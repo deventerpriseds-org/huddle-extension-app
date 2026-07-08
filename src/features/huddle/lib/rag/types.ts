@@ -3,12 +3,15 @@
 
 export type RagScope = "agent" | "global";
 
+export type SharingMode = "shared" | "private" | "readonly-shared";
+
 export interface ChunkRow {
   id: string;
   scope: RagScope;
   agentId: string | null;
   text: string;
   source: string | null;
+  authorAgentIds: string[];
   score?: number;
   createdAt: string;
 }
@@ -21,6 +24,7 @@ export interface TripleRow {
   predicate: string;
   object: string;
   confidence: number;
+  authorAgentIds: string[];
   createdAt: string;
 }
 
@@ -30,6 +34,9 @@ export interface WriteChunkInput {
   text: string;
   source?: string;
   metadata?: Record<string, unknown>;
+  authorAgentIds?: string[];
+  /** Reuse an existing embedding rather than re-embedding `text`. */
+  embedding?: number[];
 }
 
 export interface WriteTripleInput {
@@ -40,6 +47,7 @@ export interface WriteTripleInput {
   object: string;
   confidence?: number;
   sourceChunkId?: string;
+  authorAgentIds?: string[];
 }
 
 export interface SearchChunksInput {
@@ -47,6 +55,7 @@ export interface SearchChunksInput {
   k?: number;
   scope?: RagScope;
   agentId?: string;
+  mode?: SharingMode;
 }
 
 export interface LookupTriplesInput {
@@ -56,6 +65,7 @@ export interface LookupTriplesInput {
   k?: number;
   scope?: RagScope;
   agentId?: string;
+  mode?: SharingMode;
 }
 
 export interface RagStore {
