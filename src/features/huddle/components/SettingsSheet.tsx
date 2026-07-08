@@ -181,10 +181,9 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                 cfg.backend === "lovable"
                   ? "Lovable AI"
                   : hasId
-                  ? cfg.useStoredPrompt
-                    ? "OpenAI · stored prompt"
-                    : "OpenAI · app prompt"
-                  : "Missing assistant ID";
+                  ? `OpenAI · ${cfg.model ?? "gpt-4o"}`
+                  : `OpenAI · ${cfg.model ?? "gpt-4o"} (no snapshot)`;
+
               return (
                 <div key={a.id} className="rounded-lg border border-hairline p-3 space-y-2">
                   <div className="flex items-center justify-between gap-3">
