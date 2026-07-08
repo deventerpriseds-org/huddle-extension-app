@@ -323,3 +323,136 @@ export function useSettingsSheet() {
   const [open, setOpen] = useState(false);
   return { open, setOpen };
 }
+
+// ---------------- Memory tab ----------------
+
+type PingResult =
+  | { ok: true; version: string; extensions: string[] }
+  | { ok: false; error: string };
+
+function MemoryTab() {
+  const config = useBackendsStore((s) => s.config);
+  const setAgent = useBackendsStore((s) => s.setAgent);
+  const [pinging, setPinging] = useState(false);
+  const [ping, setPing] = useState<PingResult | null>(null);
+
+  async function onTest() {
+    setPinging(true);
+    setPing(null);
+    try {
+      const res = (await pingRagStore({ data: { store: "azure" } })) as PingResult;
+      setPing(res);
+    } catch (err) {
+      setPing({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setPinging(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-hairline p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold flex items-center gap-2">
+              <Database size={14} /> Azure Postgres + pgvector
+            </div>
+            <div className="text-xs text-muted-foreground">
+              Uses <code>AZURE_PG_URL</code> secret. Chunks and triples stored on your instance.
+            </div>
+          </div>
+          <Button size="sm" variant="outline" onClick={onTest} disabled={pinging}>
+            {pinging ? <Loader2 size={14} className="animate-spin mr-1" /> : null}
+            Test connection
+          </Button>
+        </div>
+        {ping && ping.ok && (
+          <div className="text-xs rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 p-2">
+            <div className="font-medium">Connected</div>
+            <div className="opacity-80 truncate">{ping.version}</div>
+            <div className="opacity-80">Extensions: {ping.extensions.join(", ") || "(none)"}</div>
+          </div>
+        )}
+        {ping && !ping.ok && (
+          <div className="text-xs rounded bg-destructive/10 text-destructive p-2 whitespace-pre-wrap break-all">
+            {ping.error}
+          </div>
+        )}
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        Per-agent retrieval tools. The model decides when to call{" "}
+        <b>search_memory</b> (semantic chunks) vs <b>lookup_facts</b> (structured triples).
+        Turn a tool off to hide it from that agent.
+      </p>
+
+      <div className="space-y-3">
+        {AGENTS.map((a) => {
+          const cfg = config.agents[a.id];
+          if (!cfg) return null;
+          const rag = cfg.rag ?? { store: "azure", chunks: true, triples: true, fileSearch: false };
+          const setRag = (patch: Partial<typeof rag>) =>
+            setAgent(a.id, { rag: { ...rag, ...patch } });
+          return (
+            <div key={a.id} className="rounded-lg border border-hairline p-3 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold truncate">{a.name}</div>
+                  <div className="text-xs text-muted-foreground truncate">@{a.handle}</div>
+                </div>
+                <Select
+                  value={rag.store}
+                  onValueChange={(v) => setRag({ store: v as "azure" | "lovable" | "none" })}
+                >
+                  <SelectTrigger className="h-8 w-40"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="azure">Azure pgvector</SelectItem>
+                    <SelectItem value="lovable" disabled>
+                      Lovable Cloud (soon)
+                    </SelectItem>
+                    <SelectItem value="none">Off</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {rag.store !== "none" && (
+                <div className="grid grid-cols-3 gap-2 pt-1">
+                  <label className="flex items-center gap-2 text-xs">
+                    <Switch
+                      checked={rag.chunks}
+                      onCheckedChange={(v) => setRag({ chunks: v })}
+                    />
+                    Chunks
+                  </label>
+                  <label className="flex items-center gap-2 text-xs">
+                    <Switch
+                      checked={rag.triples}
+                      onCheckedChange={(v) => setRag({ triples: v })}
+                    />
+                    Facts
+                  </label>
+                  <label className="flex items-center gap-2 text-xs">
+                    <Switch
+                      checked={rag.fileSearch}
+                      onCheckedChange={(v) => setRag({ fileSearch: v })}
+                    />
+                    File search
+                  </label>
+                </div>
+              )}
+
+              {rag.store !== "none" && rag.fileSearch && (
+                <Input
+                  className="h-8"
+                  placeholder="vs_... (OpenAI vector store id)"
+                  value={rag.openaiVectorStoreId ?? ""}
+                  onChange={(e) => setRag({ openaiVectorStoreId: e.target.value })}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
