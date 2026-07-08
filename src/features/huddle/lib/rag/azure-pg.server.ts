@@ -143,10 +143,10 @@ export const azurePgStore: RagStore = {
   async writeChunk(input: WriteChunkInput) {
     await ensureBootstrap();
     const pool = getPool();
-    const vec = await embed(input.text);
+    const vec = input.embedding ?? (await embed(input.text));
     const { rows } = await pool.query<{ id: string }>(
-      `INSERT INTO rag_chunks (scope, agent_id, text, source, embedding, metadata)
-       VALUES ($1, $2, $3, $4, $5::vector, $6)
+      `INSERT INTO rag_chunks (scope, agent_id, text, source, embedding, metadata, author_agent_ids)
+       VALUES ($1, $2, $3, $4, $5::vector, $6, $7)
        RETURNING id`,
       [
         input.scope,
@@ -155,6 +155,7 @@ export const azurePgStore: RagStore = {
         input.source ?? null,
         toPgVector(vec),
         input.metadata ?? {},
+        input.authorAgentIds ?? [],
       ],
     );
     return { id: rows[0].id };
@@ -167,8 +168,8 @@ export const azurePgStore: RagStore = {
     const ids: string[] = [];
     for (const t of inputs) {
       const { rows } = await pool.query<{ id: string }>(
-        `INSERT INTO rag_triples (scope, agent_id, subject, predicate, object, confidence, source_chunk_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO rag_triples (scope, agent_id, subject, predicate, object, confidence, source_chunk_id, author_agent_ids)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING id`,
         [
           t.scope,
@@ -178,6 +179,7 @@ export const azurePgStore: RagStore = {
           t.object,
           t.confidence ?? 0.8,
           t.sourceChunkId ?? null,
+          t.authorAgentIds ?? [],
         ],
       );
       ids.push(rows[0].id);
@@ -191,14 +193,14 @@ export const azurePgStore: RagStore = {
     const vec = await embed(input.query);
     const k = Math.min(Math.max(input.k ?? 6, 1), 20);
 
-    const clause = scopeClause(input.scope, input.agentId);
+    const clause = scopeClause(input.mode, input.scope, input.agentId);
     const params: unknown[] = [toPgVector(vec)];
-    let where = clause.sql.replace("$AGENT", `$${params.length + 1}`);
+    const where = clause.sql.replace("$AGENT", `$${params.length + 1}`);
     params.push(...clause.params);
     params.push(k);
 
     const { rows } = await pool.query(
-      `SELECT id, scope, agent_id, text, source, created_at,
+      `SELECT id, scope, agent_id, text, source, created_at, author_agent_ids,
               1 - (embedding <=> $1::vector) AS score
        FROM rag_chunks
        WHERE ${where}
@@ -212,6 +214,7 @@ export const azurePgStore: RagStore = {
       agentId: r.agent_id,
       text: r.text,
       source: r.source,
+      authorAgentIds: (r.author_agent_ids ?? []) as string[],
       score: Number(r.score),
       createdAt: r.created_at,
     }));
@@ -222,7 +225,7 @@ export const azurePgStore: RagStore = {
     const pool = getPool();
     const k = Math.min(Math.max(input.k ?? 8, 1), 30);
 
-    const clause = scopeClause(input.scope, input.agentId);
+    const clause = scopeClause(input.mode, input.scope, input.agentId);
     const params: unknown[] = [];
     let where = clause.sql;
     if (clause.params.length > 0) {
@@ -245,7 +248,7 @@ export const azurePgStore: RagStore = {
 
     params.push(k);
     const { rows } = await pool.query(
-      `SELECT id, scope, agent_id, subject, predicate, object, confidence, created_at
+      `SELECT id, scope, agent_id, subject, predicate, object, confidence, created_at, author_agent_ids
        FROM rag_triples
        WHERE ${where}
        ORDER BY confidence DESC, created_at DESC
@@ -260,6 +263,7 @@ export const azurePgStore: RagStore = {
       predicate: r.predicate,
       object: r.object,
       confidence: Number(r.confidence),
+      authorAgentIds: (r.author_agent_ids ?? []) as string[],
       createdAt: r.created_at,
     }));
   },
