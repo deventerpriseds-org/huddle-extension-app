@@ -167,11 +167,44 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
         if (agentBackend.backend === "openai" && agentBackend.assistantId && openaiKey) {
           const { callOpenAIResponses } = await import("./openai-responses.server");
+          const rag = agentBackend.rag;
+          const hasRag =
+            !!rag && rag.store === "azure" && (rag.chunks || rag.triples || rag.fileSearch);
+
+          let tools: unknown[] | undefined;
+          let onToolCall:
+            | ((c: { name: string; arguments: Record<string, unknown> }) => Promise<string>)
+            | undefined;
+          let ragInstructions = "";
+
+          if (hasRag && rag) {
+            const { buildRagTools, dispatchTool, RAG_SYSTEM_HINT } = await import("./rag/tools");
+            const { azurePgStore } = await import("./rag/azure-pg.server");
+            const built = buildRagTools({
+              chunks: rag.chunks,
+              triples: rag.triples,
+              fileSearch: rag.fileSearch,
+              vectorStoreId: rag.openaiVectorStoreId,
+            });
+            if (built.length > 0) {
+              tools = built;
+              ragInstructions = "\n\n" + RAG_SYSTEM_HINT;
+              onToolCall = (c) => dispatchTool(azurePgStore, winner.id, c);
+            }
+          }
+
+          const instructions =
+            agentBackend.useStoredPrompt && !ragInstructions
+              ? undefined
+              : (agentBackend.useStoredPrompt ? "" : appSystem) + ragInstructions;
+
           const text = await callOpenAIResponses({
             assistantId: agentBackend.assistantId,
-            instructions: agentBackend.useStoredPrompt ? undefined : appSystem,
+            instructions,
             transcript: baseTranscript,
             fastMode: routerCfg.fastMode,
+            tools,
+            onToolCall,
           });
           clean = text.trim();
         } else {
