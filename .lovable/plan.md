@@ -1,141 +1,109 @@
-# Phase 2 (revised) — Azure Postgres + pgvector, tool-based retrieval
+# RAG finisher — memory provenance + cross-agent attribution
 
-Two big changes from the last plan:
+Two related pieces that close out the RAG phase together:
 
-1. **Azure-first, Lovable Cloud later.** We connect directly to your existing Azure Postgres over `pg` (node-postgres). A single `RagStore` interface keeps the swap to Lovable Cloud trivial later.
-2. **Retrieval is tool-based, not score-based.** Instead of a confidence threshold picking chunks vs triples for the model, we expose **two OpenAI tools** and let the model call whichever fits — `search_memory` (semantic chunks), `lookup_facts` (structured triples), or both. Optional third tool `file_search` for Layer 3.
+1. **Provenance** — every memory row records which agents were in the room when it was captured, so retrieval can tell the model *whose* memory this is.
+2. **Attribution in replies** — when an agent surfaces memory that wasn't its own, it says so conversationally ("according to Finn…", "Tess mentioned…", "I reached out to Ezra and he said…") instead of pretending it always knew.
 
----
-
-## What you need to give me for Azure
-
-Please gather these and I'll request them via `add_secret` when we start building:
-
-1. **`AZURE_PG_HOST`** — e.g. `my-server.postgres.database.azure.com`
-2. **`AZURE_PG_PORT`** — usually `5432`
-3. **`AZURE_PG_DATABASE`** — the database name (not the server name)
-4. **`AZURE_PG_USER`** — for Azure Postgres Flexible Server, just the username (e.g. `myadmin`). For Single Server it's `user@servername`.
-5. **`AZURE_PG_PASSWORD`**
-6. **`AZURE_PG_SSL`** — I'll default to `require`; only override if your instance is different.
-
-**Before it will work, in the Azure Portal:**
-- Networking → **Firewall rules** → add outbound IPs for Lovable's server runtime. I'll pull the current egress IP list from Lovable docs when we're ready; if it's not published we can start with **"Allow public access from any Azure service"** or a wide range and tighten later.
-- Server parameters → confirm `azure.extensions` includes `VECTOR` (and `pg_trgm` if you want fuzzy fact matching).
-- In the target database, run once: `CREATE EXTENSION IF NOT EXISTS vector;`
-
-**Alternative** if you'd rather not manage firewall rules: paste one `DATABASE_URL` connection string (`postgresql://user:pass@host:5432/db?sslmode=require`) and I'll use that single secret instead.
+Cross-agent sharing (Shared / Private / Read-only) folds into the same change since it's the same write/read path.
 
 ---
 
-## Retrieval as tools (the important change)
+## Data model change
 
-Every OpenAI Responses call for an agent with RAG enabled gets these tools attached:
-
-```
-tools: [
-  {
-    type: "function",
-    name: "search_memory",
-    description: "Semantic search over past conversations, notes, and documents. Use when the user's question is about topics, events, discussions, or open-ended context — anything where meaning matters more than exact facts.",
-    parameters: { query: string, k?: number (default 6), scope?: "agent"|"global" }
-  },
-  {
-    type: "function",
-    name: "lookup_facts",
-    description: "Structured fact lookup: preferences, allergies, ownership, deadlines, relationships, commitments. Use when the question implies a definite answer about a person or entity (e.g. 'what is X allergic to', 'who owns Y', 'when is Z due'). Prefer this over search_memory for direct factual questions.",
-    parameters: { subject?: string, predicate?: string, query?: string, k?: number (default 8) }
-  },
-  // Optional Layer 3, only if agent.rag.fileSearch is on:
-  { type: "file_search", vector_store_ids: [agent.openaiVectorStoreId] }
-]
-```
-
-The model reads its own system prompt (we add one line: *"You have memory tools. Use `lookup_facts` for direct factual questions about people/things, `search_memory` for topical recall, both when appropriate."*) and picks. Tool results come back as `[FACT] …` / `[CONTEXT] …` blocks so the model treats triples as ground truth.
-
-No confidence-threshold escalation logic on our side. The model decides. If you later want a safety net, we can add "if the model didn't call any tool but the message looks factual, force-call `lookup_facts`" as a small heuristic — but starting purely tool-driven.
-
----
-
-## Writes (extraction) — unchanged from last message
-
-- Every persisted message → 1 chunk (embedded).
-- Triple extraction fires on verb heuristics (`prefer|allergic|own|manages|reports to|deadline|due|hate|love|avoid`) or explicit MemoryItem save — never on every message.
-- Extraction uses `gpt-5.5` with strict JSON schema, capped 5 triples per chunk, stored in `rag_triples`.
-
----
-
-## Schema (runs against your Azure DB)
+Add one column to both tables:
 
 ```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-
-CREATE TYPE rag_scope AS ENUM ('agent', 'global');
-
-CREATE TABLE rag_chunks (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  scope rag_scope NOT NULL,
-  agent_id TEXT,
-  text TEXT NOT NULL,
-  source TEXT,
-  embedding vector(3072) NOT NULL,
-  metadata JSONB DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX ON rag_chunks USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX ON rag_chunks (agent_id) WHERE scope = 'agent';
-
-CREATE TABLE rag_triples (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  scope rag_scope NOT NULL,
-  agent_id TEXT,
-  subject TEXT NOT NULL,
-  predicate TEXT NOT NULL,
-  object TEXT NOT NULL,
-  confidence REAL DEFAULT 0.8,
-  source_chunk_id UUID REFERENCES rag_chunks(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX ON rag_triples USING gin (to_tsvector('english', subject || ' ' || predicate || ' ' || object));
-CREATE INDEX ON rag_triples (subject);
+ALTER TABLE rag_chunks  ADD COLUMN IF NOT EXISTS author_agent_ids TEXT[] DEFAULT '{}';
+ALTER TABLE rag_triples ADD COLUMN IF NOT EXISTS author_agent_ids TEXT[] DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS rag_chunks_authors_idx  ON rag_chunks  USING gin (author_agent_ids);
+CREATE INDEX IF NOT EXISTS rag_triples_authors_idx ON rag_triples USING gin (author_agent_ids);
 ```
 
-We run this as an idempotent bootstrap on first server-fn call (`CREATE ... IF NOT EXISTS`), so no external migration tool is needed.
+Added to the idempotent `BOOTSTRAP_SQL` so it runs on next server-fn call. Old rows keep `{}` (no attribution — treated as ambient user memory, no "according to…" prefix).
 
----
+`author_agent_ids` is the list of agents *present when the user said this*. That's the natural source model for attribution: "according to whichever agents were in the conversation." A 1:1 huddle with Finn → `['finn-reid']`. A group huddle with Finn, Tess, Ezra → all three. If Charleston later retrieves that memory, he attributes to any of them.
+
+## Write path (`huddle.functions.ts`)
+
+Today the fire-and-forget block writes one global chunk with no provenance. Change:
+
+- Compute `authorAgentIds = data.members` (everyone in the huddle when the user typed).
+- Compute destination scope from each replying agent's `sharing` mode (new config, see below):
+  - **Shared** (default) → one global write, `author_agent_ids = data.members`.
+  - **Private** → one `scope='agent'` write per Private agent, `author_agent_ids = [thatAgent]`.
+  - **Read-only shared** → no write.
+- Embedding is computed once and reused across per-scope inserts (saves the OpenAI call).
+- Triple extraction: same `author_agent_ids` applied to each extracted triple.
+
+## Read path (`azure-pg.server.ts`)
+
+Return `authorAgentIds` in `ChunkRow` / `TripleRow`. `scopeClause` gets a variant for **Private** mode (agent-only, no globals) and **Read-only shared** (globals only).
+
+## Retrieval scope filter (`tools.ts`)
+
+`dispatchTool` accepts a `mode: "shared" | "private" | "readonly-shared"` computed from the calling agent's config, translated to the store's `scope`/`agentId` params.
+
+## Attribution formatting (`tools.ts`)
+
+Tool results already come back as `[FACT]` / `[CONTEXT]` prefixes. Change to include an author list *only when the calling agent wasn't among the authors*:
+
+```
+[FACT from Finn Reid] user is allergic to shellfish
+[FACT from Finn Reid, Tess Sutton] user's deadline for Q4 is Nov 15
+[CONTEXT from Ezra Miles] we discussed the roadmap last Tuesday...
+```
+
+If the calling agent IS in `author_agent_ids`, the prefix stays `[FACT]` / `[CONTEXT]` with no attribution — it's their own memory. If `author_agent_ids` is empty (legacy rows), also no attribution.
+
+Uses `AGENT_BY_ID[id].name` so the model sees human names, not slugs.
+
+## System hint update (`tools.ts`)
+
+Extend `RAG_SYSTEM_HINT`:
+
+> You have memory tools. Use `lookup_facts` for direct factual questions (allergies, ownership, deadlines, preferences). Use `search_memory` for topical recall. Call both when useful. Treat `[FACT]` as ground truth, `[CONTEXT]` as supporting.
+>
+> **When a result includes "from <agent name(s)>", that memory came from another agent's conversation with the user — you were not there. Say so naturally: "According to Finn…", "Tess mentioned that…", "I checked with Ezra and he said…", "I believe you talked to Finn about this — he said…". Never present another agent's memory as your own recollection. When a result has no attribution, it's ambient memory or your own conversation; speak as yourself.**
+
+## Sharing UI (`SettingsSheet.tsx`)
+
+Per-agent Memory tab gets a Select above the layer toggles:
+
+```
+Sharing  [ Shared ▾ ]     Shared · Private · Read-only shared
+```
+
+One-line tooltip per option. Default **Shared**.
+
+## Config (`agent-backends.ts`)
+
+Add `sharing: "shared" | "private" | "readonly-shared"` to `RagConfigSchema`, default `"shared"`.
 
 ## Files
 
-- **new** `src/features/huddle/lib/rag/types.ts` — `RagStore` interface (`searchChunks`, `lookupTriples`, `writeChunk`, `writeTriples`)
-- **new** `src/features/huddle/lib/rag/azure-pg.server.ts` — `pg` Pool, bootstrap SQL, implementations
-- **new** `src/features/huddle/lib/rag/embed.server.ts` — OpenAI `text-embedding-3-large` (3072-dim)
-- **new** `src/features/huddle/lib/rag/triples.server.ts` — heuristic + `gpt-5.5` extraction
-- **new** `src/features/huddle/lib/rag/tools.ts` — tool schemas + dispatcher (called from responses loop when the model emits a `tool_call`)
-- **edit** `openai-responses.server.ts` — accept `tools`, handle a tool-call round-trip loop (max 2 hops)
-- **edit** `huddle.functions.ts` — attach tools per agent config; write chunk after each user msg; run extraction if heuristic hits
-- **edit** `agent-backends.ts` — per-agent `rag: { store: "azure" | "lovable" | "none"; chunks: bool; triples: bool; fileSearch: bool; openaiVectorStoreId?: string }`, default `store: "azure"`, all layers on
-- **edit** `SettingsSheet.tsx` — Memory tab: store dropdown (Azure default, Lovable Cloud disabled with tooltip "Enable Lovable Cloud to use"), three layer toggles, "Test connection" button, per-agent vector store provisioning
-
----
-
-## Swap path to Lovable Cloud later
-
-`RagStore` interface has two implementations. Switching per-agent is a dropdown; switching globally is a config default. Data doesn't move automatically — we'd add a one-shot "Copy memory from Azure to Cloud" action if/when you want to migrate. Embeddings are portable (same model, same dimensions).
-
----
+- **edit** `src/features/huddle/lib/rag/azure-pg.server.ts` — `author_agent_ids` column + index in bootstrap; write/read/return it; `scopeClause` variants for private + readonly-shared.
+- **edit** `src/features/huddle/lib/rag/types.ts` — add `authorAgentIds: string[]` to `ChunkRow`/`TripleRow`, `authorAgentIds?` to `WriteChunkInput`/`WriteTripleInput`, `mode?` to search/lookup inputs.
+- **edit** `src/features/huddle/lib/rag/tools.ts` — `dispatchTool` maps agent ids → display names, prefixes results with `[FACT from …]` when calling agent isn't an author; expanded system hint.
+- **edit** `src/features/huddle/lib/huddle.functions.ts` — compute `authorAgentIds`, per-sharing-mode write fan-out, reuse embedding across writes, pass `mode` into `dispatchTool` per calling agent.
+- **edit** `src/features/huddle/lib/agent-backends.ts` — `sharing` field on RAG config.
+- **edit** `src/features/huddle/components/SettingsSheet.tsx` — Sharing select in Memory tab.
+- **edit** `.lovable/plan.md` — reflect completion; renumber remaining phases.
 
 ## Verify
 
-- Add Azure secrets → "Test connection" in Settings returns `ok` with server version + extension list.
-- Send "I'm allergic to shellfish" → row in `rag_chunks` + row in `rag_triples`.
-- Ask charleston-lewis "what am I allergic to?" → model calls `lookup_facts`, gets the triple, answers.
-- Ask "what did we discuss about the roadmap?" → model calls `search_memory`, gets chunks.
-- Ask a mixed question → sometimes both tool calls in one turn (visible in network as two function-call rounds).
-- Flip `rag.triples` off for an agent → only `search_memory` is attached.
+- 1:1 with Finn: "I'm allergic to shellfish." → `rag_triples` row `author_agent_ids = ['finn-reid']`.
+- Switch to Charleston, ask "what am I allergic to?" → he calls `lookup_facts`, sees `[FACT from Finn Reid] user is allergic to shellfish`, replies something like *"According to Finn, you're allergic to shellfish."*
+- Same question to Finn → he sees `[FACT]` (no attribution — he's an author), replies *"You're allergic to shellfish."*
+- Set Ezra to **Private**, tell Ezra a secret preference → verify Charleston's `lookup_facts` doesn't return it (private = agent-only, no globals cross the wall).
+- Group huddle with Finn + Tess, user says a fact → `author_agent_ids = ['finn-reid', 'tess-sutton']`. Charleston later attributes to both: *"I believe you talked to Finn and Tess about this — they said…"*
 
----
+## Deferred (unchanged from prior discussion)
 
-## Not in this phase
+- **Confidence-threshold escalation fallback** — not added; watch traffic first, cheaper fix later is tighter tool descriptions.
+- **Background reindex / job queue** — deferred to the background-executor phase; same worker infra powers reindex, bulk import, and file ingestion.
+- **Splitting `AZURE_PG_URL`** — not needed unless ops requires independent password rotation.
 
-Cloud store implementation, cross-agent memory sharing UI, background reindex, migration between stores.
+## Ships this turn
 
-**Ships after your approval.** Reply with the Azure creds (or a single `DATABASE_URL`) and I'll kick off.
+Everything above. Approve and I'll build it.

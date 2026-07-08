@@ -1,7 +1,8 @@
 // OpenAI Responses "function" tool schemas + dispatcher. The model decides
 // when to call search_memory (chunks) vs lookup_facts (triples).
 
-import type { RagStore } from "./types";
+import { AGENT_BY_ID, type AgentId } from "../../data/agents";
+import type { RagStore, SharingMode } from "./types";
 
 export const SEARCH_MEMORY_TOOL = {
   type: "function" as const,
@@ -59,23 +60,46 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
 }
 
+/**
+ * Map author agent ids to display names, excluding the calling agent
+ * (their own memory needs no attribution). Returns null when the result
+ * has no other-agent authors — the model should speak as itself.
+ */
+function attributionSuffix(
+  authorIds: string[] | undefined,
+  callerId: string,
+): string | null {
+  if (!authorIds || authorIds.length === 0) return null;
+  const others = authorIds.filter((id) => id !== callerId);
+  if (others.length === 0) return null;
+  const names = others
+    .map((id) => AGENT_BY_ID[id as AgentId]?.name)
+    .filter((n): n is string => Boolean(n));
+  if (names.length === 0) return null;
+  return names.join(", ");
+}
+
 export async function dispatchTool(
   store: RagStore,
   agentId: string,
   call: ToolCall,
+  mode: SharingMode = "shared",
 ): Promise<string> {
   if (call.name === "search_memory") {
     const q = String(call.arguments.query ?? "").trim();
     if (!q) return JSON.stringify({ results: [] });
     const k = typeof call.arguments.k === "number" ? call.arguments.k : 6;
-    const rows = await store.searchChunks({ query: q, k, agentId });
+    const rows = await store.searchChunks({ query: q, k, agentId, mode });
     return JSON.stringify({
-      results: rows.map((r) => ({
-        text: r.text,
-        source: r.source,
-        score: r.score,
-        prefix: "[CONTEXT]",
-      })),
+      results: rows.map((r) => {
+        const from = attributionSuffix(r.authorAgentIds, agentId);
+        return {
+          prefix: from ? `[CONTEXT from ${from}]` : "[CONTEXT]",
+          text: r.text,
+          source: r.source,
+          score: r.score,
+        };
+      }),
     });
   }
   if (call.name === "lookup_facts") {
@@ -85,19 +109,23 @@ export async function dispatchTool(
       query: call.arguments.query as string | undefined,
       k: (call.arguments.k as number | undefined) ?? 8,
       agentId,
+      mode,
     });
     return JSON.stringify({
-      results: rows.map((r) => ({
-        subject: r.subject,
-        predicate: r.predicate,
-        object: r.object,
-        confidence: r.confidence,
-        prefix: "[FACT]",
-      })),
+      results: rows.map((r) => {
+        const from = attributionSuffix(r.authorAgentIds, agentId);
+        return {
+          prefix: from ? `[FACT from ${from}]` : "[FACT]",
+          subject: r.subject,
+          predicate: r.predicate,
+          object: r.object,
+          confidence: r.confidence,
+        };
+      }),
     });
   }
   return JSON.stringify({ error: `Unknown tool: ${call.name}` });
 }
 
 export const RAG_SYSTEM_HINT =
-  "You have memory tools. Use `lookup_facts` for direct factual questions about people or things (allergies, ownership, deadlines, preferences). Use `search_memory` for topical or open-ended recall. Call both when useful. Treat [FACT] results as ground truth and [CONTEXT] results as supporting information.";
+  "You have memory tools. Use `lookup_facts` for direct factual questions about people or things (allergies, ownership, deadlines, preferences). Use `search_memory` for topical or open-ended recall. Call both when useful. Treat [FACT] results as ground truth and [CONTEXT] results as supporting information.\n\nAttribution matters: when a result's prefix reads `[FACT from <name(s)>]` or `[CONTEXT from <name(s)>]`, that memory came from another agent's conversation with the user — you were not there. Say so naturally: \"According to Finn…\", \"Tess mentioned that…\", \"I checked with Ezra and he said…\", \"I believe you talked to Finn about this — he said…\". Never present another agent's memory as your own recollection. When a result has no `from` attribution, it's ambient memory or your own conversation; speak as yourself without citing anyone.";

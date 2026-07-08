@@ -390,7 +390,13 @@ function MemoryTab() {
         {AGENTS.map((a) => {
           const cfg = config.agents[a.id];
           if (!cfg) return null;
-          const rag = cfg.rag ?? { store: "azure", chunks: true, triples: true, fileSearch: false };
+          const rag = cfg.rag ?? {
+            store: "azure" as const,
+            chunks: true,
+            triples: true,
+            fileSearch: false,
+            sharing: "shared" as const,
+          };
           const setRag = (patch: Partial<typeof rag>) =>
             setAgent(a.id, { rag: { ...rag, ...patch } });
           return (
@@ -414,6 +420,30 @@ function MemoryTab() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {rag.store !== "none" && (
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <label
+                    className="text-xs text-muted-foreground"
+                    title="Shared: writes global, reads global + own. Private: agent-only, no cross-agent bleed. Read-only shared: consumes shared memory but doesn't write."
+                  >
+                    Sharing
+                  </label>
+                  <Select
+                    value={rag.sharing ?? "shared"}
+                    onValueChange={(v) =>
+                      setRag({ sharing: v as "shared" | "private" | "readonly-shared" })
+                    }
+                  >
+                    <SelectTrigger className="h-8 w-40"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="shared">Shared</SelectItem>
+                      <SelectItem value="private">Private</SelectItem>
+                      <SelectItem value="readonly-shared">Read-only shared</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
               {rag.store !== "none" && (
                 <div className="grid grid-cols-3 gap-2 pt-1">
