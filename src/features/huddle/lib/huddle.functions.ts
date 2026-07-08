@@ -287,7 +287,30 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       }`;
 
       const roster = buildRoster(data.members, winner.id);
-      const appSystem = winner.systemPrompt + scene + roster;
+      const appSystem =
+        winner.systemPrompt +
+        scene +
+        roster +
+        "\n\nWrite as plain prose. Do NOT prefix your reply with your own name, a bracketed label like [Flex Grimes], or a 'Name:' header — the UI already shows who you are.";
+
+      // Per-agent transcript: the current agent's own prior turns are role=assistant
+      // (unprefixed); other agents' turns are surfaced as role=user context so the
+      // model doesn't imitate a `[Name] ...` prefix pattern.
+      const transcript = data.history
+        .slice(-14)
+        .filter((m) => m.author.kind !== "system")
+        .map((m) => {
+          if (m.author.kind === "user") return { role: "user" as const, content: m.text };
+          const a = AGENT_BY_ID[(m.author as { kind: "agent"; agentId: AgentId }).agentId];
+          if (a?.id === winner.id) {
+            return { role: "assistant" as const, content: m.text };
+          }
+          return {
+            role: "user" as const,
+            content: `(context — ${a?.name ?? "another agent"} said): ${m.text}`,
+          };
+        })
+        .concat([{ role: "user" as const, content: data.text }]);
 
       const perAgentFallbacks: string[] = [];
 
