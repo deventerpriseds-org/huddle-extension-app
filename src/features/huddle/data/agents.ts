@@ -50,6 +50,7 @@ export interface Agent {
   voiceId: string;
   special?: "coordinator" | "standup-host" | "queue-owner";
   systemPrompt: string;
+  avatarUrl?: string;
 }
 
 const p = (role: string, tone: string, bounds: string) =>
