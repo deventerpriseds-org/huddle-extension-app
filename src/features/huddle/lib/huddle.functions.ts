@@ -70,14 +70,12 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
     const transcript = data.history
       .slice(-14)
+      .filter((m) => m.author.kind !== "system")
       .map((m) => {
         if (m.author.kind === "user") return { role: "user" as const, content: m.text };
-        if (m.author.kind === "agent") {
-          const a = AGENT_BY_ID[m.author.agentId];
-          const tag = a.id === winner.id ? "" : `[${a.name}] `;
-          return { role: "assistant" as const, content: tag + m.text };
-        }
-        return { role: "system" as const, content: `(event) ${m.text}` };
+        const a = AGENT_BY_ID[(m.author as { kind: "agent"; agentId: AgentId }).agentId];
+        const tag = a.id === winner.id ? "" : `[${a.name}] `;
+        return { role: "assistant" as const, content: tag + m.text };
       })
       .concat([{ role: "user" as const, content: data.text }]);
 

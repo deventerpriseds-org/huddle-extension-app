@@ -79,10 +79,10 @@ export interface RoutingDecision {
 export const HUDDLES: Huddle[] = [
   {
     id: "daily",
-    name: "Daily huddle",
+    name: "All members",
     kind: "group",
     members: AGENTS.map((a) => a.id),
-    topic: "Cross-agent standup and follow-ups",
+    topic: "Address the whole EDS at once — everyone is in this channel",
   },
   {
     id: "launch-war-room",
