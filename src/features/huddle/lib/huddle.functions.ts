@@ -255,15 +255,10 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     }
 
     // ---- Reply transcript ----
-    const baseTranscript = data.history
-      .slice(-14)
-      .filter((m) => m.author.kind !== "system")
-      .map((m) => {
-        if (m.author.kind === "user") return { role: "user" as const, content: m.text };
-        const a = AGENT_BY_ID[(m.author as { kind: "agent"; agentId: AgentId }).agentId];
-        return { role: "assistant" as const, content: `[${a.name}] ${m.text}` };
-      })
-      .concat([{ role: "user" as const, content: data.text }]);
+    // NOTE: `baseTranscript` is rebuilt per-agent below so the *current* agent's
+    // prior turns appear as role=assistant (unprefixed) and other agents' turns
+    // appear as role=user context — otherwise models mimic the `[Name] ...`
+    // prefix pattern in their own replies.
 
     const presentAgents = AGENTS.filter((a) => data.members.includes(a.id));
 
