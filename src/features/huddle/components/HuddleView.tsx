@@ -19,9 +19,12 @@ import {
 
 export function HuddleView() {
   const activeId = useHuddleStore((s) => s.activeHuddleId);
-  const huddle = useHuddleStore((s) => s.huddles.find((h) => h.id === activeId));
-  const messages = useHuddleStore((s) =>
-    s.messages.filter((m) => m.huddleId === activeId),
+  const huddles = useHuddleStore((s) => s.huddles);
+  const allMessages = useHuddleStore((s) => s.messages);
+  const huddle = useMemo(() => huddles.find((h) => h.id === activeId), [huddles, activeId]);
+  const messages = useMemo(
+    () => allMessages.filter((m) => m.huddleId === activeId),
+    [allMessages, activeId],
   );
   const view = useHuddleStore((s) => s.view);
   const setView = useHuddleStore((s) => s.setView);
