@@ -38,6 +38,7 @@ const AgentBackendInput = z.object({
       triples: z.boolean(),
       fileSearch: z.boolean(),
       openaiVectorStoreId: z.string().optional(),
+      sharing: z.enum(["shared", "private", "readonly-shared"]).default("shared"),
     })
     .optional(),
 });
