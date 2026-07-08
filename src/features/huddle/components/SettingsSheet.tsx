@@ -169,6 +169,36 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                 />
               </div>
             )}
+
+            <div className="flex items-center justify-between rounded-lg border border-hairline p-3">
+              <div className="pr-3">
+                <Label className="text-sm">Solo when covered</Label>
+                <p className="text-xs text-muted-foreground">
+                  Drop supporting agents when the primary already covers the
+                  message. Prevents adjacent-lane pile-ons (e.g. life-strategy
+                  chiming in on a workout question).
+                </p>
+              </div>
+              <Switch
+                checked={config.router.soloOnCoverage}
+                onCheckedChange={(v) => setRouter({ soloOnCoverage: v })}
+              />
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border border-hairline p-3">
+              <div className="pr-3">
+                <Label className="text-sm">Strict router prompt</Label>
+                <p className="text-xs text-muted-foreground">
+                  Tighten the LLM router's instructions to prefer a single
+                  primary agent, with an explicit one-shot example. Only add
+                  supporting agents when the message names a second specialty.
+                </p>
+              </div>
+              <Switch
+                checked={config.router.strictPrompt}
+                onCheckedChange={(v) => setRouter({ strictPrompt: v })}
+              />
+            </div>
           </TabsContent>
 
           {/* ---- Agents ---- */}
