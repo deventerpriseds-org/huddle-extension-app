@@ -51,11 +51,15 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+ALTER TABLE rag_chunks  ADD COLUMN IF NOT EXISTS author_agent_ids TEXT[] DEFAULT '{}';
+
 -- HNSW has a 2000-dim cap; text-embedding-3-large is 3072. Use ivfflat instead.
 CREATE INDEX IF NOT EXISTS rag_chunks_embed_ivf
   ON rag_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX IF NOT EXISTS rag_chunks_agent_idx
   ON rag_chunks (agent_id) WHERE scope = 'agent';
+CREATE INDEX IF NOT EXISTS rag_chunks_authors_idx
+  ON rag_chunks USING gin (author_agent_ids);
 
 CREATE TABLE IF NOT EXISTS rag_triples (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -69,9 +73,13 @@ CREATE TABLE IF NOT EXISTS rag_triples (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+ALTER TABLE rag_triples ADD COLUMN IF NOT EXISTS author_agent_ids TEXT[] DEFAULT '{}';
+
 CREATE INDEX IF NOT EXISTS rag_triples_subject_idx ON rag_triples (subject);
 CREATE INDEX IF NOT EXISTS rag_triples_fts_idx
   ON rag_triples USING gin (to_tsvector('english', subject || ' ' || predicate || ' ' || object));
+CREATE INDEX IF NOT EXISTS rag_triples_authors_idx
+  ON rag_triples USING gin (author_agent_ids);
 `;
 
 async function ensureBootstrap(): Promise<void> {
@@ -81,14 +89,29 @@ async function ensureBootstrap(): Promise<void> {
   _bootstrapped = true;
 }
 
-function scopeClause(scope: "agent" | "global" | undefined, agentId: string | undefined) {
-  // agent-scoped: return rows for this agent OR global rows.
-  // global: only global rows.
+/**
+ * Compose the WHERE fragment for scope filtering based on the caller's sharing mode.
+ * - "shared" (default): global rows + this agent's private rows.
+ * - "private": only this agent's private rows (never sees other agents' shared writes).
+ * - "readonly-shared": globals only, never own private rows.
+ */
+function scopeClause(
+  mode: "shared" | "private" | "readonly-shared" | undefined,
+  scope: "agent" | "global" | undefined,
+  agentId: string | undefined,
+) {
+  if (mode === "private" && agentId) {
+    return { sql: `(scope = 'agent' AND agent_id = $AGENT)`, params: [agentId] as unknown[] };
+  }
+  if (mode === "readonly-shared") {
+    return { sql: `scope = 'global'`, params: [] as unknown[] };
+  }
+  // shared (or unspecified): explicit scope override still wins
   if (scope === "global") return { sql: `scope = 'global'`, params: [] as unknown[] };
   if (agentId) {
     return {
       sql: `(scope = 'global' OR (scope = 'agent' AND agent_id = $AGENT))`,
-      params: [agentId],
+      params: [agentId] as unknown[],
     };
   }
   return { sql: `TRUE`, params: [] as unknown[] };
