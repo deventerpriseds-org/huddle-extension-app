@@ -277,10 +277,18 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             }
           }
 
+          // OpenAI Responses only honors a stored prompt (`pmpt_...`) via
+          // `prompt.id`. Legacy assistant IDs (`asst_...`) fall back to a
+          // plain model call, so we must always send the persona instructions
+          // in that case even if the agent is configured to use its stored
+          // prompt.
+          const hasStoredPrompt = agentBackend.assistantId.startsWith("pmpt_");
+          const useStored = agentBackend.useStoredPrompt && hasStoredPrompt;
           const instructions =
-            agentBackend.useStoredPrompt && !ragInstructions
+            useStored && !ragInstructions
               ? undefined
-              : (agentBackend.useStoredPrompt ? "" : appSystem) + ragInstructions;
+              : (useStored ? "" : appSystem) + ragInstructions;
+
 
           const text = await callOpenAIResponses({
             assistantId: agentBackend.assistantId,
