@@ -32,7 +32,7 @@ export function HuddleView() {
   if (!huddle) return null;
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col bg-background">
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <HuddleHeader huddle={huddle} view={view} setView={setView} />
       <Transcript messages={messages} huddle={huddle} />
       <Composer huddle={huddle} />
