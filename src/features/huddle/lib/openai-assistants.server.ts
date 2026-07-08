@@ -31,10 +31,42 @@ export function getAssistantSnapshot(agentId: AgentId): AssistantSnapshot | null
  * (custom function calling), and drop `code_interpreter` — Responses supports
  * it but wiring the container/session lifecycle is beyond this app's scope.
  */
-export function snapshotResponsesTools(snap: AssistantSnapshot | null): unknown[] {
+/**
+ * Reshape Assistants-API tool definitions into the flat shape the Responses
+ * API accepts. Assistants nests function/file_search config one level deep;
+ * Responses expects a flat object with `name`/`vector_store_ids` at the top.
+ * Drops `code_interpreter` and anything unrecognized.
+ */
+export function snapshotResponsesTools(
+  snap: AssistantSnapshot | null,
+): unknown[] {
   if (!snap) return [];
-  return snap.tools.filter((t) => {
-    const type = t?.type;
-    return type === "file_search" || type === "function";
-  });
+  const vectorStoreIds =
+    (snap.toolResources as { file_search?: { vector_store_ids?: string[] } } | null)
+      ?.file_search?.vector_store_ids ?? [];
+
+  const out: unknown[] = [];
+  for (const t of snap.tools) {
+    const type = (t as { type?: string }).type;
+    if (type === "file_search") {
+      if (vectorStoreIds.length === 0) continue; // Responses requires ids
+      out.push({ type: "file_search", vector_store_ids: vectorStoreIds });
+    } else if (type === "function") {
+      // Assistants: { type:"function", function:{ name, description, parameters } }
+      // Responses:  { type:"function", name, description, parameters }
+      const fn = (t as { function?: Record<string, unknown> }).function;
+      const flat = t as Record<string, unknown>;
+      const name = (fn?.name ?? flat.name) as string | undefined;
+      if (!name) continue;
+      out.push({
+        type: "function",
+        name,
+        description: (fn?.description ?? flat.description) as string | undefined,
+        parameters: (fn?.parameters ?? flat.parameters) as
+          | Record<string, unknown>
+          | undefined,
+      });
+    }
+  }
+  return out;
 }
