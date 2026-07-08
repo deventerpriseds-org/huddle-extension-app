@@ -17,8 +17,11 @@ const RagConfigSchema = z.object({
 
 const AgentBackendSchema = z.object({
   backend: z.enum(["lovable", "openai"]),
+  // Provenance only — the runtime never sends this to OpenAI. Kept so the
+  // fetch-openai-assistants script knows which assistant to re-pull.
   assistantId: z.string().trim().optional(),
-  useStoredPrompt: z.boolean(),
+  // Optional model override. Defaults to gpt-4o at runtime (matches journey-voice).
+  model: z.string().trim().optional(),
   rag: RagConfigSchema.default({
     store: "azure",
     chunks: true,
@@ -27,6 +30,7 @@ const AgentBackendSchema = z.object({
     sharing: "shared",
   }),
 });
+
 
 export type RagConfig = z.infer<typeof RagConfigSchema>;
 
@@ -75,9 +79,10 @@ function defaultAgents(): Record<AgentId, AgentBackend> {
   for (const a of AGENTS) {
     const id = ASSISTANT_IDS[a.id];
     out[a.id] = id
-      ? { backend: "openai", assistantId: id, useStoredPrompt: true, rag: { ...defaultRag } }
-      : { backend: "lovable", useStoredPrompt: false, rag: { ...defaultRag } };
+      ? { backend: "openai", assistantId: id, rag: { ...defaultRag } }
+      : { backend: "lovable", rag: { ...defaultRag } };
   }
+
   return out;
 }
 

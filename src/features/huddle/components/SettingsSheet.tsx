@@ -181,10 +181,9 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                 cfg.backend === "lovable"
                   ? "Lovable AI"
                   : hasId
-                  ? cfg.useStoredPrompt
-                    ? "OpenAI · stored prompt"
-                    : "OpenAI · app prompt"
-                  : "Missing assistant ID";
+                  ? `OpenAI · ${cfg.model ?? "gpt-4o"}`
+                  : `OpenAI · ${cfg.model ?? "gpt-4o"} (no snapshot)`;
+
               return (
                 <div key={a.id} className="rounded-lg border border-hairline p-3 space-y-2">
                   <div className="flex items-center justify-between gap-3">
@@ -229,19 +228,22 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                   </div>
 
                   {cfg.backend === "openai" && (
-                    <div className="flex items-center justify-between pt-1">
-                      <div>
-                        <Label className="text-sm">Use OpenAI's stored prompt</Label>
-                        <p className="text-xs text-muted-foreground">
-                          On = your assistant's voice. Off = app's persona prompt.
-                        </p>
-                      </div>
-                      <Switch
-                        checked={cfg.useStoredPrompt}
-                        onCheckedChange={(v) => setAgent(a.id, { useStoredPrompt: v })}
+                    <div>
+                      <Label className="text-xs">Model</Label>
+                      <Input
+                        className="h-8"
+                        placeholder="gpt-4o"
+                        value={cfg.model ?? ""}
+                        onChange={(e) =>
+                          setAgent(a.id, { model: e.target.value.trim() || undefined })
+                        }
                       />
+                      <p className="text-xs text-muted-foreground pt-1">
+                        Blank falls back to the assistant snapshot's model, then gpt-4o.
+                      </p>
                     </div>
                   )}
+
                 </div>
               );
             })}
