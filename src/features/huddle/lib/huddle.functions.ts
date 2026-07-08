@@ -4,6 +4,9 @@ import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import type { HuddleMessage } from "../data/seed";
 import { parseMentions, routeMessage, routeMessageLLM, type RouterInvocation } from "./routing";
+import type { FallbackEvent, PromptDebug } from "./fallbacks";
+import { buildRoster } from "./roster";
+
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
