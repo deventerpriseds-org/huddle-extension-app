@@ -14,21 +14,18 @@ function scoreAgentAgainst(text: string, agent: Agent): number {
   const textStems = new Set(textTokens.map(stem).filter((s) => s.length >= 3));
   let hits = 0;
   let total = 0;
-  const kws = [...agent.domains, ...agent.themes, agent.role];
-  for (const kw of kws) {
+  // domains carry more weight than themes/role
+  const weighted: Array<{ kw: string; w: number }> = [
+    ...agent.domains.map((kw) => ({ kw, w: 3 })),
+    ...agent.themes.map((kw) => ({ kw, w: 1 })),
+    { kw: agent.role, w: 1 },
+  ];
+  for (const { kw, w } of weighted) {
     for (const part of kw.split(/\s+/)) {
       const s = stem(part);
       if (s.length < 3) continue;
-      total += 1;
-      if (textStems.has(s)) hits += 2;
-      else {
-        for (const ts of textStems) {
-          if (ts.startsWith(s) || s.startsWith(ts)) {
-            hits += 1;
-            break;
-          }
-        }
-      }
+      total += w;
+      if (textStems.has(s)) hits += w * 2;
     }
   }
   const raw = hits / Math.max(8, total);
