@@ -215,6 +215,8 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         backend: routerCfg.backend,
         model: routerCfg.model,
         fastMode: routerCfg.fastMode,
+        strictPrompt: routerCfg.strictPrompt,
+        soloOnCoverage: routerCfg.soloOnCoverage,
       };
       if (routerCfg.backend === "lovable") {
         const m = await getLovableModel(routerCfg.model);
