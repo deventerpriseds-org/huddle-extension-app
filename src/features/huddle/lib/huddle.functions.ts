@@ -3,7 +3,7 @@ import { generateText } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import type { HuddleMessage } from "../data/seed";
-import { routeMessage } from "./routing";
+import { parseMentions, routeMessage, routeMessageLLM } from "./routing";
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
@@ -30,25 +30,60 @@ const Input = z.object({
   targetAgentId: z.enum(AgentIds).optional(),
 });
 
+const MAX_REPLIES_PER_TURN = 4;
+
 export const sendHuddleMessage = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => Input.parse(raw))
   .handler(async ({ data }) => {
-    const routed = routeMessage({
-      text: data.text,
-      scope: data.scope,
-      members: data.members,
-      history: data.history as HuddleMessage[],
-      targetAgentId: data.targetAgentId,
-    });
+    const key = process.env.LOVABLE_API_KEY;
 
     type Reply = { agentId: AgentId; text: string };
+
+    // Set up the model once so both router and replies share it.
+    let model: Parameters<typeof generateText>[0]["model"] | null = null;
+    if (key) {
+      const { createLovableAiGatewayProvider } = await import(
+        "@/lib/ai-gateway.server"
+      );
+      const gateway = createLovableAiGatewayProvider(key);
+      model = gateway("openai/gpt-5.5");
+    }
+
+    // Route: LLM-first for group + no explicit target/mention, else keyword.
+    const explicitMentions = parseMentions(
+      data.text,
+      AGENTS.filter((a) => data.members.includes(a.id)),
+    );
+    const useLLMRouter =
+      !!model &&
+      data.scope === "group" &&
+      !data.targetAgentId &&
+      explicitMentions.length === 0;
+
+    const routed = useLLMRouter
+      ? await routeMessageLLM(
+          {
+            text: data.text,
+            scope: data.scope,
+            members: data.members,
+            history: data.history as HuddleMessage[],
+            targetAgentId: data.targetAgentId,
+          },
+          model!,
+        )
+      : routeMessage({
+          text: data.text,
+          scope: data.scope,
+          members: data.members,
+          history: data.history as HuddleMessage[],
+          targetAgentId: data.targetAgentId,
+        });
 
     if (routed.winners.length === 0) {
       return { decision: routed.decision, replies: [] as Reply[] };
     }
 
-    const key = process.env.LOVABLE_API_KEY;
-    if (!key) {
+    if (!model) {
       return {
         decision: routed.decision,
         replies: routed.winners.map((id) => ({
@@ -57,10 +92,6 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         })),
       };
     }
-
-    const { createLovableAiGatewayProvider } = await import("@/lib/ai-gateway.server");
-    const gateway = createLovableAiGatewayProvider(key);
-    const model = gateway("openai/gpt-5.5");
 
     const baseTranscript = data.history
       .slice(-14)
@@ -72,16 +103,32 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       })
       .concat([{ role: "user" as const, content: data.text }]);
 
+    const presentAgents = AGENTS.filter((a) => data.members.includes(a.id));
+
+    // Queue of agents to reply. Start with the routed winners; extend via
+    // @mentions inside replies so agents can summon each other.
+    const queue: AgentId[] = [...routed.winners];
+    const spoken = new Set<AgentId>();
     const replies: Reply[] = [];
-    for (let i = 0; i < routed.winners.length; i++) {
-      const winner = AGENT_BY_ID[routed.winners[i]];
+
+    while (queue.length > 0 && replies.length < MAX_REPLIES_PER_TURN) {
+      const nextId = queue.shift()!;
+      if (spoken.has(nextId)) continue;
+      const winner = AGENT_BY_ID[nextId];
+      if (!winner || !data.members.includes(nextId)) continue;
+
       const priorInThisTurn = replies
         .map((r) => `${AGENT_BY_ID[r.agentId].name} just said: "${r.text}"`)
         .join("\n");
+
       const system =
         winner.systemPrompt +
-        ` You are ${winner.name} in a ${data.scope === "group" ? "group huddle" : "1:1"}. Reply naturally, as yourself, in-character — like you're talking in a room with real people. Never announce routing or say you'll pass it to another agent; just answer. Do not speak as anyone else. 1–3 short sentences unless asked for detail.` +
-        (priorInThisTurn ? `\n\nOther agents just replied in this same turn:\n${priorInThisTurn}\nBuild on what they said instead of repeating it. If you have nothing to add, reply with a single short line.` : "");
+        ` You are ${winner.name} in a ${data.scope === "group" ? "group huddle" : "1:1"}. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle (e.g. @${
+          presentAgents.find((a) => a.id !== winner.id)?.handle ?? "charleston-lewis"
+        }) — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail.` +
+        (priorInThisTurn
+          ? `\n\nOther agents just replied in this same turn:\n${priorInThisTurn}\nBuild on what they said instead of repeating it. If you have nothing to add, reply with a single short line.`
+          : "");
 
       try {
         const { text } = await generateText({
@@ -90,13 +137,33 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           messages: baseTranscript,
         });
         const clean = text.trim();
-        if (clean) replies.push({ agentId: winner.id, text: clean });
+        if (!clean) continue;
+        replies.push({ agentId: winner.id, text: clean });
+        spoken.add(winner.id);
+
+        // Chain: any agents this reply @mentioned should chime in next.
+        const chained = parseMentions(clean, presentAgents);
+        for (const id of chained) {
+          if (
+            id !== winner.id &&
+            !spoken.has(id) &&
+            !queue.includes(id) &&
+            data.members.includes(id)
+          ) {
+            queue.push(id);
+          }
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "AI gateway error";
-        replies.push({ agentId: winner.id, text: `(couldn't reach the model — ${msg})` });
+        replies.push({
+          agentId: winner.id,
+          text: `(couldn't reach the model — ${msg})`,
+        });
+        spoken.add(winner.id);
       }
     }
 
     return { decision: routed.decision, replies };
   });
+
 
