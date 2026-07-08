@@ -255,7 +255,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     }
 
     // ---- Reply transcript ----
-    // NOTE: `baseTranscript` is rebuilt per-agent below so the *current* agent's
+    // NOTE: `transcript` is rebuilt per-agent below so the *current* agent's
     // prior turns appear as role=assistant (unprefixed) and other agents' turns
     // appear as role=user context — otherwise models mimic the `[Name] ...`
     // prefix pattern in their own replies.
@@ -422,7 +422,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           const text = await callOpenAIResponses({
             model: usedModel,
             instructions,
-            transcript: baseTranscript,
+            transcript: transcript,
             fastMode: routerCfg.fastMode,
             tools: mergedTools.length > 0 ? mergedTools : undefined,
             onToolCall,
@@ -460,7 +460,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           const { text } = await generateText({
             model,
             system: appSystem,
-            messages: baseTranscript,
+            messages: transcript,
           });
           clean = text.trim();
         }
