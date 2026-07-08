@@ -17,14 +17,28 @@ const sizeMap = {
 };
 
 export function AgentAvatar({ agent, size = "md", ring, className }: Props) {
+  const base = cn(
+    "inline-flex items-center justify-center rounded-full overflow-hidden font-semibold text-white shrink-0 select-none",
+    sizeMap[size],
+    ring && "ring-2 ring-background",
+    className,
+  );
+
+  if (agent.avatarUrl) {
+    return (
+      <img
+        src={agent.avatarUrl}
+        alt={agent.name}
+        title={agent.name}
+        className={cn(base, "object-cover")}
+        loading="lazy"
+      />
+    );
+  }
+
   return (
     <span
-      className={cn(
-        "inline-flex items-center justify-center rounded-full font-semibold text-white shrink-0 select-none",
-        sizeMap[size],
-        ring && "ring-2 ring-background",
-        className,
-      )}
+      className={base}
       style={{ backgroundColor: `var(${agent.colorVar})` }}
       aria-label={agent.name}
       title={agent.name}
