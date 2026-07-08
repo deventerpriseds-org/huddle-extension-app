@@ -1,0 +1,119 @@
+import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { z } from "zod";
+import { AGENTS, type AgentId } from "../data/agents";
+import { DEFAULT_ROUTER_MODEL, type RouterBackend } from "./model-catalog";
+
+// ------- Schema (used to validate uploaded config JSON) -------
+
+const AgentBackendSchema = z.object({
+  backend: z.enum(["lovable", "openai"]),
+  assistantId: z.string().trim().optional(),
+  useStoredPrompt: z.boolean(),
+});
+
+const RouterConfigSchema = z.object({
+  backend: z.enum(["openai", "lovable"]),
+  model: z.string().min(1),
+  fastMode: z.boolean(),
+});
+
+export const BackendsConfigSchema = z.object({
+  version: z.number().default(1),
+  router: RouterConfigSchema,
+  agents: z.record(z.string(), AgentBackendSchema),
+});
+
+export type AgentBackend = z.infer<typeof AgentBackendSchema>;
+export type RouterConfig = z.infer<typeof RouterConfigSchema>;
+export type BackendsConfig = z.infer<typeof BackendsConfigSchema>;
+
+// ------- Prefilled assistant IDs (12 of 15 agents) -------
+
+export const ASSISTANT_IDS: Partial<Record<AgentId, string>> = {
+  "flex-grimes": "asst_TkRNda28gmRggEb1duj31a8J",
+  "charleston-lewis": "asst_epZActkpqNmqw7KusXBmyfuT",
+  "troy-lennox": "asst_AqTwFwQx5RICAH3OPYVPCG5Q",
+  "ezra-miles": "asst_FIdoVvUYjszVEei8QBo2LFoO",
+  "faith-hartley": "asst_gY8usQIJelYXLZzQm08Z0C2x",
+  "sam-trent": "asst_zIO5Sfb4k4IzHOF2TbJQf1tH",
+  "elle-rowan": "asst_yLrJPsX4gJjiQo92kLUUOhnh",
+  "cole-blake": "asst_nk9d9XZcVacBHyhzUPvAVM5o",
+  "tess-sutton": "asst_KnIB4EMkB5ziEwZZdwEFzoII",
+  "iris-chase": "asst_BcZBxIx9zH8VlPvfJrhPP3EF",
+  "eli-vaughn": "asst_hNYvCTsP7t8XB4Md0xFN7DwC",
+  "liam-kingsley": "asst_GVIrKekZI0p9UsqAgGYZHtOE",
+};
+
+function defaultAgents(): Record<AgentId, AgentBackend> {
+  const out = {} as Record<AgentId, AgentBackend>;
+  for (const a of AGENTS) {
+    const id = ASSISTANT_IDS[a.id];
+    out[a.id] = id
+      ? { backend: "openai", assistantId: id, useStoredPrompt: true }
+      : { backend: "lovable", useStoredPrompt: false };
+  }
+  return out;
+}
+
+export function defaultBackendsConfig(): BackendsConfig {
+  return {
+    version: 1,
+    router: {
+      backend: "openai",
+      model: DEFAULT_ROUTER_MODEL.openai,
+      fastMode: false,
+    },
+    agents: defaultAgents(),
+  };
+}
+
+// ------- Store -------
+
+interface BackendsState {
+  config: BackendsConfig;
+  setRouter: (patch: Partial<RouterConfig>) => void;
+  setAgent: (id: AgentId, patch: Partial<AgentBackend>) => void;
+  replaceConfig: (cfg: BackendsConfig) => void;
+  resetToDefaults: () => void;
+}
+
+export const useBackendsStore = create<BackendsState>()(
+  persist(
+    (set) => ({
+      config: defaultBackendsConfig(),
+      setRouter: (patch) =>
+        set((s) => ({ config: { ...s.config, router: { ...s.config.router, ...patch } } })),
+      setAgent: (id, patch) =>
+        set((s) => ({
+          config: {
+            ...s.config,
+            agents: {
+              ...s.config.agents,
+              [id]: { ...s.config.agents[id], ...patch },
+            },
+          },
+        })),
+      replaceConfig: (cfg) => set({ config: cfg }),
+      resetToDefaults: () => set({ config: defaultBackendsConfig() }),
+    }),
+    {
+      name: "huddle-backends",
+      storage: createJSONStorage(() =>
+        typeof window !== "undefined" ? window.localStorage : (undefined as unknown as Storage),
+      ),
+      skipHydration: typeof window === "undefined",
+      // Merge to pick up new agents added in future versions.
+      merge: (persisted, current) => {
+        const p = persisted as Partial<BackendsState> | undefined;
+        if (!p?.config) return current;
+        const merged: BackendsConfig = {
+          version: 1,
+          router: { ...current.config.router, ...p.config.router },
+          agents: { ...current.config.agents, ...p.config.agents },
+        };
+        return { ...current, config: merged };
+      },
+    },
+  ),
+);

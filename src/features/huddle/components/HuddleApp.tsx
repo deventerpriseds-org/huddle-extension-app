@@ -1,14 +1,16 @@
 import { useState } from "react";
-import { Menu, PanelRight } from "lucide-react";
+import { Menu, PanelRight, Settings } from "lucide-react";
 import { BoardView } from "./BoardView";
 import { ContextPanel } from "./ContextPanel";
 import { HuddleView } from "./HuddleView";
 import { MeetingLayer } from "./MeetingBar";
 import { Rail } from "./Rail";
 import { Sidebar } from "./Sidebar";
+import { SettingsSheet } from "./SettingsSheet";
 import { useHuddleStore } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID } from "../data/agents";
+
 
 export function HuddleApp() {
   const view = useHuddleStore((s) => s.view);
@@ -17,6 +19,8 @@ export function HuddleApp() {
   const active = huddles.find((h) => h.id === activeId);
   const [navOpen, setNavOpen] = useState(false);
   const [ctxOpen, setCtxOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
 
   const activeTitle = active
     ? active.kind === "group"
@@ -46,15 +50,27 @@ export function HuddleApp() {
             <Menu size={18} />
           </button>
           <div className="min-w-0 truncate text-sm font-semibold">{activeTitle}</div>
-          <button
-            type="button"
-            onClick={() => setCtxOpen(true)}
-            aria-label="Open activity panel"
-            className="inline-flex size-9 items-center justify-center rounded-lg hover:bg-muted"
-          >
-            <PanelRight size={18} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Open settings"
+              className="inline-flex size-9 items-center justify-center rounded-lg hover:bg-muted"
+            >
+              <Settings size={18} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setCtxOpen(true)}
+              aria-label="Open activity panel"
+              className="inline-flex size-9 items-center justify-center rounded-lg hover:bg-muted"
+            >
+              <PanelRight size={18} />
+            </button>
+          </div>
         </div>
+
+
 
         {view === "huddle" ? <HuddleView /> : <BoardView />}
       </div>
@@ -84,7 +100,9 @@ export function HuddleApp() {
         </SheetContent>
       </Sheet>
 
+      <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
       <MeetingLayer />
+
     </div>
   );
 }

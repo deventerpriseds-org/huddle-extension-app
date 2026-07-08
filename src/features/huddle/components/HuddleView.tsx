@@ -7,6 +7,8 @@ import type { Huddle, HuddleMessage } from "../data/seed";
 import { sendHuddleMessage } from "../lib/huddle.functions";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore } from "../store";
+import { useBackendsStore } from "../lib/agent-backends";
+
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
 import {
   DropdownMenu,
@@ -298,6 +300,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
     setText("");
     setSending(true);
     try {
+      const backendsCfg = useBackendsStore.getState().config;
       const result = await sendHuddleMessage({
         data: {
           text: trimmed,
@@ -314,8 +317,11 @@ function Composer({ huddle }: { huddle: Huddle }) {
             replyTo: m.replyTo,
           })),
           targetAgentId,
+          router: backendsCfg.router,
+          agents: backendsCfg.agents,
         },
       });
+
 
       logDecision({
         id: `d-${now}`,
