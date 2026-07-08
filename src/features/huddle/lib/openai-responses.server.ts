@@ -1,10 +1,12 @@
-// Direct OpenAI Responses API helpers. Used when:
-//   1. Router backend === "openai"           → callOpenAIRouter (structured JSON)
-//   2. Agent backend === "openai"            → callOpenAIResponses (persona reply)
+// Direct OpenAI Responses API helpers.
 //
-// All calls hit https://api.openai.com/v1/responses. Reads OPENAI_API_KEY at
-// call time (never at module scope — .functions.ts modules ship stubs to the
-// client bundle).
+// OpenAI has deprecated Assistants (`asst_...`) and reusable stored prompts
+// (`pmpt_...`); `v1/prompts` shuts down 2026-11-30. The current, forward-
+// compatible shape is a plain Responses call with `model` + `instructions` +
+// `input` + inline `tools`. That's what we do here.
+//
+// Reads OPENAI_API_KEY at call time (never at module scope — this file is
+// imported dynamically inside a server-function handler).
 
 const OPENAI_URL = "https://api.openai.com/v1/responses";
 
@@ -71,12 +73,13 @@ export interface ToolHandler {
 }
 
 export interface OpenAIPersonaInput {
-  assistantId: string;
-  /** When set, overrides the assistant's stored prompt (useStoredPrompt === false). */
-  instructions?: string;
+  /** Model id to run (e.g. "gpt-4o", "gpt-4o-mini"). */
+  model: string;
+  /** Full system prompt for this turn (persona + scene + RAG hint). */
+  instructions: string;
   transcript: Array<{ role: "user" | "assistant"; content: string }>;
   fastMode?: boolean;
-  /** OpenAI Responses tools (function/file_search). */
+  /** OpenAI Responses tools (function/file_search). Not code_interpreter. */
   tools?: unknown[];
   /** Called when the model emits function_call items. */
   onToolCall?: ToolHandler;
@@ -116,34 +119,37 @@ function extractToolCalls(json: ResponsesReply): Array<{
     }));
 }
 
+// Only some OpenAI models honor the priority service tier. Gate to avoid
+// silent no-ops and per-model billing surprises.
+const PRIORITY_MODELS = new Set([
+  "gpt-4o",
+  "gpt-4o-2024-08-06",
+  "gpt-4o-2024-11-20",
+  "gpt-5",
+  "gpt-5-mini",
+  "gpt-5.5",
+]);
+
 export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<string> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY not configured");
 
   const maxHops = input.maxToolHops ?? 2;
+  const priority = input.fastMode && PRIORITY_MODELS.has(input.model);
 
-  // Build the running input array. Each tool round appends function_call_output items.
+  // Running input array. Each tool round appends function_call_output items.
   const runningInput: unknown[] = [...input.transcript];
-
   let previousResponseId: string | undefined;
 
   for (let hop = 0; hop <= maxHops; hop++) {
-    // OpenAI Responses API accepts `prompt: { id }` only for stored prompts
-    // (`pmpt_...`). Legacy Assistants IDs (`asst_...`) are a different resource
-    // and are rejected. Fall back to a plain model + instructions call in that
-    // case so agents configured with assistant IDs still work.
-    const isStoredPrompt = input.assistantId.startsWith("pmpt_");
     const body: Record<string, unknown> = {
-      ...(isStoredPrompt
-        ? { prompt: { id: input.assistantId } }
-        : { model: "gpt-5.5" }),
+      model: input.model,
+      instructions: input.instructions,
       input: runningInput,
-      ...(input.instructions ? { instructions: input.instructions } : {}),
-      ...(input.fastMode ? { service_tier: "priority" } : {}),
+      ...(priority ? { service_tier: "priority" } : {}),
       ...(input.tools && input.tools.length > 0 ? { tools: input.tools } : {}),
       ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
     };
-
 
     const res = await fetch(OPENAI_URL, {
       method: "POST",
@@ -167,8 +173,6 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<st
       return extractText(json).trim();
     }
 
-    // Execute tools; append function_call_output for each to the next input.
-    // With previous_response_id, we only need to send the new outputs.
     const nextInput: unknown[] = [];
     for (const tc of toolCalls) {
       let args: Record<string, unknown> = {};
@@ -189,7 +193,6 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<st
         output,
       });
     }
-    // Replace running input for the next hop (previous_response_id carries prior state).
     runningInput.length = 0;
     runningInput.push(...nextInput);
   }
