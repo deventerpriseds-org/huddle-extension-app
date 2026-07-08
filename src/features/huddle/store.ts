@@ -93,6 +93,7 @@ export const useHuddleStore = create<HuddleState>()(
     }),
     {
       name: "huddle-workspace",
+      version: 2,
       storage: createJSONStorage(() =>
         typeof window !== "undefined" ? window.localStorage : (undefined as unknown as Storage),
       ),
@@ -103,6 +104,17 @@ export const useHuddleStore = create<HuddleState>()(
         decisions: s.decisions,
         activeHuddleId: s.activeHuddleId,
       }),
+      migrate: (persisted) => {
+        const p = (persisted ?? {}) as Partial<HuddleState>;
+        const validMessages = (p.messages ?? []).filter((m) => {
+          if (!m || !m.author) return false;
+          if (m.author.kind === "agent") {
+            return !!AGENT_BY_ID[m.author.agentId as AgentId];
+          }
+          return true;
+        });
+        return { ...p, messages: validMessages } as Partial<HuddleState>;
+      },
     },
 
   ),
