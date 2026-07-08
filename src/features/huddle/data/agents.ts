@@ -5,7 +5,7 @@ import "@fontsource/inter/700.css";
 
 export type AgentId =
   | "terry-locke"
-  | "compass"
+  | "iris-chase"
   | "tess-sutton"
   | "finn-reid"
   | "faith-hartley"
@@ -36,7 +36,7 @@ export interface Agent {
 }
 
 const p = (role: string, tone: string, bounds: string) =>
-  `You are ${role}. Voice: ${tone}. Stay strictly in your lane — ${bounds}. Use sentence case, no emoji, no headings. Keep replies to 1–3 short sentences unless the user asks for detail. If a question is outside your lane, hand off to Compass in one line.`;
+  `You are ${role}. Voice: ${tone}. Stay strictly in your lane — ${bounds}. Use sentence case, no emoji, no headings. Keep replies to 1–3 short sentences unless the user asks for detail. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle (e.g. @charleston-lewis) — the mention itself is the handoff, don't narrate it.`;
 
 export const AGENTS: Agent[] = [
   {
@@ -58,21 +58,20 @@ export const AGENTS: Agent[] = [
     ),
   },
   {
-    id: "compass",
-    name: "Compass",
-    handle: "compass",
-    role: "Planner",
-    initials: "CP",
+    id: "iris-chase",
+    name: "Iris Chase",
+    handle: "iris-chase",
+    role: "Itinerary",
+    initials: "IC",
     colorVar: "--agent-teal",
-    domains: ["planning", "scheduling", "coordination"],
-    themes: ["route", "assign", "prioritize", "coordinate", "who owns"],
-    tone: "formal",
-    voiceId: "compass",
-    special: "coordinator",
+    domains: ["itinerary", "trips", "travel plans", "day plans"],
+    themes: ["itinerary", "trip", "route", "stops", "day-of", "schedule of the day"],
+    tone: "warm",
+    voiceId: "iris",
     systemPrompt: p(
-      "Compass, the planner who keeps priorities and sequencing clear",
-      "neutral, precise, a little formal",
-      "you clarify priorities, timelines and sequencing — you never narrate handoffs or say you'll pass things to another agent",
+      "Iris Chase, the itinerary agent",
+      "warm, orderly, day-of-focused",
+      "you build itineraries, day plans and trip sequences — not finances or long-term strategy",
     ),
   },
   {

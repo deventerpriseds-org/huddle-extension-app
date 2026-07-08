@@ -136,8 +136,7 @@ function ExpandedStage() {
           <SpeakerSpotlight agent={speaker} />
           <div className="max-w-xl rounded-xl bg-white/5 px-4 py-3 text-sm text-white/90">
             <span className="opacity-70">“</span>
-            Since last check-in — {speaker.role.toLowerCase()} progress on your open threads. I'll hand to
-            Compass after I finish this note.
+            Since last check-in — {speaker.role.toLowerCase()} progress on your open threads.
             <span className="opacity-70">”</span>
           </div>
         </div>
