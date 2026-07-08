@@ -14,7 +14,6 @@ export function HuddleApp() {
   const view = useHuddleStore((s) => s.view);
   const huddles = useHuddleStore((s) => s.huddles);
   const activeId = useHuddleStore((s) => s.activeHuddleId);
-  const setActive = useHuddleStore((s) => s.setActive);
   const active = huddles.find((h) => h.id === activeId);
   const [navOpen, setNavOpen] = useState(false);
   const [ctxOpen, setCtxOpen] = useState(false);
