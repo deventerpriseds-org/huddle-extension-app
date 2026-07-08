@@ -77,15 +77,20 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "Huddle — chat, huddle, and run a team of AI agents" },
+      {
+        name: "description",
+        content:
+          "Huddle is a Slack/Teams-style workspace where you talk to your own AI agents — one-to-one or as a group — and they do real work on your behalf.",
+      },
+      { property: "og:title", content: "Huddle — a team of AI agents" },
+      {
+        property: "og:description",
+        content:
+          "Chat, huddle, and run a team of AI agents. Group and 1:1 huddles, a shared queue, voice standups.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
-    ],
     links: [
       {
         rel: "stylesheet",
