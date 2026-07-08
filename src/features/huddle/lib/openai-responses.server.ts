@@ -128,14 +128,22 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<st
   let previousResponseId: string | undefined;
 
   for (let hop = 0; hop <= maxHops; hop++) {
+    // OpenAI Responses API accepts `prompt: { id }` only for stored prompts
+    // (`pmpt_...`). Legacy Assistants IDs (`asst_...`) are a different resource
+    // and are rejected. Fall back to a plain model + instructions call in that
+    // case so agents configured with assistant IDs still work.
+    const isStoredPrompt = input.assistantId.startsWith("pmpt_");
     const body: Record<string, unknown> = {
-      prompt: { id: input.assistantId },
+      ...(isStoredPrompt
+        ? { prompt: { id: input.assistantId } }
+        : { model: "gpt-5.5" }),
       input: runningInput,
       ...(input.instructions ? { instructions: input.instructions } : {}),
       ...(input.fastMode ? { service_tier: "priority" } : {}),
       ...(input.tools && input.tools.length > 0 ? { tools: input.tools } : {}),
       ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
     };
+
 
     const res = await fetch(OPENAI_URL, {
       method: "POST",
