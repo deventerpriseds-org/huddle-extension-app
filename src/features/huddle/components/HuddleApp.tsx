@@ -19,6 +19,8 @@ export function HuddleApp() {
   const active = huddles.find((h) => h.id === activeId);
   const [navOpen, setNavOpen] = useState(false);
   const [ctxOpen, setCtxOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
 
   const activeTitle = active
     ? active.kind === "group"
