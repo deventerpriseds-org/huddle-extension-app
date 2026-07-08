@@ -30,7 +30,7 @@ const RouterConfigInput = z.object({
 const AgentBackendInput = z.object({
   backend: z.enum(["lovable", "openai"]),
   assistantId: z.string().optional(),
-  useStoredPrompt: z.boolean(),
+  model: z.string().optional(),
   rag: z
     .object({
       store: z.enum(["azure", "lovable", "none"]),
@@ -42,6 +42,7 @@ const AgentBackendInput = z.object({
     })
     .optional(),
 });
+
 
 const Input = z.object({
   text: z.string().min(1).max(4000),
