@@ -175,23 +175,24 @@ export function routeMessage(input: RouteInput): RouteResult {
  *
  * 1:1 and explicit @mentions short-circuit before this is called.
  */
+export interface RouterInvocation {
+  backend: "openai" | "lovable";
+  model: string;
+  fastMode?: boolean;
+  /** Lovable AI SDK model instance — required when backend === "lovable". */
+  lovableModel?: Parameters<typeof generateText>[0]["model"];
+}
+
 export async function routeMessageLLM(
   input: RouteInput,
-  model: Parameters<typeof generateText>[0]["model"],
+  invocation: RouterInvocation,
 ): Promise<RouteResult> {
   const { text, scope, members, history, targetAgentId } = input;
   const present = AGENTS.filter((a) => members.includes(a.id));
 
-  // 1:1 — target always answers
-  if (scope === "one-to-one" && targetAgentId) {
-    return routeMessage(input);
-  }
-
-  // Explicit @mentions win deterministically
+  if (scope === "one-to-one" && targetAgentId) return routeMessage(input);
   const mentions = parseMentions(text, present);
-  if (mentions.length > 0) {
-    return routeMessage(input);
-  }
+  if (mentions.length > 0) return routeMessage(input);
 
   const memberIds = present.map((a) => a.id) as [AgentId, ...AgentId[]];
   if (memberIds.length === 0) return routeMessage(input);
@@ -224,23 +225,58 @@ ${text}
 
 Pick the best primary agent, up to 2 supporting agents, and a one-line reason.`;
 
+  const zodSchema = z.object({
+    primary: z.enum(memberIds),
+    supporting: z.array(z.enum(memberIds)),
+    reason: z.string(),
+  });
+
   try {
-    const { output } = await generateText({
-      model,
-      system,
-      prompt,
-      output: Output.object({
-        schema: z.object({
-          primary: z.enum(memberIds),
-          supporting: z.array(z.enum(memberIds)),
-          reason: z.string(),
-        }),
-      }),
-    });
+    let output: { primary: AgentId; supporting: AgentId[]; reason: string };
+
+    if (invocation.backend === "openai") {
+      const { callOpenAIRouter } = await import("./openai-responses.server");
+      // Build a strict JSON schema mirroring the Zod shape.
+      const jsonSchema = {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          primary: { type: "string", enum: memberIds },
+          supporting: {
+            type: "array",
+            items: { type: "string", enum: memberIds },
+          },
+          reason: { type: "string" },
+        },
+        required: ["primary", "supporting", "reason"],
+      } as Record<string, unknown>;
+
+      const raw = await callOpenAIRouter<{
+        primary: string;
+        supporting: string[];
+        reason: string;
+      }>({
+        model: invocation.model,
+        system,
+        prompt,
+        schema: jsonSchema,
+        schemaName: "huddle_route",
+        fastMode: invocation.fastMode,
+      });
+      output = zodSchema.parse(raw);
+    } else {
+      if (!invocation.lovableModel) throw new Error("Lovable model not initialized");
+      const result = await generateText({
+        model: invocation.lovableModel,
+        system,
+        prompt,
+        output: Output.object({ schema: zodSchema }),
+      });
+      output = result.output;
+    }
 
     const { primary, supporting, reason } = output;
 
-    // Sanity check — model must pick from the roster.
     if (!memberIds.includes(primary)) {
       console.error(
         "[huddle-router] LLM returned primary not in roster, using keyword fallback:",
@@ -279,7 +315,7 @@ Pick the best primary agent, up to 2 supporting agents, and a one-line reason.`;
         winnerId: primary,
         runnerUpId: winners[1] ?? null,
         interjected: true,
-        reason: `LLM router: ${reason}`.slice(0, 200),
+        reason: `LLM router (${invocation.backend}/${invocation.model}): ${reason}`.slice(0, 220),
       },
     };
   } catch (err) {
@@ -307,3 +343,4 @@ Pick the best primary agent, up to 2 supporting agents, and a one-line reason.`;
     };
   }
 }
+
