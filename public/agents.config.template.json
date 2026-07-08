@@ -6,20 +6,20 @@
     "fastMode": false
   },
   "agents": {
-    "terry-locke":     { "backend": "lovable", "useStoredPrompt": false },
-    "iris-chase":      { "backend": "openai", "assistantId": "asst_BcZBxIx9zH8VlPvfJrhPP3EF", "useStoredPrompt": true },
-    "tess-sutton":     { "backend": "openai", "assistantId": "asst_KnIB4EMkB5ziEwZZdwEFzoII", "useStoredPrompt": true },
-    "finn-reid":       { "backend": "lovable", "useStoredPrompt": false },
-    "faith-hartley":   { "backend": "openai", "assistantId": "asst_gY8usQIJelYXLZzQm08Z0C2x", "useStoredPrompt": true },
-    "elle-rowan":      { "backend": "openai", "assistantId": "asst_yLrJPsX4gJjiQo92kLUUOhnh", "useStoredPrompt": true },
-    "flex-grimes":     { "backend": "openai", "assistantId": "asst_TkRNda28gmRggEb1duj31a8J", "useStoredPrompt": true },
-    "ezra-miles":      { "backend": "openai", "assistantId": "asst_FIdoVvUYjszVEei8QBo2LFoO", "useStoredPrompt": true },
-    "sam-trent":       { "backend": "openai", "assistantId": "asst_zIO5Sfb4k4IzHOF2TbJQf1tH", "useStoredPrompt": true },
-    "cole-blake":      { "backend": "openai", "assistantId": "asst_nk9d9XZcVacBHyhzUPvAVM5o", "useStoredPrompt": true },
-    "charleston-lewis":{ "backend": "openai", "assistantId": "asst_epZActkpqNmqw7KusXBmyfuT", "useStoredPrompt": true },
-    "eli-vaughn":      { "backend": "openai", "assistantId": "asst_hNYvCTsP7t8XB4Md0xFN7DwC", "useStoredPrompt": true },
-    "liam-kingsley":   { "backend": "openai", "assistantId": "asst_GVIrKekZI0p9UsqAgGYZHtOE", "useStoredPrompt": true },
-    "cam-post":        { "backend": "lovable", "useStoredPrompt": false },
-    "troy-lennox":     { "backend": "openai", "assistantId": "asst_AqTwFwQx5RICAH3OPYVPCG5Q", "useStoredPrompt": true }
+    "terry-locke":     { "backend": "lovable" },
+    "iris-chase":      { "backend": "openai", "assistantId": "asst_BcZBxIx9zH8VlPvfJrhPP3EF", "model": "gpt-4o" },
+    "tess-sutton":     { "backend": "openai", "assistantId": "asst_KnIB4EMkB5ziEwZZdwEFzoII", "model": "gpt-4o" },
+    "finn-reid":       { "backend": "lovable" },
+    "faith-hartley":   { "backend": "openai", "assistantId": "asst_gY8usQIJelYXLZzQm08Z0C2x", "model": "gpt-4o" },
+    "elle-rowan":      { "backend": "openai", "assistantId": "asst_yLrJPsX4gJjiQo92kLUUOhnh", "model": "gpt-4o" },
+    "flex-grimes":     { "backend": "openai", "assistantId": "asst_TkRNda28gmRggEb1duj31a8J", "model": "gpt-4o" },
+    "ezra-miles":      { "backend": "openai", "assistantId": "asst_FIdoVvUYjszVEei8QBo2LFoO", "model": "gpt-4o" },
+    "sam-trent":       { "backend": "openai", "assistantId": "asst_zIO5Sfb4k4IzHOF2TbJQf1tH", "model": "gpt-4o" },
+    "cole-blake":      { "backend": "openai", "assistantId": "asst_nk9d9XZcVacBHyhzUPvAVM5o", "model": "gpt-4o" },
+    "charleston-lewis":{ "backend": "openai", "assistantId": "asst_epZActkpqNmqw7KusXBmyfuT", "model": "gpt-4o" },
+    "eli-vaughn":      { "backend": "openai", "assistantId": "asst_hNYvCTsP7t8XB4Md0xFN7DwC", "model": "gpt-4o" },
+    "liam-kingsley":   { "backend": "openai", "assistantId": "asst_GVIrKekZI0p9UsqAgGYZHtOE", "model": "gpt-4o" },
+    "cam-post":        { "backend": "lovable" },
+    "troy-lennox":     { "backend": "openai", "assistantId": "asst_AqTwFwQx5RICAH3OPYVPCG5Q", "model": "gpt-4o" }
   }
 }
