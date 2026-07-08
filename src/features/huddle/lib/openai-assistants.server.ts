@@ -26,12 +26,6 @@ export function getAssistantSnapshot(agentId: AgentId): AssistantSnapshot | null
 }
 
 /**
- * Filter snapshot tools down to shapes the Responses API accepts inline in a
- * modern call. We keep `file_search` (built-in retrieval) and `function`
- * (custom function calling), and drop `code_interpreter` — Responses supports
- * it but wiring the container/session lifecycle is beyond this app's scope.
- */
-/**
  * Reshape Assistants-API tool definitions into the flat shape the Responses
  * API accepts. Assistants nests function/file_search config one level deep;
  * Responses expects a flat object with `name`/`vector_store_ids` at the top.
