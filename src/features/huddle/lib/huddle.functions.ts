@@ -4,6 +4,9 @@ import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import type { HuddleMessage } from "../data/seed";
 import { parseMentions, routeMessage, routeMessageLLM, type RouterInvocation } from "./routing";
+import type { FallbackEvent, PromptDebug } from "./fallbacks";
+import { buildRoster } from "./roster";
+
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
@@ -63,10 +66,32 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     const lovableKey = process.env.LOVABLE_API_KEY;
     const openaiKey = process.env.OPENAI_API_KEY;
 
-    type Reply = { agentId: AgentId; text: string };
+    type Reply = { agentId: AgentId; text: string; fallbackNotes?: string[] };
 
     const routerCfg = data.router ?? { backend: "openai" as const, model: "gpt-5.5", fastMode: false };
     const agentsCfg = data.agents ?? {};
+
+    // ---- Fallback + prompt trackers ----
+    const fallbacks: FallbackEvent[] = [];
+    const prompts: PromptDebug[] = [];
+    let fbSeq = 0;
+    function recordFallback(
+      subsystem: FallbackEvent["subsystem"],
+      reason: string,
+      inline: string,
+      agentId?: AgentId,
+    ): FallbackEvent {
+      const ev: FallbackEvent = {
+        id: `fb-${Date.now()}-${fbSeq++}`,
+        ts: Date.now(),
+        agentId,
+        subsystem,
+        reason,
+        inline,
+      };
+      fallbacks.push(ev);
+      return ev;
+    }
 
     // Fire-and-forget: persist the user's message into memory so future
     // retrieval can see it. Fan out to the right scope(s) based on each
@@ -89,7 +114,6 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           const { embed } = await import("./rag/embed.server");
           const { extractTriples, shouldExtractTriples } = await import("./rag/triples.server");
 
-          // Embed once, reuse across per-scope inserts.
           const vec = await embed(data.text);
           const source = `huddle:${data.huddleId}`;
 
@@ -175,6 +199,14 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       explicitMentions.length === 0 &&
       (routerCfg.backend === "openai" ? !!openaiKey : !!lovableKey);
 
+    if (data.scope === "group" && !data.targetAgentId && explicitMentions.length === 0 && !canLLMRoute) {
+      recordFallback(
+        "router",
+        `LLM router unavailable (${routerCfg.backend === "openai" ? "OPENAI_API_KEY" : "LOVABLE_API_KEY"} missing); using keyword routing.`,
+        "router: keyword fallback (no key)",
+      );
+    }
+
     let routed;
     if (canLLMRoute) {
       const invocation: RouterInvocation = {
@@ -196,6 +228,14 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         },
         invocation,
       );
+      // routeMessageLLM prefixes reason with "LLM fallback:" when it degrades.
+      if (routed.decision.reason.startsWith("LLM fallback")) {
+        recordFallback(
+          "router",
+          routed.decision.reason,
+          "router: LLM router failed, keyword fallback",
+        );
+      }
     } else {
       routed = routeMessage({
         text: data.text,
@@ -207,7 +247,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     }
 
     if (routed.winners.length === 0) {
-      return { decision: routed.decision, replies: [] as Reply[] };
+      return { decision: routed.decision, replies: [] as Reply[], fallbacks, prompts };
     }
 
     // ---- Reply transcript ----
@@ -239,23 +279,56 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         .map((r) => `${AGENT_BY_ID[r.agentId].name} just said: "${r.text}"`)
         .join("\n");
 
-      const appSystem =
-        winner.systemPrompt +
-        ` You are ${winner.name} in a ${data.scope === "group" ? "group huddle" : "1:1"}. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail.` +
-        (priorInThisTurn
+      const scene = ` You are ${winner.name} in a ${
+        data.scope === "group" ? "group huddle" : "1:1"
+      }. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail.${
+        priorInThisTurn
           ? `\n\nOther agents just replied in this same turn:\n${priorInThisTurn}\nBuild on what they said instead of repeating it. If you have nothing to add, reply with a single short line.`
-          : "");
+          : ""
+      }`;
+
+      const roster = buildRoster(data.members, winner.id);
+      const appSystem = winner.systemPrompt + scene + roster;
+
+      const perAgentFallbacks: string[] = [];
 
       try {
         let clean = "";
+        let usedBackend: "openai" | "lovable" = agentBackend.backend;
+        let usedModel = "";
+        let usedInstructions = "";
+        let fromSnapshot = false;
+        let toolTypes: string[] = [];
 
-        if (agentBackend.backend === "openai" && openaiKey) {
+        // Detect config-level fallback before we branch.
+        if (agentBackend.backend === "openai" && !openaiKey) {
+          const ev = recordFallback(
+            "openai",
+            `${winner.name} is configured for OpenAI but OPENAI_API_KEY is not set; falling back to Lovable AI.`,
+            "openai key missing — using Lovable AI",
+            winner.id,
+          );
+          perAgentFallbacks.push(ev.inline);
+          usedBackend = "lovable";
+        }
+
+        if (usedBackend === "openai" && openaiKey) {
           const { callOpenAIResponses } = await import("./openai-responses.server");
           const { getAssistantSnapshot, snapshotResponsesTools } = await import(
             "./openai-assistants.server"
           );
 
           const snapshot = getAssistantSnapshot(winner.id);
+          if (!snapshot) {
+            const ev = recordFallback(
+              "snapshot",
+              `${winner.name}: no OpenAI assistant snapshot on disk; using in-repo persona prompt. Run \`bun run fetch:assistants\` after fixing the assistant ID.`,
+              "no assistant snapshot — using in-repo prompt",
+              winner.id,
+            );
+            perAgentFallbacks.push(ev.inline);
+          }
+
           const rag = agentBackend.rag;
           const hasRag =
             !!rag && rag.store === "azure" && (rag.chunks || rag.triples || rag.fileSearch);
@@ -267,47 +340,65 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           let ragInstructions = "";
 
           if (hasRag && rag) {
-            const { buildRagTools, dispatchTool, RAG_SYSTEM_HINT } = await import("./rag/tools");
-            const { azurePgStore } = await import("./rag/azure-pg.server");
-            const built = buildRagTools({
-              chunks: rag.chunks,
-              triples: rag.triples,
-              fileSearch: rag.fileSearch,
-              vectorStoreId: rag.openaiVectorStoreId,
-            });
-            if (built.length > 0) {
-              ragTools = built;
-              ragInstructions = "\n\n" + RAG_SYSTEM_HINT;
-              const mode = rag.sharing ?? "shared";
-              onToolCall = (c) => dispatchTool(azurePgStore, winner.id, c, mode);
+            try {
+              const { buildRagTools, dispatchTool, RAG_SYSTEM_HINT } = await import("./rag/tools");
+              const { azurePgStore } = await import("./rag/azure-pg.server");
+              const built = buildRagTools({
+                chunks: rag.chunks,
+                triples: rag.triples,
+                fileSearch: rag.fileSearch,
+                vectorStoreId: rag.openaiVectorStoreId,
+              });
+              if (built.length > 0) {
+                ragTools = built;
+                ragInstructions = "\n\n" + RAG_SYSTEM_HINT;
+                const mode = rag.sharing ?? "shared";
+                onToolCall = (c) => dispatchTool(azurePgStore, winner.id, c, mode);
+              }
+            } catch (err) {
+              const ev = recordFallback(
+                "rag",
+                `${winner.name}: RAG tools failed to load (${err instanceof Error ? err.message : "unknown"}); replying without memory.`,
+                "rag unavailable — replying without memory",
+                winner.id,
+              );
+              perAgentFallbacks.push(ev.inline);
             }
           }
 
-          // Instructions: prefer the assistant snapshot's tuned instructions
-          // when we have one; otherwise fall back to the in-repo persona.
-          // Then append the scene/handoff rules and RAG hint.
           const snapshotInstructions = snapshot?.instructions?.trim();
-          const scene = ` You are ${winner.name} in a ${
-            data.scope === "group" ? "group huddle" : "1:1"
-          }. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail.${
-            priorInThisTurn
-              ? `\n\nOther agents just replied in this same turn:\n${priorInThisTurn}\nBuild on what they said instead of repeating it. If you have nothing to add, reply with a single short line.`
-              : ""
-          }`;
+          fromSnapshot = !!snapshotInstructions;
           const baseInstructions = snapshotInstructions
-            ? snapshotInstructions + scene
+            ? snapshotInstructions + scene + roster
             : appSystem;
           const instructions = baseInstructions + ragInstructions;
+          usedInstructions = instructions;
 
-          // Merge snapshot tools (file_search / function) with our RAG tools.
           const snapshotTools = snapshotResponsesTools(snapshot);
+          // Warn if snapshot had tools we can't wire (e.g. code_interpreter).
+          if (snapshot && snapshot.tools.length > snapshotTools.length) {
+            const dropped = snapshot.tools
+              .map((t) => t?.type)
+              .filter((t) => t !== "file_search" && t !== "function") as string[];
+            if (dropped.length > 0) {
+              const ev = recordFallback(
+                "tool",
+                `${winner.name}: dropped unsupported assistant tools: ${dropped.join(", ")}.`,
+                `dropped tools: ${dropped.join(", ")}`,
+                winner.id,
+              );
+              perAgentFallbacks.push(ev.inline);
+            }
+          }
           const mergedTools = [...snapshotTools, ...ragTools];
+          toolTypes = mergedTools
+            .map((t) => (t as { type?: string })?.type ?? "unknown")
+            .filter(Boolean);
 
-          const model =
-            agentBackend.model?.trim() || snapshot?.model || "gpt-4o";
+          usedModel = agentBackend.model?.trim() || snapshot?.model || "gpt-4o";
 
           const text = await callOpenAIResponses({
-            model,
+            model: usedModel,
             instructions,
             transcript: baseTranscript,
             fastMode: routerCfg.fastMode,
@@ -315,13 +406,33 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             onToolCall,
           });
           clean = text.trim();
-
         } else {
           // Lovable AI path (default fallback).
-          const model = await getLovableModel("openai/gpt-5.5");
+          usedBackend = "lovable";
+          usedModel = "openai/gpt-5.5";
+          usedInstructions = appSystem;
+          const model = await getLovableModel(usedModel);
           if (!model) {
-            replies.push({ agentId: winner.id, text: "AI gateway is not configured yet." });
+            const ev = recordFallback(
+              "lovable",
+              `${winner.name}: LOVABLE_API_KEY is not configured; cannot reach any model.`,
+              "no AI backend configured",
+              winner.id,
+            );
+            replies.push({
+              agentId: winner.id,
+              text: `(fallback: ${ev.inline}) AI gateway is not configured yet.`,
+              fallbackNotes: [ev.inline],
+            });
             spoken.add(winner.id);
+            prompts.push({
+              agentId: winner.id,
+              backend: "lovable",
+              model: usedModel,
+              instructions: usedInstructions,
+              fromSnapshot: false,
+              toolTypes: [],
+            });
             continue;
           }
           const { text } = await generateText({
@@ -333,7 +444,26 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         }
 
         if (!clean) continue;
-        replies.push({ agentId: winner.id, text: clean });
+
+        // Persist prompt debug for this reply.
+        prompts.push({
+          agentId: winner.id,
+          backend: usedBackend,
+          model: usedModel,
+          instructions: usedInstructions,
+          fromSnapshot,
+          toolTypes,
+        });
+
+        const finalText = perAgentFallbacks.length > 0
+          ? `${clean}\n\n_(fallback: ${perAgentFallbacks.join("; ")})_`
+          : clean;
+
+        replies.push({
+          agentId: winner.id,
+          text: finalText,
+          fallbackNotes: perAgentFallbacks.length > 0 ? perAgentFallbacks : undefined,
+        });
         spoken.add(winner.id);
 
         const chained = parseMentions(clean, presentAgents);
@@ -349,13 +479,21 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "AI error";
+        const ev = recordFallback(
+          "openai",
+          `${winner.name}: model call failed — ${msg}`,
+          `model call failed: ${msg.slice(0, 80)}`,
+          winner.id,
+        );
         replies.push({
           agentId: winner.id,
-          text: `(couldn't reach the model — ${msg})`,
+          text: `(fallback: ${ev.inline}) couldn't reach the model — ${msg}`,
+          fallbackNotes: [ev.inline],
         });
         spoken.add(winner.id);
       }
     }
 
-    return { decision: routed.decision, replies };
+    return { decision: routed.decision, replies, fallbacks, prompts };
   });
+

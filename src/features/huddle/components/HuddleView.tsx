@@ -8,6 +8,8 @@ import { sendHuddleMessage } from "../lib/huddle.functions";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
+import { useAgentPanelStore } from "../lib/agent-panel-store";
+
 
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
 import {
@@ -272,6 +274,8 @@ function Composer({ huddle }: { huddle: Huddle }) {
   const addUser = useHuddleStore((s) => s.addUserMessage);
   const addAgent = useHuddleStore((s) => s.addAgentMessage);
   const logDecision = useHuddleStore((s) => s.logDecision);
+  const addFallbacks = useAgentPanelStore((s) => s.addFallbacks);
+  const recordTurn = useAgentPanelStore((s) => s.recordTurn);
   const allMessages = useHuddleStore((s) => s.messages);
   const messages = useMemo(() => allMessages.filter((m) => m.huddleId === huddle.id), [allMessages, huddle.id]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -335,6 +339,25 @@ function Composer({ huddle }: { huddle: Huddle }) {
         reason: result.decision.reason,
       });
 
+      // Surface fallbacks per the "no silent degrade" rule.
+      if (result.fallbacks && result.fallbacks.length > 0) {
+        addFallbacks(result.fallbacks);
+        for (const f of result.fallbacks.slice(0, 3)) {
+          toast.warning(`Fallback: ${f.inline}`, { description: f.reason });
+        }
+      }
+
+      // Record per-agent prompt debug for the Activity/Settings viewer.
+      if (result.prompts && result.prompts.length > 0) {
+        recordTurn({
+          turnId: userId,
+          ts: now,
+          huddleId: huddle.id,
+          userText: trimmed,
+          prompts: result.prompts,
+        });
+      }
+
       result.replies.forEach((reply, i) => {
         addAgent({
           id: `a-${now}-${i}`,
@@ -353,6 +376,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }
+
 
   return (
     <div className="border-t border-hairline bg-surface px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-3">

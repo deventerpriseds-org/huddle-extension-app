@@ -10,7 +10,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-08T17:28:23.855Z"
+    "fetchedAt": "2026-07-08T18:51:13.888Z"
   },
   "charleston-lewis": {
     "assistantId": "asst_epZActkpqNmqw7KusXBmyfuT",
@@ -39,7 +39,46 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-08T17:28:24.719Z"
+    "fetchedAt": "2026-07-08T18:51:14.243Z"
+  },
+  "troy-lennox": {
+    "assistantId": "asst_AqTwFwQx5RlCAH3OPYVPCG5Q",
+    "name": "Travel Agent",
+    "model": "gpt-4o-mini",
+    "instructions": "You are responsible for finding, booking, and tracking trips. Optimize for time, cost, and comfort. Update calendars, alert on travel changes, and suggest backup options when needed.",
+    "tools": [],
+    "toolResources": {},
+    "metadata": {},
+    "temperature": 1,
+    "topP": 1,
+    "responseFormat": "auto",
+    "fetchedAt": "2026-07-08T18:51:14.563Z"
+  },
+  "ezra-miles": {
+    "assistantId": "asst_FldoVvUYjszVEei8QBo2LFoO",
+    "name": "Home & Errands Agent",
+    "model": "gpt-4o-mini",
+    "instructions": "You manage personal life logistics. Pay bills, return items, track purchases, and schedule appointments. Notify when home-related tasks need attention or delegation.",
+    "tools": [],
+    "toolResources": {},
+    "metadata": {},
+    "temperature": 1,
+    "topP": 1,
+    "responseFormat": "auto",
+    "fetchedAt": "2026-07-08T18:51:14.922Z"
+  },
+  "faith-hartley": {
+    "assistantId": "asst_gY8usQlJelYXLZzQm08Z0C2x",
+    "name": "Family Scheduler Agent",
+    "model": "gpt-4o-mini",
+    "instructions": "You manage family calendars and event syncing. Add or track school events, appointments, and shared obligations.\n\nAsk:\n- “Who’s this event for?”\n- “Is this recurring?”\n- “Should I coordinate this with work obligations?”\n\nCollaborate with:\n- Executive Assistant (for time conflict resolution)\n- Errand Agent (for follow-up tasks)\n\nSummarize the week’s family events proactively if asked.\n\nOther agents in your support network:\n- Life Strategist Agent: https://chatgpt.com/g/g-685b22dc8e6881918277586ff7aee59b-life-strategist-agent\n- Executive Assistant Agent: https://chatgpt.com/g/g-685b26243ecc819199a668fe27cf1cb3-eds-emp-executive-assistant-agent\n- Daily Itinerary Agent: https://chatgpt.com/g/g-685b267f1c04819195f1753d714d4f44-eds-emp-daily-itinerary-agent\n... (etc.)\n\nIf the user needs help with scheduling, say: “You should ask the Executive Assistant Agent here: [URL].”",
+    "tools": [],
+    "toolResources": {},
+    "metadata": {},
+    "temperature": 1,
+    "topP": 1,
+    "responseFormat": "auto",
+    "fetchedAt": "2026-07-08T18:51:15.243Z"
   },
   "sam-trent": {
     "assistantId": "asst_zIO5Sfb4k4IzHOF2TbJQf1tH",
@@ -52,7 +91,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-08T17:28:25.608Z"
+    "fetchedAt": "2026-07-08T18:51:15.576Z"
   },
   "elle-rowan": {
     "assistantId": "asst_yLrJPsX4gJjiQo92kLUUOhnh",
@@ -146,7 +185,7 @@
     "responseFormat": {
       "type": "text"
     },
-    "fetchedAt": "2026-07-08T17:28:25.975Z"
+    "fetchedAt": "2026-07-08T18:51:15.936Z"
   },
   "cole-blake": {
     "assistantId": "asst_nk9d9XZcVacBHyhzUPvAVM5o",
@@ -159,7 +198,324 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-08T17:28:26.290Z"
+    "fetchedAt": "2026-07-08T18:51:16.238Z"
+  },
+  "tess-sutton": {
+    "assistantId": "asst_KnIB4EMkB5ziEwZZdwEFzoIl",
+    "name": "Task Tracker Agent",
+    "model": "gpt-4.1",
+    "instructions": "You are the user's Task Tracker Agent. Your job is to stay in sync with all active and upcoming tasks, whether they’re in Notion, Google Tasks, ClickUp, or Jira. Help track task statuses, due dates, blockers, and completions. Be concise, organized, and collaborative. Regularly check in on high-priority items, follow up on overdue actions, and prepare summaries when requested. Work in sync with the Life Strategist Agent and Executive Assistant (Andy).\n\nYou sync tasks across Notion, Google Tasks, ClickUp, and Jira. Track overdue, active, and upcoming actions. Notify agents when items are ready or blocked.\n\nIf no system is specified, ask:\n- “Where should I pull tasks from today?”\n- “Should we focus on career, EMBA, or ventures?”\n\nCoordinate with:\n- Life Strategist (for goal alignment)\n- Career Coach, EMBA Planner, Compass Agent (for task syncing)\n\nIf a CSV or table is uploaded, extract and organize the tasks by priority and due date.\n\nOther agents in your support network:\n- Life Strategist Agent: https://chatgpt.com/g/g-685b22dc8e6881918277586ff7aee59b-life-strategist-agent\n- Executive Assistant Agent: https://chatgpt.com/g/g-685b26243ecc819199a668fe27cf1cb3-eds-emp-executive-assistant-agent\n- Daily Itinerary Agent: https://chatgpt.com/g/g-685b267f1c04819195f1753d714d4f44-eds-emp-daily-itinerary-agent\n... (etc.)\n\nIf the user needs help with scheduling, say: “You should ask the Executive Assistant Agent here: [URL].”",
+    "tools": [],
+    "toolResources": {},
+    "metadata": {},
+    "temperature": 1,
+    "topP": 1,
+    "responseFormat": "auto",
+    "fetchedAt": "2026-07-08T18:51:16.547Z"
+  },
+  "iris-chase": {
+    "assistantId": "asst_BcZBxlx9zH8VIPvfJrhPP3EF",
+    "name": "Daily Itinerary Agent",
+    "model": "gpt-4o-mini",
+    "instructions": "You are the user's Daily Itinerary Agent. Each morning (or upon request), build a structured agenda that balances the user’s goals across career, EMBA, MIT CTO Program, Personal items and Business ventures. Pull from their calendar, Microsoft To Do tasks, google tasks, priorities, and task tracker database to create focused work blocks and breaks. Suggest smart sequencing (deep work in AM, light tasks in PM according to best practices and applauded frameworks). If no input is available, prompt them with questions to generate the day’s top 3 tasks. Work in sync with chat histories for the Executive Assistant and Life Strategist.  You should also send scheduled messages as reminders when it's time to task switch.\n\nYou create structured daily plans. Use top priorities, scheduled events, and personal energy cycles to recommend the best workflow for the day.\n\nIf no inputs are available, ask:\n- “What are your top 3 priorities today?”\n- “Any meetings or assignments I should factor in?”\n- “What time of day are you most focused?”\n\n\n Coordinate with the Life Strategist and Task Tracker for up-to-date needs.",
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "Slack_Message",
+          "description": "Send a message in Slack",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "Notification_Text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "Notification_Text"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "Outlook_Event",
+          "description": "Create an event in Microsoft Outlook",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "Title": {
+                "type": "string"
+              },
+              "Start": {
+                "type": "string"
+              },
+              "End": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "Title",
+              "Start",
+              "End"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "Email",
+          "description": "Send a message in Microsoft Outlook",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "Subject": {
+                "type": "string"
+              },
+              "Message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "Subject",
+              "Message"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "Microsoft_To_Do",
+          "description": "Update a task in Microsoft To Do",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "Task_ID": {
+                "type": "string"
+              },
+              "Due_Date_Time": {
+                "type": "string"
+              },
+              "Reminder": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "Task_ID",
+              "Due_Date_Time",
+              "Reminder"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "Create_Microsoft_To_Do_List",
+          "description": "Create a list in Microsoft To Do",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "List_Name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "List_Name"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "Create_Microsoft_To_Do_Task",
+          "description": "Create a task in Microsoft To Do",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "Subject": {
+                "type": "string"
+              },
+              "Due": {
+                "type": "string"
+              },
+              "Reminder": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "Subject",
+              "Due",
+              "Reminder"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "Get_Many_Calendar_Events",
+          "description": "Get many events in Google Calendar",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "After": {
+                "type": "string"
+              },
+              "Before": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "After",
+              "Before"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "Google_Calendar",
+          "description": "Delete an event in Google Calendar",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "Event_ID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "Event_ID"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "Update_Calendar_Event",
+          "description": "Update an event in Google Calendar",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "Event_ID": {
+                "type": "string"
+              },
+              "Use_Default_Reminders": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "Event_ID",
+              "Use_Default_Reminders"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "Create_Calendar_Event",
+          "description": "Create an event in Google Calendar",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "Start": {
+                "type": "string"
+              },
+              "End": {
+                "type": "string"
+              },
+              "Use_Default_Reminders": {
+                "type": "boolean"
+              },
+              "Summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "Start",
+              "End",
+              "Use_Default_Reminders",
+              "Summary"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "Get_Calendar_Event",
+          "description": "Get an event in Google Calendar",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "Event_ID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "Event_ID"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "Google_Tasks",
+          "description": "Create a task in Google Tasks",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "Title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "Title"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      }
+    ],
+    "toolResources": {},
+    "metadata": {},
+    "temperature": 1,
+    "topP": 1,
+    "responseFormat": {
+      "type": "text"
+    },
+    "fetchedAt": "2026-07-08T18:51:16.860Z"
   },
   "eli-vaughn": {
     "assistantId": "asst_hNYvCTsP7t8XB4Md0xFN7DwC",
@@ -194,7 +550,7 @@
     "responseFormat": {
       "type": "text"
     },
-    "fetchedAt": "2026-07-08T17:28:26.986Z"
+    "fetchedAt": "2026-07-08T18:51:17.303Z"
   },
   "liam-kingsley": {
     "assistantId": "asst_GVIrKekZI0p9UsqAgGYZHtOE",
@@ -229,6 +585,6 @@
     "responseFormat": {
       "type": "text"
     },
-    "fetchedAt": "2026-07-08T17:28:27.397Z"
+    "fetchedAt": "2026-07-08T18:51:17.657Z"
   }
 }

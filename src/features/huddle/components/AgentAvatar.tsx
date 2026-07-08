@@ -1,11 +1,14 @@
 import { cn } from "@/lib/utils";
 import type { Agent } from "../data/agents";
+import { useAgentPanelStore } from "../lib/agent-panel-store";
 
 interface Props {
   agent: Agent;
   size?: "xs" | "sm" | "md" | "lg" | "xl";
   ring?: boolean;
   className?: string;
+  /** Set false to disable the click-to-open-settings behavior. */
+  clickable?: boolean;
 }
 
 const sizeMap = {
@@ -16,13 +19,37 @@ const sizeMap = {
   xl: "size-16 text-base",
 };
 
-export function AgentAvatar({ agent, size = "md", ring, className }: Props) {
+export function AgentAvatar({ agent, size = "md", ring, className, clickable = true }: Props) {
+  const openAgent = useAgentPanelStore((s) => s.openAgent);
   const base = cn(
     "inline-flex items-center justify-center rounded-full overflow-hidden font-semibold text-white shrink-0 select-none",
     sizeMap[size],
     ring && "ring-2 ring-background",
+    clickable && "cursor-pointer transition hover:ring-2 hover:ring-primary/50",
     className,
   );
+
+  const onClick = clickable
+    ? (e: React.MouseEvent) => {
+        e.stopPropagation();
+        openAgent(agent.id);
+      }
+    : undefined;
+
+  const commonProps = {
+    onClick,
+    role: clickable ? "button" : undefined,
+    tabIndex: clickable ? 0 : undefined,
+    onKeyDown: clickable
+      ? (e: React.KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openAgent(agent.id);
+          }
+        }
+      : undefined,
+    "aria-label": clickable ? `Open settings for ${agent.name}` : agent.name,
+  };
 
   if (agent.avatarUrl) {
     return (
@@ -32,6 +59,7 @@ export function AgentAvatar({ agent, size = "md", ring, className }: Props) {
         title={agent.name}
         className={cn(base, "object-cover")}
         loading="lazy"
+        {...commonProps}
       />
     );
   }
@@ -40,13 +68,14 @@ export function AgentAvatar({ agent, size = "md", ring, className }: Props) {
     <span
       className={base}
       style={{ backgroundColor: `var(${agent.colorVar})` }}
-      aria-label={agent.name}
       title={agent.name}
+      {...commonProps}
     >
       {agent.initials}
     </span>
   );
 }
+
 
 export function UserAvatar({ size = "md" }: { size?: "xs" | "sm" | "md" | "lg" }) {
   return (

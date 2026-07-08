@@ -7,9 +7,12 @@ import { MeetingLayer } from "./MeetingBar";
 import { Rail } from "./Rail";
 import { Sidebar } from "./Sidebar";
 import { SettingsSheet } from "./SettingsSheet";
+import { AgentSettingsDrawer } from "./AgentSettingsDrawer";
+import { FallbackBanner } from "./FallbackBanner";
 import { useHuddleStore } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID } from "../data/agents";
+
 
 
 export function HuddleApp() {
@@ -70,10 +73,11 @@ export function HuddleApp() {
           </div>
         </div>
 
-
+        <FallbackBanner />
 
         {view === "huddle" ? <HuddleView /> : <BoardView />}
       </div>
+
 
       {/* Desktop context panel */}
       <div className="hidden h-full lg:flex">
@@ -101,8 +105,10 @@ export function HuddleApp() {
       </Sheet>
 
       <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <AgentSettingsDrawer />
       <MeetingLayer />
 
     </div>
   );
 }
+

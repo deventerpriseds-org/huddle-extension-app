@@ -1,109 +1,67 @@
-# RAG finisher — memory provenance + cross-agent attribution
+## Root cause found
 
-Two related pieces that close out the RAG phase together:
+The five "404" agents (Iris, Tess, Faith, Ezra, Troy) are not missing in OpenAI — their IDs in the codebase were transcribed with a capital `I` where the real IDs have a lowercase `l`. All five assistants exist in this project and match the personas exactly:
 
-1. **Provenance** — every memory row records which agents were in the room when it was captured, so retrieval can tell the model *whose* memory this is.
-2. **Attribution in replies** — when an agent surfaces memory that wasn't its own, it says so conversationally ("according to Finn…", "Tess mentioned…", "I reached out to Ezra and he said…") instead of pretending it always knew.
+| Persona | Real assistant | Correction |
+|---|---|---|
+| iris-chase → Daily Itinerary Agent | `asst_BcZBxlx9zH8VIPvfJrhPP3EF` | `l` for `I` (twice) |
+| tess-sutton → Task Tracker Agent | `asst_KnIB4EMkB5ziEwZZdwEFzoIl` | trailing `Il` not `II` |
+| faith-hartley → Family Scheduler | `asst_gY8usQlJelYXLZzQm08Z0C2x` | `Ql` not `QI` |
+| ezra-miles → Home & Errands | `asst_FldoVvUYjszVEei8QBo2LFoO` | `Fl` not `FI` |
+| troy-lennox → Travel Agent | `asst_AqTwFwQx5RlCAH3OPYVPCG5Q` | `5Rl` not `5RI` |
 
-Cross-agent sharing (Shared / Private / Read-only) folds into the same change since it's the same write/read path.
+## What I'll build
 
----
+**1. Correct the assistant IDs**
+- Update `ASSISTANT_IDS` in `src/features/huddle/lib/agent-backends.ts` and the parallel map in `scripts/fetch-openai-assistants.ts` with the five corrected IDs.
+- Re-run `bun run fetch:assistants`. Expected outcome: `openai-assistant-snapshots.json` grows from 7 entries to all 12. Verify with a diff summary printed by the script.
 
-## Data model change
+**2. New hard rule — every fallback must be user-visible (commit to project memory)**
+- Add a `Core` rule to `mem://index.md`: *"Any runtime fallback must surface a visible alert to the user — never degrade silently."*
+- Wire it in three places:
+  - **Inline tag on the message** — when an agent's reply comes from anything other than its authored path, append an italic muted line: `(fallback: <reason>)` — e.g. "no OpenAI snapshot, using in-repo prompt", "OpenAI unreachable, replied via Lovable AI", "router LLM failed, using keyword routing", "RAG store unavailable, replied without memory".
+  - **Persistent status banner** in `HuddleView` header — badge listing every currently-degraded subsystem, click to expand details. Driven by a shared `useFallbackStore` (Zustand) that server functions populate via the reply envelope.
+  - **Activity-tab entry** — each fallback event becomes a row (timestamp · agent · subsystem · reason) so history is auditable.
+- Extend the `sendHuddleMessage` return type with `fallbacks: FallbackEvent[]`, and thread the events through router, agent-model call, tool dispatch, and RAG paths so every silent degrade is captured.
 
-Add one column to both tables:
+**3. Agent settings viewer (click avatar → drawer, plus full page)**
+- Make every `AgentAvatar` clickable — opens a right-hand drawer showing, for the selected agent:
+  - Snapshot status: `authored (snapshot ✓)` or `fallback (in-repo prompt)`
+  - Backend, model, tools (snapshot + RAG), RAG config
+  - **Full system prompt** rendered in a monospace `<pre>` — exactly `snapshotInstructions + scene + ragInstructions`, i.e. what actually gets sent to the model
+  - "Refetch snapshot" button (calls the server fn for that one assistant ID; requires OPENAI_API_KEY)
+- Add a dedicated `/agents` route (TanStack file route) listing all 12 agents side-by-side with the same detail expandable; avatar-drawer's "Open full page" button navigates there.
+- SettingsSheet's existing per-agent controls stay but are joined by a "View full prompt" link that opens the same drawer.
 
-```sql
-ALTER TABLE rag_chunks  ADD COLUMN IF NOT EXISTS author_agent_ids TEXT[] DEFAULT '{}';
-ALTER TABLE rag_triples ADD COLUMN IF NOT EXISTS author_agent_ids TEXT[] DEFAULT '{}';
-CREATE INDEX IF NOT EXISTS rag_chunks_authors_idx  ON rag_chunks  USING gin (author_agent_ids);
-CREATE INDEX IF NOT EXISTS rag_triples_authors_idx ON rag_triples USING gin (author_agent_ids);
-```
+**4. Agents aware of one another**
+- Add a compact roster block that gets appended to every OpenAI-backed agent's instructions server-side (and to Lovable-backed agents' system prompt):
+  ```
+  Team roster (use @handle to hand off):
+  - @iris-chase — Daily Itinerary Agent (itineraries, day plans)
+  - @tess-sutton — Task Tracker (queue, backlog)
+  - ...
+  ```
+- Built from `AGENTS[]` at server start so it stays in sync when agents are added/removed. Excludes the speaking agent from their own roster.
 
-Added to the idempotent `BOOTSTRAP_SQL` so it runs on next server-fn call. Old rows keep `{}` (no attribution — treated as ambient user memory, no "according to…" prefix).
+**5. Activity-tab prompt/instruction history**
+- Persist every user turn's outbound instruction bundle per agent (system + scene + roster + RAG hint + user transcript window) in a client-side ring buffer (Zustand, capped at 50 turns × per huddle) keyed by turn id.
+- Activity tab gets a new "Prompts" section: each turn expandable, showing per-agent exact instructions and the resulting reply. Copy button per block.
+- No server persistence yet — matches the current in-memory model of the app; can be promoted to DB later.
 
-`author_agent_ids` is the list of agents *present when the user said this*. That's the natural source model for attribution: "according to whichever agents were in the conversation." A 1:1 huddle with Finn → `['finn-reid']`. A group huddle with Finn, Tess, Ezra → all three. If Charleston later retrieves that memory, he attributes to any of them.
+## Technical details
 
-## Write path (`huddle.functions.ts`)
+- ID fix is data-only, no API shape change.
+- `FallbackEvent` shape: `{ id, ts, agentId?, subsystem: "openai" | "snapshot" | "router" | "rag" | "tool", reason: string }`.
+- Server function returns `{ decision, replies, fallbacks }`; UI reducer merges into store.
+- Roster string is memoised at module scope in `huddle.functions.ts`, computed from `AGENTS`.
+- Avatar-click uses a `useAgentSettingsDrawer` store toggled by `AgentAvatar` `onClick`; the sheet mounts once in `HuddleApp`.
+- `/agents` route file: `src/routes/agents.tsx`, with head() setting a real page title.
 
-Today the fire-and-forget block writes one global chunk with no provenance. Change:
+## Verification before finishing
 
-- Compute `authorAgentIds = data.members` (everyone in the huddle when the user typed).
-- Compute destination scope from each replying agent's `sharing` mode (new config, see below):
-  - **Shared** (default) → one global write, `author_agent_ids = data.members`.
-  - **Private** → one `scope='agent'` write per Private agent, `author_agent_ids = [thatAgent]`.
-  - **Read-only shared** → no write.
-- Embedding is computed once and reused across per-scope inserts (saves the OpenAI call).
-- Triple extraction: same `author_agent_ids` applied to each extracted triple.
-
-## Read path (`azure-pg.server.ts`)
-
-Return `authorAgentIds` in `ChunkRow` / `TripleRow`. `scopeClause` gets a variant for **Private** mode (agent-only, no globals) and **Read-only shared** (globals only).
-
-## Retrieval scope filter (`tools.ts`)
-
-`dispatchTool` accepts a `mode: "shared" | "private" | "readonly-shared"` computed from the calling agent's config, translated to the store's `scope`/`agentId` params.
-
-## Attribution formatting (`tools.ts`)
-
-Tool results already come back as `[FACT]` / `[CONTEXT]` prefixes. Change to include an author list *only when the calling agent wasn't among the authors*:
-
-```
-[FACT from Finn Reid] user is allergic to shellfish
-[FACT from Finn Reid, Tess Sutton] user's deadline for Q4 is Nov 15
-[CONTEXT from Ezra Miles] we discussed the roadmap last Tuesday...
-```
-
-If the calling agent IS in `author_agent_ids`, the prefix stays `[FACT]` / `[CONTEXT]` with no attribution — it's their own memory. If `author_agent_ids` is empty (legacy rows), also no attribution.
-
-Uses `AGENT_BY_ID[id].name` so the model sees human names, not slugs.
-
-## System hint update (`tools.ts`)
-
-Extend `RAG_SYSTEM_HINT`:
-
-> You have memory tools. Use `lookup_facts` for direct factual questions (allergies, ownership, deadlines, preferences). Use `search_memory` for topical recall. Call both when useful. Treat `[FACT]` as ground truth, `[CONTEXT]` as supporting.
->
-> **When a result includes "from <agent name(s)>", that memory came from another agent's conversation with the user — you were not there. Say so naturally: "According to Finn…", "Tess mentioned that…", "I checked with Ezra and he said…", "I believe you talked to Finn about this — he said…". Never present another agent's memory as your own recollection. When a result has no attribution, it's ambient memory or your own conversation; speak as yourself.**
-
-## Sharing UI (`SettingsSheet.tsx`)
-
-Per-agent Memory tab gets a Select above the layer toggles:
-
-```
-Sharing  [ Shared ▾ ]     Shared · Private · Read-only shared
-```
-
-One-line tooltip per option. Default **Shared**.
-
-## Config (`agent-backends.ts`)
-
-Add `sharing: "shared" | "private" | "readonly-shared"` to `RagConfigSchema`, default `"shared"`.
-
-## Files
-
-- **edit** `src/features/huddle/lib/rag/azure-pg.server.ts` — `author_agent_ids` column + index in bootstrap; write/read/return it; `scopeClause` variants for private + readonly-shared.
-- **edit** `src/features/huddle/lib/rag/types.ts` — add `authorAgentIds: string[]` to `ChunkRow`/`TripleRow`, `authorAgentIds?` to `WriteChunkInput`/`WriteTripleInput`, `mode?` to search/lookup inputs.
-- **edit** `src/features/huddle/lib/rag/tools.ts` — `dispatchTool` maps agent ids → display names, prefixes results with `[FACT from …]` when calling agent isn't an author; expanded system hint.
-- **edit** `src/features/huddle/lib/huddle.functions.ts` — compute `authorAgentIds`, per-sharing-mode write fan-out, reuse embedding across writes, pass `mode` into `dispatchTool` per calling agent.
-- **edit** `src/features/huddle/lib/agent-backends.ts` — `sharing` field on RAG config.
-- **edit** `src/features/huddle/components/SettingsSheet.tsx` — Sharing select in Memory tab.
-- **edit** `.lovable/plan.md` — reflect completion; renumber remaining phases.
-
-## Verify
-
-- 1:1 with Finn: "I'm allergic to shellfish." → `rag_triples` row `author_agent_ids = ['finn-reid']`.
-- Switch to Charleston, ask "what am I allergic to?" → he calls `lookup_facts`, sees `[FACT from Finn Reid] user is allergic to shellfish`, replies something like *"According to Finn, you're allergic to shellfish."*
-- Same question to Finn → he sees `[FACT]` (no attribution — he's an author), replies *"You're allergic to shellfish."*
-- Set Ezra to **Private**, tell Ezra a secret preference → verify Charleston's `lookup_facts` doesn't return it (private = agent-only, no globals cross the wall).
-- Group huddle with Finn + Tess, user says a fact → `author_agent_ids = ['finn-reid', 'tess-sutton']`. Charleston later attributes to both: *"I believe you talked to Finn and Tess about this — they said…"*
-
-## Deferred (unchanged from prior discussion)
-
-- **Confidence-threshold escalation fallback** — not added; watch traffic first, cheaper fix later is tighter tool descriptions.
-- **Background reindex / job queue** — deferred to the background-executor phase; same worker infra powers reindex, bulk import, and file ingestion.
-- **Splitting `AZURE_PG_URL`** — not needed unless ops requires independent password rotation.
-
-## Ships this turn
-
-Everything above. Approve and I'll build it.
+1. `bun run fetch:assistants` — snapshot file contains all 12 entries with non-empty `instructions`.
+2. Send a message to Iris; drawer shows the authored Daily Itinerary Agent prompt (not the `p()` fallback), and no inline fallback tag appears.
+3. Temporarily break one agent's ID → confirm inline tag, banner entry, and Activity row all fire.
+4. Click any headshot → drawer opens with settings + full prompt.
+5. `/agents` route renders and links from drawer work.
+6. Roster block visible in the drawer's rendered instructions for at least one agent.
