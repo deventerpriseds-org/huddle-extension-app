@@ -7,6 +7,8 @@ import type { Huddle, HuddleMessage } from "../data/seed";
 import { sendHuddleMessage } from "../lib/huddle.functions";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore } from "../store";
+import { useBackendsStore } from "../lib/agent-backends";
+
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
 import {
   DropdownMenu,
