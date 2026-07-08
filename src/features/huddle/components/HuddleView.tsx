@@ -391,3 +391,16 @@ function Composer({ huddle }: { huddle: Huddle }) {
     </div>
   );
 }
+
+function ClientTime({ ts }: { ts: number }) {
+  const [label, setLabel] = useState<string>("");
+  useEffect(() => {
+    setLabel(new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+  }, [ts]);
+  return (
+    <span className="text-[11px] text-muted-foreground" suppressHydrationWarning>
+      {label}
+    </span>
+  );
+}
+
