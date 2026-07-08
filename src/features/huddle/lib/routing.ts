@@ -341,7 +341,7 @@ ${supportingHint}`;
         winnerId: primary,
         runnerUpId: winners[1] ?? null,
         interjected: true,
-        reason: `LLM router (${invocation.backend}/${invocation.model}): ${reason}`.slice(0, 220),
+        reason: `LLM router (${invocation.backend}/${invocation.model})${soloApplied ? " [solo]" : ""}: ${reason}`.slice(0, 220),
       },
     };
   } catch (err) {
