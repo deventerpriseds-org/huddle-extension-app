@@ -41,22 +41,20 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       targetAgentId: data.targetAgentId,
     });
 
-    if (!routed.winnerId) {
-      return {
-        decision: routed.decision,
-        reply: null as null | { agentId: AgentId; text: string },
-      };
+    type Reply = { agentId: AgentId; text: string };
+
+    if (routed.winners.length === 0) {
+      return { decision: routed.decision, replies: [] as Reply[] };
     }
 
-    const winner = AGENT_BY_ID[routed.winnerId];
     const key = process.env.LOVABLE_API_KEY;
     if (!key) {
       return {
         decision: routed.decision,
-        reply: {
-          agentId: winner.id,
-          text: "AI gateway is not configured yet — placeholder reply.",
-        },
+        replies: routed.winners.map((id) => ({
+          agentId: id,
+          text: "AI gateway is not configured yet.",
+        })),
       };
     }
 
@@ -64,36 +62,41 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     const gateway = createLovableAiGatewayProvider(key);
     const model = gateway("openai/gpt-5.5");
 
-    const system =
-      winner.systemPrompt +
-      ` You are inside a ${data.scope === "group" ? "group huddle with multiple agents present" : "one-to-one huddle with the user"}. Never break character. Do not answer as another agent. If a task should be tracked, mention it in one line at most.`;
-
-    const transcript = data.history
+    const baseTranscript = data.history
       .slice(-14)
       .filter((m) => m.author.kind !== "system")
       .map((m) => {
         if (m.author.kind === "user") return { role: "user" as const, content: m.text };
         const a = AGENT_BY_ID[(m.author as { kind: "agent"; agentId: AgentId }).agentId];
-        const tag = a.id === winner.id ? "" : `[${a.name}] `;
-        return { role: "assistant" as const, content: tag + m.text };
+        return { role: "assistant" as const, content: `[${a.name}] ${m.text}` };
       })
       .concat([{ role: "user" as const, content: data.text }]);
 
-    try {
-      const { text } = await generateText({
-        model,
-        system,
-        messages: transcript,
-      });
-      return {
-        decision: routed.decision,
-        reply: { agentId: winner.id, text: text.trim() },
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "AI gateway error";
-      return {
-        decision: routed.decision,
-        reply: { agentId: winner.id, text: `(couldn't reach the model — ${msg})` },
-      };
+    const replies: Reply[] = [];
+    for (let i = 0; i < routed.winners.length; i++) {
+      const winner = AGENT_BY_ID[routed.winners[i]];
+      const priorInThisTurn = replies
+        .map((r) => `${AGENT_BY_ID[r.agentId].name} just said: "${r.text}"`)
+        .join("\n");
+      const system =
+        winner.systemPrompt +
+        ` You are ${winner.name} in a ${data.scope === "group" ? "group huddle" : "1:1"}. Reply naturally, as yourself, in-character — like you're talking in a room with real people. Never announce routing or say you'll pass it to another agent; just answer. Do not speak as anyone else. 1–3 short sentences unless asked for detail.` +
+        (priorInThisTurn ? `\n\nOther agents just replied in this same turn:\n${priorInThisTurn}\nBuild on what they said instead of repeating it. If you have nothing to add, reply with a single short line.` : "");
+
+      try {
+        const { text } = await generateText({
+          model,
+          system,
+          messages: baseTranscript,
+        });
+        const clean = text.trim();
+        if (clean) replies.push({ agentId: winner.id, text: clean });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "AI gateway error";
+        replies.push({ agentId: winner.id, text: `(couldn't reach the model — ${msg})` });
+      }
     }
+
+    return { decision: routed.decision, replies };
   });
+
