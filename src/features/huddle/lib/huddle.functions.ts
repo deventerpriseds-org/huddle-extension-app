@@ -28,6 +28,8 @@ const RouterConfigInput = z.object({
   backend: z.enum(["openai", "lovable"]),
   model: z.string().min(1),
   fastMode: z.boolean().optional(),
+  strictPrompt: z.boolean().optional(),
+  soloOnCoverage: z.boolean().optional(),
 });
 
 const AgentBackendInput = z.object({
@@ -213,6 +215,8 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         backend: routerCfg.backend,
         model: routerCfg.model,
         fastMode: routerCfg.fastMode,
+        strictPrompt: routerCfg.strictPrompt,
+        soloOnCoverage: routerCfg.soloOnCoverage,
       };
       if (routerCfg.backend === "lovable") {
         const m = await getLovableModel(routerCfg.model);
