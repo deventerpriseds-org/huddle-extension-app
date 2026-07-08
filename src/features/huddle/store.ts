@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+
 import type { AgentId } from "./data/agents";
 import {
   HUDDLES,
@@ -92,6 +93,10 @@ export const useHuddleStore = create<HuddleState>()(
     }),
     {
       name: "huddle-workspace",
+      storage: createJSONStorage(() =>
+        typeof window !== "undefined" ? window.localStorage : (undefined as unknown as Storage),
+      ),
+      skipHydration: typeof window === "undefined",
       partialize: (s) => ({
         messages: s.messages,
         tasks: s.tasks,
@@ -99,5 +104,6 @@ export const useHuddleStore = create<HuddleState>()(
         activeHuddleId: s.activeHuddleId,
       }),
     },
+
   ),
 );
