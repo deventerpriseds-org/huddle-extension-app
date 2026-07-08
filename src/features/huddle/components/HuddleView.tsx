@@ -71,7 +71,7 @@ function HuddleHeader({
           </p>
         </div>
         {huddle.kind === "group" && (
-          <div className="ml-3 flex -space-x-1.5">
+          <div className="ml-3 hidden -space-x-1.5 sm:flex">
             {huddle.members.slice(0, 4).map((id) => (
               <AgentAvatar key={id} agent={AGENT_BY_ID[id]} size="sm" ring />
             ))}
