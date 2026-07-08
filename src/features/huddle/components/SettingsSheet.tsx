@@ -248,6 +248,12 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
           </TabsContent>
 
           {/* ---- Platforms ---- */}
+          {/* ---- Memory ---- */}
+          <TabsContent value="memory" className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+            <MemoryTab />
+          </TabsContent>
+
+          {/* ---- Platforms ---- */}
           <TabsContent value="platforms" className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
             <div className="rounded-lg border border-hairline p-4">
               <div className="flex items-center justify-between">
