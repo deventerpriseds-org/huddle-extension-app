@@ -95,8 +95,13 @@ function QueueTab() {
       })}
 
       <button
-        onClick={() => setView("board")}
-        className="mt-1 rounded-lg border border-hairline bg-surface px-3 py-2 text-xs font-medium text-foreground hover:bg-muted"
+        onClick={() => {
+          if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+            navigator.vibrate?.(15);
+          }
+          setView("board");
+        }}
+        className="mt-1 rounded-lg border border-hairline bg-surface px-3 py-2 text-xs font-medium text-foreground transition-all duration-150 hover:bg-muted hover:border-primary/40 active:scale-[0.97] active:bg-muted active:shadow-inner focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         Open full board →
       </button>
