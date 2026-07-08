@@ -45,11 +45,15 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       const { createLovableAiGatewayProvider } = await import(
         "@/lib/ai-gateway.server"
       );
-      const gateway = createLovableAiGatewayProvider(key);
+      const gateway = createLovableAiGatewayProvider(key, undefined, {
+        structuredOutputs: true,
+      });
       model = gateway("openai/gpt-5.5");
     }
 
-    // Route: LLM-first for group + no explicit target/mention, else keyword.
+    // Route: LLM is the primary router for group huddles. 1:1 and explicit
+    // @mentions still short-circuit deterministically. Keyword scorer only
+    // runs when the LLM router throws (see routeMessageLLM catch block).
     const explicitMentions = parseMentions(
       data.text,
       AGENTS.filter((a) => data.members.includes(a.id)),
@@ -123,9 +127,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
       const system =
         winner.systemPrompt +
-        ` You are ${winner.name} in a ${data.scope === "group" ? "group huddle" : "1:1"}. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle (e.g. @${
-          presentAgents.find((a) => a.id !== winner.id)?.handle ?? "charleston-lewis"
-        }) — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail.` +
+        ` You are ${winner.name} in a ${data.scope === "group" ? "group huddle" : "1:1"}. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail.` +
         (priorInThisTurn
           ? `\n\nOther agents just replied in this same turn:\n${priorInThisTurn}\nBuild on what they said instead of repeating it. If you have nothing to add, reply with a single short line.`
           : "");
