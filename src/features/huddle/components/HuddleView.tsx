@@ -52,7 +52,7 @@ function HuddleHeader({
   const startMeeting = useHuddleStore((s) => s.startMeeting);
   return (
     <header className="flex items-center justify-between gap-2 border-b border-hairline bg-surface px-3 py-2 sm:px-5 sm:py-3">
-      <div className="flex items-center gap-3 min-w-0">
+      <div className="hidden items-center gap-3 min-w-0 sm:flex">
         <div className="flex size-8 items-center justify-center rounded-lg bg-muted">
           {huddle.kind === "group" ? (
             <span className="text-xs font-semibold text-muted-foreground">#</span>
