@@ -1,4 +1,6 @@
-import { AGENTS, type Agent, type AgentId } from "../data/agents";
+import { generateText, Output } from "ai";
+import { z } from "zod";
+import { AGENTS, AGENT_BY_ID, type Agent, type AgentId } from "../data/agents";
 import type { HuddleMessage, RoutingDecision } from "../data/seed";
 
 // stem match — first 5 chars, word-boundary
@@ -164,4 +166,102 @@ export function routeMessage(input: RouteInput): RouteResult {
       reason: "Open floor.",
     },
   };
+}
+
+/**
+ * LLM-based router. Picks a primary agent + optional supporting agents based
+ * on the user's message and recent history. Falls back to the keyword
+ * routeMessage() on any failure so we never block a reply.
+ *
+ * 1:1 and explicit @mentions short-circuit before this is called.
+ */
+export async function routeMessageLLM(
+  input: RouteInput,
+  model: Parameters<typeof generateText>[0]["model"],
+): Promise<RouteResult> {
+  const { text, scope, members, history, targetAgentId } = input;
+  const present = AGENTS.filter((a) => members.includes(a.id));
+
+  // 1:1 — target always answers
+  if (scope === "one-to-one" && targetAgentId) {
+    return routeMessage(input);
+  }
+
+  // Explicit @mentions win deterministically
+  const mentions = parseMentions(text, present);
+  if (mentions.length > 0) {
+    return routeMessage(input);
+  }
+
+  const memberIds = present.map((a) => a.id) as [AgentId, ...AgentId[]];
+  if (memberIds.length === 0) return routeMessage(input);
+
+  const roster = present
+    .map((a) => `- ${a.id} (${a.name}, ${a.role}): ${a.domains.join(", ")}`)
+    .join("\n");
+
+  const transcript = history
+    .slice(-8)
+    .filter((m) => m.author.kind !== "system")
+    .map((m) => {
+      if (m.author.kind === "user") return `User: ${m.text}`;
+      const a =
+        AGENT_BY_ID[(m.author as { kind: "agent"; agentId: AgentId }).agentId];
+      return `${a.name}: ${m.text}`;
+    })
+    .join("\n");
+
+  const system = `You are the router for a multi-agent huddle. Choose which agents should respond to the user's latest message based on intent and context — not just keywords. Prefer a single primary agent; add supporting agents only when their expertise is clearly needed. Never invent agent ids — only choose from the roster.`;
+
+  const prompt = `Roster (available agents in this huddle):
+${roster}
+
+Recent transcript:
+${transcript || "(no prior messages)"}
+
+Latest user message:
+${text}
+
+Pick the best primary agent, up to 2 supporting agents, and a one-line reason.`;
+
+  try {
+    const { output } = await generateText({
+      model,
+      system,
+      prompt,
+      output: Output.object({
+        schema: z.object({
+          primary: z.enum(memberIds),
+          supporting: z.array(z.enum(memberIds)),
+          reason: z.string(),
+        }),
+      }),
+    });
+
+    const { primary, supporting, reason } = output;
+    const winners: AgentId[] = [primary];
+    for (const id of supporting) {
+      if (id !== primary && !winners.includes(id) && winners.length < 3) {
+        winners.push(id);
+      }
+    }
+    const scores = Object.fromEntries(
+      winners.map((id, i) => [id, Number((1 - i * 0.2).toFixed(2))]),
+    ) as Partial<Record<AgentId, number>>;
+
+    return {
+      winners,
+      decision: {
+        signal: "topic",
+        scores,
+        winnerId: primary,
+        runnerUpId: winners[1] ?? null,
+        interjected: true,
+        reason: `LLM router: ${reason}`.slice(0, 200),
+      },
+    };
+  } catch {
+    // fall back to keyword router — never block a reply
+    return routeMessage(input);
+  }
 }
