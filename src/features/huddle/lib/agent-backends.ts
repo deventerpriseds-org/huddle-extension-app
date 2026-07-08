@@ -97,6 +97,8 @@ export function defaultBackendsConfig(): BackendsConfig {
       backend: "openai",
       model: DEFAULT_ROUTER_MODEL.openai,
       fastMode: false,
+      strictPrompt: false,
+      soloOnCoverage: true,
     },
     agents: defaultAgents(),
   };
