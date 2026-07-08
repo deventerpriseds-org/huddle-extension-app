@@ -390,7 +390,13 @@ function MemoryTab() {
         {AGENTS.map((a) => {
           const cfg = config.agents[a.id];
           if (!cfg) return null;
-          const rag = cfg.rag ?? { store: "azure", chunks: true, triples: true, fileSearch: false };
+          const rag = cfg.rag ?? {
+            store: "azure" as const,
+            chunks: true,
+            triples: true,
+            fileSearch: false,
+            sharing: "shared" as const,
+          };
           const setRag = (patch: Partial<typeof rag>) =>
             setAgent(a.id, { rag: { ...rag, ...patch } });
           return (
