@@ -100,7 +100,9 @@ export function HuddleApp() {
         </SheetContent>
       </Sheet>
 
+      <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
       <MeetingLayer />
+
     </div>
   );
 }
