@@ -233,7 +233,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       const winner = AGENT_BY_ID[nextId];
       if (!winner || !data.members.includes(nextId)) continue;
 
-      const agentBackend = agentsCfg[nextId] ?? { backend: "lovable" as const, useStoredPrompt: false };
+      const agentBackend = agentsCfg[nextId] ?? { backend: "lovable" as const };
 
       const priorInThisTurn = replies
         .map((r) => `${AGENT_BY_ID[r.agentId].name} just said: "${r.text}"`)
