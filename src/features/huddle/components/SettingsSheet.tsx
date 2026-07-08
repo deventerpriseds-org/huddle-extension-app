@@ -119,6 +119,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
           <TabsList className="mx-5 mt-4">
             <TabsTrigger value="router">Router</TabsTrigger>
             <TabsTrigger value="agents">Agents</TabsTrigger>
+            <TabsTrigger value="memory">Memory</TabsTrigger>
             <TabsTrigger value="platforms">Platforms</TabsTrigger>
             <TabsTrigger value="batch">Batch</TabsTrigger>
           </TabsList>
