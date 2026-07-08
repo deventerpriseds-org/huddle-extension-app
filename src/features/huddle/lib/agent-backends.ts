@@ -70,6 +70,7 @@ function defaultAgents(): Record<AgentId, AgentBackend> {
     chunks: true,
     triples: true,
     fileSearch: false,
+    sharing: "shared",
   };
   for (const a of AGENTS) {
     const id = ASSISTANT_IDS[a.id];
