@@ -149,7 +149,7 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
   }, [messages, hydrated]);
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
       <div className="mx-auto flex max-w-3xl flex-col gap-4">
         <div className="flex justify-center">
           <span className="rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground">
