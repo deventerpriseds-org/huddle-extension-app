@@ -179,6 +179,10 @@ export interface RouterInvocation {
   backend: "openai" | "lovable";
   model: string;
   fastMode?: boolean;
+  /** #1 — tighten the router prompt to prefer a single primary agent. */
+  strictPrompt?: boolean;
+  /** #2 — drop supporting agents when the primary already covers the message. */
+  soloOnCoverage?: boolean;
   /** Lovable AI SDK model instance — required when backend === "lovable". */
   lovableModel?: Parameters<typeof generateText>[0]["model"];
 }
