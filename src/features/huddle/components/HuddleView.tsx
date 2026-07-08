@@ -51,8 +51,8 @@ function HuddleHeader({
 }) {
   const startMeeting = useHuddleStore((s) => s.startMeeting);
   return (
-    <header className="flex items-center justify-between border-b border-hairline bg-surface px-5 py-3">
-      <div className="flex items-center gap-3 min-w-0">
+    <header className="flex items-center justify-between gap-2 border-b border-hairline bg-surface px-3 py-2 sm:px-5 sm:py-3">
+      <div className="hidden items-center gap-3 min-w-0 sm:flex">
         <div className="flex size-8 items-center justify-center rounded-lg bg-muted">
           {huddle.kind === "group" ? (
             <span className="text-xs font-semibold text-muted-foreground">#</span>
@@ -71,7 +71,7 @@ function HuddleHeader({
           </p>
         </div>
         {huddle.kind === "group" && (
-          <div className="ml-3 flex -space-x-1.5">
+          <div className="ml-3 hidden -space-x-1.5 sm:flex">
             {huddle.members.slice(0, 4).map((id) => (
               <AgentAvatar key={id} agent={AGENT_BY_ID[id]} size="sm" ring />
             ))}
@@ -84,7 +84,7 @@ function HuddleHeader({
         )}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="ml-auto flex items-center gap-2">
         <div className="inline-flex rounded-lg border border-hairline bg-surface p-0.5">
           {(["huddle", "board"] as const).map((v) => (
             <button
@@ -149,7 +149,7 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
   }, [messages, hydrated]);
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
       <div className="mx-auto flex max-w-3xl flex-col gap-4">
         <div className="flex justify-center">
           <span className="rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground">
@@ -350,7 +350,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
   }
 
   return (
-    <div className="border-t border-hairline bg-surface px-6 py-3">
+    <div className="border-t border-hairline bg-surface px-3 py-2 sm:px-6 sm:py-3">
       <div className="mx-auto flex max-w-3xl items-end gap-2">
         <div className="flex-1 rounded-2xl border border-hairline bg-background px-3 py-2 focus-within:ring-2 focus-within:ring-ring">
           <div className="mb-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
