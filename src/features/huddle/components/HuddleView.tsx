@@ -208,9 +208,8 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
               agent
             </span>
           )}
-          <span className="text-[11px] text-muted-foreground">
-            {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-          </span>
+          <ClientTime ts={m.ts} />
+
         </div>
         <div
           className={cn(
