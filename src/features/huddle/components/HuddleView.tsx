@@ -131,15 +131,19 @@ function HuddleHeader({
 
 function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: Huddle }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => { setHydrated(true); }, []);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 999999, behavior: "smooth" });
   }, [messages.length]);
 
   const dayLabel = useMemo(() => {
-    const first = messages[0]?.ts ?? Date.now();
+    if (!hydrated) return "Today · morning standup";
+    const first = messages[0]?.ts;
+    if (!first) return "Today · morning standup";
     const d = new Date(first);
     return `Today · morning standup ${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
-  }, [messages]);
+  }, [messages, hydrated]);
 
   return (
     <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6">
