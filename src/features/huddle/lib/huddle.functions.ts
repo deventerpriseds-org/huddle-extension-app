@@ -68,34 +68,79 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     const agentsCfg = data.agents ?? {};
 
     // Fire-and-forget: persist the user's message into memory so future
-    // retrieval can see it. Any agent with rag.store === "azure" enabled
-    // triggers this; we write once with scope "global" so all agents share it.
-    const anyRag = Object.values(agentsCfg).some(
-      (a) => a?.rag?.store === "azure" && a.rag.chunks,
-    );
-    if (anyRag && openaiKey) {
+    // retrieval can see it. Fan out to the right scope(s) based on each
+    // participating agent's sharing mode:
+    //   - shared          → one global write, author_agent_ids = all members
+    //   - private         → per-agent private write, author_agent_ids = [that agent]
+    //   - readonly-shared → no write
+    const ragAgents = data.members
+      .map((id) => ({ id, cfg: agentsCfg[id]?.rag }))
+      .filter((x) => x.cfg && x.cfg.store === "azure" && x.cfg.chunks);
+    const anyShared = ragAgents.some((a) => (a.cfg?.sharing ?? "shared") === "shared");
+    const privateAgents = ragAgents
+      .filter((a) => a.cfg?.sharing === "private")
+      .map((a) => a.id);
+
+    if ((anyShared || privateAgents.length > 0) && openaiKey) {
       (async () => {
         try {
           const { azurePgStore } = await import("./rag/azure-pg.server");
+          const { embed } = await import("./rag/embed.server");
           const { extractTriples, shouldExtractTriples } = await import("./rag/triples.server");
-          const chunk = await azurePgStore.writeChunk({
-            scope: "global",
-            text: data.text,
-            source: `huddle:${data.huddleId}`,
-          });
-          if (shouldExtractTriples(data.text)) {
+
+          // Embed once, reuse across per-scope inserts.
+          const vec = await embed(data.text);
+          const source = `huddle:${data.huddleId}`;
+
+          const writes: Array<{
+            chunk: { id: string };
+            scope: "global" | "agent";
+            agentId?: string;
+            authors: string[];
+          }> = [];
+
+          if (anyShared) {
+            const authors = [...data.members];
+            const chunk = await azurePgStore.writeChunk({
+              scope: "global",
+              text: data.text,
+              source,
+              embedding: vec,
+              authorAgentIds: authors,
+            });
+            writes.push({ chunk, scope: "global", authors });
+          }
+
+          for (const agentId of privateAgents) {
+            const authors = [agentId];
+            const chunk = await azurePgStore.writeChunk({
+              scope: "agent",
+              agentId,
+              text: data.text,
+              source,
+              embedding: vec,
+              authorAgentIds: authors,
+            });
+            writes.push({ chunk, scope: "agent", agentId, authors });
+          }
+
+          if (writes.length > 0 && shouldExtractTriples(data.text)) {
             const triples = await extractTriples(data.text);
             if (triples.length > 0) {
-              await azurePgStore.writeTriples(
-                triples.map((t) => ({
-                  scope: "global" as const,
-                  subject: t.subject,
-                  predicate: t.predicate,
-                  object: t.object,
-                  confidence: t.confidence,
-                  sourceChunkId: chunk.id,
-                })),
-              );
+              for (const w of writes) {
+                await azurePgStore.writeTriples(
+                  triples.map((t) => ({
+                    scope: w.scope,
+                    agentId: w.agentId,
+                    subject: t.subject,
+                    predicate: t.predicate,
+                    object: t.object,
+                    confidence: t.confidence,
+                    sourceChunkId: w.chunk.id,
+                    authorAgentIds: w.authors,
+                  })),
+                );
+              }
             }
           }
         } catch (err) {
