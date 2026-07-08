@@ -85,8 +85,6 @@ export function HuddleApp() {
       </Sheet>
 
       <MeetingLayer />
-      {/* Prevent unused-var warning for setActive */}
-      <span className="hidden">{setActive ? "" : ""}</span>
     </div>
   );
 }
