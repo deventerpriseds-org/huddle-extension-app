@@ -216,7 +216,18 @@ export async function routeMessageLLM(
     })
     .join("\n");
 
-  const system = `You are the router for a multi-agent huddle. Choose which agents should respond to the user's latest message based on intent and context — not just keywords. Prefer a single primary agent; add supporting agents only when their expertise is clearly needed. Never invent agent ids — only choose from the roster.`;
+  const baseSystem = `You are the router for a multi-agent huddle. Choose which agents should respond to the user's latest message based on intent and context — not just keywords. Prefer a single primary agent; add supporting agents only when their expertise is clearly needed. Never invent agent ids — only choose from the roster.`;
+
+  const strictSystem = `You are the router for a multi-agent huddle. Pick exactly ONE primary agent for the user's latest message. Return supporting = [] UNLESS the message explicitly asks for a second, non-overlapping specialty (e.g. "and also budget it" or "then draft the email"). Adjacency is not enough — a workout question does NOT need a life-strategist just because habits are related. When in doubt, return supporting = []. Never invent agent ids — only choose from the roster.
+
+Example — user: "what workouts do i usually go for?" → primary: flex-grimes, supporting: [], reason: single-lane fitness question.
+Example — user: "plan tomorrow's workout and also budget my gym membership" → primary: flex-grimes, supporting: [finn-reid], reason: two distinct lanes explicitly named.`;
+
+  const system = invocation.strictPrompt ? strictSystem : baseSystem;
+
+  const supportingHint = invocation.strictPrompt
+    ? "Pick the best primary agent. Return supporting = [] unless the message explicitly requires a second specialty."
+    : "Pick the best primary agent, up to 2 supporting agents, and a one-line reason.";
 
   const prompt = `Roster (available agents in this huddle):
 ${roster}
@@ -227,7 +238,7 @@ ${transcript || "(no prior messages)"}
 Latest user message:
 ${text}
 
-Pick the best primary agent, up to 2 supporting agents, and a one-line reason.`;
+${supportingHint}`;
 
   const zodSchema = z.object({
     primary: z.enum(memberIds),
