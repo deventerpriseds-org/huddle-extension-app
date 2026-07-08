@@ -1,27 +1,37 @@
 import { AGENTS, type Agent, type AgentId } from "../data/agents";
 import type { HuddleMessage, RoutingDecision } from "../data/seed";
 
-const THRESHOLD_GROUP = 0.32;
-const THRESHOLD_ONE_TO_ONE = 0;
+// stem match — first 5 chars, word-boundary
+function stem(w: string) {
+  return w.toLowerCase().replace(/[^a-z]/g, "").slice(0, 5);
+}
+function tokens(text: string) {
+  return text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
 
-// crude bag-of-words scoring against agent domains + themes
 function scoreAgentAgainst(text: string, agent: Agent): number {
-  const t = text.toLowerCase();
+  const textTokens = tokens(text);
+  const textStems = new Set(textTokens.map(stem).filter((s) => s.length >= 3));
   let hits = 0;
   let total = 0;
-  for (const kw of [...agent.domains, ...agent.themes]) {
-    total += 1;
-    const needle = kw.toLowerCase();
-    if (t.includes(needle)) hits += 2;
-    else {
-      // token match on first word of the theme
-      const first = needle.split(/\s+/)[0];
-      if (first.length > 3 && new RegExp(`\\b${first}`).test(t)) hits += 1;
+  const kws = [...agent.domains, ...agent.themes, agent.role];
+  for (const kw of kws) {
+    for (const part of kw.split(/\s+/)) {
+      const s = stem(part);
+      if (s.length < 3) continue;
+      total += 1;
+      if (textStems.has(s)) hits += 2;
+      else {
+        for (const ts of textStems) {
+          if (ts.startsWith(s) || s.startsWith(ts)) {
+            hits += 1;
+            break;
+          }
+        }
+      }
     }
   }
-  // also boost on role first word
-  if (t.includes(agent.role.toLowerCase().split(" ")[0])) hits += 1;
-  const raw = hits / Math.max(6, total);
+  const raw = hits / Math.max(8, total);
   return Math.min(1, raw);
 }
 
@@ -40,86 +50,52 @@ export function parseMentions(text: string, agents: Agent[]): AgentId[] {
 export interface RouteInput {
   text: string;
   scope: "one-to-one" | "group" | "call";
-  members: AgentId[]; // agents present in the huddle
-  history: HuddleMessage[]; // recent, oldest first
-  targetAgentId?: AgentId; // for 1:1 (always answers)
+  members: AgentId[];
+  history: HuddleMessage[];
+  targetAgentId?: AgentId;
 }
 
 export interface RouteResult {
   decision: Omit<RoutingDecision, "id" | "messageId" | "ts">;
-  winnerId: AgentId | null;
+  winners: AgentId[]; // ordered; primary first
 }
 
 export function routeMessage(input: RouteInput): RouteResult {
   const { text, scope, members, history, targetAgentId } = input;
   const present = AGENTS.filter((a) => members.includes(a.id));
 
-  // 1:1 — the target agent always answers
+  // 1:1 — target always answers
   if (scope === "one-to-one" && targetAgentId) {
     return {
-      winnerId: targetAgentId,
+      winners: [targetAgentId],
       decision: {
         signal: "mention",
         scores: { [targetAgentId]: 1 },
         winnerId: targetAgentId,
         runnerUpId: null,
         interjected: false,
-        reason: "1:1 huddle — direct conversation with the agent.",
+        reason: "1:1",
       },
     };
   }
 
-  // 1. explicit @mention
+  // 1. explicit @mentions — all mentioned agents answer
   const mentions = parseMentions(text, present);
   if (mentions.length > 0) {
-    const winner = mentions[0];
     return {
-      winnerId: winner,
+      winners: mentions.slice(0, 3),
       decision: {
         signal: "mention",
         scores: Object.fromEntries(mentions.map((m) => [m, 1])) as Partial<Record<AgentId, number>>,
-        winnerId: winner,
+        winnerId: mentions[0],
         runnerUpId: mentions[1] ?? null,
         interjected: false,
-        reason: `Explicit mention of @${winner}.`,
+        reason: `Explicit mention.`,
       },
     };
   }
 
-  // 2. reply / last-addressed agent (walk back 3 turns)
-  const last = [...history].reverse().slice(0, 6);
-  const lastAgentTurn = last.find((m) => m.author.kind === "agent");
-  if (lastAgentTurn && lastAgentTurn.author.kind === "agent") {
-    // small boost — only wins if topic doesn't strongly disagree
-    const holder = lastAgentTurn.author.agentId;
-    const holderAgent = present.find((a) => a.id === holder);
-    if (holderAgent) {
-      const holderScore = 0.55 + scoreAgentAgainst(text, holderAgent) * 0.4;
-      const scores: Partial<Record<AgentId, number>> = {};
-      let bestOther: { id: AgentId; s: number } | null = null;
-      for (const a of present) {
-        const s = a.id === holder ? holderScore : scoreAgentAgainst(text, a);
-        scores[a.id] = Number(s.toFixed(2));
-        if (a.id !== holder && (!bestOther || s > bestOther.s)) bestOther = { id: a.id, s };
-      }
-      // If another agent decisively beats the holder, defer to topic route below
-      if (!bestOther || holderScore >= bestOther.s - 0.15) {
-        return {
-          winnerId: holder,
-          decision: {
-            signal: "reply",
-            scores,
-            winnerId: holder,
-            runnerUpId: bestOther?.id ?? null,
-            interjected: false,
-            reason: `Reply/thread context — ${holderAgent.name} kept the floor.`,
-          },
-        };
-      }
-    }
-  }
-
-  // 3. topic & theme relevance
+  // Score all present agents by topic
   const scores: Partial<Record<AgentId, number>> = {};
   const ranked: Array<{ id: AgentId; s: number }> = [];
   for (const a of present) {
@@ -128,35 +104,67 @@ export function routeMessage(input: RouteInput): RouteResult {
     ranked.push({ id: a.id, s });
   }
   ranked.sort((a, b) => b.s - a.s);
-  const T = scope === "group" ? THRESHOLD_GROUP : THRESHOLD_ONE_TO_ONE;
+
+  // 2. reply/thread stickiness — last agent turn keeps floor unless topic strongly points elsewhere
+  const last = [...history].reverse().slice(0, 6);
+  const lastAgentTurn = last.find((m) => m.author.kind === "agent");
+  if (lastAgentTurn && lastAgentTurn.author.kind === "agent") {
+    const holder = lastAgentTurn.author.agentId;
+    const holderRank = ranked.find((r) => r.id === holder);
+    const top = ranked[0];
+    if (holderRank && top && (holderRank.s >= top.s - 0.1 || top.s < 0.1)) {
+      const runner = ranked.find((r) => r.id !== holder);
+      const winners: AgentId[] = [holder];
+      if (runner && runner.s >= 0.2 && runner.s >= (holderRank.s - 0.15)) winners.push(runner.id);
+      return {
+        winners,
+        decision: {
+          signal: "reply",
+          scores,
+          winnerId: holder,
+          runnerUpId: runner?.id ?? null,
+          interjected: false,
+          reason: "Thread continuation.",
+        },
+      };
+    }
+  }
+
+  // 3. topic — take the top scorer plus any close runner-up
   const top = ranked[0];
   const runnerUp = ranked[1];
-  if (top && top.s >= T && (!runnerUp || top.s - runnerUp.s >= 0.06)) {
+  if (top && top.s > 0) {
+    const winners: AgentId[] = [top.id];
+    if (runnerUp && runnerUp.s >= 0.2 && top.s - runnerUp.s <= 0.15) {
+      winners.push(runnerUp.id);
+    }
     return {
-      winnerId: top.id,
+      winners,
       decision: {
         signal: "topic",
         scores,
         winnerId: top.id,
         runnerUpId: runnerUp?.id ?? null,
         interjected: true,
-        reason: `Topic relevance — score ${top.s.toFixed(2)} ≥ τ ${T}.`,
+        reason: `Topic match.`,
       },
     };
   }
 
-  // 4. floor — coordinator fallback
-  const coordinator = present.find((a) => a.special === "coordinator") ?? present.find((a) => a.special === "standup-host");
-  const winner = coordinator?.id ?? null;
+  // 4. floor — team lead (Terry) picks it up as a person, not a router
+  const lead =
+    present.find((a) => a.special === "standup-host") ??
+    present.find((a) => a.special === "coordinator") ??
+    present[0];
   return {
-    winnerId: winner,
+    winners: lead ? [lead.id] : [],
     decision: {
       signal: "floor",
       scores,
-      winnerId: winner,
+      winnerId: lead?.id ?? null,
       runnerUpId: top?.id ?? null,
       interjected: false,
-      reason: "No clear match — coordinator picks up.",
+      reason: "Open floor.",
     },
   };
 }
