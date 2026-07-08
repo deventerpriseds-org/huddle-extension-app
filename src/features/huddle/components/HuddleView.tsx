@@ -330,16 +330,16 @@ function Composer({ huddle }: { huddle: Huddle }) {
         reason: result.decision.reason,
       });
 
-      if (result.reply) {
+      result.replies.forEach((reply, i) => {
         addAgent({
-          id: `a-${now}`,
+          id: `a-${now}-${i}`,
           huddleId: huddle.id,
-          author: { kind: "agent", agentId: result.reply.agentId },
-          text: result.reply.text,
-          ts: Date.now(),
+          author: { kind: "agent", agentId: reply.agentId },
+          text: reply.text,
+          ts: Date.now() + i,
           replyTo: userId,
         });
-      }
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Message failed";
       toast.error(msg);
