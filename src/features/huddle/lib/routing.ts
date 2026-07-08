@@ -239,9 +239,31 @@ Pick the best primary agent, up to 2 supporting agents, and a one-line reason.`;
     });
 
     const { primary, supporting, reason } = output;
+
+    // Sanity check — model must pick from the roster.
+    if (!memberIds.includes(primary)) {
+      console.error(
+        "[huddle-router] LLM returned primary not in roster, using keyword fallback:",
+        { primary, memberIds },
+      );
+      const fallback = routeMessage(input);
+      return {
+        ...fallback,
+        decision: {
+          ...fallback.decision,
+          reason: `LLM fallback: primary "${primary}" not in roster. ${fallback.decision.reason}`,
+        },
+      };
+    }
+
     const winners: AgentId[] = [primary];
     for (const id of supporting) {
-      if (id !== primary && !winners.includes(id) && winners.length < 3) {
+      if (
+        memberIds.includes(id) &&
+        id !== primary &&
+        !winners.includes(id) &&
+        winners.length < 3
+      ) {
         winners.push(id);
       }
     }
@@ -260,8 +282,28 @@ Pick the best primary agent, up to 2 supporting agents, and a one-line reason.`;
         reason: `LLM router: ${reason}`.slice(0, 200),
       },
     };
-  } catch {
-    // fall back to keyword router — never block a reply
-    return routeMessage(input);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (NoObjectGeneratedError.isInstance(err)) {
+      console.error(
+        "[huddle-router] LLM router failed (NoObjectGenerated), using keyword fallback:",
+        msg,
+        "raw:",
+        err.text,
+      );
+    } else {
+      console.error(
+        "[huddle-router] LLM router failed, using keyword fallback:",
+        msg,
+      );
+    }
+    const fallback = routeMessage(input);
+    return {
+      ...fallback,
+      decision: {
+        ...fallback.decision,
+        reason: `LLM fallback: ${msg.slice(0, 120)}. ${fallback.decision.reason}`,
+      },
+    };
   }
 }
