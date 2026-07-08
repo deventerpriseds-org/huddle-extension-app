@@ -63,11 +63,17 @@ export const ASSISTANT_IDS: Partial<Record<AgentId, string>> = {
 
 function defaultAgents(): Record<AgentId, AgentBackend> {
   const out = {} as Record<AgentId, AgentBackend>;
+  const defaultRag: RagConfig = {
+    store: "azure",
+    chunks: true,
+    triples: true,
+    fileSearch: false,
+  };
   for (const a of AGENTS) {
     const id = ASSISTANT_IDS[a.id];
     out[a.id] = id
-      ? { backend: "openai", assistantId: id, useStoredPrompt: true }
-      : { backend: "lovable", useStoredPrompt: false };
+      ? { backend: "openai", assistantId: id, useStoredPrompt: true, rag: { ...defaultRag } }
+      : { backend: "lovable", useStoredPrompt: false, rag: { ...defaultRag } };
   }
   return out;
 }
