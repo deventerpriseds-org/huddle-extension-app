@@ -300,6 +300,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
     setText("");
     setSending(true);
     try {
+      const backendsCfg = useBackendsStore.getState().config;
       const result = await sendHuddleMessage({
         data: {
           text: trimmed,
@@ -316,8 +317,11 @@ function Composer({ huddle }: { huddle: Huddle }) {
             replyTo: m.replyTo,
           })),
           targetAgentId,
+          router: backendsCfg.router,
+          agents: backendsCfg.agents,
         },
       });
+
 
       logDecision({
         id: `d-${now}`,
