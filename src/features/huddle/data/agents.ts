@@ -3,6 +3,21 @@ import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
 import "@fontsource/inter/700.css";
 
+import terryAsset from "@/assets/agents/terry-locke.png.asset.json";
+import irisAsset from "@/assets/agents/iris-chase.png.asset.json";
+import tessAsset from "@/assets/agents/tess-sutton.png.asset.json";
+import finnAsset from "@/assets/agents/finn-reid.png.asset.json";
+import faithAsset from "@/assets/agents/faith-hartley.png.asset.json";
+import elleAsset from "@/assets/agents/elle-rowan.png.asset.json";
+import flexAsset from "@/assets/agents/flex-grimes.png.asset.json";
+import ezraAsset from "@/assets/agents/ezra-miles.png.asset.json";
+import samAsset from "@/assets/agents/sam-trent.png.asset.json";
+import coleAsset from "@/assets/agents/cole-blake.png.asset.json";
+import charlestonAsset from "@/assets/agents/charleston-lewis.png.asset.json";
+import eliAsset from "@/assets/agents/eli-vaughn.png.asset.json";
+import camAsset from "@/assets/agents/cam-post.png.asset.json";
+import troyAsset from "@/assets/agents/troy-lennox.png.asset.json";
+
 export type AgentId =
   | "terry-locke"
   | "iris-chase"
