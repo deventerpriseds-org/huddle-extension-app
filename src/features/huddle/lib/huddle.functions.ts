@@ -45,11 +45,15 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       const { createLovableAiGatewayProvider } = await import(
         "@/lib/ai-gateway.server"
       );
-      const gateway = createLovableAiGatewayProvider(key);
+      const gateway = createLovableAiGatewayProvider(key, undefined, {
+        structuredOutputs: true,
+      });
       model = gateway("openai/gpt-5.5");
     }
 
-    // Route: LLM-first for group + no explicit target/mention, else keyword.
+    // Route: LLM is the primary router for group huddles. 1:1 and explicit
+    // @mentions still short-circuit deterministically. Keyword scorer only
+    // runs when the LLM router throws (see routeMessageLLM catch block).
     const explicitMentions = parseMentions(
       data.text,
       AGENTS.filter((a) => data.members.includes(a.id)),
