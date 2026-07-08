@@ -1,103 +1,141 @@
-# Huddle: settings, switchable router, per-agent OpenAI, live tasks, RAG, background exec
+# Phase 2 (revised) — Azure Postgres + pgvector, tool-based retrieval
 
-Four phases. Each leaves the app fully working. Only Phase 1 ships this turn.
+Two big changes from the last plan:
+
+1. **Azure-first, Lovable Cloud later.** We connect directly to your existing Azure Postgres over `pg` (node-postgres). A single `RagStore` interface keeps the swap to Lovable Cloud trivial later.
+2. **Retrieval is tool-based, not score-based.** Instead of a confidence threshold picking chunks vs triples for the model, we expose **two OpenAI tools** and let the model call whichever fits — `search_memory` (semantic chunks), `lookup_facts` (structured triples), or both. Optional third tool `file_search` for Layer 3.
 
 ---
 
-## Phase 1 — Settings, switchable router with model dropdown, per-agent OpenAI Responses
+## What you need to give me for Azure
 
-### 1a. Settings entry point
-- Gear icon at bottom of `Rail.tsx` (desktop).
-- Gear icon in mobile top bar of `HuddleApp.tsx`.
-- Both open one `SettingsSheet` (radix Sheet — right side desktop, full-screen mobile).
+Please gather these and I'll request them via `add_secret` when we start building:
 
-### 1b. Settings UI (tabs)
+1. **`AZURE_PG_HOST`** — e.g. `my-server.postgres.database.azure.com`
+2. **`AZURE_PG_PORT`** — usually `5432`
+3. **`AZURE_PG_DATABASE`** — the database name (not the server name)
+4. **`AZURE_PG_USER`** — for Azure Postgres Flexible Server, just the username (e.g. `myadmin`). For Single Server it's `user@servername`.
+5. **`AZURE_PG_PASSWORD`**
+6. **`AZURE_PG_SSL`** — I'll default to `require`; only override if your instance is different.
 
-**1. Platforms**
-- Lovable AI — "Active" pill (auto).
-- OpenAI — "Save OpenAI key" → `add_secret("OPENAI_API_KEY")`. Shows "Configured" once set.
+**Before it will work, in the Azure Portal:**
+- Networking → **Firewall rules** → add outbound IPs for Lovable's server runtime. I'll pull the current egress IP list from Lovable docs when we're ready; if it's not published we can start with **"Allow public access from any Azure service"** or a wide range and tighten later.
+- Server parameters → confirm `azure.extensions` includes `VECTOR` (and `pg_trgm` if you want fuzzy fact matching).
+- In the target database, run once: `CREATE EXTENSION IF NOT EXISTS vector;`
 
-**2. Router**
-- Backend dropdown: **OpenAI** (default) / **Lovable AI Gateway**.
-- Model dropdown — populated from a maintained catalog constant. Filters by backend:
-  - `backend === "openai"` → direct OpenAI chat models: `gpt-5.5` (default), `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.2`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`.
-  - `backend === "lovable"` → full Lovable AI catalog: `openai/gpt-5.5` (default), `openai/gpt-5.4`, `openai/gpt-5-mini`, `google/gemini-3.5-flash`, `google/gemini-3-flash-preview`, `google/gemini-2.5-pro`, `google/gemini-2.5-flash`.
-- Catalog lives in `src/features/huddle/lib/model-catalog.ts` — single source of truth, easy to bump. Version-tagged so a future "Refresh models" button can hit an endpoint later.
-- "Fast mode" toggle appears when the selected model supports the priority tier (checked from the catalog); off by default.
+**Alternative** if you'd rather not manage firewall rules: paste one `DATABASE_URL` connection string (`postgresql://user:pass@host:5432/db?sslmode=require`) and I'll use that single secret instead.
 
-**3. Agents** (15 rows)
-- Backend dropdown: **Lovable AI** / **OpenAI Responses**.
-- `assistantId` input (only for OpenAI). Prefilled for the 12 mapped agents.
-- **"Use OpenAI's stored prompt"** toggle:
-  - **Default ON for the 12 mapped agents.**
-  - Default OFF (and irrelevant) for the 3 unmapped.
-  - ON → send only transcript + `prompt: { id }`.
-  - OFF → send our `systemPrompt` as `instructions`.
-- Status pill: `Ready` / `Missing key` / `Missing ID`.
+---
 
-**4. Batch config** — Upload / Download / Reset-to-template for `agents.config.json`.
+## Retrieval as tools (the important change)
 
-### 1c. Backend dispatch
+Every OpenAI Responses call for an agent with RAG enabled gets these tools attached:
 
-- **new** `src/features/huddle/lib/model-catalog.ts` — typed model list, groups, `supportsPriority` flag, `defaultRouterModel` per backend.
-- **new** `src/features/huddle/lib/agent-backends.ts` — Zod schema + zustand-persisted config:
-  ```ts
+```
+tools: [
   {
-    router: { backend: "openai" | "lovable", model: string, fastMode: boolean },
-    agents: Record<AgentId, { backend: "lovable" | "openai", assistantId?: string, useStoredPrompt: boolean }>
-  }
-  ```
-  Hydrates from `agents.config.template.json` on first load. Defaults: `router = { backend: "openai", model: "gpt-5.5", fastMode: false }`.
-- **new** `src/features/huddle/lib/openai-responses.server.ts` — `callOpenAIResponses({ assistantId, transcript, instructions? })` for personas + `callOpenAIRouter({ model, system, prompt, schema })` for the router (direct `POST https://api.openai.com/v1/responses` with strict `response_format: { type: "json_schema" }`).
-- **edit** `routing.ts` — `routeMessageLLM` accepts a `routerConfig` param. When `backend === "openai"` and `OPENAI_API_KEY` is set → `callOpenAIRouter`. Otherwise current Lovable AI path with the selected `openai/…` or `google/…` model. Existing loud-fallback + `NoObjectGeneratedError` guard preserved.
-- **edit** `huddle.functions.ts` — build model from router config, pass config into `routeMessageLLM`. Per-agent reply dispatch: `lovable` = existing path; `openai` = `callOpenAIResponses` with `instructions` iff `useStoredPrompt === false`.
-- `ai-gateway.server.ts` untouched — `structuredOutputs: true` is already correct for the Lovable AI router path.
+    type: "function",
+    name: "search_memory",
+    description: "Semantic search over past conversations, notes, and documents. Use when the user's question is about topics, events, discussions, or open-ended context — anything where meaning matters more than exact facts.",
+    parameters: { query: string, k?: number (default 6), scope?: "agent"|"global" }
+  },
+  {
+    type: "function",
+    name: "lookup_facts",
+    description: "Structured fact lookup: preferences, allergies, ownership, deadlines, relationships, commitments. Use when the question implies a definite answer about a person or entity (e.g. 'what is X allergic to', 'who owns Y', 'when is Z due'). Prefer this over search_memory for direct factual questions.",
+    parameters: { subject?: string, predicate?: string, query?: string, k?: number (default 8) }
+  },
+  // Optional Layer 3, only if agent.rag.fileSearch is on:
+  { type: "file_search", vector_store_ids: [agent.openaiVectorStoreId] }
+]
+```
 
-### 1d. Prefilled template
-`public/agents.config.template.json` seeds the 12 mapped assistants with `backend: "openai"` + `useStoredPrompt: true`, and the 3 unmapped with `backend: "lovable"`. Router seed: `{ backend: "openai", model: "gpt-5.5", fastMode: false }`.
+The model reads its own system prompt (we add one line: *"You have memory tools. Use `lookup_facts` for direct factual questions about people/things, `search_memory` for topical recall, both when appropriate."*) and picks. Tool results come back as `[FACT] …` / `[CONTEXT] …` blocks so the model treats triples as ground truth.
 
-### 1e. Files touched
-- **new:** `SettingsSheet.tsx`, `agent-backends.ts`, `model-catalog.ts`, `openai-responses.server.ts`, `public/agents.config.template.json`
-- **edit:** `Rail.tsx`, `HuddleApp.tsx`, `huddle.functions.ts`, `routing.ts`, `store.ts`
-- **secret:** `OPENAI_API_KEY` via `add_secret`.
-
-### 1f. Verify
-- Settings opens on desktop + mobile.
-- Router defaults to OpenAI + `gpt-5.5`. Send ambiguous group message → ContextPanel decision reason shows `LLM router: …`; network shows a call to `api.openai.com/v1/responses`.
-- Switch router to Lovable AI + `google/gemini-2.5-pro` → next call hits `ai.gateway.lovable.dev` with that model.
-- Break `OPENAI_API_KEY` while router is on OpenAI → keyword fallback fires, ContextPanel shows `LLM fallback: …`.
-- Flip Flex "Use OpenAI's stored prompt" OFF → reply still from your assistant but our persona rules apply.
-- Terry (unmapped) → stays on Lovable AI unchanged.
+No confidence-threshold escalation logic on our side. The model decides. If you later want a safety net, we can add "if the model didn't call any tool but the message looks factual, force-call `lookup_facts`" as a small heuristic — but starting purely tool-driven.
 
 ---
 
-## Phase 2 — Live task queue + agent-suggested tasks (later)
-Drop `SEED_TASKS`. Cloud-backed `tasks` table. Owner agent may propose a task after replying; inline **task confirmation card** — `Add "{title}" to backlog?` — Approve / Skip. Manual "New task" still works.
+## Writes (extraction) — unchanged from last message
 
-## Phase 3 — RAG (pgvector now, Azure adapter later) + triggered triple extraction (later)
-`RagStore` interface with `PgvectorRagStore` (Lovable AI `gemini-embedding-2`) and `AzureAiSearchRagStore` stub configured from Settings. Chunks embedded on every write. Triples extracted only when triggered: (a) explicit MemoryItem, (b) preference-verb heuristic, (c) "Remember this" click. Retrieval prepends top-k chunks + matching triples into system prompt.
-
-## Phase 4 — Background execution: Backlog → plan → Ready → run → artifact (later)
-On entry to Backlog, owner agent generates a plan (steps, tools, deliverable). On Ready-approve, Inngest job runs the owner in tool-use mode with a per-agent connector allowlist (web search, email draft, calendar). Output = Markdown artifact viewable in ContextPanel with "new since last huddle" indicator.
+- Every persisted message → 1 chunk (embedded).
+- Triple extraction fires on verb heuristics (`prefer|allergic|own|manages|reports to|deadline|due|hate|love|avoid`) or explicit MemoryItem save — never on every message.
+- Extraction uses `gpt-5.5` with strict JSON schema, capped 5 triples per chunk, stored in `rag_triples`.
 
 ---
 
-## Checklist (rendered in Settings → Roadmap)
-- [ ] P1 · Settings sheet (desktop + mobile)
-- [ ] P1 · Router backend + model dropdown (OpenAI default)
-- [ ] P1 · Fast-mode toggle where supported
-- [ ] P1 · OpenAI Responses persona helper
-- [ ] P1 · Per-agent backend + prompt-source toggle (ON for 12 mapped)
-- [ ] P1 · Prefilled 12-ID template
-- [ ] P2 · Cloud-backed tasks (drop SEED_TASKS)
-- [ ] P2 · Agent task proposals + confirmation card
-- [ ] P3 · pgvector RAG store
-- [ ] P3 · Triggered triple extraction
-- [ ] P3 · Retrieval injection
-- [ ] P3 · Azure AI Search adapter
-- [ ] P4 · Owner-agent plan step → Ready
-- [ ] P4 · Background executor + tool allowlist
-- [ ] P4 · Artifact viewer
+## Schema (runs against your Azure DB)
 
-## This turn ships
-**Phase 1 only.** After you approve, I'll re-plan Phase 2 before touching code.
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TYPE rag_scope AS ENUM ('agent', 'global');
+
+CREATE TABLE rag_chunks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  scope rag_scope NOT NULL,
+  agent_id TEXT,
+  text TEXT NOT NULL,
+  source TEXT,
+  embedding vector(3072) NOT NULL,
+  metadata JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX ON rag_chunks USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON rag_chunks (agent_id) WHERE scope = 'agent';
+
+CREATE TABLE rag_triples (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  scope rag_scope NOT NULL,
+  agent_id TEXT,
+  subject TEXT NOT NULL,
+  predicate TEXT NOT NULL,
+  object TEXT NOT NULL,
+  confidence REAL DEFAULT 0.8,
+  source_chunk_id UUID REFERENCES rag_chunks(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX ON rag_triples USING gin (to_tsvector('english', subject || ' ' || predicate || ' ' || object));
+CREATE INDEX ON rag_triples (subject);
+```
+
+We run this as an idempotent bootstrap on first server-fn call (`CREATE ... IF NOT EXISTS`), so no external migration tool is needed.
+
+---
+
+## Files
+
+- **new** `src/features/huddle/lib/rag/types.ts` — `RagStore` interface (`searchChunks`, `lookupTriples`, `writeChunk`, `writeTriples`)
+- **new** `src/features/huddle/lib/rag/azure-pg.server.ts` — `pg` Pool, bootstrap SQL, implementations
+- **new** `src/features/huddle/lib/rag/embed.server.ts` — OpenAI `text-embedding-3-large` (3072-dim)
+- **new** `src/features/huddle/lib/rag/triples.server.ts` — heuristic + `gpt-5.5` extraction
+- **new** `src/features/huddle/lib/rag/tools.ts` — tool schemas + dispatcher (called from responses loop when the model emits a `tool_call`)
+- **edit** `openai-responses.server.ts` — accept `tools`, handle a tool-call round-trip loop (max 2 hops)
+- **edit** `huddle.functions.ts` — attach tools per agent config; write chunk after each user msg; run extraction if heuristic hits
+- **edit** `agent-backends.ts` — per-agent `rag: { store: "azure" | "lovable" | "none"; chunks: bool; triples: bool; fileSearch: bool; openaiVectorStoreId?: string }`, default `store: "azure"`, all layers on
+- **edit** `SettingsSheet.tsx` — Memory tab: store dropdown (Azure default, Lovable Cloud disabled with tooltip "Enable Lovable Cloud to use"), three layer toggles, "Test connection" button, per-agent vector store provisioning
+
+---
+
+## Swap path to Lovable Cloud later
+
+`RagStore` interface has two implementations. Switching per-agent is a dropdown; switching globally is a config default. Data doesn't move automatically — we'd add a one-shot "Copy memory from Azure to Cloud" action if/when you want to migrate. Embeddings are portable (same model, same dimensions).
+
+---
+
+## Verify
+
+- Add Azure secrets → "Test connection" in Settings returns `ok` with server version + extension list.
+- Send "I'm allergic to shellfish" → row in `rag_chunks` + row in `rag_triples`.
+- Ask charleston-lewis "what am I allergic to?" → model calls `lookup_facts`, gets the triple, answers.
+- Ask "what did we discuss about the roadmap?" → model calls `search_memory`, gets chunks.
+- Ask a mixed question → sometimes both tool calls in one turn (visible in network as two function-call rounds).
+- Flip `rag.triples` off for an agent → only `search_memory` is attached.
+
+---
+
+## Not in this phase
+
+Cloud store implementation, cross-agent memory sharing UI, background reindex, migration between stores.
+
+**Ships after your approval.** Reply with the Azure creds (or a single `DATABASE_URL`) and I'll kick off.
