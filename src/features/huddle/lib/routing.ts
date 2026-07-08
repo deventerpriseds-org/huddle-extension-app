@@ -308,14 +308,25 @@ ${supportingHint}`;
     }
 
     const winners: AgentId[] = [primary];
-    for (const id of supporting) {
-      if (
-        memberIds.includes(id) &&
-        id !== primary &&
-        !winners.includes(id) &&
-        winners.length < 3
-      ) {
-        winners.push(id);
+    let soloApplied = false;
+    if (invocation.soloOnCoverage) {
+      // If the primary already covers the message's topic (score >= 0.15 on
+      // its own domains/themes), skip supporting agents entirely. This kills
+      // adjacency pile-ons like "fitness question → also pull in life-strategy".
+      const primaryAgent = AGENT_BY_ID[primary];
+      const primaryScore = primaryAgent ? scoreAgentAgainst(text, primaryAgent) : 0;
+      if (primaryScore >= 0.15) soloApplied = true;
+    }
+    if (!soloApplied) {
+      for (const id of supporting) {
+        if (
+          memberIds.includes(id) &&
+          id !== primary &&
+          !winners.includes(id) &&
+          winners.length < 3
+        ) {
+          winners.push(id);
+        }
       }
     }
     const scores = Object.fromEntries(
