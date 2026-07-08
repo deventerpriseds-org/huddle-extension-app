@@ -350,7 +350,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
   }
 
   return (
-    <div className="border-t border-hairline bg-surface px-6 py-3">
+    <div className="border-t border-hairline bg-surface px-3 py-2 sm:px-6 sm:py-3">
       <div className="mx-auto flex max-w-3xl items-end gap-2">
         <div className="flex-1 rounded-2xl border border-hairline bg-background px-3 py-2 focus-within:ring-2 focus-within:ring-ring">
           <div className="mb-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
