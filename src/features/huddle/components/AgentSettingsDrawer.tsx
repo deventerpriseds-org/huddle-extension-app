@@ -28,7 +28,7 @@ export function AgentSettingsDrawer() {
     setLoading(true);
     getAgentDebug({ data: { agentId: openId } })
       .then(setDebug)
-      .catch((err) => toast.error(err instanceof Error ? err.message : "Failed to load agent debug"))
+      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : "Failed to load agent debug"))
       .finally(() => setLoading(false));
   }, [openId]);
 
@@ -190,7 +190,7 @@ export function AgentSettingsDrawer() {
                     </p>
                   ) : (
                     <ul className="mt-2 flex flex-wrap gap-1.5">
-                      {debug.snapshotTools.map((t, i) => (
+                      {debug.snapshotTools.map((t: string, i: number) => (
                         <li
                           key={i}
                           className="rounded-md bg-muted px-2 py-0.5 text-[11px]"
