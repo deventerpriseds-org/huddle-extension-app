@@ -31,6 +31,15 @@ const AgentBackendInput = z.object({
   backend: z.enum(["lovable", "openai"]),
   assistantId: z.string().optional(),
   useStoredPrompt: z.boolean(),
+  rag: z
+    .object({
+      store: z.enum(["azure", "lovable", "none"]),
+      chunks: z.boolean(),
+      triples: z.boolean(),
+      fileSearch: z.boolean(),
+      openaiVectorStoreId: z.string().optional(),
+    })
+    .optional(),
 });
 
 const Input = z.object({
@@ -56,6 +65,43 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
     const routerCfg = data.router ?? { backend: "openai" as const, model: "gpt-5.5", fastMode: false };
     const agentsCfg = data.agents ?? {};
+
+    // Fire-and-forget: persist the user's message into memory so future
+    // retrieval can see it. Any agent with rag.store === "azure" enabled
+    // triggers this; we write once with scope "global" so all agents share it.
+    const anyRag = Object.values(agentsCfg).some(
+      (a) => a?.rag?.store === "azure" && a.rag.chunks,
+    );
+    if (anyRag && openaiKey) {
+      (async () => {
+        try {
+          const { azurePgStore } = await import("./rag/azure-pg.server");
+          const { extractTriples, shouldExtractTriples } = await import("./rag/triples.server");
+          const chunk = await azurePgStore.writeChunk({
+            scope: "global",
+            text: data.text,
+            source: `huddle:${data.huddleId}`,
+          });
+          if (shouldExtractTriples(data.text)) {
+            const triples = await extractTriples(data.text);
+            if (triples.length > 0) {
+              await azurePgStore.writeTriples(
+                triples.map((t) => ({
+                  scope: "global" as const,
+                  subject: t.subject,
+                  predicate: t.predicate,
+                  object: t.object,
+                  confidence: t.confidence,
+                  sourceChunkId: chunk.id,
+                })),
+              );
+            }
+          }
+        } catch (err) {
+          console.error("[rag] write failed:", err);
+        }
+      })();
+    }
 
     // Lovable AI SDK model — created lazily only when something needs it.
     let lovableModel: Parameters<typeof generateText>[0]["model"] | null = null;
@@ -158,11 +204,44 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
         if (agentBackend.backend === "openai" && agentBackend.assistantId && openaiKey) {
           const { callOpenAIResponses } = await import("./openai-responses.server");
+          const rag = agentBackend.rag;
+          const hasRag =
+            !!rag && rag.store === "azure" && (rag.chunks || rag.triples || rag.fileSearch);
+
+          let tools: unknown[] | undefined;
+          let onToolCall:
+            | ((c: { name: string; arguments: Record<string, unknown> }) => Promise<string>)
+            | undefined;
+          let ragInstructions = "";
+
+          if (hasRag && rag) {
+            const { buildRagTools, dispatchTool, RAG_SYSTEM_HINT } = await import("./rag/tools");
+            const { azurePgStore } = await import("./rag/azure-pg.server");
+            const built = buildRagTools({
+              chunks: rag.chunks,
+              triples: rag.triples,
+              fileSearch: rag.fileSearch,
+              vectorStoreId: rag.openaiVectorStoreId,
+            });
+            if (built.length > 0) {
+              tools = built;
+              ragInstructions = "\n\n" + RAG_SYSTEM_HINT;
+              onToolCall = (c) => dispatchTool(azurePgStore, winner.id, c);
+            }
+          }
+
+          const instructions =
+            agentBackend.useStoredPrompt && !ragInstructions
+              ? undefined
+              : (agentBackend.useStoredPrompt ? "" : appSystem) + ragInstructions;
+
           const text = await callOpenAIResponses({
             assistantId: agentBackend.assistantId,
-            instructions: agentBackend.useStoredPrompt ? undefined : appSystem,
+            instructions,
             transcript: baseTranscript,
             fastMode: routerCfg.fastMode,
+            tools,
+            onToolCall,
           });
           clean = text.trim();
         } else {

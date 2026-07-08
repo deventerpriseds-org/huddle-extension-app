@@ -6,11 +6,27 @@ import { DEFAULT_ROUTER_MODEL, type RouterBackend } from "./model-catalog";
 
 // ------- Schema (used to validate uploaded config JSON) -------
 
+const RagConfigSchema = z.object({
+  store: z.enum(["azure", "lovable", "none"]).default("azure"),
+  chunks: z.boolean().default(true),
+  triples: z.boolean().default(true),
+  fileSearch: z.boolean().default(false),
+  openaiVectorStoreId: z.string().trim().optional(),
+});
+
 const AgentBackendSchema = z.object({
   backend: z.enum(["lovable", "openai"]),
   assistantId: z.string().trim().optional(),
   useStoredPrompt: z.boolean(),
+  rag: RagConfigSchema.default({
+    store: "azure",
+    chunks: true,
+    triples: true,
+    fileSearch: false,
+  }),
 });
+
+export type RagConfig = z.infer<typeof RagConfigSchema>;
 
 const RouterConfigSchema = z.object({
   backend: z.enum(["openai", "lovable"]),
@@ -47,11 +63,17 @@ export const ASSISTANT_IDS: Partial<Record<AgentId, string>> = {
 
 function defaultAgents(): Record<AgentId, AgentBackend> {
   const out = {} as Record<AgentId, AgentBackend>;
+  const defaultRag: RagConfig = {
+    store: "azure",
+    chunks: true,
+    triples: true,
+    fileSearch: false,
+  };
   for (const a of AGENTS) {
     const id = ASSISTANT_IDS[a.id];
     out[a.id] = id
-      ? { backend: "openai", assistantId: id, useStoredPrompt: true }
-      : { backend: "lovable", useStoredPrompt: false };
+      ? { backend: "openai", assistantId: id, useStoredPrompt: true, rag: { ...defaultRag } }
+      : { backend: "lovable", useStoredPrompt: false, rag: { ...defaultRag } };
   }
   return out;
 }

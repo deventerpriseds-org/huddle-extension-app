@@ -1,0 +1,243 @@
+// Azure Postgres + pgvector implementation of RagStore. Uses `pg` over TCP.
+// AZURE_PG_URL is a full connection string (postgresql://user:pass@host:5432/db?sslmode=require).
+
+import { Pool } from "pg";
+import { embed, toPgVector, EMBED_DIM } from "./embed.server";
+import type {
+  ChunkRow,
+  LookupTriplesInput,
+  RagStore,
+  SearchChunksInput,
+  TripleRow,
+  WriteChunkInput,
+  WriteTripleInput,
+} from "./types";
+
+let _pool: Pool | null = null;
+let _bootstrapped = false;
+
+function getPool(): Pool {
+  if (_pool) return _pool;
+  const url = process.env.AZURE_PG_URL;
+  if (!url) throw new Error("AZURE_PG_URL not configured");
+  _pool = new Pool({
+    connectionString: url,
+    // Azure Postgres requires TLS. Node's default CA store lacks the DigiCert
+    // roots on some runtimes; skip cert verification to keep this portable.
+    // Encryption still applies — only the cert-chain check is skipped.
+    ssl: { rejectUnauthorized: false },
+    max: 3,
+    idleTimeoutMillis: 20_000,
+    connectionTimeoutMillis: 10_000,
+  });
+  return _pool;
+}
+
+const BOOTSTRAP_SQL = `
+CREATE EXTENSION IF NOT EXISTS vector;
+
+DO $$ BEGIN
+  CREATE TYPE rag_scope AS ENUM ('agent', 'global');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS rag_chunks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  scope rag_scope NOT NULL,
+  agent_id TEXT,
+  text TEXT NOT NULL,
+  source TEXT,
+  embedding vector(${EMBED_DIM}) NOT NULL,
+  metadata JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- HNSW has a 2000-dim cap; text-embedding-3-large is 3072. Use ivfflat instead.
+CREATE INDEX IF NOT EXISTS rag_chunks_embed_ivf
+  ON rag_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS rag_chunks_agent_idx
+  ON rag_chunks (agent_id) WHERE scope = 'agent';
+
+CREATE TABLE IF NOT EXISTS rag_triples (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  scope rag_scope NOT NULL,
+  agent_id TEXT,
+  subject TEXT NOT NULL,
+  predicate TEXT NOT NULL,
+  object TEXT NOT NULL,
+  confidence REAL DEFAULT 0.8,
+  source_chunk_id UUID REFERENCES rag_chunks(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS rag_triples_subject_idx ON rag_triples (subject);
+CREATE INDEX IF NOT EXISTS rag_triples_fts_idx
+  ON rag_triples USING gin (to_tsvector('english', subject || ' ' || predicate || ' ' || object));
+`;
+
+async function ensureBootstrap(): Promise<void> {
+  if (_bootstrapped) return;
+  const pool = getPool();
+  await pool.query(BOOTSTRAP_SQL);
+  _bootstrapped = true;
+}
+
+function scopeClause(scope: "agent" | "global" | undefined, agentId: string | undefined) {
+  // agent-scoped: return rows for this agent OR global rows.
+  // global: only global rows.
+  if (scope === "global") return { sql: `scope = 'global'`, params: [] as unknown[] };
+  if (agentId) {
+    return {
+      sql: `(scope = 'global' OR (scope = 'agent' AND agent_id = $AGENT))`,
+      params: [agentId],
+    };
+  }
+  return { sql: `TRUE`, params: [] as unknown[] };
+}
+
+export const azurePgStore: RagStore = {
+  async bootstrap() {
+    await ensureBootstrap();
+  },
+
+  async ping() {
+    try {
+      const pool = getPool();
+      await ensureBootstrap();
+      const ver = await pool.query<{ version: string }>("SELECT version()");
+      const ext = await pool.query<{ extname: string }>(
+        "SELECT extname FROM pg_extension ORDER BY extname",
+      );
+      return {
+        ok: true as const,
+        version: ver.rows[0]?.version ?? "unknown",
+        extensions: ext.rows.map((r) => r.extname),
+      };
+    } catch (err) {
+      return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async writeChunk(input: WriteChunkInput) {
+    await ensureBootstrap();
+    const pool = getPool();
+    const vec = await embed(input.text);
+    const { rows } = await pool.query<{ id: string }>(
+      `INSERT INTO rag_chunks (scope, agent_id, text, source, embedding, metadata)
+       VALUES ($1, $2, $3, $4, $5::vector, $6)
+       RETURNING id`,
+      [
+        input.scope,
+        input.agentId ?? null,
+        input.text,
+        input.source ?? null,
+        toPgVector(vec),
+        input.metadata ?? {},
+      ],
+    );
+    return { id: rows[0].id };
+  },
+
+  async writeTriples(inputs: WriteTripleInput[]) {
+    if (inputs.length === 0) return { ids: [] };
+    await ensureBootstrap();
+    const pool = getPool();
+    const ids: string[] = [];
+    for (const t of inputs) {
+      const { rows } = await pool.query<{ id: string }>(
+        `INSERT INTO rag_triples (scope, agent_id, subject, predicate, object, confidence, source_chunk_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id`,
+        [
+          t.scope,
+          t.agentId ?? null,
+          t.subject,
+          t.predicate,
+          t.object,
+          t.confidence ?? 0.8,
+          t.sourceChunkId ?? null,
+        ],
+      );
+      ids.push(rows[0].id);
+    }
+    return { ids };
+  },
+
+  async searchChunks(input: SearchChunksInput): Promise<ChunkRow[]> {
+    await ensureBootstrap();
+    const pool = getPool();
+    const vec = await embed(input.query);
+    const k = Math.min(Math.max(input.k ?? 6, 1), 20);
+
+    const clause = scopeClause(input.scope, input.agentId);
+    const params: unknown[] = [toPgVector(vec)];
+    let where = clause.sql.replace("$AGENT", `$${params.length + 1}`);
+    params.push(...clause.params);
+    params.push(k);
+
+    const { rows } = await pool.query(
+      `SELECT id, scope, agent_id, text, source, created_at,
+              1 - (embedding <=> $1::vector) AS score
+       FROM rag_chunks
+       WHERE ${where}
+       ORDER BY embedding <=> $1::vector
+       LIMIT $${params.length}`,
+      params,
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      scope: r.scope,
+      agentId: r.agent_id,
+      text: r.text,
+      source: r.source,
+      score: Number(r.score),
+      createdAt: r.created_at,
+    }));
+  },
+
+  async lookupTriples(input: LookupTriplesInput): Promise<TripleRow[]> {
+    await ensureBootstrap();
+    const pool = getPool();
+    const k = Math.min(Math.max(input.k ?? 8, 1), 30);
+
+    const clause = scopeClause(input.scope, input.agentId);
+    const params: unknown[] = [];
+    let where = clause.sql;
+    if (clause.params.length > 0) {
+      where = where.replace("$AGENT", `$${params.length + 1}`);
+      params.push(...clause.params);
+    }
+
+    if (input.subject) {
+      params.push(`%${input.subject}%`);
+      where += ` AND subject ILIKE $${params.length}`;
+    }
+    if (input.predicate) {
+      params.push(`%${input.predicate}%`);
+      where += ` AND predicate ILIKE $${params.length}`;
+    }
+    if (input.query) {
+      params.push(input.query);
+      where += ` AND to_tsvector('english', subject || ' ' || predicate || ' ' || object) @@ plainto_tsquery('english', $${params.length})`;
+    }
+
+    params.push(k);
+    const { rows } = await pool.query(
+      `SELECT id, scope, agent_id, subject, predicate, object, confidence, created_at
+       FROM rag_triples
+       WHERE ${where}
+       ORDER BY confidence DESC, created_at DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      scope: r.scope,
+      agentId: r.agent_id,
+      subject: r.subject,
+      predicate: r.predicate,
+      object: r.object,
+      confidence: Number(r.confidence),
+      createdAt: r.created_at,
+    }));
+  },
+};
