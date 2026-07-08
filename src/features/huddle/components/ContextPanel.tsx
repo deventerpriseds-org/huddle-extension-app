@@ -15,9 +15,9 @@ export function ContextPanel() {
       <nav className="flex border-b border-hairline px-2">
         {(
           [
-            { id: "queue", label: "Queue", Icon: Boxes },
+            { id: "queue", label: "Queue", Icon: Boxes, dot: false },
             { id: "activity", label: "Activity", Icon: Activity, dot: true },
-            { id: "memory", label: "Memory", Icon: BookOpen },
+            { id: "memory", label: "Memory", Icon: BookOpen, dot: false },
           ] as const
         ).map(({ id, label, Icon, dot }) => (
           <button
