@@ -93,6 +93,10 @@ export const useHuddleStore = create<HuddleState>()(
     }),
     {
       name: "huddle-workspace",
+      storage: createJSONStorage(() =>
+        typeof window !== "undefined" ? window.localStorage : (undefined as unknown as Storage),
+      ),
+      skipHydration: typeof window === "undefined",
       partialize: (s) => ({
         messages: s.messages,
         tasks: s.tasks,
@@ -100,5 +104,6 @@ export const useHuddleStore = create<HuddleState>()(
         activeHuddleId: s.activeHuddleId,
       }),
     },
+
   ),
 );
