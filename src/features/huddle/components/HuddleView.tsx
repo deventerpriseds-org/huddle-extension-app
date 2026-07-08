@@ -268,7 +268,8 @@ function Composer({ huddle }: { huddle: Huddle }) {
   const addUser = useHuddleStore((s) => s.addUserMessage);
   const addAgent = useHuddleStore((s) => s.addAgentMessage);
   const logDecision = useHuddleStore((s) => s.logDecision);
-  const messages = useHuddleStore((s) => s.messages.filter((m) => m.huddleId === huddle.id));
+  const allMessages = useHuddleStore((s) => s.messages);
+  const messages = useMemo(() => allMessages.filter((m) => m.huddleId === huddle.id), [allMessages, huddle.id]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const targetAgentId: AgentId | undefined =
