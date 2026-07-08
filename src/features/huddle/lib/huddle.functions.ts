@@ -3,7 +3,7 @@ import { generateText } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import type { HuddleMessage } from "../data/seed";
-import { parseMentions, routeMessage, routeMessageLLM } from "./routing";
+import { parseMentions, routeMessage, routeMessageLLM, type RouterInvocation } from "./routing";
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
@@ -21,6 +21,18 @@ const HistoryMessage = z.object({
   replyTo: z.string().optional(),
 });
 
+const RouterConfigInput = z.object({
+  backend: z.enum(["openai", "lovable"]),
+  model: z.string().min(1),
+  fastMode: z.boolean().optional(),
+});
+
+const AgentBackendInput = z.object({
+  backend: z.enum(["lovable", "openai"]),
+  assistantId: z.string().optional(),
+  useStoredPrompt: z.boolean(),
+});
+
 const Input = z.object({
   text: z.string().min(1).max(4000),
   huddleId: z.string(),
@@ -28,6 +40,8 @@ const Input = z.object({
   members: z.array(z.enum(AgentIds)).min(1),
   history: z.array(HistoryMessage).max(40),
   targetAgentId: z.enum(AgentIds).optional(),
+  router: RouterConfigInput.optional(),
+  agents: z.record(z.enum(AgentIds), AgentBackendInput).optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
@@ -35,68 +49,75 @@ const MAX_REPLIES_PER_TURN = 4;
 export const sendHuddleMessage = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => Input.parse(raw))
   .handler(async ({ data }) => {
-    const key = process.env.LOVABLE_API_KEY;
+    const lovableKey = process.env.LOVABLE_API_KEY;
+    const openaiKey = process.env.OPENAI_API_KEY;
 
     type Reply = { agentId: AgentId; text: string };
 
-    // Set up the model once so both router and replies share it.
-    let model: Parameters<typeof generateText>[0]["model"] | null = null;
-    if (key) {
-      const { createLovableAiGatewayProvider } = await import(
-        "@/lib/ai-gateway.server"
-      );
-      const gateway = createLovableAiGatewayProvider(key, undefined, {
-        structuredOutputs: true,
-      });
-      model = gateway("openai/gpt-5.5");
+    const routerCfg = data.router ?? { backend: "openai" as const, model: "gpt-5.5", fastMode: false };
+    const agentsCfg = data.agents ?? {};
+
+    // Lovable AI SDK model — created lazily only when something needs it.
+    let lovableModel: Parameters<typeof generateText>[0]["model"] | null = null;
+    async function getLovableModel(id: string) {
+      if (!lovableKey) return null;
+      if (!lovableModel) {
+        const { createLovableAiGatewayProvider } = await import("@/lib/ai-gateway.server");
+        const gateway = createLovableAiGatewayProvider(lovableKey, undefined, {
+          structuredOutputs: true,
+        });
+        lovableModel = gateway(id);
+      }
+      return lovableModel;
     }
 
-    // Route: LLM is the primary router for group huddles. 1:1 and explicit
-    // @mentions still short-circuit deterministically. Keyword scorer only
-    // runs when the LLM router throws (see routeMessageLLM catch block).
+    // ---- Route ----
     const explicitMentions = parseMentions(
       data.text,
       AGENTS.filter((a) => data.members.includes(a.id)),
     );
-    const useLLMRouter =
-      !!model &&
+    const canLLMRoute =
       data.scope === "group" &&
       !data.targetAgentId &&
-      explicitMentions.length === 0;
+      explicitMentions.length === 0 &&
+      (routerCfg.backend === "openai" ? !!openaiKey : !!lovableKey);
 
-    const routed = useLLMRouter
-      ? await routeMessageLLM(
-          {
-            text: data.text,
-            scope: data.scope,
-            members: data.members,
-            history: data.history as HuddleMessage[],
-            targetAgentId: data.targetAgentId,
-          },
-          model!,
-        )
-      : routeMessage({
+    let routed;
+    if (canLLMRoute) {
+      const invocation: RouterInvocation = {
+        backend: routerCfg.backend,
+        model: routerCfg.model,
+        fastMode: routerCfg.fastMode,
+      };
+      if (routerCfg.backend === "lovable") {
+        const m = await getLovableModel(routerCfg.model);
+        if (m) invocation.lovableModel = m;
+      }
+      routed = await routeMessageLLM(
+        {
           text: data.text,
           scope: data.scope,
           members: data.members,
           history: data.history as HuddleMessage[],
           targetAgentId: data.targetAgentId,
-        });
+        },
+        invocation,
+      );
+    } else {
+      routed = routeMessage({
+        text: data.text,
+        scope: data.scope,
+        members: data.members,
+        history: data.history as HuddleMessage[],
+        targetAgentId: data.targetAgentId,
+      });
+    }
 
     if (routed.winners.length === 0) {
       return { decision: routed.decision, replies: [] as Reply[] };
     }
 
-    if (!model) {
-      return {
-        decision: routed.decision,
-        replies: routed.winners.map((id) => ({
-          agentId: id,
-          text: "AI gateway is not configured yet.",
-        })),
-      };
-    }
-
+    // ---- Reply transcript ----
     const baseTranscript = data.history
       .slice(-14)
       .filter((m) => m.author.kind !== "system")
@@ -109,8 +130,6 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
     const presentAgents = AGENTS.filter((a) => data.members.includes(a.id));
 
-    // Queue of agents to reply. Start with the routed winners; extend via
-    // @mentions inside replies so agents can summon each other.
     const queue: AgentId[] = [...routed.winners];
     const spoken = new Set<AgentId>();
     const replies: Reply[] = [];
@@ -121,11 +140,13 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       const winner = AGENT_BY_ID[nextId];
       if (!winner || !data.members.includes(nextId)) continue;
 
+      const agentBackend = agentsCfg[nextId] ?? { backend: "lovable" as const, useStoredPrompt: false };
+
       const priorInThisTurn = replies
         .map((r) => `${AGENT_BY_ID[r.agentId].name} just said: "${r.text}"`)
         .join("\n");
 
-      const system =
+      const appSystem =
         winner.systemPrompt +
         ` You are ${winner.name} in a ${data.scope === "group" ? "group huddle" : "1:1"}. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail.` +
         (priorInThisTurn
@@ -133,17 +154,37 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           : "");
 
       try {
-        const { text } = await generateText({
-          model,
-          system,
-          messages: baseTranscript,
-        });
-        const clean = text.trim();
+        let clean = "";
+
+        if (agentBackend.backend === "openai" && agentBackend.assistantId && openaiKey) {
+          const { callOpenAIResponses } = await import("./openai-responses.server");
+          const text = await callOpenAIResponses({
+            assistantId: agentBackend.assistantId,
+            instructions: agentBackend.useStoredPrompt ? undefined : appSystem,
+            transcript: baseTranscript,
+            fastMode: routerCfg.fastMode,
+          });
+          clean = text.trim();
+        } else {
+          // Lovable AI path (default fallback).
+          const model = await getLovableModel("openai/gpt-5.5");
+          if (!model) {
+            replies.push({ agentId: winner.id, text: "AI gateway is not configured yet." });
+            spoken.add(winner.id);
+            continue;
+          }
+          const { text } = await generateText({
+            model,
+            system: appSystem,
+            messages: baseTranscript,
+          });
+          clean = text.trim();
+        }
+
         if (!clean) continue;
         replies.push({ agentId: winner.id, text: clean });
         spoken.add(winner.id);
 
-        // Chain: any agents this reply @mentioned should chime in next.
         const chained = parseMentions(clean, presentAgents);
         for (const id of chained) {
           if (
@@ -156,7 +197,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           }
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "AI gateway error";
+        const msg = err instanceof Error ? err.message : "AI error";
         replies.push({
           agentId: winner.id,
           text: `(couldn't reach the model — ${msg})`,
@@ -167,5 +208,3 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
     return { decision: routed.decision, replies };
   });
-
-
