@@ -38,6 +38,10 @@ const RouterConfigSchema = z.object({
   backend: z.enum(["openai", "lovable"]),
   model: z.string().min(1),
   fastMode: z.boolean(),
+  /** #1 — tighten the router prompt to prefer a single primary agent. */
+  strictPrompt: z.boolean().default(false),
+  /** #2 — drop supporting agents when the primary already covers the message. */
+  soloOnCoverage: z.boolean().default(true),
 });
 
 export const BackendsConfigSchema = z.object({
