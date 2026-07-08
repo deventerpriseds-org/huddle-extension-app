@@ -79,9 +79,10 @@ function defaultAgents(): Record<AgentId, AgentBackend> {
   for (const a of AGENTS) {
     const id = ASSISTANT_IDS[a.id];
     out[a.id] = id
-      ? { backend: "openai", assistantId: id, useStoredPrompt: true, rag: { ...defaultRag } }
-      : { backend: "lovable", useStoredPrompt: false, rag: { ...defaultRag } };
+      ? { backend: "openai", assistantId: id, rag: { ...defaultRag } }
+      : { backend: "lovable", rag: { ...defaultRag } };
   }
+
   return out;
 }
 
