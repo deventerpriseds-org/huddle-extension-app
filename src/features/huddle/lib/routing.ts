@@ -225,11 +225,11 @@ ${text}
 Pick the best primary agent, up to 2 supporting agents, and a one-line reason.`;
 
   try {
-    const { experimental_output } = await generateText({
+    const { output } = await generateText({
       model,
       system,
       prompt,
-      experimental_output: Output.object({
+      output: Output.object({
         schema: z.object({
           primary: z.enum(memberIds),
           supporting: z.array(z.enum(memberIds)),
@@ -238,7 +238,7 @@ Pick the best primary agent, up to 2 supporting agents, and a one-line reason.`;
       }),
     });
 
-    const { primary, supporting, reason } = experimental_output;
+    const { primary, supporting, reason } = output;
     const winners: AgentId[] = [primary];
     for (const id of supporting) {
       if (id !== primary && !winners.includes(id) && winners.length < 3) {
