@@ -1,6 +1,8 @@
-import { MessageSquare, LayoutGrid, Compass } from "lucide-react";
+import { useState } from "react";
+import { MessageSquare, LayoutGrid, Compass, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useHuddleStore } from "../store";
+import { SettingsSheet } from "./SettingsSheet";
 
 const items = [
   { id: "huddle", label: "Huddles", icon: MessageSquare },
@@ -11,6 +13,7 @@ const items = [
 export function Rail() {
   const view = useHuddleStore((s) => s.view);
   const setView = useHuddleStore((s) => s.setView);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
     <nav className="flex h-full w-14 flex-col items-center justify-between bg-primary text-primary-foreground py-4">
@@ -22,7 +25,7 @@ export function Rail() {
           const active =
             (it.id === "huddle" && view === "huddle") ||
             (it.id === "board" && view === "board") ||
-            (it.id === "memory" && view === "huddle"); // memory is a tab, keep neutral
+            (it.id === "memory" && view === "huddle");
           const Icon = it.icon;
           return (
             <button
@@ -43,12 +46,25 @@ export function Rail() {
           );
         })}
       </div>
-      <div
-        className="flex size-9 items-center justify-center rounded-full text-xs font-semibold"
-        style={{ background: "color-mix(in oklch, white 20%, transparent)" }}
-      >
-        You
+      <div className="flex flex-col items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          className="flex size-10 items-center justify-center rounded-lg text-primary-foreground/60 hover:text-primary-foreground hover:bg-primary-foreground/10 transition"
+          aria-label="Settings"
+          title="Settings"
+        >
+          <Settings size={18} strokeWidth={1.8} />
+        </button>
+        <div
+          className="flex size-9 items-center justify-center rounded-full text-xs font-semibold"
+          style={{ background: "color-mix(in oklch, white 20%, transparent)" }}
+        >
+          You
+        </div>
       </div>
+      <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
     </nav>
   );
 }
+
