@@ -34,7 +34,7 @@ export function HuddleApp() {
         <Sidebar />
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* Mobile top bar */}
         <div className="flex items-center justify-between border-b border-hairline bg-surface px-3 py-2 md:hidden">
           <button
