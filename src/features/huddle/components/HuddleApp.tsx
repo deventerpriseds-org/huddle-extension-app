@@ -1,14 +1,16 @@
 import { useState } from "react";
-import { Menu, PanelRight } from "lucide-react";
+import { Menu, PanelRight, Settings } from "lucide-react";
 import { BoardView } from "./BoardView";
 import { ContextPanel } from "./ContextPanel";
 import { HuddleView } from "./HuddleView";
 import { MeetingLayer } from "./MeetingBar";
 import { Rail } from "./Rail";
 import { Sidebar } from "./Sidebar";
+import { SettingsSheet } from "./SettingsSheet";
 import { useHuddleStore } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID } from "../data/agents";
+
 
 export function HuddleApp() {
   const view = useHuddleStore((s) => s.view);
