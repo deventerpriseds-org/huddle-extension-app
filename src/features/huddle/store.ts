@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import type { AgentId } from "./data/agents";
+import { AGENT_BY_ID, type AgentId } from "./data/agents";
 import {
   HUDDLES,
   SEED_MEMORY,
