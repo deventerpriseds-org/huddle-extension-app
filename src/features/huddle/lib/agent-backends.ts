@@ -12,6 +12,7 @@ const RagConfigSchema = z.object({
   triples: z.boolean().default(true),
   fileSearch: z.boolean().default(false),
   openaiVectorStoreId: z.string().trim().optional(),
+  sharing: z.enum(["shared", "private", "readonly-shared"]).default("shared"),
 });
 
 const AgentBackendSchema = z.object({
@@ -23,6 +24,7 @@ const AgentBackendSchema = z.object({
     chunks: true,
     triples: true,
     fileSearch: false,
+    sharing: "shared",
   }),
 });
 
