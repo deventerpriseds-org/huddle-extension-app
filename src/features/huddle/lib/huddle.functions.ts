@@ -31,6 +31,15 @@ const AgentBackendInput = z.object({
   backend: z.enum(["lovable", "openai"]),
   assistantId: z.string().optional(),
   useStoredPrompt: z.boolean(),
+  rag: z
+    .object({
+      store: z.enum(["azure", "lovable", "none"]),
+      chunks: z.boolean(),
+      triples: z.boolean(),
+      fileSearch: z.boolean(),
+      openaiVectorStoreId: z.string().optional(),
+    })
+    .optional(),
 });
 
 const Input = z.object({
