@@ -311,15 +311,23 @@ function Composer({ huddle }: { huddle: Huddle }) {
           huddleId: huddle.id,
           scope,
           members: huddle.members,
-          history: messages.slice(-14).map((m) => ({
-            id: m.id,
-            huddleId: m.huddleId,
-            author: m.author,
-            text: m.text,
-            ts: m.ts,
-            mentions: m.mentions,
-            replyTo: m.replyTo,
-          })),
+          history: messages
+            .slice(-14)
+            .filter(
+              (m) =>
+                m.author.kind === "user" ||
+                m.author.kind === "system" ||
+                (m.author.kind === "agent" && !!AGENT_BY_ID[m.author.agentId as AgentId]),
+            )
+            .map((m) => ({
+              id: m.id,
+              huddleId: m.huddleId,
+              author: m.author,
+              text: m.text,
+              ts: m.ts,
+              mentions: m.mentions,
+              replyTo: m.replyTo,
+            })),
           targetAgentId,
           router: backendsCfg.router,
           agents: backendsCfg.agents,
