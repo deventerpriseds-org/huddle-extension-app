@@ -84,7 +84,7 @@ function HuddleHeader({
         )}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="ml-auto flex items-center gap-2">
         <div className="inline-flex rounded-lg border border-hairline bg-surface p-0.5">
           {(["huddle", "board"] as const).map((v) => (
             <button
