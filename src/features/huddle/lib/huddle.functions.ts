@@ -272,7 +272,8 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             if (built.length > 0) {
               tools = built;
               ragInstructions = "\n\n" + RAG_SYSTEM_HINT;
-              onToolCall = (c) => dispatchTool(azurePgStore, winner.id, c);
+              const mode = rag.sharing ?? "shared";
+              onToolCall = (c) => dispatchTool(azurePgStore, winner.id, c, mode);
             }
           }
 
