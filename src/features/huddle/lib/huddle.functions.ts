@@ -28,6 +28,8 @@ const RouterConfigInput = z.object({
   backend: z.enum(["openai", "lovable"]),
   model: z.string().min(1),
   fastMode: z.boolean().optional(),
+  strictPrompt: z.boolean().optional(),
+  soloOnCoverage: z.boolean().optional(),
 });
 
 const AgentBackendInput = z.object({
