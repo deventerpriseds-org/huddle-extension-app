@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, Upload, RotateCcw, X } from "lucide-react";
+import { Download, Upload, RotateCcw, X, Database, Loader2 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
@@ -26,6 +26,7 @@ import {
   supportsPriority,
   type RouterBackend,
 } from "../lib/model-catalog";
+import { pingRagStore } from "../lib/rag.functions";
 
 interface SettingsSheetProps {
   open: boolean;
