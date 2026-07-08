@@ -423,25 +423,16 @@ function MemoryTab() {
 
               {rag.store !== "none" && (
                 <div className="flex items-center justify-between gap-3 pt-1">
-                  <label
-                    className="text-xs text-muted-foreground"
-                    title="Shared: writes global, reads global + own. Private: agent-only, no cross-agent bleed. Read-only shared: consumes shared memory but doesn't write."
-                  >
-                    Sharing
-                  </label>
-                  <Select
-                    value={rag.sharing ?? "shared"}
-                    onValueChange={(v) =>
-                      setRag({ sharing: v as "shared" | "private" | "readonly-shared" })
-                    }
-                  >
-                    <SelectTrigger className="h-8 w-40"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="shared">Shared</SelectItem>
-                      <SelectItem value="private">Private</SelectItem>
-                      <SelectItem value="readonly-shared">Read-only shared</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <div>
+                    <Label className="text-sm">Shared memory</Label>
+                    <p className="text-xs text-muted-foreground">
+                      On = this agent reads and writes shared memory. Off = private to this agent.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={(rag.sharing ?? "shared") === "shared"}
+                    onCheckedChange={(v) => setRag({ sharing: v ? "shared" : "private" })}
+                  />
                 </div>
               )}
 
