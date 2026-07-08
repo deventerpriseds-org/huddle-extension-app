@@ -249,13 +249,18 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       try {
         let clean = "";
 
-        if (agentBackend.backend === "openai" && agentBackend.assistantId && openaiKey) {
+        if (agentBackend.backend === "openai" && openaiKey) {
           const { callOpenAIResponses } = await import("./openai-responses.server");
+          const { getAssistantSnapshot, snapshotResponsesTools } = await import(
+            "./openai-assistants.server"
+          );
+
+          const snapshot = getAssistantSnapshot(winner.id);
           const rag = agentBackend.rag;
           const hasRag =
             !!rag && rag.store === "azure" && (rag.chunks || rag.triples || rag.fileSearch);
 
-          let tools: unknown[] | undefined;
+          let ragTools: unknown[] = [];
           let onToolCall:
             | ((c: { name: string; arguments: Record<string, unknown> }) => Promise<string>)
             | undefined;
@@ -271,35 +276,46 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
               vectorStoreId: rag.openaiVectorStoreId,
             });
             if (built.length > 0) {
-              tools = built;
+              ragTools = built;
               ragInstructions = "\n\n" + RAG_SYSTEM_HINT;
               const mode = rag.sharing ?? "shared";
               onToolCall = (c) => dispatchTool(azurePgStore, winner.id, c, mode);
             }
           }
 
-          // OpenAI Responses only honors a stored prompt (`pmpt_...`) via
-          // `prompt.id`. Legacy assistant IDs (`asst_...`) fall back to a
-          // plain model call, so we must always send the persona instructions
-          // in that case even if the agent is configured to use its stored
-          // prompt.
-          const hasStoredPrompt = agentBackend.assistantId.startsWith("pmpt_");
-          const useStored = agentBackend.useStoredPrompt && hasStoredPrompt;
-          const instructions =
-            useStored && !ragInstructions
-              ? undefined
-              : (useStored ? "" : appSystem) + ragInstructions;
+          // Instructions: prefer the assistant snapshot's tuned instructions
+          // when we have one; otherwise fall back to the in-repo persona.
+          // Then append the scene/handoff rules and RAG hint.
+          const snapshotInstructions = snapshot?.instructions?.trim();
+          const scene = ` You are ${winner.name} in a ${
+            data.scope === "group" ? "group huddle" : "1:1"
+          }. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail.${
+            priorInThisTurn
+              ? `\n\nOther agents just replied in this same turn:\n${priorInThisTurn}\nBuild on what they said instead of repeating it. If you have nothing to add, reply with a single short line.`
+              : ""
+          }`;
+          const baseInstructions = snapshotInstructions
+            ? snapshotInstructions + scene
+            : appSystem;
+          const instructions = baseInstructions + ragInstructions;
 
+          // Merge snapshot tools (file_search / function) with our RAG tools.
+          const snapshotTools = snapshotResponsesTools(snapshot);
+          const mergedTools = [...snapshotTools, ...ragTools];
+
+          const model =
+            agentBackend.model?.trim() || snapshot?.model || "gpt-4o";
 
           const text = await callOpenAIResponses({
-            assistantId: agentBackend.assistantId,
+            model,
             instructions,
             transcript: baseTranscript,
             fastMode: routerCfg.fastMode,
-            tools,
+            tools: mergedTools.length > 0 ? mergedTools : undefined,
             onToolCall,
           });
           clean = text.trim();
+
         } else {
           // Lovable AI path (default fallback).
           const model = await getLovableModel("openai/gpt-5.5");
