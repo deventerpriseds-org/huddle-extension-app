@@ -16,7 +16,9 @@ export type AgentId =
   | "cole-blake"
   | "charleston-lewis"
   | "eli-vaughn"
-  | "liam-kingsley";
+  | "liam-kingsley"
+  | "cam-post"
+  | "troy-lennox";
 
 export type AgentTone = "warm" | "direct" | "coach" | "wry" | "formal";
 
