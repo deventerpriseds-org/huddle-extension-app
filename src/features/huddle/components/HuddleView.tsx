@@ -194,7 +194,7 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
       </div>
     );
   }
-  const agent = AGENT_BY_ID[m.author.agentId];
+  const agent = AGENT_BY_ID[m.author.agentId as AgentId] ?? AGENTS[0];
   const isBriefing = m.isBriefing;
   return (
     <div className="flex gap-3">
