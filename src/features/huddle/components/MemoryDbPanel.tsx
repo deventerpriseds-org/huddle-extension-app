@@ -51,6 +51,22 @@ export function MemoryDbPanel() {
       setRunning(null);
     }
   }
+  async function runRt() {
+    setRunning("rt");
+    try {
+      const r = await verifyRagRoundTrip();
+      setRt(r);
+      if (r.ok) toast.success(`Round-trip OK — wrote+read+deleted (marker ${r.marker.slice(-6)})`);
+      else toast.error(`Round-trip failed: ${firstRtError(r)}`);
+      // refresh diag afterwards for accurate row counts
+      const d = await diagnoseRagStore();
+      setDiag(d);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Round-trip crashed");
+    } finally {
+      setRunning(null);
+    }
+  }
 
   const status = statusOf(diag);
 
