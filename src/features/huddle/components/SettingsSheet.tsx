@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, Upload, RotateCcw, X, Database, Loader2 } from "lucide-react";
+import { Download, Upload, RotateCcw, X, Database, Loader2, Settings2 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
@@ -28,6 +28,8 @@ import {
 } from "../lib/model-catalog";
 import { pingRagStore } from "../lib/rag.functions";
 import { useHuddleStore } from "../store";
+import { useAgentPanelStore } from "../lib/agent-panel-store";
+import { MemoryDbPanel } from "./MemoryDbPanel";
 
 interface SettingsSheetProps {
   open: boolean;
