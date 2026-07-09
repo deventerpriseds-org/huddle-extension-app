@@ -639,6 +639,6 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       }
     }
 
-    return { decision: routed.decision, replies, fallbacks, prompts };
+    return { decision: routed.decision, replies, fallbacks, prompts, journeyTaskUpdates };
   });
 
