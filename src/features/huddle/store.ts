@@ -242,3 +242,4 @@ export const useVisibleTasks = () => useFilterDemo(useHuddleStore((s) => s.tasks
 export const useVisibleMemory = () => useFilterDemo(useHuddleStore((s) => s.memory));
 export const useVisibleDecisions = () => useFilterDemo(useHuddleStore((s) => s.decisions));
 export const useVisibleHuddles = () => useFilterDemo(useHuddleStore((s) => s.huddles));
+export const useToolUses = () => useHuddleStore((s) => s.toolUses);
