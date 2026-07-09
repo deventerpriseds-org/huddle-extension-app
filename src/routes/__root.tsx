@@ -84,14 +84,18 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         content:
           "Huddle is a Slack/Teams-style workspace where you talk to your own AI agents — one-to-one or as a group — and they do real work on your behalf.",
       },
-      { property: "og:title", content: "Huddle — a team of AI agents" },
+      { property: "og:title", content: "Huddle — chat, huddle, and run a team of AI agents" },
       {
         property: "og:description",
         content:
-          "Chat, huddle, and run a team of AI agents. Group and 1:1 huddles, a shared queue, voice standups.",
+          "Huddle is a Slack/Teams-style workspace where you talk to your own AI agents — one-to-one or as a group — and they do real work on your behalf.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: "Huddle — chat, huddle, and run a team of AI agents" },
+      { name: "twitter:description", content: "Huddle is a Slack/Teams-style workspace where you talk to your own AI agents — one-to-one or as a group — and they do real work on your behalf." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/1391a380-070d-4721-a2bc-a89b1725aaf1/id-preview-296080e2--a6760242-2abf-43de-b87f-bf2cff586ea4.lovable.app-1783562864946.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/1391a380-070d-4721-a2bc-a89b1725aaf1/id-preview-296080e2--a6760242-2abf-43de-b87f-bf2cff586ea4.lovable.app-1783562864946.png" },
     ],
     links: [
       {
