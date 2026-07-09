@@ -535,4 +535,82 @@ export const azurePgStore: RagStore = {
   },
 };
 
+export interface RoundTripResult {
+  ok: boolean;
+  steps: {
+    bootstrap?: { ok: boolean; error?: string };
+    write?: { ok: boolean; id?: string; ms?: number; error?: string };
+    semanticSearch?: { ok: boolean; matched?: boolean; topId?: string; topScore?: number; hitCount?: number; ms?: number; error?: string };
+    directRead?: { ok: boolean; text?: string; ms?: number; error?: string };
+    cleanup?: { ok: boolean; deleted?: number; error?: string };
+  };
+  marker: string;
+  timestamp: string;
+}
+
+/**
+ * True end-to-end verification. Writes a uniquely-tagged chunk, searches for it
+ * semantically, reads it back by id, then deletes it. Every step returns its
+ * raw result — no fake "success" states.
+ */
+export async function verifyRoundTrip(): Promise<RoundTripResult> {
+  const marker = `verify-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const text = `MEMORY_VERIFY_MARKER ${marker}: Azure Postgres pgvector round-trip probe.`;
+  const result: RoundTripResult = { ok: false, steps: {}, marker, timestamp: new Date().toISOString() };
+
+  const boot = await runBootstrap();
+  result.steps.bootstrap = { ok: boot.ok, error: boot.error?.message };
+  if (!boot.ok) return result;
+
+  let chunkId: string | undefined;
+  try {
+    const t0 = Date.now();
+    const w = await azurePgStore.writeChunk({ scope: "global", text, source: `roundtrip:${marker}` });
+    chunkId = w.id;
+    result.steps.write = { ok: true, id: w.id, ms: Date.now() - t0 };
+  } catch (err) {
+    result.steps.write = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return result;
+  }
+
+  try {
+    const t0 = Date.now();
+    const hits = await azurePgStore.searchChunks({ query: text, k: 5, mode: "shared" });
+    const top = hits[0];
+    result.steps.semanticSearch = {
+      ok: true,
+      matched: top?.id === chunkId,
+      topId: top?.id,
+      topScore: top?.score,
+      hitCount: hits.length,
+      ms: Date.now() - t0,
+    };
+  } catch (err) {
+    result.steps.semanticSearch = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+
+  try {
+    const t0 = Date.now();
+    const { rows } = await q<{ text: string }>(`SELECT text FROM rag_chunks WHERE id = $1`, [chunkId]);
+    result.steps.directRead = { ok: rows.length === 1, text: rows[0]?.text, ms: Date.now() - t0 };
+  } catch (err) {
+    result.steps.directRead = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+
+  try {
+    const del = await q<{ id: string }>(`DELETE FROM rag_chunks WHERE id = $1 RETURNING id`, [chunkId]);
+    result.steps.cleanup = { ok: true, deleted: del.rows.length };
+  } catch (err) {
+    result.steps.cleanup = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+
+  result.ok =
+    !!result.steps.write?.ok &&
+    !!result.steps.semanticSearch?.ok &&
+    !!result.steps.semanticSearch?.matched &&
+    !!result.steps.directRead?.ok;
+
+  return result;
+}
+
 export type { DiagnoseResult };
