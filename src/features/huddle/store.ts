@@ -103,6 +103,7 @@ export const useHuddleStore = create<HuddleState>()(
       partialize: (s) => ({
         messages: s.messages,
         tasks: s.tasks,
+        memory: s.memory,
         decisions: s.decisions,
         activeHuddleId: s.activeHuddleId,
       }),
