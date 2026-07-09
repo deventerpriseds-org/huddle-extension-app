@@ -27,6 +27,7 @@ import {
   type RouterBackend,
 } from "../lib/model-catalog";
 import { pingRagStore } from "../lib/rag.functions";
+import { useHuddleStore } from "../store";
 
 interface SettingsSheetProps {
   open: boolean;
