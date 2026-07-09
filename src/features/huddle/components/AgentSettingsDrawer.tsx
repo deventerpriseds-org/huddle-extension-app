@@ -35,22 +35,39 @@ export function AgentSettingsDrawer() {
   const [ctxScope, setCtxScope] = useState<"agent" | "global">("agent");
   const [extractFacts, setExtractFacts] = useState(true);
   const [savingCtx, setSavingCtx] = useState(false);
+  const [memoryItems, setMemoryItems] = useState<MemoryChunk[]>([]);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  async function refreshMemoryList(agentId: string) {
+    setMemoryLoading(true);
+    try {
+      const r = await listMemoryItems({ data: { agentId, limit: 100 } });
+      setMemoryItems(r.rows);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load memory list");
+    } finally {
+      setMemoryLoading(false);
+    }
+  }
 
   useEffect(() => {
     if (!openId) {
       setDebug(null);
       setCtxText("");
       setCtxScope("agent");
+      setMemoryItems([]);
       return;
     }
     setLoading(true);
     setCtxText("");
     setCtxScope("agent");
+    setMemoryItems([]);
     getAgentDebug({ data: { agentId: openId } })
       .then(setDebug)
       .catch((err: unknown) => toast.error(err instanceof Error ? err.message : "Failed to load agent debug"))
       .finally(() => setLoading(false));
+    refreshMemoryList(openId);
   }, [openId]);
 
 
@@ -71,10 +88,29 @@ export function AgentSettingsDrawer() {
       });
       toast.success(`Saved memory (chunk ${r.chunkId.slice(0, 8)}…, ${r.tripleCount} facts)`);
       setCtxText("");
+      await refreshMemoryList(openId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Save failed");
     } finally {
       setSavingCtx(false);
+    }
+  }
+
+  async function handleDeleteMemory(id: string) {
+    if (!openId) return;
+    setDeletingId(id);
+    try {
+      const r = await deleteMemoryItem({ data: { id } });
+      if (r.deleted > 0) {
+        toast.success("Memory item deleted");
+        setMemoryItems((prev) => prev.filter((m) => m.id !== id));
+      } else {
+        toast.error("Nothing deleted (item may already be gone)");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeletingId(null);
     }
   }
 
