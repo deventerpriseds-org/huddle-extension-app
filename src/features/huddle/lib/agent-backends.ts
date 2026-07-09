@@ -10,7 +10,7 @@ const RagConfigSchema = z.object({
   store: z.enum(["azure", "lovable", "none"]).default("azure"),
   chunks: z.boolean().default(true),
   triples: z.boolean().default(true),
-  fileSearch: z.boolean().default(false),
+  fileSearch: z.boolean().default(true),
   openaiVectorStoreId: z.string().trim().optional(),
   sharing: z.enum(["shared", "private", "readonly-shared"]).default("shared"),
 });
@@ -31,12 +31,12 @@ const AgentBackendSchema = z.object({
     store: "azure",
     chunks: true,
     triples: true,
-    fileSearch: false,
+    fileSearch: true,
     sharing: "shared",
   }),
   journey: JourneyConfigSchema.default({ enabled: false }),
   /** Enable OpenAI Responses `web_search_preview` tool for this agent. */
-  webSearch: z.boolean().default(false),
+  webSearch: z.boolean().default(true),
 });
 
 
@@ -54,7 +54,7 @@ const RouterConfigSchema = z.object({
 });
 
 export const BackendsConfigSchema = z.object({
-  version: z.number().default(1),
+  version: z.number().default(2),
   router: RouterConfigSchema,
   agents: z.record(z.string(), AgentBackendSchema),
 });
@@ -86,14 +86,14 @@ function defaultAgents(): Record<AgentId, AgentBackend> {
     store: "azure",
     chunks: true,
     triples: true,
-    fileSearch: false,
+    fileSearch: true,
     sharing: "shared",
   };
   for (const a of AGENTS) {
     const id = ASSISTANT_IDS[a.id];
     out[a.id] = id
-      ? { backend: "openai", assistantId: id, rag: { ...defaultRag }, journey: { enabled: false }, webSearch: false }
-      : { backend: "lovable", rag: { ...defaultRag }, journey: { enabled: false }, webSearch: false };
+      ? { backend: "openai", assistantId: id, rag: { ...defaultRag }, journey: { enabled: false }, webSearch: true }
+      : { backend: "lovable", rag: { ...defaultRag }, journey: { enabled: false }, webSearch: true };
 
   }
 
@@ -153,10 +153,22 @@ export const useBackendsStore = create<BackendsState>()(
       merge: (persisted, current) => {
         const p = persisted as Partial<BackendsState> | undefined;
         if (!p?.config) return current;
+        const persistedVersion = p.config.version ?? 1;
+        const mergedAgents: Record<string, AgentBackend> = { ...current.config.agents };
+        for (const [id, pAgent] of Object.entries(p.config.agents ?? {})) {
+          const base = current.config.agents[id as AgentId] ?? pAgent;
+          const combined = { ...base, ...pAgent } as AgentBackend;
+          // v1 → v2 migration: web search + file search default ON.
+          if (persistedVersion < 2) {
+            combined.webSearch = true;
+            combined.rag = { ...combined.rag, fileSearch: true };
+          }
+          mergedAgents[id] = combined;
+        }
         const merged: BackendsConfig = {
-          version: 1,
+          version: 2,
           router: { ...current.config.router, ...p.config.router },
-          agents: { ...current.config.agents, ...p.config.agents },
+          agents: mergedAgents as Record<AgentId, AgentBackend>,
         };
         return { ...current, config: merged };
       },

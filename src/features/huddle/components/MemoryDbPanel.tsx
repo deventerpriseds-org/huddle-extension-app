@@ -1,7 +1,10 @@
 import { useState } from "react";
-import { Loader2, Play, Wrench, RefreshCw, CheckCircle2, XCircle, HelpCircle, ChevronDown, Beaker } from "lucide-react";
+import { Loader2, Play, Wrench, RefreshCw, CheckCircle2, XCircle, HelpCircle, ChevronDown, Beaker, PackagePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { diagnoseRagStore, runRagBootstrap, verifyRagRoundTrip } from "../lib/rag.functions";
+import { provisionAgentVectorStores } from "../lib/openai-provisioning.functions";
+import { useBackendsStore } from "../lib/agent-backends";
+import type { AgentId } from "../data/agents";
 import { toast } from "sonner";
 
 type Diagnostic = Awaited<ReturnType<typeof diagnoseRagStore>>;
@@ -17,9 +20,41 @@ export function MemoryDbPanel({ agentId, agentName }: MemoryDbPanelProps = {}) {
   const [diag, setDiag] = useState<Diagnostic | null>(null);
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [rt, setRt] = useState<RoundTrip | null>(null);
-  const [running, setRunning] = useState<"diag" | "boot" | "rt" | null>(null);
+  const [running, setRunning] = useState<"diag" | "boot" | "rt" | "prov" | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const agents = useBackendsStore((s) => s.config.agents);
+  const setAgent = useBackendsStore((s) => s.setAgent);
 
+  async function runProvisionAll() {
+    setRunning("prov");
+    try {
+      const existing: Record<string, string | undefined> = {};
+      for (const [id, cfg] of Object.entries(agents)) {
+        if (cfg.rag?.openaiVectorStoreId) existing[id] = cfg.rag.openaiVectorStoreId;
+      }
+      const r = await provisionAgentVectorStores({ data: { existing, onlyMissing: true } });
+      if (!r.ok && "error" in r && r.error) {
+        toast.error(r.error);
+        return;
+      }
+      for (const row of r.results) {
+        if (row.vectorStoreId) {
+          const cur = agents[row.agentId as AgentId];
+          setAgent(row.agentId as AgentId, {
+            rag: { ...cur.rag, openaiVectorStoreId: row.vectorStoreId, fileSearch: true },
+          });
+        }
+      }
+      const s = "summary" in r ? r.summary : undefined;
+      if (s) {
+        toast.success(`Vector stores: ${s.created} created, ${s.reused} reused, ${s.failed} failed`);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Provision failed");
+    } finally {
+      setRunning(null);
+    }
+  }
 
   async function runDiag() {
     setRunning("diag");
@@ -110,6 +145,10 @@ export function MemoryDbPanel({ agentId, agentName }: MemoryDbPanelProps = {}) {
         <Button size="sm" variant="outline" disabled={!!running} onClick={runRt}>
           {running === "rt" ? <Loader2 size={12} className="animate-spin" /> : <Beaker size={12} />}
           <span className="ml-1.5">Verify round-trip</span>
+        </Button>
+        <Button size="sm" variant="outline" disabled={!!running} onClick={runProvisionAll}>
+          {running === "prov" ? <Loader2 size={12} className="animate-spin" /> : <PackagePlus size={12} />}
+          <span className="ml-1.5">Provision vector stores (all agents)</span>
         </Button>
         {diag && (
           <Button size="sm" variant="ghost" onClick={() => setExpanded((v) => !v)}>
