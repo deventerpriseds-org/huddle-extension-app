@@ -1,15 +1,24 @@
 import { useEffect, useState } from "react";
-import { X, RefreshCw, Loader2, AlertTriangle, CheckCircle2, PlusCircle } from "lucide-react";
+import { X, RefreshCw, Loader2, AlertTriangle, CheckCircle2, PlusCircle, Trash2 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useBackendsStore, ASSISTANT_IDS } from "../lib/agent-backends";
 import { getAgentDebug, refetchAgentSnapshot } from "../lib/agent-inspect.functions";
-import { saveMemoryItem } from "../lib/rag.functions";
+import { saveMemoryItem, listMemoryItems, deleteMemoryItem } from "../lib/rag.functions";
 import { AgentAvatar } from "./AgentAvatar";
 import { MemoryDbPanel } from "./MemoryDbPanel";
 import { toast } from "sonner";
+
+type MemoryChunk = {
+  id: string;
+  scope: "agent" | "global";
+  agentId: string | null;
+  text: string;
+  source: string | null;
+  createdAt: string;
+};
 
 
 export function AgentSettingsDrawer() {
