@@ -184,7 +184,7 @@ export async function getOrCreateProfile(claims: {
     // Try base, base2, base3, ... until unique.
     while (true) {
       const conflict = await client.query(
-        `SELECT 1 FROM identity.profiles WHERE username = $1`,
+        `SELECT 1 FROM identity.profiles WHERE lower(username) = lower($1)`,
         [username],
       );
       if (conflict.rowCount === 0) break;
