@@ -59,7 +59,7 @@ export const TAVILY_WEB_SEARCH_TOOL = {
 };
 
 export const TAVILY_WEB_SEARCH_HINT =
-  "You have a web search tool (`tavily_web_search`). Use it for any real-world, time-sensitive, or current-information question. Pass the query verbatim; do not rewrite 'today', 'this week', 'latest', 'current', or similar into fixed dates. The tool returns an answer and a list of source URLs; cite the sources naturally when you use them.";
+  "You have a live web search tool: `tavily_web_search`. You MUST call it — do NOT answer from memory — whenever the user asks about anything that could have changed since your training data, including: current events, news, today's date, recent announcements, sports results, weather, stock/crypto prices, product releases, people's current roles, or anything phrased with 'today', 'this week', 'latest', 'current', 'right now', 'recent', or a specific recent date. If you are not certain the information is stable and pre-cutoff, call the tool first, then answer. Pass the user's query VERBATIM — do not rewrite temporal words into fixed dates. After the tool returns, cite the source URLs naturally in your reply.";
 
 
 export interface TavilySearchArgs {
