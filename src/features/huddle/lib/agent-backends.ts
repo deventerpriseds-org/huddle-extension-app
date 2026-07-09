@@ -31,12 +31,12 @@ const AgentBackendSchema = z.object({
     store: "azure",
     chunks: true,
     triples: true,
-    fileSearch: false,
+    fileSearch: true,
     sharing: "shared",
   }),
   journey: JourneyConfigSchema.default({ enabled: false }),
   /** Enable OpenAI Responses `web_search_preview` tool for this agent. */
-  webSearch: z.boolean().default(false),
+  webSearch: z.boolean().default(true),
 });
 
 
