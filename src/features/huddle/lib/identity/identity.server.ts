@@ -259,7 +259,7 @@ export async function addEmail(oid: string, email: string): Promise<ProfileBundl
   const normalized = validateEmail(email);
   const pool = getPool();
   const conflict = await pool.query<{ entra_object_id: string }>(
-    `SELECT entra_object_id FROM identity.profile_emails WHERE email = $1`,
+    `SELECT entra_object_id FROM identity.profile_emails WHERE lower(email) = lower($1)`,
     [normalized],
   );
   if (conflict.rowCount && conflict.rowCount > 0) {
