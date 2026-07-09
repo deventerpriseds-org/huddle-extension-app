@@ -63,6 +63,7 @@ export const useHuddleStore = create<HuddleState>()(
       tasks: SEED_TASKS,
       memory: SEED_MEMORY,
       decisions: [],
+      journeyTasks: [],
       showDemoData: true,
       meeting: null,
       setActive: (id) => set({ activeHuddleId: id, view: "huddle" }),
