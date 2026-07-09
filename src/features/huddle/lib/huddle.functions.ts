@@ -375,7 +375,23 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
                 ragTools = built;
                 ragInstructions = "\n\n" + RAG_SYSTEM_HINT;
                 const mode = rag.sharing ?? "shared";
-                onToolCall = (c) => dispatchTool(azurePgStore, winner.id, c, mode);
+                // Wrap dispatchTool so per-call store failures surface as a
+                // user-visible fallback instead of silently returning empty.
+                onToolCall = async (c) => {
+                  try {
+                    return await dispatchTool(azurePgStore, winner.id, c, mode);
+                  } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    const ev = recordFallback(
+                      "rag",
+                      `${winner.name}: memory tool ${c.name} failed — ${msg}`,
+                      "memory unavailable — replied without RAG",
+                      winner.id,
+                    );
+                    perAgentFallbacks.push(ev.inline);
+                    return JSON.stringify({ error: msg, tool: c.name });
+                  }
+                };
               }
             } catch (err) {
               const ev = recordFallback(
