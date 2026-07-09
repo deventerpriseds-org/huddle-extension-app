@@ -24,7 +24,7 @@ export interface JourneyResponsesTool {
   type: "function";
   name: string;
   description: string;
-  parameters: Record<string, unknown>;
+  parameters: Record<string, JsonValue>;
   strict: false;
 }
 
