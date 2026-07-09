@@ -74,30 +74,6 @@ export function MemoryDbPanel({ agentId, agentName }: MemoryDbPanelProps = {}) {
     }
   }
 
-  async function saveCtx() {
-    const text = ctxText.trim();
-    if (!text) return;
-    setRunning("save");
-    try {
-      const r = await saveMemoryItem({
-        data: {
-          text,
-          scope: ctxScope,
-          agentId: ctxScope === "agent" ? agentId : undefined,
-          source: agentName ? `settings:${agentName}` : "settings",
-          extractFacts,
-        },
-      });
-      toast.success(`Saved memory (chunk ${r.chunkId.slice(0, 8)}…, ${r.tripleCount} facts)`);
-      setCtxText("");
-      const d = await diagnoseRagStore();
-      setDiag(d);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Save failed");
-    } finally {
-      setRunning(null);
-    }
-  }
 
 
   const status = statusOf(diag);
