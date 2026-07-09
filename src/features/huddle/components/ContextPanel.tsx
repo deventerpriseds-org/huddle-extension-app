@@ -171,7 +171,15 @@ function TaskCard({
 
 function ActivityTab() {
   const decisions = useVisibleDecisions();
-  if (decisions.length === 0) {
+  const toolUses = useToolUses();
+
+  const items = useMemo(() => {
+    const d = decisions.map((x) => ({ kind: "decision" as const, ts: x.ts, id: x.id, data: x }));
+    const t = toolUses.map((x) => ({ kind: "tool" as const, ts: x.ts, id: x.id, data: x }));
+    return [...d, ...t].sort((a, b) => b.ts - a.ts);
+  }, [decisions, toolUses]);
+
+  if (items.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-hairline p-4 text-center text-xs text-muted-foreground">
         Routing decisions and agent activity will show up here as the huddle moves.
@@ -180,7 +188,44 @@ function ActivityTab() {
   }
   return (
     <div className="flex flex-col gap-2.5">
-      {decisions.map((d) => {
+      {items.map((it) => {
+        if (it.kind === "tool") {
+          const tu = it.data;
+          const a = AGENT_BY_ID[tu.agentId];
+          return (
+            <div key={it.id} className="rounded-lg border border-hairline bg-surface p-3 shadow-soft">
+              <div className="flex items-center gap-2">
+                <span
+                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                  style={{
+                    backgroundColor: tu.ok ? "var(--ai-soft)" : "var(--muted)",
+                    color: tu.ok ? "var(--ai)" : "var(--destructive)",
+                  }}
+                >
+                  <Wrench size={10} /> tool
+                </span>
+                {a && (
+                  <div className="flex items-center gap-1.5">
+                    <AgentAvatar agent={a} size="xs" />
+                    <span className="text-[12px] font-medium">{a.name}</span>
+                  </div>
+                )}
+                <span className="ml-auto text-[10px] text-muted-foreground">
+                  {new Date(tu.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              </div>
+              <p className="mt-1.5 text-[11px] text-foreground">
+                <span className="font-mono text-muted-foreground">{tu.tool}</span> · {tu.summary}
+              </p>
+              {tu.detail && !tu.ok && (
+                <p className="mt-1 text-[10px]" style={{ color: "var(--destructive)" }}>
+                  {tu.detail}
+                </p>
+              )}
+            </div>
+          );
+        }
+        const d = it.data;
         const winner = d.winnerId ? AGENT_BY_ID[d.winnerId] : null;
         const top = Object.entries(d.scores)
           .sort((a, b) => (b[1] as number) - (a[1] as number))
