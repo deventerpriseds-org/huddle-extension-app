@@ -1,15 +1,71 @@
 import { AGENT_BY_ID } from "../data/agents";
 import { useHuddleStore, useVisibleTasks } from "../store";
 import type { TaskLane } from "../data/seed";
+import type { JourneyTask } from "../lib/journey/types";
 import { AgentAvatar } from "./AgentAvatar";
-import { Sparkles } from "lucide-react";
+import { Sparkles, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const LANES: TaskLane[] = ["Backlog", "Blocked", "Ready", "Up next", "Doing", "Done"];
 
+/**
+ * Map journey-voice status → huddle lane. Journey ships its own workflow states
+ * (BACKLOG, TODO, READY, UP_NEXT, DOING, DONE, BLOCKED, PLANNING); we surface
+ * them under the closest huddle lane so the board reads consistently. The
+ * original status is kept on the JourneyTask so the merge back to journey is
+ * lossless.
+ */
+function journeyLane(status: string): TaskLane {
+  switch (status?.toUpperCase()) {
+    case "DONE": return "Done";
+    case "DOING": return "Doing";
+    case "UP_NEXT": return "Up next";
+    case "READY": return "Ready";
+    case "BLOCKED": return "Blocked";
+    case "BACKLOG":
+    case "TODO":
+    case "PLANNING":
+    default:
+      return "Backlog";
+  }
+}
+
+interface UnifiedCard {
+  id: string;
+  title: string;
+  lane: TaskLane;
+  origin: "huddle" | "journey-voice";
+  ownerId?: string;
+  progress?: number;
+  suggested?: boolean;
+  blockReason?: string;
+  journey?: JourneyTask;
+}
+
 export function BoardView() {
   const tasks = useVisibleTasks();
+  const journeyTasks = useHuddleStore((s) => s.journeyTasks);
   const move = useHuddleStore((s) => s.moveTask);
+
+  const cards: UnifiedCard[] = [
+    ...tasks.map<UnifiedCard>((t) => ({
+      id: t.id,
+      title: t.title,
+      lane: t.lane,
+      origin: "huddle",
+      ownerId: t.ownerId,
+      progress: t.progress,
+      suggested: t.suggested,
+      blockReason: t.blockReason,
+    })),
+    ...journeyTasks.map<UnifiedCard>((j) => ({
+      id: `journey:${j.id}`,
+      title: j.title,
+      lane: journeyLane(j.status),
+      origin: "journey-voice",
+      journey: j,
+    })),
+  ];
 
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-background">
