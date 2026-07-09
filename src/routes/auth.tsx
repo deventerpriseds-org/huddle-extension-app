@@ -76,6 +76,7 @@ function AuthPage() {
   };
 
   const lastTraceEvent = trace.at(-1)?.event ?? "none";
+  const authFailure = getAuthFailure(trace);
 
   return (
     <div className="flex min-h-dvh items-center justify-center bg-background p-4">
@@ -137,6 +138,13 @@ function AuthPage() {
           Continue with Google
         </button>
 
+        {authFailure ? (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-foreground">
+            <p className="font-medium">{authFailure.title}</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">{authFailure.message}</p>
+          </div>
+        ) : null}
+
         <p className="text-center text-[11px] text-muted-foreground">
           Secured by Microsoft Entra External ID.
         </p>
@@ -166,4 +174,28 @@ function AuthPage() {
       </div>
     </div>
   );
+}
+
+function getAuthFailure(trace: AuthTraceEntry[]) {
+  const errorEntry = [...trace]
+    .reverse()
+    .find((entry) => entry.event.includes(":error") || typeof entry.details?.message === "string");
+  const message = typeof errorEntry?.details?.message === "string" ? errorEntry.details.message : "";
+
+  if (message.includes("AADSTS9002326")) {
+    return {
+      title: "Microsoft rejected this redirect URI",
+      message:
+        "This app registration is configured as a Web client, but browser sign-in must use the Single-page application platform. In Microsoft Entra External ID, add this site's origin under Authentication → Single-page application redirect URIs, then remove the same origin from Web redirect URIs if it is listed there.",
+    };
+  }
+
+  if (message) {
+    return {
+      title: "Sign-in did not complete",
+      message,
+    };
+  }
+
+  return null;
 }
