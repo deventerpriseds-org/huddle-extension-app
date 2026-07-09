@@ -1,73 +1,51 @@
-## Goal
+## Problem
 
-Replace the Zustand `persist(localStorage)` layer in `src/features/huddle/store.ts` with a per-user store persisted to Azure Postgres, keyed by the signed-in Entra `oid` (via the `identity.profiles.id` we already provision). Also fixes:
+Azure Database for PostgreSQL (Flexible Server) blocks `CREATE EXTENSION citext` unless the DBA explicitly allow-lists it via the `azure.extensions` server parameter. Our bootstrap in `identity.server.ts` runs `CREATE EXTENSION IF NOT EXISTS citext` and fails, so the entire Account tab errors out with "Couldn't load account". This also blocks profile creation, which blocks the workspace persistence work.
 
-- Account tab `block_nested_popups` (already patched — silent → popup fallback in iframe).
-- Journey tools "no such ability" — audit tool wiring after migration lands, in a follow-up.
+## Fix
 
-## What persists per user
+Drop the citext dependency entirely and enforce case-insensitivity in application code + functional unique indexes. This works on any Postgres without server-parameter changes.
 
-From current `partialize`:
-- `messages` (per huddle)
-- `tasks` (kanban)
-- `memory` (RAG surface items)
-- `decisions` (routing log)
-- `activeHuddleId`
-- `showDemoData`
-- `journeyTasks`
+### Changes to `src/features/huddle/lib/identity/identity.server.ts`
 
-Demo seed remains in code (`SEED_*`). New users still see it via the existing `showDemoData` toggle; their own writes go to the DB.
+1. Remove `CREATE EXTENSION IF NOT EXISTS citext` from `BOOTSTRAP_SQL`.
+2. Change columns:
+   - `identity.profiles.username` → `TEXT NOT NULL` (drop `UNIQUE` inline; replace with functional index).
+   - `identity.profile_emails.email` → `TEXT NOT NULL` (drop `UNIQUE` inline; replace with functional index).
+3. Add functional unique indexes:
+   ```sql
+   CREATE UNIQUE INDEX IF NOT EXISTS profiles_username_lower_key
+     ON identity.profiles (lower(username));
+   CREATE UNIQUE INDEX IF NOT EXISTS profile_emails_email_lower_key
+     ON identity.profile_emails (lower(email));
+   ```
+4. Add a one-shot migration step (idempotent) that handles databases already created before this fix — if the tables exist with `citext` columns, alter them to `TEXT`:
+   ```sql
+   DO $$
+   BEGIN
+     IF EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='identity' AND table_name='profiles'
+                  AND column_name='username' AND udt_name='citext') THEN
+       ALTER TABLE identity.profiles ALTER COLUMN username TYPE TEXT;
+     END IF;
+     IF EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='identity' AND table_name='profile_emails'
+                  AND column_name='email' AND udt_name='citext') THEN
+       ALTER TABLE identity.profile_emails ALTER COLUMN email TYPE TEXT;
+     END IF;
+   END$$;
+   ```
+   (In our case bootstrap failed before the tables were created, so this is defensive.)
+5. Update every query that compares username/email to use `lower(col) = lower($n)` or pass an already-lowercased value. Callers already normalize via `normalizeUsername`/`validateEmail`, so the DB side just needs `lower(col) =` on the read side:
+   - `getOrCreateProfile`: username-conflict `SELECT 1 FROM identity.profiles WHERE lower(username) = $1` (pass `username` already lower-cased — it is).
+   - `setUsername`: `WHERE lower(username) = $1 AND entra_object_id <> $2`.
+   - `addEmail`: conflict `SELECT ... WHERE lower(email) = $1`.
+   - Insert paths: values are already lower-cased by validators; nothing else changes.
 
-## Schema (new migration in `identity.server.ts` bootstrap)
-
-```text
-identity.workspace_state (
-  profile_id  uuid PRIMARY KEY REFERENCES identity.profiles(id) ON DELETE CASCADE,
-  state       jsonb NOT NULL DEFAULT '{}'::jsonb,
-  version     int   NOT NULL DEFAULT 3,
-  updated_at  timestamptz NOT NULL DEFAULT now()
-)
-```
-
-Single-row JSONB blob per user. Same shape as the current `partialize` output — simplest, no per-table schema churn, and the store already treats it as one bag. We can normalize later if any single field grows unbounded.
-
-## Server functions (new `workspace.functions.ts`)
-
-- `loadWorkspace({ idToken })` → `{ state, version, updatedAt } | null`
-- `saveWorkspace({ idToken, state, version })` → `{ updatedAt }` (upsert)
-
-Both verify the ID token via `verifyEntraIdToken`, resolve profile via `getOrCreateProfile`, then read/write the row.
-
-## Client integration (`store.ts`)
-
-Replace the `persist` middleware with a custom sync layer:
-
-1. Keep Zustand store in-memory with the same shape (no API change to consumers).
-2. New `useWorkspaceSync()` hook mounted once in `HuddleApp`:
-   - On sign-in: `loadWorkspace` → `store.setState(remote.state)`. If null, keep seed defaults and immediately save.
-   - Subscribe to store changes; debounce 800ms; call `saveWorkspace` with `partialize`d payload.
-   - On sign-out: reset store to seed defaults.
-3. Signed-out users: fall back to the current localStorage behavior (keep `persist` behind a flag) so the app still works pre-auth. Simplest: keep `persist` but namespace the key by `oid` when signed in, OR just skip persistence entirely when signed out and rely on in-memory + seed. I'll go with **skip persist when signed out** to avoid two sources of truth.
-
-## Files touched
-
-- New: `src/features/huddle/lib/identity/workspace.functions.ts`
-- Edit: `src/features/huddle/lib/identity/identity.server.ts` — add `workspace_state` table to bootstrap + `loadWorkspace`/`saveWorkspace` helpers.
-- Edit: `src/features/huddle/store.ts` — remove `persist` middleware, expose `hydrateFromRemote(state)` and `getPersistablePayload()`.
-- New: `src/features/huddle/hooks/useWorkspaceSync.ts` — mount-once sync loop using `useAuth` + `getToken`.
-- Edit: `src/features/huddle/components/HuddleApp.tsx` — call the sync hook.
-
-## Migration safety
-
-On first successful `loadWorkspace` returning null, if the browser has an existing `huddle-workspace` localStorage blob, upload it once as the initial state (one-shot migration), then clear the local key. This preserves existing demo edits already accumulated in the browser.
-
-## Out of scope this pass
-
-- Journey tools not recognized — separate investigation after migration lands.
-- Multi-device conflict resolution — last-write-wins is fine; single active tab per user is the common case.
-- Splitting messages/tasks into their own tables (future normalization).
+No other files need changes. `entra-verify.server.ts`, `profile.functions.ts`, `useProfile.ts`, and `AccountSettingsPanel.tsx` are untouched.
 
 ## Verification
 
-- `bunx tsgo --noEmit` clean.
-- Playwright: sign in via preview, send a message, reload — message survives; sign out from a second browser context — no data leak.
+1. Reload the Account tab while signed in — bootstrap runs on the fixed schema, profile auto-provisions, panel renders with username + Entra email.
+2. Try adding a second email with mixed case; confirm duplicate rejection is case-insensitive.
+3. Confirm `useWorkspaceSync` no longer 500s (its bootstrap references `identity.profiles` via FK — schema now creates cleanly).
