@@ -81,9 +81,11 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
 
 ALTER TABLE rag_chunks  ADD COLUMN IF NOT EXISTS author_agent_ids TEXT[] DEFAULT '{}';
 
--- HNSW has a 2000-dim cap; text-embedding-3-large is 3072. Use ivfflat instead.
-CREATE INDEX IF NOT EXISTS rag_chunks_embed_ivf
-  ON rag_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+-- pgvector: ivfflat/hnsw over the raw vector type cap at 2000 dims, but
+-- text-embedding-3-large is 3072. Index a halfvec cast instead (pgvector >= 0.7).
+DROP INDEX IF EXISTS rag_chunks_embed_ivf;
+CREATE INDEX IF NOT EXISTS rag_chunks_embed_hnsw
+  ON rag_chunks USING hnsw ((embedding::halfvec(${EMBED_DIM})) halfvec_cosine_ops);
 CREATE INDEX IF NOT EXISTS rag_chunks_agent_idx
   ON rag_chunks (agent_id) WHERE scope = 'agent';
 CREATE INDEX IF NOT EXISTS rag_chunks_authors_idx
@@ -447,10 +449,10 @@ export const azurePgStore: RagStore = {
 
     const { rows } = await q(
       `SELECT id, scope, agent_id, text, source, created_at, author_agent_ids,
-              1 - (embedding <=> $1::vector) AS score
+              1 - (embedding::halfvec(${EMBED_DIM}) <=> ($1::vector)::halfvec(${EMBED_DIM})) AS score
        FROM rag_chunks
        WHERE ${where}
-       ORDER BY embedding <=> $1::vector
+       ORDER BY embedding::halfvec(${EMBED_DIM}) <=> ($1::vector)::halfvec(${EMBED_DIM})
        LIMIT $${params.length}`,
       params,
     );
