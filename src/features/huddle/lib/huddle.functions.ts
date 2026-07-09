@@ -125,7 +125,9 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     // ---- Fallback + prompt trackers ----
     const fallbacks: FallbackEvent[] = [];
     const prompts: PromptDebug[] = [];
+    const toolUses: import("../data/seed").ToolUseEvent[] = [];
     let fbSeq = 0;
+    let tuSeq = 0;
     function recordFallback(
       subsystem: FallbackEvent["subsystem"],
       reason: string,
@@ -142,6 +144,23 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       };
       fallbacks.push(ev);
       return ev;
+    }
+    function recordToolUse(
+      agentId: AgentId,
+      tool: string,
+      summary: string,
+      ok: boolean,
+      detail?: string,
+    ) {
+      toolUses.push({
+        id: `tu-${Date.now()}-${tuSeq++}`,
+        ts: Date.now(),
+        agentId,
+        tool,
+        summary,
+        ok,
+        detail,
+      });
     }
 
     // Fire-and-forget: persist the user's message into memory so future
