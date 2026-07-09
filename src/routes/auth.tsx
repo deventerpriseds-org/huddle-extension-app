@@ -177,9 +177,7 @@ function AuthPage() {
 }
 
 function getAuthFailure(trace: AuthTraceEntry[]) {
-  const errorEntry = [...trace]
-    .reverse()
-    .find((entry) => entry.event.includes(":error") || typeof entry.details?.message === "string");
+  const errorEntry = [...trace].reverse().find((entry) => entry.event.includes(":error"));
   const message = typeof errorEntry?.details?.message === "string" ? errorEntry.details.message : "";
 
   if (message.includes("AADSTS9002326")) {
