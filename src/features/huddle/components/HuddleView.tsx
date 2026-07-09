@@ -385,6 +385,11 @@ function Composer({ huddle }: { huddle: Huddle }) {
           replyTo: userId,
         });
       });
+
+      // Mirror any journey-voice task mutations onto the huddle board.
+      if (result.journeyTaskUpdates && result.journeyTaskUpdates.length > 0) {
+        upsertJourneyTasks(result.journeyTaskUpdates);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Message failed";
       toast.error(msg);
