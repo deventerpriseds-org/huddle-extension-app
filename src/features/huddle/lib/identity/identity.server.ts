@@ -19,12 +19,11 @@ function getPool(): Pool {
 }
 
 const BOOTSTRAP_SQL = `
-CREATE EXTENSION IF NOT EXISTS citext;
 CREATE SCHEMA IF NOT EXISTS identity;
 
 CREATE TABLE IF NOT EXISTS identity.profiles (
   entra_object_id TEXT PRIMARY KEY,
-  username        CITEXT UNIQUE NOT NULL,
+  username        TEXT NOT NULL,
   display_name    TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -33,13 +32,33 @@ CREATE TABLE IF NOT EXISTS identity.profiles (
 CREATE TABLE IF NOT EXISTS identity.profile_emails (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   entra_object_id TEXT NOT NULL REFERENCES identity.profiles(entra_object_id) ON DELETE CASCADE,
-  email           CITEXT NOT NULL,
+  email           TEXT NOT NULL,
   source          TEXT NOT NULL CHECK (source IN ('entra','manual')),
-  added_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (email)
+  added_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS profile_emails_owner_idx
   ON identity.profile_emails(entra_object_id);
+
+-- Case-insensitive uniqueness without citext (Azure PG doesn't allow-list it).
+DO $mig$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema='identity' AND table_name='profiles'
+               AND column_name='username' AND udt_name='citext') THEN
+    ALTER TABLE identity.profiles ALTER COLUMN username TYPE TEXT;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema='identity' AND table_name='profile_emails'
+               AND column_name='email' AND udt_name='citext') THEN
+    ALTER TABLE identity.profile_emails ALTER COLUMN email TYPE TEXT;
+  END IF;
+END
+$mig$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_username_lower_key
+  ON identity.profiles (lower(username));
+CREATE UNIQUE INDEX IF NOT EXISTS profile_emails_email_lower_key
+  ON identity.profile_emails (lower(email));
 `;
 
 let bootstrapped: Promise<void> | null = null;
