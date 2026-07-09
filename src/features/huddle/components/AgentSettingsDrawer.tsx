@@ -251,7 +251,58 @@ export function AgentSettingsDrawer() {
                   </p>
                 </section>
 
+                {/* Add context to memory — directly under the system prompt. */}
+                <section>
+                  <SectionTitle>Add context to memory</SectionTitle>
+                  <div className="mt-2 rounded-lg border border-hairline bg-surface p-3">
+                    <textarea
+                      value={ctxText}
+                      onChange={(e) => setCtxText(e.target.value)}
+                      disabled={savingCtx}
+                      rows={3}
+                      placeholder={`Fact, note, or reference for ${agent.name}. Saved as an embedded chunk; facts auto-extracted.`}
+                      className="w-full resize-y rounded-md border border-hairline bg-surface px-2 py-1.5 text-[12px] font-mono outline-none focus:border-primary"
+                    />
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                      <div className="flex items-center gap-1 rounded-md border border-hairline bg-surface p-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setCtxScope("agent")}
+                          className={`rounded px-2 py-0.5 ${ctxScope === "agent" ? "bg-primary text-primary-foreground" : ""}`}
+                        >
+                          {agent.name} only
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCtxScope("global")}
+                          className={`rounded px-2 py-0.5 ${ctxScope === "global" ? "bg-primary text-primary-foreground" : ""}`}
+                        >
+                          shared (all agents)
+                        </button>
+                      </div>
+                      <label className="flex items-center gap-1.5 text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          checked={extractFacts}
+                          onChange={(e) => setExtractFacts(e.target.checked)}
+                        />
+                        extract facts (triples)
+                      </label>
+                      <Button
+                        size="sm"
+                        className="ml-auto"
+                        disabled={savingCtx || !ctxText.trim()}
+                        onClick={handleSaveContext}
+                      >
+                        {savingCtx ? <Loader2 size={12} className="animate-spin" /> : <PlusCircle size={12} />}
+                        <span className="ml-1.5">Save to memory</span>
+                      </Button>
+                    </div>
+                  </div>
+                </section>
+
                 {/* Agent fallbacks */}
+
                 {agentFallbacks.length > 0 && (
                   <section>
                     <SectionTitle>Recent fallbacks for this agent</SectionTitle>
