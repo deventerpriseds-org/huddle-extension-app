@@ -243,4 +243,9 @@ export const SEED_MEMORY: MemoryItem[] = [
   { id: "mem4", agentId: "elle-rowan", kind: "fact", label: "Program: EMBA · cohort of 2026", editable: true },
   { id: "mem5", agentId: "flex-grimes", kind: "fact", label: "Split: push/pull/legs · 4 days", editable: true },
   { id: "mem6", agentId: "sam-trent", kind: "source", label: "Notion · pitch narrative v1", sourceRef: "notion", editable: true },
-];
+].map((m) => ({ ...m, demo: true }));
+
+// Mark every seeded record as demo so it can be filtered by the global toggle
+// without deleting data. User-added records omit the flag.
+for (const m of SEED_MESSAGES) m.demo = true;
+for (const t of SEED_TASKS) t.demo = true;
