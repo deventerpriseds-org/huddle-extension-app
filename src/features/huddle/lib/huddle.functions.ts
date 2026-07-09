@@ -47,7 +47,9 @@ const AgentBackendInput = z.object({
     })
     .optional(),
   journey: z.object({ enabled: z.boolean() }).optional(),
+  webSearch: z.boolean().optional(),
 });
+
 
 
 const Input = z.object({
