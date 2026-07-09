@@ -242,6 +242,16 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                     }`}>{status}</div>
                   </div>
 
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full justify-start"
+                    onClick={() => openAgentDrawer(a.id)}
+                  >
+                    <Settings2 size={14} className="mr-1.5" />
+                    Open full agent settings (prompt, memory, hosted tools)
+                  </Button>
+
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <Label className="text-xs">Backend</Label>
