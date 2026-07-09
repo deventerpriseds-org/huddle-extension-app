@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { generateText, tool, stepCountIs } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
-import type { HuddleMessage } from "../data/seed";
+import type { HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
 import { parseMentions, routeMessage, routeMessageLLM, type RouterInvocation } from "./routing";
 import type { FallbackEvent, PromptDebug } from "./fallbacks";
 import { buildRoster } from "./roster";
@@ -93,6 +93,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     // are accumulated here and returned to the client so the huddle board can
     // upsert them.
     const journeyTaskUpdates: import("./journey/types").JourneyTask[] = [];
+    const suggestedTasks: SuggestedTaskDraft[] = [];
 
     // Lazy: fetch & cache journey tool definitions for this whole turn. Only
     // populated when at least one participating agent has journey.enabled.
@@ -322,7 +323,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     }
 
     if (routed.winners.length === 0) {
-      return { decision: routed.decision, replies: [] as Reply[], fallbacks, prompts, journeyTaskUpdates, toolUses };
+      return { decision: routed.decision, replies: [] as Reply[], fallbacks, prompts, journeyTaskUpdates, suggestedTasks, toolUses };
     }
 
     // ---- Reply transcript ----
@@ -358,11 +359,14 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       }`;
 
       const roster = buildRoster(data.members, winner.id);
+      const taskToolInstructions =
+        "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it.";
       const appSystem =
         winner.systemPrompt +
         scene +
         roster +
-        "\n\nWrite as plain prose. Do NOT prefix your reply with your own name, a bracketed label like [Flex Grimes], or a 'Name:' header — the UI already shows who you are.";
+        "\n\nWrite as plain prose. Do NOT prefix your reply with your own name, a bracketed label like [Flex Grimes], or a 'Name:' header — the UI already shows who you are." +
+        taskToolInstructions;
 
       // Per-agent transcript: the current agent's own prior turns are role=assistant
       // (unprefixed); other agents' turns are surfaced as role=user context so the
@@ -384,6 +388,61 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         .concat([{ role: "user" as const, content: data.text }]);
 
       const perAgentFallbacks: string[] = [];
+      const timeSensitiveRe =
+        /\b(today|tonight|tomorrow|yesterday|this week|this month|this year|latest|current|currently|right now|recent|recently|news|breaking|headline|score|price|stock|weather|forecast|202\d|updated|update)\b/i;
+      const createTaskRe =
+        /\b(add|create|make|log|track|put|place|capture|assign|remind me|todo|to-do|action item|follow[- ]?up)\b/i;
+      const forceTaskCreation = createTaskRe.test(data.text);
+      const forceWebSearch = !!agentBackend.webSearch && timeSensitiveRe.test(data.text);
+
+      function resolveTaskLane(value: unknown): TaskLane {
+        const lane = String(value ?? "").trim().toLowerCase();
+        if (lane === "blocked") return "Blocked";
+        if (lane === "ready") return "Ready";
+        if (lane === "up next" || lane === "up-next" || lane === "next") return "Up next";
+        if (lane === "doing" || lane === "in progress") return "Doing";
+        if (lane === "done" || lane === "complete" || lane === "completed") return "Done";
+        return "Backlog";
+      }
+
+      function resolveTaskOwner(value: unknown): AgentId {
+        const raw = String(value ?? "").trim().toLowerCase();
+        if (!raw) return winner.id;
+        if (AGENT_BY_ID[raw as AgentId]) return raw as AgentId;
+        const matched = AGENTS.find(
+          (a) =>
+            a.name.toLowerCase() === raw ||
+            a.handle.toLowerCase() === raw ||
+            a.name.toLowerCase().includes(raw) ||
+            raw.includes(a.handle.toLowerCase()),
+        );
+        return matched?.id ?? winner.id;
+      }
+
+      function createSuggestedTaskFromTool(args: Record<string, unknown>) {
+        const title = String(args.title ?? args.task ?? args.name ?? "").trim();
+        if (!title) {
+          const error = "create_huddle_task requires a title";
+          recordToolUse(winner.id, "create_huddle_task", "task creation failed", false, error);
+          return { ok: false, error };
+        }
+        const task: SuggestedTaskDraft = {
+          id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+          title: title.slice(0, 160),
+          ownerId: resolveTaskOwner(args.ownerId ?? args.owner ?? args.assignee),
+          lane: resolveTaskLane(args.lane ?? args.status),
+          progress: typeof args.progress === "number" ? args.progress : undefined,
+          blockReason: typeof args.blockReason === "string" ? args.blockReason : undefined,
+        };
+        suggestedTasks.push(task);
+        recordToolUse(
+          winner.id,
+          "create_huddle_task",
+          `suggested “${task.title}” · owner ${AGENT_BY_ID[task.ownerId].name}`,
+          true,
+        );
+        return { ok: true, task };
+      }
 
       try {
         let clean = "";
@@ -487,6 +546,11 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           usedInstructions = instructions;
 
           const snapshotTools = snapshotResponsesTools(snapshot);
+          const snapshotToolNames = new Set(
+            snapshotTools
+              .map((t) => (t as { name?: string })?.name)
+              .filter((name): name is string => !!name),
+          );
           // Warn if snapshot had tools we can't wire (e.g. code_interpreter).
           if (snapshot && snapshot.tools.length > snapshotTools.length) {
             const dropped = snapshot.tools
@@ -524,10 +588,44 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           // Tavily web search tool (opt-in per agent).
           const webSearchTools: unknown[] = agentBackend.webSearch ? [TAVILY_WEB_SEARCH_TOOL] : [];
 
-          const mergedTools = [...snapshotTools, ...ragTools, ...journeyTools, ...webSearchTools];
+          const createHuddleTaskTool = {
+            type: "function" as const,
+            name: "create_huddle_task",
+            description:
+              "Create a suggested task card on the Huddle board when the user asks to add, log, track, assign, or capture a task/action item.",
+            parameters: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                title: { type: "string", description: "Short task title." },
+                ownerId: {
+                  type: "string",
+                  description: "Optional owner agent id, handle, or name. Defaults to the current agent.",
+                },
+                lane: {
+                  type: "string",
+                  description: "Optional board lane: Backlog, Ready, Up next, Doing, Done, or Blocked. Defaults to Backlog.",
+                },
+                blockReason: { type: "string", description: "Optional blocker note." },
+              },
+              required: ["title"],
+            },
+            strict: false,
+          };
+
+          const mergedTools = [createHuddleTaskTool, ...snapshotTools, ...ragTools, ...journeyTools, ...webSearchTools];
           toolTypes = mergedTools
-            .map((t) => (t as { type?: string })?.type ?? "unknown")
+            .map((t) => {
+              const rec = t as { type?: string; name?: string };
+              if (rec.name) return rec.name;
+              if (rec.type === "file_search") return "file_search";
+              return rec.type ?? "unknown";
+            })
             .filter(Boolean);
+
+          if (toolTypes.length > 0) {
+            recordToolUse(winner.id, "tool_catalog", `offered: ${toolTypes.join(", ")}`, true);
+          }
 
 
           // Wrap onToolCall to route Tavily web search and journey tools, while
@@ -537,6 +635,9 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             name: string;
             arguments: Record<string, unknown>;
           }) => {
+            if (c.name === "create_huddle_task") {
+              return JSON.stringify(createSuggestedTaskFromTool(c.arguments));
+            }
             if (c.name === "tavily_web_search") {
               const q = String(c.arguments.query ?? "").trim() || "unknown";
               try {
@@ -628,6 +729,19 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
                 return JSON.stringify({ error: msg, tool: c.name });
               }
             }
+            if (snapshotToolNames.has(c.name)) {
+              const detail =
+                "This assistant snapshot exposes the tool schema, but Huddle does not have a local executor or journey proxy handler for it.";
+              recordToolUse(winner.id, c.name, "snapshot tool offered but not executable", false, detail);
+              const ev = recordFallback(
+                "tool",
+                `${winner.name}: snapshot tool ${c.name} was requested but no executor is wired in Huddle.`,
+                "snapshot tool has no executor",
+                winner.id,
+              );
+              perAgentFallbacks.push(ev.inline);
+              return JSON.stringify({ error: detail, tool: c.name });
+            }
             if (ragOnToolCall) {
               const out = await ragOnToolCall(c);
               let ok = true;
@@ -645,21 +759,19 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
           usedModel = agentBackend.model?.trim() || snapshot?.model || "gpt-4o";
 
-          // Detect time-sensitive queries and force the first tool call so the
-          // model can't skip Tavily for current-events questions.
-          const TIME_SENSITIVE_RE =
-            /\b(today|tonight|tomorrow|yesterday|this week|this month|this year|latest|current|currently|right now|recent|recently|news|breaking|headline|score|price|stock|weather|forecast|202\d|updated|update)\b/i;
-          const forceWebSearch =
-            agentBackend.webSearch && TIME_SENSITIVE_RE.test(data.text);
-          const toolChoice = forceWebSearch
+          const toolChoice = forceTaskCreation
+            ? { type: "function", name: "create_huddle_task" }
+            : forceWebSearch
             ? { type: "function", name: "tavily_web_search" }
             : undefined;
 
-          if (agentBackend.webSearch) {
+          if (forceTaskCreation) {
+            recordToolUse(winner.id, "create_huddle_task", "offered (forced — task request)", true);
+          } else if (forceWebSearch) {
             recordToolUse(
               winner.id,
               "tavily_web_search",
-              forceWebSearch ? "offered (forced — time-sensitive)" : "offered",
+              "offered (forced — time-sensitive)",
               true,
             );
           }

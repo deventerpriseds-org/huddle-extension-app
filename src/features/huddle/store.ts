@@ -11,6 +11,7 @@ import {
   type HuddleMessage,
   type MemoryItem,
   type RoutingDecision,
+  type SuggestedTaskDraft,
   type Task,
   type TaskLane,
   type ToolUseEvent,
@@ -43,6 +44,7 @@ interface HuddleState {
   logDecision: (d: RoutingDecision) => void;
   addToolUses: (events: ToolUseEvent[]) => void;
   moveTask: (id: string, lane: TaskLane) => void;
+  addSuggestedTasks: (tasks: SuggestedTaskDraft[]) => void;
   approveTask: (id: string) => void;
   skipTask: (id: string) => void;
   startMeeting: (kind: "morning" | "midday" | "afternoon" | "adhoc") => void;
@@ -107,6 +109,23 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
           : t,
       ),
     })),
+  addSuggestedTasks: (incoming) =>
+    set((s) => {
+      if (!incoming || incoming.length === 0) return {};
+      const now = Date.now();
+      const tasks = incoming.map((t, i): Task => ({
+        id: t.id ?? `task-${now.toString(36)}-${i}`,
+        title: t.title,
+        ownerId: t.ownerId,
+        lane: t.lane,
+        progress: t.progress,
+        blockReason: t.blockReason,
+        suggested: true,
+        origin: "agent-suggested",
+        createdAt: now + i,
+      }));
+      return { tasks: [...tasks, ...s.tasks] };
+    }),
   approveTask: (id) =>
     set((s) => ({
       tasks: s.tasks.map((t) =>
