@@ -275,6 +275,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
   const addUser = useHuddleStore((s) => s.addUserMessage);
   const addAgent = useHuddleStore((s) => s.addAgentMessage);
   const logDecision = useHuddleStore((s) => s.logDecision);
+  const addToolUses = useHuddleStore((s) => s.addToolUses);
   const upsertJourneyTasks = useHuddleStore((s) => s.upsertJourneyTasks);
   const addFallbacks = useAgentPanelStore((s) => s.addFallbacks);
   const recordTurn = useAgentPanelStore((s) => s.recordTurn);
@@ -389,6 +390,10 @@ function Composer({ huddle }: { huddle: Huddle }) {
       // Mirror any journey-voice task mutations onto the huddle board.
       if (result.journeyTaskUpdates && result.journeyTaskUpdates.length > 0) {
         upsertJourneyTasks(result.journeyTaskUpdates);
+      }
+
+      if (result.toolUses && result.toolUses.length > 0) {
+        addToolUses(result.toolUses);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Message failed";

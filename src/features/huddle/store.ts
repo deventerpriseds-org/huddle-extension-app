@@ -13,6 +13,7 @@ import {
   type RoutingDecision,
   type Task,
   type TaskLane,
+  type ToolUseEvent,
 } from "./data/seed";
 import type { JourneyTask } from "./lib/journey/types";
 
@@ -26,6 +27,7 @@ interface HuddleState {
   tasks: Task[];
   memory: MemoryItem[];
   decisions: RoutingDecision[];
+  toolUses: ToolUseEvent[];
   journeyTasks: JourneyTask[];
   showDemoData: boolean;
   meeting: null | {
@@ -39,6 +41,7 @@ interface HuddleState {
   addUserMessage: (m: HuddleMessage) => void;
   addAgentMessage: (m: HuddleMessage) => void;
   logDecision: (d: RoutingDecision) => void;
+  addToolUses: (events: ToolUseEvent[]) => void;
   moveTask: (id: string, lane: TaskLane) => void;
   approveTask: (id: string) => void;
   skipTask: (id: string) => void;
@@ -85,6 +88,7 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
   tasks: SEED_TASKS,
   memory: SEED_MEMORY,
   decisions: [],
+  toolUses: [],
   journeyTasks: [],
   showDemoData: true,
   meeting: null,
@@ -93,6 +97,8 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
   addUserMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
   addAgentMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
   logDecision: (d) => set((s) => ({ decisions: [d, ...s.decisions].slice(0, 50) })),
+  addToolUses: (events) =>
+    set((s) => ({ toolUses: [...events, ...s.toolUses].slice(0, 100) })),
   moveTask: (id, lane) =>
     set((s) => ({
       tasks: s.tasks.map((t) =>
@@ -236,3 +242,4 @@ export const useVisibleTasks = () => useFilterDemo(useHuddleStore((s) => s.tasks
 export const useVisibleMemory = () => useFilterDemo(useHuddleStore((s) => s.memory));
 export const useVisibleDecisions = () => useFilterDemo(useHuddleStore((s) => s.decisions));
 export const useVisibleHuddles = () => useFilterDemo(useHuddleStore((s) => s.huddles));
+export const useToolUses = () => useHuddleStore((s) => s.toolUses);
