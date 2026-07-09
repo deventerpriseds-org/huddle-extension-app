@@ -1,9 +1,10 @@
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
-import { getCurrentUser } from "@/lib/entra-auth";
+import { getCurrentUser, initMsal } from "@/lib/entra-auth";
 
 export const Route = createFileRoute("/_authenticated")({
   ssr: false,
-  beforeLoad: () => {
+  beforeLoad: async () => {
+    await initMsal();
     if (!getCurrentUser()) {
       throw redirect({ to: "/auth" });
     }
