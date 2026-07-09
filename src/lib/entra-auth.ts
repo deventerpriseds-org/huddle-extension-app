@@ -102,11 +102,9 @@ export function getMsal(): PublicClientApplication | null {
         `${tenantName}.ciamlogin.com`,
       ],
       redirectUri: window.location.origin,
-      navigateToLoginRequestUrl: false,
     },
     cache: {
       cacheLocation: "localStorage",
-      storeAuthStateInCookie: true,
     },
     system: {
       loggerOptions: {
