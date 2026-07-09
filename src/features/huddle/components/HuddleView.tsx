@@ -287,6 +287,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
   const scope = huddle.kind;
 
   const presentAgents = AGENTS.filter((a) => huddle.members.includes(a.id));
+  const { user } = useAuth();
 
   async function submit() {
     const trimmed = text.trim();
