@@ -349,7 +349,80 @@ export function AgentSettingsDrawer() {
                       </Button>
                     </div>
                   </div>
+
+                  {/* Persistent list of saved memory items visible to this agent. */}
+                  <div className="mt-3 rounded-lg border border-hairline bg-surface">
+                    <div className="flex items-center justify-between px-3 py-2 border-b border-hairline">
+                      <div className="text-[11px] font-medium">
+                        Saved memory for {agent.name}
+                        <span className="ml-1.5 text-muted-foreground">
+                          ({memoryItems.length})
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openId && refreshMemoryList(openId)}
+                        disabled={memoryLoading}
+                        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted disabled:opacity-50"
+                      >
+                        {memoryLoading ? (
+                          <Loader2 size={10} className="animate-spin" />
+                        ) : (
+                          <RefreshCw size={10} />
+                        )}
+                        Refresh
+                      </button>
+                    </div>
+                    {memoryItems.length === 0 ? (
+                      <p className="px-3 py-3 text-[11px] text-muted-foreground">
+                        {memoryLoading
+                          ? "Loading…"
+                          : "No memory items yet. Anything saved above will appear here and persist."}
+                      </p>
+                    ) : (
+                      <ul className="max-h-72 overflow-y-auto divide-y divide-hairline">
+                        {memoryItems.map((m) => (
+                          <li key={m.id} className="flex items-start gap-2 px-3 py-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                                <span
+                                  className={
+                                    m.scope === "global"
+                                      ? "rounded bg-primary/10 text-primary px-1.5 py-0.5"
+                                      : "rounded bg-muted px-1.5 py-0.5"
+                                  }
+                                >
+                                  {m.scope === "global" ? "shared" : "agent"}
+                                </span>
+                                <span>{new Date(m.createdAt).toLocaleString()}</span>
+                                {m.source && (
+                                  <span className="truncate">· {m.source}</span>
+                                )}
+                              </div>
+                              <p className="mt-1 text-[12px] whitespace-pre-wrap break-words">
+                                {m.text}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteMemory(m.id)}
+                              disabled={deletingId === m.id}
+                              className="shrink-0 inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                              aria-label="Delete memory item"
+                            >
+                              {deletingId === m.id ? (
+                                <Loader2 size={12} className="animate-spin" />
+                              ) : (
+                                <Trash2 size={12} />
+                              )}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 </section>
+
 
                 {/* Agent fallbacks */}
 
