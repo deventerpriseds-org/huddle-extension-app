@@ -85,6 +85,8 @@ export interface OpenAIPersonaInput {
   onToolCall?: ToolHandler;
   /** Max tool-call round-trips (default 2). */
   maxToolHops?: number;
+  /** Optional tool_choice override (e.g. "auto", "required", or { type: "function", name }). */
+  toolChoice?: unknown;
 }
 
 interface ResponsesReply {
@@ -142,12 +144,16 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<st
   let previousResponseId: string | undefined;
 
   for (let hop = 0; hop <= maxHops; hop++) {
+    const hasTools = !!(input.tools && input.tools.length > 0);
     const body: Record<string, unknown> = {
       model: input.model,
       instructions: input.instructions,
       input: runningInput,
       ...(priority ? { service_tier: "priority" } : {}),
-      ...(input.tools && input.tools.length > 0 ? { tools: input.tools } : {}),
+      ...(hasTools ? { tools: input.tools } : {}),
+      // Only force tool_choice on the FIRST hop; subsequent hops let the model
+      // produce a normal text answer using the tool output.
+      ...(hasTools && input.toolChoice && hop === 0 ? { tool_choice: input.toolChoice } : {}),
       ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
     };
 

@@ -645,6 +645,25 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
           usedModel = agentBackend.model?.trim() || snapshot?.model || "gpt-4o";
 
+          // Detect time-sensitive queries and force the first tool call so the
+          // model can't skip Tavily for current-events questions.
+          const TIME_SENSITIVE_RE =
+            /\b(today|tonight|tomorrow|yesterday|this week|this month|this year|latest|current|currently|right now|recent|recently|news|breaking|headline|score|price|stock|weather|forecast|202\d|updated|update)\b/i;
+          const forceWebSearch =
+            agentBackend.webSearch && TIME_SENSITIVE_RE.test(data.text);
+          const toolChoice = forceWebSearch
+            ? { type: "function", name: "tavily_web_search" }
+            : undefined;
+
+          if (agentBackend.webSearch) {
+            recordToolUse(
+              winner.id,
+              "tavily_web_search",
+              forceWebSearch ? "offered (forced — time-sensitive)" : "offered",
+              true,
+            );
+          }
+
           const text = await callOpenAIResponses({
             model: usedModel,
             instructions,
@@ -652,6 +671,8 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             fastMode: routerCfg.fastMode,
             tools: mergedTools.length > 0 ? mergedTools : undefined,
             onToolCall: combinedOnToolCall,
+            toolChoice,
+            maxToolHops: 5,
           });
           clean = text.trim();
         } else {
