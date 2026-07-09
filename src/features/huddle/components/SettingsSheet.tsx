@@ -337,23 +337,20 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
               <p className="text-xs text-destructive">{uploadError}</p>
             )}
             <div className="rounded-lg border border-hairline p-3 space-y-2">
-              <div className="text-sm font-semibold">Demo data</div>
-              <p className="text-xs text-muted-foreground">
-                Remove the seeded example messages, tasks, memory, and routing decisions from this workspace. This affects only your browser; it does not touch server data.
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  clearDemoData();
-                  setDemoCleared(true);
-                }}
-              >
-                <RotateCcw size={14} className="mr-1" /> Clear demo data
-              </Button>
-              {demoCleared && (
-                <p className="text-xs text-emerald-600 dark:text-emerald-400">Demo data cleared.</p>
-              )}
+              <div className="flex items-center justify-between gap-3">
+                <div className="pr-3">
+                  <div className="text-sm font-semibold">Show demo data</div>
+                  <p className="text-xs text-muted-foreground">
+                    Toggle the seeded example messages, tasks, memory, and routing
+                    decisions on or off. Nothing is deleted — the records are simply
+                    filtered from every view while this is off.
+                  </p>
+                </div>
+                <Switch
+                  checked={showDemoData}
+                  onCheckedChange={(v) => setShowDemoData(v)}
+                />
+              </div>
             </div>
             <details className="text-xs">
               <summary className="cursor-pointer text-muted-foreground">Show current config</summary>
