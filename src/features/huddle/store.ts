@@ -91,6 +91,7 @@ export const useHuddleStore = create<HuddleState>()(
       leaveMeeting: () => set({ meeting: null }),
       setSpeaker: (id) =>
         set((s) => (s.meeting ? { meeting: { ...s.meeting, activeSpeakerId: id } } : {})),
+      clearDemoData: () => set({ messages: [], tasks: [], memory: [], decisions: [] }),
     }),
     {
       name: "huddle-workspace",
