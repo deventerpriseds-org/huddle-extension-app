@@ -236,14 +236,16 @@ export const SEED_TASKS: Task[] = [
   },
 ];
 
-export const SEED_MEMORY: MemoryItem[] = [
-  { id: "mem1", agentId: "finn-reid", kind: "source", label: "Plaid · card + checking", sourceRef: "plaid", editable: true },
-  { id: "mem2", agentId: "finn-reid", kind: "fact", label: "Dining cap: $600/month", editable: true },
-  { id: "mem3", agentId: "faith-hartley", kind: "source", label: "Google Calendar · family", sourceRef: "gcal", editable: true },
-  { id: "mem4", agentId: "elle-rowan", kind: "fact", label: "Program: EMBA · cohort of 2026", editable: true },
-  { id: "mem5", agentId: "flex-grimes", kind: "fact", label: "Split: push/pull/legs · 4 days", editable: true },
-  { id: "mem6", agentId: "sam-trent", kind: "source", label: "Notion · pitch narrative v1", sourceRef: "notion", editable: true },
-].map((m) => ({ ...m, demo: true }));
+export const SEED_MEMORY: MemoryItem[] = (
+  [
+    { id: "mem1", agentId: "finn-reid", kind: "source", label: "Plaid · card + checking", sourceRef: "plaid", editable: true },
+    { id: "mem2", agentId: "finn-reid", kind: "fact", label: "Dining cap: $600/month", editable: true },
+    { id: "mem3", agentId: "faith-hartley", kind: "source", label: "Google Calendar · family", sourceRef: "gcal", editable: true },
+    { id: "mem4", agentId: "elle-rowan", kind: "fact", label: "Program: EMBA · cohort of 2026", editable: true },
+    { id: "mem5", agentId: "flex-grimes", kind: "fact", label: "Split: push/pull/legs · 4 days", editable: true },
+    { id: "mem6", agentId: "sam-trent", kind: "source", label: "Notion · pitch narrative v1", sourceRef: "notion", editable: true },
+  ] as MemoryItem[]
+).map((m) => ({ ...m, demo: true }));
 
 // Mark every seeded record as demo so it can be filtered by the global toggle
 // without deleting data. User-added records omit the flag.
