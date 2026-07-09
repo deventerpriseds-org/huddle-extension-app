@@ -10,7 +10,7 @@ const RagConfigSchema = z.object({
   store: z.enum(["azure", "lovable", "none"]).default("azure"),
   chunks: z.boolean().default(true),
   triples: z.boolean().default(true),
-  fileSearch: z.boolean().default(false),
+  fileSearch: z.boolean().default(true),
   openaiVectorStoreId: z.string().trim().optional(),
   sharing: z.enum(["shared", "private", "readonly-shared"]).default("shared"),
 });
