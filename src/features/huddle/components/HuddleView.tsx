@@ -391,6 +391,10 @@ function Composer({ huddle }: { huddle: Huddle }) {
       if (result.journeyTaskUpdates && result.journeyTaskUpdates.length > 0) {
         upsertJourneyTasks(result.journeyTaskUpdates);
       }
+
+      if (result.toolUses && result.toolUses.length > 0) {
+        addToolUses(result.toolUses);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Message failed";
       toast.error(msg);
