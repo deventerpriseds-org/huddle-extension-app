@@ -4,7 +4,8 @@ Repository (Lovable ↔ GitHub two-way sync):
 - Lovable project: https://lovable.dev/projects/a6760242-2abf-43de-b87f-bf2cff586ea4
 - Preview: https://id-preview--a6760242-2abf-43de-b87f-bf2cff586ea4.lovable.app
 - Published: https://huddle-extension-app.lovable.app
-- GitHub repo: connected via the Lovable GitHub App (Plus (+) → GitHub in the editor). If you haven't yet, click *Connect project* to create/link the repo under your GitHub org. The `main` branch mirrors the current Lovable state; pushes to GitHub sync back into Lovable in real time.
+- GitHub repo: https://github.com/deventerprisesds/huddle-extension-app.git
+  - `main` branch mirrors the current Lovable state; pushes to GitHub sync back into Lovable in real time.
 
 Reference companion app whose auth stack and infra pattern this app borrows from:
 - https://github.com/deventerprisesds/bridge-builder
