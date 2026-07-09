@@ -99,6 +99,10 @@ export function MemoryDbPanel() {
           {running === "boot" ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />}
           <span className="ml-1.5">Run bootstrap (create tables)</span>
         </Button>
+        <Button size="sm" variant="outline" disabled={!!running} onClick={runRt}>
+          {running === "rt" ? <Loader2 size={12} className="animate-spin" /> : <Beaker size={12} />}
+          <span className="ml-1.5">Verify round-trip</span>
+        </Button>
         {diag && (
           <Button size="sm" variant="ghost" onClick={() => setExpanded((v) => !v)}>
             <ChevronDown
@@ -127,6 +131,48 @@ export function MemoryDbPanel() {
           </pre>
         </div>
       )}
+      {rt && (
+        <div className="border-t border-hairline p-3">
+          <RoundTripBlock rt={rt} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function firstRtError(r: RoundTrip): string {
+  const s = r.steps;
+  if (s.bootstrap && !s.bootstrap.ok) return `bootstrap: ${s.bootstrap.error ?? "failed"}`;
+  if (s.write && !s.write.ok) return `write: ${s.write.error ?? "failed"}`;
+  if (s.semanticSearch && !s.semanticSearch.ok) return `search: ${s.semanticSearch.error ?? "failed"}`;
+  if (s.semanticSearch && !s.semanticSearch.matched) return `search: wrote id was not the top hit`;
+  if (s.directRead && !s.directRead.ok) return `direct read: ${s.directRead.error ?? "row not found"}`;
+  if (s.cleanup && !s.cleanup.ok) return `cleanup: ${s.cleanup.error ?? "failed"}`;
+  return "unknown";
+}
+
+function RoundTripBlock({ rt }: { rt: RoundTrip }) {
+  const s = rt.steps;
+  return (
+    <div className="flex flex-col gap-2 text-[11px]">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        Round-trip · marker {rt.marker}
+      </div>
+      <Row label="Bootstrap" ok={s.bootstrap?.ok} value={s.bootstrap ? (s.bootstrap.ok ? "schema ready" : s.bootstrap.error ?? "failed") : "—"} />
+      <Row label="Write chunk" ok={s.write?.ok} value={s.write ? (s.write.ok ? `id=${s.write.id} (${s.write.ms}ms)` : s.write.error ?? "failed") : "—"} />
+      <Row
+        label="Semantic search"
+        ok={s.semanticSearch?.ok && s.semanticSearch?.matched}
+        value={
+          s.semanticSearch
+            ? s.semanticSearch.ok
+              ? `hits=${s.semanticSearch.hitCount} top=${s.semanticSearch.topId ?? "none"} score=${s.semanticSearch.topScore?.toFixed(4) ?? "?"} matched=${s.semanticSearch.matched ? "yes" : "NO"} (${s.semanticSearch.ms}ms)`
+              : s.semanticSearch.error ?? "failed"
+            : "—"
+        }
+      />
+      <Row label="Direct read" ok={s.directRead?.ok} value={s.directRead ? (s.directRead.ok ? `text len=${s.directRead.text?.length ?? 0} (${s.directRead.ms}ms)` : s.directRead.error ?? "row missing") : "—"} />
+      <Row label="Cleanup" ok={s.cleanup?.ok} value={s.cleanup ? (s.cleanup.ok ? `deleted ${s.cleanup.deleted}` : s.cleanup.error ?? "failed") : "—"} />
     </div>
   );
 }
