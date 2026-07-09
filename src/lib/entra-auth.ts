@@ -75,6 +75,12 @@ export function getCurrentUser(): AccountInfo | null {
 export async function signIn(): Promise<void> {
   const msal = getMsal();
   if (!msal) return;
+  // In an iframe (Lovable preview), MSAL blocks loginRedirect. Fall back to popup.
+  const inIframe = window.self !== window.top;
+  if (inIframe) {
+    await msal.loginPopup(loginRequest);
+    return;
+  }
   await msal.loginRedirect(loginRequest);
 }
 
