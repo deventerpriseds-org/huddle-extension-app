@@ -529,3 +529,70 @@ function MemoryTab() {
     </div>
   );
 }
+
+// ---------------- Per-agent context entry ----------------
+
+import { Plus, Trash2 } from "lucide-react";
+import type { AgentId } from "../data/agents";
+
+function AgentContextEditor({ agentId }: { agentId: AgentId }) {
+  const memory = useHuddleStore((s) => s.memory);
+  const addMemoryItem = useHuddleStore((s) => s.addMemoryItem);
+  const removeMemoryItem = useHuddleStore((s) => s.removeMemoryItem);
+  const [draft, setDraft] = useState("");
+
+  const entries = memory.filter((m) => m.agentId === agentId && !m.demo);
+
+  function commit() {
+    const label = draft.trim();
+    if (!label) return;
+    addMemoryItem({ agentId, kind: "fact", label, editable: true });
+    setDraft("");
+  }
+
+  return (
+    <div className="pt-2 border-t border-hairline space-y-2">
+      <Label className="text-xs">Context entries</Label>
+      <p className="text-[11px] text-muted-foreground">
+        Add facts, preferences, or knowledge this agent should always remember.
+      </p>
+      {entries.length > 0 && (
+        <ul className="space-y-1">
+          {entries.map((e) => (
+            <li
+              key={e.id}
+              className="flex items-center justify-between gap-2 rounded bg-muted/60 px-2 py-1 text-xs"
+            >
+              <span className="truncate">{e.label}</span>
+              <button
+                type="button"
+                onClick={() => removeMemoryItem(e.id)}
+                className="inline-flex size-6 items-center justify-center rounded hover:bg-muted"
+                aria-label="Remove entry"
+              >
+                <Trash2 size={12} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex gap-2">
+        <Input
+          className="h-8"
+          placeholder="e.g. I prefer concise, bulleted answers"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commit();
+            }
+          }}
+        />
+        <Button size="sm" variant="outline" onClick={commit} disabled={!draft.trim()}>
+          <Plus size={14} className="mr-1" /> Add
+        </Button>
+      </div>
+    </div>
+  );
+}
