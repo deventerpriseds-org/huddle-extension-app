@@ -127,6 +127,42 @@ func azure functionapp publish $APP --typescript
 #   az functionapp deployment source config-zip -g $RG -n $APP --src ../pkg.zip
 ```
 
+## CI deploy (org convention)
+
+`.github/workflows/deploy-web-search.yml` deploys this function the same way
+`bridge-builder`'s `deploy-api.yml` does: `Azure/functions-action@v1.5.2` with a
+**publish-profile secret** — no `az login` in CI.
+
+A publish profile can only *deploy code to an existing app*; it cannot provision
+one or set app settings. Do this once (Azure portal or an authenticated `az`):
+
+```bash
+RG=rg-huddle-web-search; LOC=eastus2
+APP=huddle-web-search-<short-random>; STG=huddlewebsearch<short-random>
+
+az group create -n $RG -l $LOC
+az storage account create -n $STG -g $RG -l $LOC --sku Standard_LRS
+az functionapp create -g $RG -n $APP --storage-account $STG \
+  --consumption-plan-location $LOC --runtime node --runtime-version 20 \
+  --functions-version 4 --os-type Linux
+
+az functionapp config appsettings set -g $RG -n $APP --settings TAVILY_API_KEY="<value>"
+for O in https://huddle-extension-app.lovable.app \
+  https://id-preview--a6760242-2abf-43de-b87f-bf2cff586ea4.lovable.app \
+  http://localhost:8080 http://localhost:5173; do
+  az functionapp cors add -g $RG -n $APP --allowed-origins "$O"; done
+
+# Publish profile -> paste into repo secret AZURE_WEBSEARCH_PUBLISH_PROFILE
+az functionapp deployment list-publishing-profiles -g $RG -n $APP --xml
+```
+
+Then in the huddle-extension-app repo settings:
+- Secret **`AZURE_WEBSEARCH_PUBLISH_PROFILE`** = the XML from the command above.
+- Variable **`WEBSEARCH_APP_NAME`** = `$APP`.
+
+Pushes touching `azure/functions/web-search/**` (or a manual **Run workflow**)
+then build and deploy automatically.
+
 ## Verify
 
 ```bash
