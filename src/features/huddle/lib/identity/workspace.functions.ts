@@ -7,18 +7,23 @@ const WORKSPACE_VERSION = 3;
 
 const AuthInput = z.object({ idToken: z.string().min(20) });
 
-async function loadImpl(oid: string) {
+export type WorkspaceStateBlob = Record<string, unknown>;
+export type LoadedWorkspace =
+  | { state: WorkspaceStateBlob; version: number; updatedAt: string }
+  | null;
+
+async function loadImpl(oid: string): Promise<LoadedWorkspace> {
   const { getPool, ensureWorkspaceBootstrapped } = await import(
     "@/features/huddle/lib/identity/workspace.server"
   );
   await ensureWorkspaceBootstrapped();
-  const res = await getPool().query<{ state: unknown; version: number; updated_at: string }>(
+  const res = await getPool().query<{ state: WorkspaceStateBlob; version: number; updated_at: string }>(
     `SELECT state, version, updated_at FROM identity.workspace_state WHERE entra_object_id = $1`,
     [oid],
   );
   if (res.rowCount === 0) return null;
   const row = res.rows[0];
-  return { state: row.state, version: row.version, updatedAt: row.updated_at };
+  return { state: row.state ?? {}, version: row.version, updatedAt: row.updated_at };
 }
 
 async function saveImpl(oid: string, state: unknown, version: number) {
