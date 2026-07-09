@@ -15,6 +15,7 @@ import {
   type Task,
   type TaskLane,
 } from "./data/seed";
+import type { JourneyTask } from "./lib/journey/types";
 
 type View = "huddle" | "board";
 
@@ -26,6 +27,7 @@ interface HuddleState {
   tasks: Task[];
   memory: MemoryItem[];
   decisions: RoutingDecision[];
+  journeyTasks: JourneyTask[];
   showDemoData: boolean;
   meeting: null | {
     kind: "morning" | "midday" | "afternoon" | "adhoc";
@@ -48,6 +50,7 @@ interface HuddleState {
   setShowDemoData: (v: boolean) => void;
   addMemoryItem: (item: Omit<MemoryItem, "id"> & { id?: string }) => void;
   removeMemoryItem: (id: string) => void;
+  upsertJourneyTasks: (tasks: JourneyTask[]) => void;
 }
 
 export const useHuddleStore = create<HuddleState>()(
