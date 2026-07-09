@@ -459,7 +459,10 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           const baseInstructions = snapshotInstructions
             ? snapshotInstructions + scene + roster
             : appSystem;
-          const instructions = baseInstructions + ragInstructions;
+          const webInstructions = agentBackend.webSearch
+            ? "\n\n" + TAVILY_WEB_SEARCH_HINT
+            : "";
+          const instructions = baseInstructions + ragInstructions + webInstructions;
           usedInstructions = instructions;
 
           const snapshotTools = snapshotResponsesTools(snapshot);
@@ -497,10 +500,8 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             }
           }
 
-          // OpenAI hosted web search tool (opt-in per agent).
-          const webSearchTools: unknown[] = agentBackend.webSearch
-            ? [{ type: "web_search_preview" }]
-            : [];
+          // Tavily web search tool (opt-in per agent).
+          const webSearchTools: unknown[] = agentBackend.webSearch ? [TAVILY_WEB_SEARCH_TOOL] : [];
 
           const mergedTools = [...snapshotTools, ...ragTools, ...journeyTools, ...webSearchTools];
           toolTypes = mergedTools
