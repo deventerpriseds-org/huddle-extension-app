@@ -46,6 +46,7 @@ const AgentBackendInput = z.object({
       sharing: z.enum(["shared", "private", "readonly-shared"]).default("shared"),
     })
     .optional(),
+  journey: z.object({ enabled: z.boolean() }).optional(),
 });
 
 
@@ -58,6 +59,14 @@ const Input = z.object({
   targetAgentId: z.enum(AgentIds).optional(),
   router: RouterConfigInput.optional(),
   agents: z.record(z.enum(AgentIds), AgentBackendInput).optional(),
+  // Optional caller identity so journey-voice can resolve a Supabase user.
+  // Populated from the signed-in Entra account (email / oid) on the client.
+  caller: z
+    .object({
+      entra_object_id: z.string().optional(),
+      entra_email: z.string().optional(),
+    })
+    .optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
@@ -69,6 +78,36 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     const openaiKey = process.env.OPENAI_API_KEY;
 
     type Reply = { agentId: AgentId; text: string; fallbackNotes?: string[] };
+
+    // Journey-voice mirror: any task rows that journey returns from a tool call
+    // are accumulated here and returned to the client so the huddle board can
+    // upsert them.
+    const journeyTaskUpdates: import("./journey/types").JourneyTask[] = [];
+
+    // Lazy: fetch & cache journey tool definitions for this whole turn. Only
+    // populated when at least one participating agent has journey.enabled.
+    let journeyToolsCache:
+      | { defs: import("./journey/types").JourneyToolDefinition[]; tools: unknown[] }
+      | null = null;
+    let journeyToolsError: string | null = null;
+    const journeyEnabledMembers = data.members.filter(
+      (id) => (data.agents ?? {})[id]?.journey?.enabled,
+    );
+    async function ensureJourneyTools() {
+      if (journeyToolsCache || journeyToolsError) return journeyToolsCache;
+      if (journeyEnabledMembers.length === 0) return null;
+      try {
+        const { fetchJourneyToolDefinitions, toResponsesTool } = await import(
+          "./journey/proxy.functions"
+        );
+        const defs = await fetchJourneyToolDefinitions();
+        journeyToolsCache = { defs, tools: defs.map(toResponsesTool) };
+        return journeyToolsCache;
+      } catch (err) {
+        journeyToolsError = err instanceof Error ? err.message : String(err);
+        return null;
+      }
+    }
 
     const routerCfg = data.router ?? { backend: "openai" as const, model: "gpt-5.5", fastMode: false };
     const agentsCfg = data.agents ?? {};
@@ -254,7 +293,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     }
 
     if (routed.winners.length === 0) {
-      return { decision: routed.decision, replies: [] as Reply[], fallbacks, prompts };
+      return { decision: routed.decision, replies: [] as Reply[], fallbacks, prompts, journeyTaskUpdates };
     }
 
     // ---- Reply transcript ----
@@ -431,10 +470,75 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
               perAgentFallbacks.push(ev.inline);
             }
           }
-          const mergedTools = [...snapshotTools, ...ragTools];
+          // Journey-voice proxy tools (opt-in per agent).
+          let journeyTools: unknown[] = [];
+          const journeyNames = new Set<string>();
+          if (agentBackend.journey?.enabled) {
+            const cached = await ensureJourneyTools();
+            if (cached) {
+              journeyTools = cached.tools;
+              for (const d of cached.defs) journeyNames.add(d.name);
+            } else if (journeyToolsError) {
+              const ev = recordFallback(
+                "tool",
+                `${winner.name}: journey-voice proxy tools unavailable — ${journeyToolsError}`,
+                "journey tools unavailable",
+                winner.id,
+              );
+              perAgentFallbacks.push(ev.inline);
+            }
+          }
+
+          const mergedTools = [...snapshotTools, ...ragTools, ...journeyTools];
           toolTypes = mergedTools
             .map((t) => (t as { type?: string })?.type ?? "unknown")
             .filter(Boolean);
+
+          // Wrap onToolCall to route journey-named tools to the proxy while
+          // keeping RAG dispatch on the existing handler.
+          const ragOnToolCall = onToolCall;
+          const combinedOnToolCall = journeyTools.length > 0
+            ? async (c: { name: string; arguments: Record<string, unknown> }) => {
+                if (journeyNames.has(c.name)) {
+                  try {
+                    const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                    const r = await invokeJourneyTool({
+                      toolName: c.name,
+                      args: c.arguments,
+                      caller: data.caller ?? {},
+                      context: {
+                        source: "huddle",
+                        huddleId: data.huddleId,
+                        agentId: winner.id,
+                      },
+                    });
+                    if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+                    if (!r.ok) {
+                      const ev = recordFallback(
+                        "tool",
+                        `${winner.name}: journey tool ${c.name} failed — ${r.error ?? "unknown"}`,
+                        "journey tool failed",
+                        winner.id,
+                      );
+                      perAgentFallbacks.push(ev.inline);
+                    }
+                    return r.output;
+                  } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    const ev = recordFallback(
+                      "tool",
+                      `${winner.name}: journey tool ${c.name} crashed — ${msg}`,
+                      "journey tool crashed",
+                      winner.id,
+                    );
+                    perAgentFallbacks.push(ev.inline);
+                    return JSON.stringify({ error: msg, tool: c.name });
+                  }
+                }
+                if (ragOnToolCall) return ragOnToolCall(c);
+                return JSON.stringify({ error: `Unknown tool: ${c.name}` });
+              }
+            : ragOnToolCall;
 
           usedModel = agentBackend.model?.trim() || snapshot?.model || "gpt-4o";
 
@@ -444,7 +548,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             transcript: transcript,
             fastMode: routerCfg.fastMode,
             tools: mergedTools.length > 0 ? mergedTools : undefined,
-            onToolCall,
+            onToolCall: combinedOnToolCall,
           });
           clean = text.trim();
         } else {
@@ -535,6 +639,6 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       }
     }
 
-    return { decision: routed.decision, replies, fallbacks, prompts };
+    return { decision: routed.decision, replies, fallbacks, prompts, journeyTaskUpdates };
   });
 

@@ -15,6 +15,11 @@ const RagConfigSchema = z.object({
   sharing: z.enum(["shared", "private", "readonly-shared"]).default("shared"),
 });
 
+const JourneyConfigSchema = z.object({
+  /** Enable journey-voice proxy tools for this agent. */
+  enabled: z.boolean().default(false),
+});
+
 const AgentBackendSchema = z.object({
   backend: z.enum(["lovable", "openai"]),
   // Provenance only — the runtime never sends this to OpenAI. Kept so the
@@ -29,6 +34,7 @@ const AgentBackendSchema = z.object({
     fileSearch: false,
     sharing: "shared",
   }),
+  journey: JourneyConfigSchema.default({ enabled: false }),
 });
 
 
@@ -83,8 +89,8 @@ function defaultAgents(): Record<AgentId, AgentBackend> {
   for (const a of AGENTS) {
     const id = ASSISTANT_IDS[a.id];
     out[a.id] = id
-      ? { backend: "openai", assistantId: id, rag: { ...defaultRag } }
-      : { backend: "lovable", rag: { ...defaultRag } };
+      ? { backend: "openai", assistantId: id, rag: { ...defaultRag }, journey: { enabled: false } }
+      : { backend: "lovable", rag: { ...defaultRag }, journey: { enabled: false } };
   }
 
   return out;

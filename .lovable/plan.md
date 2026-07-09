@@ -1,68 +1,128 @@
+## Goal
 
-# Get Azure Postgres working, transparently — no fallbacks, no tricks
+Give every huddle agent the same tool surface journey-voice's agents use (`execute-tool` dispatcher: task, communication, scheduling, introspection). Tasks created from huddle land in journey-voice AND on huddle's board. Ship it in a way that a future merge — or a reverse direction (journey calling huddle) — is a config change, not a rewrite.
 
-You're right that it's a single connection string (`AZURE_PG_URL`), and it's already saved. The reason it hasn't worked isn't a missing secret — it's that the current code hides the actual failure behind a lazy bootstrap and static "everything's fine" chips. This plan removes the deception so we can see exactly what Azure is saying and fix that one thing.
+## Architecture
 
-## What changes
+Journey-voice remains the system of record for tasks. Huddle's OpenAI tool loop gains a "journey tools" group that forwards each call over HTTPS to a new thin proxy in journey-voice. The proxy verifies a shared bearer, resolves the caller's Entra identity to a journey `user_id`, then calls the existing `execute-tool` internally. Huddle mirrors the returned task(s) into a dedicated store slice using journey's schema verbatim.
 
-### 1. Delete the silent lazy bootstrap
-`azure-pg.server.ts` today runs `CREATE TABLE IF NOT EXISTS` on the first call inside `ensureBootstrap()` and every store method swallows errors upstream. Replace with:
-- Explicit `runBootstrap()` server fn the user triggers from Settings. Returns the raw SQL result or the raw error.
-- Every store method (`writeChunk`, `searchChunks`, `lookupTriples`, `writeTriples`) throws `RagStoreUnavailableError` on failure. No `{ ok: false }` masquerading as success.
+```text
+huddle agent (OpenAI Responses)
+    │  tool_call: create_task | get_tasks | send_email | ...
+    ▼
+huddle server fn: callJourneyTool({ toolName, args })
+    │  POST {JOURNEY_PROXY_URL}
+    │  Authorization: Bearer <HUDDLE_JOURNEY_BEARER>
+    │  x-huddle-entra-oid: <object id>
+    │  x-huddle-entra-email: <email>
+    ▼
+journey edge fn: huddle-proxy   ← NEW
+    │  verify bearer, resolve identity → user_id via huddle_user_aliases
+    │  fetch(execute-tool, { toolName, args, userId, context })
+    ▼
+journey edge fn: execute-tool   ← unchanged
+    ▼  result JSON
+huddle: return to model; mirror any tasks into journeyTasks slice
+```
 
-### 2. Real diagnostic server function
-New `diagnoseAzurePg` returns, in one payload, the ground truth:
-- Parsed host / port / database / user / sslmode from `AZURE_PG_URL` (password redacted).
-- DNS resolution: does the host even resolve, and to what?
-- Raw TCP probe on port 5432 with a 5-second timeout, using `node:net` — this tells "firewall blocks the port" apart from "TCP fine, Postgres rejected us."
-- Real `pg.Client` handshake with 10-second timeout: returns the full Postgres error (`code`, `severity`, `message`, `routine`) on failure.
-- On success: `SELECT version()`, `pg_extension` list, and presence + row counts for `rag_chunks` / `rag_triples`.
+Same shape works in reverse later: a `huddle-inbound` server route in huddle accepts `{ toolName, args, context }` with the same bearer so journey's agents can post to the huddle board without any new contract.
 
-Whatever Azure says gets shown verbatim. Nothing inferred, nothing hidden.
+## Merge-safety guardrails (all applied)
 
-### 3. Live "Memory DB" panel in Agent Settings
-Replace the static `RAG STORE: azure / CHUNKS: true / TRIPLES: true` chips with a live panel:
-- Grey/"unknown" on first mount — never green by default.
-- Green only when the last `diagnoseAzurePg` returned ok. Otherwise red with the raw error line.
-- Buttons: **Run diagnostic**, **Run bootstrap (create tables)**, **Refresh**.
-- Expandable details: host, port, ssl mode, server version, extensions, table row counts, last-error timestamp.
+**1. Separate task slice, journey's schema verbatim.** New `journeyTasks` slice on `useHuddleStore`, storing journey rows as-is (`id`, `status`, `due_date`, `start_time`, `end_time`, `is_scheduled`, `category`, `board_id`, `user_id`, `updated_at`, …). Huddle-native demo `tasks` slice keeps its current shape with `demo: true`. Board view reads both, deriving `lane` from journey `status`:
 
-### 4. Chat-turn transparency
-If retrieval throws during a turn:
-- Inline `memory unavailable` tag on the assistant message.
-- Activity-log entry with the raw error.
-- No silent empty-context fallback that pretends memory worked.
+```text
+BACKLOG | TODO | PLANNING       → Backlog
+READY | UP_NEXT                 → Ready
+DOING                           → Doing
+DONE                            → Done
+```
 
-This matches your core-memory rule already: "Any runtime fallback must surface a visible alert."
+Merger day = point board at `journeyTasks`, drop the demo slice. No data migration.
 
-### 5. What the diagnostic will likely show
-Ordered by how often each is the culprit for Cloudflare Worker → Azure Flexible Server:
-1. **Public access disabled** — Flexible Server defaults to private endpoint only. DNS resolves, TCP times out.
-2. **Firewall rules missing a rule for public traffic** — Workers use rotating egress IPs; a fixed IP allowlist won't work. Options: enable "Allow public access from any Azure service" (limited), or accept `0.0.0.0/0` with strong auth, or front the DB with a fixed-IP proxy.
-3. **TLS / sslmode conflict** — if `sslmode=verify-full` is baked into the URL it overrides driver options. We'll parse and strip conflicting query params, keep `{ ssl: { rejectUnauthorized: false } }` in code.
-4. **Auth (`28P01`)** — password rotated or wrong user.
-5. **Missing `vector` extension privilege** — bootstrap will surface this cleanly.
+**2. Every mirrored row is real.** Written with `demo: false`, `origin: 'journey-voice'`, and journey's `updated_at`. A "Clear demo data" button in Settings wipes only rows where `demo === true`, leaving mirrored state intact.
 
-The diagnostic will point at exactly one of these, and we fix that one.
+**3. Identity bridge, not a hack.** New table on journey-voice:
 
-## Technical details
+```sql
+create table public.huddle_user_aliases (
+  entra_object_id text primary key,
+  email text not null,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+create index huddle_user_aliases_email_idx on public.huddle_user_aliases (lower(email));
+```
 
-Files touched:
-- `src/features/huddle/lib/rag/azure-pg.server.ts` — remove swallowing `ensureBootstrap`, export raw `runBootstrap()`, throw typed errors on failure.
-- `src/features/huddle/lib/rag.functions.ts` — add `diagnoseAzurePg`, `runRagBootstrap`, `getRagTableStats` server functions.
-- `src/features/huddle/components/AgentSettingsDrawer.tsx` — replace static RAG chips with the live Memory DB panel (TanStack Query, `refetchOnMount: "always"`).
-- Chat turn renderer (`HuddleView.tsx` / message component) — surface `memory-unavailable` inline tag when retrieval throws.
-- `openai-responses.server.ts` (retrieval call site) — let errors propagate to the turn instead of returning `[]`.
+Resolution order in `huddle-proxy`: `entra_object_id` → `lower(email)` → 401. Seed one row for each of your emails, both pointing at your journey `auth.users.id`. This is exactly the table a future unified app reads to reconcile identities.
 
-Implementation notes:
-- Raw TCP probe uses `node:net`, DNS uses `node:dns/promises`. These work in the Workers runtime with `nodejs_compat` (already enabled).
-- Use a fresh `pg.Client` (not the pool) inside the diagnostic so a broken pool state can't hide the error.
-- No new secrets requested. `AZURE_PG_URL` is enough. If the diagnostic proves the string itself is bad (auth or sslmode), I'll ask you to reissue it from the portal at that point — with proof of what's wrong, not before.
+**4. No hand-copied tool schemas.** `huddle-proxy` supports `GET ?action=list_tools` returning `getToolDefinitions()` from journey's shared module. Huddle fetches once per server-function cold start and caches on `globalThis`. When journey adds/edits a tool, huddle picks it up on next invocation with zero code change.
 
-## What happens after this ships
+**5. RAG origin column (huddle-side migration).** Add `origin text not null default 'huddle'` to `rag_chunks` and `rag_triples` in Azure PG. Existing rows backfill to `'huddle'`. Future ingest from journey memories tags rows with `'journey-voice'` and dedup becomes a simple filter. Two `ALTER TABLE` statements, no code change to current writers.
 
-1. You open Agent Settings → Memory DB → **Run diagnostic**.
-2. You paste the raw output back here (or screenshot it — the panel shows everything).
-3. It names exactly one failure: DNS / TCP / TLS / auth / bootstrap. We fix that one thing and the store is live.
+**6. Symmetric proxy shape (implemented now).** Both directions share one wire contract:
 
-From that point on, the panel is the source of truth. If it's not green, memory isn't working — no more inferring from static config.
+```ts
+// Request
+POST /<proxy>
+Authorization: Bearer <shared>
+x-caller-app: 'huddle' | 'journey-voice'
+x-caller-entra-oid?: string
+x-caller-entra-email?: string
+x-caller-user-id?: string        // journey side sets this instead of entra headers
+Content-Type: application/json
+{ toolName: string, args: Record<string, unknown>, context?: { interface: 'chat'|'phone', timezone?: string } }
+
+// Response
+{ success: boolean, data?: unknown, error?: string, tool: string }
+```
+
+Both endpoints (`huddle-proxy` on journey-voice, `/api/public/journey-inbound` on huddle) implement this exact envelope. Today only huddle→journey is wired; the reverse endpoint is scaffolded with a "not implemented" list of tool names so the surface exists but no tool executes until we're ready. This makes reverse-direction a matter of filling in handlers, not designing a protocol.
+
+## Deployment shape assumption
+
+Building **extension-first, standalone-capable**: journey tools are appended to an agent's toolset only when `JOURNEY_PROXY_URL` + `HUDDLE_JOURNEY_BEARER` are configured. Missing config = tools omitted, agents still work with search_memory / lookup_facts, and the MemoryDbPanel shows "Journey link: not configured" instead of failing. This matches the Core memory rule (never degrade silently) and keeps a standalone build viable.
+
+## File plan
+
+### Journey-voice (new files only, `execute-tool` untouched)
+
+- `supabase/functions/huddle-proxy/index.ts` — bearer verify, identity resolve, GET `list_tools`, POST forwards to `execute-tool` via internal fetch with `SUPABASE_SERVICE_ROLE_KEY`.
+- Migration: `huddle_user_aliases` table + seed two rows for your emails.
+- Secret: `HUDDLE_SHARED_BEARER` (generated).
+
+### Huddle (this project)
+
+- `src/features/huddle/lib/journey/proxy.functions.ts` — server fn `callJourneyTool({ toolName, args, context? })` and `listJourneyTools()` with globalThis cache.
+- `src/features/huddle/lib/journey/tools.ts` — builds OpenAI function tool schemas from the cached tool list.
+- `src/features/huddle/lib/openai-responses.server.ts` — merges journey tools alongside RAG tools when `JOURNEY_PROXY_URL` present.
+- `src/features/huddle/lib/rag/tools.ts` — dispatcher branch: journey tool names → `callJourneyTool`, other names → existing RAG path. Result JSON returned verbatim to the model.
+- `src/features/huddle/store.ts` — new `journeyTasks` slice, `upsertJourneyTasks(rows)` action, `useVisibleJourneyTasks()` selector, `laneFromStatus()` helper.
+- `src/features/huddle/components/BoardView.tsx` — read both slices, render via computed lane.
+- `src/features/huddle/components/MemoryDbPanel.tsx` — add "Journey link" health section: calls `listJourneyTools()`, shows OK + tool count or the error verbatim.
+- `src/features/huddle/components/AgentSettingsDrawer.tsx` — per-agent toggle "Enable Journey tools" (default: on for `openai` backend, off for `lovable`), persisted in `agent-backends` config.
+- `src/features/huddle/data/seed.ts` — mark all seeds `demo: true` (audit; most already are).
+- `src/routes/api/public/journey-inbound.ts` — scaffold POST with bearer check, returns `{ success: false, error: 'not-implemented' }` for now. Contract is live so the reverse direction is one PR away.
+- Azure PG migration script (`scripts/rag-add-origin.sql`) — `ALTER TABLE rag_chunks ADD COLUMN origin text NOT NULL DEFAULT 'huddle'` and same on `rag_triples`. Run once against Azure.
+
+### Secrets to add (huddle)
+
+- `JOURNEY_PROXY_URL` — full URL to journey's `huddle-proxy` edge fn.
+- `HUDDLE_JOURNEY_BEARER` — same value as journey's `HUDDLE_SHARED_BEARER`.
+
+## Out of scope this pass
+
+- Reverse direction handlers (journey calling huddle tools) — scaffold only.
+- Two-way task sync / edits from huddle → journey — planned via `move_task_to_day` / `quick_create_task` since those already exist as journey tools; will wire in a follow-up.
+- Realtime updates from journey → huddle — the `updated_at` field is stored so a future "Refresh from Journey" reconcile is straightforward.
+- Memory reconciliation across `rag_chunks` origins — the column exists, the dedup job doesn't.
+- Migrating Terry/Finn/Cam off the `lovable` backend to give them journey tools.
+
+## Order of operations
+
+1. Journey-voice: migration for `huddle_user_aliases` + seed, then `huddle-proxy` edge fn, then generate `HUDDLE_SHARED_BEARER`.
+2. Huddle: add secrets, then proxy server fn + tool builder + dispatcher branch.
+3. Huddle: store slice + BoardView read + MemoryDbPanel health check.
+4. Huddle: Azure PG `origin` column migration.
+5. Huddle: journey-inbound scaffold.
+6. Verify end-to-end: settings drawer → agent chat → "create a task to test cookie tomorrow" → row appears in journey-voice and on huddle's Board Ready lane with `origin: 'journey-voice'`.

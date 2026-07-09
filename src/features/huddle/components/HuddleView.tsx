@@ -9,6 +9,7 @@ import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
+import { useAuth } from "@/hooks/useAuth";
 
 
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
@@ -274,6 +275,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
   const addUser = useHuddleStore((s) => s.addUserMessage);
   const addAgent = useHuddleStore((s) => s.addAgentMessage);
   const logDecision = useHuddleStore((s) => s.logDecision);
+  const upsertJourneyTasks = useHuddleStore((s) => s.upsertJourneyTasks);
   const addFallbacks = useAgentPanelStore((s) => s.addFallbacks);
   const recordTurn = useAgentPanelStore((s) => s.recordTurn);
   const allMessages = useVisibleMessages();
@@ -285,6 +287,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
   const scope = huddle.kind;
 
   const presentAgents = AGENTS.filter((a) => huddle.members.includes(a.id));
+  const { user } = useAuth();
 
   async function submit() {
     const trimmed = text.trim();
@@ -331,6 +334,12 @@ function Composer({ huddle }: { huddle: Huddle }) {
           targetAgentId,
           router: backendsCfg.router,
           agents: backendsCfg.agents,
+          caller: user
+            ? {
+                entra_object_id: user.localAccountId ?? user.homeAccountId,
+                entra_email: user.username,
+              }
+            : undefined,
         },
       });
 
@@ -376,6 +385,11 @@ function Composer({ huddle }: { huddle: Huddle }) {
           replyTo: userId,
         });
       });
+
+      // Mirror any journey-voice task mutations onto the huddle board.
+      if (result.journeyTaskUpdates && result.journeyTaskUpdates.length > 0) {
+        upsertJourneyTasks(result.journeyTaskUpdates);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Message failed";
       toast.error(msg);

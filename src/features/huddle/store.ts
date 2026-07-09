@@ -15,6 +15,7 @@ import {
   type Task,
   type TaskLane,
 } from "./data/seed";
+import type { JourneyTask } from "./lib/journey/types";
 
 type View = "huddle" | "board";
 
@@ -26,6 +27,7 @@ interface HuddleState {
   tasks: Task[];
   memory: MemoryItem[];
   decisions: RoutingDecision[];
+  journeyTasks: JourneyTask[];
   showDemoData: boolean;
   meeting: null | {
     kind: "morning" | "midday" | "afternoon" | "adhoc";
@@ -48,6 +50,7 @@ interface HuddleState {
   setShowDemoData: (v: boolean) => void;
   addMemoryItem: (item: Omit<MemoryItem, "id"> & { id?: string }) => void;
   removeMemoryItem: (id: string) => void;
+  upsertJourneyTasks: (tasks: JourneyTask[]) => void;
 }
 
 export const useHuddleStore = create<HuddleState>()(
@@ -60,6 +63,7 @@ export const useHuddleStore = create<HuddleState>()(
       tasks: SEED_TASKS,
       memory: SEED_MEMORY,
       decisions: [],
+      journeyTasks: [],
       showDemoData: true,
       meeting: null,
       setActive: (id) => set({ activeHuddleId: id, view: "huddle" }),
@@ -114,6 +118,14 @@ export const useHuddleStore = create<HuddleState>()(
         })),
       removeMemoryItem: (id) =>
         set((s) => ({ memory: s.memory.filter((m) => m.id !== id) })),
+      upsertJourneyTasks: (incoming) =>
+        set((s) => {
+          if (!incoming || incoming.length === 0) return {};
+          const byId = new Map<string, JourneyTask>();
+          for (const t of s.journeyTasks) byId.set(t.id, t);
+          for (const t of incoming) byId.set(t.id, { ...t, origin: "journey-voice" });
+          return { journeyTasks: Array.from(byId.values()) };
+        }),
     }),
     {
       name: "huddle-workspace",
@@ -129,6 +141,7 @@ export const useHuddleStore = create<HuddleState>()(
         decisions: s.decisions,
         activeHuddleId: s.activeHuddleId,
         showDemoData: s.showDemoData,
+        journeyTasks: s.journeyTasks,
       }),
       migrate: (persisted) => {
         const p = (persisted ?? {}) as Partial<HuddleState>;
