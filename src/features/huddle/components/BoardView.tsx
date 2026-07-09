@@ -79,7 +79,7 @@ export function BoardView() {
       <div className="flex-1 overflow-x-auto p-4">
         <div className="grid h-full min-w-max grid-cols-6 gap-3">
           {LANES.map((lane) => {
-            const items = tasks.filter((t) => t.lane === lane);
+            const items = cards.filter((c) => c.lane === lane);
             return (
               <div
                 key={lane}
@@ -87,7 +87,9 @@ export function BoardView() {
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   const id = e.dataTransfer.getData("text/plain");
-                  if (id) move(id, lane);
+                  // Only native huddle tasks are drag-movable for now.
+                  // Journey tasks are read-only from the mirror; changes come from journey-voice.
+                  if (id && !id.startsWith("journey:")) move(id, lane);
                 }}
               >
                 <header className="flex items-center justify-between border-b border-hairline px-3 py-2">
@@ -99,43 +101,59 @@ export function BoardView() {
                   </span>
                 </header>
                 <div className="flex flex-1 flex-col gap-2 p-2">
-                  {items.map((t) => {
-                    const a = AGENT_BY_ID[t.ownerId];
+                  {items.map((c) => {
+                    const isJourney = c.origin === "journey-voice";
+                    const owner = c.ownerId ? AGENT_BY_ID[c.ownerId] : null;
                     return (
                       <div
-                        key={t.id}
-                        draggable
-                        onDragStart={(e) => e.dataTransfer.setData("text/plain", t.id)}
+                        key={c.id}
+                        draggable={!isJourney}
+                        onDragStart={(e) => e.dataTransfer.setData("text/plain", c.id)}
                         className={cn(
-                          "cursor-grab rounded-lg border bg-surface p-2.5 shadow-soft active:cursor-grabbing",
-                          t.suggested ? "border-warning/50" : "border-hairline",
+                          "rounded-lg border bg-surface p-2.5 shadow-soft",
+                          isJourney
+                            ? "border-primary/30 cursor-default"
+                            : "cursor-grab active:cursor-grabbing",
+                          c.suggested ? "border-warning/50" : !isJourney && "border-hairline",
                         )}
                       >
-                        {t.suggested && (
+                        {isJourney && (
+                          <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase text-primary">
+                            <ExternalLink size={10} /> journey
+                          </div>
+                        )}
+                        {c.suggested && (
                           <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase" style={{ color: "var(--warning)" }}>
                             <Sparkles size={10} /> suggested
                           </div>
                         )}
-                        <div className="text-[13px] font-medium leading-snug">{t.title}</div>
-                        {typeof t.progress === "number" && lane === "Doing" && (
+                        <div className="text-[13px] font-medium leading-snug">{c.title}</div>
+                        {typeof c.progress === "number" && lane === "Doing" && (
                           <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-muted">
                             <div
                               className="h-full rounded-full bg-primary"
-                              style={{ width: `${t.progress}%` }}
+                              style={{ width: `${c.progress}%` }}
                             />
                           </div>
                         )}
-                        {t.blockReason && (
+                        {c.blockReason && (
                           <div className="mt-1 text-[10px]" style={{ color: "var(--destructive)" }}>
-                            {t.blockReason}
+                            {c.blockReason}
                           </div>
                         )}
-                        <div className="mt-2 flex items-center gap-1.5">
-                          <AgentAvatar agent={a} size="xs" />
-                          <span className="text-[10px] text-muted-foreground truncate">
-                            {a.name}
-                          </span>
-                        </div>
+                        {owner && (
+                          <div className="mt-2 flex items-center gap-1.5">
+                            <AgentAvatar agent={owner} size="xs" />
+                            <span className="text-[10px] text-muted-foreground truncate">
+                              {owner.name}
+                            </span>
+                          </div>
+                        )}
+                        {isJourney && c.journey?.assignee_name && (
+                          <div className="mt-2 text-[10px] text-muted-foreground truncate">
+                            {c.journey.assignee_name}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
