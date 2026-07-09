@@ -226,7 +226,7 @@ export async function setUsername(oid: string, next: string): Promise<ProfileBun
   const username = validateUsername(next);
   const pool = getPool();
   const taken = await pool.query(
-    `SELECT 1 FROM identity.profiles WHERE username = $1 AND entra_object_id <> $2`,
+    `SELECT 1 FROM identity.profiles WHERE lower(username) = lower($1) AND entra_object_id <> $2`,
     [username, oid],
   );
   if (taken.rowCount && taken.rowCount > 0) {
