@@ -31,14 +31,19 @@ export function AgentSettingsDrawer() {
   useEffect(() => {
     if (!openId) {
       setDebug(null);
+      setCtxText("");
+      setCtxScope("agent");
       return;
     }
     setLoading(true);
+    setCtxText("");
+    setCtxScope("agent");
     getAgentDebug({ data: { agentId: openId } })
       .then(setDebug)
       .catch((err: unknown) => toast.error(err instanceof Error ? err.message : "Failed to load agent debug"))
       .finally(() => setLoading(false));
   }, [openId]);
+
 
   async function handleSaveContext() {
     if (!openId) return;
