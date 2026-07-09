@@ -12,6 +12,7 @@ import { FallbackBanner } from "./FallbackBanner";
 import { useHuddleStore, useVisibleHuddles } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID } from "../data/agents";
+import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
 
 
 
