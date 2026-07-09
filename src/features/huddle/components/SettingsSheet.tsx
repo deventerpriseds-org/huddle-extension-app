@@ -277,6 +277,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                     </div>
                   )}
 
+                  <AgentContextEditor agentId={a.id} />
                 </div>
               );
             })}
