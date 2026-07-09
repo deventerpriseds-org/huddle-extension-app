@@ -44,6 +44,8 @@ function AuthPage() {
 
   const handleLogin = async () => {
     try {
+      clearAuthTrace();
+      setTrace([]);
       traceAuth("auth-page:button-click");
       setTrace(getAuthTrace());
       await signIn();
@@ -177,7 +179,31 @@ function AuthPage() {
 }
 
 function getAuthFailure(trace: AuthTraceEntry[]) {
-  const errorEntry = [...trace].reverse().find((entry) => entry.event.includes(":error"));
+  const latestAttemptIndex = trace.findLastIndex((entry) =>
+    ["auth-page:button-click", "signin:start", "signin:redirect:start"].includes(entry.event),
+  );
+
+  if (latestAttemptIndex === -1) return null;
+
+  const attemptTrace = trace.slice(latestAttemptIndex);
+  const completed = attemptTrace.some((entry) =>
+    [
+      "signin:popup:complete",
+      "msal:active-account:set-from-redirect",
+      "msal:active-account:recovered-from-cache",
+      "route:/auth:redirect-home",
+    ].includes(entry.event),
+  );
+
+  if (completed) return null;
+
+  const errorEntry = [...attemptTrace].reverse().find((entry) => entry.event.includes(":error"));
+  const errorTime = errorEntry ? Date.parse(errorEntry.t) : Number.NaN;
+
+  if (!errorEntry || (Number.isFinite(errorTime) && Date.now() - errorTime > 2 * 60 * 1_000)) {
+    return null;
+  }
+
   const message = typeof errorEntry?.details?.message === "string" ? errorEntry.details.message : "";
 
   if (message.includes("AADSTS9002326")) {
