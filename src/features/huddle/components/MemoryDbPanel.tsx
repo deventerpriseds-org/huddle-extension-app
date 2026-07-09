@@ -146,6 +146,10 @@ export function MemoryDbPanel({ agentId, agentName }: MemoryDbPanelProps = {}) {
           {running === "rt" ? <Loader2 size={12} className="animate-spin" /> : <Beaker size={12} />}
           <span className="ml-1.5">Verify round-trip</span>
         </Button>
+        <Button size="sm" variant="outline" disabled={!!running} onClick={runProvisionAll}>
+          {running === "prov" ? <Loader2 size={12} className="animate-spin" /> : <PackagePlus size={12} />}
+          <span className="ml-1.5">Provision vector stores (all agents)</span>
+        </Button>
         {diag && (
           <Button size="sm" variant="ghost" onClick={() => setExpanded((v) => !v)}>
             <ChevronDown
