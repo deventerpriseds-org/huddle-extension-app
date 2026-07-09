@@ -150,6 +150,54 @@ export function AgentSettingsDrawer() {
     }
   }
 
+  async function handleProvisionStore() {
+    if (!openId) return;
+    setProvisioning(true);
+    try {
+      const existing = backend?.rag?.openaiVectorStoreId
+        ? { [openId]: backend.rag.openaiVectorStoreId }
+        : {};
+      const r = await provisionAgentVectorStores({ data: { existing, onlyMissing: true } });
+      if (!r.ok) {
+        toast.error(r.error ?? "Provision failed");
+        return;
+      }
+      const mine = r.results.find((row) => row.agentId === openId);
+      if (!mine || !mine.vectorStoreId) {
+        toast.error(mine?.error ?? "No store id returned");
+        return;
+      }
+      setAgent(openId, {
+        rag: {
+          ...(backend?.rag ?? {
+            store: "azure" as const,
+            chunks: true,
+            triples: true,
+            fileSearch: false,
+            sharing: "shared" as const,
+          }),
+          openaiVectorStoreId: mine.vectorStoreId,
+          fileSearch: true,
+        },
+      });
+      toast.success(
+        mine.created
+          ? `Vector store created: ${mine.vectorStoreId}`
+          : `Reusing existing vector store: ${mine.vectorStoreId}`,
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Provision failed");
+    } finally {
+      setProvisioning(false);
+    }
+  }
+
+  function toggleWebSearch(next: boolean) {
+    if (!openId) return;
+    setAgent(openId, { webSearch: next });
+  }
+
+
   return (
     <Sheet open={!!openId} onOpenChange={(o) => !o && closeAgent()}>
       <SheetContent side="right" className="w-full max-w-2xl p-0 sm:max-w-2xl">
