@@ -26,6 +26,7 @@ export type AuthTraceEntry = {
 
 const AUTH_TRACE_KEY = "huddle-auth-trace-v1";
 const AUTH_TRACE_LIMIT = 150;
+const AUTH_TRACE_SERVER_ENDPOINT = "/api/public/auth-trace";
 
 let instance: PublicClientApplication | null = null;
 let initPromise: Promise<void> | null = null;
@@ -39,6 +40,55 @@ function sanitizeMsalMessage(message: string) {
     .replace(/([?&](?:code|client_info|id_token|access_token|refresh_token|state|session_state)=)[^&\s]+/gi, "$1[redacted]")
     .replace(/#(?:code|client_info|id_token|access_token|refresh_token|state|session_state)=[^\s]+/gi, "#[redacted]")
     .slice(0, 700);
+}
+
+function sanitizeTraceDetails(value: unknown, depth = 0): unknown {
+  if (depth > 4) return "[truncated]";
+  if (typeof value === "string") return sanitizeMsalMessage(value).slice(0, 1_200);
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+  if (Array.isArray(value)) return value.slice(0, 25).map((item) => sanitizeTraceDetails(item, depth + 1));
+  if (typeof value === "object" && value) {
+    const safe: Record<string, unknown> = {};
+    for (const [key, nestedValue] of Object.entries(value).slice(0, 30)) {
+      if (/^(code|client_info|id_token|access_token|refresh_token|state|session_state)$/i.test(key)) {
+        safe[key] = "[redacted]";
+      } else {
+        safe[key] = sanitizeTraceDetails(nestedValue, depth + 1);
+      }
+    }
+    return safe;
+  }
+  return undefined;
+}
+
+function sendTraceToServer(entry: AuthTraceEntry) {
+  if (!isBrowser()) return;
+  try {
+    const payload = JSON.stringify({
+      entry,
+      href: sanitizeMsalMessage(window.location.href),
+      userAgent: navigator.userAgent.slice(0, 300),
+    });
+
+    if (navigator.sendBeacon) {
+      const sent = navigator.sendBeacon(
+        AUTH_TRACE_SERVER_ENDPOINT,
+        new Blob([payload], { type: "application/json" }),
+      );
+      if (sent) return;
+    }
+
+    void fetch(AUTH_TRACE_SERVER_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload,
+      keepalive: true,
+    }).catch(() => {
+      // Auth diagnostics must never break login.
+    });
+  } catch {
+    // Auth diagnostics must never break login.
+  }
 }
 
 export function getAuthTrace(): AuthTraceEntry[] {
@@ -63,7 +113,7 @@ export function traceAuth(event: string, details?: Record<string, unknown>) {
     t: new Date().toISOString(),
     event,
     path: window.location.pathname,
-    details,
+    details: sanitizeTraceDetails(details) as Record<string, unknown> | undefined,
   };
   try {
     const next = [...getAuthTrace(), entry].slice(-AUTH_TRACE_LIMIT);
@@ -73,6 +123,7 @@ export function traceAuth(event: string, details?: Record<string, unknown>) {
     // localStorage can be unavailable in strict/private browser modes.
   }
   console.info("[huddle-auth]", entry);
+  sendTraceToServer(entry);
 }
 
 export function getMsal(): PublicClientApplication | null {
