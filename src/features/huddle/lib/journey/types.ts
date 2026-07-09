@@ -5,13 +5,16 @@
 // `supabase/functions/_shared/tool-definitions.ts` — the shape below is a
 // verbatim mirror so we do NOT hand-copy schemas across repos.
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type JsonValue = any;
+
 export interface JourneyToolDefinition {
   type: "function";
   name: string;
   description: string;
   parameters: {
     type: "object";
-    properties: Record<string, unknown>;
+    properties: Record<string, JsonValue>;
     required?: string[];
   };
 }
