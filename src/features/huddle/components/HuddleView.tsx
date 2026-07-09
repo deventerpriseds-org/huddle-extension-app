@@ -274,6 +274,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
   const addUser = useHuddleStore((s) => s.addUserMessage);
   const addAgent = useHuddleStore((s) => s.addAgentMessage);
   const logDecision = useHuddleStore((s) => s.logDecision);
+  const upsertJourneyTasks = useHuddleStore((s) => s.upsertJourneyTasks);
   const addFallbacks = useAgentPanelStore((s) => s.addFallbacks);
   const recordTurn = useAgentPanelStore((s) => s.recordTurn);
   const allMessages = useVisibleMessages();
