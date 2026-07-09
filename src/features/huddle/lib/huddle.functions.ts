@@ -359,11 +359,14 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       }`;
 
       const roster = buildRoster(data.members, winner.id);
+      const taskToolInstructions =
+        "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it.";
       const appSystem =
         winner.systemPrompt +
         scene +
         roster +
-        "\n\nWrite as plain prose. Do NOT prefix your reply with your own name, a bracketed label like [Flex Grimes], or a 'Name:' header — the UI already shows who you are.";
+        "\n\nWrite as plain prose. Do NOT prefix your reply with your own name, a bracketed label like [Flex Grimes], or a 'Name:' header — the UI already shows who you are." +
+        taskToolInstructions;
 
       // Per-agent transcript: the current agent's own prior turns are role=assistant
       // (unprefixed); other agents' turns are surfaced as role=user context so the
@@ -385,6 +388,61 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         .concat([{ role: "user" as const, content: data.text }]);
 
       const perAgentFallbacks: string[] = [];
+      const timeSensitiveRe =
+        /\b(today|tonight|tomorrow|yesterday|this week|this month|this year|latest|current|currently|right now|recent|recently|news|breaking|headline|score|price|stock|weather|forecast|202\d|updated|update)\b/i;
+      const createTaskRe =
+        /\b(add|create|make|log|track|put|place|capture|assign|remind me|todo|to-do|action item|follow[- ]?up)\b/i;
+      const forceTaskCreation = createTaskRe.test(data.text);
+      const forceWebSearch = !!agentBackend.webSearch && timeSensitiveRe.test(data.text);
+
+      function resolveTaskLane(value: unknown): TaskLane {
+        const lane = String(value ?? "").trim().toLowerCase();
+        if (lane === "blocked") return "Blocked";
+        if (lane === "ready") return "Ready";
+        if (lane === "up next" || lane === "up-next" || lane === "next") return "Up next";
+        if (lane === "doing" || lane === "in progress") return "Doing";
+        if (lane === "done" || lane === "complete" || lane === "completed") return "Done";
+        return "Backlog";
+      }
+
+      function resolveTaskOwner(value: unknown): AgentId {
+        const raw = String(value ?? "").trim().toLowerCase();
+        if (!raw) return winner.id;
+        if (AGENT_BY_ID[raw as AgentId]) return raw as AgentId;
+        const matched = AGENTS.find(
+          (a) =>
+            a.name.toLowerCase() === raw ||
+            a.handle.toLowerCase() === raw ||
+            a.name.toLowerCase().includes(raw) ||
+            raw.includes(a.handle.toLowerCase()),
+        );
+        return matched?.id ?? winner.id;
+      }
+
+      function createSuggestedTaskFromTool(args: Record<string, unknown>) {
+        const title = String(args.title ?? args.task ?? args.name ?? "").trim();
+        if (!title) {
+          const error = "create_huddle_task requires a title";
+          recordToolUse(winner.id, "create_huddle_task", "task creation failed", false, error);
+          return { ok: false, error };
+        }
+        const task: SuggestedTaskDraft = {
+          id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+          title: title.slice(0, 160),
+          ownerId: resolveTaskOwner(args.ownerId ?? args.owner ?? args.assignee),
+          lane: resolveTaskLane(args.lane ?? args.status),
+          progress: typeof args.progress === "number" ? args.progress : undefined,
+          blockReason: typeof args.blockReason === "string" ? args.blockReason : undefined,
+        };
+        suggestedTasks.push(task);
+        recordToolUse(
+          winner.id,
+          "create_huddle_task",
+          `suggested “${task.title}” · owner ${AGENT_BY_ID[task.ownerId].name}`,
+          true,
+        );
+        return { ok: true, task };
+      }
 
       try {
         let clean = "";
