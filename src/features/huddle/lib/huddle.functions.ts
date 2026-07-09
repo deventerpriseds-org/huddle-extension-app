@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { generateText } from "ai";
+import { generateText, tool, stepCountIs } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import type { HuddleMessage } from "../data/seed";
@@ -658,7 +658,8 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           // Lovable AI path (default fallback).
           usedBackend = "lovable";
           usedModel = "openai/gpt-5.5";
-          usedInstructions = appSystem;
+          const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
+          usedInstructions = appSystem + webInstructions;
           const model = await getLovableModel(usedModel);
           if (!model) {
             const ev = recordFallback(
@@ -683,10 +684,56 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             });
             continue;
           }
+          const lovableTools = agentBackend.webSearch
+            ? {
+                tavily_web_search: tool({
+                  description:
+                    "Search the live web via Tavily. Use for current events, news, dates, prices, or anything after your training cutoff.",
+                  inputSchema: z.object({
+                    query: z.string(),
+                    topic: z.enum(["general", "news", "finance"]).optional(),
+                    search_depth: z.enum(["basic", "advanced"]).optional(),
+                    time_range: z.enum(["day", "week", "month", "year"]).optional(),
+                    max_results: z.number().optional(),
+                  }),
+                  execute: async (args) => {
+                    const q = String(args.query ?? "").trim() || "unknown";
+                    try {
+                      const r = await tavilySearch({
+                        query: q,
+                        topic: args.topic as TavilySearchArgs["topic"],
+                        search_depth: args.search_depth as TavilySearchArgs["search_depth"],
+                        time_range: args.time_range as TavilySearchArgs["time_range"],
+                        max_results: args.max_results,
+                      });
+                      const resultCount = Array.isArray((r as { results?: unknown[] }).results)
+                        ? (r as { results: unknown[] }).results.length
+                        : 0;
+                      recordToolUse(
+                        winner.id,
+                        "tavily_web_search",
+                        r.success
+                          ? `“${q}” · ${resultCount} result${resultCount === 1 ? "" : "s"}`
+                          : `“${q}” · failed`,
+                        r.success,
+                      );
+                      return r;
+                    } catch (err) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      recordToolUse(winner.id, "tavily_web_search", `“${q}” · crashed`, false, msg);
+                      return { success: false, error: msg };
+                    }
+                  },
+                }),
+              }
+            : undefined;
+          toolTypes = lovableTools ? ["tavily_web_search"] : [];
           const { text } = await generateText({
             model,
-            system: appSystem,
+            system: usedInstructions,
             messages: transcript,
+            tools: lovableTools,
+            stopWhen: stepCountIs(50),
           });
           clean = text.trim();
         }
