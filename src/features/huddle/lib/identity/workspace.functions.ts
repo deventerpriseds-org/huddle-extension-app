@@ -7,9 +7,10 @@ const WORKSPACE_VERSION = 3;
 
 const AuthInput = z.object({ idToken: z.string().min(20) });
 
-export type WorkspaceStateBlob = Record<string, unknown>;
+// Return `state` as a JSON string so the server-fn RPC layer doesn't need to
+// validate the arbitrary blob shape as serializable — the client parses it.
 export type LoadedWorkspace =
-  | { state: WorkspaceStateBlob; version: number; updatedAt: string }
+  | { stateJson: string; version: number; updatedAt: string }
   | null;
 
 async function loadImpl(oid: string): Promise<LoadedWorkspace> {
@@ -17,13 +18,17 @@ async function loadImpl(oid: string): Promise<LoadedWorkspace> {
     "@/features/huddle/lib/identity/workspace.server"
   );
   await ensureWorkspaceBootstrapped();
-  const res = await getPool().query<{ state: WorkspaceStateBlob; version: number; updated_at: string }>(
+  const res = await getPool().query<{ state: unknown; version: number; updated_at: string }>(
     `SELECT state, version, updated_at FROM identity.workspace_state WHERE entra_object_id = $1`,
     [oid],
   );
   if (res.rowCount === 0) return null;
   const row = res.rows[0];
-  return { state: row.state ?? {}, version: row.version, updatedAt: row.updated_at };
+  return {
+    stateJson: JSON.stringify(row.state ?? {}),
+    version: row.version,
+    updatedAt: row.updated_at,
+  };
 }
 
 async function saveImpl(oid: string, state: unknown, version: number) {
