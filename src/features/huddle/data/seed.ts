@@ -89,6 +89,10 @@ export interface ToolUseEvent {
   detail?: string;
 }
 
+export type SuggestedTaskDraft = Omit<Task, "id" | "createdAt" | "origin" | "suggested"> & {
+  id?: string;
+};
+
 /* ---------- seed data ---------- */
 
 export const HUDDLES: Huddle[] = [
