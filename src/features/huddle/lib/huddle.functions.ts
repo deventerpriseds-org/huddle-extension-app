@@ -47,7 +47,9 @@ const AgentBackendInput = z.object({
     })
     .optional(),
   journey: z.object({ enabled: z.boolean() }).optional(),
+  webSearch: z.boolean().optional(),
 });
+
 
 
 const Input = z.object({
@@ -489,10 +491,16 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             }
           }
 
-          const mergedTools = [...snapshotTools, ...ragTools, ...journeyTools];
+          // OpenAI hosted web search tool (opt-in per agent).
+          const webSearchTools: unknown[] = agentBackend.webSearch
+            ? [{ type: "web_search_preview" }]
+            : [];
+
+          const mergedTools = [...snapshotTools, ...ragTools, ...journeyTools, ...webSearchTools];
           toolTypes = mergedTools
             .map((t) => (t as { type?: string })?.type ?? "unknown")
             .filter(Boolean);
+
 
           // Wrap onToolCall to route journey-named tools to the proxy while
           // keeping RAG dispatch on the existing handler.

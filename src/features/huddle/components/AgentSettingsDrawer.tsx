@@ -7,9 +7,11 @@ import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useBackendsStore, ASSISTANT_IDS } from "../lib/agent-backends";
 import { getAgentDebug, refetchAgentSnapshot } from "../lib/agent-inspect.functions";
 import { saveMemoryItem, listMemoryItems, deleteMemoryItem } from "../lib/rag.functions";
+import { provisionAgentVectorStores } from "../lib/openai-provisioning.functions";
 import { AgentAvatar } from "./AgentAvatar";
 import { MemoryDbPanel } from "./MemoryDbPanel";
 import { toast } from "sonner";
+
 
 type MemoryChunk = {
   id: string;
@@ -28,6 +30,8 @@ export function AgentSettingsDrawer() {
   const fallbacks = useAgentPanelStore((s) => s.fallbacks);
   const backendCfg = useBackendsStore((s) => s.config);
 
+  const setAgent = useBackendsStore((s) => s.setAgent);
+
   const [debug, setDebug] = useState<Awaited<ReturnType<typeof getAgentDebug>> | null>(null);
   const [loading, setLoading] = useState(false);
   const [refetching, setRefetching] = useState(false);
@@ -38,6 +42,8 @@ export function AgentSettingsDrawer() {
   const [memoryItems, setMemoryItems] = useState<MemoryChunk[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [provisioning, setProvisioning] = useState(false);
+
 
   async function refreshMemoryList(agentId: string) {
     setMemoryLoading(true);
@@ -143,6 +149,54 @@ export function AgentSettingsDrawer() {
       setRefetching(false);
     }
   }
+
+  async function handleProvisionStore() {
+    if (!openId) return;
+    setProvisioning(true);
+    try {
+      const existing = backend?.rag?.openaiVectorStoreId
+        ? { [openId]: backend.rag.openaiVectorStoreId }
+        : {};
+      const r = await provisionAgentVectorStores({ data: { existing, onlyMissing: true } });
+      if (!r.ok) {
+        toast.error(r.error ?? "Provision failed");
+        return;
+      }
+      const mine = r.results.find((row) => row.agentId === openId);
+      if (!mine || !mine.vectorStoreId) {
+        toast.error(mine?.error ?? "No store id returned");
+        return;
+      }
+      setAgent(openId, {
+        rag: {
+          ...(backend?.rag ?? {
+            store: "azure" as const,
+            chunks: true,
+            triples: true,
+            fileSearch: false,
+            sharing: "shared" as const,
+          }),
+          openaiVectorStoreId: mine.vectorStoreId,
+          fileSearch: true,
+        },
+      });
+      toast.success(
+        mine.created
+          ? `Vector store created: ${mine.vectorStoreId}`
+          : `Reusing existing vector store: ${mine.vectorStoreId}`,
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Provision failed");
+    } finally {
+      setProvisioning(false);
+    }
+  }
+
+  function toggleWebSearch(next: boolean) {
+    if (!openId) return;
+    setAgent(openId, { webSearch: next });
+  }
+
 
   return (
     <Sheet open={!!openId} onOpenChange={(o) => !o && closeAgent()}>
@@ -263,6 +317,46 @@ export function AgentSettingsDrawer() {
                     />
                   </div>
                 </section>
+
+                {/* Hosted tools: web search + OpenAI vector store */}
+                <section>
+                  <SectionTitle>Hosted tools</SectionTitle>
+                  <div className="mt-2 flex flex-col gap-2 rounded-lg border border-hairline bg-surface p-3">
+                    <label className="flex items-start gap-2 text-[12px]">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={!!backend?.webSearch}
+                        onChange={(e) => toggleWebSearch(e.target.checked)}
+                      />
+                      <div className="min-w-0">
+                        <div className="font-medium">Web search</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          Adds OpenAI's <code>web_search_preview</code> tool to this agent's Responses call. Only works on OpenAI models that support it.
+                        </div>
+                      </div>
+                    </label>
+
+                    <div className="border-t border-hairline pt-2 flex items-start gap-2">
+                      <div className="min-w-0 flex-1 text-[12px]">
+                        <div className="font-medium">OpenAI vector store (file_search)</div>
+                        <div className="mt-0.5 text-[11px] text-muted-foreground break-all">
+                          {backend?.rag?.openaiVectorStoreId
+                            ? <>ID: <code>{backend.rag.openaiVectorStoreId}</code> · file_search={String(backend.rag.fileSearch)}</>
+                            : "No vector store provisioned yet."}
+                        </div>
+                      </div>
+                      <Button size="sm" variant="outline" disabled={provisioning} onClick={handleProvisionStore}>
+                        {provisioning ? <Loader2 size={12} className="animate-spin" /> : <PlusCircle size={12} />}
+                        <span className="ml-1.5">
+                          {backend?.rag?.openaiVectorStoreId ? "Reverify / recreate" : "Provision store"}
+                        </span>
+                      </Button>
+                    </div>
+                  </div>
+                </section>
+
+
 
 
                 {/* Tools */}
