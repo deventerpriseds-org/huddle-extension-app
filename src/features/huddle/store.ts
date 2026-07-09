@@ -141,6 +141,7 @@ export const useHuddleStore = create<HuddleState>()(
         decisions: s.decisions,
         activeHuddleId: s.activeHuddleId,
         showDemoData: s.showDemoData,
+        journeyTasks: s.journeyTasks,
       }),
       migrate: (persisted) => {
         const p = (persisted ?? {}) as Partial<HuddleState>;
