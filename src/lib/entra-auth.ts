@@ -39,11 +39,9 @@ export function getMsal(): PublicClientApplication | null {
       authority,
       knownAuthorities: [`${tenantName}.ciamlogin.com`],
       redirectUri: window.location.origin,
-      navigateToLoginRequestUrl: false,
     },
     cache: {
       cacheLocation: "localStorage",
-      storeAuthStateInCookie: true,
     },
   };
   instance = new PublicClientApplication(config);
