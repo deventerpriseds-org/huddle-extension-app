@@ -103,7 +103,7 @@ export function BoardView() {
                 <div className="flex flex-1 flex-col gap-2 p-2">
                   {items.map((c) => {
                     const isJourney = c.origin === "journey-voice";
-                    const owner = c.ownerId ? AGENT_BY_ID[c.ownerId] : null;
+                    const owner = c.ownerId ? AGENT_BY_ID[c.ownerId as keyof typeof AGENT_BY_ID] : null;
                     return (
                       <div
                         key={c.id}
