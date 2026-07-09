@@ -179,9 +179,15 @@ function AuthPage() {
 }
 
 function getAuthFailure(trace: AuthTraceEntry[]) {
-  const latestAttemptIndex = trace.findLastIndex((entry) =>
-    ["auth-page:button-click", "signin:start", "signin:redirect:start"].includes(entry.event),
-  );
+  const attemptEvents = ["auth-page:button-click", "signin:start", "signin:redirect:start"];
+  let latestAttemptIndex = -1;
+
+  for (let index = trace.length - 1; index >= 0; index -= 1) {
+    if (attemptEvents.includes(trace[index].event)) {
+      latestAttemptIndex = index;
+      break;
+    }
+  }
 
   if (latestAttemptIndex === -1) return null;
 
