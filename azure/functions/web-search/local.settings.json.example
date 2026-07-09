@@ -1,0 +1,11 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "TAVILY_API_KEY": "tvly-your-key-here"
+  },
+  "Host": {
+    "CORS": "*"
+  }
+}

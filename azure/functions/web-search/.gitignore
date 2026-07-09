@@ -1,0 +1,10 @@
+# Azure Functions
+bin
+obj
+dist
+appsettings.json
+local.settings.json
+
+# Node
+node_modules/
+npm-debug.log*

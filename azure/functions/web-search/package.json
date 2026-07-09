@@ -1,0 +1,21 @@
+{
+  "name": "huddle-web-search",
+  "version": "1.0.0",
+  "description": "Azure Function: Tavily web-search proxy for the huddle app (port of journey-voice's web-search edge function).",
+  "main": "dist/src/functions/*.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "clean": "rm -rf dist",
+    "prestart": "npm run clean && npm run build",
+    "start": "func start"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}
