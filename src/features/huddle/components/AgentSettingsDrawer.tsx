@@ -1,15 +1,24 @@
 import { useEffect, useState } from "react";
-import { X, RefreshCw, Loader2, AlertTriangle, CheckCircle2, PlusCircle } from "lucide-react";
+import { X, RefreshCw, Loader2, AlertTriangle, CheckCircle2, PlusCircle, Trash2 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useBackendsStore, ASSISTANT_IDS } from "../lib/agent-backends";
 import { getAgentDebug, refetchAgentSnapshot } from "../lib/agent-inspect.functions";
-import { saveMemoryItem } from "../lib/rag.functions";
+import { saveMemoryItem, listMemoryItems, deleteMemoryItem } from "../lib/rag.functions";
 import { AgentAvatar } from "./AgentAvatar";
 import { MemoryDbPanel } from "./MemoryDbPanel";
 import { toast } from "sonner";
+
+type MemoryChunk = {
+  id: string;
+  scope: "agent" | "global";
+  agentId: string | null;
+  text: string;
+  source: string | null;
+  createdAt: string;
+};
 
 
 export function AgentSettingsDrawer() {
@@ -26,22 +35,39 @@ export function AgentSettingsDrawer() {
   const [ctxScope, setCtxScope] = useState<"agent" | "global">("agent");
   const [extractFacts, setExtractFacts] = useState(true);
   const [savingCtx, setSavingCtx] = useState(false);
+  const [memoryItems, setMemoryItems] = useState<MemoryChunk[]>([]);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  async function refreshMemoryList(agentId: string) {
+    setMemoryLoading(true);
+    try {
+      const r = await listMemoryItems({ data: { agentId, limit: 100 } });
+      setMemoryItems(r.rows);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load memory list");
+    } finally {
+      setMemoryLoading(false);
+    }
+  }
 
   useEffect(() => {
     if (!openId) {
       setDebug(null);
       setCtxText("");
       setCtxScope("agent");
+      setMemoryItems([]);
       return;
     }
     setLoading(true);
     setCtxText("");
     setCtxScope("agent");
+    setMemoryItems([]);
     getAgentDebug({ data: { agentId: openId } })
       .then(setDebug)
       .catch((err: unknown) => toast.error(err instanceof Error ? err.message : "Failed to load agent debug"))
       .finally(() => setLoading(false));
+    refreshMemoryList(openId);
   }, [openId]);
 
 
@@ -62,10 +88,29 @@ export function AgentSettingsDrawer() {
       });
       toast.success(`Saved memory (chunk ${r.chunkId.slice(0, 8)}…, ${r.tripleCount} facts)`);
       setCtxText("");
+      await refreshMemoryList(openId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Save failed");
     } finally {
       setSavingCtx(false);
+    }
+  }
+
+  async function handleDeleteMemory(id: string) {
+    if (!openId) return;
+    setDeletingId(id);
+    try {
+      const r = await deleteMemoryItem({ data: { id } });
+      if (r.deleted > 0) {
+        toast.success("Memory item deleted");
+        setMemoryItems((prev) => prev.filter((m) => m.id !== id));
+      } else {
+        toast.error("Nothing deleted (item may already be gone)");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -304,7 +349,80 @@ export function AgentSettingsDrawer() {
                       </Button>
                     </div>
                   </div>
+
+                  {/* Persistent list of saved memory items visible to this agent. */}
+                  <div className="mt-3 rounded-lg border border-hairline bg-surface">
+                    <div className="flex items-center justify-between px-3 py-2 border-b border-hairline">
+                      <div className="text-[11px] font-medium">
+                        Saved memory for {agent.name}
+                        <span className="ml-1.5 text-muted-foreground">
+                          ({memoryItems.length})
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openId && refreshMemoryList(openId)}
+                        disabled={memoryLoading}
+                        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted disabled:opacity-50"
+                      >
+                        {memoryLoading ? (
+                          <Loader2 size={10} className="animate-spin" />
+                        ) : (
+                          <RefreshCw size={10} />
+                        )}
+                        Refresh
+                      </button>
+                    </div>
+                    {memoryItems.length === 0 ? (
+                      <p className="px-3 py-3 text-[11px] text-muted-foreground">
+                        {memoryLoading
+                          ? "Loading…"
+                          : "No memory items yet. Anything saved above will appear here and persist."}
+                      </p>
+                    ) : (
+                      <ul className="max-h-72 overflow-y-auto divide-y divide-hairline">
+                        {memoryItems.map((m) => (
+                          <li key={m.id} className="flex items-start gap-2 px-3 py-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                                <span
+                                  className={
+                                    m.scope === "global"
+                                      ? "rounded bg-primary/10 text-primary px-1.5 py-0.5"
+                                      : "rounded bg-muted px-1.5 py-0.5"
+                                  }
+                                >
+                                  {m.scope === "global" ? "shared" : "agent"}
+                                </span>
+                                <span>{new Date(m.createdAt).toLocaleString()}</span>
+                                {m.source && (
+                                  <span className="truncate">· {m.source}</span>
+                                )}
+                              </div>
+                              <p className="mt-1 text-[12px] whitespace-pre-wrap break-words">
+                                {m.text}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteMemory(m.id)}
+                              disabled={deletingId === m.id}
+                              className="shrink-0 inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                              aria-label="Delete memory item"
+                            >
+                              {deletingId === m.id ? (
+                                <Loader2 size={12} className="animate-spin" />
+                              ) : (
+                                <Trash2 size={12} />
+                              )}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 </section>
+
 
                 {/* Agent fallbacks */}
 

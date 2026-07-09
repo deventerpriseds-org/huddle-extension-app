@@ -616,3 +616,68 @@ export async function verifyRoundTrip(): Promise<RoundTripResult> {
 }
 
 export type { DiagnoseResult };
+
+export interface ListedChunk {
+  id: string;
+  scope: "agent" | "global";
+  agentId: string | null;
+  text: string;
+  source: string | null;
+  createdAt: string;
+}
+
+/**
+ * List saved memory chunks visible to an agent (its own + global). If no
+ * agentId is passed, returns global chunks only.
+ */
+export async function listChunksForAgent(input: {
+  agentId?: string;
+  limit?: number;
+}): Promise<{ rows: ListedChunk[] }> {
+  const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
+  const params: unknown[] = [];
+  let where = `scope = 'global'`;
+  if (input.agentId) {
+    params.push(input.agentId);
+    where = `(scope = 'global' OR (scope = 'agent' AND agent_id = $${params.length}))`;
+  }
+  params.push(limit);
+  const { rows } = await q(
+    `SELECT id, scope, agent_id, text, source, created_at
+     FROM rag_chunks
+     WHERE ${where}
+     ORDER BY created_at DESC
+     LIMIT $${params.length}`,
+    params,
+  );
+  return {
+    rows: rows.map((r) => {
+      const row = r as {
+        id: string;
+        scope: "agent" | "global";
+        agent_id: string | null;
+        text: string;
+        source: string | null;
+        created_at: string;
+      };
+      return {
+        id: row.id,
+        scope: row.scope,
+        agentId: row.agent_id,
+        text: row.text,
+        source: row.source,
+        createdAt: row.created_at,
+      };
+    }),
+  };
+}
+
+export async function deleteChunkById(id: string): Promise<{ deleted: number }> {
+  // Triples reference chunks via ON DELETE SET NULL, so this is safe.
+  const { rows } = await q<{ id: string }>(
+    `DELETE FROM rag_chunks WHERE id = $1 RETURNING id`,
+    [id],
+  );
+  return { deleted: rows.length };
+}
+
