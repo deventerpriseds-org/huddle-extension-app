@@ -204,7 +204,7 @@ export async function getOrCreateProfile(claims: {
       await client.query(
         `INSERT INTO identity.profile_emails (entra_object_id, email, source)
          VALUES ($1, $2, 'entra')
-         ON CONFLICT (email) DO NOTHING`,
+         ON CONFLICT (lower(email)) DO NOTHING`,
         [claims.oid, claims.email.trim().toLowerCase()],
       );
     }
