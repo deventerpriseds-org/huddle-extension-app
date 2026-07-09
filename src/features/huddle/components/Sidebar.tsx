@@ -1,16 +1,60 @@
-import { Plus, Users } from "lucide-react";
+import { LogOut, Plus, Users } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS } from "../data/agents";
 import { useHuddleStore } from "../store";
 import { AgentAvatar } from "./AgentAvatar";
+import { useAuth } from "@/hooks/useAuth";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+const HUDDLE_PERSIST_KEY = "huddle-workspace";
 
 export function Sidebar() {
   const huddles = useHuddleStore((s) => s.huddles);
   const activeId = useHuddleStore((s) => s.activeHuddleId);
   const setActive = useHuddleStore((s) => s.setActive);
+  const { user, signOut } = useAuth();
+  const queryClient = useQueryClient();
 
   const groups = huddles.filter((h) => h.kind === "group");
   const dms = huddles.filter((h) => h.kind === "one-to-one");
+
+  const displayName =
+    (user?.name && user.name.trim()) ||
+    (user?.username && user.username.split("@")[0]) ||
+    "Signed in";
+  const email = user?.username ?? "";
+  const initials =
+    displayName
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((s) => s[0]?.toUpperCase())
+      .join("") || "U";
+
+  const handleSignOut = async () => {
+    try {
+      await queryClient.cancelQueries();
+      queryClient.clear();
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.removeItem(HUDDLE_PERSIST_KEY);
+        } catch {
+          /* ignore */
+        }
+      }
+      await signOut();
+    } catch (err) {
+      console.error("[sidebar] signOut failed", err);
+    }
+  };
 
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-hairline bg-surface">
@@ -47,6 +91,41 @@ export function Sidebar() {
           })}
         </Section>
       </div>
+
+      {user && (
+        <div className="border-t border-hairline p-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-muted"
+              >
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+                  {initials}
+                </span>
+                <span className="min-w-0 flex-1 truncate">
+                  <span className="block truncate text-[13px] font-medium text-foreground">
+                    {displayName}
+                  </span>
+                  {email && (
+                    <span className="block truncate text-[10px] text-muted-foreground">
+                      {email}
+                    </span>
+                  )}
+                </span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" side="top" className="w-56">
+              <DropdownMenuLabel className="truncate">{email || displayName}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleSignOut}>
+                <LogOut size={14} className="mr-2" />
+                Sign out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
     </aside>
   );
 }
