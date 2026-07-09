@@ -1,5 +1,6 @@
 // Azure PG identity schema + query helpers for user profiles and their emails.
-// Auto-bootstraps schema on first use. citext = case-insensitive email/username.
+// Auto-bootstraps schema on first use. Case-insensitive uniqueness is enforced
+// with functional lower(...) indexes so it works on Azure PG without extensions.
 import { Pool } from "pg";
 
 let _pool: Pool | null = null;
@@ -38,22 +39,6 @@ CREATE TABLE IF NOT EXISTS identity.profile_emails (
 );
 CREATE INDEX IF NOT EXISTS profile_emails_owner_idx
   ON identity.profile_emails(entra_object_id);
-
--- Case-insensitive uniqueness without citext (Azure PG doesn't allow-list it).
-DO $mig$
-BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.columns
-             WHERE table_schema='identity' AND table_name='profiles'
-               AND column_name='username' AND udt_name='citext') THEN
-    ALTER TABLE identity.profiles ALTER COLUMN username TYPE TEXT;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.columns
-             WHERE table_schema='identity' AND table_name='profile_emails'
-               AND column_name='email' AND udt_name='citext') THEN
-    ALTER TABLE identity.profile_emails ALTER COLUMN email TYPE TEXT;
-  END IF;
-END
-$mig$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS profiles_username_lower_key
   ON identity.profiles (lower(username));
