@@ -1,7 +1,13 @@
 // Azure Postgres + pgvector implementation of RagStore. Uses `pg` over TCP.
 // AZURE_PG_URL is a full connection string (postgresql://user:pass@host:5432/db?sslmode=require).
+//
+// Errors are NEVER swallowed here. Every method throws on failure. Callers
+// decide whether to record a user-visible fallback. The old "lazy bootstrap"
+// has been removed — schema creation is now an explicit runBootstrap() call
+// the user triggers from Settings, so the UI can never falsely claim tables
+// exist when they don't.
 
-import { Pool } from "pg";
+import { Pool, Client } from "pg";
 import { embed, toPgVector, EMBED_DIM } from "./embed.server";
 import type {
   ChunkRow,
@@ -13,13 +19,21 @@ import type {
   WriteTripleInput,
 } from "./types";
 
+export class RagStoreUnavailableError extends Error {
+  cause: unknown;
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = "RagStoreUnavailableError";
+    this.cause = cause;
+  }
+}
+
 let _pool: Pool | null = null;
-let _bootstrapped = false;
 
 function getPool(): Pool {
   if (_pool) return _pool;
   const url = process.env.AZURE_PG_URL;
-  if (!url) throw new Error("AZURE_PG_URL not configured");
+  if (!url) throw new RagStoreUnavailableError("AZURE_PG_URL not configured");
   _pool = new Pool({
     connectionString: url,
     // Azure Postgres requires TLS. Node's default CA store lacks the DigiCert
@@ -33,7 +47,18 @@ function getPool(): Pool {
   return _pool;
 }
 
-const BOOTSTRAP_SQL = `
+async function q<T = Record<string, unknown>>(sql: string, params?: unknown[]) {
+  try {
+    return await getPool().query<T>(sql, params);
+  } catch (err) {
+    throw new RagStoreUnavailableError(
+      `Azure Postgres query failed: ${err instanceof Error ? err.message : String(err)}`,
+      err,
+    );
+  }
+}
+
+export const BOOTSTRAP_SQL = `
 CREATE EXTENSION IF NOT EXISTS vector;
 
 DO $$ BEGIN
@@ -82,18 +107,237 @@ CREATE INDEX IF NOT EXISTS rag_triples_authors_idx
   ON rag_triples USING gin (author_agent_ids);
 `;
 
-async function ensureBootstrap(): Promise<void> {
-  if (_bootstrapped) return;
-  const pool = getPool();
-  await pool.query(BOOTSTRAP_SQL);
-  _bootstrapped = true;
+/**
+ * Explicit schema bootstrap. Returns a raw report so the UI can display it.
+ * Never called implicitly by store methods — the user runs this from
+ * Agent Settings → Memory DB.
+ */
+export async function runBootstrap(): Promise<{
+  ok: boolean;
+  ranSql: string;
+  error?: { message: string; code?: string; detail?: string };
+  extensions: string[];
+  tables: { rag_chunks: boolean; rag_triples: boolean };
+}> {
+  const url = process.env.AZURE_PG_URL;
+  if (!url) {
+    return {
+      ok: false,
+      ranSql: BOOTSTRAP_SQL,
+      error: { message: "AZURE_PG_URL not configured" },
+      extensions: [],
+      tables: { rag_chunks: false, rag_triples: false },
+    };
+  }
+  const client = new Client({
+    connectionString: url,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10_000,
+  });
+  try {
+    await client.connect();
+    await client.query(BOOTSTRAP_SQL);
+    const ext = await client.query<{ extname: string }>(
+      "SELECT extname FROM pg_extension ORDER BY extname",
+    );
+    const t = await client.query<{ table_name: string }>(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('rag_chunks','rag_triples')",
+    );
+    const names = new Set(t.rows.map((r) => r.table_name));
+    return {
+      ok: true,
+      ranSql: BOOTSTRAP_SQL,
+      extensions: ext.rows.map((r) => r.extname),
+      tables: { rag_chunks: names.has("rag_chunks"), rag_triples: names.has("rag_triples") },
+    };
+  } catch (err) {
+    const e = err as { message?: string; code?: string; detail?: string };
+    return {
+      ok: false,
+      ranSql: BOOTSTRAP_SQL,
+      error: {
+        message: e.message ?? String(err),
+        code: e.code,
+        detail: e.detail,
+      },
+      extensions: [],
+      tables: { rag_chunks: false, rag_triples: false },
+    };
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
+
+interface DiagnoseResult {
+  connectionString: {
+    configured: boolean;
+    host?: string;
+    port?: number;
+    database?: string;
+    user?: string;
+    sslmode?: string;
+    parseError?: string;
+  };
+  dns: { ok: boolean; addresses?: string[]; error?: string; ms?: number };
+  tcp: { ok: boolean; ms?: number; error?: string };
+  handshake: {
+    ok: boolean;
+    ms?: number;
+    error?: { message: string; code?: string; severity?: string; routine?: string; detail?: string };
+  };
+  server: {
+    version?: string;
+    extensions?: string[];
+    tables?: { rag_chunks: boolean; rag_triples: boolean };
+    rows?: { rag_chunks: number; rag_triples: number };
+  };
+  timestamp: string;
+}
+
+function parseConnectionString(url: string): DiagnoseResult["connectionString"] {
+  try {
+    const u = new URL(url);
+    return {
+      configured: true,
+      host: u.hostname,
+      port: u.port ? Number(u.port) : 5432,
+      database: u.pathname.replace(/^\//, "") || undefined,
+      user: decodeURIComponent(u.username) || undefined,
+      sslmode: u.searchParams.get("sslmode") ?? undefined,
+    };
+  } catch (err) {
+    return {
+      configured: true,
+      parseError: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function probeTcp(host: string, port: number, timeoutMs = 5000): Promise<{ ok: boolean; ms?: number; error?: string }> {
+  const net = await import("node:net");
+  const start = Date.now();
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const done = (result: { ok: boolean; error?: string }) => {
+      socket.destroy();
+      resolve({ ...result, ms: Date.now() - start });
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => done({ ok: true }));
+    socket.once("timeout", () => done({ ok: false, error: `TCP connect timed out after ${timeoutMs}ms` }));
+    socket.once("error", (err) => done({ ok: false, error: err.message }));
+    try {
+      socket.connect(port, host);
+    } catch (err) {
+      done({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+}
+
+/**
+ * Deep diagnostic: DNS → raw TCP → Postgres handshake → schema check.
+ * Never throws. Returns the ground truth about every layer.
+ */
+export async function diagnoseAzurePg(): Promise<DiagnoseResult> {
+  const url = process.env.AZURE_PG_URL;
+  const result: DiagnoseResult = {
+    connectionString: { configured: !!url },
+    dns: { ok: false },
+    tcp: { ok: false },
+    handshake: { ok: false },
+    server: {},
+    timestamp: new Date().toISOString(),
+  };
+
+  if (!url) {
+    result.connectionString.parseError = "AZURE_PG_URL not configured";
+    return result;
+  }
+
+  result.connectionString = parseConnectionString(url);
+  const host = result.connectionString.host;
+  const port = result.connectionString.port ?? 5432;
+  if (!host) return result;
+
+  // DNS
+  try {
+    const dns = await import("node:dns/promises");
+    const t0 = Date.now();
+    const addrs = await dns.lookup(host, { all: true });
+    result.dns = {
+      ok: true,
+      addresses: addrs.map((a) => `${a.address} (v${a.family})`),
+      ms: Date.now() - t0,
+    };
+  } catch (err) {
+    result.dns = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return result;
+  }
+
+  // Raw TCP probe (5s)
+  result.tcp = await probeTcp(host, port, 5000);
+  if (!result.tcp.ok) return result;
+
+  // Real Postgres handshake with fresh client
+  const client = new Client({
+    connectionString: url,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10_000,
+  });
+  const hs0 = Date.now();
+  try {
+    await client.connect();
+    result.handshake = { ok: true, ms: Date.now() - hs0 };
+
+    const ver = await client.query<{ version: string }>("SELECT version()");
+    result.server.version = ver.rows[0]?.version;
+
+    const ext = await client.query<{ extname: string }>(
+      "SELECT extname FROM pg_extension ORDER BY extname",
+    );
+    result.server.extensions = ext.rows.map((r) => r.extname);
+
+    const t = await client.query<{ table_name: string }>(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('rag_chunks','rag_triples')",
+    );
+    const names = new Set(t.rows.map((r) => r.table_name));
+    result.server.tables = {
+      rag_chunks: names.has("rag_chunks"),
+      rag_triples: names.has("rag_triples"),
+    };
+
+    const rows = { rag_chunks: 0, rag_triples: 0 };
+    if (names.has("rag_chunks")) {
+      const c = await client.query<{ n: string }>("SELECT COUNT(*)::text AS n FROM rag_chunks");
+      rows.rag_chunks = Number(c.rows[0]?.n ?? 0);
+    }
+    if (names.has("rag_triples")) {
+      const c = await client.query<{ n: string }>("SELECT COUNT(*)::text AS n FROM rag_triples");
+      rows.rag_triples = Number(c.rows[0]?.n ?? 0);
+    }
+    result.server.rows = rows;
+  } catch (err) {
+    const e = err as { message?: string; code?: string; severity?: string; routine?: string; detail?: string };
+    result.handshake = {
+      ok: false,
+      ms: Date.now() - hs0,
+      error: {
+        message: e.message ?? String(err),
+        code: e.code,
+        severity: e.severity,
+        routine: e.routine,
+        detail: e.detail,
+      },
+    };
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+
+  return result;
 }
 
 /**
  * Compose the WHERE fragment for scope filtering based on the caller's sharing mode.
- * - "shared" (default): global rows + this agent's private rows.
- * - "private": only this agent's private rows (never sees other agents' shared writes).
- * - "readonly-shared": globals only, never own private rows.
  */
 function scopeClause(
   mode: "shared" | "private" | "readonly-shared" | undefined,
@@ -106,7 +350,6 @@ function scopeClause(
   if (mode === "readonly-shared") {
     return { sql: `scope = 'global'`, params: [] as unknown[] };
   }
-  // shared (or unspecified): explicit scope override still wins
   if (scope === "global") return { sql: `scope = 'global'`, params: [] as unknown[] };
   if (agentId) {
     return {
@@ -119,32 +362,37 @@ function scopeClause(
 
 export const azurePgStore: RagStore = {
   async bootstrap() {
-    await ensureBootstrap();
-  },
-
-  async ping() {
-    try {
-      const pool = getPool();
-      await ensureBootstrap();
-      const ver = await pool.query<{ version: string }>("SELECT version()");
-      const ext = await pool.query<{ extname: string }>(
-        "SELECT extname FROM pg_extension ORDER BY extname",
+    const r = await runBootstrap();
+    if (!r.ok) {
+      throw new RagStoreUnavailableError(
+        `Bootstrap failed: ${r.error?.message ?? "unknown error"}`,
+        r.error,
       );
-      return {
-        ok: true as const,
-        version: ver.rows[0]?.version ?? "unknown",
-        extensions: ext.rows.map((r) => r.extname),
-      };
-    } catch (err) {
-      return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
     }
   },
 
+  async ping() {
+    // Kept for the RagStore interface but the diagnostic fn is what the UI uses.
+    const d = await diagnoseAzurePg();
+    if (d.handshake.ok && d.server.version) {
+      return {
+        ok: true as const,
+        version: d.server.version,
+        extensions: d.server.extensions ?? [],
+      };
+    }
+    const err =
+      d.handshake.error?.message ??
+      d.tcp.error ??
+      d.dns.error ??
+      d.connectionString.parseError ??
+      "unknown";
+    return { ok: false as const, error: err };
+  },
+
   async writeChunk(input: WriteChunkInput) {
-    await ensureBootstrap();
-    const pool = getPool();
     const vec = input.embedding ?? (await embed(input.text));
-    const { rows } = await pool.query<{ id: string }>(
+    const { rows } = await q<{ id: string }>(
       `INSERT INTO rag_chunks (scope, agent_id, text, source, embedding, metadata, author_agent_ids)
        VALUES ($1, $2, $3, $4, $5::vector, $6, $7)
        RETURNING id`,
@@ -163,11 +411,9 @@ export const azurePgStore: RagStore = {
 
   async writeTriples(inputs: WriteTripleInput[]) {
     if (inputs.length === 0) return { ids: [] };
-    await ensureBootstrap();
-    const pool = getPool();
     const ids: string[] = [];
     for (const t of inputs) {
-      const { rows } = await pool.query<{ id: string }>(
+      const { rows } = await q<{ id: string }>(
         `INSERT INTO rag_triples (scope, agent_id, subject, predicate, object, confidence, source_chunk_id, author_agent_ids)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING id`,
@@ -188,18 +434,15 @@ export const azurePgStore: RagStore = {
   },
 
   async searchChunks(input: SearchChunksInput): Promise<ChunkRow[]> {
-    await ensureBootstrap();
-    const pool = getPool();
     const vec = await embed(input.query);
     const k = Math.min(Math.max(input.k ?? 6, 1), 20);
-
     const clause = scopeClause(input.mode, input.scope, input.agentId);
     const params: unknown[] = [toPgVector(vec)];
     const where = clause.sql.replace("$AGENT", `$${params.length + 1}`);
     params.push(...clause.params);
     params.push(k);
 
-    const { rows } = await pool.query(
+    const { rows } = await q(
       `SELECT id, scope, agent_id, text, source, created_at, author_agent_ids,
               1 - (embedding <=> $1::vector) AS score
        FROM rag_chunks
@@ -208,23 +451,32 @@ export const azurePgStore: RagStore = {
        LIMIT $${params.length}`,
       params,
     );
-    return rows.map((r) => ({
-      id: r.id,
-      scope: r.scope,
-      agentId: r.agent_id,
-      text: r.text,
-      source: r.source,
-      authorAgentIds: (r.author_agent_ids ?? []) as string[],
-      score: Number(r.score),
-      createdAt: r.created_at,
-    }));
+    return rows.map((r) => {
+      const row = r as {
+        id: string;
+        scope: "agent" | "global";
+        agent_id: string | null;
+        text: string;
+        source: string | null;
+        author_agent_ids: string[] | null;
+        score: number | string;
+        created_at: string;
+      };
+      return {
+        id: row.id,
+        scope: row.scope,
+        agentId: row.agent_id,
+        text: row.text,
+        source: row.source,
+        authorAgentIds: row.author_agent_ids ?? [],
+        score: Number(row.score),
+        createdAt: row.created_at,
+      };
+    });
   },
 
   async lookupTriples(input: LookupTriplesInput): Promise<TripleRow[]> {
-    await ensureBootstrap();
-    const pool = getPool();
     const k = Math.min(Math.max(input.k ?? 8, 1), 30);
-
     const clause = scopeClause(input.mode, input.scope, input.agentId);
     const params: unknown[] = [];
     let where = clause.sql;
@@ -232,7 +484,6 @@ export const azurePgStore: RagStore = {
       where = where.replace("$AGENT", `$${params.length + 1}`);
       params.push(...clause.params);
     }
-
     if (input.subject) {
       params.push(`%${input.subject}%`);
       where += ` AND subject ILIKE $${params.length}`;
@@ -245,9 +496,8 @@ export const azurePgStore: RagStore = {
       params.push(input.query);
       where += ` AND to_tsvector('english', subject || ' ' || predicate || ' ' || object) @@ plainto_tsquery('english', $${params.length})`;
     }
-
     params.push(k);
-    const { rows } = await pool.query(
+    const { rows } = await q(
       `SELECT id, scope, agent_id, subject, predicate, object, confidence, created_at, author_agent_ids
        FROM rag_triples
        WHERE ${where}
@@ -255,16 +505,31 @@ export const azurePgStore: RagStore = {
        LIMIT $${params.length}`,
       params,
     );
-    return rows.map((r) => ({
-      id: r.id,
-      scope: r.scope,
-      agentId: r.agent_id,
-      subject: r.subject,
-      predicate: r.predicate,
-      object: r.object,
-      confidence: Number(r.confidence),
-      authorAgentIds: (r.author_agent_ids ?? []) as string[],
-      createdAt: r.created_at,
-    }));
+    return rows.map((r) => {
+      const row = r as {
+        id: string;
+        scope: "agent" | "global";
+        agent_id: string | null;
+        subject: string;
+        predicate: string;
+        object: string;
+        confidence: number | string;
+        author_agent_ids: string[] | null;
+        created_at: string;
+      };
+      return {
+        id: row.id,
+        scope: row.scope,
+        agentId: row.agent_id,
+        subject: row.subject,
+        predicate: row.predicate,
+        object: row.object,
+        confidence: Number(row.confidence),
+        authorAgentIds: row.author_agent_ids ?? [],
+        createdAt: row.created_at,
+      };
+    });
   },
 };
+
+export type { DiagnoseResult };

@@ -1,12 +1,32 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { azurePgStore } from "./rag/azure-pg.server";
-import { extractTriples } from "./rag/triples.server";
 
 export const pingRagStore = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => z.object({ store: z.enum(["azure"]) }).parse(raw))
   .handler(async () => {
+    const { azurePgStore } = await import("./rag/azure-pg.server");
     return azurePgStore.ping();
+  });
+
+/**
+ * Deep diagnostic: DNS → TCP → Postgres handshake → schema/row counts.
+ * Never throws. Returns the raw ground truth for every layer so the UI can
+ * show exactly what Azure is saying.
+ */
+export const diagnoseRagStore = createServerFn({ method: "POST" })
+  .handler(async () => {
+    const { diagnoseAzurePg } = await import("./rag/azure-pg.server");
+    return diagnoseAzurePg();
+  });
+
+/**
+ * Explicit schema bootstrap. Runs the CREATE EXTENSION / CREATE TABLE SQL
+ * and returns the raw result. Idempotent.
+ */
+export const runRagBootstrap = createServerFn({ method: "POST" })
+  .handler(async () => {
+    const { runBootstrap } = await import("./rag/azure-pg.server");
+    return runBootstrap();
   });
 
 export const saveMemoryItem = createServerFn({ method: "POST" })
@@ -22,6 +42,8 @@ export const saveMemoryItem = createServerFn({ method: "POST" })
       .parse(raw),
   )
   .handler(async ({ data }) => {
+    const { azurePgStore } = await import("./rag/azure-pg.server");
+    const { extractTriples } = await import("./rag/triples.server");
     const chunk = await azurePgStore.writeChunk({
       scope: data.scope,
       agentId: data.agentId,
