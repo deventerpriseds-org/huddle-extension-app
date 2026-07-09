@@ -1,16 +1,18 @@
 import { useState } from "react";
-import { Loader2, Play, Wrench, RefreshCw, CheckCircle2, XCircle, HelpCircle, ChevronDown } from "lucide-react";
+import { Loader2, Play, Wrench, RefreshCw, CheckCircle2, XCircle, HelpCircle, ChevronDown, Beaker } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { diagnoseRagStore, runRagBootstrap } from "../lib/rag.functions";
+import { diagnoseRagStore, runRagBootstrap, verifyRagRoundTrip } from "../lib/rag.functions";
 import { toast } from "sonner";
 
 type Diagnostic = Awaited<ReturnType<typeof diagnoseRagStore>>;
 type Bootstrap = Awaited<ReturnType<typeof runRagBootstrap>>;
+type RoundTrip = Awaited<ReturnType<typeof verifyRagRoundTrip>>;
 
 export function MemoryDbPanel() {
   const [diag, setDiag] = useState<Diagnostic | null>(null);
   const [boot, setBoot] = useState<Bootstrap | null>(null);
-  const [running, setRunning] = useState<"diag" | "boot" | null>(null);
+  const [rt, setRt] = useState<RoundTrip | null>(null);
+  const [running, setRunning] = useState<"diag" | "boot" | "rt" | null>(null);
   const [expanded, setExpanded] = useState(false);
 
   async function runDiag() {
