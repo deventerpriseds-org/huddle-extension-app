@@ -88,6 +88,7 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
   tasks: SEED_TASKS,
   memory: SEED_MEMORY,
   decisions: [],
+  toolUses: [],
   journeyTasks: [],
   showDemoData: true,
   meeting: null,
@@ -96,6 +97,8 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
   addUserMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
   addAgentMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
   logDecision: (d) => set((s) => ({ decisions: [d, ...s.decisions].slice(0, 50) })),
+  addToolUses: (events) =>
+    set((s) => ({ toolUses: [...events, ...s.toolUses].slice(0, 100) })),
   moveTask: (id, lane) =>
     set((s) => ({
       tasks: s.tasks.map((t) =>
