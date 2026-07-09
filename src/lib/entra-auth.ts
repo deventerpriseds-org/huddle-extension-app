@@ -8,6 +8,7 @@ import {
 } from "@azure/msal-browser";
 
 const tenantName = import.meta.env.VITE_ENTRA_TENANT_NAME as string | undefined;
+const tenantId = import.meta.env.VITE_ENTRA_TENANT_ID as string | undefined;
 const clientId = import.meta.env.VITE_ENTRA_CLIENT_ID as string | undefined;
 
 export const loginRequest = {
