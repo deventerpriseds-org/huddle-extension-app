@@ -30,6 +30,7 @@ import { pingRagStore } from "../lib/rag.functions";
 import { useHuddleStore } from "../store";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { MemoryDbPanel } from "./MemoryDbPanel";
+import { AccountSettingsPanel } from "./AccountSettingsPanel";
 
 interface SettingsSheetProps {
   open: boolean;
