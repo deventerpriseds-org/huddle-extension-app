@@ -509,51 +509,87 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             .filter(Boolean);
 
 
-          // Wrap onToolCall to route journey-named tools to the proxy while
+          // Wrap onToolCall to route Tavily web search and journey tools, while
           // keeping RAG dispatch on the existing handler.
           const ragOnToolCall = onToolCall;
-          const combinedOnToolCall = journeyTools.length > 0
-            ? async (c: { name: string; arguments: Record<string, unknown> }) => {
-                if (journeyNames.has(c.name)) {
-                  try {
-                    const { invokeJourneyTool } = await import("./journey/proxy.functions");
-                    const r = await invokeJourneyTool({
-                      toolName: c.name,
-                      args: c.arguments,
-                      caller: data.caller ?? {},
-                      context: {
-                        source: "huddle",
-                        huddleId: data.huddleId,
-                        agentId: winner.id,
-                      },
-                    });
-                    if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
-                    if (!r.ok) {
-                      const ev = recordFallback(
-                        "tool",
-                        `${winner.name}: journey tool ${c.name} failed — ${r.error ?? "unknown"}`,
-                        "journey tool failed",
-                        winner.id,
-                      );
-                      perAgentFallbacks.push(ev.inline);
-                    }
-                    return r.output;
-                  } catch (err) {
-                    const msg = err instanceof Error ? err.message : String(err);
-                    const ev = recordFallback(
-                      "tool",
-                      `${winner.name}: journey tool ${c.name} crashed — ${msg}`,
-                      "journey tool crashed",
-                      winner.id,
-                    );
-                    perAgentFallbacks.push(ev.inline);
-                    return JSON.stringify({ error: msg, tool: c.name });
-                  }
+          const combinedOnToolCall = async (c: {
+            name: string;
+            arguments: Record<string, unknown>;
+          }) => {
+            if (c.name === "tavily_web_search") {
+              try {
+                const r = await tavilySearch({
+                  query: String(c.arguments.query ?? "").trim() || "unknown",
+                  topic: c.arguments.topic as TavilySearchArgs["topic"],
+                  search_depth: c.arguments.search_depth as TavilySearchArgs["search_depth"],
+                  time_range: c.arguments.time_range as TavilySearchArgs["time_range"],
+                  start_date: c.arguments.start_date as string | undefined,
+                  end_date: c.arguments.end_date as string | undefined,
+                  include_domains: c.arguments.include_domains as string[] | undefined,
+                  exclude_domains: c.arguments.exclude_domains as string[] | undefined,
+                  max_results: c.arguments.max_results as number | undefined,
+                });
+                if (!r.success) {
+                  const ev = recordFallback(
+                    "tool",
+                    `${winner.name}: web search failed — ${r.error ?? "unknown"}`,
+                    "web search unavailable",
+                    winner.id,
+                  );
+                  perAgentFallbacks.push(ev.inline);
                 }
-                if (ragOnToolCall) return ragOnToolCall(c);
-                return JSON.stringify({ error: `Unknown tool: ${c.name}` });
+                return JSON.stringify(r);
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                const ev = recordFallback(
+                  "tool",
+                  `${winner.name}: web search crashed — ${msg}`,
+                  "web search crashed",
+                  winner.id,
+                );
+                perAgentFallbacks.push(ev.inline);
+                return JSON.stringify({ error: msg, tool: c.name });
               }
-            : ragOnToolCall;
+            }
+            if (journeyNames.has(c.name)) {
+              try {
+                const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                const r = await invokeJourneyTool({
+                  toolName: c.name,
+                  args: c.arguments,
+                  caller: data.caller ?? {},
+                  context: {
+                    source: "huddle",
+                    huddleId: data.huddleId,
+                    agentId: winner.id,
+                  },
+                });
+                if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+                if (!r.ok) {
+                  const ev = recordFallback(
+                    "tool",
+                    `${winner.name}: journey tool ${c.name} failed — ${r.error ?? "unknown"}`,
+                    "journey tool failed",
+                    winner.id,
+                  );
+                  perAgentFallbacks.push(ev.inline);
+                }
+                return r.output;
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                const ev = recordFallback(
+                  "tool",
+                  `${winner.name}: journey tool ${c.name} crashed — ${msg}`,
+                  "journey tool crashed",
+                  winner.id,
+                );
+                perAgentFallbacks.push(ev.inline);
+                return JSON.stringify({ error: msg, tool: c.name });
+              }
+            }
+            if (ragOnToolCall) return ragOnToolCall(c);
+            return JSON.stringify({ error: `Unknown tool: ${c.name}` });
+          };
 
           usedModel = agentBackend.model?.trim() || snapshot?.model || "gpt-4o";
 
