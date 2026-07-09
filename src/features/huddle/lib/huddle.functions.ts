@@ -538,9 +538,10 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             arguments: Record<string, unknown>;
           }) => {
             if (c.name === "tavily_web_search") {
+              const q = String(c.arguments.query ?? "").trim() || "unknown";
               try {
                 const r = await tavilySearch({
-                  query: String(c.arguments.query ?? "").trim() || "unknown",
+                  query: q,
                   topic: c.arguments.topic as TavilySearchArgs["topic"],
                   search_depth: c.arguments.search_depth as TavilySearchArgs["search_depth"],
                   time_range: c.arguments.time_range as TavilySearchArgs["time_range"],
@@ -550,6 +551,16 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
                   exclude_domains: c.arguments.exclude_domains as string[] | undefined,
                   max_results: c.arguments.max_results as number | undefined,
                 });
+                const resultCount = Array.isArray((r as { results?: unknown[] }).results)
+                  ? ((r as { results: unknown[] }).results.length)
+                  : 0;
+                recordToolUse(
+                  winner.id,
+                  "tavily_web_search",
+                  r.success ? `“${q}” · ${resultCount} result${resultCount === 1 ? "" : "s"}` : `“${q}” · failed`,
+                  !!r.success,
+                  r.success ? undefined : r.error,
+                );
                 if (!r.success) {
                   const ev = recordFallback(
                     "tool",
@@ -562,6 +573,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
                 return JSON.stringify(r);
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "tavily_web_search", `“${q}” · crashed`, false, msg);
                 const ev = recordFallback(
                   "tool",
                   `${winner.name}: web search crashed — ${msg}`,
@@ -586,6 +598,13 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
                   },
                 });
                 if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+                recordToolUse(
+                  winner.id,
+                  c.name,
+                  r.ok ? `journey-voice · ok` : `journey-voice · failed`,
+                  !!r.ok,
+                  r.ok ? undefined : r.error,
+                );
                 if (!r.ok) {
                   const ev = recordFallback(
                     "tool",
@@ -598,6 +617,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
                 return r.output;
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, c.name, `journey-voice · crashed`, false, msg);
                 const ev = recordFallback(
                   "tool",
                   `${winner.name}: journey tool ${c.name} crashed — ${msg}`,
@@ -608,7 +628,18 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
                 return JSON.stringify({ error: msg, tool: c.name });
               }
             }
-            if (ragOnToolCall) return ragOnToolCall(c);
+            if (ragOnToolCall) {
+              const out = await ragOnToolCall(c);
+              let ok = true;
+              try {
+                const parsed = JSON.parse(out);
+                if (parsed && typeof parsed === "object" && "error" in parsed) ok = false;
+              } catch {
+                /* non-JSON is fine */
+              }
+              recordToolUse(winner.id, c.name, ok ? "memory query" : "memory query · failed", ok);
+              return out;
+            }
             return JSON.stringify({ error: `Unknown tool: ${c.name}` });
           };
 
