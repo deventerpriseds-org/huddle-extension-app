@@ -41,6 +41,7 @@ interface HuddleState {
   addUserMessage: (m: HuddleMessage) => void;
   addAgentMessage: (m: HuddleMessage) => void;
   logDecision: (d: RoutingDecision) => void;
+  addToolUses: (events: ToolUseEvent[]) => void;
   moveTask: (id: string, lane: TaskLane) => void;
   approveTask: (id: string) => void;
   skipTask: (id: string) => void;
