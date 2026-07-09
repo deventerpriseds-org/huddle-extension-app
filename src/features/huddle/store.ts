@@ -43,6 +43,7 @@ interface HuddleState {
   toggleMeetingExpanded: () => void;
   leaveMeeting: () => void;
   setSpeaker: (id: AgentId) => void;
+  clearDemoData: () => void;
 }
 
 export const useHuddleStore = create<HuddleState>()(
@@ -90,6 +91,7 @@ export const useHuddleStore = create<HuddleState>()(
       leaveMeeting: () => set({ meeting: null }),
       setSpeaker: (id) =>
         set((s) => (s.meeting ? { meeting: { ...s.meeting, activeSpeakerId: id } } : {})),
+      clearDemoData: () => set({ messages: [], tasks: [], memory: [], decisions: [] }),
     }),
     {
       name: "huddle-workspace",
@@ -101,6 +103,7 @@ export const useHuddleStore = create<HuddleState>()(
       partialize: (s) => ({
         messages: s.messages,
         tasks: s.tasks,
+        memory: s.memory,
         decisions: s.decisions,
         activeHuddleId: s.activeHuddleId,
       }),

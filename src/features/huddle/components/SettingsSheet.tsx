@@ -27,6 +27,7 @@ import {
   type RouterBackend,
 } from "../lib/model-catalog";
 import { pingRagStore } from "../lib/rag.functions";
+import { useHuddleStore } from "../store";
 
 interface SettingsSheetProps {
   open: boolean;
@@ -39,6 +40,8 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const setAgent = useBackendsStore((s) => s.setAgent);
   const replaceConfig = useBackendsStore((s) => s.replaceConfig);
   const resetToDefaults = useBackendsStore((s) => s.resetToDefaults);
+  const clearDemoData = useHuddleStore((s) => s.clearDemoData);
+  const [demoCleared, setDemoCleared] = useState(false);
 
   const [uploadError, setUploadError] = useState<string | null>(null);
 
@@ -333,6 +336,25 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
             {uploadError && (
               <p className="text-xs text-destructive">{uploadError}</p>
             )}
+            <div className="rounded-lg border border-hairline p-3 space-y-2">
+              <div className="text-sm font-semibold">Demo data</div>
+              <p className="text-xs text-muted-foreground">
+                Remove the seeded example messages, tasks, memory, and routing decisions from this workspace. This affects only your browser; it does not touch server data.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  clearDemoData();
+                  setDemoCleared(true);
+                }}
+              >
+                <RotateCcw size={14} className="mr-1" /> Clear demo data
+              </Button>
+              {demoCleared && (
+                <p className="text-xs text-emerald-600 dark:text-emerald-400">Demo data cleared.</p>
+              )}
+            </div>
             <details className="text-xs">
               <summary className="cursor-pointer text-muted-foreground">Show current config</summary>
               <pre className="mt-2 max-h-64 overflow-auto rounded bg-muted p-2 text-[11px]">
