@@ -27,6 +27,7 @@ interface HuddleState {
   tasks: Task[];
   memory: MemoryItem[];
   decisions: RoutingDecision[];
+  toolUses: ToolUseEvent[];
   journeyTasks: JourneyTask[];
   showDemoData: boolean;
   meeting: null | {
