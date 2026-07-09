@@ -79,6 +79,36 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
     type Reply = { agentId: AgentId; text: string; fallbackNotes?: string[] };
 
+    // Journey-voice mirror: any task rows that journey returns from a tool call
+    // are accumulated here and returned to the client so the huddle board can
+    // upsert them.
+    const journeyTaskUpdates: import("./journey/types").JourneyTask[] = [];
+
+    // Lazy: fetch & cache journey tool definitions for this whole turn. Only
+    // populated when at least one participating agent has journey.enabled.
+    let journeyToolsCache:
+      | { defs: import("./journey/types").JourneyToolDefinition[]; tools: unknown[] }
+      | null = null;
+    let journeyToolsError: string | null = null;
+    const journeyEnabledMembers = data.members.filter(
+      (id) => (data.agents ?? {})[id]?.journey?.enabled,
+    );
+    async function ensureJourneyTools() {
+      if (journeyToolsCache || journeyToolsError) return journeyToolsCache;
+      if (journeyEnabledMembers.length === 0) return null;
+      try {
+        const { fetchJourneyToolDefinitions, toResponsesTool } = await import(
+          "./journey/proxy.functions"
+        );
+        const defs = await fetchJourneyToolDefinitions();
+        journeyToolsCache = { defs, tools: defs.map(toResponsesTool) };
+        return journeyToolsCache;
+      } catch (err) {
+        journeyToolsError = err instanceof Error ? err.message : String(err);
+        return null;
+      }
+    }
+
     const routerCfg = data.router ?? { backend: "openai" as const, model: "gpt-5.5", fastMode: false };
     const agentsCfg = data.agents ?? {};
 
