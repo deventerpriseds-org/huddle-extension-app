@@ -80,3 +80,24 @@ export const saveMemoryItem = createServerFn({ method: "POST" })
     }
     return { chunkId: chunk.id, tripleCount };
   });
+
+export const listMemoryItems = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({
+        agentId: z.string().optional(),
+        limit: z.number().int().min(1).max(200).default(50),
+      })
+      .parse(raw),
+  )
+  .handler(async ({ data }) => {
+    const { listChunksForAgent } = await import("./rag/azure-pg.server");
+    return listChunksForAgent({ agentId: data.agentId, limit: data.limit });
+  });
+
+export const deleteMemoryItem = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => z.object({ id: z.string().uuid() }).parse(raw))
+  .handler(async ({ data }) => {
+    const { deleteChunkById } = await import("./rag/azure-pg.server");
+    return deleteChunkById(data.id);
+  });
