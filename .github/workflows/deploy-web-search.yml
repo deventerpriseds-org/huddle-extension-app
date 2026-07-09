@@ -1,18 +1,22 @@
 name: Deploy Huddle Web Search
 
-# Deploys azure/functions/web-search to Azure Functions, mirroring the org's
-# bridge-builder deploy-api.yml convention (Azure/functions-action + a
-# publish-profile secret; no az login required).
+# Full provision + deploy of azure/functions/web-search on a GitHub runner
+# (open network + org secrets), so the workflow does everything §9 of the task
+# describes: create the resource group / storage / Function App, set the
+# TAVILY_API_KEY app setting and CORS, build, deploy, then verify.
 #
-# One-time provisioning the publish profile cannot do (needs Azure portal or a
-# service principal) — see azure/functions/web-search/README.md:
-#   1. Create the resource group, storage account and Function App
-#      (huddle-web-search-<short-random>, Node 20, Functions v4, Linux).
-#   2. Set the TAVILY_API_KEY application setting on the Function App.
-#   3. Add the allowed CORS origins on the Function App.
-#   4. Download the app's publish profile and store it as the repo secret
-#      AZURE_WEBSEARCH_PUBLISH_PROFILE, and set the repo variable
-#      WEBSEARCH_APP_NAME to the app's name.
+# ── Required GitHub secrets (rename below if yours differ) ───────────────────
+#   AZURE_CREDENTIALS  – azure/login JSON: {clientId, clientSecret,
+#                        subscriptionId, tenantId}. Must be visible to
+#                        deventerprisesds/huddle-extension-app (repo or org secret).
+#   TAVILY_API_KEY     – the Tavily key; set as the Function App app setting.
+#
+# ── Optional repo variables (override the defaults in `env:` below) ──────────
+#   WEBSEARCH_APP_NAME, WEBSEARCH_STORAGE, WEBSEARCH_RG, WEBSEARCH_LOCATION
+#
+# The app/storage names below carry a fixed suffix so re-runs are idempotent
+# (they target the same resources). Override via the repo variables if the
+# globally-unique names are already taken.
 
 on:
   push:
@@ -24,13 +28,20 @@ on:
       - '.github/workflows/deploy-web-search.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+env:
+  RG: ${{ vars.WEBSEARCH_RG || 'rg-huddle-web-search' }}
+  LOC: ${{ vars.WEBSEARCH_LOCATION || 'eastus2' }}
+  APP: ${{ vars.WEBSEARCH_APP_NAME || 'huddle-web-search-8mkq' }}
+  STG: ${{ vars.WEBSEARCH_STORAGE || 'huddlewebsearch8mkq' }}
+  FUNC_DIR: azure/functions/web-search
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    name: Build & deploy web-search
-    defaults:
-      run:
-        working-directory: azure/functions/web-search
+    name: Provision, build & deploy web-search
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +49,43 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Provision resources (idempotent)
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+            az group create -n "$RG" -l "$LOC" -o none
+
+            az storage account create -n "$STG" -g "$RG" -l "$LOC" \
+              --sku Standard_LRS -o none
+
+            if ! az functionapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
+              az functionapp create -g "$RG" -n "$APP" \
+                --storage-account "$STG" \
+                --consumption-plan-location "$LOC" \
+                --runtime node --runtime-version 20 \
+                --functions-version 4 --os-type Linux -o none
+            fi
+
+            az functionapp config appsettings set -g "$RG" -n "$APP" --settings \
+              TAVILY_API_KEY="${{ secrets.TAVILY_API_KEY }}" -o none
+
+            # CORS (belt-and-suspenders; the function also emits headers).
+            for O in \
+              https://huddle-extension-app.lovable.app \
+              https://id-preview--a6760242-2abf-43de-b87f-bf2cff586ea4.lovable.app \
+              http://localhost:8080 \
+              http://localhost:5173; do
+              az functionapp cors add -g "$RG" -n "$APP" --allowed-origins "$O" -o none 2>/dev/null || true
+            done
+
       - name: Install & build
+        working-directory: ${{ env.FUNC_DIR }}
         run: |
           npm ci
           npm run build
@@ -46,7 +93,32 @@ jobs:
       - name: Deploy to Azure Functions
         uses: Azure/functions-action@v1.5.2
         with:
-          app-name: ${{ vars.WEBSEARCH_APP_NAME }}
+          app-name: ${{ env.APP }}
           package: azure/functions/web-search
-          publish-profile: ${{ secrets.AZURE_WEBSEARCH_PUBLISH_PROFILE }}
           scm-do-build-during-deployment: false
+
+      - name: Verify deployed endpoint
+        continue-on-error: true
+        run: |
+          URL="https://${APP}.azurewebsites.net/api/web-search"
+          echo "URL=$URL"
+          echo "Waiting for the function to warm up..."
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS "$URL" \
+              -H 'Origin: https://huddle-extension-app.lovable.app' \
+              -H 'Access-Control-Request-Method: POST' || echo 000)
+            [ "$code" = "204" ] && break
+            echo "  attempt $i: OPTIONS -> $code; retrying in 10s"; sleep 10
+          done
+
+          echo "== 1. Preflight =="
+          curl -i -X OPTIONS "$URL" \
+            -H 'Origin: https://huddle-extension-app.lovable.app' \
+            -H 'Access-Control-Request-Method: POST'
+          echo; echo "== 2. Basic query =="
+          curl -s -X POST "$URL" -H 'Content-Type: application/json' \
+            -d '{"query":"latest news on Azure Functions v4","topic":"news","max_results":3}'
+          echo; echo "== 3. Same-day range guardrail =="
+          curl -s -X POST "$URL" -H 'Content-Type: application/json' \
+            -d '{"query":"nvidia earnings","topic":"news","start_date":"2025-08-27","end_date":"2025-08-27"}'
+          echo
