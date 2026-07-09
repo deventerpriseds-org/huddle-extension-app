@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { generateText, tool, stepCountIs } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
-import type { HuddleMessage } from "../data/seed";
+import type { HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
 import { parseMentions, routeMessage, routeMessageLLM, type RouterInvocation } from "./routing";
 import type { FallbackEvent, PromptDebug } from "./fallbacks";
 import { buildRoster } from "./roster";
@@ -93,6 +93,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     // are accumulated here and returned to the client so the huddle board can
     // upsert them.
     const journeyTaskUpdates: import("./journey/types").JourneyTask[] = [];
+    const suggestedTasks: SuggestedTaskDraft[] = [];
 
     // Lazy: fetch & cache journey tool definitions for this whole turn. Only
     // populated when at least one participating agent has journey.enabled.
@@ -322,7 +323,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     }
 
     if (routed.winners.length === 0) {
-      return { decision: routed.decision, replies: [] as Reply[], fallbacks, prompts, journeyTaskUpdates, toolUses };
+      return { decision: routed.decision, replies: [] as Reply[], fallbacks, prompts, journeyTaskUpdates, suggestedTasks, toolUses };
     }
 
     // ---- Reply transcript ----
