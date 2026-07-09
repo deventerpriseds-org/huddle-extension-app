@@ -334,6 +334,12 @@ function Composer({ huddle }: { huddle: Huddle }) {
           targetAgentId,
           router: backendsCfg.router,
           agents: backendsCfg.agents,
+          caller: user
+            ? {
+                entra_object_id: user.localAccountId ?? user.homeAccountId,
+                entra_email: user.username,
+              }
+            : undefined,
         },
       });
 
