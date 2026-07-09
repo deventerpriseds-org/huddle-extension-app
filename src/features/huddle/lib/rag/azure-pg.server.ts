@@ -47,7 +47,10 @@ function getPool(): Pool {
   return _pool;
 }
 
-async function q<T = Record<string, unknown>>(sql: string, params?: unknown[]) {
+async function q<T extends Record<string, unknown> = Record<string, unknown>>(
+  sql: string,
+  params?: unknown[],
+) {
   try {
     return await getPool().query<T>(sql, params);
   } catch (err) {
