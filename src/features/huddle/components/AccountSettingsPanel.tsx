@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
+
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
 
@@ -160,11 +160,11 @@ export function AccountSettingsPanel() {
       </div>
 
       <div className="space-y-2">
-        <Label>Linked emails</Label>
+        <Label>Your emails</Label>
         <ul className="divide-y rounded-md border">
           {bundle.emails.length === 0 ? (
             <li className="p-3 text-sm text-muted-foreground">
-              No emails linked yet.
+              No emails yet.
             </li>
           ) : (
             bundle.emails.map((e) => (
@@ -172,14 +172,9 @@ export function AccountSettingsPanel() {
                 key={e.id}
                 className="flex items-center justify-between gap-2 p-2 text-sm"
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="truncate">{e.email}</span>
-                  <Badge variant={e.source === "entra" ? "default" : "secondary"}>
-                    {e.source === "entra" ? "sign-in" : "linked"}
-                  </Badge>
-                </div>
+                <span className="truncate">{e.email}</span>
                 {e.source === "entra" ? (
-                  <span className="text-xs text-muted-foreground">Primary</span>
+                  <span className="text-xs text-muted-foreground">Sign-in</span>
                 ) : (
                   <Button
                     size="sm"
