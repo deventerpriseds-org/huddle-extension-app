@@ -7,9 +7,11 @@ import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useBackendsStore, ASSISTANT_IDS } from "../lib/agent-backends";
 import { getAgentDebug, refetchAgentSnapshot } from "../lib/agent-inspect.functions";
 import { saveMemoryItem, listMemoryItems, deleteMemoryItem } from "../lib/rag.functions";
+import { provisionAgentVectorStores } from "../lib/openai-provisioning.functions";
 import { AgentAvatar } from "./AgentAvatar";
 import { MemoryDbPanel } from "./MemoryDbPanel";
 import { toast } from "sonner";
+
 
 type MemoryChunk = {
   id: string;
