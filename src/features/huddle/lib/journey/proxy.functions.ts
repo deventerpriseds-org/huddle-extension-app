@@ -67,7 +67,7 @@ export function toResponsesTool(t: JourneyToolDefinition): JourneyResponsesTool 
     type: "function",
     name: t.name,
     description: t.description,
-    parameters: t.parameters as Record<string, unknown>,
+    parameters: t.parameters as Record<string, unknown> as Record<string, unknown>,
     strict: false,
   };
 }
