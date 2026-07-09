@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -25,6 +26,7 @@ interface HuddleState {
   tasks: Task[];
   memory: MemoryItem[];
   decisions: RoutingDecision[];
+  showDemoData: boolean;
   meeting: null | {
     kind: "morning" | "midday" | "afternoon" | "adhoc";
     startedAt: number;
@@ -43,7 +45,9 @@ interface HuddleState {
   toggleMeetingExpanded: () => void;
   leaveMeeting: () => void;
   setSpeaker: (id: AgentId) => void;
-  clearDemoData: () => void;
+  setShowDemoData: (v: boolean) => void;
+  addMemoryItem: (item: Omit<MemoryItem, "id"> & { id?: string }) => void;
+  removeMemoryItem: (id: string) => void;
 }
 
 export const useHuddleStore = create<HuddleState>()(
@@ -56,6 +60,7 @@ export const useHuddleStore = create<HuddleState>()(
       tasks: SEED_TASKS,
       memory: SEED_MEMORY,
       decisions: [],
+      showDemoData: true,
       meeting: null,
       setActive: (id) => set({ activeHuddleId: id, view: "huddle" }),
       setView: (v) => set({ view: v }),
@@ -91,11 +96,28 @@ export const useHuddleStore = create<HuddleState>()(
       leaveMeeting: () => set({ meeting: null }),
       setSpeaker: (id) =>
         set((s) => (s.meeting ? { meeting: { ...s.meeting, activeSpeakerId: id } } : {})),
-      clearDemoData: () => set({ messages: [], tasks: [], memory: [], decisions: [] }),
+      setShowDemoData: (v) => set({ showDemoData: v }),
+      addMemoryItem: (item) =>
+        set((s) => ({
+          memory: [
+            ...s.memory,
+            {
+              id: item.id ?? `mem-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+              agentId: item.agentId,
+              kind: item.kind,
+              label: item.label,
+              sourceRef: item.sourceRef,
+              confidence: item.confidence,
+              editable: item.editable ?? true,
+            },
+          ],
+        })),
+      removeMemoryItem: (id) =>
+        set((s) => ({ memory: s.memory.filter((m) => m.id !== id) })),
     }),
     {
       name: "huddle-workspace",
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() =>
         typeof window !== "undefined" ? window.localStorage : (undefined as unknown as Storage),
       ),
@@ -106,6 +128,7 @@ export const useHuddleStore = create<HuddleState>()(
         memory: s.memory,
         decisions: s.decisions,
         activeHuddleId: s.activeHuddleId,
+        showDemoData: s.showDemoData,
       }),
       migrate: (persisted) => {
         const p = (persisted ?? {}) as Partial<HuddleState>;
@@ -122,3 +145,18 @@ export const useHuddleStore = create<HuddleState>()(
 
   ),
 );
+
+/* ---------------- Demo-aware selectors ---------------- */
+// Keep raw arrays in the store; expose visibility-filtered views so a global
+// "Show demo data" toggle can hide seeded records without deleting them.
+
+function useFilterDemo<T extends { demo?: boolean }>(items: T[]): T[] {
+  const show = useHuddleStore((s) => s.showDemoData);
+  return useMemo(() => (show ? items : items.filter((i) => !i.demo)), [items, show]);
+}
+
+export const useVisibleMessages = () => useFilterDemo(useHuddleStore((s) => s.messages));
+export const useVisibleTasks = () => useFilterDemo(useHuddleStore((s) => s.tasks));
+export const useVisibleMemory = () => useFilterDemo(useHuddleStore((s) => s.memory));
+export const useVisibleDecisions = () => useFilterDemo(useHuddleStore((s) => s.decisions));
+export const useVisibleHuddles = () => useFilterDemo(useHuddleStore((s) => s.huddles));
