@@ -6,6 +6,12 @@ import type { HuddleMessage } from "../data/seed";
 import { parseMentions, routeMessage, routeMessageLLM, type RouterInvocation } from "./routing";
 import type { FallbackEvent, PromptDebug } from "./fallbacks";
 import { buildRoster } from "./roster";
+import {
+  TAVILY_WEB_SEARCH_TOOL,
+  TAVILY_WEB_SEARCH_HINT,
+  tavilySearch,
+} from "./tavily-search.functions";
+
 
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
