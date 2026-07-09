@@ -168,7 +168,7 @@ export const checkJourneyHealth = createServerFn({ method: "GET" }).handler(
  */
 const InvokeInput = z.object({
   toolName: z.string().min(1),
-  args: z.record(z.unknown()).default({}),
+  args: z.record(z.any()).default({}),
   caller: z.object({
     entra_object_id: z.string().optional(),
     entra_email: z.string().optional(),
