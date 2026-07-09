@@ -40,6 +40,8 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const setAgent = useBackendsStore((s) => s.setAgent);
   const replaceConfig = useBackendsStore((s) => s.replaceConfig);
   const resetToDefaults = useBackendsStore((s) => s.resetToDefaults);
+  const clearDemoData = useHuddleStore((s) => s.clearDemoData);
+  const [demoCleared, setDemoCleared] = useState(false);
 
   const [uploadError, setUploadError] = useState<string | null>(null);
 
