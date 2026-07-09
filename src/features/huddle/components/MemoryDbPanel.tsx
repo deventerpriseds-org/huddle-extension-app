@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Loader2, Play, Wrench, RefreshCw, CheckCircle2, XCircle, HelpCircle, ChevronDown, Beaker, PlusCircle } from "lucide-react";
+import { Loader2, Play, Wrench, RefreshCw, CheckCircle2, XCircle, HelpCircle, ChevronDown, Beaker } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { diagnoseRagStore, runRagBootstrap, verifyRagRoundTrip, saveMemoryItem } from "../lib/rag.functions";
+import { diagnoseRagStore, runRagBootstrap, verifyRagRoundTrip } from "../lib/rag.functions";
 import { toast } from "sonner";
 
 type Diagnostic = Awaited<ReturnType<typeof diagnoseRagStore>>;
@@ -17,11 +17,9 @@ export function MemoryDbPanel({ agentId, agentName }: MemoryDbPanelProps = {}) {
   const [diag, setDiag] = useState<Diagnostic | null>(null);
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [rt, setRt] = useState<RoundTrip | null>(null);
-  const [running, setRunning] = useState<"diag" | "boot" | "rt" | "save" | null>(null);
+  const [running, setRunning] = useState<"diag" | "boot" | "rt" | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const [ctxText, setCtxText] = useState("");
-  const [ctxScope, setCtxScope] = useState<"agent" | "global">(agentId ? "agent" : "global");
-  const [extractFacts, setExtractFacts] = useState(true);
+
 
   async function runDiag() {
     setRunning("diag");
