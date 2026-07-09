@@ -48,7 +48,7 @@ export interface JourneyCallerIdentity {
 /** Request shape for POST {proxy}/tool */
 export interface JourneyToolInvocationRequest {
   toolName: string;
-  args: Record<string, unknown>;
+  args: Record<string, JsonValue>;
   caller: JourneyCallerIdentity;
   context?: { source: "huddle"; huddleId?: string; agentId?: string };
 }
