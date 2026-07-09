@@ -172,6 +172,11 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           }
         } catch (err) {
           console.error("[rag] write failed:", err);
+          recordFallback(
+            "rag",
+            `Memory write failed: ${err instanceof Error ? err.message : String(err)}`,
+            "memory write failed — turn not saved to RAG",
+          );
         }
       })();
     }
