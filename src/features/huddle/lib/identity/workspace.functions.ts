@@ -65,14 +65,23 @@ export const loadWorkspace = createServerFn({ method: "POST" })
 export const saveWorkspace = createServerFn({ method: "POST" })
   .inputValidator((d) =>
     AuthInput.extend({
-      state: z.record(z.string(), z.unknown()),
+      stateJson: z.string().min(2).max(2_000_000),
       version: z.number().int().min(1).max(9999).optional(),
     }).parse(d),
   )
   .handler(async ({ data }) => {
     const { verifyEntraIdToken } = await import("@/lib/entra-verify.server");
     const claims = await verifyEntraIdToken(data.idToken);
-    return saveImpl(claims.oid, data.state, data.version ?? WORKSPACE_VERSION);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data.stateJson);
+    } catch {
+      throw new Error("Invalid workspace state payload");
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Workspace state must be an object");
+    }
+    return saveImpl(claims.oid, parsed, data.version ?? WORKSPACE_VERSION);
   });
 
 export const CURRENT_WORKSPACE_VERSION = WORKSPACE_VERSION;
