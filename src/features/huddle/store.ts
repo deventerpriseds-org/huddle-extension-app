@@ -118,6 +118,14 @@ export const useHuddleStore = create<HuddleState>()(
         })),
       removeMemoryItem: (id) =>
         set((s) => ({ memory: s.memory.filter((m) => m.id !== id) })),
+      upsertJourneyTasks: (incoming) =>
+        set((s) => {
+          if (!incoming || incoming.length === 0) return {};
+          const byId = new Map<string, JourneyTask>();
+          for (const t of s.journeyTasks) byId.set(t.id, t);
+          for (const t of incoming) byId.set(t.id, { ...t, origin: "journey-voice" });
+          return { journeyTasks: Array.from(byId.values()) };
+        }),
     }),
     {
       name: "huddle-workspace",
