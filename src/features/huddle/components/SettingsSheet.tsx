@@ -30,6 +30,7 @@ import { pingRagStore } from "../lib/rag.functions";
 import { useHuddleStore } from "../store";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { MemoryDbPanel } from "./MemoryDbPanel";
+import { AccountSettingsPanel } from "./AccountSettingsPanel";
 
 interface SettingsSheetProps {
   open: boolean;
@@ -129,12 +130,18 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
 
         <Tabs defaultValue="router" className="flex-1 min-h-0 flex flex-col">
           <TabsList className="mx-5 mt-4">
+            <TabsTrigger value="account">Account</TabsTrigger>
             <TabsTrigger value="router">Router</TabsTrigger>
             <TabsTrigger value="agents">Agents</TabsTrigger>
             <TabsTrigger value="memory">Memory</TabsTrigger>
             <TabsTrigger value="platforms">Platforms</TabsTrigger>
             <TabsTrigger value="batch">Batch</TabsTrigger>
           </TabsList>
+
+          {/* ---- Account ---- */}
+          <TabsContent value="account" className="flex-1 overflow-y-auto px-5 py-4">
+            <AccountSettingsPanel />
+          </TabsContent>
 
           {/* ---- Router ---- */}
           <TabsContent value="router" className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
