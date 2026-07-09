@@ -149,9 +149,9 @@ export function BoardView() {
                             </span>
                           </div>
                         )}
-                        {isJourney && c.journey?.assignee_name && (
+                        {isJourney && c.journey?.category && (
                           <div className="mt-2 text-[10px] text-muted-foreground truncate">
-                            {c.journey.assignee_name}
+                            {c.journey.category}
                           </div>
                         )}
                       </div>
