@@ -294,8 +294,31 @@ export async function getToken(): Promise<string | null> {
       name: e instanceof Error ? e.name : "unknown",
       message: e instanceof Error ? e.message : String(e),
     });
-    console.error("[entra-auth] acquireTokenSilent failed — redirecting to login:", e);
-    await msal.loginRedirect(loginRequest);
-    return null;
+    // In an iframe (Lovable preview), redirect/popup-token flows raise
+    // block_nested_popups. Fall back to an interactive popup for token
+    // acquisition when we're inside an iframe.
+    const inIframe = window.self !== window.top;
+    try {
+      if (inIframe) {
+        const result = await msal.acquireTokenPopup({
+          scopes: loginRequest.scopes,
+          account,
+        });
+        traceAuth("token:popup:success");
+        return result.idToken;
+      }
+      const result = await msal.acquireTokenRedirect({
+        scopes: loginRequest.scopes,
+        account,
+      });
+      // acquireTokenRedirect navigates away; unreachable.
+      return (result as unknown as AuthenticationResult | undefined)?.idToken ?? null;
+    } catch (err2) {
+      traceAuth("token:interactive:error", {
+        name: err2 instanceof Error ? err2.name : "unknown",
+        message: err2 instanceof Error ? err2.message : String(err2),
+      });
+      return null;
+    }
   }
 }
