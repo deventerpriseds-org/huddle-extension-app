@@ -19,12 +19,11 @@ function getPool(): Pool {
 }
 
 const BOOTSTRAP_SQL = `
-CREATE EXTENSION IF NOT EXISTS citext;
 CREATE SCHEMA IF NOT EXISTS identity;
 
 CREATE TABLE IF NOT EXISTS identity.profiles (
   entra_object_id TEXT PRIMARY KEY,
-  username        CITEXT UNIQUE NOT NULL,
+  username        TEXT NOT NULL,
   display_name    TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -33,13 +32,33 @@ CREATE TABLE IF NOT EXISTS identity.profiles (
 CREATE TABLE IF NOT EXISTS identity.profile_emails (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   entra_object_id TEXT NOT NULL REFERENCES identity.profiles(entra_object_id) ON DELETE CASCADE,
-  email           CITEXT NOT NULL,
+  email           TEXT NOT NULL,
   source          TEXT NOT NULL CHECK (source IN ('entra','manual')),
-  added_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (email)
+  added_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS profile_emails_owner_idx
   ON identity.profile_emails(entra_object_id);
+
+-- Case-insensitive uniqueness without citext (Azure PG doesn't allow-list it).
+DO $mig$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema='identity' AND table_name='profiles'
+               AND column_name='username' AND udt_name='citext') THEN
+    ALTER TABLE identity.profiles ALTER COLUMN username TYPE TEXT;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema='identity' AND table_name='profile_emails'
+               AND column_name='email' AND udt_name='citext') THEN
+    ALTER TABLE identity.profile_emails ALTER COLUMN email TYPE TEXT;
+  END IF;
+END
+$mig$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_username_lower_key
+  ON identity.profiles (lower(username));
+CREATE UNIQUE INDEX IF NOT EXISTS profile_emails_email_lower_key
+  ON identity.profile_emails (lower(email));
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -141,7 +160,7 @@ export async function getOrCreateProfile(claims: {
           await getPool().query(
             `INSERT INTO identity.profile_emails (entra_object_id, email, source)
              VALUES ($1, $2, 'entra')
-             ON CONFLICT (email) DO NOTHING`,
+             ON CONFLICT (lower(email)) DO NOTHING`,
             [claims.oid, normalized],
           );
         } catch {
@@ -165,7 +184,7 @@ export async function getOrCreateProfile(claims: {
     // Try base, base2, base3, ... until unique.
     while (true) {
       const conflict = await client.query(
-        `SELECT 1 FROM identity.profiles WHERE username = $1`,
+        `SELECT 1 FROM identity.profiles WHERE lower(username) = lower($1)`,
         [username],
       );
       if (conflict.rowCount === 0) break;
@@ -185,7 +204,7 @@ export async function getOrCreateProfile(claims: {
       await client.query(
         `INSERT INTO identity.profile_emails (entra_object_id, email, source)
          VALUES ($1, $2, 'entra')
-         ON CONFLICT (email) DO NOTHING`,
+         ON CONFLICT (lower(email)) DO NOTHING`,
         [claims.oid, claims.email.trim().toLowerCase()],
       );
     }
@@ -207,7 +226,7 @@ export async function setUsername(oid: string, next: string): Promise<ProfileBun
   const username = validateUsername(next);
   const pool = getPool();
   const taken = await pool.query(
-    `SELECT 1 FROM identity.profiles WHERE username = $1 AND entra_object_id <> $2`,
+    `SELECT 1 FROM identity.profiles WHERE lower(username) = lower($1) AND entra_object_id <> $2`,
     [username, oid],
   );
   if (taken.rowCount && taken.rowCount > 0) {
@@ -240,7 +259,7 @@ export async function addEmail(oid: string, email: string): Promise<ProfileBundl
   const normalized = validateEmail(email);
   const pool = getPool();
   const conflict = await pool.query<{ entra_object_id: string }>(
-    `SELECT entra_object_id FROM identity.profile_emails WHERE email = $1`,
+    `SELECT entra_object_id FROM identity.profile_emails WHERE lower(email) = lower($1)`,
     [normalized],
   );
   if (conflict.rowCount && conflict.rowCount > 0) {
