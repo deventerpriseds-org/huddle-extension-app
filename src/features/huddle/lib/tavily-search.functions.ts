@@ -28,7 +28,7 @@ export interface TavilySearchResponse {
   results?: TavilySearchResult[];
   query: string;
   error?: string;
-  paramsUsed?: Record<string, unknown>;
+  paramsUsed?: TavilySearchArgs;
 }
 
 export const TavilyInput = z.object({
