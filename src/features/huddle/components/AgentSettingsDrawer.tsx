@@ -30,6 +30,8 @@ export function AgentSettingsDrawer() {
   const fallbacks = useAgentPanelStore((s) => s.fallbacks);
   const backendCfg = useBackendsStore((s) => s.config);
 
+  const setAgent = useBackendsStore((s) => s.setAgent);
+
   const [debug, setDebug] = useState<Awaited<ReturnType<typeof getAgentDebug>> | null>(null);
   const [loading, setLoading] = useState(false);
   const [refetching, setRefetching] = useState(false);
@@ -40,6 +42,8 @@ export function AgentSettingsDrawer() {
   const [memoryItems, setMemoryItems] = useState<MemoryChunk[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [provisioning, setProvisioning] = useState(false);
+
 
   async function refreshMemoryList(agentId: string) {
     setMemoryLoading(true);
