@@ -1,5 +1,65 @@
 import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
+
+export const TAVILY_WEB_SEARCH_TOOL = {
+  type: "function" as const,
+  name: "tavily_web_search",
+  description:
+    "Search the live web for current information, news, facts, or recent events. Use this when the user asks about anything time-sensitive, real-world, or outside your training knowledge. Pass the user's query VERBATIM — do not rewrite temporal phrases such as 'today', 'this week', 'latest', or 'current' into fixed dates.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      query: {
+        type: "string",
+        description:
+          "Verbatim search query as spoken by the user. Do not paraphrase or rewrite.",
+      },
+      topic: {
+        type: "string",
+        enum: ["general", "news", "finance"],
+        description: "Search topic/category. Default: general.",
+      },
+      search_depth: {
+        type: "string",
+        enum: ["basic", "advanced"],
+        description: "advanced returns more thorough results. Default: advanced.",
+      },
+      time_range: {
+        type: "string",
+        enum: ["day", "week", "month", "year"],
+        description: "Optional time range filter.",
+      },
+      start_date: {
+        type: "string",
+        description: "Optional start date in YYYY-MM-DD format.",
+      },
+      end_date: {
+        type: "string",
+        description: "Optional end date in YYYY-MM-DD format.",
+      },
+      include_domains: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional domains to include in results.",
+      },
+      exclude_domains: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional domains to exclude from results.",
+      },
+      max_results: {
+        type: "number",
+        description: "Maximum number of results (1-20). Default 10.",
+      },
+    },
+    required: ["query"],
+  },
+  strict: false,
+};
+
+export const TAVILY_WEB_SEARCH_HINT =
+  "You have a web search tool (`tavily_web_search`). Use it for any real-world, time-sensitive, or current-information question. Pass the query verbatim; do not rewrite 'today', 'this week', 'latest', 'current', or similar into fixed dates. The tool returns an answer and a list of source URLs; cite the sources naturally when you use them.";
+
 
 export interface TavilySearchArgs {
   query: string;
