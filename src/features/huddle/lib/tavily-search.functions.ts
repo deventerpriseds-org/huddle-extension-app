@@ -127,11 +127,15 @@ export async function tavilySearch(args: TavilySearchArgs): Promise<TavilySearch
       results,
       query: args.query,
       paramsUsed: {
-        topic: requestBody.topic,
-        search_depth: requestBody.search_depth,
-        time_range: requestBody.time_range,
-        start_date: requestBody.start_date,
-        end_date: requestBody.end_date,
+        query: args.query,
+        topic: args.topic,
+        search_depth: args.search_depth,
+        time_range: args.time_range,
+        start_date: args.start_date,
+        end_date: args.end_date,
+        include_domains: args.include_domains,
+        exclude_domains: args.exclude_domains,
+        max_results: args.max_results,
       },
     };
   } catch (err) {
