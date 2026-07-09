@@ -182,13 +182,6 @@ export function AgentSettingsDrawer() {
                   </div>
                 </section>
 
-                {/* Memory DB — live, real diagnostic. Not static config. */}
-                <section>
-                  <SectionTitle>Memory DB (live)</SectionTitle>
-                  <div className="mt-2">
-                    <MemoryDbPanel />
-                  </div>
-                </section>
 
                 {/* Tools */}
                 <section>
