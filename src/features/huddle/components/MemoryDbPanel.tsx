@@ -1,7 +1,10 @@
 import { useState } from "react";
-import { Loader2, Play, Wrench, RefreshCw, CheckCircle2, XCircle, HelpCircle, ChevronDown, Beaker } from "lucide-react";
+import { Loader2, Play, Wrench, RefreshCw, CheckCircle2, XCircle, HelpCircle, ChevronDown, Beaker, PackagePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { diagnoseRagStore, runRagBootstrap, verifyRagRoundTrip } from "../lib/rag.functions";
+import { provisionAgentVectorStores } from "../lib/openai-provisioning.functions";
+import { useBackendsStore } from "../lib/agent-backends";
+import type { AgentId } from "../data/agents";
 import { toast } from "sonner";
 
 type Diagnostic = Awaited<ReturnType<typeof diagnoseRagStore>>;
