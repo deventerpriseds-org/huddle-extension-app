@@ -1,6 +1,5 @@
 import { useMemo } from "react";
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
 
 import { AGENT_BY_ID, type AgentId } from "./data/agents";
 import {
