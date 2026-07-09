@@ -14,6 +14,7 @@ export interface HuddleMessage {
   mentions?: AgentId[];
   replyTo?: string;
   isBriefing?: boolean;
+  demo?: boolean;
   checkIn?: {
     kind: "morning" | "midday" | "afternoon" | "adhoc";
     scheduledAt: string;
@@ -30,6 +31,7 @@ export interface Huddle {
   kind: HuddleScope;
   members: AgentId[]; // agents present (user is implicit)
   topic?: string;
+  demo?: boolean;
 }
 
 export type TaskLane =
@@ -50,6 +52,7 @@ export interface Task {
   blockReason?: string;
   origin: "user" | "agent-suggested" | "standup";
   createdAt: number;
+  demo?: boolean;
 }
 
 export interface MemoryItem {
@@ -60,6 +63,7 @@ export interface MemoryItem {
   sourceRef?: string;
   confidence?: number;
   editable: boolean;
+  demo?: boolean;
 }
 
 export interface RoutingDecision {
@@ -72,6 +76,7 @@ export interface RoutingDecision {
   interjected: boolean;
   reason: string;
   ts: number;
+  demo?: boolean;
 }
 
 /* ---------- seed data ---------- */
