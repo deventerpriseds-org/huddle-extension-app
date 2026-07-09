@@ -63,7 +63,17 @@ export function initMsal(): Promise<void> {
   initPromise = (async () => {
     await msal.initialize();
     try {
-      await msal.handleRedirectPromise();
+      const result = await msal.handleRedirectPromise();
+      if (result?.account) {
+        msal.setActiveAccount(result.account);
+        return;
+      }
+
+      const activeAccount = msal.getActiveAccount();
+      if (!activeAccount) {
+        const accounts = msal.getAllAccounts();
+        if (accounts[0]) msal.setActiveAccount(accounts[0]);
+      }
     } catch (err) {
       console.error("[entra-auth] handleRedirectPromise failed", err);
     }
@@ -74,7 +84,10 @@ export function initMsal(): Promise<void> {
 export function getCurrentUser(): AccountInfo | null {
   const msal = getMsal();
   if (!msal) return null;
+  const activeAccount = msal.getActiveAccount();
+  if (activeAccount) return activeAccount;
   const accounts = msal.getAllAccounts();
+  if (accounts[0]) msal.setActiveAccount(accounts[0]);
   return accounts[0] ?? null;
 }
 
@@ -84,7 +97,8 @@ export async function signIn(): Promise<void> {
   // In an iframe (Lovable preview), MSAL blocks loginRedirect. Fall back to popup.
   const inIframe = window.self !== window.top;
   if (inIframe) {
-    await msal.loginPopup(loginRequest);
+    const result = await msal.loginPopup(loginRequest);
+    if (result.account) msal.setActiveAccount(result.account);
     return;
   }
   await msal.loginRedirect(loginRequest);
@@ -99,12 +113,12 @@ export async function signOut(): Promise<void> {
 export async function getToken(): Promise<string | null> {
   const msal = getMsal();
   if (!msal) return null;
-  const accounts = msal.getAllAccounts();
-  if (accounts.length === 0) return null;
+  const account = getCurrentUser();
+  if (!account) return null;
   try {
     const result: AuthenticationResult = await msal.acquireTokenSilent({
       scopes: loginRequest.scopes,
-      account: accounts[0],
+      account,
       forceRefresh: false,
     });
     return result.idToken;
