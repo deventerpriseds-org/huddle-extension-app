@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, Upload, RotateCcw, X, Database, Loader2 } from "lucide-react";
+import { Download, Upload, RotateCcw, X, Database, Loader2, Settings2 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
@@ -28,6 +28,8 @@ import {
 } from "../lib/model-catalog";
 import { pingRagStore } from "../lib/rag.functions";
 import { useHuddleStore } from "../store";
+import { useAgentPanelStore } from "../lib/agent-panel-store";
+import { MemoryDbPanel } from "./MemoryDbPanel";
 
 interface SettingsSheetProps {
   open: boolean;
@@ -42,6 +44,13 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const resetToDefaults = useBackendsStore((s) => s.resetToDefaults);
   const showDemoData = useHuddleStore((s) => s.showDemoData);
   const setShowDemoData = useHuddleStore((s) => s.setShowDemoData);
+  const openAgent = useAgentPanelStore((s) => s.openAgent);
+
+  function openAgentDrawer(id: (typeof AGENTS)[number]["id"]) {
+    onOpenChange(false);
+    // small delay so the sheet close animation doesn't fight the new one
+    setTimeout(() => openAgent(id), 60);
+  }
 
   const [uploadError, setUploadError] = useState<string | null>(null);
 
@@ -233,6 +242,16 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                     }`}>{status}</div>
                   </div>
 
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full justify-start"
+                    onClick={() => openAgentDrawer(a.id)}
+                  >
+                    <Settings2 size={14} className="mr-1.5" />
+                    Open full agent settings (prompt, memory, hosted tools)
+                  </Button>
+
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <Label className="text-xs">Backend</Label>
@@ -352,6 +371,14 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                   onCheckedChange={(v) => setShowDemoData(v)}
                 />
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-semibold">Memory DB &amp; vector stores (all agents)</div>
+              <p className="text-xs text-muted-foreground">
+                Cross-agent database diagnostics and batch provisioning of OpenAI vector stores.
+              </p>
+              <MemoryDbPanel />
             </div>
             <details className="text-xs">
               <summary className="cursor-pointer text-muted-foreground">Show current config</summary>
