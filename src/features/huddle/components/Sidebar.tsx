@@ -2,7 +2,7 @@ import { LogOut, Plus, Users } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS } from "../data/agents";
-import { useHuddleStore } from "../store";
+import { useHuddleStore, useVisibleHuddles } from "../store";
 import { AgentAvatar } from "./AgentAvatar";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -17,7 +17,7 @@ import {
 const HUDDLE_PERSIST_KEY = "huddle-workspace";
 
 export function Sidebar() {
-  const huddles = useHuddleStore((s) => s.huddles);
+  const huddles = useVisibleHuddles();
   const activeId = useHuddleStore((s) => s.activeHuddleId);
   const setActive = useHuddleStore((s) => s.setActive);
   const { user, signOut } = useAuth();

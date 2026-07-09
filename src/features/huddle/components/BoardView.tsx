@@ -1,5 +1,5 @@
 import { AGENT_BY_ID } from "../data/agents";
-import { useHuddleStore } from "../store";
+import { useHuddleStore, useVisibleTasks } from "../store";
 import type { TaskLane } from "../data/seed";
 import { AgentAvatar } from "./AgentAvatar";
 import { Sparkles } from "lucide-react";
@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 const LANES: TaskLane[] = ["Backlog", "Blocked", "Ready", "Up next", "Doing", "Done"];
 
 export function BoardView() {
-  const tasks = useHuddleStore((s) => s.tasks);
+  const tasks = useVisibleTasks();
   const move = useHuddleStore((s) => s.moveTask);
 
   return (
