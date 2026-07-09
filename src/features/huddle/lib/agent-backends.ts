@@ -92,8 +92,9 @@ function defaultAgents(): Record<AgentId, AgentBackend> {
   for (const a of AGENTS) {
     const id = ASSISTANT_IDS[a.id];
     out[a.id] = id
-      ? { backend: "openai", assistantId: id, rag: { ...defaultRag }, journey: { enabled: false } }
-      : { backend: "lovable", rag: { ...defaultRag }, journey: { enabled: false } };
+      ? { backend: "openai", assistantId: id, rag: { ...defaultRag }, journey: { enabled: false }, webSearch: false }
+      : { backend: "lovable", rag: { ...defaultRag }, journey: { enabled: false }, webSearch: false };
+
   }
 
   return out;
