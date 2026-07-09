@@ -22,6 +22,11 @@ export function AgentSettingsDrawer() {
   const [debug, setDebug] = useState<Awaited<ReturnType<typeof getAgentDebug>> | null>(null);
   const [loading, setLoading] = useState(false);
   const [refetching, setRefetching] = useState(false);
+  const [ctxText, setCtxText] = useState("");
+  const [ctxScope, setCtxScope] = useState<"agent" | "global">("agent");
+  const [extractFacts, setExtractFacts] = useState(true);
+  const [savingCtx, setSavingCtx] = useState(false);
+
 
   useEffect(() => {
     if (!openId) {
