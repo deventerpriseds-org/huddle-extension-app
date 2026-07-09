@@ -171,12 +171,10 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             }
           }
         } catch (err) {
+          // Fire-and-forget path — the client response has already returned,
+          // so we can only log here. Failures will still surface on the NEXT
+          // turn via the diagnostic panel and the retrieval tool wrapper.
           console.error("[rag] write failed:", err);
-          recordFallback(
-            "rag",
-            `Memory write failed: ${err instanceof Error ? err.message : String(err)}`,
-            "memory write failed — turn not saved to RAG",
-          );
         }
       })();
     }
