@@ -44,6 +44,13 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const resetToDefaults = useBackendsStore((s) => s.resetToDefaults);
   const showDemoData = useHuddleStore((s) => s.showDemoData);
   const setShowDemoData = useHuddleStore((s) => s.setShowDemoData);
+  const openAgent = useAgentPanelStore((s) => s.openAgent);
+
+  function openAgentDrawer(id: (typeof AGENTS)[number]["id"]) {
+    onOpenChange(false);
+    // small delay so the sheet close animation doesn't fight the new one
+    setTimeout(() => openAgent(id), 60);
+  }
 
   const [uploadError, setUploadError] = useState<string | null>(null);
 
