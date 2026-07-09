@@ -40,7 +40,32 @@ export function AgentSettingsDrawer() {
       .finally(() => setLoading(false));
   }, [openId]);
 
+  async function handleSaveContext() {
+    if (!openId) return;
+    const text = ctxText.trim();
+    if (!text) return;
+    setSavingCtx(true);
+    try {
+      const r = await saveMemoryItem({
+        data: {
+          text,
+          scope: ctxScope,
+          agentId: ctxScope === "agent" ? openId : undefined,
+          source: agent ? `settings:${agent.name}` : "settings",
+          extractFacts,
+        },
+      });
+      toast.success(`Saved memory (chunk ${r.chunkId.slice(0, 8)}…, ${r.tripleCount} facts)`);
+      setCtxText("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setSavingCtx(false);
+    }
+  }
+
   if (!openId) return null;
+
   const agent = AGENT_BY_ID[openId];
   const backend = backendCfg.agents[openId];
   const assistantId = ASSISTANT_IDS[openId];
