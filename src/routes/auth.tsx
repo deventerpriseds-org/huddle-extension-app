@@ -1,13 +1,25 @@
+import { useEffect, useState } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { getCurrentUser, initMsal, signIn } from "@/lib/entra-auth";
+import {
+  clearAuthTrace,
+  getAuthTrace,
+  getCurrentUser,
+  initMsal,
+  signIn,
+  traceAuth,
+  type AuthTraceEntry,
+} from "@/lib/entra-auth";
 
 export const Route = createFileRoute("/auth")({
   ssr: false,
   beforeLoad: async () => {
+    traceAuth("route:/auth:beforeLoad:start");
     await initMsal();
     if (getCurrentUser()) {
+      traceAuth("route:/auth:redirect-home", { hasUser: true });
       throw redirect({ to: "/" });
     }
+    traceAuth("route:/auth:allow", { hasUser: false });
   },
   head: () => ({
     meta: [
@@ -23,13 +35,47 @@ export const Route = createFileRoute("/auth")({
 });
 
 function AuthPage() {
+  const [trace, setTrace] = useState<AuthTraceEntry[]>([]);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+
+  useEffect(() => {
+    setTrace(getAuthTrace());
+  }, []);
+
   const handleLogin = async () => {
     try {
+      traceAuth("auth-page:button-click");
+      setTrace(getAuthTrace());
       await signIn();
     } catch (err) {
+      traceAuth("auth-page:signin-error", {
+        name: err instanceof Error ? err.name : "unknown",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      setTrace(getAuthTrace());
       console.error("[auth] signIn failed", err);
     }
   };
+
+  const handleCopyTrace = async () => {
+    const latestTrace = getAuthTrace();
+    setTrace(latestTrace);
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(latestTrace, null, 2));
+      setCopyState("copied");
+    } catch (err) {
+      setCopyState("failed");
+      console.info("[huddle-auth] copy this trace", latestTrace, err);
+    }
+  };
+
+  const handleClearTrace = () => {
+    clearAuthTrace();
+    setTrace([]);
+    setCopyState("idle");
+  };
+
+  const lastTraceEvent = trace.at(-1)?.event ?? "none";
 
   return (
     <div className="flex min-h-dvh items-center justify-center bg-background p-4">
@@ -94,6 +140,29 @@ function AuthPage() {
         <p className="text-center text-[11px] text-muted-foreground">
           Secured by Microsoft Entra External ID.
         </p>
+
+        <div className="space-y-2 rounded-md border border-hairline bg-muted/40 p-3 text-[11px] text-muted-foreground">
+          <div className="flex items-center justify-between gap-3">
+            <span className="min-w-0 truncate font-mono">Auth trace: {lastTraceEvent}</span>
+            <span className="shrink-0 font-mono">{trace.length}</span>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleCopyTrace}
+              className="inline-flex flex-1 items-center justify-center rounded-md border border-hairline bg-background px-2 py-1.5 font-medium text-foreground transition hover:bg-muted"
+            >
+              {copyState === "copied" ? "Copied" : copyState === "failed" ? "See console" : "Copy trace"}
+            </button>
+            <button
+              type="button"
+              onClick={handleClearTrace}
+              className="inline-flex items-center justify-center rounded-md border border-hairline bg-background px-2 py-1.5 font-medium text-foreground transition hover:bg-muted"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

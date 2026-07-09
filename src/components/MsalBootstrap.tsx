@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { initMsal } from "@/lib/entra-auth";
+import { initMsal, traceAuth } from "@/lib/entra-auth";
 
 /**
  * Client-only MSAL bootstrap.
@@ -14,8 +14,10 @@ export function MsalBootstrap({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    traceAuth("bootstrap:start");
     initMsal().finally(() => {
       if (!cancelled) setReady(true);
+      traceAuth(cancelled ? "bootstrap:cancelled" : "bootstrap:ready");
     });
     return () => {
       cancelled = true;
