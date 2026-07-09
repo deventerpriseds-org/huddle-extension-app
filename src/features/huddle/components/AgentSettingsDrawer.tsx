@@ -7,6 +7,7 @@ import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useBackendsStore, ASSISTANT_IDS } from "../lib/agent-backends";
 import { getAgentDebug, refetchAgentSnapshot } from "../lib/agent-inspect.functions";
 import { AgentAvatar } from "./AgentAvatar";
+import { MemoryDbPanel } from "./MemoryDbPanel";
 import { toast } from "sonner";
 
 export function AgentSettingsDrawer() {
@@ -178,6 +179,14 @@ export function AgentSettingsDrawer() {
                       label="RAG sharing"
                       value={backend?.rag?.sharing ?? "shared"}
                     />
+                  </div>
+                </section>
+
+                {/* Memory DB — live, real diagnostic. Not static config. */}
+                <section>
+                  <SectionTitle>Memory DB (live)</SectionTitle>
+                  <div className="mt-2">
+                    <MemoryDbPanel />
                   </div>
                 </section>
 
