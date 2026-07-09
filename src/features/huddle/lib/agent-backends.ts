@@ -35,7 +35,10 @@ const AgentBackendSchema = z.object({
     sharing: "shared",
   }),
   journey: JourneyConfigSchema.default({ enabled: false }),
+  /** Enable OpenAI Responses `web_search_preview` tool for this agent. */
+  webSearch: z.boolean().default(false),
 });
+
 
 
 export type RagConfig = z.infer<typeof RagConfigSchema>;
