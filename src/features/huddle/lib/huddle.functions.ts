@@ -46,6 +46,7 @@ const AgentBackendInput = z.object({
       sharing: z.enum(["shared", "private", "readonly-shared"]).default("shared"),
     })
     .optional(),
+  journey: z.object({ enabled: z.boolean() }).optional(),
 });
 
 
@@ -58,6 +59,14 @@ const Input = z.object({
   targetAgentId: z.enum(AgentIds).optional(),
   router: RouterConfigInput.optional(),
   agents: z.record(z.enum(AgentIds), AgentBackendInput).optional(),
+  // Optional caller identity so journey-voice can resolve a Supabase user.
+  // Populated from the signed-in Entra account (email / oid) on the client.
+  caller: z
+    .object({
+      entra_object_id: z.string().optional(),
+      entra_email: z.string().optional(),
+    })
+    .optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
