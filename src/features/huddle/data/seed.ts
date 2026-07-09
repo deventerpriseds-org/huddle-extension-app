@@ -88,6 +88,7 @@ export const HUDDLES: Huddle[] = [
     kind: "group",
     members: AGENTS.map((a) => a.id),
     topic: "Cross-agent standup and follow-ups",
+    demo: true,
   },
   {
     id: "all-members",
@@ -102,6 +103,7 @@ export const HUDDLES: Huddle[] = [
     kind: "group",
     members: ["sam-trent", "tess-sutton", "cole-blake", "eli-vaughn", "iris-chase"],
     topic: "Launch coordination",
+    demo: true,
   },
   // 1:1 huddles for the sidebar (Agent channels)
   ...AGENTS.map<Huddle>((a) => ({
