@@ -271,6 +271,14 @@ export function AgentSettingsDrawer() {
                     </div>
                   </section>
                 )}
+
+                {/* Memory DB — live, real diagnostic + context capture. At the bottom. */}
+                <section>
+                  <SectionTitle>Memory DB (live)</SectionTitle>
+                  <div className="mt-2">
+                    <MemoryDbPanel agentId={openId} agentName={agent.name} />
+                  </div>
+                </section>
               </>
             )}
           </div>
