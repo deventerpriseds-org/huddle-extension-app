@@ -372,6 +372,14 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                 />
               </div>
             </div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-semibold">Memory DB &amp; vector stores (all agents)</div>
+              <p className="text-xs text-muted-foreground">
+                Cross-agent database diagnostics and batch provisioning of OpenAI vector stores.
+              </p>
+              <MemoryDbPanel />
+            </div>
             <details className="text-xs">
               <summary className="cursor-pointer text-muted-foreground">Show current config</summary>
               <pre className="mt-2 max-h-64 overflow-auto rounded bg-muted p-2 text-[11px]">
