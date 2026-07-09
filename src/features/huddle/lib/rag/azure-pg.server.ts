@@ -575,7 +575,7 @@ export async function verifyRoundTrip(): Promise<RoundTripResult> {
 
   try {
     const t0 = Date.now();
-    const hits = await azurePgStore.searchChunks({ query: text, k: 5, mode: "global" });
+    const hits = await azurePgStore.searchChunks({ query: text, k: 5, mode: "shared" });
     const top = hits[0];
     result.steps.semanticSearch = {
       ok: true,
