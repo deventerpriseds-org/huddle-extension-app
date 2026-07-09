@@ -85,6 +85,8 @@ export interface OpenAIPersonaInput {
   onToolCall?: ToolHandler;
   /** Max tool-call round-trips (default 2). */
   maxToolHops?: number;
+  /** Optional tool_choice override (e.g. "auto", "required", or { type: "function", name }). */
+  toolChoice?: unknown;
 }
 
 interface ResponsesReply {
