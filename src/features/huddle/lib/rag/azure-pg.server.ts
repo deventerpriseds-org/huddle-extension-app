@@ -449,10 +449,10 @@ export const azurePgStore: RagStore = {
 
     const { rows } = await q(
       `SELECT id, scope, agent_id, text, source, created_at, author_agent_ids,
-              1 - (embedding <=> $1::vector) AS score
+              1 - (embedding::halfvec(${EMBED_DIM}) <=> ($1::vector)::halfvec(${EMBED_DIM})) AS score
        FROM rag_chunks
        WHERE ${where}
-       ORDER BY embedding <=> $1::vector
+       ORDER BY embedding::halfvec(${EMBED_DIM}) <=> ($1::vector)::halfvec(${EMBED_DIM})
        LIMIT $${params.length}`,
       params,
     );
