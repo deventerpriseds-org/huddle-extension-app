@@ -43,6 +43,7 @@ interface HuddleState {
   toggleMeetingExpanded: () => void;
   leaveMeeting: () => void;
   setSpeaker: (id: AgentId) => void;
+  clearDemoData: () => void;
 }
 
 export const useHuddleStore = create<HuddleState>()(
