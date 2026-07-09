@@ -322,7 +322,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     }
 
     if (routed.winners.length === 0) {
-      return { decision: routed.decision, replies: [] as Reply[], fallbacks, prompts, journeyTaskUpdates };
+      return { decision: routed.decision, replies: [] as Reply[], fallbacks, prompts, journeyTaskUpdates, toolUses };
     }
 
     // ---- Reply transcript ----
@@ -742,6 +742,6 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       }
     }
 
-    return { decision: routed.decision, replies, fallbacks, prompts, journeyTaskUpdates };
+    return { decision: routed.decision, replies, fallbacks, prompts, journeyTaskUpdates, toolUses };
   });
 
