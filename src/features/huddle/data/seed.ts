@@ -79,6 +79,16 @@ export interface RoutingDecision {
   demo?: boolean;
 }
 
+export interface ToolUseEvent {
+  id: string;
+  ts: number;
+  agentId: AgentId;
+  tool: string;
+  summary: string;
+  ok: boolean;
+  detail?: string;
+}
+
 /* ---------- seed data ---------- */
 
 export const HUDDLES: Huddle[] = [
