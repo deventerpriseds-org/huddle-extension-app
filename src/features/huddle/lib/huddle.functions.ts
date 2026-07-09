@@ -10,7 +10,9 @@ import {
   TAVILY_WEB_SEARCH_TOOL,
   TAVILY_WEB_SEARCH_HINT,
   tavilySearch,
+  type TavilySearchArgs,
 } from "./tavily-search.functions";
+
 
 
 
