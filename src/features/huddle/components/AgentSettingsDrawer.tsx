@@ -330,9 +330,9 @@ export function AgentSettingsDrawer() {
                         onChange={(e) => toggleWebSearch(e.target.checked)}
                       />
                       <div className="min-w-0">
-                        <div className="font-medium">Web search</div>
+                        <div className="font-medium">Tavily web search</div>
                         <div className="text-[11px] text-muted-foreground">
-                          Adds OpenAI's <code>web_search_preview</code> tool to this agent's Responses call. Only works on OpenAI models that support it.
+                          Adds the <code>tavily_web_search</code> tool to this agent's Responses call. The agent sends the user's query verbatim to Tavily for current web results.
                         </div>
                       </div>
                     </label>
