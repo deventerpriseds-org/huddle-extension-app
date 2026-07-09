@@ -206,6 +206,14 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
 
           {/* ---- Agents ---- */}
           <TabsContent value="agents" className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+            {AGENTS.map((a) => (
+              <AgentCard key={a.id} agentId={a.id} />
+            ))}
+          </TabsContent>
+
+          {/* legacy inline agent list kept for reference */}
+          {false && (
+          <TabsContent value="agents-legacy" className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
             {AGENTS.map((a) => {
               const cfg = config.agents[a.id];
               if (!cfg) return null;
