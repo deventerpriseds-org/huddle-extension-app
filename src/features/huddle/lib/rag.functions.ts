@@ -29,6 +29,16 @@ export const runRagBootstrap = createServerFn({ method: "POST" })
     return runBootstrap();
   });
 
+/**
+ * True end-to-end round-trip: write → semantic search → direct read → delete.
+ * Every step reports its raw outcome. Proves the store is actually usable.
+ */
+export const verifyRagRoundTrip = createServerFn({ method: "POST" })
+  .handler(async () => {
+    const { verifyRoundTrip } = await import("./rag/azure-pg.server");
+    return verifyRoundTrip();
+  });
+
 export const saveMemoryItem = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) =>
     z
