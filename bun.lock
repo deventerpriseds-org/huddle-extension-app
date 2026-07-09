@@ -6,6 +6,7 @@
       "name": "tanstack_start_ts",
       "dependencies": {
         "@ai-sdk/openai-compatible": "^3.0.5",
+        "@azure/msal-browser": "^5.17.0",
         "@fontsource/inter": "^5.2.8",
         "@hookform/resolvers": "^5.2.2",
         "@radix-ui/react-accordion": "^1.2.12",
@@ -95,6 +96,10 @@
     "@ai-sdk/provider-utils": ["@ai-sdk/provider-utils@5.0.5", "https://europe-west1-npm.pkg.dev/lovable-core-prod/sandbox-npm-cache/@ai-sdk/provider-utils/-/provider-utils-5.0.5.tgz", { "dependencies": { "@ai-sdk/provider": "4.0.2", "@standard-schema/spec": "^1.1.0", "@workflow/serde": "4.1.0", "eventsource-parser": "^3.0.8" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-oI0t3dvCoqWNV1I8o1Rybi2DXDvHES5r/TrwtJW90tuFLVepgJlftPxrcjh8vaSvjqC2diTuA2vXyjKAyHJm4A=="],
 
     "@alloc/quick-lru": ["@alloc/quick-lru@5.2.0", "", {}, "sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw=="],
+
+    "@azure/msal-browser": ["@azure/msal-browser@5.17.0", "https://europe-west1-npm.pkg.dev/lovable-core-prod/sandbox-npm-cache/@azure/msal-browser/-/msal-browser-5.17.0.tgz", { "dependencies": { "@azure/msal-common": "16.11.1" } }, "sha512-/yTnW2TCk9Mh+2b/NOaHAN+MryUNxzRTaJD/YtrqOA9bpBWfTXn/iyReRbaLrK/btBo3stEzLyEvuWp2NZ5DuA=="],
+
+    "@azure/msal-common": ["@azure/msal-common@16.11.1", "https://europe-west1-npm.pkg.dev/lovable-core-prod/sandbox-npm-cache/@azure/msal-common/-/msal-common-16.11.1.tgz", {}, "sha512-yPohvMwWLv1XnaWnIUyKUh8CvcVChCGqG/VluGwfGmaAfrZTNt5yQ+sIs462Sgw6+e2K83KGmMJ860p73ZSCrw=="],
 
     "@babel/code-frame": ["@babel/code-frame@7.29.0", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.28.5", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, "sha512-9NhCeYjq9+3uxgdtp20LSiJXJvN0FeCtNGpJxuMFZ1Kv3cWUNb6DOhJwUvcVCzKGR66cw4njwM6hrJLqgOwbcw=="],
 
