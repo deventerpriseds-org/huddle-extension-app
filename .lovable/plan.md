@@ -1,99 +1,68 @@
-## Plan: port Bridge Builder's Entra External ID login into Huddle
 
-Add a client-side login gate using MSAL against your existing Entra CIAM app (tenant `enterpriseds`, client `59465948-6e95-4124-984e-a43acade2fa9`). Any user who successfully signs in via Google-through-Entra can use the app. Server functions stay open (unchanged).
+# Get Azure Postgres working, transparently — no fallbacks, no tricks
 
-### 1. Package + env
+You're right that it's a single connection string (`AZURE_PG_URL`), and it's already saved. The reason it hasn't worked isn't a missing secret — it's that the current code hides the actual failure behind a lazy bootstrap and static "everything's fine" chips. This plan removes the deception so we can see exactly what Azure is saying and fix that one thing.
 
-- `bun add @azure/msal-browser`
-- Add to `.env` (and document in a new `.env.example`):
-  ```
-  VITE_ENTRA_TENANT_NAME=enterpriseds
-  VITE_ENTRA_TENANT_ID=b9791c7d-dd6c-4190-b1bb-dbbd1996bc2e
-  VITE_ENTRA_CLIENT_ID=59465948-6e95-4124-984e-a43acade2fa9
-  ```
-- In the Entra app registration → Authentication → SPA redirect URIs, you'll need to add both this project's dev preview URL and its published URL. I'll list the exact URLs in the closing message so you can paste them into the portal.
+## What changes
 
-### 2. Auth module — `src/lib/entra-auth.ts`
+### 1. Delete the silent lazy bootstrap
+`azure-pg.server.ts` today runs `CREATE TABLE IF NOT EXISTS` on the first call inside `ensureBootstrap()` and every store method swallows errors upstream. Replace with:
+- Explicit `runBootstrap()` server fn the user triggers from Settings. Returns the raw SQL result or the raw error.
+- Every store method (`writeChunk`, `searchChunks`, `lookupTriples`, `writeTriples`) throws `RagStoreUnavailableError` on failure. No `{ ok: false }` masquerading as success.
 
-Direct port of `web/src/lib/b2cAuth.ts` with three SSR-safety changes:
+### 2. Real diagnostic server function
+New `diagnoseAzurePg` returns, in one payload, the ground truth:
+- Parsed host / port / database / user / sslmode from `AZURE_PG_URL` (password redacted).
+- DNS resolution: does the host even resolve, and to what?
+- Raw TCP probe on port 5432 with a 5-second timeout, using `node:net` — this tells "firewall blocks the port" apart from "TCP fine, Postgres rejected us."
+- Real `pg.Client` handshake with 10-second timeout: returns the full Postgres error (`code`, `severity`, `message`, `routine`) on failure.
+- On success: `SELECT version()`, `pg_extension` list, and presence + row counts for `rag_chunks` / `rag_triples`.
 
-- Do not construct `PublicClientApplication` at module top level. Export `getMsal()` that lazily instantiates on first browser call, guarded by `typeof window !== "undefined"`. Server-side calls return `null`.
-- `redirectUri: window.location.origin` stays, but only read inside `getMsal()`.
-- `cacheLocation: "localStorage"`, `storeAuthStateInCookie: true`, `navigateToLoginRequestUrl: false` — same as Bridge Builder.
-- Exports: `initMsal()`, `getMsal()`, `getCurrentUser()`, `signIn()`, `signOut()`, `getToken()`. Scopes: `openid profile email`.
+Whatever Azure says gets shown verbatim. Nothing inferred, nothing hidden.
 
-### 3. Bootstrap — `src/start.ts` stays server-only; MSAL init happens client-side
+### 3. Live "Memory DB" panel in Agent Settings
+Replace the static `RAG STORE: azure / CHUNKS: true / TRIPLES: true` chips with a live panel:
+- Grey/"unknown" on first mount — never green by default.
+- Green only when the last `diagnoseAzurePg` returned ok. Otherwise red with the raw error line.
+- Buttons: **Run diagnostic**, **Run bootstrap (create tables)**, **Refresh**.
+- Expandable details: host, port, ssl mode, server version, extensions, table row counts, last-error timestamp.
 
-TanStack Start has no `main.tsx` we control. Do MSAL init in a client-only component wrapper. Add `src/components/MsalBootstrap.tsx`:
+### 4. Chat-turn transparency
+If retrieval throws during a turn:
+- Inline `memory unavailable` tag on the assistant message.
+- Activity-log entry with the raw error.
+- No silent empty-context fallback that pretends memory worked.
 
-- On mount: `await msal.initialize()` then `await msal.handleRedirectPromise()`.
-- Renders a small full-screen "Signing you in…" placeholder until both promises resolve, then renders `children`.
-- Wraps its work in `useEffect` + a `ready` state so SSR renders the same placeholder markup.
+This matches your core-memory rule already: "Any runtime fallback must surface a visible alert."
 
-Mount it inside `RootComponent` in `src/routes/__root.tsx` around `<Outlet />`, inside the existing `QueryClientProvider`. Nothing else in `__root.tsx` changes.
+### 5. What the diagnostic will likely show
+Ordered by how often each is the culprit for Cloudflare Worker → Azure Flexible Server:
+1. **Public access disabled** — Flexible Server defaults to private endpoint only. DNS resolves, TCP times out.
+2. **Firewall rules missing a rule for public traffic** — Workers use rotating egress IPs; a fixed IP allowlist won't work. Options: enable "Allow public access from any Azure service" (limited), or accept `0.0.0.0/0` with strong auth, or front the DB with a fixed-IP proxy.
+3. **TLS / sslmode conflict** — if `sslmode=verify-full` is baked into the URL it overrides driver options. We'll parse and strip conflicting query params, keep `{ ssl: { rejectUnauthorized: false } }` in code.
+4. **Auth (`28P01`)** — password rotated or wrong user.
+5. **Missing `vector` extension privilege** — bootstrap will surface this cleanly.
 
-### 4. Route structure
+The diagnostic will point at exactly one of these, and we fix that one.
 
-TanStack Start file routes:
+## Technical details
 
-- `src/routes/auth.tsx` — public login page (port of `pages/Auth.tsx`, restyled to match Huddle's dark theme + existing shadcn primitives, not the neutral-50 Compass card). Uses `signIn()` on button click. If already signed in, `redirect({ to: "/" })` from `beforeLoad`.
-- `src/routes/_authenticated.tsx` — pathless layout, `beforeLoad` reads `getCurrentUser()`; if null, `throw redirect({ to: "/auth" })`. Component returns `<Outlet />`.
-- Move current `src/routes/index.tsx` → `src/routes/_authenticated/index.tsx` (same content, still renders `<HuddleApp />`). Keeps `/` as the URL.
+Files touched:
+- `src/features/huddle/lib/rag/azure-pg.server.ts` — remove swallowing `ensureBootstrap`, export raw `runBootstrap()`, throw typed errors on failure.
+- `src/features/huddle/lib/rag.functions.ts` — add `diagnoseAzurePg`, `runRagBootstrap`, `getRagTableStats` server functions.
+- `src/features/huddle/components/AgentSettingsDrawer.tsx` — replace static RAG chips with the live Memory DB panel (TanStack Query, `refetchOnMount: "always"`).
+- Chat turn renderer (`HuddleView.tsx` / message component) — surface `memory-unavailable` inline tag when retrieval throws.
+- `openai-responses.server.ts` (retrieval call site) — let errors propagate to the turn instead of returning `[]`.
 
-The router already runs `defaultPreloadStaleTime: 0`, so no changes to `src/router.tsx`.
+Implementation notes:
+- Raw TCP probe uses `node:net`, DNS uses `node:dns/promises`. These work in the Workers runtime with `nodejs_compat` (already enabled).
+- Use a fresh `pg.Client` (not the pool) inside the diagnostic so a broken pool state can't hide the error.
+- No new secrets requested. `AZURE_PG_URL` is enough. If the diagnostic proves the string itself is bad (auth or sslmode), I'll ask you to reissue it from the portal at that point — with proof of what's wrong, not before.
 
-MSAL cache is browser-only, so this layout must be `ssr: false` (add `ssr: false` to `_authenticated.tsx` and to `auth.tsx`). Without this, `getCurrentUser()` throws during SSR/prerender.
+## What happens after this ships
 
-### 5. Auth state hook — `src/hooks/useAuth.ts`
+1. You open Agent Settings → Memory DB → **Run diagnostic**.
+2. You paste the raw output back here (or screenshot it — the panel shows everything).
+3. It names exactly one failure: DNS / TCP / TLS / auth / bootstrap. We fix that one thing and the store is live.
 
-Port of Bridge Builder's `useAuth.ts`. Subscribes to `msalInstance.addEventCallback` and re-reads `getCurrentUser()`. Exposes `{ user, isAuthenticated, signIn, signOut }`. Used by the sign-out button and the header account chip.
-
-### 6. Sign-out affordance in the UI
-
-The current `Sidebar` and `Rail` have no account UI. Add a small account row to `src/features/huddle/components/Sidebar.tsx` bottom edge: avatar circle with initials + display name + a chevron that opens a dropdown-menu (already in shadcn) with "Sign out". Sign-out handler:
-
-1. `await queryClient.cancelQueries()` — via a `useQueryClient()` call.
-2. `queryClient.clear()`.
-3. Clear the persisted huddle store: `localStorage.removeItem("huddle-workspace")` (the persist key from `src/features/huddle/store.ts`) so the next user doesn't see stale messages.
-4. `await signOut()` — MSAL redirect.
-
-MSAL redirects back to `/`; the `_authenticated` guard then bounces to `/auth`.
-
-### 7. Session-driven header
-
-The mobile top bar in `HuddleApp.tsx` gets a small "Signed in as {name}" tooltip on the settings button — cosmetic, no behavior change. Not adding a full account menu on mobile — the sidebar sheet already exposes it.
-
-### 8. Files touched
-
-New:
-- `src/lib/entra-auth.ts`
-- `src/hooks/useAuth.ts`
-- `src/components/MsalBootstrap.tsx`
-- `src/routes/auth.tsx`
-- `src/routes/_authenticated.tsx`
-- `src/routes/_authenticated/index.tsx`
-- `.env.example` (or append)
-
-Edited:
-- `src/routes/__root.tsx` — wrap `<Outlet />` with `<MsalBootstrap>`.
-- `src/features/huddle/components/Sidebar.tsx` — add account footer + sign-out.
-- `package.json` — `@azure/msal-browser` dep.
-
-Deleted:
-- `src/routes/index.tsx` (moved under `_authenticated/`).
-
-### 9. What's intentionally NOT changed
-
-- Server functions (`huddle.functions.ts`, `rag.functions.ts`, `agent-inspect.functions.ts`) — no bearer verification. If you later want server-side JWT verification, that's a separate task adding `jsonwebtoken` + `jwks-rsa` and a `functionMiddleware` in `src/start.ts`.
-- No user allowlist — any Entra-authenticated user gets in, per your answer.
-- No `profiles` / `user_roles` tables — user identity lives entirely in the Entra token, matching Bridge Builder.
-- No redirect-back memory — MSAL always lands on `/` (Bridge Builder's behavior).
-
-### 10. Verification steps
-
-1. `bun run build` succeeds.
-2. Visit `/` unauthenticated → redirected to `/auth`.
-3. Click "Continue with Google" → Entra flow → back to `/` → HuddleApp renders.
-4. Refresh `/` → still authenticated (localStorage cache).
-5. Click sign out → back to `/auth`; hitting Back doesn't restore the app shell (React Query cache + persist store cleared).
-6. Check network tab: server functions still called without an Authorization header, as intended.
+From that point on, the panel is the source of truth. If it's not green, memory isn't working — no more inferring from static config.
