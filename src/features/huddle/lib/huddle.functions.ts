@@ -546,6 +546,11 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           usedInstructions = instructions;
 
           const snapshotTools = snapshotResponsesTools(snapshot);
+          const snapshotToolNames = new Set(
+            snapshotTools
+              .map((t) => (t as { name?: string })?.name)
+              .filter((name): name is string => !!name),
+          );
           // Warn if snapshot had tools we can't wire (e.g. code_interpreter).
           if (snapshot && snapshot.tools.length > snapshotTools.length) {
             const dropped = snapshot.tools
@@ -583,10 +588,44 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           // Tavily web search tool (opt-in per agent).
           const webSearchTools: unknown[] = agentBackend.webSearch ? [TAVILY_WEB_SEARCH_TOOL] : [];
 
-          const mergedTools = [...snapshotTools, ...ragTools, ...journeyTools, ...webSearchTools];
+          const createHuddleTaskTool = {
+            type: "function" as const,
+            name: "create_huddle_task",
+            description:
+              "Create a suggested task card on the Huddle board when the user asks to add, log, track, assign, or capture a task/action item.",
+            parameters: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                title: { type: "string", description: "Short task title." },
+                ownerId: {
+                  type: "string",
+                  description: "Optional owner agent id, handle, or name. Defaults to the current agent.",
+                },
+                lane: {
+                  type: "string",
+                  description: "Optional board lane: Backlog, Ready, Up next, Doing, Done, or Blocked. Defaults to Backlog.",
+                },
+                blockReason: { type: "string", description: "Optional blocker note." },
+              },
+              required: ["title"],
+            },
+            strict: false,
+          };
+
+          const mergedTools = [createHuddleTaskTool, ...snapshotTools, ...ragTools, ...journeyTools, ...webSearchTools];
           toolTypes = mergedTools
-            .map((t) => (t as { type?: string })?.type ?? "unknown")
+            .map((t) => {
+              const rec = t as { type?: string; name?: string };
+              if (rec.name) return rec.name;
+              if (rec.type === "file_search") return "file_search";
+              return rec.type ?? "unknown";
+            })
             .filter(Boolean);
+
+          if (toolTypes.length > 0) {
+            recordToolUse(winner.id, "tool_catalog", `offered: ${toolTypes.join(", ")}`, true);
+          }
 
 
           // Wrap onToolCall to route Tavily web search and journey tools, while
@@ -596,6 +635,9 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             name: string;
             arguments: Record<string, unknown>;
           }) => {
+            if (c.name === "create_huddle_task") {
+              return JSON.stringify(createSuggestedTaskFromTool(c.arguments));
+            }
             if (c.name === "tavily_web_search") {
               const q = String(c.arguments.query ?? "").trim() || "unknown";
               try {
@@ -687,6 +729,19 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
                 return JSON.stringify({ error: msg, tool: c.name });
               }
             }
+            if (snapshotToolNames.has(c.name)) {
+              const detail =
+                "This assistant snapshot exposes the tool schema, but Huddle does not have a local executor or journey proxy handler for it.";
+              recordToolUse(winner.id, c.name, "snapshot tool offered but not executable", false, detail);
+              const ev = recordFallback(
+                "tool",
+                `${winner.name}: snapshot tool ${c.name} was requested but no executor is wired in Huddle.`,
+                "snapshot tool has no executor",
+                winner.id,
+              );
+              perAgentFallbacks.push(ev.inline);
+              return JSON.stringify({ error: detail, tool: c.name });
+            }
             if (ragOnToolCall) {
               const out = await ragOnToolCall(c);
               let ok = true;
@@ -704,21 +759,19 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
           usedModel = agentBackend.model?.trim() || snapshot?.model || "gpt-4o";
 
-          // Detect time-sensitive queries and force the first tool call so the
-          // model can't skip Tavily for current-events questions.
-          const TIME_SENSITIVE_RE =
-            /\b(today|tonight|tomorrow|yesterday|this week|this month|this year|latest|current|currently|right now|recent|recently|news|breaking|headline|score|price|stock|weather|forecast|202\d|updated|update)\b/i;
-          const forceWebSearch =
-            agentBackend.webSearch && TIME_SENSITIVE_RE.test(data.text);
-          const toolChoice = forceWebSearch
+          const toolChoice = forceTaskCreation
+            ? { type: "function", name: "create_huddle_task" }
+            : forceWebSearch
             ? { type: "function", name: "tavily_web_search" }
             : undefined;
 
-          if (agentBackend.webSearch) {
+          if (forceTaskCreation) {
+            recordToolUse(winner.id, "create_huddle_task", "offered (forced — task request)", true);
+          } else if (forceWebSearch) {
             recordToolUse(
               winner.id,
               "tavily_web_search",
-              forceWebSearch ? "offered (forced — time-sensitive)" : "offered",
+              "offered (forced — time-sensitive)",
               true,
             );
           }
