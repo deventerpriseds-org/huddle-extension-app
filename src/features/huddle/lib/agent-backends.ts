@@ -54,7 +54,7 @@ const RouterConfigSchema = z.object({
 });
 
 export const BackendsConfigSchema = z.object({
-  version: z.number().default(1),
+  version: z.number().default(2),
   router: RouterConfigSchema,
   agents: z.record(z.string(), AgentBackendSchema),
 });
