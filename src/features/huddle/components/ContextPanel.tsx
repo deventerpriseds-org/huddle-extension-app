@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Activity, Boxes, BookOpen, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
-import { useHuddleStore } from "../store";
+import { useHuddleStore, useVisibleDecisions, useVisibleMemory, useVisibleTasks } from "../store";
 import { AgentAvatar } from "./AgentAvatar";
 import type { Task, TaskLane } from "../data/seed";
 
@@ -53,7 +53,7 @@ export function ContextPanel() {
 }
 
 function QueueTab() {
-  const tasks = useHuddleStore((s) => s.tasks);
+  const tasks = useVisibleTasks();
   const setView = useHuddleStore((s) => s.setView);
   const approve = useHuddleStore((s) => s.approveTask);
   const skip = useHuddleStore((s) => s.skipTask);
@@ -170,7 +170,7 @@ function TaskCard({
 }
 
 function ActivityTab() {
-  const decisions = useHuddleStore((s) => s.decisions);
+  const decisions = useVisibleDecisions();
   if (decisions.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-hairline p-4 text-center text-xs text-muted-foreground">
@@ -239,7 +239,7 @@ function ActivityTab() {
 }
 
 function MemoryTab() {
-  const memory = useHuddleStore((s) => s.memory);
+  const memory = useVisibleMemory();
   const grouped = new Map<AgentId, typeof memory>();
   for (const m of memory) {
     const arr = grouped.get(m.agentId) ?? [];

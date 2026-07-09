@@ -9,7 +9,7 @@ import { Sidebar } from "./Sidebar";
 import { SettingsSheet } from "./SettingsSheet";
 import { AgentSettingsDrawer } from "./AgentSettingsDrawer";
 import { FallbackBanner } from "./FallbackBanner";
-import { useHuddleStore } from "../store";
+import { useHuddleStore, useVisibleHuddles } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID } from "../data/agents";
 
@@ -17,7 +17,7 @@ import { AGENT_BY_ID } from "../data/agents";
 
 export function HuddleApp() {
   const view = useHuddleStore((s) => s.view);
-  const huddles = useHuddleStore((s) => s.huddles);
+  const huddles = useVisibleHuddles();
   const activeId = useHuddleStore((s) => s.activeHuddleId);
   const active = huddles.find((h) => h.id === activeId);
   const [navOpen, setNavOpen] = useState(false);

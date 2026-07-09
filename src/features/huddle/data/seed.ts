@@ -14,6 +14,7 @@ export interface HuddleMessage {
   mentions?: AgentId[];
   replyTo?: string;
   isBriefing?: boolean;
+  demo?: boolean;
   checkIn?: {
     kind: "morning" | "midday" | "afternoon" | "adhoc";
     scheduledAt: string;
@@ -30,6 +31,7 @@ export interface Huddle {
   kind: HuddleScope;
   members: AgentId[]; // agents present (user is implicit)
   topic?: string;
+  demo?: boolean;
 }
 
 export type TaskLane =
@@ -50,6 +52,7 @@ export interface Task {
   blockReason?: string;
   origin: "user" | "agent-suggested" | "standup";
   createdAt: number;
+  demo?: boolean;
 }
 
 export interface MemoryItem {
@@ -60,6 +63,7 @@ export interface MemoryItem {
   sourceRef?: string;
   confidence?: number;
   editable: boolean;
+  demo?: boolean;
 }
 
 export interface RoutingDecision {
@@ -72,6 +76,7 @@ export interface RoutingDecision {
   interjected: boolean;
   reason: string;
   ts: number;
+  demo?: boolean;
 }
 
 /* ---------- seed data ---------- */
@@ -83,6 +88,7 @@ export const HUDDLES: Huddle[] = [
     kind: "group",
     members: AGENTS.map((a) => a.id),
     topic: "Cross-agent standup and follow-ups",
+    demo: true,
   },
   {
     id: "all-members",
@@ -97,6 +103,7 @@ export const HUDDLES: Huddle[] = [
     kind: "group",
     members: ["sam-trent", "tess-sutton", "cole-blake", "eli-vaughn", "iris-chase"],
     topic: "Launch coordination",
+    demo: true,
   },
   // 1:1 huddles for the sidebar (Agent channels)
   ...AGENTS.map<Huddle>((a) => ({
@@ -229,11 +236,18 @@ export const SEED_TASKS: Task[] = [
   },
 ];
 
-export const SEED_MEMORY: MemoryItem[] = [
-  { id: "mem1", agentId: "finn-reid", kind: "source", label: "Plaid · card + checking", sourceRef: "plaid", editable: true },
-  { id: "mem2", agentId: "finn-reid", kind: "fact", label: "Dining cap: $600/month", editable: true },
-  { id: "mem3", agentId: "faith-hartley", kind: "source", label: "Google Calendar · family", sourceRef: "gcal", editable: true },
-  { id: "mem4", agentId: "elle-rowan", kind: "fact", label: "Program: EMBA · cohort of 2026", editable: true },
-  { id: "mem5", agentId: "flex-grimes", kind: "fact", label: "Split: push/pull/legs · 4 days", editable: true },
-  { id: "mem6", agentId: "sam-trent", kind: "source", label: "Notion · pitch narrative v1", sourceRef: "notion", editable: true },
-];
+export const SEED_MEMORY: MemoryItem[] = (
+  [
+    { id: "mem1", agentId: "finn-reid", kind: "source", label: "Plaid · card + checking", sourceRef: "plaid", editable: true },
+    { id: "mem2", agentId: "finn-reid", kind: "fact", label: "Dining cap: $600/month", editable: true },
+    { id: "mem3", agentId: "faith-hartley", kind: "source", label: "Google Calendar · family", sourceRef: "gcal", editable: true },
+    { id: "mem4", agentId: "elle-rowan", kind: "fact", label: "Program: EMBA · cohort of 2026", editable: true },
+    { id: "mem5", agentId: "flex-grimes", kind: "fact", label: "Split: push/pull/legs · 4 days", editable: true },
+    { id: "mem6", agentId: "sam-trent", kind: "source", label: "Notion · pitch narrative v1", sourceRef: "notion", editable: true },
+  ] as MemoryItem[]
+).map((m) => ({ ...m, demo: true }));
+
+// Mark every seeded record as demo so it can be filtered by the global toggle
+// without deleting data. User-added records omit the flag.
+for (const m of SEED_MESSAGES) m.demo = true;
+for (const t of SEED_TASKS) t.demo = true;

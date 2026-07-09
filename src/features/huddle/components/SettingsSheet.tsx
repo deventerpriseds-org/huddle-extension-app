@@ -40,8 +40,8 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const setAgent = useBackendsStore((s) => s.setAgent);
   const replaceConfig = useBackendsStore((s) => s.replaceConfig);
   const resetToDefaults = useBackendsStore((s) => s.resetToDefaults);
-  const clearDemoData = useHuddleStore((s) => s.clearDemoData);
-  const [demoCleared, setDemoCleared] = useState(false);
+  const showDemoData = useHuddleStore((s) => s.showDemoData);
+  const setShowDemoData = useHuddleStore((s) => s.setShowDemoData);
 
   const [uploadError, setUploadError] = useState<string | null>(null);
 
@@ -277,6 +277,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                     </div>
                   )}
 
+                  <AgentContextEditor agentId={a.id} />
                 </div>
               );
             })}
@@ -337,23 +338,20 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
               <p className="text-xs text-destructive">{uploadError}</p>
             )}
             <div className="rounded-lg border border-hairline p-3 space-y-2">
-              <div className="text-sm font-semibold">Demo data</div>
-              <p className="text-xs text-muted-foreground">
-                Remove the seeded example messages, tasks, memory, and routing decisions from this workspace. This affects only your browser; it does not touch server data.
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  clearDemoData();
-                  setDemoCleared(true);
-                }}
-              >
-                <RotateCcw size={14} className="mr-1" /> Clear demo data
-              </Button>
-              {demoCleared && (
-                <p className="text-xs text-emerald-600 dark:text-emerald-400">Demo data cleared.</p>
-              )}
+              <div className="flex items-center justify-between gap-3">
+                <div className="pr-3">
+                  <div className="text-sm font-semibold">Show demo data</div>
+                  <p className="text-xs text-muted-foreground">
+                    Toggle the seeded example messages, tasks, memory, and routing
+                    decisions on or off. Nothing is deleted — the records are simply
+                    filtered from every view while this is off.
+                  </p>
+                </div>
+                <Switch
+                  checked={showDemoData}
+                  onCheckedChange={(v) => setShowDemoData(v)}
+                />
+              </div>
             </div>
             <details className="text-xs">
               <summary className="cursor-pointer text-muted-foreground">Show current config</summary>
@@ -527,6 +525,73 @@ function MemoryTab() {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------- Per-agent context entry ----------------
+
+import { Plus, Trash2 } from "lucide-react";
+import type { AgentId } from "../data/agents";
+
+function AgentContextEditor({ agentId }: { agentId: AgentId }) {
+  const memory = useHuddleStore((s) => s.memory);
+  const addMemoryItem = useHuddleStore((s) => s.addMemoryItem);
+  const removeMemoryItem = useHuddleStore((s) => s.removeMemoryItem);
+  const [draft, setDraft] = useState("");
+
+  const entries = memory.filter((m) => m.agentId === agentId && !m.demo);
+
+  function commit() {
+    const label = draft.trim();
+    if (!label) return;
+    addMemoryItem({ agentId, kind: "fact", label, editable: true });
+    setDraft("");
+  }
+
+  return (
+    <div className="pt-2 border-t border-hairline space-y-2">
+      <Label className="text-xs">Context entries</Label>
+      <p className="text-[11px] text-muted-foreground">
+        Add facts, preferences, or knowledge this agent should always remember.
+      </p>
+      {entries.length > 0 && (
+        <ul className="space-y-1">
+          {entries.map((e) => (
+            <li
+              key={e.id}
+              className="flex items-center justify-between gap-2 rounded bg-muted/60 px-2 py-1 text-xs"
+            >
+              <span className="truncate">{e.label}</span>
+              <button
+                type="button"
+                onClick={() => removeMemoryItem(e.id)}
+                className="inline-flex size-6 items-center justify-center rounded hover:bg-muted"
+                aria-label="Remove entry"
+              >
+                <Trash2 size={12} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex gap-2">
+        <Input
+          className="h-8"
+          placeholder="e.g. I prefer concise, bulleted answers"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commit();
+            }
+          }}
+        />
+        <Button size="sm" variant="outline" onClick={commit} disabled={!draft.trim()}>
+          <Plus size={14} className="mr-1" /> Add
+        </Button>
       </div>
     </div>
   );

@@ -6,7 +6,7 @@ import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
 import type { Huddle, HuddleMessage } from "../data/seed";
 import { sendHuddleMessage } from "../lib/huddle.functions";
 import { parseMentions } from "../lib/routing";
-import { useHuddleStore } from "../store";
+import { useHuddleStore, useVisibleHuddles, useVisibleMessages } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 
@@ -23,8 +23,8 @@ import {
 
 export function HuddleView() {
   const activeId = useHuddleStore((s) => s.activeHuddleId);
-  const huddles = useHuddleStore((s) => s.huddles);
-  const allMessages = useHuddleStore((s) => s.messages);
+  const huddles = useVisibleHuddles();
+  const allMessages = useVisibleMessages();
   const huddle = useMemo(() => huddles.find((h) => h.id === activeId), [huddles, activeId]);
   const messages = useMemo(
     () => allMessages.filter((m) => m.huddleId === activeId),
@@ -276,7 +276,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
   const logDecision = useHuddleStore((s) => s.logDecision);
   const addFallbacks = useAgentPanelStore((s) => s.addFallbacks);
   const recordTurn = useAgentPanelStore((s) => s.recordTurn);
-  const allMessages = useHuddleStore((s) => s.messages);
+  const allMessages = useVisibleMessages();
   const messages = useMemo(() => allMessages.filter((m) => m.huddleId === huddle.id), [allMessages, huddle.id]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
