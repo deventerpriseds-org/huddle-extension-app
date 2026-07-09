@@ -9,6 +9,7 @@ import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
+import { useAuth } from "@/hooks/useAuth";
 
 
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
