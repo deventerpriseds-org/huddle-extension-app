@@ -153,10 +153,22 @@ export const useBackendsStore = create<BackendsState>()(
       merge: (persisted, current) => {
         const p = persisted as Partial<BackendsState> | undefined;
         if (!p?.config) return current;
+        const persistedVersion = p.config.version ?? 1;
+        const mergedAgents: Record<string, AgentBackend> = { ...current.config.agents };
+        for (const [id, pAgent] of Object.entries(p.config.agents ?? {})) {
+          const base = current.config.agents[id as AgentId] ?? pAgent;
+          const combined = { ...base, ...pAgent } as AgentBackend;
+          // v1 → v2 migration: web search + file search default ON.
+          if (persistedVersion < 2) {
+            combined.webSearch = true;
+            combined.rag = { ...combined.rag, fileSearch: true };
+          }
+          mergedAgents[id] = combined;
+        }
         const merged: BackendsConfig = {
-          version: 1,
+          version: 2,
           router: { ...current.config.router, ...p.config.router },
-          agents: { ...current.config.agents, ...p.config.agents },
+          agents: mergedAgents as Record<AgentId, AgentBackend>,
         };
         return { ...current, config: merged };
       },
