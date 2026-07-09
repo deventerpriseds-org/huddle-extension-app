@@ -1,8 +1,8 @@
-import { useState } from "react";
-import { Activity, Boxes, BookOpen, Sparkles } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Activity, Boxes, BookOpen, Sparkles, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
-import { useHuddleStore, useVisibleDecisions, useVisibleMemory, useVisibleTasks } from "../store";
+import { useHuddleStore, useToolUses, useVisibleDecisions, useVisibleMemory, useVisibleTasks } from "../store";
 import { AgentAvatar } from "./AgentAvatar";
 import type { Task, TaskLane } from "../data/seed";
 
