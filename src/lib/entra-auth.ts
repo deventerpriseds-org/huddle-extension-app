@@ -8,6 +8,7 @@ import {
 } from "@azure/msal-browser";
 
 const tenantName = import.meta.env.VITE_ENTRA_TENANT_NAME as string | undefined;
+const tenantId = import.meta.env.VITE_ENTRA_TENANT_ID as string | undefined;
 const clientId = import.meta.env.VITE_ENTRA_CLIENT_ID as string | undefined;
 
 export const loginRequest = {
@@ -25,19 +26,24 @@ function isBrowser() {
 export function getMsal(): PublicClientApplication | null {
   if (!isBrowser()) return null;
   if (instance) return instance;
-  if (!tenantName || !clientId) {
+  if (!tenantName || !tenantId || !clientId) {
     console.error(
-      "[entra-auth] Missing VITE_ENTRA_TENANT_NAME or VITE_ENTRA_CLIENT_ID env vars",
+      "[entra-auth] Missing VITE_ENTRA_TENANT_NAME / VITE_ENTRA_TENANT_ID / VITE_ENTRA_CLIENT_ID env vars",
     );
     return null;
   }
-  const tenantDomain = `${tenantName}.onmicrosoft.com`;
-  const authority = `https://${tenantName}.ciamlogin.com/${tenantDomain}/`;
+  // Use the tenant-GUID authority so MSAL's issuer validation matches the
+  // discovery document (which returns `<tenantId>.ciamlogin.com` as the issuer,
+  // not the tenant-name host).
+  const authority = `https://${tenantId}.ciamlogin.com/${tenantId}/v2.0`;
   const config: Configuration = {
     auth: {
       clientId,
       authority,
-      knownAuthorities: [`${tenantName}.ciamlogin.com`],
+      knownAuthorities: [
+        `${tenantId}.ciamlogin.com`,
+        `${tenantName}.ciamlogin.com`,
+      ],
       redirectUri: window.location.origin,
     },
     cache: {
