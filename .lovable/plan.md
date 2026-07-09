@@ -1,92 +1,73 @@
 ## Goal
 
-Give each signed-in Entra user a huddle profile with:
-- A chosen **username** (unique handle)
-- **One or more email addresses** attached to it (any email they've signed in with, or any they add manually)
+Replace the Zustand `persist(localStorage)` layer in `src/features/huddle/store.ts` with a per-user store persisted to Azure Postgres, keyed by the signed-in Entra `oid` (via the `identity.profiles.id` we already provision). Also fixes:
 
-No verification emails, no primary/secondary distinction, no promotion rules. Just: a username, and a list of emails that resolve to the same person. LinkedIn was the reference only because the shape is familiar — this build is intentionally simpler.
+- Account tab `block_nested_popups` (already patched — silent → popup fallback in iframe).
+- Journey tools "no such ability" — audit tool wiring after migration lands, in a follow-up.
 
-## Data model (Azure PG, new `identity` schema)
+## What persists per user
 
-```text
-identity.profiles
-  entra_object_id  text primary key         -- Entra oid from MSAL
-  username         citext unique not null   -- 3-30 chars [a-z0-9_-]
-  display_name     text
-  created_at       timestamptz default now()
-  updated_at       timestamptz default now()
+From current `partialize`:
+- `messages` (per huddle)
+- `tasks` (kanban)
+- `memory` (RAG surface items)
+- `decisions` (routing log)
+- `activeHuddleId`
+- `showDemoData`
+- `journeyTasks`
 
-identity.profile_emails
-  id               uuid primary key
-  entra_object_id  text references identity.profiles on delete cascade
-  email            citext not null
-  source           text not null            -- 'entra' | 'manual'
-  added_at         timestamptz default now()
-  unique (lower(email))                     -- one email → one profile
-```
+Demo seed remains in code (`SEED_*`). New users still see it via the existing `showDemoData` toggle; their own writes go to the DB.
 
-`citext` = case-insensitive matching. Global email uniqueness so two profiles can't claim the same address.
-
-On first `getMyProfile()` call after sign-in:
-- Insert a `profiles` row keyed by the MSAL `homeAccountId` / `localAccountId` (oid), with `username` auto-derived from the Entra email local-part (deduped with a numeric suffix if taken).
-- Insert the Entra sign-in email into `profile_emails` with `source='entra'`.
-
-If the same user later signs in with a different Entra identity that shares an email already in `profile_emails`, we surface it in the UI as "this email is already linked to @username" — no auto-merge.
-
-## UX — new "Account" tab in Settings
-
-Only shown when signed in. Three fields, no wizards:
+## Schema (new migration in `identity.server.ts` bootstrap)
 
 ```text
-┌ Account ────────────────────────────┐
-│ Username                            │
-│   [ flex_grimes         ] [ Save ]  │
-│                                     │
-│ Display name                        │
-│   [ Alex Rivera         ] [ Save ]  │
-│                                     │
-│ Emails                              │
-│   • alex@enterpriseds.com  (Entra)  │
-│   • alex.personal@gmail.com  Remove │
-│   [ + Add email ]                   │
-└─────────────────────────────────────┘
+identity.workspace_state (
+  profile_id  uuid PRIMARY KEY REFERENCES identity.profiles(id) ON DELETE CASCADE,
+  state       jsonb NOT NULL DEFAULT '{}'::jsonb,
+  version     int   NOT NULL DEFAULT 3,
+  updated_at  timestamptz NOT NULL DEFAULT now()
+)
 ```
 
-- Username edit is validated for format + uniqueness; no cooldown.
-- Adding an email just inserts a `manual` row after a format check and uniqueness check. No verification link.
-- Removing an email is allowed for any `manual` row. The `entra` row (the address the user is currently signed in with) is not removable — deleting it would orphan the profile from its login.
+Single-row JSONB blob per user. Same shape as the current `partialize` output — simplest, no per-table schema churn, and the store already treats it as one bag. We can normalize later if any single field grows unbounded.
 
-## Server functions
+## Server functions (new `workspace.functions.ts`)
 
-New file `src/features/huddle/lib/identity/profile.functions.ts`, each guarded by MSAL bearer middleware that resolves `entra_object_id` from the token. All return the same `{ profile, emails }` payload so one query key covers everything.
+- `loadWorkspace({ idToken })` → `{ state, version, updatedAt } | null`
+- `saveWorkspace({ idToken, state, version })` → `{ updatedAt }` (upsert)
 
-- `getMyProfile()` — auto-provisions on first call.
-- `updateUsername({ username })`
-- `updateDisplayName({ displayName })`
-- `addEmail({ email })`
-- `removeEmail({ emailId })` — rejects `source='entra'` rows.
+Both verify the ID token via `verifyEntraIdToken`, resolve profile via `getOrCreateProfile`, then read/write the row.
 
-## Client wiring
+## Client integration (`store.ts`)
 
-- `src/hooks/useProfile.ts` — TanStack Query hook.
-- `src/features/huddle/components/AccountSettingsPanel.tsx` — the tab body.
-- `src/features/huddle/components/SettingsSheet.tsx` — add "Account" tab, only when `useAuth().isAuthenticated`.
+Replace the `persist` middleware with a custom sync layer:
 
-## How this unblocks other work
+1. Keep Zustand store in-memory with the same shape (no API change to consumers).
+2. New `useWorkspaceSync()` hook mounted once in `HuddleApp`:
+   - On sign-in: `loadWorkspace` → `store.setState(remote.state)`. If null, keep seed defaults and immediately save.
+   - Subscribe to store changes; debounce 800ms; call `saveWorkspace` with `partialize`d payload.
+   - On sign-out: reset store to seed defaults.
+3. Signed-out users: fall back to the current localStorage behavior (keep `persist` behind a flag) so the app still works pre-auth. Simplest: keep `persist` but namespace the key by `oid` when signed in, OR just skip persistence entirely when signed out and rely on in-memory + seed. I'll go with **skip persist when signed out** to avoid two sources of truth.
 
-- `entra_object_id` becomes the key for moving huddle store state off localStorage (open item #3).
-- `identity.profile_emails` is the exact input the `huddle_user_aliases` bridge to journey-voice needs (from `.lovable/plan.md`) — every row already maps an email to one Entra identity.
+## Files touched
 
-## Out of scope
+- New: `src/features/huddle/lib/identity/workspace.functions.ts`
+- Edit: `src/features/huddle/lib/identity/identity.server.ts` — add `workspace_state` table to bootstrap + `loadWorkspace`/`saveWorkspace` helpers.
+- Edit: `src/features/huddle/store.ts` — remove `persist` middleware, expose `hydrateFromRemote(state)` and `getPersistablePayload()`.
+- New: `src/features/huddle/hooks/useWorkspaceSync.ts` — mount-once sync loop using `useAuth` + `getToken`.
+- Edit: `src/features/huddle/components/HuddleApp.tsx` — call the sync hook.
 
-- Email verification / ownership proof.
-- Primary vs secondary emails.
-- Public `/@username` pages.
-- Merging two profiles that share an email (surface conflict, don't auto-resolve).
+## Migration safety
 
-## Order
+On first successful `loadWorkspace` returning null, if the browser has an existing `huddle-workspace` localStorage blob, upload it once as the initial state (one-shot migration), then clear the local key. This preserves existing demo edits already accumulated in the browser.
 
-1. Migration: `identity` schema + two tables + `citext` extension.
-2. `profile.functions.ts` with auto-provision on `getMyProfile`.
-3. `useProfile` hook + `AccountSettingsPanel` + Settings tab wiring.
-4. Smoke test: sign in → profile auto-created with Entra email → edit username → add second email → remove it.
+## Out of scope this pass
+
+- Journey tools not recognized — separate investigation after migration lands.
+- Multi-device conflict resolution — last-write-wins is fine; single active tab per user is the common case.
+- Splitting messages/tasks into their own tables (future normalization).
+
+## Verification
+
+- `bunx tsgo --noEmit` clean.
+- Playwright: sign in via preview, send a message, reload — message survives; sign out from a second browser context — no data leak.
