@@ -31,6 +31,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Secret presence check
+        # Prints present/MISSING per secret name — never the value (GitHub masks
+        # values regardless). Run once to confirm the org secret names line up,
+        # then add any MISSING ones in the org settings UI. Does not fail the run.
+        run: |
+          for k in AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID \
+                   ELEVENLABS_API_KEY ELEVENLABS_DEFAULT_VOICE_ID ELEVENLABS_AGENT_LLM \
+                   OPENAI_API_KEY LOVABLE_API_KEY TAVILY_API_KEY AZURE_PG_URL \
+                   JOURNEY_PROXY_URL JOURNEY_PROXY_TOKEN ENTRA_TENANT_ID ENTRA_CLIENT_ID \
+                   VITE_ENTRA_TENANT_ID VITE_ENTRA_CLIENT_ID; do
+            if [ -n "${!k}" ]; then echo "$k: present"; else echo "$k: MISSING"; fi
+          done
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_DEFAULT_VOICE_ID: ${{ secrets.ELEVENLABS_DEFAULT_VOICE_ID }}
+          ELEVENLABS_AGENT_LLM: ${{ secrets.ELEVENLABS_AGENT_LLM }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LOVABLE_API_KEY: ${{ secrets.LOVABLE_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          AZURE_PG_URL: ${{ secrets.AZURE_PG_URL }}
+          JOURNEY_PROXY_URL: ${{ secrets.JOURNEY_PROXY_URL }}
+          JOURNEY_PROXY_TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          ENTRA_TENANT_ID: ${{ secrets.ENTRA_TENANT_ID }}
+          ENTRA_CLIENT_ID: ${{ secrets.ENTRA_CLIENT_ID }}
+          VITE_ENTRA_TENANT_ID: ${{ secrets.VITE_ENTRA_TENANT_ID }}
+          VITE_ENTRA_CLIENT_ID: ${{ secrets.VITE_ENTRA_CLIENT_ID }}
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
