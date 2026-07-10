@@ -133,32 +133,43 @@ jobs:
               json.dump(c, open(f, "w"), indent=2)
               print("set apiRuntime=node:20 in", f)
           PY
-          # Patch the beta azure-swa handler: it builds `new Request(url, ...)`
-          # with a RELATIVE url ("/", "/api/..."), which Node's undici rejects
-          # ("Failed to parse URL") — the function throws before writing a body,
-          # so every request 500s with content-length:0. Give the Request an
-          # absolute base (routing only uses the pathname, so the origin is
-          # irrelevant). Remove once Nitro's stable azure-swa preset ships.
+          # The beta azure-swa handler (nitro 3.x beta) has three bugs that make
+          # the SWA managed function unusable. Patch the generated handler in one
+          # pass; each replacement asserts its anchor exists so a future Nitro
+          # upgrade that changes the code shape fails the build loudly instead of
+          # silently shipping a broken function. Remove once the stable preset ships.
+          #   1. `new Request(url, ...)` uses a RELATIVE url ("/", "/api/...");
+          #      Node's undici rejects it ("Failed to parse URL") and the function
+          #      throws before writing a body → every request 500s. Give it an
+          #      absolute base (routing only reads the pathname).
+          #   2. The Request forwards NO request headers, so POST server-function
+          #      calls arrive without Content-Type and TanStack can't parse the
+          #      body → 500 on every server fn (Settings, memory, batch, chat).
+          #      Forward the headers, minus content-length/content-encoding, which
+          #      describe the ORIGINAL wire body and would corrupt the proxied one.
+          #   3. `context.res.body = response.body` hands a ReadableStream to SWA's
+          #      classic Functions worker, which serializes it to "{}" (HTTP 200,
+          #      empty page). Buffer it first.
           ENTRY=.output/server/functions/index.mjs
-          if grep -q 'new Request(url,' "$ENTRY"; then
-            sed -i 's/new Request(url,/new Request(new URL(url, "http:\/\/localhost"),/' "$ENTRY"
-            echo "patched relative-URL Request in $ENTRY"
-          else
-            echo "WARNING: expected 'new Request(url,' not found in $ENTRY — preset may have changed" >&2
-            grep -n 'new Request' "$ENTRY" || true
-          fi
-          # Second beta-preset bug: the handler assigns the response's
-          # ReadableStream straight to `context.res.body`. SWA's classic Azure
-          # Functions Node worker can't serialize a stream, so it JSON-stringifies
-          # it to "{}" — the page returns HTTP 200 with an empty body. Buffer the
-          # stream to a Buffer first. Remove once the stable preset ships.
-          if grep -q 'body: response.body,' "$ENTRY"; then
-            sed -i 's/body: response.body,/body: Buffer.from(await response.arrayBuffer()),/' "$ENTRY"
-            echo "patched streaming body in $ENTRY"
-          else
-            echo "WARNING: expected 'body: response.body,' not found in $ENTRY — preset may have changed" >&2
-            grep -n 'response.body' "$ENTRY" || true
-          fi
+          python3 - "$ENTRY" <<'PY'
+          import sys
+          f = sys.argv[1]
+          s = o = open(f).read()
+          def patch(src, old, new, label):
+              if old not in src:
+                  sys.stderr.write(f"ERROR: anchor for '{label}' not found — azure-swa preset changed; update deploy-swa.yml\n")
+                  sys.exit(1)
+              print("patched:", label)
+              return src.replace(old, new, 1)
+          s = patch(s, "new Request(url, {",
+                    'new Request(new URL(url, "http://localhost"), {', "relative-URL Request")
+          s = patch(s, "method: req.method || void 0,",
+                    'method: req.method || void 0, headers: (()=>{const h={...req.headers};delete h["content-length"];delete h["content-encoding"];return h;})(),',
+                    "forward request headers")
+          s = patch(s, "body: response.body,",
+                    "body: Buffer.from(await response.arrayBuffer()),", "buffer response body")
+          open(f, "w").write(s)
+          PY
 
       - name: Sync secrets → SWA app settings
         run: |
