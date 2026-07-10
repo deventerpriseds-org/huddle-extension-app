@@ -160,7 +160,7 @@ jobs:
               LOVABLE_API_KEY="${{ secrets.LOVABLE_API_KEY }}" \
               TAVILY_API_KEY="${{ secrets.TAVILY_API_KEY }}" \
               AZURE_PG_URL="${{ secrets.AZURE_PG_URL }}" \
-              JOURNEY_PROXY_URL="${{ secrets.JOURNEY_PROXY_URL }}" \
+              JOURNEY_PROXY_URL="${{ secrets.JOURNEY_PROXY_URL || 'https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/huddle-proxy' }}" \
               JOURNEY_PROXY_TOKEN="${{ secrets.JOURNEY_PROXY_TOKEN }}" \
               ENTRA_TENANT_ID="${{ secrets.ENTRA_TENANT_ID }}" \
               ENTRA_CLIENT_ID="${{ secrets.ENTRA_CLIENT_ID }}"
