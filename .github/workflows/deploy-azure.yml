@@ -1,0 +1,119 @@
+name: Deploy to Azure (App Service)
+
+# Deploys the Huddle SSR app (TanStack Start / Nitro) to an Azure Linux Web App
+# and injects runtime secrets as App Service settings, so process.env.* works at
+# runtime (this is how ELEVENLABS_API_KEY etc. reach the server — GitHub Actions
+# secrets are NOT visible to the Lovable/Cloudflare runtime).
+#
+# Trigger is manual for now so this does not double-deploy against Lovable's own
+# Cloudflare deploy of `main`. Flip on the `push` trigger once you want GitHub
+# Actions to own deployment.
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+
+# ---------------------------------------------------------------------------
+# CONFIRM THESE for your environment (naming follows the enterpriseds pattern).
+# ---------------------------------------------------------------------------
+env:
+  AZURE_WEBAPP_NAME: enterpriseds-huddle-web        # globally-unique Web App name
+  AZURE_RESOURCE_GROUP: EnterpriseDS_ResourceGRP
+  AZURE_APP_SERVICE_PLAN: enterpriseds-huddle-plan
+  AZURE_LOCATION: eastus
+  APP_SERVICE_SKU: B1
+  NODE_VERSION: "22"
+  NITRO_PRESET: node-server                          # retargets Nitro off Cloudflare → Node
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies (public npm)
+        # The committed bun.lock pins Lovable's private pkg.dev registry, which a
+        # GitHub runner can't reach. Regenerate against public npm for CI only.
+        run: |
+          rm -f bun.lock
+          bun install --registry https://registry.npmjs.org
+
+      - name: Build (Node/SSR target)
+        env:
+          NITRO_PRESET: ${{ env.NITRO_PRESET }}
+          # VITE_* are baked into the client bundle at build time (public SPA ids).
+          VITE_ENTRA_TENANT_NAME: ${{ secrets.VITE_ENTRA_TENANT_NAME || 'enterpriseds' }}
+          VITE_ENTRA_TENANT_ID: ${{ secrets.VITE_ENTRA_TENANT_ID }}
+          VITE_ENTRA_CLIENT_ID: ${{ secrets.VITE_ENTRA_CLIENT_ID }}
+        run: bun run build
+
+      - name: Package server output
+        # Nitro's node-server output is self-contained (deps traced in), so we
+        # ship .output as-is and start it with `node server/index.mjs`.
+        run: |
+          test -f .output/server/index.mjs || (echo "Nitro node output missing — check NITRO_PRESET/build" && exit 1)
+          cd .output && zip -r ../app.zip . >/dev/null
+
+      - uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
+             "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}",
+             "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+             "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
+
+      - name: Ensure App Service plan + Web App exist (idempotent)
+        run: |
+          az appservice plan create \
+            --name "$AZURE_APP_SERVICE_PLAN" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --location "$AZURE_LOCATION" --is-linux --sku "$APP_SERVICE_SKU" --only-show-errors || true
+          az webapp create \
+            --name "$AZURE_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --plan "$AZURE_APP_SERVICE_PLAN" --runtime "NODE:${NODE_VERSION}-lts" --only-show-errors || true
+          az webapp config set \
+            --name "$AZURE_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --startup-file "node server/index.mjs" --only-show-errors
+
+      - name: Sync secrets → App Service settings
+        # Exact-name and silent-on-miss: if a GitHub secret is named differently,
+        # the value lands empty. The app also accepts common ELEVENLABS_* aliases.
+        run: |
+          az webapp config appsettings set \
+            --name "$AZURE_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --only-show-errors --settings \
+              SCM_DO_BUILD_DURING_DEPLOYMENT=false \
+              WEBSITES_PORT=3000 \
+              ELEVENLABS_API_KEY="${{ secrets.ELEVENLABS_API_KEY }}" \
+              ELEVENLABS_DEFAULT_VOICE_ID="${{ secrets.ELEVENLABS_DEFAULT_VOICE_ID }}" \
+              ELEVENLABS_AGENT_LLM="${{ secrets.ELEVENLABS_AGENT_LLM }}" \
+              OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+              LOVABLE_API_KEY="${{ secrets.LOVABLE_API_KEY }}" \
+              TAVILY_API_KEY="${{ secrets.TAVILY_API_KEY }}" \
+              AZURE_PG_URL="${{ secrets.AZURE_PG_URL }}" \
+              JOURNEY_PROXY_URL="${{ secrets.JOURNEY_PROXY_URL }}" \
+              JOURNEY_PROXY_TOKEN="${{ secrets.JOURNEY_PROXY_TOKEN }}" \
+              ENTRA_TENANT_ID="${{ secrets.ENTRA_TENANT_ID }}" \
+              ENTRA_CLIENT_ID="${{ secrets.ENTRA_CLIENT_ID }}"
+
+      - name: Deploy
+        run: |
+          az webapp deploy \
+            --name "$AZURE_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --type zip --src-path app.zip --only-show-errors
+
+      - name: Converge + verify
+        # config-zip/deploy returns before workers converge — restart, then poll.
+        run: |
+          az webapp restart --name "$AZURE_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP"
+          URL="https://${AZURE_WEBAPP_NAME}.azurewebsites.net/"
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$URL" || echo 000)
+            echo "attempt $i → HTTP $code"
+            [ "$code" = "200" ] && echo "Deployed: $URL" && exit 0
+            sleep 15
+          done
+          echo "App did not return 200 after deploy — check the App Service log stream." && exit 1

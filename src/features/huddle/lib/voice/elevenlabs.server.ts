@@ -14,12 +14,29 @@
 const EL_BASE = "https://api.elevenlabs.io/v1/convai";
 const DEFAULT_LLM = "gpt-4o-mini";
 
+/** First non-empty value among the given env var names (exact-name tolerant). */
+function firstEnv(names: string[]): string {
+  for (const n of names) {
+    const v = (process.env[n] ?? "").trim();
+    if (v) return v;
+  }
+  return "";
+}
+
+// Canonical names are ELEVENLABS_API_KEY / ELEVENLABS_DEFAULT_VOICE_ID, but we
+// accept common variants so a differently-named secret still lights up voice.
 function elKey(): string {
-  return (process.env.ELEVENLABS_API_KEY ?? "").trim();
+  return firstEnv(["ELEVENLABS_API_KEY", "ELEVEN_LABS_API_KEY", "ELEVENLABS_KEY", "XI_API_KEY"]);
 }
 
 function defaultVoiceId(): string {
-  return (process.env.ELEVENLABS_DEFAULT_VOICE_ID ?? "").trim();
+  return firstEnv([
+    "ELEVENLABS_DEFAULT_VOICE_ID",
+    "ELEVENLABS_VOICE_ID",
+    "ELEVEN_LABS_VOICE_ID",
+    "ELEVENLABS_VOICEID",
+    "DEFAULT_VOICE_ID",
+  ]);
 }
 
 function agentLlm(): string {
