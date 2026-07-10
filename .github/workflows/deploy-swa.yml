@@ -133,6 +133,20 @@ jobs:
               json.dump(c, open(f, "w"), indent=2)
               print("set apiRuntime=node:20 in", f)
           PY
+          # Patch the beta azure-swa handler: it builds `new Request(url, ...)`
+          # with a RELATIVE url ("/", "/api/..."), which Node's undici rejects
+          # ("Failed to parse URL") — the function throws before writing a body,
+          # so every request 500s with content-length:0. Give the Request an
+          # absolute base (routing only uses the pathname, so the origin is
+          # irrelevant). Remove once Nitro's stable azure-swa preset ships.
+          ENTRY=.output/server/functions/index.mjs
+          if grep -q 'new Request(url,' "$ENTRY"; then
+            sed -i 's/new Request(url,/new Request(new URL(url, "http:\/\/localhost"),/' "$ENTRY"
+            echo "patched relative-URL Request in $ENTRY"
+          else
+            echo "WARNING: expected 'new Request(url,' not found in $ENTRY — preset may have changed" >&2
+            grep -n 'new Request' "$ENTRY" || true
+          fi
 
       - name: Sync secrets → SWA app settings
         run: |
