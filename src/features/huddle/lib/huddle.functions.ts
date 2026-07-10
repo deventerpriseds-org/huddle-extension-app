@@ -82,6 +82,28 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     const lovableKey = process.env.LOVABLE_API_KEY;
     const openaiKey = process.env.OPENAI_API_KEY;
 
+    // ---- Grounding: give every agent the current date/time and an explicit
+    // freshness rule. The model has no clock and a frozen knowledge cutoff, so
+    // without this it confidently guesses dates / "latest version" / prices and
+    // is usually wrong. Injecting "now" removes the excuse to guess; the rule
+    // tells it to search (when it has web search) or decline to guess (when it
+    // doesn't) instead of answering verifiable facts from memory.
+    const nowIso = new Date().toISOString();
+    function groundingBlock(hasWeb: boolean): string {
+      const freshness = hasWeb
+        ? '- If a request depends on anything time-sensitive or verifiable — "today", "now", "latest", "current", "this week/month/year", a version or release number, a price, a score, standings, recent news, or who currently holds a role — you MUST call the `tavily_web_search` tool and answer ONLY from its results. Never answer these from memory. When unsure whether a fact is still current, search.'
+        : "- You do NOT have a web-search tool this turn. For anything time-sensitive or verifiable (dates, prices, versions, standings, recent news), say plainly that you can't verify it right now rather than guessing — do not assert a specific current fact you cannot confirm.";
+      return (
+        "\n\nKNOWLEDGE AND FRESHNESS\n" +
+        "- Your training data has a fixed cutoff. You do NOT inherently know the current date, time, prices, product versions, releases, standings, or news — these change after your cutoff.\n" +
+        "- Trust the CONTEXT below over your own assumptions; never compute or guess the current date.\n" +
+        freshness +
+        "\n- Never state a specific date, version, price, or standing you did not just retrieve from a tool.\n\n" +
+        "CONTEXT\n" +
+        `- Current date and time (UTC, ISO 8601): ${nowIso}`
+      );
+    }
+
     type Reply = { agentId: AgentId; text: string; fallbackNotes?: string[] };
 
     // Journey-voice mirror: any task rows that journey returns from a tool call
@@ -553,7 +575,11 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             ? snapshotInstructions + scene + roster
             : appSystem;
           const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
-          const instructions = baseInstructions + ragInstructions + webInstructions;
+          const instructions =
+            baseInstructions +
+            ragInstructions +
+            webInstructions +
+            groundingBlock(!!agentBackend.webSearch);
           usedInstructions = instructions;
 
           const snapshotTools = snapshotResponsesTools(snapshot);
@@ -1075,7 +1101,11 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             }
           }
 
-          usedInstructions = appSystem + ragInstructions + webInstructions;
+          usedInstructions =
+            appSystem +
+            ragInstructions +
+            webInstructions +
+            groundingBlock(!!agentBackend.webSearch);
 
           const toolNames = Object.keys(lovableTools);
           toolTypes = toolNames;
