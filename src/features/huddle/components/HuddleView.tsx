@@ -11,7 +11,6 @@ import { useBackendsStore } from "../lib/agent-backends";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useAuth } from "@/hooks/useAuth";
 
-
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
 import {
   DropdownMenu,
@@ -98,7 +97,9 @@ function HuddleHeader({
               onClick={() => setView(v)}
               className={cn(
                 "rounded-md px-3 py-1 text-xs font-medium capitalize transition",
-                view === v ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                view === v
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
               {v === "huddle" ? "Huddle" : "Board"}
@@ -140,7 +141,9 @@ function HuddleHeader({
 function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: Huddle }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [hydrated, setHydrated] = useState(false);
-  useEffect(() => { setHydrated(true); }, []);
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 999999, behavior: "smooth" });
   }, [messages.length]);
@@ -168,7 +171,8 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
 
         {messages.length === 0 && (
           <div className="rounded-xl border border-dashed border-hairline p-8 text-center text-sm text-muted-foreground">
-            Start the conversation. Try “what's the latest workout routine?” or “@Finn, how am I doing on dining?”
+            Start the conversation. Try “what's the latest workout routine?” or “@Finn, how am I
+            doing on dining?”
           </div>
         )}
       </div>
@@ -214,19 +218,26 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
             </span>
           )}
           <ClientTime ts={m.ts} />
-
         </div>
         <div
           className={cn(
             "mt-1 whitespace-pre-wrap text-[14px] leading-relaxed text-foreground",
-            isBriefing &&
-              "rounded-xl border border-hairline bg-surface p-4 shadow-soft",
+            isBriefing && "rounded-xl border border-hairline bg-surface p-4 shadow-soft",
           )}
         >
           {isBriefing && (
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm font-semibold">Morning briefing</span>
-              <button className="inline-flex items-center gap-1 text-xs" style={{ color: "var(--ai)" }}>
+              <button
+                onClick={() =>
+                  toast("Read-aloud is coming with the voice update", {
+                    description:
+                      "Standups and briefings will be spoken via ElevenLabs once the voice pipeline ships.",
+                  })
+                }
+                className="inline-flex items-center gap-1 text-xs"
+                style={{ color: "var(--ai)" }}
+              >
                 <Sparkles size={12} /> read aloud
               </button>
             </div>
@@ -240,9 +251,11 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
 
 function CheckInCard({ m }: { m: HuddleMessage }) {
   const startMeeting = useHuddleStore((s) => s.startMeeting);
+  const [snoozed, setSnoozed] = useState(false);
   const c = m.checkIn!;
   const hostName = AGENT_BY_ID[c.host].name.split(" ")[0];
   const joins = c.joins.map((id) => AGENT_BY_ID[id].name.split(" ")[0]).join(" · ");
+  if (snoozed) return null;
   return (
     <div className="mx-auto w-full max-w-2xl rounded-xl border-2 border-primary/25 bg-surface p-4 shadow-soft">
       <div className="flex items-center gap-2 text-sm font-semibold">
@@ -255,7 +268,15 @@ function CheckInCard({ m }: { m: HuddleMessage }) {
         Scheduled {c.scheduledAt} · {hostName} hosts · {joins} join by voice.
       </p>
       <div className="mt-3 grid grid-cols-2 gap-2">
-        <button className="rounded-lg border border-hairline bg-surface px-3 py-2 text-xs font-medium hover:bg-muted">
+        <button
+          onClick={() => {
+            setSnoozed(true);
+            toast("Check-in snoozed", {
+              description: "It won't resurface until the next scheduled session.",
+            });
+          }}
+          className="rounded-lg border border-hairline bg-surface px-3 py-2 text-xs font-medium hover:bg-muted"
+        >
           Snooze
         </button>
         <button
@@ -281,7 +302,10 @@ function Composer({ huddle }: { huddle: Huddle }) {
   const addFallbacks = useAgentPanelStore((s) => s.addFallbacks);
   const recordTurn = useAgentPanelStore((s) => s.recordTurn);
   const allMessages = useVisibleMessages();
-  const messages = useMemo(() => allMessages.filter((m) => m.huddleId === huddle.id), [allMessages, huddle.id]);
+  const messages = useMemo(
+    () => allMessages.filter((m) => m.huddleId === huddle.id),
+    [allMessages, huddle.id],
+  );
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const targetAgentId: AgentId | undefined =
@@ -344,7 +368,6 @@ function Composer({ huddle }: { huddle: Huddle }) {
             : undefined,
         },
       });
-
 
       logDecision({
         id: `d-${now}`,
@@ -409,7 +432,6 @@ function Composer({ huddle }: { huddle: Huddle }) {
     }
   }
 
-
   return (
     <div className="border-t border-hairline bg-surface px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-3">
       <div className="mx-auto flex max-w-3xl items-end gap-2">
@@ -465,4 +487,3 @@ function ClientTime({ ts }: { ts: number }) {
     </span>
   );
 }
-

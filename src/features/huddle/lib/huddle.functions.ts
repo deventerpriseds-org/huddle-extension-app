@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { generateText, tool, stepCountIs } from "ai";
+import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import type { HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
@@ -12,9 +12,6 @@ import {
   tavilySearch,
   type TavilySearchArgs,
 } from "./tavily-search.functions";
-
-
-
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
@@ -58,8 +55,6 @@ const AgentBackendInput = z.object({
   webSearch: z.boolean().optional(),
 });
 
-
-
 const Input = z.object({
   text: z.string().min(1).max(4000),
   huddleId: z.string(),
@@ -97,9 +92,10 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
     // Lazy: fetch & cache journey tool definitions for this whole turn. Only
     // populated when at least one participating agent has journey.enabled.
-    let journeyToolsCache:
-      | { defs: import("./journey/types").JourneyToolDefinition[]; tools: unknown[] }
-      | null = null;
+    let journeyToolsCache: {
+      defs: import("./journey/types").JourneyToolDefinition[];
+      tools: unknown[];
+    } | null = null;
     let journeyToolsError: string | null = null;
     const journeyEnabledMembers = data.members.filter(
       (id) => (data.agents ?? {})[id]?.journey?.enabled,
@@ -108,9 +104,8 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       if (journeyToolsCache || journeyToolsError) return journeyToolsCache;
       if (journeyEnabledMembers.length === 0) return null;
       try {
-        const { fetchJourneyToolDefinitions, toResponsesTool } = await import(
-          "./journey/proxy.functions"
-        );
+        const { fetchJourneyToolDefinitions, toResponsesTool } =
+          await import("./journey/proxy.functions");
         const defs = await fetchJourneyToolDefinitions();
         journeyToolsCache = { defs, tools: defs.map(toResponsesTool) };
         return journeyToolsCache;
@@ -120,7 +115,11 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       }
     }
 
-    const routerCfg = data.router ?? { backend: "openai" as const, model: "gpt-5.5", fastMode: false };
+    const routerCfg = data.router ?? {
+      backend: "openai" as const,
+      model: "gpt-5.5",
+      fastMode: false,
+    };
     const agentsCfg = data.agents ?? {};
 
     // ---- Fallback + prompt trackers ----
@@ -174,9 +173,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       .map((id) => ({ id, cfg: agentsCfg[id]?.rag }))
       .filter((x) => x.cfg && x.cfg.store === "azure" && x.cfg.chunks);
     const anyShared = ragAgents.some((a) => (a.cfg?.sharing ?? "shared") === "shared");
-    const privateAgents = ragAgents
-      .filter((a) => a.cfg?.sharing === "private")
-      .map((a) => a.id);
+    const privateAgents = ragAgents.filter((a) => a.cfg?.sharing === "private").map((a) => a.id);
 
     if ((anyShared || privateAgents.length > 0) && openaiKey) {
       (async () => {
@@ -273,7 +270,12 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       explicitMentions.length === 0 &&
       (routerCfg.backend === "openai" ? !!openaiKey : !!lovableKey);
 
-    if (data.scope === "group" && !data.targetAgentId && explicitMentions.length === 0 && !canLLMRoute) {
+    if (
+      data.scope === "group" &&
+      !data.targetAgentId &&
+      explicitMentions.length === 0 &&
+      !canLLMRoute
+    ) {
       recordFallback(
         "router",
         `LLM router unavailable (${routerCfg.backend === "openai" ? "OPENAI_API_KEY" : "LOVABLE_API_KEY"} missing); using keyword routing.`,
@@ -323,7 +325,15 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     }
 
     if (routed.winners.length === 0) {
-      return { decision: routed.decision, replies: [] as Reply[], fallbacks, prompts, journeyTaskUpdates, suggestedTasks, toolUses };
+      return {
+        decision: routed.decision,
+        replies: [] as Reply[],
+        fallbacks,
+        prompts,
+        journeyTaskUpdates,
+        suggestedTasks,
+        toolUses,
+      };
     }
 
     // ---- Reply transcript ----
@@ -396,7 +406,9 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       const forceWebSearch = !!agentBackend.webSearch && timeSensitiveRe.test(data.text);
 
       function resolveTaskLane(value: unknown): TaskLane {
-        const lane = String(value ?? "").trim().toLowerCase();
+        const lane = String(value ?? "")
+          .trim()
+          .toLowerCase();
         if (lane === "blocked") return "Blocked";
         if (lane === "ready") return "Ready";
         if (lane === "up next" || lane === "up-next" || lane === "next") return "Up next";
@@ -406,7 +418,9 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       }
 
       function resolveTaskOwner(value: unknown): AgentId {
-        const raw = String(value ?? "").trim().toLowerCase();
+        const raw = String(value ?? "")
+          .trim()
+          .toLowerCase();
         if (!raw) return winner.id;
         if (AGENT_BY_ID[raw as AgentId]) return raw as AgentId;
         const matched = AGENTS.find(
@@ -466,9 +480,8 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
         if (usedBackend === "openai" && openaiKey) {
           const { callOpenAIResponses } = await import("./openai-responses.server");
-          const { getAssistantSnapshot, snapshotResponsesTools } = await import(
-            "./openai-assistants.server"
-          );
+          const { getAssistantSnapshot, snapshotResponsesTools } =
+            await import("./openai-assistants.server");
 
           const snapshot = getAssistantSnapshot(winner.id);
           if (!snapshot) {
@@ -539,9 +552,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           const baseInstructions = snapshotInstructions
             ? snapshotInstructions + scene + roster
             : appSystem;
-          const webInstructions = agentBackend.webSearch
-            ? "\n\n" + TAVILY_WEB_SEARCH_HINT
-            : "";
+          const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
           const instructions = baseInstructions + ragInstructions + webInstructions;
           usedInstructions = instructions;
 
@@ -600,11 +611,13 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
                 title: { type: "string", description: "Short task title." },
                 ownerId: {
                   type: "string",
-                  description: "Optional owner agent id, handle, or name. Defaults to the current agent.",
+                  description:
+                    "Optional owner agent id, handle, or name. Defaults to the current agent.",
                 },
                 lane: {
                   type: "string",
-                  description: "Optional board lane: Backlog, Ready, Up next, Doing, Done, or Blocked. Defaults to Backlog.",
+                  description:
+                    "Optional board lane: Backlog, Ready, Up next, Doing, Done, or Blocked. Defaults to Backlog.",
                 },
                 blockReason: { type: "string", description: "Optional blocker note." },
               },
@@ -613,7 +626,13 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             strict: false,
           };
 
-          const mergedTools = [createHuddleTaskTool, ...snapshotTools, ...ragTools, ...journeyTools, ...webSearchTools];
+          const mergedTools = [
+            createHuddleTaskTool,
+            ...snapshotTools,
+            ...ragTools,
+            ...journeyTools,
+            ...webSearchTools,
+          ];
           toolTypes = mergedTools
             .map((t) => {
               const rec = t as { type?: string; name?: string };
@@ -626,7 +645,6 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           if (toolTypes.length > 0) {
             recordToolUse(winner.id, "tool_catalog", `offered: ${toolTypes.join(", ")}`, true);
           }
-
 
           // Wrap onToolCall to route Tavily web search and journey tools, while
           // keeping RAG dispatch on the existing handler.
@@ -653,12 +671,14 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
                   max_results: c.arguments.max_results as number | undefined,
                 });
                 const resultCount = Array.isArray((r as { results?: unknown[] }).results)
-                  ? ((r as { results: unknown[] }).results.length)
+                  ? (r as { results: unknown[] }).results.length
                   : 0;
                 recordToolUse(
                   winner.id,
                   "tavily_web_search",
-                  r.success ? `“${q}” · ${resultCount} result${resultCount === 1 ? "" : "s"}` : `“${q}” · failed`,
+                  r.success
+                    ? `“${q}” · ${resultCount} result${resultCount === 1 ? "" : "s"}`
+                    : `“${q}” · failed`,
                   !!r.success,
                   r.success ? undefined : r.error,
                 );
@@ -732,7 +752,13 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             if (snapshotToolNames.has(c.name)) {
               const detail =
                 "This assistant snapshot exposes the tool schema, but Huddle does not have a local executor or journey proxy handler for it.";
-              recordToolUse(winner.id, c.name, "snapshot tool offered but not executable", false, detail);
+              recordToolUse(
+                winner.id,
+                c.name,
+                "snapshot tool offered but not executable",
+                false,
+                detail,
+              );
               const ev = recordFallback(
                 "tool",
                 `${winner.name}: snapshot tool ${c.name} was requested but no executor is wired in Huddle.`,
@@ -762,8 +788,8 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           const toolChoice = forceTaskCreation
             ? { type: "function", name: "create_huddle_task" }
             : forceWebSearch
-            ? { type: "function", name: "tavily_web_search" }
-            : undefined;
+              ? { type: "function", name: "tavily_web_search" }
+              : undefined;
 
           if (forceTaskCreation) {
             recordToolUse(winner.id, "create_huddle_task", "offered (forced — task request)", true);
@@ -788,7 +814,11 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           });
           clean = text.trim();
         } else {
-          // Lovable AI path (default fallback).
+          // Lovable AI path (default backend). Wire the SAME native tools the
+          // OpenAI path offers — create_huddle_task, Tavily, RAG memory, and the
+          // journey-voice proxy — so default-backend agents are not silently
+          // missing capabilities. Anything that cannot run on this path (e.g.
+          // file_search) is surfaced as a fallback, never dropped silently.
           usedBackend = "lovable";
           usedModel = "openai/gpt-5.5";
           const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
@@ -817,55 +847,273 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             });
             continue;
           }
-          const lovableTools = agentBackend.webSearch
-            ? {
-                tavily_web_search: tool({
-                  description:
-                    "Search the live web via Tavily. Use for current events, news, dates, prices, or anything after your training cutoff.",
+
+          const rag = agentBackend.rag;
+          const hasRagChunks = !!rag && rag.store === "azure" && rag.chunks;
+          const hasRagTriples = !!rag && rag.store === "azure" && rag.triples;
+          const wantsFileSearch = !!rag && rag.store === "azure" && rag.fileSearch;
+          const ragMode = rag?.sharing ?? "shared";
+          let ragInstructions = "";
+
+          // file_search is an OpenAI-Responses-only capability and cannot run on
+          // the Lovable gateway — surface it instead of dropping it silently.
+          if (wantsFileSearch) {
+            const ev = recordFallback(
+              "rag",
+              `${winner.name}: file_search is only available on the OpenAI backend; skipped on the Lovable gateway.`,
+              "file_search unavailable on Lovable backend",
+              winner.id,
+            );
+            perAgentFallbacks.push(ev.inline);
+          }
+
+          const lovableTools: ToolSet = {};
+
+          // create_huddle_task — always available (mirrors the OpenAI path).
+          lovableTools.create_huddle_task = tool({
+            description:
+              "Create a suggested task card on the Huddle board when the user asks to add, log, track, assign, or capture a task/action item.",
+            inputSchema: z.object({
+              title: z.string(),
+              ownerId: z.string().optional(),
+              lane: z.string().optional(),
+              blockReason: z.string().optional(),
+            }),
+            execute: async (args) =>
+              JSON.stringify(createSuggestedTaskFromTool(args as Record<string, unknown>)),
+          });
+
+          if (agentBackend.webSearch) {
+            lovableTools.tavily_web_search = tool({
+              description:
+                "Search the live web via Tavily. Use for current events, news, dates, prices, or anything after your training cutoff.",
+              inputSchema: z.object({
+                query: z.string(),
+                topic: z.enum(["general", "news", "finance"]).optional(),
+                search_depth: z.enum(["basic", "advanced"]).optional(),
+                time_range: z.enum(["day", "week", "month", "year"]).optional(),
+                max_results: z.number().optional(),
+              }),
+              execute: async (args) => {
+                const q = String(args.query ?? "").trim() || "unknown";
+                try {
+                  const r = await tavilySearch({
+                    query: q,
+                    topic: args.topic as TavilySearchArgs["topic"],
+                    search_depth: args.search_depth as TavilySearchArgs["search_depth"],
+                    time_range: args.time_range as TavilySearchArgs["time_range"],
+                    max_results: args.max_results,
+                  });
+                  const resultCount = Array.isArray((r as { results?: unknown[] }).results)
+                    ? (r as { results: unknown[] }).results.length
+                    : 0;
+                  recordToolUse(
+                    winner.id,
+                    "tavily_web_search",
+                    r.success
+                      ? `“${q}” · ${resultCount} result${resultCount === 1 ? "" : "s"}`
+                      : `“${q}” · failed`,
+                    r.success,
+                  );
+                  if (!r.success) {
+                    const ev = recordFallback(
+                      "tool",
+                      `${winner.name}: web search failed — ${r.error ?? "unknown"}`,
+                      "web search unavailable",
+                      winner.id,
+                    );
+                    perAgentFallbacks.push(ev.inline);
+                  }
+                  return r;
+                } catch (err) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  recordToolUse(winner.id, "tavily_web_search", `“${q}” · crashed`, false, msg);
+                  const ev = recordFallback(
+                    "tool",
+                    `${winner.name}: web search crashed — ${msg}`,
+                    "web search crashed",
+                    winner.id,
+                  );
+                  perAgentFallbacks.push(ev.inline);
+                  return { success: false, error: msg };
+                }
+              },
+            });
+          }
+
+          // RAG memory tools (Azure pgvector) — same executors as the OpenAI path.
+          if (hasRagChunks || hasRagTriples) {
+            try {
+              const { dispatchTool, RAG_SYSTEM_HINT, SEARCH_MEMORY_TOOL, LOOKUP_FACTS_TOOL } =
+                await import("./rag/tools");
+              const { azurePgStore } = await import("./rag/azure-pg.server");
+              ragInstructions = "\n\n" + RAG_SYSTEM_HINT;
+              const runRag = async (name: string, args: Record<string, unknown>) => {
+                try {
+                  const out = await dispatchTool(
+                    azurePgStore,
+                    winner.id,
+                    { name, arguments: args },
+                    ragMode,
+                  );
+                  let ok = true;
+                  try {
+                    const parsed = JSON.parse(out);
+                    if (parsed && typeof parsed === "object" && "error" in parsed) ok = false;
+                  } catch {
+                    /* non-JSON is fine */
+                  }
+                  recordToolUse(winner.id, name, ok ? "memory query" : "memory query · failed", ok);
+                  return out;
+                } catch (err) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  recordToolUse(winner.id, name, "memory query · failed", false, msg);
+                  const ev = recordFallback(
+                    "rag",
+                    `${winner.name}: memory tool ${name} failed — ${msg}`,
+                    "memory unavailable — replied without RAG",
+                    winner.id,
+                  );
+                  perAgentFallbacks.push(ev.inline);
+                  return JSON.stringify({ error: msg, tool: name });
+                }
+              };
+              if (hasRagChunks) {
+                lovableTools.search_memory = tool({
+                  description: SEARCH_MEMORY_TOOL.description,
+                  inputSchema: z.object({ query: z.string(), k: z.number().optional() }),
+                  execute: async (args) => runRag("search_memory", args as Record<string, unknown>),
+                });
+              }
+              if (hasRagTriples) {
+                lovableTools.lookup_facts = tool({
+                  description: LOOKUP_FACTS_TOOL.description,
                   inputSchema: z.object({
-                    query: z.string(),
-                    topic: z.enum(["general", "news", "finance"]).optional(),
-                    search_depth: z.enum(["basic", "advanced"]).optional(),
-                    time_range: z.enum(["day", "week", "month", "year"]).optional(),
-                    max_results: z.number().optional(),
+                    subject: z.string().optional(),
+                    predicate: z.string().optional(),
+                    query: z.string().optional(),
+                    k: z.number().optional(),
                   }),
+                  execute: async (args) => runRag("lookup_facts", args as Record<string, unknown>),
+                });
+              }
+            } catch (err) {
+              const ev = recordFallback(
+                "rag",
+                `${winner.name}: RAG tools failed to load (${err instanceof Error ? err.message : "unknown"}); replying without memory.`,
+                "rag unavailable — replying without memory",
+                winner.id,
+              );
+              perAgentFallbacks.push(ev.inline);
+            }
+          }
+
+          // Journey-voice proxy tools (opt-in per agent).
+          if (agentBackend.journey?.enabled) {
+            const cached = await ensureJourneyTools();
+            if (cached) {
+              for (const def of cached.defs) {
+                lovableTools[def.name] = tool({
+                  description: def.description,
+                  inputSchema: jsonSchema(
+                    def.parameters as unknown as Parameters<typeof jsonSchema>[0],
+                  ),
                   execute: async (args) => {
-                    const q = String(args.query ?? "").trim() || "unknown";
                     try {
-                      const r = await tavilySearch({
-                        query: q,
-                        topic: args.topic as TavilySearchArgs["topic"],
-                        search_depth: args.search_depth as TavilySearchArgs["search_depth"],
-                        time_range: args.time_range as TavilySearchArgs["time_range"],
-                        max_results: args.max_results,
+                      const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                      const r = await invokeJourneyTool({
+                        toolName: def.name,
+                        args: (args ?? {}) as Record<string, unknown>,
+                        caller: data.caller ?? {},
+                        context: {
+                          source: "huddle",
+                          huddleId: data.huddleId,
+                          agentId: winner.id,
+                        },
                       });
-                      const resultCount = Array.isArray((r as { results?: unknown[] }).results)
-                        ? (r as { results: unknown[] }).results.length
-                        : 0;
+                      if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
                       recordToolUse(
                         winner.id,
-                        "tavily_web_search",
-                        r.success
-                          ? `“${q}” · ${resultCount} result${resultCount === 1 ? "" : "s"}`
-                          : `“${q}” · failed`,
-                        r.success,
+                        def.name,
+                        r.ok ? `journey-voice · ok` : `journey-voice · failed`,
+                        !!r.ok,
+                        r.ok ? undefined : r.error,
                       );
-                      return r;
+                      if (!r.ok) {
+                        const ev = recordFallback(
+                          "tool",
+                          `${winner.name}: journey tool ${def.name} failed — ${r.error ?? "unknown"}`,
+                          "journey tool failed",
+                          winner.id,
+                        );
+                        perAgentFallbacks.push(ev.inline);
+                      }
+                      return r.output;
                     } catch (err) {
                       const msg = err instanceof Error ? err.message : String(err);
-                      recordToolUse(winner.id, "tavily_web_search", `“${q}” · crashed`, false, msg);
-                      return { success: false, error: msg };
+                      recordToolUse(winner.id, def.name, `journey-voice · crashed`, false, msg);
+                      const ev = recordFallback(
+                        "tool",
+                        `${winner.name}: journey tool ${def.name} crashed — ${msg}`,
+                        "journey tool crashed",
+                        winner.id,
+                      );
+                      perAgentFallbacks.push(ev.inline);
+                      return JSON.stringify({ error: msg, tool: def.name });
                     }
                   },
-                }),
+                });
               }
-            : undefined;
-          toolTypes = lovableTools ? ["tavily_web_search"] : [];
+            } else if (journeyToolsError) {
+              const ev = recordFallback(
+                "tool",
+                `${winner.name}: journey-voice proxy tools unavailable — ${journeyToolsError}`,
+                "journey tools unavailable",
+                winner.id,
+              );
+              perAgentFallbacks.push(ev.inline);
+            }
+          }
+
+          usedInstructions = appSystem + ragInstructions + webInstructions;
+
+          const toolNames = Object.keys(lovableTools);
+          toolTypes = toolNames;
+          if (toolNames.length > 0) {
+            recordToolUse(winner.id, "tool_catalog", `offered: ${toolNames.join(", ")}`, true);
+          }
+
+          const lovableToolChoice =
+            forceTaskCreation && lovableTools.create_huddle_task
+              ? { type: "tool" as const, toolName: "create_huddle_task" }
+              : forceWebSearch && lovableTools.tavily_web_search
+                ? { type: "tool" as const, toolName: "tavily_web_search" }
+                : undefined;
+
+          if (forceTaskCreation && lovableTools.create_huddle_task) {
+            recordToolUse(winner.id, "create_huddle_task", "offered (forced — task request)", true);
+          } else if (forceWebSearch && lovableTools.tavily_web_search) {
+            recordToolUse(
+              winner.id,
+              "tavily_web_search",
+              "offered (forced — time-sensitive)",
+              true,
+            );
+          }
+
           const { text } = await generateText({
             model,
             system: usedInstructions,
             messages: transcript,
-            tools: lovableTools,
+            tools: toolNames.length > 0 ? lovableTools : undefined,
+            // Force the chosen tool on the FIRST step only, then release to
+            // "auto". A forced toolChoice persists across every step otherwise,
+            // which would re-invoke the same tool until the step cap is hit.
+            toolChoice: lovableToolChoice,
+            prepareStep: lovableToolChoice
+              ? ({ stepNumber }) =>
+                  stepNumber === 0 ? { toolChoice: lovableToolChoice } : { toolChoice: "auto" }
+              : undefined,
             stopWhen: stepCountIs(50),
           });
           clean = text.trim();
@@ -883,9 +1131,10 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           toolTypes,
         });
 
-        const finalText = perAgentFallbacks.length > 0
-          ? `${clean}\n\n_(fallback: ${perAgentFallbacks.join("; ")})_`
-          : clean;
+        const finalText =
+          perAgentFallbacks.length > 0
+            ? `${clean}\n\n_(fallback: ${perAgentFallbacks.join("; ")})_`
+            : clean;
 
         replies.push({
           agentId: winner.id,
@@ -922,6 +1171,13 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       }
     }
 
-    return { decision: routed.decision, replies, fallbacks, prompts, journeyTaskUpdates, toolUses };
+    return {
+      decision: routed.decision,
+      replies,
+      fallbacks,
+      prompts,
+      journeyTaskUpdates,
+      suggestedTasks,
+      toolUses,
+    };
   });
-
