@@ -11,6 +11,12 @@ import {
 const tenantName = import.meta.env.VITE_ENTRA_TENANT_NAME as string | undefined;
 const tenantId = import.meta.env.VITE_ENTRA_TENANT_ID as string | undefined;
 const clientId = import.meta.env.VITE_ENTRA_CLIENT_ID as string | undefined;
+// Full authority override. When set (e.g. a workforce app deployed via the
+// enterpriseds azure-entra-app workflow:
+//   https://login.microsoftonline.com/<tenantId>/v2.0
+// ) it is used verbatim; otherwise we fall back to the Entra External ID (CIAM)
+// authority built from the tenant GUID below.
+const authorityOverride = import.meta.env.VITE_ENTRA_AUTHORITY as string | undefined;
 
 export const loginRequest = {
   scopes: ["openid", "profile", "email"],
@@ -37,8 +43,14 @@ function isBrowser() {
 
 function sanitizeMsalMessage(message: string) {
   return message
-    .replace(/([?&](?:code|client_info|id_token|access_token|refresh_token|state|session_state)=)[^&\s]+/gi, "$1[redacted]")
-    .replace(/#(?:code|client_info|id_token|access_token|refresh_token|state|session_state)=[^\s]+/gi, "#[redacted]")
+    .replace(
+      /([?&](?:code|client_info|id_token|access_token|refresh_token|state|session_state)=)[^&\s]+/gi,
+      "$1[redacted]",
+    )
+    .replace(
+      /#(?:code|client_info|id_token|access_token|refresh_token|state|session_state)=[^\s]+/gi,
+      "#[redacted]",
+    )
     .slice(0, 700);
 }
 
@@ -46,11 +58,14 @@ function sanitizeTraceDetails(value: unknown, depth = 0): unknown {
   if (depth > 4) return "[truncated]";
   if (typeof value === "string") return sanitizeMsalMessage(value).slice(0, 1_200);
   if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
-  if (Array.isArray(value)) return value.slice(0, 25).map((item) => sanitizeTraceDetails(item, depth + 1));
+  if (Array.isArray(value))
+    return value.slice(0, 25).map((item) => sanitizeTraceDetails(item, depth + 1));
   if (typeof value === "object" && value) {
     const safe: Record<string, unknown> = {};
     for (const [key, nestedValue] of Object.entries(value).slice(0, 30)) {
-      if (/^(code|client_info|id_token|access_token|refresh_token|state|session_state)$/i.test(key)) {
+      if (
+        /^(code|client_info|id_token|access_token|refresh_token|state|session_state)$/i.test(key)
+      ) {
         safe[key] = "[redacted]";
       } else {
         safe[key] = sanitizeTraceDetails(nestedValue, depth + 1);
@@ -129,29 +144,56 @@ export function traceAuth(event: string, details?: Record<string, unknown>) {
 export function getMsal(): PublicClientApplication | null {
   if (!isBrowser()) return null;
   if (instance) return instance;
-  if (!tenantName || !tenantId || !clientId) {
-    console.error(
-      "[entra-auth] Missing VITE_ENTRA_TENANT_NAME / VITE_ENTRA_TENANT_ID / VITE_ENTRA_CLIENT_ID env vars",
-    );
-    traceAuth("msal:missing-env", {
-      hasTenantName: Boolean(tenantName),
-      hasTenantId: Boolean(tenantId),
-      hasClientId: Boolean(clientId),
-    });
-    return null;
+
+  // Two supported modes:
+  //   1. Workforce app  — VITE_ENTRA_AUTHORITY set (login.microsoftonline.com/<tid>/v2.0)
+  //   2. External ID    — CIAM authority built from tenant name + GUID (fallback)
+  let authority: string;
+  let knownAuthorities: string[] = [];
+  let authorityHost: string;
+
+  if (authorityOverride) {
+    if (!clientId) {
+      console.error("[entra-auth] VITE_ENTRA_AUTHORITY is set but VITE_ENTRA_CLIENT_ID is missing");
+      traceAuth("msal:missing-env", { hasClientId: false, mode: "authority-override" });
+      return null;
+    }
+    authority = authorityOverride;
+    try {
+      authorityHost = new URL(authorityOverride).host;
+      // login.microsoftonline.com is a default-trusted MSAL host; only custom
+      // hosts (e.g. *.ciamlogin.com) need to be listed as knownAuthorities.
+      if (!/(^|\.)login\.microsoftonline\.com$/i.test(authorityHost)) {
+        knownAuthorities = [authorityHost];
+      }
+    } catch {
+      authorityHost = "unknown";
+    }
+  } else {
+    if (!tenantName || !tenantId || !clientId) {
+      console.error(
+        "[entra-auth] Missing VITE_ENTRA_TENANT_NAME / VITE_ENTRA_TENANT_ID / VITE_ENTRA_CLIENT_ID env vars",
+      );
+      traceAuth("msal:missing-env", {
+        hasTenantName: Boolean(tenantName),
+        hasTenantId: Boolean(tenantId),
+        hasClientId: Boolean(clientId),
+      });
+      return null;
+    }
+    // Use the tenant-GUID authority so MSAL's issuer validation matches the
+    // discovery document (which returns `<tenantId>.ciamlogin.com` as the issuer,
+    // not the tenant-name host).
+    authority = `https://${tenantId}.ciamlogin.com/${tenantId}/v2.0`;
+    knownAuthorities = [`${tenantId}.ciamlogin.com`, `${tenantName}.ciamlogin.com`];
+    authorityHost = `${tenantId}.ciamlogin.com`;
   }
-  // Use the tenant-GUID authority so MSAL's issuer validation matches the
-  // discovery document (which returns `<tenantId>.ciamlogin.com` as the issuer,
-  // not the tenant-name host).
-  const authority = `https://${tenantId}.ciamlogin.com/${tenantId}/v2.0`;
+
   const config: Configuration = {
     auth: {
-      clientId,
+      clientId: clientId!,
       authority,
-      knownAuthorities: [
-        `${tenantId}.ciamlogin.com`,
-        `${tenantName}.ciamlogin.com`,
-      ],
+      knownAuthorities,
       redirectUri: window.location.origin,
     },
     cache: {
@@ -173,7 +215,7 @@ export function getMsal(): PublicClientApplication | null {
   };
   instance = new PublicClientApplication(config);
   traceAuth("msal:create", {
-    authorityHost: `${tenantId}.ciamlogin.com`,
+    authorityHost,
     redirectOrigin: window.location.origin,
   });
   return instance;
