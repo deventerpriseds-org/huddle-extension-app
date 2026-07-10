@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { X, RefreshCw, Loader2, AlertTriangle, CheckCircle2, PlusCircle, Trash2 } from "lucide-react";
+import {
+  X,
+  RefreshCw,
+  Loader2,
+  AlertTriangle,
+  CheckCircle2,
+  PlusCircle,
+  Trash2,
+} from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
@@ -12,7 +20,6 @@ import { AgentAvatar } from "./AgentAvatar";
 import { MemoryDbPanel } from "./MemoryDbPanel";
 import { toast } from "sonner";
 
-
 type MemoryChunk = {
   id: string;
   scope: "agent" | "global";
@@ -21,7 +28,6 @@ type MemoryChunk = {
   source: string | null;
   createdAt: string;
 };
-
 
 export function AgentSettingsDrawer() {
   const openId = useAgentPanelStore((s) => s.openAgentId);
@@ -43,7 +49,6 @@ export function AgentSettingsDrawer() {
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [provisioning, setProvisioning] = useState(false);
-
 
   async function refreshMemoryList(agentId: string) {
     setMemoryLoading(true);
@@ -71,11 +76,12 @@ export function AgentSettingsDrawer() {
     setMemoryItems([]);
     getAgentDebug({ data: { agentId: openId } })
       .then(setDebug)
-      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : "Failed to load agent debug"))
+      .catch((err: unknown) =>
+        toast.error(err instanceof Error ? err.message : "Failed to load agent debug"),
+      )
       .finally(() => setLoading(false));
     refreshMemoryList(openId);
   }, [openId]);
-
 
   async function handleSaveContext() {
     if (!openId) return;
@@ -197,6 +203,10 @@ export function AgentSettingsDrawer() {
     setAgent(openId, { webSearch: next });
   }
 
+  function toggleJourney(next: boolean) {
+    if (!openId) return;
+    setAgent(openId, { journey: { enabled: next } });
+  }
 
   return (
     <Sheet open={!!openId} onOpenChange={(o) => !o && closeAgent()}>
@@ -243,14 +253,10 @@ export function AgentSettingsDrawer() {
                     <div className="min-w-0 flex-1 text-[13px]">
                       {debug.hasSnapshot ? (
                         <>
-                          <div className="font-medium">
-                            Authored — using OpenAI snapshot
-                          </div>
+                          <div className="font-medium">Authored — using OpenAI snapshot</div>
                           <div className="mt-0.5 text-xs text-muted-foreground">
                             {debug.snapshotName ?? "(unnamed)"} · fetched{" "}
-                            {debug.fetchedAt
-                              ? new Date(debug.fetchedAt).toLocaleString()
-                              : "—"}
+                            {debug.fetchedAt ? new Date(debug.fetchedAt).toLocaleString() : "—"}
                           </div>
                         </>
                       ) : (
@@ -260,8 +266,7 @@ export function AgentSettingsDrawer() {
                           </div>
                           <div className="mt-0.5 text-xs text-muted-foreground">
                             Set correct assistantId and run{" "}
-                            <code className="rounded bg-muted px-1">bun run fetch:assistants</code>
-                            .
+                            <code className="rounded bg-muted px-1">bun run fetch:assistants</code>.
                           </div>
                         </>
                       )}
@@ -290,31 +295,12 @@ export function AgentSettingsDrawer() {
                   <div className="mt-2 grid grid-cols-2 gap-2 text-[12px]">
                     <Field label="Backend" value={backend?.backend ?? "lovable"} />
                     <Field label="Model" value={debug.resolvedModel} />
-                    <Field
-                      label="Assistant ID"
-                      value={assistantId ?? "—"}
-                      mono
-                    />
-                    <Field
-                      label="RAG store"
-                      value={backend?.rag?.store ?? "none"}
-                    />
-                    <Field
-                      label="RAG chunks"
-                      value={String(backend?.rag?.chunks ?? false)}
-                    />
-                    <Field
-                      label="RAG triples"
-                      value={String(backend?.rag?.triples ?? false)}
-                    />
-                    <Field
-                      label="File search"
-                      value={String(backend?.rag?.fileSearch ?? false)}
-                    />
-                    <Field
-                      label="RAG sharing"
-                      value={backend?.rag?.sharing ?? "shared"}
-                    />
+                    <Field label="Assistant ID" value={assistantId ?? "—"} mono />
+                    <Field label="RAG store" value={backend?.rag?.store ?? "none"} />
+                    <Field label="RAG chunks" value={String(backend?.rag?.chunks ?? false)} />
+                    <Field label="RAG triples" value={String(backend?.rag?.triples ?? false)} />
+                    <Field label="File search" value={String(backend?.rag?.fileSearch ?? false)} />
+                    <Field label="RAG sharing" value={backend?.rag?.sharing ?? "shared"} />
                   </div>
                 </section>
 
@@ -332,7 +318,26 @@ export function AgentSettingsDrawer() {
                       <div className="min-w-0">
                         <div className="font-medium">Tavily web search</div>
                         <div className="text-[11px] text-muted-foreground">
-                          Adds the <code>tavily_web_search</code> tool to this agent's Responses call. The agent sends the user's query verbatim to Tavily for current web results.
+                          Adds the <code>tavily_web_search</code> tool to this agent's Responses
+                          call. The agent sends the user's query verbatim to Tavily for current web
+                          results.
+                        </div>
+                      </div>
+                    </label>
+
+                    <label className="flex items-start gap-2 border-t border-hairline pt-2 text-[12px]">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={backend?.journey?.enabled ?? true}
+                        onChange={(e) => toggleJourney(e.target.checked)}
+                      />
+                      <div className="min-w-0">
+                        <div className="font-medium">Journey-voice tools</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          Gives this agent the journey-voice tool catalog (tasks, calendar, email,
+                          Slack, web search) via the <code>huddle-proxy</code>. Requires the user's
+                          sign-in email to match a journey-voice account.
                         </div>
                       </div>
                     </label>
@@ -341,38 +346,46 @@ export function AgentSettingsDrawer() {
                       <div className="min-w-0 flex-1 text-[12px]">
                         <div className="font-medium">OpenAI vector store (file_search)</div>
                         <div className="mt-0.5 text-[11px] text-muted-foreground break-all">
-                          {backend?.rag?.openaiVectorStoreId
-                            ? <>ID: <code>{backend.rag.openaiVectorStoreId}</code> · file_search={String(backend.rag.fileSearch)}</>
-                            : "No vector store provisioned yet."}
+                          {backend?.rag?.openaiVectorStoreId ? (
+                            <>
+                              ID: <code>{backend.rag.openaiVectorStoreId}</code> · file_search=
+                              {String(backend.rag.fileSearch)}
+                            </>
+                          ) : (
+                            "No vector store provisioned yet."
+                          )}
                         </div>
                       </div>
-                      <Button size="sm" variant="outline" disabled={provisioning} onClick={handleProvisionStore}>
-                        {provisioning ? <Loader2 size={12} className="animate-spin" /> : <PlusCircle size={12} />}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={provisioning}
+                        onClick={handleProvisionStore}
+                      >
+                        {provisioning ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <PlusCircle size={12} />
+                        )}
                         <span className="ml-1.5">
-                          {backend?.rag?.openaiVectorStoreId ? "Reverify / recreate" : "Provision store"}
+                          {backend?.rag?.openaiVectorStoreId
+                            ? "Reverify / recreate"
+                            : "Provision store"}
                         </span>
                       </Button>
                     </div>
                   </div>
                 </section>
 
-
-
-
                 {/* Tools */}
                 <section>
                   <SectionTitle>Snapshot tools</SectionTitle>
                   {debug.snapshotTools.length === 0 ? (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      No snapshot tools.
-                    </p>
+                    <p className="mt-2 text-xs text-muted-foreground">No snapshot tools.</p>
                   ) : (
                     <ul className="mt-2 flex flex-wrap gap-1.5">
                       {debug.snapshotTools.map((t: string, i: number) => (
-                        <li
-                          key={i}
-                          className="rounded-md bg-muted px-2 py-0.5 text-[11px]"
-                        >
+                        <li key={i} className="rounded-md bg-muted px-2 py-0.5 text-[11px]">
                           {t}
                         </li>
                       ))}
@@ -390,8 +403,8 @@ export function AgentSettingsDrawer() {
                     {debug.previewInstructions}
                   </pre>
                   <p className="mt-1 text-[10px] text-muted-foreground">
-                    Scene/priorTurn block is inserted at reply time and not shown here.
-                    Roster block is included.
+                    Scene/priorTurn block is inserted at reply time and not shown here. Roster block
+                    is included.
                   </p>
                 </section>
 
@@ -438,7 +451,11 @@ export function AgentSettingsDrawer() {
                         disabled={savingCtx || !ctxText.trim()}
                         onClick={handleSaveContext}
                       >
-                        {savingCtx ? <Loader2 size={12} className="animate-spin" /> : <PlusCircle size={12} />}
+                        {savingCtx ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <PlusCircle size={12} />
+                        )}
                         <span className="ml-1.5">Save to memory</span>
                       </Button>
                     </div>
@@ -449,9 +466,7 @@ export function AgentSettingsDrawer() {
                     <div className="flex items-center justify-between px-3 py-2 border-b border-hairline">
                       <div className="text-[11px] font-medium">
                         Saved memory for {agent.name}
-                        <span className="ml-1.5 text-muted-foreground">
-                          ({memoryItems.length})
-                        </span>
+                        <span className="ml-1.5 text-muted-foreground">({memoryItems.length})</span>
                       </div>
                       <button
                         type="button"
@@ -489,9 +504,7 @@ export function AgentSettingsDrawer() {
                                   {m.scope === "global" ? "shared" : "agent"}
                                 </span>
                                 <span>{new Date(m.createdAt).toLocaleString()}</span>
-                                {m.source && (
-                                  <span className="truncate">· {m.source}</span>
-                                )}
+                                {m.source && <span className="truncate">· {m.source}</span>}
                               </div>
                               <p className="mt-1 text-[12px] whitespace-pre-wrap break-words">
                                 {m.text}
@@ -516,7 +529,6 @@ export function AgentSettingsDrawer() {
                     )}
                   </div>
                 </section>
-
 
                 {/* Agent fallbacks */}
 
@@ -599,12 +611,8 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="rounded-md border border-hairline bg-surface px-2.5 py-1.5">
-      <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
-      <div className={mono ? "font-mono text-[11px] break-all" : "text-[12px]"}>
-        {value}
-      </div>
+      <div className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className={mono ? "font-mono text-[11px] break-all" : "text-[12px]"}>{value}</div>
     </div>
   );
 }

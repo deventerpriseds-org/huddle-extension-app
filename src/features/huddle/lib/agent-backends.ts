@@ -16,8 +16,8 @@ const RagConfigSchema = z.object({
 });
 
 const JourneyConfigSchema = z.object({
-  /** Enable journey-voice proxy tools for this agent. */
-  enabled: z.boolean().default(false),
+  /** Enable journey-voice proxy tools for this agent. Default ON. */
+  enabled: z.boolean().default(true),
 });
 
 const AgentBackendSchema = z.object({
@@ -34,12 +34,10 @@ const AgentBackendSchema = z.object({
     fileSearch: true,
     sharing: "shared",
   }),
-  journey: JourneyConfigSchema.default({ enabled: false }),
+  journey: JourneyConfigSchema.default({ enabled: true }),
   /** Enable OpenAI Responses `web_search_preview` tool for this agent. */
   webSearch: z.boolean().default(true),
 });
-
-
 
 export type RagConfig = z.infer<typeof RagConfigSchema>;
 
@@ -54,7 +52,7 @@ const RouterConfigSchema = z.object({
 });
 
 export const BackendsConfigSchema = z.object({
-  version: z.number().default(2),
+  version: z.number().default(3),
   router: RouterConfigSchema,
   agents: z.record(z.string(), AgentBackendSchema),
 });
@@ -92,9 +90,14 @@ function defaultAgents(): Record<AgentId, AgentBackend> {
   for (const a of AGENTS) {
     const id = ASSISTANT_IDS[a.id];
     out[a.id] = id
-      ? { backend: "openai", assistantId: id, rag: { ...defaultRag }, journey: { enabled: false }, webSearch: true }
-      : { backend: "lovable", rag: { ...defaultRag }, journey: { enabled: false }, webSearch: true };
-
+      ? {
+          backend: "openai",
+          assistantId: id,
+          rag: { ...defaultRag },
+          journey: { enabled: true },
+          webSearch: true,
+        }
+      : { backend: "lovable", rag: { ...defaultRag }, journey: { enabled: true }, webSearch: true };
   }
 
   return out;
@@ -163,10 +166,14 @@ export const useBackendsStore = create<BackendsState>()(
             combined.webSearch = true;
             combined.rag = { ...combined.rag, fileSearch: true };
           }
+          // v2 → v3 migration: journey-voice tools default ON.
+          if (persistedVersion < 3) {
+            combined.journey = { enabled: true };
+          }
           mergedAgents[id] = combined;
         }
         const merged: BackendsConfig = {
-          version: 2,
+          version: 3,
           router: { ...current.config.router, ...p.config.router },
           agents: mergedAgents as Record<AgentId, AgentBackend>,
         };
