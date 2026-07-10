@@ -15,6 +15,7 @@
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
     "@azure/msal-browser": "^5.17.0",
+    "@elevenlabs/client": "^1.15.0",
     "@fontsource/inter": "^5.2.8",
     "@hookform/resolvers": "^5.2.2",
     "@radix-ui/react-accordion": "^1.2.12",
