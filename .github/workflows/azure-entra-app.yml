@@ -1,0 +1,104 @@
+name: Provision Entra app (Huddle, External ID / CIAM)
+
+# Gives Huddle its OWN Entra app registration and sets its SPA redirect URIs
+# automatically — no portal step, per the "one Entra app per app" rule.
+#
+# IMPORTANT — tenant scope: Huddle signs in against an Entra *External ID* (CIAM)
+# tenant (…ciamlogin.com), which is a DIFFERENT directory from the enterpriseds
+# workforce tenant where the deploy service principal's Graph grant lives. So
+# this workflow does NOT use AZURE_CLIENT_ID/SECRET — it uses a credential that
+# has Microsoft Graph `Application.ReadWrite.All` in the CIAM tenant:
+#   ENTRA_CIAM_TENANT_ID     (defaults to the value below)
+#   ENTRA_CIAM_ADMIN_CLIENT_ID
+#   ENTRA_CIAM_ADMIN_CLIENT_SECRET
+# If those org secrets don't exist yet, this workflow fails fast with a clear
+# message (the workforce SP cannot manage the external tenant). Add them once in
+# the CIAM tenant, or run the app-registration step by hand there.
+#
+# After it runs it prints the new app's client id — set that as VITE_ENTRA_CLIENT_ID
+# (build arg / secret) to switch Huddle off the borrowed Bridge Builder app.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_display_name:
+        description: Entra app display name
+        default: enterpriseds-huddle-web
+      extra_redirect_uri:
+        description: Optional extra SPA redirect URI (e.g. a custom domain)
+        required: false
+
+env:
+  CIAM_TENANT_ID: b9791c7d-dd6c-4190-b1bb-dbbd1996bc2e
+  # SPA redirect URIs to register (the app uses window.location.origin).
+  REDIRECT_AZURE: https://enterpriseds-huddle-web.azurewebsites.net
+  REDIRECT_LOVABLE_PUB: https://huddle-extension-app.lovable.app
+  REDIRECT_LOCAL: http://localhost:3000
+
+jobs:
+  provision-entra:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preflight — CIAM admin credentials present?
+        run: |
+          missing=0
+          for k in ENTRA_CIAM_ADMIN_CLIENT_ID ENTRA_CIAM_ADMIN_CLIENT_SECRET; do
+            if [ -z "${!k}" ]; then echo "$k: MISSING"; missing=1; else echo "$k: present"; fi
+          done
+          if [ "$missing" = "1" ]; then
+            echo "::error::This workflow needs a Graph app credential in the CIAM tenant (${CIAM_TENANT_ID}). The workforce deploy SP cannot manage the External ID directory. Add ENTRA_CIAM_ADMIN_CLIENT_ID/SECRET or create the app manually in the CIAM tenant."
+            exit 1
+          fi
+        env:
+          ENTRA_CIAM_ADMIN_CLIENT_ID: ${{ secrets.ENTRA_CIAM_ADMIN_CLIENT_ID }}
+          ENTRA_CIAM_ADMIN_CLIENT_SECRET: ${{ secrets.ENTRA_CIAM_ADMIN_CLIENT_SECRET }}
+
+      - name: Create or update the Entra app (Graph)
+        env:
+          TENANT_ID: ${{ secrets.ENTRA_CIAM_TENANT_ID || env.CIAM_TENANT_ID }}
+          CLIENT_ID: ${{ secrets.ENTRA_CIAM_ADMIN_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.ENTRA_CIAM_ADMIN_CLIENT_SECRET }}
+          APP_NAME: ${{ inputs.app_display_name }}
+          EXTRA_URI: ${{ inputs.extra_redirect_uri }}
+        run: |
+          set -euo pipefail
+
+          # 1) App-only Graph token in the CIAM tenant.
+          TOKEN=$(curl -s -X POST \
+            "https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token" \
+            -d "client_id=${CLIENT_ID}" \
+            -d "client_secret=${CLIENT_SECRET}" \
+            -d "grant_type=client_credentials" \
+            -d "scope=https://graph.microsoft.com/.default" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
+          if [ -z "$TOKEN" ]; then echo "::error::Failed to acquire a Graph token in the CIAM tenant."; exit 1; fi
+
+          # 2) Build the SPA redirect URI list.
+          URIS="\"${REDIRECT_AZURE}\",\"${REDIRECT_LOVABLE_PUB}\",\"${REDIRECT_LOCAL}\""
+          if [ -n "${EXTRA_URI}" ]; then URIS="${URIS},\"${EXTRA_URI}\""; fi
+
+          # 3) Find an existing app by displayName.
+          EXISTING=$(curl -s -G "https://graph.microsoft.com/v1.0/applications" \
+            --data-urlencode "\$filter=displayName eq '${APP_NAME}'" \
+            -H "Authorization: Bearer ${TOKEN}" | python3 -c 'import sys,json;a=json.load(sys.stdin).get("value",[]);print(a[0]["id"]+" "+a[0]["appId"] if a else "")')
+
+          BODY="{\"displayName\":\"${APP_NAME}\",\"signInAudience\":\"AzureADMyOrg\",\"spa\":{\"redirectUris\":[${URIS}]}}"
+
+          if [ -z "${EXISTING}" ]; then
+            echo "Creating app ${APP_NAME}…"
+            RESP=$(curl -s -X POST "https://graph.microsoft.com/v1.0/applications" \
+              -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -d "${BODY}")
+            APPID=$(echo "$RESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("appId",""))')
+          else
+            OBJID=$(echo "$EXISTING" | cut -d' ' -f1)
+            APPID=$(echo "$EXISTING" | cut -d' ' -f2)
+            echo "Updating redirect URIs on existing app ${APP_NAME} (${APPID})…"
+            curl -s -X PATCH "https://graph.microsoft.com/v1.0/applications/${OBJID}" \
+              -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" \
+              -d "{\"spa\":{\"redirectUris\":[${URIS}]}}"
+          fi
+
+          if [ -z "${APPID}" ]; then echo "::error::Graph did not return an appId."; exit 1; fi
+          echo "## Huddle Entra app" >> "$GITHUB_STEP_SUMMARY"
+          echo "- displayName: ${APP_NAME}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- client id (set as VITE_ENTRA_CLIENT_ID): \`${APPID}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- tenant: ${TENANT_ID}" >> "$GITHUB_STEP_SUMMARY"
