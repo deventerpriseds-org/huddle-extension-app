@@ -147,6 +147,18 @@ jobs:
             echo "WARNING: expected 'new Request(url,' not found in $ENTRY — preset may have changed" >&2
             grep -n 'new Request' "$ENTRY" || true
           fi
+          # Second beta-preset bug: the handler assigns the response's
+          # ReadableStream straight to `context.res.body`. SWA's classic Azure
+          # Functions Node worker can't serialize a stream, so it JSON-stringifies
+          # it to "{}" — the page returns HTTP 200 with an empty body. Buffer the
+          # stream to a Buffer first. Remove once the stable preset ships.
+          if grep -q 'body: response.body,' "$ENTRY"; then
+            sed -i 's/body: response.body,/body: Buffer.from(await response.arrayBuffer()),/' "$ENTRY"
+            echo "patched streaming body in $ENTRY"
+          else
+            echo "WARNING: expected 'body: response.body,' not found in $ENTRY — preset may have changed" >&2
+            grep -n 'response.body' "$ENTRY" || true
+          fi
 
       - name: Sync secrets → SWA app settings
         run: |
