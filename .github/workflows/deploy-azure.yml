@@ -21,7 +21,7 @@ env:
   AZURE_RESOURCE_GROUP: EnterpriseDS_ResourceGRP
   AZURE_APP_SERVICE_PLAN: enterpriseds-huddle-plan
   AZURE_LOCATION: eastus
-  APP_SERVICE_SKU: B1
+  APP_SERVICE_SKU: F1                                # Free/shared tier — no dedicated-VM quota needed
   NODE_VERSION: "22"
   NITRO_PRESET: node-server                          # retargets Nitro off Cloudflare → Node
   ENTRA_APP_NAME: enterpriseds-huddle-web            # matches azure-entra-app.yml
