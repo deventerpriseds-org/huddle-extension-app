@@ -111,6 +111,12 @@ jobs:
             echo "VITE_ENTRA_TENANT_ID=${AZURE_TENANT_ID}"
             echo "VITE_ENTRA_TENANT_NAME=enterpriseds"
           } > .env.production
+          # Hand the resolved client id + authority to later steps so the server
+          # runtime verifies tokens against the SAME authority the client used.
+          {
+            echo "ENTRA_CLIENT_ID_RESOLVED=${APPID}"
+            echo "ENTRA_AUTHORITY_RESOLVED=${AUTH}"
+          } >> "$GITHUB_ENV"
 
       - name: Build (Azure Static Web Apps target)
         env:
@@ -195,7 +201,8 @@ jobs:
               JOURNEY_PROXY_URL="${{ secrets.JOURNEY_PROXY_URL || 'https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/huddle-proxy' }}" \
               JOURNEY_PROXY_TOKEN="${{ secrets.JOURNEY_PROXY_TOKEN }}" \
               ENTRA_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
-              ENTRA_CLIENT_ID="${{ secrets.ENTRA_CLIENT_ID }}"
+              ENTRA_CLIENT_ID="${ENTRA_CLIENT_ID_RESOLVED:-${{ secrets.ENTRA_CLIENT_ID }}}" \
+              ENTRA_AUTHORITY="${ENTRA_AUTHORITY_RESOLVED:-${{ secrets.VITE_ENTRA_AUTHORITY }}}"
 
       - name: Deploy to Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
