@@ -120,6 +120,19 @@ jobs:
           # Co-locate the generated SWA config with the static assets we upload.
           cp -f staticwebapp.config.json .output/public/ 2>/dev/null || true
           test -d .output/server || (echo "azure-swa build produced no server output" && exit 1)
+          # Pin the managed-function runtime: Nitro sets node:22 (its build node),
+          # but SWA managed functions don't support Node 22 yet — the function
+          # fails to start and pages 500. Force a supported version.
+          python3 - <<'PY'
+          import json, os
+          for f in ("staticwebapp.config.json", ".output/public/staticwebapp.config.json"):
+              if not os.path.exists(f):
+                  continue
+              c = json.load(open(f))
+              c.setdefault("platform", {})["apiRuntime"] = "node:20"
+              json.dump(c, open(f, "w"), indent=2)
+              print("set apiRuntime=node:20 in", f)
+          PY
 
       - name: Sync secrets → SWA app settings
         run: |
