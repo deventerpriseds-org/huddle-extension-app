@@ -120,9 +120,14 @@ jobs:
           # Co-locate the generated SWA config with the static assets we upload.
           cp -f staticwebapp.config.json .output/public/ 2>/dev/null || true
           test -d .output/server || (echo "azure-swa build produced no server output" && exit 1)
-          # Pin the managed-function runtime: Nitro sets node:22 (its build node),
-          # but SWA managed functions don't support Node 22 yet — the function
-          # fails to start and pages 500. Force a supported version.
+          # Patch the generated SWA routing/runtime config. Two fixes:
+          #  a. apiRuntime: Nitro sets node:22 (its build node), but SWA managed
+          #     functions don't support Node 22 — the function won't start. Pin node:20.
+          #  b. Route server-function calls to the SSR function. Nitro only wires
+          #     `navigationFallback` (GET navigations) + an explicit `/` rewrite, so
+          #     POST /_serverFn/* falls through to the static host and returns 405 —
+          #     every server function (Settings, memory, batch, chat) fails. Add an
+          #     explicit all-methods route for /_serverFn/* → the SSR function.
           python3 - <<'PY'
           import json, os
           for f in ("staticwebapp.config.json", ".output/public/staticwebapp.config.json"):
@@ -130,6 +135,11 @@ jobs:
                   continue
               c = json.load(open(f))
               c.setdefault("platform", {})["apiRuntime"] = "node:20"
+              target = (c.get("navigationFallback") or {}).get("rewrite") or "/api/server"
+              routes = c.setdefault("routes", [])
+              if not any(r.get("route") == "/_serverFn/*" for r in routes):
+                  routes.insert(0, {"route": "/_serverFn/*", "rewrite": target})
+                  print("added /_serverFn/* ->", target, "route in", f)
               json.dump(c, open(f, "w"), indent=2)
               print("set apiRuntime=node:20 in", f)
           PY
