@@ -1,0 +1,154 @@
+name: Deploy to Azure (Static Web Apps)
+
+# Deploys Huddle to an Azure Static Web App — the same model as the rest of the
+# enterpriseds fleet, and (unlike App Service) it needs no dedicated-VM quota.
+# Huddle is server-rendered, so Nitro's `azure-swa` preset packages the SSR
+# server as the SWA managed API function; static assets are served by the CDN.
+#
+# Everything flows from GitHub org secrets: the deploy SP creates/looks up the
+# SWA, the runtime secrets are pushed as SWA app settings, and the SWA's real
+# hostname is auto-registered as the Entra sign-in redirect URI. No portal, no
+# manual secret entry.
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+
+env:
+  SWA_NAME: enterpriseds-huddle-web
+  AZURE_RESOURCE_GROUP: EnterpriseDS_ResourceGRP
+  SWA_LOCATION: eastus2 # Static Web Apps region
+  ENTRA_APP_NAME: enterpriseds-huddle-web
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Secret presence check
+        run: |
+          for k in AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID \
+                   ELEVENLABS_API_KEY ELEVENLABS_DEFAULT_VOICE_ID OPENAI_API_KEY LOVABLE_API_KEY \
+                   TAVILY_API_KEY AZURE_PG_URL JOURNEY_PROXY_TOKEN; do
+            if [ -n "${!k}" ]; then echo "$k: present"; else echo "$k: MISSING"; fi
+          done
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_DEFAULT_VOICE_ID: ${{ secrets.ELEVENLABS_DEFAULT_VOICE_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LOVABLE_API_KEY: ${{ secrets.LOVABLE_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          AZURE_PG_URL: ${{ secrets.AZURE_PG_URL }}
+          JOURNEY_PROXY_TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies (public npm)
+        run: |
+          rm -f bun.lock
+          sed -i 's/^minimumReleaseAge = .*/minimumReleaseAge = 0/' bunfig.toml
+          bun install --registry https://registry.npmjs.org
+
+      - uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
+             "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}",
+             "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+             "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
+
+      - name: Ensure Static Web App exists + read hostname/token
+        run: |
+          set -euo pipefail
+          az staticwebapp create --name "$SWA_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --location "$SWA_LOCATION" --sku Free --only-show-errors || true
+          HOST=$(az staticwebapp show --name "$SWA_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query defaultHostname -o tsv)
+          TOKEN=$(az staticwebapp secrets list --name "$SWA_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query "properties.apiKey" -o tsv)
+          echo "::add-mask::$TOKEN"
+          echo "SWA_HOST=$HOST" >> "$GITHUB_ENV"
+          echo "SWA_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+          echo "Static Web App: https://$HOST"
+
+      - name: Register redirect URI + resolve Entra client id
+        # Point the Entra app's SPA redirect at the SWA hostname (dynamic) and
+        # resolve its client id, then write the VITE_* build env.
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          set -euo pipefail
+          GT=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)
+          APP=$(curl -s -G "https://graph.microsoft.com/v1.0/applications" \
+            --data-urlencode "\$filter=displayName eq '${ENTRA_APP_NAME}'" \
+            -H "Authorization: Bearer $GT" \
+            | python3 -c 'import sys,json;a=json.load(sys.stdin).get("value",[]);print((a[0]["id"]+" "+a[0]["appId"]) if a else "")')
+          OBJID=$(echo "$APP" | cut -d' ' -f1)
+          APPID=$(echo "$APP" | cut -d' ' -f2)
+          if [ -n "$OBJID" ]; then
+            URIS="\"https://${SWA_HOST}\",\"https://huddle-extension-app.lovable.app\",\"http://localhost:3000\""
+            curl -s -X PATCH "https://graph.microsoft.com/v1.0/applications/${OBJID}" \
+              -H "Authorization: Bearer $GT" -H "Content-Type: application/json" \
+              -d "{\"spa\":{\"redirectUris\":[${URIS}]}}" >/dev/null
+            echo "Registered redirect URI https://${SWA_HOST} on ${ENTRA_APP_NAME} (${APPID})"
+            AUTH="https://login.microsoftonline.com/${AZURE_TENANT_ID}/v2.0"
+          else
+            echo "Entra app '${ENTRA_APP_NAME}' not found — run azure-entra-app.yml first. Using fallback VITE_ENTRA_* secrets."
+            APPID="${{ secrets.VITE_ENTRA_CLIENT_ID }}"
+            AUTH="${{ secrets.VITE_ENTRA_AUTHORITY }}"
+          fi
+          {
+            echo "VITE_ENTRA_CLIENT_ID=${APPID}"
+            echo "VITE_ENTRA_AUTHORITY=${AUTH}"
+            echo "VITE_ENTRA_TENANT_ID=${AZURE_TENANT_ID}"
+            echo "VITE_ENTRA_TENANT_NAME=enterpriseds"
+          } > .env.production
+
+      - name: Build (Azure Static Web Apps target)
+        env:
+          NITRO_PRESET: azure-swa
+        run: |
+          bun run build
+          # Co-locate the generated SWA config with the static assets we upload.
+          cp -f staticwebapp.config.json .output/public/ 2>/dev/null || true
+          test -d .output/server || (echo "azure-swa build produced no server output" && exit 1)
+
+      - name: Sync secrets → SWA app settings
+        run: |
+          az staticwebapp appsettings set --name "$SWA_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --only-show-errors --setting-names \
+              ELEVENLABS_API_KEY="${{ secrets.ELEVENLABS_API_KEY }}" \
+              ELEVENLABS_DEFAULT_VOICE_ID="${{ secrets.ELEVENLABS_DEFAULT_VOICE_ID }}" \
+              ELEVENLABS_AGENT_LLM="${{ secrets.ELEVENLABS_AGENT_LLM }}" \
+              OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+              LOVABLE_API_KEY="${{ secrets.LOVABLE_API_KEY }}" \
+              TAVILY_API_KEY="${{ secrets.TAVILY_API_KEY }}" \
+              AZURE_PG_URL="${{ secrets.AZURE_PG_URL }}" \
+              JOURNEY_PROXY_URL="${{ secrets.JOURNEY_PROXY_URL || 'https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/huddle-proxy' }}" \
+              JOURNEY_PROXY_TOKEN="${{ secrets.JOURNEY_PROXY_TOKEN }}" \
+              ENTRA_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
+              ENTRA_CLIENT_ID="${{ secrets.ENTRA_CLIENT_ID }}"
+
+      - name: Deploy to Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ env.SWA_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: ".output/public"
+          api_location: ".output/server"
+          skip_app_build: true
+          skip_api_build: true
+
+      - name: Report
+        run: |
+          echo "## Huddle on Static Web Apps" >> "$GITHUB_STEP_SUMMARY"
+          echo "- URL: https://${SWA_HOST}" >> "$GITHUB_STEP_SUMMARY"
