@@ -271,7 +271,11 @@ Example — user: "plan tomorrow's workout and also budget my gym membership" �
     : "Pick the best primary agent, up to 2 supporting agents, and a one-line reason.";
 
   const interjectHint = wantInterject
-    ? `\n\nAlso list "interjectors": agents (other than the primary/supporting) who likely hold SPECIFIC, substantive value to add that the primary would NOT cover — e.g. a scheduling conflict, notes to prepare for a named contact, a risk or deadline. This is NOT topical adjacency: only nominate an agent if there is concrete reason to think they hold particular information the user would want surfaced. Return interjectors = [] if none. Each nominee will double-check and stay silent if they turn out to have nothing concrete.`
+    ? `\n\nAlso list "interjectors": agents (other than the primary/supporting) who should CHECK whether they hold specific value the primary can't provide, because the message plausibly intersects information they would own. You cannot see their data — nominate based on the ANGLE, and each nominee will look and stay silent (pass) if they find nothing:
+- A specific time/date is set → nominate the calendar/scheduling agent to check for conflicts.
+- A named person/contact/meeting is mentioned → nominate an agent who may hold prep notes or history on them.
+- A commitment, deadline, budget, or risk is implied → nominate the agent who tracks that.
+Do NOT nominate for mere topical similarity with no such information angle. Return interjectors = [] when there is no plausible angle.`
     : "";
 
   const prompt = `Roster (available agents in this huddle):
