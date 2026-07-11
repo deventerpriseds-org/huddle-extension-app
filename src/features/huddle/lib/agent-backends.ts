@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { z } from "zod";
 import { AGENTS, type AgentId } from "../data/agents";
 import { DEFAULT_ROUTER_MODEL, type RouterBackend } from "./model-catalog";
+import assistantIds from "../data/assistant-ids.json";
 
 // ------- Schema (used to validate uploaded config JSON) -------
 
@@ -75,22 +76,12 @@ export type AgentBackend = z.infer<typeof AgentBackendSchema>;
 export type RouterConfig = z.infer<typeof RouterConfigSchema>;
 export type BackendsConfig = z.infer<typeof BackendsConfigSchema>;
 
-// ------- Prefilled assistant IDs (12 of 15 agents; Finn/Cam persona-only) -------
+// ------- Assistant IDs (single source of truth) -------
+// The id → agent mapping lives in one JSON file, imported here and by the
+// fetch/create scripts, so there is exactly one place ids are defined. The
+// provision-assistants workflow merges newly-minted ids into that JSON.
 
-export const ASSISTANT_IDS: Partial<Record<AgentId, string>> = {
-  "flex-grimes": "asst_TkRNda28gmRggEb1duj31a8J",
-  "charleston-lewis": "asst_epZActkpqNmqw7KusXBmyfuT",
-  "troy-lennox": "asst_AqTwFwQx5RlCAH3OPYVPCG5Q",
-  "ezra-miles": "asst_FldoVvUYjszVEei8QBo2LFoO",
-  "faith-hartley": "asst_gY8usQlJelYXLZzQm08Z0C2x",
-  "sam-trent": "asst_zIO5Sfb4k4IzHOF2TbJQf1tH",
-  "elle-rowan": "asst_yLrJPsX4gJjiQo92kLUUOhnh",
-  "cole-blake": "asst_nk9d9XZcVacBHyhzUPvAVM5o",
-  "tess-sutton": "asst_KnIB4EMkB5ziEwZZdwEFzoIl",
-  "iris-chase": "asst_BcZBxlx9zH8VIPvfJrhPP3EF",
-  "eli-vaughn": "asst_hNYvCTsP7t8XB4Md0xFN7DwC",
-  "liam-kingsley": "asst_GVIrKekZI0p9UsqAgGYZHtOE",
-};
+export const ASSISTANT_IDS = assistantIds as Partial<Record<AgentId, string>>;
 
 function defaultAgents(): Record<AgentId, AgentBackend> {
   const out = {} as Record<AgentId, AgentBackend>;

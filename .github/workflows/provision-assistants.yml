@@ -1,0 +1,58 @@
+name: Provision missing assistants
+
+# One-off / on-demand: creates OpenAI platform assistants for any agent that
+# doesn't have one yet (currently Terry, Finn, Cam), so every agent is
+# assistant-backed and the runtime never has to fall back to the in-repo persona.
+# Finn and Cam also get an attached vector store for file search.
+#
+# Idempotent: create-missing-assistants.ts skips agents already present in
+# assistant-ids.json, so re-runs create nothing. After creating, it snapshots the
+# new assistants into the JSON the runtime reads, commits, and dispatches a deploy.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies (public npm)
+        run: |
+          rm -f bun.lock
+          sed -i 's/^minimumReleaseAge = .*/minimumReleaseAge = 0/' bunfig.toml
+          bun install --registry https://registry.npmjs.org
+
+      - name: Create missing assistants (+ vector stores) and merge ids
+        run: bun run scripts/create-missing-assistants.ts
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Snapshot the new assistants
+        run: bun run scripts/fetch-openai-assistants.ts
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Commit and deploy if anything changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- src/features/huddle/data/assistant-ids.json src/features/huddle/data/openai-assistant-snapshots.json; then
+            echo "Nothing changed — all agents already provisioned."
+            exit 0
+          fi
+          git add src/features/huddle/data/assistant-ids.json src/features/huddle/data/openai-assistant-snapshots.json
+          git commit -m "Provision OpenAI assistants for Terry, Finn, Cam"
+          git push origin HEAD:${{ github.ref_name }}
+          echo "Provisioned — dispatching deploy."
+          gh workflow run deploy-swa.yml --ref ${{ github.ref_name }}

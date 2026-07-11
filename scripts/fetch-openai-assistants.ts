@@ -11,21 +11,8 @@
  */
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-
-const ASSISTANT_IDS: Record<string, string> = {
-  "flex-grimes": "asst_TkRNda28gmRggEb1duj31a8J",
-  "charleston-lewis": "asst_epZActkpqNmqw7KusXBmyfuT",
-  "troy-lennox": "asst_AqTwFwQx5RlCAH3OPYVPCG5Q",
-  "ezra-miles": "asst_FldoVvUYjszVEei8QBo2LFoO",
-  "faith-hartley": "asst_gY8usQlJelYXLZzQm08Z0C2x",
-  "sam-trent": "asst_zIO5Sfb4k4IzHOF2TbJQf1tH",
-  "elle-rowan": "asst_yLrJPsX4gJjiQo92kLUUOhnh",
-  "cole-blake": "asst_nk9d9XZcVacBHyhzUPvAVM5o",
-  "tess-sutton": "asst_KnIB4EMkB5ziEwZZdwEFzoIl",
-  "iris-chase": "asst_BcZBxlx9zH8VIPvfJrhPP3EF",
-  "eli-vaughn": "asst_hNYvCTsP7t8XB4Md0xFN7DwC",
-  "liam-kingsley": "asst_GVIrKekZI0p9UsqAgGYZHtOE",
-};
+// Single source of truth for the id → agent mapping (shared with the runtime).
+import ASSISTANT_IDS from "../src/features/huddle/data/assistant-ids.json" with { type: "json" };
 
 interface AssistantSnapshot {
   assistantId: string;
