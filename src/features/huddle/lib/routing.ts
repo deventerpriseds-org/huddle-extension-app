@@ -186,7 +186,8 @@ export function routeMessage(input: RouteInput): RouteResult {
     };
   }
 
-  // 4. floor — team lead (Terry) picks it up as a person, not a router
+  // 4. floor — the team lead (Iris, coordinator) picks it up as a person, not a
+  // router; standup-host is kept as a higher-priority fallback if ever assigned.
   const lead =
     present.find((a) => a.special === "standup-host") ??
     present.find((a) => a.special === "coordinator") ??

@@ -80,7 +80,6 @@ export const ASSISTANT_IDS: Partial<Record<AgentId, string>> = {
   "sam-trent": "asst_zIO5Sfb4k4IzHOF2TbJQf1tH",
   "elle-rowan": "asst_yLrJPsX4gJjiQo92kLUUOhnh",
   "cole-blake": "asst_nk9d9XZcVacBHyhzUPvAVM5o",
-  "tess-sutton": "asst_KnIB4EMkB5ziEwZZdwEFzoIl",
   "iris-chase": "asst_BcZBxlx9zH8VIPvfJrhPP3EF",
   "eli-vaughn": "asst_hNYvCTsP7t8XB4Md0xFN7DwC",
   "liam-kingsley": "asst_GVIrKekZI0p9UsqAgGYZHtOE",

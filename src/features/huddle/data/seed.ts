@@ -115,7 +115,7 @@ export const HUDDLES: Huddle[] = [
     id: "launch-war-room",
     name: "Launch week war-room",
     kind: "group",
-    members: ["sam-trent", "cole-blake", "eli-vaughn", "iris-chase"],
+    members: ["sam-trent", "tess-sutton", "terry-locke", "cole-blake", "eli-vaughn", "iris-chase"],
     topic: "Launch coordination",
     demo: true,
   },
