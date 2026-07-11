@@ -1,10 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type {} from "@tanstack/react-start";
 
-// Inbound webhook: journey's supabase pg_net trigger POSTs here on every task
-// add/edit/delete, and we mirror the row into Huddle's Azure PG so prioritization
-// is supabase-independent. Server-to-server, gated by a shared secret header
-// (TASKS_SYNC_SECRET) — no Entra. Body shape from the trigger:
+// Inbound webhook: journey's supabase pg_net trigger (via the huddle-task-sync edge
+// function) POSTs here on every task add/edit/delete, and we mirror the row into Huddle's
+// Azure PG so prioritization is supabase-independent. Server-to-server, gated by the
+// existing shared secret JOURNEY_PROXY_TOKEN (same secret already bridging the two apps —
+// no new org credential) — no Entra. Body shape from the forwarder:
 //   { operation: "INSERT"|"UPDATE"|"DELETE", task: {...journey task columns...},
 //     user_id?: string, user_email?: string }
 
@@ -21,7 +22,7 @@ export const Route = createFileRoute("/api/public/tasks-sync")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const secret = process.env.TASKS_SYNC_SECRET;
+        const secret = process.env.JOURNEY_PROXY_TOKEN;
         if (!secret) return json({ ok: false, error: "not_configured" }, 503);
         if (request.headers.get("x-webhook-secret") !== secret) {
           return json({ ok: false, error: "unauthorized" }, 401);
