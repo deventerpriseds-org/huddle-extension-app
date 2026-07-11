@@ -84,6 +84,15 @@ const Input = z.object({
 
 const MAX_REPLIES_PER_TURN = 4;
 
+// Shared house-style layer — appended to EVERY agent's instructions regardless of
+// whether the domain content came from the platform snapshot, a client override,
+// or the in-repo persona. Formatting is a Huddle presentation concern that belongs
+// in one place, not baked into each agent's prompt; changing it here changes it for
+// all agents. (Lane ownership / handoffs are already shared, generated dynamically
+// by buildRoster from agents.ts.)
+const HOUSE_STYLE =
+  "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail.";
+
 export const sendHuddleMessage = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => Input.parse(raw))
   .handler(async ({ data }) => {
@@ -460,8 +469,8 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         winner.systemPrompt +
         scene +
         roster +
-        "\n\nWrite as plain prose. Do NOT prefix your reply with your own name, a bracketed label like [Flex Grimes], or a 'Name:' header — the UI already shows who you are." +
-        taskToolInstructions;
+        taskToolInstructions +
+        HOUSE_STYLE;
 
       // Per-agent transcript: the current agent's own prior turns are role=assistant
       // (unprefixed); other agents' turns are surfaced as role=user context so the
@@ -695,7 +704,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           const effectiveInstructions = overrideInstructions || snapshotInstructions;
           fromSnapshot = !overrideInstructions && !!snapshotInstructions;
           const baseInstructions = effectiveInstructions
-            ? effectiveInstructions + scene + roster
+            ? effectiveInstructions + scene + roster + taskToolInstructions + HOUSE_STYLE
             : appSystem;
           const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
           const instructions =
