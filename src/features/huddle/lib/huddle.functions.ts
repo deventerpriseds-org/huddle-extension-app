@@ -72,6 +72,11 @@ const Input = z.object({
       entra_email: z.string().optional(),
     })
     .optional(),
+  // The caller's IANA timezone (e.g. "America/New_York") so the grounding block
+  // can state the user's LOCAL date, not the server's UTC date. Without it the
+  // agent reports the UTC date, which is a day ahead for users behind UTC in the
+  // evening.
+  timeZone: z.string().max(64).optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
@@ -89,6 +94,20 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     // tells it to search (when it has web search) or decline to guess (when it
     // doesn't) instead of answering verifiable facts from memory.
     const nowIso = new Date().toISOString();
+    // Present the user's LOCAL date/time (server clock is authoritative; the
+    // timezone comes from the client). Falls back to UTC-only if absent/invalid.
+    let localNow: string | null = null;
+    if (data.timeZone) {
+      try {
+        localNow = new Intl.DateTimeFormat("en-US", {
+          timeZone: data.timeZone,
+          dateStyle: "full",
+          timeStyle: "long",
+        }).format(new Date(nowIso));
+      } catch {
+        localNow = null;
+      }
+    }
     function groundingBlock(hasWeb: boolean): string {
       const freshness = hasWeb
         ? '- If a request depends on anything time-sensitive or verifiable — "today", "now", "latest", "current", "this week/month/year", a version or release number, a price, a score, standings, recent news, or who currently holds a role — you MUST call the `tavily_web_search` tool and answer ONLY from its results. Never answer these from memory. When unsure whether a fact is still current, search.'
@@ -100,7 +119,11 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         freshness +
         "\n- Never state a specific date, version, price, or standing you did not just retrieve from a tool.\n\n" +
         "CONTEXT\n" +
-        `- Current date and time (UTC, ISO 8601): ${nowIso}`
+        (localNow
+          ? `- Current date and time (the user's local time): ${localNow}\n` +
+            `- Same instant in UTC (ISO 8601): ${nowIso}\n` +
+            "- When the user asks for \"today\", \"the date\", or the time, use their LOCAL time above, not UTC."
+          : `- Current date and time (UTC, ISO 8601): ${nowIso}`)
       );
     }
 

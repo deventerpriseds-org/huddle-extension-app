@@ -366,6 +366,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
                 entra_email: user.username,
               }
             : undefined,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         },
       });
 
