@@ -35,6 +35,8 @@ const RouterConfigInput = z.object({
   fastMode: z.boolean().optional(),
   strictPrompt: z.boolean().optional(),
   soloOnCoverage: z.boolean().optional(),
+  interjections: z.boolean().optional(),
+  maxInterjectors: z.number().optional(),
 });
 
 const AgentBackendInput = z.object({
@@ -344,6 +346,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         fastMode: routerCfg.fastMode,
         strictPrompt: routerCfg.strictPrompt,
         soloOnCoverage: routerCfg.soloOnCoverage,
+        interjections: routerCfg.interjections,
       };
       if (routerCfg.backend === "lovable") {
         const m = await getLovableModel(routerCfg.model);
@@ -398,7 +401,18 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
     const presentAgents = AGENTS.filter((a) => data.members.includes(a.id));
 
-    const queue: AgentId[] = [...routed.winners];
+    // Interjectors: agents the router flagged as holding specific substantive
+    // value beyond the primary's answer. Appended AFTER the primary winners so
+    // they see the primary's reply; each self-censors ("PASS") if it turns out
+    // to have nothing concrete. Gated by the router's interjections toggle.
+    const interjectorSet = new Set<AgentId>();
+    if (routerCfg.interjections && (routerCfg.maxInterjectors ?? 2) > 0) {
+      for (const id of (routed.interjectors ?? []).slice(0, routerCfg.maxInterjectors ?? 2)) {
+        if (data.members.includes(id) && !routed.winners.includes(id)) interjectorSet.add(id);
+      }
+    }
+
+    const queue: AgentId[] = [...routed.winners, ...interjectorSet];
     const spoken = new Set<AgentId>();
     const replies: Reply[] = [];
 
@@ -408,7 +422,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     const broadcastTurn = data.scope === "group" && isBroadcast(data.text);
     const replyCap = broadcastTurn
       ? Math.min(data.members.length, 12)
-      : MAX_REPLIES_PER_TURN;
+      : MAX_REPLIES_PER_TURN + interjectorSet.size;
 
     while (queue.length > 0 && replies.length < replyCap) {
       const nextId = queue.shift()!;
@@ -422,13 +436,18 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         .map((r) => `${AGENT_BY_ID[r.agentId].name} just said: "${r.text}"`)
         .join("\n");
 
+      const isInterjector = interjectorSet.has(nextId);
+      const interjectDirective = isInterjector
+        ? `\n\nYou were NOT asked directly — you are interjecting only because you may hold specific information the user needs that the primary responder wouldn't have (a scheduling conflict, notes to prepare for a named contact, a risk or deadline). First check whether you actually have something concrete and useful using your tools/knowledge. If you DO, say it in one or two short sentences, leading with the value ("Heads up — you have a 12pm already"). If you do NOT have anything specific and substantive to add, reply with exactly: PASS`
+        : "";
+
       const scene = ` You are ${winner.name} in a ${
         data.scope === "group" ? "group huddle" : "1:1"
       }. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail.${
         priorInThisTurn
           ? `\n\nOther agents just replied in this same turn:\n${priorInThisTurn}\nBuild on what they said instead of repeating it. If you have nothing to add, reply with a single short line.`
           : ""
-      }`;
+      }${interjectDirective}`;
 
       const roster = buildRoster(data.members, winner.id);
       const taskToolInstructions =
@@ -1382,6 +1401,12 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           fromSnapshot,
           toolTypes,
         });
+
+        // An interjector that found nothing concrete stays silent.
+        if (isInterjector && /^\s*pass[.!]?\s*$/i.test(clean)) {
+          spoken.add(winner.id);
+          continue;
+        }
 
         const finalText =
           perAgentFallbacks.length > 0

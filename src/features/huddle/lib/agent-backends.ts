@@ -49,6 +49,14 @@ const RouterConfigSchema = z.object({
   strictPrompt: z.boolean().default(false),
   /** #2 — drop supporting agents when the primary already covers the message. */
   soloOnCoverage: z.boolean().default(true),
+  /**
+   * Let other agents interject with SPECIFIC substantive value (a conflict, prep
+   * notes, a warning) even when the primary already covered the request. Off =
+   * pure solo. Each interjector self-censors if it has nothing concrete.
+   */
+  interjections: z.boolean().default(false),
+  /** Max agents that may interject per turn (0 disables). */
+  maxInterjectors: z.number().int().min(0).max(4).default(2),
 });
 
 export const BackendsConfigSchema = z.object({
@@ -112,6 +120,8 @@ export function defaultBackendsConfig(): BackendsConfig {
       fastMode: false,
       strictPrompt: false,
       soloOnCoverage: true,
+      interjections: false,
+      maxInterjectors: 2,
     },
     agents: defaultAgents(),
   };

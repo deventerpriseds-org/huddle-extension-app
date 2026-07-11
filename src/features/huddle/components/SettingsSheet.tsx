@@ -218,6 +218,64 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                 onCheckedChange={(v) => setRouter({ strictPrompt: v })}
               />
             </div>
+
+            <div className="flex items-center justify-between rounded-lg border border-hairline p-3">
+              <div className="pr-3">
+                <Label className="text-sm">Substantive interjections</Label>
+                <p className="text-xs text-muted-foreground">
+                  Let another agent add SPECIFIC value even when the primary
+                  already covered the request — a calendar conflict, prep notes
+                  for a named contact, a risk. Not topical adjacency; each
+                  interjector stays silent unless it has something concrete. Off
+                  keeps pure solo.
+                </p>
+              </div>
+              <Switch
+                checked={config.router.interjections ?? false}
+                onCheckedChange={(v) => setRouter({ interjections: v })}
+              />
+            </div>
+
+            {config.router.interjections && (
+              <div className="flex items-center justify-between rounded-lg border border-hairline p-3">
+                <div className="pr-3">
+                  <Label className="text-sm">Max interjectors per turn</Label>
+                  <p className="text-xs text-muted-foreground">
+                    How many agents may chime in with substantive value on a
+                    single message.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="flex size-7 items-center justify-center rounded-md border border-hairline text-sm disabled:opacity-40"
+                    disabled={(config.router.maxInterjectors ?? 2) <= 0}
+                    onClick={() =>
+                      setRouter({
+                        maxInterjectors: Math.max(0, (config.router.maxInterjectors ?? 2) - 1),
+                      })
+                    }
+                  >
+                    −
+                  </button>
+                  <span className="w-5 text-center text-sm tabular-nums">
+                    {config.router.maxInterjectors ?? 2}
+                  </span>
+                  <button
+                    type="button"
+                    className="flex size-7 items-center justify-center rounded-md border border-hairline text-sm disabled:opacity-40"
+                    disabled={(config.router.maxInterjectors ?? 2) >= 4}
+                    onClick={() =>
+                      setRouter({
+                        maxInterjectors: Math.min(4, (config.router.maxInterjectors ?? 2) + 1),
+                      })
+                    }
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            )}
           </TabsContent>
 
           {/* ---- Agents ---- */}

@@ -68,6 +68,13 @@ export interface RouteInput {
 export interface RouteResult {
   decision: Omit<RoutingDecision, "id" | "messageId" | "ts">;
   winners: AgentId[]; // ordered; primary first
+  /**
+   * Agents who likely hold SPECIFIC, substantive value to add beyond the
+   * primary's answer (a scheduling conflict, prep notes, a warning) — not mere
+   * topical adjacency. Only used when the interjections toggle is on; each still
+   * self-censors (passes) if it turns out it has nothing concrete.
+   */
+  interjectors?: AgentId[];
 }
 
 export function routeMessage(input: RouteInput): RouteResult {
@@ -212,6 +219,8 @@ export interface RouterInvocation {
   strictPrompt?: boolean;
   /** #2 — drop supporting agents when the primary already covers the message. */
   soloOnCoverage?: boolean;
+  /** When on, the router also nominates interjectors (substantive cross-domain value). */
+  interjections?: boolean;
   /** Lovable AI SDK model instance — required when backend === "lovable". */
   lovableModel?: Parameters<typeof generateText>[0]["model"];
 }
@@ -256,9 +265,14 @@ Example — user: "plan tomorrow's workout and also budget my gym membership" �
 
   const system = invocation.strictPrompt ? strictSystem : baseSystem;
 
+  const wantInterject = !!invocation.interjections;
   const supportingHint = invocation.strictPrompt
     ? "Pick the best primary agent. Return supporting = [] unless the message explicitly requires a second specialty."
     : "Pick the best primary agent, up to 2 supporting agents, and a one-line reason.";
+
+  const interjectHint = wantInterject
+    ? `\n\nAlso list "interjectors": agents (other than the primary/supporting) who likely hold SPECIFIC, substantive value to add that the primary would NOT cover — e.g. a scheduling conflict, notes to prepare for a named contact, a risk or deadline. This is NOT topical adjacency: only nominate an agent if there is concrete reason to think they hold particular information the user would want surfaced. Return interjectors = [] if none. Each nominee will double-check and stay silent if they turn out to have nothing concrete.`
+    : "";
 
   const prompt = `Roster (available agents in this huddle):
 ${roster}
@@ -269,16 +283,22 @@ ${transcript || "(no prior messages)"}
 Latest user message:
 ${text}
 
-${supportingHint}`;
+${supportingHint}${interjectHint}`;
 
   const zodSchema = z.object({
     primary: z.enum(memberIds),
     supporting: z.array(z.enum(memberIds)),
+    interjectors: z.array(z.enum(memberIds)).optional().default([]),
     reason: z.string(),
   });
 
   try {
-    let output: { primary: AgentId; supporting: AgentId[]; reason: string };
+    let output: {
+      primary: AgentId;
+      supporting: AgentId[];
+      interjectors?: AgentId[];
+      reason: string;
+    };
 
     if (invocation.backend === "openai") {
       const { callOpenAIRouter } = await import("./openai-responses.server");
@@ -292,14 +312,19 @@ ${supportingHint}`;
             type: "array",
             items: { type: "string", enum: memberIds },
           },
+          interjectors: {
+            type: "array",
+            items: { type: "string", enum: memberIds },
+          },
           reason: { type: "string" },
         },
-        required: ["primary", "supporting", "reason"],
+        required: ["primary", "supporting", "interjectors", "reason"],
       } as Record<string, unknown>;
 
       const raw = await callOpenAIRouter<{
         primary: string;
         supporting: string[];
+        interjectors: string[];
         reason: string;
       }>({
         model: invocation.model,
@@ -364,15 +389,24 @@ ${supportingHint}`;
       winners.map((id, i) => [id, Number((1 - i * 0.2).toFixed(2))]),
     ) as Partial<Record<AgentId, number>>;
 
+    // Interjectors: substantive cross-domain voices, distinct from the primary
+    // and supporting agents. Only surfaced when the toggle is on.
+    const interjectors = wantInterject
+      ? (output.interjectors ?? []).filter(
+          (id) => memberIds.includes(id) && !winners.includes(id),
+        )
+      : [];
+
     return {
       winners,
+      interjectors,
       decision: {
         signal: "topic",
         scores,
         winnerId: primary,
         runnerUpId: winners[1] ?? null,
-        interjected: true,
-        reason: `LLM router (${invocation.backend}/${invocation.model})${soloApplied ? " [solo]" : ""}: ${reason}`.slice(0, 220),
+        interjected: interjectors.length > 0,
+        reason: `LLM router (${invocation.backend}/${invocation.model})${soloApplied ? " [solo]" : ""}${interjectors.length ? ` +${interjectors.length} interject` : ""}: ${reason}`.slice(0, 220),
       },
     };
   } catch (err) {
