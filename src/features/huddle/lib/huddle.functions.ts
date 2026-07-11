@@ -151,7 +151,12 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       try {
         const { fetchJourneyToolDefinitions, toResponsesTool } =
           await import("./journey/proxy.functions");
-        const defs = await fetchJourneyToolDefinitions();
+        // Huddle has its own Tavily web search; journey's web_search is redundant
+        // and only confuses tool selection, so don't offer it to Huddle agents.
+        const HIDDEN_FROM_HUDDLE = new Set(["web_search"]);
+        const defs = (await fetchJourneyToolDefinitions()).filter(
+          (d) => !HIDDEN_FROM_HUDDLE.has(d.name),
+        );
         journeyToolsCache = { defs, tools: defs.map(toResponsesTool) };
         return journeyToolsCache;
       } catch (err) {
@@ -478,7 +483,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         return matched?.id ?? winner.id;
       }
 
-      function createSuggestedTaskFromTool(args: Record<string, unknown>) {
+      async function createSuggestedTaskFromTool(args: Record<string, unknown>) {
         const title = String(args.title ?? args.task ?? args.name ?? "").trim();
         if (!title) {
           const error = "create_huddle_task requires a title";
@@ -493,6 +498,52 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           progress: typeof args.progress === "number" ? args.progress : undefined,
           blockReason: typeof args.blockReason === "string" ? args.blockReason : undefined,
         };
+
+        // Dual-write: a task created from Huddle should land on BOTH the Huddle
+        // board and the journey board. When this agent has journey enabled and we
+        // know the caller, also create it in journey. On success the journey task
+        // is mirrored onto the Huddle board (journeyTaskUpdates) so exactly one
+        // card shows; if journey is off or fails, fall back to a Huddle-only card.
+        if (agentBackend.journey?.enabled && data.caller?.entra_email) {
+          try {
+            const { invokeJourneyTool } = await import("./journey/proxy.functions");
+            const r = await invokeJourneyTool({
+              toolName: "quick_create_task",
+              args: { title: task.title },
+              caller: data.caller ?? {},
+              context: { source: "huddle", huddleId: data.huddleId, agentId: winner.id },
+            });
+            if (r.ok) {
+              if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+              else suggestedTasks.push(task); // journey didn't echo a row — keep a Huddle card
+              recordToolUse(
+                winner.id,
+                "create_huddle_task",
+                `“${task.title}” → Huddle board + journey`,
+                true,
+              );
+              return { ok: true, task, boards: ["huddle", "journey"] };
+            }
+            const ev = recordFallback(
+              "tool",
+              `${winner.name}: task saved to the Huddle board but journey create failed — ${r.error ?? "unknown"}`,
+              "journey task create failed",
+              winner.id,
+            );
+            perAgentFallbacks.push(ev.inline);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const ev = recordFallback(
+              "tool",
+              `${winner.name}: task saved to the Huddle board but journey create crashed — ${msg}`,
+              "journey task create crashed",
+              winner.id,
+            );
+            perAgentFallbacks.push(ev.inline);
+          }
+        }
+
+        // Huddle-only path (journey disabled, no caller, or journey create failed).
         suggestedTasks.push(task);
         recordToolUse(
           winner.id,
@@ -500,7 +551,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           `suggested “${task.title}” · owner ${AGENT_BY_ID[task.ownerId].name}`,
           true,
         );
-        return { ok: true, task };
+        return { ok: true, task, boards: ["huddle"] };
       }
 
       try {
@@ -652,7 +703,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             type: "function" as const,
             name: "create_huddle_task",
             description:
-              "Create a suggested task card on the Huddle board when the user asks to add, log, track, assign, or capture a task/action item.",
+              "Create a task when the user asks to add, log, track, assign, or capture a task/action item. It is added to the Huddle board and, when the user's journey account is connected, also created on their journey board — one call covers both.",
             parameters: {
               type: "object",
               additionalProperties: false,
@@ -703,7 +754,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             arguments: Record<string, unknown>;
           }) => {
             if (c.name === "create_huddle_task") {
-              return JSON.stringify(createSuggestedTaskFromTool(c.arguments));
+              return JSON.stringify(await createSuggestedTaskFromTool(c.arguments));
             }
             if (c.name === "tavily_web_search") {
               const q = String(c.arguments.query ?? "").trim() || "unknown";
@@ -921,7 +972,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           // create_huddle_task — always available (mirrors the OpenAI path).
           lovableTools.create_huddle_task = tool({
             description:
-              "Create a suggested task card on the Huddle board when the user asks to add, log, track, assign, or capture a task/action item.",
+              "Create a task when the user asks to add, log, track, assign, or capture a task/action item. It is added to the Huddle board and, when the user's journey account is connected, also created on their journey board — one call covers both.",
             inputSchema: z.object({
               title: z.string(),
               ownerId: z.string().optional(),
@@ -929,7 +980,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
               blockReason: z.string().optional(),
             }),
             execute: async (args) =>
-              JSON.stringify(createSuggestedTaskFromTool(args as Record<string, unknown>)),
+              JSON.stringify(await createSuggestedTaskFromTool(args as Record<string, unknown>)),
           });
 
           if (agentBackend.webSearch) {
