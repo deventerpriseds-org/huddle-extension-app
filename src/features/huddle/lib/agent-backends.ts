@@ -69,7 +69,7 @@ export type AgentBackend = z.infer<typeof AgentBackendSchema>;
 export type RouterConfig = z.infer<typeof RouterConfigSchema>;
 export type BackendsConfig = z.infer<typeof BackendsConfigSchema>;
 
-// ------- Prefilled assistant IDs (12 of 15 agents) -------
+// ------- Prefilled assistant IDs (12 of 15 agents; Finn/Cam persona-only) -------
 
 export const ASSISTANT_IDS: Partial<Record<AgentId, string>> = {
   "flex-grimes": "asst_TkRNda28gmRggEb1duj31a8J",
@@ -80,6 +80,7 @@ export const ASSISTANT_IDS: Partial<Record<AgentId, string>> = {
   "sam-trent": "asst_zIO5Sfb4k4IzHOF2TbJQf1tH",
   "elle-rowan": "asst_yLrJPsX4gJjiQo92kLUUOhnh",
   "cole-blake": "asst_nk9d9XZcVacBHyhzUPvAVM5o",
+  "tess-sutton": "asst_KnIB4EMkB5ziEwZZdwEFzoIl",
   "iris-chase": "asst_BcZBxlx9zH8VIPvfJrhPP3EF",
   "eli-vaughn": "asst_hNYvCTsP7t8XB4Md0xFN7DwC",
   "liam-kingsley": "asst_GVIrKekZI0p9UsqAgGYZHtOE",

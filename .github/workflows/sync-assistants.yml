@@ -1,0 +1,54 @@
+name: Sync OpenAI assistants
+
+# Keeps the OpenAI platform (the backup / source of truth) and the in-repo
+# snapshot in lockstep. It (1) pushes authoritative instructions UP to the
+# assistants listed in scripts/push-assistant-instructions.ts, then (2) pulls a
+# fresh snapshot of every assistant in scripts/fetch-openai-assistants.ts back
+# into the JSON the runtime reads, and commits the result.
+#
+# Run this after repurposing an agent (so the platform assistant matches the new
+# role) or any time you edit an assistant on the OpenAI dashboard and want the
+# repo snapshot to catch up. OPENAI_API_KEY comes from org secrets.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies (public npm)
+        run: |
+          rm -f bun.lock
+          sed -i 's/^minimumReleaseAge = .*/minimumReleaseAge = 0/' bunfig.toml
+          bun install --registry https://registry.npmjs.org
+
+      - name: Push authoritative instructions to the platform
+        run: bun run scripts/push-assistant-instructions.ts
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Pull fresh snapshots from the platform
+        run: bun run scripts/fetch-openai-assistants.ts
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Commit refreshed snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- src/features/huddle/data/openai-assistant-snapshots.json; then
+            echo "No snapshot changes."
+            exit 0
+          fi
+          git add src/features/huddle/data/openai-assistant-snapshots.json
+          git commit -m "Sync OpenAI assistant snapshots (platform -> repo)"
+          git push origin HEAD:${{ github.ref_name }}
