@@ -16,9 +16,21 @@ live SWA deployment, which exercises the *real* runtime: routing, snapshot instr
 layer, tools (`create_huddle_task`, `prioritize`, RAG, web search), and multi-agent interjection.
 
 ## Why this is fiddly (and why the harness exists)
-- The request/response bodies are **seroval-encoded**, not plain JSON. You must encode the payload
-  with `toJSONAsync` and decode the reply with `fromJSON`, both using TanStack's default seroval
-  plugins. Hand-rolling a JSON body gets a 500; hand-parsing the reply misreads the node graph.
+- The request/response bodies are **seroval-encoded**, not plain JSON. Encode the payload with
+  `toJSONAsync` using seroval plugins; hand-rolling a JSON body gets a 500.
+- **Getting the plugins standalone:** `getDefaultSerovalPlugins()` from `@tanstack/start-client-core`
+  requires the Start **server** runtime (AsyncLocalStorage) and throws when run as a plain Node
+  script. It just returns `[...customSerializationAdapters.map(makeSerovalPlugin), ...defaultSerovalPlugins]`,
+  and Huddle registers **no** custom serialization adapters — so import `defaultSerovalPlugins`
+  straight from `@tanstack/router-core` and use that. (If the app ever adds custom adapters, mirror
+  them.)
+- **Decoding the reply:** the stock `fromJSON` needs the server's exact plugin set and throws on
+  constant nodes we don't register. The harness instead **walks the node graph itself**
+  (0=number, 1=string, 2=constant, 7=reference, 9=array, 10/11=object) and unwraps the
+  `{ result, error, context }` transport envelope. Robust and dependency-light.
+- **History shape:** threaded `history` items must match the server's `HuddleMessage` zod schema —
+  `{ id, huddleId, author: {kind:"user"} | {kind:"agent", agentId}, text, ts }`. A bare
+  `{role, text}` fails validation (`history[0].id Required`).
 - The endpoint is `POST /_serverFn/{id}` and **requires the header `x-tsr-serverFn: true`**. Without
   it you get a 405 (routing rejects it as a non-server-fn request).
 - `{id}` is a **content hash TanStack assigns to `sendHuddleMessage` at build time** — it *changes*
@@ -33,19 +45,17 @@ The ready-to-run harness is `scripts/harness.mjs` in this skill dir. Run it from
 node .claude/skills/test-agent-serverfn/scripts/harness.mjs
 ```
 
-It sends a probe turn to all members and prints each agent's reply. For a **multi-round group
-conversation** (the high-value test — target 1 answers, then a different agent jumps in per round),
-thread the returned `replies` back in as `history` and enable interjections:
+The harness runs a **multi-round group conversation** out of the box (the high-value test — a
+different specialist should lead each round, and a second agent should interject when it's their
+domain). It threads each round's `replies` back as properly-shaped `HuddleMessage` history and turns
+on interjections. Edit the `TURNS` array to match what you're verifying. A known-good run:
 
-```js
-// history is an array of { role, agentId?, text }; append each turn's replies before the next send.
-let history = [];
-const t1 = await send("am I over budget on dining this month?", history, /*interject*/ true);
-history = history.concat({ role: "user", text: "am I over budget on dining this month?" },
-                         ...t1.val.replies.map(r => ({ role: "assistant", agentId: r.agentId, text: r.text })));
-const t2 = await send("switching gears, what features should we build next?", history, true);
-// …3–4 rounds; assert different agentIds lead per round and that a second agent interjects.
-```
+| round | prompt | expected lead |
+|---|---|---|
+| 1 | "am I over budget on dining this month?" | Finn (finance) |
+| 2 | "what features should we build next?" | Tess (product owner) |
+| 3 | "how would we pitch that to seed investors?" | Sam (startup planner) |
+| 4 | "let's run a quick retro on the sprint" | Terry (scrum master) |
 
 Set `interject: true` and `maxInterjectors` in the router block to test the "another agent should
 jump in with input because it's their domain/memory" behavior. Set `journey.enabled` per-agent if
