@@ -16,6 +16,11 @@ jobs:
       contents: write
       actions: write
     steps:
+      - name: Frozen — refuse to run
+        run: |
+          echo "::error::revert-assistants is FROZEN. The repo snapshot is the authoritative source; roll back prompt changes via git (revert the snapshot commit) instead of the platform."
+          exit 1
+
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2

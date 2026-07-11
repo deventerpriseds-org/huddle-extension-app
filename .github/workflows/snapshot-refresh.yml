@@ -1,18 +1,15 @@
-name: Refresh assistant snapshots
+name: Refresh assistant snapshots (DEPRECATED)
 
-# Keeps the in-repo snapshot in sync with the OpenAI platform, hands-off.
-#
-# PULL-ONLY: it fetches the current config of every assistant and commits the
-# snapshot if anything changed. It does NOT push repo instructions up to the
-# platform, so edits made on the OpenAI dashboard are preserved (the opposite
-# of sync-assistants.yml, which re-authors the platform from the repo and is
-# manual-only). When the snapshot changes it dispatches a deploy so the live
-# app picks it up.
+# DEPRECATED — do not run. The in-repo snapshot
+# (src/features/huddle/data/openai-assistant-snapshots.json) is now the
+# AUTHORITATIVE, git-versioned source of agent instructions (OpenAI is sunsetting
+# both the Assistants API and reusable Prompt objects; their guidance is to keep
+# prompts code-managed). This job PULLS from the platform and would OVERWRITE the
+# authoritative snapshot with stale platform content — so its schedule is removed
+# and the manual trigger is guarded off. Kept only for historical reference.
 
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 7 * * *" # daily 07:00 UTC
+  workflow_dispatch: # manual only; guarded off below (schedule removed)
 
 jobs:
   refresh:
@@ -21,6 +18,11 @@ jobs:
       contents: write
       actions: write
     steps:
+      - name: Frozen — refuse to run
+        run: |
+          echo "::error::snapshot-refresh is DEPRECATED. The repo snapshot is the authoritative source; pulling from the platform would clobber it. Edit openai-assistant-snapshots.json directly."
+          exit 1
+
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2

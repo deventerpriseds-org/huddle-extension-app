@@ -28,11 +28,22 @@ in-repo **`p()` persona** (compact fallback). The role split (who answers what) 
 rich prompt does not change routing. The snapshot is the domain layer; shared house-style and
 handoffs are a separate always-appended layer (`SHARED_COORDINATION` in `huddle.functions.ts`).
 
-## Assistant IDs
-Single source of truth: `src/features/huddle/data/assistant-ids.json`. Imported by
-`agent-backends.ts` and the fetch/create scripts. Do not hand-copy the map elsewhere.
+## Prompt source of truth (code-authoritative)
+`src/features/huddle/data/openai-assistant-snapshots.json` is the **authoritative,
+git-versioned source** of every agent's instructions. Edit it directly and commit — git
+history IS the version record, so a degrading change is reverted with `git revert`/restore.
+OpenAI is sunsetting BOTH the Assistants API and reusable Prompt objects (their guidance is to
+keep prompts code-managed), and Huddle's runtime is already 100% Responses API reading this
+snapshot — so the OpenAI platform `asst_…` objects are legacy and must NOT be treated as the
+source of truth. Vector stores (file_search) are separate Files/vector-store API objects and
+remain valid.
 
-## Keeping platform ⇄ snapshot in sync
-- `sync-assistants.yml` — push authored instructions up, then pull a fresh snapshot (manual).
-- `snapshot-refresh.yml` — daily pull-only (preserves dashboard edits) + deploy on change.
-- `provision-assistants.yml` — create assistants for any agent missing one.
+## FROZEN platform workflows (do not run)
+These are disabled (each has a `Frozen — refuse to run` guard) because they would push to or
+pull from the deprecated platform objects and could clobber the authoritative snapshot:
+`sync-assistants.yml`, `snapshot-refresh.yml`, `provision-assistants.yml`, `revert-assistants.yml`.
+To change an agent's instructions, edit the snapshot JSON directly.
+
+## Assistant IDs
+`src/features/huddle/data/assistant-ids.json` maps agent → legacy `asst_…` id. Kept for
+reference/vector-store bindings; not the prompt source of truth.

@@ -19,6 +19,11 @@ jobs:
       contents: write
       actions: write
     steps:
+      - name: Frozen — refuse to run
+        run: |
+          echo "::error::provision-assistants is FROZEN. The repo snapshot is the authoritative source; we no longer create/write platform assistants (Assistants API is deprecated). Add the agent's entry to openai-assistant-snapshots.json directly."
+          exit 1
+
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2
