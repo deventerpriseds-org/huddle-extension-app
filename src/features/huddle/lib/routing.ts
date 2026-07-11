@@ -221,6 +221,8 @@ export interface RouterInvocation {
   soloOnCoverage?: boolean;
   /** When on, the router also nominates interjectors (substantive cross-domain value). */
   interjections?: boolean;
+  /** Member ids that have journey tools (calendar/tasks/contacts) enabled. */
+  journeyEnabledIds?: AgentId[];
   /** Lovable AI SDK model instance — required when backend === "lovable". */
   lovableModel?: Parameters<typeof generateText>[0]["model"];
 }
@@ -241,8 +243,14 @@ export async function routeMessageLLM(
   const memberIds = present.map((a) => a.id) as [AgentId, ...AgentId[]];
   if (memberIds.length === 0) return routeMessage(input);
 
+  const journeySet = new Set(invocation.journeyEnabledIds ?? []);
   const roster = present
-    .map((a) => `- ${a.id} (${a.name}, ${a.role}): ${a.domains.join(", ")}`)
+    .map(
+      (a) =>
+        `- ${a.id} (${a.name}, ${a.role}): ${a.domains.join(", ")}${
+          journeySet.has(a.id) ? " [has live calendar/tasks/contacts tools]" : ""
+        }`,
+    )
     .join("\n");
 
   const transcript = history
@@ -272,10 +280,10 @@ Example — user: "plan tomorrow's workout and also budget my gym membership" �
 
   const interjectHint = wantInterject
     ? `\n\nAlso list "interjectors": agents (other than the primary/supporting) who should CHECK whether they hold specific value the primary can't provide, because the message plausibly intersects information they would own. You cannot see their data — nominate based on the ANGLE, and each nominee will look and stay silent (pass) if they find nothing:
-- A specific time/date is set → nominate the calendar/scheduling agent to check for conflicts.
-- A named person/contact/meeting is mentioned → nominate an agent who may hold prep notes or history on them.
+- A specific time/date is set → nominate an agent marked [has live calendar/tasks/contacts tools] to check for conflicts on the user's schedule.
+- A named person/contact/meeting is mentioned → nominate an agent (prefer one with the tools marker) who may hold prep notes or history on them.
 - A commitment, deadline, budget, or risk is implied → nominate the agent who tracks that.
-Do NOT nominate for mere topical similarity with no such information angle. Return interjectors = [] when there is no plausible angle.`
+Agents marked [has live calendar/tasks/contacts tools] can look up the user's actual schedule and contacts, so they are the right nominees for time/person/deadline angles even if their stated domain sounds unrelated. Do NOT nominate for mere topical similarity with no such information angle. Return interjectors = [] when there is no plausible angle.`
     : "";
 
   const prompt = `Roster (available agents in this huddle):
