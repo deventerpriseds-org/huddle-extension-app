@@ -10,7 +10,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T16:17:22.985Z"
+    "fetchedAt": "2026-07-11T18:26:19.280Z"
   },
   "charleston-lewis": {
     "assistantId": "asst_epZActkpqNmqw7KusXBmyfuT",
@@ -39,7 +39,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T16:17:27.892Z"
+    "fetchedAt": "2026-07-11T18:26:20.112Z"
   },
   "troy-lennox": {
     "assistantId": "asst_AqTwFwQx5RlCAH3OPYVPCG5Q",
@@ -52,7 +52,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T16:17:28.156Z"
+    "fetchedAt": "2026-07-11T18:26:20.358Z"
   },
   "ezra-miles": {
     "assistantId": "asst_FldoVvUYjszVEei8QBo2LFoO",
@@ -65,7 +65,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T16:17:28.395Z"
+    "fetchedAt": "2026-07-11T18:26:20.617Z"
   },
   "faith-hartley": {
     "assistantId": "asst_gY8usQlJelYXLZzQm08Z0C2x",
@@ -78,7 +78,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T16:17:28.613Z"
+    "fetchedAt": "2026-07-11T18:26:20.869Z"
   },
   "sam-trent": {
     "assistantId": "asst_zIO5Sfb4k4IzHOF2TbJQf1tH",
@@ -91,7 +91,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T16:17:28.878Z"
+    "fetchedAt": "2026-07-11T18:26:21.110Z"
   },
   "elle-rowan": {
     "assistantId": "asst_yLrJPsX4gJjiQo92kLUUOhnh",
@@ -185,7 +185,7 @@
     "responseFormat": {
       "type": "text"
     },
-    "fetchedAt": "2026-07-11T16:17:29.148Z"
+    "fetchedAt": "2026-07-11T18:26:21.363Z"
   },
   "cole-blake": {
     "assistantId": "asst_nk9d9XZcVacBHyhzUPvAVM5o",
@@ -198,7 +198,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T16:17:29.471Z"
+    "fetchedAt": "2026-07-11T18:26:21.622Z"
   },
   "tess-sutton": {
     "assistantId": "asst_KnIB4EMkB5ziEwZZdwEFzoIl",
@@ -211,7 +211,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T16:17:29.732Z"
+    "fetchedAt": "2026-07-11T18:26:21.893Z"
   },
   "iris-chase": {
     "assistantId": "asst_BcZBxlx9zH8VIPvfJrhPP3EF",
@@ -515,7 +515,7 @@
     "responseFormat": {
       "type": "text"
     },
-    "fetchedAt": "2026-07-11T16:17:29.954Z"
+    "fetchedAt": "2026-07-11T18:26:22.118Z"
   },
   "eli-vaughn": {
     "assistantId": "asst_hNYvCTsP7t8XB4Md0xFN7DwC",
@@ -550,7 +550,7 @@
     "responseFormat": {
       "type": "text"
     },
-    "fetchedAt": "2026-07-11T16:17:30.217Z"
+    "fetchedAt": "2026-07-11T18:26:22.363Z"
   },
   "liam-kingsley": {
     "assistantId": "asst_GVIrKekZI0p9UsqAgGYZHtOE",
@@ -585,7 +585,7 @@
     "responseFormat": {
       "type": "text"
     },
-    "fetchedAt": "2026-07-11T16:17:30.445Z"
+    "fetchedAt": "2026-07-11T18:26:22.585Z"
   },
   "terry-locke": {
     "assistantId": "asst_FDc1lqPYKtgkZmIFfDEp7FtQ",
@@ -598,7 +598,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T16:17:30.679Z"
+    "fetchedAt": "2026-07-11T18:26:22.802Z"
   },
   "finn-reid": {
     "assistantId": "asst_SPOeSqDYSvBdN4RtALKjd5BT",
@@ -627,7 +627,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T16:17:31.014Z"
+    "fetchedAt": "2026-07-11T18:26:23.070Z"
   },
   "cam-post": {
     "assistantId": "asst_uVbzmNEaZEWop9ddgRZcTsoJ",
@@ -656,6 +656,6 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T16:17:31.309Z"
+    "fetchedAt": "2026-07-11T18:26:23.318Z"
   }
 }
