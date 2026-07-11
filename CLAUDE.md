@@ -47,3 +47,41 @@ To change an agent's instructions, edit the snapshot JSON directly.
 ## Assistant IDs
 `src/features/huddle/data/assistant-ids.json` maps agent → legacy `asst_…` id. Kept for
 reference/vector-store bindings; not the prompt source of truth.
+
+## Prioritization & task-sync (how Huddle gets journey tasks)
+Huddle scores/prioritizes tasks **supabase-independently** by mirroring journey's tasks into
+Huddle's own Azure Postgres and running a ported scoring engine over the mirror. Read this before
+touching anything task/priority related — several of these facts are non-obvious and were expensive
+to re-derive.
+
+**Pipeline (one-way fan-out, do not add a second writer):**
+`create_huddle_task` (or any journey task write) → journey `public.tasks` (**canonical source of
+truth**) → a `SECURITY DEFINER` DB trigger `notify_huddle_task_sync` → `pg_net` async HTTP →
+journey edge fn `huddle-task-sync` (resolves owner email, adds the shared secret) →
+Huddle webhook `POST /api/public/tasks-sync` → **`tasks.journey_tasks`** mirror in Azure PG →
+`prioritize(category)` tool reads the mirror.
+
+**Facts that keep getting relearned:**
+- **The mirror is a single-writer read-model.** Only the sync trigger writes `tasks.journey_tasks`.
+  `create_huddle_task` does **not** write the mirror — it writes journey + renders a UI board card.
+  The "Huddle board" is UI state (`suggestedTasks`/`journeyTaskUpdates` in the response), **not** a
+  table. Before this mirror there was **no** Huddle task table at all.
+- **No duplicates by construction.** The mirror upserts `ON CONFLICT (id) DO UPDATE` keyed on
+  journey's task uuid. INSERT→UPDATE→re-fire all update the same row. If you ever add a
+  read-your-writes warm-write from `create_huddle_task`, keep it id-keyed so it stays idempotent.
+- **The sync is eventually-consistent (`pg_net` is async, ~1–3s lag).** A `prioritize` call
+  immediately after a create can miss the just-created row. This is a freshness gap, **not** a bug —
+  tests must **poll/retry**, not assume synchronous. A single failed read is usually just timing.
+- **Secret discipline (standing rule): reuse `JOURNEY_PROXY_TOKEN`.** It already bridges
+  Huddle↔journey and is synced to both Huddle appsettings and journey edge secrets. The webhook auth
+  (`x-webhook-secret`) reuses it. **Never mint a new org secret** for this — it clutters org creds.
+- **Azure PG access pattern:** model new stores on `src/features/huddle/lib/identity/identity.server.ts`
+  — `getPool()`, `AZURE_PG_URL`, `ssl:{rejectUnauthorized:false}`, lazy `ensureBootstrapped()`.
+- Ported scoring lives in `src/features/huddle/lib/tasks/scoring.ts`; the tool + dispatch in
+  `src/features/huddle/lib/tasks/tools.ts`; mirror store in `.../tasks/tasks.server.ts`; webhook
+  route in `src/routes/api/public/tasks-sync.ts`. The journey side (trigger migration + edge fn)
+  lives in the **journey-voice** repo — see its CLAUDE.md for the supabase-side facts.
+
+To exercise the pipeline end-to-end, use the **`verify-task-sync`** skill. To live-test agents
+(group conversations, routing, tool use) via the server function, use the **`test-agent-serverfn`**
+skill — both under `.claude/skills/`.
