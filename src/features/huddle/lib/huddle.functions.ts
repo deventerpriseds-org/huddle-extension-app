@@ -134,6 +134,8 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     // upsert them.
     const journeyTaskUpdates: import("./journey/types").JourneyTask[] = [];
     const suggestedTasks: SuggestedTaskDraft[] = [];
+    // Reasoning summaries collected across agent turns (reasoning models only).
+    const reasoningSummaries: string[] = [];
 
     // Lazy: fetch & cache journey tool definitions for this whole turn. Only
     // populated when at least one participating agent has journey.enabled.
@@ -384,6 +386,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         journeyTaskUpdates,
         suggestedTasks,
         toolUses,
+        reasoning: reasoningSummaries,
       };
     }
 
@@ -983,7 +986,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             );
           }
 
-          const text = await callOpenAIResponses({
+          const persona = await callOpenAIResponses({
             model: usedModel,
             instructions,
             transcript: transcript,
@@ -993,7 +996,12 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             toolChoice,
             maxToolHops: 5,
           });
-          clean = text.trim();
+          clean = persona.text.trim();
+          if (persona.reasoning.length > 0) {
+            reasoningSummaries.push(
+              ...persona.reasoning.map((r) => `${winner.name}: ${r}`),
+            );
+          }
         } else {
           // Lovable AI path (default backend). Wire the SAME native tools the
           // OpenAI path offers — create_huddle_task, Tavily, RAG memory, and the
@@ -1406,5 +1414,6 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       journeyTaskUpdates,
       suggestedTasks,
       toolUses,
+      reasoning: reasoningSummaries,
     };
   });

@@ -138,15 +138,47 @@ function HuddleHeader({
   );
 }
 
+function TypingIndicator({ agentId }: { agentId?: AgentId }) {
+  const agent = agentId ? AGENT_BY_ID[agentId] : undefined;
+  return (
+    <div className="flex items-start gap-2">
+      {agent ? (
+        <AgentAvatar agent={agent} size="sm" />
+      ) : (
+        <div className="size-8 shrink-0 rounded-full bg-muted" />
+      )}
+      <div className="flex flex-col gap-1">
+        <div className="flex w-fit items-center gap-1 rounded-2xl bg-muted px-3 py-2">
+          <span className="size-2 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-0.3s]" />
+          <span className="size-2 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-0.15s]" />
+          <span className="size-2 animate-bounce rounded-full bg-muted-foreground/60" />
+        </div>
+        <span className="pl-1 text-[11px] text-muted-foreground">
+          {agent ? `${agent.name} is thinking…` : "Thinking…"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: Huddle }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
   const [hydrated, setHydrated] = useState(false);
+  const pending = useAgentPanelStore((s) => s.pending);
+  const isPending = pending?.huddleId === huddle.id;
+
   useEffect(() => {
     setHydrated(true);
   }, []);
+
+  // Reveal the latest message (and the typing indicator) whenever the transcript
+  // grows or a turn starts/ends. Uses the sentinel at the bottom for reliability.
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 999999, behavior: "smooth" });
-  }, [messages.length]);
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [messages.length, isPending]);
 
   const dayLabel = useMemo(() => {
     if (!hydrated) return "Today · morning standup";
@@ -169,12 +201,16 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
           <MessageRow key={m.id} m={m} huddle={huddle} />
         ))}
 
-        {messages.length === 0 && (
+        {messages.length === 0 && !isPending && (
           <div className="rounded-xl border border-dashed border-hairline p-8 text-center text-sm text-muted-foreground">
             Start the conversation. Try “what's the latest workout routine?” or “@Finn, how am I
             doing on dining?”
           </div>
         )}
+
+        {isPending && <TypingIndicator agentId={pending?.agentId} />}
+
+        <div ref={bottomRef} />
       </div>
     </div>
   );
@@ -301,6 +337,8 @@ function Composer({ huddle }: { huddle: Huddle }) {
   const upsertJourneyTasks = useHuddleStore((s) => s.upsertJourneyTasks);
   const addFallbacks = useAgentPanelStore((s) => s.addFallbacks);
   const recordTurn = useAgentPanelStore((s) => s.recordTurn);
+  const setPending = useAgentPanelStore((s) => s.setPending);
+  const clearPending = useAgentPanelStore((s) => s.clearPending);
   const allMessages = useVisibleMessages();
   const messages = useMemo(
     () => allMessages.filter((m) => m.huddleId === huddle.id),
@@ -332,6 +370,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
     addUser(userMsg);
     setText("");
     setSending(true);
+    setPending({ huddleId: huddle.id, agentId: targetAgentId, startedAt: now });
     try {
       const backendsCfg = useBackendsStore.getState().config;
       const result = await sendHuddleMessage({
@@ -390,14 +429,26 @@ function Composer({ huddle }: { huddle: Huddle }) {
         }
       }
 
-      // Record per-agent prompt debug for the Activity/Settings viewer.
-      if (result.prompts && result.prompts.length > 0) {
+      // Record per-agent prompt debug + tool activity + reasoning for the
+      // Activity viewer (the "other tab").
+      if (
+        (result.prompts && result.prompts.length > 0) ||
+        (result.toolUses && result.toolUses.length > 0)
+      ) {
         recordTurn({
           turnId: userId,
           ts: now,
           huddleId: huddle.id,
           userText: trimmed,
-          prompts: result.prompts,
+          prompts: result.prompts ?? [],
+          toolUses: (result.toolUses ?? []).map((t) => ({
+            agentId: t.agentId,
+            tool: t.tool,
+            status: t.summary,
+            ok: t.ok,
+            detail: t.detail,
+          })),
+          reasoning: result.reasoning,
         });
       }
 
@@ -429,6 +480,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
       toast.error(msg);
     } finally {
       setSending(false);
+      clearPending();
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }

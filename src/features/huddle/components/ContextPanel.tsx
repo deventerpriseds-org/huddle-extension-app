@@ -3,6 +3,7 @@ import { Activity, Boxes, BookOpen, Sparkles, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
 import { useHuddleStore, useToolUses, useVisibleDecisions, useVisibleMemory, useVisibleTasks } from "../store";
+import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { AgentAvatar } from "./AgentAvatar";
 import type { Task, TaskLane } from "../data/seed";
 
@@ -172,12 +173,22 @@ function TaskCard({
 function ActivityTab() {
   const decisions = useVisibleDecisions();
   const toolUses = useToolUses();
+  const turns = useAgentPanelStore((s) => s.turns);
 
   const items = useMemo(() => {
     const d = decisions.map((x) => ({ kind: "decision" as const, ts: x.ts, id: x.id, data: x }));
     const t = toolUses.map((x) => ({ kind: "tool" as const, ts: x.ts, id: x.id, data: x }));
-    return [...d, ...t].sort((a, b) => b.ts - a.ts);
-  }, [decisions, toolUses]);
+    // Reasoning summaries the model exposed while working (reasoning models only).
+    const r = turns
+      .filter((tn) => tn.reasoning && tn.reasoning.length > 0)
+      .map((tn) => ({
+        kind: "reasoning" as const,
+        ts: tn.ts,
+        id: `reason-${tn.turnId}`,
+        data: { reasoning: tn.reasoning as string[] },
+      }));
+    return [...d, ...t, ...r].sort((a, b) => b.ts - a.ts);
+  }, [decisions, toolUses, turns]);
 
   if (items.length === 0) {
     return (
@@ -189,6 +200,30 @@ function ActivityTab() {
   return (
     <div className="flex flex-col gap-2.5">
       {items.map((it) => {
+        if (it.kind === "reasoning") {
+          return (
+            <div key={it.id} className="rounded-lg border border-hairline bg-surface p-3 shadow-soft">
+              <div className="flex items-center gap-2">
+                <span
+                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                  style={{ backgroundColor: "var(--ai-soft)", color: "var(--ai)" }}
+                >
+                  <Sparkles size={10} /> thinking
+                </span>
+                <span className="ml-auto text-[10px] text-muted-foreground">
+                  {new Date(it.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              </div>
+              <div className="mt-1.5 flex flex-col gap-1">
+                {it.data.reasoning.map((line, i) => (
+                  <p key={i} className="text-[11px] leading-snug text-muted-foreground">
+                    {line}
+                  </p>
+                ))}
+              </div>
+            </div>
+          );
+        }
         if (it.kind === "tool") {
           const tu = it.data;
           const a = AGENT_BY_ID[tu.agentId];

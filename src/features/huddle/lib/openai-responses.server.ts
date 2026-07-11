@@ -98,6 +98,8 @@ interface ResponsesReply {
     name?: string;
     arguments?: string;
     content?: Array<{ text?: string; type?: string }>;
+    /** Present on reasoning items when reasoning.summary is enabled. */
+    summary?: Array<{ text?: string; type?: string }>;
   }>;
 }
 
@@ -105,6 +107,19 @@ function extractText(json: ResponsesReply): string {
   if (json.output_text) return json.output_text;
   const parts = (json.output ?? []).flatMap((o) => o.content ?? []);
   return parts.find((c) => c?.type === "output_text" || c?.text)?.text ?? "";
+}
+
+/** Reasoning summary text, when the model exposes one (reasoning models only). */
+function extractReasoning(json: ResponsesReply): string[] {
+  return (json.output ?? [])
+    .filter((o) => o.type === "reasoning")
+    .flatMap((o) => (o.summary ?? []).map((s) => (s.text ?? "").trim()).filter(Boolean));
+}
+
+/** Reasoning models accept `reasoning: { summary }`; classic chat models reject it. */
+function isReasoningModel(model: string): boolean {
+  const m = model.replace(/^openai\//, "");
+  return /^o\d/.test(m) || m.startsWith("gpt-5");
 }
 
 function extractToolCalls(json: ResponsesReply): Array<{
@@ -132,12 +147,22 @@ const PRIORITY_MODELS = new Set([
   "gpt-5.5",
 ]);
 
-export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<string> {
+export interface OpenAIPersonaResult {
+  text: string;
+  /** Reasoning summary lines, when the model exposes them (reasoning models). */
+  reasoning: string[];
+}
+
+export async function callOpenAIResponses(
+  input: OpenAIPersonaInput,
+): Promise<OpenAIPersonaResult> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY not configured");
 
   const maxHops = input.maxToolHops ?? 2;
   const priority = input.fastMode && PRIORITY_MODELS.has(input.model);
+  const wantReasoning = isReasoningModel(input.model);
+  const reasoning: string[] = [];
 
   // Running input array. Each tool round appends function_call_output items.
   const runningInput: unknown[] = [...input.transcript];
@@ -150,6 +175,7 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<st
       instructions: input.instructions,
       input: runningInput,
       ...(priority ? { service_tier: "priority" } : {}),
+      ...(wantReasoning ? { reasoning: { summary: "auto" } } : {}),
       ...(hasTools ? { tools: input.tools } : {}),
       // Only force tool_choice on the FIRST hop; subsequent hops let the model
       // produce a normal text answer using the tool output.
@@ -173,10 +199,11 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<st
 
     const json = (await res.json()) as ResponsesReply & { id?: string };
     previousResponseId = json.id;
+    if (wantReasoning) reasoning.push(...extractReasoning(json));
 
     const toolCalls = extractToolCalls(json);
     if (toolCalls.length === 0 || !input.onToolCall || hop === maxHops) {
-      return extractText(json).trim();
+      return { text: extractText(json).trim(), reasoning };
     }
 
     const nextInput: unknown[] = [];
@@ -203,5 +230,5 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<st
     runningInput.push(...nextInput);
   }
 
-  return "";
+  return { text: "", reasoning };
 }
