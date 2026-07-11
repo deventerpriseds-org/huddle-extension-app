@@ -1,20 +1,21 @@
-name: Sync OpenAI assistants
+name: Refresh assistant snapshots
 
-# Keeps the OpenAI platform (the backup / source of truth) and the in-repo
-# snapshot in lockstep. It (1) pushes authoritative instructions UP to the
-# assistants listed in scripts/push-assistant-instructions.ts, then (2) pulls a
-# fresh snapshot of every assistant in scripts/fetch-openai-assistants.ts back
-# into the JSON the runtime reads, and commits the result.
+# Keeps the in-repo snapshot in sync with the OpenAI platform, hands-off.
 #
-# Run this after repurposing an agent (so the platform assistant matches the new
-# role) or any time you edit an assistant on the OpenAI dashboard and want the
-# repo snapshot to catch up. OPENAI_API_KEY comes from org secrets.
+# PULL-ONLY: it fetches the current config of every assistant and commits the
+# snapshot if anything changed. It does NOT push repo instructions up to the
+# platform, so edits made on the OpenAI dashboard are preserved (the opposite
+# of sync-assistants.yml, which re-authors the platform from the repo and is
+# manual-only). When the snapshot changes it dispatches a deploy so the live
+# app picks it up.
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * *" # daily 07:00 UTC
 
 jobs:
-  sync:
+  refresh:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -32,28 +33,23 @@ jobs:
           sed -i 's/^minimumReleaseAge = .*/minimumReleaseAge = 0/' bunfig.toml
           bun install --registry https://registry.npmjs.org
 
-      - name: Push authoritative instructions to the platform
-        run: bun run scripts/push-assistant-instructions.ts
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-
       - name: Pull fresh snapshots from the platform
         run: bun run scripts/fetch-openai-assistants.ts
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
-      - name: Commit refreshed snapshot and deploy
+      - name: Commit and deploy if the snapshot changed
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if git diff --quiet -- src/features/huddle/data/openai-assistant-snapshots.json; then
-            echo "No snapshot changes."
+            echo "Snapshot unchanged — nothing to deploy."
             exit 0
           fi
           git add src/features/huddle/data/openai-assistant-snapshots.json
-          git commit -m "Sync OpenAI assistant snapshots (platform -> repo)"
+          git commit -m "Refresh OpenAI assistant snapshots (scheduled)"
           git push origin HEAD:${{ github.ref_name }}
           echo "Snapshot changed — dispatching deploy."
           gh workflow run deploy-swa.yml --ref ${{ github.ref_name }}
