@@ -196,13 +196,14 @@ jobs:
         # outbound IPs are dynamic. The assembled URL is masked and never printed.
         env:
           FULL_URL: ${{ secrets.AZURE_PG_URL }}
-          # First non-empty password secret wins — covers the likely names.
-          PG_PW_1: ${{ secrets.AZURE_PG_PASSWORD }}
-          PG_PW_2: ${{ secrets.AZURE_POSTGRES_PASSWORD }}
-          PG_PW_3: ${{ secrets.AZURE_PG_ADMIN_PASSWORD }}
-          PG_PW_4: ${{ secrets.PG_ADMIN_PASSWORD }}
-          PG_PW_5: ${{ secrets.POSTGRES_PASSWORD }}
-          PG_PW_6: ${{ secrets.AZURE_PG_PASS }}
+          # First non-empty password secret wins. AZURE_ADMIN_PW is the real one;
+          # the rest are fallbacks in case it's ever renamed.
+          PG_PW_1: ${{ secrets.AZURE_ADMIN_PW }}
+          PG_PW_2: ${{ secrets.AZURE_PG_PASSWORD }}
+          PG_PW_3: ${{ secrets.AZURE_POSTGRES_PASSWORD }}
+          PG_PW_4: ${{ secrets.AZURE_PG_ADMIN_PASSWORD }}
+          PG_PW_5: ${{ secrets.PG_ADMIN_PASSWORD }}
+          PG_PW_6: ${{ secrets.POSTGRES_PASSWORD }}
           # Optional explicit overrides if discovery picks the wrong one.
           PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER }}
           PG_DB_OVERRIDE: ${{ secrets.AZURE_PG_DB }}
@@ -242,7 +243,7 @@ jobs:
             if [ -n "$c" ]; then PW="$c"; break; fi
           done
           if [ -z "$PW" ]; then
-            echo "::error::No Postgres admin-password secret set. Tried AZURE_PG_PASSWORD, AZURE_POSTGRES_PASSWORD, AZURE_PG_ADMIN_PASSWORD, PG_ADMIN_PASSWORD, POSTGRES_PASSWORD, AZURE_PG_PASS. Set one (or set AZURE_PG_URL directly)."
+            echo "::error::No Postgres admin-password secret set. Tried AZURE_ADMIN_PW, AZURE_PG_PASSWORD, AZURE_POSTGRES_PASSWORD, AZURE_PG_ADMIN_PASSWORD, PG_ADMIN_PASSWORD, POSTGRES_PASSWORD. Set one (or set AZURE_PG_URL directly)."
             exit 1
           fi
           echo "::add-mask::$PW"
