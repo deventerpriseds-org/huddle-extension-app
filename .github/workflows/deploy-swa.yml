@@ -187,8 +187,83 @@ jobs:
           open(f, "w").write(s)
           PY
 
+      - name: Resolve database connection string
+        # Prefer the full AZURE_PG_URL secret. If it's empty, assemble it from
+        # parts entirely inside the workflow: discover the Postgres flexible
+        # server (host, admin user, db) with the already-logged-in Azure SP, and
+        # take the password from whichever admin-password secret is set. Also open
+        # the DB firewall to Azure services, since the SWA managed function's
+        # outbound IPs are dynamic. The assembled URL is masked and never printed.
+        env:
+          FULL_URL: ${{ secrets.AZURE_PG_URL }}
+          # First non-empty password secret wins — covers the likely names.
+          PG_PW_1: ${{ secrets.AZURE_PG_PASSWORD }}
+          PG_PW_2: ${{ secrets.AZURE_POSTGRES_PASSWORD }}
+          PG_PW_3: ${{ secrets.AZURE_PG_ADMIN_PASSWORD }}
+          PG_PW_4: ${{ secrets.PG_ADMIN_PASSWORD }}
+          PG_PW_5: ${{ secrets.POSTGRES_PASSWORD }}
+          PG_PW_6: ${{ secrets.AZURE_PG_PASS }}
+          # Optional explicit overrides if discovery picks the wrong one.
+          PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER }}
+          PG_DB_OVERRIDE: ${{ secrets.AZURE_PG_DB }}
+        run: |
+          set -euo pipefail
+          if [ -n "${FULL_URL}" ]; then
+            echo "::add-mask::${FULL_URL}"
+            echo "AZURE_PG_URL_RESOLVED=${FULL_URL}" >> "$GITHUB_ENV"
+            echo "Using AZURE_PG_URL secret as-is."
+            exit 0
+          fi
+          echo "AZURE_PG_URL empty — assembling from parts via az discovery."
+          SERVERS=$(az postgres flexible-server list -o json)
+          read -r SRV RG HOST ADMIN < <(python3 - "$SERVERS" "${PG_SERVER_OVERRIDE:-}" <<'PY'
+          import sys, json
+          servers = json.loads(sys.argv[1] or "[]")
+          override = sys.argv[2]
+          if not servers:
+              sys.stderr.write("No Azure PostgreSQL flexible server found in the subscription.\n")
+              sys.exit(3)
+          s = next((x for x in servers if x.get("name") == override), servers[0]) if override else servers[0]
+          print(s["name"], s["resourceGroup"], s["fullyQualifiedDomainName"], s.get("administratorLogin", "pgadmin"))
+          PY
+          )
+          echo "Discovered server '$SRV' (rg=$RG, host=$HOST, admin=$ADMIN)."
+          # Pick the database: override, else first non-system db, else 'postgres'.
+          if [ -n "${PG_DB_OVERRIDE:-}" ]; then
+            DB="$PG_DB_OVERRIDE"
+          else
+            DBS=$(az postgres flexible-server db list -g "$RG" -s "$SRV" -o json 2>/dev/null || echo '[]')
+            DB=$(python3 -c 'import sys,json; sysdb={"azure_maintenance","azure_sys"}; xs=[d["name"] for d in json.loads(sys.argv[1]) if d.get("name") not in sysdb and d.get("name")!="postgres"]; print(xs[0] if xs else "postgres")' "$DBS")
+          fi
+          echo "Using database '$DB'."
+          # Password from the first non-empty candidate secret.
+          PW=""
+          for c in "$PG_PW_1" "$PG_PW_2" "$PG_PW_3" "$PG_PW_4" "$PG_PW_5" "$PG_PW_6"; do
+            if [ -n "$c" ]; then PW="$c"; break; fi
+          done
+          if [ -z "$PW" ]; then
+            echo "::error::No Postgres admin-password secret set. Tried AZURE_PG_PASSWORD, AZURE_POSTGRES_PASSWORD, AZURE_PG_ADMIN_PASSWORD, PG_ADMIN_PASSWORD, POSTGRES_PASSWORD, AZURE_PG_PASS. Set one (or set AZURE_PG_URL directly)."
+            exit 1
+          fi
+          echo "::add-mask::$PW"
+          # Allow Azure-hosted services (the SWA function) through the DB firewall. Idempotent.
+          az postgres flexible-server firewall-rule create -g "$RG" -n "$SRV" \
+            --rule-name AllowAzureServices --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0 \
+            --only-show-errors >/dev/null 2>&1 && echo "Ensured 'Allow Azure services' firewall rule." || echo "Firewall rule step skipped/failed (may already exist)."
+          # URL-encode user + password, then assemble.
+          EADMIN=$(python3 -c 'import sys,urllib.parse as u; print(u.quote(sys.argv[1], safe=""))' "$ADMIN")
+          EPW=$(python3 -c 'import sys,urllib.parse as u; print(u.quote(sys.argv[1], safe=""))' "$PW")
+          URL="postgresql://${EADMIN}:${EPW}@${HOST}:5432/${DB}?sslmode=require"
+          echo "::add-mask::$URL"
+          echo "AZURE_PG_URL_RESOLVED=${URL}" >> "$GITHUB_ENV"
+          echo "Assembled AZURE_PG_URL for $SRV/$DB."
+
       - name: Sync secrets → SWA app settings
         run: |
+          if [ -z "${AZURE_PG_URL_RESOLVED:-}" ]; then
+            echo "::error::AZURE_PG_URL_RESOLVED is empty — database not configured; aborting so the app isn't deployed half-wired."
+            exit 1
+          fi
           az staticwebapp appsettings set --name "$SWA_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
             --only-show-errors --setting-names \
               ELEVENLABS_API_KEY="${{ secrets.ELEVENLABS_API_KEY }}" \
@@ -197,7 +272,7 @@ jobs:
               OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
               LOVABLE_API_KEY="${{ secrets.LOVABLE_API_KEY }}" \
               TAVILY_API_KEY="${{ secrets.TAVILY_API_KEY }}" \
-              AZURE_PG_URL="${{ secrets.AZURE_PG_URL }}" \
+              AZURE_PG_URL="${AZURE_PG_URL_RESOLVED}" \
               JOURNEY_PROXY_URL="${{ secrets.JOURNEY_PROXY_URL || 'https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/huddle-proxy' }}" \
               JOURNEY_PROXY_TOKEN="${{ secrets.JOURNEY_PROXY_TOKEN }}" \
               ENTRA_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
