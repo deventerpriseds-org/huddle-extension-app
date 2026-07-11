@@ -151,9 +151,10 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       try {
         const { fetchJourneyToolDefinitions, toResponsesTool } =
           await import("./journey/proxy.functions");
-        // Huddle has its own Tavily web search; journey's web_search is redundant
-        // and only confuses tool selection, so don't offer it to Huddle agents.
-        const HIDDEN_FROM_HUDDLE = new Set(["web_search"]);
+        // Tools Huddle owns natively (or doesn't want) — don't offer journey's:
+        //  - web_search: Huddle uses its own Tavily.
+        //  - send_email: Huddle sends via Microsoft Graph (email/graph-email.server).
+        const HIDDEN_FROM_HUDDLE = new Set(["web_search", "send_email"]);
         const defs = (await fetchJourneyToolDefinitions()).filter(
           (d) => !HIDDEN_FROM_HUDDLE.has(d.name),
         );
@@ -734,8 +735,46 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             strict: false,
           };
 
+          // Native Huddle email (Microsoft Graph). Offered when the Graph app
+          // creds are configured; sends as an allow-listed tenant mailbox.
+          const { emailFromOptions, graphEmailConfigured } = await import(
+            "./email/graph-email.server"
+          );
+          const emailTools: unknown[] = [];
+          if (graphEmailConfigured()) {
+            const fromOpts = emailFromOptions();
+            emailTools.push({
+              type: "function" as const,
+              name: "send_email",
+              description:
+                `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
+                `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
+                `Requires a recipient (to), a subject, and a body. Use this whenever the user asks to email someone.`,
+              parameters: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  to: {
+                    type: "string",
+                    description: "Recipient email address. Comma-separate multiple recipients.",
+                  },
+                  subject: { type: "string", description: "Email subject line." },
+                  body: { type: "string", description: "Email body (plain text)." },
+                  from: {
+                    type: "string",
+                    description: `Optional sender mailbox. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.`,
+                  },
+                  cc: { type: "string", description: "Optional CC address(es), comma-separated." },
+                },
+                required: ["to", "subject", "body"],
+              },
+              strict: false,
+            });
+          }
+
           const mergedTools = [
             createHuddleTaskTool,
+            ...emailTools,
             ...snapshotTools,
             ...ragTools,
             ...journeyTools,
@@ -763,6 +802,40 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           }) => {
             if (c.name === "create_huddle_task") {
               return JSON.stringify(await createSuggestedTaskFromTool(c.arguments));
+            }
+            if (c.name === "send_email") {
+              const a = c.arguments as Record<string, unknown>;
+              try {
+                const { sendGraphEmail } = await import("./email/graph-email.server");
+                const r = await sendGraphEmail({
+                  to: String(a.to ?? ""),
+                  subject: String(a.subject ?? ""),
+                  body: String(a.body ?? ""),
+                  from: a.from ? String(a.from) : undefined,
+                  cc: a.cc ? String(a.cc) : undefined,
+                });
+                recordToolUse(
+                  winner.id,
+                  "send_email",
+                  r.ok ? `sent from ${r.from} → ${(r.to ?? []).join(", ")}` : `send failed`,
+                  r.ok,
+                  r.ok ? undefined : r.error,
+                );
+                if (!r.ok) {
+                  const ev = recordFallback(
+                    "tool",
+                    `${winner.name}: send_email failed — ${r.error ?? "unknown"}`,
+                    "send_email failed",
+                    winner.id,
+                  );
+                  perAgentFallbacks.push(ev.inline);
+                }
+                return JSON.stringify(r);
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "send_email", "send crashed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
             }
             if (c.name === "tavily_web_search") {
               const q = String(c.arguments.query ?? "").trim() || "unknown";
@@ -990,6 +1063,48 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             execute: async (args) =>
               JSON.stringify(await createSuggestedTaskFromTool(args as Record<string, unknown>)),
           });
+
+          // Native Huddle email via Microsoft Graph (mirrors the OpenAI path).
+          {
+            const { emailFromOptions, graphEmailConfigured } = await import(
+              "./email/graph-email.server"
+            );
+            if (graphEmailConfigured()) {
+              const fromOpts = emailFromOptions();
+              lovableTools.send_email = tool({
+                description:
+                  `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
+                  `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
+                  `Requires to, subject, and body. Use whenever the user asks to email someone.`,
+                inputSchema: z.object({
+                  to: z.string(),
+                  subject: z.string(),
+                  body: z.string(),
+                  from: z.string().optional(),
+                  cc: z.string().optional(),
+                }),
+                execute: async (args) => {
+                  const a = args as Record<string, unknown>;
+                  const { sendGraphEmail } = await import("./email/graph-email.server");
+                  const r = await sendGraphEmail({
+                    to: String(a.to ?? ""),
+                    subject: String(a.subject ?? ""),
+                    body: String(a.body ?? ""),
+                    from: a.from ? String(a.from) : undefined,
+                    cc: a.cc ? String(a.cc) : undefined,
+                  });
+                  recordToolUse(
+                    winner.id,
+                    "send_email",
+                    r.ok ? `sent from ${r.from} → ${(r.to ?? []).join(", ")}` : "send failed",
+                    r.ok,
+                    r.ok ? undefined : r.error,
+                  );
+                  return JSON.stringify(r);
+                },
+              });
+            }
+          }
 
           if (agentBackend.webSearch) {
             lovableTools.tavily_web_search = tool({

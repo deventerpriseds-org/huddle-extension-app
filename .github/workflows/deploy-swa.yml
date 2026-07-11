@@ -118,6 +118,43 @@ jobs:
             echo "ENTRA_AUTHORITY_RESOLVED=${AUTH}"
           } >> "$GITHUB_ENV"
 
+      - name: Ensure Graph Mail.Send permission (native email)
+        # Huddle sends email natively via Microsoft Graph (app-only). The deploy
+        # service principal needs the Mail.Send APPLICATION permission. Try to grant
+        # it programmatically; if the SP can't self-consent, warn with the one-time
+        # manual step rather than failing the deploy.
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          GT=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)
+          GRAPH_APPID="00000003-0000-0000-c000-000000000000"
+          MAILSEND_ROLE="b633e1c5-b582-4048-a93e-9f11b44c7e96"  # Graph Mail.Send (application)
+          spid() {
+            curl -s -G "https://graph.microsoft.com/v1.0/servicePrincipals" \
+              --data-urlencode "\$filter=appId eq '$1'" -H "Authorization: Bearer $GT" \
+              | python3 -c 'import sys,json;a=json.load(sys.stdin).get("value",[]);print(a[0]["id"] if a else "")'
+          }
+          GRAPH_SP=$(spid "$GRAPH_APPID")
+          MY_SP=$(spid "$AZURE_CLIENT_ID")
+          if [ -z "$GRAPH_SP" ] || [ -z "$MY_SP" ]; then
+            echo "::warning::Could not resolve service principals; skipping Mail.Send grant."; exit 0
+          fi
+          ALREADY=$(curl -s "https://graph.microsoft.com/v1.0/servicePrincipals/$MY_SP/appRoleAssignments" \
+            -H "Authorization: Bearer $GT" \
+            | python3 -c "import sys,json;print(any(a.get('appRoleId')=='$MAILSEND_ROLE' for a in json.load(sys.stdin).get('value',[])))")
+          if [ "$ALREADY" = "True" ]; then echo "Mail.Send already granted."; exit 0; fi
+          CODE=$(curl -s -o /tmp/grant.json -w '%{http_code}' -X POST \
+            "https://graph.microsoft.com/v1.0/servicePrincipals/$MY_SP/appRoleAssignments" \
+            -H "Authorization: Bearer $GT" -H "Content-Type: application/json" \
+            -d "{\"principalId\":\"$MY_SP\",\"resourceId\":\"$GRAPH_SP\",\"appRoleId\":\"$MAILSEND_ROLE\"}")
+          if [ "$CODE" = "201" ]; then
+            echo "Granted Mail.Send (application) to the app."
+          else
+            echo "::warning::Could not auto-grant Mail.Send (HTTP $CODE). Grant it once in Entra: App registrations → the deploy app → API permissions → Add → Microsoft Graph → Application → Mail.Send → Grant admin consent. (Or give the deploy SP AppRoleAssignment.ReadWrite.All so this step can self-consent.)"
+            cat /tmp/grant.json 2>/dev/null || true
+          fi
+
       - name: Build (Azure Static Web Apps target)
         env:
           NITRO_PRESET: azure-swa
@@ -278,7 +315,11 @@ jobs:
               JOURNEY_PROXY_TOKEN="${{ secrets.JOURNEY_PROXY_TOKEN }}" \
               ENTRA_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
               ENTRA_CLIENT_ID="${ENTRA_CLIENT_ID_RESOLVED:-${{ secrets.ENTRA_CLIENT_ID }}}" \
-              ENTRA_AUTHORITY="${ENTRA_AUTHORITY_RESOLVED:-${{ secrets.VITE_ENTRA_AUTHORITY }}}"
+              ENTRA_AUTHORITY="${ENTRA_AUTHORITY_RESOLVED:-${{ secrets.VITE_ENTRA_AUTHORITY }}}" \
+              AZURE_CLIENT_ID="${{ secrets.AZURE_CLIENT_ID }}" \
+              AZURE_CLIENT_SECRET="${{ secrets.AZURE_CLIENT_SECRET }}" \
+              AZURE_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
+              HUDDLE_EMAIL_FROM="${{ secrets.HUDDLE_EMAIL_FROM || 'dev@enterpriseds.io,von.ellis@enterpriseds.io' }}"
 
       - name: Deploy to Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
