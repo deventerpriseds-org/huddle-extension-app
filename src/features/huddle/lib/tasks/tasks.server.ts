@@ -1,0 +1,134 @@
+// Azure-PG mirror of journey's `tasks`, kept in sync by a supabase pg_net trigger that POSTs
+// to /api/public/tasks-sync on every add/edit/delete. This makes prioritization
+// supabase-independent: the scorer reads from here, not from journey at request time.
+// Auto-bootstraps its schema on first use (same pattern as identity/identity.server.ts).
+import { Pool } from "pg";
+import type { ScorableTask } from "./scoring";
+
+let _pool: Pool | null = null;
+function getPool(): Pool {
+  if (_pool) return _pool;
+  const url = process.env.AZURE_PG_URL;
+  if (!url) throw new Error("AZURE_PG_URL not configured");
+  _pool = new Pool({
+    connectionString: url,
+    ssl: { rejectUnauthorized: false },
+    max: 3,
+    idleTimeoutMillis: 20_000,
+    connectionTimeoutMillis: 10_000,
+  });
+  return _pool;
+}
+
+// Enums stored as TEXT (journey extends its enums with ALTER TYPE ADD VALUE, which can't be
+// mirrored transactionally — text avoids the coupling). user_email is the join key Huddle
+// filters on (resolved from journey's profiles/user_email_aliases in the sync payload).
+const BOOTSTRAP_SQL = `
+CREATE SCHEMA IF NOT EXISTS tasks;
+
+CREATE TABLE IF NOT EXISTS tasks.journey_tasks (
+  id             TEXT PRIMARY KEY,
+  user_id        TEXT,
+  user_email     TEXT,
+  title          TEXT NOT NULL,
+  description    TEXT,
+  status         TEXT,
+  priority       TEXT NOT NULL DEFAULT 'MEDIUM',
+  category       TEXT,
+  is_priority    BOOLEAN NOT NULL DEFAULT false,
+  priority_rank  INTEGER,
+  due_date       TIMESTAMPTZ,
+  start_time     TIMESTAMPTZ,
+  end_time       TIMESTAMPTZ,
+  is_scheduled   BOOLEAN NOT NULL DEFAULT false,
+  pushed_count   INTEGER NOT NULL DEFAULT 0,
+  board_id       TEXT,
+  completed_at   TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  synced_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS journey_tasks_user_email_idx ON tasks.journey_tasks (lower(user_email));
+CREATE INDEX IF NOT EXISTS journey_tasks_category_idx   ON tasks.journey_tasks (category);
+`;
+
+let bootstrapped: Promise<void> | null = null;
+async function ensureBootstrapped() {
+  if (bootstrapped) return bootstrapped;
+  bootstrapped = (async () => {
+    await getPool().query(BOOTSTRAP_SQL);
+  })();
+  try {
+    await bootstrapped;
+  } catch (e) {
+    bootstrapped = null;
+    throw e;
+  }
+}
+
+/** A row as it arrives from the journey sync payload (journey's `tasks` columns). */
+export interface JourneyTaskPayload {
+  id: string;
+  user_id?: string | null;
+  user_email?: string | null;
+  title: string;
+  description?: string | null;
+  status?: string | null;
+  priority?: string | null;
+  category?: string | null;
+  is_priority?: boolean | null;
+  priority_rank?: number | null;
+  due_date?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  is_scheduled?: boolean | null;
+  pushed_count?: number | null;
+  board_id?: string | null;
+  completed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export async function upsertJourneyTask(row: JourneyTaskPayload, userEmail?: string | null): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.journey_tasks
+       (id,user_id,user_email,title,description,status,priority,category,is_priority,priority_rank,
+        due_date,start_time,end_time,is_scheduled,pushed_count,board_id,completed_at,created_at,updated_at,synced_at)
+     VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'MEDIUM'),$8,COALESCE($9,false),$10,
+             $11,$12,$13,COALESCE($14,false),COALESCE($15,0),$16,$17,COALESCE($18,now()),COALESCE($19,now()),now())
+     ON CONFLICT (id) DO UPDATE SET
+       user_id=EXCLUDED.user_id, user_email=EXCLUDED.user_email, title=EXCLUDED.title,
+       description=EXCLUDED.description, status=EXCLUDED.status, priority=EXCLUDED.priority,
+       category=EXCLUDED.category, is_priority=EXCLUDED.is_priority, priority_rank=EXCLUDED.priority_rank,
+       due_date=EXCLUDED.due_date, start_time=EXCLUDED.start_time, end_time=EXCLUDED.end_time,
+       is_scheduled=EXCLUDED.is_scheduled, pushed_count=EXCLUDED.pushed_count, board_id=EXCLUDED.board_id,
+       completed_at=EXCLUDED.completed_at, updated_at=EXCLUDED.updated_at, synced_at=now()`,
+    [
+      row.id, row.user_id ?? null, userEmail ?? row.user_email ?? null, row.title, row.description ?? null,
+      row.status ?? null, row.priority ?? null, row.category ?? null, row.is_priority ?? null, row.priority_rank ?? null,
+      row.due_date ?? null, row.start_time ?? null, row.end_time ?? null, row.is_scheduled ?? null,
+      row.pushed_count ?? null, row.board_id ?? null, row.completed_at ?? null, row.created_at ?? null, row.updated_at ?? null,
+    ],
+  );
+}
+
+export async function deleteJourneyTask(id: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(`DELETE FROM tasks.journey_tasks WHERE id = $1`, [id]);
+}
+
+/** Open tasks for a user (by email), optionally filtered to one category, for the scorer. */
+export async function getTasksForUser(userEmail: string, category?: string): Promise<ScorableTask[]> {
+  await ensureBootstrapped();
+  const params: unknown[] = [userEmail.toLowerCase()];
+  let sql = `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,pushed_count,created_at,completed_at
+             FROM tasks.journey_tasks WHERE lower(user_email) = $1`;
+  if (category) {
+    params.push(category.toUpperCase());
+    sql += ` AND upper(category) = $2`;
+  }
+  sql += ` AND completed_at IS NULL AND (status IS NULL OR status NOT IN ('DONE','BLOCKED')) LIMIT 500`;
+  const { rows } = await getPool().query<ScorableTask>(sql, params);
+  return rows;
+}

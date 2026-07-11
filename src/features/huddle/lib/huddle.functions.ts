@@ -707,10 +707,12 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             ? effectiveInstructions + scene + roster + taskToolInstructions + HOUSE_STYLE
             : appSystem;
           const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
+          const { PRIORITIZE_SYSTEM_HINT } = await import("./tasks/tools");
           const instructions =
             baseInstructions +
             ragInstructions +
             webInstructions +
+            "\n\n" + PRIORITIZE_SYSTEM_HINT +
             groundingBlock(!!agentBackend.webSearch);
           usedInstructions = instructions;
 
@@ -829,8 +831,10 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             });
           }
 
+          const { PRIORITIZE_TOOL } = await import("./tasks/tools");
           const mergedTools = [
             createHuddleTaskTool,
+            PRIORITIZE_TOOL,
             ...emailTools,
             ...snapshotTools,
             ...ragTools,
@@ -859,6 +863,10 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           }) => {
             if (c.name === "create_huddle_task") {
               return JSON.stringify(await createSuggestedTaskFromTool(c.arguments));
+            }
+            if (c.name === "prioritize") {
+              const { dispatchPrioritize } = await import("./tasks/tools");
+              return dispatchPrioritize(data.caller?.entra_email, c.arguments);
             }
             if (c.name === "send_email") {
               const a = c.arguments as Record<string, unknown>;
@@ -1126,6 +1134,21 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
               JSON.stringify(await createSuggestedTaskFromTool(args as Record<string, unknown>)),
           });
 
+          // prioritize — shared prioritization tool (mirrors the OpenAI path).
+          {
+            const { dispatchPrioritize } = await import("./tasks/tools");
+            lovableTools.prioritize = tool({
+              description:
+                "Rank the user's open tasks by what to do next (priority, due dates, staleness), optionally within a category (LIFE, VENTURES, CAREER, EDUCATION, PERSONAL, PROF_EDUCATION). Call it when the user asks what to focus on / prioritize / do next.",
+              inputSchema: z.object({
+                category: z.string().optional(),
+                limit: z.number().optional(),
+              }),
+              execute: async (args) =>
+                dispatchPrioritize(data.caller?.entra_email, args as Record<string, unknown>),
+            });
+          }
+
           // Native Huddle email via Microsoft Graph (mirrors the OpenAI path).
           {
             const { emailFromOptions, graphEmailConfigured } = await import(
@@ -1360,11 +1383,15 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             }
           }
 
-          usedInstructions =
-            appSystem +
-            ragInstructions +
-            webInstructions +
-            groundingBlock(!!agentBackend.webSearch);
+          {
+            const { PRIORITIZE_SYSTEM_HINT } = await import("./tasks/tools");
+            usedInstructions =
+              appSystem +
+              ragInstructions +
+              webInstructions +
+              "\n\n" + PRIORITIZE_SYSTEM_HINT +
+              groundingBlock(!!agentBackend.webSearch);
+          }
 
           const toolNames = Object.keys(lovableTools);
           toolTypes = toolNames;
