@@ -656,7 +656,15 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             groundingBlock(!!agentBackend.webSearch);
           usedInstructions = instructions;
 
-          const snapshotTools = snapshotResponsesTools(snapshot);
+          // The assistant snapshot carries the original journey-voice assistant's
+          // function tools (e.g. "Email", "get_tasks"). Huddle has no executor for
+          // snapshot function tools — worse, they shadow the wired journey proxy
+          // tools (the model picks the snapshot's "Email" over journey's
+          // "send_email" and hits a dead end). Offer only non-function snapshot
+          // tools (file_search); the real functions come from the journey catalog.
+          const snapshotTools = snapshotResponsesTools(snapshot).filter(
+            (t) => (t as { type?: string })?.type !== "function",
+          );
           const snapshotToolNames = new Set(
             snapshotTools
               .map((t) => (t as { name?: string })?.name)
