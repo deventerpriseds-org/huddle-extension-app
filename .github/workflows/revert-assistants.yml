@@ -1,4 +1,4 @@
-name: Revert assistants to canonical
+name: Realign iris/sam platform assistants with repo snapshot
 
 # One-off: realign the platform assistants for iris-chase and sam-trent with the
 # canonical instructions restored into openai-assistant-snapshots.json (undoing a
@@ -46,7 +46,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet -- src/features/huddle/data/openai-assistant-snapshots.json; then
             git add src/features/huddle/data/openai-assistant-snapshots.json
-            git commit -m "Re-snapshot after reverting iris/sam to canonical"
+            git commit -m "Re-snapshot iris/sam after platform realign"
             git push origin HEAD:${{ github.ref_name }}
           else
             echo "Snapshot already matches platform."
