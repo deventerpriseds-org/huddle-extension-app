@@ -34,6 +34,17 @@ function scoreAgentAgainst(text: string, agent: Agent): number {
   return Math.min(1, raw);
 }
 
+/**
+ * Broadcast intent — the user is addressing the whole room ("everyone introduce
+ * yourselves", "go around one by one"), so every member should respond, not just
+ * the top-scored specialist.
+ */
+export function isBroadcast(text: string): boolean {
+  return /\b(everyone|everybody|every one|each of you|all of you|y'?all|one by one|go around|round[- ]?robin|whole team|entire team|each of the agents|each person|introduce yoursel(f|ves)|say your name|share your name)\b/i.test(
+    text,
+  );
+}
+
 export function parseMentions(text: string, agents: Agent[]): AgentId[] {
   const found = new Set<AgentId>();
   const lower = text.toLowerCase();
@@ -74,6 +85,24 @@ export function routeMessage(input: RouteInput): RouteResult {
         runnerUpId: null,
         interjected: false,
         reason: "1:1",
+      },
+    };
+  }
+
+  // 0. broadcast — the user addressed the whole room; everyone answers.
+  if (scope === "group" && isBroadcast(text) && present.length > 0) {
+    const all = present.map((a) => a.id);
+    return {
+      winners: all,
+      decision: {
+        signal: "mention",
+        scores: Object.fromEntries(all.map((id) => [id, 1])) as Partial<
+          Record<AgentId, number>
+        >,
+        winnerId: all[0],
+        runnerUpId: all[1] ?? null,
+        interjected: false,
+        reason: "Broadcast — every member responds.",
       },
     };
   }
@@ -197,6 +226,8 @@ export async function routeMessageLLM(
   if (scope === "one-to-one" && targetAgentId) return routeMessage(input);
   const mentions = parseMentions(text, present);
   if (mentions.length > 0) return routeMessage(input);
+  // Broadcast → everyone answers; no need to ask the LLM who.
+  if (scope === "group" && isBroadcast(text)) return routeMessage(input);
 
   const memberIds = present.map((a) => a.id) as [AgentId, ...AgentId[]];
   if (memberIds.length === 0) return routeMessage(input);

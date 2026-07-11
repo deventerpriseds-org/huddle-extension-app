@@ -402,7 +402,15 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     const spoken = new Set<AgentId>();
     const replies: Reply[] = [];
 
-    while (queue.length > 0 && replies.length < MAX_REPLIES_PER_TURN) {
+    // A broadcast ("everyone introduce yourselves") means every member should
+    // get to speak, so lift the normal per-turn reply cap for that case.
+    const { isBroadcast } = await import("./routing");
+    const broadcastTurn = data.scope === "group" && isBroadcast(data.text);
+    const replyCap = broadcastTurn
+      ? Math.min(data.members.length, 12)
+      : MAX_REPLIES_PER_TURN;
+
+    while (queue.length > 0 && replies.length < replyCap) {
       const nextId = queue.shift()!;
       if (spoken.has(nextId)) continue;
       const winner = AGENT_BY_ID[nextId];
@@ -566,8 +574,13 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         let fromSnapshot = false;
         let toolTypes: string[] = [];
 
-        // Detect config-level fallback before we branch.
-        if (agentBackend.backend === "openai" && !openaiKey) {
+        // Route to whichever backend is actually configured. Agents default to
+        // the Lovable gateway until they get their own OpenAI assistant, but that
+        // gateway only exists inside Lovable — once deployed elsewhere there's no
+        // LOVABLE_API_KEY. So if an agent's chosen backend has no key but the
+        // other one does, run it there instead of dead-failing. OpenAI can run
+        // any agent from its in-repo persona prompt (no assistant required).
+        if (agentBackend.backend === "openai" && !openaiKey && lovableKey) {
           const ev = recordFallback(
             "openai",
             `${winner.name} is configured for OpenAI but OPENAI_API_KEY is not set; falling back to Lovable AI.`,
@@ -576,6 +589,10 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           );
           perAgentFallbacks.push(ev.inline);
           usedBackend = "lovable";
+        } else if (agentBackend.backend === "lovable" && !lovableKey && openaiKey) {
+          // The common case after moving off Lovable: no gateway key, but OpenAI
+          // is configured. Run the agent on OpenAI with its persona prompt.
+          usedBackend = "openai";
         }
 
         if (usedBackend === "openai" && openaiKey) {

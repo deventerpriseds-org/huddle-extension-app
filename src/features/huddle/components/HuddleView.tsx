@@ -172,12 +172,17 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
     setHydrated(true);
   }, []);
 
-  // Reveal the latest message (and the typing indicator) whenever the transcript
-  // grows or a turn starts/ends. Uses the sentinel at the bottom for reliability.
+  // Reveal the latest message (and the typing indicator) when the transcript
+  // grows or a turn starts. Instant + rAF (no smooth-scroll jank), and only when
+  // the user is already near the bottom so it never yanks them out of history.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
+    if (!nearBottom && !isPending) return;
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
   }, [messages.length, isPending]);
 
   const dayLabel = useMemo(() => {
