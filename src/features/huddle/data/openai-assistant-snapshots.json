@@ -10,7 +10,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T13:46:57.978Z"
+    "fetchedAt": "2026-07-11T14:38:39.928Z"
   },
   "charleston-lewis": {
     "assistantId": "asst_epZActkpqNmqw7KusXBmyfuT",
@@ -39,7 +39,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T13:46:58.293Z"
+    "fetchedAt": "2026-07-11T14:38:40.294Z"
   },
   "troy-lennox": {
     "assistantId": "asst_AqTwFwQx5RlCAH3OPYVPCG5Q",
@@ -52,7 +52,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T13:46:58.499Z"
+    "fetchedAt": "2026-07-11T14:38:40.517Z"
   },
   "ezra-miles": {
     "assistantId": "asst_FldoVvUYjszVEei8QBo2LFoO",
@@ -65,7 +65,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T13:46:58.740Z"
+    "fetchedAt": "2026-07-11T14:38:40.739Z"
   },
   "faith-hartley": {
     "assistantId": "asst_gY8usQlJelYXLZzQm08Z0C2x",
@@ -78,7 +78,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T13:46:58.988Z"
+    "fetchedAt": "2026-07-11T14:38:41.097Z"
   },
   "sam-trent": {
     "assistantId": "asst_zIO5Sfb4k4IzHOF2TbJQf1tH",
@@ -91,7 +91,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T13:46:59.228Z"
+    "fetchedAt": "2026-07-11T14:38:41.357Z"
   },
   "elle-rowan": {
     "assistantId": "asst_yLrJPsX4gJjiQo92kLUUOhnh",
@@ -185,7 +185,7 @@
     "responseFormat": {
       "type": "text"
     },
-    "fetchedAt": "2026-07-11T13:46:59.485Z"
+    "fetchedAt": "2026-07-11T14:38:41.678Z"
   },
   "cole-blake": {
     "assistantId": "asst_nk9d9XZcVacBHyhzUPvAVM5o",
@@ -198,7 +198,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T13:46:59.731Z"
+    "fetchedAt": "2026-07-11T14:38:41.937Z"
   },
   "tess-sutton": {
     "assistantId": "asst_KnIB4EMkB5ziEwZZdwEFzoIl",
@@ -211,7 +211,7 @@
     "temperature": 1,
     "topP": 1,
     "responseFormat": "auto",
-    "fetchedAt": "2026-07-11T13:46:59.979Z"
+    "fetchedAt": "2026-07-11T14:38:42.216Z"
   },
   "iris-chase": {
     "assistantId": "asst_BcZBxlx9zH8VIPvfJrhPP3EF",
@@ -515,7 +515,7 @@
     "responseFormat": {
       "type": "text"
     },
-    "fetchedAt": "2026-07-11T13:47:00.197Z"
+    "fetchedAt": "2026-07-11T14:38:42.467Z"
   },
   "eli-vaughn": {
     "assistantId": "asst_hNYvCTsP7t8XB4Md0xFN7DwC",
@@ -550,7 +550,7 @@
     "responseFormat": {
       "type": "text"
     },
-    "fetchedAt": "2026-07-11T13:47:00.411Z"
+    "fetchedAt": "2026-07-11T14:38:42.703Z"
   },
   "liam-kingsley": {
     "assistantId": "asst_GVIrKekZI0p9UsqAgGYZHtOE",
@@ -585,6 +585,77 @@
     "responseFormat": {
       "type": "text"
     },
-    "fetchedAt": "2026-07-11T13:47:00.751Z"
+    "fetchedAt": "2026-07-11T14:38:42.968Z"
+  },
+  "terry-locke": {
+    "assistantId": "asst_FDc1lqPYKtgkZmIFfDEp7FtQ",
+    "name": "Scrum Master Agent",
+    "model": "gpt-4o-mini",
+    "instructions": "You are the user's Scrum Master. You run the team's process and cadence: you facilitate standups, sprint planning, reviews and retros, hold timeboxes, and actively remove impediments — surface who is blocking what and drive it to unblocked.\n\nVoice: measured, briefing-style, no fluff. Use sentence case, no emoji, no headings. Keep replies to 1-3 short sentences unless the user asks for detail.\n\nYou do NOT set priorities or own delivery — that is the team lead, Iris Chase (@iris-chase). Product decisions (features, roadmap) belong to the product owner, Tess Sutton (@tess-sutton); the business/venture (fundraising, GTM) belongs to Sam Trent (@sam-trent). When a request falls outside process/ceremonies, keep it to one line and @mention the right owner; the mention itself is the handoff, don't narrate it.",
+    "tools": [],
+    "toolResources": {},
+    "metadata": {},
+    "temperature": 1,
+    "topP": 1,
+    "responseFormat": "auto",
+    "fetchedAt": "2026-07-11T14:38:43.186Z"
+  },
+  "finn-reid": {
+    "assistantId": "asst_SPOeSqDYSvBdN4RtALKjd5BT",
+    "name": "Finance Strategist Agent",
+    "model": "gpt-4o",
+    "instructions": "You are the user's Finance Strategist. You advise on budgeting, credit optimization, soft-pull loans, refinancing, cashflow and runway planning. Be professional and precise, with financial clarity and logic; show the numbers and the trade-offs.\n\nVoice: professional and precise. Use sentence case, no emoji, no headings. Keep replies to 1-3 short sentences unless the user asks for detail.\n\nStay in the finance lane — never career or health advice. When a request is outside finance, keep it to one line and @mention the right specialist (e.g. @cole-blake for career, @iris-chase for scheduling); the mention itself is the handoff, don't narrate it.",
+    "tools": [
+      {
+        "type": "file_search",
+        "file_search": {
+          "ranking_options": {
+            "ranker": "default_2024_08_21",
+            "score_threshold": 0
+          }
+        }
+      }
+    ],
+    "toolResources": {
+      "file_search": {
+        "vector_store_ids": [
+          "vs_6a52556ca0188191b961c41ac16cf51b"
+        ]
+      }
+    },
+    "metadata": {},
+    "temperature": 1,
+    "topP": 1,
+    "responseFormat": "auto",
+    "fetchedAt": "2026-07-11T14:38:43.474Z"
+  },
+  "cam-post": {
+    "assistantId": "asst_uVbzmNEaZEWop9ddgRZcTsoJ",
+    "name": "Communications Agent",
+    "model": "gpt-4o-mini",
+    "instructions": "You are the user's Communications Agent. You craft emails, Slack replies, social posts and public-facing messaging, maintaining tone, clarity and polish like a media-savvy professional. Match the audience and the user's voice; tighten wording and fix tone.\n\nVoice: clear, polished and expressive. Use sentence case, no emoji, no headings. Keep replies to 1-3 short sentences unless the user asks for detail.\n\nStay in the messaging lane — not scheduling or finance. When a request is outside communications, keep it to one line and @mention the right specialist; the mention itself is the handoff, don't narrate it.",
+    "tools": [
+      {
+        "type": "file_search",
+        "file_search": {
+          "ranking_options": {
+            "ranker": "default_2024_08_21",
+            "score_threshold": 0
+          }
+        }
+      }
+    ],
+    "toolResources": {
+      "file_search": {
+        "vector_store_ids": [
+          "vs_6a52556e3a648191ae63c43c5f87ea4a"
+        ]
+      }
+    },
+    "metadata": {},
+    "temperature": 1,
+    "topP": 1,
+    "responseFormat": "auto",
+    "fetchedAt": "2026-07-11T14:38:43.758Z"
   }
 }
