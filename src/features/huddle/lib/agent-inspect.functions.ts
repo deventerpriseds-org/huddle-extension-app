@@ -53,6 +53,89 @@ export const getAgentDebug = createServerFn({ method: "GET" })
     };
   });
 
+interface AssistantLive {
+  id: string;
+  name: string | null;
+  model: string;
+  instructions: string | null;
+}
+
+async function fetchAssistantLive(key: string, id: string): Promise<AssistantLive> {
+  const res = await fetch(`https://api.openai.com/v1/assistants/${id}`, {
+    headers: { Authorization: `Bearer ${key}`, "OpenAI-Beta": "assistants=v2" },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`GET /v1/assistants/${id} → ${res.status}: ${body.slice(0, 160)}`);
+  }
+  return (await res.json()) as AssistantLive;
+}
+
+/**
+ * Compare every mapped OpenAI assistant against the bundled snapshot and report
+ * which ones have drifted on the platform. Read-only — safe on the SWA runtime.
+ * The UI uses this to offer applying the fresh platform instructions as a
+ * per-agent override (which holds without a redeploy) and to flag that the repo
+ * snapshot should be re-synced via the sync-assistants workflow.
+ */
+export const checkAssistantDrift = createServerFn({ method: "POST" }).handler(async () => {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return { ok: false as const, error: "OPENAI_API_KEY not configured", rows: [] };
+
+  const { ASSISTANT_IDS } = await import("./agent-backends");
+  const { getAssistantSnapshot } = await import("./openai-assistants.server");
+
+  const rows: Array<{
+    agentId: AgentId;
+    name: string;
+    assistantId: string;
+    status: "same" | "changed" | "no-local" | "error";
+    changedFields: string[];
+    liveName: string | null;
+    liveModel: string | null;
+    liveInstructions: string | null;
+    error?: string;
+  }> = [];
+
+  for (const agent of AGENTS) {
+    const assistantId = ASSISTANT_IDS[agent.id];
+    if (!assistantId) continue; // persona-only agent; nothing on the platform
+    try {
+      const live = await fetchAssistantLive(key, assistantId);
+      const snap = getAssistantSnapshot(agent.id);
+      const changedFields: string[] = [];
+      if ((snap?.instructions ?? null) !== (live.instructions ?? null)) changedFields.push("instructions");
+      if ((snap?.model ?? null) !== (live.model ?? null)) changedFields.push("model");
+      if ((snap?.name ?? null) !== (live.name ?? null)) changedFields.push("name");
+      rows.push({
+        agentId: agent.id,
+        name: AGENT_BY_ID[agent.id].name,
+        assistantId,
+        status: !snap ? "no-local" : changedFields.length ? "changed" : "same",
+        changedFields,
+        liveName: live.name,
+        liveModel: live.model,
+        liveInstructions: live.instructions,
+      });
+    } catch (err) {
+      rows.push({
+        agentId: agent.id,
+        name: AGENT_BY_ID[agent.id].name,
+        assistantId,
+        status: "error",
+        changedFields: [],
+        liveName: null,
+        liveModel: null,
+        liveInstructions: null,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const drifted = rows.filter((r) => r.status === "changed" || r.status === "no-local").length;
+  return { ok: true as const, rows, drifted };
+});
+
 /**
  * Refetch a single assistant snapshot from OpenAI and update the on-disk JSON
  * used at runtime. Returns a diff summary.

@@ -43,6 +43,7 @@ const AgentBackendInput = z.object({
   backend: z.enum(["lovable", "openai"]),
   assistantId: z.string().optional(),
   model: z.string().optional(),
+  instructionsOverride: z.string().optional(),
   rag: z
     .object({
       store: z.enum(["azure", "lovable", "none"]),
@@ -686,10 +687,15 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
             }
           }
 
+          // Instruction source, most-authoritative first: a client-applied
+          // override (from "Check platform for updates" or a manual edit) wins
+          // over the bundled snapshot, which wins over the in-repo persona.
+          const overrideInstructions = agentBackend.instructionsOverride?.trim();
           const snapshotInstructions = snapshot?.instructions?.trim();
-          fromSnapshot = !!snapshotInstructions;
-          const baseInstructions = snapshotInstructions
-            ? snapshotInstructions + scene + roster
+          const effectiveInstructions = overrideInstructions || snapshotInstructions;
+          fromSnapshot = !overrideInstructions && !!snapshotInstructions;
+          const baseInstructions = effectiveInstructions
+            ? effectiveInstructions + scene + roster
             : appSystem;
           const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
           const instructions =

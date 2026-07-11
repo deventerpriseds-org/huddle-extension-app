@@ -27,6 +27,12 @@ const AgentBackendSchema = z.object({
   assistantId: z.string().trim().optional(),
   // Optional model override. Defaults to gpt-4o at runtime (matches journey-voice).
   model: z.string().trim().optional(),
+  // Optional instructions override. When set, it wins over the bundled snapshot
+  // and the in-repo persona at runtime. The "Check platform for updates" flow in
+  // Settings writes freshly-fetched OpenAI assistant instructions here so a
+  // platform edit holds immediately, without a redeploy — mirroring a manual
+  // settings edit. Cleared by re-syncing the snapshot in the repo.
+  instructionsOverride: z.string().trim().optional(),
   rag: RagConfigSchema.default({
     store: "azure",
     chunks: true,

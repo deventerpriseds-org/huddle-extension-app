@@ -27,6 +27,7 @@ import {
   type RouterBackend,
 } from "../lib/model-catalog";
 import { pingRagStore } from "../lib/rag.functions";
+import { checkAssistantDrift } from "../lib/agent-inspect.functions";
 import { useHuddleStore } from "../store";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { MemoryDbPanel } from "./MemoryDbPanel";
@@ -280,6 +281,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
 
           {/* ---- Agents ---- */}
           <TabsContent value="agents" className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+            <PlatformDriftPanel />
             {AGENTS.map((a) => {
               const cfg = config.agents[a.id];
               if (!cfg) return null;
@@ -466,6 +468,125 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
 export function useSettingsSheet() {
   const [open, setOpen] = useState(false);
   return { open, setOpen };
+}
+
+// ---------------- Platform drift check ----------------
+
+type DriftRow = Awaited<ReturnType<typeof checkAssistantDrift>>["rows"][number];
+
+function PlatformDriftPanel() {
+  const setAgent = useBackendsStore((s) => s.setAgent);
+  const config = useBackendsStore((s) => s.config);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [rows, setRows] = useState<DriftRow[] | null>(null);
+
+  async function runCheck() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await checkAssistantDrift();
+      if (!res.ok) {
+        setError(res.error);
+        setRows(null);
+      } else {
+        setRows(res.rows);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Check failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function applyRow(r: DriftRow, applied: boolean) {
+    if (applied) {
+      setAgent(r.agentId, { instructionsOverride: undefined });
+      return;
+    }
+    if (!r.liveInstructions) return;
+    setAgent(r.agentId, {
+      instructionsOverride: r.liveInstructions,
+      ...(r.liveModel ? { model: r.liveModel } : {}),
+    });
+  }
+
+  const drifted = (rows ?? []).filter(
+    (r) => r.status === "changed" || r.status === "no-local",
+  );
+
+  return (
+    <div className="rounded-lg border border-hairline p-3 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">Platform sync</div>
+          <div className="text-xs text-muted-foreground">
+            Check whether any OpenAI assistant has changed on the platform since the bundled snapshot.
+          </div>
+        </div>
+        <Button size="sm" variant="outline" onClick={runCheck} disabled={loading}>
+          {loading ? (
+            <Loader2 size={14} className="mr-1.5 animate-spin" />
+          ) : (
+            <RotateCcw size={14} className="mr-1.5" />
+          )}
+          Check for updates
+        </Button>
+      </div>
+
+      {error && <div className="text-xs text-red-600 dark:text-red-400">{error}</div>}
+
+      {rows && (
+        <div className="space-y-1.5">
+          {drifted.length === 0 ? (
+            <div className="text-xs text-emerald-700 dark:text-emerald-300">
+              Up to date — every platform assistant matches the bundled snapshot.
+            </div>
+          ) : (
+            <>
+              <div className="text-xs text-amber-700 dark:text-amber-300">
+                {drifted.length} assistant{drifted.length === 1 ? "" : "s"} drifted from the snapshot.
+                Apply pulls the live platform instructions into this browser now; re-run the
+                sync-assistants workflow to update the repo snapshot for everyone.
+              </div>
+              {drifted.map((r) => {
+                const applied = !!config.agents[r.agentId]?.instructionsOverride;
+                return (
+                  <div
+                    key={r.agentId}
+                    className="flex items-center justify-between gap-2 rounded border border-hairline px-2 py-1.5"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium truncate">{r.name}</div>
+                      <div className="text-[11px] text-muted-foreground truncate">
+                        {r.status === "no-local"
+                          ? "not in local snapshot"
+                          : `changed: ${r.changedFields.join(", ")}`}
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant={applied ? "secondary" : "outline"}
+                      className="h-7 shrink-0"
+                      disabled={!r.liveInstructions}
+                      onClick={() => applyRow(r, applied)}
+                    >
+                      {applied ? "Applied ✓ (clear)" : "Apply to app"}
+                    </Button>
+                  </div>
+                );
+              })}
+            </>
+          )}
+          {rows.some((r) => r.status === "error") && (
+            <div className="text-[11px] text-muted-foreground">
+              {rows.filter((r) => r.status === "error").length} assistant(s) could not be checked.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ---------------- Memory tab ----------------
