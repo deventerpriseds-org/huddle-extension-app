@@ -439,7 +439,9 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
 
       const isInterjector = interjectorSet.has(nextId);
       const interjectDirective = isInterjector
-        ? `\n\nYou were NOT asked directly — you are interjecting only because you may hold specific information the user needs that the primary responder wouldn't have (a scheduling conflict, notes to prepare for a named contact, a risk or deadline). First check whether you actually have something concrete and useful using your tools/knowledge. If you DO, say it in one or two short sentences, leading with the value ("Heads up — you have a 12pm already"). If you do NOT have anything specific and substantive to add, reply with exactly: PASS`
+        ? `\n\nYou were NOT asked directly — you are interjecting ONLY to surface specific information the primary cannot see. Do NOT repeat, restate, agree with, or react to what the primary said. FIRST use your own tools to look up the user's actual schedule / tasks / contacts for the relevant time, person, or deadline. Then:
+- If your tools return something concrete and relevant (a conflict, a prep note, a risk), reply with ONLY that, one short sentence, leading with the value — e.g. "Heads up — you already have a 12pm investor call."
+- If your tools return nothing relevant, reply with exactly the single word: PASS (nothing before or after it).`
         : "";
 
       const scene = ` You are ${winner.name} in a ${
@@ -1403,8 +1405,13 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           toolTypes,
         });
 
-        // An interjector that found nothing concrete stays silent.
-        if (isInterjector && /^\s*pass[.!]?\s*$/i.test(clean)) {
+        // An interjector that found nothing concrete stays silent. Catch a bare
+        // "PASS" as well as the model appending PASS after echoing the primary.
+        const interjTrimmed = clean.trim();
+        if (
+          isInterjector &&
+          (/^pass[.!]?$/i.test(interjTrimmed) || /\bPASS[.!]?$/.test(interjTrimmed))
+        ) {
           spoken.add(winner.id);
           continue;
         }
