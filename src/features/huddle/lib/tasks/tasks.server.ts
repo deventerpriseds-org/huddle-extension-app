@@ -118,6 +118,40 @@ export async function deleteJourneyTask(id: string): Promise<void> {
   await getPool().query(`DELETE FROM tasks.journey_tasks WHERE id = $1`, [id]);
 }
 
+/** A task row shaped for the stand-up report (keeps done/blocked, unlike the scorer feed). */
+export interface StandupTask {
+  id: string;
+  title: string;
+  status: string | null;
+  priority: string | null;
+  category: string | null;
+  is_priority: boolean | null;
+  due_date: string | null;
+  pushed_count: number | null;
+  completed_at: string | null;
+  updated_at: string | null;
+  created_at: string | null;
+}
+
+/**
+ * Tasks for a stand-up: every OPEN task (including blocked) plus tasks COMPLETED within
+ * the recent window (so "what got done" has a horizon). Unlike getTasksForUser this does
+ * NOT drop DONE/BLOCKED — the ceremony needs both progress and blockers.
+ */
+export async function getStandupTasks(userEmail: string, windowHours = 36): Promise<StandupTask[]> {
+  await ensureBootstrapped();
+  const hrs = Number.isFinite(windowHours) && windowHours > 0 ? Math.min(windowHours, 24 * 14) : 36;
+  const { rows } = await getPool().query<StandupTask>(
+    `SELECT id,title,status,priority,category,is_priority,due_date,pushed_count,completed_at,updated_at,created_at
+       FROM tasks.journey_tasks
+      WHERE lower(user_email) = $1
+        AND (completed_at IS NULL OR completed_at >= now() - ($2 * interval '1 hour'))
+      LIMIT 1000`,
+    [userEmail.toLowerCase(), hrs],
+  );
+  return rows;
+}
+
 /** Open tasks for a user (by email), optionally filtered to one category, for the scorer. */
 export async function getTasksForUser(userEmail: string, category?: string): Promise<ScorableTask[]> {
   await ensureBootstrapped();

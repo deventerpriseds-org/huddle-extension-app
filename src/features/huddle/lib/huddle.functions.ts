@@ -3,9 +3,20 @@ import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import type { HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
-import { parseMentions, routeMessage, routeMessageLLM, type RouterInvocation } from "./routing";
+import { parseMentions, routeMessage, routeMessageLLM, type RouterInvocation, type RouteResult } from "./routing";
 import type { FallbackEvent, PromptDebug } from "./fallbacks";
 import { buildRoster } from "./roster";
+import {
+  detectCeremony,
+  buildCeremonyReport,
+  lanesByOwner,
+  roundRobinParticipants,
+  ownerDirective,
+  closerDirective,
+  narrateDirective,
+  CEREMONY_WINDOW_HOURS,
+  CEREMONY_HOST,
+} from "./tasks/ceremonies";
 import {
   TAVILY_WEB_SEARCH_TOOL,
   TAVILY_WEB_SEARCH_HINT,
@@ -37,6 +48,9 @@ const RouterConfigInput = z.object({
   soloOnCoverage: z.boolean().optional(),
   interjections: z.boolean().optional(),
   maxInterjectors: z.number().optional(),
+  // Scrum ceremonies: "round-robin" (default) has each lane owner voice their own
+  // section and the scrum master close; "narrate" has the scrum master run it solo.
+  ceremonyMode: z.enum(["round-robin", "narrate"]).optional(),
 });
 
 const AgentBackendInput = z.object({
@@ -378,7 +392,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       );
     }
 
-    let routed;
+    let routed: RouteResult;
     if (canLLMRoute) {
       const invocation: RouterInvocation = {
         backend: routerCfg.backend,
@@ -421,6 +435,99 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       });
     }
 
+    // ---- Scrum ceremonies ----
+    // A ceremony request (stand-up, retro, sprint planning, sprint review) overrides
+    // normal routing: participants become the lane owners + the scrum master, each fed
+    // their real slice of the task mirror so nobody improvises progress. Round-robin by
+    // default (each owner speaks, host closes); "narrate" mode runs it solo via the host.
+    const ceremonyDirectiveById = new Map<AgentId, string>();
+    let ceremonyActive = false;
+    const ceremonyType = detectCeremony(data.text);
+    if (ceremonyType) {
+      const email = data.caller?.entra_email;
+      if (!email) {
+        const host = data.members.includes(CEREMONY_HOST) ? CEREMONY_HOST : routed.winners[0];
+        return {
+          decision: {
+            signal: "topic",
+            scores: {} as Partial<Record<AgentId, number>>,
+            winnerId: host,
+            runnerUpId: null,
+            interjected: false,
+            reason: `ceremony ${ceremonyType}: needs signed-in account`,
+          },
+          replies: [
+            {
+              agentId: host,
+              text: `I can run the ${ceremonyType} once your account is connected — I read your real tasks to do it, and I don't have them without your sign-in.`,
+            },
+          ] as Reply[],
+          fallbacks,
+          prompts,
+          journeyTaskUpdates,
+          suggestedTasks,
+          toolUses,
+          reasoning: reasoningSummaries,
+        };
+      }
+      try {
+        const { getStandupTasks } = await import("./tasks/tasks.server");
+        const tasks = await getStandupTasks(email, CEREMONY_WINDOW_HOURS[ceremonyType]);
+        const report = buildCeremonyReport(ceremonyType, tasks);
+        const narrate = routerCfg.ceremonyMode === "narrate";
+        const host = data.members.includes(CEREMONY_HOST) ? CEREMONY_HOST : routed.winners[0];
+
+        if (narrate || report.lanes.length === 0) {
+          // Solo: the scrum master narrates (or there's simply no lane activity to round-robin).
+          ceremonyDirectiveById.set(host, narrateDirective(ceremonyType, report));
+          routed = {
+            winners: [host],
+            interjectors: [],
+            decision: {
+              signal: "topic",
+              scores: { [host]: 1 } as Partial<Record<AgentId, number>>,
+              winnerId: host,
+              runnerUpId: null,
+              interjected: false,
+              reason: `ceremony ${ceremonyType} [narrate]`,
+            },
+          };
+        } else {
+          const participants = roundRobinParticipants(report, data.members);
+          const owners = lanesByOwner(report);
+          for (const p of participants) {
+            if (p === CEREMONY_HOST) ceremonyDirectiveById.set(p, closerDirective(ceremonyType, report));
+            else {
+              const lane = owners.get(p);
+              if (lane) ceremonyDirectiveById.set(p, ownerDirective(ceremonyType, lane));
+            }
+          }
+          const scores = Object.fromEntries(
+            participants.map((id, i) => [id, Number((1 - i * 0.1).toFixed(2))]),
+          ) as Partial<Record<AgentId, number>>;
+          routed = {
+            winners: participants,
+            interjectors: [],
+            decision: {
+              signal: "topic",
+              scores,
+              winnerId: participants[0],
+              runnerUpId: participants[1] ?? null,
+              interjected: false,
+              reason: `ceremony ${ceremonyType} [round-robin] · ${participants.length} participants`,
+            },
+          };
+        }
+        ceremonyActive = ceremonyDirectiveById.size > 0;
+      } catch (err) {
+        recordFallback(
+          "tool",
+          `ceremony ${ceremonyType} failed to load tasks — ${err instanceof Error ? err.message : String(err)}`,
+          "ceremony data load failed",
+        );
+      }
+    }
+
     if (routed.winners.length === 0) {
       return {
         decision: routed.decision,
@@ -461,9 +568,10 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
     // get to speak, so lift the normal per-turn reply cap for that case.
     const { isBroadcast } = await import("./routing");
     const broadcastTurn = data.scope === "group" && isBroadcast(data.text);
-    const replyCap = broadcastTurn
-      ? Math.min(data.members.length, 12)
-      : MAX_REPLIES_PER_TURN + interjectorSet.size;
+    const replyCap =
+      broadcastTurn || ceremonyActive
+        ? Math.min(data.members.length, 12)
+        : MAX_REPLIES_PER_TURN + interjectorSet.size;
 
     while (queue.length > 0 && replies.length < replyCap) {
       const nextId = queue.shift()!;
@@ -477,6 +585,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         .map((r) => `${AGENT_BY_ID[r.agentId].name} just said: "${r.text}"`)
         .join("\n");
 
+      const ceremonyDirective = ceremonyDirectiveById.get(nextId) ?? "";
       const isInterjector = interjectorSet.has(nextId);
       const interjectDirective = isInterjector
         ? `\n\nYou were NOT asked directly — you are interjecting ONLY to surface specific information the primary cannot see. Do NOT repeat, restate, agree with, or react to what the primary said. FIRST use your own tools to look up the user's actual schedule / tasks / contacts for the relevant time, person, or deadline. Then:
@@ -490,7 +599,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         priorInThisTurn
           ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
           : ""
-      }${interjectDirective}`;
+      }${interjectDirective}${ceremonyDirective}`;
 
       const roster = buildRoster(data.members, winner.id);
       const taskToolInstructions =
@@ -1585,7 +1694,9 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         // earlier agent already gave this turn, drop it (the point was already
         // made). Backstops the "don't repeat what was said" instruction, which a
         // weak model obeys inconsistently. Never fires on the first speaker.
-        if (interjTrimmed && isEchoOfPrior(interjTrimmed, replies)) {
+        // Exempt ceremonies: each lane owner reports its own distinct slice and the
+        // host synthesizes, all governed by the ceremony directives instead.
+        if (!ceremonyActive && interjTrimmed && isEchoOfPrior(interjTrimmed, replies)) {
           recordFallback(
             "tool",
             `${winner.name}: near-duplicate of an earlier reply this turn — suppressed to avoid echo.`,
