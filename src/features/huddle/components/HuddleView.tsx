@@ -80,7 +80,10 @@ function HuddleHeader({
             text: TRIGGER[step],
             huddleId: huddle.id,
             scope: "group",
-            members: huddle.members,
+            // A ceremony seats the FULL roster (scrum master + all lane owners), not just the
+            // current huddle's members — otherwise a 1:1/small huddle has no owners or host and
+            // the ceremony collapses to a single wrong narrator.
+            members: AGENTS.map((a) => a.id),
             history: [],
             router: { ...backendsCfg.router, ceremonyMode: "round-robin" },
             agents: backendsCfg.agents,
