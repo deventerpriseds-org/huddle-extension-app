@@ -1,17 +1,28 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Expand, LogOut, Mic, MicOff, Minimize2, Phone, Video, VideoOff } from "lucide-react";
 import { AGENT_BY_ID, type Agent } from "../data/agents";
-import { useHuddleStore } from "../store";
+import { useHuddleStore, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
 import { AgentAvatar } from "./AgentAvatar";
 import { cn } from "@/lib/utils";
 
-const purposeLabel = {
+const CEREMONY_LABEL: Record<string, string> = {
+  standup: "Daily stand-up",
+  retro: "Sprint retro",
+  planning: "Sprint planning",
+  review: "Sprint review",
+  review_retro: "Review + retro",
+};
+const KIND_LABEL: Record<string, string> = {
   morning: "Morning standup",
   midday: "Midday check-in",
   afternoon: "Afternoon wrap-up",
   adhoc: "Ad-hoc group call",
 };
+function meetingLabel(m: MeetingState): string {
+  if (m.kind === "virtual-meeting") return CEREMONY_LABEL[m.ceremonyType ?? "standup"] ?? "Virtual meeting";
+  return KIND_LABEL[m.kind] ?? "Meeting";
+}
 
 const voiceStatusLabel: Record<VoiceCallController["status"], string> = {
   idle: "connecting…",
@@ -24,14 +35,16 @@ export function MeetingLayer() {
   const meeting = useHuddleStore((s) => s.meeting);
   const voice = useVoiceCall();
   const active = !!meeting;
+  const isVirtual = meeting?.kind === "virtual-meeting";
   const speakerId = meeting?.activeSpeakerId;
   const { connect, disconnect } = voice;
 
   // Connect to the active speaker's agent when a call starts, and reconnect
   // when the user switches speakers. `connect` tears down any prior session.
+  // Virtual meetings are text (transcript) for now — no voice session.
   useEffect(() => {
-    if (active && speakerId) connect(speakerId);
-  }, [active, speakerId, connect]);
+    if (active && speakerId && !isVirtual) connect(speakerId);
+  }, [active, speakerId, isVirtual, connect]);
 
   // Tear down the live session when the call ends.
   useEffect(() => {
@@ -85,7 +98,7 @@ function CallBar({ voice }: { voice: VoiceCallController }) {
         >
           <Phone size={12} />
         </span>
-        <span className="text-xs font-semibold">{purposeLabel[meeting.kind]}</span>
+        <span className="text-xs font-semibold">{meetingLabel(meeting)}</span>
         <span className="text-[11px] opacity-70 tabular-nums">{elapsed}</span>
         <span className="mx-1 h-4 w-px opacity-30" style={{ background: "currentColor" }} />
         <div className="flex items-center gap-1.5">
@@ -148,6 +161,19 @@ function ExpandedStage({ voice }: { voice: VoiceCallController }) {
   const elapsed = useElapsed(meeting.startedAt);
   const [cam, setCam] = useState(false);
 
+  // Virtual meeting = the ceremony transcript in a Zoom/Teams-style view (text now, voice later).
+  if (meeting.kind === "virtual-meeting") {
+    return (
+      <VirtualMeetingStage
+        meeting={meeting}
+        elapsed={elapsed}
+        participants={participants}
+        onCollapse={toggleExpanded}
+        onLeave={leave}
+      />
+    );
+  }
+
   const lastCaption = voice.captions[voice.captions.length - 1];
   const statusLine =
     voice.status === "connected"
@@ -163,7 +189,7 @@ function ExpandedStage({ voice }: { voice: VoiceCallController }) {
     >
       <header className="flex items-center justify-between px-6 py-3 text-white/90">
         <div>
-          <div className="text-sm font-semibold">{purposeLabel[meeting.kind]}</div>
+          <div className="text-sm font-semibold">{meetingLabel(meeting)}</div>
           <div className="text-[11px] opacity-70 tabular-nums">
             {elapsed} · ElevenLabs voice · {statusLine}
           </div>
@@ -233,6 +259,92 @@ function ExpandedStage({ voice }: { voice: VoiceCallController }) {
         </button>
       </footer>
       <style>{`@keyframes huddle-bar { 0%{height:3px} 100%{height:10px} }`}</style>
+    </div>
+  );
+}
+
+function VirtualMeetingStage({
+  meeting,
+  elapsed,
+  participants,
+  onCollapse,
+  onLeave,
+}: {
+  meeting: MeetingState;
+  elapsed: string;
+  participants: Agent[];
+  onCollapse: () => void;
+  onLeave: () => void;
+}) {
+  const turns = meeting.transcript ?? [];
+  const status = meeting.ceremonyStatus ?? "running";
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [turns.length]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "oklch(0.12 0.02 220)" }}>
+      <header className="flex items-center justify-between px-6 py-3 text-white/90">
+        <div>
+          <div className="text-sm font-semibold">{meetingLabel(meeting)}</div>
+          <div className="text-[11px] opacity-70 tabular-nums">
+            {elapsed} · virtual meeting ·{" "}
+            {status === "running" ? "in session…" : status === "error" ? "error" : "wrapped"}
+          </div>
+        </div>
+        <button
+          onClick={onCollapse}
+          className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-3 py-1.5 text-xs hover:bg-white/15"
+        >
+          <Minimize2 size={13} /> Collapse
+        </button>
+      </header>
+
+      <div className="flex min-h-0 flex-1 gap-4 px-6 pb-3">
+        <div className="hidden w-40 shrink-0 flex-col gap-2 overflow-y-auto py-2 sm:flex">
+          {participants.map((a) => (
+            <div key={a.id} className="flex items-center gap-2 rounded-lg bg-white/5 px-2 py-1.5">
+              <AgentAvatar agent={a} size="sm" />
+              <span className="truncate text-[11px] text-white/80">{a.name.split(" ")[0]}</span>
+            </div>
+          ))}
+        </div>
+
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-white/5 p-4">
+          {turns.length === 0 ? (
+            <div className="flex h-full items-center justify-center text-sm text-white/50">
+              {status === "running" ? "The team is meeting…" : "No transcript."}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {turns.map((t, i) => {
+                const a = AGENT_BY_ID[t.agentId];
+                return (
+                  <div key={i} className="flex gap-2.5">
+                    <AgentAvatar agent={a} size="sm" />
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-semibold text-white/70">{a?.name ?? t.agentId}</div>
+                      <div className="whitespace-pre-wrap text-sm text-white/90">{t.text}</div>
+                    </div>
+                  </div>
+                );
+              })}
+              {status === "running" && <div className="pl-9 text-xs text-white/40">…</div>}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <footer className="flex items-center justify-center gap-2 border-t border-white/10 py-3">
+        <button
+          onClick={onLeave}
+          className="inline-flex items-center gap-1 rounded-full px-4 py-2 text-xs font-semibold"
+          style={{ background: "var(--destructive)", color: "var(--destructive-foreground)" }}
+        >
+          <LogOut size={13} /> Leave
+        </button>
+      </footer>
     </div>
   );
 }

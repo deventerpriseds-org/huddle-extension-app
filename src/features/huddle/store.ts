@@ -20,6 +20,23 @@ import type { JourneyTask } from "./lib/journey/types";
 
 type View = "huddle" | "board";
 
+export type MeetingKind = "morning" | "midday" | "afternoon" | "adhoc" | "virtual-meeting";
+export type CeremonyKind = "standup" | "retro" | "planning" | "review" | "review_retro";
+export interface CeremonyTurn {
+  agentId: AgentId;
+  text: string;
+}
+export interface MeetingState {
+  kind: MeetingKind;
+  startedAt: number;
+  expanded: boolean;
+  activeSpeakerId: AgentId;
+  // Ceremony ("virtual-meeting") extras — the transcript shows in the right pane, Zoom/Teams-style.
+  ceremonyType?: CeremonyKind;
+  ceremonyStatus?: "running" | "done" | "error";
+  transcript?: CeremonyTurn[];
+}
+
 interface HuddleState {
   activeHuddleId: string;
   view: View;
@@ -31,12 +48,7 @@ interface HuddleState {
   toolUses: ToolUseEvent[];
   journeyTasks: JourneyTask[];
   showDemoData: boolean;
-  meeting: null | {
-    kind: "morning" | "midday" | "afternoon" | "adhoc";
-    startedAt: number;
-    expanded: boolean;
-    activeSpeakerId: AgentId;
-  };
+  meeting: null | MeetingState;
   setActive: (id: string) => void;
   setView: (v: View) => void;
   addUserMessage: (m: HuddleMessage) => void;
@@ -47,10 +59,11 @@ interface HuddleState {
   addSuggestedTasks: (tasks: SuggestedTaskDraft[]) => void;
   approveTask: (id: string) => void;
   skipTask: (id: string) => void;
-  startMeeting: (kind: "morning" | "midday" | "afternoon" | "adhoc") => void;
+  startMeeting: (kind: MeetingKind, opts?: { ceremonyType?: CeremonyKind }) => void;
   toggleMeetingExpanded: () => void;
   leaveMeeting: () => void;
   setSpeaker: (id: AgentId) => void;
+  patchMeeting: (patch: Partial<MeetingState>) => void;
   setShowDemoData: (v: boolean) => void;
   addMemoryItem: (item: Omit<MemoryItem, "id"> & { id?: string }) => void;
   removeMemoryItem: (id: string) => void;
@@ -133,13 +146,17 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
       ),
     })),
   skipTask: (id) => set((s) => ({ tasks: s.tasks.filter((t) => t.id !== id) })),
-  startMeeting: (kind) =>
+  startMeeting: (kind, opts) =>
     set({
       meeting: {
         kind,
         startedAt: Date.now(),
-        expanded: false,
+        // Virtual meetings open expanded (the transcript stage); voice calls start collapsed.
+        expanded: kind === "virtual-meeting",
         activeSpeakerId: "terry-locke",
+        ...(kind === "virtual-meeting"
+          ? { ceremonyType: opts?.ceremonyType ?? "standup", ceremonyStatus: "running" as const, transcript: [] }
+          : {}),
       },
     }),
   toggleMeetingExpanded: () =>
@@ -147,6 +164,8 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
   leaveMeeting: () => set({ meeting: null }),
   setSpeaker: (id) =>
     set((s) => (s.meeting ? { meeting: { ...s.meeting, activeSpeakerId: id } } : {})),
+  patchMeeting: (patch) =>
+    set((s) => (s.meeting ? { meeting: { ...s.meeting, ...patch } } : {})),
   setShowDemoData: (v) => set({ showDemoData: v }),
   addMemoryItem: (item) =>
     set((s) => ({

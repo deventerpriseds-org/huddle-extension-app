@@ -1766,3 +1766,25 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
 export const sendHuddleMessage = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => Input.parse(raw))
   .handler(async ({ data }) => runHuddleTurn(data));
+
+// Recent persisted ceremony runs for the signed-in user — powers "review what happened later"
+// (e.g. an auto-run that fired while you were away) in the virtual-meeting view.
+const CeremonyRunsInput = z.object({
+  caller: z.object({ entra_email: z.string().optional() }).optional(),
+  limit: z.number().optional(),
+});
+export const listCeremonyRuns = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => CeremonyRunsInput.parse(raw))
+  .handler(async ({ data }) => {
+    const email = data.caller?.entra_email?.trim();
+    let runs: import("./tasks/tasks.server").CeremonyRunRow[] = [];
+    if (email) {
+      try {
+        const { getCeremonyRuns } = await import("./tasks/tasks.server");
+        runs = await getCeremonyRuns(email, data.limit ?? 20);
+      } catch (err) {
+        console.error("[listCeremonyRuns] failed", err instanceof Error ? err.message : err);
+      }
+    }
+    return { runs };
+  });

@@ -207,10 +207,21 @@ export async function recordCeremonyRun(r: CeremonyRunRecord): Promise<void> {
   );
 }
 
+export interface CeremonyRunRow {
+  id: string;
+  ceremony_type: string;
+  mode: string | null;
+  status: string | null;
+  summary: string | null;
+  transcript: { agentId: string; text: string }[];
+  auto_run: boolean | null;
+  created_at: string;
+}
+
 /** Recent ceremony runs for a user (newest first), for the review thread / virtual-meeting view. */
-export async function getCeremonyRuns(userEmail: string, limit = 20): Promise<Record<string, unknown>[]> {
+export async function getCeremonyRuns(userEmail: string, limit = 20): Promise<CeremonyRunRow[]> {
   await ensureBootstrapped();
-  const { rows } = await getPool().query(
+  const { rows } = await getPool().query<CeremonyRunRow>(
     `SELECT id,ceremony_type,mode,status,summary,transcript,auto_run,created_at
        FROM tasks.ceremony_runs WHERE lower(user_email)=$1 ORDER BY created_at DESC LIMIT $2`,
     [userEmail.toLowerCase(), limit],

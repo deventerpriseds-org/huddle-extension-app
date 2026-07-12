@@ -4,9 +4,9 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
 import type { Huddle, HuddleMessage } from "../data/seed";
-import { sendHuddleMessage } from "../lib/huddle.functions";
+import { sendHuddleMessage, listCeremonyRuns } from "../lib/huddle.functions";
 import { parseMentions } from "../lib/routing";
-import { useHuddleStore, useVisibleHuddles, useVisibleMessages } from "../store";
+import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useAuth } from "@/hooks/useAuth";
@@ -54,6 +54,73 @@ function HuddleHeader({
   setView: (v: "huddle" | "board") => void;
 }) {
   const startMeeting = useHuddleStore((s) => s.startMeeting);
+  const patchMeeting = useHuddleStore((s) => s.patchMeeting);
+  const { user } = useAuth();
+
+  // Start a virtual meeting for a ceremony and stream its grounded transcript into the stage.
+  async function startVirtualMeeting(ceremonyType: CeremonyKind) {
+    startMeeting("virtual-meeting", { ceremonyType });
+    const backendsCfg = useBackendsStore.getState().config;
+    const caller = user
+      ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+      : undefined;
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const TRIGGER: Record<string, string> = {
+      standup: "let's run the daily stand-up",
+      retro: "let's run the sprint retrospective",
+      planning: "let's do sprint planning",
+      review: "let's run the sprint review",
+    };
+    const steps = ceremonyType === "review_retro" ? ["review", "retro"] : [ceremonyType];
+    try {
+      const turns: { agentId: AgentId; text: string }[] = [];
+      for (const step of steps) {
+        const result = await sendHuddleMessage({
+          data: {
+            text: TRIGGER[step],
+            huddleId: huddle.id,
+            scope: "group",
+            members: huddle.members,
+            history: [],
+            router: { ...backendsCfg.router, ceremonyMode: "round-robin" },
+            agents: backendsCfg.agents,
+            caller,
+            timeZone,
+          },
+        });
+        for (const r of result.replies ?? []) turns.push({ agentId: r.agentId as AgentId, text: r.text });
+        patchMeeting({ transcript: [...turns] });
+      }
+      patchMeeting({ ceremonyStatus: "done" });
+    } catch {
+      patchMeeting({ ceremonyStatus: "error" });
+    }
+  }
+
+  // Open the most recent persisted ceremony run (e.g. an auto-run that fired while away).
+  async function reviewLastCeremony() {
+    const caller = user
+      ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+      : undefined;
+    try {
+      const { runs } = await listCeremonyRuns({ data: { caller, limit: 1 } });
+      const run = runs?.[0] as
+        | { ceremony_type?: string; transcript?: { agentId: string; text: string }[] }
+        | undefined;
+      if (!run) {
+        toast.info("No past ceremonies yet.");
+        return;
+      }
+      startMeeting("virtual-meeting", { ceremonyType: (run.ceremony_type ?? "standup") as CeremonyKind });
+      patchMeeting({
+        transcript: (run.transcript ?? []).map((t) => ({ agentId: t.agentId as AgentId, text: t.text })),
+        ceremonyStatus: "done",
+      });
+    } catch {
+      toast.error("Couldn't load past ceremonies.");
+    }
+  }
+
   return (
     <header className="flex items-center justify-between gap-2 border-b border-hairline bg-surface px-3 py-2 sm:px-5 sm:py-3">
       <div className="hidden items-center gap-3 min-w-0 sm:flex">
@@ -116,8 +183,22 @@ function HuddleHeader({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>Start a session</DropdownMenuLabel>
+            <DropdownMenuLabel>Virtual meeting (agents)</DropdownMenuLabel>
             <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => startVirtualMeeting("standup")}>
+              Daily stand-up
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => startVirtualMeeting("planning")}>
+              Sprint planning
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => startVirtualMeeting("review_retro")}>
+              Review + retro
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => reviewLastCeremony()}>
+              Review last auto-run…
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Voice call</DropdownMenuLabel>
             <DropdownMenuItem onClick={() => startMeeting("morning")}>
               Morning standup
             </DropdownMenuItem>
@@ -127,7 +208,6 @@ function HuddleHeader({
             <DropdownMenuItem onClick={() => startMeeting("afternoon")}>
               Afternoon wrap-up
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => startMeeting("adhoc")}>
               <Phone size={14} className="mr-1.5" /> Ad-hoc group call
             </DropdownMenuItem>
