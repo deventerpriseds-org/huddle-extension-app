@@ -1719,7 +1719,10 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         });
         spoken.add(winner.id);
 
-        const chained = parseMentions(clean, presentAgents);
+        // Mention-chaining is disabled during ceremonies: the participant list is
+        // fixed (lane owners + host), and the host's summary naturally @mentions
+        // owners — those must not be pulled in as extra repliers.
+        const chained = ceremonyActive ? [] : parseMentions(clean, presentAgents);
         for (const id of chained) {
           if (
             id !== winner.id &&
