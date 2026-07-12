@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Expand, LogOut, Mic, MicOff, Minimize2, Phone, Video, VideoOff } from "lucide-react";
-import { AGENT_BY_ID, type Agent } from "../data/agents";
+import { Check, Expand, LogOut, Mic, MicOff, Minimize2, Phone, Play, Plus, Send, Video, VideoOff } from "lucide-react";
+import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
 import { useHuddleStore, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
+import { sendHuddleMessage } from "../lib/huddle.functions";
+import { useBackendsStore } from "../lib/agent-backends";
+import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
 import { cn } from "@/lib/utils";
 
@@ -161,17 +164,9 @@ function ExpandedStage({ voice }: { voice: VoiceCallController }) {
   const elapsed = useElapsed(meeting.startedAt);
   const [cam, setCam] = useState(false);
 
-  // Virtual meeting = the ceremony transcript in a Zoom/Teams-style view (text now, voice later).
+  // Virtual meeting = a live text meeting (ceremony or free-form) with a dynamic participant panel.
   if (meeting.kind === "virtual-meeting") {
-    return (
-      <VirtualMeetingStage
-        meeting={meeting}
-        elapsed={elapsed}
-        participants={participants}
-        onCollapse={toggleExpanded}
-        onLeave={leave}
-      />
-    );
+    return <MeetingStage meeting={meeting} elapsed={elapsed} onCollapse={toggleExpanded} onLeave={leave} />;
   }
 
   const lastCaption = voice.captions[voice.captions.length - 1];
@@ -263,25 +258,113 @@ function ExpandedStage({ voice }: { voice: VoiceCallController }) {
   );
 }
 
-function VirtualMeetingStage({
+const CEREMONY_TRIGGER: Record<string, string> = {
+  standup: "let's run the daily stand-up",
+  retro: "let's run the sprint retrospective",
+  planning: "let's do sprint planning",
+  review: "let's run the sprint review",
+};
+
+function MeetingStage({
   meeting,
   elapsed,
-  participants,
   onCollapse,
   onLeave,
 }: {
   meeting: MeetingState;
   elapsed: string;
-  participants: Agent[];
   onCollapse: () => void;
   onLeave: () => void;
 }) {
-  const turns = meeting.transcript ?? [];
-  const status = meeting.ceremonyStatus ?? "running";
+  const patchMeeting = useHuddleStore((s) => s.patchMeeting);
+  const addMeetingTurns = useHuddleStore((s) => s.addMeetingTurns);
+  const toggleAgent = useHuddleStore((s) => s.toggleAgent);
+  const activeHuddleId = useHuddleStore((s) => s.activeHuddleId);
+  const { user } = useAuth();
+
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const turns = meeting.transcript ?? [];
+  const memberSet = new Set(meeting.members);
+  const isCeremony = !!meeting.ceremonyType;
+  const status = meeting.ceremonyStatus;
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [turns.length]);
+
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const caller = user
+    ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+    : undefined;
+
+  async function runCeremony() {
+    if (!meeting.ceremonyType || !meeting.members.length) return;
+    const cfg = useBackendsStore.getState().config;
+    patchMeeting({ ceremonyStatus: "running", transcript: [] });
+    const steps = meeting.ceremonyType === "review_retro" ? ["review", "retro"] : [meeting.ceremonyType];
+    try {
+      for (const step of steps) {
+        const result = await sendHuddleMessage({
+          data: {
+            text: CEREMONY_TRIGGER[step],
+            huddleId: activeHuddleId,
+            scope: "group",
+            members: meeting.members,
+            history: [],
+            router: { ...cfg.router, ceremonyMode: "round-robin" },
+            agents: cfg.agents,
+            caller,
+            timeZone: tz,
+          },
+        });
+        addMeetingTurns((result.replies ?? []).map((r) => ({ agentId: r.agentId as AgentId, text: r.text })));
+      }
+      patchMeeting({ ceremonyStatus: "done" });
+    } catch {
+      patchMeeting({ ceremonyStatus: "error" });
+    }
+  }
+
+  async function sendMessage() {
+    const text = input.trim();
+    if (!text || busy || !meeting.members.length) return;
+    const cfg = useBackendsStore.getState().config;
+    setInput("");
+    setBusy(true);
+    addMeetingTurns([{ text, user: true }]);
+    try {
+      const result = await sendHuddleMessage({
+        data: {
+          text,
+          huddleId: activeHuddleId,
+          scope: "group",
+          members: meeting.members,
+          history: [],
+          router: cfg.router,
+          agents: cfg.agents,
+          caller,
+          timeZone: tz,
+        },
+      });
+      addMeetingTurns((result.replies ?? []).map((r) => ({ agentId: r.agentId as AgentId, text: r.text })));
+    } catch {
+      /* leave the meeting running; user can retry */
+    }
+    setBusy(false);
+  }
+
+  const subtitle = isCeremony
+    ? status === "running"
+      ? "in session…"
+      : status === "done"
+        ? "wrapped"
+        : status === "error"
+          ? "error"
+          : "ready"
+    : `${meeting.members.length} in the room`;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "oklch(0.12 0.02 220)" }}>
@@ -289,8 +372,7 @@ function VirtualMeetingStage({
         <div>
           <div className="text-sm font-semibold">{meetingLabel(meeting)}</div>
           <div className="text-[11px] opacity-70 tabular-nums">
-            {elapsed} · virtual meeting ·{" "}
-            {status === "running" ? "in session…" : status === "error" ? "error" : "wrapped"}
+            {elapsed} · virtual meeting · {subtitle}
           </div>
         </div>
         <button
@@ -301,36 +383,113 @@ function VirtualMeetingStage({
         </button>
       </header>
 
-      <div className="flex min-h-0 flex-1 gap-4 px-6 pb-3">
-        <div className="hidden w-40 shrink-0 flex-col gap-2 overflow-y-auto py-2 sm:flex">
-          {participants.map((a) => (
-            <div key={a.id} className="flex items-center gap-2 rounded-lg bg-white/5 px-2 py-1.5">
-              <AgentAvatar agent={a} size="sm" />
-              <span className="truncate text-[11px] text-white/80">{a.name.split(" ")[0]}</span>
-            </div>
-          ))}
-        </div>
+      <div className="flex min-h-0 flex-1 gap-4 px-4 pb-3 sm:px-6">
+        {/* Participant panel — full roster; tap to invite/remove. */}
+        <aside className="hidden w-52 shrink-0 flex-col overflow-y-auto py-1 sm:flex">
+          <div className="px-1 pb-1.5 text-[11px] uppercase tracking-wide text-white/40">
+            Participants · {meeting.members.length}
+          </div>
+          <div className="flex flex-col gap-1">
+            {AGENTS.map((a) => {
+              const inRoom = memberSet.has(a.id);
+              return (
+                <button
+                  key={a.id}
+                  onClick={() => toggleAgent(a.id)}
+                  className={cn(
+                    "flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition",
+                    inRoom ? "bg-white/10" : "opacity-45 hover:opacity-80 hover:bg-white/5",
+                  )}
+                  title={inRoom ? "In the meeting — tap to remove" : "Invite to the meeting"}
+                >
+                  <AgentAvatar agent={a} size="sm" />
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-white/85">{a.name}</span>
+                  {inRoom ? (
+                    <Check size={13} className="text-white/60" />
+                  ) : (
+                    <Plus size={13} className="text-white/40" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </aside>
 
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-white/5 p-4">
-          {turns.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-sm text-white/50">
-              {status === "running" ? "The team is meeting…" : "No transcript."}
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {turns.map((t, i) => {
-                const a = AGENT_BY_ID[t.agentId];
-                return (
-                  <div key={i} className="flex gap-2.5">
-                    <AgentAvatar agent={a} size="sm" />
-                    <div className="min-w-0">
-                      <div className="text-[11px] font-semibold text-white/70">{a?.name ?? t.agentId}</div>
-                      <div className="whitespace-pre-wrap text-sm text-white/90">{t.text}</div>
+        {/* Transcript + controls */}
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
+          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-white/5 p-4">
+            {turns.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-center text-sm text-white/45">
+                {isCeremony
+                  ? meeting.members.length
+                    ? `Ready — ${meeting.members.length} agents. Toggle anyone off, then run.`
+                    : "Add at least one agent to run this."
+                  : meeting.members.length
+                    ? "Invite is set — send a message to start."
+                    : "Invite agents from the left, then send a message."}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {turns.map((t, i) =>
+                  t.user ? (
+                    <div key={i} className="flex justify-end">
+                      <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl bg-white/15 px-3 py-2 text-sm text-white">
+                        {t.text}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-              {status === "running" && <div className="pl-9 text-xs text-white/40">…</div>}
+                  ) : (
+                    <div key={i} className="flex gap-2.5">
+                      <AgentAvatar agent={t.agentId ? AGENT_BY_ID[t.agentId] : AGENTS[0]} size="sm" />
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-semibold text-white/70">
+                          {t.agentId ? AGENT_BY_ID[t.agentId]?.name : "Agent"}
+                        </div>
+                        <div className="whitespace-pre-wrap text-sm text-white/90">{t.text}</div>
+                      </div>
+                    </div>
+                  ),
+                )}
+                {(status === "running" || busy) && <div className="pl-9 text-xs text-white/40">…</div>}
+              </div>
+            )}
+          </div>
+
+          {isCeremony ? (
+            <button
+              onClick={runCeremony}
+              disabled={status === "running" || !meeting.members.length}
+              className="inline-flex items-center justify-center gap-1.5 rounded-full bg-white px-4 py-2 text-xs font-semibold text-black transition hover:opacity-90 disabled:opacity-40"
+            >
+              <Play size={13} />
+              {status === "running"
+                ? "Running…"
+                : status === "done"
+                  ? "Run again"
+                  : `Run ${meetingLabel(meeting).toLowerCase()}`}
+            </button>
+          ) : (
+            <div className="flex items-end gap-2">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void sendMessage();
+                  }
+                }}
+                rows={1}
+                placeholder={meeting.members.length ? "Message the meeting…" : "Invite an agent first…"}
+                className="min-h-10 flex-1 resize-none rounded-2xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none placeholder:text-white/40"
+              />
+              <button
+                onClick={() => void sendMessage()}
+                disabled={busy || !input.trim() || !meeting.members.length}
+                className="inline-flex size-10 items-center justify-center rounded-full bg-white text-black transition hover:opacity-90 disabled:opacity-40"
+                aria-label="Send"
+              >
+                <Send size={16} />
+              </button>
             </div>
           )}
         </div>

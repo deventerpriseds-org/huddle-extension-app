@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 
-import { AGENT_BY_ID, type AgentId } from "./data/agents";
+import { AGENT_BY_ID, AGENTS, type AgentId } from "./data/agents";
 import {
   HUDDLES,
   SEED_MEMORY,
@@ -23,17 +23,21 @@ type View = "huddle" | "board";
 export type MeetingKind = "morning" | "midday" | "afternoon" | "adhoc" | "virtual-meeting";
 export type CeremonyKind = "standup" | "retro" | "planning" | "review" | "review_retro";
 export interface CeremonyTurn {
-  agentId: AgentId;
+  agentId?: AgentId; // omitted for a user turn
   text: string;
+  user?: boolean;
 }
 export interface MeetingState {
   kind: MeetingKind;
   startedAt: number;
   expanded: boolean;
   activeSpeakerId: AgentId;
+  // The live participant list — you can invite/remove agents during the meeting. Messages in the
+  // meeting fan out to exactly these members, so a freshly-invited agent answers the next turn.
+  members: AgentId[];
   // Ceremony ("virtual-meeting") extras — the transcript shows in the right pane, Zoom/Teams-style.
   ceremonyType?: CeremonyKind;
-  ceremonyStatus?: "running" | "done" | "error";
+  ceremonyStatus?: "ready" | "running" | "done" | "error";
   transcript?: CeremonyTurn[];
 }
 
@@ -61,12 +65,16 @@ interface HuddleState {
   skipTask: (id: string) => void;
   startMeeting: (
     kind: MeetingKind,
-    opts?: { ceremonyType?: CeremonyKind; speakerId?: AgentId; expanded?: boolean },
+    opts?: { ceremonyType?: CeremonyKind; speakerId?: AgentId; expanded?: boolean; members?: AgentId[] },
   ) => void;
   toggleMeetingExpanded: () => void;
   leaveMeeting: () => void;
   setSpeaker: (id: AgentId) => void;
   patchMeeting: (patch: Partial<MeetingState>) => void;
+  inviteAgent: (id: AgentId) => void;
+  removeAgent: (id: AgentId) => void;
+  toggleAgent: (id: AgentId) => void;
+  addMeetingTurns: (turns: CeremonyTurn[]) => void;
   setShowDemoData: (v: boolean) => void;
   addMemoryItem: (item: Omit<MemoryItem, "id"> & { id?: string }) => void;
   removeMemoryItem: (id: string) => void;
@@ -158,9 +166,16 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
         // request expanded. Speaker defaults to the scrum master unless the caller names one.
         expanded: opts?.expanded ?? kind === "virtual-meeting",
         activeSpeakerId: opts?.speakerId ?? "terry-locke",
-        ...(kind === "virtual-meeting"
-          ? { ceremonyType: opts?.ceremonyType ?? "standup", ceremonyStatus: "running" as const, transcript: [] }
-          : {}),
+        // Ceremonies seat the FULL roster (toggle any off in the meeting); other meetings start with
+        // whatever the caller passes (a 1:1 seeds that one agent; a blank meeting seeds none).
+        members: opts?.members ?? (kind === "virtual-meeting" ? AGENTS.map((a) => a.id) : []),
+        // A ceremony (ceremonyType passed) opens in "ready" state with a Run button; a blank/invite
+        // virtual meeting has no ceremonyType, so it renders the interactive composer instead.
+        ...(opts?.ceremonyType
+          ? { ceremonyType: opts.ceremonyType, ceremonyStatus: "ready" as const, transcript: [] }
+          : kind === "virtual-meeting"
+            ? { transcript: [] }
+            : {}),
       },
     }),
   toggleMeetingExpanded: () =>
@@ -170,6 +185,31 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
     set((s) => (s.meeting ? { meeting: { ...s.meeting, activeSpeakerId: id } } : {})),
   patchMeeting: (patch) =>
     set((s) => (s.meeting ? { meeting: { ...s.meeting, ...patch } } : {})),
+  inviteAgent: (id) =>
+    set((s) =>
+      s.meeting && !s.meeting.members.includes(id)
+        ? { meeting: { ...s.meeting, members: [...s.meeting.members, id] } }
+        : {},
+    ),
+  removeAgent: (id) =>
+    set((s) =>
+      s.meeting ? { meeting: { ...s.meeting, members: s.meeting.members.filter((m) => m !== id) } } : {},
+    ),
+  toggleAgent: (id) =>
+    set((s) => {
+      if (!s.meeting) return {};
+      const has = s.meeting.members.includes(id);
+      return {
+        meeting: {
+          ...s.meeting,
+          members: has ? s.meeting.members.filter((m) => m !== id) : [...s.meeting.members, id],
+        },
+      };
+    }),
+  addMeetingTurns: (turns) =>
+    set((s) =>
+      s.meeting ? { meeting: { ...s.meeting, transcript: [...(s.meeting.transcript ?? []), ...turns] } } : {},
+    ),
   setShowDemoData: (v) => set({ showDemoData: v }),
   addMemoryItem: (item) =>
     set((s) => ({

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Send, Sparkles, Video, Phone, ChevronDown, Mic, Square, Loader2, AudioLines } from "lucide-react";
+import { Send, Sparkles, Video, Phone, ChevronDown, Mic, Square, Loader2, AudioLines, Plus, Users } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
@@ -58,47 +58,12 @@ function HuddleHeader({
   const patchMeeting = useHuddleStore((s) => s.patchMeeting);
   const { user } = useAuth();
 
-  // Start a virtual meeting for a ceremony and stream its grounded transcript into the stage.
-  async function startVirtualMeeting(ceremonyType: CeremonyKind) {
+  // Open a virtual meeting seated with the FULL roster (scrum master + all lane owners). The
+  // meeting stage owns the run: the user can toggle any agent off in the participant panel, then
+  // hit Run. We no longer auto-run on open — a ceremony over a mis-seated roster collapsed to a
+  // single wrong narrator, and the user wants to curate who's in the room first.
+  function startVirtualMeeting(ceremonyType: CeremonyKind) {
     startMeeting("virtual-meeting", { ceremonyType });
-    const backendsCfg = useBackendsStore.getState().config;
-    const caller = user
-      ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
-      : undefined;
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const TRIGGER: Record<string, string> = {
-      standup: "let's run the daily stand-up",
-      retro: "let's run the sprint retrospective",
-      planning: "let's do sprint planning",
-      review: "let's run the sprint review",
-    };
-    const steps = ceremonyType === "review_retro" ? ["review", "retro"] : [ceremonyType];
-    try {
-      const turns: { agentId: AgentId; text: string }[] = [];
-      for (const step of steps) {
-        const result = await sendHuddleMessage({
-          data: {
-            text: TRIGGER[step],
-            huddleId: huddle.id,
-            scope: "group",
-            // A ceremony seats the FULL roster (scrum master + all lane owners), not just the
-            // current huddle's members — otherwise a 1:1/small huddle has no owners or host and
-            // the ceremony collapses to a single wrong narrator.
-            members: AGENTS.map((a) => a.id),
-            history: [],
-            router: { ...backendsCfg.router, ceremonyMode: "round-robin" },
-            agents: backendsCfg.agents,
-            caller,
-            timeZone,
-          },
-        });
-        for (const r of result.replies ?? []) turns.push({ agentId: r.agentId as AgentId, text: r.text });
-        patchMeeting({ transcript: [...turns] });
-      }
-      patchMeeting({ ceremonyStatus: "done" });
-    } catch {
-      patchMeeting({ ceremonyStatus: "error" });
-    }
   }
 
   // Open the most recent persisted ceremony run (e.g. an auto-run that fired while away).
@@ -197,6 +162,16 @@ function HuddleHeader({
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => startVirtualMeeting("review_retro")}>
               Review + retro
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => startMeeting("virtual-meeting", { members: [] })}>
+              <Plus size={14} className="mr-1.5" /> New blank meeting
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => startMeeting("virtual-meeting", { members: huddle.members })}
+            >
+              <Users size={14} className="mr-1.5" />
+              {huddle.kind === "group" ? "Meet with this channel" : `Meet with ${AGENT_BY_ID[huddle.members[0]].name}`}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => reviewLastCeremony()}>
               Review last auto-run…
