@@ -50,6 +50,21 @@ CREATE TABLE IF NOT EXISTS tasks.journey_tasks (
 );
 CREATE INDEX IF NOT EXISTS journey_tasks_user_email_idx ON tasks.journey_tasks (lower(user_email));
 CREATE INDEX IF NOT EXISTS journey_tasks_category_idx   ON tasks.journey_tasks (category);
+
+-- Persisted scrum-ceremony runs (stand-up/retro/planning/review), so an auto-run or a
+-- past run is reviewable later as a thread. transcript = the ordered agent turns.
+CREATE TABLE IF NOT EXISTS tasks.ceremony_runs (
+  id           TEXT PRIMARY KEY,
+  user_email   TEXT NOT NULL,
+  ceremony_type TEXT NOT NULL,
+  mode         TEXT,
+  status       TEXT NOT NULL DEFAULT 'completed',
+  summary      TEXT,
+  transcript   JSONB NOT NULL DEFAULT '[]',
+  auto_run     BOOLEAN NOT NULL DEFAULT false,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ceremony_runs_user_idx ON tasks.ceremony_runs (lower(user_email), created_at DESC);
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -164,5 +179,41 @@ export async function getTasksForUser(userEmail: string, category?: string): Pro
   }
   sql += ` AND completed_at IS NULL AND (status IS NULL OR status NOT IN ('DONE','BLOCKED')) LIMIT 500`;
   const { rows } = await getPool().query<ScorableTask>(sql, params);
+  return rows;
+}
+
+export interface CeremonyRunRecord {
+  id: string;
+  user_email: string;
+  ceremony_type: string;
+  mode?: string | null;
+  status?: string | null;
+  summary?: string | null;
+  transcript: unknown;
+  auto_run?: boolean | null;
+}
+
+/** Persist a ceremony run (transcript + summary) so it's reviewable later. */
+export async function recordCeremonyRun(r: CeremonyRunRecord): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.ceremony_runs (id,user_email,ceremony_type,mode,status,summary,transcript,auto_run)
+     VALUES ($1,$2,$3,$4,COALESCE($5,'completed'),$6,$7,COALESCE($8,false))
+     ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, summary=EXCLUDED.summary, transcript=EXCLUDED.transcript`,
+    [
+      r.id, r.user_email, r.ceremony_type, r.mode ?? null, r.status ?? null,
+      r.summary ?? null, JSON.stringify(r.transcript ?? []), r.auto_run ?? null,
+    ],
+  );
+}
+
+/** Recent ceremony runs for a user (newest first), for the review thread / virtual-meeting view. */
+export async function getCeremonyRuns(userEmail: string, limit = 20): Promise<Record<string, unknown>[]> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query(
+    `SELECT id,ceremony_type,mode,status,summary,transcript,auto_run,created_at
+       FROM tasks.ceremony_runs WHERE lower(user_email)=$1 ORDER BY created_at DESC LIMIT $2`,
+    [userEmail.toLowerCase(), limit],
+  );
   return rows;
 }

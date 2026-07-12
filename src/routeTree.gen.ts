@@ -14,6 +14,7 @@ import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as ApiPublicTasksSyncRouteImport } from './routes/api/public/tasks-sync'
+import { Route as ApiPublicRunCeremonyRouteImport } from './routes/api/public/run-ceremony'
 import { Route as ApiPublicAuthTraceRouteImport } from './routes/api/public/auth-trace'
 
 const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
@@ -40,6 +41,11 @@ const ApiPublicTasksSyncRoute = ApiPublicTasksSyncRouteImport.update({
   path: '/api/public/tasks-sync',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicRunCeremonyRoute = ApiPublicRunCeremonyRouteImport.update({
+  id: '/api/public/run-ceremony',
+  path: '/api/public/run-ceremony',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicAuthTraceRoute = ApiPublicAuthTraceRouteImport.update({
   id: '/api/public/auth-trace',
   path: '/api/public/auth-trace',
@@ -51,6 +57,7 @@ export interface FileRoutesByFullPath {
   '/auth': typeof AuthRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
 }
 export interface FileRoutesByTo {
@@ -58,6 +65,7 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/': typeof AuthenticatedIndexRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
 }
 export interface FileRoutesById {
@@ -67,6 +75,7 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
 }
 export interface FileRouteTypes {
@@ -76,6 +85,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/sitemap.xml'
     | '/api/public/auth-trace'
+    | '/api/public/run-ceremony'
     | '/api/public/tasks-sync'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -83,6 +93,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/'
     | '/api/public/auth-trace'
+    | '/api/public/run-ceremony'
     | '/api/public/tasks-sync'
   id:
     | '__root__'
@@ -91,6 +102,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/_authenticated/'
     | '/api/public/auth-trace'
+    | '/api/public/run-ceremony'
     | '/api/public/tasks-sync'
   fileRoutesById: FileRoutesById
 }
@@ -99,6 +111,7 @@ export interface RootRouteChildren {
   AuthRoute: typeof AuthRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiPublicAuthTraceRoute: typeof ApiPublicAuthTraceRoute
+  ApiPublicRunCeremonyRoute: typeof ApiPublicRunCeremonyRoute
   ApiPublicTasksSyncRoute: typeof ApiPublicTasksSyncRoute
 }
 
@@ -139,6 +152,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicTasksSyncRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/run-ceremony': {
+      id: '/api/public/run-ceremony'
+      path: '/api/public/run-ceremony'
+      fullPath: '/api/public/run-ceremony'
+      preLoaderRoute: typeof ApiPublicRunCeremonyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/auth-trace': {
       id: '/api/public/auth-trace'
       path: '/api/public/auth-trace'
@@ -166,6 +186,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiPublicAuthTraceRoute: ApiPublicAuthTraceRoute,
+  ApiPublicRunCeremonyRoute: ApiPublicRunCeremonyRoute,
   ApiPublicTasksSyncRoute: ApiPublicTasksSyncRoute,
 }
 export const routeTree = rootRouteImport

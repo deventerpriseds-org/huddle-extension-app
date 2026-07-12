@@ -137,9 +137,10 @@ function isEchoOfPrior(text: string, priorReplies: { text: string }[]): boolean 
   return priorReplies.some((r) => replyJaccard(text, r.text) >= 0.72);
 }
 
-export const sendHuddleMessage = createServerFn({ method: "POST" })
-  .inputValidator((raw: unknown) => Input.parse(raw))
-  .handler(async ({ data }) => {
+// The core huddle turn — shared by the client-facing server function and by
+// server-to-server callers (e.g. the scheduled-ceremony route). Kept as a plain
+// exported async function so a route can invoke a ceremony without an RPC hop.
+export async function runHuddleTurn(data: z.infer<typeof Input>) {
     const lovableKey = process.env.LOVABLE_API_KEY;
     const openaiKey = process.env.OPENAI_API_KEY;
 
@@ -449,7 +450,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         const host = data.members.includes(CEREMONY_HOST) ? CEREMONY_HOST : routed.winners[0];
         return {
           decision: {
-            signal: "topic",
+            signal: "topic" as const,
             scores: {} as Partial<Record<AgentId, number>>,
             winnerId: host,
             runnerUpId: null,
@@ -1760,4 +1761,8 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
       toolUses,
       reasoning: reasoningSummaries,
     };
-  });
+}
+
+export const sendHuddleMessage = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => Input.parse(raw))
+  .handler(async ({ data }) => runHuddleTurn(data));
