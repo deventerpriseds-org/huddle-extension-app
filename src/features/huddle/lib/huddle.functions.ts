@@ -91,7 +91,8 @@ const MAX_REPLIES_PER_TURN = 4;
 // all agents. (Lane ownership / handoffs are already shared, generated dynamically
 // by buildRoster from agents.ts.)
 const HOUSE_STYLE =
-  "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail.";
+  "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
+  " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that (e.g. \"here's a draft\" or \"I can send this if you want\"); never state it \"has been sent\" or \"is done\" when it has not.";
 
 export const sendHuddleMessage = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => Input.parse(raw))
@@ -458,7 +459,7 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
         data.scope === "group" ? "group huddle" : "1:1"
       }. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail.${
         priorInThisTurn
-          ? `\n\nOther agents just replied in this same turn:\n${priorInThisTurn}\nBuild on what they said instead of repeating it. If you have nothing to add, reply with a single short line.`
+          ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
           : ""
       }${interjectDirective}`;
 
