@@ -92,7 +92,7 @@ const MAX_REPLIES_PER_TURN = 4;
 // by buildRoster from agents.ts.)
 const HOUSE_STYLE =
   "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
-  " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that (e.g. \"here's a draft\" or \"I can send this if you want\"); never state it \"has been sent\" or \"is done\" when it has not.";
+  " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it \"has been sent\" or \"is done\" when it has not. Email specifically: text you write in the chat is \"draft text\" — only say you \"saved a draft to your inbox\" if you called the create_email_draft tool and it returned success, and only say an email was \"sent\" if send_email returned success.";
 
 // Deterministic backstop for co-answer echo: a weak router model sometimes
 // ignores the "don't repeat what was already said" instruction and re-emits a
@@ -859,6 +859,33 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
               },
               strict: false,
             });
+            emailTools.push({
+              type: "function" as const,
+              name: "create_email_draft",
+              description:
+                `Save a REAL draft email to the ${fromOpts[0]} mailbox's Drafts folder (does NOT send it). ` +
+                `Use this when the user asks you to draft, prepare, or write up an email for later — it creates an actual draft they can open, edit and send, and returns the draft's link. ` +
+                `A subject and body are required; recipients (to) are optional for a draft.`,
+              parameters: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  subject: { type: "string", description: "Email subject line." },
+                  body: { type: "string", description: "Email body (plain text)." },
+                  to: {
+                    type: "string",
+                    description: "Optional recipient address(es), comma-separated.",
+                  },
+                  from: {
+                    type: "string",
+                    description: `Optional mailbox to draft in. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.`,
+                  },
+                  cc: { type: "string", description: "Optional CC address(es), comma-separated." },
+                },
+                required: ["subject", "body"],
+              },
+              strict: false,
+            });
           }
 
           const { PRIORITIZE_TOOL } = await import("./tasks/tools");
@@ -929,6 +956,40 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "send_email", "send crashed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            }
+            if (c.name === "create_email_draft") {
+              const a = c.arguments as Record<string, unknown>;
+              try {
+                const { createGraphDraft } = await import("./email/graph-email.server");
+                const r = await createGraphDraft({
+                  to: String(a.to ?? ""),
+                  subject: String(a.subject ?? ""),
+                  body: String(a.body ?? ""),
+                  from: a.from ? String(a.from) : undefined,
+                  cc: a.cc ? String(a.cc) : undefined,
+                });
+                recordToolUse(
+                  winner.id,
+                  "create_email_draft",
+                  r.ok ? `draft saved in ${r.from} (id ${String(r.id ?? "").slice(0, 12)}…)` : "draft failed",
+                  r.ok,
+                  r.ok ? undefined : r.error,
+                );
+                if (!r.ok) {
+                  const ev = recordFallback(
+                    "tool",
+                    `${winner.name}: create_email_draft failed — ${r.error ?? "unknown"}`,
+                    "create_email_draft failed",
+                    winner.id,
+                  );
+                  perAgentFallbacks.push(ev.inline);
+                }
+                return JSON.stringify(r);
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "create_email_draft", "draft crashed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             }
@@ -1212,6 +1273,38 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
                     winner.id,
                     "send_email",
                     r.ok ? `sent from ${r.from} → ${(r.to ?? []).join(", ")}` : "send failed",
+                    r.ok,
+                    r.ok ? undefined : r.error,
+                  );
+                  return JSON.stringify(r);
+                },
+              });
+              lovableTools.create_email_draft = tool({
+                description:
+                  `Save a REAL draft email to the ${fromOpts[0]} mailbox's Drafts folder (does NOT send it). ` +
+                  `Use when the user asks to draft/prepare an email for later; returns the draft's link. ` +
+                  `Subject and body required; recipients optional.`,
+                inputSchema: z.object({
+                  subject: z.string(),
+                  body: z.string(),
+                  to: z.string().optional(),
+                  from: z.string().optional(),
+                  cc: z.string().optional(),
+                }),
+                execute: async (args) => {
+                  const a = args as Record<string, unknown>;
+                  const { createGraphDraft } = await import("./email/graph-email.server");
+                  const r = await createGraphDraft({
+                    to: String(a.to ?? ""),
+                    subject: String(a.subject ?? ""),
+                    body: String(a.body ?? ""),
+                    from: a.from ? String(a.from) : undefined,
+                    cc: a.cc ? String(a.cc) : undefined,
+                  });
+                  recordToolUse(
+                    winner.id,
+                    "create_email_draft",
+                    r.ok ? `draft saved in ${r.from}` : "draft failed",
                     r.ok,
                     r.ok ? undefined : r.error,
                   );

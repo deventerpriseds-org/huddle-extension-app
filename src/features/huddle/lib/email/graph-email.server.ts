@@ -91,6 +91,61 @@ function toRecipients(v: string | string[] | undefined) {
     .map((address) => ({ emailAddress: { address } }));
 }
 
+export interface DraftEmailResult {
+  ok: boolean;
+  from?: string;
+  id?: string;
+  webLink?: string;
+  error?: string;
+}
+
+/**
+ * Create a REAL draft in the mailbox's Drafts folder via Graph POST
+ * /users/{from}/messages (unlike sendGraphEmail, which sends immediately). Returns
+ * the created message's id and webLink so the caller can prove the draft exists.
+ * Recipients are optional for a draft. Requires the Graph app to hold Mail.ReadWrite
+ * application permission (a 403 here means that consent is missing).
+ */
+export async function createGraphDraft(input: SendEmailInput): Promise<DraftEmailResult> {
+  const options = emailFromOptions();
+  const requested = (input.from ?? "").trim();
+  const from = requested || options[0];
+  if (!options.some((o) => o.toLowerCase() === from.toLowerCase())) {
+    return { ok: false, error: `"${from}" is not an allowed mailbox. Available: ${options.join(", ")}.` };
+  }
+  const subject = String(input.subject ?? "").trim();
+  if (!subject) return { ok: false, error: "A subject is required." };
+
+  try {
+    const token = await getAppToken();
+    const res = await fetch(`${GRAPH}/users/${encodeURIComponent(from)}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subject,
+        body: { contentType: input.html ? "HTML" : "Text", content: input.body ?? "" },
+        toRecipients: toRecipients(input.to),
+        ccRecipients: toRecipients(input.cc),
+      }),
+    });
+    if (res.status === 201) {
+      const j = (await res.json()) as { id?: string; webLink?: string };
+      return { ok: true, from, id: j.id, webLink: j.webLink };
+    }
+    const text = await res.text();
+    let msg = `Graph create-draft failed (${res.status})`;
+    try {
+      const j = JSON.parse(text);
+      msg = j?.error?.message ? `${msg}: ${j.error.message}` : `${msg}: ${text.slice(0, 200)}`;
+    } catch {
+      msg = `${msg}: ${text.slice(0, 200)}`;
+    }
+    return { ok: false, from, error: msg };
+  } catch (err) {
+    return { ok: false, from, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function sendGraphEmail(input: SendEmailInput): Promise<SendEmailResult> {
   const options = emailFromOptions();
   const requested = (input.from ?? "").trim();
