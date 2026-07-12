@@ -160,3 +160,38 @@ export async function getSignedUrl(elAgentId: string): Promise<string> {
   if (!body.signed_url) throw new Error("ElevenLabs get-signed-url returned no signed_url");
   return body.signed_url;
 }
+
+// Low-latency model for the turn-based group-voice loop — Flash trades a little
+// fidelity for ~75ms first-byte, which is what keeps multi-agent turns feeling live.
+const TTS_MODEL = (process.env.ELEVENLABS_TTS_MODEL ?? "").trim() || "eleven_flash_v2_5";
+
+/**
+ * One-shot text→speech in a given agent's voice, for the uniform streaming group
+ * meeting (as opposed to the Conversational-AI orb used for 1:1). Returns raw mp3
+ * bytes as base64; the browser decodes and plays them. Voice falls back to the
+ * configured default until real per-agent voice ids are assigned.
+ */
+export async function textToSpeech(text: string, agentVoiceId?: string): Promise<string> {
+  const key = elKey();
+  if (!key) throw new Error("ELEVENLABS_API_KEY not configured");
+  const voiceId = resolveVoiceId(agentVoiceId);
+  if (!voiceId) throw new Error("No ElevenLabs voice available (set ELEVENLABS_DEFAULT_VOICE_ID)");
+  const res = await fetch(
+    `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
+    {
+      method: "POST",
+      headers: { "xi-api-key": key, "content-type": "application/json" },
+      body: JSON.stringify({ text, model_id: TTS_MODEL }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`ElevenLabs TTS ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+  const buf = new Uint8Array(await res.arrayBuffer());
+  let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < buf.length; i += chunk) {
+    bin += String.fromCharCode(...buf.subarray(i, i + chunk));
+  }
+  return btoa(bin);
+}

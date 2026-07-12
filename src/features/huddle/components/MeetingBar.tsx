@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Expand, LogOut, Mic, MicOff, Minimize2, Phone, Play, Plus, Send, Video, VideoOff } from "lucide-react";
+import { AudioLines, Check, Expand, LogOut, Mic, MicOff, Minimize2, Phone, Play, Plus, Send, Video, VideoOff } from "lucide-react";
 import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
 import { useHuddleStore, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
+import { useGroupVoice } from "../hooks/useGroupVoice";
 import { sendHuddleMessage } from "../lib/huddle.functions";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
@@ -300,6 +301,30 @@ function MeetingStage({
     ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
     : undefined;
 
+  // Uniform streaming group voice: many agents speak in their own voices, turn-based.
+  const groupVoice = useGroupVoice();
+  const voiceLive = groupVoice.status !== "idle" && groupVoice.status !== "error";
+  // Keep the live voice loop's roster in sync as agents are toggled in/out mid-meeting.
+  useEffect(() => {
+    if (voiceLive) groupVoice.setMembers(meeting.members);
+  }, [meeting.members, voiceLive, groupVoice]);
+  // Tear the mic down if the meeting is left/collapsed away.
+  useEffect(() => () => groupVoice.stop(), [groupVoice]);
+
+  function toggleGroupVoice() {
+    if (voiceLive) {
+      groupVoice.stop();
+      return;
+    }
+    if (!meeting.members.length) return;
+    void groupVoice.start({
+      members: meeting.members,
+      caller,
+      huddleId: activeHuddleId,
+      onTurn: (t) => addMeetingTurns([t]),
+    });
+  }
+
   async function runCeremony() {
     if (!meeting.ceremonyType || !meeting.members.length) return;
     const cfg = useBackendsStore.getState().config;
@@ -468,28 +493,75 @@ function MeetingStage({
                   : `Run ${meetingLabel(meeting).toLowerCase()}`}
             </button>
           ) : (
-            <div className="flex items-end gap-2">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    void sendMessage();
+            <div className="flex flex-col gap-1.5">
+              {voiceLive && (
+                <div className="flex items-center gap-2 px-1 text-[11px] text-white/60">
+                  <span className="inline-flex size-2 animate-pulse rounded-full bg-emerald-400" />
+                  {groupVoice.status === "listening"
+                    ? groupVoice.muted
+                      ? "Muted"
+                      : "Listening…"
+                    : groupVoice.status === "thinking"
+                      ? "Thinking…"
+                      : groupVoice.activeSpeaker
+                        ? `${AGENT_BY_ID[groupVoice.activeSpeaker]?.name ?? "Agent"} speaking…`
+                        : "In session"}
+                  {groupVoice.partial && (
+                    <span className="min-w-0 flex-1 truncate italic text-white/40">{groupVoice.partial}</span>
+                  )}
+                </div>
+              )}
+              <div className="flex items-end gap-2">
+                <button
+                  onClick={toggleGroupVoice}
+                  disabled={!meeting.members.length || !groupVoice.supported}
+                  title={
+                    !groupVoice.supported
+                      ? "Voice isn't supported on this device"
+                      : voiceLive
+                        ? "End voice"
+                        : "Join with voice — everyone speaks in their own voice"
                   }
-                }}
-                rows={1}
-                placeholder={meeting.members.length ? "Message the meeting…" : "Invite an agent first…"}
-                className="min-h-10 flex-1 resize-none rounded-2xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none placeholder:text-white/40"
-              />
-              <button
-                onClick={() => void sendMessage()}
-                disabled={busy || !input.trim() || !meeting.members.length}
-                className="inline-flex size-10 items-center justify-center rounded-full bg-white text-black transition hover:opacity-90 disabled:opacity-40"
-                aria-label="Send"
-              >
-                <Send size={16} />
-              </button>
+                  className={cn(
+                    "inline-flex size-10 shrink-0 items-center justify-center rounded-full transition disabled:opacity-40",
+                    voiceLive ? "bg-emerald-500 text-white hover:opacity-90" : "bg-white/10 text-white hover:bg-white/15",
+                  )}
+                  aria-label={voiceLive ? "End voice" : "Join with voice"}
+                >
+                  <AudioLines size={16} />
+                </button>
+                {voiceLive && (
+                  <button
+                    onClick={groupVoice.toggleMute}
+                    className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/15"
+                    aria-label={groupVoice.muted ? "Unmute" : "Mute"}
+                    title={groupVoice.muted ? "Unmute" : "Mute"}
+                  >
+                    {groupVoice.muted ? <MicOff size={16} /> : <Mic size={16} />}
+                  </button>
+                )}
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void sendMessage();
+                    }
+                  }}
+                  rows={1}
+                  placeholder={meeting.members.length ? "Message the meeting…" : "Invite an agent first…"}
+                  className="min-h-10 flex-1 resize-none rounded-2xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none placeholder:text-white/40"
+                />
+                <button
+                  onClick={() => void sendMessage()}
+                  disabled={busy || !input.trim() || !meeting.members.length}
+                  className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-white text-black transition hover:opacity-90 disabled:opacity-40"
+                  aria-label="Send"
+                >
+                  <Send size={16} />
+                </button>
+              </div>
             </div>
           )}
         </div>

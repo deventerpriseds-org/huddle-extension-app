@@ -550,10 +550,17 @@ function Composer({ huddle }: { huddle: Huddle }) {
   }
 
   const startMeeting = useHuddleStore((s) => s.startMeeting);
-  // Live voice with the current channel's agent (1:1 → that agent; group → first member, switchable
-  // in the meeting stage). Reuses the ElevenLabs meeting orb.
+  // Voice from the composer. 1:1 → the smooth ElevenLabs Conversational-AI orb (one agent,
+  // continuous duplex). Group channel → open a virtual meeting seeded with the channel's
+  // members, where the uniform streaming multi-voice loop lets everyone speak in their own
+  // voice (turn-based). Keeping these split is the current design: prove streaming is as
+  // smooth as the orb before switching 1:1 over too.
   function startVoice() {
-    startMeeting("adhoc", { speakerId: huddle.members[0], expanded: true });
+    if (huddle.kind === "group") {
+      startMeeting("virtual-meeting", { members: huddle.members, expanded: true });
+    } else {
+      startMeeting("adhoc", { speakerId: huddle.members[0], expanded: true });
+    }
   }
 
   const dictation = useDictation();
