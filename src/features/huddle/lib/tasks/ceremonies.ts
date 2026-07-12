@@ -193,7 +193,7 @@ export function closerDirective(type: CeremonyType, report: CeremonyReport): str
         : type === "planning"
           ? "Close planning: propose the sprint — the top few items to commit to across lanes, and flag any overload."
           : "Close the review: summarize what shipped and call out anything not demo-ready.";
-  return `\n\nCEREMONY — you are the scrum master closing this ${VERB[type]} after the team's round-robin. ${close} Use ONLY the real data below; do not invent progress. Keep it tight.\n\n${reportDigest(report)}`;
+  return `\n\nCEREMONY — you are the scrum master CLOSING this ${VERB[type]}. The team has ALREADY given their updates — do NOT open the ceremony, do NOT ask anyone for updates, and do NOT say "let's begin" or "please share". Your only job now is to close it. ${close} Use ONLY the real data below; do not invent progress. Keep it tight.\n\n${reportDigest(report)}`;
 }
 
 /** Narrate mode: Terry runs the whole ceremony solo from the data. */
