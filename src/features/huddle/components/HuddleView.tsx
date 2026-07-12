@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Send, Sparkles, Video, Phone, ChevronDown } from "lucide-react";
+import { Send, Sparkles, Video, Phone, ChevronDown, Mic, Square, Loader2, AudioLines } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
@@ -8,6 +8,7 @@ import { sendHuddleMessage, listCeremonyRuns } from "../lib/huddle.functions";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
+import { useDictation } from "../hooks/useDictation";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -573,6 +574,28 @@ function Composer({ huddle }: { huddle: Huddle }) {
     }
   }
 
+  const startMeeting = useHuddleStore((s) => s.startMeeting);
+  // Live voice with the current channel's agent (1:1 → that agent; group → first member, switchable
+  // in the meeting stage). Reuses the ElevenLabs meeting orb.
+  function startVoice() {
+    startMeeting("adhoc", { speakerId: huddle.members[0], expanded: true });
+  }
+
+  const dictation = useDictation();
+  async function handleDictate() {
+    if (dictation.recording) {
+      const t = await dictation.stop();
+      if (t) {
+        setText((prev) => (prev ? `${prev} ${t}` : t));
+        inputRef.current?.focus();
+      } else if (dictation.error) {
+        toast.error(dictation.error);
+      }
+    } else {
+      await dictation.start();
+    }
+  }
+
   return (
     <div className="border-t border-hairline bg-surface px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-3">
       <div className="mx-auto flex max-w-3xl items-end gap-2">
@@ -603,6 +626,41 @@ function Composer({ huddle }: { huddle: Huddle }) {
             autoFocus
           />
         </div>
+        <button
+          type="button"
+          onClick={startVoice}
+          className="inline-flex size-10 items-center justify-center rounded-full border border-hairline bg-background text-muted-foreground transition hover:bg-muted"
+          aria-label="Start voice conversation"
+        >
+          <AudioLines size={16} />
+        </button>
+        {dictation.supported && (
+          <button
+            type="button"
+            onClick={handleDictate}
+            disabled={dictation.transcribing}
+            className={cn(
+              "inline-flex size-10 items-center justify-center rounded-full border border-hairline transition disabled:opacity-50",
+              dictation.recording
+                ? "bg-destructive text-destructive-foreground"
+                : "bg-background text-muted-foreground hover:bg-muted",
+            )}
+            style={
+              dictation.recording
+                ? { boxShadow: `0 0 0 ${Math.round(2 + dictation.level * 8)}px color-mix(in oklch, var(--destructive) 22%, transparent)` }
+                : undefined
+            }
+            aria-label={dictation.recording ? "Stop dictation" : "Dictate"}
+          >
+            {dictation.transcribing ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : dictation.recording ? (
+              <Square size={13} />
+            ) : (
+              <Mic size={16} />
+            )}
+          </button>
+        )}
         <button
           type="button"
           disabled={sending || !text.trim()}

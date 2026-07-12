@@ -59,7 +59,10 @@ interface HuddleState {
   addSuggestedTasks: (tasks: SuggestedTaskDraft[]) => void;
   approveTask: (id: string) => void;
   skipTask: (id: string) => void;
-  startMeeting: (kind: MeetingKind, opts?: { ceremonyType?: CeremonyKind }) => void;
+  startMeeting: (
+    kind: MeetingKind,
+    opts?: { ceremonyType?: CeremonyKind; speakerId?: AgentId; expanded?: boolean },
+  ) => void;
   toggleMeetingExpanded: () => void;
   leaveMeeting: () => void;
   setSpeaker: (id: AgentId) => void;
@@ -151,9 +154,10 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
       meeting: {
         kind,
         startedAt: Date.now(),
-        // Virtual meetings open expanded (the transcript stage); voice calls start collapsed.
-        expanded: kind === "virtual-meeting",
-        activeSpeakerId: "terry-locke",
+        // Virtual meetings open expanded (the transcript stage); a composer voice call can also
+        // request expanded. Speaker defaults to the scrum master unless the caller names one.
+        expanded: opts?.expanded ?? kind === "virtual-meeting",
+        activeSpeakerId: opts?.speakerId ?? "terry-locke",
         ...(kind === "virtual-meeting"
           ? { ceremonyType: opts?.ceremonyType ?? "standup", ceremonyStatus: "running" as const, transcript: [] }
           : {}),
