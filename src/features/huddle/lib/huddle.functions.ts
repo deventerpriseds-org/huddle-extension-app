@@ -94,6 +94,35 @@ const HOUSE_STYLE =
   "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
   " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that (e.g. \"here's a draft\" or \"I can send this if you want\"); never state it \"has been sent\" or \"is done\" when it has not.";
 
+// Deterministic backstop for co-answer echo: a weak router model sometimes
+// ignores the "don't repeat what was already said" instruction and re-emits a
+// near-verbatim copy of an earlier agent's reply this turn (identical calendar
+// readouts, a re-pasted email draft). Prompt wording alone can't guarantee a
+// small model complies, so we also detect and drop near-duplicates in code.
+// Jaccard over content tokens; >= 0.72 with enough tokens on both sides means
+// "said essentially the same thing" — distinct-but-related co-answers score well
+// below this, so genuine contributions are never suppressed.
+function contentTokenSet(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 2),
+  );
+}
+function replyJaccard(a: string, b: string): number {
+  const A = contentTokenSet(a);
+  const B = contentTokenSet(b);
+  if (A.size < 4 || B.size < 4) return 0;
+  let inter = 0;
+  for (const t of A) if (B.has(t)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+function isEchoOfPrior(text: string, priorReplies: { text: string }[]): boolean {
+  return priorReplies.some((r) => replyJaccard(text, r.text) >= 0.72);
+}
+
 export const sendHuddleMessage = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => Input.parse(raw))
   .handler(async ({ data }) => {
@@ -1455,6 +1484,21 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
           isInterjector &&
           (/^pass[.!]?$/i.test(interjTrimmed) || /\bPASS[.!]?$/.test(interjTrimmed))
         ) {
+          spoken.add(winner.id);
+          continue;
+        }
+
+        // Deterministic echo guard: if this reply is a near-duplicate of one an
+        // earlier agent already gave this turn, drop it (the point was already
+        // made). Backstops the "don't repeat what was said" instruction, which a
+        // weak model obeys inconsistently. Never fires on the first speaker.
+        if (interjTrimmed && isEchoOfPrior(interjTrimmed, replies)) {
+          recordFallback(
+            "tool",
+            `${winner.name}: near-duplicate of an earlier reply this turn — suppressed to avoid echo.`,
+            "duplicate reply suppressed",
+            winner.id,
+          );
           spoken.add(winner.id);
           continue;
         }
