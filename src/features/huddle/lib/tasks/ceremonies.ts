@@ -131,11 +131,17 @@ const VERB: Record<CeremonyType, string> = {
   review: "sprint review",
 };
 
+// due_date comes off the pg mirror as a Date (timestamptz), not a string — coerce safely.
+function fmtDate(v: string | Date | null): string {
+  if (!v) return "";
+  const iso = typeof v === "string" ? v : v instanceof Date ? v.toISOString() : String(v);
+  return iso.slice(0, 10);
+}
 function fmtLines(items: TaskLine[], max = 6): string {
   if (!items.length) return "none";
   return items
     .slice(0, max)
-    .map((t) => `“${t.title}”${t.due_date ? ` (due ${t.due_date.slice(0, 10)})` : ""}${t.priority ? ` [${t.priority}]` : ""}`)
+    .map((t) => `“${t.title}”${t.due_date ? ` (due ${fmtDate(t.due_date)})` : ""}${t.priority ? ` [${t.priority}]` : ""}`)
     .join("; ");
 }
 function fmtBlocked(items: BlockedLine[], max = 6): string {
