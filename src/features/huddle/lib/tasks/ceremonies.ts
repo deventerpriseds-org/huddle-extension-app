@@ -167,7 +167,7 @@ export function ownerDirective(type: CeremonyType, lane: LaneReport): string {
 - up next: ${fmtLines(lane.upNext)}
 - overdue: ${fmtLines(lane.overdue)}
 - blocked: ${fmtBlocked(lane.blocked)}
-If every bucket is "none", say you have nothing to report this ${type} in one short line.`;
+You MUST name the actual items in every bucket that is not "none" — do not summarize them away or skip them. Only if done, up next, overdue AND blocked are all "none" may you say you have nothing to report.`;
 }
 
 function reportDigest(report: CeremonyReport): string {
