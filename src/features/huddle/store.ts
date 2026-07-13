@@ -26,6 +26,7 @@ export interface CeremonyTurn {
   agentId?: AgentId; // omitted for a user turn
   text: string;
   user?: boolean;
+  ts?: number; // epoch ms, stamped on append — drives the transcript's MM:SS timestamps
 }
 export interface MeetingState {
   kind: MeetingKind;
@@ -207,9 +208,12 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
       };
     }),
   addMeetingTurns: (turns) =>
-    set((s) =>
-      s.meeting ? { meeting: { ...s.meeting, transcript: [...(s.meeting.transcript ?? []), ...turns] } } : {},
-    ),
+    set((s) => {
+      if (!s.meeting) return {};
+      const now = Date.now();
+      const stamped = turns.map((t) => ({ ...t, ts: t.ts ?? now }));
+      return { meeting: { ...s.meeting, transcript: [...(s.meeting.transcript ?? []), ...stamped] } };
+    }),
   setShowDemoData: (v) => set({ showDemoData: v }),
   addMemoryItem: (item) =>
     set((s) => ({

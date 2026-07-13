@@ -45,8 +45,13 @@ export function useVoiceCall() {
   const lastAgentText = useRef("");
   const lastAgentAt = useRef(0);
   modeRef.current = mode;
+  // Monotonic token so a connect that resolves AFTER a leave/disconnect tears its own
+  // session down instead of leaking a live mic that nothing can stop (the "had to refresh
+  // to stop it listening" bug).
+  const genRef = useRef(0);
 
   const disconnect = useCallback(async () => {
+    genRef.current++;
     const conv = convRef.current;
     convRef.current = null;
     setStatus("idle");
@@ -62,8 +67,10 @@ export function useVoiceCall() {
 
   const connect = useCallback(
     async (agentId: AgentId) => {
-      // Tear down any existing session first.
+      // Tear down any existing session first. `disconnect` bumps genRef; capture the token
+      // AFTER it so we can detect a leave/reconnect that lands while we're awaiting below.
       await disconnect();
+      const myGen = genRef.current;
       setStatus("connecting");
       setError(null);
       setCaptions([]);
@@ -71,10 +78,14 @@ export function useVoiceCall() {
 
       const res = await startVoiceSession({ data: { agentId } });
       if (!res.ok) {
-        setStatus("error");
-        setError(res.error);
+        if (genRef.current === myGen) {
+          setStatus("error");
+          setError(res.error);
+        }
         return res;
       }
+      // A leave/disconnect happened while minting the signed URL — abort before opening a socket.
+      if (genRef.current !== myGen) return res;
 
       try {
         const { Conversation } = await import("@elevenlabs/client");
@@ -105,10 +116,22 @@ export function useVoiceCall() {
             setCaptions((c) => [...c.slice(-40), { role, text: message }]);
           },
         });
+        // If a leave landed while the WebSocket was opening, this session is orphaned — end it
+        // immediately instead of leaking a live mic that nothing can stop (the refresh-to-stop bug).
+        if (genRef.current !== myGen) {
+          try {
+            await (conv as unknown as LiveConversation).endSession();
+          } catch {
+            /* already closing */
+          }
+          return res;
+        }
         convRef.current = conv as unknown as LiveConversation;
       } catch (err) {
-        setStatus("error");
-        setError(err instanceof Error ? err.message : String(err));
+        if (genRef.current === myGen) {
+          setStatus("error");
+          setError(err instanceof Error ? err.message : String(err));
+        }
       }
       return res;
     },
