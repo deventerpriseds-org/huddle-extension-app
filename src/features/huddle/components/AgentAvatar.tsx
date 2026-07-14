@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 import type { Agent } from "../data/agents";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
@@ -21,6 +22,9 @@ const sizeMap = {
 
 export function AgentAvatar({ agent, size = "md", ring, className, clickable = true }: Props) {
   const openAgent = useAgentPanelStore((s) => s.openAgent);
+  // The seeded avatarUrls are Lovable-preview-only paths (/__l5e/…) that 404 on the deployed app,
+  // so fall back to the colored initials chip whenever the image can't load.
+  const [imgFailed, setImgFailed] = useState(false);
   const base = cn(
     "inline-flex items-center justify-center rounded-full overflow-hidden font-semibold text-white shrink-0 select-none",
     sizeMap[size],
@@ -51,7 +55,7 @@ export function AgentAvatar({ agent, size = "md", ring, className, clickable = t
     "aria-label": clickable ? `Open settings for ${agent.name}` : agent.name,
   };
 
-  if (agent.avatarUrl) {
+  if (agent.avatarUrl && !imgFailed) {
     return (
       <img
         src={agent.avatarUrl}
@@ -59,6 +63,7 @@ export function AgentAvatar({ agent, size = "md", ring, className, clickable = t
         title={agent.name}
         className={cn(base, "object-cover")}
         loading="lazy"
+        onError={() => setImgFailed(true)}
         {...commonProps}
       />
     );

@@ -22,6 +22,7 @@ import { useHuddleStore, type CeremonyTurn, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
 import { useGroupVoice } from "../hooks/useGroupVoice";
 import { sendHuddleMessage } from "../lib/huddle.functions";
+import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
@@ -202,6 +203,20 @@ function MeetingRoom({
   const [showCaptions, setShowCaptions] = useState(true);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  // Which agent is speaking during a scripted ceremony run (drives the spotlight while Start plays).
+  const [speakingId, setSpeakingId] = useState<AgentId | null>(null);
+  const ceremonyAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ceremonyAliveRef = useRef(true);
+  useEffect(() => {
+    ceremonyAliveRef.current = true;
+    return () => {
+      ceremonyAliveRef.current = false;
+      if (ceremonyAudioRef.current) {
+        ceremonyAudioRef.current.pause();
+        ceremonyAudioRef.current.src = "";
+      }
+    };
+  }, []);
 
   const groupVoice = useGroupVoice();
   const voiceLive = isVirtual && groupVoice.status !== "idle" && groupVoice.status !== "error";
@@ -227,15 +242,15 @@ function MeetingRoom({
   // The spotlighted speaker: live group-voice speaker → last agent turn → the meeting's default.
   const lastAgentTurn = [...turns].reverse().find((t) => !t.user && t.agentId);
   const spotlightId: AgentId | null = isVirtual
-    ? groupVoice.activeSpeaker ?? lastAgentTurn?.agentId ?? (meeting.members[0] ?? null)
+    ? groupVoice.activeSpeaker ?? speakingId ?? lastAgentTurn?.agentId ?? (meeting.members[0] ?? null)
     : meeting.activeSpeakerId;
   const spotlightAgent = spotlightId ? AGENT_BY_ID[spotlightId] : undefined;
   const speaking = isVirtual
-    ? groupVoice.status === "speaking"
+    ? groupVoice.status === "speaking" || speakingId != null
     : voice.status === "connected" && voice.mode === "speaking";
 
   const caption = isVirtual
-    ? groupVoice.status === "speaking"
+    ? groupVoice.status === "speaking" || speakingId
       ? lastAgentTurn?.text ?? ""
       : ""
     : voice.captions[voice.captions.length - 1]?.text ?? "";
@@ -277,11 +292,32 @@ function MeetingRoom({
     }
   }
 
+  // Speak one ceremony turn aloud in the agent's voice; resolves when playback ends.
+  async function speakCeremonyTurn(agentId: AgentId, text: string): Promise<void> {
+    const spoken = await synthesizeSpeech({ data: { text, agentId } });
+    if (!spoken.ok) throw new Error(spoken.error);
+    if (!ceremonyAliveRef.current) return;
+    await new Promise<void>((resolve) => {
+      const el = new Audio(`data:audio/mpeg;base64,${spoken.audioBase64}`);
+      ceremonyAudioRef.current = el;
+      const done = () => {
+        el.onended = null;
+        el.onerror = null;
+        if (ceremonyAudioRef.current === el) ceremonyAudioRef.current = null;
+        resolve();
+      };
+      el.onended = done;
+      el.onerror = done;
+      el.play().catch(done);
+    });
+  }
+
   async function runCeremony() {
     if (!meeting.ceremonyType || !meeting.members.length) return;
     const cfg = useBackendsStore.getState().config;
     patchMeeting({ ceremonyStatus: "running", transcript: [] });
     const steps = meeting.ceremonyType === "review_retro" ? ["review", "retro"] : [meeting.ceremonyType];
+    let voiceOff = false; // once TTS fails (e.g. no default voice), fall back to text-only silently
     try {
       for (const step of steps) {
         const result = await sendHuddleMessage({
@@ -297,7 +333,28 @@ function MeetingRoom({
             timeZone: tz,
           },
         });
-        addMeetingTurns((result.replies ?? []).map((r) => ({ agentId: r.agentId as AgentId, text: r.text })));
+        for (const r of result.replies ?? []) {
+          if (!ceremonyAliveRef.current) return;
+          const agentId = r.agentId as AgentId;
+          addMeetingTurns([{ agentId, text: r.text }]);
+          // Speak it aloud (the stand-up should be heard, not just read). Uses each agent's
+          // ElevenLabs voice — falls back to ELEVENLABS_DEFAULT_VOICE_ID until real ids are set.
+          if (!voiceOff) {
+            setSpeakingId(agentId);
+            try {
+              await speakCeremonyTurn(agentId, r.text);
+            } catch (e) {
+              voiceOff = true;
+              toast.error(
+                e instanceof Error && /voice/i.test(e.message)
+                  ? "No ElevenLabs voice configured — set ELEVENLABS_DEFAULT_VOICE_ID. Continuing in text."
+                  : "Voice playback failed — continuing in text.",
+              );
+            } finally {
+              setSpeakingId(null);
+            }
+          }
+        }
       }
       patchMeeting({ ceremonyStatus: "done" });
     } catch (err) {
@@ -550,22 +607,36 @@ function ParticipantTile({
   return (
     <button
       onClick={onClick}
+      title={`${agent.name} · ${agent.role}`}
       className={cn(
-        "flex w-24 shrink-0 flex-col items-center gap-1 rounded-xl border border-hairline bg-card p-2 transition",
-        active ? "ring-2 ring-primary" : "hover:bg-surface-2",
-        speaking && "ring-2 ring-primary",
+        "flex w-32 shrink-0 items-center gap-2 rounded-xl border border-hairline bg-card p-2 text-left transition",
+        active || speaking ? "ring-2 ring-primary" : "hover:bg-surface-2",
       )}
     >
-      <AgentAvatar agent={agent} size="md" clickable={false} />
-      <div className="flex items-center gap-1">
-        <span className="max-w-[64px] truncate text-[11px] font-medium">{firstName(agent)}</span>
-        {host && (
-          <Badge variant="secondary" className="px-1 py-0 text-[8px] uppercase tracking-wide">
-            host
-          </Badge>
-        )}
+      <div className="relative shrink-0">
+        <AgentAvatar agent={agent} size="md" clickable={false} />
+        <span
+          className={cn(
+            "absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full bg-card",
+            muted ? "text-muted-foreground" : speaking ? "text-primary" : "text-foreground/70",
+          )}
+        >
+          {muted ? <MicOff size={9} /> : <Mic size={9} />}
+        </span>
       </div>
-      <span className="text-muted-foreground">{muted ? <MicOff size={12} /> : <Mic size={12} />}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1">
+          <span className="truncate text-[12px] font-semibold leading-tight">{agent.name}</span>
+          {host && (
+            <Badge variant="secondary" className="shrink-0 px-1 py-0 text-[8px] uppercase tracking-wide">
+              host
+            </Badge>
+          )}
+        </div>
+        <div className="truncate text-[10px] leading-tight text-muted-foreground">
+          {speaking ? <span className="font-mono text-primary">speaking…</span> : agent.role}
+        </div>
+      </div>
     </button>
   );
 }
@@ -578,14 +649,24 @@ function YouTile({ muted, name }: { muted?: boolean; name: string }) {
     .slice(0, 2)
     .toUpperCase();
   return (
-    <div className="flex w-24 shrink-0 flex-col items-center gap-1 rounded-xl border border-hairline bg-card p-2">
-      <span className="flex size-9 items-center justify-center rounded-full bg-primary/20 text-xs font-semibold text-primary">
-        {initials || "You"}
-      </span>
-      <span className="text-[11px] font-medium">You</span>
-      <span className={cn(muted ? "text-destructive" : "text-muted-foreground")}>
-        {muted ? <MicOff size={12} /> : <Mic size={12} />}
-      </span>
+    <div className="flex w-32 shrink-0 items-center gap-2 rounded-xl border border-hairline bg-card p-2">
+      <div className="relative shrink-0">
+        <span className="flex size-9 items-center justify-center rounded-full bg-primary/20 text-xs font-semibold text-primary">
+          {initials || "You"}
+        </span>
+        <span
+          className={cn(
+            "absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full bg-card",
+            muted ? "text-destructive" : "text-foreground/70",
+          )}
+        >
+          {muted ? <MicOff size={9} /> : <Mic size={9} />}
+        </span>
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[12px] font-semibold leading-tight">You</div>
+        <div className="truncate text-[10px] leading-tight text-muted-foreground">{muted ? "muted" : "in the room"}</div>
+      </div>
     </div>
   );
 }
