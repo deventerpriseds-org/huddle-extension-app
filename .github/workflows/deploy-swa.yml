@@ -64,8 +64,12 @@ jobs:
           # The npm registry occasionally refuses connections mid-install on the runner
           # (ConnectionRefused / FailedToOpenSocket on random tarballs). Retry with backoff so a
           # transient blip doesn't fail the whole deploy.
+          # Cap concurrency: bun defaults to 48 simultaneous registry connections, and the npm CDN
+          # intermittently refuses that burst from a runner IP (ConnectionRefused / FailedToOpenSocket
+          # across many tarballs at once — a known bun-install flake, oven-sh/bun#4988/#12737). Far
+          # fewer parallel sockets sidesteps the refusal. Retry loop stays as a backstop.
           for attempt in 1 2 3 4 5; do
-            if bun install --registry https://registry.npmjs.org; then
+            if bun install --registry https://registry.npmjs.org --network-concurrency 6; then
               echo "bun install succeeded on attempt $attempt"; exit 0
             fi
             echo "bun install failed (attempt $attempt) — retrying after ${attempt}0s"
