@@ -240,6 +240,35 @@ export async function setCapabilityPrompt(userEmail: string, prompt: string): Pr
   );
 }
 
+/** A mirror row shaped for the Kanban board (all tasks, including done). */
+export interface BoardTaskRow {
+  id: string;
+  title: string;
+  status: string | null;
+  priority: string | null;
+  category: string | null;
+  is_priority: boolean | null;
+  priority_rank: number | null;
+  due_date: string | null;
+  completed_at: string | null;
+  assigned_agent: string | null;
+  tags: string[] | null;
+}
+
+/** All of a user's mirrored tasks for the board (newest-updated first, capped). */
+export async function getBoardTasks(userEmail: string): Promise<BoardTaskRow[]> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<BoardTaskRow>(
+    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags
+       FROM tasks.journey_tasks
+      WHERE lower(user_email) = $1
+      ORDER BY updated_at DESC
+      LIMIT 500`,
+    [userEmail.toLowerCase()],
+  );
+  return rows;
+}
+
 export interface CeremonyRunRecord {
   id: string;
   user_email: string;
