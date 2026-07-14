@@ -144,7 +144,7 @@ export async function upsertJourneyTask(row: JourneyTaskPayload, userEmail?: str
        (id,user_id,user_email,title,description,status,priority,category,is_priority,priority_rank,
         due_date,start_time,end_time,is_scheduled,pushed_count,board_id,completed_at,assigned_agent,tags,created_at,updated_at,synced_at)
      VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'MEDIUM'),$8,COALESCE($9,false),$10,
-             $11,$12,$13,COALESCE($14,false),COALESCE($15,0),$16,$17,$18,COALESCE($19,'{}'),COALESCE($20,now()),COALESCE($21,now()),now())
+             $11,$12,$13,COALESCE($14,false),COALESCE($15,0),$16,$17,$18,COALESCE($19::text[],'{}'::text[]),COALESCE($20,now()),COALESCE($21,now()),now())
      ON CONFLICT (id) DO UPDATE SET
        user_id=EXCLUDED.user_id, user_email=EXCLUDED.user_email, title=EXCLUDED.title,
        description=EXCLUDED.description, status=EXCLUDED.status, priority=EXCLUDED.priority,

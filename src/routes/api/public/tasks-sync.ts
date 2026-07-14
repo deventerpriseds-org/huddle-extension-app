@@ -61,8 +61,9 @@ export const Route = createFileRoute("/api/public/tasks-sync")({
             );
           }
         } catch (err) {
-          console.error("[tasks-sync] mirror failed", err instanceof Error ? err.message : err);
-          return json({ ok: false, error: "mirror_failed" }, 500);
+          const detail = err instanceof Error ? err.message : String(err);
+          console.error("[tasks-sync] mirror failed", detail);
+          return json({ ok: false, error: "mirror_failed", detail: detail.slice(0, 300) }, 500);
         }
 
         return json({ ok: true, operation: op, id });

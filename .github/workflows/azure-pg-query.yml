@@ -1,0 +1,30 @@
+name: Azure PG Query
+
+# Ad-hoc / cross-project query tool against Huddle's Azure Postgres mirror (tasks.journey_tasks etc.).
+# The Azure connection string lives only as a GitHub secret (AZURE_PG_URL); this workflow is the
+# supported way to run a query against it and read the result from the run logs. Dispatch-only.
+on:
+  workflow_dispatch:
+    inputs:
+      sql:
+        description: "SQL to run against the Azure PG mirror"
+        required: true
+
+jobs:
+  query:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install psql client
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
+      - name: Run query
+        env:
+          AZURE_PG_URL: ${{ secrets.AZURE_PG_URL }}
+          # Self-signed cert on the Azure PG endpoint (Huddle connects with rejectUnauthorized:false).
+          PGSSLMODE: require
+          SQL: ${{ github.event.inputs.sql }}
+        run: |
+          if [ -z "$AZURE_PG_URL" ]; then echo "AZURE_PG_URL secret not set"; exit 1; fi
+          echo "----- QUERY OUTPUT -----"
+          psql "$AZURE_PG_URL" -v ON_ERROR_STOP=1 --pset pager=off -c "$SQL"
+          echo "----- END QUERY OUTPUT -----"
