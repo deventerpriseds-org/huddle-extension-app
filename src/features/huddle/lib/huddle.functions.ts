@@ -137,6 +137,23 @@ function isEchoOfPrior(text: string, priorReplies: { text: string }[]): boolean 
   return priorReplies.some((r) => replyJaccard(text, r.text) >= 0.72);
 }
 
+// Cross-cutting tool resilience: EVERY agent tool call is bounded by a timeout and its errors are
+// turned into a normal tool RESULT (never a throw). A hung or failing tool must not sink the turn —
+// the model always gets something back and can still reply ("I hit a problem with X"). Applies to
+// all tools and all agents, not any single one.
+const TOOL_TIMEOUT_MS = 30_000;
+async function runToolSafely(name: string, fn: () => Promise<unknown>): Promise<string> {
+  try {
+    const out = await Promise.race([
+      Promise.resolve().then(fn),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${name} timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS)),
+    ]);
+    return typeof out === "string" ? out : JSON.stringify(out ?? {});
+  } catch (e) {
+    return JSON.stringify({ error: "tool_failed", tool: name, message: e instanceof Error ? e.message : String(e) });
+  }
+}
+
 // The core huddle turn — shared by the client-facing server function and by
 // server-to-server callers (e.g. the scheduled-ceremony route). Kept as a plain
 // exported async function so a route can invoke a ceremony without an RPC hop.
@@ -1274,7 +1291,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             transcript: transcript,
             fastMode: routerCfg.fastMode,
             tools: mergedTools.length > 0 ? mergedTools : undefined,
-            onToolCall: combinedOnToolCall,
+            onToolCall: (c) => runToolSafely(c.name, () => combinedOnToolCall(c)),
             toolChoice,
             maxToolHops: 5,
           });
@@ -1658,6 +1675,17 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
               webInstructions +
               "\n\n" + PRIORITIZE_SYSTEM_HINT +
               groundingBlock(!!agentBackend.webSearch);
+          }
+
+          // Same cross-cutting safety as the OpenAI path: bound + catch every Lovable tool's
+          // execute so a failing/hanging tool returns a result instead of sinking the turn.
+          for (const [name, t] of Object.entries(lovableTools)) {
+            const tt = t as { execute?: (args: unknown, opts: unknown) => unknown };
+            const orig = tt.execute;
+            if (typeof orig === "function") {
+              tt.execute = (args: unknown, opts: unknown) =>
+                runToolSafely(name, () => Promise.resolve(orig(args, opts)));
+            }
           }
 
           const toolNames = Object.keys(lovableTools);

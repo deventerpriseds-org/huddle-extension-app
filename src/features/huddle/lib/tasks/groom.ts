@@ -44,6 +44,17 @@ interface Assignment {
 
 const AGENT_IDS = new Set(AGENTS.map((a) => a.id));
 
+// Grooming runs inside a chat turn, so it MUST return promptly — a hung tool produces no agent
+// reply at all (the model never gets a result). Bound every network call and the whole write phase.
+const WRITE_DEADLINE_MS = 18000; // hard cap on the single batch write so the turn never hangs
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${label} timed out`)), ms)),
+  ]);
+}
+
 function rosterForPrompt(): string {
   return AGENTS.map((a) => `- ${a.id} (${a.name}, ${a.role}): ${a.domains.slice(0, 6).join(", ")}`).join("\n");
 }
@@ -66,7 +77,7 @@ export async function dispatchGroomBacklog(
   if (!apiKey) return JSON.stringify({ error: "not_configured", message: "OPENAI_API_KEY is not set." });
 
   const category = typeof args.category === "string" && args.category.trim() ? args.category.trim() : undefined;
-  const limit = typeof args.limit === "number" && args.limit > 0 ? Math.min(args.limit, 60) : 40;
+  const limit = typeof args.limit === "number" && args.limit > 0 ? Math.min(args.limit, 40) : 25;
 
   try {
     const { getTasksForUser, getCapabilityPrompt } = await import("./tasks.server");
@@ -96,7 +107,8 @@ ${rosterForPrompt()}
 
 Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"action":"do|schedule|blocked","priority","rank":<int|null>,"reason":"<=12 words"}]}. assigned_agent MUST be one of the agent ids above. Include every task id exactly once.`;
 
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    const res = await withTimeout(
+      fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
@@ -108,7 +120,10 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"action":"d
           { role: "user", content: `Tasks:\n${taskLines}` },
         ],
       }),
-    });
+      }),
+      15000,
+      "grooming classification",
+    );
     if (!res.ok) {
       return JSON.stringify({ error: "groom_llm_failed", message: `${res.status}: ${(await res.text()).slice(0, 160)}` });
     }
@@ -122,18 +137,21 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"action":"d
     }
     const assignments = (parsed.assignments ?? []).filter((a) => a && a.id && AGENT_IDS.has(a.assigned_agent as AgentId));
 
-    // Write each assignment back to journey, and set the priority-lane rank for do-able tasks.
-    const { invokeJourneyTool } = await import("../journey/proxy.functions");
+    // Rank the do-able tasks (1 = do first) so we can set the priority lane.
     const doable = assignments
       .filter((a) => a.action === "do" && typeof a.rank === "number")
       .sort((x, y) => (x.rank as number) - (y.rank as number));
     const rankById = new Map<string, number>();
     doable.forEach((a, i) => rankById.set(a.id, i + 1));
 
-    let written = 0;
     const blocked: { title: string; reason: string }[] = [];
     for (const a of assignments) {
-      const task = slice.find((t) => t.id === a.id);
+      if (a.action !== "do") blocked.push({ title: slice.find((t) => t.id === a.id)?.title ?? a.id, reason: a.reason });
+    }
+
+    // Compute everything Huddle-side, then push ALL updates to journey in ONE batch call
+    // (not N per-task round-trips). Bounded by a timeout so the turn never hangs.
+    const updates = assignments.map((a) => {
       const tags = Array.from(
         new Set([
           ...(Array.isArray(a.tags) ? a.tags.map((t) => String(t).toLowerCase()) : []),
@@ -141,38 +159,44 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"action":"d
           ...(a.action === "blocked" ? ["blocked-on-capability"] : []),
         ]),
       ).slice(0, 5);
-      try {
-        await invokeJourneyTool({
-          toolName: "update_task",
-          args: {
-            task_id: a.id,
-            assigned_agent: a.assigned_agent,
-            tags,
-            priority: a.priority,
-          },
+      const rank = rankById.get(a.id);
+      return { task_id: a.id, assigned_agent: a.assigned_agent, tags, priority: a.priority, ...(rank ? { rank } : {}) };
+    });
+
+    let written = 0;
+    try {
+      const { invokeJourneyTool } = await import("../journey/proxy.functions");
+      const r = await withTimeout(
+        invokeJourneyTool({
+          toolName: "batch_update_tasks",
+          args: { updates },
           caller: caller ?? {},
           context: { source: "huddle" },
-        });
-        const rank = rankById.get(a.id);
-        if (rank) {
-          await invokeJourneyTool({
-            toolName: "set_priority_rank",
-            args: { task_id: a.id, rank },
-            caller: caller ?? {},
-            context: { source: "huddle" },
-          });
+        }),
+        WRITE_DEADLINE_MS,
+        "batch_update_tasks",
+      );
+      if (r.ok) {
+        try {
+          const p = JSON.parse(r.output || "{}") as { updated?: number };
+          written = typeof p.updated === "number" ? p.updated : updates.length;
+        } catch {
+          written = updates.length;
         }
-        written++;
-      } catch {
-        /* keep grooming the rest even if one write fails */
       }
-      if (a.action !== "do") blocked.push({ title: task?.title ?? a.id, reason: a.reason });
+    } catch {
+      /* batch call failed/timed out — report the plan anyway so Terry can respond */
     }
 
     return JSON.stringify({
       groomed: written,
       total: assignments.length,
-      note: "Assignments + priority written back to the task board; the Huddle board reflects them within a few seconds (async sync).",
+      note:
+        written === 0
+          ? "Planned the assignments, but the write to the task board didn't confirm — try again in a moment."
+          : written < assignments.length
+            ? `Wrote ${written} of ${assignments.length}; board reflects changes within a few seconds (async sync).`
+            : "Assignments + priority written back to the task board; the Huddle board reflects them within a few seconds (async sync).",
       order: doable.map((a, i) => {
         const t = slice.find((s) => s.id === a.id);
         const agent = AGENTS.find((ag) => ag.id === a.assigned_agent);
