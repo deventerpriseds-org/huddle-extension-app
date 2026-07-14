@@ -58,6 +58,7 @@ export function BoardView() {
     [user],
   );
   const [tasks, setTasks] = useState<BoardTaskRow[]>([]);
+  const [debug, setDebug] = useState<{ login?: string; resolved?: string } | undefined>();
   const [loading, setLoading] = useState(true);
   const [groupBy, setGroupBy] = useState<GroupBy>("assignee");
   const [assigneeFilter, setAssigneeFilter] = useState<Set<string>>(new Set());
@@ -70,8 +71,9 @@ export function BoardView() {
       return;
     }
     try {
-      const { tasks: t } = await getBoardTasks({ data: { caller } });
-      setTasks(t);
+      const res = await getBoardTasks({ data: { caller } });
+      setTasks(res.tasks);
+      setDebug(res.debug);
     } catch {
       /* keep prior */
     }
@@ -262,8 +264,13 @@ export function BoardView() {
           {loading ? (
             <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">Loading the backlog…</div>
           ) : !filtered.length ? (
-            <div className="flex h-40 items-center justify-center text-center text-sm text-muted-foreground">
-              No tasks yet. Ask Terry to “groom the backlog”, or add tasks in journey.
+            <div className="flex h-40 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
+              <div>No tasks yet. Ask Terry to “groom the backlog”, or add tasks in journey.</div>
+              {debug && (
+                <div className="rounded bg-muted px-2 py-1 font-mono text-[10px] text-muted-foreground">
+                  signed in: {debug.login} · reading tasks for: {debug.resolved}
+                </div>
+              )}
             </div>
           ) : (
             <div className="min-w-max space-y-3">

@@ -11,16 +11,17 @@ const Caller = z.object({ entra_object_id: z.string().optional(), entra_email: z
 
 export const getBoardTasks = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => z.object({ caller: Caller }).parse(raw))
-  .handler(async ({ data }): Promise<{ tasks: BoardTaskRow[] }> => {
-    if (!data.caller?.entra_email) return { tasks: [] };
+  .handler(async ({ data }): Promise<{ tasks: BoardTaskRow[]; debug?: { login?: string; resolved?: string } }> => {
+    const login = data.caller?.entra_email;
+    if (!login) return { tasks: [], debug: { login: "(none)", resolved: "(none)" } };
     try {
       const { resolveTaskEmail } = await import("../journey/identity");
       const email = await resolveTaskEmail(data.caller);
-      if (!email) return { tasks: [] };
       const { getBoardTasks: read } = await import("./tasks.server");
-      return { tasks: await read(email) };
-    } catch {
-      return { tasks: [] };
+      const tasks = email ? await read(email) : [];
+      return { tasks, debug: { login, resolved: email ?? "(unresolved)" } };
+    } catch (err) {
+      return { tasks: [], debug: { login, resolved: `error: ${err instanceof Error ? err.message : String(err)}` } };
     }
   });
 
