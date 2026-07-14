@@ -255,6 +255,17 @@ export interface BoardTaskRow {
   tags: string[] | null;
 }
 
+/** Diagnostics: how many rows the mirror holds and under which emails (top 12). */
+export async function getMirrorStats(): Promise<{ total: number; byEmail: { email: string | null; n: number }[] }> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ email: string | null; n: number }>(
+    `SELECT lower(user_email) AS email, count(*)::int AS n
+       FROM tasks.journey_tasks GROUP BY 1 ORDER BY n DESC LIMIT 12`,
+  );
+  const total = rows.reduce((s, r) => s + Number(r.n), 0);
+  return { total, byEmail: rows };
+}
+
 /** All of a user's mirrored tasks for the board (newest-updated first, capped). */
 export async function getBoardTasks(userEmail: string): Promise<BoardTaskRow[]> {
   await ensureBootstrapped();

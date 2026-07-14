@@ -11,15 +11,20 @@ const Caller = z.object({ entra_object_id: z.string().optional(), entra_email: z
 
 export const getBoardTasks = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => z.object({ caller: Caller }).parse(raw))
-  .handler(async ({ data }): Promise<{ tasks: BoardTaskRow[]; debug?: { login?: string; resolved?: string } }> => {
+  .handler(async ({ data }): Promise<{ tasks: BoardTaskRow[]; debug?: { login?: string; resolved?: string; mirror?: string } }> => {
     const login = data.caller?.entra_email;
     if (!login) return { tasks: [], debug: { login: "(none)", resolved: "(none)" } };
     try {
       const { resolveTaskEmail } = await import("../journey/identity");
       const email = await resolveTaskEmail(data.caller);
-      const { getBoardTasks: read } = await import("./tasks.server");
+      const { getBoardTasks: read, getMirrorStats } = await import("./tasks.server");
       const tasks = email ? await read(email) : [];
-      return { tasks, debug: { login, resolved: email ?? "(unresolved)" } };
+      let mirror = "";
+      if (!tasks.length) {
+        const s = await getMirrorStats();
+        mirror = `mirror total=${s.total}; ${s.byEmail.map((r) => `${r.email ?? "(null)"}:${r.n}`).join(", ") || "empty"}`;
+      }
+      return { tasks, debug: { login, resolved: email ?? "(unresolved)", mirror } };
     } catch (err) {
       return { tasks: [], debug: { login, resolved: `error: ${err instanceof Error ? err.message : String(err)}` } };
     }

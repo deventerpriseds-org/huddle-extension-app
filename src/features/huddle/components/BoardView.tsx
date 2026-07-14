@@ -58,7 +58,7 @@ export function BoardView() {
     [user],
   );
   const [tasks, setTasks] = useState<BoardTaskRow[]>([]);
-  const [debug, setDebug] = useState<{ login?: string; resolved?: string } | undefined>();
+  const [debug, setDebug] = useState<{ login?: string; resolved?: string; mirror?: string } | undefined>();
   const [loading, setLoading] = useState(true);
   const [groupBy, setGroupBy] = useState<GroupBy>("assignee");
   const [assigneeFilter, setAssigneeFilter] = useState<Set<string>>(new Set());
@@ -268,7 +268,8 @@ export function BoardView() {
               <div>No tasks yet. Ask Terry to “groom the backlog”, or add tasks in journey.</div>
               {debug && (
                 <div className="rounded bg-muted px-2 py-1 font-mono text-[10px] text-muted-foreground">
-                  signed in: {debug.login} · reading tasks for: {debug.resolved}
+                  <div>signed in: {debug.login} · reading tasks for: {debug.resolved}</div>
+                  {debug.mirror && <div className="mt-0.5 max-w-[80vw] break-words">{debug.mirror}</div>}
                 </div>
               )}
             </div>
