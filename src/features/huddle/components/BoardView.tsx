@@ -285,8 +285,9 @@ export function BoardView() {
           </div>
         )}
 
-        {/* Board grid */}
-        <div className="flex-1 overflow-auto p-3 sm:p-4">
+        {/* Board grid — min-h-0 is required so this flex child becomes the scroll container
+            instead of growing to fit all cards (which broke scrolling entirely). */}
+        <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3 sm:p-4">
           {loading ? (
             <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">Loading the backlog…</div>
           ) : !filtered.length ? (
