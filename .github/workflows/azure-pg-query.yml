@@ -1,8 +1,10 @@
 name: Azure PG Query
 
 # Ad-hoc / cross-project query tool against Huddle's Azure Postgres mirror (tasks.journey_tasks etc.).
-# The Azure connection string lives only as a GitHub secret (AZURE_PG_URL); this workflow is the
-# supported way to run a query against it and read the result from the run logs. Dispatch-only.
+# AZURE_PG_URL isn't a plain secret — the deploy workflow assembles it via `az` discovery and only
+# opens the DB firewall to Azure services. A GitHub runner is external, so this workflow logs into
+# Azure, assembles the same URL, temporarily allows the runner's own IP through the firewall, runs
+# the query, then removes the rule. Dispatch-only. Output is in the run log.
 on:
   workflow_dispatch:
     inputs:
@@ -14,17 +16,92 @@ jobs:
   query:
     runs-on: ubuntu-latest
     steps:
-      - name: Install psql client
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
+             "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}",
+             "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+             "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
 
-      - name: Run query
+      - name: Resolve connection string (mirrors deploy-swa)
         env:
-          AZURE_PG_URL: ${{ secrets.AZURE_PG_URL }}
-          # Self-signed cert on the Azure PG endpoint (Huddle connects with rejectUnauthorized:false).
-          PGSSLMODE: require
+          FULL_URL: ${{ secrets.AZURE_PG_URL }}
+          PG_PW_1: ${{ secrets.AZURE_ADMIN_PW }}
+          PG_PW_2: ${{ secrets.AZURE_PG_PASSWORD }}
+          PG_PW_3: ${{ secrets.AZURE_POSTGRES_PASSWORD }}
+          PG_PW_4: ${{ secrets.AZURE_PG_ADMIN_PASSWORD }}
+          PG_PW_5: ${{ secrets.PG_ADMIN_PASSWORD }}
+          PG_PW_6: ${{ secrets.POSTGRES_PASSWORD }}
+          PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER }}
+          PG_DB_OVERRIDE: ${{ secrets.AZURE_PG_DB }}
+        run: |
+          set -euo pipefail
+          if [ -n "${FULL_URL}" ]; then
+            echo "::add-mask::${FULL_URL}"
+            echo "AZURE_PG_URL_RESOLVED=${FULL_URL}" >> "$GITHUB_ENV"
+            # Parse host/rg for the firewall step even when the full URL is provided.
+            HOST=$(python3 -c 'import sys,urllib.parse as u;print(u.urlparse(sys.argv[1]).hostname or "")' "$FULL_URL")
+            SRV=$(echo "$HOST" | cut -d. -f1)
+            RG=$(az postgres flexible-server list -o json | python3 -c 'import sys,json;xs=json.load(sys.stdin);s=sys.argv[1];print(next((x["resourceGroup"] for x in xs if x.get("name")==s), ""))' "$SRV")
+            echo "PG_RG=$RG" >> "$GITHUB_ENV"; echo "PG_SRV=$SRV" >> "$GITHUB_ENV"
+            echo "Using AZURE_PG_URL secret as-is (server=$SRV rg=$RG)."
+            exit 0
+          fi
+          echo "AZURE_PG_URL empty — assembling from parts via az discovery."
+          SERVERS=$(az postgres flexible-server list -o json)
+          read -r SRV RG HOST ADMIN < <(python3 - "$SERVERS" "${PG_SERVER_OVERRIDE:-}" <<'PY'
+          import sys, json
+          servers = json.loads(sys.argv[1] or "[]")
+          override = sys.argv[2]
+          if not servers:
+              sys.stderr.write("No Azure PostgreSQL flexible server found.\n"); sys.exit(3)
+          s = next((x for x in servers if x.get("name") == override), servers[0]) if override else servers[0]
+          print(s["name"], s["resourceGroup"], s["fullyQualifiedDomainName"], s.get("administratorLogin", "pgadmin"))
+          PY
+          )
+          if [ -n "${PG_DB_OVERRIDE:-}" ]; then DB="$PG_DB_OVERRIDE"; else
+            DBS=$(az postgres flexible-server db list -g "$RG" -s "$SRV" -o json 2>/dev/null || echo '[]')
+            DB=$(python3 -c 'import sys,json; sysdb={"azure_maintenance","azure_sys"}; xs=[d["name"] for d in json.loads(sys.argv[1]) if d.get("name") not in sysdb and d.get("name")!="postgres"]; print(xs[0] if xs else "postgres")' "$DBS")
+          fi
+          PW=""
+          for c in "$PG_PW_1" "$PG_PW_2" "$PG_PW_3" "$PG_PW_4" "$PG_PW_5" "$PG_PW_6"; do
+            if [ -n "$c" ]; then PW="$c"; break; fi
+          done
+          if [ -z "$PW" ]; then echo "::error::No Postgres admin-password secret set."; exit 1; fi
+          echo "::add-mask::$PW"
+          EADMIN=$(python3 -c 'import sys,urllib.parse as u; print(u.quote(sys.argv[1], safe=""))' "$ADMIN")
+          EPW=$(python3 -c 'import sys,urllib.parse as u; print(u.quote(sys.argv[1], safe=""))' "$PW")
+          URL="postgresql://${EADMIN}:${EPW}@${HOST}:5432/${DB}?sslmode=require"
+          echo "::add-mask::$URL"
+          echo "AZURE_PG_URL_RESOLVED=${URL}" >> "$GITHUB_ENV"
+          echo "PG_RG=$RG" >> "$GITHUB_ENV"; echo "PG_SRV=$SRV" >> "$GITHUB_ENV"
+          echo "Assembled AZURE_PG_URL for $SRV/$DB (rg=$RG)."
+
+      - name: Allow this runner through the DB firewall
+        run: |
+          set -euo pipefail
+          IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+          echo "Runner IP: $IP"
+          RULE="ghquery-${IP//./-}"
+          echo "FW_RULE=$RULE" >> "$GITHUB_ENV"
+          az postgres flexible-server firewall-rule create -g "$PG_RG" -n "$PG_SRV" \
+            --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null
+          echo "Opened firewall for $IP (rule $RULE); waiting for it to take effect."
+          sleep 8
+
+      - name: Install psql + run query
+        env:
           SQL: ${{ github.event.inputs.sql }}
         run: |
-          if [ -z "$AZURE_PG_URL" ]; then echo "AZURE_PG_URL secret not set"; exit 1; fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
           echo "----- QUERY OUTPUT -----"
-          psql "$AZURE_PG_URL" -v ON_ERROR_STOP=1 --pset pager=off -c "$SQL"
+          psql "$AZURE_PG_URL_RESOLVED" -v ON_ERROR_STOP=1 --pset pager=off -c "$SQL"
           echo "----- END QUERY OUTPUT -----"
+
+      - name: Remove the runner firewall rule
+        if: always() && env.FW_RULE != ''
+        run: |
+          az postgres flexible-server firewall-rule delete -g "$PG_RG" -n "$PG_SRV" \
+            --rule-name "$FW_RULE" --yes --only-show-errors >/dev/null 2>&1 && echo "Removed $FW_RULE." || echo "Cleanup skipped."
