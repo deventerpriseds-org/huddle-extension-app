@@ -56,10 +56,12 @@ export async function dispatchGroomBacklog(
   caller: Caller | undefined,
   args: Record<string, unknown>,
 ): Promise<string> {
-  const email = caller?.entra_email;
-  if (!email) {
+  if (!caller?.entra_email) {
     return JSON.stringify({ error: "no_caller_identity", message: "Grooming needs the signed-in user's email." });
   }
+  // Resolve the sign-in email (possibly an alias) to the canonical journey email the mirror uses.
+  const { resolveTaskEmail } = await import("../journey/identity");
+  const email = (await resolveTaskEmail(caller)) ?? caller.entra_email;
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return JSON.stringify({ error: "not_configured", message: "OPENAI_API_KEY is not set." });
 

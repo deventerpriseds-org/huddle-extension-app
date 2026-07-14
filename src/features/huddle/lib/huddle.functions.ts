@@ -445,7 +445,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
     let ceremonyActive = false;
     const ceremonyType = detectCeremony(data.text);
     if (ceremonyType) {
-      const email = data.caller?.entra_email;
+      // Resolve the sign-in email (possibly an alias) to the canonical journey email the mirror
+      // is keyed on — otherwise an aliased login grounds the ceremony in an empty task set.
+      const { resolveTaskEmail } = await import("./journey/identity");
+      const email = (await resolveTaskEmail(data.caller)) ?? data.caller?.entra_email;
       if (!email) {
         const host = data.members.includes(CEREMONY_HOST) ? CEREMONY_HOST : routed.winners[0];
         return {
@@ -1039,7 +1042,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             }
             if (c.name === "prioritize") {
               const { dispatchPrioritize } = await import("./tasks/tools");
-              return dispatchPrioritize(data.caller?.entra_email, c.arguments);
+              return dispatchPrioritize(
+                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email,
+                c.arguments,
+              );
             }
             if (c.name === "groom_backlog") {
               const { dispatchGroomBacklog } = await import("./tasks/groom");
@@ -1358,7 +1365,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
                 limit: z.number().optional(),
               }),
               execute: async (args) =>
-                dispatchPrioritize(data.caller?.entra_email, args as Record<string, unknown>),
+                dispatchPrioritize(
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                    data.caller?.entra_email,
+                  args as Record<string, unknown>,
+                ),
             });
           }
 

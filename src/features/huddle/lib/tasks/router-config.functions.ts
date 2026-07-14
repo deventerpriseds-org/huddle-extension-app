@@ -12,9 +12,10 @@ export const loadCapabilityPrompt = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => z.object({ caller: Caller }).parse(raw))
   .handler(async ({ data }): Promise<{ prompt: string; stored: boolean }> => {
     const { getCapabilityPrompt, DEFAULT_CAPABILITY_PROMPT } = await import("./tasks.server");
-    const email = data.caller?.entra_email;
-    if (!email) return { prompt: DEFAULT_CAPABILITY_PROMPT, stored: false };
+    if (!data.caller?.entra_email) return { prompt: DEFAULT_CAPABILITY_PROMPT, stored: false };
     try {
+      const { resolveTaskEmail } = await import("../journey/identity");
+      const email = (await resolveTaskEmail(data.caller)) ?? data.caller.entra_email;
       const prompt = await getCapabilityPrompt(email);
       return { prompt, stored: true };
     } catch {
@@ -27,9 +28,10 @@ export const saveCapabilityPrompt = createServerFn({ method: "POST" })
     z.object({ caller: Caller, prompt: z.string().max(8000) }).parse(raw),
   )
   .handler(async ({ data }): Promise<{ ok: boolean; error: string }> => {
-    const email = data.caller?.entra_email;
-    if (!email) return { ok: false, error: "Sign-in required to save." };
+    if (!data.caller?.entra_email) return { ok: false, error: "Sign-in required to save." };
     try {
+      const { resolveTaskEmail } = await import("../journey/identity");
+      const email = (await resolveTaskEmail(data.caller)) ?? data.caller.entra_email;
       const { setCapabilityPrompt } = await import("./tasks.server");
       await setCapabilityPrompt(email, data.prompt);
       return { ok: true, error: "" };

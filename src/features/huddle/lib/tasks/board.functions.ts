@@ -12,9 +12,11 @@ const Caller = z.object({ entra_object_id: z.string().optional(), entra_email: z
 export const getBoardTasks = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => z.object({ caller: Caller }).parse(raw))
   .handler(async ({ data }): Promise<{ tasks: BoardTaskRow[] }> => {
-    const email = data.caller?.entra_email;
-    if (!email) return { tasks: [] };
+    if (!data.caller?.entra_email) return { tasks: [] };
     try {
+      const { resolveTaskEmail } = await import("../journey/identity");
+      const email = await resolveTaskEmail(data.caller);
+      if (!email) return { tasks: [] };
       const { getBoardTasks: read } = await import("./tasks.server");
       return { tasks: await read(email) };
     } catch {
