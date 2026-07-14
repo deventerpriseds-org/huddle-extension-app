@@ -848,11 +848,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             : appSystem;
           const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
           const { PRIORITIZE_SYSTEM_HINT } = await import("./tasks/tools");
+          const isScrumMaster = winner.id === "terry-locke" || winner.special === "standup-host";
+          const groomHint = isScrumMaster ? "\n\n" + (await import("./tasks/groom")).GROOM_SYSTEM_HINT : "";
           const instructions =
             baseInstructions +
             ragInstructions +
             webInstructions +
             "\n\n" + PRIORITIZE_SYSTEM_HINT +
+            groomHint +
             groundingBlock(!!agentBackend.webSearch);
           usedInstructions = instructions;
 
@@ -999,9 +1002,12 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           }
 
           const { PRIORITIZE_TOOL } = await import("./tasks/tools");
+          // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
+          const groomTools = isScrumMaster ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
           const mergedTools = [
             createHuddleTaskTool,
             PRIORITIZE_TOOL,
+            ...groomTools,
             ...emailTools,
             ...snapshotTools,
             ...ragTools,
@@ -1034,6 +1040,12 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             if (c.name === "prioritize") {
               const { dispatchPrioritize } = await import("./tasks/tools");
               return dispatchPrioritize(data.caller?.entra_email, c.arguments);
+            }
+            if (c.name === "groom_backlog") {
+              const { dispatchGroomBacklog } = await import("./tasks/groom");
+              const out = await dispatchGroomBacklog(data.caller, c.arguments);
+              recordToolUse(winner.id, "groom_backlog", "groomed the backlog", true);
+              return out;
             }
             if (c.name === "send_email") {
               const a = c.arguments as Record<string, unknown>;
@@ -1347,6 +1359,17 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
               }),
               execute: async (args) =>
                 dispatchPrioritize(data.caller?.entra_email, args as Record<string, unknown>),
+            });
+          }
+
+          // groom_backlog — scrum-master-only backlog grooming (mirrors the OpenAI path).
+          if (winner.id === "terry-locke" || winner.special === "standup-host") {
+            const { dispatchGroomBacklog } = await import("./tasks/groom");
+            lovableTools.groom_backlog = tool({
+              description:
+                "Groom/triage the backlog like a scrum master: assign each task to the best-fit agent, tag, prioritize, and mark do/schedule/blocked per the team's real capabilities. Writes assignments + priority back to the task board.",
+              inputSchema: z.object({ category: z.string().optional(), limit: z.number().optional() }),
+              execute: async (args) => dispatchGroomBacklog(data.caller, args as Record<string, unknown>),
             });
           }
 

@@ -19,6 +19,8 @@ export interface ScorableTask {
   pushed_count: number | null;
   created_at: string;
   completed_at: string | null;
+  assigned_agent?: string | null;
+  tags?: string[] | null;
 }
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };

@@ -44,12 +44,18 @@ CREATE TABLE IF NOT EXISTS tasks.journey_tasks (
   pushed_count   INTEGER NOT NULL DEFAULT 0,
   board_id       TEXT,
   completed_at   TIMESTAMPTZ,
+  assigned_agent TEXT,
+  tags           TEXT[] NOT NULL DEFAULT '{}',
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   synced_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Grooming fields synced back from journey (added after the table first shipped).
+ALTER TABLE tasks.journey_tasks ADD COLUMN IF NOT EXISTS assigned_agent TEXT;
+ALTER TABLE tasks.journey_tasks ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS journey_tasks_user_email_idx ON tasks.journey_tasks (lower(user_email));
 CREATE INDEX IF NOT EXISTS journey_tasks_category_idx   ON tasks.journey_tasks (category);
+CREATE INDEX IF NOT EXISTS journey_tasks_assigned_idx   ON tasks.journey_tasks (assigned_agent);
 
 -- Persisted scrum-ceremony runs (stand-up/retro/planning/review), so an auto-run or a
 -- past run is reviewable later as a thread. transcript = the ordered agent turns.
@@ -65,7 +71,32 @@ CREATE TABLE IF NOT EXISTS tasks.ceremony_runs (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ceremony_runs_user_idx ON tasks.ceremony_runs (lower(user_email), created_at DESC);
+
+-- The scrum master's editable "capability prompt": what the app CAN and CANNOT do today, so the
+-- grooming router only assigns work agents can actually execute (e.g. no payments until Plaid).
+CREATE TABLE IF NOT EXISTS tasks.router_config (
+  user_email        TEXT PRIMARY KEY,
+  capability_prompt TEXT,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;
+
+/** Seed capability prompt — the user edits this in Settings; the grooming router obeys it. */
+export const DEFAULT_CAPABILITY_PROMPT = `Capabilities the team HAS today:
+- Create, update, re-prioritize, tag, and schedule tasks (in the journey backlog).
+- Draft emails, and send them after the user approves.
+- Search the web for information.
+- Prioritize/groom the backlog and run scrum ceremonies.
+
+Capabilities the team does NOT have yet (do not pretend otherwise):
+- Moving or spending money — there is no Plaid / bank / payment / card integration.
+- Booking or purchasing anything that costs money.
+- Sending external messages (email/Slack) without the user's approval.
+
+Rule for grooming: if a task requires a capability we do NOT have (e.g. "pay the electric bill",
+"transfer money", "buy flights"), an agent may only SCHEDULE or PREPARE it and must flag it
+blocked-on-capability — never mark it doable-now. Assign such tasks to the closest-fit agent but set
+action to "schedule".`;
 
 let bootstrapped: Promise<void> | null = null;
 async function ensureBootstrapped() {
@@ -100,6 +131,8 @@ export interface JourneyTaskPayload {
   pushed_count?: number | null;
   board_id?: string | null;
   completed_at?: string | null;
+  assigned_agent?: string | null;
+  tags?: string[] | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -109,21 +142,23 @@ export async function upsertJourneyTask(row: JourneyTaskPayload, userEmail?: str
   await getPool().query(
     `INSERT INTO tasks.journey_tasks
        (id,user_id,user_email,title,description,status,priority,category,is_priority,priority_rank,
-        due_date,start_time,end_time,is_scheduled,pushed_count,board_id,completed_at,created_at,updated_at,synced_at)
+        due_date,start_time,end_time,is_scheduled,pushed_count,board_id,completed_at,assigned_agent,tags,created_at,updated_at,synced_at)
      VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'MEDIUM'),$8,COALESCE($9,false),$10,
-             $11,$12,$13,COALESCE($14,false),COALESCE($15,0),$16,$17,COALESCE($18,now()),COALESCE($19,now()),now())
+             $11,$12,$13,COALESCE($14,false),COALESCE($15,0),$16,$17,$18,COALESCE($19,'{}'),COALESCE($20,now()),COALESCE($21,now()),now())
      ON CONFLICT (id) DO UPDATE SET
        user_id=EXCLUDED.user_id, user_email=EXCLUDED.user_email, title=EXCLUDED.title,
        description=EXCLUDED.description, status=EXCLUDED.status, priority=EXCLUDED.priority,
        category=EXCLUDED.category, is_priority=EXCLUDED.is_priority, priority_rank=EXCLUDED.priority_rank,
        due_date=EXCLUDED.due_date, start_time=EXCLUDED.start_time, end_time=EXCLUDED.end_time,
        is_scheduled=EXCLUDED.is_scheduled, pushed_count=EXCLUDED.pushed_count, board_id=EXCLUDED.board_id,
-       completed_at=EXCLUDED.completed_at, updated_at=EXCLUDED.updated_at, synced_at=now()`,
+       completed_at=EXCLUDED.completed_at, assigned_agent=EXCLUDED.assigned_agent, tags=EXCLUDED.tags,
+       updated_at=EXCLUDED.updated_at, synced_at=now()`,
     [
       row.id, row.user_id ?? null, userEmail ?? row.user_email ?? null, row.title, row.description ?? null,
       row.status ?? null, row.priority ?? null, row.category ?? null, row.is_priority ?? null, row.priority_rank ?? null,
       row.due_date ?? null, row.start_time ?? null, row.end_time ?? null, row.is_scheduled ?? null,
-      row.pushed_count ?? null, row.board_id ?? null, row.completed_at ?? null, row.created_at ?? null, row.updated_at ?? null,
+      row.pushed_count ?? null, row.board_id ?? null, row.completed_at ?? null, row.assigned_agent ?? null,
+      row.tags ?? null, row.created_at ?? null, row.updated_at ?? null,
     ],
   );
 }
@@ -146,6 +181,8 @@ export interface StandupTask {
   completed_at: string | null;
   updated_at: string | null;
   created_at: string | null;
+  assigned_agent: string | null;
+  tags: string[] | null;
 }
 
 /**
@@ -157,7 +194,7 @@ export async function getStandupTasks(userEmail: string, windowHours = 36): Prom
   await ensureBootstrapped();
   const hrs = Number.isFinite(windowHours) && windowHours > 0 ? Math.min(windowHours, 24 * 14) : 36;
   const { rows } = await getPool().query<StandupTask>(
-    `SELECT id,title,status,priority,category,is_priority,due_date,pushed_count,completed_at,updated_at,created_at
+    `SELECT id,title,status,priority,category,is_priority,due_date,pushed_count,completed_at,updated_at,created_at,assigned_agent,tags
        FROM tasks.journey_tasks
       WHERE lower(user_email) = $1
         AND (completed_at IS NULL OR completed_at >= now() - ($2 * interval '1 hour'))
@@ -171,7 +208,7 @@ export async function getStandupTasks(userEmail: string, windowHours = 36): Prom
 export async function getTasksForUser(userEmail: string, category?: string): Promise<ScorableTask[]> {
   await ensureBootstrapped();
   const params: unknown[] = [userEmail.toLowerCase()];
-  let sql = `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,pushed_count,created_at,completed_at
+  let sql = `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,pushed_count,created_at,completed_at,assigned_agent,tags
              FROM tasks.journey_tasks WHERE lower(user_email) = $1`;
   if (category) {
     params.push(category.toUpperCase());
@@ -180,6 +217,27 @@ export async function getTasksForUser(userEmail: string, category?: string): Pro
   sql += ` AND completed_at IS NULL AND (status IS NULL OR status NOT IN ('DONE','BLOCKED')) LIMIT 500`;
   const { rows } = await getPool().query<ScorableTask>(sql, params);
   return rows;
+}
+
+/** The scrum master's editable capability prompt (falls back to the seed default). */
+export async function getCapabilityPrompt(userEmail: string): Promise<string> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ capability_prompt: string | null }>(
+    `SELECT capability_prompt FROM tasks.router_config WHERE lower(user_email) = $1`,
+    [userEmail.toLowerCase()],
+  );
+  const stored = rows[0]?.capability_prompt?.trim();
+  return stored && stored.length ? stored : DEFAULT_CAPABILITY_PROMPT;
+}
+
+export async function setCapabilityPrompt(userEmail: string, prompt: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.router_config (user_email, capability_prompt, updated_at)
+     VALUES ($1,$2,now())
+     ON CONFLICT (user_email) DO UPDATE SET capability_prompt=EXCLUDED.capability_prompt, updated_at=now()`,
+    [userEmail.toLowerCase(), prompt],
+  );
 }
 
 export interface CeremonyRunRecord {

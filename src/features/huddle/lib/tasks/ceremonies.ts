@@ -9,8 +9,10 @@
 // All four ceremonies read the same mirror; they differ only in window + framing. The data
 // bucketing (done / up-next / blocked / overdue) is shared.
 
-import type { AgentId } from "../../data/agents";
+import { AGENTS, type AgentId } from "../../data/agents";
 import type { StandupTask } from "./tasks.server";
+
+const AGENT_IDS = new Set<string>(AGENTS.map((a) => a.id));
 
 export type CeremonyType = "standup" | "retro" | "planning" | "review";
 
@@ -32,6 +34,13 @@ const CEREMONY_HOST: AgentId = "terry-locke";
 export function ownerForCategory(category: string | null): AgentId {
   if (!category) return FALLBACK_OWNER;
   return CATEGORY_OWNER[category.toUpperCase()] ?? FALLBACK_OWNER;
+}
+
+// Who owns a task in a ceremony: the scrum-master's explicit assignment wins (Jira-style
+// swimlane-by-assignee); unassigned tasks fall back to the lane/category owner.
+export function ownerForTask(t: Pick<StandupTask, "assigned_agent" | "category">): AgentId {
+  if (t.assigned_agent && AGENT_IDS.has(t.assigned_agent)) return t.assigned_agent as AgentId;
+  return ownerForCategory(t.category);
 }
 
 export const CEREMONY_WINDOW_HOURS: Record<CeremonyType, number> = {
@@ -70,19 +79,20 @@ const line = (t: StandupTask): TaskLine => ({ title: t.title, priority: t.priori
 /** Bucket the mirror tasks into per-lane done / up-next / blocked / overdue. Shared by all ceremonies. */
 export function buildCeremonyReport(type: CeremonyType, tasks: StandupTask[]): CeremonyReport {
   const now = Date.now();
-  const byCat = new Map<string, LaneReport>();
-  const laneFor = (category: string | null): LaneReport => {
-    const cat = (category ?? "UNCATEGORIZED").toUpperCase();
-    let lane = byCat.get(cat);
+  // Group by OWNER (assignee-first, category fallback) so each agent gets one lane = their queue.
+  const byOwner = new Map<AgentId, LaneReport>();
+  const laneFor = (t: StandupTask): LaneReport => {
+    const owner = ownerForTask(t);
+    let lane = byOwner.get(owner);
     if (!lane) {
-      lane = { category: cat, owner: ownerForCategory(cat), done: [], upNext: [], blocked: [], overdue: [] };
-      byCat.set(cat, lane);
+      lane = { category: (t.category ?? "GENERAL").toUpperCase(), owner, done: [], upNext: [], blocked: [], overdue: [] };
+      byOwner.set(owner, lane);
     }
     return lane;
   };
 
   for (const t of tasks) {
-    const lane = laneFor(t.category);
+    const lane = laneFor(t);
     if (t.completed_at) {
       lane.done.push(line(t));
     } else if (t.status === "BLOCKED" || (t.pushed_count ?? 0) >= 3) {
@@ -95,7 +105,7 @@ export function buildCeremonyReport(type: CeremonyType, tasks: StandupTask[]): C
     }
   }
 
-  const lanes = [...byCat.values()].filter(
+  const lanes = [...byOwner.values()].filter(
     (l) => l.done.length || l.upNext.length || l.blocked.length || l.overdue.length,
   );
   const blockers = lanes.flatMap((l) => l.blocked.map((b) => ({ ...b, category: l.category, owner: l.owner })));
