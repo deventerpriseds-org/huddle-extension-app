@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Send, Sparkles, Video, Phone, ChevronDown, Mic, Square, Loader2, AudioLines, Plus, Users } from "lucide-react";
+import { Send, Sparkles, Video, Phone, ChevronDown, Mic, Square, Loader2, AudioLines, Plus, Users, Bell, BellRing } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
 import type { Huddle, HuddleMessage } from "../data/seed";
-import { sendHuddleMessage, listCeremonyRuns } from "../lib/huddle.functions";
+import { enqueueHuddleTurn, getTurnUpdates, listCeremonyRuns } from "../lib/huddle.functions";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useDictation } from "../hooks/useDictation";
+import { usePush } from "../hooks/usePush";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -417,14 +418,107 @@ function Composer({ huddle }: { huddle: Huddle }) {
   const presentAgents = AGENTS.filter((a) => huddle.members.includes(a.id));
   const { user } = useAuth();
 
+  // Web Push so a reply that finishes while the app is backgrounded/closed can buzz the phone.
+  const pushCaller = useMemo(
+    () =>
+      user
+        ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+        : undefined,
+    [user],
+  );
+  const push = usePush(pushCaller);
+  async function toggleNotifications() {
+    const ok = await push.enablePush();
+    toast[ok ? "success" : "message"](
+      ok ? "Notifications on — we'll ping you when a reply lands while you're away." : "Notifications not enabled.",
+    );
+  }
+
+  // Render a completed turn's result into the stores. Idempotent and keyed by turnId: safe to call
+  // from BOTH the live fast-path response AND the deliver-on-reconnect poll (and repeated polls)
+  // without double-posting — the guard checks whether this turn's agent messages already exist.
+  type TurnResult = Awaited<ReturnType<typeof enqueueHuddleTurn>>["result"];
+  function applyTurnResult(turnId: string, result: TurnResult) {
+    if (!result) return;
+    const state = useHuddleStore.getState();
+    if (state.messages.some((m) => m.id.startsWith(`a-${turnId}-`))) return; // already delivered
+    const userText = state.messages.find((m) => m.id === turnId)?.text ?? "";
+    const r = result as {
+      decision?: {
+        signal?: unknown; scores?: unknown; winnerId?: AgentId; runnerUpId?: AgentId;
+        interjected?: boolean; reason?: string;
+      };
+      replies?: { agentId: AgentId; text: string }[];
+      fallbacks?: { inline: string; reason?: string }[];
+      prompts?: unknown[];
+      toolUses?: { agentId: AgentId; tool: string; summary: string; ok: boolean; detail?: string }[];
+      reasoning?: string[];
+      journeyTaskUpdates?: Parameters<typeof upsertJourneyTasks>[0];
+      suggestedTasks?: Parameters<typeof addSuggestedTasks>[0];
+    };
+
+    if (r.decision) {
+      logDecision({
+        id: `d-${turnId}`,
+        messageId: turnId,
+        ts: Date.now(),
+        signal: r.decision.signal as never,
+        scores: r.decision.scores as never,
+        winnerId: r.decision.winnerId as never,
+        runnerUpId: r.decision.runnerUpId as never,
+        interjected: r.decision.interjected as never,
+        reason: r.decision.reason as never,
+      });
+    }
+    if (r.fallbacks && r.fallbacks.length > 0) {
+      addFallbacks(r.fallbacks as never);
+      for (const f of r.fallbacks.slice(0, 3)) {
+        toast.warning(`Fallback: ${f.inline}`, { description: f.reason });
+      }
+    }
+    if ((r.prompts && r.prompts.length > 0) || (r.toolUses && r.toolUses.length > 0)) {
+      recordTurn({
+        turnId,
+        ts: Date.now(),
+        huddleId: huddle.id,
+        userText,
+        prompts: (r.prompts ?? []) as never,
+        toolUses: (r.toolUses ?? []).map((t) => ({
+          agentId: t.agentId, tool: t.tool, status: t.summary, ok: t.ok, detail: t.detail,
+        })),
+        reasoning: r.reasoning,
+      });
+    }
+    (r.replies ?? []).forEach((reply, i) => {
+      addAgent({
+        id: `a-${turnId}-${i}`,
+        huddleId: huddle.id,
+        author: { kind: "agent", agentId: reply.agentId },
+        text: reply.text,
+        ts: Date.now() + i,
+        replyTo: turnId,
+      });
+    });
+    if (r.journeyTaskUpdates && r.journeyTaskUpdates.length > 0) upsertJourneyTasks(r.journeyTaskUpdates);
+    if (r.suggestedTasks && r.suggestedTasks.length > 0) addSuggestedTasks(r.suggestedTasks);
+    if (r.toolUses && r.toolUses.length > 0) addToolUses(r.toolUses as never);
+  }
+
+  // Clear the "thinking" indicator only if it belongs to this turn (don't wipe a newer pending turn).
+  function clearPendingFor(turnId: string) {
+    const p = useAgentPanelStore.getState().pending;
+    if (!p || p.turnId === turnId) clearPending();
+  }
+
   async function submit() {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
     const now = Date.now();
-    const userId = `u-${now}`;
+    // turnId doubles as the user message id AND the durable idempotency key.
+    const turnId = `u-${now}`;
     const mentions = parseMentions(trimmed, presentAgents);
     const userMsg: HuddleMessage = {
-      id: userId,
+      id: turnId,
       huddleId: huddle.id,
       author: { kind: "user" },
       text: trimmed,
@@ -434,120 +528,104 @@ function Composer({ huddle }: { huddle: Huddle }) {
     addUser(userMsg);
     setText("");
     setSending(true);
-    setPending({ huddleId: huddle.id, agentId: targetAgentId, startedAt: now });
+    setPending({ huddleId: huddle.id, agentId: targetAgentId, startedAt: now, turnId });
+
+    const backendsCfg = useBackendsStore.getState().config;
+    const payload = {
+      turnId,
+      text: trimmed,
+      huddleId: huddle.id,
+      scope,
+      members: huddle.members,
+      history: messages
+        .slice(-14)
+        .filter(
+          (m) =>
+            m.author.kind === "user" ||
+            m.author.kind === "system" ||
+            (m.author.kind === "agent" && !!AGENT_BY_ID[m.author.agentId as AgentId]),
+        )
+        .map((m) => ({
+          id: m.id,
+          huddleId: m.huddleId,
+          author: m.author,
+          text: m.text,
+          ts: m.ts,
+          mentions: m.mentions,
+          replyTo: m.replyTo,
+        })),
+      targetAgentId,
+      router: backendsCfg.router,
+      agents: backendsCfg.agents,
+      caller: user
+        ? {
+            entra_object_id: user.localAccountId ?? user.homeAccountId,
+            entra_email: user.username,
+          }
+        : undefined,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+
     try {
-      const backendsCfg = useBackendsStore.getState().config;
-      const result = await sendHuddleMessage({
-        data: {
-          text: trimmed,
-          huddleId: huddle.id,
-          scope,
-          members: huddle.members,
-          history: messages
-            .slice(-14)
-            .filter(
-              (m) =>
-                m.author.kind === "user" ||
-                m.author.kind === "system" ||
-                (m.author.kind === "agent" && !!AGENT_BY_ID[m.author.agentId as AgentId]),
-            )
-            .map((m) => ({
-              id: m.id,
-              huddleId: m.huddleId,
-              author: m.author,
-              text: m.text,
-              ts: m.ts,
-              mentions: m.mentions,
-              replyTo: m.replyTo,
-            })),
-          targetAgentId,
-          router: backendsCfg.router,
-          agents: backendsCfg.agents,
-          caller: user
-            ? {
-                entra_object_id: user.localAccountId ?? user.homeAccountId,
-                entra_email: user.username,
-              }
-            : undefined,
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        },
-      });
-
-      logDecision({
-        id: `d-${now}`,
-        messageId: userId,
-        ts: Date.now(),
-        signal: result.decision.signal,
-        scores: result.decision.scores,
-        winnerId: result.decision.winnerId,
-        runnerUpId: result.decision.runnerUpId,
-        interjected: result.decision.interjected,
-        reason: result.decision.reason,
-      });
-
-      // Surface fallbacks per the "no silent degrade" rule.
-      if (result.fallbacks && result.fallbacks.length > 0) {
-        addFallbacks(result.fallbacks);
-        for (const f of result.fallbacks.slice(0, 3)) {
-          toast.warning(`Fallback: ${f.inline}`, { description: f.reason });
-        }
+      // Fast path: run the turn now and render its result. The turn is ALSO persisted server-side,
+      // so if this request dies (app backgrounded / screen off) the reply isn't lost — the delivery
+      // loop below re-reads it on return, and the cron heartbeat finishes any turn we couldn't.
+      const res = await enqueueHuddleTurn({ data: payload });
+      if (res.status === "done") {
+        applyTurnResult(turnId, res.result);
+        clearPendingFor(turnId);
+      } else if (res.status === "error") {
+        toast.error(res.error || "Message failed");
+        clearPendingFor(turnId);
       }
-
-      // Record per-agent prompt debug + tool activity + reasoning for the
-      // Activity viewer (the "other tab").
-      if (
-        (result.prompts && result.prompts.length > 0) ||
-        (result.toolUses && result.toolUses.length > 0)
-      ) {
-        recordTurn({
-          turnId: userId,
-          ts: now,
-          huddleId: huddle.id,
-          userText: trimmed,
-          prompts: result.prompts ?? [],
-          toolUses: (result.toolUses ?? []).map((t) => ({
-            agentId: t.agentId,
-            tool: t.tool,
-            status: t.summary,
-            ok: t.ok,
-            detail: t.detail,
-          })),
-          reasoning: result.reasoning,
-        });
-      }
-
-      result.replies.forEach((reply, i) => {
-        addAgent({
-          id: `a-${now}-${i}`,
-          huddleId: huddle.id,
-          author: { kind: "agent", agentId: reply.agentId },
-          text: reply.text,
-          ts: Date.now() + i,
-          replyTo: userId,
-        });
-      });
-
-      // Mirror any journey-voice task mutations onto the huddle board.
-      if (result.journeyTaskUpdates && result.journeyTaskUpdates.length > 0) {
-        upsertJourneyTasks(result.journeyTaskUpdates);
-      }
-
-      if (result.suggestedTasks && result.suggestedTasks.length > 0) {
-        addSuggestedTasks(result.suggestedTasks);
-      }
-
-      if (result.toolUses && result.toolUses.length > 0) {
-        addToolUses(result.toolUses);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Message failed";
-      toast.error(msg);
+      // queued/running → leave the pending indicator up; the delivery loop picks it up.
+    } catch {
+      // The request was cut off (typically the app was backgrounded mid-turn). Do NOT surface an
+      // error or clear pending — the turn keeps running server-side and the reply arrives on return
+      // (plus a push notification while away).
     } finally {
       setSending(false);
-      clearPending();
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }
+
+  // Deliver-on-reconnect: while a turn is in flight, poll the durable store for its finished result,
+  // and re-check the moment the tab regains focus (mobile kills the in-flight fetch on background).
+  // This is what makes a reply that completed while you were away appear when you come back.
+  const pending = useAgentPanelStore((s) => s.pending);
+  useEffect(() => {
+    if (!pending || pending.huddleId !== huddle.id) return;
+    let stopped = false;
+    let cursor = Math.max(0, pending.startedAt - 60_000);
+    const poll = async () => {
+      if (stopped) return;
+      try {
+        const { turns } = await getTurnUpdates({ data: { huddleId: huddle.id, sinceMs: cursor } });
+        for (const t of turns) {
+          cursor = Math.max(cursor, t.updated_ms);
+          if (t.status === "done") applyTurnResult(t.id, t.result as TurnResult);
+          else if (t.status === "error") toast.error((t.error as string) || "That turn hit an error.");
+          clearPendingFor(t.id);
+        }
+      } catch {
+        /* offline / transient — retry next tick */
+      }
+    };
+    const iv = setInterval(poll, 2500);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void poll();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onVisible);
+    void poll();
+    return () => {
+      stopped = true;
+      clearInterval(iv);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending?.turnId, pending?.huddleId, huddle.id]);
 
   const startMeeting = useHuddleStore((s) => s.startMeeting);
   // Voice from the composer. 1:1 → the smooth ElevenLabs Conversational-AI orb (one agent,
@@ -608,6 +686,27 @@ function Composer({ huddle }: { huddle: Huddle }) {
             autoFocus
           />
         </div>
+        {push.supported && push.permission !== "granted" && (
+          <button
+            type="button"
+            onClick={toggleNotifications}
+            disabled={push.busy}
+            className="inline-flex size-10 items-center justify-center rounded-full border border-hairline bg-background text-muted-foreground transition hover:bg-muted disabled:opacity-50"
+            aria-label="Enable notifications for replies while you're away"
+            title="Notify me when a reply lands while I'm away"
+          >
+            {push.busy ? <Loader2 size={16} className="animate-spin" /> : <Bell size={16} />}
+          </button>
+        )}
+        {push.supported && push.permission === "granted" && (
+          <span
+            className="inline-flex size-10 items-center justify-center rounded-full border border-hairline bg-background text-primary"
+            aria-label="Notifications on"
+            title="Notifications on — we'll ping you when a reply lands while you're away"
+          >
+            <BellRing size={16} />
+          </span>
+        )}
         <button
           type="button"
           onClick={startVoice}

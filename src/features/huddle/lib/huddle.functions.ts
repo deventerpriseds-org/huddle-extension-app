@@ -1829,6 +1829,177 @@ export const sendHuddleMessage = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => Input.parse(raw))
   .handler(async ({ data }) => runHuddleTurn(data));
 
+// ---- Durable, device-independent turns ------------------------------------------------------
+// A chat turn no longer depends on the phone holding a long fetch open. The client PERSISTS the
+// turn (keyed by a client-generated turnId) and runs it best-effort in this request; the result is
+// stored the instant it's ready, so backgrounding the app (screen off, app switch) can't lose it —
+// the delivery loop re-reads it on reconnect. A journey pg_cron heartbeat drains any turn left
+// `queued` or stale-`running` (the case where this phone-tied request was killed mid-flight), so a
+// turn always completes and a push notification fires even while the user is fully away.
+
+const EnqueueTurnInput = Input.extend({
+  // Client-generated idempotency key (e.g. the user message id). Re-sending the same turnId never
+  // double-runs — the row is INSERT ... ON CONFLICT DO NOTHING and execution is claim-locked.
+  turnId: z.string().min(6).max(80),
+});
+
+type HuddleTurnResult = Awaited<ReturnType<typeof runHuddleTurn>>;
+
+/**
+ * Run a claimed turn to completion, persist the result, and (best-effort) push-notify the user. The
+ * service worker decides whether to actually surface the notification (suppressed if a tab is
+ * focused). Shared by the client fast-path and the cron backstop so both behave identically.
+ */
+async function executeClaimedTurn(record: {
+  id: string;
+  user_email: string | null;
+  payload: Record<string, unknown>;
+}): Promise<HuddleTurnResult | null> {
+  const { completeTurn, failTurn } = await import("./tasks/turns.server");
+  try {
+    const data = Input.parse(record.payload);
+    const result = await runHuddleTurn(data);
+    await completeTurn(record.id, result);
+    // Fire a push per finished turn (SW suppresses it when the app is focused).
+    const lead = result.replies?.[0];
+    if (lead) {
+      try {
+        const { sendPushToUser } = await import("./push/push.server");
+        const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
+        await sendPushToUser(record.user_email, {
+          title: `${name} replied`,
+          body: String(lead.text).replace(/\s+/g, " ").slice(0, 140),
+          url: "/",
+          tag: `huddle-${data.huddleId}`,
+        });
+      } catch {
+        /* push is best-effort */
+      }
+    }
+    return result;
+  } catch (err) {
+    await failTurn(record.id, err instanceof Error ? err.message : String(err));
+    return null;
+  }
+}
+
+/**
+ * Client entrypoint. Persist the turn, then run it in THIS request (fast path). If this request is
+ * killed by the app backgrounding before it stores, the turn is left claimable and the cron
+ * heartbeat finishes it — either way the result lands in the durable store and is delivered on
+ * return. Returns the result when the fast path completes; the client also polls `getTurnUpdates`.
+ */
+export const enqueueHuddleTurn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => EnqueueTurnInput.parse(raw))
+  .handler(async ({ data }) => {
+    const { turnId, ...turnData } = data;
+    // Resolve the sign-in email (possibly an alias) to the canonical journey email for push targeting.
+    let email: string | null = null;
+    try {
+      const { resolveTaskEmail } = await import("./journey/identity");
+      email = (await resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
+    } catch {
+      email = data.caller?.entra_email ?? null;
+    }
+    const { enqueueTurn, claimTurn, getTurn } = await import("./tasks/turns.server");
+    await enqueueTurn(turnId, data.huddleId, email, turnData);
+    // Claim + run right now (fast path). If another runner (cron) already grabbed it, fall through
+    // to reporting status so we never double-run (the client then polls getTurnUpdates for the result).
+    const claimed = await claimTurn(turnId);
+    if (claimed) {
+      const result = await executeClaimedTurn(claimed);
+      if (result) return { turnId, status: "done" as string, result, error: null as string | null };
+      const rec = await getTurn(turnId);
+      return { turnId, status: (rec?.status ?? "error") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
+    }
+    const rec = await getTurn(turnId);
+    return { turnId, status: (rec?.status ?? "queued") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
+  });
+
+/** The public VAPID key the browser needs to create a push subscription (null if push isn't set up). */
+export const getPushConfig = createServerFn({ method: "GET" }).handler(async () => {
+  const { vapidPublicKey } = await import("./push/push.server");
+  return { vapidPublicKey: vapidPublicKey() };
+});
+
+/** Deliver finished turns to a client that (re)connected — the backgrounding-safe read path. */
+const TurnUpdatesInput = z.object({
+  huddleId: z.string(),
+  sinceMs: z.number().optional(),
+});
+export const getTurnUpdates = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => TurnUpdatesInput.parse(raw))
+  .handler(async ({ data }) => {
+    const { getTurnsSince } = await import("./tasks/turns.server");
+    const rows = await getTurnsSince(data.huddleId, data.sinceMs ?? 0);
+    // Trim to a serializable DTO (drop the raw payload; type result like the live turn result).
+    const turns = rows.map((t) => ({
+      id: t.id,
+      status: t.status as string,
+      error: t.error,
+      updated_ms: t.updated_ms,
+      result: (t.result ?? null) as HuddleTurnResult | null,
+    }));
+    return { turns };
+  });
+
+/** Save/refresh a Web Push subscription for the signed-in user (for notify-while-away). */
+const PushSubInput = z.object({
+  caller: z.object({
+    entra_object_id: z.string().optional(),
+    entra_email: z.string().optional(),
+  }).optional(),
+  subscription: z.object({
+    endpoint: z.string(),
+    keys: z.object({ p256dh: z.string(), auth: z.string() }),
+  }),
+});
+export const registerPushSubscription = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => PushSubInput.parse(raw))
+  .handler(async ({ data }) => {
+    let email: string | null = null;
+    try {
+      const { resolveTaskEmail } = await import("./journey/identity");
+      email = (await resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
+    } catch {
+      email = data.caller?.entra_email ?? null;
+    }
+    if (!email) return { ok: false as const, error: "no_identity" };
+    const { savePushSubscription } = await import("./tasks/turns.server");
+    await savePushSubscription(email, {
+      endpoint: data.subscription.endpoint,
+      p256dh: data.subscription.keys.p256dh,
+      auth: data.subscription.keys.auth,
+    });
+    return { ok: true as const };
+  });
+
+/**
+ * Backstop executor used by the run-turn route (cron heartbeat). Drains up to `max` queued or
+ * stale-running turns, running each to completion. Returns how many it ran. This is the guaranteed,
+ * device-independent path: journey's always-on pg_cron POSTs here every minute.
+ */
+export async function drainQueuedTurns(max = 5): Promise<number> {
+  const { claimNextQueued } = await import("./tasks/turns.server");
+  let ran = 0;
+  for (let i = 0; i < max; i++) {
+    const claimed = await claimNextQueued();
+    if (!claimed) break;
+    await executeClaimedTurn(claimed);
+    ran++;
+  }
+  return ran;
+}
+
+/** Run one specific turn by id (targeted kick). Returns true if it claimed and ran it. */
+export async function runTurnById(turnId: string): Promise<boolean> {
+  const { claimTurn } = await import("./tasks/turns.server");
+  const claimed = await claimTurn(turnId);
+  if (!claimed) return false;
+  await executeClaimedTurn(claimed);
+  return true;
+}
+
 // Recent persisted ceremony runs for the signed-in user — powers "review what happened later"
 // (e.g. an auto-run that fired while you were away) in the virtual-meeting view.
 const CeremonyRunsInput = z.object({

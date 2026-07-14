@@ -34,7 +34,13 @@ jobs:
                    TAVILY_API_KEY AZURE_PG_URL JOURNEY_PROXY_TOKEN; do
             if [ -n "${!k}" ]; then echo "$k: present"; else echo "$k: MISSING"; fi
           done
+          # Web Push is optional — absence just disables notify-while-away (durable turns still work).
+          for k in VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY; do
+            if [ -n "${!k}" ]; then echo "$k: present"; else echo "$k: not set (Web Push disabled)"; fi
+          done
         env:
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -313,6 +319,9 @@ jobs:
               AZURE_PG_URL="${AZURE_PG_URL_RESOLVED}" \
               JOURNEY_PROXY_URL="${{ secrets.JOURNEY_PROXY_URL || 'https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/huddle-proxy' }}" \
               JOURNEY_PROXY_TOKEN="${{ secrets.JOURNEY_PROXY_TOKEN }}" \
+              VAPID_PUBLIC_KEY="${{ secrets.VAPID_PUBLIC_KEY }}" \
+              VAPID_PRIVATE_KEY="${{ secrets.VAPID_PRIVATE_KEY }}" \
+              VAPID_SUBJECT="${{ secrets.VAPID_SUBJECT || 'mailto:dev@enterpriseds.io' }}" \
               ENTRA_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
               ENTRA_CLIENT_ID="${ENTRA_CLIENT_ID_RESOLVED:-${{ secrets.ENTRA_CLIENT_ID }}}" \
               ENTRA_AUTHORITY="${ENTRA_AUTHORITY_RESOLVED:-${{ secrets.VITE_ENTRA_AUTHORITY }}}" \
