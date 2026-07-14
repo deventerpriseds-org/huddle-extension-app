@@ -56,6 +56,22 @@ CREATE TABLE IF NOT EXISTS chat.push_subscriptions (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS push_subscriptions_user_idx ON chat.push_subscriptions (lower(user_email));
+
+-- User reminders ("remind me in 30 min to ..."). A per-minute drain fires due ones: it delivers the
+-- reminder into the Huddle conversation (the client polls getReminderDeliveries) and pushes the phone.
+CREATE TABLE IF NOT EXISTS chat.reminders (
+  id          TEXT PRIMARY KEY,
+  user_email  TEXT,
+  huddle_id   TEXT NOT NULL,
+  agent_id    TEXT,
+  text        TEXT NOT NULL,
+  due_at      TIMESTAMPTZ NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'pending', -- pending | fired | cancelled
+  fired_at    TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS reminders_due_idx    ON chat.reminders (status, due_at);
+CREATE INDEX IF NOT EXISTS reminders_huddle_idx ON chat.reminders (huddle_id, fired_at DESC);
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -237,4 +253,80 @@ export async function getPushSubscriptions(userEmail: string): Promise<PushSubsc
 export async function deletePushSubscription(endpoint: string): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(`DELETE FROM chat.push_subscriptions WHERE endpoint = $1`, [endpoint]);
+}
+
+// ---- Reminders -----------------------------------------------------------------------------------
+
+export interface ReminderRecord {
+  id: string;
+  user_email: string | null;
+  huddle_id: string;
+  agent_id: string | null;
+  text: string;
+  due_ms: number;
+  fired_ms: number | null;
+}
+
+function mapReminder(r: Record<string, unknown>): ReminderRecord {
+  return {
+    id: r.id as string,
+    user_email: (r.user_email as string) ?? null,
+    huddle_id: r.huddle_id as string,
+    agent_id: (r.agent_id as string) ?? null,
+    text: r.text as string,
+    due_ms: Number(r.due_ms ?? 0),
+    fired_ms: r.fired_ms == null ? null : Number(r.fired_ms),
+  };
+}
+
+export async function createReminder(args: {
+  id: string;
+  userEmail: string | null;
+  huddleId: string;
+  agentId: string | null;
+  text: string;
+  dueAtMs: number;
+}): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO chat.reminders (id, user_email, huddle_id, agent_id, text, due_at, status)
+     VALUES ($1, $2, $3, $4, $5, to_timestamp($6 / 1000.0), 'pending')`,
+    [args.id, args.userEmail, args.huddleId, args.agentId, args.text.slice(0, 500), args.dueAtMs],
+  );
+}
+
+/** Atomically claim due reminders and mark them fired, so the per-minute drain fires each exactly once. */
+export async function claimDueReminders(max = 25): Promise<ReminderRecord[]> {
+  await ensureBootstrapped();
+  const res = await getPool().query(
+    `UPDATE chat.reminders SET status = 'fired', fired_at = now()
+      WHERE id IN (
+        SELECT id FROM chat.reminders
+         WHERE status = 'pending' AND due_at <= now()
+         ORDER BY due_at
+         LIMIT $1
+         FOR UPDATE SKIP LOCKED
+      )
+      RETURNING id, user_email, huddle_id, agent_id, text,
+        (EXTRACT(EPOCH FROM due_at) * 1000)::bigint AS due_ms,
+        (EXTRACT(EPOCH FROM fired_at) * 1000)::bigint AS fired_ms`,
+    [max],
+  );
+  return res.rows.map(mapReminder);
+}
+
+/** Reminders that fired for a huddle after `sinceMs` — the client's in-chat delivery read. */
+export async function getFiredRemindersSince(huddleId: string, sinceMs: number): Promise<ReminderRecord[]> {
+  await ensureBootstrapped();
+  const res = await getPool().query(
+    `SELECT id, user_email, huddle_id, agent_id, text,
+        (EXTRACT(EPOCH FROM due_at) * 1000)::bigint AS due_ms,
+        (EXTRACT(EPOCH FROM fired_at) * 1000)::bigint AS fired_ms
+       FROM chat.reminders
+      WHERE huddle_id = $1 AND status = 'fired' AND fired_at > to_timestamp($2 / 1000.0)
+      ORDER BY fired_at ASC
+      LIMIT 20`,
+    [huddleId, Math.max(0, sinceMs)],
+  );
+  return res.rows.map(mapReminder);
 }

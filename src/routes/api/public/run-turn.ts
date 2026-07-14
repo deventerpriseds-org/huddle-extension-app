@@ -41,13 +41,15 @@ export const Route = createFileRoute("/api/public/run-turn")({
           const { drainQueuedTurns, runTurnById } = await import(
             "@/features/huddle/lib/huddle.functions"
           );
+          const { fireDueReminders } = await import("@/features/huddle/lib/tasks/reminders");
           if (payload.turnId) {
             const ran = await runTurnById(payload.turnId);
             return json({ ok: true, turnId: payload.turnId, ran });
           }
           const max = Math.min(Math.max(1, payload.max ?? 5), 20);
-          const ran = await drainQueuedTurns(max);
-          return json({ ok: true, ran });
+          // Each drain tick: finish any stranded turns AND fire any due reminders.
+          const [ran, reminders] = await Promise.all([drainQueuedTurns(max), fireDueReminders()]);
+          return json({ ok: true, ran, reminders });
         } catch (err) {
           console.error("[run-turn] failed", err instanceof Error ? err.message : err);
           return json({ ok: false, error: "run_turn_failed" }, 500);

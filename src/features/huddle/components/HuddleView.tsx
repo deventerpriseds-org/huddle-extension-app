@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
 import type { Huddle, HuddleMessage } from "../data/seed";
-import { enqueueHuddleTurn, getTurnUpdates, listCeremonyRuns } from "../lib/huddle.functions";
+import { enqueueHuddleTurn, getTurnUpdates, getReminderDeliveries, listCeremonyRuns } from "../lib/huddle.functions";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
@@ -626,6 +626,52 @@ function Composer({ huddle }: { huddle: Huddle }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending?.turnId, pending?.huddleId, huddle.id]);
+
+  // Reminder delivery: a reminder ("remind me in 30 min…") fires server-side and shows up here as a
+  // message from the agent who set it. Poll on an interval and on focus so one that fired while you
+  // were away appears when you return. Dedup by rem-id (messages persist, so it never double-posts).
+  useEffect(() => {
+    let stopped = false;
+    let cursor = 0;
+    const render = (r: { id: string; agentId: string | null; text: string; firedMs: number }) => {
+      const mid = `rem-${r.id}`;
+      if (useHuddleStore.getState().messages.some((m) => m.id === mid)) return;
+      const agentId = (r.agentId && AGENT_BY_ID[r.agentId as AgentId] ? r.agentId : huddle.members[0]) as AgentId;
+      addAgent({
+        id: mid,
+        huddleId: huddle.id,
+        author: { kind: "agent", agentId },
+        text: `⏰ Reminder: ${r.text}`,
+        ts: r.firedMs || Date.now(),
+      });
+    };
+    const poll = async () => {
+      if (stopped) return;
+      try {
+        const { reminders } = await getReminderDeliveries({ data: { huddleId: huddle.id, sinceMs: cursor } });
+        for (const r of reminders) {
+          cursor = Math.max(cursor, r.firedMs || 0);
+          render(r);
+        }
+      } catch {
+        /* transient */
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void poll();
+    };
+    const iv = setInterval(poll, 30_000);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onVisible);
+    void poll();
+    return () => {
+      stopped = true;
+      clearInterval(iv);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [huddle.id]);
 
   const startMeeting = useHuddleStore((s) => s.startMeeting);
   // Voice from the composer. 1:1 → the smooth ElevenLabs Conversational-AI orb (one agent,

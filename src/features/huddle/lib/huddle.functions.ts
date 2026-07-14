@@ -106,7 +106,8 @@ const MAX_REPLIES_PER_TURN = 4;
 // by buildRoster from agents.ts.)
 const HOUSE_STYLE =
   "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
-  " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it \"has been sent\" or \"is done\" when it has not. Email specifically: text you write in the chat is \"draft text\" — only say you \"saved a draft to your inbox\" if you called the create_email_draft tool and it returned success, and only say an email was \"sent\" if send_email returned success.";
+  " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it \"has been sent\" or \"is done\" when it has not. Email specifically: text you write in the chat is \"draft text\" — only say you \"saved a draft to your inbox\" if you called the create_email_draft tool and it returned success, and only say an email was \"sent\" if send_email returned success." +
+  " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message.";
 
 // Deterministic backstop for co-answer echo: a weak router model sometimes
 // ignores the "don't repeat what was already said" instruction and re-emits a
@@ -655,9 +656,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       const timeSensitiveRe =
         /\b(today|tonight|tomorrow|yesterday|this week|this month|this year|latest|current|currently|right now|recent|recently|news|breaking|headline|score|price|stock|weather|forecast|202\d|updated|update)\b/i;
       const createTaskRe =
-        /\b(add|create|make|log|track|put|place|capture|assign|remind me|todo|to-do|action item|follow[- ]?up)\b/i;
-      const forceTaskCreation = createTaskRe.test(data.text);
-      const forceWebSearch = !!agentBackend.webSearch && timeSensitiveRe.test(data.text);
+        /\b(add|create|make|log|track|put|place|capture|assign|todo|to-do|action item|follow[- ]?up)\b/i;
+      // A reminder ("remind me in 30 min", "ping me at 3pm") is a timed nudge, NOT a backlog task —
+      // route it to schedule_reminder and DON'T also force a task/web-search for the same message.
+      const reminderRe =
+        /\b(remind me|reminder|notify me|ping me|nudge me|alert me|wake me|message me (?:in|at|later|tonight|tomorrow)|text me (?:in|at))\b/i;
+      const forceReminder = reminderRe.test(data.text);
+      const forceTaskCreation = !forceReminder && createTaskRe.test(data.text);
+      const forceWebSearch = !forceReminder && !!agentBackend.webSearch && timeSensitiveRe.test(data.text);
 
       function resolveTaskLane(value: unknown): TaskLane {
         const lane = String(value ?? "")
@@ -870,12 +876,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           const { PRIORITIZE_SYSTEM_HINT } = await import("./tasks/tools");
           const isScrumMaster = winner.id === "terry-locke" || winner.special === "standup-host";
           const groomHint = isScrumMaster ? "\n\n" + (await import("./tasks/groom")).GROOM_SYSTEM_HINT : "";
+          const { REMINDER_SYSTEM_HINT } = await import("./tasks/reminders");
           const instructions =
             baseInstructions +
             ragInstructions +
             webInstructions +
             "\n\n" + PRIORITIZE_SYSTEM_HINT +
             groomHint +
+            "\n\n" + REMINDER_SYSTEM_HINT +
             groundingBlock(!!agentBackend.webSearch);
           usedInstructions = instructions;
 
@@ -1024,8 +1032,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           const { PRIORITIZE_TOOL } = await import("./tasks/tools");
           // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
           const groomTools = isScrumMaster ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
+          const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
           const mergedTools = [
             createHuddleTaskTool,
+            SCHEDULE_REMINDER_TOOL,
             PRIORITIZE_TOOL,
             ...groomTools,
             ...emailTools,
@@ -1056,6 +1066,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           }) => {
             if (c.name === "create_huddle_task") {
               return JSON.stringify(await createSuggestedTaskFromTool(c.arguments));
+            }
+            if (c.name === "schedule_reminder") {
+              const { dispatchScheduleReminder } = await import("./tasks/reminders");
+              const out = await dispatchScheduleReminder(data.caller, c.arguments, data.huddleId, winner.id, data.timeZone);
+              const ok = !JSON.parse(out).error;
+              recordToolUse(winner.id, "schedule_reminder", ok ? "reminder scheduled" : "reminder · failed", ok);
+              return out;
             }
             if (c.name === "prioritize") {
               const { dispatchPrioritize } = await import("./tasks/tools");
@@ -1268,13 +1285,17 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
 
           usedModel = agentBackend.model?.trim() || snapshot?.model || "gpt-4o";
 
-          const toolChoice = forceTaskCreation
-            ? { type: "function", name: "create_huddle_task" }
-            : forceWebSearch
-              ? { type: "function", name: "tavily_web_search" }
-              : undefined;
+          const toolChoice = forceReminder
+            ? { type: "function", name: "schedule_reminder" }
+            : forceTaskCreation
+              ? { type: "function", name: "create_huddle_task" }
+              : forceWebSearch
+                ? { type: "function", name: "tavily_web_search" }
+                : undefined;
 
-          if (forceTaskCreation) {
+          if (forceReminder) {
+            recordToolUse(winner.id, "schedule_reminder", "offered (forced — reminder request)", true);
+          } else if (forceTaskCreation) {
             recordToolUse(winner.id, "create_huddle_task", "offered (forced — task request)", true);
           } else if (forceWebSearch) {
             recordToolUse(
@@ -1370,6 +1391,31 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             execute: async (args) =>
               JSON.stringify(await createSuggestedTaskFromTool(args as Record<string, unknown>)),
           });
+
+          // schedule_reminder — Huddle-native timed reminder (mirrors the OpenAI path).
+          {
+            const { dispatchScheduleReminder, SCHEDULE_REMINDER_TOOL: RTOOL } = await import("./tasks/reminders");
+            lovableTools.schedule_reminder = tool({
+              description: RTOOL.description,
+              inputSchema: z.object({
+                text: z.string(),
+                delay_minutes: z.number().optional(),
+                at_time: z.string().optional(),
+              }),
+              execute: async (args) => {
+                const out = await dispatchScheduleReminder(
+                  data.caller,
+                  args as Record<string, unknown>,
+                  data.huddleId,
+                  winner.id,
+                  data.timeZone,
+                );
+                const ok = !JSON.parse(out).error;
+                recordToolUse(winner.id, "schedule_reminder", ok ? "reminder scheduled" : "reminder · failed", ok);
+                return out;
+              },
+            });
+          }
 
           // prioritize — shared prioritization tool (mirrors the OpenAI path).
           {
@@ -1695,13 +1741,17 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           }
 
           const lovableToolChoice =
-            forceTaskCreation && lovableTools.create_huddle_task
-              ? { type: "tool" as const, toolName: "create_huddle_task" }
-              : forceWebSearch && lovableTools.tavily_web_search
-                ? { type: "tool" as const, toolName: "tavily_web_search" }
-                : undefined;
+            forceReminder && lovableTools.schedule_reminder
+              ? { type: "tool" as const, toolName: "schedule_reminder" }
+              : forceTaskCreation && lovableTools.create_huddle_task
+                ? { type: "tool" as const, toolName: "create_huddle_task" }
+                : forceWebSearch && lovableTools.tavily_web_search
+                  ? { type: "tool" as const, toolName: "tavily_web_search" }
+                  : undefined;
 
-          if (forceTaskCreation && lovableTools.create_huddle_task) {
+          if (forceReminder && lovableTools.schedule_reminder) {
+            recordToolUse(winner.id, "schedule_reminder", "offered (forced — reminder request)", true);
+          } else if (forceTaskCreation && lovableTools.create_huddle_task) {
             recordToolUse(winner.id, "create_huddle_task", "offered (forced — task request)", true);
           } else if (forceWebSearch && lovableTools.tavily_web_search) {
             recordToolUse(
@@ -1941,6 +1991,21 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
       result: (t.result ?? null) as HuddleTurnResult | null,
     }));
     return { turns };
+  });
+
+/** Reminders that have fired for a huddle since `sinceMs` — the client renders each as an agent message. */
+export const getReminderDeliveries = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => TurnUpdatesInput.parse(raw))
+  .handler(async ({ data }) => {
+    const { getFiredRemindersSince } = await import("./tasks/turns.server");
+    const rows = await getFiredRemindersSince(data.huddleId, data.sinceMs ?? 0);
+    const reminders = rows.map((r) => ({
+      id: r.id,
+      agentId: r.agent_id,
+      text: r.text,
+      firedMs: r.fired_ms ?? 0,
+    }));
+    return { reminders };
   });
 
 /** Save/refresh a Web Push subscription for the signed-in user (for notify-while-away). */
