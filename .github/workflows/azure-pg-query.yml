@@ -86,7 +86,7 @@ jobs:
           echo "Runner IP: $IP"
           RULE="ghquery-${IP//./-}"
           echo "FW_RULE=$RULE" >> "$GITHUB_ENV"
-          az postgres flexible-server firewall-rule create -g "$PG_RG" -n "$PG_SRV" \
+          az postgres flexible-server firewall-rule create -g "$PG_RG" -s "$PG_SRV" \
             --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null
           echo "Opened firewall for $IP (rule $RULE); waiting for it to take effect."
           sleep 8
@@ -103,5 +103,5 @@ jobs:
       - name: Remove the runner firewall rule
         if: always() && env.FW_RULE != ''
         run: |
-          az postgres flexible-server firewall-rule delete -g "$PG_RG" -n "$PG_SRV" \
+          az postgres flexible-server firewall-rule delete -g "$PG_RG" -s "$PG_SRV" \
             --rule-name "$FW_RULE" --yes --only-show-errors >/dev/null 2>&1 && echo "Removed $FW_RULE." || echo "Cleanup skipped."
