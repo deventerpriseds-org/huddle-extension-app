@@ -61,7 +61,17 @@ jobs:
         run: |
           rm -f bun.lock
           sed -i 's/^minimumReleaseAge = .*/minimumReleaseAge = 0/' bunfig.toml
-          bun install --registry https://registry.npmjs.org
+          # The npm registry occasionally refuses connections mid-install on the runner
+          # (ConnectionRefused / FailedToOpenSocket on random tarballs). Retry with backoff so a
+          # transient blip doesn't fail the whole deploy.
+          for attempt in 1 2 3 4 5; do
+            if bun install --registry https://registry.npmjs.org; then
+              echo "bun install succeeded on attempt $attempt"; exit 0
+            fi
+            echo "bun install failed (attempt $attempt) — retrying after ${attempt}0s"
+            sleep "${attempt}0"
+          done
+          echo "::error::bun install failed after 5 attempts"; exit 1
 
       - uses: azure/login@v2
         with:
