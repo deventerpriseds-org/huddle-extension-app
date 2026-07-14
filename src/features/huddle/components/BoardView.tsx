@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon } from "lucide-react";
+import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical } from "lucide-react";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import type { BoardTaskRow } from "../lib/tasks/tasks.server";
@@ -7,6 +7,17 @@ import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -64,6 +75,7 @@ export function BoardView() {
   const [assigneeFilter, setAssigneeFilter] = useState<Set<string>>(new Set());
   const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
   const [dragId, setDragId] = useState<string | null>(null);
+  const [activeCol, setActiveCol] = useState<string>("upnext"); // mobile: which status column is shown
 
   const refetch = useCallback(async () => {
     if (!caller) {
@@ -131,14 +143,49 @@ export function BoardView() {
       .sort(rankSort);
   }
 
-  async function onDrop(colKey: string, laneKey: string) {
+  // Shared write-back: optimistic update + persist to journey. Used by drag (desktop) and the
+  // card action menu (mobile).
+  const applyMove = useCallback(
+    async (taskId: string, patch: { status?: string; assigned_agent?: string; category?: string }) => {
+      if (!Object.keys(patch).length) return;
+      let prev: BoardTaskRow[] = [];
+      setTasks((ts) => {
+        prev = ts;
+        return ts.map((t) =>
+          t.id === taskId
+            ? {
+                ...t,
+                status: patch.status ?? t.status,
+                assigned_agent:
+                  patch.assigned_agent !== undefined ? patch.assigned_agent || null : t.assigned_agent,
+                category: patch.category ?? t.category,
+              }
+            : t,
+        );
+      });
+      try {
+        const r = await updateBoardTask({ data: { caller, taskId, ...patch } });
+        if (!r.ok) {
+          setTasks(prev);
+          toast.error(r.error || "Couldn't move the task.");
+        } else {
+          setTimeout(() => void refetch(), 2500);
+        }
+      } catch (e) {
+        setTasks(prev);
+        toast.error(e instanceof Error ? e.message : "Move failed.");
+      }
+    },
+    [caller, refetch],
+  );
+
+  function onDrop(colKey: string, laneKey: string) {
     const id = dragId;
     setDragId(null);
     if (!id) return;
     const task = tasks.find((t) => t.id === id);
     if (!task) return;
     const col = COLUMNS.find((c) => c.key === colKey)!;
-
     const patch: { status?: string; assigned_agent?: string; category?: string } = {};
     if (columnKeyFor(task.status) !== colKey) patch.status = col.setStatus;
     if (groupBy === "assignee" && laneKeyFor(task, "assignee") !== laneKey) {
@@ -147,35 +194,7 @@ export function BoardView() {
     if (groupBy === "category" && laneKey !== UNCATEGORIZED && laneKeyFor(task, "category") !== laneKey) {
       patch.category = laneKey;
     }
-    if (!Object.keys(patch).length) return;
-
-    // Optimistic.
-    const prev = tasks;
-    setTasks((ts) =>
-      ts.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              status: patch.status ?? t.status,
-              assigned_agent: patch.assigned_agent !== undefined ? (patch.assigned_agent || null) : t.assigned_agent,
-              category: patch.category ?? t.category,
-            }
-          : t,
-      ),
-    );
-    try {
-      const r = await updateBoardTask({ data: { caller, taskId: id, ...patch } });
-      if (!r.ok) {
-        setTasks(prev);
-        toast.error(r.error || "Couldn't move the task.");
-      } else {
-        // Reconcile with the async journey→mirror sync shortly.
-        setTimeout(() => void refetch(), 2500);
-      }
-    } catch (e) {
-      setTasks(prev);
-      toast.error(e instanceof Error ? e.message : "Move failed.");
-    }
+    void applyMove(id, patch);
   }
 
   function toggle(set: Set<string>, key: string, apply: (s: Set<string>) => void) {
@@ -274,53 +293,110 @@ export function BoardView() {
               )}
             </div>
           ) : (
-            <div className="min-w-max space-y-3">
-              {/* Column headers — align with the columns inside each lane (box border + p-2). */}
-              <div className="flex gap-3 pl-[9px]">
-                {COLUMNS.map((c) => (
-                  <div key={c.key} className="w-60 shrink-0 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    {c.label}
+            <>
+              {/* Desktop: full Kanban grid (swimlanes × status columns), drag to move. */}
+              <div className="hidden min-w-max space-y-3 lg:block">
+                <div className="flex gap-3 pl-[9px]">
+                  {COLUMNS.map((c) => (
+                    <div key={c.key} className="w-60 shrink-0 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {c.label}
+                    </div>
+                  ))}
+                </div>
+
+                {lanes.map((lane) => (
+                  <div key={lane.key} className="rounded-xl border border-hairline bg-surface/40">
+                    {groupBy !== "none" && (
+                      <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
+                        {lane.agent ? (
+                          <AgentAvatar agent={lane.agent} size="sm" clickable={false} />
+                        ) : (
+                          <span className="flex size-7 items-center justify-center rounded-full bg-muted text-[10px] text-muted-foreground">—</span>
+                        )}
+                        <span className="text-[13px] font-semibold">{lane.label}</span>
+                        {lane.agent && <span className="text-[11px] text-muted-foreground">{lane.agent.role}</span>}
+                        <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                          {COLUMNS.reduce((n, c) => n + cellTasks(lane.key, c.key).length, 0)}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex gap-3 p-2">
+                      {COLUMNS.map((col) => {
+                        const items = cellTasks(lane.key, col.key);
+                        return (
+                          <div
+                            key={col.key}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={() => onDrop(col.key, lane.key)}
+                            className="flex w-60 shrink-0 flex-col gap-2 rounded-lg bg-muted/30 p-1.5"
+                          >
+                            {items.map((t) => (
+                              <BoardCard key={t.id} task={t} onDragStart={() => setDragId(t.id)} onDragEnd={() => setDragId(null)} />
+                            ))}
+                            {!items.length && <div className="h-1" />}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 ))}
               </div>
 
-              {lanes.map((lane) => (
-                <div key={lane.key} className="rounded-xl border border-hairline bg-surface/40">
-                  {groupBy !== "none" && (
-                    <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
-                      {lane.agent ? (
-                        <AgentAvatar agent={lane.agent} size="sm" clickable={false} />
-                      ) : (
-                        <span className="flex size-7 items-center justify-center rounded-full bg-muted text-[10px] text-muted-foreground">—</span>
-                      )}
-                      <span className="text-[13px] font-semibold">{lane.label}</span>
-                      {lane.agent && <span className="text-[11px] text-muted-foreground">{lane.agent.role}</span>}
-                      <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                        {COLUMNS.reduce((n, c) => n + cellTasks(lane.key, c.key).length, 0)}
-                      </span>
-                    </div>
-                  )}
-                  <div className="flex gap-3 p-2">
-                    {COLUMNS.map((col) => {
-                      const items = cellTasks(lane.key, col.key);
-                      return (
-                        <div
-                          key={col.key}
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={() => void onDrop(col.key, lane.key)}
-                          className="flex w-60 shrink-0 flex-col gap-2 rounded-lg bg-muted/30 p-1.5"
-                        >
-                          {items.map((t) => (
-                            <BoardCard key={t.id} task={t} onDragStart={() => setDragId(t.id)} onDragEnd={() => setDragId(null)} />
-                          ))}
-                          {!items.length && <div className="h-1" />}
-                        </div>
-                      );
-                    })}
-                  </div>
+              {/* Mobile: one status column at a time (tap the pills), swimlanes stacked, full-width
+                  cards with a ⋮ menu to move/reassign (drag is unreliable on touch). */}
+              <div className="space-y-3 lg:hidden">
+                <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
+                  {COLUMNS.map((c) => {
+                    const n = filtered.filter((t) => columnKeyFor(t.status) === c.key).length;
+                    return (
+                      <button
+                        key={c.key}
+                        onClick={() => setActiveCol(c.key)}
+                        className={cn(
+                          "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition",
+                          activeCol === c.key
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-hairline text-muted-foreground",
+                        )}
+                      >
+                        {c.label} <span className="ml-1 opacity-60">{n}</span>
+                      </button>
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
+
+                {lanes.map((lane) => {
+                  const items = cellTasks(lane.key, activeCol);
+                  if (!items.length) return null;
+                  return (
+                    <div key={lane.key} className="rounded-xl border border-hairline bg-surface/40">
+                      {groupBy !== "none" && (
+                        <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
+                          {lane.agent ? (
+                            <AgentAvatar agent={lane.agent} size="sm" clickable={false} />
+                          ) : (
+                            <span className="flex size-7 items-center justify-center rounded-full bg-muted text-[10px] text-muted-foreground">—</span>
+                          )}
+                          <span className="text-[13px] font-semibold">{lane.label}</span>
+                          <span className="ml-auto rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{items.length}</span>
+                        </div>
+                      )}
+                      <div className="flex flex-col gap-2 p-2">
+                        {items.map((t) => (
+                          <BoardCard key={t.id} task={t} fullWidth onMove={applyMove} />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {lanes.every((lane) => !cellTasks(lane.key, activeCol).length) && (
+                  <div className="py-10 text-center text-sm text-muted-foreground">
+                    Nothing in “{COLUMNS.find((c) => c.key === activeCol)?.label}”.
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </div>
       </section>
@@ -328,24 +404,86 @@ export function BoardView() {
   );
 }
 
-function BoardCard({ task, onDragStart, onDragEnd }: { task: BoardTaskRow; onDragStart: () => void; onDragEnd: () => void }) {
+function BoardCard({
+  task,
+  onDragStart,
+  onDragEnd,
+  fullWidth,
+  onMove,
+}: {
+  task: BoardTaskRow;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  fullWidth?: boolean;
+  onMove?: (id: string, patch: { status?: string; assigned_agent?: string }) => void;
+}) {
   const agent = task.assigned_agent ? AGENT_BY_ID[task.assigned_agent as AgentId] : undefined;
   const stripe = agent ? `var(${agent.colorVar})` : "var(--hairline)";
   const overdue = task.due_date && task.status !== "DONE" && new Date(task.due_date).getTime() < Date.now();
   const prio = (task.priority ?? "MEDIUM").toUpperCase();
   const tags = task.tags ?? [];
+  const draggable = !!onDragStart;
 
   return (
     <div
-      draggable
+      draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className="cursor-grab overflow-hidden rounded-lg border border-hairline bg-card shadow-soft active:cursor-grabbing"
+      className={cn(
+        "relative overflow-hidden rounded-lg border border-hairline bg-card shadow-soft",
+        draggable && "cursor-grab active:cursor-grabbing",
+        fullWidth && "w-full",
+      )}
     >
       <div className="flex">
         <span className="w-1 shrink-0" style={{ background: stripe }} />
         <div className="min-w-0 flex-1 p-2.5">
-          <div className="text-[13px] font-medium leading-snug">{task.title}</div>
+          {onMove && (
+            <div className="absolute right-1 top-1">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="size-7 text-muted-foreground" aria-label="Move or reassign">
+                    <MoreVertical size={15} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>Move to…</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {COLUMNS.map((c) => (
+                        <DropdownMenuItem
+                          key={c.key}
+                          disabled={columnKeyFor(task.status) === c.key}
+                          onClick={() => onMove(task.id, { status: c.setStatus })}
+                        >
+                          {c.label}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>Assign to…</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className="max-h-72 overflow-y-auto">
+                      <DropdownMenuItem onClick={() => onMove(task.id, { assigned_agent: "" })}>
+                        Unassigned
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      {AGENTS.map((a) => (
+                        <DropdownMenuItem
+                          key={a.id}
+                          disabled={task.assigned_agent === a.id}
+                          onClick={() => onMove(task.id, { assigned_agent: a.id })}
+                        >
+                          {a.name} · {a.role}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
+          <div className={cn("text-[13px] font-medium leading-snug", onMove && "pr-6")}>{task.title}</div>
           {tags.length > 0 && (
             <div className="mt-1.5 flex flex-wrap gap-1">
               {tags.slice(0, 4).map((tag) => (
