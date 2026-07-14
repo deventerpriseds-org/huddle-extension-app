@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical } from "lucide-react";
+import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown } from "lucide-react";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import type { BoardTaskRow } from "../lib/tasks/tasks.server";
@@ -76,6 +76,13 @@ export function BoardView() {
   const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
   const [dragId, setDragId] = useState<string | null>(null);
   const [activeCol, setActiveCol] = useState<string>("upnext"); // mobile: which status column is shown
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set()); // collapsed swimlanes
+  const toggleLane = (key: string) =>
+    setCollapsed((s) => {
+      const n = new Set(s);
+      n.has(key) ? n.delete(key) : n.add(key);
+      return n;
+    });
 
   const refetch = useCallback(async () => {
     if (!caller) {
@@ -205,7 +212,7 @@ export function BoardView() {
 
   return (
     <TooltipProvider delayDuration={200}>
-      <section className="flex min-w-0 flex-1 flex-col bg-background">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         <header className="flex flex-wrap items-center gap-2 border-b border-hairline bg-surface px-4 py-2.5 sm:px-6">
           <div className="mr-2">
             <h1 className="text-sm font-semibold">Board</h1>
@@ -304,42 +311,50 @@ export function BoardView() {
                   ))}
                 </div>
 
-                {lanes.map((lane) => (
-                  <div key={lane.key} className="rounded-xl border border-hairline bg-surface/40">
-                    {groupBy !== "none" && (
-                      <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
-                        {lane.agent ? (
-                          <AgentAvatar agent={lane.agent} size="sm" clickable={false} />
-                        ) : (
-                          <span className="flex size-7 items-center justify-center rounded-full bg-muted text-[10px] text-muted-foreground">—</span>
-                        )}
-                        <span className="text-[13px] font-semibold">{lane.label}</span>
-                        {lane.agent && <span className="text-[11px] text-muted-foreground">{lane.agent.role}</span>}
-                        <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                          {COLUMNS.reduce((n, c) => n + cellTasks(lane.key, c.key).length, 0)}
-                        </span>
-                      </div>
-                    )}
-                    <div className="flex gap-3 p-2">
-                      {COLUMNS.map((col) => {
-                        const items = cellTasks(lane.key, col.key);
-                        return (
-                          <div
-                            key={col.key}
-                            onDragOver={(e) => e.preventDefault()}
-                            onDrop={() => onDrop(col.key, lane.key)}
-                            className="flex w-60 shrink-0 flex-col gap-2 rounded-lg bg-muted/30 p-1.5"
-                          >
-                            {items.map((t) => (
-                              <BoardCard key={t.id} task={t} onDragStart={() => setDragId(t.id)} onDragEnd={() => setDragId(null)} />
-                            ))}
-                            {!items.length && <div className="h-1" />}
-                          </div>
-                        );
-                      })}
+                {lanes.map((lane) => {
+                  const isCollapsed = collapsed.has(lane.key);
+                  return (
+                    <div key={lane.key} className="overflow-hidden rounded-xl border border-hairline bg-surface/40">
+                      {groupBy !== "none" && (
+                        <button
+                          onClick={() => toggleLane(lane.key)}
+                          className="flex w-full items-center gap-2 border-b border-hairline px-3 py-2 text-left"
+                        >
+                          <ChevronDown
+                            size={15}
+                            className={cn("shrink-0 text-muted-foreground transition-transform", isCollapsed && "-rotate-90")}
+                          />
+                          {lane.agent && <AgentAvatar agent={lane.agent} size="sm" clickable={false} />}
+                          <span className="text-[13px] font-semibold">{lane.label}</span>
+                          {lane.agent && <span className="text-[11px] text-muted-foreground">{lane.agent.role}</span>}
+                          <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                            {COLUMNS.reduce((n, c) => n + cellTasks(lane.key, c.key).length, 0)}
+                          </span>
+                        </button>
+                      )}
+                      {!isCollapsed && (
+                        <div className="flex gap-3 p-2">
+                          {COLUMNS.map((col) => {
+                            const items = cellTasks(lane.key, col.key);
+                            return (
+                              <div
+                                key={col.key}
+                                onDragOver={(e) => e.preventDefault()}
+                                onDrop={() => onDrop(col.key, lane.key)}
+                                className="flex w-60 shrink-0 flex-col gap-2 rounded-lg bg-muted/30 p-1.5"
+                              >
+                                {items.map((t) => (
+                                  <BoardCard key={t.id} task={t} onDragStart={() => setDragId(t.id)} onDragEnd={() => setDragId(null)} />
+                                ))}
+                                {!items.length && <div className="h-1" />}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               {/* Mobile: one status column at a time (tap the pills), swimlanes stacked, full-width
@@ -368,24 +383,30 @@ export function BoardView() {
                 {lanes.map((lane) => {
                   const items = cellTasks(lane.key, activeCol);
                   if (!items.length) return null;
+                  const isCollapsed = collapsed.has(lane.key);
                   return (
-                    <div key={lane.key} className="rounded-xl border border-hairline bg-surface/40">
+                    <div key={lane.key} className="overflow-hidden rounded-xl border border-hairline bg-surface/40">
                       {groupBy !== "none" && (
-                        <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
-                          {lane.agent ? (
-                            <AgentAvatar agent={lane.agent} size="sm" clickable={false} />
-                          ) : (
-                            <span className="flex size-7 items-center justify-center rounded-full bg-muted text-[10px] text-muted-foreground">—</span>
-                          )}
-                          <span className="text-[13px] font-semibold">{lane.label}</span>
+                        <button
+                          onClick={() => toggleLane(lane.key)}
+                          className="flex w-full items-center gap-2 border-b border-hairline px-3 py-2.5 text-left"
+                        >
+                          <ChevronDown
+                            size={15}
+                            className={cn("shrink-0 text-muted-foreground transition-transform", isCollapsed && "-rotate-90")}
+                          />
+                          {lane.agent && <AgentAvatar agent={lane.agent} size="sm" clickable={false} />}
+                          <span className="truncate text-[13px] font-semibold">{lane.label}</span>
                           <span className="ml-auto rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{items.length}</span>
+                        </button>
+                      )}
+                      {!isCollapsed && (
+                        <div className="flex flex-col gap-2 p-2">
+                          {items.map((t) => (
+                            <BoardCard key={t.id} task={t} fullWidth onMove={applyMove} />
+                          ))}
                         </div>
                       )}
-                      <div className="flex flex-col gap-2 p-2">
-                        {items.map((t) => (
-                          <BoardCard key={t.id} task={t} fullWidth onMove={applyMove} />
-                        ))}
-                      </div>
                     </div>
                   );
                 })}
