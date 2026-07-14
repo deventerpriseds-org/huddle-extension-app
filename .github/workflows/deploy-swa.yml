@@ -64,18 +64,21 @@ jobs:
           # The npm registry occasionally refuses connections mid-install on the runner
           # (ConnectionRefused / FailedToOpenSocket on random tarballs). Retry with backoff so a
           # transient blip doesn't fail the whole deploy.
-          # Cap concurrency: bun defaults to 48 simultaneous registry connections, and the npm CDN
-          # intermittently refuses that burst from a runner IP (ConnectionRefused / FailedToOpenSocket
-          # across many tarballs at once — a known bun-install flake, oven-sh/bun#4988/#12737). Far
-          # fewer parallel sockets sidesteps the refusal. Retry loop stays as a backstop.
-          for attempt in 1 2 3 4 5; do
-            if bun install --registry https://registry.npmjs.org --network-concurrency 6; then
+          # The npm CDN is intermittently refusing connections from the runner IP (ConnectionRefused /
+          # FailedToOpenSocket on many tarballs at once — a known bun-install flake under load,
+          # oven-sh/bun#4988/#12737). Two mitigations: (1) low --network-concurrency so we open few
+          # sockets at a time; (2) many retries — bun's global cache (~/.bun/install/cache) persists
+          # across attempts, so each retry only re-fetches what's still missing and the set converges
+          # to zero even when any single pass can't finish. Cap total time with a modest backoff.
+          for attempt in $(seq 1 12); do
+            if bun install --registry https://registry.npmjs.org --network-concurrency 4; then
               echo "bun install succeeded on attempt $attempt"; exit 0
             fi
-            echo "bun install failed (attempt $attempt) — retrying after ${attempt}0s"
-            sleep "${attempt}0"
+            back=$(( attempt < 6 ? attempt * 15 : 90 ))
+            echo "bun install failed (attempt $attempt) — retrying after ${back}s (cache carries partial progress)"
+            sleep "$back"
           done
-          echo "::error::bun install failed after 5 attempts"; exit 1
+          echo "::error::bun install failed after 12 attempts — npm registry still refusing this runner"; exit 1
 
       - uses: azure/login@v2
         with:
