@@ -77,7 +77,9 @@ export async function dispatchGroomBacklog(
   if (!apiKey) return JSON.stringify({ error: "not_configured", message: "OPENAI_API_KEY is not set." });
 
   const category = typeof args.category === "string" && args.category.trim() ? args.category.trim() : undefined;
-  const limit = typeof args.limit === "number" && args.limit > 0 ? Math.min(args.limit, 40) : 25;
+  // Keep each pass small so classification + the batched write finish comfortably within the tool
+  // budget (a large pass is what made grooming time out). The user can ask again to groom more.
+  const limit = typeof args.limit === "number" && args.limit > 0 ? Math.min(args.limit, 25) : 15;
 
   try {
     const { getTasksForUser, getCapabilityPrompt } = await import("./tasks.server");

@@ -143,11 +143,16 @@ function isEchoOfPrior(text: string, priorReplies: { text: string }[]): boolean 
 // the model always gets something back and can still reply ("I hit a problem with X"). Applies to
 // all tools and all agents, not any single one.
 const TOOL_TIMEOUT_MS = 30_000;
+// A few tools do more work than a normal call (an LLM classification pass PLUS a batched write) and
+// legitimately need longer than the default cap — otherwise the wrapper kills them mid-write and the
+// agent reports a false "timed out". Give them a bounded-but-larger budget.
+const TOOL_TIMEOUT_OVERRIDES: Record<string, number> = { groom_backlog: 55_000 };
 async function runToolSafely(name: string, fn: () => Promise<unknown>): Promise<string> {
+  const timeoutMs = TOOL_TIMEOUT_OVERRIDES[name] ?? TOOL_TIMEOUT_MS;
   try {
     const out = await Promise.race([
       Promise.resolve().then(fn),
-      new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${name} timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS)),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${name} timed out after ${timeoutMs / 1000}s`)), timeoutMs)),
     ]);
     return typeof out === "string" ? out : JSON.stringify(out ?? {});
   } catch (e) {
