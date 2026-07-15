@@ -633,7 +633,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
   useEffect(() => {
     let stopped = false;
     let cursor = 0;
-    const render = (r: { id: string; agentId: string | null; text: string; firedMs: number }) => {
+    const render = (r: { id: string; agentId: string | null; text: string; kind?: string; firedMs: number }) => {
       const mid = `rem-${r.id}`;
       if (useHuddleStore.getState().messages.some((m) => m.id === mid)) return;
       const agentId = (r.agentId && AGENT_BY_ID[r.agentId as AgentId] ? r.agentId : huddle.members[0]) as AgentId;
@@ -641,7 +641,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
         id: mid,
         huddleId: huddle.id,
         author: { kind: "agent", agentId },
-        text: `⏰ Reminder: ${r.text}`,
+        text: `⏰ ${r.kind === "alarm" ? "Alarm" : "Reminder"}: ${r.text}`,
         ts: r.firedMs || Date.now(),
       });
     };

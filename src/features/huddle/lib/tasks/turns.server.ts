@@ -65,11 +65,13 @@ CREATE TABLE IF NOT EXISTS chat.reminders (
   huddle_id   TEXT NOT NULL,
   agent_id    TEXT,
   text        TEXT NOT NULL,
+  kind        TEXT NOT NULL DEFAULT 'reminder', -- reminder (heads-up) | alarm (full-screen)
   due_at      TIMESTAMPTZ NOT NULL,
   status      TEXT NOT NULL DEFAULT 'pending', -- pending | fired | cancelled
   fired_at    TIMESTAMPTZ,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE chat.reminders ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'reminder';
 CREATE INDEX IF NOT EXISTS reminders_due_idx    ON chat.reminders (status, due_at);
 CREATE INDEX IF NOT EXISTS reminders_huddle_idx ON chat.reminders (huddle_id, fired_at DESC);
 `;
@@ -263,6 +265,7 @@ export interface ReminderRecord {
   huddle_id: string;
   agent_id: string | null;
   text: string;
+  kind: string;
   due_ms: number;
   fired_ms: number | null;
 }
@@ -274,6 +277,7 @@ function mapReminder(r: Record<string, unknown>): ReminderRecord {
     huddle_id: r.huddle_id as string,
     agent_id: (r.agent_id as string) ?? null,
     text: r.text as string,
+    kind: (r.kind as string) ?? "reminder",
     due_ms: Number(r.due_ms ?? 0),
     fired_ms: r.fired_ms == null ? null : Number(r.fired_ms),
   };
@@ -285,13 +289,14 @@ export async function createReminder(args: {
   huddleId: string;
   agentId: string | null;
   text: string;
+  kind: string;
   dueAtMs: number;
 }): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(
-    `INSERT INTO chat.reminders (id, user_email, huddle_id, agent_id, text, due_at, status)
-     VALUES ($1, $2, $3, $4, $5, to_timestamp($6 / 1000.0), 'pending')`,
-    [args.id, args.userEmail, args.huddleId, args.agentId, args.text.slice(0, 500), args.dueAtMs],
+    `INSERT INTO chat.reminders (id, user_email, huddle_id, agent_id, text, kind, due_at, status)
+     VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7 / 1000.0), 'pending')`,
+    [args.id, args.userEmail, args.huddleId, args.agentId, args.text.slice(0, 500), args.kind, args.dueAtMs],
   );
 }
 
@@ -307,7 +312,7 @@ export async function claimDueReminders(max = 25): Promise<ReminderRecord[]> {
          LIMIT $1
          FOR UPDATE SKIP LOCKED
       )
-      RETURNING id, user_email, huddle_id, agent_id, text,
+      RETURNING id, user_email, huddle_id, agent_id, text, kind,
         (EXTRACT(EPOCH FROM due_at) * 1000)::bigint AS due_ms,
         (EXTRACT(EPOCH FROM fired_at) * 1000)::bigint AS fired_ms`,
     [max],
@@ -319,7 +324,7 @@ export async function claimDueReminders(max = 25): Promise<ReminderRecord[]> {
 export async function getFiredRemindersSince(huddleId: string, sinceMs: number): Promise<ReminderRecord[]> {
   await ensureBootstrapped();
   const res = await getPool().query(
-    `SELECT id, user_email, huddle_id, agent_id, text,
+    `SELECT id, user_email, huddle_id, agent_id, text, kind,
         (EXTRACT(EPOCH FROM due_at) * 1000)::bigint AS due_ms,
         (EXTRACT(EPOCH FROM fired_at) * 1000)::bigint AS fired_ms
        FROM chat.reminders

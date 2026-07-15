@@ -660,7 +660,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       // A reminder ("remind me in 30 min", "ping me at 3pm") is a timed nudge, NOT a backlog task —
       // route it to schedule_reminder and DON'T also force a task/web-search for the same message.
       const reminderRe =
-        /\b(remind me|reminder|notify me|ping me|nudge me|alert me|wake me|message me (?:in|at|later|tonight|tomorrow)|text me (?:in|at))\b/i;
+        /\b(remind me|reminder|notify me|ping me|nudge me|alert me|wake me|set an alarm|alarm|message me (?:in|at|later|tonight|tomorrow)|text me (?:in|at))\b/i;
       const forceReminder = reminderRe.test(data.text);
       const forceTaskCreation = !forceReminder && createTaskRe.test(data.text);
       const forceWebSearch = !forceReminder && !!agentBackend.webSearch && timeSensitiveRe.test(data.text);
@@ -2003,6 +2003,7 @@ export const getReminderDeliveries = createServerFn({ method: "POST" })
       id: r.id,
       agentId: r.agent_id,
       text: r.text,
+      kind: r.kind,
       firedMs: r.fired_ms ?? 0,
     }));
     return { reminders };

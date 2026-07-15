@@ -10,14 +10,19 @@ export const SCHEDULE_REMINDER_TOOL = {
   type: "function",
   name: "schedule_reminder",
   description:
-    "Schedule a reminder that pings the user LATER, in this conversation (plus a phone notification if they're away). Call this whenever the user asks to be reminded, notified, pinged, nudged, or messaged at a later time or after a delay — e.g. 'remind me in 30 minutes to stretch', 'ping me at 3pm', 'nudge me tonight'. A reminder is a timed nudge, NOT a backlog task, so do not also create a task for it. Only tell the user the reminder is set AFTER this tool returns success; if it returns an error, tell them it failed.",
+    "Schedule a reminder or alarm that pings the user LATER, in this conversation and on their phone. Call this whenever the user asks to be reminded, notified, pinged, nudged, messaged, woken, or alarmed at a later time or after a delay — e.g. 'remind me in 30 minutes to stretch', 'ping me at 3pm', 'wake me at 6am', 'set an alarm for 20 minutes'. For a time-critical wake-up ('wake me', 'set an alarm'), pass kind:'alarm' — it rings full-screen with sound on the phone until dismissed. Otherwise use kind:'reminder' (a gentle heads-up). A reminder/alarm is a timed nudge, NOT a backlog task, so do not also create a task for it. Only tell the user it's set AFTER this tool returns success; if it returns an error, tell them it failed.",
   parameters: {
     type: "object",
     additionalProperties: false,
     properties: {
       text: {
         type: "string",
-        description: "What to remind the user about, as the reminder message itself (e.g. 'drink water').",
+        description: "What to remind the user about, as the message itself (e.g. 'drink water', 'stand-up meeting').",
+      },
+      kind: {
+        type: "string",
+        enum: ["reminder", "alarm"],
+        description: "'reminder' = a normal heads-up nudge (default). 'alarm' = a time-critical wake-up that rings full-screen with sound until dismissed — use for 'wake me', 'set an alarm'.",
       },
       delay_minutes: {
         type: "number",
@@ -25,7 +30,7 @@ export const SCHEDULE_REMINDER_TOOL = {
       },
       at_time: {
         type: "string",
-        description: "Local clock time as HH:MM (24-hour) to fire today, or tomorrow if already past. Use for 'at 3pm' → '15:00'.",
+        description: "Local clock time as HH:MM (24-hour) to fire today, or tomorrow if already past. Use for 'at 3pm' → '15:00', 'wake me at 6am' → '06:00'.",
       },
     },
     required: ["text"],
@@ -34,7 +39,7 @@ export const SCHEDULE_REMINDER_TOOL = {
 } as const;
 
 export const REMINDER_SYSTEM_HINT =
-  "When the user asks to be reminded, notified, pinged, nudged, or messaged at a later time or after a delay ('remind me in 30 minutes', 'ping me at 3pm'), you MUST call `schedule_reminder` — do not create a task and do not claim you've set a reminder unless the tool returns success. If it returns an error, say plainly that you couldn't set it.";
+  "When the user asks to be reminded, notified, pinged, nudged, messaged, woken, or alarmed at a later time or after a delay ('remind me in 30 minutes', 'ping me at 3pm', 'wake me at 6am', 'set an alarm'), you MUST call `schedule_reminder` — pass kind:'alarm' for a time-critical wake-up (rings full-screen), otherwise kind:'reminder'. Do not create a task, and do not claim you've set it unless the tool returns success. If it returns an error, say plainly that you couldn't set it.";
 
 type Caller = { entra_object_id?: string; entra_email?: string };
 
@@ -93,6 +98,7 @@ export async function dispatchScheduleReminder(
   const text = typeof args.text === "string" ? args.text.trim() : "";
   if (!text) return JSON.stringify({ error: "missing_text", message: "A reminder needs something to say." });
 
+  const kind = args.kind === "alarm" ? "alarm" : "reminder";
   const nowMs = Date.now();
   const dueMs = resolveDueMs(args, timeZone, nowMs);
   if (dueMs == null) {
@@ -110,15 +116,17 @@ export async function dispatchScheduleReminder(
   try {
     const { createReminder } = await import("./turns.server");
     const id = `rem-${nowMs.toString(36)}-${Math.round((dueMs % 1_000_000))}`;
-    await createReminder({ id, userEmail: email, huddleId, agentId, text, dueAtMs: dueMs });
+    await createReminder({ id, userEmail: email, huddleId, agentId, text, kind, dueAtMs: dueMs });
     const minutes = Math.round((dueMs - nowMs) / 60_000);
     const whenIso = new Date(dueMs).toISOString();
+    const label = kind === "alarm" ? "Alarm" : "Reminder";
     return JSON.stringify({
       scheduled: true,
       id,
+      kind,
       due_at: whenIso,
       in_minutes: minutes,
-      message: `Reminder set — I'll ping you here${minutes >= 1 ? ` in about ${minutes} minute${minutes === 1 ? "" : "s"}` : " shortly"}.`,
+      message: `${label} set — I'll ${kind === "alarm" ? "ring you" : "ping you here"}${minutes >= 1 ? ` in about ${minutes} minute${minutes === 1 ? "" : "s"}` : " shortly"}.`,
     });
   } catch (err) {
     return JSON.stringify({ error: "reminder_write_failed", message: err instanceof Error ? err.message : String(err) });
@@ -134,18 +142,37 @@ export async function fireDueReminders(max = 25): Promise<number> {
   const due = await claimDueReminders(max);
   if (!due.length) return 0;
   const { sendPushToUser } = await import("../push/push.server");
+  const { invokeJourneyTool } = await import("../journey/proxy.functions");
   await Promise.all(
     due.map(async (r) => {
       const name = r.agent_id ? AGENT_BY_ID[r.agent_id as AgentId]?.name ?? "Huddle" : "Huddle";
+      const isAlarm = r.kind === "alarm";
+      const title = isAlarm ? "⏰ Alarm" : `Reminder from ${name}`;
+      // Phone delivery via journey's native push → the Android bridge. A reminder lands as a heads-up
+      // (channel `messages`); an alarm lands as the bridge's full-screen, ring-until-dismissed alarm
+      // (channel `calendar_events`). Requires the user's device to be registered in journey.
+      if (r.user_email) {
+        try {
+          await invokeJourneyTool({
+            toolName: "send_push",
+            args: { title, body: r.text.slice(0, 200), channel: isAlarm ? "calendar_events" : "messages" },
+            caller: { entra_email: r.user_email },
+            context: { source: "huddle" },
+          });
+        } catch {
+          /* journey push best-effort */
+        }
+      }
+      // Huddle's own Web Push (no-op until Huddle VAPID keys are set) — covers browser-only users.
       try {
         await sendPushToUser(r.user_email, {
-          title: `⏰ Reminder from ${name}`,
+          title,
           body: r.text.slice(0, 140),
           url: "/",
           tag: `reminder-${r.id}`,
         });
       } catch {
-        /* push best-effort; the in-chat delivery still happens */
+        /* best-effort; the in-chat delivery still happens */
       }
     }),
   );
