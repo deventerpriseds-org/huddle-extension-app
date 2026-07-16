@@ -36,7 +36,7 @@ jobs:
              "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
              "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
 
-      - name: Add VECTOR to azure.extensions (append, no restart)
+      - name: Identify the app's PG server + allow-list VECTOR on it
         env:
           AZURE_PG_URL: ${{ secrets.AZURE_PG_URL }}
           PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER }}
@@ -44,30 +44,46 @@ jobs:
           set -euo pipefail
           RG="$AZURE_RESOURCE_GROUP"
 
-          # Resolve the server name the app actually connects to: prefer an explicit override, else
-          # derive it from the host in AZURE_PG_URL (<server>.postgres.database.azure.com), else fall
-          # back to the single server in the resource group.
-          SRV="${PG_SERVER_OVERRIDE:-}"
-          if [ -z "$SRV" ] && [ -n "${AZURE_PG_URL:-}" ]; then
+          echo "=== Flexible servers in $RG ==="
+          az postgres flexible-server list -g "$RG" --query "[].name" -o tsv || true
+          echo "================================"
+
+          # Determine the server the APP actually connects to, so we don't allow-list the wrong one.
+          APP_SRV="${PG_SERVER_OVERRIDE:-}"
+          if [ -n "$APP_SRV" ]; then
+            echo "Using PG_SERVER_OVERRIDE for the app server."
+          elif [ -n "${AZURE_PG_URL:-}" ]; then
+            echo "AZURE_PG_URL IS available to this workflow — deriving the app server from it."
             HOST=$(printf '%s' "$AZURE_PG_URL" | sed -E 's#^[a-zA-Z]+://[^@]+@([^:/?]+).*#\1#')
-            SRV="${HOST%%.*}"
-          fi
-          if [ -z "$SRV" ]; then
-            SRV=$(az postgres flexible-server list -g "$RG" --query "[0].name" -o tsv)
-          fi
-          echo "Target Flexible Server: $SRV (rg: $RG)"
-
-          CURRENT=$(az postgres flexible-server parameter show \
-            -g "$RG" -s "$SRV" --name azure.extensions --query value -o tsv 2>/dev/null || echo "")
-          echo "Current azure.extensions: '${CURRENT}'"
-
-          if printf '%s' "$CURRENT" | tr ',' '\n' | grep -qix 'vector'; then
-            echo "VECTOR already allow-listed — nothing to do."
+            APP_SRV="${HOST%%.*}"
+            # Never print the derived name (it's a substring of the secret); print only the match result.
+            echo "App server matches 'ux-design-pg': $([ "$APP_SRV" = "ux-design-pg" ] && echo YES || echo NO)"
           else
-            if [ -z "$CURRENT" ]; then NEW="VECTOR"; else NEW="${CURRENT},VECTOR"; fi
-            echo "Setting azure.extensions to: '${NEW}'"
-            az postgres flexible-server parameter set \
-              -g "$RG" -s "$SRV" --name azure.extensions --value "$NEW"
+            echo "AZURE_PG_URL is EMPTY in this workflow (likely an Environment-scoped secret)."
           fi
+
+          # Targets: the app server if we know it, otherwise EVERY server in the RG. Allow-listing an
+          # extension is benign — it only PERMITS CREATE EXTENSION, it installs/changes nothing — so
+          # covering all servers guarantees the app's server is included when we can't single it out.
+          if [ -n "$APP_SRV" ]; then
+            TARGETS="$APP_SRV"
+            echo "Targeting the identified app server only."
+          else
+            TARGETS=$(az postgres flexible-server list -g "$RG" --query "[].name" -o tsv)
+            echo "App server unknown — targeting all servers in the RG."
+          fi
+
+          for SRV in $TARGETS; do
+            CURRENT=$(az postgres flexible-server parameter show \
+              -g "$RG" -s "$SRV" --name azure.extensions --query value -o tsv 2>/dev/null || echo "")
+            if printf '%s' "$CURRENT" | tr ',' '\n' | grep -qix 'vector'; then
+              echo "[$SRV] VECTOR already allow-listed"
+            else
+              if [ -z "$CURRENT" ]; then NEW="VECTOR"; else NEW="${CURRENT},VECTOR"; fi
+              az postgres flexible-server parameter set \
+                -g "$RG" -s "$SRV" --name azure.extensions --value "$NEW" -o none
+              echo "[$SRV] allow-listed VECTOR (was '$CURRENT')"
+            fi
+          done
 
           echo "Done. Next: app -> Settings -> Memory DB -> Run bootstrap (creates rag_chunks/rag_triples)."
