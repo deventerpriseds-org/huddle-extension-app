@@ -1090,7 +1090,12 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             if (c.name === "groom_backlog") {
               const { dispatchGroomBacklog } = await import("./tasks/groom");
               const out = await dispatchGroomBacklog(data.caller, c.arguments);
-              recordToolUse(winner.id, "groom_backlog", "groomed the backlog", true);
+              let groomDetail = "";
+              try {
+                const p = JSON.parse(out) as { _timings?: { readMs: number; classifyMs: number; writeMs: number; tasks: number } };
+                if (p._timings) groomDetail = `read=${p._timings.readMs}ms classify=${p._timings.classifyMs}ms write=${p._timings.writeMs}ms tasks=${p._timings.tasks}`;
+              } catch { /* ignore */ }
+              recordToolUse(winner.id, "groom_backlog", "groomed the backlog", true, groomDetail);
               return out;
             }
             if (c.name === "send_email") {

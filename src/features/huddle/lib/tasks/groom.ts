@@ -82,11 +82,13 @@ export async function dispatchGroomBacklog(
   const limit = typeof args.limit === "number" && args.limit > 0 ? Math.min(args.limit, 25) : 15;
 
   try {
+    const _tRead0 = Date.now();
     const { getTasksForUser, getCapabilityPrompt } = await import("./tasks.server");
     const [tasks, capabilityPrompt] = await Promise.all([
       getTasksForUser(email, category),
       getCapabilityPrompt(email),
     ]);
+    const _readMs = Date.now() - _tRead0;
     if (!tasks.length) {
       return JSON.stringify({ groomed: 0, message: "No open tasks to groom." });
     }
@@ -109,6 +111,7 @@ ${rosterForPrompt()}
 
 Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"action":"do|schedule|blocked","priority","rank":<int|null>,"reason":"<=12 words"}]}. assigned_agent MUST be one of the agent ids above. Include every task id exactly once.`;
 
+    const _tClf0 = Date.now();
     const res = await withTimeout(
       fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -130,6 +133,7 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"action":"d
       return JSON.stringify({ error: "groom_llm_failed", message: `${res.status}: ${(await res.text()).slice(0, 160)}` });
     }
     const j = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const _classifyMs = Date.now() - _tClf0;
     const raw = j.choices?.[0]?.message?.content ?? "{}";
     let parsed: { assignments?: Assignment[] };
     try {
@@ -166,6 +170,7 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"action":"d
     });
 
     let written = 0;
+    const _tW0 = Date.now();
     try {
       const { invokeJourneyTool } = await import("../journey/proxy.functions");
       const r = await withTimeout(
@@ -189,10 +194,12 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"action":"d
     } catch {
       /* batch call failed/timed out — report the plan anyway so Terry can respond */
     }
+    const _writeMs = Date.now() - _tW0;
 
     return JSON.stringify({
       groomed: written,
       total: assignments.length,
+      _timings: { readMs: _readMs, classifyMs: _classifyMs, writeMs: _writeMs, tasks: slice.length },
       note:
         written === 0
           ? "Planned the assignments, but the write to the task board didn't confirm — try again in a moment."
