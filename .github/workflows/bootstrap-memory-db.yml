@@ -14,6 +14,12 @@ name: Bootstrap Memory DB (allow-list pgvector)
 
 on:
   workflow_dispatch: {}
+  # Also fire when this workflow file itself changes, so it can run from a feature branch without
+  # first landing on the default branch (workflow_dispatch is only exposed from the default branch).
+  # Pushing an edit to this file triggers exactly one run on the branch.
+  push:
+    paths:
+      - .github/workflows/bootstrap-memory-db.yml
 
 env:
   AZURE_RESOURCE_GROUP: EnterpriseDS_ResourceGRP
