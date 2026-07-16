@@ -94,11 +94,6 @@ export async function dispatchGroomBacklog(
     }
     const slice = tasks.slice(0, limit);
 
-    // One classification pass over the whole slice.
-    const taskLines = slice
-      .map((t) => `{"id":"${t.id}","title":${JSON.stringify(t.title)},"category":${JSON.stringify(t.category ?? "")},"due_date":${JSON.stringify(t.due_date ?? "")}}`)
-      .join("\n");
-
     const system = `You are Terry Locke, the scrum master, grooming a backlog like in Jira. Assign each task to exactly ONE agent (the best fit by their domains/role), give it 0-3 short lowercase tags, set a priority (LOW|MEDIUM|HIGH|URGENT), and set an integer rank (1 = do first) ONLY for tasks that are do-able now; use null rank for scheduled/blocked tasks.
 
 Respect the team's real capabilities below. If a task needs a capability the team does NOT have, set action to "schedule" (prep/schedule only) or "blocked", NEVER "do", and add a tag like "needs-capability".
@@ -109,39 +104,50 @@ ${capabilityPrompt}
 AGENTS (id — name, role: domains):
 ${rosterForPrompt()}
 
-Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"action":"do|schedule|blocked","priority","rank":<int|null>,"reason":"<=12 words"}]}. assigned_agent MUST be one of the agent ids above. Include every task id exactly once.`;
+Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"action":"do|schedule|blocked","priority","rank":<int|null>,"reason":"<=8 words"}]}. assigned_agent MUST be one of the agent ids above. Include every task id exactly once.`;
 
+    // Classification is output-token bound (one JSON object per task), so a single call over the whole
+    // slice serializes ~1k tokens and takes ~13s. Split into small chunks classified CONCURRENTLY so
+    // wall time collapses to roughly one chunk's latency.
+    const CHUNK = 5;
+    const chunks: (typeof slice)[] = [];
+    for (let i = 0; i < slice.length; i += CHUNK) chunks.push(slice.slice(i, i + CHUNK));
     const _tClf0 = Date.now();
-    const res = await withTimeout(
-      fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        model: process.env.GROOM_MODEL || "gpt-4o-mini",
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: `Tasks:\n${taskLines}` },
-        ],
-      }),
-      }),
-      15000,
-      "grooming classification",
-    );
-    if (!res.ok) {
-      return JSON.stringify({ error: "groom_llm_failed", message: `${res.status}: ${(await res.text()).slice(0, 160)}` });
-    }
-    const j = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const classifyChunk = async (chunkTasks: typeof slice): Promise<Assignment[]> => {
+      const taskLines = chunkTasks
+        .map((t) => `{"id":"${t.id}","title":${JSON.stringify(t.title)},"category":${JSON.stringify(t.category ?? "")},"due_date":${JSON.stringify(t.due_date ?? "")}}`)
+        .join("\n");
+      const res = await withTimeout(
+        fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+          body: JSON.stringify({
+            model: process.env.GROOM_MODEL || "gpt-4o-mini",
+            temperature: 0.2,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: `Tasks:\n${taskLines}` },
+            ],
+          }),
+        }),
+        15000,
+        "grooming classification",
+      );
+      if (!res.ok) return [];
+      const j = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+      try {
+        return (JSON.parse(j.choices?.[0]?.message?.content ?? "{}").assignments ?? []) as Assignment[];
+      } catch {
+        return [];
+      }
+    };
+    const chunkResults = await Promise.all(chunks.map(classifyChunk));
     const _classifyMs = Date.now() - _tClf0;
-    const raw = j.choices?.[0]?.message?.content ?? "{}";
-    let parsed: { assignments?: Assignment[] };
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return JSON.stringify({ error: "groom_bad_json", message: raw.slice(0, 200) });
+    const assignments = chunkResults.flat().filter((a) => a && a.id && AGENT_IDS.has(a.assigned_agent as AgentId));
+    if (!assignments.length) {
+      return JSON.stringify({ error: "groom_no_assignments", message: "Classification returned nothing — try again." });
     }
-    const assignments = (parsed.assignments ?? []).filter((a) => a && a.id && AGENT_IDS.has(a.assigned_agent as AgentId));
 
     // Rank the do-able tasks (1 = do first) so we can set the priority lane.
     const doable = assignments
