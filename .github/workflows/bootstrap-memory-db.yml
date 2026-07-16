@@ -1,0 +1,67 @@
+# One-shot maintenance: allow-list the pgvector extension on the Azure Postgres Flexible Server.
+#
+# Why this exists: the memory/RAG store (rag_chunks / rag_triples) needs the `vector` extension. On
+# Azure Database for PostgreSQL Flexible Server, an extension can only be CREATEd if it is in the
+# server's `azure.extensions` allow-list. When that list doesn't include VECTOR (e.g. after a server
+# transfer/restore), `CREATE EXTENSION vector` fails with "not allow-listed", the bootstrap batch
+# aborts, `rag_chunks` is never created, and every search_memory/write throws
+# `relation "rag_chunks" does not exist`. This job adds VECTOR to the allow-list (append — it never
+# clobbers other allow-listed extensions). azure.extensions is a DYNAMIC parameter (no restart).
+#
+# After this runs green: open the app → Settings → Memory DB → "Run bootstrap" to create the tables
+# (canonical DDL lives in code, azure-pg.server.ts BOOTSTRAP_SQL), then "Verify round-trip".
+name: Bootstrap Memory DB (allow-list pgvector)
+
+on:
+  workflow_dispatch: {}
+
+env:
+  AZURE_RESOURCE_GROUP: EnterpriseDS_ResourceGRP
+
+jobs:
+  allowlist-vector:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
+             "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}",
+             "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+             "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
+
+      - name: Add VECTOR to azure.extensions (append, no restart)
+        env:
+          AZURE_PG_URL: ${{ secrets.AZURE_PG_URL }}
+          PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER }}
+        run: |
+          set -euo pipefail
+          RG="$AZURE_RESOURCE_GROUP"
+
+          # Resolve the server name the app actually connects to: prefer an explicit override, else
+          # derive it from the host in AZURE_PG_URL (<server>.postgres.database.azure.com), else fall
+          # back to the single server in the resource group.
+          SRV="${PG_SERVER_OVERRIDE:-}"
+          if [ -z "$SRV" ] && [ -n "${AZURE_PG_URL:-}" ]; then
+            HOST=$(printf '%s' "$AZURE_PG_URL" | sed -E 's#^[a-zA-Z]+://[^@]+@([^:/?]+).*#\1#')
+            SRV="${HOST%%.*}"
+          fi
+          if [ -z "$SRV" ]; then
+            SRV=$(az postgres flexible-server list -g "$RG" --query "[0].name" -o tsv)
+          fi
+          echo "Target Flexible Server: $SRV (rg: $RG)"
+
+          CURRENT=$(az postgres flexible-server parameter show \
+            -g "$RG" -s "$SRV" --name azure.extensions --query value -o tsv 2>/dev/null || echo "")
+          echo "Current azure.extensions: '${CURRENT}'"
+
+          if printf '%s' "$CURRENT" | tr ',' '\n' | grep -qix 'vector'; then
+            echo "VECTOR already allow-listed — nothing to do."
+          else
+            if [ -z "$CURRENT" ]; then NEW="VECTOR"; else NEW="${CURRENT},VECTOR"; fi
+            echo "Setting azure.extensions to: '${NEW}'"
+            az postgres flexible-server parameter set \
+              -g "$RG" -s "$SRV" --name azure.extensions --value "$NEW"
+          fi
+
+          echo "Done. Next: app -> Settings -> Memory DB -> Run bootstrap (creates rag_chunks/rag_triples)."
