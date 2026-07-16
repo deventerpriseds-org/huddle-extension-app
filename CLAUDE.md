@@ -85,3 +85,38 @@ Huddle webhook `POST /api/public/tasks-sync` → **`tasks.journey_tasks`** mirro
 To exercise the pipeline end-to-end, use the **`verify-task-sync`** skill. To live-test agents
 (group conversations, routing, tool use) via the server function, use the **`test-agent-serverfn`**
 skill — both under `.claude/skills/`.
+
+## Chat memory & context architecture (relearned the hard way — read before touching "memory")
+How an agent gets context is TWO separate layers. Confusing them leads to wrong diagnoses.
+
+- **Short-term = per-huddle transcript, isolated.** The zustand store holds ONE global message list,
+  but every consumer (and the turn payload) filters by `huddleId`: `HuddleView.tsx` builds `history`
+  from `messages.filter(m => m.huddleId === huddle.id)`, and `runHuddleTurn` only ever reads
+  `data.history`. Group (`all-members`/`daily`) and 1:1 (`dm-<agentId>`) are **different huddles with
+  different histories** — a message typed in the group is NOT in a 1:1's payload. Nothing seeds/copies
+  messages across huddles. So history alone can never carry context group→1:1.
+- **Cross-huddle bridge = shared RAG memory (Azure pgvector `rag_chunks`).** Every turn auto-writes the
+  user message as a `scope='global'` chunk (`huddle.functions.ts`, fire-and-forget). Retrieval filters
+  by **scope/agent only — no huddle filter** (`azure-pg.server.ts` `scopeClause`), so a global chunk is
+  findable from any huddle. This is the ONLY thing that carries context across conversations.
+- **Retrieval is now AUTOMATIC (was model-elected).** Historically memory was reachable only if the
+  model chose to call the `search_memory` tool — so a pointed "what were the tasks?" recalled, but
+  casual continuity ("two lines ago") often didn't. `runHuddleTurn` now **auto-retrieves** the top
+  shared chunks (embed `data.text` once/turn, `searchChunks(mode:"shared", queryVec)`) and injects them
+  into the system prompt. The `search_memory` tool remains for deeper lookups. If "it forgot", suspect
+  the huddle boundary + whether auto-retrieval ran — NOT a broken store.
+- **Memory-DB "vector not allow-listed" is usually a FALSE ALARM.** Azure's `azure.extensions`
+  allow-list gate fires on `CREATE EXTENSION IF NOT EXISTS vector` even when vector is already installed
+  and the store works — so the Settings "Run bootstrap"/"Verify round-trip" buttons can show red while
+  live memory is fine. `BOOTSTRAP_SQL` guards this (swallows the error only if `pg_extension` shows
+  vector present). "Saved memory for X (0)" is a per-agent MANUAL-save view; auto-written global chunks
+  don't populate it and it is not evidence of an empty store.
+
+## Away-notifications: piggyback journey, don't build a parallel push (standing rule)
+journey already delivers push when the user is away via `send_push` (huddle-proxy → `execute-tool` →
+`send-push-notification`), dual web-push **+ FCM/Android bridge** — the reliable path to the phone.
+Reminders/alarms (`reminders.ts`) and durable-turn reply notifications (`executeClaimedTurn`) route
+through it (`invokeJourneyTool({toolName:"send_push", channel:"messages"|"task-reminders"|"calendar_events"})`).
+Huddle's own Web Push (`push/push.server.ts`, VAPID) is an OPTIONAL browser-only extra (no-op unless
+Huddle VAPID keys are set) — journey's path is what covers the phone, so new away-comms should reuse
+`send_push`, not add another sender.

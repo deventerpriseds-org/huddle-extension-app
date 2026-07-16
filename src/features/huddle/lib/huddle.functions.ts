@@ -591,6 +591,18 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
     const spoken = new Set<AgentId>();
     const replies: Reply[] = [];
 
+    // Embedding of the user's message for AUTO memory retrieval, computed at most once per turn
+    // (undefined = not yet computed, null = embedding failed). Recall must not depend on the model
+    // electing to call `search_memory`: we proactively pull the most relevant SHARED/global memory
+    // into each responding agent's prompt. This is what carries context across huddles (e.g. a fact
+    // stated in the group channel is available in a later 1:1) without the agent having to ask.
+    let memoryQueryVec: number[] | null | undefined;
+
+    // Normalized titles of tasks already created THIS turn, so multiple responding agents (or a
+    // re-run of the same turn) can't create duplicate board cards for one intent. See
+    // createSuggestedTaskFromTool below, which claims a title here before writing.
+    const createdTaskTitles = new Set<string>();
+
     // A broadcast ("everyone introduce yourselves") means every member should
     // get to speak, so lift the normal per-turn reply cap for that case.
     const { isBroadcast } = await import("./routing");
@@ -631,11 +643,56 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       const roster = buildRoster(data.members, winner.id);
       const taskToolInstructions =
         "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it.";
+
+      // AUTO memory retrieval: pull the most relevant shared/global memory for THIS agent and inject
+      // it into the prompt, so recall works even when the model doesn't call `search_memory`. This is
+      // the fix for "forgot two lines ago" across huddles — history is per-huddle, but memory is not.
+      let memoryBlock = "";
+      const ragCfg = agentBackend.rag;
+      if (ragCfg && ragCfg.store === "azure" && ragCfg.chunks && openaiKey) {
+        try {
+          if (memoryQueryVec === undefined) {
+            const { embed } = await import("./rag/embed.server");
+            try {
+              memoryQueryVec = await embed(data.text);
+            } catch {
+              memoryQueryVec = null; // embedding unavailable — skip auto-retrieval this turn
+            }
+          }
+          if (memoryQueryVec) {
+            const { azurePgStore } = await import("./rag/azure-pg.server");
+            const hits = await azurePgStore.searchChunks({
+              query: data.text,
+              queryVec: memoryQueryVec,
+              agentId: winner.id,
+              mode: ragCfg.sharing ?? "shared",
+              k: 6,
+            });
+            // Exclude the current message and anything already in this huddle's recent transcript,
+            // so we surface only context the model wouldn't otherwise have (older / other-huddle).
+            const alreadyVisible = new Set(
+              [data.text, ...data.history.slice(-14).map((m) => m.text)].map((t) => t.trim()),
+            );
+            const fresh = (hits ?? [])
+              .filter((h) => (h.score ?? 0) >= 0.72 && !alreadyVisible.has(h.text.trim()))
+              .slice(0, 4);
+            if (fresh.length) {
+              memoryBlock =
+                "\n\nRelevant memory from earlier conversations (use only if it helps answer; do not repeat it verbatim or announce that you looked it up):\n" +
+                fresh.map((h) => `- ${h.text}`).join("\n");
+            }
+          }
+        } catch {
+          /* memory retrieval is best-effort — never block or fail the reply */
+        }
+      }
+
       const appSystem =
         winner.systemPrompt +
         scene +
         roster +
         taskToolInstructions +
+        memoryBlock +
         HOUSE_STYLE;
 
       // Per-agent transcript: the current agent's own prior turns are role=assistant
@@ -667,7 +724,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       const reminderRe =
         /\b(remind me|reminder|notify me|ping me|nudge me|alert me|wake me|set an alarm|alarm|message me (?:in|at|later|tonight|tomorrow)|text me (?:in|at))\b/i;
       const forceReminder = reminderRe.test(data.text);
-      const forceTaskCreation = !forceReminder && createTaskRe.test(data.text);
+      // Only the PRIMARY responder is forced to create the task. Interjectors surface information;
+      // forcing them to also create produced duplicate cards (e.g. Troy AND Iris both creating).
+      const forceTaskCreation = !forceReminder && !isInterjector && createTaskRe.test(data.text);
       const forceWebSearch = !forceReminder && !!agentBackend.webSearch && timeSensitiveRe.test(data.text);
 
       function resolveTaskLane(value: unknown): TaskLane {
@@ -705,6 +764,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           recordToolUse(winner.id, "create_huddle_task", "task creation failed", false, error);
           return { ok: false, error };
         }
+        // Cross-agent / re-run dedup: if this exact title was already created earlier in this turn,
+        // don't create a second card. The first caller claims the title here.
+        const titleKey = title.trim().toLowerCase();
+        if (createdTaskTitles.has(titleKey)) {
+          recordToolUse(winner.id, "create_huddle_task", "already created this turn — skipped duplicate", true);
+          return { ok: true, deduped: true, task: { title: title.slice(0, 160) } };
+        }
+        createdTaskTitles.add(titleKey);
         const task: SuggestedTaskDraft = {
           id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
           title: title.slice(0, 160),
@@ -1923,12 +1990,32 @@ async function executeClaimedTurn(record: {
     // Fire a push per finished turn (SW suppresses it when the app is focused).
     const lead = result.replies?.[0];
     if (lead) {
+      const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
+      const title = `${name} replied`;
+      const body = String(lead.text).replace(/\s+/g, " ").slice(0, 140);
+      // Primary away-delivery: piggyback journey's push (web-push + FCM/Android bridge), the SAME
+      // reliable path reminders/alarms use to reach the phone. No separate Huddle VAPID keys needed;
+      // this reuses journey's existing notification infra (channel `messages` = heads-up reply).
+      if (record.user_email) {
+        try {
+          const { invokeJourneyTool } = await import("./journey/proxy.functions");
+          await invokeJourneyTool({
+            toolName: "send_push",
+            args: { title, body, channel: "messages" },
+            caller: { entra_email: record.user_email },
+            context: { source: "huddle" },
+          });
+        } catch {
+          /* journey push best-effort */
+        }
+      }
+      // Optional extra: Huddle's own Web Push for pure-browser subscribers (no-op unless Huddle VAPID
+      // keys are set). Harmless to keep; journey's path above is what covers the phone.
       try {
         const { sendPushToUser } = await import("./push/push.server");
-        const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
         await sendPushToUser(record.user_email, {
-          title: `${name} replied`,
-          body: String(lead.text).replace(/\s+/g, " ").slice(0, 140),
+          title,
+          body,
           url: "/",
           tag: `huddle-${data.huddleId}`,
         });

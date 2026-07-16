@@ -24,8 +24,11 @@ function getPool(): Pool {
 }
 
 // A `running` turn older than this is considered stale (the runner died mid-flight, e.g. the SWA
-// function hit its ceiling) and may be re-claimed. Comfortably above a normal turn's wall-clock.
-const STALE_RUNNING_SECONDS = 90;
+// function hit its ceiling) and may be re-claimed. Must comfortably exceed a real turn's wall-clock:
+// a group turn with several agents each doing multi-hop tool calls can run well past a minute, and
+// re-claiming a still-live turn re-executes its (non-idempotent) tool calls → duplicate task cards.
+// 300s is safely above any legitimate turn while still reclaiming genuinely dead ones.
+const STALE_RUNNING_SECONDS = 300;
 
 const BOOTSTRAP_SQL = `
 CREATE SCHEMA IF NOT EXISTS chat;

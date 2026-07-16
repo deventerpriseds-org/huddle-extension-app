@@ -62,7 +62,18 @@ async function q<T extends Record<string, unknown> = Record<string, unknown>>(
 }
 
 export const BOOTSTRAP_SQL = `
-CREATE EXTENSION IF NOT EXISTS vector;
+-- Azure's azure.extensions allow-list can reject CREATE EXTENSION even for an extension that is
+-- ALREADY installed and working (e.g. after the allow-list was reset/tightened post-install). That
+-- made the whole bootstrap batch throw on line 1 and the Settings buttons show a false "vector not
+-- allow-listed" failure while the live store kept working. Swallow that error ONLY when vector is in
+-- fact present; re-raise when it is genuinely missing so a real problem still fails loudly.
+DO $$ BEGIN
+  CREATE EXTENSION IF NOT EXISTS vector;
+EXCEPTION WHEN OTHERS THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
+    RAISE;
+  END IF;
+END $$;
 
 DO $$ BEGIN
   CREATE TYPE rag_scope AS ENUM ('agent', 'global');
@@ -439,7 +450,7 @@ export const azurePgStore: RagStore = {
   },
 
   async searchChunks(input: SearchChunksInput): Promise<ChunkRow[]> {
-    const vec = await embed(input.query);
+    const vec = input.queryVec ?? (await embed(input.query));
     const k = Math.min(Math.max(input.k ?? 6, 1), 20);
     const clause = scopeClause(input.mode, input.scope, input.agentId);
     const params: unknown[] = [toPgVector(vec)];

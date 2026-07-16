@@ -138,7 +138,18 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
     set((s) => {
       if (!incoming || incoming.length === 0) return {};
       const now = Date.now();
-      const tasks = incoming.map((t, i): Task => ({
+      // Backstop dedup: drop any suggestion whose title already exists on the board (a duplicate that
+      // slipped past the server-side per-turn dedup, or the same title arriving twice). Title-keyed
+      // because each duplicate carries a distinct random id, so id-dedup alone can't collapse them.
+      const seenTitles = new Set(s.tasks.map((t) => t.title.trim().toLowerCase()));
+      const fresh = incoming.filter((t) => {
+        const key = (t.title ?? "").trim().toLowerCase();
+        if (!key || seenTitles.has(key)) return false;
+        seenTitles.add(key);
+        return true;
+      });
+      if (fresh.length === 0) return {};
+      const tasks = fresh.map((t, i): Task => ({
         id: t.id ?? `task-${now.toString(36)}-${i}`,
         title: t.title,
         ownerId: t.ownerId,
@@ -238,7 +249,20 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
       const byId = new Map<string, JourneyTask>();
       for (const t of s.journeyTasks) byId.set(t.id, t);
       for (const t of incoming) byId.set(t.id, { ...t, origin: "journey-voice" });
-      return { journeyTasks: Array.from(byId.values()) };
+      // Collapse same-title duplicates (distinct journey uuids minted for one intent when more than
+      // one agent created it) so the board shows a single card. Keep the first per normalized title;
+      // tasks with no title are left untouched.
+      const out: JourneyTask[] = [];
+      const seenTitles = new Set<string>();
+      for (const t of byId.values()) {
+        const key = (t.title ?? "").trim().toLowerCase();
+        if (key) {
+          if (seenTitles.has(key)) continue;
+          seenTitles.add(key);
+        }
+        out.push(t);
+      }
+      return { journeyTasks: out };
     }),
 }));
 
