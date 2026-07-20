@@ -85,3 +85,137 @@ Huddle webhook `POST /api/public/tasks-sync` → **`tasks.journey_tasks`** mirro
 To exercise the pipeline end-to-end, use the **`verify-task-sync`** skill. To live-test agents
 (group conversations, routing, tool use) via the server function, use the **`test-agent-serverfn`**
 skill — both under `.claude/skills/`.
+
+## Chat memory & context architecture (relearned the hard way — read before touching "memory")
+How an agent gets context is TWO separate layers. Confusing them leads to wrong diagnoses.
+
+- **Short-term = per-huddle transcript, isolated.** The zustand store holds ONE global message list,
+  but every consumer (and the turn payload) filters by `huddleId`: `HuddleView.tsx` builds `history`
+  from `messages.filter(m => m.huddleId === huddle.id)`, and `runHuddleTurn` only ever reads
+  `data.history`. Group (`all-members`/`daily`) and 1:1 (`dm-<agentId>`) are **different huddles with
+  different histories** — a message typed in the group is NOT in a 1:1's payload. Nothing seeds/copies
+  messages across huddles. So history alone can never carry context group→1:1.
+- **Cross-huddle bridge = shared RAG memory (Azure pgvector `rag_chunks`).** Every turn auto-writes the
+  user message as a `scope='global'` chunk (`huddle.functions.ts`, fire-and-forget). Retrieval filters
+  by **scope/agent only — no huddle filter** (`azure-pg.server.ts` `scopeClause`), so a global chunk is
+  findable from any huddle. This is the ONLY thing that carries context across conversations.
+- **Retrieval is now AUTOMATIC (was model-elected).** Historically memory was reachable only if the
+  model chose to call the `search_memory` tool — so a pointed "what were the tasks?" recalled, but
+  casual continuity ("two lines ago") often didn't. `runHuddleTurn` now **auto-retrieves** the top
+  shared chunks (embed `data.text` once/turn, `searchChunks(mode:"shared", queryVec)`) and injects them
+  into the system prompt. The `search_memory` tool remains for deeper lookups. If "it forgot", suspect
+  the huddle boundary + whether auto-retrieval ran — NOT a broken store.
+- **Memory-DB "vector not allow-listed" is usually a FALSE ALARM.** Azure's `azure.extensions`
+  allow-list gate fires on `CREATE EXTENSION IF NOT EXISTS vector` even when vector is already installed
+  and the store works — so the Settings "Run bootstrap"/"Verify round-trip" buttons can show red while
+  live memory is fine. `BOOTSTRAP_SQL` guards this (swallows the error only if `pg_extension` shows
+  vector present). "Saved memory for X (0)" is a per-agent MANUAL-save view; auto-written global chunks
+  don't populate it and it is not evidence of an empty store.
+
+## Away-notifications: piggyback journey, don't build a parallel push (standing rule)
+journey already delivers push when the user is away via `send_push` (huddle-proxy → `execute-tool` →
+`send-push-notification`), dual web-push **+ FCM/Android bridge** — the reliable path to the phone.
+Reminders/alarms (`reminders.ts`) and durable-turn reply notifications (`executeClaimedTurn`) route
+through it (`invokeJourneyTool({toolName:"send_push", channel:"messages"|"task-reminders"|"calendar_events"})`).
+Huddle's own Web Push (`push/push.server.ts`, VAPID) is an OPTIONAL browser-only extra (no-op unless
+Huddle VAPID keys are set) — journey's path is what covers the phone, so new away-comms should reuse
+`send_push`, not add another sender.
+
+## The canonical Azure DB is PINNED — do not let deploy discovery drift (relearned expensively)
+Huddle's Azure Postgres is **`eds-postgresql` / database `RAG_AI_Agents`** (PG 17), in RG
+`EnterpriseDS_ResourceGRP`. It holds everything: `public.rag_chunks`/`rag_triples` (memory),
+`identity.*`, `tasks.*`, `chat.*`. **Never point the app at `ux-design-pg` (a different app's bare
+server whose only DB is the default `postgres`).**
+
+- **How it broke once:** `deploy-swa.yml` assembles `AZURE_PG_URL` from `az` discovery when the
+  secret is empty (it is), and it used to take `servers[0]` with no pin + fall back to db `postgres`.
+  When `ux-design-pg` was created it started winning discovery, so the app silently switched to
+  `ux-design-pg/postgres`. Everything that **auto-bootstraps** (identity/tasks/turns/reminders)
+  re-created itself there and looked fine; **memory does NOT auto-bootstrap** (explicit `runBootstrap`
+  only), so `rag_chunks`/`rag_triples` never existed there → "relation does not exist" and
+  "vector not allow-listed". Data ended up split-brain across the two servers.
+- **The fix (in place):** `deploy-swa.yml` + `azure-pg-query.yml` default
+  `PG_SERVER_OVERRIDE`→`eds-postgresql`, `PG_DB_OVERRIDE`→`RAG_AI_Agents`. Every deploy now pins there.
+- **Ops workflows** (org Azure SP creds; a runner opens a temp firewall rule for data-plane psql):
+  `bootstrap-memory-db.yml` (allow-list pgvector + inspect all servers/DBs + confirm the app's DB),
+  `migrate-huddle-db.yml` (idempotent consolidation onto `RAG_AI_Agents`), `azure-pg-query.yml`
+  (ad-hoc read-only SQL, pinned). `scripts/setup-environment.sh` records these facts + helper commands.
+- **Verify the live pointer:** the deploy's "Resolve database connection string" step must log
+  `Assembled AZURE_PG_URL for eds-postgresql/RAG_AI_Agents`; or read the SWA app setting `AZURE_PG_URL`.
+
+## Auto-retrieval calibration (two non-obvious gotchas that made memory look broken)
+- **Score floor is model-specific.** `searchChunks` returns cosine similarity; `text-embedding-3-large`
+  scores real topical matches ~0.4–0.5 (measured: "what is my dog's name?" vs a stored "my dog's name
+  is Waffles" = 0.42), NOT the ~0.75+ older models give. The auto-retrieval floor is **0.3**
+  (`MEMORY_MIN_SCORE` in `runHuddleTurn`); a higher floor silently drops every real hit.
+- **Inject `memoryBlock` on BOTH instruction branches.** The OpenAI Responses path builds
+  `baseInstructions` from the assistant snapshot when one exists (all real agents have one) and only
+  falls back to `appSystem` when none does. `memoryBlock` must be concatenated into the snapshot branch
+  too (`effectiveInstructions + scene + roster + taskToolInstructions + memoryBlock + HOUSE_STYLE`),
+  or retrieval runs but never reaches the model. Verify recall with the `test-agent-serverfn` harness
+  (RAG on; write a fact in a group huddle, recall it in a different 1:1 with empty history).
+
+## Agent cooperation primitives (lightweight — NOT a workflow engine)
+Three coordination helpers in `runHuddleTurn`; scoped to fix real duplicate/handoff/relevance gaps
+without an Apollo-style state machine (deliberately not built — see git history / plan notes).
+- **Decision rights = per-turn action ledger.** `turnActionLedger` + `claimAction(key)` (declared near
+  `createdTaskTitles`): the first responding agent to perform a mutating action owns it; a second
+  winner's identical call is a no-op. Guards `schedule_reminder`, `send_email`, `create_email_draft`
+  in BOTH the OpenAI and Lovable dispatch paths (tasks already dedup via `createdTaskTitles`). Journey
+  proxy tools are intentionally NOT ledgered (they mix reads + writes; ledgering a read would break it).
+- **Mention-chain handoff.** When an agent @mentions a teammate, `handoffById.set(id,{fromName,ask})`
+  is recorded at the re-queue site; the mentionee gets a `handoffDirective` ("you were handed this,
+  address exactly it") in its scene. Ceremonies already carry their own directives; grooming is
+  single-agent — this only fills the ad-hoc gap.
+- **Role-scoped retrieval.** Auto-retrieval re-ranks the (relevance-floored) memory hits with a small
+  lane boost — chunks whose text matches the responding agent's `domains`/`themes`, or that it
+  co-authored (`author_agent_ids`), sort first — so each agent surfaces memory relevant to its lane.
+  Pure reorder, no SQL change.
+
+## Routing is the auto-scaling brain — fix multi-agent behavior THERE, not with regex (relearned)
+We ALREADY have a router (`src/features/huddle/lib/routing.ts`); do not bolt on hardcoded
+agent lists or verb-regexes to steer who responds — they won't keep up as agents are added.
+- **Two layers.** `routeMessage` = deterministic keyword/domain scoring (fallback). `routeMessageLLM`
+  = the real brain: it's handed the roster **dynamically** (`present.map(...)`) and picks
+  `primary + supporting + interjectors` semantically ("intent, not just keywords"). **Adding a new
+  agent needs ZERO router code** — it shows up in the roster automatically. `parseMentions` is
+  roster-driven too, so `@newagent` works the day you add them. So: extend/tune the LLM router (prompt,
+  the trust rules below), never a per-agent hardcoded heuristic.
+- **The responder set** = `routed.winners` + `interjectors`, assembled into `queue` at
+  `huddle.functions.ts:590`. The mention-chain re-queue (`parseMentions`, huddle.functions.ts:~1984)
+  is only a SECONDARY mid-reply path for agent-discovered handoffs.
+- **THE BUG that makes "only one agent answers a multi-lane ask" (measured, not theorized).**
+  `soloOnCoverage` (routing.ts:381-388) drops **every** supporting agent whenever the primary scores
+  ≥0.15 on the topic — including collaborators the USER explicitly asked to pull in. Live proof
+  (same message "Sam, sketch GTM; pull in Finn + Tess; Tess loop Cole", via `test-agent-serverfn`):
+  - `soloOnCoverage=true` → responders **Sam → Iris** only; router reason even says "Finn can validate
+    the financials and Tess can outline the MVP" then tags `[solo]` — i.e. the LLM routed them in and
+    the guard cut them.
+  - `soloOnCoverage=false` → responders **Sam → Finn → Tess → Iris**. The requested lanes all reply.
+  `soloOnCoverage` exists to kill *adjacency* pile-ons (the "fitness Q also pulls in life-strategy"
+  annoyance), but it's too blunt: it can't tell an adjacency add from an explicitly-requested one, so it
+  suppresses genuine, user-asked multi-agent collaboration. **Fix direction:** make solo only drop
+  adjacency (LLM-added, not user-named) supporting agents — e.g. trust the strict-prompt LLM `supporting`
+  for explicitly multi-lane requests instead of overriding it with a keyword score. Keep it in the router.
+- **Secondary (prose handoff).** Mid-reply, `parseMentions` fires only on a literal `@handle`/`@firstname`.
+  When an agent delegates in prose ("I'll get Finn to…", "Tess should…") no re-queue happens. Prefer
+  fixing this by prompt (get agents to emit `@handle`) or router intelligence — NOT a hardcoded verb list.
+
+## eds-claude-skills — shared dev-workflow playbooks (USE THESE going forward)
+The org repo **`deventerpriseds-org/eds-claude-skills`** carries reusable Claude playbooks that apply
+to ALL work in this environment. They are flat `.md` files under `.claude/skills/` (NOT `SKILL.md`
+dirs), so they do NOT register as `/slash` Skill-tool entries — they're **reference playbooks to read
+and follow**, surfaced to a session by the repo's `setup.sh` (which the CCR environment setup script
+should run: it copies them into `/root/.claude/skills/` and appends an overview to the home CLAUDE.md).
+Standing habit for future sessions:
+- **`define-acceptance-criteria`** — before writing code for any feature/bug/task, extract verifiable
+  ACs as a numbered checklist and get sign-off.
+- **`verify-work`** — after implementing, map each AC to a concrete test, run it, and report **only
+  observed evidence** (drive the real flow, e.g. the `test-agent-serverfn` harness); "should work" is
+  banned. Matches this repo's rule that a firing trap is signal, not noise.
+- **`setup-environment`** / **`setup-mcp`** — canonical CLI-install and `.mcp.json` recipes; reuse
+  instead of re-deriving. All secrets are **org-level** in `deventerpriseds-org` (auto-inherited).
+- **`create-github-repo`** — CCR's proxy blocks account-level GitHub API (`POST /orgs/{org}/repos`);
+  create repos by triggering the repo's `create-repo.yml` workflow via `actions_run_trigger`, not the API.
+To make these permanent across sessions, paste `eds-claude-skills/setup.sh` into the CCR environment
+setup script (claude.ai/code → environment → edit → Setup script).

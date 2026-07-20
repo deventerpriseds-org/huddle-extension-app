@@ -56,6 +56,8 @@ export interface SearchChunksInput {
   scope?: RagScope;
   agentId?: string;
   mode?: SharingMode;
+  /** Reuse an existing embedding of `query` rather than re-embedding it. */
+  queryVec?: number[];
 }
 
 export interface LookupTriplesInput {

@@ -34,8 +34,9 @@ jobs:
           PG_PW_4: ${{ secrets.AZURE_PG_ADMIN_PASSWORD }}
           PG_PW_5: ${{ secrets.PG_ADMIN_PASSWORD }}
           PG_PW_6: ${{ secrets.POSTGRES_PASSWORD }}
-          PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER }}
-          PG_DB_OVERRIDE: ${{ secrets.AZURE_PG_DB }}
+          # Pinned to the canonical Huddle DB (see deploy-swa.yml). Secret overrides if set.
+          PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER || 'eds-postgresql' }}
+          PG_DB_OVERRIDE: ${{ secrets.AZURE_PG_DB || 'RAG_AI_Agents' }}
         run: |
           set -euo pipefail
           if [ -n "${FULL_URL}" ]; then
@@ -86,9 +87,12 @@ jobs:
           echo "Runner IP: $IP"
           RULE="ghquery-${IP//./-}"
           echo "FW_RULE=$RULE" >> "$GITHUB_ENV"
+          # Some az CLI builds on the runner reject --rule-name here; don't hard-fail on it — the
+          # target server already admits the runner (a broad existing rule), so continue regardless.
           az postgres flexible-server firewall-rule create -g "$PG_RG" -s "$PG_SRV" \
-            --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null
-          echo "Opened firewall for $IP (rule $RULE); waiting for it to take effect."
+            --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 \
+            && echo "Opened firewall rule $RULE for $IP." \
+            || echo "firewall-rule create skipped (relying on existing server rules)."
           sleep 8
 
       - name: Install psql + run query

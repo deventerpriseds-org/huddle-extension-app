@@ -106,7 +106,8 @@ const MAX_REPLIES_PER_TURN = 4;
 // by buildRoster from agents.ts.)
 const HOUSE_STYLE =
   "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
-  " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it \"has been sent\" or \"is done\" when it has not. Email specifically: text you write in the chat is \"draft text\" — only say you \"saved a draft to your inbox\" if you called the create_email_draft tool and it returned success, and only say an email was \"sent\" if send_email returned success.";
+  " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it \"has been sent\" or \"is done\" when it has not. Email specifically: text you write in the chat is \"draft text\" — only say you \"saved a draft to your inbox\" if you called the create_email_draft tool and it returned success, and only say an email was \"sent\" if send_email returned success." +
+  " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message.";
 
 // Deterministic backstop for co-answer echo: a weak router model sometimes
 // ignores the "don't repeat what was already said" instruction and re-emits a
@@ -142,11 +143,16 @@ function isEchoOfPrior(text: string, priorReplies: { text: string }[]): boolean 
 // the model always gets something back and can still reply ("I hit a problem with X"). Applies to
 // all tools and all agents, not any single one.
 const TOOL_TIMEOUT_MS = 30_000;
+// A few tools do more work than a normal call (an LLM classification pass PLUS a batched write) and
+// legitimately need longer than the default cap — otherwise the wrapper kills them mid-write and the
+// agent reports a false "timed out". Give them a bounded-but-larger budget.
+const TOOL_TIMEOUT_OVERRIDES: Record<string, number> = { groom_backlog: 55_000 };
 async function runToolSafely(name: string, fn: () => Promise<unknown>): Promise<string> {
+  const timeoutMs = TOOL_TIMEOUT_OVERRIDES[name] ?? TOOL_TIMEOUT_MS;
   try {
     const out = await Promise.race([
       Promise.resolve().then(fn),
-      new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${name} timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS)),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${name} timed out after ${timeoutMs / 1000}s`)), timeoutMs)),
     ]);
     return typeof out === "string" ? out : JSON.stringify(out ?? {});
   } catch (e) {
@@ -585,6 +591,38 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
     const spoken = new Set<AgentId>();
     const replies: Reply[] = [];
 
+    // Embedding of the user's message for AUTO memory retrieval, computed at most once per turn
+    // (undefined = not yet computed, null = embedding failed). Recall must not depend on the model
+    // electing to call `search_memory`: we proactively pull the most relevant SHARED/global memory
+    // into each responding agent's prompt. This is what carries context across huddles (e.g. a fact
+    // stated in the group channel is available in a later 1:1) without the agent having to ask.
+    let memoryQueryVec: number[] | null | undefined;
+
+    // Normalized titles of tasks already created THIS turn, so multiple responding agents (or a
+    // re-run of the same turn) can't create duplicate board cards for one intent. See
+    // createSuggestedTaskFromTool below, which claims a title here before writing.
+    const createdTaskTitles = new Set<string>();
+
+    // Decision rights: a turn-scoped ledger of mutating actions already performed this turn, keyed by
+    // (tool + normalized args). The FIRST responding agent to perform an action "owns" it; a second
+    // winner's identical call is a no-op. Generalizes the task dedup to reminders, emails, and journey
+    // writes so two agents in a group turn can't double-fire the same intent. `claimAction` returns
+    // false when the action was already done (caller should skip). Read-only tools are never ledgered.
+    const turnActionLedger = new Set<string>();
+    const claimAction = (key: string): boolean => {
+      const k = key.trim().toLowerCase().slice(0, 240);
+      if (turnActionLedger.has(k)) return false;
+      turnActionLedger.add(k);
+      return true;
+    };
+
+    // Lightweight handoff contract for the ad-hoc mention-chain: when an agent @mentions a teammate
+    // (the "mention IS the handoff"), we re-queue that teammate — but today they receive no structured
+    // ask, only the raw reply as context. Record { fromName, ask } here so the mentionee gets a crisp
+    // "you were handed this, address exactly it" directive (mirrors the ceremony directive pattern).
+    // Ceremonies carry their own directives; grooming is single-agent — this only fills the ad-hoc gap.
+    const handoffById = new Map<AgentId, { fromName: string; ask: string }>();
+
     // A broadcast ("everyone introduce yourselves") means every member should
     // get to speak, so lift the normal per-turn reply cap for that case.
     const { isBroadcast } = await import("./routing");
@@ -607,6 +645,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         .join("\n");
 
       const ceremonyDirective = ceremonyDirectiveById.get(nextId) ?? "";
+      const handoff = handoffById.get(nextId);
+      const handoffDirective = handoff
+        ? `\n\nYou were brought into this turn by ${handoff.fromName}, who handed this to you: "${handoff.ask}". Address exactly that in your lane — answer it directly or take the action they need. Do not re-ask what was already said or restate their message.`
+        : "";
       const isInterjector = interjectorSet.has(nextId);
       const interjectDirective = isInterjector
         ? `\n\nYou were NOT asked directly — you are interjecting ONLY to surface specific information the primary cannot see. Do NOT repeat, restate, agree with, or react to what the primary said. FIRST use your own tools to look up the user's actual schedule / tasks / contacts for the relevant time, person, or deadline. Then:
@@ -620,16 +662,80 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         priorInThisTurn && !ceremonyDirective
           ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
           : ""
-      }${interjectDirective}${ceremonyDirective}`;
+      }${interjectDirective}${ceremonyDirective}${handoffDirective}`;
 
       const roster = buildRoster(data.members, winner.id);
       const taskToolInstructions =
         "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it.";
+
+      // AUTO memory retrieval: pull the most relevant shared/global memory for THIS agent and inject
+      // it into the prompt, so recall works even when the model doesn't call `search_memory`. This is
+      // the fix for "forgot two lines ago" across huddles — history is per-huddle, but memory is not.
+      let memoryBlock = "";
+      const ragCfg = agentBackend.rag;
+      if (ragCfg && ragCfg.store === "azure" && ragCfg.chunks && openaiKey) {
+        try {
+          if (memoryQueryVec === undefined) {
+            const { embed } = await import("./rag/embed.server");
+            try {
+              memoryQueryVec = await embed(data.text);
+            } catch {
+              memoryQueryVec = null; // embedding unavailable — skip auto-retrieval this turn
+            }
+          }
+          if (memoryQueryVec) {
+            const { azurePgStore } = await import("./rag/azure-pg.server");
+            const hits = await azurePgStore.searchChunks({
+              query: data.text,
+              queryVec: memoryQueryVec,
+              agentId: winner.id,
+              mode: ragCfg.sharing ?? "shared",
+              k: 6,
+            });
+            // Exclude the current message and anything already in this huddle's recent transcript,
+            // so we surface only context the model wouldn't otherwise have (older / other-huddle).
+            const alreadyVisible = new Set(
+              [data.text, ...data.history.slice(-14).map((m) => m.text)].map((t) => t.trim()),
+            );
+            // Relevance floor calibrated for text-embedding-3-large, whose cosine scores run LOWER
+            // than older models: a strong topical match (e.g. "what is my dog's name?" vs a stored
+            // "my dog's name is Waffles") measures ~0.42, and unrelated text sits below ~0.25. The old
+            // 0.72 floor silently dropped every real hit. 0.3 keeps genuine matches, rejects noise.
+            const MEMORY_MIN_SCORE = 0.3;
+            // Role/domain-aware re-rank: within the relevance floor, gently prefer memory that matches
+            // THIS agent's lane — its domains/themes appear in the chunk, or it co-authored the chunk —
+            // so each agent surfaces the memory most relevant to what it actually owns, instead of the
+            // same generic top-K for everyone. Pure reorder over already-relevant hits (no SQL change).
+            const laneTerms = [...winner.domains, ...winner.themes]
+              .map((t) => t.toLowerCase())
+              .filter((t) => t.length >= 3);
+            const laneBoost = (h: { text?: string; authorAgentIds?: string[] }) => {
+              const t = (h.text || "").toLowerCase();
+              const termHit = laneTerms.some((kw) => t.includes(kw)) ? 0.12 : 0;
+              const authorHit = h.authorAgentIds?.includes(winner.id) ? 0.06 : 0;
+              return termHit + authorHit;
+            };
+            const fresh = (hits ?? [])
+              .filter((h) => (h.score ?? 0) >= MEMORY_MIN_SCORE && !alreadyVisible.has(h.text.trim()))
+              .sort((a, b) => ((b.score ?? 0) + laneBoost(b)) - ((a.score ?? 0) + laneBoost(a)))
+              .slice(0, 4);
+            if (fresh.length) {
+              memoryBlock =
+                "\n\nRelevant memory from earlier conversations (use only if it helps answer; do not repeat it verbatim or announce that you looked it up):\n" +
+                fresh.map((h) => `- ${h.text}`).join("\n");
+            }
+          }
+        } catch {
+          /* memory retrieval is best-effort — never block or fail the reply */
+        }
+      }
+
       const appSystem =
         winner.systemPrompt +
         scene +
         roster +
         taskToolInstructions +
+        memoryBlock +
         HOUSE_STYLE;
 
       // Per-agent transcript: the current agent's own prior turns are role=assistant
@@ -655,9 +761,16 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       const timeSensitiveRe =
         /\b(today|tonight|tomorrow|yesterday|this week|this month|this year|latest|current|currently|right now|recent|recently|news|breaking|headline|score|price|stock|weather|forecast|202\d|updated|update)\b/i;
       const createTaskRe =
-        /\b(add|create|make|log|track|put|place|capture|assign|remind me|todo|to-do|action item|follow[- ]?up)\b/i;
-      const forceTaskCreation = createTaskRe.test(data.text);
-      const forceWebSearch = !!agentBackend.webSearch && timeSensitiveRe.test(data.text);
+        /\b(add|create|make|log|track|put|place|capture|assign|todo|to-do|action item|follow[- ]?up)\b/i;
+      // A reminder ("remind me in 30 min", "ping me at 3pm") is a timed nudge, NOT a backlog task —
+      // route it to schedule_reminder and DON'T also force a task/web-search for the same message.
+      const reminderRe =
+        /\b(remind me|reminder|notify me|ping me|nudge me|alert me|wake me|set an alarm|alarm|message me (?:in|at|later|tonight|tomorrow)|text me (?:in|at))\b/i;
+      const forceReminder = reminderRe.test(data.text);
+      // Only the PRIMARY responder is forced to create the task. Interjectors surface information;
+      // forcing them to also create produced duplicate cards (e.g. Troy AND Iris both creating).
+      const forceTaskCreation = !forceReminder && !isInterjector && createTaskRe.test(data.text);
+      const forceWebSearch = !forceReminder && !!agentBackend.webSearch && timeSensitiveRe.test(data.text);
 
       function resolveTaskLane(value: unknown): TaskLane {
         const lane = String(value ?? "")
@@ -694,6 +807,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           recordToolUse(winner.id, "create_huddle_task", "task creation failed", false, error);
           return { ok: false, error };
         }
+        // Cross-agent / re-run dedup: if this exact title was already created earlier in this turn,
+        // don't create a second card. The first caller claims the title here.
+        const titleKey = title.trim().toLowerCase();
+        if (createdTaskTitles.has(titleKey)) {
+          recordToolUse(winner.id, "create_huddle_task", "already created this turn — skipped duplicate", true);
+          return { ok: true, deduped: true, task: { title: title.slice(0, 160) } };
+        }
+        createdTaskTitles.add(titleKey);
         const task: SuggestedTaskDraft = {
           id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
           title: title.slice(0, 160),
@@ -864,18 +985,20 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           const effectiveInstructions = overrideInstructions || snapshotInstructions;
           fromSnapshot = !overrideInstructions && !!snapshotInstructions;
           const baseInstructions = effectiveInstructions
-            ? effectiveInstructions + scene + roster + taskToolInstructions + HOUSE_STYLE
+            ? effectiveInstructions + scene + roster + taskToolInstructions + memoryBlock + HOUSE_STYLE
             : appSystem;
           const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
           const { PRIORITIZE_SYSTEM_HINT } = await import("./tasks/tools");
           const isScrumMaster = winner.id === "terry-locke" || winner.special === "standup-host";
           const groomHint = isScrumMaster ? "\n\n" + (await import("./tasks/groom")).GROOM_SYSTEM_HINT : "";
+          const { REMINDER_SYSTEM_HINT } = await import("./tasks/reminders");
           const instructions =
             baseInstructions +
             ragInstructions +
             webInstructions +
             "\n\n" + PRIORITIZE_SYSTEM_HINT +
             groomHint +
+            "\n\n" + REMINDER_SYSTEM_HINT +
             groundingBlock(!!agentBackend.webSearch);
           usedInstructions = instructions;
 
@@ -1024,8 +1147,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           const { PRIORITIZE_TOOL } = await import("./tasks/tools");
           // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
           const groomTools = isScrumMaster ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
+          const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
           const mergedTools = [
             createHuddleTaskTool,
+            SCHEDULE_REMINDER_TOOL,
             PRIORITIZE_TOOL,
             ...groomTools,
             ...emailTools,
@@ -1057,6 +1182,18 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             if (c.name === "create_huddle_task") {
               return JSON.stringify(await createSuggestedTaskFromTool(c.arguments));
             }
+            if (c.name === "schedule_reminder") {
+              const a = c.arguments as Record<string, unknown>;
+              if (!claimAction(`reminder:${a.text ?? ""}:${a.delay_minutes ?? ""}:${a.at_time ?? ""}`)) {
+                recordToolUse(winner.id, "schedule_reminder", "already scheduled this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true, message: "That reminder was already scheduled this turn." });
+              }
+              const { dispatchScheduleReminder } = await import("./tasks/reminders");
+              const out = await dispatchScheduleReminder(data.caller, c.arguments, data.huddleId, winner.id, data.timeZone);
+              const ok = !JSON.parse(out).error;
+              recordToolUse(winner.id, "schedule_reminder", ok ? "reminder scheduled" : "reminder · failed", ok);
+              return out;
+            }
             if (c.name === "prioritize") {
               const { dispatchPrioritize } = await import("./tasks/tools");
               return dispatchPrioritize(
@@ -1068,11 +1205,20 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             if (c.name === "groom_backlog") {
               const { dispatchGroomBacklog } = await import("./tasks/groom");
               const out = await dispatchGroomBacklog(data.caller, c.arguments);
-              recordToolUse(winner.id, "groom_backlog", "groomed the backlog", true);
+              let groomDetail = "";
+              try {
+                const p = JSON.parse(out) as { _timings?: { readMs: number; classifyMs: number; writeMs: number; tasks: number } };
+                if (p._timings) groomDetail = `read=${p._timings.readMs}ms classify=${p._timings.classifyMs}ms write=${p._timings.writeMs}ms tasks=${p._timings.tasks}`;
+              } catch { /* ignore */ }
+              recordToolUse(winner.id, "groom_backlog", "groomed the backlog", true, groomDetail);
               return out;
             }
             if (c.name === "send_email") {
               const a = c.arguments as Record<string, unknown>;
+              if (!claimAction(`send_email:${a.to ?? ""}:${a.subject ?? ""}`)) {
+                recordToolUse(winner.id, "send_email", "already sent this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true, message: "That email was already sent this turn." });
+              }
               try {
                 const { sendGraphEmail } = await import("./email/graph-email.server");
                 const r = await sendGraphEmail({
@@ -1107,6 +1253,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             }
             if (c.name === "create_email_draft") {
               const a = c.arguments as Record<string, unknown>;
+              if (!claimAction(`create_email_draft:${a.to ?? ""}:${a.subject ?? ""}`)) {
+                recordToolUse(winner.id, "create_email_draft", "already drafted this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true, message: "That draft was already created this turn." });
+              }
               try {
                 const { createGraphDraft } = await import("./email/graph-email.server");
                 const r = await createGraphDraft({
@@ -1268,13 +1418,17 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
 
           usedModel = agentBackend.model?.trim() || snapshot?.model || "gpt-4o";
 
-          const toolChoice = forceTaskCreation
-            ? { type: "function", name: "create_huddle_task" }
-            : forceWebSearch
-              ? { type: "function", name: "tavily_web_search" }
-              : undefined;
+          const toolChoice = forceReminder
+            ? { type: "function", name: "schedule_reminder" }
+            : forceTaskCreation
+              ? { type: "function", name: "create_huddle_task" }
+              : forceWebSearch
+                ? { type: "function", name: "tavily_web_search" }
+                : undefined;
 
-          if (forceTaskCreation) {
+          if (forceReminder) {
+            recordToolUse(winner.id, "schedule_reminder", "offered (forced — reminder request)", true);
+          } else if (forceTaskCreation) {
             recordToolUse(winner.id, "create_huddle_task", "offered (forced — task request)", true);
           } else if (forceWebSearch) {
             recordToolUse(
@@ -1371,6 +1525,36 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
               JSON.stringify(await createSuggestedTaskFromTool(args as Record<string, unknown>)),
           });
 
+          // schedule_reminder — Huddle-native timed reminder (mirrors the OpenAI path).
+          {
+            const { dispatchScheduleReminder, SCHEDULE_REMINDER_TOOL: RTOOL } = await import("./tasks/reminders");
+            lovableTools.schedule_reminder = tool({
+              description: RTOOL.description,
+              inputSchema: z.object({
+                text: z.string(),
+                delay_minutes: z.number().optional(),
+                at_time: z.string().optional(),
+              }),
+              execute: async (args) => {
+                const a = args as Record<string, unknown>;
+                if (!claimAction(`reminder:${a.text ?? ""}:${a.delay_minutes ?? ""}:${a.at_time ?? ""}`)) {
+                  recordToolUse(winner.id, "schedule_reminder", "already scheduled this turn — skipped duplicate", true);
+                  return JSON.stringify({ ok: true, deduped: true, message: "That reminder was already scheduled this turn." });
+                }
+                const out = await dispatchScheduleReminder(
+                  data.caller,
+                  a,
+                  data.huddleId,
+                  winner.id,
+                  data.timeZone,
+                );
+                const ok = !JSON.parse(out).error;
+                recordToolUse(winner.id, "schedule_reminder", ok ? "reminder scheduled" : "reminder · failed", ok);
+                return out;
+              },
+            });
+          }
+
           // prioritize — shared prioritization tool (mirrors the OpenAI path).
           {
             const { dispatchPrioritize } = await import("./tasks/tools");
@@ -1422,6 +1606,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
                 }),
                 execute: async (args) => {
                   const a = args as Record<string, unknown>;
+                  if (!claimAction(`send_email:${a.to ?? ""}:${a.subject ?? ""}`)) {
+                    recordToolUse(winner.id, "send_email", "already sent this turn — skipped duplicate", true);
+                    return JSON.stringify({ ok: true, deduped: true, message: "That email was already sent this turn." });
+                  }
                   const { sendGraphEmail } = await import("./email/graph-email.server");
                   const r = await sendGraphEmail({
                     to: String(a.to ?? ""),
@@ -1454,6 +1642,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
                 }),
                 execute: async (args) => {
                   const a = args as Record<string, unknown>;
+                  if (!claimAction(`create_email_draft:${a.to ?? ""}:${a.subject ?? ""}`)) {
+                    recordToolUse(winner.id, "create_email_draft", "already drafted this turn — skipped duplicate", true);
+                    return JSON.stringify({ ok: true, deduped: true, message: "That draft was already created this turn." });
+                  }
                   const { createGraphDraft } = await import("./email/graph-email.server");
                   const r = await createGraphDraft({
                     to: String(a.to ?? ""),
@@ -1695,13 +1887,17 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           }
 
           const lovableToolChoice =
-            forceTaskCreation && lovableTools.create_huddle_task
-              ? { type: "tool" as const, toolName: "create_huddle_task" }
-              : forceWebSearch && lovableTools.tavily_web_search
-                ? { type: "tool" as const, toolName: "tavily_web_search" }
-                : undefined;
+            forceReminder && lovableTools.schedule_reminder
+              ? { type: "tool" as const, toolName: "schedule_reminder" }
+              : forceTaskCreation && lovableTools.create_huddle_task
+                ? { type: "tool" as const, toolName: "create_huddle_task" }
+                : forceWebSearch && lovableTools.tavily_web_search
+                  ? { type: "tool" as const, toolName: "tavily_web_search" }
+                  : undefined;
 
-          if (forceTaskCreation && lovableTools.create_huddle_task) {
+          if (forceReminder && lovableTools.schedule_reminder) {
+            recordToolUse(winner.id, "schedule_reminder", "offered (forced — reminder request)", true);
+          } else if (forceTaskCreation && lovableTools.create_huddle_task) {
             recordToolUse(winner.id, "create_huddle_task", "offered (forced — task request)", true);
           } else if (forceWebSearch && lovableTools.tavily_web_search) {
             recordToolUse(
@@ -1794,6 +1990,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             data.members.includes(id)
           ) {
             queue.push(id);
+            // Hand off a structured ask so the mentioned agent addresses the actual request rather
+            // than re-deriving it from raw context. Keep the last handoff if mentioned by several.
+            handoffById.set(id, { fromName: winner.name, ask: clean.replace(/\s+/g, " ").trim().slice(0, 300) });
           }
         }
       } catch (err) {
@@ -1828,6 +2027,213 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
 export const sendHuddleMessage = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => Input.parse(raw))
   .handler(async ({ data }) => runHuddleTurn(data));
+
+// ---- Durable, device-independent turns ------------------------------------------------------
+// A chat turn no longer depends on the phone holding a long fetch open. The client PERSISTS the
+// turn (keyed by a client-generated turnId) and runs it best-effort in this request; the result is
+// stored the instant it's ready, so backgrounding the app (screen off, app switch) can't lose it —
+// the delivery loop re-reads it on reconnect. A journey pg_cron heartbeat drains any turn left
+// `queued` or stale-`running` (the case where this phone-tied request was killed mid-flight), so a
+// turn always completes and a push notification fires even while the user is fully away.
+
+const EnqueueTurnInput = Input.extend({
+  // Client-generated idempotency key (e.g. the user message id). Re-sending the same turnId never
+  // double-runs — the row is INSERT ... ON CONFLICT DO NOTHING and execution is claim-locked.
+  turnId: z.string().min(6).max(80),
+});
+
+type HuddleTurnResult = Awaited<ReturnType<typeof runHuddleTurn>>;
+
+/**
+ * Run a claimed turn to completion, persist the result, and (best-effort) push-notify the user. The
+ * service worker decides whether to actually surface the notification (suppressed if a tab is
+ * focused). Shared by the client fast-path and the cron backstop so both behave identically.
+ */
+async function executeClaimedTurn(record: {
+  id: string;
+  user_email: string | null;
+  payload: Record<string, unknown>;
+}): Promise<HuddleTurnResult | null> {
+  const { completeTurn, failTurn } = await import("./tasks/turns.server");
+  try {
+    const data = Input.parse(record.payload);
+    const result = await runHuddleTurn(data);
+    await completeTurn(record.id, result);
+    // Fire a push per finished turn (SW suppresses it when the app is focused).
+    const lead = result.replies?.[0];
+    if (lead) {
+      const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
+      const title = `${name} replied`;
+      const body = String(lead.text).replace(/\s+/g, " ").slice(0, 140);
+      // Primary away-delivery: piggyback journey's push (web-push + FCM/Android bridge), the SAME
+      // reliable path reminders/alarms use to reach the phone. No separate Huddle VAPID keys needed;
+      // this reuses journey's existing notification infra (channel `messages` = heads-up reply).
+      if (record.user_email) {
+        try {
+          const { invokeJourneyTool } = await import("./journey/proxy.functions");
+          await invokeJourneyTool({
+            toolName: "send_push",
+            args: { title, body, channel: "messages" },
+            caller: { entra_email: record.user_email },
+            context: { source: "huddle" },
+          });
+        } catch {
+          /* journey push best-effort */
+        }
+      }
+      // Optional extra: Huddle's own Web Push for pure-browser subscribers (no-op unless Huddle VAPID
+      // keys are set). Harmless to keep; journey's path above is what covers the phone.
+      try {
+        const { sendPushToUser } = await import("./push/push.server");
+        await sendPushToUser(record.user_email, {
+          title,
+          body,
+          url: "/",
+          tag: `huddle-${data.huddleId}`,
+        });
+      } catch {
+        /* push is best-effort */
+      }
+    }
+    return result;
+  } catch (err) {
+    await failTurn(record.id, err instanceof Error ? err.message : String(err));
+    return null;
+  }
+}
+
+/**
+ * Client entrypoint. Persist the turn, then run it in THIS request (fast path). If this request is
+ * killed by the app backgrounding before it stores, the turn is left claimable and the cron
+ * heartbeat finishes it — either way the result lands in the durable store and is delivered on
+ * return. Returns the result when the fast path completes; the client also polls `getTurnUpdates`.
+ */
+export const enqueueHuddleTurn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => EnqueueTurnInput.parse(raw))
+  .handler(async ({ data }) => {
+    const { turnId, ...turnData } = data;
+    // Resolve the sign-in email (possibly an alias) to the canonical journey email for push targeting.
+    let email: string | null = null;
+    try {
+      const { resolveTaskEmail } = await import("./journey/identity");
+      email = (await resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
+    } catch {
+      email = data.caller?.entra_email ?? null;
+    }
+    const { enqueueTurn, claimTurn, getTurn } = await import("./tasks/turns.server");
+    await enqueueTurn(turnId, data.huddleId, email, turnData);
+    // Claim + run right now (fast path). If another runner (cron) already grabbed it, fall through
+    // to reporting status so we never double-run (the client then polls getTurnUpdates for the result).
+    const claimed = await claimTurn(turnId);
+    if (claimed) {
+      const result = await executeClaimedTurn(claimed);
+      if (result) return { turnId, status: "done" as string, result, error: null as string | null };
+      const rec = await getTurn(turnId);
+      return { turnId, status: (rec?.status ?? "error") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
+    }
+    const rec = await getTurn(turnId);
+    return { turnId, status: (rec?.status ?? "queued") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
+  });
+
+/** The public VAPID key the browser needs to create a push subscription (null if push isn't set up). */
+export const getPushConfig = createServerFn({ method: "GET" }).handler(async () => {
+  const { vapidPublicKey } = await import("./push/push.server");
+  return { vapidPublicKey: vapidPublicKey() };
+});
+
+/** Deliver finished turns to a client that (re)connected — the backgrounding-safe read path. */
+const TurnUpdatesInput = z.object({
+  huddleId: z.string(),
+  sinceMs: z.number().optional(),
+});
+export const getTurnUpdates = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => TurnUpdatesInput.parse(raw))
+  .handler(async ({ data }) => {
+    const { getTurnsSince } = await import("./tasks/turns.server");
+    const rows = await getTurnsSince(data.huddleId, data.sinceMs ?? 0);
+    // Trim to a serializable DTO (drop the raw payload; type result like the live turn result).
+    const turns = rows.map((t) => ({
+      id: t.id,
+      status: t.status as string,
+      error: t.error,
+      updated_ms: t.updated_ms,
+      result: (t.result ?? null) as HuddleTurnResult | null,
+    }));
+    return { turns };
+  });
+
+/** Reminders that have fired for a huddle since `sinceMs` — the client renders each as an agent message. */
+export const getReminderDeliveries = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => TurnUpdatesInput.parse(raw))
+  .handler(async ({ data }) => {
+    const { getFiredRemindersSince } = await import("./tasks/turns.server");
+    const rows = await getFiredRemindersSince(data.huddleId, data.sinceMs ?? 0);
+    const reminders = rows.map((r) => ({
+      id: r.id,
+      agentId: r.agent_id,
+      text: r.text,
+      kind: r.kind,
+      firedMs: r.fired_ms ?? 0,
+    }));
+    return { reminders };
+  });
+
+/** Save/refresh a Web Push subscription for the signed-in user (for notify-while-away). */
+const PushSubInput = z.object({
+  caller: z.object({
+    entra_object_id: z.string().optional(),
+    entra_email: z.string().optional(),
+  }).optional(),
+  subscription: z.object({
+    endpoint: z.string(),
+    keys: z.object({ p256dh: z.string(), auth: z.string() }),
+  }),
+});
+export const registerPushSubscription = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => PushSubInput.parse(raw))
+  .handler(async ({ data }) => {
+    let email: string | null = null;
+    try {
+      const { resolveTaskEmail } = await import("./journey/identity");
+      email = (await resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
+    } catch {
+      email = data.caller?.entra_email ?? null;
+    }
+    if (!email) return { ok: false as const, error: "no_identity" };
+    const { savePushSubscription } = await import("./tasks/turns.server");
+    await savePushSubscription(email, {
+      endpoint: data.subscription.endpoint,
+      p256dh: data.subscription.keys.p256dh,
+      auth: data.subscription.keys.auth,
+    });
+    return { ok: true as const };
+  });
+
+/**
+ * Backstop executor used by the run-turn route (cron heartbeat). Drains up to `max` queued or
+ * stale-running turns, running each to completion. Returns how many it ran. This is the guaranteed,
+ * device-independent path: journey's always-on pg_cron POSTs here every minute.
+ */
+export async function drainQueuedTurns(max = 5): Promise<number> {
+  const { claimNextQueued } = await import("./tasks/turns.server");
+  let ran = 0;
+  for (let i = 0; i < max; i++) {
+    const claimed = await claimNextQueued();
+    if (!claimed) break;
+    await executeClaimedTurn(claimed);
+    ran++;
+  }
+  return ran;
+}
+
+/** Run one specific turn by id (targeted kick). Returns true if it claimed and ran it. */
+export async function runTurnById(turnId: string): Promise<boolean> {
+  const { claimTurn } = await import("./tasks/turns.server");
+  const claimed = await claimTurn(turnId);
+  if (!claimed) return false;
+  await executeClaimedTurn(claimed);
+  return true;
+}
 
 // Recent persisted ceremony runs for the signed-in user — powers "review what happened later"
 // (e.g. an auto-run that fired while you were away) in the virtual-meeting view.

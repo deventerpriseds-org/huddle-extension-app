@@ -34,7 +34,13 @@ jobs:
                    TAVILY_API_KEY AZURE_PG_URL JOURNEY_PROXY_TOKEN; do
             if [ -n "${!k}" ]; then echo "$k: present"; else echo "$k: MISSING"; fi
           done
+          # Web Push is optional — absence just disables notify-while-away (durable turns still work).
+          for k in VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY; do
+            if [ -n "${!k}" ]; then echo "$k: present"; else echo "$k: not set (Web Push disabled)"; fi
+          done
         env:
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -55,7 +61,33 @@ jobs:
         run: |
           rm -f bun.lock
           sed -i 's/^minimumReleaseAge = .*/minimumReleaseAge = 0/' bunfig.toml
-          bun install --registry https://registry.npmjs.org
+          # The npm registry occasionally refuses connections mid-install on the runner
+          # (ConnectionRefused / FailedToOpenSocket on random tarballs). Retry with backoff so a
+          # transient blip doesn't fail the whole deploy.
+          # The npm CDN is intermittently refusing this runner's connections (ConnectionRefused /
+          # FailedToOpenSocket downloading tarballs). bun's HTTP client gives up hard on that error
+          # (oven-sh/bun#5548) — retries plateau with a stubborn handful of packages never landing.
+          # Strategy: try bun a few times (fast path when the registry is healthy), then fall back to
+          # npm, whose per-tarball exponential-backoff retry on a different network stack rides through
+          # refusals bun can't. Either installer produces a standard node_modules the build can use.
+          for attempt in 1 2 3; do
+            if bun install --registry https://registry.npmjs.org --network-concurrency 4; then
+              echo "bun install succeeded on attempt $attempt"; exit 0
+            fi
+            echo "bun install failed (attempt $attempt) — retrying after 20s"
+            sleep 20
+          done
+          echo "bun exhausted — falling back to npm install with per-request retries"
+          rm -rf node_modules
+          for attempt in 1 2 3; do
+            if npm install --no-audit --no-fund --registry https://registry.npmjs.org \
+                 --fetch-retries 10 --fetch-retry-mintimeout 15000 --fetch-retry-maxtimeout 120000 --maxsockets 3; then
+              echo "npm install succeeded on attempt $attempt"; exit 0
+            fi
+            echo "npm install failed (attempt $attempt) — retrying after 30s"
+            sleep 30
+          done
+          echo "::error::both bun and npm install failed — npm registry still refusing this runner"; exit 1
 
       - uses: azure/login@v2
         with:
@@ -241,9 +273,13 @@ jobs:
           PG_PW_4: ${{ secrets.AZURE_PG_ADMIN_PASSWORD }}
           PG_PW_5: ${{ secrets.PG_ADMIN_PASSWORD }}
           PG_PW_6: ${{ secrets.POSTGRES_PASSWORD }}
-          # Optional explicit overrides if discovery picks the wrong one.
-          PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER }}
-          PG_DB_OVERRIDE: ${{ secrets.AZURE_PG_DB }}
+          # PINNED to the canonical Huddle database. Deploy-time discovery previously took the first
+          # server it found (servers[0]) with no pin; when a second server (ux-design-pg) appeared it
+          # started winning, and the app got mis-wired to ux-design-pg/postgres (a bare DB with no
+          # memory tables) — the root cause of the "memory switched DBs between sessions" bug. Pinning
+          # here makes every deploy target eds-postgresql/RAG_AI_Agents. A secret still overrides if set.
+          PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER || 'eds-postgresql' }}
+          PG_DB_OVERRIDE: ${{ secrets.AZURE_PG_DB || 'RAG_AI_Agents' }}
         run: |
           set -euo pipefail
           if [ -n "${FULL_URL}" ]; then
@@ -313,6 +349,9 @@ jobs:
               AZURE_PG_URL="${AZURE_PG_URL_RESOLVED}" \
               JOURNEY_PROXY_URL="${{ secrets.JOURNEY_PROXY_URL || 'https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/huddle-proxy' }}" \
               JOURNEY_PROXY_TOKEN="${{ secrets.JOURNEY_PROXY_TOKEN }}" \
+              VAPID_PUBLIC_KEY="${{ secrets.VAPID_PUBLIC_KEY }}" \
+              VAPID_PRIVATE_KEY="${{ secrets.VAPID_PRIVATE_KEY }}" \
+              VAPID_SUBJECT="${{ secrets.VAPID_SUBJECT || 'mailto:dev@enterpriseds.io' }}" \
               ENTRA_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
               ENTRA_CLIENT_ID="${ENTRA_CLIENT_ID_RESOLVED:-${{ secrets.ENTRA_CLIENT_ID }}}" \
               ENTRA_AUTHORITY="${ENTRA_AUTHORITY_RESOLVED:-${{ secrets.VITE_ENTRA_AUTHORITY }}}" \

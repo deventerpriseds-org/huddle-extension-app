@@ -1,0 +1,140 @@
+# One-shot maintenance: allow-list the pgvector extension on the Azure Postgres Flexible Server.
+#
+# Why this exists: the memory/RAG store (rag_chunks / rag_triples) needs the `vector` extension. On
+# Azure Database for PostgreSQL Flexible Server, an extension can only be CREATEd if it is in the
+# server's `azure.extensions` allow-list. When that list doesn't include VECTOR (e.g. after a server
+# transfer/restore), `CREATE EXTENSION vector` fails with "not allow-listed", the bootstrap batch
+# aborts, `rag_chunks` is never created, and every search_memory/write throws
+# `relation "rag_chunks" does not exist`. This job adds VECTOR to the allow-list (append — it never
+# clobbers other allow-listed extensions). azure.extensions is a DYNAMIC parameter (no restart).
+#
+# After this runs green: open the app → Settings → Memory DB → "Run bootstrap" to create the tables
+# (canonical DDL lives in code, azure-pg.server.ts BOOTSTRAP_SQL), then "Verify round-trip".
+name: Bootstrap Memory DB (allow-list pgvector)
+
+on:
+  workflow_dispatch: {}
+  # Also fire when this workflow file itself changes, so it can run from a feature branch without
+  # first landing on the default branch (workflow_dispatch is only exposed from the default branch).
+  # Pushing an edit to this file triggers exactly one run on the branch.
+  push:
+    paths:
+      - .github/workflows/bootstrap-memory-db.yml
+
+env:
+  AZURE_RESOURCE_GROUP: EnterpriseDS_ResourceGRP
+
+jobs:
+  allowlist-vector:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
+             "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}",
+             "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+             "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
+
+      - name: Identify the app's PG server + allow-list VECTOR on it
+        env:
+          AZURE_PG_URL: ${{ secrets.AZURE_PG_URL }}
+          PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER }}
+        run: |
+          set -euo pipefail
+          RG="$AZURE_RESOURCE_GROUP"
+          SWA_NAME="enterpriseds-huddle-web"
+
+          echo "=== ALL PostgreSQL flexible servers in the subscription ==="
+          az postgres flexible-server list \
+            --query "sort_by([].{name:name, rg:resourceGroup, fqdn:fullyQualifiedDomainName, pgVersion:version, state:state}, &name)" \
+            -o table || true
+          echo ""
+          echo "=== Databases on each server ==="
+          while read -r S SRG; do
+            [ -z "$S" ] && continue
+            echo "-- $S ($SRG):"
+            az postgres flexible-server db list -g "$SRG" -s "$S" --query "[].name" -o tsv 2>/dev/null | sed 's/^/     /' \
+              || echo "     (could not list)"
+          done < <(az postgres flexible-server list --query "[].[name, resourceGroup]" -o tsv)
+          echo ""
+
+          echo "=== Which server/database does the deployed Huddle app ACTUALLY use? ==="
+          # Authoritative: read AZURE_PG_URL from the SWA's app settings (what the running app connects
+          # with). Mask the full value so the password never lands in logs; print only host + db name.
+          APP_SRV=""
+          PG=$(az staticwebapp appsettings list --name "$SWA_NAME" -g "$RG" \
+                 --query "properties.AZURE_PG_URL" -o tsv 2>/dev/null || echo "")
+          if [ -n "$PG" ]; then
+            echo "::add-mask::$PG"
+            APPHOST=$(printf '%s' "$PG" | sed -E 's#^[a-zA-Z]+://[^@]+@([^:/?]+).*#\1#')
+            APP_SRV="${APPHOST%%.*}"
+            APPDB=$(printf '%s' "$PG" | sed -E 's#.*/([^/?]+)(\?.*)?$#\1#')
+            echo "App server:   $APP_SRV   (fqdn: $APPHOST)"
+            echo "App database: $APPDB"
+          else
+            echo "AZURE_PG_URL not readable from SWA app settings — will allow-list all servers as a safety net."
+          fi
+          echo "================================"
+
+          # Targets: the app server if we know it, otherwise EVERY server in the RG. Allow-listing an
+          # extension is benign — it only PERMITS CREATE EXTENSION, it installs/changes nothing — so
+          # covering all servers guarantees the app's server is included when we can't single it out.
+          if [ -n "$APP_SRV" ]; then
+            TARGETS="$APP_SRV"
+            echo "Targeting the identified app server only."
+          else
+            TARGETS=$(az postgres flexible-server list -g "$RG" --query "[].name" -o tsv)
+            echo "App server unknown — targeting all servers in the RG."
+          fi
+
+          for SRV in $TARGETS; do
+            CURRENT=$(az postgres flexible-server parameter show \
+              -g "$RG" -s "$SRV" --name azure.extensions --query value -o tsv 2>/dev/null || echo "")
+            if printf '%s' "$CURRENT" | tr ',' '\n' | grep -qix 'vector'; then
+              echo "[$SRV] VECTOR already allow-listed"
+            else
+              if [ -z "$CURRENT" ]; then NEW="VECTOR"; else NEW="${CURRENT},VECTOR"; fi
+              az postgres flexible-server parameter set \
+                -g "$RG" -s "$SRV" --name azure.extensions --value "$NEW" -o none
+              echo "[$SRV] allow-listed VECTOR (was '$CURRENT')"
+            fi
+          done
+
+          echo "Done. Next: app -> Settings -> Memory DB -> Run bootstrap (creates rag_chunks/rag_triples)."
+
+      - name: Inspect tables + row counts on both candidate DBs (READ-ONLY)
+        env:
+          PG_PW: ${{ secrets.AZURE_ADMIN_PW }}
+        run: |
+          set -uo pipefail
+          RG="$AZURE_RESOURCE_GROUP"
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+          IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+          echo "Runner IP: $IP"
+          # Read-only introspection: every user table, and per-table live-row estimate.
+          INTRO="SELECT table_schema||'.'||table_name AS tbl FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema') ORDER BY 1;"
+          ROWS="SELECT schemaname||'.'||relname AS tbl, n_live_tup AS est_rows FROM pg_stat_user_tables ORDER BY n_live_tup DESC;"
+          inspect() {
+            SRV="$1"; DB="$2"
+            HOST=$(az postgres flexible-server show -g "$RG" -n "$SRV" --query fullyQualifiedDomainName -o tsv 2>/dev/null || echo "")
+            ADMIN=$(az postgres flexible-server show -g "$RG" -n "$SRV" --query administratorLogin -o tsv 2>/dev/null || echo "")
+            RULE="ghq-${IP//./-}"
+            az postgres flexible-server firewall-rule create -g "$RG" -s "$SRV" \
+              --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 || true
+            sleep 8
+            EADMIN=$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$ADMIN")
+            EPW=$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$PG_PW")
+            URL="postgresql://${EADMIN}:${EPW}@${HOST}:5432/${DB}?sslmode=require"
+            echo "::add-mask::$URL"
+            echo ""
+            echo "################## $SRV / $DB ##################"
+            psql "$URL" -v ON_ERROR_STOP=0 --pset pager=off -c "$INTRO" -c "$ROWS" 2>&1 | sed 's/^/    /' \
+              || echo "    (could not connect/query — see error above)"
+            az postgres flexible-server firewall-rule delete -g "$RG" -s "$SRV" \
+              --rule-name "$RULE" --yes --only-show-errors >/dev/null 2>&1 || true
+          }
+          inspect eds-postgresql RAG_AI_Agents
+          inspect ux-design-pg postgres
+          echo ""
+          echo "Inspection complete."

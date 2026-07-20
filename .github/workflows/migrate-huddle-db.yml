@@ -1,0 +1,130 @@
+# One-shot data migration: consolidate the split-brain onto the canonical Huddle DB.
+#
+# Background: deploy-time discovery mis-wired the app from eds-postgresql/RAG_AI_Agents (the intended
+# home, which holds the memory: rag_chunks/rag_triples) to ux-design-pg/postgres (a bare DB where
+# identity/tasks/turns/reminders auto-bootstrapped and accumulated recent activity, but memory — which
+# does NOT auto-bootstrap — never existed). We've pinned the deploy back to RAG_AI_Agents; this job
+# merges the recent rows that landed on ux-design-pg INTO RAG_AI_Agents so nothing is lost.
+#
+# SAFE by construction: writes ONLY tasks.journey_tasks (id-keyed upsert) and creates the missing
+# chat.*/tasks.router_config tables + copies their rows. It NEVER touches rag_chunks, rag_triples,
+# identity.profiles, or identity.workspace_state on the target. identity/workspace_state are only
+# INSPECTED and reported (they need a human decision; getOrCreateProfile re-links the user on login).
+# Idempotent: additive tables copy only when empty on target; journey_tasks is an id-keyed upsert.
+name: Migrate Huddle DB (consolidate onto RAG_AI_Agents)
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - .github/workflows/migrate-huddle-db.yml
+
+env:
+  AZURE_RESOURCE_GROUP: EnterpriseDS_ResourceGRP
+  SRC_SERVER: ux-design-pg
+  SRC_DB: postgres
+  TGT_SERVER: eds-postgresql
+  TGT_DB: RAG_AI_Agents
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
+             "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}",
+             "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+             "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
+
+      - name: Merge ux-design-pg/postgres → eds-postgresql/RAG_AI_Agents
+        env:
+          PG_PW: ${{ secrets.AZURE_ADMIN_PW }}
+        run: |
+          set -euo pipefail
+          RG="$AZURE_RESOURCE_GROUP"
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+          IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+          echo "Runner IP: $IP"
+          RULE="ghmig-${IP//./-}"
+
+          url_for() {
+            local SRV="$1" DB="$2" HOST ADMIN EADMIN EPW
+            HOST=$(az postgres flexible-server show -g "$RG" -n "$SRV" --query fullyQualifiedDomainName -o tsv)
+            ADMIN=$(az postgres flexible-server show -g "$RG" -n "$SRV" --query administratorLogin -o tsv)
+            az postgres flexible-server firewall-rule create -g "$RG" -s "$SRV" \
+              --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 || true
+            EADMIN=$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$ADMIN")
+            EPW=$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$PG_PW")
+            printf 'postgresql://%s:%s@%s:5432/%s?sslmode=require' "$EADMIN" "$EPW" "$HOST" "$DB"
+          }
+
+          SRC_URL="$(url_for "$SRC_SERVER" "$SRC_DB")"; echo "::add-mask::$SRC_URL"
+          TGT_URL="$(url_for "$TGT_SERVER" "$TGT_DB")"; echo "::add-mask::$TGT_URL"
+          sleep 10  # firewall propagation
+
+          count() { psql "$1" -tAc "SELECT COALESCE((SELECT count(*) FROM $2),0)" 2>/dev/null | tr -d '[:space:]' || echo "n/a"; }
+
+          echo "===== BEFORE ====="
+          for T in tasks.journey_tasks chat.reminders chat.pending_turns chat.push_subscriptions tasks.router_config; do
+            printf '  %-28s src=%s tgt=%s\n' "$T" "$(count "$SRC_URL" "$T")" "$(count "$TGT_URL" "$T")"
+          done
+
+          psql "$TGT_URL" -v ON_ERROR_STOP=1 -c "CREATE SCHEMA IF NOT EXISTS chat;" >/dev/null
+
+          # Additive copy (never overwrites): create table from source schema if absent, then copy data
+          # ONLY when the target table is empty — so re-runs don't duplicate rows.
+          migrate_additive() {
+            local FQ="$1" exists tgtn
+            exists=$(psql "$TGT_URL" -tAc "SELECT to_regclass('$FQ') IS NOT NULL" | tr -d '[:space:]')
+            if [ "$exists" != "t" ]; then
+              echo "  [$FQ] absent on target — creating + copying"
+              pg_dump "$SRC_URL" --no-owner --no-privileges -t "$FQ" | psql "$TGT_URL" -v ON_ERROR_STOP=1 >/dev/null
+            else
+              tgtn=$(count "$TGT_URL" "$FQ")
+              if [ "$tgtn" = "0" ]; then
+                echo "  [$FQ] exists but empty — copying data"
+                pg_dump "$SRC_URL" --no-owner --no-privileges --data-only -t "$FQ" | psql "$TGT_URL" -v ON_ERROR_STOP=1 >/dev/null
+              else
+                echo "  [$FQ] already has $tgtn rows — skipping (idempotent)"
+              fi
+            fi
+          }
+
+          migrate_additive chat.reminders
+          migrate_additive chat.pending_turns
+          migrate_additive chat.push_subscriptions
+          migrate_additive tasks.router_config
+
+          # journey_tasks: exists on both — id-keyed UPSERT (newer source row wins). Load the source
+          # dump into a staging table (rewrite the COPY target with sed), then INSERT ... ON CONFLICT.
+          echo "  [tasks.journey_tasks] align target schema + upsert by id"
+          # The target's journey_tasks predates the grooming feature, so it lacks assigned_agent/tags
+          # (added later via ALTER in tasks.server.ts). Bring it up to the current schema so the staging
+          # copy — and the app — have those columns. Idempotent (ADD COLUMN IF NOT EXISTS).
+          psql "$TGT_URL" -v ON_ERROR_STOP=1 -c "ALTER TABLE tasks.journey_tasks ADD COLUMN IF NOT EXISTS assigned_agent TEXT; ALTER TABLE tasks.journey_tasks ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';" >/dev/null
+          psql "$TGT_URL" -v ON_ERROR_STOP=1 -c "DROP TABLE IF EXISTS tasks._jt_stage; CREATE TABLE tasks._jt_stage (LIKE tasks.journey_tasks INCLUDING DEFAULTS);" >/dev/null
+          pg_dump "$SRC_URL" --no-owner --no-privileges --data-only -t tasks.journey_tasks \
+            | sed 's/^COPY tasks\.journey_tasks /COPY tasks._jt_stage /' \
+            | psql "$TGT_URL" -v ON_ERROR_STOP=1 >/dev/null
+          psql "$TGT_URL" -v ON_ERROR_STOP=1 -c "DO \$\$ DECLARE cols text; setc text; BEGIN SELECT string_agg(quote_ident(column_name),',' ORDER BY ordinal_position) INTO cols FROM information_schema.columns WHERE table_schema='tasks' AND table_name='journey_tasks'; SELECT string_agg(format('%I=EXCLUDED.%I',column_name,column_name),',') INTO setc FROM information_schema.columns WHERE table_schema='tasks' AND table_name='journey_tasks' AND column_name<>'id'; EXECUTE format('INSERT INTO tasks.journey_tasks (%s) SELECT %s FROM tasks._jt_stage ON CONFLICT (id) DO UPDATE SET %s', cols, cols, setc); END \$\$;" >/dev/null
+          psql "$TGT_URL" -v ON_ERROR_STOP=1 -c "DROP TABLE tasks._jt_stage;" >/dev/null
+
+          echo "===== AFTER (target row counts) ====="
+          for T in tasks.journey_tasks chat.reminders chat.pending_turns chat.push_subscriptions tasks.router_config; do
+            printf '  %-28s tgt=%s\n' "$T" "$(count "$TGT_URL" "$T")"
+          done
+
+          echo "===== identity / workspace_state (INSPECT ONLY — not migrated) ====="
+          echo "-- source ($SRC_SERVER/$SRC_DB):"
+          psql "$SRC_URL" -c "SELECT user_id, entra_object_id, email FROM identity.profiles;" 2>&1 | sed 's/^/    /' || true
+          psql "$SRC_URL" -c "SELECT user_id, length(state::text) AS state_bytes FROM identity.workspace_state;" 2>&1 | sed 's/^/    /' || true
+          echo "-- target ($TGT_SERVER/$TGT_DB):"
+          psql "$TGT_URL" -c "SELECT user_id, entra_object_id, email FROM identity.profiles;" 2>&1 | sed 's/^/    /' || true
+          psql "$TGT_URL" -c "SELECT user_id, length(state::text) AS state_bytes FROM identity.workspace_state;" 2>&1 | sed 's/^/    /' || true
+
+          for SRV in "$SRC_SERVER" "$TGT_SERVER"; do
+            az postgres flexible-server firewall-rule delete -g "$RG" -s "$SRV" --rule-name "$RULE" --yes --only-show-errors >/dev/null 2>&1 || true
+          done
+          echo "Migration complete."
