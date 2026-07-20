@@ -279,6 +279,11 @@ Example — user: "plan tomorrow's workout and also budget my gym membership" �
     ? "Pick the best primary agent. Return supporting = [] unless the message explicitly requires a second specialty."
     : "Pick the best primary agent, up to 2 supporting agents, and a one-line reason.";
 
+  // Distinguish user-REQUESTED collaborators from adjacency the model volunteered. Only the
+  // latter should ever be dropped by the caller's solo-on-coverage guard, so the router reports
+  // which supporting agents the user actually asked for. Roster-driven (ids only) → auto-scales.
+  const explicitRequestHint = `\n\nAlso return "explicitlyRequested": the subset of your supporting agents that the user NAMED (e.g. "pull in Finn and Tess", "loop in Cole") or whose distinct deliverable the user explicitly asked for (e.g. "and also draft the email"). Do NOT include an agent you merely judged helpful — only ones the user actually asked for. Return [] if none.`;
+
   const interjectHint = wantInterject
     ? `\n\nAlso list "interjectors": agents (other than the primary/supporting) who should CHECK whether they hold specific value the primary can't provide, because the message plausibly intersects information they would own. You cannot see their data — nominate based on the ANGLE, and each nominee will look and stay silent (pass) if they find nothing:
 - A specific time/date is set → nominate an agent marked [has live calendar/tasks/contacts tools] to check for conflicts on the user's schedule.
@@ -296,11 +301,12 @@ ${transcript || "(no prior messages)"}
 Latest user message:
 ${text}
 
-${supportingHint}${interjectHint}`;
+${supportingHint}${interjectHint}${explicitRequestHint}`;
 
   const zodSchema = z.object({
     primary: z.enum(memberIds),
     supporting: z.array(z.enum(memberIds)),
+    explicitlyRequested: z.array(z.enum(memberIds)).optional().default([]),
     interjectors: z.array(z.enum(memberIds)).optional().default([]),
     reason: z.string(),
   });
@@ -309,6 +315,7 @@ ${supportingHint}${interjectHint}`;
     let output: {
       primary: AgentId;
       supporting: AgentId[];
+      explicitlyRequested?: AgentId[];
       interjectors?: AgentId[];
       reason: string;
     };
@@ -325,18 +332,23 @@ ${supportingHint}${interjectHint}`;
             type: "array",
             items: { type: "string", enum: memberIds },
           },
+          explicitlyRequested: {
+            type: "array",
+            items: { type: "string", enum: memberIds },
+          },
           interjectors: {
             type: "array",
             items: { type: "string", enum: memberIds },
           },
           reason: { type: "string" },
         },
-        required: ["primary", "supporting", "interjectors", "reason"],
+        required: ["primary", "supporting", "explicitlyRequested", "interjectors", "reason"],
       } as Record<string, unknown>;
 
       const raw = await callOpenAIRouter<{
         primary: string;
         supporting: string[];
+        explicitlyRequested: string[];
         interjectors: string[];
         reason: string;
       }>({
@@ -386,17 +398,26 @@ ${supportingHint}${interjectHint}`;
       const primaryScore = primaryAgent ? scoreAgentAgainst(text, primaryAgent) : 0;
       if (primaryScore >= 0.15) soloApplied = true;
     }
-    if (!soloApplied) {
-      for (const id of supporting) {
-        if (
-          memberIds.includes(id) &&
-          id !== primary &&
-          !winners.includes(id) &&
-          winners.length < 3
-        ) {
-          winners.push(id);
-        }
+    // Collaborators the user EXPLICITLY named/requested are never adjacency, so the solo
+    // cut must not drop them (else "pull in Finn + Tess" collapses to solo). The adjacency
+    // guard still removes LLM-volunteered supporting agents whenever soloApplied. Roster-id
+    // based → a newly added agent is honored the day it's added, no code change.
+    const explicitlyRequested = new Set(
+      (output.explicitlyRequested ?? []).filter((id) => memberIds.includes(id)),
+    );
+    let explicitKept = 0;
+    for (const id of supporting) {
+      if (
+        !memberIds.includes(id) ||
+        id === primary ||
+        winners.includes(id) ||
+        winners.length >= 3
+      ) {
+        continue;
       }
+      if (soloApplied && !explicitlyRequested.has(id)) continue; // drop adjacency only
+      if (soloApplied) explicitKept++;
+      winners.push(id);
     }
     const scores = Object.fromEntries(
       winners.map((id, i) => [id, Number((1 - i * 0.2).toFixed(2))]),
@@ -419,7 +440,7 @@ ${supportingHint}${interjectHint}`;
         winnerId: primary,
         runnerUpId: winners[1] ?? null,
         interjected: interjectors.length > 0,
-        reason: `LLM router (${invocation.backend}/${invocation.model})${soloApplied ? " [solo]" : ""}${interjectors.length ? ` +${interjectors.length} interject` : ""}: ${reason}`.slice(0, 220),
+        reason: `LLM router (${invocation.backend}/${invocation.model})${soloApplied ? (explicitKept > 0 ? ` [solo+${explicitKept}req]` : " [solo]") : ""}${interjectors.length ? ` +${interjectors.length} interject` : ""}: ${reason}`.slice(0, 220),
       },
     };
   } catch (err) {
