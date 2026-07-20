@@ -172,6 +172,35 @@ without an Apollo-style state machine (deliberately not built — see git histor
   co-authored (`author_agent_ids`), sort first — so each agent surfaces memory relevant to its lane.
   Pure reorder, no SQL change.
 
+## Routing is the auto-scaling brain — fix multi-agent behavior THERE, not with regex (relearned)
+We ALREADY have a router (`src/features/huddle/lib/routing.ts`); do not bolt on hardcoded
+agent lists or verb-regexes to steer who responds — they won't keep up as agents are added.
+- **Two layers.** `routeMessage` = deterministic keyword/domain scoring (fallback). `routeMessageLLM`
+  = the real brain: it's handed the roster **dynamically** (`present.map(...)`) and picks
+  `primary + supporting + interjectors` semantically ("intent, not just keywords"). **Adding a new
+  agent needs ZERO router code** — it shows up in the roster automatically. `parseMentions` is
+  roster-driven too, so `@newagent` works the day you add them. So: extend/tune the LLM router (prompt,
+  the trust rules below), never a per-agent hardcoded heuristic.
+- **The responder set** = `routed.winners` + `interjectors`, assembled into `queue` at
+  `huddle.functions.ts:590`. The mention-chain re-queue (`parseMentions`, huddle.functions.ts:~1984)
+  is only a SECONDARY mid-reply path for agent-discovered handoffs.
+- **THE BUG that makes "only one agent answers a multi-lane ask" (measured, not theorized).**
+  `soloOnCoverage` (routing.ts:381-388) drops **every** supporting agent whenever the primary scores
+  ≥0.15 on the topic — including collaborators the USER explicitly asked to pull in. Live proof
+  (same message "Sam, sketch GTM; pull in Finn + Tess; Tess loop Cole", via `test-agent-serverfn`):
+  - `soloOnCoverage=true` → responders **Sam → Iris** only; router reason even says "Finn can validate
+    the financials and Tess can outline the MVP" then tags `[solo]` — i.e. the LLM routed them in and
+    the guard cut them.
+  - `soloOnCoverage=false` → responders **Sam → Finn → Tess → Iris**. The requested lanes all reply.
+  `soloOnCoverage` exists to kill *adjacency* pile-ons (the "fitness Q also pulls in life-strategy"
+  annoyance), but it's too blunt: it can't tell an adjacency add from an explicitly-requested one, so it
+  suppresses genuine, user-asked multi-agent collaboration. **Fix direction:** make solo only drop
+  adjacency (LLM-added, not user-named) supporting agents — e.g. trust the strict-prompt LLM `supporting`
+  for explicitly multi-lane requests instead of overriding it with a keyword score. Keep it in the router.
+- **Secondary (prose handoff).** Mid-reply, `parseMentions` fires only on a literal `@handle`/`@firstname`.
+  When an agent delegates in prose ("I'll get Finn to…", "Tess should…") no re-queue happens. Prefer
+  fixing this by prompt (get agents to emit `@handle`) or router intelligence — NOT a hardcoded verb list.
+
 ## eds-claude-skills — shared dev-workflow playbooks (USE THESE going forward)
 The org repo **`deventerpriseds-org/eds-claude-skills`** carries reusable Claude playbooks that apply
 to ALL work in this environment. They are flat `.md` files under `.claude/skills/` (NOT `SKILL.md`
