@@ -273,9 +273,13 @@ jobs:
           PG_PW_4: ${{ secrets.AZURE_PG_ADMIN_PASSWORD }}
           PG_PW_5: ${{ secrets.PG_ADMIN_PASSWORD }}
           PG_PW_6: ${{ secrets.POSTGRES_PASSWORD }}
-          # Optional explicit overrides if discovery picks the wrong one.
-          PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER }}
-          PG_DB_OVERRIDE: ${{ secrets.AZURE_PG_DB }}
+          # PINNED to the canonical Huddle database. Deploy-time discovery previously took the first
+          # server it found (servers[0]) with no pin; when a second server (ux-design-pg) appeared it
+          # started winning, and the app got mis-wired to ux-design-pg/postgres (a bare DB with no
+          # memory tables) — the root cause of the "memory switched DBs between sessions" bug. Pinning
+          # here makes every deploy target eds-postgresql/RAG_AI_Agents. A secret still overrides if set.
+          PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER || 'eds-postgresql' }}
+          PG_DB_OVERRIDE: ${{ secrets.AZURE_PG_DB || 'RAG_AI_Agents' }}
         run: |
           set -euo pipefail
           if [ -n "${FULL_URL}" ]; then
