@@ -171,3 +171,22 @@ without an Apollo-style state machine (deliberately not built — see git histor
   lane boost — chunks whose text matches the responding agent's `domains`/`themes`, or that it
   co-authored (`author_agent_ids`), sort first — so each agent surfaces memory relevant to its lane.
   Pure reorder, no SQL change.
+
+## eds-claude-skills — shared dev-workflow playbooks (USE THESE going forward)
+The org repo **`deventerpriseds-org/eds-claude-skills`** carries reusable Claude playbooks that apply
+to ALL work in this environment. They are flat `.md` files under `.claude/skills/` (NOT `SKILL.md`
+dirs), so they do NOT register as `/slash` Skill-tool entries — they're **reference playbooks to read
+and follow**, surfaced to a session by the repo's `setup.sh` (which the CCR environment setup script
+should run: it copies them into `/root/.claude/skills/` and appends an overview to the home CLAUDE.md).
+Standing habit for future sessions:
+- **`define-acceptance-criteria`** — before writing code for any feature/bug/task, extract verifiable
+  ACs as a numbered checklist and get sign-off.
+- **`verify-work`** — after implementing, map each AC to a concrete test, run it, and report **only
+  observed evidence** (drive the real flow, e.g. the `test-agent-serverfn` harness); "should work" is
+  banned. Matches this repo's rule that a firing trap is signal, not noise.
+- **`setup-environment`** / **`setup-mcp`** — canonical CLI-install and `.mcp.json` recipes; reuse
+  instead of re-deriving. All secrets are **org-level** in `deventerpriseds-org` (auto-inherited).
+- **`create-github-repo`** — CCR's proxy blocks account-level GitHub API (`POST /orgs/{org}/repos`);
+  create repos by triggering the repo's `create-repo.yml` workflow via `actions_run_trigger`, not the API.
+To make these permanent across sessions, paste `eds-claude-skills/setup.sh` into the CCR environment
+setup script (claude.ai/code → environment → edit → Setup script).
