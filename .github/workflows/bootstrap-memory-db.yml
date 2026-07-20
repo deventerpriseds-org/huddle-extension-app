@@ -43,24 +43,39 @@ jobs:
         run: |
           set -euo pipefail
           RG="$AZURE_RESOURCE_GROUP"
+          SWA_NAME="enterpriseds-huddle-web"
 
-          echo "=== Flexible servers in $RG ==="
-          az postgres flexible-server list -g "$RG" --query "[].name" -o tsv || true
-          echo "================================"
+          echo "=== ALL PostgreSQL flexible servers in the subscription ==="
+          az postgres flexible-server list \
+            --query "sort_by([].{name:name, rg:resourceGroup, fqdn:fullyQualifiedDomainName, pgVersion:version, state:state}, &name)" \
+            -o table || true
+          echo ""
+          echo "=== Databases on each server ==="
+          while read -r S SRG; do
+            [ -z "$S" ] && continue
+            echo "-- $S ($SRG):"
+            az postgres flexible-server db list -g "$SRG" -s "$S" --query "[].name" -o tsv 2>/dev/null | sed 's/^/     /' \
+              || echo "     (could not list)"
+          done < <(az postgres flexible-server list --query "[].[name, resourceGroup]" -o tsv)
+          echo ""
 
-          # Determine the server the APP actually connects to, so we don't allow-list the wrong one.
-          APP_SRV="${PG_SERVER_OVERRIDE:-}"
-          if [ -n "$APP_SRV" ]; then
-            echo "Using PG_SERVER_OVERRIDE for the app server."
-          elif [ -n "${AZURE_PG_URL:-}" ]; then
-            echo "AZURE_PG_URL IS available to this workflow — deriving the app server from it."
-            HOST=$(printf '%s' "$AZURE_PG_URL" | sed -E 's#^[a-zA-Z]+://[^@]+@([^:/?]+).*#\1#')
-            APP_SRV="${HOST%%.*}"
-            # Never print the derived name (it's a substring of the secret); print only the match result.
-            echo "App server matches 'ux-design-pg': $([ "$APP_SRV" = "ux-design-pg" ] && echo YES || echo NO)"
+          echo "=== Which server/database does the deployed Huddle app ACTUALLY use? ==="
+          # Authoritative: read AZURE_PG_URL from the SWA's app settings (what the running app connects
+          # with). Mask the full value so the password never lands in logs; print only host + db name.
+          APP_SRV=""
+          PG=$(az staticwebapp appsettings list --name "$SWA_NAME" -g "$RG" \
+                 --query "properties.AZURE_PG_URL" -o tsv 2>/dev/null || echo "")
+          if [ -n "$PG" ]; then
+            echo "::add-mask::$PG"
+            APPHOST=$(printf '%s' "$PG" | sed -E 's#^[a-zA-Z]+://[^@]+@([^:/?]+).*#\1#')
+            APP_SRV="${APPHOST%%.*}"
+            APPDB=$(printf '%s' "$PG" | sed -E 's#.*/([^/?]+)(\?.*)?$#\1#')
+            echo "App server:   $APP_SRV   (fqdn: $APPHOST)"
+            echo "App database: $APPDB"
           else
-            echo "AZURE_PG_URL is EMPTY in this workflow (likely an Environment-scoped secret)."
+            echo "AZURE_PG_URL not readable from SWA app settings — will allow-list all servers as a safety net."
           fi
+          echo "================================"
 
           # Targets: the app server if we know it, otherwise EVERY server in the RG. Allow-listing an
           # extension is benign — it only PERMITS CREATE EXTENSION, it installs/changes nothing — so
