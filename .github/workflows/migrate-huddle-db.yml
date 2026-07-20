@@ -99,7 +99,11 @@ jobs:
 
           # journey_tasks: exists on both — id-keyed UPSERT (newer source row wins). Load the source
           # dump into a staging table (rewrite the COPY target with sed), then INSERT ... ON CONFLICT.
-          echo "  [tasks.journey_tasks] upsert by id"
+          echo "  [tasks.journey_tasks] align target schema + upsert by id"
+          # The target's journey_tasks predates the grooming feature, so it lacks assigned_agent/tags
+          # (added later via ALTER in tasks.server.ts). Bring it up to the current schema so the staging
+          # copy — and the app — have those columns. Idempotent (ADD COLUMN IF NOT EXISTS).
+          psql "$TGT_URL" -v ON_ERROR_STOP=1 -c "ALTER TABLE tasks.journey_tasks ADD COLUMN IF NOT EXISTS assigned_agent TEXT; ALTER TABLE tasks.journey_tasks ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';" >/dev/null
           psql "$TGT_URL" -v ON_ERROR_STOP=1 -c "DROP TABLE IF EXISTS tasks._jt_stage; CREATE TABLE tasks._jt_stage (LIKE tasks.journey_tasks INCLUDING DEFAULTS);" >/dev/null
           pg_dump "$SRC_URL" --no-owner --no-privileges --data-only -t tasks.journey_tasks \
             | sed 's/^COPY tasks\.journey_tasks /COPY tasks._jt_stage /' \
