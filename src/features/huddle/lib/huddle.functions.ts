@@ -673,8 +673,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             const alreadyVisible = new Set(
               [data.text, ...data.history.slice(-14).map((m) => m.text)].map((t) => t.trim()),
             );
+            // Relevance floor calibrated for text-embedding-3-large, whose cosine scores run LOWER
+            // than older models: a strong topical match (e.g. "what is my dog's name?" vs a stored
+            // "my dog's name is Waffles") measures ~0.42, and unrelated text sits below ~0.25. The old
+            // 0.72 floor silently dropped every real hit. 0.3 keeps genuine matches, rejects noise.
+            const MEMORY_MIN_SCORE = 0.3;
             const fresh = (hits ?? [])
-              .filter((h) => (h.score ?? 0) >= 0.72 && !alreadyVisible.has(h.text.trim()))
+              .filter((h) => (h.score ?? 0) >= MEMORY_MIN_SCORE && !alreadyVisible.has(h.text.trim()))
               .slice(0, 4);
             if (fresh.length) {
               memoryBlock =
