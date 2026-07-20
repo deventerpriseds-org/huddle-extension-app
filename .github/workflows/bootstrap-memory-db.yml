@@ -102,3 +102,39 @@ jobs:
           done
 
           echo "Done. Next: app -> Settings -> Memory DB -> Run bootstrap (creates rag_chunks/rag_triples)."
+
+      - name: Inspect tables + row counts on both candidate DBs (READ-ONLY)
+        env:
+          PG_PW: ${{ secrets.AZURE_ADMIN_PW }}
+        run: |
+          set -uo pipefail
+          RG="$AZURE_RESOURCE_GROUP"
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+          IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+          echo "Runner IP: $IP"
+          # Read-only introspection: every user table, and per-table live-row estimate.
+          INTRO="SELECT table_schema||'.'||table_name AS tbl FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema') ORDER BY 1;"
+          ROWS="SELECT schemaname||'.'||relname AS tbl, n_live_tup AS est_rows FROM pg_stat_user_tables ORDER BY n_live_tup DESC;"
+          inspect() {
+            SRV="$1"; DB="$2"
+            HOST=$(az postgres flexible-server show -g "$RG" -n "$SRV" --query fullyQualifiedDomainName -o tsv 2>/dev/null || echo "")
+            ADMIN=$(az postgres flexible-server show -g "$RG" -n "$SRV" --query administratorLogin -o tsv 2>/dev/null || echo "")
+            RULE="ghq-${IP//./-}"
+            az postgres flexible-server firewall-rule create -g "$RG" -s "$SRV" \
+              --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 || true
+            sleep 8
+            EADMIN=$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$ADMIN")
+            EPW=$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$PG_PW")
+            URL="postgresql://${EADMIN}:${EPW}@${HOST}:5432/${DB}?sslmode=require"
+            echo "::add-mask::$URL"
+            echo ""
+            echo "################## $SRV / $DB ##################"
+            psql "$URL" -v ON_ERROR_STOP=0 --pset pager=off -c "$INTRO" -c "$ROWS" 2>&1 | sed 's/^/    /' \
+              || echo "    (could not connect/query — see error above)"
+            az postgres flexible-server firewall-rule delete -g "$RG" -s "$SRV" \
+              --rule-name "$RULE" --yes --only-show-errors >/dev/null 2>&1 || true
+          }
+          inspect eds-postgresql RAG_AI_Agents
+          inspect ux-design-pg postgres
+          echo ""
+          echo "Inspection complete."
