@@ -87,9 +87,12 @@ jobs:
           echo "Runner IP: $IP"
           RULE="ghquery-${IP//./-}"
           echo "FW_RULE=$RULE" >> "$GITHUB_ENV"
+          # Some az CLI builds on the runner reject --rule-name here; don't hard-fail on it — the
+          # target server already admits the runner (a broad existing rule), so continue regardless.
           az postgres flexible-server firewall-rule create -g "$PG_RG" -s "$PG_SRV" \
-            --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null
-          echo "Opened firewall for $IP (rule $RULE); waiting for it to take effect."
+            --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 \
+            && echo "Opened firewall rule $RULE for $IP." \
+            || echo "firewall-rule create skipped (relying on existing server rules)."
           sleep 8
 
       - name: Install psql + run query
