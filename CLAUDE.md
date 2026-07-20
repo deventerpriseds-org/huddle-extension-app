@@ -120,3 +120,25 @@ through it (`invokeJourneyTool({toolName:"send_push", channel:"messages"|"task-r
 Huddle's own Web Push (`push/push.server.ts`, VAPID) is an OPTIONAL browser-only extra (no-op unless
 Huddle VAPID keys are set) — journey's path is what covers the phone, so new away-comms should reuse
 `send_push`, not add another sender.
+
+## The canonical Azure DB is PINNED — do not let deploy discovery drift (relearned expensively)
+Huddle's Azure Postgres is **`eds-postgresql` / database `RAG_AI_Agents`** (PG 17), in RG
+`EnterpriseDS_ResourceGRP`. It holds everything: `public.rag_chunks`/`rag_triples` (memory),
+`identity.*`, `tasks.*`, `chat.*`. **Never point the app at `ux-design-pg` (a different app's bare
+server whose only DB is the default `postgres`).**
+
+- **How it broke once:** `deploy-swa.yml` assembles `AZURE_PG_URL` from `az` discovery when the
+  secret is empty (it is), and it used to take `servers[0]` with no pin + fall back to db `postgres`.
+  When `ux-design-pg` was created it started winning discovery, so the app silently switched to
+  `ux-design-pg/postgres`. Everything that **auto-bootstraps** (identity/tasks/turns/reminders)
+  re-created itself there and looked fine; **memory does NOT auto-bootstrap** (explicit `runBootstrap`
+  only), so `rag_chunks`/`rag_triples` never existed there → "relation does not exist" and
+  "vector not allow-listed". Data ended up split-brain across the two servers.
+- **The fix (in place):** `deploy-swa.yml` + `azure-pg-query.yml` default
+  `PG_SERVER_OVERRIDE`→`eds-postgresql`, `PG_DB_OVERRIDE`→`RAG_AI_Agents`. Every deploy now pins there.
+- **Ops workflows** (org Azure SP creds; a runner opens a temp firewall rule for data-plane psql):
+  `bootstrap-memory-db.yml` (allow-list pgvector + inspect all servers/DBs + confirm the app's DB),
+  `migrate-huddle-db.yml` (idempotent consolidation onto `RAG_AI_Agents`), `azure-pg-query.yml`
+  (ad-hoc read-only SQL, pinned). `scripts/setup-environment.sh` records these facts + helper commands.
+- **Verify the live pointer:** the deploy's "Resolve database connection string" step must log
+  `Assembled AZURE_PG_URL for eds-postgresql/RAG_AI_Agents`; or read the SWA app setting `AZURE_PG_URL`.
