@@ -603,6 +603,26 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
     // createSuggestedTaskFromTool below, which claims a title here before writing.
     const createdTaskTitles = new Set<string>();
 
+    // Decision rights: a turn-scoped ledger of mutating actions already performed this turn, keyed by
+    // (tool + normalized args). The FIRST responding agent to perform an action "owns" it; a second
+    // winner's identical call is a no-op. Generalizes the task dedup to reminders, emails, and journey
+    // writes so two agents in a group turn can't double-fire the same intent. `claimAction` returns
+    // false when the action was already done (caller should skip). Read-only tools are never ledgered.
+    const turnActionLedger = new Set<string>();
+    const claimAction = (key: string): boolean => {
+      const k = key.trim().toLowerCase().slice(0, 240);
+      if (turnActionLedger.has(k)) return false;
+      turnActionLedger.add(k);
+      return true;
+    };
+
+    // Lightweight handoff contract for the ad-hoc mention-chain: when an agent @mentions a teammate
+    // (the "mention IS the handoff"), we re-queue that teammate — but today they receive no structured
+    // ask, only the raw reply as context. Record { fromName, ask } here so the mentionee gets a crisp
+    // "you were handed this, address exactly it" directive (mirrors the ceremony directive pattern).
+    // Ceremonies carry their own directives; grooming is single-agent — this only fills the ad-hoc gap.
+    const handoffById = new Map<AgentId, { fromName: string; ask: string }>();
+
     // A broadcast ("everyone introduce yourselves") means every member should
     // get to speak, so lift the normal per-turn reply cap for that case.
     const { isBroadcast } = await import("./routing");
@@ -625,6 +645,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         .join("\n");
 
       const ceremonyDirective = ceremonyDirectiveById.get(nextId) ?? "";
+      const handoff = handoffById.get(nextId);
+      const handoffDirective = handoff
+        ? `\n\nYou were brought into this turn by ${handoff.fromName}, who handed this to you: "${handoff.ask}". Address exactly that in your lane — answer it directly or take the action they need. Do not re-ask what was already said or restate their message.`
+        : "";
       const isInterjector = interjectorSet.has(nextId);
       const interjectDirective = isInterjector
         ? `\n\nYou were NOT asked directly — you are interjecting ONLY to surface specific information the primary cannot see. Do NOT repeat, restate, agree with, or react to what the primary said. FIRST use your own tools to look up the user's actual schedule / tasks / contacts for the relevant time, person, or deadline. Then:
@@ -638,7 +662,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         priorInThisTurn && !ceremonyDirective
           ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
           : ""
-      }${interjectDirective}${ceremonyDirective}`;
+      }${interjectDirective}${ceremonyDirective}${handoffDirective}`;
 
       const roster = buildRoster(data.members, winner.id);
       const taskToolInstructions =
@@ -678,8 +702,22 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             // "my dog's name is Waffles") measures ~0.42, and unrelated text sits below ~0.25. The old
             // 0.72 floor silently dropped every real hit. 0.3 keeps genuine matches, rejects noise.
             const MEMORY_MIN_SCORE = 0.3;
+            // Role/domain-aware re-rank: within the relevance floor, gently prefer memory that matches
+            // THIS agent's lane — its domains/themes appear in the chunk, or it co-authored the chunk —
+            // so each agent surfaces the memory most relevant to what it actually owns, instead of the
+            // same generic top-K for everyone. Pure reorder over already-relevant hits (no SQL change).
+            const laneTerms = [...winner.domains, ...winner.themes]
+              .map((t) => t.toLowerCase())
+              .filter((t) => t.length >= 3);
+            const laneBoost = (h: { text?: string; authorAgentIds?: string[] }) => {
+              const t = (h.text || "").toLowerCase();
+              const termHit = laneTerms.some((kw) => t.includes(kw)) ? 0.12 : 0;
+              const authorHit = h.authorAgentIds?.includes(winner.id) ? 0.06 : 0;
+              return termHit + authorHit;
+            };
             const fresh = (hits ?? [])
               .filter((h) => (h.score ?? 0) >= MEMORY_MIN_SCORE && !alreadyVisible.has(h.text.trim()))
+              .sort((a, b) => ((b.score ?? 0) + laneBoost(b)) - ((a.score ?? 0) + laneBoost(a)))
               .slice(0, 4);
             if (fresh.length) {
               memoryBlock =
@@ -1145,6 +1183,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
               return JSON.stringify(await createSuggestedTaskFromTool(c.arguments));
             }
             if (c.name === "schedule_reminder") {
+              const a = c.arguments as Record<string, unknown>;
+              if (!claimAction(`reminder:${a.text ?? ""}:${a.delay_minutes ?? ""}:${a.at_time ?? ""}`)) {
+                recordToolUse(winner.id, "schedule_reminder", "already scheduled this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true, message: "That reminder was already scheduled this turn." });
+              }
               const { dispatchScheduleReminder } = await import("./tasks/reminders");
               const out = await dispatchScheduleReminder(data.caller, c.arguments, data.huddleId, winner.id, data.timeZone);
               const ok = !JSON.parse(out).error;
@@ -1172,6 +1215,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             }
             if (c.name === "send_email") {
               const a = c.arguments as Record<string, unknown>;
+              if (!claimAction(`send_email:${a.to ?? ""}:${a.subject ?? ""}`)) {
+                recordToolUse(winner.id, "send_email", "already sent this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true, message: "That email was already sent this turn." });
+              }
               try {
                 const { sendGraphEmail } = await import("./email/graph-email.server");
                 const r = await sendGraphEmail({
@@ -1206,6 +1253,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             }
             if (c.name === "create_email_draft") {
               const a = c.arguments as Record<string, unknown>;
+              if (!claimAction(`create_email_draft:${a.to ?? ""}:${a.subject ?? ""}`)) {
+                recordToolUse(winner.id, "create_email_draft", "already drafted this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true, message: "That draft was already created this turn." });
+              }
               try {
                 const { createGraphDraft } = await import("./email/graph-email.server");
                 const r = await createGraphDraft({
@@ -1485,9 +1536,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
                 at_time: z.string().optional(),
               }),
               execute: async (args) => {
+                const a = args as Record<string, unknown>;
+                if (!claimAction(`reminder:${a.text ?? ""}:${a.delay_minutes ?? ""}:${a.at_time ?? ""}`)) {
+                  recordToolUse(winner.id, "schedule_reminder", "already scheduled this turn — skipped duplicate", true);
+                  return JSON.stringify({ ok: true, deduped: true, message: "That reminder was already scheduled this turn." });
+                }
                 const out = await dispatchScheduleReminder(
                   data.caller,
-                  args as Record<string, unknown>,
+                  a,
                   data.huddleId,
                   winner.id,
                   data.timeZone,
@@ -1550,6 +1606,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
                 }),
                 execute: async (args) => {
                   const a = args as Record<string, unknown>;
+                  if (!claimAction(`send_email:${a.to ?? ""}:${a.subject ?? ""}`)) {
+                    recordToolUse(winner.id, "send_email", "already sent this turn — skipped duplicate", true);
+                    return JSON.stringify({ ok: true, deduped: true, message: "That email was already sent this turn." });
+                  }
                   const { sendGraphEmail } = await import("./email/graph-email.server");
                   const r = await sendGraphEmail({
                     to: String(a.to ?? ""),
@@ -1582,6 +1642,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
                 }),
                 execute: async (args) => {
                   const a = args as Record<string, unknown>;
+                  if (!claimAction(`create_email_draft:${a.to ?? ""}:${a.subject ?? ""}`)) {
+                    recordToolUse(winner.id, "create_email_draft", "already drafted this turn — skipped duplicate", true);
+                    return JSON.stringify({ ok: true, deduped: true, message: "That draft was already created this turn." });
+                  }
                   const { createGraphDraft } = await import("./email/graph-email.server");
                   const r = await createGraphDraft({
                     to: String(a.to ?? ""),
@@ -1926,6 +1990,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             data.members.includes(id)
           ) {
             queue.push(id);
+            // Hand off a structured ask so the mentioned agent addresses the actual request rather
+            // than re-deriving it from raw context. Keep the last handoff if mentioned by several.
+            handoffById.set(id, { fromName: winner.name, ask: clean.replace(/\s+/g, " ").trim().slice(0, 300) });
           }
         }
       } catch (err) {

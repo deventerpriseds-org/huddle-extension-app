@@ -142,3 +142,32 @@ server whose only DB is the default `postgres`).**
   (ad-hoc read-only SQL, pinned). `scripts/setup-environment.sh` records these facts + helper commands.
 - **Verify the live pointer:** the deploy's "Resolve database connection string" step must log
   `Assembled AZURE_PG_URL for eds-postgresql/RAG_AI_Agents`; or read the SWA app setting `AZURE_PG_URL`.
+
+## Auto-retrieval calibration (two non-obvious gotchas that made memory look broken)
+- **Score floor is model-specific.** `searchChunks` returns cosine similarity; `text-embedding-3-large`
+  scores real topical matches ~0.4–0.5 (measured: "what is my dog's name?" vs a stored "my dog's name
+  is Waffles" = 0.42), NOT the ~0.75+ older models give. The auto-retrieval floor is **0.3**
+  (`MEMORY_MIN_SCORE` in `runHuddleTurn`); a higher floor silently drops every real hit.
+- **Inject `memoryBlock` on BOTH instruction branches.** The OpenAI Responses path builds
+  `baseInstructions` from the assistant snapshot when one exists (all real agents have one) and only
+  falls back to `appSystem` when none does. `memoryBlock` must be concatenated into the snapshot branch
+  too (`effectiveInstructions + scene + roster + taskToolInstructions + memoryBlock + HOUSE_STYLE`),
+  or retrieval runs but never reaches the model. Verify recall with the `test-agent-serverfn` harness
+  (RAG on; write a fact in a group huddle, recall it in a different 1:1 with empty history).
+
+## Agent cooperation primitives (lightweight — NOT a workflow engine)
+Three coordination helpers in `runHuddleTurn`; scoped to fix real duplicate/handoff/relevance gaps
+without an Apollo-style state machine (deliberately not built — see git history / plan notes).
+- **Decision rights = per-turn action ledger.** `turnActionLedger` + `claimAction(key)` (declared near
+  `createdTaskTitles`): the first responding agent to perform a mutating action owns it; a second
+  winner's identical call is a no-op. Guards `schedule_reminder`, `send_email`, `create_email_draft`
+  in BOTH the OpenAI and Lovable dispatch paths (tasks already dedup via `createdTaskTitles`). Journey
+  proxy tools are intentionally NOT ledgered (they mix reads + writes; ledgering a read would break it).
+- **Mention-chain handoff.** When an agent @mentions a teammate, `handoffById.set(id,{fromName,ask})`
+  is recorded at the re-queue site; the mentionee gets a `handoffDirective` ("you were handed this,
+  address exactly it") in its scene. Ceremonies already carry their own directives; grooming is
+  single-agent — this only fills the ad-hoc gap.
+- **Role-scoped retrieval.** Auto-retrieval re-ranks the (relevance-floored) memory hits with a small
+  lane boost — chunks whose text matches the responding agent's `domains`/`themes`, or that it
+  co-authored (`author_agent_ids`), sort first — so each agent surfaces memory relevant to its lane.
+  Pure reorder, no SQL change.
