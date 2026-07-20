@@ -947,7 +947,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           const effectiveInstructions = overrideInstructions || snapshotInstructions;
           fromSnapshot = !overrideInstructions && !!snapshotInstructions;
           const baseInstructions = effectiveInstructions
-            ? effectiveInstructions + scene + roster + taskToolInstructions + HOUSE_STYLE
+            ? effectiveInstructions + scene + roster + taskToolInstructions + memoryBlock + HOUSE_STYLE
             : appSystem;
           const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
           const { PRIORITIZE_SYSTEM_HINT } = await import("./tasks/tools");
