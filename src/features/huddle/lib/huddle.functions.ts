@@ -164,6 +164,10 @@ async function runToolSafely(name: string, fn: () => Promise<unknown>): Promise<
 // server-to-server callers (e.g. the scheduled-ceremony route). Kept as a plain
 // exported async function so a route can invoke a ceremony without an RPC hop.
 export async function runHuddleTurn(data: z.infer<typeof Input>) {
+    // Wall-clock start for the GLOBAL turn deadline (see runBounded). The whole turn — sequential
+    // primary + parallel wave(s) — must finish under the ~45s hosting request ceiling, so agents are
+    // bounded by time REMAINING, not a fixed per-agent value.
+    const turnStartMs = Date.now();
     const lovableKey = process.env.LOVABLE_API_KEY;
     const openaiKey = process.env.OPENAI_API_KEY;
 
@@ -2248,9 +2252,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
     // straggler is deferred (no reply, logged as a fallback) so the turn returns well under the limit.
     // NOTE: this races the response only; a truly abandoned call's late tool side-effects aren't
     // cancelled here (rare). Threading an AbortSignal into the model calls is the follow-up.
-    const AGENT_TIMEOUT_MS = 28_000;
-    const runBounded = (id: AgentId, prior: string): Promise<AgentTurnResult> =>
-      Promise.race([
+    // GLOBAL turn deadline (~40s leaves headroom under the ~45s ceiling for merge + response
+    // encoding). Each agent is bounded by the time REMAINING to the deadline — critical because the
+    // turn runs the primary sequentially THEN a parallel wave, so a fixed per-agent value would sum
+    // across those phases and still blow the ceiling. A straggler is deferred (no reply, logged).
+    const TURN_DEADLINE_MS = 40_000;
+    const runBounded = (id: AgentId, prior: string): Promise<AgentTurnResult> => {
+      const remaining = Math.max(3_000, TURN_DEADLINE_MS - (Date.now() - turnStartMs));
+      return Promise.race([
         runAgentTurn(id, prior),
         new Promise<AgentTurnResult>((resolve) =>
           setTimeout(() => {
@@ -2262,7 +2271,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
                   ts: Date.now(),
                   agentId: id,
                   subsystem: "tool",
-                  reason: `${nm}: response timed out (>${Math.round(AGENT_TIMEOUT_MS / 1000)}s) — deferred to keep the turn responsive.`,
+                  reason: `${nm}: deferred to keep the turn under the response deadline.`,
                   inline: "response timed out — deferred",
                 },
               ],
@@ -2273,9 +2282,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
               prompts: [],
               outcome: { kind: "skip" },
             });
-          }, AGENT_TIMEOUT_MS),
+          }, remaining),
         ),
       ]);
+    };
 
     if (ceremonyActive) {
       // Ceremonies stay STRICTLY SEQUENTIAL: each participant (lane owners, then
