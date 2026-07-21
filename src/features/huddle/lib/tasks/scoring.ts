@@ -70,8 +70,13 @@ export function scoreTask(task: ScorableTask, targetDate: Date = new Date()): nu
     const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     if (dueDate > twoDaysOut && dueDate <= sevenDaysOut) score += 3;
-    if (dueDate < thirtyDaysAgo) score -= 10;
-    else if (dueDate < fourteenDaysAgo) score -= 3;
+    // Keep important-but-old work competitive so it isn't buried below the view limit — mirrors
+    // journey's scheduler/explain. Priority-lane and HIGH/URGENT skip the staleness penalty.
+    const isImportant = task.is_priority || task.priority === "HIGH" || task.priority === "URGENT";
+    if (!isImportant) {
+      if (dueDate < thirtyDaysAgo) score -= 10;
+      else if (dueDate < fourteenDaysAgo) score -= 3;
+    }
   }
 
   const daysSinceCreated = (Date.now() - new Date(task.created_at).getTime()) / (24 * 60 * 60 * 1000);
