@@ -243,3 +243,28 @@ OpenAI and Lovable dispatch paths, gated on `graphEmailConfigured()`). Facts:
 - Tasks vs events are different data: `prioritize` (mirror tasks) answers backlog/priorities;
   `get_calendar_events` (Graph) answers "what's on my calendar." Route accordingly.
 - Related app for Graph patterns: `deventerpriseds-org/boost-application-packet-platform` ("boost").
+
+## Backlog / known optimizations (surfaced, not yet done)
+Ordered roughly by leverage. Revisit once the core turn is reliably fast.
+1. **Prompt-payload efficiency via provider prompt caching (high leverage).** Each agent turn sends a
+   large prompt (snapshot instructions + house-style + tool schemas + roster + memory + scene), and a
+   multi-agent turn sends one PER agent — expensive (input tokens) and slow (bigger prompt = higher,
+   higher-variance latency). Do NOT thin the snapshots (they're canonical/additive-only). Instead order
+   the prompt as `[stable prefix: snapshot + house-style + tool schemas + roster]` + `[volatile suffix:
+   scene + memory + user msg]` and lean on OpenAI automatic prompt caching (prefix-keyed, >1024 tok) so
+   repeated/multi-agent sends bill the cached prefix cheaply and return faster — no loss of agent
+   quality or flexibility. This both cuts cost and reduces the per-agent tail latency that causes #2.
+2. **Per-agent model-call timeout (reliability).** Group-turn wall-time is now `primary + max(wave
+   agent)` after the fan-out parallelization; OpenAI per-call latency is high-variance, so one stalled
+   agent (~38s) can still drag a wave to the ~45s hosting ceiling and 500. Wrap each agent's
+   `callOpenAIResponses`/`generateText` in an AbortController (~30s) → a graceful per-agent fallback,
+   bounding worst-case under the ceiling. (Measured post-parallelization: successful 3-agent turns
+   ~19–24s, but ~2/4 still 500 at ~46s from tail latency.)
+3. **Incremental per-agent reply streaming.** `getTurnsSince` returns only done/error turns, so a group
+   turn lands atomically (typing indicator until the whole turn finishes). Stream/persist replies
+   agent-by-agent so they appear as each completes. Bigger change; the durable plumbing exists.
+4. **Scoring upgrades (deferred from the read-tool work).** Effort term (WSJF "short job first"),
+   continuous deadline-urgency curve (EDF/MDD vs the current step function), fix the `after_work`
+   window drift (17–22 in scheduling-defaults vs 17–19 in execute-tool `find_open_slots`) and the
+   whole-hour truncation, and a capacity guard that flags overcommitment instead of scheduling into
+   nonexistent time.

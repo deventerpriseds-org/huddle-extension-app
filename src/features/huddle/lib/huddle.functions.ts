@@ -2242,13 +2242,48 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       return null;
     };
 
+    // Per-agent hard timeout. After parallelization a group turn's wall-time is
+    // primary + max(wave agent); OpenAI per-call latency is high-variance, so one stalled agent can
+    // still drag a wave to the ~45s hosting ceiling and 500 the whole turn. Bound each agent: a
+    // straggler is deferred (no reply, logged as a fallback) so the turn returns well under the limit.
+    // NOTE: this races the response only; a truly abandoned call's late tool side-effects aren't
+    // cancelled here (rare). Threading an AbortSignal into the model calls is the follow-up.
+    const AGENT_TIMEOUT_MS = 28_000;
+    const runBounded = (id: AgentId, prior: string): Promise<AgentTurnResult> =>
+      Promise.race([
+        runAgentTurn(id, prior),
+        new Promise<AgentTurnResult>((resolve) =>
+          setTimeout(() => {
+            const nm = AGENT_BY_ID[id]?.name ?? id;
+            resolve({
+              fallbacks: [
+                {
+                  id: `fb-${Date.now()}-${id}-timeout`,
+                  ts: Date.now(),
+                  agentId: id,
+                  subsystem: "tool",
+                  reason: `${nm}: response timed out (>${Math.round(AGENT_TIMEOUT_MS / 1000)}s) — deferred to keep the turn responsive.`,
+                  inline: "response timed out — deferred",
+                },
+              ],
+              toolUses: [],
+              journeyTaskUpdates: [],
+              suggestedTasks: [],
+              reasoning: [],
+              prompts: [],
+              outcome: { kind: "skip" },
+            });
+          }, AGENT_TIMEOUT_MS),
+        ),
+      ]);
+
     if (ceremonyActive) {
       // Ceremonies stay STRICTLY SEQUENTIAL: each participant (lane owners, then
       // the host/closer) speaks in turn seeing everything said before it.
       while (replies.length < replyCap) {
         const nextId = shiftEligible();
         if (nextId == null) break;
-        const r = await runAgentTurn(nextId, buildPrior());
+        const r = await runBounded(nextId, buildPrior());
         mergeAgentResult(nextId, r, [nextId]);
       }
     } else {
@@ -2260,7 +2295,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       if (replies.length < replyCap) {
         const primaryId = shiftEligible();
         if (primaryId != null) {
-          const r = await runAgentTurn(primaryId, buildPrior());
+          const r = await runBounded(primaryId, buildPrior());
           mergeAgentResult(primaryId, r, [primaryId]);
         }
       }
@@ -2278,7 +2313,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           wave.push(id);
         }
         if (wave.length === 0) break;
-        const results = await Promise.all(wave.map((id) => runAgentTurn(id, frozenPrior)));
+        const results = await Promise.all(wave.map((id) => runBounded(id, frozenPrior)));
         for (let i = 0; i < wave.length; i++) {
           mergeAgentResult(wave[i], results[i], wave);
         }
