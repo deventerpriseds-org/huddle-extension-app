@@ -208,7 +208,7 @@ export async function getStandupTasks(userEmail: string, windowHours = 36): Prom
 export async function getTasksForUser(userEmail: string, category?: string): Promise<ScorableTask[]> {
   await ensureBootstrapped();
   const params: unknown[] = [userEmail.toLowerCase()];
-  let sql = `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,pushed_count,created_at,completed_at,assigned_agent,tags
+  let sql = `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,pushed_count,created_at,completed_at,assigned_agent,tags,is_scheduled,start_time
              FROM tasks.journey_tasks WHERE lower(user_email) = $1`;
   if (category) {
     params.push(category.toUpperCase());

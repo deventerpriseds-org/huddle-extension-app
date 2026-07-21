@@ -21,6 +21,8 @@ export interface ScorableTask {
   completed_at: string | null;
   assigned_agent?: string | null;
   tags?: string[] | null;
+  is_scheduled?: boolean | null;
+  start_time?: string | null;
 }
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
@@ -103,6 +105,8 @@ export interface RankedTask {
   category: string | null;
   status: string | null;
   due_date: string | null;
+  is_scheduled: boolean | null;
+  start_time: string | null;
   score: number;
   why: string;
 }
@@ -145,6 +149,8 @@ export function rankTasks(tasks: ScorableTask[], limit = 25): RankedTask[] {
       category: t.category,
       status: t.status,
       due_date: t.due_date,
+      is_scheduled: t.is_scheduled ?? null,
+      start_time: t.start_time ?? null,
       score,
       why: explainScore(t),
     }));
