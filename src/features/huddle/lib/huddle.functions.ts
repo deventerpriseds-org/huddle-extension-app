@@ -632,17 +632,90 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         ? Math.min(data.members.length, 12)
         : MAX_REPLIES_PER_TURN + interjectorSet.size;
 
-    while (queue.length > 0 && replies.length < replyCap) {
-      const nextId = queue.shift()!;
-      if (spoken.has(nextId)) continue;
-      const winner = AGENT_BY_ID[nextId];
-      if (!winner || !data.members.includes(nextId)) continue;
-
+    // Per-agent turn body, extracted so the driver can run agents either
+    // SEQUENTIALLY (ceremonies) or CONCURRENTLY (normal group turns). It writes
+    // only to PER-AGENT buffers (returned below) plus the turn-scoped dedup
+    // ledgers (`createdTaskTitles` / `claimAction`, first-writer-wins and safe
+    // under concurrency because their has→add is synchronous). The driver merges
+    // the buffers in queue order and solely owns replies/spoken/queue/handoffById,
+    // so the transcript is deterministic regardless of completion order. The
+    // `priorInThisTurn` anti-repetition context is passed in FROZEN — parallel
+    // wave agents all see the same snapshot and never each other's replies.
+    type AgentTurnResult = {
+      fallbacks: FallbackEvent[];
+      toolUses: import("../data/seed").ToolUseEvent[];
+      journeyTaskUpdates: import("./journey/types").JourneyTask[];
+      suggestedTasks: SuggestedTaskDraft[];
+      reasoning: string[];
+      prompts: PromptDebug[];
+      outcome:
+        | { kind: "skip" }
+        | { kind: "hardReply"; reply: Reply }
+        | { kind: "reply"; clean: string; isInterjector: boolean; perAgentFallbacks: string[] };
+    };
+    const runAgentTurn = async (
+      nextId: AgentId,
+      priorInThisTurn: string,
+    ): Promise<AgentTurnResult> => {
+      const winner = AGENT_BY_ID[nextId]!;
       const agentBackend = agentsCfg[nextId] ?? { backend: "lovable" as const };
 
-      const priorInThisTurn = replies
-        .map((r) => `${AGENT_BY_ID[r.agentId].name} just said: "${r.text}"`)
-        .join("\n");
+      // Per-agent output buffers. These SHADOW the outer shared arrays/helpers so
+      // the (unmodified) dispatch body writes here; the driver merges them into
+      // the shared arrays in queue order after the wave settles (append-only).
+      const fallbacks: FallbackEvent[] = [];
+      const toolUses: import("../data/seed").ToolUseEvent[] = [];
+      const journeyTaskUpdates: import("./journey/types").JourneyTask[] = [];
+      const suggestedTasks: SuggestedTaskDraft[] = [];
+      const reasoningSummaries: string[] = [];
+      const prompts: PromptDebug[] = [];
+      let fbSeq = 0;
+      let tuSeq = 0;
+      const recordFallback = (
+        subsystem: FallbackEvent["subsystem"],
+        reason: string,
+        inline: string,
+        agentId?: AgentId,
+      ): FallbackEvent => {
+        const ev: FallbackEvent = {
+          id: `fb-${Date.now()}-${winner.id}-${fbSeq++}`,
+          ts: Date.now(),
+          agentId,
+          subsystem,
+          reason,
+          inline,
+        };
+        fallbacks.push(ev);
+        return ev;
+      };
+      const recordToolUse = (
+        agentId: AgentId,
+        tool: string,
+        summary: string,
+        ok: boolean,
+        detail?: string,
+      ) => {
+        toolUses.push({
+          id: `tu-${Date.now()}-${winner.id}-${tuSeq++}`,
+          ts: Date.now(),
+          agentId,
+          tool,
+          summary,
+          ok,
+          detail,
+        });
+      };
+      // Snapshot the fully-populated buffers into a result. Called at each return
+      // point (after all pushes), so the buffers are complete.
+      const bundle = (outcome: AgentTurnResult["outcome"]): AgentTurnResult => ({
+        fallbacks,
+        toolUses,
+        journeyTaskUpdates,
+        suggestedTasks,
+        reasoning: reasoningSummaries,
+        prompts,
+        outcome,
+      });
 
       const ceremonyDirective = ceremonyDirectiveById.get(nextId) ?? "";
       const handoff = handoffById.get(nextId);
@@ -1536,12 +1609,6 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
               "no AI backend configured",
               winner.id,
             );
-            replies.push({
-              agentId: winner.id,
-              text: `(fallback: ${ev.inline}) AI gateway is not configured yet.`,
-              fallbackNotes: [ev.inline],
-            });
-            spoken.add(winner.id);
             prompts.push({
               agentId: winner.id,
               backend: "lovable",
@@ -1550,7 +1617,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
               fromSnapshot: false,
               toolTypes: [],
             });
-            continue;
+            return bundle({
+              kind: "hardReply",
+              reply: {
+                agentId: winner.id,
+                text: `(fallback: ${ev.inline}) AI gateway is not configured yet.`,
+                fallbackNotes: [ev.inline],
+              },
+            });
           }
 
           const rag = agentBackend.rag;
@@ -2021,7 +2095,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           clean = text.trim();
         }
 
-        if (!clean) continue;
+        if (!clean) return bundle({ kind: "skip" });
 
         // Persist prompt debug for this reply.
         prompts.push({
@@ -2033,63 +2107,16 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           toolTypes,
         });
 
-        // An interjector that found nothing concrete stays silent. Catch a bare
-        // "PASS" as well as the model appending PASS after echoing the primary.
-        const interjTrimmed = clean.trim();
-        if (
-          isInterjector &&
-          (/^pass[.!]?$/i.test(interjTrimmed) || /\bPASS[.!]?$/.test(interjTrimmed))
-        ) {
-          spoken.add(winner.id);
-          continue;
-        }
-
-        // Deterministic echo guard: if this reply is a near-duplicate of one an
-        // earlier agent already gave this turn, drop it (the point was already
-        // made). Backstops the "don't repeat what was said" instruction, which a
-        // weak model obeys inconsistently. Never fires on the first speaker.
-        // Exempt ceremonies: each lane owner reports its own distinct slice and the
-        // host synthesizes, all governed by the ceremony directives instead.
-        if (!ceremonyActive && interjTrimmed && isEchoOfPrior(interjTrimmed, replies)) {
-          recordFallback(
-            "tool",
-            `${winner.name}: near-duplicate of an earlier reply this turn — suppressed to avoid echo.`,
-            "duplicate reply suppressed",
-            winner.id,
-          );
-          spoken.add(winner.id);
-          continue;
-        }
-
-        const finalText =
-          perAgentFallbacks.length > 0
-            ? `${clean}\n\n_(fallback: ${perAgentFallbacks.join("; ")})_`
-            : clean;
-
-        replies.push({
-          agentId: winner.id,
-          text: finalText,
-          fallbackNotes: perAgentFallbacks.length > 0 ? perAgentFallbacks : undefined,
+        // PASS/self-censor + echo suppression + the reply push + mention-chain are
+        // all applied by the driver during the ORDERED MERGE (see mergeAgentResult),
+        // NOT here — so concurrent agents produce identical output to the sequential
+        // engine. This task only surfaces the raw reply + the flags the merge needs.
+        return bundle({
+          kind: "reply",
+          clean,
+          isInterjector,
+          perAgentFallbacks,
         });
-        spoken.add(winner.id);
-
-        // Mention-chaining is disabled during ceremonies: the participant list is
-        // fixed (lane owners + host), and the host's summary naturally @mentions
-        // owners — those must not be pulled in as extra repliers.
-        const chained = ceremonyActive ? [] : parseMentions(clean, presentAgents);
-        for (const id of chained) {
-          if (
-            id !== winner.id &&
-            !spoken.has(id) &&
-            !queue.includes(id) &&
-            data.members.includes(id)
-          ) {
-            queue.push(id);
-            // Hand off a structured ask so the mentioned agent addresses the actual request rather
-            // than re-deriving it from raw context. Keep the last handoff if mentioned by several.
-            handoffById.set(id, { fromName: winner.name, ask: clean.replace(/\s+/g, " ").trim().slice(0, 300) });
-          }
-        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "AI error";
         const ev = recordFallback(
@@ -2098,12 +2125,163 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           `model call failed: ${msg.slice(0, 80)}`,
           winner.id,
         );
-        replies.push({
-          agentId: winner.id,
-          text: `(fallback: ${ev.inline}) couldn't reach the model — ${msg}`,
-          fallbackNotes: [ev.inline],
+        return bundle({
+          kind: "hardReply",
+          reply: {
+            agentId: winner.id,
+            text: `(fallback: ${ev.inline}) couldn't reach the model — ${msg}`,
+            fallbackNotes: [ev.inline],
+          },
         });
-        spoken.add(winner.id);
+      }
+    };
+
+    // ---- Merge a settled agent result into the shared turn state, in queue order.
+    // The SOLE owner of replies/spoken/queue/handoffById and of the PASS + echo
+    // suppression, so the transcript is byte-identical to the sequential engine no
+    // matter what order the agents actually finished in. `waveIds` = the ids that
+    // ran together this wave; a mid-reply @mention of a same-wave agent must NOT
+    // re-enqueue it (it already ran once), mirroring the sequential queue.includes
+    // guard for agents still pending in the queue.
+    const mergeAgentResult = (
+      nextId: AgentId,
+      r: AgentTurnResult,
+      waveIds: readonly AgentId[],
+    ) => {
+      const winner = AGENT_BY_ID[nextId]!;
+      // Append-only buffers merge deterministically (queue order via call order).
+      fallbacks.push(...r.fallbacks);
+      toolUses.push(...r.toolUses);
+      journeyTaskUpdates.push(...r.journeyTaskUpdates);
+      suggestedTasks.push(...r.suggestedTasks);
+      reasoningSummaries.push(...r.reasoning);
+      prompts.push(...r.prompts);
+
+      const outcome = r.outcome;
+      if (outcome.kind === "skip") return; // produced nothing (no reply, not spoken)
+      if (outcome.kind === "hardReply") {
+        // Config/model-failure fallbacks: always emitted, no echo/PASS, no mentions.
+        replies.push(outcome.reply);
+        spoken.add(nextId);
+        return;
+      }
+
+      // kind === "reply": an interjector that found nothing concrete stays silent.
+      const clean = outcome.clean;
+      const interjTrimmed = clean.trim();
+      if (
+        outcome.isInterjector &&
+        (/^pass[.!]?$/i.test(interjTrimmed) || /\bPASS[.!]?$/.test(interjTrimmed))
+      ) {
+        spoken.add(nextId);
+        return;
+      }
+
+      // Deterministic echo guard: drop a near-duplicate of a reply already merged
+      // this turn. Checked against the growing `replies` during the ordered merge,
+      // so it matches the sequential behavior exactly. Never fires on the first
+      // speaker. Exempt during ceremonies (lane owners report distinct slices).
+      if (!ceremonyActive && interjTrimmed && isEchoOfPrior(interjTrimmed, replies)) {
+        recordFallback(
+          "tool",
+          `${winner.name}: near-duplicate of an earlier reply this turn — suppressed to avoid echo.`,
+          "duplicate reply suppressed",
+          winner.id,
+        );
+        spoken.add(nextId);
+        return;
+      }
+
+      const finalText =
+        outcome.perAgentFallbacks.length > 0
+          ? `${clean}\n\n_(fallback: ${outcome.perAgentFallbacks.join("; ")})_`
+          : clean;
+
+      replies.push({
+        agentId: nextId,
+        text: finalText,
+        fallbackNotes: outcome.perAgentFallbacks.length > 0 ? outcome.perAgentFallbacks : undefined,
+      });
+      spoken.add(nextId);
+
+      // Mention-chaining is disabled during ceremonies (fixed participant list).
+      const chained = ceremonyActive ? [] : parseMentions(clean, presentAgents);
+      for (const id of chained) {
+        if (
+          id !== nextId &&
+          !spoken.has(id) &&
+          !queue.includes(id) &&
+          !waveIds.includes(id) &&
+          data.members.includes(id)
+        ) {
+          queue.push(id);
+          // Hand off a structured ask so the mentioned agent addresses the actual request rather
+          // than re-deriving it from raw context. Keep the last handoff if mentioned by several.
+          handoffById.set(id, { fromName: winner.name, ask: clean.replace(/\s+/g, " ").trim().slice(0, 300) });
+        }
+      }
+    };
+
+    // The frozen anti-repetition anchor for the NEXT agent(s) to run: every reply
+    // merged so far, in order. Recomputed once per wave and shared by all agents
+    // in that wave (they do not see each other's replies).
+    const buildPrior = () =>
+      replies
+        .map((rep) => `${AGENT_BY_ID[rep.agentId].name} just said: "${rep.text}"`)
+        .join("\n");
+
+    // Pop the next runnable agent, skipping ones that already spoke or aren't
+    // members (mirrors the sequential loop's per-iteration skip checks).
+    const shiftEligible = (): AgentId | null => {
+      while (queue.length > 0) {
+        const id = queue.shift()!;
+        if (spoken.has(id)) continue;
+        if (!AGENT_BY_ID[id] || !data.members.includes(id)) continue;
+        return id;
+      }
+      return null;
+    };
+
+    if (ceremonyActive) {
+      // Ceremonies stay STRICTLY SEQUENTIAL: each participant (lane owners, then
+      // the host/closer) speaks in turn seeing everything said before it.
+      while (replies.length < replyCap) {
+        const nextId = shiftEligible();
+        if (nextId == null) break;
+        const r = await runAgentTurn(nextId, buildPrior());
+        mergeAgentResult(nextId, r, [nextId]);
+      }
+    } else {
+      // Normal group turn: the PRIMARY winner runs first (sequentially) so the
+      // rest of the turn anti-repeats against a settled anchor; then the remaining
+      // agents of each wave run CONCURRENTLY (~max(agent) latency instead of the
+      // sum), each seeded with the SAME frozen prior. Waves repeat to drain the
+      // mention-chain handoffs (each wave's @mentions enqueue the next wave).
+      if (replies.length < replyCap) {
+        const primaryId = shiftEligible();
+        if (primaryId != null) {
+          const r = await runAgentTurn(primaryId, buildPrior());
+          mergeAgentResult(primaryId, r, [primaryId]);
+        }
+      }
+      while (replies.length < replyCap && queue.length > 0) {
+        const frozenPrior = buildPrior();
+        // Drain the current queue into one wave, bounded by remaining reply slots
+        // so we never run an agent whose reply couldn't be shown (which would
+        // execute tool side-effects the sequential engine never would). Overflow
+        // simply rolls into the next wave.
+        const wave: AgentId[] = [];
+        const slots = replyCap - replies.length;
+        while (wave.length < slots) {
+          const id = shiftEligible();
+          if (id == null) break;
+          wave.push(id);
+        }
+        if (wave.length === 0) break;
+        const results = await Promise.all(wave.map((id) => runAgentTurn(id, frozenPrior)));
+        for (let i = 0; i < wave.length; i++) {
+          mergeAgentResult(wave[i], results[i], wave);
+        }
       }
     }
 
