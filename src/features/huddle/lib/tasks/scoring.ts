@@ -21,6 +21,8 @@ export interface ScorableTask {
   completed_at: string | null;
   assigned_agent?: string | null;
   tags?: string[] | null;
+  is_scheduled?: boolean | null;
+  start_time?: string | null;
 }
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
@@ -68,8 +70,13 @@ export function scoreTask(task: ScorableTask, targetDate: Date = new Date()): nu
     const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     if (dueDate > twoDaysOut && dueDate <= sevenDaysOut) score += 3;
-    if (dueDate < thirtyDaysAgo) score -= 10;
-    else if (dueDate < fourteenDaysAgo) score -= 3;
+    // Keep important-but-old work competitive so it isn't buried below the view limit — mirrors
+    // journey's scheduler/explain. Priority-lane and HIGH/URGENT skip the staleness penalty.
+    const isImportant = task.is_priority || task.priority === "HIGH" || task.priority === "URGENT";
+    if (!isImportant) {
+      if (dueDate < thirtyDaysAgo) score -= 10;
+      else if (dueDate < fourteenDaysAgo) score -= 3;
+    }
   }
 
   const daysSinceCreated = (Date.now() - new Date(task.created_at).getTime()) / (24 * 60 * 60 * 1000);
@@ -103,6 +110,8 @@ export interface RankedTask {
   category: string | null;
   status: string | null;
   due_date: string | null;
+  is_scheduled: boolean | null;
+  start_time: string | null;
   score: number;
   why: string;
 }
@@ -145,6 +154,8 @@ export function rankTasks(tasks: ScorableTask[], limit = 25): RankedTask[] {
       category: t.category,
       status: t.status,
       due_date: t.due_date,
+      is_scheduled: t.is_scheduled ?? null,
+      start_time: t.start_time ?? null,
       score,
       why: explainScore(t),
     }));
