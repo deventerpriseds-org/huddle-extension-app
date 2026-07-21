@@ -1142,6 +1142,28 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
               },
               strict: false,
             });
+            emailTools.push({
+              type: "function" as const,
+              name: "get_calendar_events",
+              description:
+                "Read the user's Microsoft/Outlook calendar for a day or range and return the actual events (meetings, appointments). Use this whenever the user asks what's on their calendar/schedule/agenda for a day, or whether they're free/busy at a time. This reads REAL calendar data — never answer calendar questions from memory or 'files'. Dates are ISO (YYYY-MM-DD or full ISO datetime). Note: returns Microsoft/Outlook events; a Google-only calendar won't appear.",
+              parameters: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  start: {
+                    type: "string",
+                    description: "Start of the range, ISO date or datetime (e.g. 2026-07-21). Defaults to today.",
+                  },
+                  end: {
+                    type: "string",
+                    description: "End of the range, ISO date or datetime. Defaults to the end of the start day.",
+                  },
+                },
+                required: [],
+              },
+              strict: false,
+            });
           }
 
           const { PRIORITIZE_TOOL } = await import("./tasks/tools");
@@ -1286,6 +1308,47 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "create_email_draft", "draft crashed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            }
+            if (c.name === "get_calendar_events") {
+              const a = c.arguments as Record<string, unknown>;
+              try {
+                const tz = data.timeZone || "UTC";
+                const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+                const startRaw = typeof a.start === "string" && a.start.trim() ? a.start.trim() : todayStr;
+                const endRaw = typeof a.end === "string" && a.end.trim() ? a.end.trim() : startRaw;
+                const startDay = startRaw.slice(0, 10);
+                const endDay = endRaw.slice(0, 10);
+                const startISO = startRaw.length > 10 ? startRaw : `${startDay}T00:00:00`;
+                const endISO = endRaw.length > 10 ? endRaw : `${endDay}T23:59:59`;
+                const mailbox =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                const { getGraphCalendarEvents } = await import("./email/graph-email.server");
+                const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+                recordToolUse(
+                  winner.id,
+                  "get_calendar_events",
+                  r.ok
+                    ? `${r.events?.length ?? 0} event(s) ${startDay}${endDay !== startDay ? `..${endDay}` : ""}`
+                    : "calendar read failed",
+                  r.ok,
+                  r.ok ? undefined : r.error,
+                );
+                if (!r.ok) {
+                  const ev = recordFallback(
+                    "tool",
+                    `${winner.name}: get_calendar_events failed — ${r.error ?? "unknown"}`,
+                    "get_calendar_events failed",
+                    winner.id,
+                  );
+                  perAgentFallbacks.push(ev.inline);
+                }
+                return JSON.stringify(r);
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "get_calendar_events", "calendar read crashed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             }
@@ -1658,6 +1721,38 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
                     winner.id,
                     "create_email_draft",
                     r.ok ? `draft saved in ${r.from}` : "draft failed",
+                    r.ok,
+                    r.ok ? undefined : r.error,
+                  );
+                  return JSON.stringify(r);
+                },
+              });
+              lovableTools.get_calendar_events = tool({
+                description:
+                  "Read the user's Microsoft/Outlook calendar for a day or range and return the actual events. Use for 'what's on my calendar/schedule/agenda' or free/busy questions — reads REAL data, never answer calendar questions from memory or 'files'. Note: Microsoft/Outlook events only.",
+                inputSchema: z.object({
+                  start: z.string().optional(),
+                  end: z.string().optional(),
+                }),
+                execute: async (args) => {
+                  const a = args as Record<string, unknown>;
+                  const tz = data.timeZone || "UTC";
+                  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+                  const startRaw = typeof a.start === "string" && a.start.trim() ? a.start.trim() : todayStr;
+                  const endRaw = typeof a.end === "string" && a.end.trim() ? a.end.trim() : startRaw;
+                  const startDay = startRaw.slice(0, 10);
+                  const endDay = endRaw.slice(0, 10);
+                  const startISO = startRaw.length > 10 ? startRaw : `${startDay}T00:00:00`;
+                  const endISO = endRaw.length > 10 ? endRaw : `${endDay}T23:59:59`;
+                  const mailbox =
+                    (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                    data.caller?.entra_email;
+                  const { getGraphCalendarEvents } = await import("./email/graph-email.server");
+                  const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+                  recordToolUse(
+                    winner.id,
+                    "get_calendar_events",
+                    r.ok ? `${r.events?.length ?? 0} event(s)` : "calendar read failed",
                     r.ok,
                     r.ok ? undefined : r.error,
                   );

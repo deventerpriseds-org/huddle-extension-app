@@ -219,3 +219,27 @@ Standing habit for future sessions:
   create repos by triggering the repo's `create-repo.yml` workflow via `actions_run_trigger`, not the API.
 To make these permanent across sessions, paste `eds-claude-skills/setup.sh` into the CCR environment
 setup script (claude.ai/code → environment → edit → Setup script).
+
+**Working style the user expects (bias to action — relearned):** don't turn every step into a
+question. Apply the eds-skills' AC/verify discipline, but tune the ceremony down:
+- **Confirm by searching, not by asking.** If a fact is discoverable (repo name, which app a service
+  uses, a config value), look it up (`search_repositories`, grep, the `azure-pg-query` workflow) instead
+  of asking. Only ask when the answer is a genuine judgment call the code/tools can't settle.
+- **Just do the obviously-right, non-destructive step.** Cloning a repo for reference, reading code,
+  running a read-only query, adding a tool the user already green-lit — fold it into the plan and do it;
+  don't stop for permission on things that can't hurt anything.
+- Reserve questions for destructive/irreversible/outward-facing actions or real forks in intent.
+
+## Calendar reads — get_calendar_events via Microsoft Graph (Huddle-native)
+Huddle reads the user's Outlook/M365 calendar directly through the **same Graph app** as email
+(`email/graph-email.server.ts`, app-only client-credentials). `getGraphCalendarEvents()` calls
+`GET /users/{mailbox}/calendarView` and backs the `get_calendar_events` agent tool (wired in both the
+OpenAI and Lovable dispatch paths, gated on `graphEmailConfigured()`). Facts:
+- Needs the Graph app to hold **`Calendars.Read`** application permission (admin-consented). A 403 from
+  calendarView means that consent is missing — that's the thing to grant, not a code bug.
+- **Outlook/M365 only.** A Google-only calendar won't appear here — journey holds Google tokens; a
+  multi-provider read would go through the `mail-and-appointments` middleware
+  (`deventerpriseds-org/mail-and-appointments`, the "mail-watcher" — M365 + Google email/calendar).
+- Tasks vs events are different data: `prioritize` (mirror tasks) answers backlog/priorities;
+  `get_calendar_events` (Graph) answers "what's on my calendar." Route accordingly.
+- Related app for Graph patterns: `deventerpriseds-org/boost-application-packet-platform` ("boost").
