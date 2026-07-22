@@ -260,9 +260,15 @@ Ordered roughly by leverage. Revisit once the core turn is reliably fast.
    `callOpenAIResponses`/`generateText` in an AbortController (~30s) → a graceful per-agent fallback,
    bounding worst-case under the ceiling. (Measured post-parallelization: successful 3-agent turns
    ~19–24s, but ~2/4 still 500 at ~46s from tail latency.)
-3. **Incremental per-agent reply streaming.** `getTurnsSince` returns only done/error turns, so a group
-   turn lands atomically (typing indicator until the whole turn finishes). Stream/persist replies
-   agent-by-agent so they appear as each completes. Bigger change; the durable plumbing exists.
+3. **Incremental per-agent reply streaming (NEXT — plan written).** Group-turn wall-time can exceed
+   the ~45s hosting ceiling; today parallel fan-out + a 36s turn deadline (`runBounded`) keep it
+   crash-free but **defer/DROP** agents under slow-LLM windows (a turn can even return empty). The fix
+   is a **resumable, incrementally-persisted turn**: run agents in sub-45s chunks, persist each reply
+   the instant it completes (append to `chat.pending_turns.replies`), and continue the turn across
+   runner executions (self-kick `/api/public/run-turn`) — so ALL agents reply, streaming in via the
+   existing poll, and no agent is ever dropped. Ready-to-execute plan (schema, chunked driver,
+   cross-chunk ledger persistence, client incremental render, verification) in
+   **`docs/plan-incremental-turn-streaming.md`**. Supersedes the defer/drop path.
 4. **Scoring upgrades (deferred from the read-tool work).** Effort term (WSJF "short job first"),
    continuous deadline-urgency curve (EDF/MDD vs the current step function), fix the `after_work`
    window drift (17–22 in scheduling-defaults vs 17–19 in execute-tool `find_open_slots`) and the
