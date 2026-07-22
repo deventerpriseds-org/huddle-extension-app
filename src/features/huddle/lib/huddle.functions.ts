@@ -2268,9 +2268,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
     // encoding). Each agent is bounded by the time REMAINING to the deadline — critical because the
     // turn runs the primary sequentially THEN a parallel wave, so a fixed per-agent value would sum
     // across those phases and still blow the ceiling. A straggler is deferred (no reply, logged).
-    const TURN_DEADLINE_MS = 40_000;
+    const TURN_DEADLINE_MS = 36_000;
     const runBounded = (id: AgentId, prior: string): Promise<AgentTurnResult> => {
-      const remaining = Math.max(3_000, TURN_DEADLINE_MS - (Date.now() - turnStartMs));
+      const remaining = Math.max(2_000, TURN_DEADLINE_MS - (Date.now() - turnStartMs));
       return Promise.race([
         runAgentTurn(id, prior),
         new Promise<AgentTurnResult>((resolve) =>
@@ -2323,6 +2323,15 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       }
       while (replies.length < replyCap && queue.length > 0) {
         const frozenPrior = buildPrior();
+        // Past the turn deadline: defer the rest instead of starting another wave whose bounded
+        // timeouts would stack onto the merge/serialize overhead and breach the hosting ceiling.
+        if (Date.now() - turnStartMs > TURN_DEADLINE_MS) {
+          for (const id of queue) {
+            const a = AGENT_BY_ID[id];
+            if (a) recordFallback("tool", `${a.name}: deferred — turn deadline reached before it could run.`, "deferred (deadline)", a.id);
+          }
+          break;
+        }
         // Drain the current queue into one wave, bounded by remaining reply slots
         // so we never run an agent whose reply couldn't be shown (which would
         // execute tool side-effects the sequential engine never would). Overflow
