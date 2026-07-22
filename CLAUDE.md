@@ -201,6 +201,25 @@ agent lists or verb-regexes to steer who responds — they won't keep up as agen
   When an agent delegates in prose ("I'll get Finn to…", "Tess should…") no re-queue happens. Prefer
   fixing this by prompt (get agents to emit `@handle`) or router intelligence — NOT a hardcoded verb list.
 
+## Testing without killing the OpenAI account (hard-won — read before verifying routing/agents)
+Live end-to-end turns are EXPENSIVE and burned the OpenAI quota to `insufficient_quota` (429) once —
+after which every LLM-router call silently falls back to keyword routing, so tests show the FALLBACK
+behavior (handoff→mention-only, multi-lane→solo) and look like code bugs when the code never ran. The
+tell is `decision.reason` starting `LLM fallback: OpenAI Responses 429`. Rules:
+- **Test the cheapest layer that proves the point.** A full group turn fires 1 router call + up to 7
+  agent-reply calls (huge prompts). To verify WHO gets selected you need none of the replies. The
+  winner-assembly is a PURE function — `assembleWinners()` in `routing.ts` — unit-tested OFFLINE with
+  mocked router outputs: `bun scripts/router-winners.test.ts` (aka `npm run test:router`). Zero API
+  spend, deterministic, milliseconds. Iterate router logic HERE, not against the live app.
+- **Run TS offline with `bun`, not `tsx`** — importing `routing.ts` pulls a transitive `.css`
+  (@fontsource) that tsx/node can't load; bun tolerates it.
+- **Never verify routing via full turns.** Reserve live turns for a tiny FINAL smoke (3–5 calls,
+  spaced ≥10s) once the offline tests pass — and print `decision.reason` to confirm the real LLM router
+  ran (not the 429 fallback).
+- **Fail fast on quota.** On `429`/`insufficient_quota`, STOP — do not retry (each retry burns more).
+- **One turn, many assertions.** Reuse a single live result for multiple checks; don't fire one turn
+  per assertion.
+
 ## eds-claude-skills — shared dev-workflow playbooks (USE THESE going forward)
 The org repo **`deventerpriseds-org/eds-claude-skills`** carries reusable Claude playbooks that apply
 to ALL work in this environment. They are flat `.md` files under `.claude/skills/` (NOT `SKILL.md`

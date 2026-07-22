@@ -206,6 +206,80 @@ export function routeMessage(input: RouteInput): RouteResult {
 }
 
 /**
+ * PURE winner-assembly — turns the LLM router's raw pick ({primary, supporting, explicitlyRequested})
+ * plus the parsed @mentions into the final ordered winner set. Extracted so it can be unit-tested
+ * OFFLINE with mocked router outputs (no OpenAI spend). The only external reads are AGENT_BY_ID +
+ * scoreAgentAgainst (deterministic keyword scoring), so this is fully self-contained.
+ */
+export interface WinnerAssemblyInput {
+  primary: AgentId;
+  supporting: AgentId[];
+  explicitlyRequested: AgentId[];
+  mentions: AgentId[];
+  memberIds: AgentId[];
+  text: string;
+  soloOnCoverage: boolean;
+}
+export interface WinnerAssemblyResult {
+  winners: AgentId[];
+  soloApplied: boolean;
+  explicitKept: number;
+  mentionedWinners: AgentId[];
+}
+export function assembleWinners(input: WinnerAssemblyInput): WinnerAssemblyResult {
+  const { primary, supporting, mentions, memberIds, text, soloOnCoverage } = input;
+  const explicitlyRequested = new Set(
+    input.explicitlyRequested.filter((id) => memberIds.includes(id)),
+  );
+  const mentionSet = mentions.filter((id) => memberIds.includes(id));
+
+  let winners: AgentId[];
+  let soloApplied = false;
+  let explicitKept = 0;
+  const mentionedWinners: AgentId[] = [];
+
+  if (mentionSet.length > 0) {
+    // MENTION TURN: semantic PRIMARY (main-task owner) + @mentioned agents + any explicitly-NAMED
+    // supporting agent. Adjacency (unnamed supporting) is dropped. Handoff "Tess, scope X, then @cole"
+    // → primary tess + mention cole; bare "@cole how long?" → primary cole == mention → just Cole.
+    winners = [primary];
+    for (const id of supporting) {
+      if (explicitlyRequested.has(id) && !winners.includes(id) && winners.length < 4) {
+        winners.push(id);
+        explicitKept++;
+      }
+    }
+    for (const id of mentionSet) {
+      if (!winners.includes(id) && winners.length < 4) winners.push(id);
+    }
+    mentionedWinners.push(...mentionSet.filter((id) => id !== primary));
+  } else {
+    // NORMAL TURN: semantic primary + supporting. soloOnCoverage drops adjacency when the primary
+    // already covers the topic — but never a user-named collaborator (explicitlyRequested).
+    winners = [primary];
+    if (soloOnCoverage) {
+      const primaryAgent = AGENT_BY_ID[primary];
+      const primaryScore = primaryAgent ? scoreAgentAgainst(text, primaryAgent) : 0;
+      if (primaryScore >= 0.15) soloApplied = true;
+    }
+    for (const id of supporting) {
+      if (
+        !memberIds.includes(id) ||
+        id === primary ||
+        winners.includes(id) ||
+        winners.length >= 3
+      ) {
+        continue;
+      }
+      if (soloApplied && !explicitlyRequested.has(id)) continue; // drop adjacency only
+      if (soloApplied) explicitKept++;
+      winners.push(id);
+    }
+  }
+  return { winners, soloApplied, explicitKept, mentionedWinners };
+}
+
+/**
  * LLM-based router. Picks a primary agent + optional supporting agents based
  * on the user's message and recent history. Falls back to the keyword
  * routeMessage() on any failure so we never block a reply.
@@ -393,64 +467,16 @@ ${supportingHint}${interjectHint}${explicitRequestHint}`;
       };
     }
 
-    // Collaborators the user EXPLICITLY named/requested are never adjacency (roster-id based →
-    // auto-scales). Used two ways below: to exempt named agents from the solo cut, and to decide who
-    // joins a @mention turn.
-    const explicitlyRequested = new Set(
-      (output.explicitlyRequested ?? []).filter((id) => memberIds.includes(id)),
-    );
-    const mentionSet = mentions.filter((id) => memberIds.includes(id));
-
-    let winners: AgentId[];
-    let soloApplied = false;
-    let explicitKept = 0;
-    const mentionedWinners: AgentId[] = [];
-
-    if (mentionSet.length > 0) {
-      // MENTION TURN: responders = the semantic PRIMARY (the agent who owns the main task) + the
-      // @mentioned agents. Supporting ADJACENCY is dropped. This resolves both shapes deterministically:
-      //  - handoff "Tess, scope the MVP, then @cole build it" → primary tess (owns "scope") + mention
-      //    cole  → Tess + Cole (the prose work-owner is never dropped).
-      //  - bare "@cole how long?" → the LLM makes the addressed agent the primary → primary cole ==
-      //    mention cole → just Cole (no adjacency pulled in).
-      // We trust the primary (a single, well-scoped pick) but NOT the supporting list (adjacency),
-      // which is what caused a bare @mention to over-pull a second voice. Cap 4 (explicit asks).
-      winners = [primary];
-      // Keep supporting agents the user explicitly NAMED (never pure adjacency) — covers a mixed
-      // "Sam, pull in Finn, and @tess do the MVP" (primary sam + named finn + mention tess).
-      for (const id of supporting) {
-        if (explicitlyRequested.has(id) && !winners.includes(id) && winners.length < 4) {
-          winners.push(id);
-          explicitKept++;
-        }
-      }
-      for (const id of mentionSet) {
-        if (!winners.includes(id) && winners.length < 4) winners.push(id);
-      }
-      mentionedWinners.push(...mentionSet.filter((id) => id !== primary));
-    } else {
-      // NORMAL TURN: semantic primary + supporting. soloOnCoverage drops adjacency when the primary
-      // already covers the topic — but never a user-named collaborator (explicitlyRequested).
-      winners = [primary];
-      if (invocation.soloOnCoverage) {
-        const primaryAgent = AGENT_BY_ID[primary];
-        const primaryScore = primaryAgent ? scoreAgentAgainst(text, primaryAgent) : 0;
-        if (primaryScore >= 0.15) soloApplied = true;
-      }
-      for (const id of supporting) {
-        if (
-          !memberIds.includes(id) ||
-          id === primary ||
-          winners.includes(id) ||
-          winners.length >= 3
-        ) {
-          continue;
-        }
-        if (soloApplied && !explicitlyRequested.has(id)) continue; // drop adjacency only
-        if (soloApplied) explicitKept++;
-        winners.push(id);
-      }
-    }
+    // Deterministic winner assembly (pure, unit-tested offline — see routing.winners.test.ts).
+    const { winners, soloApplied, explicitKept, mentionedWinners } = assembleWinners({
+      primary,
+      supporting,
+      explicitlyRequested: output.explicitlyRequested ?? [],
+      mentions,
+      memberIds,
+      text,
+      soloOnCoverage: !!invocation.soloOnCoverage,
+    });
     const scores = Object.fromEntries(
       winners.map((id, i) => [id, Number((1 - i * 0.2).toFixed(2))]),
     ) as Partial<Record<AgentId, number>>;
