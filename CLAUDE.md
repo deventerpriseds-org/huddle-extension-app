@@ -201,24 +201,29 @@ agent lists or verb-regexes to steer who responds — they won't keep up as agen
   When an agent delegates in prose ("I'll get Finn to…", "Tess should…") no re-queue happens. Prefer
   fixing this by prompt (get agents to emit `@handle`) or router intelligence — NOT a hardcoded verb list.
 
-## Testing without killing the OpenAI account (hard-won — read before verifying routing/agents)
-Live end-to-end turns are EXPENSIVE and burned the OpenAI quota to `insufficient_quota` (429) once —
-after which every LLM-router call silently falls back to keyword routing, so tests show the FALLBACK
-behavior (handoff→mention-only, multi-lane→solo) and look like code bugs when the code never ran. The
-tell is `decision.reason` starting `LLM fallback: OpenAI Responses 429`. Rules:
-- **Test the cheapest layer that proves the point.** A full group turn fires 1 router call + up to 7
-  agent-reply calls (huge prompts). To verify WHO gets selected you need none of the replies. The
-  winner-assembly is a PURE function — `assembleWinners()` in `routing.ts` — unit-tested OFFLINE with
-  mocked router outputs: `bun scripts/router-winners.test.ts` (aka `npm run test:router`). Zero API
-  spend, deterministic, milliseconds. Iterate router logic HERE, not against the live app.
-- **Run TS offline with `bun`, not `tsx`** — importing `routing.ts` pulls a transitive `.css`
-  (@fontsource) that tsx/node can't load; bun tolerates it.
-- **Never verify routing via full turns.** Reserve live turns for a tiny FINAL smoke (3–5 calls,
-  spaced ≥10s) once the offline tests pass — and print `decision.reason` to confirm the real LLM router
-  ran (not the 429 fallback).
-- **Fail fast on quota.** On `429`/`insufficient_quota`, STOP — do not retry (each retry burns more).
-- **One turn, many assertions.** Reuse a single live result for multiple checks; don't fire one turn
-  per assertion.
+## Verifying routing/agents: the loop discipline that matters (hard-won)
+Full end-to-end turns are the REAL UAT and are the preferred way to verify — drive the actual flow.
+The mistake to avoid is not "using full turns"; it's **blind responsive micro-iteration**: seeing a
+result, making a tiny change, re-running the heavy test, repeat — without stopping to ask why.
+- **THE RULE: when heavy calls return the SAME result 2–3× in a row, PAUSE and re-analyze.** Stop
+  changing code. Form a hypothesis, add instrumentation, and find the ROOT CAUSE before the next edit.
+  A run of identical outputs across incremental changes means your change isn't reaching the code path
+  — that itself is the signal to investigate, not to tweak again.
+- **Instrument to see the truth.** Surfacing `decision.reason` in the response is what finally revealed
+  the real cause here: `LLM fallback: OpenAI Responses 429` — the OpenAI account hit
+  `insufficient_quota`, so every LLM-router call fell back to keyword routing. The router CODE never
+  ran; six rounds of prompt tweaks were chasing the quota fallback (handoff→mention-only,
+  multi-lane→solo). Always print `decision.reason` when verifying routing — `LLM router (openai/…)` =
+  real; `LLM fallback: …` = the router didn't run (429/quota/error), so the result says nothing about
+  your change.
+- **Keep a cheap offline inner loop AS WELL.** The winner-assembly is a pure function —
+  `assembleWinners()` in `routing.ts` — unit-tested offline with mocked router outputs:
+  `bun scripts/router-winners.test.ts` (`npm run test:router`), zero API spend, deterministic. Use it
+  to prove the deterministic LOGIC fast, then confirm end-to-end with a few real turns. Offline test
+  COMPLEMENTS full-turn UAT; it doesn't replace it. (Run TS offline with `bun`, not `tsx` — importing
+  `routing.ts` pulls a transitive `.css` that tsx/node can't load; bun tolerates it.)
+- **Fail fast on quota.** On `429`/`insufficient_quota`, STOP — do not retry (each retry burns more),
+  and don't interpret any result until quota is restored.
 
 ## eds-claude-skills — shared dev-workflow playbooks (USE THESE going forward)
 The org repo **`deventerpriseds-org/eds-claude-skills`** carries reusable Claude playbooks that apply
