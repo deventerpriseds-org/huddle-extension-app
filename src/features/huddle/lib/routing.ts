@@ -287,7 +287,7 @@ Example — user: "plan tomorrow's workout and also budget my gym membership" �
   // Distinguish user-REQUESTED collaborators from adjacency the model volunteered. Only the
   // latter should ever be dropped by the caller's solo-on-coverage guard, so the router reports
   // which supporting agents the user actually asked for. Roster-driven (ids only) → auto-scales.
-  const explicitRequestHint = `\n\nAlso return "explicitlyRequested": the subset of your supporting agents that the user NAMED (e.g. "pull in Finn and Tess", "loop in Cole") or whose distinct deliverable the user explicitly asked for (e.g. "and also draft the email"). Do NOT include an agent you merely judged helpful — only ones the user actually asked for. Return [] if none.`;
+  const explicitRequestHint = `\n\nAlso return "explicitlyRequested": every agent — whether you selected it as primary OR supporting — that the user NAMED with a task or explicitly asked to include (e.g. "Tess, scope the MVP" → includes tess; "pull in Finn and Tess" → finn, tess; "and also draft the email" → the email agent). Do NOT include an agent you merely judged helpful, or one the user only reached via @mention without naming a task — only agents the user explicitly addressed by name with something to do. Return [] if none.`;
 
   const interjectHint = wantInterject
     ? `\n\nAlso list "interjectors": agents (other than the primary/supporting) who should CHECK whether they hold specific value the primary can't provide, because the message plausibly intersects information they would own. You cannot see their data — nominate based on the ANGLE, and each nominee will look and stay silent (pass) if they find nothing:
@@ -296,16 +296,6 @@ Example — user: "plan tomorrow's workout and also budget my gym membership" �
 - A commitment, deadline, budget, or risk is implied → nominate the agent who tracks that.
 Agents marked [has live calendar/tasks/contacts tools] can look up the user's actual schedule and contacts, so they are the right nominees for time/person/deadline angles even if their stated domain sounds unrelated. Do NOT nominate for mere topical similarity with no such information angle. Return interjectors = [] when there is no plausible angle.`
     : "";
-
-  // Mention-aware primary bias (group scope): a group @mention now flows through this router (so a
-  // prose-named work-owner isn't dropped), but the mentioned agent is the ADDRESSEE — make it the
-  // primary unless the message hands a DISTINCT task to someone else. Without this the router can pick
-  // an adjacent agent as primary on a plain "@X <question>", which (unioned with the mention) wrongly
-  // pulls a second voice. Roster-driven (names only) → auto-scales.
-  const mentionHint =
-    mentions.length > 0
-      ? `\n\nThe user @mentioned: ${mentions.map((id) => AGENT_BY_ID[id]?.name ?? id).join(", ")} — these agents MUST be included. Restrict BOTH primary and supporting to agents the user either @mentioned OR named with a task in this message. Do NOT add any other agent — no adjacency, no "might be relevant." Examples: "@cole how long will the API take?" → primary cole, supporting []. "Tess, scope the MVP, then @cole build it" → primary tess (her task), supporting [cole] (named for the handoff).`
-      : "";
 
   const prompt = `Roster (available agents in this huddle):
 ${roster}
@@ -316,7 +306,7 @@ ${transcript || "(no prior messages)"}
 Latest user message:
 ${text}
 
-${supportingHint}${interjectHint}${explicitRequestHint}${mentionHint}`;
+${supportingHint}${interjectHint}${explicitRequestHint}`;
 
   const zodSchema = z.object({
     primary: z.enum(memberIds),
@@ -403,46 +393,54 @@ ${supportingHint}${interjectHint}${explicitRequestHint}${mentionHint}`;
       };
     }
 
-    const winners: AgentId[] = [primary];
-    let soloApplied = false;
-    if (invocation.soloOnCoverage) {
-      // If the primary already covers the message's topic (score >= 0.15 on
-      // its own domains/themes), skip supporting agents entirely. This kills
-      // adjacency pile-ons like "fitness question → also pull in life-strategy".
-      const primaryAgent = AGENT_BY_ID[primary];
-      const primaryScore = primaryAgent ? scoreAgentAgainst(text, primaryAgent) : 0;
-      if (primaryScore >= 0.15) soloApplied = true;
-    }
-    // Collaborators the user EXPLICITLY named/requested are never adjacency, so the solo
-    // cut must not drop them (else "pull in Finn + Tess" collapses to solo). The adjacency
-    // guard still removes LLM-volunteered supporting agents whenever soloApplied. Roster-id
-    // based → a newly added agent is honored the day it's added, no code change.
+    // Collaborators the user EXPLICITLY named/requested are never adjacency (roster-id based →
+    // auto-scales). Used two ways below: to exempt named agents from the solo cut, and to decide who
+    // joins a @mention turn.
     const explicitlyRequested = new Set(
       (output.explicitlyRequested ?? []).filter((id) => memberIds.includes(id)),
     );
+    const mentionSet = mentions.filter((id) => memberIds.includes(id));
+
+    let winners: AgentId[];
+    let soloApplied = false;
     let explicitKept = 0;
-    for (const id of supporting) {
-      if (
-        !memberIds.includes(id) ||
-        id === primary ||
-        winners.includes(id) ||
-        winners.length >= 3
-      ) {
-        continue;
-      }
-      if (soloApplied && !explicitlyRequested.has(id)) continue; // drop adjacency only
-      if (soloApplied) explicitKept++;
-      winners.push(id);
-    }
-    // AUGMENT with @mentioned agents (group scope): an explicit @mention is a hard request to include
-    // that agent, so union them in as guaranteed responders — never dropped by soloOnCoverage. They go
-    // AFTER the semantic primary so a prose work-owner ("Tess, scope X …") still speaks before the
-    // handoff target ("@cole"). Cap a touch higher than the normal 3 since these are explicit user asks.
     const mentionedWinners: AgentId[] = [];
-    for (const id of mentions) {
-      if (memberIds.includes(id) && !winners.includes(id) && winners.length < 4) {
+
+    if (mentionSet.length > 0) {
+      // MENTION TURN (deterministic — does NOT trust the LLM to pick a primary for a mention-directed
+      // message). Responders = the @mentioned agents PLUS any agent the user EXPLICITLY named for a
+      // task (explicitlyRequested). The router's raw primary/supporting adjacency is ignored here, so a
+      // bare "@cole how long?" stays Cole-only, while "Tess, scope the MVP, then @cole build it" keeps
+      // Tess (named) + Cole (mentioned). Cap at 4 (explicit asks warrant a touch more than the normal 3).
+      winners = [...mentionSet];
+      mentionedWinners.push(...mentionSet);
+      for (const id of [primary, ...supporting]) {
+        if (explicitlyRequested.has(id) && !winners.includes(id) && winners.length < 4) {
+          winners.push(id);
+          explicitKept++;
+        }
+      }
+    } else {
+      // NORMAL TURN: semantic primary + supporting. soloOnCoverage drops adjacency when the primary
+      // already covers the topic — but never a user-named collaborator (explicitlyRequested).
+      winners = [primary];
+      if (invocation.soloOnCoverage) {
+        const primaryAgent = AGENT_BY_ID[primary];
+        const primaryScore = primaryAgent ? scoreAgentAgainst(text, primaryAgent) : 0;
+        if (primaryScore >= 0.15) soloApplied = true;
+      }
+      for (const id of supporting) {
+        if (
+          !memberIds.includes(id) ||
+          id === primary ||
+          winners.includes(id) ||
+          winners.length >= 3
+        ) {
+          continue;
+        }
+        if (soloApplied && !explicitlyRequested.has(id)) continue; // drop adjacency only
+        if (soloApplied) explicitKept++;
         winners.push(id);
-        mentionedWinners.push(id);
       }
     }
     const scores = Object.fromEntries(
