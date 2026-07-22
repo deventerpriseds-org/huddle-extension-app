@@ -70,9 +70,14 @@ async function callFn(fnId, data) {
 const HID = "all-members";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// A heavy, EXPLICIT multi-lane ask — names 4 lanes so routing must return 4 responders (tests the
-// explicitlyRequested router fix too). Wall-time across 4 agents is what may cross the 30s chunk budget.
-const TEXT =
+// Members can be narrowed (HUDDLE_MEMBERS=comma,list) so the responder count stays under MAX_CHUNKS
+// when verifying the multi-chunk path with a shrunk budget.
+const MEMBERS = (process.env.HUDDLE_MEMBERS ? process.env.HUDDLE_MEMBERS.split(",") : ALL).map((s) => s.trim());
+
+// A heavy, EXPLICIT multi-lane ask — names several lanes so routing must return that many responders
+// (tests the explicitlyRequested router fix too). Wall-time across the agents is what crosses the
+// chunk budget. Override with HUDDLE_TEXT.
+const TEXT = process.env.HUDDLE_TEXT ||
   "Team, I want to launch a premium tier next quarter. Sam, lead the go-to-market plan. " +
   "Finn, model the pricing and unit margins. Tess, define the MVP feature set. Cole, outline the " +
   "engineering plan and rough timeline. Each of you give your piece in detail.";
@@ -83,7 +88,7 @@ const payload = {
   text: TEXT,
   huddleId: HID,
   scope: "group",
-  members: ALL,
+  members: MEMBERS,
   history: [],
   router: { backend: "openai", model: "gpt-5.5", fastMode: false, soloOnCoverage: true, interjections: true, maxInterjectors: 2 },
   agents,
@@ -106,7 +111,7 @@ const seen = new Map(); // reply index -> agentId (to detect growth)
 let lastStatus = null;
 let done = false;
 const statusTimeline = [];
-for (let i = 0; i < 90 && !done; i++) {
+for (let i = 0; i < 150 && !done; i++) {
   await sleep(1200);
   const u = await callFn(FN_UPDATES, { huddleId: HID, sinceMs: 0 });
   if (u.http !== 200 || !u.val || !u.val.turns) {
