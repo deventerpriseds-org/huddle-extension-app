@@ -87,6 +87,9 @@ export interface OpenAIPersonaInput {
   maxToolHops?: number;
   /** Optional tool_choice override (e.g. "auto", "required", or { type: "function", name }). */
   toolChoice?: unknown;
+  /** Stable key (per agent) that routes requests to the same cached prompt prefix — improves
+   *  OpenAI automatic prompt-cache hit rate for the large stable instruction/tool prefix. */
+  promptCacheKey?: string;
 }
 
 interface ResponsesReply {
@@ -177,6 +180,7 @@ export async function callOpenAIResponses(
       ...(priority ? { service_tier: "priority" } : {}),
       ...(wantReasoning ? { reasoning: { summary: "auto" } } : {}),
       ...(hasTools ? { tools: input.tools } : {}),
+      ...(input.promptCacheKey ? { prompt_cache_key: input.promptCacheKey } : {}),
       // Only force tool_choice on the FIRST hop; subsequent hops let the model
       // produce a normal text answer using the tool output.
       ...(hasTools && input.toolChoice && hop === 0 ? { tool_choice: input.toolChoice } : {}),

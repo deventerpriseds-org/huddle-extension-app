@@ -1061,22 +1061,32 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           const snapshotInstructions = snapshot?.instructions?.trim();
           const effectiveInstructions = overrideInstructions || snapshotInstructions;
           fromSnapshot = !overrideInstructions && !!snapshotInstructions;
-          const baseInstructions = effectiveInstructions
-            ? effectiveInstructions + scene + roster + taskToolInstructions + memoryBlock + HOUSE_STYLE
-            : appSystem;
           const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
           const { PRIORITIZE_SYSTEM_HINT } = await import("./tasks/tools");
           const isScrumMaster = winner.id === "terry-locke" || winner.special === "standup-host";
           const groomHint = isScrumMaster ? "\n\n" + (await import("./tasks/groom")).GROOM_SYSTEM_HINT : "";
           const { REMINDER_SYSTEM_HINT } = await import("./tasks/reminders");
-          const instructions =
-            baseInstructions +
+          // Cache-friendly ordering (see the "prompt-payload efficiency" backlog item): put ALL
+          // STABLE content first — persona/snapshot + roster + tool hints + house-style — so OpenAI
+          // automatic prompt caching keys on a large prefix that's byte-identical across this agent's
+          // turns; put VOLATILE content last — the turn-specific scene, retrieved memory, and the
+          // current-time grounding. This is a pure REORDER (nothing removed; additive-rule safe), and
+          // it cuts the uncached input tokens per call, which lowers cost + TPM pressure (the throttle
+          // that inflates multi-agent latency). Turn-specific directives sitting last also aids
+          // instruction adherence via recency. Paired with a per-agent `promptCacheKey` for routing.
+          const stableInstructions =
+            (effectiveInstructions || winner.systemPrompt) +
+            roster +
+            taskToolInstructions +
+            HOUSE_STYLE +
             ragInstructions +
             webInstructions +
             "\n\n" + PRIORITIZE_SYSTEM_HINT +
             groomHint +
-            "\n\n" + REMINDER_SYSTEM_HINT +
-            groundingBlock(!!agentBackend.webSearch);
+            "\n\n" + REMINDER_SYSTEM_HINT;
+          const volatileInstructions =
+            scene + memoryBlock + groundingBlock(!!agentBackend.webSearch);
+          const instructions = stableInstructions + volatileInstructions;
           usedInstructions = instructions;
 
           // The assistant snapshot carries the original journey-voice assistant's
@@ -1588,6 +1598,8 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             onToolCall: (c) => runToolSafely(c.name, () => combinedOnToolCall(c)),
             toolChoice,
             maxToolHops: 5,
+            // Route this agent's requests to its own cached prefix (stable snapshot/tools/roster).
+            promptCacheKey: `huddle-${winner.id}`,
           });
           clean = persona.text.trim();
           if (persona.reasoning.length > 0) {
