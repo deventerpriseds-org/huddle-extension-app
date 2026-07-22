@@ -287,7 +287,7 @@ Example — user: "plan tomorrow's workout and also budget my gym membership" �
   // Distinguish user-REQUESTED collaborators from adjacency the model volunteered. Only the
   // latter should ever be dropped by the caller's solo-on-coverage guard, so the router reports
   // which supporting agents the user actually asked for. Roster-driven (ids only) → auto-scales.
-  const explicitRequestHint = `\n\nAlso return "explicitlyRequested": every agent — whether you selected it as primary OR supporting — that the user NAMED with a task or explicitly asked to include (e.g. "Tess, scope the MVP" → includes tess; "pull in Finn and Tess" → finn, tess; "and also draft the email" → the email agent). Do NOT include an agent you merely judged helpful, or one the user only reached via @mention without naming a task — only agents the user explicitly addressed by name with something to do. Return [] if none.`;
+  const explicitRequestHint = `\n\nAlso return "explicitlyRequested": the subset of your supporting agents that the user NAMED (e.g. "pull in Finn and Tess", "loop in Cole") or whose distinct deliverable the user explicitly asked for (e.g. "and also draft the email"). Do NOT include an agent you merely judged helpful — only ones the user actually asked for. Return [] if none.`;
 
   const interjectHint = wantInterject
     ? `\n\nAlso list "interjectors": agents (other than the primary/supporting) who should CHECK whether they hold specific value the primary can't provide, because the message plausibly intersects information they would own. You cannot see their data — nominate based on the ANGLE, and each nominee will look and stay silent (pass) if they find nothing:
@@ -407,19 +407,27 @@ ${supportingHint}${interjectHint}${explicitRequestHint}`;
     const mentionedWinners: AgentId[] = [];
 
     if (mentionSet.length > 0) {
-      // MENTION TURN (deterministic — does NOT trust the LLM to pick a primary for a mention-directed
-      // message). Responders = the @mentioned agents PLUS any agent the user EXPLICITLY named for a
-      // task (explicitlyRequested). The router's raw primary/supporting adjacency is ignored here, so a
-      // bare "@cole how long?" stays Cole-only, while "Tess, scope the MVP, then @cole build it" keeps
-      // Tess (named) + Cole (mentioned). Cap at 4 (explicit asks warrant a touch more than the normal 3).
-      winners = [...mentionSet];
-      mentionedWinners.push(...mentionSet);
-      for (const id of [primary, ...supporting]) {
+      // MENTION TURN: responders = the semantic PRIMARY (the agent who owns the main task) + the
+      // @mentioned agents. Supporting ADJACENCY is dropped. This resolves both shapes deterministically:
+      //  - handoff "Tess, scope the MVP, then @cole build it" → primary tess (owns "scope") + mention
+      //    cole  → Tess + Cole (the prose work-owner is never dropped).
+      //  - bare "@cole how long?" → the LLM makes the addressed agent the primary → primary cole ==
+      //    mention cole → just Cole (no adjacency pulled in).
+      // We trust the primary (a single, well-scoped pick) but NOT the supporting list (adjacency),
+      // which is what caused a bare @mention to over-pull a second voice. Cap 4 (explicit asks).
+      winners = [primary];
+      // Keep supporting agents the user explicitly NAMED (never pure adjacency) — covers a mixed
+      // "Sam, pull in Finn, and @tess do the MVP" (primary sam + named finn + mention tess).
+      for (const id of supporting) {
         if (explicitlyRequested.has(id) && !winners.includes(id) && winners.length < 4) {
           winners.push(id);
           explicitKept++;
         }
       }
+      for (const id of mentionSet) {
+        if (!winners.includes(id) && winners.length < 4) winners.push(id);
+      }
+      mentionedWinners.push(...mentionSet.filter((id) => id !== primary));
     } else {
       // NORMAL TURN: semantic primary + supporting. soloOnCoverage drops adjacency when the primary
       // already covers the topic — but never a user-named collaborator (explicitlyRequested).
