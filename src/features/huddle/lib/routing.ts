@@ -304,7 +304,7 @@ Agents marked [has live calendar/tasks/contacts tools] can look up the user's ac
   // pulls a second voice. Roster-driven (names only) → auto-scales.
   const mentionHint =
     mentions.length > 0
-      ? `\n\nThe user @mentioned: ${mentions.map((id) => AGENT_BY_ID[id]?.name ?? id).join(", ")}. Those agents MUST be included. Make the mentioned agent the PRIMARY and return supporting = [] UNLESS the message gives a DISTINCT task to a different, named agent (e.g. "Tess, scope the MVP, then @cole build it" → primary Tess, and Cole is included for the handoff). Do NOT add an adjacent agent the user did not address.`
+      ? `\n\nThe user @mentioned: ${mentions.map((id) => AGENT_BY_ID[id]?.name ?? id).join(", ")} — these agents MUST be included. Restrict BOTH primary and supporting to agents the user either @mentioned OR named with a task in this message. Do NOT add any other agent — no adjacency, no "might be relevant." Examples: "@cole how long will the API take?" → primary cole, supporting []. "Tess, scope the MVP, then @cole build it" → primary tess (her task), supporting [cole] (named for the handoff).`
       : "";
 
   const prompt = `Roster (available agents in this huddle):
