@@ -476,10 +476,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       data.text,
       AGENTS.filter((a) => data.members.includes(a.id)),
     );
+    // Group @mentions now go THROUGH the LLM router (which augments: mentioned agents are guaranteed
+    // winners AND a prose-named work-owner is still routed — see routing.ts). Previously any @mention
+    // forced the deterministic mention-only route, dropping the prose-named collaborator ("Tess, scope
+    // X, then @cole …" → Cole only). 1:1 and missing-key still fall back to keyword routing below.
     const canLLMRoute =
       data.scope === "group" &&
       !data.targetAgentId &&
-      explicitMentions.length === 0 &&
       (routerCfg.backend === "openai" ? !!openaiKey : !!lovableKey);
 
     if (
