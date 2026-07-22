@@ -297,6 +297,16 @@ Example — user: "plan tomorrow's workout and also budget my gym membership" �
 Agents marked [has live calendar/tasks/contacts tools] can look up the user's actual schedule and contacts, so they are the right nominees for time/person/deadline angles even if their stated domain sounds unrelated. Do NOT nominate for mere topical similarity with no such information angle. Return interjectors = [] when there is no plausible angle.`
     : "";
 
+  // Mention-aware primary bias (group scope): a group @mention now flows through this router (so a
+  // prose-named work-owner isn't dropped), but the mentioned agent is the ADDRESSEE — make it the
+  // primary unless the message hands a DISTINCT task to someone else. Without this the router can pick
+  // an adjacent agent as primary on a plain "@X <question>", which (unioned with the mention) wrongly
+  // pulls a second voice. Roster-driven (names only) → auto-scales.
+  const mentionHint =
+    mentions.length > 0
+      ? `\n\nThe user @mentioned: ${mentions.map((id) => AGENT_BY_ID[id]?.name ?? id).join(", ")}. Those agents MUST be included. Make the mentioned agent the PRIMARY and return supporting = [] UNLESS the message gives a DISTINCT task to a different, named agent (e.g. "Tess, scope the MVP, then @cole build it" → primary Tess, and Cole is included for the handoff). Do NOT add an adjacent agent the user did not address.`
+      : "";
+
   const prompt = `Roster (available agents in this huddle):
 ${roster}
 
@@ -306,7 +316,7 @@ ${transcript || "(no prior messages)"}
 Latest user message:
 ${text}
 
-${supportingHint}${interjectHint}${explicitRequestHint}`;
+${supportingHint}${interjectHint}${explicitRequestHint}${mentionHint}`;
 
   const zodSchema = z.object({
     primary: z.enum(memberIds),
