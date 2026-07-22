@@ -237,7 +237,12 @@ export async function routeMessageLLM(
 
   if (scope === "one-to-one" && targetAgentId) return routeMessage(input);
   const mentions = parseMentions(text, present);
-  if (mentions.length > 0) return routeMessage(input);
+  // Group + @mention: AUGMENT, don't replace. A mentioned agent is a hard request to include it (unioned
+  // into winners below, never dropped), but we STILL run the semantic router so a prose-named work-owner
+  // ("Tess, scope the MVP, then hand to @cole …") isn't dropped just because someone else was @mentioned.
+  // Only a non-group mention short-circuits to the deterministic mention-only route; a group mention flows
+  // through to the LLM router. Roster-driven → auto-scales as agents are added.
+  if (mentions.length > 0 && scope !== "group") return routeMessage(input);
   // Broadcast → everyone answers; no need to ask the LLM who.
   if (scope === "group" && isBroadcast(text)) return routeMessage(input);
 
@@ -419,6 +424,17 @@ ${supportingHint}${interjectHint}${explicitRequestHint}`;
       if (soloApplied) explicitKept++;
       winners.push(id);
     }
+    // AUGMENT with @mentioned agents (group scope): an explicit @mention is a hard request to include
+    // that agent, so union them in as guaranteed responders — never dropped by soloOnCoverage. They go
+    // AFTER the semantic primary so a prose work-owner ("Tess, scope X …") still speaks before the
+    // handoff target ("@cole"). Cap a touch higher than the normal 3 since these are explicit user asks.
+    const mentionedWinners: AgentId[] = [];
+    for (const id of mentions) {
+      if (memberIds.includes(id) && !winners.includes(id) && winners.length < 4) {
+        winners.push(id);
+        mentionedWinners.push(id);
+      }
+    }
     const scores = Object.fromEntries(
       winners.map((id, i) => [id, Number((1 - i * 0.2).toFixed(2))]),
     ) as Partial<Record<AgentId, number>>;
@@ -440,7 +456,7 @@ ${supportingHint}${interjectHint}${explicitRequestHint}`;
         winnerId: primary,
         runnerUpId: winners[1] ?? null,
         interjected: interjectors.length > 0,
-        reason: `LLM router (${invocation.backend}/${invocation.model})${soloApplied ? (explicitKept > 0 ? ` [solo+${explicitKept}req]` : " [solo]") : ""}${interjectors.length ? ` +${interjectors.length} interject` : ""}: ${reason}`.slice(0, 220),
+        reason: `LLM router (${invocation.backend}/${invocation.model})${soloApplied ? (explicitKept > 0 ? ` [solo+${explicitKept}req]` : " [solo]") : ""}${mentionedWinners.length ? ` +${mentionedWinners.length}@mention` : ""}${interjectors.length ? ` +${interjectors.length} interject` : ""}: ${reason}`.slice(0, 220),
       },
     };
   } catch (err) {
