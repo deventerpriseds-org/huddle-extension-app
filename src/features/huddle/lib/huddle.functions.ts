@@ -164,6 +164,10 @@ async function runToolSafely(name: string, fn: () => Promise<unknown>): Promise<
 // server-to-server callers (e.g. the scheduled-ceremony route). Kept as a plain
 // exported async function so a route can invoke a ceremony without an RPC hop.
 export async function runHuddleTurn(data: z.infer<typeof Input>) {
+    // Wall-clock start for the GLOBAL turn deadline (see runBounded). The whole turn — sequential
+    // primary + parallel wave(s) — must finish under the ~45s hosting request ceiling, so agents are
+    // bounded by time REMAINING, not a fixed per-agent value.
+    const turnStartMs = Date.now();
     const lovableKey = process.env.LOVABLE_API_KEY;
     const openaiKey = process.env.OPENAI_API_KEY;
 
@@ -632,17 +636,90 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         ? Math.min(data.members.length, 12)
         : MAX_REPLIES_PER_TURN + interjectorSet.size;
 
-    while (queue.length > 0 && replies.length < replyCap) {
-      const nextId = queue.shift()!;
-      if (spoken.has(nextId)) continue;
-      const winner = AGENT_BY_ID[nextId];
-      if (!winner || !data.members.includes(nextId)) continue;
-
+    // Per-agent turn body, extracted so the driver can run agents either
+    // SEQUENTIALLY (ceremonies) or CONCURRENTLY (normal group turns). It writes
+    // only to PER-AGENT buffers (returned below) plus the turn-scoped dedup
+    // ledgers (`createdTaskTitles` / `claimAction`, first-writer-wins and safe
+    // under concurrency because their has→add is synchronous). The driver merges
+    // the buffers in queue order and solely owns replies/spoken/queue/handoffById,
+    // so the transcript is deterministic regardless of completion order. The
+    // `priorInThisTurn` anti-repetition context is passed in FROZEN — parallel
+    // wave agents all see the same snapshot and never each other's replies.
+    type AgentTurnResult = {
+      fallbacks: FallbackEvent[];
+      toolUses: import("../data/seed").ToolUseEvent[];
+      journeyTaskUpdates: import("./journey/types").JourneyTask[];
+      suggestedTasks: SuggestedTaskDraft[];
+      reasoning: string[];
+      prompts: PromptDebug[];
+      outcome:
+        | { kind: "skip" }
+        | { kind: "hardReply"; reply: Reply }
+        | { kind: "reply"; clean: string; isInterjector: boolean; perAgentFallbacks: string[] };
+    };
+    const runAgentTurn = async (
+      nextId: AgentId,
+      priorInThisTurn: string,
+    ): Promise<AgentTurnResult> => {
+      const winner = AGENT_BY_ID[nextId]!;
       const agentBackend = agentsCfg[nextId] ?? { backend: "lovable" as const };
 
-      const priorInThisTurn = replies
-        .map((r) => `${AGENT_BY_ID[r.agentId].name} just said: "${r.text}"`)
-        .join("\n");
+      // Per-agent output buffers. These SHADOW the outer shared arrays/helpers so
+      // the (unmodified) dispatch body writes here; the driver merges them into
+      // the shared arrays in queue order after the wave settles (append-only).
+      const fallbacks: FallbackEvent[] = [];
+      const toolUses: import("../data/seed").ToolUseEvent[] = [];
+      const journeyTaskUpdates: import("./journey/types").JourneyTask[] = [];
+      const suggestedTasks: SuggestedTaskDraft[] = [];
+      const reasoningSummaries: string[] = [];
+      const prompts: PromptDebug[] = [];
+      let fbSeq = 0;
+      let tuSeq = 0;
+      const recordFallback = (
+        subsystem: FallbackEvent["subsystem"],
+        reason: string,
+        inline: string,
+        agentId?: AgentId,
+      ): FallbackEvent => {
+        const ev: FallbackEvent = {
+          id: `fb-${Date.now()}-${winner.id}-${fbSeq++}`,
+          ts: Date.now(),
+          agentId,
+          subsystem,
+          reason,
+          inline,
+        };
+        fallbacks.push(ev);
+        return ev;
+      };
+      const recordToolUse = (
+        agentId: AgentId,
+        tool: string,
+        summary: string,
+        ok: boolean,
+        detail?: string,
+      ) => {
+        toolUses.push({
+          id: `tu-${Date.now()}-${winner.id}-${tuSeq++}`,
+          ts: Date.now(),
+          agentId,
+          tool,
+          summary,
+          ok,
+          detail,
+        });
+      };
+      // Snapshot the fully-populated buffers into a result. Called at each return
+      // point (after all pushes), so the buffers are complete.
+      const bundle = (outcome: AgentTurnResult["outcome"]): AgentTurnResult => ({
+        fallbacks,
+        toolUses,
+        journeyTaskUpdates,
+        suggestedTasks,
+        reasoning: reasoningSummaries,
+        prompts,
+        outcome,
+      });
 
       const ceremonyDirective = ceremonyDirectiveById.get(nextId) ?? "";
       const handoff = handoffById.get(nextId);
@@ -984,22 +1061,32 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           const snapshotInstructions = snapshot?.instructions?.trim();
           const effectiveInstructions = overrideInstructions || snapshotInstructions;
           fromSnapshot = !overrideInstructions && !!snapshotInstructions;
-          const baseInstructions = effectiveInstructions
-            ? effectiveInstructions + scene + roster + taskToolInstructions + memoryBlock + HOUSE_STYLE
-            : appSystem;
           const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
           const { PRIORITIZE_SYSTEM_HINT } = await import("./tasks/tools");
           const isScrumMaster = winner.id === "terry-locke" || winner.special === "standup-host";
           const groomHint = isScrumMaster ? "\n\n" + (await import("./tasks/groom")).GROOM_SYSTEM_HINT : "";
           const { REMINDER_SYSTEM_HINT } = await import("./tasks/reminders");
-          const instructions =
-            baseInstructions +
+          // Cache-friendly ordering (see the "prompt-payload efficiency" backlog item): put ALL
+          // STABLE content first — persona/snapshot + roster + tool hints + house-style — so OpenAI
+          // automatic prompt caching keys on a large prefix that's byte-identical across this agent's
+          // turns; put VOLATILE content last — the turn-specific scene, retrieved memory, and the
+          // current-time grounding. This is a pure REORDER (nothing removed; additive-rule safe), and
+          // it cuts the uncached input tokens per call, which lowers cost + TPM pressure (the throttle
+          // that inflates multi-agent latency). Turn-specific directives sitting last also aids
+          // instruction adherence via recency. Paired with a per-agent `promptCacheKey` for routing.
+          const stableInstructions =
+            (effectiveInstructions || winner.systemPrompt) +
+            roster +
+            taskToolInstructions +
+            HOUSE_STYLE +
             ragInstructions +
             webInstructions +
             "\n\n" + PRIORITIZE_SYSTEM_HINT +
             groomHint +
-            "\n\n" + REMINDER_SYSTEM_HINT +
-            groundingBlock(!!agentBackend.webSearch);
+            "\n\n" + REMINDER_SYSTEM_HINT;
+          const volatileInstructions =
+            scene + memoryBlock + groundingBlock(!!agentBackend.webSearch);
+          const instructions = stableInstructions + volatileInstructions;
           usedInstructions = instructions;
 
           // The assistant snapshot carries the original journey-voice assistant's
@@ -1139,6 +1226,28 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
                   cc: { type: "string", description: "Optional CC address(es), comma-separated." },
                 },
                 required: ["subject", "body"],
+              },
+              strict: false,
+            });
+            emailTools.push({
+              type: "function" as const,
+              name: "get_calendar_events",
+              description:
+                "Read the user's Microsoft/Outlook calendar for a day or range and return the actual events (meetings, appointments). Use this whenever the user asks what's on their calendar/schedule/agenda for a day, or whether they're free/busy at a time. This reads REAL calendar data — never answer calendar questions from memory or 'files'. Dates are ISO (YYYY-MM-DD or full ISO datetime). Note: returns Microsoft/Outlook events; a Google-only calendar won't appear.",
+              parameters: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  start: {
+                    type: "string",
+                    description: "Start of the range, ISO date or datetime (e.g. 2026-07-21). Defaults to today.",
+                  },
+                  end: {
+                    type: "string",
+                    description: "End of the range, ISO date or datetime. Defaults to the end of the start day.",
+                  },
+                },
+                required: [],
               },
               strict: false,
             });
@@ -1286,6 +1395,47 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "create_email_draft", "draft crashed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            }
+            if (c.name === "get_calendar_events") {
+              const a = c.arguments as Record<string, unknown>;
+              try {
+                const tz = data.timeZone || "UTC";
+                const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+                const startRaw = typeof a.start === "string" && a.start.trim() ? a.start.trim() : todayStr;
+                const endRaw = typeof a.end === "string" && a.end.trim() ? a.end.trim() : startRaw;
+                const startDay = startRaw.slice(0, 10);
+                const endDay = endRaw.slice(0, 10);
+                const startISO = startRaw.length > 10 ? startRaw : `${startDay}T00:00:00`;
+                const endISO = endRaw.length > 10 ? endRaw : `${endDay}T23:59:59`;
+                const mailbox =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                const { getGraphCalendarEvents } = await import("./email/graph-email.server");
+                const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+                recordToolUse(
+                  winner.id,
+                  "get_calendar_events",
+                  r.ok
+                    ? `${r.events?.length ?? 0} event(s) ${startDay}${endDay !== startDay ? `..${endDay}` : ""}`
+                    : "calendar read failed",
+                  r.ok,
+                  r.ok ? undefined : r.error,
+                );
+                if (!r.ok) {
+                  const ev = recordFallback(
+                    "tool",
+                    `${winner.name}: get_calendar_events failed — ${r.error ?? "unknown"}`,
+                    "get_calendar_events failed",
+                    winner.id,
+                  );
+                  perAgentFallbacks.push(ev.inline);
+                }
+                return JSON.stringify(r);
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "get_calendar_events", "calendar read crashed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             }
@@ -1448,6 +1598,8 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             onToolCall: (c) => runToolSafely(c.name, () => combinedOnToolCall(c)),
             toolChoice,
             maxToolHops: 5,
+            // Route this agent's requests to its own cached prefix (stable snapshot/tools/roster).
+            promptCacheKey: `huddle-${winner.id}`,
           });
           clean = persona.text.trim();
           if (persona.reasoning.length > 0) {
@@ -1473,12 +1625,6 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
               "no AI backend configured",
               winner.id,
             );
-            replies.push({
-              agentId: winner.id,
-              text: `(fallback: ${ev.inline}) AI gateway is not configured yet.`,
-              fallbackNotes: [ev.inline],
-            });
-            spoken.add(winner.id);
             prompts.push({
               agentId: winner.id,
               backend: "lovable",
@@ -1487,7 +1633,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
               fromSnapshot: false,
               toolTypes: [],
             });
-            continue;
+            return bundle({
+              kind: "hardReply",
+              reply: {
+                agentId: winner.id,
+                text: `(fallback: ${ev.inline}) AI gateway is not configured yet.`,
+                fallbackNotes: [ev.inline],
+              },
+            });
           }
 
           const rag = agentBackend.rag;
@@ -1658,6 +1811,38 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
                     winner.id,
                     "create_email_draft",
                     r.ok ? `draft saved in ${r.from}` : "draft failed",
+                    r.ok,
+                    r.ok ? undefined : r.error,
+                  );
+                  return JSON.stringify(r);
+                },
+              });
+              lovableTools.get_calendar_events = tool({
+                description:
+                  "Read the user's Microsoft/Outlook calendar for a day or range and return the actual events. Use for 'what's on my calendar/schedule/agenda' or free/busy questions — reads REAL data, never answer calendar questions from memory or 'files'. Note: Microsoft/Outlook events only.",
+                inputSchema: z.object({
+                  start: z.string().optional(),
+                  end: z.string().optional(),
+                }),
+                execute: async (args) => {
+                  const a = args as Record<string, unknown>;
+                  const tz = data.timeZone || "UTC";
+                  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+                  const startRaw = typeof a.start === "string" && a.start.trim() ? a.start.trim() : todayStr;
+                  const endRaw = typeof a.end === "string" && a.end.trim() ? a.end.trim() : startRaw;
+                  const startDay = startRaw.slice(0, 10);
+                  const endDay = endRaw.slice(0, 10);
+                  const startISO = startRaw.length > 10 ? startRaw : `${startDay}T00:00:00`;
+                  const endISO = endRaw.length > 10 ? endRaw : `${endDay}T23:59:59`;
+                  const mailbox =
+                    (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                    data.caller?.entra_email;
+                  const { getGraphCalendarEvents } = await import("./email/graph-email.server");
+                  const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+                  recordToolUse(
+                    winner.id,
+                    "get_calendar_events",
+                    r.ok ? `${r.events?.length ?? 0} event(s)` : "calendar read failed",
                     r.ok,
                     r.ok ? undefined : r.error,
                   );
@@ -1926,7 +2111,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           clean = text.trim();
         }
 
-        if (!clean) continue;
+        if (!clean) return bundle({ kind: "skip" });
 
         // Persist prompt debug for this reply.
         prompts.push({
@@ -1938,63 +2123,16 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           toolTypes,
         });
 
-        // An interjector that found nothing concrete stays silent. Catch a bare
-        // "PASS" as well as the model appending PASS after echoing the primary.
-        const interjTrimmed = clean.trim();
-        if (
-          isInterjector &&
-          (/^pass[.!]?$/i.test(interjTrimmed) || /\bPASS[.!]?$/.test(interjTrimmed))
-        ) {
-          spoken.add(winner.id);
-          continue;
-        }
-
-        // Deterministic echo guard: if this reply is a near-duplicate of one an
-        // earlier agent already gave this turn, drop it (the point was already
-        // made). Backstops the "don't repeat what was said" instruction, which a
-        // weak model obeys inconsistently. Never fires on the first speaker.
-        // Exempt ceremonies: each lane owner reports its own distinct slice and the
-        // host synthesizes, all governed by the ceremony directives instead.
-        if (!ceremonyActive && interjTrimmed && isEchoOfPrior(interjTrimmed, replies)) {
-          recordFallback(
-            "tool",
-            `${winner.name}: near-duplicate of an earlier reply this turn — suppressed to avoid echo.`,
-            "duplicate reply suppressed",
-            winner.id,
-          );
-          spoken.add(winner.id);
-          continue;
-        }
-
-        const finalText =
-          perAgentFallbacks.length > 0
-            ? `${clean}\n\n_(fallback: ${perAgentFallbacks.join("; ")})_`
-            : clean;
-
-        replies.push({
-          agentId: winner.id,
-          text: finalText,
-          fallbackNotes: perAgentFallbacks.length > 0 ? perAgentFallbacks : undefined,
+        // PASS/self-censor + echo suppression + the reply push + mention-chain are
+        // all applied by the driver during the ORDERED MERGE (see mergeAgentResult),
+        // NOT here — so concurrent agents produce identical output to the sequential
+        // engine. This task only surfaces the raw reply + the flags the merge needs.
+        return bundle({
+          kind: "reply",
+          clean,
+          isInterjector,
+          perAgentFallbacks,
         });
-        spoken.add(winner.id);
-
-        // Mention-chaining is disabled during ceremonies: the participant list is
-        // fixed (lane owners + host), and the host's summary naturally @mentions
-        // owners — those must not be pulled in as extra repliers.
-        const chained = ceremonyActive ? [] : parseMentions(clean, presentAgents);
-        for (const id of chained) {
-          if (
-            id !== winner.id &&
-            !spoken.has(id) &&
-            !queue.includes(id) &&
-            data.members.includes(id)
-          ) {
-            queue.push(id);
-            // Hand off a structured ask so the mentioned agent addresses the actual request rather
-            // than re-deriving it from raw context. Keep the last handoff if mentioned by several.
-            handoffById.set(id, { fromName: winner.name, ask: clean.replace(/\s+/g, " ").trim().slice(0, 300) });
-          }
-        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "AI error";
         const ev = recordFallback(
@@ -2003,12 +2141,213 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           `model call failed: ${msg.slice(0, 80)}`,
           winner.id,
         );
-        replies.push({
-          agentId: winner.id,
-          text: `(fallback: ${ev.inline}) couldn't reach the model — ${msg}`,
-          fallbackNotes: [ev.inline],
+        return bundle({
+          kind: "hardReply",
+          reply: {
+            agentId: winner.id,
+            text: `(fallback: ${ev.inline}) couldn't reach the model — ${msg}`,
+            fallbackNotes: [ev.inline],
+          },
         });
-        spoken.add(winner.id);
+      }
+    };
+
+    // ---- Merge a settled agent result into the shared turn state, in queue order.
+    // The SOLE owner of replies/spoken/queue/handoffById and of the PASS + echo
+    // suppression, so the transcript is byte-identical to the sequential engine no
+    // matter what order the agents actually finished in. `waveIds` = the ids that
+    // ran together this wave; a mid-reply @mention of a same-wave agent must NOT
+    // re-enqueue it (it already ran once), mirroring the sequential queue.includes
+    // guard for agents still pending in the queue.
+    const mergeAgentResult = (
+      nextId: AgentId,
+      r: AgentTurnResult,
+      waveIds: readonly AgentId[],
+    ) => {
+      const winner = AGENT_BY_ID[nextId]!;
+      // Append-only buffers merge deterministically (queue order via call order).
+      fallbacks.push(...r.fallbacks);
+      toolUses.push(...r.toolUses);
+      journeyTaskUpdates.push(...r.journeyTaskUpdates);
+      suggestedTasks.push(...r.suggestedTasks);
+      reasoningSummaries.push(...r.reasoning);
+      prompts.push(...r.prompts);
+
+      const outcome = r.outcome;
+      if (outcome.kind === "skip") return; // produced nothing (no reply, not spoken)
+      if (outcome.kind === "hardReply") {
+        // Config/model-failure fallbacks: always emitted, no echo/PASS, no mentions.
+        replies.push(outcome.reply);
+        spoken.add(nextId);
+        return;
+      }
+
+      // kind === "reply": an interjector that found nothing concrete stays silent.
+      const clean = outcome.clean;
+      const interjTrimmed = clean.trim();
+      if (
+        outcome.isInterjector &&
+        (/^pass[.!]?$/i.test(interjTrimmed) || /\bPASS[.!]?$/.test(interjTrimmed))
+      ) {
+        spoken.add(nextId);
+        return;
+      }
+
+      // Deterministic echo guard: drop a near-duplicate of a reply already merged
+      // this turn. Checked against the growing `replies` during the ordered merge,
+      // so it matches the sequential behavior exactly. Never fires on the first
+      // speaker. Exempt during ceremonies (lane owners report distinct slices).
+      if (!ceremonyActive && interjTrimmed && isEchoOfPrior(interjTrimmed, replies)) {
+        recordFallback(
+          "tool",
+          `${winner.name}: near-duplicate of an earlier reply this turn — suppressed to avoid echo.`,
+          "duplicate reply suppressed",
+          winner.id,
+        );
+        spoken.add(nextId);
+        return;
+      }
+
+      const finalText =
+        outcome.perAgentFallbacks.length > 0
+          ? `${clean}\n\n_(fallback: ${outcome.perAgentFallbacks.join("; ")})_`
+          : clean;
+
+      replies.push({
+        agentId: nextId,
+        text: finalText,
+        fallbackNotes: outcome.perAgentFallbacks.length > 0 ? outcome.perAgentFallbacks : undefined,
+      });
+      spoken.add(nextId);
+
+      // Mention-chaining is disabled during ceremonies (fixed participant list).
+      const chained = ceremonyActive ? [] : parseMentions(clean, presentAgents);
+      for (const id of chained) {
+        if (
+          id !== nextId &&
+          !spoken.has(id) &&
+          !queue.includes(id) &&
+          !waveIds.includes(id) &&
+          data.members.includes(id)
+        ) {
+          queue.push(id);
+          // Hand off a structured ask so the mentioned agent addresses the actual request rather
+          // than re-deriving it from raw context. Keep the last handoff if mentioned by several.
+          handoffById.set(id, { fromName: winner.name, ask: clean.replace(/\s+/g, " ").trim().slice(0, 300) });
+        }
+      }
+    };
+
+    // The frozen anti-repetition anchor for the NEXT agent(s) to run: every reply
+    // merged so far, in order. Recomputed once per wave and shared by all agents
+    // in that wave (they do not see each other's replies).
+    const buildPrior = () =>
+      replies
+        .map((rep) => `${AGENT_BY_ID[rep.agentId].name} just said: "${rep.text}"`)
+        .join("\n");
+
+    // Pop the next runnable agent, skipping ones that already spoke or aren't
+    // members (mirrors the sequential loop's per-iteration skip checks).
+    const shiftEligible = (): AgentId | null => {
+      while (queue.length > 0) {
+        const id = queue.shift()!;
+        if (spoken.has(id)) continue;
+        if (!AGENT_BY_ID[id] || !data.members.includes(id)) continue;
+        return id;
+      }
+      return null;
+    };
+
+    // Per-agent hard timeout. After parallelization a group turn's wall-time is
+    // primary + max(wave agent); OpenAI per-call latency is high-variance, so one stalled agent can
+    // still drag a wave to the ~45s hosting ceiling and 500 the whole turn. Bound each agent: a
+    // straggler is deferred (no reply, logged as a fallback) so the turn returns well under the limit.
+    // NOTE: this races the response only; a truly abandoned call's late tool side-effects aren't
+    // cancelled here (rare). Threading an AbortSignal into the model calls is the follow-up.
+    // GLOBAL turn deadline (~40s leaves headroom under the ~45s ceiling for merge + response
+    // encoding). Each agent is bounded by the time REMAINING to the deadline — critical because the
+    // turn runs the primary sequentially THEN a parallel wave, so a fixed per-agent value would sum
+    // across those phases and still blow the ceiling. A straggler is deferred (no reply, logged).
+    const TURN_DEADLINE_MS = 36_000;
+    const runBounded = (id: AgentId, prior: string): Promise<AgentTurnResult> => {
+      const remaining = Math.max(2_000, TURN_DEADLINE_MS - (Date.now() - turnStartMs));
+      return Promise.race([
+        runAgentTurn(id, prior),
+        new Promise<AgentTurnResult>((resolve) =>
+          setTimeout(() => {
+            const nm = AGENT_BY_ID[id]?.name ?? id;
+            resolve({
+              fallbacks: [
+                {
+                  id: `fb-${Date.now()}-${id}-timeout`,
+                  ts: Date.now(),
+                  agentId: id,
+                  subsystem: "tool",
+                  reason: `${nm}: deferred to keep the turn under the response deadline.`,
+                  inline: "response timed out — deferred",
+                },
+              ],
+              toolUses: [],
+              journeyTaskUpdates: [],
+              suggestedTasks: [],
+              reasoning: [],
+              prompts: [],
+              outcome: { kind: "skip" },
+            });
+          }, remaining),
+        ),
+      ]);
+    };
+
+    if (ceremonyActive) {
+      // Ceremonies stay STRICTLY SEQUENTIAL: each participant (lane owners, then
+      // the host/closer) speaks in turn seeing everything said before it.
+      while (replies.length < replyCap) {
+        const nextId = shiftEligible();
+        if (nextId == null) break;
+        const r = await runBounded(nextId, buildPrior());
+        mergeAgentResult(nextId, r, [nextId]);
+      }
+    } else {
+      // Normal group turn: the PRIMARY winner runs first (sequentially) so the
+      // rest of the turn anti-repeats against a settled anchor; then the remaining
+      // agents of each wave run CONCURRENTLY (~max(agent) latency instead of the
+      // sum), each seeded with the SAME frozen prior. Waves repeat to drain the
+      // mention-chain handoffs (each wave's @mentions enqueue the next wave).
+      if (replies.length < replyCap) {
+        const primaryId = shiftEligible();
+        if (primaryId != null) {
+          const r = await runBounded(primaryId, buildPrior());
+          mergeAgentResult(primaryId, r, [primaryId]);
+        }
+      }
+      while (replies.length < replyCap && queue.length > 0) {
+        const frozenPrior = buildPrior();
+        // Past the turn deadline: defer the rest instead of starting another wave whose bounded
+        // timeouts would stack onto the merge/serialize overhead and breach the hosting ceiling.
+        if (Date.now() - turnStartMs > TURN_DEADLINE_MS) {
+          for (const id of queue) {
+            const a = AGENT_BY_ID[id];
+            if (a) recordFallback("tool", `${a.name}: deferred — turn deadline reached before it could run.`, "deferred (deadline)", a.id);
+          }
+          break;
+        }
+        // Drain the current queue into one wave, bounded by remaining reply slots
+        // so we never run an agent whose reply couldn't be shown (which would
+        // execute tool side-effects the sequential engine never would). Overflow
+        // simply rolls into the next wave.
+        const wave: AgentId[] = [];
+        const slots = replyCap - replies.length;
+        while (wave.length < slots) {
+          const id = shiftEligible();
+          if (id == null) break;
+          wave.push(id);
+        }
+        if (wave.length === 0) break;
+        const results = await Promise.all(wave.map((id) => runBounded(id, frozenPrior)));
+        for (let i = 0; i < wave.length; i++) {
+          mergeAgentResult(wave[i], results[i], wave);
+        }
       }
     }
 

@@ -219,3 +219,58 @@ Standing habit for future sessions:
   create repos by triggering the repo's `create-repo.yml` workflow via `actions_run_trigger`, not the API.
 To make these permanent across sessions, paste `eds-claude-skills/setup.sh` into the CCR environment
 setup script (claude.ai/code → environment → edit → Setup script).
+
+**Working style the user expects (bias to action — relearned):** don't turn every step into a
+question. Apply the eds-skills' AC/verify discipline, but tune the ceremony down:
+- **Confirm by searching, not by asking.** If a fact is discoverable (repo name, which app a service
+  uses, a config value), look it up (`search_repositories`, grep, the `azure-pg-query` workflow) instead
+  of asking. Only ask when the answer is a genuine judgment call the code/tools can't settle.
+- **Just do the obviously-right, non-destructive step.** Cloning a repo for reference, reading code,
+  running a read-only query, adding a tool the user already green-lit — fold it into the plan and do it;
+  don't stop for permission on things that can't hurt anything.
+- Reserve questions for destructive/irreversible/outward-facing actions or real forks in intent.
+
+## Calendar reads — get_calendar_events via Microsoft Graph (Huddle-native)
+Huddle reads the user's Outlook/M365 calendar directly through the **same Graph app** as email
+(`email/graph-email.server.ts`, app-only client-credentials). `getGraphCalendarEvents()` calls
+`GET /users/{mailbox}/calendarView` and backs the `get_calendar_events` agent tool (wired in both the
+OpenAI and Lovable dispatch paths, gated on `graphEmailConfigured()`). Facts:
+- Needs the Graph app to hold **`Calendars.Read`** application permission (admin-consented). A 403 from
+  calendarView means that consent is missing — that's the thing to grant, not a code bug.
+- **Outlook/M365 only.** A Google-only calendar won't appear here — journey holds Google tokens; a
+  multi-provider read would go through the `mail-and-appointments` middleware
+  (`deventerpriseds-org/mail-and-appointments`, the "mail-watcher" — M365 + Google email/calendar).
+- Tasks vs events are different data: `prioritize` (mirror tasks) answers backlog/priorities;
+  `get_calendar_events` (Graph) answers "what's on my calendar." Route accordingly.
+- Related app for Graph patterns: `deventerpriseds-org/boost-application-packet-platform` ("boost").
+
+## Backlog / known optimizations (surfaced, not yet done)
+Ordered roughly by leverage. Revisit once the core turn is reliably fast.
+1. **Prompt-payload efficiency via provider prompt caching (high leverage).** Each agent turn sends a
+   large prompt (snapshot instructions + house-style + tool schemas + roster + memory + scene), and a
+   multi-agent turn sends one PER agent — expensive (input tokens) and slow (bigger prompt = higher,
+   higher-variance latency). Do NOT thin the snapshots (they're canonical/additive-only). Instead order
+   the prompt as `[stable prefix: snapshot + house-style + tool schemas + roster]` + `[volatile suffix:
+   scene + memory + user msg]` and lean on OpenAI automatic prompt caching (prefix-keyed, >1024 tok) so
+   repeated/multi-agent sends bill the cached prefix cheaply and return faster — no loss of agent
+   quality or flexibility. This both cuts cost and reduces the per-agent tail latency that causes #2.
+2. **Per-agent model-call timeout (reliability).** Group-turn wall-time is now `primary + max(wave
+   agent)` after the fan-out parallelization; OpenAI per-call latency is high-variance, so one stalled
+   agent (~38s) can still drag a wave to the ~45s hosting ceiling and 500. Wrap each agent's
+   `callOpenAIResponses`/`generateText` in an AbortController (~30s) → a graceful per-agent fallback,
+   bounding worst-case under the ceiling. (Measured post-parallelization: successful 3-agent turns
+   ~19–24s, but ~2/4 still 500 at ~46s from tail latency.)
+3. **Incremental per-agent reply streaming (NEXT — plan written).** Group-turn wall-time can exceed
+   the ~45s hosting ceiling; today parallel fan-out + a 36s turn deadline (`runBounded`) keep it
+   crash-free but **defer/DROP** agents under slow-LLM windows (a turn can even return empty). The fix
+   is a **resumable, incrementally-persisted turn**: run agents in sub-45s chunks, persist each reply
+   the instant it completes (append to `chat.pending_turns.replies`), and continue the turn across
+   runner executions (self-kick `/api/public/run-turn`) — so ALL agents reply, streaming in via the
+   existing poll, and no agent is ever dropped. Ready-to-execute plan (schema, chunked driver,
+   cross-chunk ledger persistence, client incremental render, verification) in
+   **`docs/plan-incremental-turn-streaming.md`**. Supersedes the defer/drop path.
+4. **Scoring upgrades (deferred from the read-tool work).** Effort term (WSJF "short job first"),
+   continuous deadline-urgency curve (EDF/MDD vs the current step function), fix the `after_work`
+   window drift (17–22 in scheduling-defaults vs 17–19 in execute-tool `find_open_slots`) and the
+   whole-hour truncation, and a capacity guard that flags overcommitment instead of scheduling into
+   nonexistent time.

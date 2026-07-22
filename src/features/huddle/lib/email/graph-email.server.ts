@@ -146,6 +146,90 @@ export async function createGraphDraft(input: SendEmailInput): Promise<DraftEmai
   }
 }
 
+export interface CalendarEvent {
+  subject: string;
+  start: string | null;
+  end: string | null;
+  location: string | null;
+  isAllDay: boolean;
+  organizer: string | null;
+}
+
+export interface CalendarReadResult {
+  ok: boolean;
+  mailbox?: string;
+  events?: CalendarEvent[];
+  error?: string;
+}
+
+/**
+ * Read a mailbox's Outlook/M365 calendar for a time range via Graph
+ * GET /users/{mailbox}/calendarView. App-only, so it reuses the same client-credentials
+ * token as email; requires the Graph app to hold **Calendars.Read** application permission
+ * (a 403 here means that consent is missing). Times are ISO 8601; `timeZone` sets the
+ * Prefer: outlook.timezone header so start/end come back in the user's zone.
+ * NOTE: this reads the Microsoft/Outlook calendar only — a Google-only calendar won't appear.
+ */
+export async function getGraphCalendarEvents(input: {
+  mailbox?: string;
+  startISO: string;
+  endISO: string;
+  timeZone?: string;
+  top?: number;
+}): Promise<CalendarReadResult> {
+  const mailbox = (input.mailbox ?? "").trim() || defaultFrom();
+  const top = Math.min(Math.max(input.top ?? 50, 1), 100);
+  try {
+    const token = await getAppToken();
+    // Build the query string by hand so the OData $-params stay literal (URLSearchParams
+    // would percent-encode "$select" to "%24select").
+    const qs =
+      `startDateTime=${encodeURIComponent(input.startISO)}` +
+      `&endDateTime=${encodeURIComponent(input.endISO)}` +
+      `&$select=${encodeURIComponent("subject,start,end,location,isAllDay,organizer")}` +
+      `&$orderby=${encodeURIComponent("start/dateTime")}` +
+      `&$top=${top}`;
+    const res = await fetch(`${GRAPH}/users/${encodeURIComponent(mailbox)}/calendarView?${qs}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Prefer: `outlook.timezone="${input.timeZone ?? "UTC"}"`,
+      },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      let msg = `Graph calendarView failed (${res.status})`;
+      try {
+        const j = JSON.parse(text);
+        msg = j?.error?.message ? `${msg}: ${j.error.message}` : `${msg}: ${text.slice(0, 200)}`;
+      } catch {
+        msg = `${msg}: ${text.slice(0, 200)}`;
+      }
+      return { ok: false, mailbox, error: msg };
+    }
+    const j = (await res.json()) as {
+      value?: Array<{
+        subject?: string;
+        start?: { dateTime?: string };
+        end?: { dateTime?: string };
+        location?: { displayName?: string };
+        isAllDay?: boolean;
+        organizer?: { emailAddress?: { name?: string; address?: string } };
+      }>;
+    };
+    const events: CalendarEvent[] = (j.value ?? []).map((e) => ({
+      subject: e.subject?.trim() || "(no subject)",
+      start: e.start?.dateTime ?? null,
+      end: e.end?.dateTime ?? null,
+      location: e.location?.displayName?.trim() || null,
+      isAllDay: !!e.isAllDay,
+      organizer: e.organizer?.emailAddress?.name || e.organizer?.emailAddress?.address || null,
+    }));
+    return { ok: true, mailbox, events };
+  } catch (err) {
+    return { ok: false, mailbox, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function sendGraphEmail(input: SendEmailInput): Promise<SendEmailResult> {
   const options = emailFromOptions();
   const requested = (input.from ?? "").trim();
