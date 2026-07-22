@@ -253,6 +253,29 @@ export async function saveTurnChunk(
   );
 }
 
+/**
+ * Mid-chunk STREAMING write (backlog #3): push the replies produced so far to the client's poll the
+ * instant each wave lands, WITHOUT ending the chunk. Deliberately leaves `status='running'` and does
+ * NOT bump `chunks` — `chunks` counts continuation executions (the runaway guard), and a single
+ * execution streams several times. `getTurnsSince` already returns 'running' rows with their replies,
+ * so the client renders each wave as it arrives. Guarded on `status='running'` so it can never
+ * resurrect or clobber a row another writer already finalized to done/error.
+ */
+export async function updateTurnReplies(
+  id: string,
+  replies: unknown[],
+  progress: unknown,
+): Promise<void> {
+  await ensureBootstrapped();
+  const reps = replies ?? [];
+  await getPool().query(
+    `UPDATE chat.pending_turns
+       SET replies = $2::jsonb, seq = $3, progress = $4::jsonb, updated_at = now()
+     WHERE id = $1 AND status = 'running'`,
+    [id, JSON.stringify(reps), reps.length, progress == null ? null : JSON.stringify(progress)],
+  );
+}
+
 export async function failTurn(id: string, error: string): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(

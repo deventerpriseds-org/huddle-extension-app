@@ -410,6 +410,9 @@ function Composer({ huddle }: { huddle: Huddle }) {
     [allMessages, huddle.id],
   );
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Turns whose one-time metadata (decision, fallbacks, tool uses, task cards) has already been
+  // applied — so a turn that streams in across several polls applies those exactly once, at 'done'.
+  const finalizedTurns = useRef<Set<string>>(new Set());
 
   const targetAgentId: AgentId | undefined =
     huddle.kind === "one-to-one" ? huddle.members[0] : undefined;
@@ -434,21 +437,45 @@ function Composer({ huddle }: { huddle: Huddle }) {
     );
   }
 
-  // Render a completed turn's result into the stores. Idempotent and keyed by turnId: safe to call
-  // from BOTH the live fast-path response AND the deliver-on-reconnect poll (and repeated polls)
-  // without double-posting — the guard checks whether this turn's agent messages already exist.
+  // Render a turn into the stores, INCREMENTALLY. `replies` is the array streamed so far (grows across
+  // polls as later chunks land); each agent message is keyed `a-<turnId>-<i>` so only new indices are
+  // appended — safe to call from the fast-path response, the partial-stream response, and every poll.
+  // The one-time turn metadata (decision, fallbacks, tool uses, task cards) is applied exactly once,
+  // when `final` (status 'done') and `result` (the full payload) are present.
   type TurnResult = Awaited<ReturnType<typeof enqueueHuddleTurn>>["result"];
-  function applyTurnResult(turnId: string, result: TurnResult) {
-    if (!result) return;
+  function applyTurnStream(
+    turnId: string,
+    replies: { agentId: AgentId; text: string }[] | undefined,
+    result: TurnResult,
+    final: boolean,
+  ) {
     const state = useHuddleStore.getState();
-    if (state.messages.some((m) => m.id.startsWith(`a-${turnId}-`))) return; // already delivered
+    // Append only reply indices not already rendered (addAgentMessage does not dedupe).
+    const existing = new Set(
+      state.messages.filter((m) => m.id.startsWith(`a-${turnId}-`)).map((m) => m.id),
+    );
+    (replies ?? []).forEach((reply, i) => {
+      const mid = `a-${turnId}-${i}`;
+      if (existing.has(mid)) return;
+      addAgent({
+        id: mid,
+        huddleId: huddle.id,
+        author: { kind: "agent", agentId: reply.agentId },
+        text: reply.text,
+        ts: Date.now() + i,
+        replyTo: turnId,
+      });
+    });
+
+    // One-time metadata — only when the turn is fully done, only once.
+    if (!final || !result || finalizedTurns.current.has(turnId)) return;
+    finalizedTurns.current.add(turnId);
     const userText = state.messages.find((m) => m.id === turnId)?.text ?? "";
     const r = result as {
       decision?: {
         signal?: unknown; scores?: unknown; winnerId?: AgentId; runnerUpId?: AgentId;
         interjected?: boolean; reason?: string;
       };
-      replies?: { agentId: AgentId; text: string }[];
       fallbacks?: { inline: string; reason?: string }[];
       prompts?: unknown[];
       toolUses?: { agentId: AgentId; tool: string; summary: string; ok: boolean; detail?: string }[];
@@ -489,16 +516,6 @@ function Composer({ huddle }: { huddle: Huddle }) {
         reasoning: r.reasoning,
       });
     }
-    (r.replies ?? []).forEach((reply, i) => {
-      addAgent({
-        id: `a-${turnId}-${i}`,
-        huddleId: huddle.id,
-        author: { kind: "agent", agentId: reply.agentId },
-        text: reply.text,
-        ts: Date.now() + i,
-        replyTo: turnId,
-      });
-    });
     if (r.journeyTaskUpdates && r.journeyTaskUpdates.length > 0) upsertJourneyTasks(r.journeyTaskUpdates);
     if (r.suggestedTasks && r.suggestedTasks.length > 0) addSuggestedTasks(r.suggestedTasks);
     if (r.toolUses && r.toolUses.length > 0) addToolUses(r.toolUses as never);
@@ -572,13 +589,17 @@ function Composer({ huddle }: { huddle: Huddle }) {
       // loop below re-reads it on return, and the cron heartbeat finishes any turn we couldn't.
       const res = await enqueueHuddleTurn({ data: payload });
       if (res.status === "done") {
-        applyTurnResult(turnId, res.result);
+        applyTurnStream(turnId, res.result?.replies, res.result, true);
         clearPendingFor(turnId);
+      } else if (res.status === "partial") {
+        // The first chunk ran here — render its replies now, but KEEP the indicator up: more agents
+        // are still coming and the poll loop streams them in as later chunks complete.
+        applyTurnStream(turnId, res.result?.replies, res.result, false);
       } else if (res.status === "error") {
         toast.error(res.error || "Message failed");
         clearPendingFor(turnId);
       }
-      // queued/running → leave the pending indicator up; the delivery loop picks it up.
+      // partial/queued/running → leave the pending indicator up; the delivery loop streams the rest.
     } catch {
       // The request was cut off (typically the app was backgrounded mid-turn). Do NOT surface an
       // error or clear pending — the turn keeps running server-side and the reply arrives on return
@@ -603,9 +624,17 @@ function Composer({ huddle }: { huddle: Huddle }) {
         const { turns } = await getTurnUpdates({ data: { huddleId: huddle.id, sinceMs: cursor } });
         for (const t of turns) {
           cursor = Math.max(cursor, t.updated_ms);
-          if (t.status === "done") applyTurnResult(t.id, t.result as TurnResult);
-          else if (t.status === "error") toast.error((t.error as string) || "That turn hit an error.");
-          clearPendingFor(t.id);
+          if (t.status === "done") {
+            applyTurnStream(t.id, t.replies, t.result as TurnResult, true);
+            clearPendingFor(t.id);
+          } else if (t.status === "error") {
+            toast.error((t.error as string) || "That turn hit an error.");
+            clearPendingFor(t.id);
+          } else {
+            // 'partial' | 'running' — stream the replies produced so far and KEEP the typing indicator
+            // up (do NOT clear pending) until the turn reaches 'done'/'error'.
+            applyTurnStream(t.id, t.replies, null, false);
+          }
         }
       } catch {
         /* offline / transient — retry next tick */
