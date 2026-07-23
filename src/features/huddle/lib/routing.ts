@@ -344,9 +344,12 @@ export async function routeMessageLLM(
     })
     .join("\n");
 
-  const baseSystem = `You are the router for a multi-agent huddle. Choose which agents should respond to the user's latest message based on intent and context — not just keywords. Prefer a single primary agent; add supporting agents only when their expertise is clearly needed. Never invent agent ids — only choose from the roster.`;
+  const baseSystem = `You are the router for a multi-agent huddle. Choose which agents should respond to the user's latest message based on intent and context — not just keywords. Prefer a single primary agent; add supporting agents only when their expertise is clearly needed. Never invent agent ids — only choose from the roster.
+ADDRESSED BY NAME: if the user addresses an agent by name (e.g. "Cole, how long…", "Finn — …"), that agent IS the primary. Do NOT hand the lead to a different agent because the topic superficially fits another lane.
+TIME IS NOT ALWAYS THE CALENDAR: how long a piece of WORK will take (a build estimate, a task's effort) belongs to the lane that owns that work — NOT the schedule/itinerary agent. The schedule agent is ONLY for the user's OWN calendar (their meetings, appointments, personal deadlines). Do not pull in the calendar agent just because a duration or the word "time" appears.`;
 
   const strictSystem = `You are the router for a multi-agent huddle. Pick exactly ONE primary agent for the user's latest message. Return supporting = [] UNLESS the message explicitly asks for a second, non-overlapping specialty (e.g. "and also budget it" or "then draft the email"). Adjacency is not enough — a workout question does NOT need a life-strategist just because habits are related. When in doubt, return supporting = []. Never invent agent ids — only choose from the roster.
+ADDRESSED BY NAME: if the user addresses an agent by name ("Cole, how long…"), that agent IS the primary — never hand the lead to another agent because the topic superficially fits their lane. TIME IS NOT ALWAYS THE CALENDAR: how long WORK takes (a build/effort estimate) belongs to the lane that owns the work, not the schedule agent; the schedule agent is only for the user's OWN calendar.
 
 Example — user: "what workouts do i usually go for?" → primary: flex-grimes, supporting: [], reason: single-lane fitness question.
 Example — user: "plan tomorrow's workout and also budget my gym membership" → primary: flex-grimes, supporting: [finn-reid], reason: two distinct lanes explicitly named.`;
@@ -367,7 +370,7 @@ Example — user: "plan tomorrow's workout and also budget my gym membership" �
     ? `\n\nAlso list "interjectors": agents (other than the primary/supporting) who might hold something URGENT the primary will MISS. Nominate ONLY for one of these two reasons — never for topical relevance, a second opinion, or to add color:
 1. MISSING PIECE — another lane owns a specific fact/number/constraint/check the primary needs to get this right and would plausibly omit or get wrong (e.g. the finance lane knows the pricing math the GTM answer skipped).
 2. BLOCKING RISK / CONFLICT — another lane can see a clash or risk the primary can't (a schedule conflict, a budget/deadline/dependency/compliance blocker, a commitment already made).
-You can't see their data — nominate on the ANGLE; each nominee checks and PASSES silently if it has nothing concrete. Prefer agents marked [has live calendar/tasks/contacts tools] for time/person/deadline angles. Nothing urgent is the COMMON case → return interjectors = [].`
+You can't see their data — nominate on the ANGLE; each nominee checks and PASSES silently if it has nothing concrete. The calendar/tasks/contacts agent is a good nominee ONLY when the message touches the user's OWN schedule/commitments (a real meeting, appointment, or personal deadline) — NOT for a generic duration like "how long will the build take." Nothing urgent is the COMMON case → return interjectors = [].`
     : "";
 
   const prompt = `Roster (available agents in this huddle):
