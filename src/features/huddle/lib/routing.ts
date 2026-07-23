@@ -364,11 +364,10 @@ Example — user: "plan tomorrow's workout and also budget my gym membership" �
   const explicitRequestHint = `\n\nAlso return "explicitlyRequested": the subset of your supporting agents that the user NAMED (e.g. "pull in Finn and Tess", "loop in Cole") or whose distinct deliverable the user explicitly asked for (e.g. "and also draft the email"). Do NOT include an agent you merely judged helpful — only ones the user actually asked for. Return [] if none.`;
 
   const interjectHint = wantInterject
-    ? `\n\nAlso list "interjectors": agents (other than the primary/supporting) who should CHECK whether they hold specific value the primary can't provide, because the message plausibly intersects information they would own. You cannot see their data — nominate based on the ANGLE, and each nominee will look and stay silent (pass) if they find nothing:
-- A specific time/date is set → nominate an agent marked [has live calendar/tasks/contacts tools] to check for conflicts on the user's schedule.
-- A named person/contact/meeting is mentioned → nominate an agent (prefer one with the tools marker) who may hold prep notes or history on them.
-- A commitment, deadline, budget, or risk is implied → nominate the agent who tracks that.
-Agents marked [has live calendar/tasks/contacts tools] can look up the user's actual schedule and contacts, so they are the right nominees for time/person/deadline angles even if their stated domain sounds unrelated. Do NOT nominate for mere topical similarity with no such information angle. Return interjectors = [] when there is no plausible angle.`
+    ? `\n\nAlso list "interjectors": agents (other than the primary/supporting) who might hold something URGENT the primary will MISS. Nominate ONLY for one of these two reasons — never for topical relevance, a second opinion, or to add color:
+1. MISSING PIECE — another lane owns a specific fact/number/constraint/check the primary needs to get this right and would plausibly omit or get wrong (e.g. the finance lane knows the pricing math the GTM answer skipped).
+2. BLOCKING RISK / CONFLICT — another lane can see a clash or risk the primary can't (a schedule conflict, a budget/deadline/dependency/compliance blocker, a commitment already made).
+You can't see their data — nominate on the ANGLE; each nominee checks and PASSES silently if it has nothing concrete. Prefer agents marked [has live calendar/tasks/contacts tools] for time/person/deadline angles. Nothing urgent is the COMMON case → return interjectors = [].`
     : "";
 
   const prompt = `Roster (available agents in this huddle):

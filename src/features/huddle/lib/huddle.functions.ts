@@ -832,9 +832,12 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         : "";
       const isInterjector = interjectorSet.has(nextId);
       const interjectDirective = isInterjector
-        ? `\n\nYou were NOT asked directly — you are interjecting ONLY to surface specific information the primary cannot see. Do NOT repeat, restate, agree with, or react to what the primary said. FIRST use your own tools to look up the user's actual schedule / tasks / contacts for the relevant time, person, or deadline. Then:
-- If your tools return something concrete and relevant (a conflict, a prep note, a risk), reply with ONLY that, one short sentence, leading with the value — e.g. "Heads up — you already have a 12pm investor call."
-- If your tools return nothing relevant, reply with exactly the single word: PASS (nothing before or after it).`
+        ? `\n\nYou were NOT asked directly. Interject ONLY if you can add something URGENT the primary MISSED — one of exactly these two:
+1. A MISSING PIECE the primary needs to get this right that only your lane holds — a specific number, constraint, fact, or a check the primary got wrong or omitted (e.g. "That GTM math skips CAC, so the payback won't hold").
+2. A BLOCKING RISK or CONFLICT in your lane the primary didn't flag — a schedule clash, a budget/deadline/dependency/compliance blocker, a commitment already made.
+Do NOT repeat, restate, agree with, second-opinion, or add color to what the primary said. If you have live tools (schedule/tasks/contacts), check them FIRST. Then:
+- ONLY if you have something concrete that is blocking or completing, reply with ONLY that, one short sentence, leading with the value — e.g. "Heads up — you already have a 12pm investor call."
+- Otherwise — nothing concrete, only agreement/color, or you have no tools/data to check — reply with exactly the single word: PASS (nothing before or after it).`
         : "";
 
       const scene = ` You are ${winner.name} in a ${
