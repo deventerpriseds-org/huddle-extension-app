@@ -201,6 +201,20 @@ agent lists or verb-regexes to steer who responds — they won't keep up as agen
   When an agent delegates in prose ("I'll get Finn to…", "Tess should…") no re-queue happens. Prefer
   fixing this by prompt (get agents to emit `@handle`) or router intelligence — NOT a hardcoded verb list.
 
+## Waiting on deploys/CI: poll for the terminal state, never blind-sleep (user preference)
+The user dislikes fixed wait timers — they over-wait and are inefficient. Do NOT `sleep 300` then check.
+Instead detect completion the INSTANT it happens with a tight poll that exits on the terminal state, so
+the notification fires right away:
+- **GitHub Actions is directly pollable from bash** — `GITHUB_TOKEN`/`GH_TOKEN` are in the env, so hit
+  the REST API (no `gh` CLI needed): `curl -s -H "Authorization: Bearer $GH_TOKEN" .../actions/runs?per_page=1&branch=<b>` and read `status`/`conclusion`. Wrap it in a background `until`/`while` loop that
+  `sleep 15-20` between checks and `break`s on `status=completed` — ONE notification, the moment it lands.
+- The MCP `list_workflow_jobs` returns FRESH data; `get_workflow_run` can be cached/stale — prefer the
+  direct API poll or `list_workflow_jobs`.
+- SWA deploys are server-only here, so the client asset hash does NOT change — do not poll the hash to
+  detect a server-code deploy; poll the workflow run state instead.
+- Same idea for any external job (CI, remote queue): watch the actual state and exit on terminal, don't
+  guess a duration. Reserve `send_later`/scheduled check-ins for genuinely long, detached waits.
+
 ## Verifying routing/agents: the loop discipline that matters (hard-won)
 Full end-to-end turns are the REAL UAT and are the preferred way to verify — drive the actual flow.
 The mistake to avoid is not "using full turns"; it's **blind responsive micro-iteration**: seeing a
