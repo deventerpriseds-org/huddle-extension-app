@@ -172,6 +172,14 @@ without an Apollo-style state machine (deliberately not built — see git histor
   co-authored (`author_agent_ids`), sort first — so each agent surfaces memory relevant to its lane.
   Pure reorder, no SQL change.
 
+## Systematic capability, never a patch (standing principle — the user is firm on this)
+Do NOT fix a symptom for one agent/case with a hardcoded string (e.g. "backlog grooming → @terry-locke"
+baked into the shared layer). Build the GENERAL capability so it works for EVERY agent/lane/tool, driven
+by data in `agents.ts` (roles, domains, ownership) — then PROVE it across the board (multiple ownership
+mismatches, both group and 1:1), not just the one case that surfaced it. A one-off patch that only
+handles the reported example is a regression against this principle; rework it into the systematic
+mechanism. Same spirit as the router rule below (roster-driven, no hardcoded per-agent lists).
+
 ## Routing is the auto-scaling brain — fix multi-agent behavior THERE, not with regex (relearned)
 We ALREADY have a router (`src/features/huddle/lib/routing.ts`); do not bolt on hardcoded
 agent lists or verb-regexes to steer who responds — they won't keep up as agents are added.
