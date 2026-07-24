@@ -2,57 +2,67 @@
 Last updated: 2026-07-24
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
-> claiming any item "done" without the verifier subagent / observed evidence for every AC).
+> claiming any item "done" without ACs + the verifier subagent / observed evidence).
 
 ## Open
 
-### ACT-1: 1:1 ownership hand-off — non-owner defers AND the owner actually follows up
-**Requested:** 2026-07-24
-**Asked for:** "I believe Terry would be better suited… I will let him know" then a SEPARATE
-message from Terry confirming. Later: "what they do vs pass has to be related to domain and
-themes as well not just tools… if I say look for ways to tighten my budget, Finn should be
-brought in despite us not having specific tool ownership."
-**Expected outcome:** In a 1:1, when the ask belongs to another agent (by exclusive tool OR by
-domain/theme), the addressed agent defers + names the owner, AND the owner sends a real
-follow-up message to the user.
+### ACT-1: 1:1 ownership hand-off — natural defer + proactive owner follow-up
+**Asked for:** In a 1:1, when the ask belongs to another agent (by exclusive tool OR domain/theme),
+the addressed agent naturally acknowledges the pass, then the owner pings the user proactively —
+and the owner's message acknowledges *who contacted them and why* ("Tess reached out because you
+wanted …"). **@ is group-only** — never used in a 1:1; the follow-up is triggered by a back-channel
+(the runtime's deterministic ownership logic), NOT by parsing an @mention from the reply text.
 **Acceptance criteria:**
-- AC-1: 1:1 grooming ask to Tess → defers to @terry-locke, no tool, no task. — **PASS** (independent verifier, 2026-07-24).
-- AC-2: 1:1 budget ask to Tess → defers to @finn-reid, doesn't answer herself. — **PASS** (independent verifier).
-- AC-3: In-lane product ask to Tess → answers herself, no handoff. — **PASS** (independent verifier).
-- AC-4: After a 1:1 deferral, the owner sends a SEPARATE follow-up the user sees. — **FAIL / NOT BUILT**
-  (verifier: `dm-terry-locke` + `dm-finn-reid` = 0 turns; the promised follow-up never arrives).
-**Status:** in-progress — AC-1/2/3 verified PASS; AC-4 is the remaining build (owner cross-huddle follow-up).
-**Evidence:** independent verifier verdict (general-purpose agent, cold context) via `huddle.mjs` against live prod.
-**Branch/PR:** `fix-1to1-capability-defer` (capability defer + domain lane handoff; NOT merged)
+- AC-1: 1:1 grooming ask → addressed agent defers to Terry (no tool, no task). — **PASS** (verifier).
+- AC-2: 1:1 budget ask → defers to Finn. — **PASS** (verifier).
+- AC-3: In-lane ask → answers self, no handoff. — **PASS** (verifier).
+- AC-4: After a deferral, the OWNER proactively messages the user (own DM + push), acknowledging who
+  passed it and the context, phrased naturally. — **IN REWORK** (first build used @-parsing + fired
+  regardless; reworking to: no @ in 1:1, system-triggered from ownership, natural two-sided phrasing).
+- AC-5 (new): the addressed agent's defer reads naturally (acknowledges the pass), NO @handle in 1:1.
+**Status:** in-progress — AC-1/2/3 PASS; AC-4/AC-5 in rework (design approved: system-fires, natural).
+**Branch/PR:** `fix-1to1-capability-defer` (NOT merged)
 
-### ACT-2: Enforce mandatory skills (AC / verify / track / verifier subagent)
-**Requested:** 2026-07-24
-**Asked for:** "treat the actions, tracking, acceptance, verify skills as mandatory… refresh the
-repo for the enforcement layer or implement one of your own." Scope: Both (repo + org). Strictness: Hard block.
-**Expected outcome:** I cannot claim work done without ACs + independent verification.
-**Acceptance criteria:**
-- AC-1: SessionStart surfaces the discipline + actions.md. — built (`.claude/settings.json`).
-- AC-2: Stop gate blocks a turn that claims completion without ACs + observed evidence. — built; **activation is next session** (settings watcher).
-- AC-3: Same enforcement added org-wide via eds-claude-skills setup. — **OPEN**.
-**Status:** in-progress
+### ACT-2: Enforce mandatory skills (AC / verify / track / remember / verifier)
+**Status:** done (pending activation) — hard gate (a–d) in huddle `.claude/settings.json` + eds-skills
+`setup.sh` (merged PRs #7/#8/#9). Activates next session/env build. **Evidence:** merge-logic validated
+(idempotent, non-clobbering); condition (c) now requires memory.md on every completion.
 
 ### ACT-3: create_huddle_task cross-turn dedup (board-clutter prevention)
-**Asked for:** stop the board filling with duplicate/near-duplicate tasks.
-**Acceptance criteria:** AC-1: creating a task whose title already exists open on the board is
-skipped (deduped). **UNVERIFIED** (merged PR #5 + deployed; not tested live with verifier).
-**Status:** open (needs verification)
+**Status:** open — deployed (PR #5) but **UNVERIFIED** (no verifier run yet).
+
+### ACT-4 (NEW): Auto backlog grooming + assignment (agile leader proactively runs it)
+**Asked for:** "auto backlog grooming and assigning." The scrum master should proactively groom/triage
+and assign the backlog on a cadence (not only when asked), and surface the result.
+**Status:** open — needs AC definition + design (cadence/trigger, who fires it, how it surfaces).
+
+### ACT-5 (NEW): Agents self-start doable tasks, else classify blocked
+**Asked for:** "agents attempting to get started on tasks that they have the ability to do (e.g. Tavily)
+… or classify them as blocked." An assigned agent should begin work it can actually do with its tools
+(e.g. Cam/research via Tavily) and mark tasks it cannot do as blocked with the reason.
+**Status:** open — needs AC definition + design (capability→task matching, progress writeback, blocked tagging).
+
+### ACT-6 (NEW): Agile ceremonies actually fire + standup summaries delivered
+**Asked for:** "I haven't received standup summaries or any of the things previously discussed to ensure
+the agile leaders are aware of the ceremonies that need to take place and carrying them out."
+Scrum master / team lead should track which ceremonies are due (standup, review, retro), run them, and
+deliver the summary to the user.
+**Status:** open — needs AC definition + design; ceremony infra exists (ceremonies.ts, run-ceremony) —
+verify why summaries aren't reaching the user.
 
 ## Closed
 
 ### ACT-0: Remove test-task clutter from the production board
-**Requested:** 2026-07-24  **Closed:** 2026-07-24
-**Asked for:** "so many test tasks… my production app isn't usable… get rid of the tasks."
-**Evidence:** journey-voice `cleanup-test-tasks` workflow run (execute) log: spam 176/176 +
-duplicates deleted; TOTAL 523 → 247. Workflow removed after use (PR #19).
-**Verification:** PASS — final count observed in the run log.
+**Closed 2026-07-24.** Evidence: journey-voice `cleanup-test-tasks` run — spam 176/176 + dups deleted;
+523 → 247 tasks. Workflow removed after use (PR #19). **Verification:** PASS (run log).
 
 ## Decisions & scope changes
-- [2026-07-24] Ownership = tools AND domains/themes (not just exclusive tools). Must be systematic
-  for unforeseen lanes, not per-agent hardcodes.
-- [2026-07-24] Enforcement placement = Both (huddle repo + eds-skills); Stop gate = Hard block.
-- [2026-07-24] Standing test harness required (`huddle.mjs`) so sessions don't rebuild it each time.
+- [2026-07-24] Ownership = tools AND domains/themes; systematic, no per-agent hardcodes.
+- [2026-07-24] Enforcement = Both (huddle + eds-skills); Stop gate = hard block; memory required every completion.
+- [2026-07-24] Standing harness `huddle.mjs` (auto fn-id resolve).
+- [2026-07-24] **@ is group-only.** 1:1 hand-off uses a back-channel (deterministic ownership), not @-parsing.
+- [2026-07-24] **Present a potential fix for logic-check BEFORE executing** (standing process rule).
+
+## Known issues
+- Day-plan TIMEZONE wrong (Iris scheduled off-tz). Diagnosed, unfixed.
+- create_huddle_task dedup / quota surfacing / file-search fix: deployed, UNVERIFIED.
