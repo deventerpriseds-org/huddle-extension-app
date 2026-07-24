@@ -6,7 +6,7 @@ import type { HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
 import { parseMentions, routeMessage, routeMessageLLM, laneOwnerFor, type RouterInvocation, type RouteResult } from "./routing";
 import { isQuotaError, QUOTA_OUTAGE_INLINE, type FallbackEvent, type PromptDebug } from "./fallbacks";
 import { buildRoster } from "./roster";
-import { agentOwnsCapability, exclusiveCapabilities } from "./capabilities";
+import { agentOwnsCapability, exclusiveCapabilities, capabilityOwnerFor } from "./capabilities";
 import {
   detectCeremony,
   buildCeremonyReport,
@@ -141,7 +141,7 @@ function capabilityHandoffBlock(
   const rule =
     scope === "group"
       ? "If you are asked to do an exclusive job you do NOT own, do NOT attempt it and do NOT create a task about it — @mention the owner so they pick it up. If YOU own the job being asked for, just do it and briefly say what you did and why (e.g. \"took care of grooming — the backlog was stale\"); do not ask permission first or defer."
-      : "This is a 1:1 and the owner is NOT here. If you are asked to do an exclusive job you do NOT own, do NOT attempt it, do NOT improvise your own version of it (no grooming pass, no proposing owner assignments), and do NOT create a task about it. Say plainly that the owner is better suited and that you'll let them know, then @mention the owner (e.g. \"@terry-locke\") — the system will have them follow up with you. If YOU are the owner, just do it.";
+      : "This is a 1:1, so the owner is NOT in this conversation. If you are asked to do an exclusive job you do NOT own, do NOT attempt it, do NOT improvise your own version of it (no grooming pass, no proposing owner assignments), and do NOT create a task about it. Say plainly, in one warm sentence, that the owner (refer to them by NAME, e.g. \"Terry\") is better suited and that you'll have them reach out — do NOT use an @handle (they are not in this 1:1; @ is for group rooms). The system brings them in automatically. If YOU are the owner, just do it.";
   return (
     "\n\nExclusive capabilities — only the named owner may perform each:\n" +
     directory +
@@ -794,29 +794,39 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     async function deliverOwnerFollowup(ownerId: AgentId, fromName: string, ask: string): Promise<void> {
       try {
         const owner = AGENT_BY_ID[ownerId];
-        if (!owner) return;
-        const cleanAsk = ask.replace(/\s+/g, " ").trim().slice(0, 200);
-        const text =
-          `Hi — ${fromName} let me know you wanted help with: "${cleanAsk}". ` +
-          `That's my area, so I can take care of it — want me to go ahead now?`;
+        if (!owner) return; // caller already guards ownerId !== the deferring agent
+        const cleanAsk = ask.replace(/\s+/g, " ").trim().slice(0, 240);
+        const ownerHuddle = `dm-${ownerId}`;
         const email = data.caller?.entra_email ?? null;
-        const { insertProactiveTurn } = await import("./tasks/turns.server");
-        // Deterministic id so a retried/duplicate turn can't double-post (id-keyed idempotency).
+        // The context package handed to the owner. Careful language: the owner was TAPPED/PASSED by
+        // the addressed agent and is replying in ITS OWN 1:1 with the user — it did NOT join the other
+        // agent's conversation. (Delivered as the turn's user-text; the client renders only the reply.)
+        const directive =
+          `You are ${owner.name}. ${fromName} just tapped you and passed something your way: the user, ` +
+          `in their separate 1:1 with ${fromName}, asked — "${cleanAsk}". You are now replying in YOUR OWN ` +
+          `1:1 channel with the user; you did NOT join ${fromName}'s conversation. Send ONE brief, warm ` +
+          `opening message: greet the user, say ${fromName} passed this to you and briefly why (reference the ` +
+          `ask in your own words), and offer to take it from here — ask them to confirm before you act. Do ` +
+          `not restate ${fromName} verbatim, and do not perform the work yet.`;
+        // Enqueue a REAL durable turn in the owner's DM. It rides the proven path: the runner produces
+        // the owner's reply, persists it, and fires the away-notification (send_push → Android bridge) —
+        // exactly like any other reply. Idempotent id so a retry can't double-post.
         const id = `followup-${data.huddleId}-${ownerId}-${cleanAsk.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`;
-        await insertProactiveTurn(id, `dm-${ownerId}`, email, ownerId, text);
-        if (email) {
-          try {
-            const { invokeJourneyTool } = await import("./journey/proxy.functions");
-            await invokeJourneyTool({
-              toolName: "send_push",
-              args: { title: `${owner.name}`, body: text.slice(0, 200), channel: "messages" },
-              caller: { entra_email: email },
-              context: { source: "huddle", huddleId: `dm-${ownerId}` },
-            });
-          } catch {
-            /* push is best-effort — the in-DM message still lands */
-          }
-        }
+        const followupPayload = {
+          text: directive,
+          huddleId: ownerHuddle,
+          scope: "one-to-one",
+          members: [ownerId],
+          targetAgentId: ownerId,
+          history: [],
+          router: data.router,
+          agents: data.agents,
+          timeZone: data.timeZone,
+          caller: data.caller,
+        };
+        const { enqueueTurn } = await import("./tasks/turns.server");
+        const fresh = await enqueueTurn(id, ownerHuddle, email, followupPayload);
+        if (fresh) void kickNextChunk(id); // run it now; the pg_cron drain backstops a lost kick
       } catch {
         /* follow-up delivery is best-effort — never fail the user's turn on it */
       }
@@ -952,7 +962,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         const owner = laneOwnerFor(data.text, nextId);
         if (owner && owner.id !== nextId) {
           const o = AGENT_BY_ID[owner.id];
-          laneDirective = `\n\nThis request is squarely in ${o.name}'s lane (${o.role}: ${o.domains.slice(0, 3).join(", ")}), not yours. Do NOT answer it yourself or improvise in their lane — tell the user plainly that ${o.name} is better suited and that you'll bring them in, then @mention @${o.handle}. Keep it to one or two short sentences.`;
+          laneDirective = `\n\nThis request is squarely in ${o.name}'s lane (${o.role}: ${o.domains.slice(0, 3).join(", ")}), not yours. Do NOT answer it yourself or improvise in their lane — tell the user plainly, by NAME, that ${o.name} is better suited and that you'll loop them in (e.g. "That's really ${o.name}'s area — let me pass it to them"). Do NOT use an @handle: ${o.name} is not in this 1:1 (@ is for group rooms). The system brings ${o.name} in automatically — they'll follow up with you in their own channel. Keep it to one or two short sentences.`;
         }
       }
       const isInterjector = interjectorSet.has(nextId);
@@ -2508,15 +2518,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         }
       }
 
-      // 1:1 owner follow-up (AC-4): in a DM, if this reply defers to an owner who is NOT in the room
-      // (parseMentions over the FULL roster, not just members), that owner never gets re-queued — so
-      // deliver a real follow-up from them into their own DM + push. Once per owner per turn.
+      // 1:1 owner follow-up (AC-4) — DETERMINISTIC back-channel, no @-parsing. In a DM, resolve the
+      // owner of the USER's ask from data (capability triggers for exclusive tools, else the domain/theme
+      // lane owner). If that owner isn't the addressed agent, enqueue a backend turn so they reply in
+      // THEIR OWN DM — which fires the existing away-notification. Once per owner per turn; 1:1 only
+      // (group turns bring the owner in via the normal re-queue above).
       if (data.scope !== "group") {
-        for (const ownerId of parseMentions(clean, AGENTS)) {
-          if (ownerId !== nextId && !data.members.includes(ownerId) && !followupDelivered.has(ownerId)) {
-            followupDelivered.add(ownerId);
-            void deliverOwnerFollowup(ownerId, winner.name, data.text);
-          }
+        const ownerId = capabilityOwnerFor(data.text)?.agent.id ?? laneOwnerFor(data.text, nextId)?.id ?? null;
+        if (ownerId && ownerId !== nextId && !followupDelivered.has(ownerId)) {
+          followupDelivered.add(ownerId);
+          void deliverOwnerFollowup(ownerId, winner.name, data.text);
         }
       }
     };

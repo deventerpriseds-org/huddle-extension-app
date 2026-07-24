@@ -216,39 +216,6 @@ export async function completeTurn(id: string, result: unknown): Promise<void> {
 }
 
 /**
- * Insert a PROACTIVE, already-complete turn into a huddle — an agent-initiated message with no user
- * prompt. Used for the 1:1 owner follow-up: after a non-owner defers in a DM, the owner posts a real
- * message into their OWN DM (dm-<owner>) so "I'll let them know" is not a dead end. The row is `done`
- * with the reply pre-filled, so getTurnsSince/getTurnUpdates surfaces it to the client's poll and it
- * renders as that agent's message the moment the user opens that DM. Idempotent on id.
- */
-export async function insertProactiveTurn(
-  id: string,
-  huddleId: string,
-  userEmail: string | null,
-  agentId: string,
-  text: string,
-): Promise<boolean> {
-  await ensureBootstrapped();
-  const replies = [{ agentId, text }];
-  const res = await getPool().query(
-    `INSERT INTO chat.pending_turns (id, huddle_id, user_email, payload, status, replies, result, updated_at)
-     VALUES ($1, $2, $3, $4::jsonb, 'done', $5::jsonb, $6::jsonb, now())
-     ON CONFLICT (id) DO NOTHING
-     RETURNING id`,
-    [
-      id,
-      huddleId,
-      userEmail,
-      JSON.stringify({ text: "", author: { kind: "system" }, proactive: true }),
-      JSON.stringify(replies),
-      JSON.stringify({ replies }),
-    ],
-  );
-  return (res.rowCount ?? 0) > 0;
-}
-
-/**
  * Persist one CHUNK of a resumable turn (backlog #3). `replies` is the full accumulated array so far
  * (the client reads it as the stream); `progress` is the resume state (pass null when done). When
  * `done`, the turn is finalized (status='done') and `result` is set so the existing

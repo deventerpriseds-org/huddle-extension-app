@@ -37,6 +37,21 @@ export function ownerOfCapability(
   return exclusiveCapabilities(members).find((o) => o.cap.id === capId)?.agent;
 }
 
+/**
+ * Deterministically resolve which exclusive-capability OWNER a message is asking for, by matching the
+ * text against each capability's `triggers`. Returns the owning agent + capability, or null. This is the
+ * back-channel used for 1:1 hand-off — the runtime knows the owner without an @mention or LLM judgement.
+ */
+export function capabilityOwnerFor(text: string): OwnedCapability | null {
+  const t = text.toLowerCase();
+  for (const { agent, cap } of exclusiveCapabilities()) {
+    if ((cap.triggers ?? []).some((phrase) => t.includes(phrase.toLowerCase()))) {
+      return { agent, cap };
+    }
+  }
+  return null;
+}
+
 /** The exclusive-capability markers for a single agent's roster line, e.g. " [owns: backlog grooming …]". */
 export function ownershipMarker(agent: Agent): string {
   const owned = (agent.capabilities ?? []).filter((c) => c.exclusive);
