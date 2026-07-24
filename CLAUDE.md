@@ -201,6 +201,26 @@ agent lists or verb-regexes to steer who responds — they won't keep up as agen
   When an agent delegates in prose ("I'll get Finn to…", "Tess should…") no re-queue happens. Prefer
   fixing this by prompt (get agents to emit `@handle`) or router intelligence — NOT a hardcoded verb list.
 
+## Reading the live Huddle DB + run logs from a CCR session (the friction, solved)
+You CANNOT query Azure PG directly from a CCR session, even though `az` (2.88) and `psql` are
+installed: (1) session egress is **HTTPS-only through the agent proxy — TCP 5432 is blocked**
+(tested: connection refused/unreachable); (2) there are **no Azure/PG creds in the session env** (the
+service-principal secrets are GitHub org secrets, not here); (3) the PG firewall only admits Azure
+services + explicitly-added IPs, not the session. So `az login`/`psql` from here is a dead end — don't
+retry it.
+- **Query the DB via the `azure-pg-query.yml` workflow** (`workflow_dispatch`, input `sql`). A GitHub
+  runner logs in with the SP secrets, opens the firewall for its own IP, runs psql, closes it. Pinned
+  to `eds-postgresql`/`RAG_AI_Agents`. Dispatch with `mcp__github__actions_run_trigger`.
+- **Read the run's output with MCP `get_job_logs`** (`job_id` from `list_workflow_jobs`,
+  `return_content:true`). Do NOT download the log zip (`GET /actions/runs/{id}/logs`) — it 302s to blob
+  storage that the agent proxy blocks. Poll the run to completion with the tight GH-API bash loop (see
+  "Waiting on deploys/CI").
+- **Reading a user's chat history:** the real client uses the durable path, so conversations live in
+  **`chat.pending_turns`**: `huddle_id` (`all-members`/`daily` = group, `dm-<agentId>` = 1:1),
+  `payload->>'text'` = the user message, agent replies in the `replies` column (chunked turns) or
+  `result->'replies'` (sync-completed). Every user message is also a `public.rag_chunks` row
+  (`source = huddle:<id>`). Filter by recent `updated_at` — the DB is effectively single-user.
+
 ## Waiting on deploys/CI: poll for the terminal state, never blind-sleep (user preference)
 The user dislikes fixed wait timers — they over-wait and are inefficient. Do NOT `sleep 300` then check.
 Instead detect completion the INSTANT it happens with a tight poll that exits on the terminal state, so
