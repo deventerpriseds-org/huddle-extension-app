@@ -4,7 +4,7 @@ import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import type { HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
 import { parseMentions, routeMessage, routeMessageLLM, type RouterInvocation, type RouteResult } from "./routing";
-import type { FallbackEvent, PromptDebug } from "./fallbacks";
+import { isQuotaError, QUOTA_OUTAGE_INLINE, type FallbackEvent, type PromptDebug } from "./fallbacks";
 import { buildRoster } from "./roster";
 import { agentOwnsCapability, ownershipDirectory } from "./capabilities";
 import {
@@ -108,7 +108,8 @@ const MAX_REPLIES_PER_TURN = 4;
 const HOUSE_STYLE =
   "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
   " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it \"has been sent\" or \"is done\" when it has not. Email specifically: text you write in the chat is \"draft text\" — only say you \"saved a draft to your inbox\" if you called the create_email_draft tool and it returned success, and only say an email was \"sent\" if send_email returned success." +
-  " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message.";
+  " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message." +
+  " Never mention files, uploaded files, documents, attachments, or a knowledge base, and never say you searched them or \"couldn't find information in the uploaded files\" — file search is a silent background aid, not something to narrate. If it returns nothing useful, just answer the user directly from what you know, your live tools, and the conversation. Above all, ANSWER THE USER'S ACTUAL LAST MESSAGE: if they correct you (e.g. \"your time zone is wrong\") or ask something specific, address exactly that — never fall back to a canned \"I couldn't find that\" line that ignores what they just said.";
 
 // Scope-aware ownership hand-off — generated from `agent.capabilities` (agents.ts), NOT
 // hardcoded to any agent or job. Appended to every agent's instructions when the huddle
@@ -367,6 +368,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       reason: string,
       inline: string,
       agentId?: AgentId,
+      severity: "warn" | "critical" = "warn",
     ): FallbackEvent {
       const ev: FallbackEvent = {
         id: `fb-${Date.now()}-${fbSeq++}`,
@@ -375,6 +377,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         subsystem,
         reason,
         inline,
+        severity,
       };
       fallbacks.push(ev);
       return ev;
@@ -553,12 +556,17 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         },
         invocation,
       );
-      // routeMessageLLM prefixes reason with "LLM fallback:" when it degrades.
+      // routeMessageLLM prefixes reason with "LLM fallback:" when it degrades. Quota
+      // exhaustion must surface LOUDLY (critical) — a silently keyword-routed turn looks
+      // normal but picks the wrong agents, so the user would never realise it's broken.
       if (routed.decision.reason.startsWith("LLM fallback")) {
+        const quota = isQuotaError(routed.decision.reason);
         recordFallback(
           "router",
           routed.decision.reason,
-          "router: LLM router failed, keyword fallback",
+          quota ? QUOTA_OUTAGE_INLINE : "router: LLM router failed, keyword fallback",
+          undefined,
+          quota ? "critical" : "warn",
         );
       }
     } else {
@@ -815,6 +823,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         reason: string,
         inline: string,
         agentId?: AgentId,
+        severity: "warn" | "critical" = "warn",
       ): FallbackEvent => {
         const ev: FallbackEvent = {
           id: `fb-${Date.now()}-${winner.id}-${fbSeq++}`,
@@ -823,6 +832,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           subsystem,
           reason,
           inline,
+          severity,
         };
         fallbacks.push(ev);
         return ev;
@@ -2300,17 +2310,21 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : "AI error";
+        const quota = isQuotaError(msg);
         const ev = recordFallback(
           "openai",
           `${winner.name}: model call failed — ${msg}`,
-          `model call failed: ${msg.slice(0, 80)}`,
+          quota ? QUOTA_OUTAGE_INLINE : `model call failed: ${msg.slice(0, 80)}`,
           winner.id,
+          quota ? "critical" : "warn",
         );
         return bundle({
           kind: "hardReply",
           reply: {
             agentId: winner.id,
-            text: `(fallback: ${ev.inline}) couldn't reach the model — ${msg}`,
+            text: quota
+              ? `(couldn't respond — ${QUOTA_OUTAGE_INLINE})`
+              : `(fallback: ${ev.inline}) couldn't reach the model — ${msg}`,
             fallbackNotes: [ev.inline],
           },
         });

@@ -476,7 +476,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
         signal?: unknown; scores?: unknown; winnerId?: AgentId; runnerUpId?: AgentId;
         interjected?: boolean; reason?: string;
       };
-      fallbacks?: { inline: string; reason?: string }[];
+      fallbacks?: { inline: string; reason?: string; severity?: "warn" | "critical" }[];
       prompts?: unknown[];
       toolUses?: { agentId: AgentId; tool: string; summary: string; ok: boolean; detail?: string }[];
       reasoning?: string[];
@@ -499,7 +499,19 @@ function Composer({ huddle }: { huddle: Huddle }) {
     }
     if (r.fallbacks && r.fallbacks.length > 0) {
       addFallbacks(r.fallbacks as never);
+      // Critical fallbacks (OpenAI out of quota) must NOT be a dismissable warning that
+      // scrolls away — the user explicitly must realise the AI is degraded. Show a
+      // persistent error toast (no auto-dismiss, deduped by id) so it stays until fixed.
+      const critical = r.fallbacks.find((f) => f.severity === "critical");
+      if (critical) {
+        toast.error(critical.inline, {
+          id: "openai-quota-outage",
+          description: critical.reason,
+          duration: Infinity,
+        });
+      }
       for (const f of r.fallbacks.slice(0, 3)) {
+        if (f.severity === "critical") continue; // already shown as a persistent error
         toast.warning(`Fallback: ${f.inline}`, { description: f.reason });
       }
     }
