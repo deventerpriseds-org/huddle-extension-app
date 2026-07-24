@@ -3,7 +3,7 @@ import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import type { HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
-import { parseMentions, routeMessage, routeMessageLLM, type RouterInvocation, type RouteResult } from "./routing";
+import { parseMentions, routeMessage, routeMessageLLM, laneOwnerFor, type RouterInvocation, type RouteResult } from "./routing";
 import { isQuotaError, QUOTA_OUTAGE_INLINE, type FallbackEvent, type PromptDebug } from "./fallbacks";
 import { buildRoster } from "./roster";
 import { agentOwnsCapability, exclusiveCapabilities } from "./capabilities";
@@ -906,6 +906,18 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       const handoffDirective = handoff
         ? `\n\nYou were brought into this turn by ${handoff.fromName}, who handed this to you: "${handoff.ask}". Address exactly that in your lane — answer it directly or take the action they need. Do not re-ask what was already said or restate their message.`
         : "";
+      // Domain/theme lane hand-off (1:1 only — group turns already route to the right lane). If the
+      // user's ask clearly belongs to another agent's lane (by domains/themes, e.g. "tighten my
+      // budget" → Finn), tell THIS agent to defer and bring them in, even though that owner isn't in
+      // the room. Deterministic + data-driven, so it covers every lane, not just the tool-owned ones.
+      let laneDirective = "";
+      if (data.scope !== "group") {
+        const owner = laneOwnerFor(data.text, nextId);
+        if (owner && owner.id !== nextId) {
+          const o = AGENT_BY_ID[owner.id];
+          laneDirective = `\n\nThis request is squarely in ${o.name}'s lane (${o.role}: ${o.domains.slice(0, 3).join(", ")}), not yours. Do NOT answer it yourself or improvise in their lane — tell the user plainly that ${o.name} is better suited and that you'll bring them in, then @mention @${o.handle}. Keep it to one or two short sentences.`;
+        }
+      }
       const isInterjector = interjectorSet.has(nextId);
       const interjectDirective = isInterjector
         ? `\n\nYou were NOT asked directly. Interject ONLY if you can add something URGENT the primary MISSED — one of exactly these two:
@@ -922,7 +934,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         priorInThisTurn && !ceremonyDirective
           ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
           : ""
-      }${interjectDirective}${ceremonyDirective}${handoffDirective}`;
+      }${interjectDirective}${ceremonyDirective}${handoffDirective}${laneDirective}`;
 
       const roster = buildRoster(data.members, winner.id);
       // Data-driven, scope-aware ownership hand-off (agents.ts capabilities). Empty string
