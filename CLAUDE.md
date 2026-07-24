@@ -204,10 +204,21 @@ agent lists or verb-regexes to steer who responds — they won't keep up as agen
 ## Reading the live Huddle DB + run logs from a CCR session (the friction, solved)
 You CANNOT query Azure PG directly from a CCR session, even though `az` (2.88) and `psql` are
 installed: (1) session egress is **HTTPS-only through the agent proxy — TCP 5432 is blocked**
-(tested: connection refused/unreachable); (2) there are **no Azure/PG creds in the session env** (the
-service-principal secrets are GitHub org secrets, not here); (3) the PG firewall only admits Azure
-services + explicitly-added IPs, not the session. So `az login`/`psql` from here is a dead end — don't
-retry it.
+(tested: unreachable); (2) there are **no Azure/PG creds in the session env** (SP secrets are GitHub
+org secrets, not here); (3) the PG firewall only admits Azure services + explicitly-added IPs, not the
+session. So `az login`/`psql` from here is a dead end — and a "workflow opens the firewall → az/psql
+from the session → workflow closes it" loop does NOT help, because the session's own egress blocks
+5432 regardless of Azure's firewall. Don't retry it.
+
+- **FASTEST way to read chat messages — the app's `getTurnUpdates` server fn over HTTPS (~1s, no
+  workflow).** HTTPS works from the session, so POST the seroval-encoded `{huddleId, sinceMs}` to
+  `/_serverFn/<getTurnUpdates id>` (see the `test-agent-serverfn` harness for encode/decode). It returns
+  a huddle's recent turns (`status`, `replies`/`result.replies`). Enumerate huddleIds: group =
+  `all-members`/`daily`, 1:1 = `dm-<agentId>`. Measured: matched a 90s workflow query in ~300ms–1.5s.
+  Use this for "what did the user say / what did the agents reply." (Refresh the fn id from the build if
+  it 404s — same content-hash mechanism as the harness.)
+- For **arbitrary SQL** (memory `rag_chunks`, `tasks.*`, cross-table joins) the fast path isn't enough —
+  use the workflow below.
 - **Query the DB via the `azure-pg-query.yml` workflow** (`workflow_dispatch`, input `sql`). A GitHub
   runner logs in with the SP secrets, opens the firewall for its own IP, runs psql, closes it. Pinned
   to `eds-postgresql`/`RAG_AI_Agents`. Dispatch with `mcp__github__actions_run_trigger`.
