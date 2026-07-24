@@ -1,3 +1,6 @@
+// ⚠️ WRITES TO THE REAL journey BOARD: journey.enabled:true + caller von.ellis@enterpriseds.io
+// resolves to the live user, so tasks this creates land on their real board. Run sparingly and
+// clean up after (the app now dedups repeat titles, but this generates varied titles per run).
 // Multi-turn test of agent task-creation + inter-agent delegation + cross-agent context.
 // Scenarios:
 //   A) Ask Finn directly to create a task → does Finn create it?

@@ -69,6 +69,16 @@ Huddle webhook `POST /api/public/tasks-sync` → **`tasks.journey_tasks`** mirro
 - **No duplicates by construction.** The mirror upserts `ON CONFLICT (id) DO UPDATE` keyed on
   journey's task uuid. INSERT→UPDATE→re-fire all update the same row. If you ever add a
   read-your-writes warm-write from `create_huddle_task`, keep it id-keyed so it stays idempotent.
+- **`create_huddle_task` dedups two ways (board clutter is easy to cause).** Within a turn:
+  `createdTaskTitles`. Across turns/runs: `loadExistingOpenTitles()` reads the user's open mirror
+  tasks once/turn and skips creating a title that already exists (normalized). The historic clutter
+  (hundreds of `Define MVP scope for new venture…` rows) came from **test harnesses writing to the
+  REAL board** — the harness caller `von.ellis@enterpriseds.io` resolves to the live user, so every
+  `create_huddle_task` lands on their journey board. Harnesses that exercise task creation
+  (`delegation-test.mjs`) pollute the real board; prefer `journey:{enabled:false}` for pure routing
+  tests, and clean up after task-write tests. A one-shot REST+service-key cleanup pattern (batched
+  id-deletes with retry, because a large filter-delete 500s on the per-row sync trigger) lived in
+  journey-voice's `cleanup-test-tasks.yml` (removed after use; in git history).
 - **The sync is eventually-consistent (`pg_net` is async, ~1–3s lag).** A `prioritize` call
   immediately after a create can miss the just-created row. This is a freshness gap, **not** a bug —
   tests must **poll/retry**, not assume synchronous. A single failed read is usually just timing.

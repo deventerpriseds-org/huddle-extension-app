@@ -750,6 +750,32 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // createSuggestedTaskFromTool below, which claims a title here before writing.
     const createdTaskTitles = new Set<string>(resume?.createdTaskTitles ?? []);
 
+    // Cross-turn / cross-run dedup for create_huddle_task. `createdTaskTitles` only guards WITHIN a
+    // turn; the board clutter came from the SAME task being (re)created across many turns/test runs.
+    // Load the user's already-open task titles ONCE per turn from the mirror and skip creating a
+    // duplicate of one that already exists. Best-effort: a failed read never blocks task creation.
+    const normTitle = (t: string) => t.trim().toLowerCase().replace(/\s+/g, " ");
+    let existingOpenTitles: Set<string> | null = null;
+    async function loadExistingOpenTitles(): Promise<Set<string>> {
+      if (existingOpenTitles) return existingOpenTitles;
+      const set = new Set<string>();
+      try {
+        const email = data.caller?.entra_email;
+        if (email) {
+          const { resolveTaskEmail } = await import("./journey/identity");
+          const resolved = (await resolveTaskEmail(data.caller ?? {})) ?? email;
+          const { getTasksForUser } = await import("./tasks/tasks.server");
+          for (const t of await getTasksForUser(resolved)) {
+            if (t.title) set.add(normTitle(t.title));
+          }
+        }
+      } catch {
+        /* dedup read is best-effort — never block a create on it */
+      }
+      existingOpenTitles = set;
+      return set;
+    }
+
     // Decision rights: a turn-scoped ledger of mutating actions already performed this turn, keyed by
     // (tool + normalized args). The FIRST responding agent to perform an action "owns" it; a second
     // winner's identical call is a no-op. Generalizes the task dedup to reminders, emails, and journey
@@ -1045,6 +1071,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const titleKey = title.trim().toLowerCase();
         if (createdTaskTitles.has(titleKey)) {
           recordToolUse(winner.id, "create_huddle_task", "already created this turn — skipped duplicate", true);
+          return { ok: true, deduped: true, task: { title: title.slice(0, 160) } };
+        }
+        // Cross-turn dedup: skip if an open task with this title already exists on the board.
+        const existing = await loadExistingOpenTitles();
+        if (existing.has(normTitle(title))) {
+          createdTaskTitles.add(titleKey);
+          recordToolUse(winner.id, "create_huddle_task", "an open task with this title already exists — skipped duplicate", true);
           return { ok: true, deduped: true, task: { title: title.slice(0, 160) } };
         }
         createdTaskTitles.add(titleKey);
