@@ -1135,6 +1135,29 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           recordToolUse(winner.id, "create_huddle_task", "task creation failed", false, error);
           return { ok: false, error };
         }
+        // Exclusive-capability meta-task guard (deterministic; data-driven off capability triggers).
+        // A non-owner must NOT file a task that merely restates an EXCLUSIVE job it does not own
+        // (e.g. Iris filing "Groom and triage the backlog" — Terry's job). The owner was already
+        // handed the ask via the back-channel, so the card would be pure clutter. Two prose
+        // prohibitions (taskToolInstructions + capabilityHandoffBlock) proved unreliable on a small
+        // model, so enforce in code. Fires ONLY when the TITLE itself matches a capability trigger
+        // AND the filer isn't the owner — a genuine to-do ("renew passport") matches nothing and is
+        // untouched. Covers every agent/capability, mirroring the groom_backlog exclusive-tool gate.
+        const titleOwner = capabilityOwnerFor(title);
+        if (titleOwner && titleOwner.agent.id !== winner.id) {
+          recordToolUse(
+            winner.id,
+            "create_huddle_task",
+            `blocked meta-task “${title.slice(0, 60)}” — ${titleOwner.cap.label} belongs to ${titleOwner.agent.name}`,
+            true,
+          );
+          return {
+            ok: true,
+            deferred: true,
+            handedTo: titleOwner.agent.id,
+            note: `That's ${titleOwner.agent.name}'s exclusive job — it's been handed to them; do not file a task about it.`,
+          };
+        }
         // Cross-agent / re-run dedup: if this exact title was already created earlier in this turn,
         // don't create a second card. The first caller claims the title here.
         const titleKey = title.trim().toLowerCase();
