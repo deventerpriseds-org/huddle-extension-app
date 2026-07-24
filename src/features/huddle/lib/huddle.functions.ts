@@ -785,6 +785,43 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       return set;
     }
 
+    // 1:1 owner follow-up delivery (AC-4): when a non-owner defers in a DM ("Terry's better suited,
+    // I'll let them know" + @mention), the owner isn't in the room and nothing re-queues them — the
+    // promise was a dead end. This makes it real: the owner posts a message into their OWN DM
+    // (dm-<owner>) AND we push the user, so they actually hear back. Fire-and-forget, once per owner
+    // per turn, best-effort. Only in a 1:1 (group turns bring the owner in via the normal re-queue).
+    const followupDelivered = new Set<AgentId>();
+    async function deliverOwnerFollowup(ownerId: AgentId, fromName: string, ask: string): Promise<void> {
+      try {
+        const owner = AGENT_BY_ID[ownerId];
+        if (!owner) return;
+        const cleanAsk = ask.replace(/\s+/g, " ").trim().slice(0, 200);
+        const text =
+          `Hi — ${fromName} let me know you wanted help with: "${cleanAsk}". ` +
+          `That's my area, so I can take care of it — want me to go ahead now?`;
+        const email = data.caller?.entra_email ?? null;
+        const { insertProactiveTurn } = await import("./tasks/turns.server");
+        // Deterministic id so a retried/duplicate turn can't double-post (id-keyed idempotency).
+        const id = `followup-${data.huddleId}-${ownerId}-${cleanAsk.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`;
+        await insertProactiveTurn(id, `dm-${ownerId}`, email, ownerId, text);
+        if (email) {
+          try {
+            const { invokeJourneyTool } = await import("./journey/proxy.functions");
+            await invokeJourneyTool({
+              toolName: "send_push",
+              args: { title: `${owner.name}`, body: text.slice(0, 200), channel: "messages" },
+              caller: { entra_email: email },
+              context: { source: "huddle", huddleId: `dm-${ownerId}` },
+            });
+          } catch {
+            /* push is best-effort — the in-DM message still lands */
+          }
+        }
+      } catch {
+        /* follow-up delivery is best-effort — never fail the user's turn on it */
+      }
+    }
+
     // Decision rights: a turn-scoped ledger of mutating actions already performed this turn, keyed by
     // (tool + normalized args). The FIRST responding agent to perform an action "owns" it; a second
     // winner's identical call is a no-op. Generalizes the task dedup to reminders, emails, and journey
@@ -2468,6 +2505,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // Hand off a structured ask so the mentioned agent addresses the actual request rather
           // than re-deriving it from raw context. Keep the last handoff if mentioned by several.
           handoffById.set(id, { fromName: winner.name, ask: clean.replace(/\s+/g, " ").trim().slice(0, 300) });
+        }
+      }
+
+      // 1:1 owner follow-up (AC-4): in a DM, if this reply defers to an owner who is NOT in the room
+      // (parseMentions over the FULL roster, not just members), that owner never gets re-queued — so
+      // deliver a real follow-up from them into their own DM + push. Once per owner per turn.
+      if (data.scope !== "group") {
+        for (const ownerId of parseMentions(clean, AGENTS)) {
+          if (ownerId !== nextId && !data.members.includes(ownerId) && !followupDelivered.has(ownerId)) {
+            followupDelivered.add(ownerId);
+            void deliverOwnerFollowup(ownerId, winner.name, data.text);
+          }
         }
       }
     };

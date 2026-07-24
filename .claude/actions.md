@@ -16,13 +16,13 @@ brought in despite us not having specific tool ownership."
 domain/theme), the addressed agent defers + names the owner, AND the owner sends a real
 follow-up message to the user.
 **Acceptance criteria:**
-- AC-1: 1:1 grooming ask to Tess → Tess does NOT groom/improvise, no tool, no task; says Terry is
-  better suited + she'll let him know; @mentions terry-locke. — **OBSERVED PASS** (harness, journey off).
-- AC-2: 1:1 budget ask to Tess → Tess defers to Finn (finance lane), does NOT answer herself. — **UNVERIFIED** (deployed to `fix-1to1-capability-defer`; not yet tested with verifier).
-- AC-3: In-lane ask to Tess (a product question) → Tess answers herself, NO handoff (no over-handoff). — **UNVERIFIED**.
-- AC-4: After a 1:1 deferral, the owner (Terry/Finn) sends a SEPARATE follow-up message the user
-  can see (dm-<owner> turn and/or push). — **NOT BUILT** — delivery plumbing does not exist yet.
-**Status:** in-progress
+- AC-1: 1:1 grooming ask to Tess → defers to @terry-locke, no tool, no task. — **PASS** (independent verifier, 2026-07-24).
+- AC-2: 1:1 budget ask to Tess → defers to @finn-reid, doesn't answer herself. — **PASS** (independent verifier).
+- AC-3: In-lane product ask to Tess → answers herself, no handoff. — **PASS** (independent verifier).
+- AC-4: After a 1:1 deferral, the owner sends a SEPARATE follow-up the user sees. — **FAIL / NOT BUILT**
+  (verifier: `dm-terry-locke` + `dm-finn-reid` = 0 turns; the promised follow-up never arrives).
+**Status:** in-progress — AC-1/2/3 verified PASS; AC-4 is the remaining build (owner cross-huddle follow-up).
+**Evidence:** independent verifier verdict (general-purpose agent, cold context) via `huddle.mjs` against live prod.
 **Branch/PR:** `fix-1to1-capability-defer` (capability defer + domain lane handoff; NOT merged)
 
 ### ACT-2: Enforce mandatory skills (AC / verify / track / verifier subagent)
