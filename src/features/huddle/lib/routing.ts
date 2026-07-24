@@ -329,7 +329,7 @@ export async function routeMessageLLM(
       (a) =>
         `- ${a.id} (${a.name}, ${a.role}): ${a.domains.join(", ")}${
           journeySet.has(a.id) ? " [has live calendar/tasks/contacts tools]" : ""
-        }`,
+        }${a.role === "Scrum master" ? " [owns backlog grooming/triage/sprint-assignment]" : ""}`,
     )
     .join("\n");
 
@@ -347,6 +347,7 @@ export async function routeMessageLLM(
   const baseSystem = `You are the router for a multi-agent huddle. Choose which agents should respond to the user's latest message based on intent and context — not just keywords. Prefer a single primary agent; add supporting agents only when their expertise is clearly needed. Never invent agent ids — only choose from the roster.
 ADDRESSED BY NAME: if the user addresses an agent by name (e.g. "Cole, how long…", "Finn — …"), that agent IS the primary. Do NOT hand the lead to a different agent because the topic superficially fits another lane.
 DELEGATION (overrides ADDRESSED BY NAME): if the user tells the addressed agent to have / ask / get / assign ANOTHER named agent to do something ("Finn, have Iris create the task", "Sam, ask Cole to estimate it"), the DELEGATE — the agent who should actually perform the action (Iris / Cole) — is the primary, because they must be the one to do it (create the task, run the tool). Add the addressed agent as supporting only if they also contribute.
+CAPABILITY OWNERSHIP: some work needs a specific tool only one agent holds (shown in [brackets] on the roster — e.g. [owns backlog grooming/triage/sprint-assignment]). A request to groom / triage / organize / assign / plan the backlog or sprint belongs to that owner (the scrum master). If the user did NOT address a specific agent, route the owner as primary. If they DID address a different agent (e.g. "Tess, groom the backlog"), keep that agent as primary — they will hand off to the owner themselves; do not silently swap them out.
 TIME IS NOT ALWAYS THE CALENDAR: how long a piece of WORK will take (a build estimate, a task's effort) belongs to the lane that owns that work — NOT the schedule/itinerary agent. The schedule agent is ONLY for the user's OWN calendar (their meetings, appointments, personal deadlines). Do not pull in the calendar agent just because a duration or the word "time" appears.`;
 
   const strictSystem = `You are the router for a multi-agent huddle. Pick exactly ONE primary agent for the user's latest message. Return supporting = [] UNLESS the message explicitly asks for a second, non-overlapping specialty (e.g. "and also budget it" or "then draft the email"). Adjacency is not enough — a workout question does NOT need a life-strategist just because habits are related. When in doubt, return supporting = []. Never invent agent ids — only choose from the roster.

@@ -107,7 +107,8 @@ const MAX_REPLIES_PER_TURN = 4;
 const HOUSE_STYLE =
   "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
   " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it \"has been sent\" or \"is done\" when it has not. Email specifically: text you write in the chat is \"draft text\" — only say you \"saved a draft to your inbox\" if you called the create_email_draft tool and it returned success, and only say an email was \"sent\" if send_email returned success." +
-  " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message.";
+  " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message." +
+  " Capability hand-off: backlog grooming, triage, and sprint/board assignment are the scrum master's job (@terry-locke). If you are asked to groom, triage, or assign the backlog and you are NOT the scrum master, do NOT attempt it and do NOT create a task about it — politely say the scrum master is better suited, tell the user you'll bring him in, and end your reply with @terry-locke (the mention IS the hand-off, so he gets pulled in). Same principle for any capability another agent owns.";
 
 // Deterministic backstop for co-answer echo: a weak router model sometimes
 // ignores the "don't repeat what was already said" instruction and re-emits a
@@ -850,7 +851,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 
       const roster = buildRoster(data.members, winner.id);
       const taskToolInstructions =
-        "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it.";
+        "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it." +
+        " NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled \"groom the backlog\" or \"assign the team\") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked.";
 
       // AUTO memory retrieval: pull the most relevant shared/global memory for THIS agent and inject
       // it into the prompt, so recall works even when the model doesn't call `search_memory`. This is

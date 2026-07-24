@@ -28,7 +28,8 @@ export const GROOM_BACKLOG_TOOL = {
 } as const;
 
 export const GROOM_SYSTEM_HINT =
-  "When the user asks to groom, triage, organize, assign, or plan the backlog/sprint (a scrum-master job), call `groom_backlog`. It assigns each task to an agent, tags/prioritizes it, respects the team's real capabilities (some tasks can only be scheduled), and reorders the board. Report back what was assigned and what's blocked-on-capability — do not invent an ordering yourself.";
+  "When the user asks you DIRECTLY to groom, triage, organize, assign, or plan the backlog/sprint (a scrum-master job), call `groom_backlog`. It assigns each task to an agent, tags/prioritizes it, respects the team's real capabilities (some tasks can only be scheduled), and reorders the board. Report back what was assigned and what's blocked-on-capability — do not invent an ordering yourself." +
+  " If instead a teammate HANDED this to you (you were brought into the turn by a hand-off, not asked directly by the user), do NOT groom yet — first greet the user, say who passed it to you and what they wanted (e.g. \"Tess let me know you wanted the backlog groomed\"), and ask if they'd like you to do it now. Only call `groom_backlog` once the user gives the go-ahead.";
 
 type Caller = { entra_object_id?: string; entra_email?: string };
 
