@@ -358,7 +358,8 @@ jobs:
               AZURE_CLIENT_ID="${{ secrets.AZURE_CLIENT_ID }}" \
               AZURE_CLIENT_SECRET="${{ secrets.AZURE_CLIENT_SECRET }}" \
               AZURE_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
-              HUDDLE_EMAIL_FROM="${{ secrets.HUDDLE_EMAIL_FROM || 'dev@enterpriseds.io,von.ellis@enterpriseds.io' }}"
+              HUDDLE_EMAIL_FROM="${{ secrets.HUDDLE_EMAIL_FROM || 'dev@enterpriseds.io,von.ellis@enterpriseds.io' }}" \
+              HUDDLE_APP_URL="https://${SWA_HOST}"
 
       - name: Deploy to Static Web Apps
         uses: Azure/static-web-apps-deploy@v1

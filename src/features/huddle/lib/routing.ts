@@ -1,6 +1,7 @@
 import { generateText, NoObjectGeneratedError, Output } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type Agent, type AgentId } from "../data/agents";
+import { ownershipMarker } from "./capabilities";
 import type { HuddleMessage, RoutingDecision } from "../data/seed";
 
 // stem match — first 5 chars, word-boundary
@@ -206,6 +207,80 @@ export function routeMessage(input: RouteInput): RouteResult {
 }
 
 /**
+ * PURE winner-assembly — turns the LLM router's raw pick ({primary, supporting, explicitlyRequested})
+ * plus the parsed @mentions into the final ordered winner set. Extracted so it can be unit-tested
+ * OFFLINE with mocked router outputs (no OpenAI spend). The only external reads are AGENT_BY_ID +
+ * scoreAgentAgainst (deterministic keyword scoring), so this is fully self-contained.
+ */
+export interface WinnerAssemblyInput {
+  primary: AgentId;
+  supporting: AgentId[];
+  explicitlyRequested: AgentId[];
+  mentions: AgentId[];
+  memberIds: AgentId[];
+  text: string;
+  soloOnCoverage: boolean;
+}
+export interface WinnerAssemblyResult {
+  winners: AgentId[];
+  soloApplied: boolean;
+  explicitKept: number;
+  mentionedWinners: AgentId[];
+}
+export function assembleWinners(input: WinnerAssemblyInput): WinnerAssemblyResult {
+  const { primary, supporting, mentions, memberIds, text, soloOnCoverage } = input;
+  const explicitlyRequested = new Set(
+    input.explicitlyRequested.filter((id) => memberIds.includes(id)),
+  );
+  const mentionSet = mentions.filter((id) => memberIds.includes(id));
+
+  let winners: AgentId[];
+  let soloApplied = false;
+  let explicitKept = 0;
+  const mentionedWinners: AgentId[] = [];
+
+  if (mentionSet.length > 0) {
+    // MENTION TURN: semantic PRIMARY (main-task owner) + @mentioned agents + any explicitly-NAMED
+    // supporting agent. Adjacency (unnamed supporting) is dropped. Handoff "Tess, scope X, then @cole"
+    // → primary tess + mention cole; bare "@cole how long?" → primary cole == mention → just Cole.
+    winners = [primary];
+    for (const id of supporting) {
+      if (explicitlyRequested.has(id) && !winners.includes(id) && winners.length < 4) {
+        winners.push(id);
+        explicitKept++;
+      }
+    }
+    for (const id of mentionSet) {
+      if (!winners.includes(id) && winners.length < 4) winners.push(id);
+    }
+    mentionedWinners.push(...mentionSet.filter((id) => id !== primary));
+  } else {
+    // NORMAL TURN: semantic primary + supporting. soloOnCoverage drops adjacency when the primary
+    // already covers the topic — but never a user-named collaborator (explicitlyRequested).
+    winners = [primary];
+    if (soloOnCoverage) {
+      const primaryAgent = AGENT_BY_ID[primary];
+      const primaryScore = primaryAgent ? scoreAgentAgainst(text, primaryAgent) : 0;
+      if (primaryScore >= 0.15) soloApplied = true;
+    }
+    for (const id of supporting) {
+      if (
+        !memberIds.includes(id) ||
+        id === primary ||
+        winners.includes(id) ||
+        winners.length >= 3
+      ) {
+        continue;
+      }
+      if (soloApplied && !explicitlyRequested.has(id)) continue; // drop adjacency only
+      if (soloApplied) explicitKept++;
+      winners.push(id);
+    }
+  }
+  return { winners, soloApplied, explicitKept, mentionedWinners };
+}
+
+/**
  * LLM-based router. Picks a primary agent + optional supporting agents based
  * on the user's message and recent history. Falls back to the keyword
  * routeMessage() on any failure so we never block a reply.
@@ -237,7 +312,12 @@ export async function routeMessageLLM(
 
   if (scope === "one-to-one" && targetAgentId) return routeMessage(input);
   const mentions = parseMentions(text, present);
-  if (mentions.length > 0) return routeMessage(input);
+  // Group + @mention: AUGMENT, don't replace. A mentioned agent is a hard request to include it (unioned
+  // into winners below, never dropped), but we STILL run the semantic router so a prose-named work-owner
+  // ("Tess, scope the MVP, then hand to @cole …") isn't dropped just because someone else was @mentioned.
+  // Only a non-group mention short-circuits to the deterministic mention-only route; a group mention flows
+  // through to the LLM router. Roster-driven → auto-scales as agents are added.
+  if (mentions.length > 0 && scope !== "group") return routeMessage(input);
   // Broadcast → everyone answers; no need to ask the LLM who.
   if (scope === "group" && isBroadcast(text)) return routeMessage(input);
 
@@ -250,7 +330,7 @@ export async function routeMessageLLM(
       (a) =>
         `- ${a.id} (${a.name}, ${a.role}): ${a.domains.join(", ")}${
           journeySet.has(a.id) ? " [has live calendar/tasks/contacts tools]" : ""
-        }`,
+        }${ownershipMarker(a)}`,
     )
     .join("\n");
 
@@ -265,11 +345,17 @@ export async function routeMessageLLM(
     })
     .join("\n");
 
-  const baseSystem = `You are the router for a multi-agent huddle. Choose which agents should respond to the user's latest message based on intent and context — not just keywords. Prefer a single primary agent; add supporting agents only when their expertise is clearly needed. Never invent agent ids — only choose from the roster.`;
+  const baseSystem = `You are the router for a multi-agent huddle. Choose which agents should respond to the user's latest message based on intent and context — not just keywords. Prefer a single primary agent; add supporting agents only when their expertise is clearly needed. Never invent agent ids — only choose from the roster.
+ADDRESSED BY NAME: if the user addresses an agent by name (e.g. "Cole, how long…", "Finn — …"), that agent IS the primary. Do NOT hand the lead to a different agent because the topic superficially fits another lane.
+DELEGATION (overrides ADDRESSED BY NAME): if the user tells the addressed agent to have / ask / get / assign ANOTHER named agent to do something ("Finn, have Iris create the task", "Sam, ask Cole to estimate it"), the DELEGATE — the agent who should actually perform the action (Iris / Cole) — is the primary, because they must be the one to do it (create the task, run the tool). Add the addressed agent as supporting only if they also contribute.
+CAPABILITY OWNERSHIP: some jobs are exclusive to one agent, shown as [owns: …] on their roster line (e.g. [owns: backlog grooming, triage & sprint/board assignment]). A request for an exclusively-owned job belongs to its owner. If the user did NOT address a specific agent, route the owner as primary. If they DID address a different agent (e.g. "Tess, groom the backlog"), keep that agent as primary — they will hand off to the owner themselves; do not silently swap them out.
+TIME IS NOT ALWAYS THE CALENDAR: how long a piece of WORK will take (a build estimate, a task's effort) belongs to the lane that owns that work — NOT the schedule/itinerary agent. The schedule agent is ONLY for the user's OWN calendar (their meetings, appointments, personal deadlines). Do not pull in the calendar agent just because a duration or the word "time" appears.`;
 
   const strictSystem = `You are the router for a multi-agent huddle. Pick exactly ONE primary agent for the user's latest message. Return supporting = [] UNLESS the message explicitly asks for a second, non-overlapping specialty (e.g. "and also budget it" or "then draft the email"). Adjacency is not enough — a workout question does NOT need a life-strategist just because habits are related. When in doubt, return supporting = []. Never invent agent ids — only choose from the roster.
+ADDRESSED BY NAME: if the user addresses an agent by name ("Cole, how long…"), that agent IS the primary — never hand the lead to another agent because the topic superficially fits their lane. DELEGATION (overrides that): if the user tells the addressed agent to have/ask/get ANOTHER named agent do something ("Finn, have Iris create the task"), the DELEGATE who must perform the action (Iris) is the primary. TIME IS NOT ALWAYS THE CALENDAR: how long WORK takes (a build/effort estimate) belongs to the lane that owns the work, not the schedule agent; the schedule agent is only for the user's OWN calendar.
 
 Example — user: "what workouts do i usually go for?" → primary: flex-grimes, supporting: [], reason: single-lane fitness question.
+Example — user: "Finn, have Iris create the venue task" → primary: iris-chase, supporting: [], reason: delegation — Iris is the one who must create it.
 Example — user: "plan tomorrow's workout and also budget my gym membership" → primary: flex-grimes, supporting: [finn-reid], reason: two distinct lanes explicitly named.`;
 
   const system = invocation.strictPrompt ? strictSystem : baseSystem;
@@ -285,11 +371,10 @@ Example — user: "plan tomorrow's workout and also budget my gym membership" �
   const explicitRequestHint = `\n\nAlso return "explicitlyRequested": the subset of your supporting agents that the user NAMED (e.g. "pull in Finn and Tess", "loop in Cole") or whose distinct deliverable the user explicitly asked for (e.g. "and also draft the email"). Do NOT include an agent you merely judged helpful — only ones the user actually asked for. Return [] if none.`;
 
   const interjectHint = wantInterject
-    ? `\n\nAlso list "interjectors": agents (other than the primary/supporting) who should CHECK whether they hold specific value the primary can't provide, because the message plausibly intersects information they would own. You cannot see their data — nominate based on the ANGLE, and each nominee will look and stay silent (pass) if they find nothing:
-- A specific time/date is set → nominate an agent marked [has live calendar/tasks/contacts tools] to check for conflicts on the user's schedule.
-- A named person/contact/meeting is mentioned → nominate an agent (prefer one with the tools marker) who may hold prep notes or history on them.
-- A commitment, deadline, budget, or risk is implied → nominate the agent who tracks that.
-Agents marked [has live calendar/tasks/contacts tools] can look up the user's actual schedule and contacts, so they are the right nominees for time/person/deadline angles even if their stated domain sounds unrelated. Do NOT nominate for mere topical similarity with no such information angle. Return interjectors = [] when there is no plausible angle.`
+    ? `\n\nAlso list "interjectors": agents (other than the primary/supporting) who might hold something URGENT the primary will MISS. Nominate ONLY for one of these two reasons — never for topical relevance, a second opinion, or to add color:
+1. MISSING PIECE — another lane owns a specific fact/number/constraint/check the primary needs to get this right and would plausibly omit or get wrong (e.g. the finance lane knows the pricing math the GTM answer skipped).
+2. BLOCKING RISK / CONFLICT — another lane can see a clash or risk the primary can't (a schedule conflict, a budget/deadline/dependency/compliance blocker, a commitment already made).
+You can't see their data — nominate on the ANGLE; each nominee checks and PASSES silently if it has nothing concrete. The calendar/tasks/contacts agent is a good nominee ONLY when the message touches the user's OWN schedule/commitments (a real meeting, appointment, or personal deadline) — NOT for a generic duration like "how long will the build take." Nothing urgent is the COMMON case → return interjectors = [].`
     : "";
 
   const prompt = `Roster (available agents in this huddle):
@@ -388,37 +473,16 @@ ${supportingHint}${interjectHint}${explicitRequestHint}`;
       };
     }
 
-    const winners: AgentId[] = [primary];
-    let soloApplied = false;
-    if (invocation.soloOnCoverage) {
-      // If the primary already covers the message's topic (score >= 0.15 on
-      // its own domains/themes), skip supporting agents entirely. This kills
-      // adjacency pile-ons like "fitness question → also pull in life-strategy".
-      const primaryAgent = AGENT_BY_ID[primary];
-      const primaryScore = primaryAgent ? scoreAgentAgainst(text, primaryAgent) : 0;
-      if (primaryScore >= 0.15) soloApplied = true;
-    }
-    // Collaborators the user EXPLICITLY named/requested are never adjacency, so the solo
-    // cut must not drop them (else "pull in Finn + Tess" collapses to solo). The adjacency
-    // guard still removes LLM-volunteered supporting agents whenever soloApplied. Roster-id
-    // based → a newly added agent is honored the day it's added, no code change.
-    const explicitlyRequested = new Set(
-      (output.explicitlyRequested ?? []).filter((id) => memberIds.includes(id)),
-    );
-    let explicitKept = 0;
-    for (const id of supporting) {
-      if (
-        !memberIds.includes(id) ||
-        id === primary ||
-        winners.includes(id) ||
-        winners.length >= 3
-      ) {
-        continue;
-      }
-      if (soloApplied && !explicitlyRequested.has(id)) continue; // drop adjacency only
-      if (soloApplied) explicitKept++;
-      winners.push(id);
-    }
+    // Deterministic winner assembly (pure, unit-tested offline — see routing.winners.test.ts).
+    const { winners, soloApplied, explicitKept, mentionedWinners } = assembleWinners({
+      primary,
+      supporting,
+      explicitlyRequested: output.explicitlyRequested ?? [],
+      mentions,
+      memberIds,
+      text,
+      soloOnCoverage: !!invocation.soloOnCoverage,
+    });
     const scores = Object.fromEntries(
       winners.map((id, i) => [id, Number((1 - i * 0.2).toFixed(2))]),
     ) as Partial<Record<AgentId, number>>;
@@ -440,7 +504,7 @@ ${supportingHint}${interjectHint}${explicitRequestHint}`;
         winnerId: primary,
         runnerUpId: winners[1] ?? null,
         interjected: interjectors.length > 0,
-        reason: `LLM router (${invocation.backend}/${invocation.model})${soloApplied ? (explicitKept > 0 ? ` [solo+${explicitKept}req]` : " [solo]") : ""}${interjectors.length ? ` +${interjectors.length} interject` : ""}: ${reason}`.slice(0, 220),
+        reason: `LLM router (${invocation.backend}/${invocation.model})${soloApplied ? (explicitKept > 0 ? ` [solo+${explicitKept}req]` : " [solo]") : ""}${mentionedWinners.length ? ` +${mentionedWinners.length}@mention` : ""}${interjectors.length ? ` +${interjectors.length} interject` : ""}: ${reason}`.slice(0, 220),
       },
     };
   } catch (err) {

@@ -47,6 +47,14 @@ CREATE TABLE IF NOT EXISTS chat.pending_turns (
 );
 CREATE INDEX IF NOT EXISTS pending_turns_huddle_idx ON chat.pending_turns (huddle_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS pending_turns_status_idx ON chat.pending_turns (status, created_at);
+-- Incremental per-agent streaming (backlog #3): a turn runs its agents in sub-45s CHUNKS. Each
+-- agent reply is appended to the replies column the instant it completes (streamed to the client
+-- poll); the progress column holds the resumable driver state (remaining queue + ledgers) so a
+-- partial turn is continued by the runner without dropping agents; seq is the monotone reply cursor.
+ALTER TABLE chat.pending_turns ADD COLUMN IF NOT EXISTS replies  JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE chat.pending_turns ADD COLUMN IF NOT EXISTS progress JSONB;
+ALTER TABLE chat.pending_turns ADD COLUMN IF NOT EXISTS seq      INT  NOT NULL DEFAULT 0;
+ALTER TABLE chat.pending_turns ADD COLUMN IF NOT EXISTS chunks   INT  NOT NULL DEFAULT 0;
 
 -- Web Push subscriptions so a reply that lands while the user is fully away (screen off, app closed)
 -- can buzz the phone. Keyed by endpoint (unique per browser/device).
@@ -93,7 +101,8 @@ async function ensureBootstrapped() {
   }
 }
 
-export type TurnStatus = "queued" | "running" | "done" | "error";
+// 'partial' = ran a chunk, more agents remain (the runner will continue it).
+export type TurnStatus = "queued" | "running" | "partial" | "done" | "error";
 
 export interface TurnRecord {
   id: string;
@@ -103,10 +112,18 @@ export interface TurnRecord {
   status: TurnStatus;
   result: unknown;
   error: string | null;
+  /** Replies produced so far (grows across chunks; the client streams these in). */
+  replies: unknown[];
+  /** Resumable driver state for a 'partial' turn (null once done). */
+  progress: unknown;
+  /** Monotone reply count — the client's per-turn streaming cursor. */
+  seq: number;
+  /** How many chunks this turn has run (runaway guard). */
+  chunks: number;
   updated_ms: number;
 }
 
-const ROW_COLS = `id, huddle_id, user_email, payload, status, result, error,
+const ROW_COLS = `id, huddle_id, user_email, payload, status, result, error, replies, progress, seq, chunks,
   (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_ms`;
 
 function mapRow(r: Record<string, unknown>): TurnRecord {
@@ -118,6 +135,10 @@ function mapRow(r: Record<string, unknown>): TurnRecord {
     status: r.status as TurnStatus,
     result: r.result ?? null,
     error: (r.error as string) ?? null,
+    replies: (r.replies as unknown[]) ?? [],
+    progress: r.progress ?? null,
+    seq: Number(r.seq ?? 0),
+    chunks: Number(r.chunks ?? 0),
     updated_ms: Number(r.updated_ms ?? 0),
   };
 }
@@ -156,7 +177,7 @@ export async function claimTurn(id: string): Promise<TurnRecord | null> {
     `UPDATE chat.pending_turns
        SET status = 'running', claimed_at = now(), updated_at = now()
      WHERE id = $1
-       AND (status = 'queued'
+       AND (status IN ('queued', 'partial')
             OR (status = 'running' AND claimed_at < now() - interval '${STALE_RUNNING_SECONDS} seconds'))
      RETURNING ${ROW_COLS}`,
     [id],
@@ -173,7 +194,7 @@ export async function claimNextQueued(): Promise<TurnRecord | null> {
        SET status = 'running', claimed_at = now(), updated_at = now()
      WHERE id = (
        SELECT id FROM chat.pending_turns
-        WHERE status = 'queued'
+        WHERE status IN ('queued', 'partial')
            OR (status = 'running' AND claimed_at < now() - interval '${STALE_RUNNING_SECONDS} seconds')
         ORDER BY created_at
         LIMIT 1
@@ -194,6 +215,67 @@ export async function completeTurn(id: string, result: unknown): Promise<void> {
   );
 }
 
+/**
+ * Persist one CHUNK of a resumable turn (backlog #3). `replies` is the full accumulated array so far
+ * (the client reads it as the stream); `progress` is the resume state (pass null when done). When
+ * `done`, the turn is finalized (status='done') and `result` is set so the existing
+ * getTurnsSince/applyTurnResult consumers keep working; otherwise status='partial' and the runner
+ * continues it. Bumps `seq` (=replies.length) and `chunks` (runaway guard).
+ */
+export async function saveTurnChunk(
+  id: string,
+  replies: unknown[],
+  progress: unknown,
+  done: boolean,
+  result?: unknown,
+): Promise<void> {
+  await ensureBootstrapped();
+  const reps = replies ?? [];
+  await getPool().query(
+    `UPDATE chat.pending_turns
+       SET replies = $2::jsonb,
+           seq = $3,
+           progress = $4::jsonb,
+           status = $5,
+           chunks = chunks + 1,
+           result = CASE WHEN $5 = 'done' THEN $6::jsonb ELSE result END,
+           error = NULL,
+           updated_at = now()
+     WHERE id = $1`,
+    [
+      id,
+      JSON.stringify(reps),
+      reps.length,
+      progress == null ? null : JSON.stringify(progress),
+      done ? "done" : "partial",
+      JSON.stringify(result ?? null),
+    ],
+  );
+}
+
+/**
+ * Mid-chunk STREAMING write (backlog #3): push the replies produced so far to the client's poll the
+ * instant each wave lands, WITHOUT ending the chunk. Deliberately leaves `status='running'` and does
+ * NOT bump `chunks` — `chunks` counts continuation executions (the runaway guard), and a single
+ * execution streams several times. `getTurnsSince` already returns 'running' rows with their replies,
+ * so the client renders each wave as it arrives. Guarded on `status='running'` so it can never
+ * resurrect or clobber a row another writer already finalized to done/error.
+ */
+export async function updateTurnReplies(
+  id: string,
+  replies: unknown[],
+  progress: unknown,
+): Promise<void> {
+  await ensureBootstrapped();
+  const reps = replies ?? [];
+  await getPool().query(
+    `UPDATE chat.pending_turns
+       SET replies = $2::jsonb, seq = $3, progress = $4::jsonb, updated_at = now()
+     WHERE id = $1 AND status = 'running'`,
+    [id, JSON.stringify(reps), reps.length, progress == null ? null : JSON.stringify(progress)],
+  );
+}
+
 export async function failTurn(id: string, error: string): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(
@@ -204,13 +286,16 @@ export async function failTurn(id: string, error: string): Promise<void> {
   );
 }
 
-/** Finished turns for a huddle updated after `sinceMs` — the client's delivery-on-reconnect read. */
+/** Turns for a huddle updated after `sinceMs` — the client's delivery/streaming read. Includes
+ *  in-flight 'partial'/'running' turns (with the replies produced so far) so the client streams
+ *  agent replies incrementally as chunks land, plus finished 'done'/'error' turns. The client keys
+ *  on reply index (idempotent), so a partial turn re-appearing with more replies just appends. */
 export async function getTurnsSince(huddleId: string, sinceMs: number): Promise<TurnRecord[]> {
   await ensureBootstrapped();
   const res = await getPool().query(
     `SELECT ${ROW_COLS} FROM chat.pending_turns
       WHERE huddle_id = $1
-        AND status IN ('done', 'error')
+        AND status IN ('done', 'error', 'partial', 'running')
         AND updated_at > to_timestamp($2 / 1000.0)
       ORDER BY updated_at ASC
       LIMIT 20`,

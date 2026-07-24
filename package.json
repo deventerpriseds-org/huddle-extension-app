@@ -9,6 +9,7 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
+    "test:router": "bun scripts/router-winners.test.ts",
     "format": "prettier --write .",
     "fetch:assistants": "bun run scripts/fetch-openai-assistants.ts"
   },

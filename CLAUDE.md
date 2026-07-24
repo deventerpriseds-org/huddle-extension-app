@@ -172,6 +172,40 @@ without an Apollo-style state machine (deliberately not built — see git histor
   co-authored (`author_agent_ids`), sort first — so each agent surfaces memory relevant to its lane.
   Pure reorder, no SQL change.
 
+## Systematic capability, never a patch (standing principle — the user is firm on this)
+Do NOT fix a symptom for one agent/case with a hardcoded string (e.g. "backlog grooming → @terry-locke"
+baked into the shared layer). Build the GENERAL capability so it works for EVERY agent/lane/tool, driven
+by data in `agents.ts` (roles, domains, ownership) — then PROVE it across the board (multiple ownership
+mismatches, both group and 1:1), not just the one case that surfaced it. A one-off patch that only
+handles the reported example is a regression against this principle; rework it into the systematic
+mechanism. Same spirit as the router rule below (roster-driven, no hardcoded per-agent lists).
+
+### Ownership-aware hand-off = data-driven capabilities (the systematic version)
+"Who exclusively owns what" is **data** on the agent, never a hardcoded name. `Agent.capabilities:
+AgentCapability[]` (agents.ts) declares each agent's EXCLUSIVE powers (`{id,label,exclusive}`); Terry
+owns `backlog-grooming`. Everything reads it through **`lib/capabilities.ts`** (`agentOwnsCapability`,
+`exclusiveCapabilities`, `ownerOfCapability`, `ownershipMarker`, `ownershipDirectory`) — the single
+source of ownership truth. It flows to three consumers with ZERO per-agent code:
+- **Roster** (`buildRoster`) appends each teammate's ` [owns: …]` marker, so every agent learns who to
+  hand any exclusive job to. **Router** (`routing.ts`) surfaces the same marker on its roster line and
+  its CAPABILITY OWNERSHIP rule keys off `[owns: …]` (not `role === "Scrum master"`).
+- **Scope-aware hand-off** (`capabilityHandoffBlock(scope, members)` in huddle.functions.ts, appended
+  to every agent's instructions): **group** = the owner just DOES it and reports what/why (no permission
+  dance); a non-owner neither attempts it nor files a meta-task, it @mentions the owner. **1:1** = the
+  owner isn't in the room, so the addressed agent DEFERS ("Terry's better suited, I'll let him know")
+  and @mentions the owner. The grooming hint (`groom.ts`) is split the same way — `GROOM_HANDOFF_DO_HINT`
+  (group) vs `GROOM_HANDOFF_CONFIRM_HINT` (1:1).
+- **Exclusive-tool gating** (`groom_backlog`) is `agentOwnsCapability(winner,"backlog-grooming")` in
+  both dispatch paths, with the legacy `id==="terry-locke" || special==="standup-host"` kept as a
+  non-destructive fallback. Add a capability to any agent (or a new agent) → all of the above covers it.
+- **Task discipline:** `taskToolInstructions` forbids creating a task that merely restates an action the
+  agent was asked to PERFORM (the board is the USER's, not an agent scratchpad). Adding an agents' own
+  personal backlog (off the user's board) is the follow-on; 1:1 cross-huddle "message from Terry" plumbing
+  (reuse `send_push`) is the other follow-on.
+- Domain/theme routing (finance→Finn, travel→Troy, dinner→Charleston, fitness→Flex) is the ROUTER's job
+  and is already roster-driven; exclusive *capabilities* are the narrow powers layered on top. Prove with
+  `.claude/skills/test-agent-serverfn/scripts/capability-ownership-test.mjs`.
+
 ## Routing is the auto-scaling brain — fix multi-agent behavior THERE, not with regex (relearned)
 We ALREADY have a router (`src/features/huddle/lib/routing.ts`); do not bolt on hardcoded
 agent lists or verb-regexes to steer who responds — they won't keep up as agents are added.
@@ -200,6 +234,75 @@ agent lists or verb-regexes to steer who responds — they won't keep up as agen
 - **Secondary (prose handoff).** Mid-reply, `parseMentions` fires only on a literal `@handle`/`@firstname`.
   When an agent delegates in prose ("I'll get Finn to…", "Tess should…") no re-queue happens. Prefer
   fixing this by prompt (get agents to emit `@handle`) or router intelligence — NOT a hardcoded verb list.
+
+## Reading the live Huddle DB + run logs from a CCR session (the friction, solved)
+You CANNOT query Azure PG directly from a CCR session, even though `az` (2.88) and `psql` are
+installed: (1) session egress is **HTTPS-only through the agent proxy — TCP 5432 is blocked**
+(tested: unreachable); (2) there are **no Azure/PG creds in the session env** (SP secrets are GitHub
+org secrets, not here); (3) the PG firewall only admits Azure services + explicitly-added IPs, not the
+session. So `az login`/`psql` from here is a dead end — and a "workflow opens the firewall → az/psql
+from the session → workflow closes it" loop does NOT help, because the session's own egress blocks
+5432 regardless of Azure's firewall. Don't retry it.
+
+- **FASTEST way to read chat messages — the app's `getTurnUpdates` server fn over HTTPS (~1s, no
+  workflow).** HTTPS works from the session, so POST the seroval-encoded `{huddleId, sinceMs}` to
+  `/_serverFn/<getTurnUpdates id>` (see the `test-agent-serverfn` harness for encode/decode). It returns
+  a huddle's recent turns (`status`, `replies`/`result.replies`). Enumerate huddleIds: group =
+  `all-members`/`daily`, 1:1 = `dm-<agentId>`. Measured: matched a 90s workflow query in ~300ms–1.5s.
+  Use this for "what did the user say / what did the agents reply." (Refresh the fn id from the build if
+  it 404s — same content-hash mechanism as the harness.)
+- For **arbitrary SQL** (memory `rag_chunks`, `tasks.*`, cross-table joins) the fast path isn't enough —
+  use the workflow below.
+- **Query the DB via the `azure-pg-query.yml` workflow** (`workflow_dispatch`, input `sql`). A GitHub
+  runner logs in with the SP secrets, opens the firewall for its own IP, runs psql, closes it. Pinned
+  to `eds-postgresql`/`RAG_AI_Agents`. Dispatch with `mcp__github__actions_run_trigger`.
+- **Read the run's output with MCP `get_job_logs`** (`job_id` from `list_workflow_jobs`,
+  `return_content:true`). Do NOT download the log zip (`GET /actions/runs/{id}/logs`) — it 302s to blob
+  storage that the agent proxy blocks. Poll the run to completion with the tight GH-API bash loop (see
+  "Waiting on deploys/CI").
+- **Reading a user's chat history:** the real client uses the durable path, so conversations live in
+  **`chat.pending_turns`**: `huddle_id` (`all-members`/`daily` = group, `dm-<agentId>` = 1:1),
+  `payload->>'text'` = the user message, agent replies in the `replies` column (chunked turns) or
+  `result->'replies'` (sync-completed). Every user message is also a `public.rag_chunks` row
+  (`source = huddle:<id>`). Filter by recent `updated_at` — the DB is effectively single-user.
+
+## Waiting on deploys/CI: poll for the terminal state, never blind-sleep (user preference)
+The user dislikes fixed wait timers — they over-wait and are inefficient. Do NOT `sleep 300` then check.
+Instead detect completion the INSTANT it happens with a tight poll that exits on the terminal state, so
+the notification fires right away:
+- **GitHub Actions is directly pollable from bash** — `GITHUB_TOKEN`/`GH_TOKEN` are in the env, so hit
+  the REST API (no `gh` CLI needed): `curl -s -H "Authorization: Bearer $GH_TOKEN" .../actions/runs?per_page=1&branch=<b>` and read `status`/`conclusion`. Wrap it in a background `until`/`while` loop that
+  `sleep 15-20` between checks and `break`s on `status=completed` — ONE notification, the moment it lands.
+- The MCP `list_workflow_jobs` returns FRESH data; `get_workflow_run` can be cached/stale — prefer the
+  direct API poll or `list_workflow_jobs`.
+- SWA deploys are server-only here, so the client asset hash does NOT change — do not poll the hash to
+  detect a server-code deploy; poll the workflow run state instead.
+- Same idea for any external job (CI, remote queue): watch the actual state and exit on terminal, don't
+  guess a duration. Reserve `send_later`/scheduled check-ins for genuinely long, detached waits.
+
+## Verifying routing/agents: the loop discipline that matters (hard-won)
+Full end-to-end turns are the REAL UAT and are the preferred way to verify — drive the actual flow.
+The mistake to avoid is not "using full turns"; it's **blind responsive micro-iteration**: seeing a
+result, making a tiny change, re-running the heavy test, repeat — without stopping to ask why.
+- **THE RULE: when heavy calls return the SAME result 2–3× in a row, PAUSE and re-analyze.** Stop
+  changing code. Form a hypothesis, add instrumentation, and find the ROOT CAUSE before the next edit.
+  A run of identical outputs across incremental changes means your change isn't reaching the code path
+  — that itself is the signal to investigate, not to tweak again.
+- **Instrument to see the truth.** Surfacing `decision.reason` in the response is what finally revealed
+  the real cause here: `LLM fallback: OpenAI Responses 429` — the OpenAI account hit
+  `insufficient_quota`, so every LLM-router call fell back to keyword routing. The router CODE never
+  ran; six rounds of prompt tweaks were chasing the quota fallback (handoff→mention-only,
+  multi-lane→solo). Always print `decision.reason` when verifying routing — `LLM router (openai/…)` =
+  real; `LLM fallback: …` = the router didn't run (429/quota/error), so the result says nothing about
+  your change.
+- **Keep a cheap offline inner loop AS WELL.** The winner-assembly is a pure function —
+  `assembleWinners()` in `routing.ts` — unit-tested offline with mocked router outputs:
+  `bun scripts/router-winners.test.ts` (`npm run test:router`), zero API spend, deterministic. Use it
+  to prove the deterministic LOGIC fast, then confirm end-to-end with a few real turns. Offline test
+  COMPLEMENTS full-turn UAT; it doesn't replace it. (Run TS offline with `bun`, not `tsx` — importing
+  `routing.ts` pulls a transitive `.css` that tsx/node can't load; bun tolerates it.)
+- **Fail fast on quota.** On `429`/`insufficient_quota`, STOP — do not retry (each retry burns more),
+  and don't interpret any result until quota is restored.
 
 ## eds-claude-skills — shared dev-workflow playbooks (USE THESE going forward)
 The org repo **`deventerpriseds-org/eds-claude-skills`** carries reusable Claude playbooks that apply

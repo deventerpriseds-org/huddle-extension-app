@@ -4,8 +4,9 @@ import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import type { HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
 import { parseMentions, routeMessage, routeMessageLLM, type RouterInvocation, type RouteResult } from "./routing";
-import type { FallbackEvent, PromptDebug } from "./fallbacks";
+import { isQuotaError, QUOTA_OUTAGE_INLINE, type FallbackEvent, type PromptDebug } from "./fallbacks";
 import { buildRoster } from "./roster";
+import { agentOwnsCapability, ownershipDirectory } from "./capabilities";
 import {
   detectCeremony,
   buildCeremonyReport,
@@ -107,7 +108,38 @@ const MAX_REPLIES_PER_TURN = 4;
 const HOUSE_STYLE =
   "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
   " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it \"has been sent\" or \"is done\" when it has not. Email specifically: text you write in the chat is \"draft text\" — only say you \"saved a draft to your inbox\" if you called the create_email_draft tool and it returned success, and only say an email was \"sent\" if send_email returned success." +
-  " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message.";
+  " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message." +
+  " Never mention files, uploaded files, documents, attachments, or a knowledge base, and never say you searched them or \"couldn't find information in the uploaded files\" — file search is a silent background aid, not something to narrate. If it returns nothing useful, just answer the user directly from what you know, your live tools, and the conversation. Above all, ANSWER THE USER'S ACTUAL LAST MESSAGE: if they correct you (e.g. \"your time zone is wrong\") or ask something specific, address exactly that — never fall back to a canned \"I couldn't find that\" line that ignores what they just said.";
+
+// Scope-aware ownership hand-off — generated from `agent.capabilities` (agents.ts), NOT
+// hardcoded to any agent or job. Appended to every agent's instructions when the huddle
+// contains at least one exclusive-capability owner. It encodes the two behaviours the user
+// wants, and they differ by SCOPE:
+//   • group — the owner is in the room, so whoever owns the job just DOES it and reports
+//     what/why ("took care of it because …"); a non-owner neither attempts it nor files a
+//     meta-task, it @mentions the owner to pull them in.
+//   • 1:1  — the owner is NOT in the conversation, so the addressed agent DEFERS: it tells
+//     the user the owner is better suited and that it'll let them know, and @mentions them
+//     to follow up. No agent ever performs an exclusive job it doesn't own.
+// This is the systematic version of the earlier grooming-only clause: it covers every
+// exclusive capability of every agent, present or future, with no per-case code.
+function capabilityHandoffBlock(
+  scope: "group" | "1:1",
+  members: readonly AgentId[],
+): string {
+  const directory = ownershipDirectory(members);
+  if (!directory) return "";
+  const rule =
+    scope === "group"
+      ? "In this group huddle the owner is present. If you are asked to do an exclusive job you do NOT own, do NOT attempt it and do NOT create a task about it — @mention the owner so they pick it up. If YOU own the job being asked for, just do it and briefly say what you did and why (e.g. \"took care of grooming — the backlog was stale\"); do not ask permission first or defer."
+      : "This is a 1:1, so the owner is NOT here. If you are asked to do an exclusive job you do NOT own, do NOT attempt it and do NOT create a task about it — tell the user that teammate is better suited and that you'll let them know what they need, and @mention the owner so they can follow up with the user. Only the owner ever performs it.";
+  return (
+    "\n\nExclusive capabilities (only the named owner may perform each — the [owns: …] tags in the roster):\n" +
+    directory +
+    "\n" +
+    rule
+  );
+}
 
 // Deterministic backstop for co-answer echo: a weak router model sometimes
 // ignores the "don't repeat what was already said" instruction and re-emits a
@@ -160,14 +192,77 @@ async function runToolSafely(name: string, fn: () => Promise<unknown>): Promise<
   }
 }
 
+// Resumable mid-turn state (backlog #3). Serialized into `chat.pending_turns.progress` at a chunk
+// boundary and reloaded to continue the SAME turn in a later runner execution WITHOUT re-routing or
+// re-running any agent that already spoke. Sets/Maps are stored as arrays (JSON has no Set/Map). The
+// dedup ledgers (createdTaskTitles / claimedActions) MUST round-trip so chunk 2 never re-creates a
+// task or re-fires a reminder/email chunk 1 already did.
+type TurnResumeState = {
+  decision: RouteResult["decision"];
+  remainingQueue: AgentId[];
+  spoken: AgentId[];
+  createdTaskTitles: string[];
+  claimedActions: string[];
+  handoffById: [AgentId, { fromName: string; ask: string }][];
+  interjectors: AgentId[];
+  ceremonyActive: boolean;
+  ceremonyDirectives: [AgentId, string][];
+  replyCap: number;
+  replies: { agentId: AgentId; text: string; fallbackNotes?: string[] }[];
+  journeyTaskUpdates: import("./journey/types").JourneyTask[];
+  suggestedTasks: SuggestedTaskDraft[];
+  toolUses: import("../data/seed").ToolUseEvent[];
+  reasoning: string[];
+  fallbacks: FallbackEvent[];
+  prompts: PromptDebug[];
+};
+
+export interface RunHuddleTurnOpts {
+  /** When present → CHUNKED/durable mode: replies stream to the store and a budget-deferred agent is
+   *  persisted for continuation instead of dropped. Absent → the unchanged synchronous behavior. */
+  turnId?: string;
+  /** Rehydrated {@link TurnResumeState} from a prior chunk's `progress`; absent = fresh durable run. */
+  resume?: unknown;
+}
+
 // The core huddle turn — shared by the client-facing server function and by
 // server-to-server callers (e.g. the scheduled-ceremony route). Kept as a plain
 // exported async function so a route can invoke a ceremony without an RPC hop.
-export async function runHuddleTurn(data: z.infer<typeof Input>) {
-    // Wall-clock start for the GLOBAL turn deadline (see runBounded). The whole turn — sequential
+//
+// DUAL-PATH: with no `opts.turnId` this is the SYNCHRONOUS path (test harness, voice/meeting) — one
+// execution, the 36s deadline + graceful defer, no persistence, byte-identical to before. With
+// `opts.turnId` it runs in CHUNKED mode: sub-45s chunks, each agent's reply streamed to the durable
+// store the instant its wave lands, and a budget-deferred agent re-queued (never dropped) so the
+// runner continues the turn across executions until every routed agent has replied.
+export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddleTurnOpts) {
+    // Wall-clock start for the per-execution deadline (see runBounded). The whole chunk — sequential
     // primary + parallel wave(s) — must finish under the ~45s hosting request ceiling, so agents are
     // bounded by time REMAINING, not a fixed per-agent value.
     const turnStartMs = Date.now();
+
+    // ---- Chunked/durable mode wiring (backlog #3) ----
+    const turnId = opts?.turnId;
+    const chunked = !!turnId;
+    const resume = opts?.resume as TurnResumeState | undefined;
+    // Per-CHUNK time budget: run agents until this is hit, then persist the remaining queue + ledgers
+    // and stop THIS execution (a fresh runner execution continues the turn). Separate from — and below
+    // — the synchronous path's 36s deadline so a chunk lands comfortably under the hosting ceiling.
+    const CHUNK_BUDGET_MS = 30_000;
+    const TURN_DEADLINE_MS = 36_000;
+    const deadlineMs = chunked ? CHUNK_BUDGET_MS : TURN_DEADLINE_MS;
+    // Runaway guard: cap the number of continuation executions. `chunks` counts boundary saves (bumped
+    // by saveTurnChunk, NOT the mid-chunk streaming writes), so this is the execution count so far.
+    const MAX_CHUNKS = 6;
+    const turnStore = chunked ? await import("./tasks/turns.server") : null;
+    let priorChunks = 0;
+    if (chunked && turnId && turnStore) {
+      try {
+        priorChunks = (await turnStore.getTurn(turnId))?.chunks ?? 0;
+      } catch {
+        priorChunks = 0;
+      }
+    }
+    const atChunkCap = priorChunks + 1 >= MAX_CHUNKS;
     const lovableKey = process.env.LOVABLE_API_KEY;
     const openaiKey = process.env.OPENAI_API_KEY;
 
@@ -216,10 +311,12 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
     // Journey-voice mirror: any task rows that journey returns from a tool call
     // are accumulated here and returned to the client so the huddle board can
     // upsert them.
-    const journeyTaskUpdates: import("./journey/types").JourneyTask[] = [];
-    const suggestedTasks: SuggestedTaskDraft[] = [];
+    const journeyTaskUpdates: import("./journey/types").JourneyTask[] = resume
+      ? [...resume.journeyTaskUpdates]
+      : [];
+    const suggestedTasks: SuggestedTaskDraft[] = resume ? [...resume.suggestedTasks] : [];
     // Reasoning summaries collected across agent turns (reasoning models only).
-    const reasoningSummaries: string[] = [];
+    const reasoningSummaries: string[] = resume ? [...resume.reasoning] : [];
 
     // Lazy: fetch & cache journey tool definitions for this whole turn. Only
     // populated when at least one participating agent has journey.enabled.
@@ -259,10 +356,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
     };
     const agentsCfg = data.agents ?? {};
 
-    // ---- Fallback + prompt trackers ----
-    const fallbacks: FallbackEvent[] = [];
-    const prompts: PromptDebug[] = [];
-    const toolUses: import("../data/seed").ToolUseEvent[] = [];
+    // ---- Fallback + prompt trackers ---- (rehydrated on a resumed chunk so the final result carries
+    // every prior chunk's fallbacks/prompts/toolUses, not just this chunk's).
+    const fallbacks: FallbackEvent[] = resume ? [...resume.fallbacks] : [];
+    const prompts: PromptDebug[] = resume ? [...resume.prompts] : [];
+    const toolUses: import("../data/seed").ToolUseEvent[] = resume ? [...resume.toolUses] : [];
     let fbSeq = 0;
     let tuSeq = 0;
     function recordFallback(
@@ -270,6 +368,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       reason: string,
       inline: string,
       agentId?: AgentId,
+      severity: "warn" | "critical" = "warn",
     ): FallbackEvent {
       const ev: FallbackEvent = {
         id: `fb-${Date.now()}-${fbSeq++}`,
@@ -278,6 +377,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         subsystem,
         reason,
         inline,
+        severity,
       };
       fallbacks.push(ev);
       return ev;
@@ -312,7 +412,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
     const anyShared = ragAgents.some((a) => (a.cfg?.sharing ?? "shared") === "shared");
     const privateAgents = ragAgents.filter((a) => a.cfg?.sharing === "private").map((a) => a.id);
 
-    if ((anyShared || privateAgents.length > 0) && openaiKey) {
+    // Skip on a resumed chunk — the user message was already persisted to memory on the first chunk;
+    // re-writing it every continuation would duplicate the global chunk.
+    if (!resume && (anyShared || privateAgents.length > 0) && openaiKey) {
       (async () => {
         try {
           const { azurePgStore } = await import("./rag/azure-pg.server");
@@ -397,14 +499,24 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
     }
 
     // ---- Route ----
+    // On a resumed chunk we do NOT re-route (it would waste an LLM call and could pick a different
+    // responder set): the queue + decision come straight from the persisted progress. `routed` is a
+    // thin shell carrying only the frozen decision; the driver reads the remaining queue, not winners.
+    let routed: RouteResult;
+    if (resume) {
+      routed = { winners: [], interjectors: [], decision: resume.decision };
+    } else {
     const explicitMentions = parseMentions(
       data.text,
       AGENTS.filter((a) => data.members.includes(a.id)),
     );
+    // Group @mentions now go THROUGH the LLM router (which augments: mentioned agents are guaranteed
+    // winners AND a prose-named work-owner is still routed — see routing.ts). Previously any @mention
+    // forced the deterministic mention-only route, dropping the prose-named collaborator ("Tess, scope
+    // X, then @cole …" → Cole only). 1:1 and missing-key still fall back to keyword routing below.
     const canLLMRoute =
       data.scope === "group" &&
       !data.targetAgentId &&
-      explicitMentions.length === 0 &&
       (routerCfg.backend === "openai" ? !!openaiKey : !!lovableKey);
 
     if (
@@ -420,7 +532,6 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       );
     }
 
-    let routed: RouteResult;
     if (canLLMRoute) {
       const invocation: RouterInvocation = {
         backend: routerCfg.backend,
@@ -445,12 +556,17 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         },
         invocation,
       );
-      // routeMessageLLM prefixes reason with "LLM fallback:" when it degrades.
+      // routeMessageLLM prefixes reason with "LLM fallback:" when it degrades. Quota
+      // exhaustion must surface LOUDLY (critical) — a silently keyword-routed turn looks
+      // normal but picks the wrong agents, so the user would never realise it's broken.
       if (routed.decision.reason.startsWith("LLM fallback")) {
+        const quota = isQuotaError(routed.decision.reason);
         recordFallback(
           "router",
           routed.decision.reason,
-          "router: LLM router failed, keyword fallback",
+          quota ? QUOTA_OUTAGE_INLINE : "router: LLM router failed, keyword fallback",
+          undefined,
+          quota ? "critical" : "warn",
         );
       }
     } else {
@@ -462,15 +578,35 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         targetAgentId: data.targetAgentId,
       });
     }
+    } // end !resume routing
+
+    // Persist a TERMINAL result in chunked mode. Every exit — the two early returns below and the
+    // normal drained-queue path — routes through here so the durable store always ends 'done'. In the
+    // synchronous path this is a passthrough: no persistence, the exact same object, no `partial` key.
+    const finalize = async <R extends { replies: Reply[] }>(
+      resultObj: R,
+    ): Promise<R | (R & { partial: boolean })> => {
+      if (chunked && turnId && turnStore) {
+        try {
+          await turnStore.saveTurnChunk(turnId, resultObj.replies ?? [], null, true, resultObj);
+        } catch (e) {
+          console.error("[turn-chunk] finalize save failed", e instanceof Error ? e.message : e);
+        }
+        return { ...resultObj, partial: false };
+      }
+      return resultObj;
+    };
 
     // ---- Scrum ceremonies ----
     // A ceremony request (stand-up, retro, sprint planning, sprint review) overrides
     // normal routing: participants become the lane owners + the scrum master, each fed
     // their real slice of the task mirror so nobody improvises progress. Round-robin by
     // default (each owner speaks, host closes); "narrate" mode runs it solo via the host.
-    const ceremonyDirectiveById = new Map<AgentId, string>();
-    let ceremonyActive = false;
-    const ceremonyType = detectCeremony(data.text);
+    // On a resumed chunk the ceremony directives + active flag are rehydrated from progress and
+    // detection is skipped (ceremonyType=null) — the turn was already classified on chunk 1.
+    const ceremonyDirectiveById = new Map<AgentId, string>(resume?.ceremonyDirectives ?? []);
+    let ceremonyActive = resume?.ceremonyActive ?? false;
+    const ceremonyType = resume ? null : detectCeremony(data.text);
     if (ceremonyType) {
       // Resolve the sign-in email (possibly an alias) to the canonical journey email the mirror
       // is keyed on — otherwise an aliased login grounds the ceremony in an empty task set.
@@ -478,7 +614,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       const email = (await resolveTaskEmail(data.caller)) ?? data.caller?.entra_email;
       if (!email) {
         const host = data.members.includes(CEREMONY_HOST) ? CEREMONY_HOST : routed.winners[0];
-        return {
+        return finalize({
           decision: {
             signal: "topic" as const,
             scores: {} as Partial<Record<AgentId, number>>,
@@ -499,7 +635,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           suggestedTasks,
           toolUses,
           reasoning: reasoningSummaries,
-        };
+        });
       }
       try {
         const { getStandupTasks } = await import("./tasks/tasks.server");
@@ -559,8 +695,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       }
     }
 
-    if (routed.winners.length === 0) {
-      return {
+    // A fresh run that routed to nobody ends empty. On resume `routed.winners` is intentionally empty
+    // (the queue comes from progress), so this guard must NOT fire mid-turn.
+    if (!resume && routed.winners.length === 0) {
+      return finalize({
         decision: routed.decision,
         replies: [] as Reply[],
         fallbacks,
@@ -569,7 +707,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         suggestedTasks,
         toolUses,
         reasoning: reasoningSummaries,
-      };
+      });
     }
 
     // ---- Reply transcript ----
@@ -584,16 +722,21 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
     // value beyond the primary's answer. Appended AFTER the primary winners so
     // they see the primary's reply; each self-censors ("PASS") if it turns out
     // to have nothing concrete. Gated by the router's interjections toggle.
-    const interjectorSet = new Set<AgentId>();
-    if (routerCfg.interjections && (routerCfg.maxInterjectors ?? 2) > 0) {
+    // On resume, the interjector membership is rehydrated (an interjector still in the remaining queue
+    // must get its interjector directive when it finally runs). Otherwise derive it from the router.
+    const interjectorSet = new Set<AgentId>(resume?.interjectors ?? []);
+    if (!resume && routerCfg.interjections && (routerCfg.maxInterjectors ?? 2) > 0) {
       for (const id of (routed.interjectors ?? []).slice(0, routerCfg.maxInterjectors ?? 2)) {
         if (data.members.includes(id) && !routed.winners.includes(id)) interjectorSet.add(id);
       }
     }
 
-    const queue: AgentId[] = [...routed.winners, ...interjectorSet];
-    const spoken = new Set<AgentId>();
-    const replies: Reply[] = [];
+    // Queue/spoken/replies: fresh run seeds from routing; a resumed chunk restores the exact mid-turn
+    // position (remaining queue, who already spoke, and every reply so far → complete anti-repetition
+    // anchor + final transcript).
+    const queue: AgentId[] = resume ? [...resume.remainingQueue] : [...routed.winners, ...interjectorSet];
+    const spoken = new Set<AgentId>(resume?.spoken ?? []);
+    const replies: Reply[] = resume ? [...resume.replies] : [];
 
     // Embedding of the user's message for AUTO memory retrieval, computed at most once per turn
     // (undefined = not yet computed, null = embedding failed). Recall must not depend on the model
@@ -605,14 +748,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
     // Normalized titles of tasks already created THIS turn, so multiple responding agents (or a
     // re-run of the same turn) can't create duplicate board cards for one intent. See
     // createSuggestedTaskFromTool below, which claims a title here before writing.
-    const createdTaskTitles = new Set<string>();
+    const createdTaskTitles = new Set<string>(resume?.createdTaskTitles ?? []);
 
     // Decision rights: a turn-scoped ledger of mutating actions already performed this turn, keyed by
     // (tool + normalized args). The FIRST responding agent to perform an action "owns" it; a second
     // winner's identical call is a no-op. Generalizes the task dedup to reminders, emails, and journey
     // writes so two agents in a group turn can't double-fire the same intent. `claimAction` returns
     // false when the action was already done (caller should skip). Read-only tools are never ledgered.
-    const turnActionLedger = new Set<string>();
+    const turnActionLedger = new Set<string>(resume?.claimedActions ?? []);
     const claimAction = (key: string): boolean => {
       const k = key.trim().toLowerCase().slice(0, 240);
       if (turnActionLedger.has(k)) return false;
@@ -625,7 +768,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
     // ask, only the raw reply as context. Record { fromName, ask } here so the mentionee gets a crisp
     // "you were handed this, address exactly it" directive (mirrors the ceremony directive pattern).
     // Ceremonies carry their own directives; grooming is single-agent — this only fills the ad-hoc gap.
-    const handoffById = new Map<AgentId, { fromName: string; ask: string }>();
+    const handoffById = new Map<AgentId, { fromName: string; ask: string }>(resume?.handoffById ?? []);
 
     // A broadcast ("everyone introduce yourselves") means every member should
     // get to speak, so lift the normal per-turn reply cap for that case.
@@ -680,6 +823,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         reason: string,
         inline: string,
         agentId?: AgentId,
+        severity: "warn" | "critical" = "warn",
       ): FallbackEvent => {
         const ev: FallbackEvent = {
           id: `fb-${Date.now()}-${winner.id}-${fbSeq++}`,
@@ -688,6 +832,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           subsystem,
           reason,
           inline,
+          severity,
         };
         fallbacks.push(ev);
         return ev;
@@ -728,9 +873,12 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         : "";
       const isInterjector = interjectorSet.has(nextId);
       const interjectDirective = isInterjector
-        ? `\n\nYou were NOT asked directly — you are interjecting ONLY to surface specific information the primary cannot see. Do NOT repeat, restate, agree with, or react to what the primary said. FIRST use your own tools to look up the user's actual schedule / tasks / contacts for the relevant time, person, or deadline. Then:
-- If your tools return something concrete and relevant (a conflict, a prep note, a risk), reply with ONLY that, one short sentence, leading with the value — e.g. "Heads up — you already have a 12pm investor call."
-- If your tools return nothing relevant, reply with exactly the single word: PASS (nothing before or after it).`
+        ? `\n\nYou were NOT asked directly. Interject ONLY if you can add something URGENT the primary MISSED — one of exactly these two:
+1. A MISSING PIECE the primary needs to get this right that only your lane holds — a specific number, constraint, fact, or a check the primary got wrong or omitted (e.g. "That GTM math skips CAC, so the payback won't hold").
+2. A BLOCKING RISK or CONFLICT in your lane the primary didn't flag — a schedule clash, a budget/deadline/dependency/compliance blocker, a commitment already made.
+Do NOT repeat, restate, agree with, second-opinion, or add color to what the primary said. If you have live tools (schedule/tasks/contacts), check them FIRST. Then:
+- ONLY if you have something concrete that is blocking or completing, reply with ONLY that, one short sentence, leading with the value — e.g. "Heads up — you already have a 12pm investor call."
+- Otherwise — nothing concrete, only agreement/color, or you have no tools/data to check — reply with exactly the single word: PASS (nothing before or after it).`
         : "";
 
       const scene = ` You are ${winner.name} in a ${
@@ -742,8 +890,15 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       }${interjectDirective}${ceremonyDirective}${handoffDirective}`;
 
       const roster = buildRoster(data.members, winner.id);
+      // Data-driven, scope-aware ownership hand-off (agents.ts capabilities). Empty string
+      // when no exclusive-capability owner is in this huddle, so zero prompt overhead then.
+      const capabilityBlock = capabilityHandoffBlock(
+        data.scope === "group" ? "group" : "1:1",
+        data.members,
+      );
       const taskToolInstructions =
-        "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it.";
+        "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it." +
+        " NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled \"groom the backlog\" or \"assign the team\") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked.";
 
       // AUTO memory retrieval: pull the most relevant shared/global memory for THIS agent and inject
       // it into the prompt, so recall works even when the model doesn't call `search_memory`. This is
@@ -812,6 +967,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         scene +
         roster +
         taskToolInstructions +
+        capabilityBlock +
         memoryBlock +
         HOUSE_STYLE;
 
@@ -1063,8 +1219,21 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
           fromSnapshot = !overrideInstructions && !!snapshotInstructions;
           const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
           const { PRIORITIZE_SYSTEM_HINT } = await import("./tasks/tools");
-          const isScrumMaster = winner.id === "terry-locke" || winner.special === "standup-host";
-          const groomHint = isScrumMaster ? "\n\n" + (await import("./tasks/groom")).GROOM_SYSTEM_HINT : "";
+          // Grooming is now gated on the data-driven capability (agents.ts), with the legacy
+          // id/special check kept as a non-destructive fallback so nothing regresses.
+          const ownsGrooming =
+            agentOwnsCapability(winner, "backlog-grooming") ||
+            winner.id === "terry-locke" ||
+            winner.special === "standup-host";
+          let groomHint = "";
+          if (ownsGrooming) {
+            const groom = await import("./tasks/groom");
+            // Scope-aware hand-off: group → do-and-report; 1:1 → defer + confirm first.
+            groomHint =
+              "\n\n" +
+              groom.GROOM_SYSTEM_HINT +
+              (data.scope === "group" ? groom.GROOM_HANDOFF_DO_HINT : groom.GROOM_HANDOFF_CONFIRM_HINT);
+          }
           const { REMINDER_SYSTEM_HINT } = await import("./tasks/reminders");
           // Cache-friendly ordering (see the "prompt-payload efficiency" backlog item): put ALL
           // STABLE content first — persona/snapshot + roster + tool hints + house-style — so OpenAI
@@ -1078,6 +1247,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             (effectiveInstructions || winner.systemPrompt) +
             roster +
             taskToolInstructions +
+            capabilityBlock +
             HOUSE_STYLE +
             ragInstructions +
             webInstructions +
@@ -1255,7 +1425,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
 
           const { PRIORITIZE_TOOL } = await import("./tasks/tools");
           // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
-          const groomTools = isScrumMaster ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
+          const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
           const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
           const mergedTools = [
             createHuddleTaskTool,
@@ -1727,8 +1897,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
             });
           }
 
-          // groom_backlog — scrum-master-only backlog grooming (mirrors the OpenAI path).
-          if (winner.id === "terry-locke" || winner.special === "standup-host") {
+          // groom_backlog — gated on the data-driven grooming capability (agents.ts), with the
+          // legacy id/special check kept as a non-destructive fallback (mirrors the OpenAI path).
+          if (
+            agentOwnsCapability(winner, "backlog-grooming") ||
+            winner.id === "terry-locke" ||
+            winner.special === "standup-host"
+          ) {
             const { dispatchGroomBacklog } = await import("./tasks/groom");
             lovableTools.groom_backlog = tool({
               description:
@@ -2135,17 +2310,21 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : "AI error";
+        const quota = isQuotaError(msg);
         const ev = recordFallback(
           "openai",
           `${winner.name}: model call failed — ${msg}`,
-          `model call failed: ${msg.slice(0, 80)}`,
+          quota ? QUOTA_OUTAGE_INLINE : `model call failed: ${msg.slice(0, 80)}`,
           winner.id,
+          quota ? "critical" : "warn",
         );
         return bundle({
           kind: "hardReply",
           reply: {
             agentId: winner.id,
-            text: `(fallback: ${ev.inline}) couldn't reach the model — ${msg}`,
+            text: quota
+              ? `(couldn't respond — ${QUOTA_OUTAGE_INLINE})`
+              : `(fallback: ${ev.inline}) couldn't reach the model — ${msg}`,
             fallbackNotes: [ev.inline],
           },
         });
@@ -2260,17 +2439,15 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
 
     // Per-agent hard timeout. After parallelization a group turn's wall-time is
     // primary + max(wave agent); OpenAI per-call latency is high-variance, so one stalled agent can
-    // still drag a wave to the ~45s hosting ceiling and 500 the whole turn. Bound each agent: a
-    // straggler is deferred (no reply, logged as a fallback) so the turn returns well under the limit.
-    // NOTE: this races the response only; a truly abandoned call's late tool side-effects aren't
-    // cancelled here (rare). Threading an AbortSignal into the model calls is the follow-up.
-    // GLOBAL turn deadline (~40s leaves headroom under the ~45s ceiling for merge + response
-    // encoding). Each agent is bounded by the time REMAINING to the deadline — critical because the
-    // turn runs the primary sequentially THEN a parallel wave, so a fixed per-agent value would sum
-    // across those phases and still blow the ceiling. A straggler is deferred (no reply, logged).
-    const TURN_DEADLINE_MS = 36_000;
+    // still drag a wave to the deadline. Bound each agent by the time REMAINING to `deadlineMs` (the
+    // 36s sync-path deadline OR the 30s per-chunk budget). NOTE: this races the response only; a
+    // truly abandoned call's late tool side-effects aren't cancelled here (rare). In CHUNKED mode a
+    // higher floor keeps a late-in-chunk agent from getting a near-zero bound that guarantees a
+    // timeout-drop — the pre-wave budget gate re-queues agents there's no room for, so anything that
+    // DOES start gets a workable slice. A per-agent timeout still bounds a single pathological agent.
     const runBounded = (id: AgentId, prior: string): Promise<AgentTurnResult> => {
-      const remaining = Math.max(2_000, TURN_DEADLINE_MS - (Date.now() - turnStartMs));
+      const floor = chunked ? 8_000 : 2_000;
+      const remaining = Math.max(floor, deadlineMs - (Date.now() - turnStartMs));
       return Promise.race([
         runAgentTurn(id, prior),
         new Promise<AgentTurnResult>((resolve) =>
@@ -2299,14 +2476,68 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
       ]);
     };
 
+    // Serialize the exact mid-turn position for a continuation chunk (Sets/Maps → arrays).
+    const buildResumeState = (): TurnResumeState => ({
+      decision: routed.decision,
+      remainingQueue: [...queue],
+      spoken: [...spoken],
+      createdTaskTitles: [...createdTaskTitles],
+      claimedActions: [...turnActionLedger],
+      handoffById: [...handoffById.entries()],
+      interjectors: [...interjectorSet],
+      ceremonyActive,
+      ceremonyDirectives: [...ceremonyDirectiveById.entries()],
+      replyCap,
+      replies,
+      journeyTaskUpdates,
+      suggestedTasks,
+      toolUses,
+      reasoning: reasoningSummaries,
+      fallbacks,
+      prompts,
+    });
+
+    const finalResult = () => ({
+      decision: routed.decision,
+      replies,
+      fallbacks,
+      prompts,
+      journeyTaskUpdates,
+      suggestedTasks,
+      toolUses,
+      reasoning: reasoningSummaries,
+    });
+
+    // Mid-chunk STREAM: push the replies produced so far to the durable store the instant a wave (or
+    // a ceremony agent) lands, so the client's poll renders each reply as it arrives instead of the
+    // whole chunk at once. Keeps status 'running' and does NOT bump the chunk counter (see
+    // updateTurnReplies). No-op on the synchronous path.
+    const streamChunk = async () => {
+      if (!chunked || !turnId || !turnStore) return;
+      try {
+        await turnStore.updateTurnReplies(turnId, replies, buildResumeState());
+      } catch (e) {
+        console.error("[turn-stream] updateTurnReplies failed", e instanceof Error ? e.message : e);
+      }
+    };
+
+    // True once THIS chunk has spent its time budget: stop STARTING new work (agents left in `queue`
+    // are re-queued for the next chunk, never dropped). Only meaningful in chunked mode.
+    const chunkBudgetHit = () => chunked && Date.now() - turnStartMs > CHUNK_BUDGET_MS;
+
     if (ceremonyActive) {
       // Ceremonies stay STRICTLY SEQUENTIAL: each participant (lane owners, then
       // the host/closer) speaks in turn seeing everything said before it.
       while (replies.length < replyCap) {
+        // Chunked: once the budget is spent, stop and let the runner continue the ceremony next chunk
+        // (participants stay in `queue`). The host-closes-last ordering is preserved because the queue
+        // order is preserved across the boundary.
+        if (chunkBudgetHit() && queue.length > 0) break;
         const nextId = shiftEligible();
         if (nextId == null) break;
         const r = await runBounded(nextId, buildPrior());
         mergeAgentResult(nextId, r, [nextId]);
+        await streamChunk();
       }
     } else {
       // Normal group turn: the PRIMARY winner runs first (sequentially) so the
@@ -2319,13 +2550,19 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         if (primaryId != null) {
           const r = await runBounded(primaryId, buildPrior());
           mergeAgentResult(primaryId, r, [primaryId]);
+          await streamChunk();
         }
       }
       while (replies.length < replyCap && queue.length > 0) {
         const frozenPrior = buildPrior();
-        // Past the turn deadline: defer the rest instead of starting another wave whose bounded
-        // timeouts would stack onto the merge/serialize overhead and breach the hosting ceiling.
-        if (Date.now() - turnStartMs > TURN_DEADLINE_MS) {
+        if (Date.now() - turnStartMs > deadlineMs) {
+          if (chunked) {
+            // CHUNKED: budget spent — leave the rest on `queue` (persisted below) and continue next
+            // chunk. Do NOT emit "deferred" fallbacks: nothing is dropped, only time-sliced.
+            break;
+          }
+          // SYNC: past the turn deadline, defer the rest (unchanged behavior) instead of starting
+          // another wave whose bounded timeouts would stack and breach the hosting ceiling.
           for (const id of queue) {
             const a = AGENT_BY_ID[id];
             if (a) recordFallback("tool", `${a.name}: deferred — turn deadline reached before it could run.`, "deferred (deadline)", a.id);
@@ -2348,19 +2585,35 @@ export async function runHuddleTurn(data: z.infer<typeof Input>) {
         for (let i = 0; i < wave.length; i++) {
           mergeAgentResult(wave[i], results[i], wave);
         }
+        await streamChunk();
       }
     }
 
-    return {
-      decision: routed.decision,
-      replies,
-      fallbacks,
-      prompts,
-      journeyTaskUpdates,
-      suggestedTasks,
-      toolUses,
-      reasoning: reasoningSummaries,
-    };
+    // ---- Terminal / continuation persistence (chunked mode only) ----
+    if (chunked && turnId && turnStore) {
+      const remainingEligible = queue.filter(
+        (id) => !spoken.has(id) && AGENT_BY_ID[id] && data.members.includes(id),
+      );
+      // Continue only if there is real work left AND we haven't hit the runaway cap AND the reply cap
+      // still has room. Otherwise finalize DONE with whatever we have.
+      const hasMore = replies.length < replyCap && remainingEligible.length > 0 && !atChunkCap;
+      if (hasMore) {
+        try {
+          await turnStore.saveTurnChunk(turnId, replies, buildResumeState(), false);
+        } catch (e) {
+          console.error("[turn-chunk] partial save failed", e instanceof Error ? e.message : e);
+        }
+        return { ...finalResult(), partial: true };
+      }
+      try {
+        await turnStore.saveTurnChunk(turnId, replies, null, true, finalResult());
+      } catch (e) {
+        console.error("[turn-chunk] done save failed", e instanceof Error ? e.message : e);
+      }
+      return { ...finalResult(), partial: false };
+    }
+
+    return finalResult();
 }
 
 export const sendHuddleMessage = createServerFn({ method: "POST" })
@@ -2388,16 +2641,52 @@ type HuddleTurnResult = Awaited<ReturnType<typeof runHuddleTurn>>;
  * service worker decides whether to actually surface the notification (suppressed if a tab is
  * focused). Shared by the client fast-path and the cron backstop so both behave identically.
  */
+// Self-kick the runner for the NEXT chunk of a partial turn — fast continuation so the user doesn't
+// wait for the 1-min cron. Fire-and-forget POST to this app's own /api/public/run-turn (mirrors
+// journey's drain edge fn), authed with the shared JOURNEY_PROXY_TOKEN (NO new secret). The cron
+// heartbeat remains the guaranteed backstop if this request is frozen before the fetch lands. Base
+// URL: HUDDLE_APP_URL app setting, else the Azure runtime's WEBSITE_HOSTNAME.
+async function kickNextChunk(turnId: string): Promise<void> {
+  const token = (process.env.JOURNEY_PROXY_TOKEN ?? "").trim();
+  if (!token) return;
+  const rawBase =
+    (process.env.HUDDLE_APP_URL ?? "").trim() ||
+    (process.env.WEBSITE_HOSTNAME ? `https://${process.env.WEBSITE_HOSTNAME}` : "");
+  const base = rawBase.replace(/\/$/, "");
+  if (!base) return;
+  try {
+    await fetch(`${base}/api/public/run-turn`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-webhook-secret": token },
+      body: JSON.stringify({ turnId }),
+    });
+  } catch {
+    /* fire-and-forget: the cron drain backstops a lost kick within a minute */
+  }
+}
+
 async function executeClaimedTurn(record: {
   id: string;
   user_email: string | null;
   payload: Record<string, unknown>;
+  progress?: unknown;
 }): Promise<HuddleTurnResult | null> {
-  const { completeTurn, failTurn } = await import("./tasks/turns.server");
+  const { failTurn } = await import("./tasks/turns.server");
   try {
     const data = Input.parse(record.payload);
-    const result = await runHuddleTurn(data);
-    await completeTurn(record.id, result);
+    // DURABLE/CHUNKED run: the driver streams replies and persists the terminal 'done'/'partial' row
+    // itself (saveTurnChunk), so we do NOT completeTurn here. A resumed chunk rebuilds its mid-turn
+    // state from record.progress; a fresh durable run passes resume=undefined.
+    const result = await runHuddleTurn(data, {
+      turnId: record.id,
+      resume: record.progress ?? undefined,
+    });
+    // More agents remain (budget-sliced): kick the next chunk now and defer push until the turn is
+    // fully done (a single "X replied" notification at the end, not one per chunk).
+    if ((result as { partial?: boolean }).partial === true) {
+      void kickNextChunk(record.id);
+      return result;
+    }
     // Fire a push per finished turn (SW suppresses it when the app is focused).
     const lead = result.replies?.[0];
     if (lead) {
@@ -2466,7 +2755,13 @@ export const enqueueHuddleTurn = createServerFn({ method: "POST" })
     const claimed = await claimTurn(turnId);
     if (claimed) {
       const result = await executeClaimedTurn(claimed);
-      if (result) return { turnId, status: "done" as string, result, error: null as string | null };
+      if (result) {
+        // The first chunk ran here. If more agents remain it's 'partial': return the replies produced
+        // so far AND status 'partial' so the client renders them immediately and keeps polling for the
+        // rest (streamed as later chunks land). Otherwise it's fully 'done'.
+        const partial = (result as { partial?: boolean }).partial === true;
+        return { turnId, status: (partial ? "partial" : "done") as string, result, error: null as string | null };
+      }
       const rec = await getTurn(turnId);
       return { turnId, status: (rec?.status ?? "error") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
     }
@@ -2491,11 +2786,17 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
     const { getTurnsSince } = await import("./tasks/turns.server");
     const rows = await getTurnsSince(data.huddleId, data.sinceMs ?? 0);
     // Trim to a serializable DTO (drop the raw payload; type result like the live turn result).
+    // `replies` + `seq` carry the incrementally-streamed per-agent replies for in-flight
+    // ('partial'/'running') turns so the client renders them as they land; `result` is the full
+    // payload set once the turn is 'done'. The client keys agent messages on reply index (idempotent),
+    // so a partial turn re-appearing with more replies just appends the new ones.
     const turns = rows.map((t) => ({
       id: t.id,
       status: t.status as string,
       error: t.error,
       updated_ms: t.updated_ms,
+      seq: t.seq,
+      replies: (t.replies ?? []) as { agentId: AgentId; text: string }[],
       result: (t.result ?? null) as HuddleTurnResult | null,
     }));
     return { turns };

@@ -28,7 +28,17 @@ export const GROOM_BACKLOG_TOOL = {
 } as const;
 
 export const GROOM_SYSTEM_HINT =
-  "When the user asks to groom, triage, organize, assign, or plan the backlog/sprint (a scrum-master job), call `groom_backlog`. It assigns each task to an agent, tags/prioritizes it, respects the team's real capabilities (some tasks can only be scheduled), and reorders the board. Report back what was assigned and what's blocked-on-capability — do not invent an ordering yourself.";
+  "When the user asks you DIRECTLY to groom, triage, organize, assign, or plan the backlog/sprint (a scrum-master job), call `groom_backlog`. It assigns each task to an agent, tags/prioritizes it, respects the team's real capabilities (some tasks can only be scheduled), and reorders the board. Report back what was assigned and what's blocked-on-capability — do not invent an ordering yourself.";
+
+// GROUP hand-off: if a teammate @mentions you to groom, the user already asked in the room —
+// so just do it and report, no permission dance (the user's rule: in a group the owner acts).
+export const GROOM_HANDOFF_DO_HINT =
+  " If a teammate handed this to you in the group (they @mentioned you to groom), the user already asked in the room — go ahead and call `groom_backlog` now, then briefly report what you assigned/reprioritized and why. Do not ask permission again.";
+
+// 1:1 hand-off: you are alone with the user and a teammate flagged that they want grooming; you
+// can't see the originating request, so confirm before acting (the user's rule: 1:1 = defer + confirm).
+export const GROOM_HANDOFF_CONFIRM_HINT =
+  " If you were NOT asked directly — a teammate flagged that the user wants the backlog groomed — do NOT groom yet: greet the user, say who flagged it and what they wanted (e.g. \"Tess let me know you wanted the backlog groomed\"), and ask if they'd like you to do it now. Only call `groom_backlog` once the user gives the go-ahead.";
 
 type Caller = { entra_object_id?: string; entra_email?: string };
 
