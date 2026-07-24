@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '=== MANDATORY DEV DISCIPLINE (enforced by the Stop gate) ==='; echo '1. BEFORE coding any feature/fix/task: run define-acceptance-criteria (spawn the AC subagent to write criteria cold from the source, adversarially).'; echo '2. BEFORE claiming ANY work done/fixed/working/verified: spawn the verifier subagent to DISPROVE each AC with OBSERVED evidence. Never self-grade; \"should work\" is banned.'; echo '3. TRACK every user request in .claude/actions.md (status + evidence link). Read it now; update on real completion only.'; echo '--- .claude/actions.md ---'; cat .claude/actions.md 2>/dev/null || echo '(none yet)'; echo '--- .claude/memory.md (head) ---'; head -40 .claude/memory.md 2>/dev/null || echo '(none yet)'",
+            "statusMessage": "Loading mandatory dev discipline + open actions"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "agent",
+            "model": "claude-haiku-4-5-20251001",
+            "statusMessage": "Verification gate: checking completion claims for observed evidence",
+            "prompt": "You are a hard verification gate on a Stop hook. The hook input JSON is: $ARGUMENTS — it contains transcript_path. Read that transcript file and look ONLY at the assistant's turn since the last real user message.\n\nStep 1 — Is there a COMPLETION CLAIM? A completion claim asserts a feature, bug fix, code change, routing/prompt behavior, or deployment is done / fixed / working / verified / passing / 'now does X'. If there is NO completion claim (the turn is conversation, planning, a question, investigation, or an explicitly-hedged statement like 'deployed but NOT yet verified' / 'this is unverified'), then ALLOW the stop — output nothing blocking.\n\nStep 2 — If there IS a completion claim, require BOTH of these in the transcript, else BLOCK:\n  (a) Acceptance criteria were defined for this work (ideally via the define-acceptance-criteria AC subagent, which writes them cold/adversarially).\n  (b) INDEPENDENT verification of EVERY criterion: either the `verifier` subagent was spawned to disprove the ACs, OR concrete OBSERVED evidence is shown for each criterion — a real test/tool output, a GitHub Actions job conclusion, a captured live API/agent response, a DB query result, a screenshot. A self-assessment, 'looks correct', 'should work', a passing typecheck alone, or evidence for only SOME criteria does NOT satisfy this.\n\nIf (a) or (b) is missing, output a block decision: set continue=false with a stopReason that (1) names the specific claim that is unverified, (2) lists which acceptance criteria have no observed evidence, and (3) instructs: run define-acceptance-criteria if ACs are missing, then spawn the `verifier` subagent to disprove each AC with observed evidence, and update .claude/actions.md — before claiming done. Be specific, not generic. If both (a) and (b) are satisfied, allow the stop."
+          }
+        ]
+      }
+    ]
+  }
+}
