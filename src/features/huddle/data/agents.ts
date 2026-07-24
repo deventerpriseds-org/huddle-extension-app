@@ -37,6 +37,27 @@ export type AgentId =
 
 export type AgentTone = "warm" | "direct" | "coach" | "wry" | "formal";
 
+/**
+ * An EXCLUSIVE capability: a specific responsibility (usually backed by a tool or
+ * authority) that only the owning agent may perform. It is the data-driven backbone
+ * of ownership-aware handoff — no agent name is hardcoded anywhere in the runtime;
+ * "who owns grooming" is answered by reading this field. Add a capability here and it
+ * automatically flows into the roster surfaced to every agent, the router's ownership
+ * rule, and the scope-aware hand-off behaviour — for EVERY agent, no per-case code.
+ *
+ * Distinct from `domains`/`themes`, which are broad ROUTING lanes (topics an agent is
+ * good at). A capability is a narrow, exclusive POWER others must hand off, not merely
+ * a lane they could also speak to.
+ */
+export interface AgentCapability {
+  /** stable id, e.g. "backlog-grooming". */
+  id: string;
+  /** human phrase used in prompts and the roster, e.g. "backlog grooming, triage & sprint/board assignment". */
+  label: string;
+  /** true = only the owning agent may perform it; every other agent must hand off. */
+  exclusive?: boolean;
+}
+
 export interface Agent {
   id: AgentId;
   name: string;
@@ -49,6 +70,8 @@ export interface Agent {
   tone: AgentTone;
   voiceId: string;
   special?: "coordinator" | "standup-host" | "queue-owner";
+  /** Exclusive powers this agent owns (data-driven ownership; see AgentCapability). */
+  capabilities?: AgentCapability[];
   systemPrompt: string;
   avatarUrl?: string;
 }
@@ -66,6 +89,13 @@ export const AGENTS: Agent[] = [
     colorVar: "--agent-slate",
     domains: ["ceremonies", "sprint", "retro", "review", "cadence", "timeboxes", "impediments", "standups", "process"],
     themes: ["standup", "sprint planning", "review", "retro", "burndown", "unblock", "impediment", "timebox", "cadence", "ceremony", "check-in"],
+    capabilities: [
+      {
+        id: "backlog-grooming",
+        label: "backlog grooming, triage & sprint/board assignment",
+        exclusive: true,
+      },
+    ],
     tone: "direct",
     voiceId: "terry",
     avatarUrl: terryAsset.url,

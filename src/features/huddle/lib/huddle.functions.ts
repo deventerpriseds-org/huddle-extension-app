@@ -6,6 +6,7 @@ import type { HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
 import { parseMentions, routeMessage, routeMessageLLM, type RouterInvocation, type RouteResult } from "./routing";
 import type { FallbackEvent, PromptDebug } from "./fallbacks";
 import { buildRoster } from "./roster";
+import { agentOwnsCapability, ownershipDirectory } from "./capabilities";
 import {
   detectCeremony,
   buildCeremonyReport,
@@ -107,8 +108,37 @@ const MAX_REPLIES_PER_TURN = 4;
 const HOUSE_STYLE =
   "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
   " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it \"has been sent\" or \"is done\" when it has not. Email specifically: text you write in the chat is \"draft text\" — only say you \"saved a draft to your inbox\" if you called the create_email_draft tool and it returned success, and only say an email was \"sent\" if send_email returned success." +
-  " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message." +
-  " Capability hand-off: backlog grooming, triage, and sprint/board assignment are the scrum master's job (@terry-locke). If you are asked to groom, triage, or assign the backlog and you are NOT the scrum master, do NOT attempt it and do NOT create a task about it — politely say the scrum master is better suited, tell the user you'll bring him in, and end your reply with @terry-locke (the mention IS the hand-off, so he gets pulled in). Same principle for any capability another agent owns.";
+  " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message.";
+
+// Scope-aware ownership hand-off — generated from `agent.capabilities` (agents.ts), NOT
+// hardcoded to any agent or job. Appended to every agent's instructions when the huddle
+// contains at least one exclusive-capability owner. It encodes the two behaviours the user
+// wants, and they differ by SCOPE:
+//   • group — the owner is in the room, so whoever owns the job just DOES it and reports
+//     what/why ("took care of it because …"); a non-owner neither attempts it nor files a
+//     meta-task, it @mentions the owner to pull them in.
+//   • 1:1  — the owner is NOT in the conversation, so the addressed agent DEFERS: it tells
+//     the user the owner is better suited and that it'll let them know, and @mentions them
+//     to follow up. No agent ever performs an exclusive job it doesn't own.
+// This is the systematic version of the earlier grooming-only clause: it covers every
+// exclusive capability of every agent, present or future, with no per-case code.
+function capabilityHandoffBlock(
+  scope: "group" | "1:1",
+  members: readonly AgentId[],
+): string {
+  const directory = ownershipDirectory(members);
+  if (!directory) return "";
+  const rule =
+    scope === "group"
+      ? "In this group huddle the owner is present. If you are asked to do an exclusive job you do NOT own, do NOT attempt it and do NOT create a task about it — @mention the owner so they pick it up. If YOU own the job being asked for, just do it and briefly say what you did and why (e.g. \"took care of grooming — the backlog was stale\"); do not ask permission first or defer."
+      : "This is a 1:1, so the owner is NOT here. If you are asked to do an exclusive job you do NOT own, do NOT attempt it and do NOT create a task about it — tell the user that teammate is better suited and that you'll let them know what they need, and @mention the owner so they can follow up with the user. Only the owner ever performs it.";
+  return (
+    "\n\nExclusive capabilities (only the named owner may perform each — the [owns: …] tags in the roster):\n" +
+    directory +
+    "\n" +
+    rule
+  );
+}
 
 // Deterministic backstop for co-answer echo: a weak router model sometimes
 // ignores the "don't repeat what was already said" instruction and re-emits a
@@ -850,6 +880,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       }${interjectDirective}${ceremonyDirective}${handoffDirective}`;
 
       const roster = buildRoster(data.members, winner.id);
+      // Data-driven, scope-aware ownership hand-off (agents.ts capabilities). Empty string
+      // when no exclusive-capability owner is in this huddle, so zero prompt overhead then.
+      const capabilityBlock = capabilityHandoffBlock(
+        data.scope === "group" ? "group" : "1:1",
+        data.members,
+      );
       const taskToolInstructions =
         "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it." +
         " NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled \"groom the backlog\" or \"assign the team\") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked.";
@@ -921,6 +957,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         scene +
         roster +
         taskToolInstructions +
+        capabilityBlock +
         memoryBlock +
         HOUSE_STYLE;
 
@@ -1172,8 +1209,21 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           fromSnapshot = !overrideInstructions && !!snapshotInstructions;
           const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
           const { PRIORITIZE_SYSTEM_HINT } = await import("./tasks/tools");
-          const isScrumMaster = winner.id === "terry-locke" || winner.special === "standup-host";
-          const groomHint = isScrumMaster ? "\n\n" + (await import("./tasks/groom")).GROOM_SYSTEM_HINT : "";
+          // Grooming is now gated on the data-driven capability (agents.ts), with the legacy
+          // id/special check kept as a non-destructive fallback so nothing regresses.
+          const ownsGrooming =
+            agentOwnsCapability(winner, "backlog-grooming") ||
+            winner.id === "terry-locke" ||
+            winner.special === "standup-host";
+          let groomHint = "";
+          if (ownsGrooming) {
+            const groom = await import("./tasks/groom");
+            // Scope-aware hand-off: group → do-and-report; 1:1 → defer + confirm first.
+            groomHint =
+              "\n\n" +
+              groom.GROOM_SYSTEM_HINT +
+              (data.scope === "group" ? groom.GROOM_HANDOFF_DO_HINT : groom.GROOM_HANDOFF_CONFIRM_HINT);
+          }
           const { REMINDER_SYSTEM_HINT } = await import("./tasks/reminders");
           // Cache-friendly ordering (see the "prompt-payload efficiency" backlog item): put ALL
           // STABLE content first — persona/snapshot + roster + tool hints + house-style — so OpenAI
@@ -1187,6 +1237,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             (effectiveInstructions || winner.systemPrompt) +
             roster +
             taskToolInstructions +
+            capabilityBlock +
             HOUSE_STYLE +
             ragInstructions +
             webInstructions +
@@ -1364,7 +1415,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 
           const { PRIORITIZE_TOOL } = await import("./tasks/tools");
           // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
-          const groomTools = isScrumMaster ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
+          const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
           const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
           const mergedTools = [
             createHuddleTaskTool,
@@ -1836,8 +1887,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             });
           }
 
-          // groom_backlog — scrum-master-only backlog grooming (mirrors the OpenAI path).
-          if (winner.id === "terry-locke" || winner.special === "standup-host") {
+          // groom_backlog — gated on the data-driven grooming capability (agents.ts), with the
+          // legacy id/special check kept as a non-destructive fallback (mirrors the OpenAI path).
+          if (
+            agentOwnsCapability(winner, "backlog-grooming") ||
+            winner.id === "terry-locke" ||
+            winner.special === "standup-host"
+          ) {
             const { dispatchGroomBacklog } = await import("./tasks/groom");
             lovableTools.groom_backlog = tool({
               description:
