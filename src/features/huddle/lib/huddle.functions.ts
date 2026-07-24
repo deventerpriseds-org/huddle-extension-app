@@ -6,7 +6,7 @@ import type { HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
 import { parseMentions, routeMessage, routeMessageLLM, type RouterInvocation, type RouteResult } from "./routing";
 import { isQuotaError, QUOTA_OUTAGE_INLINE, type FallbackEvent, type PromptDebug } from "./fallbacks";
 import { buildRoster } from "./roster";
-import { agentOwnsCapability, ownershipDirectory } from "./capabilities";
+import { agentOwnsCapability, exclusiveCapabilities } from "./capabilities";
 import {
   detectCeremony,
   buildCeremonyReport,
@@ -126,15 +126,24 @@ const HOUSE_STYLE =
 function capabilityHandoffBlock(
   scope: "group" | "1:1",
   members: readonly AgentId[],
+  selfId: AgentId,
 ): string {
-  const directory = ownershipDirectory(members);
-  if (!directory) return "";
+  // Which exclusive owners to surface depends on scope. GROUP: only owners actually present
+  // (they can be @mentioned into the turn). 1:1: the owner is NEVER in a 1:1 (a DM has one
+  // agent), so filtering by members would yield NOTHING and the addressed agent would get no
+  // hand-off instruction — the exact bug where Tess improvised grooming instead of deferring.
+  // Use the FULL roster in a 1:1 so ownership is known even though the owner isn't in the room.
+  const owned = scope === "1:1" ? exclusiveCapabilities() : exclusiveCapabilities(members);
+  if (owned.length === 0) return "";
+  const directory = owned
+    .map((o) => `- ${o.cap.label} → @${o.agent.handle}${o.agent.id === selfId ? " (you own this)" : ""}`)
+    .join("\n");
   const rule =
     scope === "group"
-      ? "In this group huddle the owner is present. If you are asked to do an exclusive job you do NOT own, do NOT attempt it and do NOT create a task about it — @mention the owner so they pick it up. If YOU own the job being asked for, just do it and briefly say what you did and why (e.g. \"took care of grooming — the backlog was stale\"); do not ask permission first or defer."
-      : "This is a 1:1, so the owner is NOT here. If you are asked to do an exclusive job you do NOT own, do NOT attempt it and do NOT create a task about it — tell the user that teammate is better suited and that you'll let them know what they need, and @mention the owner so they can follow up with the user. Only the owner ever performs it.";
+      ? "If you are asked to do an exclusive job you do NOT own, do NOT attempt it and do NOT create a task about it — @mention the owner so they pick it up. If YOU own the job being asked for, just do it and briefly say what you did and why (e.g. \"took care of grooming — the backlog was stale\"); do not ask permission first or defer."
+      : "This is a 1:1 and the owner is NOT here. If you are asked to do an exclusive job you do NOT own, do NOT attempt it, do NOT improvise your own version of it (no grooming pass, no proposing owner assignments), and do NOT create a task about it. Say plainly that the owner is better suited and that you'll let them know, then @mention the owner (e.g. \"@terry-locke\") — the system will have them follow up with you. If YOU are the owner, just do it.";
   return (
-    "\n\nExclusive capabilities (only the named owner may perform each — the [owns: …] tags in the roster):\n" +
+    "\n\nExclusive capabilities — only the named owner may perform each:\n" +
     directory +
     "\n" +
     rule
@@ -921,6 +930,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       const capabilityBlock = capabilityHandoffBlock(
         data.scope === "group" ? "group" : "1:1",
         data.members,
+        winner.id,
       );
       const taskToolInstructions =
         "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it." +
