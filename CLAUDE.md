@@ -180,6 +180,32 @@ mismatches, both group and 1:1), not just the one case that surfaced it. A one-o
 handles the reported example is a regression against this principle; rework it into the systematic
 mechanism. Same spirit as the router rule below (roster-driven, no hardcoded per-agent lists).
 
+### Ownership-aware hand-off = data-driven capabilities (the systematic version)
+"Who exclusively owns what" is **data** on the agent, never a hardcoded name. `Agent.capabilities:
+AgentCapability[]` (agents.ts) declares each agent's EXCLUSIVE powers (`{id,label,exclusive}`); Terry
+owns `backlog-grooming`. Everything reads it through **`lib/capabilities.ts`** (`agentOwnsCapability`,
+`exclusiveCapabilities`, `ownerOfCapability`, `ownershipMarker`, `ownershipDirectory`) — the single
+source of ownership truth. It flows to three consumers with ZERO per-agent code:
+- **Roster** (`buildRoster`) appends each teammate's ` [owns: …]` marker, so every agent learns who to
+  hand any exclusive job to. **Router** (`routing.ts`) surfaces the same marker on its roster line and
+  its CAPABILITY OWNERSHIP rule keys off `[owns: …]` (not `role === "Scrum master"`).
+- **Scope-aware hand-off** (`capabilityHandoffBlock(scope, members)` in huddle.functions.ts, appended
+  to every agent's instructions): **group** = the owner just DOES it and reports what/why (no permission
+  dance); a non-owner neither attempts it nor files a meta-task, it @mentions the owner. **1:1** = the
+  owner isn't in the room, so the addressed agent DEFERS ("Terry's better suited, I'll let him know")
+  and @mentions the owner. The grooming hint (`groom.ts`) is split the same way — `GROOM_HANDOFF_DO_HINT`
+  (group) vs `GROOM_HANDOFF_CONFIRM_HINT` (1:1).
+- **Exclusive-tool gating** (`groom_backlog`) is `agentOwnsCapability(winner,"backlog-grooming")` in
+  both dispatch paths, with the legacy `id==="terry-locke" || special==="standup-host"` kept as a
+  non-destructive fallback. Add a capability to any agent (or a new agent) → all of the above covers it.
+- **Task discipline:** `taskToolInstructions` forbids creating a task that merely restates an action the
+  agent was asked to PERFORM (the board is the USER's, not an agent scratchpad). Adding an agents' own
+  personal backlog (off the user's board) is the follow-on; 1:1 cross-huddle "message from Terry" plumbing
+  (reuse `send_push`) is the other follow-on.
+- Domain/theme routing (finance→Finn, travel→Troy, dinner→Charleston, fitness→Flex) is the ROUTER's job
+  and is already roster-driven; exclusive *capabilities* are the narrow powers layered on top. Prove with
+  `.claude/skills/test-agent-serverfn/scripts/capability-ownership-test.mjs`.
+
 ## Routing is the auto-scaling brain — fix multi-agent behavior THERE, not with regex (relearned)
 We ALREADY have a router (`src/features/huddle/lib/routing.ts`); do not bolt on hardcoded
 agent lists or verb-regexes to steer who responds — they won't keep up as agents are added.
