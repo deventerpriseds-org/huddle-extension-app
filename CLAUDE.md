@@ -199,12 +199,27 @@ source of ownership truth. It flows to three consumers with ZERO per-agent code:
 - **Roster** (`buildRoster`) appends each teammate's ` [owns: …]` marker, so every agent learns who to
   hand any exclusive job to. **Router** (`routing.ts`) surfaces the same marker on its roster line and
   its CAPABILITY OWNERSHIP rule keys off `[owns: …]` (not `role === "Scrum master"`).
-- **Scope-aware hand-off** (`capabilityHandoffBlock(scope, members)` in huddle.functions.ts, appended
-  to every agent's instructions): **group** = the owner just DOES it and reports what/why (no permission
-  dance); a non-owner neither attempts it nor files a meta-task, it @mentions the owner. **1:1** = the
-  owner isn't in the room, so the addressed agent DEFERS ("Terry's better suited, I'll let him know")
-  and @mentions the owner. The grooming hint (`groom.ts`) is split the same way — `GROOM_HANDOFF_DO_HINT`
-  (group) vs `GROOM_HANDOFF_CONFIRM_HINT` (1:1).
+- **Scope-aware hand-off** (`capabilityHandoffBlock(scope, members, selfId)` in huddle.functions.ts,
+  appended to every agent's instructions): **group** = the owner just DOES it and reports what/why (no
+  permission dance); a non-owner neither attempts it nor files a meta-task, it @mentions the owner. **1:1**
+  = the owner isn't in the room, so the addressed agent DEFERS by **NAME** ("Terry's better suited, I'll
+  loop him in") — **NO @handle in a 1:1** (@ is group-only; the owner isn't present to mention). The
+  grooming hint (`groom.ts`) is split the same way — `GROOM_HANDOFF_DO_HINT` (group) vs
+  `GROOM_HANDOFF_CONFIRM_HINT` (1:1).
+- **1:1 owner follow-up = deterministic back-channel, NOT @-parsing** (huddle.functions.ts). After a 1:1
+  deferral, the runtime resolves the owner from DATA — `capabilityOwnerFor(text)` (exclusive-capability
+  triggers on `agents.ts`) ?? `laneOwnerFor(text, self)` (domain/theme lane) — and `deliverOwnerFollowup`
+  **enqueues a REAL durable turn** (`enqueueTurn`+`kickNextChunk`) in the owner's own DM (`dm-<owner>`).
+  It rides the SAME path as every reply, so it fires the existing away-notification (send_push → Android
+  bridge) with zero new sender. The owner's directive uses careful **"tapped/passed/mentioned by <X>"**
+  language so it knows it was passed to and is replying in ITS OWN channel — it did NOT join the other
+  agent's 1:1 — and it asks the user to confirm before acting. Idempotent id (`followup-<huddle>-<owner>-
+  <ask-slug>`) so a retry can't double-notify. Verified live (AC-1..AC-6) in dm-terry-locke + dm-finn-reid.
+- **Meta-task guard (code, not prompt).** A small model sometimes ignores the prose "don't file a task
+  about it" rule and files a card restating the handed-off job. `createSuggestedTaskFromTool` enforces it
+  deterministically: if `capabilityOwnerFor(title)` resolves an exclusive owner ≠ the filer, the create is
+  a deferred no-op (no card). Data-driven off capability triggers (covers every agent), mirrors the
+  `groom_backlog` exclusive-tool gate; genuine to-dos match no trigger and are untouched.
 - **Exclusive-tool gating** (`groom_backlog`) is `agentOwnsCapability(winner,"backlog-grooming")` in
   both dispatch paths, with the legacy `id==="terry-locke" || special==="standup-host"` kept as a
   non-destructive fallback. Add a capability to any agent (or a new agent) → all of the above covers it.

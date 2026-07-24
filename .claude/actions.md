@@ -6,22 +6,7 @@ Last updated: 2026-07-24
 
 ## Open
 
-### ACT-1: 1:1 ownership hand-off — natural defer + proactive owner follow-up
-**Asked for:** In a 1:1, when the ask belongs to another agent (by exclusive tool OR domain/theme),
-the addressed agent naturally acknowledges the pass, then the owner pings the user proactively —
-and the owner's message acknowledges *who contacted them and why* ("Tess reached out because you
-wanted …"). **@ is group-only** — never used in a 1:1; the follow-up is triggered by a back-channel
-(the runtime's deterministic ownership logic), NOT by parsing an @mention from the reply text.
-**Acceptance criteria:**
-- AC-1: 1:1 grooming ask → addressed agent defers to Terry (no tool, no task). — **PASS** (verifier).
-- AC-2: 1:1 budget ask → defers to Finn. — **PASS** (verifier).
-- AC-3: In-lane ask → answers self, no handoff. — **PASS** (verifier).
-- AC-4: After a deferral, the OWNER proactively messages the user (own DM + push), acknowledging who
-  passed it and the context, phrased naturally. — **IN REWORK** (first build used @-parsing + fired
-  regardless; reworking to: no @ in 1:1, system-triggered from ownership, natural two-sided phrasing).
-- AC-5 (new): the addressed agent's defer reads naturally (acknowledges the pass), NO @handle in 1:1.
-**Status:** in-progress — AC-1/2/3 PASS; AC-4/AC-5 in rework (design approved: system-fires, natural).
-**Branch/PR:** `fix-1to1-capability-defer` (NOT merged)
+_(ACT-1 moved to Closed 2026-07-24 — see below.)_
 
 ### ACT-2: Enforce mandatory skills (AC / verify / track / remember / verifier)
 **Status:** done (pending activation) — hard gate (a–d) in huddle `.claude/settings.json` + eds-skills
@@ -51,6 +36,27 @@ deliver the summary to the user.
 verify why summaries aren't reaching the user.
 
 ## Closed
+
+### ACT-1: 1:1 ownership hand-off — natural defer + proactive owner follow-up
+**Closed 2026-07-24.** In a 1:1, when the ask belongs to another agent (exclusive tool OR domain/theme),
+the addressed agent defers by NAME (no @ — group-only), and the runtime brings the owner in via a
+deterministic back-channel: the owner posts a REAL durable turn in their own DM (`dm-<owner>`) — which
+rides the existing send_push away-notification — acknowledging who passed it and asking to confirm first.
+**Acceptance criteria (all PASS — independent verifier over live turns on the deployed SWA):**
+- AC-1: 1:1 grooming ask → Iris defers to Terry by name, no grooming performed. — **PASS**.
+- AC-2: 1:1 budget ask → Iris defers to Finn by name. — **PASS**.
+- AC-3: In-lane ask → Finn answers self, no handoff. — **PASS**.
+- AC-4: OWNER proactively messages in their OWN DM, names who passed it + context, natural
+  "passed/mentioned by X" phrasing, asks to confirm before acting. Observed in dm-terry-locke +
+  dm-finn-reid. — **PASS**.
+- AC-5: Defer reads naturally, NO @handle in the 1:1. — **PASS**.
+- AC-6 (regression guard): non-owner leaves NO meta-task card even if the tool is attempted
+  (`capabilityOwnerFor(title)` code guard). RE-TEST: attempted, `tasks:[]`. — **PASS**.
+**Evidence:** commits 2b2fef2 (back-channel + durable follow-up + no-@) + 658144b (meta-task guard);
+deployed via deploy-swa.yml (runs 30132395350 + follow-on, both success); verifier verdict all-PASS.
+**Residual (non-blocking):** model still *attempts* the blocked meta-task on one wording (guard catches
+it); away-push reaching the phone is by-design (proven send_push path) but not separately re-proven here.
+**Branch:** `fix-1to1-capability-defer` (PR open).
 
 ### ACT-0: Remove test-task clutter from the production board
 **Closed 2026-07-24.** Evidence: journey-voice `cleanup-test-tasks` run — spam 176/176 + dups deleted;

@@ -31,9 +31,10 @@ never clutters the user's task board. TanStack Start + React 19 + Vite + Nitro �
 ## Feature status
 | Feature | Status | Notes |
 |---|---|---|
-| 1:1 capability defer (grooming→Terry) | done (verified live) | Tess defers, no tool/task — harness observed |
+| 1:1 capability defer (grooming→Terry) | done (verified live) | Iris defers by NAME, no @, no task — harness observed |
 | 1:1 domain lane handoff (budget→Finn) | done (verified live) | `laneOwnerFor`; AC-1/2/3 PASS observed |
-| 1:1 owner follow-up delivery (owner actually messages) | NOT BUILT | AC-4 of ACT-1 — the real remaining gap |
+| 1:1 owner follow-up delivery (owner actually messages) | done (verified live) | AC-4/5/6 PASS (verifier). Back-channel `capabilityOwnerFor`/`laneOwnerFor` → `deliverOwnerFollowup` enqueues a REAL durable turn in `dm-<owner>` (rides send_push away-notif). Owner turns observed in dm-terry-locke + dm-finn-reid, "passed/mentioned by X" phrasing, confirm-before-act. |
+| meta-task guard (non-owner can't file exclusive-job card) | done (verified live) | `capabilityOwnerFor(title)` in `createSuggestedTaskFromTool` → deferred no-op. RE-TEST: tool attempted, `tasks:[]`. |
 | create_huddle_task cross-turn dedup | deployed, UNVERIFIED | merged PR #5; needs verifier |
 | Quota surfacing + file-search fix | deployed, UNVERIFIED | merged in PR #4 |
 | Board test-task cleanup | done (verified) | 523 → 247 via journey REST workflow |
@@ -62,9 +63,20 @@ Every mistake must make the next session more efficient. Append, never delete.
   pause and re-prompt when the user returns; never assume a "no."
 - [2026-07-24] MISTAKE: skipped the `remember` skill entirely (no memory.md). GUARDRAIL: this file + SessionStart
   hook surfaces `## Active work` + `## Hardening`.
+- [2026-07-24] MISTAKE: first AC-4 build delivered the owner follow-up via a dead-end promise (`insertProactiveTurn`,
+  a bare done-row) that never fired the away-notification, and detected the owner by @-parsing the reply (@ is
+  group-only). ROOT CAUSE: reached for a new bespoke delivery path instead of the proven one. GUARDRAIL: owner
+  follow-up now enqueues a REAL durable turn (`enqueueTurn`+`kickNextChunk`) on the SAME path as every reply, so it
+  rides send_push automatically; detection is deterministic (`capabilityOwnerFor`/`laneOwnerFor`), never @-parsed.
+- [2026-07-24] MISTAKE: two prose "do NOT file a task" prohibitions still let a small model file a meta-task on a
+  handoff (Iris → "Groom and triage the backlog"). ROOT CAUSE: relying on negative prompt wording for compliance.
+  GUARDRAIL: deterministic code guard — `capabilityOwnerFor(title)` in `createSuggestedTaskFromTool` short-circuits
+  a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
-Current task: ACT-1 — make the 1:1 owner FOLLOW-UP real (AC-4): after a deferral, the owner (Terry/Finn)
-  posts a message the user sees (their DM turn + send_push). Defer/lane parts are done+verified.
-Files in flight: huddle.functions.ts (capabilityHandoffBlock, laneDirective), routing.ts (laneOwnerFor).
-Branch: `fix-1to1-capability-defer` (NOT merged). Next step: build AC-4 delivery, then run the verifier subagent over AC-1..4.
+ACT-1 (1:1 ownership hand-off) is COMPLETE and verified live end-to-end: AC-1..AC-6 PASS via independent verifier
+against the deployed SWA (branch `fix-1to1-capability-defer`, commits 2b2fef2 + 658144b). Next: open/refresh the PR,
+then pick up ACT-4/5/6 (auto grooming, agents self-start/blocked, ceremonies + standup summaries — each needs an AC
+pass first). Residual (non-blocking): the model still *attempts* the now-blocked meta-task on one wording; and the
+away-push actually reaching the phone is by-design (rides the proven send_push path) but was not separately re-proven
+this pass — worth a targeted push check when convenient.
