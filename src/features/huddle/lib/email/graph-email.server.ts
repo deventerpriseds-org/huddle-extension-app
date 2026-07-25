@@ -39,7 +39,7 @@ export function graphEmailConfigured(): boolean {
   );
 }
 
-async function getAppToken(): Promise<string> {
+export async function getAppToken(): Promise<string> {
   const tenant = firstEnv(["ENTRA_TENANT_ID", "AZURE_TENANT_ID"]);
   const clientId = firstEnv(["GRAPH_CLIENT_ID", "AZURE_CLIENT_ID"]);
   const secret = firstEnv(["GRAPH_CLIENT_SECRET", "AZURE_CLIENT_SECRET"]);

@@ -37,7 +37,8 @@ never clutters the user's task board. TanStack Start + React 19 + Vite + Nitro �
 | meta-task guard (non-owner can't file exclusive-job card) | done (verified live) | `capabilityOwnerFor(title)` in `createSuggestedTaskFromTool` → deferred no-op. RE-TEST: tool attempted, `tasks:[]`. |
 | ACT-4 auto backlog grooming (cadence) | done (verified live) | `runScheduledGrooming` + `run-grooming` route; change-gated (`backlogSignature`), summary in dm-terry-locke + push. Live: force groom `groomed:15`, mirror 27/49 assigned, non-force `skipped:unchanged`. |
 | General recurring-job scheduler (Azure Huddle PG) | done (verified live) | `tasks.scheduled_jobs` + `runDueScheduledJobs`, driven by the existing every-minute run-turn tick. Self-registered `groom-<user>` with DST-correct `next_run_at`. Ceremonies/digests ride it next. |
-| Artifact store Phase 1 (agent artifacts + review) | backend verified live; UI unverified-headlessly | Azure Blob (`huddle-artifacts`, private, 15-min read SAS) + `artifacts.items` in RAG_AI_Agents. `lib/artifacts/{blob,artifacts.server,artifacts.functions}.ts` + `ArtifactsView` (rail view). Live: create→blob+row, SAS read 200 / bare 409, approve records reviewer+ts, status CHECK rejects invalid. UI built+typechecks+bundles but not click-tested. Phase 2/3 = OneDrive(Graph)/Google Drive mirror (cols null now). |
+| Artifact store Phase 1 (agent artifacts + review) | backend verified live; UI verified headlessly (Playwright) | Azure Blob (`huddle-artifacts`, private, 15-min read SAS) + `artifacts.items` in RAG_AI_Agents. `lib/artifacts/{blob,artifacts.server,artifacts.functions}.ts` + `ArtifactsView` (rail view). Live: create→blob+row, SAS read 200 / bare 409, approve records reviewer+ts, status CHECK rejects invalid. |
+| Artifact store Phase 2 (one-way OneDrive mirror) | done (verified live, verifier all-PASS AC-1..9) | Reuses app-only Graph `getAppToken` (no new secret); `PUT .../drive/root:/Huddle Artifacts/{lane}/{name}:/content` (path-keyed = idempotent overwrite). `artifacts.mirror_config` (email PK, 3 bools default true) + `getMirrorConfigFn`/`setMirrorConfigFn`/`mirrorArtifactFn` + on-approve NON-FATAL mirror in `reviewArtifactFn`. `onedrive.server.ts`. UI: `ArtifactMirroringPanel` (Settings→Account) + "Mirror now". **Live:** config round-trip on/on/on; approve ok=true despite mirror `needsConsent` (403 — Graph app lacks `Files.ReadWrite.All` consent, an ADMIN grant not a code fix); gdrive `{deferred:true}` (Phase 3). Verify: `mirror-verify.mjs`. PR #10. |
 | create_huddle_task cross-turn dedup | deployed, UNVERIFIED | merged PR #5; needs verifier |
 | Quota surfacing + file-search fix | deployed, UNVERIFIED | merged in PR #4 |
 | Board test-task cleanup | done (verified) | 523 → 247 via journey REST workflow |
@@ -86,6 +87,12 @@ ACT-4 residuals to fold into ACT-5: Terry's summary omitted the blocked items; `
 in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's tail (16+) un-groomed.
 
 ## Hardening (append)
+- [2026-07-25] MISTAKE: `deleteArtifact` ignored `deleteArtifactBlob`'s return, so a transient blob-delete
+  error would still delete the metadata row → orphaned bytes (the exact state the blob-first ordering
+  exists to prevent). Caught by the verifier subagent (AC-A2), not self-caught. ROOT CAUSE: swallowed +
+  unchecked boolean. GUARDRAIL: on a blob-delete failure, KEEP the row (it's the retry handle) and surface
+  the error via `deleteArtifactFn` → `{ok:false, error}`. Lesson: when a helper returns a success boolean,
+  the caller must branch on it — don't let "fire and continue" defeat an ordering invariant.
 - [2026-07-25] MISTAKE: framed "can't verify from the session" as needing a merge because of the secret. ROOT
   CAUSE: conflated two things. JOURNEY_PROXY_TOKEN is an org secret (available to any Actions run) — it's just not
   in the CCR session shell; the real merge-gate is GitHub's rule that a NEW workflow_dispatch file must be on the

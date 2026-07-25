@@ -97,6 +97,18 @@ it); away-push reaching the phone is by-design (proven send_push path) but not s
   OOXML/PDF/MD; **one-way** OneDrive(Graph)/Google Drive(journey tokens) mirror deferred to Phase 2/3 (cols null now).
   Reuse the org storage account (not dedicated). Phase 1 (store + review UI) built + backend verified live; UI
   click-through not yet done. Mockup: artifact-store-mockup.
+  - **Phase 2 (OneDrive mirror) DONE 2026-07-25** — one-way, path-keyed idempotent PUT via the existing app-only
+    Graph `getAppToken` (NO new secret); `artifacts.mirror_config` (3 bools default true) + on-approve NON-FATAL
+    mirror + manual `mirrorArtifactFn` + Settings toggles; gdrive `{deferred:true}` (Phase 3). Verifier all-PASS
+    (AC-1..9), PR #10. **Blocked on an ADMIN grant, not code:** the Graph app needs `Files.ReadWrite.All`
+    application permission + admin consent; until then the mirror cleanly returns `needsConsent:true` (approve still
+    succeeds). Grant it to turn mirroring on — nothing in the app changes. Follow-ups: >4MB artifacts need a Graph
+    upload session (current `SIMPLE_UPLOAD_MAX=4MB` returns a clean error); no artifact DELETE fn yet (test artifacts
+    seeded by `mirror-verify.mjs` live in an isolated `_mirror-test` folder — add a `deleteArtifactFn` to clean up).
+  - **Deferred (per user, 2026-07-25): daily "expectation vs reality" self-check job** — reviews chats to find bad
+    responses + compares actual calendar/actions vs an expectation checklist; user can run it on demand any time of
+    day. Design + `.claude/expectations.md` approved. Build **after the auto-work completes (post-ACT-5)**, per
+    "save that for when we have the auto work completing."
 - [2026-07-25] Recurring jobs run on a GENERAL heartbeat dispatcher in **Azure Huddle PG** (`tasks.scheduled_jobs`
   + `runDueScheduledJobs`), driven by the existing every-minute run-turn tick — NOT a per-feature supabase cron.
   Any future recurring/scheduled job (ceremonies, digests, reminders) piggybacks as a row. No new cron/secret.

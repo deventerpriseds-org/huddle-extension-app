@@ -4,7 +4,7 @@
 // Auto-bootstraps its schema on first use (same lazy pattern as tasks.server.ts / identity.server.ts).
 import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
-import { putArtifactBlob, artifactSasUrl, artifactBlobSize } from "./blob.server";
+import { putArtifactBlob, artifactSasUrl, artifactBlobSize, getArtifactBlobBytes, deleteArtifactBlob } from "./blob.server";
 
 let _pool: Pool | null = null;
 function getPool(): Pool {
@@ -49,6 +49,16 @@ CREATE TABLE IF NOT EXISTS artifacts.items (
 CREATE INDEX IF NOT EXISTS artifact_items_user_idx   ON artifacts.items (lower(user_email), created_at DESC);
 CREATE INDEX IF NOT EXISTS artifact_items_status_idx ON artifacts.items (lower(user_email), status);
 CREATE INDEX IF NOT EXISTS artifact_items_folder_idx ON artifacts.items (lower(user_email), folder);
+
+-- Per-user artifact-mirroring preferences (one-way Azure → cloud drives). Defaults ON so approving an
+-- artifact mirrors it to OneDrive out of the box; each destination + the on-approve trigger are toggles.
+CREATE TABLE IF NOT EXISTS artifacts.mirror_config (
+  user_email       TEXT PRIMARY KEY,
+  mirror_on_approve BOOLEAN NOT NULL DEFAULT true,
+  onedrive_enabled  BOOLEAN NOT NULL DEFAULT true,
+  gdrive_enabled    BOOLEAN NOT NULL DEFAULT true,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;
 
 let _ready: Promise<void> | null = null;
@@ -195,6 +205,30 @@ export async function setArtifactStatus(
   return rows[0] ?? null;
 }
 
+/**
+ * Delete an artifact (metadata row + its blob), scoped by email. Deletes the blob first so a failure
+ * never orphans bytes with no index row; the row delete is authoritative for "gone". Returns the number
+ * of rows removed (0 = wrong owner or already gone — idempotent, never throws on a missing id).
+ */
+export async function deleteArtifact(userEmail: string, id: string): Promise<{ deleted: number; error?: string }> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ blob_path: string }>(
+    `SELECT blob_path FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
+    [id, userEmail.toLowerCase()],
+  );
+  const row = rows[0];
+  if (!row) return { deleted: 0 }; // wrong owner or missing — no cross-user delete
+  // Blob first: if it can't be removed (a transient storage error, not a 404 — deleteIfExists swallows
+  // those), KEEP the row so the artifact stays listed as the handle to retry, rather than orphaning bytes.
+  const blobOk = await deleteArtifactBlob(row.blob_path);
+  if (!blobOk) return { deleted: 0, error: "Couldn't remove the stored file — the artifact was kept so you can retry." };
+  const res = await getPool().query(
+    `DELETE FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
+    [id, userEmail.toLowerCase()],
+  );
+  return { deleted: res.rowCount ?? 0 };
+}
+
 /** Distinct folders a user has artifacts in (for the tree), with counts. */
 export async function listArtifactFolders(userEmail: string): Promise<{ folder: string; n: number }[]> {
   await ensureBootstrapped();
@@ -203,4 +237,62 @@ export async function listArtifactFolders(userEmail: string): Promise<{ folder: 
     [userEmail.toLowerCase()],
   );
   return rows;
+}
+
+// ---- Mirroring (one-way Azure → cloud drives) -----------------------------------------------------
+
+export interface MirrorConfig {
+  mirror_on_approve: boolean;
+  onedrive_enabled: boolean;
+  gdrive_enabled: boolean;
+}
+const MIRROR_DEFAULTS: MirrorConfig = { mirror_on_approve: true, onedrive_enabled: true, gdrive_enabled: true };
+
+/** A user's mirror preferences, defaulting all-on when they've never set them. */
+export async function getMirrorConfig(userEmail: string): Promise<MirrorConfig> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<MirrorConfig>(
+    `SELECT mirror_on_approve, onedrive_enabled, gdrive_enabled FROM artifacts.mirror_config WHERE lower(user_email) = $1`,
+    [userEmail.toLowerCase()],
+  );
+  return rows[0] ?? { ...MIRROR_DEFAULTS };
+}
+
+/** Persist the WHOLE config (no partial-update surprises). Idempotent upsert keyed by email. */
+export async function setMirrorConfig(userEmail: string, cfg: MirrorConfig): Promise<MirrorConfig> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO artifacts.mirror_config (user_email, mirror_on_approve, onedrive_enabled, gdrive_enabled, updated_at)
+     VALUES ($1,$2,$3,$4,now())
+     ON CONFLICT (user_email) DO UPDATE SET
+       mirror_on_approve = EXCLUDED.mirror_on_approve,
+       onedrive_enabled  = EXCLUDED.onedrive_enabled,
+       gdrive_enabled    = EXCLUDED.gdrive_enabled,
+       updated_at = now()`,
+    [userEmail.toLowerCase(), cfg.mirror_on_approve, cfg.onedrive_enabled, cfg.gdrive_enabled],
+  );
+  return cfg;
+}
+
+export interface MirrorResult { ok: boolean; onedrive_url?: string | null; error?: string; needsConsent?: boolean }
+
+/**
+ * Mirror one artifact's bytes to the owner's OneDrive and persist the returned webUrl in onedrive_url.
+ * Scoped by email (a wrong owner is a no-op). Never throws — returns a result the caller surfaces.
+ */
+export async function mirrorArtifactToOneDrive(userEmail: string, id: string): Promise<MirrorResult> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<ArtifactRow>(
+    `SELECT ${SELECT_COLS} FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
+    [id, userEmail.toLowerCase()],
+  );
+  const row = rows[0];
+  if (!row) return { ok: false, error: "Not found." };
+  const bytes = await getArtifactBlobBytes(row.blob_path);
+  if (!bytes) return { ok: false, error: "Artifact bytes not found in storage." };
+  const { uploadArtifactToOneDrive } = await import("./onedrive.server");
+  const r = await uploadArtifactToOneDrive({ mailbox: row.user_email, lane: row.folder, name: row.name, bytes, mime: row.mime });
+  if (!r.ok) return { ok: false, error: r.error, needsConsent: r.needsConsent };
+  await getPool().query(`UPDATE artifacts.items SET onedrive_url = $2, updated_at = now() WHERE id = $1`, [id, r.webUrl ?? null]);
+  return { ok: true, onedrive_url: r.webUrl ?? null };
 }

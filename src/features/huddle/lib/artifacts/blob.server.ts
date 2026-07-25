@@ -53,6 +53,27 @@ export async function putArtifactBlob(path: string, bytes: Buffer | Uint8Array, 
   });
 }
 
+/** Read a stored blob's full bytes (for mirroring to a cloud drive). Null if missing/unreadable. */
+export async function getArtifactBlobBytes(path: string): Promise<Buffer | null> {
+  try {
+    const c = await container();
+    return await c.getBlockBlobClient(path).downloadToBuffer();
+  } catch {
+    return null;
+  }
+}
+
+/** Delete a stored blob. Idempotent — returns true whether or not it existed (never throws on 404). */
+export async function deleteArtifactBlob(path: string): Promise<boolean> {
+  try {
+    const c = await container();
+    await c.getBlockBlobClient(path).deleteIfExists();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Byte length of a stored blob (diagnostics / verification). */
 export async function artifactBlobSize(path: string): Promise<number | null> {
   try {

@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FolderOpen, FileText, FileSpreadsheet, Presentation, FileImage, File as FileIcon,
-  Check, Undo2, Download, ExternalLink, Loader2, RefreshCw, Plus, Cloud,
+  Check, Undo2, Download, ExternalLink, Loader2, RefreshCw, Plus, Cloud, Trash2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
 import {
-  listArtifactsFn, getArtifactFn, reviewArtifactFn, createArtifactFn,
+  listArtifactsFn, getArtifactFn, reviewArtifactFn, createArtifactFn, mirrorArtifactFn, deleteArtifactFn,
 } from "../lib/artifacts/artifacts.functions";
 import type { ArtifactRow } from "../lib/artifacts/artifacts.server";
 import { Button } from "@/components/ui/button";
@@ -162,6 +162,49 @@ export function ArtifactsView() {
     } finally { setBusy(false); }
   }, [caller, sel]);
 
+  const mirror = useCallback(async () => {
+    if (!caller || !sel) return;
+    if (E2E) {
+      setSel((s) => (s ? { ...s, onedrive_url: "https://onedrive.example/e2e" } : s));
+      toast.success("Mirrored to OneDrive");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await mirrorArtifactFn({ data: { caller, id: sel.id, destination: "onedrive" } });
+      if (res.ok) {
+        setSel((s) => (s ? { ...s, onedrive_url: res.onedrive_url ?? s.onedrive_url } : s));
+        toast.success("Mirrored to OneDrive");
+      } else if (res.needsConsent) {
+        toast.error("OneDrive access not granted yet — an admin needs to consent Files.ReadWrite.All.");
+      } else {
+        toast.error(res.error ?? "Couldn't mirror");
+      }
+    } finally { setBusy(false); }
+  }, [caller, sel]);
+
+  const remove = useCallback(async () => {
+    if (!caller || !sel) return;
+    if (!window.confirm(`Delete “${sel.name}”? This removes the file and its bytes — it can't be undone.`)) return;
+    if (E2E) {
+      setItems((xs) => xs.filter((x) => x.id !== sel.id));
+      setSel(null);
+      toast.success("Deleted");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await deleteArtifactFn({ data: { caller, id: sel.id } });
+      if (res.ok) {
+        setItems((xs) => xs.filter((x) => x.id !== sel.id));
+        setSel(null);
+        toast.success("Deleted");
+      } else {
+        toast.error(res.error ?? "Couldn't delete");
+      }
+    } finally { setBusy(false); }
+  }, [caller, sel]);
+
   const newNote = useCallback(async () => {
     if (!caller) return;
     const name = window.prompt("Name the note (e.g. research-scan.md):", "note.md")?.trim();
@@ -299,7 +342,7 @@ export function ArtifactsView() {
             Select an artifact to preview and review it.
           </div>
         ) : (
-          <ArtifactPreview sel={sel} text={selText} busy={busy} onReview={review} />
+          <ArtifactPreview sel={sel} text={selText} busy={busy} onReview={review} onMirror={mirror} onDelete={remove} />
         )}
       </aside>
     </div>
@@ -307,8 +350,8 @@ export function ArtifactsView() {
 }
 
 function ArtifactPreview({
-  sel, text, busy, onReview,
-}: { sel: FullArtifact; text: string | null; busy: boolean; onReview: (a: "approve" | "changes" | "reopen") => void }) {
+  sel, text, busy, onReview, onMirror, onDelete,
+}: { sel: FullArtifact; text: string | null; busy: boolean; onReview: (a: "approve" | "changes" | "reopen") => void; onMirror: () => void; onDelete: () => void }) {
   const k = fileKind(sel.name, sel.mime);
   const g = sel.agent_id ? AGENT_BY_ID[sel.agent_id as AgentId] : undefined;
   const sm = STATUS_META[sel.status];
@@ -319,13 +362,22 @@ function ArtifactPreview({
       <div className="border-b p-4">
         <div className="flex items-start gap-3">
           <div className="grid size-9 shrink-0 place-items-center rounded-md text-[9px] font-bold text-white" style={{ background: k.color }}>{k.tag}</div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold leading-snug">{sel.name}</div>
             <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
               {g && <><AgentAvatar agent={g} size="xs" clickable={false} /> {g.name} ·</>}
               <span className={cn("rounded-full px-2 py-0.5 font-medium", sm.cls)}>{sm.label}</span>
             </div>
           </div>
+          <button
+            onClick={onDelete}
+            disabled={busy}
+            className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+            title="Delete this artifact"
+            aria-label="Delete artifact"
+          >
+            <Trash2 size={15} />
+          </button>
         </div>
       </div>
 
@@ -350,10 +402,20 @@ function ArtifactPreview({
         </dl>
 
         <div className="mt-4 rounded-lg border bg-muted/30 p-3">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Open natively</div>
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Open natively</span>
+            <button
+              onClick={onMirror}
+              disabled={busy}
+              className="text-[11px] font-medium text-primary hover:underline disabled:opacity-50"
+              title="Push this artifact to your OneDrive now"
+            >
+              {sel.onedrive_url ? "Re-mirror" : "Mirror now"}
+            </button>
+          </div>
           <div className="flex flex-col gap-1.5">
             <DriveLink label="Open in OneDrive" href={sel.onedrive_url} color="#126cbd" />
-            <DriveLink label="Open in Google Drive" href={sel.gdrive_url} color="#1a8a49" />
+            <DriveLink label="Open in Google Drive" href={sel.gdrive_url} color="#1a8a49" soon="Phase 3" />
             <a
               href={sel.url ?? "#"} download={sel.name}
               className={cn("flex items-center gap-2 rounded-md border px-2.5 py-2 text-xs", sel.url ? "hover:border-foreground/40" : "pointer-events-none opacity-50")}
@@ -381,7 +443,7 @@ function ArtifactPreview({
   );
 }
 
-function DriveLink({ label, href, color }: { label: string; href: string | null; color: string }) {
+function DriveLink({ label, href, color, soon = "soon" }: { label: string; href: string | null; color: string; soon?: string }) {
   const enabled = !!href;
   return (
     <a
@@ -392,7 +454,7 @@ function DriveLink({ label, href, color }: { label: string; href: string | null;
     >
       <span className="grid size-4 place-items-center rounded text-[8px] font-bold text-white" style={{ background: color }}>▸</span>
       {label}
-      {enabled ? <ExternalLink size={12} className="ml-auto" /> : <span className="ml-auto text-[10px] text-muted-foreground">soon</span>}
+      {enabled ? <ExternalLink size={12} className="ml-auto" /> : <span className="ml-auto text-[10px] text-muted-foreground">{soon}</span>}
     </a>
   );
 }
