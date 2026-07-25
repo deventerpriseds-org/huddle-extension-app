@@ -1,5 +1,5 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-07-24
+Last updated: 2026-07-25
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
 > claiming any item "done" without ACs + the verifier subagent / observed evidence).
@@ -16,10 +16,7 @@ _(ACT-1 moved to Closed 2026-07-24 — see below.)_
 ### ACT-3: create_huddle_task cross-turn dedup (board-clutter prevention)
 **Status:** open — deployed (PR #5) but **UNVERIFIED** (no verifier run yet).
 
-### ACT-4 (NEW): Auto backlog grooming + assignment (agile leader proactively runs it)
-**Asked for:** "auto backlog grooming and assigning." The scrum master should proactively groom/triage
-and assign the backlog on a cadence (not only when asked), and surface the result.
-**Status:** open — needs AC definition + design (cadence/trigger, who fires it, how it surfaces).
+_(ACT-4 moved to Closed 2026-07-25 — see below.)_
 
 ### ACT-5 (NEW): Agents self-start doable tasks, else classify blocked
 **Asked for:** "agents attempting to get started on tasks that they have the ability to do (e.g. Tavily)
@@ -36,6 +33,38 @@ deliver the summary to the user.
 verify why summaries aren't reaching the user.
 
 ## Closed
+
+### ACT-4: Auto backlog grooming + assignment on a cadence
+**Closed 2026-07-25.** Terry grooms/triages/assigns the backlog on a cadence (6×/day at 4/8/12/2/6/10 ET),
+only when the backlog actually changed, and surfaces a proactive summary + push. Built ENTIRELY in the
+Huddle app + Azure Huddle PG (no supabase change): a general recurring-job scheduler (`tasks.scheduled_jobs`
++ `runDueScheduledJobs`) driven by the existing every-minute run-turn heartbeat. Adding a future recurring
+job = one row + one `fireJob` case (ceremonies/digests next).
+**Acceptance criteria (independent verifier over live evidence):**
+- AC-1: grooms + writes assignments back to journey. — **PASS** (force-run `groomed:15`; mirror shows 27/49
+  open tasks now carry `assigned_agent` + priorities — writeback flowed journey→sync→mirror).
+- AC-2: Terry-owned. — **PASS** (runScheduledGrooming attributes to Terry; non-owner grooming already
+  blocked, ACT-1).
+- AC-3: proactive summary in `dm-terry-locke` naming what was done + top priorities. — **PASS** (observed
+  Terry turn, status done).
+- AC-4: completion fires send_push. — **PASS by composition** (same executeClaimedTurn→send_push path proven
+  in ACT-1; a device push not separately captured here).
+- AC-5: route is server-to-server, rejects wrong/missing secret. — **PASS** (401 on bad + missing; 200 with
+  the real JOURNEY_PROXY_TOKEN).
+- AC-6: change-gate skips an unchanged backlog; force bypasses. — **PASS** (offline signature ALL PASS;
+  live force:false → `skipped:true reason:unchanged`; force:true → groomed).
+- AC-7: cadence wired, DST-correct, no manual step. — **PASS on registration** (heartbeat auto-registered
+  `groom-<user>` with `next_run_at=04:00 ET` next slot + cadence `[4,8,12,14,18,22]`; `computeNextRun`
+  DST-correct offline EDT+EST). Natural slot fire is by composition (same tick that drains turns/reminders).
+**Evidence:** commits on `fix-1to1-capability-defer` (merged in PR #6: e003214 route+gate, e9918bd manual
+trigger, 9d888e0 scheduler); live runs — force groom HTTP200 groomed:15, non-force skip, mirror writeback
+read, scheduled_jobs auto-registration.
+**Residuals (follow-ups, cluster with ACT-5 "blocked surfacing + coverage"):** (1) Terry's summary omitted
+the 11 blocked-on-capability items the directive asked it to flag; (2) `blocked-on-capability` tag not
+present in the mirror (0) despite the run reporting blocked:11 — blocked-tag propagation to verify; (3)
+groom limit is 15 tasks/pass, and with skip-on-unchanged a static 49-task backlog leaves tasks 16-49
+un-groomed until it changes — raise the limit or rotate batches; (4) AC-4 device push not separately
+captured.
 
 ### ACT-1: 1:1 ownership hand-off — natural defer + proactive owner follow-up
 **Closed 2026-07-24.** In a 1:1, when the ask belongs to another agent (exclusive tool OR domain/theme),
@@ -63,6 +92,11 @@ it); away-push reaching the phone is by-design (proven send_push path) but not s
 523 → 247 tasks. Workflow removed after use (PR #19). **Verification:** PASS (run log).
 
 ## Decisions & scope changes
+- [2026-07-25] Recurring jobs run on a GENERAL heartbeat dispatcher in **Azure Huddle PG** (`tasks.scheduled_jobs`
+  + `runDueScheduledJobs`), driven by the existing every-minute run-turn tick — NOT a per-feature supabase cron.
+  Any future recurring/scheduled job (ceremonies, digests, reminders) piggybacks as a row. No new cron/secret.
+- [2026-07-25] Auto-groom cadence = 6×/day (4/8/12/2/6/10 ET), change-gated (skip unchanged), force-trigger via
+  the `run-grooming.yml` workflow (manual/test). Grooms all users with an open backlog.
 - [2026-07-24] Ownership = tools AND domains/themes; systematic, no per-agent hardcodes.
 - [2026-07-24] Enforcement = Both (huddle + eds-skills); Stop gate = hard block; memory required every completion.
 - [2026-07-24] Standing harness `huddle.mjs` (auto fn-id resolve).
