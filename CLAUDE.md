@@ -358,6 +358,39 @@ question. Apply the eds-skills' AC/verify discipline, but tune the ceremony down
   don't stop for permission on things that can't hurt anything.
 - Reserve questions for destructive/irreversible/outward-facing actions or real forks in intent.
 
+## Artifact store — agent outputs → reviewable artifacts (Azure Blob) + one-way cloud-drive mirror
+Agents produce artifacts (docs/sheets/decks/notes); the user reviews and approves them. Canonical store
+is **Azure Blob** (private container `huddle-artifacts`, read via a 15-min SAS — a bare unauthenticated GET
+returns **409 PublicAccessNotPermitted**, by design), metadata in **`artifacts.items`** (Azure PG,
+`RAG_AI_Agents`). Everything is **email-scoped** (`resolveTaskEmail(caller)`), so one user can never list,
+open, or review another's. Code: `lib/artifacts/{blob,artifacts.server,artifacts.functions,onedrive}.server.ts`
++ `components/ArtifactsView.tsx` (rail view) + `ArtifactMirroringPanel.tsx` (Settings → Account).
+
+**Phase 2 — one-way OneDrive mirror (live).** Approved (or manually "Mirror now") artifacts push to the
+owner's OneDrive so they open natively. Non-obvious facts:
+- **Reuses the existing app-only Graph client** — `getAppToken()` (now exported from
+  `email/graph-email.server.ts`), client-credentials over `AZURE_CLIENT_ID/SECRET/TENANT_ID`. **No new
+  secret** (standing rule). Upload is `PUT /users/{mailbox}/drive/root:/Huddle Artifacts/{lane}/{name}:/content`
+  — **path-keyed, so re-mirroring OVERWRITES the same item (idempotent, never a duplicate)**.
+- **Needs `Files.ReadWrite.All` application permission + admin consent.** Without it Graph returns **403**,
+  which the code surfaces as an actionable **`needsConsent:true`** result — NOT a crash, NOT a code bug.
+  Granting that consent (an admin action) is what turns mirroring on; nothing in the app changes. (Mirror
+  calendar's `Calendars.Read` precedent — a 403 means "grant the permission," not "fix the code.")
+- **On-approve mirror is NON-FATAL.** `reviewArtifactFn` approves first, then attempts the mirror in a
+  try/catch; the approve ALWAYS succeeds and the mirror outcome rides back in a separate `mirror` field.
+  Never gate the user's approve on an external-service upload.
+- **Config = `artifacts.mirror_config`** (email PK; `mirror_on_approve`/`onedrive_enabled`/`gdrive_enabled`,
+  all default **true**). `getMirrorConfigFn`/`setMirrorConfigFn` (whole-object upsert) back the Settings
+  toggles; `mirrorArtifactFn` is the manual per-destination push. **Google Drive is Phase 3** — `gdrive`
+  returns `{deferred:true}` (journey holds the Google tokens; that path routes through them later).
+- **Live-verify with `.claude/skills/test-agent-serverfn/scripts/mirror-verify.mjs`** (config round-trip,
+  seed→approve non-fatal mirror, manual mirror, gdrive deferral) against the deployed SWA.
+- **Seroval decoder gotcha (bit me):** the reused `huddle.mjs` decode `CONST` map predates any
+  boolean-returning fn and MIS-indexes constant nodes — it decoded `true` as `null`. Verified real indices
+  (via `toJSONAsync`): **`0=null 1=undefined 2=true 3=false 4=-0 5=Infinity 6=-Infinity 7=NaN`**. Any
+  harness that keys on a fn's boolean result must use these (`mirror-verify.mjs` does; `huddle.mjs` is
+  string-only so its gap is latent).
+
 ## Calendar reads — get_calendar_events via Microsoft Graph (Huddle-native)
 Huddle reads the user's Outlook/M365 calendar directly through the **same Graph app** as email
 (`email/graph-email.server.ts`, app-only client-credentials). `getGraphCalendarEvents()` calls
