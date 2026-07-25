@@ -4,7 +4,7 @@
 // Auto-bootstraps its schema on first use (same lazy pattern as tasks.server.ts / identity.server.ts).
 import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
-import { putArtifactBlob, artifactSasUrl, artifactBlobSize, getArtifactBlobBytes } from "./blob.server";
+import { putArtifactBlob, artifactSasUrl, artifactBlobSize, getArtifactBlobBytes, deleteArtifactBlob } from "./blob.server";
 
 let _pool: Pool | null = null;
 function getPool(): Pool {
@@ -203,6 +203,27 @@ export async function setArtifactStatus(
     [id, userEmail.toLowerCase(), status, note, isReview, reviewer.toLowerCase()],
   );
   return rows[0] ?? null;
+}
+
+/**
+ * Delete an artifact (metadata row + its blob), scoped by email. Deletes the blob first so a failure
+ * never orphans bytes with no index row; the row delete is authoritative for "gone". Returns the number
+ * of rows removed (0 = wrong owner or already gone — idempotent, never throws on a missing id).
+ */
+export async function deleteArtifact(userEmail: string, id: string): Promise<{ deleted: number }> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ blob_path: string }>(
+    `SELECT blob_path FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
+    [id, userEmail.toLowerCase()],
+  );
+  const row = rows[0];
+  if (!row) return { deleted: 0 }; // wrong owner or missing — no cross-user delete
+  await deleteArtifactBlob(row.blob_path);
+  const res = await getPool().query(
+    `DELETE FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
+    [id, userEmail.toLowerCase()],
+  );
+  return { deleted: res.rowCount ?? 0 };
 }
 
 /** Distinct folders a user has artifacts in (for the tree), with counts. */

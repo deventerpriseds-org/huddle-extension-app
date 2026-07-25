@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FolderOpen, FileText, FileSpreadsheet, Presentation, FileImage, File as FileIcon,
-  Check, Undo2, Download, ExternalLink, Loader2, RefreshCw, Plus, Cloud,
+  Check, Undo2, Download, ExternalLink, Loader2, RefreshCw, Plus, Cloud, Trash2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
 import {
-  listArtifactsFn, getArtifactFn, reviewArtifactFn, createArtifactFn, mirrorArtifactFn,
+  listArtifactsFn, getArtifactFn, reviewArtifactFn, createArtifactFn, mirrorArtifactFn, deleteArtifactFn,
 } from "../lib/artifacts/artifacts.functions";
 import type { ArtifactRow } from "../lib/artifacts/artifacts.server";
 import { Button } from "@/components/ui/button";
@@ -183,6 +183,28 @@ export function ArtifactsView() {
     } finally { setBusy(false); }
   }, [caller, sel]);
 
+  const remove = useCallback(async () => {
+    if (!caller || !sel) return;
+    if (!window.confirm(`Delete “${sel.name}”? This removes the file and its bytes — it can't be undone.`)) return;
+    if (E2E) {
+      setItems((xs) => xs.filter((x) => x.id !== sel.id));
+      setSel(null);
+      toast.success("Deleted");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await deleteArtifactFn({ data: { caller, id: sel.id } });
+      if (res.ok) {
+        setItems((xs) => xs.filter((x) => x.id !== sel.id));
+        setSel(null);
+        toast.success("Deleted");
+      } else {
+        toast.error(res.error ?? "Couldn't delete");
+      }
+    } finally { setBusy(false); }
+  }, [caller, sel]);
+
   const newNote = useCallback(async () => {
     if (!caller) return;
     const name = window.prompt("Name the note (e.g. research-scan.md):", "note.md")?.trim();
@@ -320,7 +342,7 @@ export function ArtifactsView() {
             Select an artifact to preview and review it.
           </div>
         ) : (
-          <ArtifactPreview sel={sel} text={selText} busy={busy} onReview={review} onMirror={mirror} />
+          <ArtifactPreview sel={sel} text={selText} busy={busy} onReview={review} onMirror={mirror} onDelete={remove} />
         )}
       </aside>
     </div>
@@ -328,8 +350,8 @@ export function ArtifactsView() {
 }
 
 function ArtifactPreview({
-  sel, text, busy, onReview, onMirror,
-}: { sel: FullArtifact; text: string | null; busy: boolean; onReview: (a: "approve" | "changes" | "reopen") => void; onMirror: () => void }) {
+  sel, text, busy, onReview, onMirror, onDelete,
+}: { sel: FullArtifact; text: string | null; busy: boolean; onReview: (a: "approve" | "changes" | "reopen") => void; onMirror: () => void; onDelete: () => void }) {
   const k = fileKind(sel.name, sel.mime);
   const g = sel.agent_id ? AGENT_BY_ID[sel.agent_id as AgentId] : undefined;
   const sm = STATUS_META[sel.status];
@@ -340,13 +362,22 @@ function ArtifactPreview({
       <div className="border-b p-4">
         <div className="flex items-start gap-3">
           <div className="grid size-9 shrink-0 place-items-center rounded-md text-[9px] font-bold text-white" style={{ background: k.color }}>{k.tag}</div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold leading-snug">{sel.name}</div>
             <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
               {g && <><AgentAvatar agent={g} size="xs" clickable={false} /> {g.name} ·</>}
               <span className={cn("rounded-full px-2 py-0.5 font-medium", sm.cls)}>{sm.label}</span>
             </div>
           </div>
+          <button
+            onClick={onDelete}
+            disabled={busy}
+            className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+            title="Delete this artifact"
+            aria-label="Delete artifact"
+          >
+            <Trash2 size={15} />
+          </button>
         </div>
       </div>
 

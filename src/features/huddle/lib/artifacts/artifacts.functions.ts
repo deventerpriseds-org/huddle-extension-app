@@ -165,6 +165,22 @@ export const mirrorArtifactFn = createServerFn({ method: "POST" })
     }
   });
 
+// Delete an artifact (row + blob), scoped to the caller. Idempotent: deleting a missing/other-owner id
+// is a no-op that returns deleted:0 rather than an error.
+export const deleteArtifactFn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => z.object({ caller: Caller, id: z.string().min(1) }).parse(raw))
+  .handler(async ({ data }): Promise<{ ok: boolean; deleted: number; error?: string }> => {
+    const email = await callerEmail(data.caller);
+    if (!email) return { ok: false, deleted: 0, error: "Sign-in required." };
+    try {
+      const { deleteArtifact } = await import("./artifacts.server");
+      const { deleted } = await deleteArtifact(email, data.id);
+      return { ok: true, deleted };
+    } catch (err) {
+      return { ok: false, deleted: 0, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
 // Create an artifact from text content (markdown/plain/csv/json). Agents write binary artifacts by
 // calling createArtifact server-side directly; this fn is the client/manual + test-seed path, scoped
 // to the caller. Bytes are the UTF-8 encoding of `text`.

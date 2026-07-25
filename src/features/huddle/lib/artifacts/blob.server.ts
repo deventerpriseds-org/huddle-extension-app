@@ -63,6 +63,17 @@ export async function getArtifactBlobBytes(path: string): Promise<Buffer | null>
   }
 }
 
+/** Delete a stored blob. Idempotent — returns true whether or not it existed (never throws on 404). */
+export async function deleteArtifactBlob(path: string): Promise<boolean> {
+  try {
+    const c = await container();
+    await c.getBlockBlobClient(path).deleteIfExists();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Byte length of a stored blob (diagnostics / verification). */
 export async function artifactBlobSize(path: string): Promise<number | null> {
   try {
