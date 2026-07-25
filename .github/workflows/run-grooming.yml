@@ -1,0 +1,49 @@
+name: Run backlog grooming (manual/on-demand)
+
+# Manual/test trigger for AUTO backlog grooming. The scheduled path is journey pg_cron POSTing
+# /api/public/run-grooming a few times a day; this workflow fires the SAME route on demand (default
+# force:true, so it grooms even if the backlog hasn't changed) for testing or an ad-hoc "groom now".
+# Uses the shared JOURNEY_PROXY_TOKEN org secret — no new secret. Terry's in-chat `groom_backlog`
+# tool remains the in-app manual path; this is the ops/verification trigger for the scheduled route.
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Caller email to groom for (journey user)."
+        required: true
+        default: "von.ellis@enterpriseds.io"
+      force:
+        description: "Bypass the change-gate (groom even if unchanged)."
+        required: false
+        default: "true"
+      timeZone:
+        description: "IANA time zone."
+        required: false
+        default: "America/New_York"
+
+jobs:
+  run-grooming:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/public/run-grooming
+        env:
+          SECRET: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          EMAIL: ${{ inputs.email }}
+          FORCE: ${{ inputs.force }}
+          TZ_INPUT: ${{ inputs.timeZone }}
+        run: |
+          if [ -z "$SECRET" ]; then echo "JOURNEY_PROXY_TOKEN secret not set"; exit 1; fi
+          RUN_ID="groom-manual-$(date -u +%Y%m%d%H%M%S)"
+          echo "Firing run-grooming for $EMAIL (force=$FORCE, runId=$RUN_ID)"
+          HTTP=$(curl -s -o /tmp/groom.out -w "%{http_code}" -X POST \
+            -H "content-type: application/json" \
+            -H "x-webhook-secret: $SECRET" \
+            -d "{\"caller\":{\"entra_email\":\"$EMAIL\"},\"force\":$FORCE,\"timeZone\":\"$TZ_INPUT\",\"runId\":\"$RUN_ID\"}" \
+            "$BASE/api/public/run-grooming")
+          echo "HTTP $HTTP"
+          echo "--- response ---"
+          cat /tmp/groom.out; echo
+          # 200 = ran (may be skipped/groomed); anything else is a failure to surface.
+          if [ "$HTTP" != "200" ]; then echo "run-grooming failed"; exit 1; fi

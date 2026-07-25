@@ -72,6 +72,37 @@ CREATE TABLE IF NOT EXISTS tasks.ceremony_runs (
 );
 CREATE INDEX IF NOT EXISTS ceremony_runs_user_idx ON tasks.ceremony_runs (lower(user_email), created_at DESC);
 
+-- Change-detection watermark for AUTO backlog grooming. The cadence runner grooms only when the
+-- backlog's grooming-INDEPENDENT shape changed since the last groom (see backlogSignature): the
+-- signature is a hash over open tasks' id/title/status/due_date — NOT the assigned_agent/tags/
+-- priority/rank that grooming itself writes — so a re-groom of an unchanged backlog is a no-op and
+-- never re-fires. One row per user.
+CREATE TABLE IF NOT EXISTS tasks.groom_state (
+  user_email      TEXT PRIMARY KEY,
+  signature       TEXT,
+  last_groomed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- GENERAL recurring-job scheduler, resident in Azure Huddle PG (NOT supabase). One heartbeat — the
+-- existing every-minute run-turn tick — dispatches every due job here, so any recurring/scheduled job
+-- (grooming today; ceremonies/digests next) is just a row: no new cron, no new secret. cadence holds
+-- the local-time spec ({tz, hours:[...]}); next_run_at is the claimed watermark (advanced after each
+-- fire, DST-evaluated in the dispatcher). Claiming pushes next_run_at ~90s out so a second concurrent
+-- tick can't double-fire before the real next slot is computed.
+CREATE TABLE IF NOT EXISTS tasks.scheduled_jobs (
+  id           TEXT PRIMARY KEY,
+  job_type     TEXT NOT NULL,
+  target_email TEXT NOT NULL,
+  cadence      JSONB NOT NULL DEFAULT '{}',
+  enabled      BOOLEAN NOT NULL DEFAULT true,
+  next_run_at  TIMESTAMPTZ,
+  last_run_at  TIMESTAMPTZ,
+  meta         JSONB NOT NULL DEFAULT '{}',
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS scheduled_jobs_due_idx ON tasks.scheduled_jobs (enabled, next_run_at);
+
 -- The scrum master's editable "capability prompt": what the app CAN and CANNOT do today, so the
 -- grooming router only assigns work agents can actually execute (e.g. no payments until Plaid).
 CREATE TABLE IF NOT EXISTS tasks.router_config (
@@ -237,6 +268,111 @@ export async function setCapabilityPrompt(userEmail: string, prompt: string): Pr
      VALUES ($1,$2,now())
      ON CONFLICT (user_email) DO UPDATE SET capability_prompt=EXCLUDED.capability_prompt, updated_at=now()`,
     [userEmail.toLowerCase(), prompt],
+  );
+}
+
+/** The last-groomed backlog signature for a user (null if never groomed), for the auto-groom change gate. */
+export async function getGroomSignature(userEmail: string): Promise<string | null> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ signature: string | null }>(
+    `SELECT signature FROM tasks.groom_state WHERE lower(user_email) = $1`,
+    [userEmail.toLowerCase()],
+  );
+  return rows[0]?.signature ?? null;
+}
+
+/** Record the backlog signature we just groomed at, so an unchanged backlog is skipped next cadence fire. */
+export async function setGroomSignature(userEmail: string, signature: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.groom_state (user_email, signature, last_groomed_at)
+     VALUES ($1,$2,now())
+     ON CONFLICT (user_email) DO UPDATE SET signature=EXCLUDED.signature, last_groomed_at=now()`,
+    [userEmail.toLowerCase(), signature],
+  );
+}
+
+// ---- General recurring-job scheduler (Azure Huddle PG) ---------------------------------------------
+
+export interface ScheduledJob {
+  id: string;
+  job_type: string;
+  target_email: string;
+  cadence: { tz?: string; hours?: number[] };
+  meta: Record<string, unknown>;
+}
+
+/** Distinct emails that currently have an OPEN backlog — the users an auto-groom job should exist for. */
+export async function getUsersWithOpenBacklog(): Promise<string[]> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ email: string }>(
+    `SELECT DISTINCT lower(user_email) AS email
+       FROM tasks.journey_tasks
+      WHERE user_email IS NOT NULL
+        AND completed_at IS NULL AND (status IS NULL OR status NOT IN ('DONE','BLOCKED'))`,
+  );
+  return rows.map((r) => r.email).filter(Boolean);
+}
+
+/** Upsert a scheduled job (idempotent on id). Only seeds next_run_at when the row is first created. */
+export async function upsertScheduledJob(job: {
+  id: string;
+  jobType: string;
+  targetEmail: string;
+  cadence: { tz?: string; hours?: number[] };
+  nextRunAt: string;
+  meta?: Record<string, unknown>;
+}): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.scheduled_jobs (id, job_type, target_email, cadence, next_run_at, meta)
+     VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb)
+     ON CONFLICT (id) DO UPDATE SET
+       job_type = EXCLUDED.job_type,
+       target_email = EXCLUDED.target_email,
+       cadence = EXCLUDED.cadence,
+       meta = EXCLUDED.meta,
+       updated_at = now()`,
+    [
+      job.id,
+      job.jobType,
+      job.targetEmail.toLowerCase(),
+      JSON.stringify(job.cadence),
+      job.nextRunAt,
+      JSON.stringify(job.meta ?? {}),
+    ],
+  );
+}
+
+/**
+ * Atomically CLAIM all due jobs: push their next_run_at ~90s out (a hold so a concurrent tick can't
+ * re-claim) and return them. The dispatcher then computes each job's real next slot and writes it
+ * back via setScheduledJobNextRun. FOR UPDATE SKIP LOCKED makes concurrent ticks safe.
+ */
+export async function claimDueScheduledJobs(limit = 20): Promise<ScheduledJob[]> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<ScheduledJob>(
+    `UPDATE tasks.scheduled_jobs j
+        SET last_run_at = now(), next_run_at = now() + interval '90 seconds', updated_at = now()
+      WHERE j.id IN (
+        SELECT id FROM tasks.scheduled_jobs
+         WHERE enabled AND next_run_at IS NOT NULL AND next_run_at <= now()
+         ORDER BY next_run_at
+         LIMIT $1
+         FOR UPDATE SKIP LOCKED
+      )
+      RETURNING id, job_type, target_email, cadence, meta`,
+    [limit],
+  );
+  return rows;
+}
+
+/** Write a job's real next fire time (computed by the dispatcher with DST-correct local-time logic). */
+export async function setScheduledJobNextRun(id: string, nextRunAtIso: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE tasks.scheduled_jobs SET next_run_at = $2, updated_at = now() WHERE id = $1`,
+    [id, nextRunAtIso],
   );
 }
 

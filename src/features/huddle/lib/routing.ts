@@ -207,6 +207,25 @@ export function routeMessage(input: RouteInput): RouteResult {
 }
 
 /**
+ * Deterministic lane-owner detection for a single message, scored over the FULL roster (not just a
+ * huddle's members). Makes 1:1 hand-off systematic by DOMAIN/THEME — not only exclusive tools: if the
+ * addressed agent isn't the best-fit lane for the ask, name who is (e.g. "tighten my budget" → Finn),
+ * so the agent can defer + bring them in. Returns null when the addressed agent is the (or a close)
+ * owner, so in-lane asks never hand off. Driven entirely by agents.ts domains/themes — no hardcoding.
+ */
+export function laneOwnerFor(text: string, selfId: AgentId): { id: AgentId; score: number } | null {
+  const ranked = AGENTS.map((a) => ({ id: a.id, s: scoreAgentAgainst(text, a) })).sort((x, y) => y.s - x.s);
+  const top = ranked[0];
+  if (!top) return null;
+  const selfScore = ranked.find((r) => r.id === selfId)?.s ?? 0;
+  // Hand off ONLY when another agent clearly owns the topic and the addressed agent does not.
+  if (top.id !== selfId && top.s >= 0.25 && top.s - selfScore >= 0.15) {
+    return { id: top.id, score: Number(top.s.toFixed(2)) };
+  }
+  return null;
+}
+
+/**
  * PURE winner-assembly — turns the LLM router's raw pick ({primary, supporting, explicitlyRequested})
  * plus the parsed @mentions into the final ordered winner set. Extracted so it can be unit-tested
  * OFFLINE with mocked router outputs (no OpenAI spend). The only external reads are AGENT_BY_ID +

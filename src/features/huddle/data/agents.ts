@@ -56,6 +56,13 @@ export interface AgentCapability {
   label: string;
   /** true = only the owning agent may perform it; every other agent must hand off. */
   exclusive?: boolean;
+  /**
+   * Lowercase phrases that indicate the user is asking for THIS capability. Used for DETERMINISTIC
+   * 1:1 hand-off detection (the runtime resolves the owner without depending on the LLM or an @mention)
+   * — needed because domain/theme scoring can mis-assign (e.g. "backlog" scores to the product owner,
+   * not the scrum master). A substring match on any trigger routes the ask to this capability's owner.
+   */
+  triggers?: string[];
 }
 
 export interface Agent {
@@ -94,6 +101,11 @@ export const AGENTS: Agent[] = [
         id: "backlog-grooming",
         label: "backlog grooming, triage & sprint/board assignment",
         exclusive: true,
+        triggers: [
+          "groom", "grooming", "triage the backlog", "triage backlog", "assign the backlog",
+          "assign the team", "plan the sprint", "sprint planning", "prioritize the backlog",
+          "organize the backlog", "clean up the backlog",
+        ],
       },
     ],
     tone: "direct",
