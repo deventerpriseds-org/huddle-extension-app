@@ -53,6 +53,16 @@ export async function putArtifactBlob(path: string, bytes: Buffer | Uint8Array, 
   });
 }
 
+/** Read a stored blob's full bytes (for mirroring to a cloud drive). Null if missing/unreadable. */
+export async function getArtifactBlobBytes(path: string): Promise<Buffer | null> {
+  try {
+    const c = await container();
+    return await c.getBlockBlobClient(path).downloadToBuffer();
+  } catch {
+    return null;
+  }
+}
+
 /** Byte length of a stored blob (diagnostics / verification). */
 export async function artifactBlobSize(path: string): Promise<number | null> {
   try {

@@ -36,6 +36,7 @@ import { useHuddleStore } from "../store";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { MemoryDbPanel } from "./MemoryDbPanel";
 import { AccountSettingsPanel } from "./AccountSettingsPanel";
+import { ArtifactMirroringPanel } from "./ArtifactMirroringPanel";
 
 interface SettingsSheetProps {
   open: boolean;
@@ -144,8 +145,9 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
           </TabsList>
 
           {/* ---- Account ---- */}
-          <TabsContent value="account" className="flex-1 overflow-y-auto px-5 py-4">
+          <TabsContent value="account" className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
             <AccountSettingsPanel />
+            <ArtifactMirroringPanel />
           </TabsContent>
 
           {/* ---- Router ---- */}

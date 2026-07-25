@@ -68,7 +68,7 @@ export const reviewArtifactFn = createServerFn({ method: "POST" })
       })
       .parse(raw),
   )
-  .handler(async ({ data }): Promise<{ ok: boolean; artifact?: ArtifactRow; error?: string }> => {
+  .handler(async ({ data }): Promise<{ ok: boolean; artifact?: ArtifactRow; error?: string; mirror?: { ok: boolean; error?: string; needsConsent?: boolean; onedrive_url?: string | null } }> => {
     const email = await callerEmail(data.caller);
     if (!email) return { ok: false, error: "Sign-in required." };
     if (data.action === "changes" && !data.note?.trim()) {
@@ -76,10 +76,90 @@ export const reviewArtifactFn = createServerFn({ method: "POST" })
     }
     const status = data.action === "approve" ? "approved" : data.action === "changes" ? "changes" : "review";
     try {
-      const { setArtifactStatus } = await import("./artifacts.server");
+      const { setArtifactStatus, getMirrorConfig, mirrorArtifactToOneDrive } = await import("./artifacts.server");
       const artifact = await setArtifactStatus(email, data.id, status, data.note ?? null, email);
       if (!artifact) return { ok: false, error: "Not found." }; // wrong owner or missing → no change
-      return { ok: true, artifact };
+      // On approve: mirror to enabled+built destinations if configured. NEVER fail the approve on a
+      // mirror error — the approve already succeeded; the mirror result is reported separately.
+      let mirror: { ok: boolean; error?: string; needsConsent?: boolean; onedrive_url?: string | null } | undefined;
+      if (status === "approved") {
+        try {
+          const cfg = await getMirrorConfig(email);
+          if (cfg.mirror_on_approve && cfg.onedrive_enabled) {
+            const r = await mirrorArtifactToOneDrive(email, data.id);
+            mirror = r;
+            if (r.ok) artifact.onedrive_url = r.onedrive_url ?? artifact.onedrive_url;
+          }
+        } catch (e) {
+          mirror = { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      }
+      return { ok: true, artifact, mirror };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+// Mirror config: read + write (whole object). Email-scoped.
+export const getMirrorConfigFn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => z.object({ caller: Caller }).parse(raw))
+  .handler(async ({ data }) => {
+    const email = await callerEmail(data.caller);
+    const defaults = { mirror_on_approve: true, onedrive_enabled: true, gdrive_enabled: true };
+    if (!email) return { config: defaults };
+    try {
+      const { getMirrorConfig } = await import("./artifacts.server");
+      return { config: await getMirrorConfig(email) };
+    } catch {
+      return { config: defaults };
+    }
+  });
+
+export const setMirrorConfigFn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({
+        caller: Caller,
+        mirror_on_approve: z.boolean(),
+        onedrive_enabled: z.boolean(),
+        gdrive_enabled: z.boolean(),
+      })
+      .parse(raw),
+  )
+  .handler(async ({ data }): Promise<{ ok: boolean; error?: string }> => {
+    const email = await callerEmail(data.caller);
+    if (!email) return { ok: false, error: "Sign-in required." };
+    try {
+      const { setMirrorConfig } = await import("./artifacts.server");
+      await setMirrorConfig(email, {
+        mirror_on_approve: data.mirror_on_approve,
+        onedrive_enabled: data.onedrive_enabled,
+        gdrive_enabled: data.gdrive_enabled,
+      });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+// Manual "Mirror now" — pushes an artifact to a destination on demand, at any status, respecting the
+// per-destination toggle. Phase 2: OneDrive is live; Google Drive is deferred (returns a Phase-3 note).
+export const mirrorArtifactFn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, id: z.string().min(1), destination: z.enum(["onedrive", "gdrive"]).default("onedrive") }).parse(raw),
+  )
+  .handler(async ({ data }): Promise<{ ok: boolean; onedrive_url?: string | null; error?: string; needsConsent?: boolean; deferred?: boolean }> => {
+    const email = await callerEmail(data.caller);
+    if (!email) return { ok: false, error: "Sign-in required." };
+    try {
+      const { getMirrorConfig, mirrorArtifactToOneDrive } = await import("./artifacts.server");
+      const cfg = await getMirrorConfig(email);
+      if (data.destination === "gdrive") {
+        if (!cfg.gdrive_enabled) return { ok: false, error: "Google Drive mirroring is turned off." };
+        return { ok: false, deferred: true, error: "Google Drive mirroring ships in Phase 3." };
+      }
+      if (!cfg.onedrive_enabled) return { ok: false, error: "OneDrive mirroring is turned off." };
+      return await mirrorArtifactToOneDrive(email, data.id);
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
