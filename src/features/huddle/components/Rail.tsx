@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MessageSquare, LayoutGrid, Compass, Settings } from "lucide-react";
+import { MessageSquare, LayoutGrid, FolderOpen, Compass, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useHuddleStore } from "../store";
 import { SettingsSheet } from "./SettingsSheet";
@@ -7,6 +7,7 @@ import { SettingsSheet } from "./SettingsSheet";
 const items = [
   { id: "huddle", label: "Huddles", icon: MessageSquare },
   { id: "board", label: "Board", icon: LayoutGrid },
+  { id: "artifacts", label: "Artifacts", icon: FolderOpen },
   { id: "memory", label: "Memory", icon: Compass },
 ] as const;
 
@@ -25,13 +26,14 @@ export function Rail() {
           const active =
             (it.id === "huddle" && view === "huddle") ||
             (it.id === "board" && view === "board") ||
+            (it.id === "artifacts" && view === "artifacts") ||
             (it.id === "memory" && view === "huddle");
           const Icon = it.icon;
           return (
             <button
               key={it.id}
               type="button"
-              onClick={() => setView(it.id === "board" ? "board" : "huddle")}
+              onClick={() => setView(it.id === "board" ? "board" : it.id === "artifacts" ? "artifacts" : "huddle")}
               className={cn(
                 "group relative flex size-10 items-center justify-center rounded-lg transition",
                 active

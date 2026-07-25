@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Menu, PanelRight, Settings } from "lucide-react";
 import { BoardView } from "./BoardView";
+import { ArtifactsView } from "./ArtifactsView";
 import { ContextPanel } from "./ContextPanel";
 import { HuddleView } from "./HuddleView";
 import { MeetingLayer } from "./MeetingBar";
@@ -77,7 +78,7 @@ export function HuddleApp() {
 
         <FallbackBanner />
 
-        {view === "huddle" ? <HuddleView /> : <BoardView />}
+        {view === "huddle" ? <HuddleView /> : view === "board" ? <BoardView /> : <ArtifactsView />}
       </div>
 
 

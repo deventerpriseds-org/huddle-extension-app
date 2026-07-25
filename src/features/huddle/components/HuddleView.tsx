@@ -52,8 +52,8 @@ function HuddleHeader({
   setView,
 }: {
   huddle: Huddle;
-  view: "huddle" | "board";
-  setView: (v: "huddle" | "board") => void;
+  view: "huddle" | "board" | "artifacts";
+  setView: (v: "huddle" | "board" | "artifacts") => void;
 }) {
   const startMeeting = useHuddleStore((s) => s.startMeeting);
   const patchMeeting = useHuddleStore((s) => s.patchMeeting);
