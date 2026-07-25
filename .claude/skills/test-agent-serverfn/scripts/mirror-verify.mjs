@@ -22,7 +22,9 @@ function ids() {
   while ((m = re.exec(s))) map[m[2]] = m[1];
   return map;
 }
-const CONST = { 1: undefined, 2: null, 3: NaN, 4: Infinity, 5: -Infinity, 6: -0 };
+// Real seroval constant indices (verified via toJSONAsync): booleans matter here, unlike the
+// string-only huddle.mjs harness whose CONST map is incomplete.
+const CONST = { 0: null, 1: undefined, 2: true, 3: false, 4: -0, 5: Infinity, 6: -Infinity, 7: NaN };
 function dec(root) {
   const reg = new Map();
   function w(n) {
