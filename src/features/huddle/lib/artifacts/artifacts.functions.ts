@@ -174,7 +174,8 @@ export const deleteArtifactFn = createServerFn({ method: "POST" })
     if (!email) return { ok: false, deleted: 0, error: "Sign-in required." };
     try {
       const { deleteArtifact } = await import("./artifacts.server");
-      const { deleted } = await deleteArtifact(email, data.id);
+      const { deleted, error } = await deleteArtifact(email, data.id);
+      if (error) return { ok: false, deleted, error }; // blob delete failed → row kept, surface it
       return { ok: true, deleted };
     } catch (err) {
       return { ok: false, deleted: 0, error: err instanceof Error ? err.message : String(err) };

@@ -210,7 +210,7 @@ export async function setArtifactStatus(
  * never orphans bytes with no index row; the row delete is authoritative for "gone". Returns the number
  * of rows removed (0 = wrong owner or already gone — idempotent, never throws on a missing id).
  */
-export async function deleteArtifact(userEmail: string, id: string): Promise<{ deleted: number }> {
+export async function deleteArtifact(userEmail: string, id: string): Promise<{ deleted: number; error?: string }> {
   await ensureBootstrapped();
   const { rows } = await getPool().query<{ blob_path: string }>(
     `SELECT blob_path FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
@@ -218,7 +218,10 @@ export async function deleteArtifact(userEmail: string, id: string): Promise<{ d
   );
   const row = rows[0];
   if (!row) return { deleted: 0 }; // wrong owner or missing — no cross-user delete
-  await deleteArtifactBlob(row.blob_path);
+  // Blob first: if it can't be removed (a transient storage error, not a 404 — deleteIfExists swallows
+  // those), KEEP the row so the artifact stays listed as the handle to retry, rather than orphaning bytes.
+  const blobOk = await deleteArtifactBlob(row.blob_path);
+  if (!blobOk) return { deleted: 0, error: "Couldn't remove the stored file — the artifact was kept so you can retry." };
   const res = await getPool().query(
     `DELETE FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
     [id, userEmail.toLowerCase()],
