@@ -56,7 +56,7 @@ async function call(id, payload) {
 
 const j = (o) => JSON.stringify(o);
 const FN = ids();
-for (const need of ["getMirrorConfigFn", "setMirrorConfigFn", "mirrorArtifactFn", "createArtifactFn", "reviewArtifactFn", "getArtifactFn"]) {
+for (const need of ["getMirrorConfigFn", "setMirrorConfigFn", "mirrorArtifactFn", "createArtifactFn", "reviewArtifactFn", "getArtifactFn", "deleteArtifactFn", "listArtifactsFn"]) {
   if (!FN[need]) { console.error("MISSING fn id:", need); process.exit(1); }
 }
 
@@ -102,4 +102,17 @@ for (const need of ["getMirrorConfigFn", "setMirrorConfigFn", "mirrorArtifactFn"
   // AC: gdrive is deferred to Phase 3 (never a crash, a clear note).
   const g = await call(FN.mirrorArtifactFn, { caller: CALLER, id: seed.id, destination: "gdrive" });
   console.log("6) mirrorArtifact(gdrive)   →", j(g), " deferred:", g.deferred === true ? "PASS" : "FAIL");
+
+  // AC: delete removes the row (deleted:1); a second delete is idempotent (deleted:0). Then sweep any
+  // leftover _mirror-test artifacts from earlier runs so verification never litters the user's board.
+  const del = await call(FN.deleteArtifactFn, { caller: CALLER, id: seed.id });
+  const del2 = await call(FN.deleteArtifactFn, { caller: CALLER, id: seed.id });
+  console.log("\n7) delete →", j(del), " idempotent re-delete →", j(del2),
+    " :", del.deleted === 1 && del2.deleted === 0 ? "PASS" : "FAIL");
+
+  const left = await call(FN.listArtifactsFn, { caller: CALLER, folder: "_mirror-test" });
+  const rows = left.artifacts ?? [];
+  let swept = 0;
+  for (const r of rows) { const d = await call(FN.deleteArtifactFn, { caller: CALLER, id: r.id }); swept += d.deleted ?? 0; }
+  console.log("8) swept leftover _mirror-test artifacts:", swept, `(found ${rows.length})`);
 })();
