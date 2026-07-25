@@ -142,10 +142,15 @@ export async function runScheduledGrooming(
     return { ok: true, skipped: true, reason: "empty", runId };
   }
 
-  // Groom via Terry's engine (LLM assign/tag/priority/rank + writeback to journey).
+  // Groom via Terry's engine (LLM assign/tag/priority/rank + writeback to journey). Unlike the in-chat
+  // tool (capped at 25 to beat the live-turn timeout), the scheduled path grooms the WHOLE open backlog
+  // per pass — bounded at 80 so a very large backlog can't rate-limit OpenAI (the remainder rotates in on
+  // the next cadence fire, driven by change/next slot). Classification runs in concurrent 5-task chunks.
+  const SCHEDULED_MAX = 80;
+  const passLimit = Math.min(tasks.length, SCHEDULED_MAX);
   let parsed: GroomJson = {};
   try {
-    parsed = JSON.parse(await dispatchGroomBacklog(caller, {})) as GroomJson;
+    parsed = JSON.parse(await dispatchGroomBacklog(caller, { limit: passLimit }, { maxLimit: SCHEDULED_MAX })) as GroomJson;
   } catch {
     parsed = {};
   }
