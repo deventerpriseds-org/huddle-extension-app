@@ -47,9 +47,15 @@ export const Route = createFileRoute("/api/public/run-turn")({
             return json({ ok: true, turnId: payload.turnId, ran });
           }
           const max = Math.min(Math.max(1, payload.max ?? 5), 20);
-          // Each drain tick: finish any stranded turns AND fire any due reminders.
-          const [ran, reminders] = await Promise.all([drainQueuedTurns(max), fireDueReminders()]);
-          return json({ ok: true, ran, reminders });
+          // Each drain tick also drives the general recurring-job scheduler (Azure Huddle PG): finish
+          // stranded turns, fire due reminders, AND dispatch any due scheduled jobs (auto-grooming, …).
+          const { runDueScheduledJobs } = await import("@/features/huddle/lib/tasks/scheduler.server");
+          const [ran, reminders, jobs] = await Promise.all([
+            drainQueuedTurns(max),
+            fireDueReminders(),
+            runDueScheduledJobs(),
+          ]);
+          return json({ ok: true, ran, reminders, jobs });
         } catch (err) {
           console.error("[run-turn] failed", err instanceof Error ? err.message : err);
           return json({ ok: false, error: "run_turn_failed" }, 500);
