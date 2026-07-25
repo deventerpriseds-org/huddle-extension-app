@@ -62,6 +62,19 @@ function ago(iso: string): string {
 
 type FullArtifact = ArtifactRow & { url?: string | null };
 
+// E2E-only fixtures — DOUBLE-GATED (Vite DEV build AND VITE_E2E_AUTH_BYPASS=1), so this whole block is
+// dead-code-eliminated in the production bundle. It lets headless Playwright drive the real component
+// (list → preview → review) without the dev/prod server-fn codec mismatch. The live data path
+// (create/list/get/review server fns) is verified separately against the deployed prod app.
+const E2E = import.meta.env.DEV && import.meta.env.VITE_E2E_AUTH_BYPASS === "1";
+const E2E_ROWS: ArtifactRow[] = E2E
+  ? [
+      { id: "art-e1", user_email: "dev@enterpriseds.io", agent_id: "cam-post", task_id: "research-agentforce", folder: "Ventures", name: "agentforce-scan.md", mime: "text/markdown", size_bytes: 1840, blob_path: "p/art-e1", status: "review", version: 1, review_note: null, reviewed_by: null, reviewed_at: null, onedrive_url: null, gdrive_url: null, created_at: "2026-07-25T17:00:00Z", updated_at: "2026-07-25T18:00:00Z" },
+      { id: "art-e2", user_email: "dev@enterpriseds.io", agent_id: "finn-reid", task_id: "market-model", folder: "Ventures", name: "market-model.xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size_bytes: 4200, blob_path: "p/art-e2", status: "approved", version: 2, review_note: null, reviewed_by: "dev@enterpriseds.io", reviewed_at: "2026-07-25T17:30:00Z", onedrive_url: null, gdrive_url: null, created_at: "2026-07-25T16:00:00Z", updated_at: "2026-07-25T17:30:00Z" },
+      { id: "art-e3", user_email: "dev@enterpriseds.io", agent_id: "sam-trent", task_id: "gtm", folder: "Ventures", name: "gtm-notes.md", mime: "text/markdown", size_bytes: 900, blob_path: "p/art-e3", status: "changes", version: 1, review_note: "tighten the CAC math", reviewed_by: "dev@enterpriseds.io", reviewed_at: "2026-07-25T17:10:00Z", onedrive_url: null, gdrive_url: null, created_at: "2026-07-25T15:00:00Z", updated_at: "2026-07-25T17:10:00Z" },
+    ]
+  : [];
+
 export function ArtifactsView() {
   const { user } = useAuth();
   const caller = useMemo(
@@ -79,6 +92,13 @@ export function ArtifactsView() {
   const [busy, setBusy] = useState(false);
 
   const refetch = useCallback(async () => {
+    if (E2E) {
+      const rows = E2E_ROWS.filter((r) => (!folder || r.folder === folder) && (!status || r.status === status));
+      setItems(rows);
+      setFolders([{ folder: "Ventures", n: E2E_ROWS.length }]);
+      setLoading(false);
+      return;
+    }
     if (!caller) { setLoading(false); return; }
     try {
       const res = await listArtifactsFn({
@@ -93,6 +113,11 @@ export function ArtifactsView() {
   useEffect(() => { void refetch(); }, [refetch]);
 
   const openArtifact = useCallback(async (id: string) => {
+    if (E2E) {
+      const a = E2E_ROWS.find((r) => r.id === id);
+      if (a) { setSelId(id); setSel({ ...a, url: "data:text/markdown,x" }); setSelText(`# ${a.name}\n\nReal artifact preview body.`); }
+      return;
+    }
     if (!caller) return;
     setSelId(id);
     setSel(null);
@@ -116,6 +141,13 @@ export function ArtifactsView() {
     if (action === "changes") {
       note = window.prompt("What changes do you want?")?.trim() || "";
       if (!note) return;
+    }
+    if (E2E) {
+      const next = action === "approve" ? "approved" : action === "changes" ? "changes" : "review";
+      setSel((s) => (s ? { ...s, status: next, reviewed_by: "dev@enterpriseds.io" } : s));
+      setItems((xs) => xs.map((x) => (x.id === sel.id ? { ...x, status: next } : x)));
+      toast.success(action === "approve" ? "Approved" : action === "changes" ? "Changes requested" : "Re-opened");
+      return;
     }
     setBusy(true);
     try {
