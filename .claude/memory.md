@@ -87,6 +87,12 @@ ACT-4 residuals to fold into ACT-5: Terry's summary omitted the blocked items; `
 in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's tail (16+) un-groomed.
 
 ## Hardening (append)
+- [2026-07-25] MISTAKE: `deleteArtifact` ignored `deleteArtifactBlob`'s return, so a transient blob-delete
+  error would still delete the metadata row → orphaned bytes (the exact state the blob-first ordering
+  exists to prevent). Caught by the verifier subagent (AC-A2), not self-caught. ROOT CAUSE: swallowed +
+  unchecked boolean. GUARDRAIL: on a blob-delete failure, KEEP the row (it's the retry handle) and surface
+  the error via `deleteArtifactFn` → `{ok:false, error}`. Lesson: when a helper returns a success boolean,
+  the caller must branch on it — don't let "fire and continue" defeat an ordering invariant.
 - [2026-07-25] MISTAKE: framed "can't verify from the session" as needing a merge because of the secret. ROOT
   CAUSE: conflated two things. JOURNEY_PROXY_TOKEN is an org secret (available to any Actions run) — it's just not
   in the CCR session shell; the real merge-gate is GitHub's rule that a NEW workflow_dispatch file must be on the
