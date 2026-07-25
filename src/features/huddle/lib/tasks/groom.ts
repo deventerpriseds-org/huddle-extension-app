@@ -76,6 +76,7 @@ function rosterForPrompt(): string {
 export async function dispatchGroomBacklog(
   caller: Caller | undefined,
   args: Record<string, unknown>,
+  opts?: { maxLimit?: number },
 ): Promise<string> {
   if (!caller?.entra_email) {
     return JSON.stringify({ error: "no_caller_identity", message: "Grooming needs the signed-in user's email." });
@@ -87,9 +88,13 @@ export async function dispatchGroomBacklog(
   if (!apiKey) return JSON.stringify({ error: "not_configured", message: "OPENAI_API_KEY is not set." });
 
   const category = typeof args.category === "string" && args.category.trim() ? args.category.trim() : undefined;
-  // Keep each pass small so classification + the batched write finish comfortably within the tool
-  // budget (a large pass is what made grooming time out). The user can ask again to groom more.
-  const limit = typeof args.limit === "number" && args.limit > 0 ? Math.min(args.limit, 25) : 15;
+  // Per-pass size. The IN-CHAT tool keeps a small cap (25) so classification + the batched write finish
+  // within the live-turn timeout (a large pass is what made grooming time out). The SCHEDULED/backend
+  // path passes a higher `opts.maxLimit` (e.g. 80) and an explicit `limit` = its whole open backlog, so a
+  // cadence groom covers EVERY open task, not just the top 15 — classification runs in concurrent 5-task
+  // chunks, so wall time barely grows. Default (no explicit limit) stays 15 for the in-chat tool.
+  const cap = Math.max(1, opts?.maxLimit ?? 25);
+  const limit = typeof args.limit === "number" && args.limit > 0 ? Math.min(args.limit, cap) : Math.min(15, cap);
 
   try {
     const _tRead0 = Date.now();
