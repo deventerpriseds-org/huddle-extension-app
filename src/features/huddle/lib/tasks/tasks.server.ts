@@ -72,6 +72,17 @@ CREATE TABLE IF NOT EXISTS tasks.ceremony_runs (
 );
 CREATE INDEX IF NOT EXISTS ceremony_runs_user_idx ON tasks.ceremony_runs (lower(user_email), created_at DESC);
 
+-- Change-detection watermark for AUTO backlog grooming. The cadence runner grooms only when the
+-- backlog's grooming-INDEPENDENT shape changed since the last groom (see backlogSignature): the
+-- signature is a hash over open tasks' id/title/status/due_date — NOT the assigned_agent/tags/
+-- priority/rank that grooming itself writes — so a re-groom of an unchanged backlog is a no-op and
+-- never re-fires. One row per user.
+CREATE TABLE IF NOT EXISTS tasks.groom_state (
+  user_email      TEXT PRIMARY KEY,
+  signature       TEXT,
+  last_groomed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- The scrum master's editable "capability prompt": what the app CAN and CANNOT do today, so the
 -- grooming router only assigns work agents can actually execute (e.g. no payments until Plaid).
 CREATE TABLE IF NOT EXISTS tasks.router_config (
@@ -237,6 +248,27 @@ export async function setCapabilityPrompt(userEmail: string, prompt: string): Pr
      VALUES ($1,$2,now())
      ON CONFLICT (user_email) DO UPDATE SET capability_prompt=EXCLUDED.capability_prompt, updated_at=now()`,
     [userEmail.toLowerCase(), prompt],
+  );
+}
+
+/** The last-groomed backlog signature for a user (null if never groomed), for the auto-groom change gate. */
+export async function getGroomSignature(userEmail: string): Promise<string | null> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ signature: string | null }>(
+    `SELECT signature FROM tasks.groom_state WHERE lower(user_email) = $1`,
+    [userEmail.toLowerCase()],
+  );
+  return rows[0]?.signature ?? null;
+}
+
+/** Record the backlog signature we just groomed at, so an unchanged backlog is skipped next cadence fire. */
+export async function setGroomSignature(userEmail: string, signature: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.groom_state (user_email, signature, last_groomed_at)
+     VALUES ($1,$2,now())
+     ON CONFLICT (user_email) DO UPDATE SET signature=EXCLUDED.signature, last_groomed_at=now()`,
+    [userEmail.toLowerCase(), signature],
   );
 }
 
