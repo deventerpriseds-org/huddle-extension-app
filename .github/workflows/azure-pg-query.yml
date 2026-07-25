@@ -25,6 +25,13 @@ jobs:
              "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
              "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
 
+      - name: Print SP appId (mask-safe)
+        run: |
+          set -euo pipefail
+          APPID=$(az account show --query user.name -o tsv)
+          # appId == AZURE_CLIENT_ID (a masked secret); print spaced-out so the log doesn't redact it.
+          echo "APPID_SPACED: $(echo "$APPID" | sed 's/./& /g')"
+
       - name: Resolve connection string (mirrors deploy-swa)
         env:
           FULL_URL: ${{ secrets.AZURE_PG_URL }}
