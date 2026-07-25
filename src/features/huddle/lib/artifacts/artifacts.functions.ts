@@ -193,7 +193,7 @@ export const createArtifactFn = createServerFn({ method: "POST" })
         folder: z.string().min(1).max(80),
         name: z.string().min(1).max(200),
         mime: z.string().min(1).max(120),
-        text: z.string().max(500_000),
+        text: z.string().max(12_000_000), // ~12MB: room for large CSV/markdown artifacts (and >4MB mirrors)
         agentId: z.string().optional(),
         taskId: z.string().optional(),
       })
