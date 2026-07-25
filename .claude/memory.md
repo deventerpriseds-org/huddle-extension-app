@@ -1,5 +1,5 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-07-24
+Last updated: 2026-07-25
 
 ## Purpose & goals
 Huddle: a multi-agent AI life-assistant (15 role-agents) integrated with the **journey** app.
@@ -35,6 +35,8 @@ never clutters the user's task board. TanStack Start + React 19 + Vite + Nitro �
 | 1:1 domain lane handoff (budget→Finn) | done (verified live) | `laneOwnerFor`; AC-1/2/3 PASS observed |
 | 1:1 owner follow-up delivery (owner actually messages) | done (verified live) | AC-4/5/6 PASS (verifier). Back-channel `capabilityOwnerFor`/`laneOwnerFor` → `deliverOwnerFollowup` enqueues a REAL durable turn in `dm-<owner>` (rides send_push away-notif). Owner turns observed in dm-terry-locke + dm-finn-reid, "passed/mentioned by X" phrasing, confirm-before-act. |
 | meta-task guard (non-owner can't file exclusive-job card) | done (verified live) | `capabilityOwnerFor(title)` in `createSuggestedTaskFromTool` → deferred no-op. RE-TEST: tool attempted, `tasks:[]`. |
+| ACT-4 auto backlog grooming (cadence) | done (verified live) | `runScheduledGrooming` + `run-grooming` route; change-gated (`backlogSignature`), summary in dm-terry-locke + push. Live: force groom `groomed:15`, mirror 27/49 assigned, non-force `skipped:unchanged`. |
+| General recurring-job scheduler (Azure Huddle PG) | done (verified live) | `tasks.scheduled_jobs` + `runDueScheduledJobs`, driven by the existing every-minute run-turn tick. Self-registered `groom-<user>` with DST-correct `next_run_at`. Ceremonies/digests ride it next. |
 | create_huddle_task cross-turn dedup | deployed, UNVERIFIED | merged PR #5; needs verifier |
 | Quota surfacing + file-search fix | deployed, UNVERIFIED | merged in PR #4 |
 | Board test-task cleanup | done (verified) | 523 → 247 via journey REST workflow |
@@ -74,9 +76,17 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
-ACT-1 (1:1 ownership hand-off) is COMPLETE and verified live end-to-end: AC-1..AC-6 PASS via independent verifier
-against the deployed SWA (branch `fix-1to1-capability-defer`, commits 2b2fef2 + 658144b). Next: open/refresh the PR,
-then pick up ACT-4/5/6 (auto grooming, agents self-start/blocked, ceremonies + standup summaries — each needs an AC
-pass first). Residual (non-blocking): the model still *attempts* the now-blocked meta-task on one wording; and the
-away-push actually reaching the phone is by-design (rides the proven send_push path) but was not separately re-proven
-this pass — worth a targeted push check when convenient.
+ACT-1 (1:1 hand-off) and ACT-4 (auto backlog grooming) are COMPLETE and verified live; PR #6 (ACT-1 + ACT-4 code)
+is MERGED to main. ACT-4 built a GENERAL recurring-job scheduler in Azure Huddle PG (see feature table) — the
+substrate ACT-6 (ceremonies) should ride next (add a 'ceremony' case to fireJob + rows), rather than a bespoke cron.
+Next up: ACT-6 (ceremonies fire + standup summaries — now cheap on the scheduler), ACT-5 (agents self-start doable
+tasks / classify blocked — dovetails with ACT-4's blocked-surfacing residuals), and ACT-3 (dedup verify).
+ACT-4 residuals to fold into ACT-5: Terry's summary omitted the blocked items; `blocked-on-capability` tag not seen
+in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's tail (16+) un-groomed.
+
+## Hardening (append)
+- [2026-07-25] MISTAKE: framed "can't verify from the session" as needing a merge because of the secret. ROOT
+  CAUSE: conflated two things. JOURNEY_PROXY_TOKEN is an org secret (available to any Actions run) — it's just not
+  in the CCR session shell; the real merge-gate is GitHub's rule that a NEW workflow_dispatch file must be on the
+  DEFAULT branch to be dispatchable. GUARDRAIL: when a secret is "needed," check the session env by all plausible
+  names first, and state the true blocker (dispatch-on-default-branch), not a proxy for it.
