@@ -92,6 +92,11 @@ it); away-push reaching the phone is by-design (proven send_push path) but not s
 523 → 247 tasks. Workflow removed after use (PR #19). **Verification:** PASS (run log).
 
 ## Decisions & scope changes
+- [2026-07-25] **Artifact store** (agent outputs → reviewable artifacts, ACT-5's output home): Azure Blob canonical
+  (private `huddle-artifacts` container, 15-min read SAS) + `artifacts.items` metadata in RAG_AI_Agents; formats
+  OOXML/PDF/MD; **one-way** OneDrive(Graph)/Google Drive(journey tokens) mirror deferred to Phase 2/3 (cols null now).
+  Reuse the org storage account (not dedicated). Phase 1 (store + review UI) built + backend verified live; UI
+  click-through not yet done. Mockup: artifact-store-mockup.
 - [2026-07-25] Recurring jobs run on a GENERAL heartbeat dispatcher in **Azure Huddle PG** (`tasks.scheduled_jobs`
   + `runDueScheduledJobs`), driven by the existing every-minute run-turn tick — NOT a per-feature supabase cron.
   Any future recurring/scheduled job (ceremonies, digests, reminders) piggybacks as a row. No new cron/secret.

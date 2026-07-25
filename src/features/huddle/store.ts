@@ -18,7 +18,7 @@ import {
 } from "./data/seed";
 import type { JourneyTask } from "./lib/journey/types";
 
-type View = "huddle" | "board";
+type View = "huddle" | "board" | "artifacts";
 
 export type MeetingKind = "morning" | "midday" | "afternoon" | "adhoc" | "virtual-meeting";
 export type CeremonyKind = "standup" | "retro" | "planning" | "review" | "review_retro";

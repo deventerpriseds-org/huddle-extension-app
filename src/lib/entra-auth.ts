@@ -222,7 +222,23 @@ export function getMsal(): PublicClientApplication | null {
 }
 
 /** Initialize MSAL and resolve any pending redirect. Safe to call multiple times. */
+// E2E test bypass — DOUBLE-GATED: only when the app is a Vite DEV/preview build AND the explicit
+// VITE_E2E_AUTH_BYPASS flag is "1". In a production build `import.meta.env.DEV` is statically false,
+// so this whole branch is dead-code-eliminated and can never activate in prod. The prod deploy
+// (deploy-swa.yml) never sets the flag. It lets headless Playwright reach the authenticated app as a
+// fixed dev user without real MSAL sign-in. Server fns already trust caller.entra_email in the payload.
+const E2E_BYPASS = import.meta.env.DEV && import.meta.env.VITE_E2E_AUTH_BYPASS === "1";
+const E2E_ACCOUNT = {
+  homeAccountId: "e2e-dev",
+  localAccountId: "e2e-dev",
+  environment: "e2e",
+  tenantId: "e2e",
+  username: "dev@enterpriseds.io",
+  name: "E2E Dev",
+} as AccountInfo;
+
 export function initMsal(): Promise<void> {
+  if (E2E_BYPASS) return Promise.resolve();
   if (!isBrowser()) return Promise.resolve();
   if (initPromise) {
     traceAuth("msal:init:reuse");
@@ -278,6 +294,7 @@ export function initMsal(): Promise<void> {
 }
 
 export function getCurrentUser(): AccountInfo | null {
+  if (E2E_BYPASS) return E2E_ACCOUNT;
   const msal = getMsal();
   if (!msal) return null;
   const activeAccount = msal.getActiveAccount();
