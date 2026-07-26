@@ -170,9 +170,15 @@ export async function fireDueReminders(max = 25): Promise<number> {
               // Target the standalone Huddle bridge app only (endpoint `fcm:app:huddle:%`) so a Huddle
               // reminder/alarm doesn't also duplicate onto journey's web + bridge subscriptions.
               app: "huddle",
-              ...(huddleId
-                ? { data: { deepLink: `/?huddle=${huddleId}`, source: isAlarm ? "huddle-alarm" : "huddle-reminder", huddleId } }
-                : {}),
+              data: {
+                ...(huddleId
+                  ? { deepLink: `/?huddle=${huddleId}`, source: isAlarm ? "huddle-alarm" : "huddle-reminder", huddleId }
+                  : {}),
+                // Unique per reminder so several firing close together each get their own notification
+                // (the bridge keys on `tag`; a shared tag would collapse them to one). See executeClaimedTurn.
+                notificationId: `rem-${r.id}`,
+                tag: `rem-${r.id}`,
+              },
             },
             caller: { entra_email: r.user_email },
             context: { source: "huddle" },

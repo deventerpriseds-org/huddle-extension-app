@@ -3031,9 +3031,18 @@ async function executeClaimedTurn(record: {
               // token (endpoint `fcm:app:huddle:%`), so an agent reply doesn't also duplicate onto
               // journey's web + bridge notifications.
               app: "huddle",
-              ...(huddleId
-                ? { data: { deepLink: `/?huddle=${huddleId}`, source: "huddle-message", huddleId } }
-                : {}),
+              data: {
+                ...(huddleId
+                  ? { deepLink: `/?huddle=${huddleId}`, source: "huddle-message", huddleId }
+                  : {}),
+                // UNIQUE per turn. The Android bridge identifies a notification by its `tag`
+                // (`notify(tag, 0, …)`) and journey defaults an untagged push to the constant `'fcm'`,
+                // so every reply would REPLACE the previous one — you'd see only the latest, not each
+                // message as it was posted. A per-turn tag makes each reply its own shade entry, arriving
+                // one at a time. `notificationId` tags web-push the same way.
+                notificationId: record.id,
+                tag: record.id,
+              },
             },
             caller: { entra_email: record.user_email },
             context: { source: "huddle" },
