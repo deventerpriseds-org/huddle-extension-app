@@ -25,6 +25,7 @@ import {
   type TavilySearchArgs,
 } from "./tavily-search.functions";
 import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
+import { FLAG_BLOCKER_TOOL } from "./tasks/task-agent-tools";
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
@@ -1556,6 +1557,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           const mergedTools = [
             createHuddleTaskTool,
             CREATE_ARTIFACT_TOOL,
+            FLAG_BLOCKER_TOOL,
             SCHEDULE_REMINDER_TOOL,
             PRIORITIZE_TOOL,
             ...groomTools,
@@ -1617,6 +1619,40 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "create_artifact", "save failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            }
+            if (c.name === "flag_blocker") {
+              const a = c.arguments as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const reason = String(a.reason ?? "").trim();
+              if (!taskId || !reason) return JSON.stringify({ ok: false, error: "task_id and reason are required" });
+              if (!claimAction(`flag_blocker:${taskId}`)) {
+                recordToolUse(winner.id, "flag_blocker", "already flagged this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true });
+              }
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                // Authoritative signal: set the journey task status=BLOCKED (syncs to the mirror, excludes
+                // it from open/auto-work). Then record the SPECIFIC reason Huddle-side for the standup.
+                const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                await invokeJourneyTool({
+                  toolName: "update_task",
+                  args: { task_id: taskId, status: "BLOCKED" },
+                  caller: data.caller ?? {},
+                  context: { source: "huddle" },
+                });
+                if (email) {
+                  const { setTaskBlocker } = await import("./tasks/tasks.server");
+                  await setTaskBlocker(email, taskId, reason, winner.id);
+                }
+                recordToolUse(winner.id, "flag_blocker", `blocked: ${reason.slice(0, 60)}`, true);
+                return JSON.stringify({ ok: true, task_id: taskId, status: "BLOCKED" });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             }
@@ -2046,6 +2082,44 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "create_artifact", "save failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            },
+          });
+
+          // flag_blocker — the agent earns the "blocked" verdict by working the task (mirrors OpenAI path).
+          lovableTools.flag_blocker = tool({
+            description: FLAG_BLOCKER_TOOL.description,
+            inputSchema: z.object({ task_id: z.string(), reason: z.string() }),
+            execute: async (args) => {
+              const a = args as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const reason = String(a.reason ?? "").trim();
+              if (!taskId || !reason) return JSON.stringify({ ok: false, error: "task_id and reason are required" });
+              if (!claimAction(`flag_blocker:${taskId}`)) {
+                recordToolUse(winner.id, "flag_blocker", "already flagged this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true });
+              }
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                await invokeJourneyTool({
+                  toolName: "update_task",
+                  args: { task_id: taskId, status: "BLOCKED" },
+                  caller: data.caller ?? {},
+                  context: { source: "huddle" },
+                });
+                if (email) {
+                  const { setTaskBlocker } = await import("./tasks/tasks.server");
+                  await setTaskBlocker(email, taskId, reason, winner.id);
+                }
+                recordToolUse(winner.id, "flag_blocker", `blocked: ${reason.slice(0, 60)}`, true);
+                return JSON.stringify({ ok: true, task_id: taskId, status: "BLOCKED" });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             },

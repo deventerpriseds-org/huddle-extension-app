@@ -1,6 +1,6 @@
 // The scrum master's backlog-grooming tool (`groom_backlog`). Jira-style triage over the user's
 // real journey backlog: one LLM pass assigns each open task to the best-fit agent, tags it, sets a
-// priority, and — respecting the user's editable capability prompt — marks it do / schedule / blocked
+// priority, and ranks it. It does NOT decide "blocked" — the owning agent earns that by working the task.
 // (e.g. a payment task can only be *scheduled* until a Plaid integration exists). It then writes the
 // assignment + priority back to journey (canonical) via the huddle-proxy, so the change flows through
 // the normal sync into Huddle's mirror. Gated to Terry (scrum master) at the call site.
@@ -11,7 +11,7 @@ export const GROOM_BACKLOG_TOOL = {
   type: "function",
   name: "groom_backlog",
   description:
-    "Groom the backlog like a scrum master: assign each open task to the best-fit agent, tag it, set its priority, and order what to do next — respecting what the team can actually do right now (some work can only be scheduled, not executed). Writes the assignments/priority back to the real task board. Call this when the user asks to groom/triage/organize/assign the backlog or plan the sprint.",
+    "Groom the backlog like a scrum master: assign each open task to the best-fit agent (by their lane/role), tag it, set its priority, and order what to do next. Writes the assignments/priority back to the real task board. Call this when the user asks to groom/triage/organize/assign the backlog or plan the sprint. (Whether a task is blocked is NOT decided here — the owning agent determines that by actually working it.)",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -28,7 +28,7 @@ export const GROOM_BACKLOG_TOOL = {
 } as const;
 
 export const GROOM_SYSTEM_HINT =
-  "When the user asks you DIRECTLY to groom, triage, organize, assign, or plan the backlog/sprint (a scrum-master job), call `groom_backlog`. It assigns each task to an agent, tags/prioritizes it, respects the team's real capabilities (some tasks can only be scheduled), and reorders the board. Report back what was assigned and what's blocked-on-capability — do not invent an ordering yourself.";
+  "When the user asks you DIRECTLY to groom, triage, organize, assign, or plan the backlog/sprint (a scrum-master job), call `groom_backlog`. It assigns each task to the best-fit agent, tags/prioritizes it, and reorders the board. Report back what you assigned and reprioritized — do not invent an ordering yourself.";
 
 // GROUP hand-off: if a teammate @mentions you to groom, the user already asked in the room —
 // so just do it and report, no permission dance (the user's rule: in a group the owner acts).
@@ -46,7 +46,6 @@ interface Assignment {
   id: string;
   assigned_agent: string;
   tags: string[];
-  action: "do" | "schedule" | "blocked";
   priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
   rank: number | null;
   reason: string;
@@ -98,32 +97,20 @@ export async function dispatchGroomBacklog(
 
   try {
     const _tRead0 = Date.now();
-    const { getTasksForUser, getCapabilityPrompt } = await import("./tasks.server");
-    const [tasks, capabilityPrompt] = await Promise.all([
-      getTasksForUser(email, category),
-      getCapabilityPrompt(email),
-    ]);
+    const { getTasksForUser } = await import("./tasks.server");
+    const tasks = await getTasksForUser(email, category);
     const _readMs = Date.now() - _tRead0;
     if (!tasks.length) {
       return JSON.stringify({ groomed: 0, message: "No open tasks to groom." });
     }
     const slice = tasks.slice(0, limit);
 
-    const system = `You are Terry Locke, the scrum master, grooming a backlog like in Jira. Assign each task to exactly ONE agent (the best fit by their domains/role), give it 0-3 short lowercase tags, set a priority (LOW|MEDIUM|HIGH|URGENT), and set an integer rank (1 = do first) ONLY for tasks that are do-able now; use null rank for scheduled/blocked tasks.
-
-Set each task's action by judging PROGRESS, not COMPLETION. Agents can move almost any knowledge task forward on their own — research it, analyze options, draft a document/plan/recommendation (saved as an artifact) — and THAT counts as "do", even if the user must still review, approve, or take a final real-world step. Criteria:
-- "do": an agent can make meaningful progress NOW (research / analysis / draft / produce a document). This is the DEFAULT for knowledge work. Give it a rank.
-- "schedule": progress is time-gated — nothing useful can happen until a specific date or event. rank null.
-- "blocked": NO useful agent progress is possible until either (a) a capability the team genuinely lacks (spending money, purchasing, sending external messages without approval — see CAPABILITIES), or (b) a specific USER action / decision / credential that must come first and that no amount of research or drafting can substitute for. rank null. ONLY then tag "blocked-on-capability".
-Do NOT mark a task "blocked" merely because the user must ultimately finish it, or because the team can't fully COMPLETE it — if an agent can research or draft toward it, it is "do".
-
-CAPABILITIES:
-${capabilityPrompt}
+    const system = `You are Terry Locke, the scrum master, grooming a backlog like in Jira. For each task: assign it to exactly ONE agent (the best fit by their domains/role), give it 0-3 short lowercase descriptive tags, set a priority (LOW|MEDIUM|HIGH|URGENT), and set an integer rank (1 = do first) reflecting the order to tackle things. You are ORGANIZING the backlog — assigning, tagging, prioritizing, ordering. You do NOT decide whether a task is "blocked" or un-doable; the assigned agent determines that by actually working it. Just route every task to its best owner and rank it.
 
 AGENTS (id — name, role: domains):
 ${rosterForPrompt()}
 
-Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"action":"do|schedule|blocked","priority","rank":<int|null>,"reason":"<=8 words"}]}. assigned_agent MUST be one of the agent ids above. Include every task id exactly once.`;
+Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority","rank":<int>,"reason":"<=8 words"}]}. assigned_agent MUST be one of the agent ids above. Include every task id exactly once.`;
 
     // Classification is output-token bound (one JSON object per task), so a single call over the whole
     // slice serializes ~1k tokens and takes ~13s. Split into small chunks classified CONCURRENTLY so
@@ -168,27 +155,19 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"action":"d
       return JSON.stringify({ error: "groom_no_assignments", message: "Classification returned nothing — try again." });
     }
 
-    // Rank the do-able tasks (1 = do first) so we can set the priority lane.
-    const doable = assignments
-      .filter((a) => a.action === "do" && typeof a.rank === "number")
+    // Normalize ranks to a dense 1..N ordering (1 = do first) for the priority lane.
+    const ranked = assignments
+      .filter((a) => typeof a.rank === "number")
       .sort((x, y) => (x.rank as number) - (y.rank as number));
     const rankById = new Map<string, number>();
-    doable.forEach((a, i) => rankById.set(a.id, i + 1));
-
-    const blocked: { title: string; reason: string }[] = [];
-    for (const a of assignments) {
-      if (a.action !== "do") blocked.push({ title: slice.find((t) => t.id === a.id)?.title ?? a.id, reason: a.reason });
-    }
+    ranked.forEach((a, i) => rankById.set(a.id, i + 1));
 
     // Compute everything Huddle-side, then push ALL updates to journey in ONE batch call
-    // (not N per-task round-trips). Bounded by a timeout so the turn never hangs.
+    // (not N per-task round-trips). Bounded by a timeout so the turn never hangs. Grooming only
+    // assigns/tags/prioritizes — it never sets a blocked status (the owning agent does that by working it).
     const updates = assignments.map((a) => {
       const tags = Array.from(
-        new Set([
-          ...(Array.isArray(a.tags) ? a.tags.map((t) => String(t).toLowerCase()) : []),
-          ...(a.action === "schedule" ? ["schedule-only"] : []),
-          ...(a.action === "blocked" ? ["blocked-on-capability"] : []),
-        ]),
+        new Set(Array.isArray(a.tags) ? a.tags.map((t) => String(t).toLowerCase()) : []),
       ).slice(0, 5);
       const rank = rankById.get(a.id);
       return { task_id: a.id, assigned_agent: a.assigned_agent, tags, priority: a.priority, ...(rank ? { rank } : {}) };
@@ -231,12 +210,11 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"action":"d
           : written < assignments.length
             ? `Wrote ${written} of ${assignments.length}; board reflects changes within a few seconds (async sync).`
             : "Assignments + priority written back to the task board; the Huddle board reflects them within a few seconds (async sync).",
-      order: doable.map((a, i) => {
+      order: ranked.map((a, i) => {
         const t = slice.find((s) => s.id === a.id);
         const agent = AGENTS.find((ag) => ag.id === a.assigned_agent);
         return { rank: i + 1, title: t?.title, assignee: agent?.name, priority: a.priority, why: a.reason };
       }),
-      blocked_on_capability: blocked,
     });
   } catch (err) {
     return JSON.stringify({ error: "groom_failed", message: err instanceof Error ? err.message : String(err) });

@@ -30,7 +30,7 @@ function agentName(id: string | null): string {
 
 function buildBrief(
   produced: { name: string; agentId: string | null; folder: string }[],
-  blocked: { title: string }[],
+  blocked: { title: string; reason?: string }[],
   priorities: { title: string; agent: string | null }[],
 ): string {
   const lines: string[] = [];
@@ -42,7 +42,9 @@ function buildBrief(
   }
   if (blocked.length) {
     lines.push("", `Blocked pending YOUR input (${blocked.length}) — the team can't proceed without you:`);
-    for (const b of blocked.slice(0, 6)) lines.push(`- "${b.title.slice(0, 120)}"`);
+    for (const b of blocked.slice(0, 6)) {
+      lines.push(`- "${b.title.slice(0, 100)}"${b.reason ? ` — ${b.reason.slice(0, 160)}` : ""}`);
+    }
   }
   if (priorities.length) {
     lines.push("", `Today's top priorities:`);
@@ -99,7 +101,7 @@ export async function runScheduledStandup(
   const email = (await resolveTaskEmail(caller)) ?? caller.entra_email;
   const tz = opts.timeZone ?? "America/New_York";
 
-  const { getBoardTasks } = await import("./tasks.server");
+  const { getBoardTasks, getTaskBlockers } = await import("./tasks.server");
   const { listArtifacts } = await import("../artifacts/artifacts.server");
 
   const now = Date.now();
@@ -112,12 +114,14 @@ export async function runScheduledStandup(
     .map((a) => ({ name: a.name, agentId: a.agent_id, folder: a.folder }));
 
   const board = await getBoardTasks(email);
-  const openTasks = board.filter((t) => !t.completed_at && (t.status ?? "").toUpperCase() !== "DONE");
-  const blocked = openTasks
-    .filter((t) => (t.tags ?? []).includes("blocked-on-capability"))
-    .map((t) => ({ title: t.title }));
-  const priorities = openTasks
-    .filter((t) => !(t.tags ?? []).includes("blocked-on-capability"))
+  const blockers = await getTaskBlockers(email);
+  const notDone = board.filter((t) => !t.completed_at && (t.status ?? "").toUpperCase() !== "DONE");
+  // Blocked = tasks an agent flagged (status BLOCKED), shown with the REAL reason it recorded.
+  const blocked = notDone
+    .filter((t) => (t.status ?? "").toUpperCase() === "BLOCKED")
+    .map((t) => ({ title: t.title, reason: blockers.get(t.id)?.reason }));
+  const priorities = notDone
+    .filter((t) => (t.status ?? "").toUpperCase() !== "BLOCKED")
     .sort((a, b) => (a.priority_rank ?? 9999) - (b.priority_rank ?? 9999))
     .slice(0, 5)
     .map((t) => ({ title: t.title, agent: t.assigned_agent }));

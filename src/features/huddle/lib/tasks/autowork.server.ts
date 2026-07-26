@@ -48,9 +48,11 @@ function researchDirective(task: { id: string; title: string; category: string |
     `"${task.id}" and folder to "${folder}".\n` +
     `2) In your reply, give the user a substantive summary of what you found and your recommendation — ` +
     `enough detail to be useful on its own, not just "see the doc".\n` +
-    `If the task genuinely needs a decision from the user, or you're blocked without their input, say so ` +
-    `clearly and ask the specific question instead of guessing. Do NOT create tasks or send email — just ` +
-    `research, save the artifact, and report.`
+    `Almost always you CAN make progress by researching/drafting — do that. Only if you genuinely cannot ` +
+    `advance this task on your own (it truly needs the user's decision, a credential, or a real-world/` +
+    `capability the team lacks), call flag_blocker with task_id "${task.id}" and the SPECIFIC reason you ` +
+    `need from them — do not guess "blocked" just because they must ultimately finish it. Do NOT create ` +
+    `tasks or send email — research, save the artifact (or flag the real blocker), and report.`
   );
 }
 
@@ -123,7 +125,7 @@ export async function runScheduledAutoWork(
   const email = (await resolveTaskEmail(caller)) ?? caller.entra_email;
   const tz = opts.timeZone ?? "America/New_York";
 
-  const { getOpenAssignedTasks, getBoardTasks, setAutoWorkSignature } = await import("./tasks.server");
+  const { getOpenAssignedTasks, getBoardTasks, getTaskBlockers, setAutoWorkSignature } = await import("./tasks.server");
   const { listArtifacts } = await import("../artifacts/artifacts.server");
   const { enqueueTurn } = await import("./turns.server");
 
@@ -135,10 +137,15 @@ export async function runScheduledAutoWork(
   const withArtifact = new Set(existing.map((a) => a.task_id).filter(Boolean) as string[]);
   const candidates = assigned.filter((t) => t.assigned_agent && AGENT_BY_ID[t.assigned_agent as AgentId] && !withArtifact.has(t.id));
 
+  // Blocked = tasks an agent flagged (status BLOCKED) — with the REAL reason it recorded. Not a guess.
   const board = await getBoardTasks(email);
+  const blockers = await getTaskBlockers(email);
   const blockedTitles = board
-    .filter((t) => !t.completed_at && (t.tags ?? []).includes("blocked-on-capability"))
-    .map((t) => t.title);
+    .filter((t) => !t.completed_at && (t.status ?? "").toUpperCase() === "BLOCKED")
+    .map((t) => {
+      const b = blockers.get(t.id);
+      return b ? `${t.title} — ${b.reason}` : t.title;
+    });
 
   if (!candidates.length && !opts.force) {
     await setAutoWorkSignature(email, signature);

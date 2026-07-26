@@ -91,6 +91,21 @@ CREATE TABLE IF NOT EXISTS tasks.autowork_state (
   last_worked_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Agent-discovered blockers (ACT-5). "Blocked" is NOT guessed by grooming from a title + a hand-written
+-- capability list any more — it is EARNED: when an agent actually works a task and genuinely can't
+-- advance it, it records the specific real reason here (and sets the journey task status=BLOCKED, which
+-- syncs to the mirror). The standup/surfacing reads this to show WHY, in the agent's own words. Keyed by
+-- the journey task id. This is Huddle-native (the mirror is single-writer — only the sync trigger writes
+-- tasks.journey_tasks — so the reason lives in its own table, not on the mirror row).
+CREATE TABLE IF NOT EXISTS tasks.task_blockers (
+  task_id     TEXT PRIMARY KEY,
+  user_email  TEXT NOT NULL,
+  reason      TEXT NOT NULL,
+  agent_id    TEXT,
+  flagged_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS task_blockers_user_idx ON tasks.task_blockers (lower(user_email));
+
 -- GENERAL recurring-job scheduler, resident in Azure Huddle PG (NOT supabase). One heartbeat — the
 -- existing every-minute run-turn tick — dispatches every due job here, so any recurring/scheduled job
 -- (grooming today; ceremonies/digests next) is just a row: no new cron, no new secret. cadence holds
@@ -120,26 +135,10 @@ CREATE TABLE IF NOT EXISTS tasks.router_config (
 );
 `;
 
-/** Seed capability prompt — the user edits this in Settings; the grooming router obeys it. */
-export const DEFAULT_CAPABILITY_PROMPT = `Capabilities the team HAS today:
-- Research ANY topic on the web, gather facts, and compare/analyze options — autonomously.
-- DRAFT documents, plans, roadmaps, lists, analyses, and recommendations, saved as artifacts for the
-  user to review. (Producing a draft/document IS real progress — it is NOT "blocked".)
-- Create, update, re-prioritize, tag, and schedule tasks (in the journey backlog).
-- Draft emails, and send them after the user approves.
-- Prioritize/groom the backlog and run scrum ceremonies.
-
-Capabilities the team does NOT have yet (do not pretend otherwise):
-- Moving or spending money — there is no Plaid / bank / payment / card integration.
-- Booking or purchasing anything that costs money.
-- Sending external messages (email/Slack) without the user's approval.
-
-Rule for grooming: a task an agent can advance by researching or drafting is DO-able now — assign it and
-give it a rank. Only mark "blocked" when the task genuinely cannot be progressed without (a) one of the
-missing capabilities above (e.g. "pay the electric bill", "transfer money", "buy flights"), or (b) a
-specific user action/decision the agent cannot prepare around (e.g. "give me your account password").
-A task the user must ultimately finish themselves is still DO-able if an agent can research or draft
-toward it first — do NOT block it.`;
+// NOTE: the hand-written "capability prompt" was removed. Capability is DATA — the tools each agent is
+// actually wired with — not a prose paragraph that drifts and gets guessed against a task title. Grooming
+// no longer classifies "blocked"; the owning agent earns that verdict by working the task (flag_blocker),
+// recording the real reason in tasks.task_blockers. See setTaskBlocker / clearTaskBlocker below.
 
 let bootstrapped: Promise<void> | null = null;
 async function ensureBootstrapped() {
@@ -262,25 +261,31 @@ export async function getTasksForUser(userEmail: string, category?: string): Pro
   return rows;
 }
 
-/** The scrum master's editable capability prompt (falls back to the seed default). */
-export async function getCapabilityPrompt(userEmail: string): Promise<string> {
-  await ensureBootstrapped();
-  const { rows } = await getPool().query<{ capability_prompt: string | null }>(
-    `SELECT capability_prompt FROM tasks.router_config WHERE lower(user_email) = $1`,
-    [userEmail.toLowerCase()],
-  );
-  const stored = rows[0]?.capability_prompt?.trim();
-  return stored && stored.length ? stored : DEFAULT_CAPABILITY_PROMPT;
-}
-
-export async function setCapabilityPrompt(userEmail: string, prompt: string): Promise<void> {
+/** Record an agent-discovered blocker (ACT-5): the specific real reason a task can't be advanced. */
+export async function setTaskBlocker(userEmail: string, taskId: string, reason: string, agentId?: string | null): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(
-    `INSERT INTO tasks.router_config (user_email, capability_prompt, updated_at)
-     VALUES ($1,$2,now())
-     ON CONFLICT (user_email) DO UPDATE SET capability_prompt=EXCLUDED.capability_prompt, updated_at=now()`,
-    [userEmail.toLowerCase(), prompt],
+    `INSERT INTO tasks.task_blockers (task_id, user_email, reason, agent_id, flagged_at)
+     VALUES ($1,$2,$3,$4,now())
+     ON CONFLICT (task_id) DO UPDATE SET reason=EXCLUDED.reason, agent_id=EXCLUDED.agent_id, flagged_at=now()`,
+    [taskId, userEmail.toLowerCase(), reason.slice(0, 400), agentId ?? null],
   );
+}
+
+/** Clear a blocker once a task is unblocked/done (so a stale reason never lingers). */
+export async function clearTaskBlocker(taskId: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(`DELETE FROM tasks.task_blockers WHERE task_id = $1`, [taskId]);
+}
+
+/** All active blockers for a user as task_id → {reason, agentId}, for the standup/surfacing. */
+export async function getTaskBlockers(userEmail: string): Promise<Map<string, { reason: string; agentId: string | null }>> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ task_id: string; reason: string; agent_id: string | null }>(
+    `SELECT task_id, reason, agent_id FROM tasks.task_blockers WHERE lower(user_email) = $1`,
+    [userEmail.toLowerCase()],
+  );
+  return new Map(rows.map((r) => [r.task_id, { reason: r.reason, agentId: r.agent_id }]));
 }
 
 /** The last-groomed backlog signature for a user (null if never groomed), for the auto-groom change gate. */
@@ -326,9 +331,10 @@ export async function setAutoWorkSignature(userEmail: string, signature: string)
 }
 
 /**
- * Open tasks that are ASSIGNED to an agent and NOT already flagged blocked/schedule-only by grooming —
- * i.e. the candidates an agent can attempt autonomously (ACT-5). Note: grooming tags "blocked" (it does
- * not set status=BLOCKED), so the not-blocked filter is on the TAGS, not status. Priority order first.
+ * Open tasks that are ASSIGNED to an agent and not blocked — the candidates an agent can attempt
+ * autonomously (ACT-5). "Blocked" is now the task STATUS (set by the owning agent via flag_blocker when
+ * it genuinely can't advance the task), so the status filter is authoritative — no tag guessing. Priority
+ * order first.
  */
 export async function getOpenAssignedTasks(userEmail: string, limit = 200): Promise<BoardTaskRow[]> {
   await ensureBootstrapped();
@@ -339,7 +345,6 @@ export async function getOpenAssignedTasks(userEmail: string, limit = 200): Prom
         AND completed_at IS NULL
         AND (status IS NULL OR status NOT IN ('DONE','BLOCKED'))
         AND assigned_agent IS NOT NULL
-        AND NOT (COALESCE(tags, '{}') && ARRAY['blocked-on-capability','schedule-only'])
       ORDER BY priority_rank NULLS LAST, updated_at DESC
       LIMIT $2`,
     [userEmail.toLowerCase(), limit],
