@@ -2903,9 +2903,18 @@ async function executeClaimedTurn(record: {
       void kickNextChunk(record.id);
       return result;
     }
-    // Fire a push per finished turn (SW suppresses it when the app is focused).
+    // Urgency-aware delivery (ACT-5 Phase B triage). Every finished turn posts its reply in-app; whether
+    // it also fires a phone PUSH depends on the enqueuer's declared intent (`payload.notify`):
+    //   "push"   (or unset) → buzz now  — interactive replies + genuine blockers/decisions.
+    //   "batch"           → NO push    — routine autonomous results; they wait in-app for the standup digest.
+    //   "silent"          → NO push    — never nudge.
+    // This is why routine research results should NOT buzz the phone: the autonomy engine tags them
+    // "batch". A real blocker the agent surfaces is tagged "push". The channel choice lives with the
+    // side that KNOWS the intent (the enqueuer), not a fragile keyword classifier here.
+    const notifyLevel = String((record.payload as { notify?: string })?.notify ?? "push");
+    const wantsPush = notifyLevel !== "batch" && notifyLevel !== "silent";
     const lead = result.replies?.[0];
-    if (lead) {
+    if (lead && wantsPush) {
       const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
       const title = `${name} replied`;
       const body = String(lead.text).replace(/\s+/g, " ").slice(0, 140);

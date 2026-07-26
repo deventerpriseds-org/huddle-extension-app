@@ -59,6 +59,21 @@ Email is durable, external, shareable, and reaches the user off-app. Reserve it 
 Deliberately NOT: routine micro-updates, blockers/decisions (those are push), or anything time-sensitive
 (email is not "now"). Keep email low-frequency so it stays signal, not noise.
 
+## Phase B (increment 2) — communication-triage, sliced
+- **B1 — urgency-gated push (DONE).** Every finished turn posts in-app; whether it also buzzes the phone
+  is the enqueuer's declared intent `payload.notify`: `push` (interactive replies + real blockers) vs
+  `batch`/`silent` (routine autonomous results → quiet, no push). Gate in `executeClaimedTurn`; autonomy
+  research turns tagged `batch`, blocked-surface tagged `push`. Fixes "a routine result buzzed me".
+- **B2 — phone-call tier.** journey `initiate_phone_call` (Twilio) for the two triggers only: a person
+  meeting on the calendar → call T-2h (calendar scan + scheduled job), or an explicit "call me". NOT for
+  general blockers.
+- **B3 — standup digest (ties into ACT-6).** The `batch` results roll into ONE morning summary (push) via
+  the ceremony/standup mechanism, so quiet results are surfaced proactively without per-item buzzing.
+- **B4 — email tier.** The four email use-cases (explicit ask; away/offline fallback; shareable
+  deliverable; optional emailed standup digest). Deliberately low-frequency.
+- **B5 — per-task override.** "notify me the moment X is done" / "just mention it at standup" sets the
+  turn's `notify` level explicitly, overriding the default triage.
+
 ## Build in two increments
 - **Increment 1 — the core autonomous loop.** Assigned research task → agent runs Tavily → drafts a
   summary → deposits an artifact linked to the task; tasks it can't do → blocked-tag + reason that

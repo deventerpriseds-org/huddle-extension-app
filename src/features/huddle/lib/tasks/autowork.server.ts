@@ -74,6 +74,9 @@ function turnPayload(task: { assigned_agent: string | null }, directive: string,
     },
     timeZone: tz,
     caller,
+    // Triage: a routine research result should NOT buzz the phone — it lands in-app and rolls into the
+    // standup digest. Only genuine blockers/decisions push (see surfaceBlocked).
+    notify: "batch",
   };
 }
 
@@ -95,6 +98,8 @@ async function surfaceBlocked(opts: { email: string; tz: string; caller: Caller;
     agents: { [COORDINATOR]: { backend: "openai", journey: { enabled: false } } },
     timeZone: opts.tz,
     caller: opts.caller,
+    // Blocked items need the user's input → this one DOES buzz the phone.
+    notify: "push",
   };
   const { enqueueTurn } = await import("./turns.server");
   await enqueueTurn(`autowork-blocked-${opts.runId}`, `dm-${COORDINATOR}`, opts.email, payload);
