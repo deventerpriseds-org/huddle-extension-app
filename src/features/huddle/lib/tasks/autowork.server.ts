@@ -74,23 +74,30 @@ function buildResearchMarkdown(
   return lines.join("\n");
 }
 
-/** Compact, DETAIL-RICH brief handed to the coordinator to relay (the user asked for max detail in chat). */
+// The durable-turn payload `text` is capped at 4000 chars (turn schema). The brief is EMBEDDED in the
+// directive prose (~700 chars), so keep the brief itself well under that; the full detail lives in each
+// artifact, which the message links to. Per-finding excerpt is bounded, and the whole brief is truncated.
+const MAX_FINDING = 240;
+const MAX_BRIEF = 2600;
+
+/** Compact, detail-rich brief handed to the coordinator to relay (full detail is in the linked docs). */
 function buildBrief(done: Researched[], blocked: { title: string }[], remaining: number): string {
   const lines: string[] = [];
   if (done.length) {
     lines.push(`Research completed this pass (${done.length}) — each saved as a document for review:`);
     for (const d of done) {
-      const finding = d.finding.replace(/\s+/g, " ").trim().slice(0, 600);
+      const finding = d.finding.replace(/\s+/g, " ").trim().slice(0, MAX_FINDING);
       lines.push(`- "${d.title}" (owner: ${agentName(d.agentId)}) — ${finding} [${d.sourceCount} sources; doc: ${d.deepLink}]`);
     }
   }
   if (blocked.length) {
     lines.push("");
     lines.push(`Blocked pending your input (${blocked.length}) — the team can't proceed without you:`);
-    for (const b of blocked) lines.push(`- "${b.title}"`);
+    for (const b of blocked) lines.push(`- "${b.title.slice(0, 120)}"`);
   }
   if (remaining > 0) lines.push("", `${remaining} more assigned task(s) queued for the next pass.`);
-  return lines.join("\n");
+  const brief = lines.join("\n");
+  return brief.length > MAX_BRIEF ? `${brief.slice(0, MAX_BRIEF)}\n…(trimmed; full detail in the linked docs)` : brief;
 }
 
 /**
