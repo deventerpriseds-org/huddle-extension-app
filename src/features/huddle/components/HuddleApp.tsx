@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Menu, PanelRight, Settings } from "lucide-react";
 import { BoardView } from "./BoardView";
 import { ArtifactsView } from "./ArtifactsView";
@@ -22,6 +22,21 @@ export function HuddleApp() {
   const view = useHuddleStore((s) => s.view);
   const huddles = useVisibleHuddles();
   const activeId = useHuddleStore((s) => s.activeHuddleId);
+
+  // Deep link: a push notification opens the app at `?huddle=<id>` (e.g. dm-sam-trent). Read it once
+  // on load and switch to that huddle so tapping "Sam replied" lands in Sam's 1:1, not the default view.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const target = params.get("huddle");
+    if (!target) return;
+    const exists = useHuddleStore.getState().huddles.some((h) => h.id === target);
+    if (exists) useHuddleStore.getState().setActive(target);
+    // Clean the param so a manual refresh doesn't keep forcing this huddle.
+    params.delete("huddle");
+    const qs = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash);
+  }, []);
   const active = huddles.find((h) => h.id === activeId);
   const [navOpen, setNavOpen] = useState(false);
   const [ctxOpen, setCtxOpen] = useState(false);

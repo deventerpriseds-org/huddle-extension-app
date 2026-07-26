@@ -2915,9 +2915,21 @@ async function executeClaimedTurn(record: {
       if (record.user_email) {
         try {
           const { invokeJourneyTool } = await import("./journey/proxy.functions");
+          // deepLink targets the exact 1:1/huddle so tapping the phone notification opens that channel.
+          // journey's sendPushNow spreads args.data into the push → send-push-notification's
+          // fcmData.deepLink; the Android bridge loads baseUrl + deepLink, so in the Huddle app this
+          // opens `?huddle=<id>` (the client reads it and switches to that huddle). Harmless elsewhere.
+          const huddleId = String((record.payload as { huddleId?: string })?.huddleId ?? "");
           await invokeJourneyTool({
             toolName: "send_push",
-            args: { title, body, channel: "messages" },
+            args: {
+              title,
+              body,
+              channel: "messages",
+              ...(huddleId
+                ? { data: { deepLink: `/?huddle=${huddleId}`, source: "huddle-message", huddleId } }
+                : {}),
+            },
             caller: { entra_email: record.user_email },
             context: { source: "huddle" },
           });
