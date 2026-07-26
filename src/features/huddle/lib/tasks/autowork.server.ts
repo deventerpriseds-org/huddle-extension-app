@@ -137,11 +137,11 @@ export async function runScheduledAutoWork(
   const withArtifact = new Set(existing.map((a) => a.task_id).filter(Boolean) as string[]);
   const candidates = assigned.filter((t) => t.assigned_agent && AGENT_BY_ID[t.assigned_agent as AgentId] && !withArtifact.has(t.id));
 
-  // Blocked = tasks an agent flagged (status BLOCKED) — with the REAL reason it recorded. Not a guess.
+  // Blocked = tasks an agent flagged (a task_blockers row) — with the REAL reason it recorded. Not a guess.
   const board = await getBoardTasks(email);
   const blockers = await getTaskBlockers(email);
   const blockedTitles = board
-    .filter((t) => !t.completed_at && (t.status ?? "").toUpperCase() === "BLOCKED")
+    .filter((t) => !t.completed_at && blockers.has(t.id))
     .map((t) => {
       const b = blockers.get(t.id);
       return b ? `${t.title} — ${b.reason}` : t.title;

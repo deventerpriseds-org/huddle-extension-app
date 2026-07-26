@@ -332,19 +332,20 @@ export async function setAutoWorkSignature(userEmail: string, signature: string)
 
 /**
  * Open tasks that are ASSIGNED to an agent and not blocked — the candidates an agent can attempt
- * autonomously (ACT-5). "Blocked" is now the task STATUS (set by the owning agent via flag_blocker when
- * it genuinely can't advance the task), so the status filter is authoritative — no tag guessing. Priority
- * order first.
+ * autonomously (ACT-5). "Blocked" is authoritative from `tasks.task_blockers` (a row an agent wrote when
+ * it genuinely couldn't advance the task) — Huddle-native and immediate, so it never depends on the async
+ * journey status round-trip. (status=BLOCKED is also excluded as a belt-and-suspenders.) Priority first.
  */
 export async function getOpenAssignedTasks(userEmail: string, limit = 200): Promise<BoardTaskRow[]> {
   await ensureBootstrapped();
   const { rows } = await getPool().query<BoardTaskRow>(
     `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags
-       FROM tasks.journey_tasks
+       FROM tasks.journey_tasks t
       WHERE lower(user_email) = $1
         AND completed_at IS NULL
         AND (status IS NULL OR status NOT IN ('DONE','BLOCKED'))
         AND assigned_agent IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM tasks.task_blockers b WHERE b.task_id = t.id)
       ORDER BY priority_rank NULLS LAST, updated_at DESC
       LIMIT $2`,
     [userEmail.toLowerCase(), limit],

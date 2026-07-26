@@ -116,12 +116,12 @@ export async function runScheduledStandup(
   const board = await getBoardTasks(email);
   const blockers = await getTaskBlockers(email);
   const notDone = board.filter((t) => !t.completed_at && (t.status ?? "").toUpperCase() !== "DONE");
-  // Blocked = tasks an agent flagged (status BLOCKED), shown with the REAL reason it recorded.
+  // Blocked = tasks an agent flagged (a task_blockers row), shown with the REAL reason it recorded.
   const blocked = notDone
-    .filter((t) => (t.status ?? "").toUpperCase() === "BLOCKED")
+    .filter((t) => blockers.has(t.id))
     .map((t) => ({ title: t.title, reason: blockers.get(t.id)?.reason }));
   const priorities = notDone
-    .filter((t) => (t.status ?? "").toUpperCase() !== "BLOCKED")
+    .filter((t) => !blockers.has(t.id))
     .sort((a, b) => (a.priority_rank ?? 9999) - (b.priority_rank ?? 9999))
     .slice(0, 5)
     .map((t) => ({ title: t.title, agent: t.assigned_agent }));

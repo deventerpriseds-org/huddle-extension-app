@@ -1636,21 +1636,26 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 const email =
                   (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                   data.caller?.entra_email;
-                // Authoritative signal: set the journey task status=BLOCKED (syncs to the mirror, excludes
-                // it from open/auto-work). Then record the SPECIFIC reason Huddle-side for the standup.
-                const { invokeJourneyTool } = await import("./journey/proxy.functions");
-                await invokeJourneyTool({
-                  toolName: "update_task",
-                  args: { task_id: taskId, status: "BLOCKED" },
-                  caller: data.caller ?? {},
-                  context: { source: "huddle" },
-                });
-                if (email) {
-                  const { setTaskBlocker } = await import("./tasks/tasks.server");
-                  await setTaskBlocker(email, taskId, reason, winner.id);
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                // AUTHORITATIVE, Huddle-native signal (immediate, no journey round-trip): record the
+                // specific reason. Huddle's blocked-surfacing + open-task selection key on this row.
+                const { setTaskBlocker } = await import("./tasks/tasks.server");
+                await setTaskBlocker(email, taskId, reason, winner.id);
+                // Best-effort: also reflect it on the board via the journey task status (eventually
+                // consistent, and not what Huddle's own logic depends on — so its failure is non-fatal).
+                try {
+                  const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                  await invokeJourneyTool({
+                    toolName: "update_task",
+                    args: { task_id: taskId, status: "BLOCKED" },
+                    caller: data.caller ?? {},
+                    context: { source: "huddle" },
+                  });
+                } catch {
+                  /* board reflect is best-effort; the blocker is recorded regardless */
                 }
                 recordToolUse(winner.id, "flag_blocker", `blocked: ${reason.slice(0, 60)}`, true);
-                return JSON.stringify({ ok: true, task_id: taskId, status: "BLOCKED" });
+                return JSON.stringify({ ok: true, task_id: taskId });
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
