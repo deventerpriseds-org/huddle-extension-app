@@ -169,7 +169,7 @@ export async function getArtifact(
   if (!row) return null;
   let url: string | null = null;
   try {
-    url = artifactSasUrl(row.blob_path);
+    url = await artifactSasUrl(row.blob_path);
   } catch {
     url = null; // storage misconfigured — metadata still returns, UI shows no preview
   }

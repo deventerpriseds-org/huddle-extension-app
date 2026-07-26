@@ -430,6 +430,47 @@ function Composer({ huddle }: { huddle: Huddle }) {
     [user],
   );
   const push = usePush(pushCaller);
+
+  // Standalone Huddle Android app: register THIS app's FCM device token into journey's push store so a
+  // Huddle-agent push reaches this app (and deep-links into the right channel on tap). Only runs inside
+  // the Android bridge once signed in. The token is prefetched by the bridge asynchronously, so retry a
+  // few times until it's available. Harmless on web (no AndroidBridge). Reuse of journey's delivery.
+  useEffect(() => {
+    const bridge = (
+      window as unknown as {
+        AndroidBridge?: { isBridgeApp?: () => boolean; getFcmToken?: () => string };
+      }
+    ).AndroidBridge;
+    if (typeof bridge?.getFcmToken !== "function" || !pushCaller?.entra_email) return;
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = async (n: number) => {
+      if (done) return;
+      let token = "";
+      try {
+        token = bridge.getFcmToken?.() ?? "";
+      } catch {
+        token = "";
+      }
+      if (token) {
+        done = true;
+        try {
+          const { registerBridgeFcmToken } = await import("../lib/huddle.functions");
+          await registerBridgeFcmToken({ data: { caller: pushCaller, token } });
+        } catch {
+          /* non-fatal */
+        }
+        return;
+      }
+      if (n < 5) timer = setTimeout(() => void attempt(n + 1), 1500);
+    };
+    void attempt(0);
+    return () => {
+      done = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [pushCaller?.entra_email]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function toggleNotifications() {
     const ok = await push.enablePush();
     toast[ok ? "success" : "message"](

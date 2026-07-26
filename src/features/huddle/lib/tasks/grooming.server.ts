@@ -44,23 +44,17 @@ interface GroomJson {
   groomed?: number;
   total?: number;
   order?: { rank?: number; title?: string; assignee?: string; priority?: string; why?: string }[];
-  blocked_on_capability?: { title?: string; reason?: string }[];
 }
 
 /** Compact human-readable brief of what grooming just did, handed to Terry to narrate in his own words. */
 function buildBrief(p: GroomJson): string {
   const order = Array.isArray(p.order) ? p.order.slice(0, 5) : [];
-  const blocked = Array.isArray(p.blocked_on_capability) ? p.blocked_on_capability.slice(0, 5) : [];
   const lines: string[] = [`Assignments written to the board: ${p.groomed ?? 0} of ${p.total ?? 0}.`];
   if (order.length) {
     lines.push("Top priorities (rank — title — owner — priority):");
     for (const o of order) {
       lines.push(`  ${o.rank}. ${o.title} — ${o.assignee} — ${o.priority}${o.why ? ` (${o.why})` : ""}`);
     }
-  }
-  if (blocked.length) {
-    lines.push("Blocked pending a capability the team lacks (needs the user's input):");
-    for (const b of blocked) lines.push(`  - ${b.title}${b.reason ? ` — ${b.reason}` : ""}`);
   }
   return lines.join("\n");
 }
@@ -82,10 +76,9 @@ async function surfaceSummary(opts: {
     `You (Terry Locke, scrum master) just finished an AUTOMATIC backlog grooming pass for the user — ` +
     `this ran on a schedule; the user did NOT ask just now. Here is exactly what you did:\n\n${brief}\n\n` +
     `Send ONE short, warm proactive message summarizing it in your own words: how many tasks you assigned/` +
-    `reprioritized, the top 1–3 priorities and who owns them, and — importantly — flag any items blocked ` +
-    `pending a capability the team doesn't have yet and ask the user to weigh in on those. This is a ` +
-    `REPORT-ONLY turn: the grooming is already written to the board, so under no circumstances call ` +
-    `groom_backlog or any other tool again, and do not paste raw JSON. Keep it to 2–4 sentences.`;
+    `reprioritized and the top 1–3 priorities and who owns them. This is a REPORT-ONLY turn: the grooming ` +
+    `is already written to the board, so under no circumstances call groom_backlog or any other tool again, ` +
+    `and do not paste raw JSON. Keep it to 2–4 sentences.`;
 
   const payload = {
     text: directive,
@@ -163,12 +156,11 @@ export async function runScheduledGrooming(
   await setGroomSignature(email, signature);
 
   const groomed = Number(parsed.groomed) || 0;
-  const blocked = Array.isArray(parsed.blocked_on_capability) ? parsed.blocked_on_capability : [];
   // Nothing meaningful to report → no proactive ping (avoids "nothing changed" noise).
-  if (groomed === 0 && blocked.length === 0) {
-    return { ok: true, skipped: false, groomed: 0, blocked: 0, runId };
+  if (groomed === 0) {
+    return { ok: true, skipped: false, groomed: 0, runId };
   }
 
   await surfaceSummary({ email, tz, caller, parsed, runId });
-  return { ok: true, skipped: false, groomed, blocked: blocked.length, runId };
+  return { ok: true, skipped: false, groomed, runId };
 }

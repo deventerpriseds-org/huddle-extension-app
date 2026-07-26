@@ -15,8 +15,10 @@ import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as ApiPublicTasksSyncRouteImport } from './routes/api/public/tasks-sync'
 import { Route as ApiPublicRunTurnRouteImport } from './routes/api/public/run-turn'
+import { Route as ApiPublicRunStandupRouteImport } from './routes/api/public/run-standup'
 import { Route as ApiPublicRunGroomingRouteImport } from './routes/api/public/run-grooming'
 import { Route as ApiPublicRunCeremonyRouteImport } from './routes/api/public/run-ceremony'
+import { Route as ApiPublicRunAutoworkRouteImport } from './routes/api/public/run-autowork'
 import { Route as ApiPublicAuthTraceRouteImport } from './routes/api/public/auth-trace'
 
 const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
@@ -48,6 +50,11 @@ const ApiPublicRunTurnRoute = ApiPublicRunTurnRouteImport.update({
   path: '/api/public/run-turn',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicRunStandupRoute = ApiPublicRunStandupRouteImport.update({
+  id: '/api/public/run-standup',
+  path: '/api/public/run-standup',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicRunGroomingRoute = ApiPublicRunGroomingRouteImport.update({
   id: '/api/public/run-grooming',
   path: '/api/public/run-grooming',
@@ -56,6 +63,11 @@ const ApiPublicRunGroomingRoute = ApiPublicRunGroomingRouteImport.update({
 const ApiPublicRunCeremonyRoute = ApiPublicRunCeremonyRouteImport.update({
   id: '/api/public/run-ceremony',
   path: '/api/public/run-ceremony',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicRunAutoworkRoute = ApiPublicRunAutoworkRouteImport.update({
+  id: '/api/public/run-autowork',
+  path: '/api/public/run-autowork',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPublicAuthTraceRoute = ApiPublicAuthTraceRouteImport.update({
@@ -69,8 +81,10 @@ export interface FileRoutesByFullPath {
   '/auth': typeof AuthRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
 }
@@ -79,8 +93,10 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/': typeof AuthenticatedIndexRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
 }
@@ -91,8 +107,10 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
 }
@@ -103,8 +121,10 @@ export interface FileRouteTypes {
     | '/auth'
     | '/sitemap.xml'
     | '/api/public/auth-trace'
+    | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
   fileRoutesByTo: FileRoutesByTo
@@ -113,8 +133,10 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/'
     | '/api/public/auth-trace'
+    | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
   id:
@@ -124,8 +146,10 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/_authenticated/'
     | '/api/public/auth-trace'
+    | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
   fileRoutesById: FileRoutesById
@@ -135,8 +159,10 @@ export interface RootRouteChildren {
   AuthRoute: typeof AuthRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiPublicAuthTraceRoute: typeof ApiPublicAuthTraceRoute
+  ApiPublicRunAutoworkRoute: typeof ApiPublicRunAutoworkRoute
   ApiPublicRunCeremonyRoute: typeof ApiPublicRunCeremonyRoute
   ApiPublicRunGroomingRoute: typeof ApiPublicRunGroomingRoute
+  ApiPublicRunStandupRoute: typeof ApiPublicRunStandupRoute
   ApiPublicRunTurnRoute: typeof ApiPublicRunTurnRoute
   ApiPublicTasksSyncRoute: typeof ApiPublicTasksSyncRoute
 }
@@ -185,6 +211,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicRunTurnRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/run-standup': {
+      id: '/api/public/run-standup'
+      path: '/api/public/run-standup'
+      fullPath: '/api/public/run-standup'
+      preLoaderRoute: typeof ApiPublicRunStandupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/run-grooming': {
       id: '/api/public/run-grooming'
       path: '/api/public/run-grooming'
@@ -197,6 +230,13 @@ declare module '@tanstack/react-router' {
       path: '/api/public/run-ceremony'
       fullPath: '/api/public/run-ceremony'
       preLoaderRoute: typeof ApiPublicRunCeremonyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/run-autowork': {
+      id: '/api/public/run-autowork'
+      path: '/api/public/run-autowork'
+      fullPath: '/api/public/run-autowork'
+      preLoaderRoute: typeof ApiPublicRunAutoworkRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/auth-trace': {
@@ -226,8 +266,10 @@ const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiPublicAuthTraceRoute: ApiPublicAuthTraceRoute,
+  ApiPublicRunAutoworkRoute: ApiPublicRunAutoworkRoute,
   ApiPublicRunCeremonyRoute: ApiPublicRunCeremonyRoute,
   ApiPublicRunGroomingRoute: ApiPublicRunGroomingRoute,
+  ApiPublicRunStandupRoute: ApiPublicRunStandupRoute,
   ApiPublicRunTurnRoute: ApiPublicRunTurnRoute,
   ApiPublicTasksSyncRoute: ApiPublicTasksSyncRoute,
 }

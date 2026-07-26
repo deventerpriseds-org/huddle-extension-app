@@ -83,6 +83,29 @@ CREATE TABLE IF NOT EXISTS tasks.groom_state (
   last_groomed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Change-detection watermark for ACT-5 auto-work (agents self-starting research on assigned tasks).
+-- Same idea as groom_state: skip a pass when the open-assigned backlog hasn't changed since last run.
+CREATE TABLE IF NOT EXISTS tasks.autowork_state (
+  user_email     TEXT PRIMARY KEY,
+  signature      TEXT,
+  last_worked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Agent-discovered blockers (ACT-5). "Blocked" is NOT guessed by grooming from a title + a hand-written
+-- capability list any more — it is EARNED: when an agent actually works a task and genuinely can't
+-- advance it, it records the specific real reason here (and sets the journey task status=BLOCKED, which
+-- syncs to the mirror). The standup/surfacing reads this to show WHY, in the agent's own words. Keyed by
+-- the journey task id. This is Huddle-native (the mirror is single-writer — only the sync trigger writes
+-- tasks.journey_tasks — so the reason lives in its own table, not on the mirror row).
+CREATE TABLE IF NOT EXISTS tasks.task_blockers (
+  task_id     TEXT PRIMARY KEY,
+  user_email  TEXT NOT NULL,
+  reason      TEXT NOT NULL,
+  agent_id    TEXT,
+  flagged_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS task_blockers_user_idx ON tasks.task_blockers (lower(user_email));
+
 -- GENERAL recurring-job scheduler, resident in Azure Huddle PG (NOT supabase). One heartbeat — the
 -- existing every-minute run-turn tick — dispatches every due job here, so any recurring/scheduled job
 -- (grooming today; ceremonies/digests next) is just a row: no new cron, no new secret. cadence holds
@@ -112,22 +135,10 @@ CREATE TABLE IF NOT EXISTS tasks.router_config (
 );
 `;
 
-/** Seed capability prompt — the user edits this in Settings; the grooming router obeys it. */
-export const DEFAULT_CAPABILITY_PROMPT = `Capabilities the team HAS today:
-- Create, update, re-prioritize, tag, and schedule tasks (in the journey backlog).
-- Draft emails, and send them after the user approves.
-- Search the web for information.
-- Prioritize/groom the backlog and run scrum ceremonies.
-
-Capabilities the team does NOT have yet (do not pretend otherwise):
-- Moving or spending money — there is no Plaid / bank / payment / card integration.
-- Booking or purchasing anything that costs money.
-- Sending external messages (email/Slack) without the user's approval.
-
-Rule for grooming: if a task requires a capability we do NOT have (e.g. "pay the electric bill",
-"transfer money", "buy flights"), an agent may only SCHEDULE or PREPARE it and must flag it
-blocked-on-capability — never mark it doable-now. Assign such tasks to the closest-fit agent but set
-action to "schedule".`;
+// NOTE: the hand-written "capability prompt" was removed. Capability is DATA — the tools each agent is
+// actually wired with — not a prose paragraph that drifts and gets guessed against a task title. Grooming
+// no longer classifies "blocked"; the owning agent earns that verdict by working the task (flag_blocker),
+// recording the real reason in tasks.task_blockers. See setTaskBlocker / clearTaskBlocker below.
 
 let bootstrapped: Promise<void> | null = null;
 async function ensureBootstrapped() {
@@ -192,6 +203,20 @@ export async function upsertJourneyTask(row: JourneyTaskPayload, userEmail?: str
       row.tags ?? null, row.created_at ?? null, row.updated_at ?? null,
     ],
   );
+
+  // Reverse-clear (keep journey↔Huddle blocked in sync). journey's `tasks` is the canonical source of
+  // truth; when a task syncs in with a status that is NOT 'BLOCKED' (the user/agent unblocked it, marked
+  // it done, moved it back to TODO/IN_PROGRESS, etc.), the Huddle-native blocker row is stale and must go
+  // — otherwise standup/auto-work would keep surfacing a task the user already unblocked. Guarded on the
+  // incoming journey `updated_at`: only clear a blocker whose `flagged_at` PRECEDES this update, so a
+  // stale in-flight TODO sync (async pg_net can deliver out of order) can't wipe a blocker just written by
+  // flag_blocker. status=BLOCKED (the forward direction) is intentionally left untouched.
+  const incomingStatus = (row.status ?? "").toUpperCase();
+  if (incomingStatus && incomingStatus !== "BLOCKED" && row.updated_at) {
+    await getPool()
+      .query(`DELETE FROM tasks.task_blockers WHERE task_id = $1 AND flagged_at < $2`, [row.id, row.updated_at])
+      .catch(() => {}); // non-fatal: the mirror upsert is what matters; a failed clear self-heals next sync
+  }
 }
 
 export async function deleteJourneyTask(id: string): Promise<void> {
@@ -250,25 +275,31 @@ export async function getTasksForUser(userEmail: string, category?: string): Pro
   return rows;
 }
 
-/** The scrum master's editable capability prompt (falls back to the seed default). */
-export async function getCapabilityPrompt(userEmail: string): Promise<string> {
-  await ensureBootstrapped();
-  const { rows } = await getPool().query<{ capability_prompt: string | null }>(
-    `SELECT capability_prompt FROM tasks.router_config WHERE lower(user_email) = $1`,
-    [userEmail.toLowerCase()],
-  );
-  const stored = rows[0]?.capability_prompt?.trim();
-  return stored && stored.length ? stored : DEFAULT_CAPABILITY_PROMPT;
-}
-
-export async function setCapabilityPrompt(userEmail: string, prompt: string): Promise<void> {
+/** Record an agent-discovered blocker (ACT-5): the specific real reason a task can't be advanced. */
+export async function setTaskBlocker(userEmail: string, taskId: string, reason: string, agentId?: string | null): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(
-    `INSERT INTO tasks.router_config (user_email, capability_prompt, updated_at)
-     VALUES ($1,$2,now())
-     ON CONFLICT (user_email) DO UPDATE SET capability_prompt=EXCLUDED.capability_prompt, updated_at=now()`,
-    [userEmail.toLowerCase(), prompt],
+    `INSERT INTO tasks.task_blockers (task_id, user_email, reason, agent_id, flagged_at)
+     VALUES ($1,$2,$3,$4,now())
+     ON CONFLICT (task_id) DO UPDATE SET reason=EXCLUDED.reason, agent_id=EXCLUDED.agent_id, flagged_at=now()`,
+    [taskId, userEmail.toLowerCase(), reason.slice(0, 400), agentId ?? null],
   );
+}
+
+/** Clear a blocker once a task is unblocked/done (so a stale reason never lingers). */
+export async function clearTaskBlocker(taskId: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(`DELETE FROM tasks.task_blockers WHERE task_id = $1`, [taskId]);
+}
+
+/** All active blockers for a user as task_id → {reason, agentId}, for the standup/surfacing. */
+export async function getTaskBlockers(userEmail: string): Promise<Map<string, { reason: string; agentId: string | null }>> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ task_id: string; reason: string; agent_id: string | null }>(
+    `SELECT task_id, reason, agent_id FROM tasks.task_blockers WHERE lower(user_email) = $1`,
+    [userEmail.toLowerCase()],
+  );
+  return new Map(rows.map((r) => [r.task_id, { reason: r.reason, agentId: r.agent_id }]));
 }
 
 /** The last-groomed backlog signature for a user (null if never groomed), for the auto-groom change gate. */
@@ -290,6 +321,50 @@ export async function setGroomSignature(userEmail: string, signature: string): P
      ON CONFLICT (user_email) DO UPDATE SET signature=EXCLUDED.signature, last_groomed_at=now()`,
     [userEmail.toLowerCase(), signature],
   );
+}
+
+/** The last auto-work signature for a user (null if never run), for the ACT-5 change gate. */
+export async function getAutoWorkSignature(userEmail: string): Promise<string | null> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ signature: string | null }>(
+    `SELECT signature FROM tasks.autowork_state WHERE lower(user_email) = $1`,
+    [userEmail.toLowerCase()],
+  );
+  return rows[0]?.signature ?? null;
+}
+
+/** Record the auto-work signature just processed, so an unchanged backlog is skipped next fire. */
+export async function setAutoWorkSignature(userEmail: string, signature: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.autowork_state (user_email, signature, last_worked_at)
+     VALUES ($1,$2,now())
+     ON CONFLICT (user_email) DO UPDATE SET signature=EXCLUDED.signature, last_worked_at=now()`,
+    [userEmail.toLowerCase(), signature],
+  );
+}
+
+/**
+ * Open tasks that are ASSIGNED to an agent and not blocked — the candidates an agent can attempt
+ * autonomously (ACT-5). "Blocked" is authoritative from `tasks.task_blockers` (a row an agent wrote when
+ * it genuinely couldn't advance the task) — Huddle-native and immediate, so it never depends on the async
+ * journey status round-trip. (status=BLOCKED is also excluded as a belt-and-suspenders.) Priority first.
+ */
+export async function getOpenAssignedTasks(userEmail: string, limit = 200): Promise<BoardTaskRow[]> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<BoardTaskRow>(
+    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags
+       FROM tasks.journey_tasks t
+      WHERE lower(user_email) = $1
+        AND completed_at IS NULL
+        AND (status IS NULL OR status NOT IN ('DONE','BLOCKED'))
+        AND assigned_agent IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM tasks.task_blockers b WHERE b.task_id = t.id)
+      ORDER BY priority_rank NULLS LAST, updated_at DESC
+      LIMIT $2`,
+    [userEmail.toLowerCase(), limit],
+  );
+  return rows;
 }
 
 // ---- General recurring-job scheduler (Azure Huddle PG) ---------------------------------------------

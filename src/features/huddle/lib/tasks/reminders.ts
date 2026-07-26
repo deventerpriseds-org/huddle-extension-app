@@ -156,9 +156,30 @@ export async function fireDueReminders(max = 25): Promise<number> {
       // (channel `calendar_events`). Requires the user's device to be registered in journey.
       if (r.user_email) {
         try {
+          // Source-aware deep link: target the agent's own 1:1 (where the reminder/alarm is rendered
+          // in-chat) so tapping the phone notification opens THAT channel — same pattern as agent
+          // replies (executeClaimedTurn). Harmless if the bridge app's baseUrl isn't Huddle; only
+          // resolves once the installed APK targets the Huddle SWA. No agent → home (default).
+          const huddleId = r.agent_id ? `dm-${r.agent_id}` : "";
           await invokeJourneyTool({
             toolName: "send_push",
-            args: { title, body: r.text.slice(0, 200), channel: isAlarm ? "calendar_events" : "task-reminders" },
+            args: {
+              title,
+              body: r.text.slice(0, 200),
+              channel: isAlarm ? "calendar_events" : "task-reminders",
+              // Target the standalone Huddle bridge app only (endpoint `fcm:app:huddle:%`) so a Huddle
+              // reminder/alarm doesn't also duplicate onto journey's web + bridge subscriptions.
+              app: "huddle",
+              data: {
+                ...(huddleId
+                  ? { deepLink: `/?huddle=${huddleId}`, source: isAlarm ? "huddle-alarm" : "huddle-reminder", huddleId }
+                  : {}),
+                // Unique per reminder so several firing close together each get their own notification
+                // (the bridge keys on `tag`; a shared tag would collapse them to one). See executeClaimedTurn.
+                notificationId: `rem-${r.id}`,
+                tag: `rem-${r.id}`,
+              },
+            },
             caller: { entra_email: r.user_email },
             context: { source: "huddle" },
           });

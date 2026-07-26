@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
-import { loadCapabilityPrompt, saveCapabilityPrompt } from "../lib/tasks/router-config.functions";
 import {
   Select,
   SelectContent,
@@ -152,8 +151,6 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
 
           {/* ---- Router ---- */}
           <TabsContent value="router" className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-            <CapabilityPromptEditor />
-
             <div className="space-y-2">
               <Label>Backend</Label>
               <Select value={config.router.backend} onValueChange={(v) => onBackendChange(v as RouterBackend)}>
@@ -476,62 +473,6 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
 export function useSettingsSheet() {
   const [open, setOpen] = useState(false);
   return { open, setOpen };
-}
-
-// The scrum master's editable "capability prompt" — what the app can/can't do, obeyed by the
-// backlog-grooming router (e.g. no payments until Plaid, so payment tasks are schedule-only).
-function CapabilityPromptEditor() {
-  const { user } = useAuth();
-  const caller = user ? { entra_email: user.username } : undefined;
-  const [prompt, setPrompt] = useState<string>("");
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    void loadCapabilityPrompt({ data: { caller } })
-      .then((r) => alive && setPrompt(r.prompt))
-      .catch(() => {})
-      .finally(() => alive && setLoading(false));
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.username]);
-
-  async function save() {
-    setSaving(true);
-    try {
-      const r = await saveCapabilityPrompt({ data: { caller, prompt } });
-      if (r.ok) toast.success("Capability prompt saved — grooming will use it.");
-      else toast.error(r.error || "Couldn't save.");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed.");
-    }
-    setSaving(false);
-  }
-
-  return (
-    <div className="space-y-2 rounded-lg border border-hairline p-3">
-      <div className="flex items-center justify-between">
-        <Label>Backlog grooming — team capabilities</Label>
-        <Button size="sm" onClick={save} disabled={saving || loading}>
-          {saving ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        The scrum master obeys this when assigning tasks: what the team can do now vs. later (e.g. no
-        payments until Plaid → those tasks can only be scheduled). Update it as you add capabilities.
-      </p>
-      <Textarea
-        value={loading ? "Loading…" : prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        disabled={loading}
-        rows={10}
-        className="text-xs font-mono"
-      />
-    </div>
-  );
 }
 
 // ---------------- Platform drift check ----------------

@@ -285,6 +285,7 @@ export function hydrateFromRemote(blob: Record<string, unknown> | null | undefin
   const seed = seedDefaults();
   if (!blob || typeof blob !== "object") {
     useHuddleStore.setState(seed);
+    workspaceHydrated = true;
     return;
   }
   const p = blob as Partial<PersistedWorkspace>;
@@ -297,8 +298,17 @@ export function hydrateFromRemote(blob: Record<string, unknown> | null | undefin
         return true;
       })
     : seed.messages;
+  // A push deep link (`?huddle=<id>`) is an explicit intent to open that channel; it must WIN over the
+  // workspace-synced activeHuddleId restored here. Without this, hydration (which resolves async, after
+  // the deep-link effect already switched channels) reverts you to your last-synced channel — the
+  // "flash Sam's chat then bounce back to Iris" bug. Consumed once so later manual navigation is free.
+  const restoredActive = p.activeHuddleId ?? seed.activeHuddleId;
+  const dl = deepLinkTarget;
+  const activeHuddleId =
+    dl && useHuddleStore.getState().huddles.some((h) => h.id === dl) ? dl : restoredActive;
+  if (dl) deepLinkTarget = null;
   useHuddleStore.setState({
-    activeHuddleId: p.activeHuddleId ?? seed.activeHuddleId,
+    activeHuddleId,
     messages,
     tasks: Array.isArray(p.tasks) ? p.tasks : seed.tasks,
     memory: Array.isArray(p.memory) ? p.memory : seed.memory,
@@ -306,11 +316,31 @@ export function hydrateFromRemote(blob: Record<string, unknown> | null | undefin
     journeyTasks: Array.isArray(p.journeyTasks) ? p.journeyTasks : seed.journeyTasks,
     showDemoData: typeof p.showDemoData === "boolean" ? p.showDemoData : seed.showDemoData,
   });
+  workspaceHydrated = true;
+}
+
+// True once the store has been hydrated from remote (or seeded). The app-global durable-turn back-fill
+// gates on this: it must add messages ON TOP of the hydrated array, never before hydrate replaces it —
+// a pre-hydrate add would be discarded by hydration while its cursor advanced, permanently losing the
+// message. Set by hydrateFromRemote / resetWorkspace; read via isWorkspaceHydrated().
+let workspaceHydrated = false;
+export function isWorkspaceHydrated(): boolean {
+  return workspaceHydrated;
+}
+
+// Deep-link target captured from `?huddle=<id>` before the URL param is cleaned. hydrateFromRemote
+// honors it so a push tap wins over the synced last-active channel. Null when no pending deep link.
+let deepLinkTarget: string | null = null;
+export function setDeepLinkTarget(id: string | null): void {
+  deepLinkTarget = id;
 }
 
 /** Reset store to seed defaults (used on sign-out). */
 export function resetWorkspace() {
   useHuddleStore.setState(seedDefaults());
+  // Not hydrated to real content — a fresh session must re-hydrate before the back-fill may add, so it
+  // never writes onto a seed store that hydration is about to replace.
+  workspaceHydrated = false;
 }
 
 /** One-shot migration: read legacy localStorage `huddle-workspace` if present. */

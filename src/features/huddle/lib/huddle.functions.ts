@@ -24,6 +24,8 @@ import {
   tavilySearch,
   type TavilySearchArgs,
 } from "./tavily-search.functions";
+import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
+import { FLAG_BLOCKER_TOOL } from "./tasks/task-agent-tools";
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
@@ -109,6 +111,7 @@ const HOUSE_STYLE =
   "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
   " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it \"has been sent\" or \"is done\" when it has not. Email specifically: text you write in the chat is \"draft text\" — only say you \"saved a draft to your inbox\" if you called the create_email_draft tool and it returned success, and only say an email was \"sent\" if send_email returned success." +
   " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message." +
+  " Your capabilities are exactly the tools you have this turn — nothing more. If you're asked or assigned something you cannot actually do with those tools (e.g. move money, buy something, take a real-world action only the user can), do NOT pretend, vaguely promise, or invent a result — say plainly in one sentence what you can't do and why. Almost always you CAN still make real progress by researching, analyzing, or drafting — do that instead. If it's a task on the board and you genuinely cannot advance it (it needs the user's decision, a credential, or a capability you don't have), call flag_blocker(task_id, reason) with the specific reason so the user knows exactly what you need." +
   " Never mention files, uploaded files, documents, attachments, or a knowledge base, and never say you searched them or \"couldn't find information in the uploaded files\" — file search is a silent background aid, not something to narrate. If it returns nothing useful, just answer the user directly from what you know, your live tools, and the conversation. Above all, ANSWER THE USER'S ACTUAL LAST MESSAGE: if they correct you (e.g. \"your time zone is wrong\") or ask something specific, address exactly that — never fall back to a canned \"I couldn't find that\" line that ignores what they just said.";
 
 // Scope-aware ownership hand-off — generated from `agent.capabilities` (agents.ts), NOT
@@ -1554,6 +1557,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
           const mergedTools = [
             createHuddleTaskTool,
+            CREATE_ARTIFACT_TOOL,
+            FLAG_BLOCKER_TOOL,
             SCHEDULE_REMINDER_TOOL,
             PRIORITIZE_TOOL,
             ...groomTools,
@@ -1585,6 +1590,89 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }) => {
             if (c.name === "create_huddle_task") {
               return JSON.stringify(await createSuggestedTaskFromTool(c.arguments));
+            }
+            if (c.name === "create_artifact") {
+              const a = c.arguments as Record<string, unknown>;
+              const name = String(a.name ?? "").trim();
+              const content = String(a.content ?? "");
+              if (!name || !content) return JSON.stringify({ ok: false, error: "name and content are required" });
+              if (!claimAction(`create_artifact:${a.task_id ?? ""}:${name}`)) {
+                recordToolUse(winner.id, "create_artifact", "already saved this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true });
+              }
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { createArtifact } = await import("./artifacts/artifacts.server");
+                const { id, deepLink } = await createArtifact({
+                  userEmail: email,
+                  agentId: winner.id,
+                  taskId: a.task_id ? String(a.task_id) : null,
+                  folder: String(a.folder ?? "Research"),
+                  name,
+                  mime: String(a.mime ?? "text/markdown"),
+                  bytes: Buffer.from(content, "utf8"),
+                });
+                recordToolUse(winner.id, "create_artifact", `saved "${name}"`, true, deepLink);
+                return JSON.stringify({ ok: true, id, deepLink });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "create_artifact", "save failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            }
+            if (c.name === "flag_blocker") {
+              const a = c.arguments as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const reason = String(a.reason ?? "").trim();
+              if (!taskId || !reason) return JSON.stringify({ ok: false, error: "task_id and reason are required" });
+              if (!claimAction(`flag_blocker:${taskId}`)) {
+                recordToolUse(winner.id, "flag_blocker", "already flagged this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true });
+              }
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                // Record the specific reason Huddle-native (holds the "why"; journey has no reason field).
+                const { setTaskBlocker } = await import("./tasks/tasks.server");
+                await setTaskBlocker(email, taskId, reason, winner.id);
+                // Set the journey task status=BLOCKED so journey ↔ Huddle stay in sync (it syncs back to
+                // the mirror). CHECK the result — a silent failure here means the two apps disagree.
+                // Set the journey task status=BLOCKED so journey ↔ Huddle stay in sync (it syncs back to
+                // the mirror in ~1s–1min; the reverse — an unblock on journey — clears the reason row via
+                // upsertJourneyTask). Check the result so a silent board-write failure is surfaced.
+                let boardStatusSet = false;
+                let boardError = "";
+                try {
+                  const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                  const r = await invokeJourneyTool({
+                    toolName: "update_task",
+                    args: { task_id: taskId, status: "BLOCKED" },
+                    caller: data.caller ?? {},
+                    context: { source: "huddle" },
+                  });
+                  boardStatusSet = !!r.ok;
+                  if (!r.ok) boardError = String(r.error ?? r.output ?? "update_task_failed").slice(0, 160);
+                } catch (e) {
+                  boardError = (e instanceof Error ? e.message : String(e)).slice(0, 160);
+                }
+                recordToolUse(
+                  winner.id,
+                  "flag_blocker",
+                  boardStatusSet ? `blocked: ${reason.slice(0, 50)}` : `blocked, board status not set: ${boardError}`,
+                  true,
+                  boardError || undefined,
+                );
+                return JSON.stringify({ ok: true, task_id: taskId, board_status_set: boardStatusSet });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
             }
             if (c.name === "schedule_reminder") {
               const a = c.arguments as Record<string, unknown>;
@@ -1971,6 +2059,88 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             }),
             execute: async (args) =>
               JSON.stringify(await createSuggestedTaskFromTool(args as Record<string, unknown>)),
+          });
+
+          // create_artifact — save the agent's own finished work as a reviewable artifact (mirrors OpenAI path).
+          lovableTools.create_artifact = tool({
+            description: CREATE_ARTIFACT_TOOL.description,
+            inputSchema: z.object({
+              name: z.string(),
+              content: z.string(),
+              folder: z.string().optional(),
+              task_id: z.string().optional(),
+              mime: z.string().optional(),
+            }),
+            execute: async (args) => {
+              const a = args as Record<string, unknown>;
+              const name = String(a.name ?? "").trim();
+              const content = String(a.content ?? "");
+              if (!name || !content) return JSON.stringify({ ok: false, error: "name and content are required" });
+              if (!claimAction(`create_artifact:${a.task_id ?? ""}:${name}`)) {
+                recordToolUse(winner.id, "create_artifact", "already saved this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true });
+              }
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { createArtifact } = await import("./artifacts/artifacts.server");
+                const { id, deepLink } = await createArtifact({
+                  userEmail: email,
+                  agentId: winner.id,
+                  taskId: a.task_id ? String(a.task_id) : null,
+                  folder: String(a.folder ?? "Research"),
+                  name,
+                  mime: String(a.mime ?? "text/markdown"),
+                  bytes: Buffer.from(content, "utf8"),
+                });
+                recordToolUse(winner.id, "create_artifact", `saved "${name}"`, true, deepLink);
+                return JSON.stringify({ ok: true, id, deepLink });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "create_artifact", "save failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            },
+          });
+
+          // flag_blocker — the agent earns the "blocked" verdict by working the task (mirrors OpenAI path).
+          lovableTools.flag_blocker = tool({
+            description: FLAG_BLOCKER_TOOL.description,
+            inputSchema: z.object({ task_id: z.string(), reason: z.string() }),
+            execute: async (args) => {
+              const a = args as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const reason = String(a.reason ?? "").trim();
+              if (!taskId || !reason) return JSON.stringify({ ok: false, error: "task_id and reason are required" });
+              if (!claimAction(`flag_blocker:${taskId}`)) {
+                recordToolUse(winner.id, "flag_blocker", "already flagged this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true });
+              }
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                await invokeJourneyTool({
+                  toolName: "update_task",
+                  args: { task_id: taskId, status: "BLOCKED" },
+                  caller: data.caller ?? {},
+                  context: { source: "huddle" },
+                });
+                if (email) {
+                  const { setTaskBlocker } = await import("./tasks/tasks.server");
+                  await setTaskBlocker(email, taskId, reason, winner.id);
+                }
+                recordToolUse(winner.id, "flag_blocker", `blocked: ${reason.slice(0, 60)}`, true);
+                return JSON.stringify({ ok: true, task_id: taskId, status: "BLOCKED" });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            },
           });
 
           // schedule_reminder — Huddle-native timed reminder (mirrors the OpenAI path).
@@ -2825,9 +2995,18 @@ async function executeClaimedTurn(record: {
       void kickNextChunk(record.id);
       return result;
     }
-    // Fire a push per finished turn (SW suppresses it when the app is focused).
+    // Urgency-aware delivery (ACT-5 Phase B triage). Every finished turn posts its reply in-app; whether
+    // it also fires a phone PUSH depends on the enqueuer's declared intent (`payload.notify`):
+    //   "push"   (or unset) → buzz now  — interactive replies + genuine blockers/decisions.
+    //   "batch"           → NO push    — routine autonomous results; they wait in-app for the standup digest.
+    //   "silent"          → NO push    — never nudge.
+    // This is why routine research results should NOT buzz the phone: the autonomy engine tags them
+    // "batch". A real blocker the agent surfaces is tagged "push". The channel choice lives with the
+    // side that KNOWS the intent (the enqueuer), not a fragile keyword classifier here.
+    const notifyLevel = String((record.payload as { notify?: string })?.notify ?? "push");
+    const wantsPush = notifyLevel !== "batch" && notifyLevel !== "silent";
     const lead = result.replies?.[0];
-    if (lead) {
+    if (lead && wantsPush) {
       const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
       const title = `${name} replied`;
       const body = String(lead.text).replace(/\s+/g, " ").slice(0, 140);
@@ -2837,9 +3016,34 @@ async function executeClaimedTurn(record: {
       if (record.user_email) {
         try {
           const { invokeJourneyTool } = await import("./journey/proxy.functions");
+          // deepLink targets the exact 1:1/huddle so tapping the phone notification opens that channel.
+          // journey's sendPushNow spreads args.data into the push → send-push-notification's
+          // fcmData.deepLink; the Android bridge loads baseUrl + deepLink, so in the Huddle app this
+          // opens `?huddle=<id>` (the client reads it and switches to that huddle). Harmless elsewhere.
+          const huddleId = String((record.payload as { huddleId?: string })?.huddleId ?? "");
           await invokeJourneyTool({
             toolName: "send_push",
-            args: { title, body, channel: "messages" },
+            args: {
+              title,
+              body,
+              channel: "messages",
+              // Source-app tag: journey delivers this ONLY to the standalone Huddle bridge app's device
+              // token (endpoint `fcm:app:huddle:%`), so an agent reply doesn't also duplicate onto
+              // journey's web + bridge notifications.
+              app: "huddle",
+              data: {
+                ...(huddleId
+                  ? { deepLink: `/?huddle=${huddleId}`, source: "huddle-message", huddleId }
+                  : {}),
+                // UNIQUE per turn. The Android bridge identifies a notification by its `tag`
+                // (`notify(tag, 0, …)`) and journey defaults an untagged push to the constant `'fcm'`,
+                // so every reply would REPLACE the previous one — you'd see only the latest, not each
+                // message as it was posted. A per-turn tag makes each reply its own shade entry, arriving
+                // one at a time. `notificationId` tags web-push the same way.
+                notificationId: record.id,
+                tag: record.id,
+              },
+            },
             caller: { entra_email: record.user_email },
             context: { source: "huddle" },
           });
@@ -2956,6 +3160,53 @@ export const getReminderDeliveries = createServerFn({ method: "POST" })
     return { reminders };
   });
 
+/** GLOBAL durable-turn back-fill: every FINISHED reply for this user across ALL huddles since `sinceMs`.
+ *  The per-huddle getTurnUpdates poll is gated on a locally-submitted turn, so an autonomous reply
+ *  (grooming/blocker/standup/owner-followup) that completes while the user is away — or in a huddle they
+ *  aren't viewing — never reaches the transcript even though its push fired. The client polls this on
+ *  load/focus and merges each reply into its OWN huddle (returned as `huddleId`), so the message the
+ *  notification announced is actually there. Reply id on the client mirrors the live poll
+ *  (`a-<turnId>-<i>`) so live-poll / interactive / back-fill collapse to one message. */
+const AllTurnUpdatesInput = z.object({
+  caller: z
+    .object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() })
+    .optional(),
+  sinceMs: z.number().optional(),
+});
+export const getAllTurnUpdates = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => AllTurnUpdatesInput.parse(raw))
+  .handler(async ({ data }) => {
+    type BackfillTurn = {
+      id: string;
+      huddleId: string;
+      updated_ms: number;
+      replies: { agentId: AgentId; text: string }[];
+    };
+    const empty: BackfillTurn[] = [];
+    if (!data.caller?.entra_email) return { turns: empty };
+    let email: string | null = null;
+    try {
+      const { resolveTaskEmail } = await import("./journey/identity");
+      email = (await resolveTaskEmail(data.caller)) ?? data.caller.entra_email ?? null;
+    } catch {
+      email = data.caller.entra_email ?? null;
+    }
+    if (!email) return { turns: empty };
+    const { getUserTurnsSince } = await import("./tasks/turns.server");
+    const rows = await getUserTurnsSince(email, data.sinceMs ?? 0);
+    const turns: BackfillTurn[] = rows.map((t) => ({
+      id: t.id,
+      huddleId: t.huddle_id,
+      updated_ms: t.updated_ms,
+      // A 'done' turn's authoritative replies live in `result.replies`; fall back to the streamed column.
+      replies: (((t.result as { replies?: unknown } | null)?.replies ?? t.replies ?? []) as {
+        agentId: AgentId;
+        text: string;
+      }[]),
+    }));
+    return { turns };
+  });
+
 /** Save/refresh a Web Push subscription for the signed-in user (for notify-while-away). */
 const PushSubInput = z.object({
   caller: z.object({
@@ -2985,6 +3236,36 @@ export const registerPushSubscription = createServerFn({ method: "POST" })
       auth: data.subscription.keys.auth,
     });
     return { ok: true as const };
+  });
+
+// Register the STANDALONE Huddle bridge app's FCM device token so journey's send_push can reach it.
+// The token (from window.AndroidBridge.getFcmToken()) is routed through the huddle-proxy, which resolves
+// the caller to a journey user and calls execute-tool `register_push_token` — so the Huddle app's token
+// joins the SAME push_subscriptions store journey already delivers to. Reuse, not a new sender: this is
+// what lets a Huddle-agent push land on the Huddle app (and deep-link into the right channel).
+const BridgeFcmInput = z.object({
+  caller: z
+    .object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() })
+    .optional(),
+  token: z.string().min(1),
+});
+export const registerBridgeFcmToken = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => BridgeFcmInput.parse(raw))
+  .handler(async ({ data }) => {
+    try {
+      const { invokeJourneyTool } = await import("./journey/proxy.functions");
+      const r = await invokeJourneyTool({
+        toolName: "register_push_token",
+        // `app:"huddle"` namespaces the endpoint as `fcm:app:huddle:<token>` so journey can target this
+        // app's device exclusively (and exclude it from journey-native pushes).
+        args: { fcm_token: data.token, app: "huddle" },
+        caller: data.caller ?? {},
+        context: { source: "huddle" },
+      });
+      return { ok: !!r.ok, error: r.ok ? undefined : String(r.error ?? "register_failed") };
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
+    }
   });
 
 /**
