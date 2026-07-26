@@ -203,6 +203,20 @@ export async function upsertJourneyTask(row: JourneyTaskPayload, userEmail?: str
       row.tags ?? null, row.created_at ?? null, row.updated_at ?? null,
     ],
   );
+
+  // Reverse-clear (keep journey↔Huddle blocked in sync). journey's `tasks` is the canonical source of
+  // truth; when a task syncs in with a status that is NOT 'BLOCKED' (the user/agent unblocked it, marked
+  // it done, moved it back to TODO/IN_PROGRESS, etc.), the Huddle-native blocker row is stale and must go
+  // — otherwise standup/auto-work would keep surfacing a task the user already unblocked. Guarded on the
+  // incoming journey `updated_at`: only clear a blocker whose `flagged_at` PRECEDES this update, so a
+  // stale in-flight TODO sync (async pg_net can deliver out of order) can't wipe a blocker just written by
+  // flag_blocker. status=BLOCKED (the forward direction) is intentionally left untouched.
+  const incomingStatus = (row.status ?? "").toUpperCase();
+  if (incomingStatus && incomingStatus !== "BLOCKED" && row.updated_at) {
+    await getPool()
+      .query(`DELETE FROM tasks.task_blockers WHERE task_id = $1 AND flagged_at < $2`, [row.id, row.updated_at])
+      .catch(() => {}); // non-fatal: the mirror upsert is what matters; a failed clear self-heals next sync
+  }
 }
 
 export async function deleteJourneyTask(id: string): Promise<void> {

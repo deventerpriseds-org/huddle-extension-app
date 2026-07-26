@@ -1642,9 +1642,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 await setTaskBlocker(email, taskId, reason, winner.id);
                 // Set the journey task status=BLOCKED so journey ↔ Huddle stay in sync (it syncs back to
                 // the mirror). CHECK the result — a silent failure here means the two apps disagree.
+                // Set the journey task status=BLOCKED so journey ↔ Huddle stay in sync (it syncs back to
+                // the mirror in ~1s–1min; the reverse — an unblock on journey — clears the reason row via
+                // upsertJourneyTask). Check the result so a silent board-write failure is surfaced.
                 let boardStatusSet = false;
                 let boardError = "";
-                let journeyReturn = "";
                 try {
                   const { invokeJourneyTool } = await import("./journey/proxy.functions");
                   const r = await invokeJourneyTool({
@@ -1654,7 +1656,6 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                     context: { source: "huddle" },
                   });
                   boardStatusSet = !!r.ok;
-                  journeyReturn = String(r.output ?? "").replace(/\s+/g, " ").slice(0, 220);
                   if (!r.ok) boardError = String(r.error ?? r.output ?? "update_task_failed").slice(0, 160);
                 } catch (e) {
                   boardError = (e instanceof Error ? e.message : String(e)).slice(0, 160);
@@ -1662,11 +1663,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 recordToolUse(
                   winner.id,
                   "flag_blocker",
-                  boardStatusSet ? `blocked: ${reason.slice(0, 40)}` : `blocked (NOT set: ${boardError})`,
+                  boardStatusSet ? `blocked: ${reason.slice(0, 50)}` : `blocked, board status not set: ${boardError}`,
                   true,
-                  `journeyReturn=${journeyReturn}${boardError ? ` err=${boardError}` : ""}`,
+                  boardError || undefined,
                 );
-                return JSON.stringify({ ok: true, task_id: taskId, board_status_set: boardStatusSet, journey_return: journeyReturn });
+                return JSON.stringify({ ok: true, task_id: taskId, board_status_set: boardStatusSet });
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
