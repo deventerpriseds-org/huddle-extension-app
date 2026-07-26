@@ -1644,6 +1644,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 // the mirror). CHECK the result — a silent failure here means the two apps disagree.
                 let boardStatusSet = false;
                 let boardError = "";
+                let journeyReturn = "";
                 try {
                   const { invokeJourneyTool } = await import("./journey/proxy.functions");
                   const r = await invokeJourneyTool({
@@ -1653,6 +1654,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                     context: { source: "huddle" },
                   });
                   boardStatusSet = !!r.ok;
+                  journeyReturn = String(r.output ?? "").replace(/\s+/g, " ").slice(0, 220);
                   if (!r.ok) boardError = String(r.error ?? r.output ?? "update_task_failed").slice(0, 160);
                 } catch (e) {
                   boardError = (e instanceof Error ? e.message : String(e)).slice(0, 160);
@@ -1660,11 +1662,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 recordToolUse(
                   winner.id,
                   "flag_blocker",
-                  boardStatusSet ? `blocked: ${reason.slice(0, 50)}` : `blocked (board status NOT set: ${boardError})`,
+                  boardStatusSet ? `blocked: ${reason.slice(0, 40)}` : `blocked (NOT set: ${boardError})`,
                   true,
-                  boardError || undefined,
+                  `journeyReturn=${journeyReturn}${boardError ? ` err=${boardError}` : ""}`,
                 );
-                return JSON.stringify({ ok: true, task_id: taskId, board_status_set: boardStatusSet, ...(boardError ? { board_error: boardError } : {}) });
+                return JSON.stringify({ ok: true, task_id: taskId, board_status_set: boardStatusSet, journey_return: journeyReturn });
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
