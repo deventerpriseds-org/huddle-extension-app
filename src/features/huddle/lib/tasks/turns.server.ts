@@ -310,6 +310,29 @@ export async function getTurn(id: string): Promise<TurnRecord | null> {
   return res.rows[0] ? mapRow(res.rows[0]) : null;
 }
 
+/** All FINISHED ('done') durable turns for a USER across EVERY huddle, updated after `sinceMs`.
+ *  This is the GLOBAL away/cold-open back-fill read. `getTurnsSince` (above) is per-huddle and its
+ *  client caller is gated on a locally-submitted turn — so an autonomous turn (grooming summary,
+ *  blocker surface, standup, owner-followup) that completes in a huddle the user isn't viewing never
+ *  reaches the rendered transcript, even though its push fired. This read returns each such reply with
+ *  its own `huddle_id` so the client can merge it into the right conversation regardless of which
+ *  huddle is open — restoring "the message is in the channel, then the notification relays it." Only
+ *  'done' turns (in-flight streaming stays with the per-huddle poll). Oldest-first so the client's
+ *  cursor advances monotonically; LIMIT bounds a long-away catch-up (re-poll drains the rest). */
+export async function getUserTurnsSince(userEmail: string, sinceMs: number): Promise<TurnRecord[]> {
+  await ensureBootstrapped();
+  const res = await getPool().query(
+    `SELECT ${ROW_COLS} FROM chat.pending_turns
+      WHERE lower(user_email) = lower($1)
+        AND status = 'done'
+        AND updated_at > to_timestamp($2 / 1000.0)
+      ORDER BY updated_at ASC
+      LIMIT 100`,
+    [userEmail, Math.max(0, sinceMs)],
+  );
+  return res.rows.map(mapRow);
+}
+
 export interface PushSubscriptionRecord {
   endpoint: string;
   p256dh: string;

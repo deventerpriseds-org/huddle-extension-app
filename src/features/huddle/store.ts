@@ -285,6 +285,7 @@ export function hydrateFromRemote(blob: Record<string, unknown> | null | undefin
   const seed = seedDefaults();
   if (!blob || typeof blob !== "object") {
     useHuddleStore.setState(seed);
+    workspaceHydrated = true;
     return;
   }
   const p = blob as Partial<PersistedWorkspace>;
@@ -315,6 +316,16 @@ export function hydrateFromRemote(blob: Record<string, unknown> | null | undefin
     journeyTasks: Array.isArray(p.journeyTasks) ? p.journeyTasks : seed.journeyTasks,
     showDemoData: typeof p.showDemoData === "boolean" ? p.showDemoData : seed.showDemoData,
   });
+  workspaceHydrated = true;
+}
+
+// True once the store has been hydrated from remote (or seeded). The app-global durable-turn back-fill
+// gates on this: it must add messages ON TOP of the hydrated array, never before hydrate replaces it —
+// a pre-hydrate add would be discarded by hydration while its cursor advanced, permanently losing the
+// message. Set by hydrateFromRemote / resetWorkspace; read via isWorkspaceHydrated().
+let workspaceHydrated = false;
+export function isWorkspaceHydrated(): boolean {
+  return workspaceHydrated;
 }
 
 // Deep-link target captured from `?huddle=<id>` before the URL param is cleaned. hydrateFromRemote
@@ -327,6 +338,9 @@ export function setDeepLinkTarget(id: string | null): void {
 /** Reset store to seed defaults (used on sign-out). */
 export function resetWorkspace() {
   useHuddleStore.setState(seedDefaults());
+  // Not hydrated to real content — a fresh session must re-hydrate before the back-fill may add, so it
+  // never writes onto a seed store that hydration is about to replace.
+  workspaceHydrated = false;
 }
 
 /** One-shot migration: read legacy localStorage `huddle-workspace` if present. */

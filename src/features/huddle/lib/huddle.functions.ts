@@ -3151,6 +3151,53 @@ export const getReminderDeliveries = createServerFn({ method: "POST" })
     return { reminders };
   });
 
+/** GLOBAL durable-turn back-fill: every FINISHED reply for this user across ALL huddles since `sinceMs`.
+ *  The per-huddle getTurnUpdates poll is gated on a locally-submitted turn, so an autonomous reply
+ *  (grooming/blocker/standup/owner-followup) that completes while the user is away — or in a huddle they
+ *  aren't viewing — never reaches the transcript even though its push fired. The client polls this on
+ *  load/focus and merges each reply into its OWN huddle (returned as `huddleId`), so the message the
+ *  notification announced is actually there. Reply id on the client mirrors the live poll
+ *  (`a-<turnId>-<i>`) so live-poll / interactive / back-fill collapse to one message. */
+const AllTurnUpdatesInput = z.object({
+  caller: z
+    .object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() })
+    .optional(),
+  sinceMs: z.number().optional(),
+});
+export const getAllTurnUpdates = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => AllTurnUpdatesInput.parse(raw))
+  .handler(async ({ data }) => {
+    type BackfillTurn = {
+      id: string;
+      huddleId: string;
+      updated_ms: number;
+      replies: { agentId: AgentId; text: string }[];
+    };
+    const empty: BackfillTurn[] = [];
+    if (!data.caller?.entra_email) return { turns: empty };
+    let email: string | null = null;
+    try {
+      const { resolveTaskEmail } = await import("./journey/identity");
+      email = (await resolveTaskEmail(data.caller)) ?? data.caller.entra_email ?? null;
+    } catch {
+      email = data.caller.entra_email ?? null;
+    }
+    if (!email) return { turns: empty };
+    const { getUserTurnsSince } = await import("./tasks/turns.server");
+    const rows = await getUserTurnsSince(email, data.sinceMs ?? 0);
+    const turns: BackfillTurn[] = rows.map((t) => ({
+      id: t.id,
+      huddleId: t.huddle_id,
+      updated_ms: t.updated_ms,
+      // A 'done' turn's authoritative replies live in `result.replies`; fall back to the streamed column.
+      replies: (((t.result as { replies?: unknown } | null)?.replies ?? t.replies ?? []) as {
+        agentId: AgentId;
+        text: string;
+      }[]),
+    }));
+    return { turns };
+  });
+
 /** Save/refresh a Web Push subscription for the signed-in user (for notify-while-away). */
 const PushSubInput = z.object({
   caller: z.object({

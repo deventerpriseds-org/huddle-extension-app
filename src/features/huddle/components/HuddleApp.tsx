@@ -10,18 +10,111 @@ import { Sidebar } from "./Sidebar";
 import { SettingsSheet } from "./SettingsSheet";
 import { AgentSettingsDrawer } from "./AgentSettingsDrawer";
 import { FallbackBanner } from "./FallbackBanner";
-import { setDeepLinkTarget, useHuddleStore, useVisibleHuddles } from "../store";
+import { isWorkspaceHydrated, setDeepLinkTarget, useHuddleStore, useVisibleHuddles } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { AGENT_BY_ID } from "../data/agents";
+import { AGENT_BY_ID, type AgentId } from "../data/agents";
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
+import { useAuth } from "@/hooks/useAuth";
+import { getAllTurnUpdates } from "../lib/huddle.functions";
 
 
 
 export function HuddleApp() {
   useWorkspaceSync();
+  const { isAuthenticated, user } = useAuth();
   const view = useHuddleStore((s) => s.view);
   const huddles = useVisibleHuddles();
   const activeId = useHuddleStore((s) => s.activeHuddleId);
+
+  // GLOBAL durable-turn back-fill — the comms invariant: a message lands in the channel, THEN a
+  // notification relays it if you're away. Autonomous replies (grooming summary, blocker surface,
+  // standup digest, 1:1 owner follow-up) complete server-side as durable turns and fire a push, but
+  // their reply text lives only in chat.pending_turns. The per-huddle turn poll (HuddleView) is gated on
+  // a locally-submitted turn, so on a push-tap cold-open — or for a huddle you never open — it never
+  // reaches the transcript. Here, app-globally, we poll every FINISHED reply for this user across ALL
+  // huddles since a persisted cursor and merge each into its OWN huddle, so the message the push
+  // announced is actually there. The reply id mirrors the live poll (`a-<turnId>-<i>`) so live-poll /
+  // interactive-submit / back-fill collapse to a single message (no double-render).
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const caller = user?.username
+      ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+      : null;
+    if (!caller?.entra_email) return;
+
+    const CURSOR_KEY = "huddle:durableTurnCursorMs";
+    let cursor = 0;
+    try {
+      const stored = Number(window.localStorage.getItem(CURSOR_KEY));
+      // First run: look back 24h so a message missed while away is recovered, without dredging history.
+      cursor = Number.isFinite(stored) && stored > 0 ? stored : Date.now() - 24 * 60 * 60 * 1000;
+    } catch {
+      cursor = Date.now() - 24 * 60 * 60 * 1000;
+    }
+
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const doPoll = async () => {
+      const { turns } = await getAllTurnUpdates({ data: { caller, sinceMs: cursor } });
+      const add = useHuddleStore.getState().addAgentMessage;
+      for (const t of turns as {
+        id: string;
+        huddleId: string;
+        updated_ms: number;
+        replies: { agentId: AgentId; text: string }[];
+      }[]) {
+        cursor = Math.max(cursor, t.updated_ms || 0);
+        (t.replies ?? []).forEach((reply, i) => {
+          if (!reply?.agentId || !AGENT_BY_ID[reply.agentId]) return;
+          const mid = `a-${t.id}-${i}`;
+          // addAgentMessage does not dedupe; skip anything already rendered (live poll / prior back-fill).
+          if (useHuddleStore.getState().messages.some((m) => m.id === mid)) return;
+          add({
+            id: mid,
+            huddleId: t.huddleId,
+            author: { kind: "agent", agentId: reply.agentId },
+            text: reply.text,
+            ts: (t.updated_ms || Date.now()) + i,
+            replyTo: t.id,
+          });
+        });
+      }
+      try {
+        window.localStorage.setItem(CURSOR_KEY, String(cursor));
+      } catch {
+        /* ignore */
+      }
+    };
+    const safePoll = () => {
+      // Only add AFTER hydrate — a pre-hydrate add would be discarded by hydration while the cursor
+      // advanced (a permanent miss).
+      if (stopped || !isWorkspaceHydrated()) return;
+      void doPoll().catch(() => {
+        /* transient — retried next tick */
+      });
+    };
+    // Poll fast until hydrated, then settle to 30s; also on focus/return so an away message appears.
+    const tick = () => {
+      if (stopped) return;
+      const hydrated = isWorkspaceHydrated();
+      if (hydrated) safePoll();
+      timer = setTimeout(tick, hydrated ? 30_000 : 1_500);
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") safePoll();
+    };
+    tick();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onVisible);
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, user?.username, user?.homeAccountId, user?.localAccountId]);
 
   // Deep link: a push notification opens the app at `?huddle=<id>` (e.g. dm-sam-trent). Read it once
   // on load and switch to that huddle so tapping "Sam replied" lands in Sam's 1:1, not the default view.
