@@ -3178,6 +3178,34 @@ export const registerPushSubscription = createServerFn({ method: "POST" })
     return { ok: true as const };
   });
 
+// Register the STANDALONE Huddle bridge app's FCM device token so journey's send_push can reach it.
+// The token (from window.AndroidBridge.getFcmToken()) is routed through the huddle-proxy, which resolves
+// the caller to a journey user and calls execute-tool `register_push_token` — so the Huddle app's token
+// joins the SAME push_subscriptions store journey already delivers to. Reuse, not a new sender: this is
+// what lets a Huddle-agent push land on the Huddle app (and deep-link into the right channel).
+const BridgeFcmInput = z.object({
+  caller: z
+    .object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() })
+    .optional(),
+  token: z.string().min(1),
+});
+export const registerBridgeFcmToken = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => BridgeFcmInput.parse(raw))
+  .handler(async ({ data }) => {
+    try {
+      const { invokeJourneyTool } = await import("./journey/proxy.functions");
+      const r = await invokeJourneyTool({
+        toolName: "register_push_token",
+        args: { fcm_token: data.token },
+        caller: data.caller ?? {},
+        context: { source: "huddle" },
+      });
+      return { ok: !!r.ok, error: r.ok ? undefined : String(r.error ?? "register_failed") };
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
 /**
  * Backstop executor used by the run-turn route (cron heartbeat). Drains up to `max` queued or
  * stale-running turns, running each to completion. Returns how many it ran. This is the guaranteed,
