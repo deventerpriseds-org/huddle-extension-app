@@ -1,0 +1,48 @@
+name: Run agent standup digest (manual/on-demand)
+
+# Manual/test trigger for ACT-5 standup digest. The scheduled path is the Huddle every-minute scheduler
+# POSTing /api/public/run-standup a few times a day; this workflow fires the SAME route on demand
+# (default force:true, so it runs even if nothing new) for testing or an ad-hoc "do the work now".
+# Uses the shared JOURNEY_PROXY_TOKEN org secret — no new secret.
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Caller email to run the standup digest for (journey user)."
+        required: true
+        default: "von.ellis@enterpriseds.io"
+      force:
+        description: "Run even when there is nothing to report."
+        required: false
+        default: "true"
+      timeZone:
+        description: "IANA time zone."
+        required: false
+        default: "America/New_York"
+
+jobs:
+  run-standup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/public/run-standup
+        env:
+          SECRET: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          EMAIL: ${{ inputs.email }}
+          FORCE: ${{ inputs.force }}
+          TZ_INPUT: ${{ inputs.timeZone }}
+        run: |
+          if [ -z "$SECRET" ]; then echo "JOURNEY_PROXY_TOKEN secret not set"; exit 1; fi
+          RUN_ID="standup-manual-$(date -u +%Y%m%d%H%M%S)"
+          echo "Firing run-standup for $EMAIL (force=$FORCE, runId=$RUN_ID)"
+          HTTP=$(curl -s -o /tmp/standup.out -w "%{http_code}" -X POST \
+            -H "content-type: application/json" \
+            -H "x-webhook-secret: $SECRET" \
+            -d "{\"caller\":{\"entra_email\":\"$EMAIL\"},\"force\":$FORCE,\"timeZone\":\"$TZ_INPUT\",\"runId\":\"$RUN_ID\"}" \
+            "$BASE/api/public/run-standup")
+          echo "HTTP $HTTP"
+          echo "--- response ---"
+          cat /tmp/standup.out; echo
+          # 200 = ran (may be skipped/researched); anything else is a failure to surface.
+          if [ "$HTTP" != "200" ]; then echo "run-standup failed"; exit 1; fi

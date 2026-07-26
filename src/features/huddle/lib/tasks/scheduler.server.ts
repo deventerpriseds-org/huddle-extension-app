@@ -20,6 +20,8 @@ const DEFAULT_GROOM_HOURS = [4, 8, 12, 14, 18, 22];
 // Auto-work runs less often than grooming (it does live web research + artifact writes). It fires
 // AFTER grooming has assigned/triaged, so agents pick up freshly-assigned work.
 const DEFAULT_AUTOWORK_HOURS = [9, 13, 17];
+// Standup digest fires once in the morning — it summarizes the prior day's autonomous work + blockers.
+const DEFAULT_STANDUP_HOURS = [8];
 const DEFAULT_TZ = "America/New_York";
 
 /** ms to add to a UTC instant so that formatting it in `tz` yields the same wall-clock — i.e. tz offset. */
@@ -103,6 +105,15 @@ async function ensureGroomJobs(now: Date): Promise<void> {
       nextRunAt: computeNextRun(autowork.hours, autowork.tz, now).toISOString(),
       meta: {},
     });
+    const standup = { tz: DEFAULT_TZ, hours: DEFAULT_STANDUP_HOURS };
+    await upsertScheduledJob({
+      id: `standup-${email}`,
+      jobType: "standup-digest",
+      targetEmail: email,
+      cadence: standup,
+      nextRunAt: computeNextRun(standup.hours, standup.tz, now).toISOString(),
+      meta: {},
+    });
   }
 }
 
@@ -136,6 +147,9 @@ async function fireJob(job: ScheduledJob, slotId: string): Promise<void> {
   } else if (job.job_type === "auto-work") {
     // No force: a cadence fire is a no-op when there's nothing new to research.
     await post("/api/public/run-autowork");
+  } else if (job.job_type === "standup-digest") {
+    // No force: a cadence fire is a no-op when nothing happened and nothing is blocked.
+    await post("/api/public/run-standup");
   }
   // Future: else if (job.job_type === "ceremony") { ... POST run-ceremony ... }
 }

@@ -15,6 +15,7 @@ import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as ApiPublicTasksSyncRouteImport } from './routes/api/public/tasks-sync'
 import { Route as ApiPublicRunTurnRouteImport } from './routes/api/public/run-turn'
+import { Route as ApiPublicRunStandupRouteImport } from './routes/api/public/run-standup'
 import { Route as ApiPublicRunGroomingRouteImport } from './routes/api/public/run-grooming'
 import { Route as ApiPublicRunCeremonyRouteImport } from './routes/api/public/run-ceremony'
 import { Route as ApiPublicRunAutoworkRouteImport } from './routes/api/public/run-autowork'
@@ -49,6 +50,11 @@ const ApiPublicRunTurnRoute = ApiPublicRunTurnRouteImport.update({
   path: '/api/public/run-turn',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicRunStandupRoute = ApiPublicRunStandupRouteImport.update({
+  id: '/api/public/run-standup',
+  path: '/api/public/run-standup',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicRunGroomingRoute = ApiPublicRunGroomingRouteImport.update({
   id: '/api/public/run-grooming',
   path: '/api/public/run-grooming',
@@ -78,6 +84,7 @@ export interface FileRoutesByFullPath {
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
 }
@@ -89,6 +96,7 @@ export interface FileRoutesByTo {
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
 }
@@ -102,6 +110,7 @@ export interface FileRoutesById {
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
 }
@@ -115,6 +124,7 @@ export interface FileRouteTypes {
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
   fileRoutesByTo: FileRoutesByTo
@@ -126,6 +136,7 @@ export interface FileRouteTypes {
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
   id:
@@ -138,6 +149,7 @@ export interface FileRouteTypes {
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
   fileRoutesById: FileRoutesById
@@ -150,6 +162,7 @@ export interface RootRouteChildren {
   ApiPublicRunAutoworkRoute: typeof ApiPublicRunAutoworkRoute
   ApiPublicRunCeremonyRoute: typeof ApiPublicRunCeremonyRoute
   ApiPublicRunGroomingRoute: typeof ApiPublicRunGroomingRoute
+  ApiPublicRunStandupRoute: typeof ApiPublicRunStandupRoute
   ApiPublicRunTurnRoute: typeof ApiPublicRunTurnRoute
   ApiPublicTasksSyncRoute: typeof ApiPublicTasksSyncRoute
 }
@@ -196,6 +209,13 @@ declare module '@tanstack/react-router' {
       path: '/api/public/run-turn'
       fullPath: '/api/public/run-turn'
       preLoaderRoute: typeof ApiPublicRunTurnRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/run-standup': {
+      id: '/api/public/run-standup'
+      path: '/api/public/run-standup'
+      fullPath: '/api/public/run-standup'
+      preLoaderRoute: typeof ApiPublicRunStandupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/run-grooming': {
@@ -249,6 +269,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicRunAutoworkRoute: ApiPublicRunAutoworkRoute,
   ApiPublicRunCeremonyRoute: ApiPublicRunCeremonyRoute,
   ApiPublicRunGroomingRoute: ApiPublicRunGroomingRoute,
+  ApiPublicRunStandupRoute: ApiPublicRunStandupRoute,
   ApiPublicRunTurnRoute: ApiPublicRunTurnRoute,
   ApiPublicTasksSyncRoute: ApiPublicTasksSyncRoute,
 }
