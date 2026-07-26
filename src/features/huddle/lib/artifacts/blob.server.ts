@@ -1,13 +1,17 @@
 // Azure Blob layer for the artifact store. Reuses the org's proven pattern (BlobServiceClient from a
 // connection string + a short-lived read SAS), but the container is PRIVATE — blob bytes are only ever
 // reachable through a server-minted, read-only SAS that expires in ~15 minutes. Container: huddle-artifacts.
-import {
-  BlobServiceClient,
-  StorageSharedKeyCredential,
-  generateBlobSASQueryParameters,
-  BlobSASPermissions,
-  SASProtocol,
-} from "@azure/storage-blob";
+//
+// @azure/storage-blob is browser-externalized, so it is LAZY-loaded (dynamic import inside the helpers)
+// rather than statically imported — that keeps this module safe to appear in a client build graph (it
+// never runs there). Static named imports from a browser-externalized package break the client build; a
+// namespace dynamic import does not. This matters because the create_artifact agent tool pulls the
+// artifacts chain in via the (client-reachable) turn engine.
+type BlobSDK = typeof import("@azure/storage-blob");
+let _sdk: Promise<BlobSDK> | null = null;
+function sdk(): Promise<BlobSDK> {
+  return (_sdk ??= import("@azure/storage-blob"));
+}
 
 const CONTAINER = "huddle-artifacts";
 const SAS_TTL_MS = 15 * 60_000; // 15-minute read window
@@ -26,15 +30,18 @@ function conn(): string {
   return c;
 }
 
-let _svc: BlobServiceClient | null = null;
-function service(): BlobServiceClient {
-  if (!_svc) _svc = BlobServiceClient.fromConnectionString(conn());
+let _svc: Awaited<ReturnType<BlobSDK["BlobServiceClient"]["fromConnectionString"]>> | null = null;
+async function service() {
+  if (!_svc) {
+    const { BlobServiceClient } = await sdk();
+    _svc = BlobServiceClient.fromConnectionString(conn());
+  }
   return _svc;
 }
 
 let _ensured = false;
 async function container() {
-  const client = service().getContainerClient(CONTAINER);
+  const client = (await service()).getContainerClient(CONTAINER);
   if (!_ensured) {
     // No `access` argument => PRIVATE container (no anonymous blob/container read). Idempotent.
     await client.createIfNotExists();
@@ -89,11 +96,12 @@ export async function artifactBlobSize(path: string): Promise<number | null> {
  * A read-ONLY SAS URL for `path`, expiring in ~15 min. This is the ONLY way blob bytes are exposed —
  * the container is private, so a URL without a valid, unexpired SAS is unreachable (403/404).
  */
-export function artifactSasUrl(path: string): string {
+export async function artifactSasUrl(path: string): Promise<string> {
   const c = conn();
   const accountName = c.match(/AccountName=([^;]+)/)?.[1] ?? "";
   const accountKey = c.match(/AccountKey=([^;]+)/)?.[1] ?? "";
   if (!accountName || !accountKey) throw new ArtifactStorageNotConfigured();
+  const { StorageSharedKeyCredential, generateBlobSASQueryParameters, BlobSASPermissions, SASProtocol } = await sdk();
   const cred = new StorageSharedKeyCredential(accountName, accountKey);
   const startsOn = new Date(Date.now() - 60_000); // small skew tolerance
   const expiresOn = new Date(Date.now() + SAS_TTL_MS);

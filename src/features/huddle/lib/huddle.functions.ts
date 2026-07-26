@@ -24,6 +24,7 @@ import {
   tavilySearch,
   type TavilySearchArgs,
 } from "./tavily-search.functions";
+import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
@@ -1554,6 +1555,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
           const mergedTools = [
             createHuddleTaskTool,
+            CREATE_ARTIFACT_TOOL,
             SCHEDULE_REMINDER_TOOL,
             PRIORITIZE_TOOL,
             ...groomTools,
@@ -1585,6 +1587,38 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }) => {
             if (c.name === "create_huddle_task") {
               return JSON.stringify(await createSuggestedTaskFromTool(c.arguments));
+            }
+            if (c.name === "create_artifact") {
+              const a = c.arguments as Record<string, unknown>;
+              const name = String(a.name ?? "").trim();
+              const content = String(a.content ?? "");
+              if (!name || !content) return JSON.stringify({ ok: false, error: "name and content are required" });
+              if (!claimAction(`create_artifact:${a.task_id ?? ""}:${name}`)) {
+                recordToolUse(winner.id, "create_artifact", "already saved this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true });
+              }
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { createArtifact } = await import("./artifacts/artifacts.server");
+                const { id, deepLink } = await createArtifact({
+                  userEmail: email,
+                  agentId: winner.id,
+                  taskId: a.task_id ? String(a.task_id) : null,
+                  folder: String(a.folder ?? "Research"),
+                  name,
+                  mime: String(a.mime ?? "text/markdown"),
+                  bytes: Buffer.from(content, "utf8"),
+                });
+                recordToolUse(winner.id, "create_artifact", `saved "${name}"`, true, deepLink);
+                return JSON.stringify({ ok: true, id, deepLink });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "create_artifact", "save failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
             }
             if (c.name === "schedule_reminder") {
               const a = c.arguments as Record<string, unknown>;
@@ -1971,6 +2005,50 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             }),
             execute: async (args) =>
               JSON.stringify(await createSuggestedTaskFromTool(args as Record<string, unknown>)),
+          });
+
+          // create_artifact — save the agent's own finished work as a reviewable artifact (mirrors OpenAI path).
+          lovableTools.create_artifact = tool({
+            description: CREATE_ARTIFACT_TOOL.description,
+            inputSchema: z.object({
+              name: z.string(),
+              content: z.string(),
+              folder: z.string().optional(),
+              task_id: z.string().optional(),
+              mime: z.string().optional(),
+            }),
+            execute: async (args) => {
+              const a = args as Record<string, unknown>;
+              const name = String(a.name ?? "").trim();
+              const content = String(a.content ?? "");
+              if (!name || !content) return JSON.stringify({ ok: false, error: "name and content are required" });
+              if (!claimAction(`create_artifact:${a.task_id ?? ""}:${name}`)) {
+                recordToolUse(winner.id, "create_artifact", "already saved this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true });
+              }
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { createArtifact } = await import("./artifacts/artifacts.server");
+                const { id, deepLink } = await createArtifact({
+                  userEmail: email,
+                  agentId: winner.id,
+                  taskId: a.task_id ? String(a.task_id) : null,
+                  folder: String(a.folder ?? "Research"),
+                  name,
+                  mime: String(a.mime ?? "text/markdown"),
+                  bytes: Buffer.from(content, "utf8"),
+                });
+                recordToolUse(winner.id, "create_artifact", `saved "${name}"`, true, deepLink);
+                return JSON.stringify({ ok: true, id, deepLink });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "create_artifact", "save failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            },
           });
 
           // schedule_reminder — Huddle-native timed reminder (mirrors the OpenAI path).
