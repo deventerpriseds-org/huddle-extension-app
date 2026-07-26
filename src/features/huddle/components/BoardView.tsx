@@ -345,7 +345,13 @@ export function BoardView() {
                                 className="flex w-60 shrink-0 flex-col gap-2 rounded-lg bg-muted/30 p-1.5"
                               >
                                 {items.map((t) => (
-                                  <BoardCard key={t.id} task={t} onDragStart={() => setDragId(t.id)} onDragEnd={() => setDragId(null)} />
+                                  <BoardCard
+                                    key={t.id}
+                                    task={t}
+                                    onDragStart={() => setDragId(t.id)}
+                                    onDragEnd={() => setDragId(null)}
+                                    onStatus={(id, s) => applyMove(id, { status: s })}
+                                  />
                                 ))}
                                 {!items.length && <div className="h-1" />}
                               </div>
@@ -404,7 +410,13 @@ export function BoardView() {
                       {!isCollapsed && (
                         <div className="flex flex-col gap-2 p-2">
                           {items.map((t) => (
-                            <BoardCard key={t.id} task={t} fullWidth onMove={applyMove} />
+                            <BoardCard
+                              key={t.id}
+                              task={t}
+                              fullWidth
+                              onMove={applyMove}
+                              onStatus={(id, s) => applyMove(id, { status: s })}
+                            />
                           ))}
                         </div>
                       )}
@@ -432,12 +444,14 @@ function BoardCard({
   onDragEnd,
   fullWidth,
   onMove,
+  onStatus,
 }: {
   task: BoardTaskRow;
   onDragStart?: () => void;
   onDragEnd?: () => void;
   fullWidth?: boolean;
   onMove?: (id: string, patch: { status?: string; assigned_agent?: string }) => void;
+  onStatus?: (id: string, status: string) => void;
 }) {
   const agent = task.assigned_agent ? AGENT_BY_ID[task.assigned_agent as AgentId] : undefined;
   const stripe = agent ? `var(${agent.colorVar})` : "var(--hairline)";
@@ -445,6 +459,8 @@ function BoardCard({
   const prio = (task.priority ?? "MEDIUM").toUpperCase();
   const tags = task.tags ?? [];
   const draggable = !!onDragStart;
+  const curColKey = columnKeyFor(task.status);
+  const curCol = COLUMNS.find((c) => c.key === curColKey) ?? COLUMNS[0];
 
   return (
     <div
@@ -469,20 +485,6 @@ function BoardCard({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-52">
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>Move to…</DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent>
-                      {COLUMNS.map((c) => (
-                        <DropdownMenuItem
-                          key={c.key}
-                          disabled={columnKeyFor(task.status) === c.key}
-                          onClick={() => onMove(task.id, { status: c.setStatus })}
-                        >
-                          {c.label}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger>Assign to…</DropdownMenuSubTrigger>
                     <DropdownMenuSubContent className="max-h-72 overflow-y-auto">
@@ -519,7 +521,44 @@ function BoardCard({
               ))}
             </div>
           )}
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+            {onStatus && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    draggable={false}
+                    onDragStart={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition hover:bg-muted",
+                      curColKey === "blocked"
+                        ? "border-destructive/40 text-destructive"
+                        : curColKey === "done"
+                        ? "border-hairline text-muted-foreground"
+                        : "border-hairline text-foreground",
+                    )}
+                    aria-label="Change status"
+                  >
+                    {curCol.label}
+                    <ChevronDown size={11} className="opacity-60" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-40">
+                  <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Set status
+                  </DropdownMenuLabel>
+                  {COLUMNS.map((c) => (
+                    <DropdownMenuItem
+                      key={c.key}
+                      disabled={c.key === curColKey}
+                      onClick={() => onStatus(task.id, c.setStatus)}
+                    >
+                      {c.label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
