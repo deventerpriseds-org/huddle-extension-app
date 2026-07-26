@@ -3027,6 +3027,10 @@ async function executeClaimedTurn(record: {
               title,
               body,
               channel: "messages",
+              // Source-app tag: journey delivers this ONLY to the standalone Huddle bridge app's device
+              // token (endpoint `fcm:app:huddle:%`), so an agent reply doesn't also duplicate onto
+              // journey's web + bridge notifications.
+              app: "huddle",
               ...(huddleId
                 ? { data: { deepLink: `/?huddle=${huddleId}`, source: "huddle-message", huddleId } }
                 : {}),
@@ -3196,7 +3200,9 @@ export const registerBridgeFcmToken = createServerFn({ method: "POST" })
       const { invokeJourneyTool } = await import("./journey/proxy.functions");
       const r = await invokeJourneyTool({
         toolName: "register_push_token",
-        args: { fcm_token: data.token },
+        // `app:"huddle"` namespaces the endpoint as `fcm:app:huddle:<token>` so journey can target this
+        // app's device exclusively (and exclude it from journey-native pushes).
+        args: { fcm_token: data.token, app: "huddle" },
         caller: data.caller ?? {},
         context: { source: "huddle" },
       });
