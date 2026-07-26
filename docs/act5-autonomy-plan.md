@@ -32,14 +32,32 @@ over time; **gate 1 = research**. Built on the ACT-4 scheduler and the existing 
   message; a reply or one-tap approve advances it). While the agent is still working → artifact stays
   **draft/hidden**; it only surfaces when there's something worth telling the user.
 
-### Channels (triage: urgency → channel, like a real teammate)
-- **📞 Phone call** (real Twilio outbound via journey `notification-delivery`) — highest urgency /
-  importance, or user asked to be called.
-- **🔔 Push** (`send_push` → FCM/web-push) — "buzz me now": an unblocking decision/question.
-- **💬 Chat / in-app** — normal, non-urgent nudges.
-- **🗒️ Standup batch (default)** — results, progress, FYIs roll into the morning summary.
-- **✉️ Email** (Graph) — long-form / away / explicitly requested.
-- **Per-task override always wins:** "call me the moment X is done" / "just mention it at standup."
+### Channels (triage: urgency → channel, like a real teammate) — refined 2026-07-26
+- **💬 Chat / in-app = the primary update channel.** Summaries posted to chat must include **as much
+  detail as possible** — the chat message itself is detail-rich (findings, specifics, the recommendation),
+  with the artifact as the full backing document. NOT a terse "done, see doc."
+- **📞 Phone call (real Twilio outbound via journey `notification-delivery`) — NARROW, two triggers only:**
+  1. A **calendar meeting/appointment with a person** → call **2 hours before** so the user doesn't miss
+     it (calendar-driven: scan Graph `get_calendar_events` for person-meetings, fire a call at T-2h).
+  2. The user **explicitly asked to be called**. Phone is NOT the default for general blockers.
+- **🔔 Push** (`send_push` → FCM/web-push) — "buzz me now": an unblocking decision/question or a
+  blocker that shouldn't wait. (This — not phone — is the default urgent tier.)
+- **🗒️ Standup batch (default)** — routine results, progress, FYIs roll into the morning summary.
+- **✉️ Email** (Graph) — see "Email use-cases" below (deliberately conservative; TBD-refined).
+- **Explicit user channel instruction ALWAYS overrides the default triage.** If the user tells an agent
+  to call / email / DM / "just tell me at standup," that wins regardless of the tier logic.
+
+### Email use-cases (thinking harder — proposed, pending user 👍)
+Email is durable, external, shareable, and reaches the user off-app. Reserve it for:
+1. **Explicitly requested** ("email me the summary") — always honored.
+2. **Away/offline fallback:** if an important result was posted to chat/standup but the user hasn't
+   engaged in-app within a window, a copy escalates to email so nothing important is missed.
+3. **Shareable/keepable deliverables:** a finished report/roadmap the user is likely to forward, file,
+   or reference later — emailed with the artifact link.
+4. **The morning standup digest**, optionally, as an emailed summary so it reaches the user even if they
+   don't open the app that morning.
+Deliberately NOT: routine micro-updates, blockers/decisions (those are push), or anything time-sensitive
+(email is not "now"). Keep email low-frequency so it stays signal, not noise.
 
 ## Build in two increments
 - **Increment 1 — the core autonomous loop.** Assigned research task → agent runs Tavily → drafts a
