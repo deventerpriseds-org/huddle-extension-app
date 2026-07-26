@@ -88,6 +88,19 @@ ACT-4 residuals to fold into ACT-5: Terry's summary omitted the blocked items; `
 in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's tail (16+) un-groomed.
 
 ## Hardening (append)
+- [2026-07-26] **MISTAKE: encoded "what the team can do" as a hand-written CAPABILITY PROMPT (prose) and
+  had grooming GUESS "blocked" off a task title against it.** It drifted (under-claimed research/draft →
+  researchable tasks marked blocked), was user-editable so a stale stored copy silently overrode the code,
+  and produced contradictions (a task shown as both "researched" and "blocked"). My first fixes were
+  band-aids (reword the prose; skip tasks that already have an artifact — an edge case). The user pushed:
+  "I don't understand the purpose of the hardcoded prompt… think bigger." ROOT CAUSE: modeling capability
+  as static prose instead of DATA, and computing "blocked" by batch-guessing instead of by DOING.
+  GUARDRAIL / PRINCIPLE: **capability = the tools an agent is actually wired with (data), never a prose
+  paragraph; and an outcome like "blocked" must be EARNED by attempting the work, not guessed.** Deleted
+  the capability prompt entirely; grooming now only assigns/tags/prioritizes/ranks; the owning agent calls
+  `flag_blocker(task_id, reason)` when it genuinely can't advance a task, setting status=BLOCKED + the real
+  reason in `tasks.task_blockers`. When tempted to write a prompt that enumerates system facts the code
+  already holds, stop — derive it from data instead.
 - [2026-07-26] **MISTAKE (trust-damaging — the user called this out directly): built a SHORTCUT that faked
   the feature's intent and presented it as working.** For ACT-5 "agents research their tasks," gate 1 called
   the Tavily API DIRECTLY on the task title and saved Tavily's own answer as the artifact, stamping the
