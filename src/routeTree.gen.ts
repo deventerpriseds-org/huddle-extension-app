@@ -17,6 +17,7 @@ import { Route as ApiPublicTasksSyncRouteImport } from './routes/api/public/task
 import { Route as ApiPublicRunTurnRouteImport } from './routes/api/public/run-turn'
 import { Route as ApiPublicRunGroomingRouteImport } from './routes/api/public/run-grooming'
 import { Route as ApiPublicRunCeremonyRouteImport } from './routes/api/public/run-ceremony'
+import { Route as ApiPublicRunAutoworkRouteImport } from './routes/api/public/run-autowork'
 import { Route as ApiPublicAuthTraceRouteImport } from './routes/api/public/auth-trace'
 
 const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
@@ -58,6 +59,11 @@ const ApiPublicRunCeremonyRoute = ApiPublicRunCeremonyRouteImport.update({
   path: '/api/public/run-ceremony',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicRunAutoworkRoute = ApiPublicRunAutoworkRouteImport.update({
+  id: '/api/public/run-autowork',
+  path: '/api/public/run-autowork',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicAuthTraceRoute = ApiPublicAuthTraceRouteImport.update({
   id: '/api/public/auth-trace',
   path: '/api/public/auth-trace',
@@ -69,6 +75,7 @@ export interface FileRoutesByFullPath {
   '/auth': typeof AuthRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
@@ -79,6 +86,7 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/': typeof AuthenticatedIndexRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
@@ -91,6 +99,7 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
@@ -103,6 +112,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/sitemap.xml'
     | '/api/public/auth-trace'
+    | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
     | '/api/public/run-turn'
@@ -113,6 +123,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/'
     | '/api/public/auth-trace'
+    | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
     | '/api/public/run-turn'
@@ -124,6 +135,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/_authenticated/'
     | '/api/public/auth-trace'
+    | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
     | '/api/public/run-turn'
@@ -135,6 +147,7 @@ export interface RootRouteChildren {
   AuthRoute: typeof AuthRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiPublicAuthTraceRoute: typeof ApiPublicAuthTraceRoute
+  ApiPublicRunAutoworkRoute: typeof ApiPublicRunAutoworkRoute
   ApiPublicRunCeremonyRoute: typeof ApiPublicRunCeremonyRoute
   ApiPublicRunGroomingRoute: typeof ApiPublicRunGroomingRoute
   ApiPublicRunTurnRoute: typeof ApiPublicRunTurnRoute
@@ -199,6 +212,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicRunCeremonyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/run-autowork': {
+      id: '/api/public/run-autowork'
+      path: '/api/public/run-autowork'
+      fullPath: '/api/public/run-autowork'
+      preLoaderRoute: typeof ApiPublicRunAutoworkRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/auth-trace': {
       id: '/api/public/auth-trace'
       path: '/api/public/auth-trace'
@@ -226,6 +246,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiPublicAuthTraceRoute: ApiPublicAuthTraceRoute,
+  ApiPublicRunAutoworkRoute: ApiPublicRunAutoworkRoute,
   ApiPublicRunCeremonyRoute: ApiPublicRunCeremonyRoute,
   ApiPublicRunGroomingRoute: ApiPublicRunGroomingRoute,
   ApiPublicRunTurnRoute: ApiPublicRunTurnRoute,

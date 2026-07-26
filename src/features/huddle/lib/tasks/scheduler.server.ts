@@ -17,6 +17,9 @@ import {
 // Default auto-groom cadence: six local checks a day (a fresh groom only fires if the backlog actually
 // changed — the run-grooming change-gate handles that; here we just decide WHEN to check).
 const DEFAULT_GROOM_HOURS = [4, 8, 12, 14, 18, 22];
+// Auto-work runs less often than grooming (it does live web research + artifact writes). It fires
+// AFTER grooming has assigned/triaged, so agents pick up freshly-assigned work.
+const DEFAULT_AUTOWORK_HOURS = [9, 13, 17];
 const DEFAULT_TZ = "America/New_York";
 
 /** ms to add to a UTC instant so that formatting it in `tz` yields the same wall-clock — i.e. tz offset. */
@@ -73,18 +76,31 @@ export function computeNextRun(hours: number[], tz: string, from: Date): Date {
   return new Date(from.getTime() + 3_600_000);
 }
 
-/** Ensure every user with an open backlog has an auto-groom job (idempotent; only new rows get a next_run). */
+/**
+ * Ensure every user with an open backlog has an auto-groom job AND an auto-work job (idempotent; only new
+ * rows get a next_run — a conflict never overwrites the claimed watermark). Adding a recurring job type is
+ * one more row here + one more `fireJob` case.
+ */
 async function ensureGroomJobs(now: Date): Promise<void> {
   const emails = await getUsersWithOpenBacklog();
   for (const email of emails) {
-    const cadence = { tz: DEFAULT_TZ, hours: DEFAULT_GROOM_HOURS };
+    const groom = { tz: DEFAULT_TZ, hours: DEFAULT_GROOM_HOURS };
     await upsertScheduledJob({
       id: `groom-${email}`,
       jobType: "groom",
       targetEmail: email,
-      cadence,
+      cadence: groom,
       // On first insert this seeds the next fire; on conflict it's ignored (next_run_at not overwritten).
-      nextRunAt: computeNextRun(cadence.hours, cadence.tz, now).toISOString(),
+      nextRunAt: computeNextRun(groom.hours, groom.tz, now).toISOString(),
+      meta: {},
+    });
+    const autowork = { tz: DEFAULT_TZ, hours: DEFAULT_AUTOWORK_HOURS };
+    await upsertScheduledJob({
+      id: `autowork-${email}`,
+      jobType: "auto-work",
+      targetEmail: email,
+      cadence: autowork,
+      nextRunAt: computeNextRun(autowork.hours, autowork.tz, now).toISOString(),
       meta: {},
     });
   }
@@ -103,17 +119,23 @@ async function fireJob(job: ScheduledJob, slotId: string): Promise<void> {
   const token = (process.env.JOURNEY_PROXY_TOKEN ?? "").trim();
   const base = selfBase();
   if (!token || !base) return;
-  if (job.job_type === "groom") {
-    // No force: a cadence fire respects the change-gate (an unchanged backlog is skipped).
-    await fetch(`${base}/api/public/run-grooming`, {
+  const body = JSON.stringify({
+    caller: { entra_email: job.target_email },
+    timeZone: job.cadence?.tz ?? DEFAULT_TZ,
+    runId: slotId,
+  });
+  const post = (path: string) =>
+    fetch(`${base}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-webhook-secret": token },
-      body: JSON.stringify({
-        caller: { entra_email: job.target_email },
-        timeZone: job.cadence?.tz ?? DEFAULT_TZ,
-        runId: slotId,
-      }),
+      body,
     }).catch(() => {});
+  if (job.job_type === "groom") {
+    // No force: a cadence fire respects the change-gate (an unchanged backlog is skipped).
+    await post("/api/public/run-grooming");
+  } else if (job.job_type === "auto-work") {
+    // No force: a cadence fire is a no-op when there's nothing new to research.
+    await post("/api/public/run-autowork");
   }
   // Future: else if (job.job_type === "ceremony") { ... POST run-ceremony ... }
 }

@@ -83,6 +83,14 @@ CREATE TABLE IF NOT EXISTS tasks.groom_state (
   last_groomed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Change-detection watermark for ACT-5 auto-work (agents self-starting research on assigned tasks).
+-- Same idea as groom_state: skip a pass when the open-assigned backlog hasn't changed since last run.
+CREATE TABLE IF NOT EXISTS tasks.autowork_state (
+  user_email     TEXT PRIMARY KEY,
+  signature      TEXT,
+  last_worked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- GENERAL recurring-job scheduler, resident in Azure Huddle PG (NOT supabase). One heartbeat — the
 -- existing every-minute run-turn tick — dispatches every due job here, so any recurring/scheduled job
 -- (grooming today; ceremonies/digests next) is just a row: no new cron, no new secret. cadence holds
@@ -290,6 +298,49 @@ export async function setGroomSignature(userEmail: string, signature: string): P
      ON CONFLICT (user_email) DO UPDATE SET signature=EXCLUDED.signature, last_groomed_at=now()`,
     [userEmail.toLowerCase(), signature],
   );
+}
+
+/** The last auto-work signature for a user (null if never run), for the ACT-5 change gate. */
+export async function getAutoWorkSignature(userEmail: string): Promise<string | null> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ signature: string | null }>(
+    `SELECT signature FROM tasks.autowork_state WHERE lower(user_email) = $1`,
+    [userEmail.toLowerCase()],
+  );
+  return rows[0]?.signature ?? null;
+}
+
+/** Record the auto-work signature just processed, so an unchanged backlog is skipped next fire. */
+export async function setAutoWorkSignature(userEmail: string, signature: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.autowork_state (user_email, signature, last_worked_at)
+     VALUES ($1,$2,now())
+     ON CONFLICT (user_email) DO UPDATE SET signature=EXCLUDED.signature, last_worked_at=now()`,
+    [userEmail.toLowerCase(), signature],
+  );
+}
+
+/**
+ * Open tasks that are ASSIGNED to an agent and NOT already flagged blocked/schedule-only by grooming —
+ * i.e. the candidates an agent can attempt autonomously (ACT-5). Note: grooming tags "blocked" (it does
+ * not set status=BLOCKED), so the not-blocked filter is on the TAGS, not status. Priority order first.
+ */
+export async function getOpenAssignedTasks(userEmail: string, limit = 200): Promise<BoardTaskRow[]> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<BoardTaskRow>(
+    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags
+       FROM tasks.journey_tasks
+      WHERE lower(user_email) = $1
+        AND completed_at IS NULL
+        AND (status IS NULL OR status NOT IN ('DONE','BLOCKED'))
+        AND assigned_agent IS NOT NULL
+        AND NOT (COALESCE(tags, '{}') && ARRAY['blocked-on-capability','schedule-only'])
+      ORDER BY priority_rank NULLS LAST, updated_at DESC
+      LIMIT $2`,
+    [userEmail.toLowerCase(), limit],
+  );
+  return rows;
 }
 
 // ---- General recurring-job scheduler (Azure Huddle PG) ---------------------------------------------
