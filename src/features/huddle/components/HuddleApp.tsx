@@ -10,7 +10,7 @@ import { Sidebar } from "./Sidebar";
 import { SettingsSheet } from "./SettingsSheet";
 import { AgentSettingsDrawer } from "./AgentSettingsDrawer";
 import { FallbackBanner } from "./FallbackBanner";
-import { useHuddleStore, useVisibleHuddles } from "../store";
+import { setDeepLinkTarget, useHuddleStore, useVisibleHuddles } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID } from "../data/agents";
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
@@ -30,6 +30,9 @@ export function HuddleApp() {
     const params = new URLSearchParams(window.location.search);
     const target = params.get("huddle");
     if (!target) return;
+    // Record the deep-link intent so workspace-sync hydration (which resolves async) honors it instead
+    // of reverting to the last-synced channel — otherwise the tapped channel flashes then bounces back.
+    setDeepLinkTarget(target);
     const exists = useHuddleStore.getState().huddles.some((h) => h.id === target);
     if (exists) useHuddleStore.getState().setActive(target);
     // Clean the param so a manual refresh doesn't keep forcing this huddle.
