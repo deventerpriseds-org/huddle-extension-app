@@ -22,7 +22,33 @@ _(ACT-4 moved to Closed 2026-07-25 — see below.)_
 **Asked for:** "agents attempting to get started on tasks that they have the ability to do (e.g. Tavily)
 … or classify them as blocked." An assigned agent should begin work it can actually do with its tools
 (e.g. Cam/research via Tavily) and mark tasks it cannot do as blocked with the reason.
-**Status:** open — needs AC definition + design (capability→task matching, progress writeback, blocked tagging).
+**Status:** open — ACs drafted (AC subagent), reshaped by the user's vision below; needs sign-off then build.
+
+**The vision (user, 2026-07-26 — verbatim intent):** a **message-driven remote team**. Throughout the
+day the user should get updates like Slack/Teams DMs, "calls," and standup mentions from their agents —
+and the SYSTEM decides the channel + timing the way a real teammate would:
+- **All agents** do work. If a task is assigned to them on the board, they are EXPECTED to attempt it
+  (all have/should have Tavily). Attempt first — do NOT ping for every little thing.
+- **Escalate immediately (don't wait for standup):** a true **blocker** or a **decision that unblocks
+  work** ("did you want this red or yellow?") reaches the user right away. Micro-answers that unblock
+  should never wait for a ceremony.
+- **Results default to the next morning standup (batched)** — UNLESS the user said "get this to me as
+  soon as it's done" (a per-task override), in which case the result skips the batch and comes right away.
+- **No 20-questions.** The attempt to complete should be genuine; only reach out for a real blocker or a
+  needed decision. Avoid back-and-forth churn.
+- **Long/multi-turn tasks = projects:** the agent produces a **roadmap** and uses **memory** to keep the
+  end goal + decisions across turns (don't forget mid-way).
+- **Skills grow over time.** GATE 1 (now): **research / look-things-up / clarify / strategize / draft
+  ideas & roadmaps**, guided by the leading/authoritative voices in each subject area → deposit as a
+  reviewable artifact. LATER gates: produce real artifacts (slide deck / Word / Excel — we have
+  docx/pptx/xlsx skills), richer multi-step execution.
+- **Two coordinated pieces to build:** (A) the **autonomous-work engine** (gate-1 research + roadmap +
+  memory, all-agents, bounded/idempotent, rides the ACT-4 scheduler); (B) a **communication-triage layer**
+  — urgency → channel/timing (immediate push vs standup-batch), per-task "notify me now" override,
+  escalate-blockers/decisions, results-to-standup default. Reuses `send_push` (no new sender).
+- **Channel reality (today):** push-to-phone (`send_push` → FCM/web-push = the "buzz you now" path),
+  in-app Huddle chat, and email (Graph). A literal outbound **telephony phone call** is NOT built — map
+  "warrants a call" → high-priority push now; real voice/telephony is a later gate.
 
 ### ACT-6 (NEW): Agile ceremonies actually fire + standup summaries delivered
 **Asked for:** "I haven't received standup summaries or any of the things previously discussed to ensure
