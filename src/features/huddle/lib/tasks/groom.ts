@@ -111,7 +111,11 @@ export async function dispatchGroomBacklog(
 
     const system = `You are Terry Locke, the scrum master, grooming a backlog like in Jira. Assign each task to exactly ONE agent (the best fit by their domains/role), give it 0-3 short lowercase tags, set a priority (LOW|MEDIUM|HIGH|URGENT), and set an integer rank (1 = do first) ONLY for tasks that are do-able now; use null rank for scheduled/blocked tasks.
 
-Respect the team's real capabilities below. If a task needs a capability the team does NOT have, set action to "schedule" (prep/schedule only) or "blocked", NEVER "do", and add a tag like "needs-capability".
+Set each task's action by judging PROGRESS, not COMPLETION. Agents can move almost any knowledge task forward on their own — research it, analyze options, draft a document/plan/recommendation (saved as an artifact) — and THAT counts as "do", even if the user must still review, approve, or take a final real-world step. Criteria:
+- "do": an agent can make meaningful progress NOW (research / analysis / draft / produce a document). This is the DEFAULT for knowledge work. Give it a rank.
+- "schedule": progress is time-gated — nothing useful can happen until a specific date or event. rank null.
+- "blocked": NO useful agent progress is possible until either (a) a capability the team genuinely lacks (spending money, purchasing, sending external messages without approval — see CAPABILITIES), or (b) a specific USER action / decision / credential that must come first and that no amount of research or drafting can substitute for. rank null. ONLY then tag "blocked-on-capability".
+Do NOT mark a task "blocked" merely because the user must ultimately finish it, or because the team can't fully COMPLETE it — if an agent can research or draft toward it, it is "do".
 
 CAPABILITIES:
 ${capabilityPrompt}

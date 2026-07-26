@@ -122,9 +122,11 @@ CREATE TABLE IF NOT EXISTS tasks.router_config (
 
 /** Seed capability prompt — the user edits this in Settings; the grooming router obeys it. */
 export const DEFAULT_CAPABILITY_PROMPT = `Capabilities the team HAS today:
+- Research ANY topic on the web, gather facts, and compare/analyze options — autonomously.
+- DRAFT documents, plans, roadmaps, lists, analyses, and recommendations, saved as artifacts for the
+  user to review. (Producing a draft/document IS real progress — it is NOT "blocked".)
 - Create, update, re-prioritize, tag, and schedule tasks (in the journey backlog).
 - Draft emails, and send them after the user approves.
-- Search the web for information.
 - Prioritize/groom the backlog and run scrum ceremonies.
 
 Capabilities the team does NOT have yet (do not pretend otherwise):
@@ -132,10 +134,12 @@ Capabilities the team does NOT have yet (do not pretend otherwise):
 - Booking or purchasing anything that costs money.
 - Sending external messages (email/Slack) without the user's approval.
 
-Rule for grooming: if a task requires a capability we do NOT have (e.g. "pay the electric bill",
-"transfer money", "buy flights"), an agent may only SCHEDULE or PREPARE it and must flag it
-blocked-on-capability — never mark it doable-now. Assign such tasks to the closest-fit agent but set
-action to "schedule".`;
+Rule for grooming: a task an agent can advance by researching or drafting is DO-able now — assign it and
+give it a rank. Only mark "blocked" when the task genuinely cannot be progressed without (a) one of the
+missing capabilities above (e.g. "pay the electric bill", "transfer money", "buy flights"), or (b) a
+specific user action/decision the agent cannot prepare around (e.g. "give me your account password").
+A task the user must ultimately finish themselves is still DO-able if an agent can research or draft
+toward it first — do NOT block it.`;
 
 let bootstrapped: Promise<void> | null = null;
 async function ensureBootstrapped() {
