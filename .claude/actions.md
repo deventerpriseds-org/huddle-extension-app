@@ -18,11 +18,25 @@ _(ACT-1 moved to Closed 2026-07-24 — see below.)_
 
 _(ACT-4 moved to Closed 2026-07-25 — see below.)_
 
-### ACT-5 (NEW): Agents self-start doable tasks, else classify blocked
-**Asked for:** "agents attempting to get started on tasks that they have the ability to do (e.g. Tavily)
-… or classify them as blocked." An assigned agent should begin work it can actually do with its tools
-(e.g. Cam/research via Tavily) and mark tasks it cannot do as blocked with the reason.
-**Status:** open — needs AC definition + design (capability→task matching, progress writeback, blocked tagging).
+### ACT-5 (NEW): Agent autonomy — message-driven remote team
+**Asked for:** agents do their assigned board work autonomously and communicate like a real remote team
+(escalate blockers/decisions now, batch results to standup, right channel per urgency). Full vision +
+locked policy (green/yellow/red autonomy, channel triage, email use-cases) + ACs in
+**`docs/act5-autonomy-plan.md`**. Branch `act5-autonomy`.
+**Gate 1 (research) — DONE, verified live + independent verifier (genuinely agent-driven).**
+- `create_artifact` agent tool (both dispatch paths) + `autowork.server.ts` enqueues a real durable turn
+  per assigned agent; the agent's OWN LLM plans, calls `tavily_web_search`, synthesizes, saves via
+  `create_artifact`, replies in `dm-<agent>` (rides send_push). Rides the ACT-4 scheduler (`auto-work`
+  job, 9/13/17 ET) + `run-autowork` route (reuses JOURNEY_PROXY_TOKEN, no new secret).
+- **Live proof:** 4 agent turns `done`, finn-reid `called_web_search=t called_create_artifact=t`,
+  agent-authored filenames, substantive lane-voice replies; 6 earlier SHORTCUT dumps deleted.
+- **The shortcut lesson (memory.md 2026-07-26):** the FIRST build faked it (direct Tavily on the title,
+  agent's name stamped on it) — rebuilt to be genuinely agent-driven. Never fake "an agent does X".
+**Still open (increment 2 + later gates):** the communication-triage layer (urgency→channel: phone via
+journey notification-delivery / push / chat / standup / email, per-task "notify me now" override);
+broaden beyond research (finance/family drafts, then real deck/doc/sheet artifacts); roadmap+memory for
+long projects; per-agent opt-in flag + spend caps. Plus the ACT-4 residuals (blocked-tag mirror
+propagation is journey-side; verify).
 
 ### ACT-6 (NEW): Agile ceremonies actually fire + standup summaries delivered
 **Asked for:** "I haven't received standup summaries or any of the things previously discussed to ensure
