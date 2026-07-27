@@ -26,6 +26,13 @@ import { coleBlakeKnowledge } from "./cole-blake.knowledge";
 import { elleRowanKnowledge } from "./elle-rowan.knowledge";
 import { liamKingsleyKnowledge } from "./liam-kingsley.knowledge";
 import { irisChaseKnowledge } from "./iris-chase.knowledge";
+import { flexGrimesKnowledge } from "./flex-grimes.knowledge";
+import { charlestonLewisKnowledge } from "./charleston-lewis.knowledge";
+import { troyLennoxKnowledge } from "./troy-lennox.knowledge";
+import { camPostKnowledge } from "./cam-post.knowledge";
+import { faithHartleyKnowledge } from "./faith-hartley.knowledge";
+import { ezraMilesKnowledge } from "./ezra-miles.knowledge";
+import { eliVaughnKnowledge } from "./eli-vaughn.knowledge";
 
 export type { KnowledgePack } from "./types";
 export { renderKnowledgePack } from "./types";
@@ -34,6 +41,7 @@ export { renderKnowledgePack } from "./types";
 // batching are documentation only — the map is keyed off each pack's agentId.
 // Batch 1 — highest-leverage professional lanes (finance, startup, product, agile).
 // Batch 2 — coaching/leadership lanes (career, EMBA, life strategy, delivery ops).
+// Batch 3 — lifestyle/ops lanes (fitness, chef, travel, comms, family, errands, EA).
 export const ALL_PACKS: readonly KnowledgePack[] = [
   finnReidKnowledge,
   samTrentKnowledge,
@@ -43,6 +51,13 @@ export const ALL_PACKS: readonly KnowledgePack[] = [
   elleRowanKnowledge,
   liamKingsleyKnowledge,
   irisChaseKnowledge,
+  flexGrimesKnowledge,
+  charlestonLewisKnowledge,
+  troyLennoxKnowledge,
+  camPostKnowledge,
+  faithHartleyKnowledge,
+  ezraMilesKnowledge,
+  eliVaughnKnowledge,
 ];
 
 /** id → pack, built from each pack's own agentId (single source of truth). */
