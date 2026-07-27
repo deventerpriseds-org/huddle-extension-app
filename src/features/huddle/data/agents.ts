@@ -127,11 +127,7 @@ export const AGENTS: Agent[] = [
     domains: ["itinerary", "day plans", "calendar", "schedule", "queue", "tasks", "board", "follow-ups", "priorities", "delivery", "status"],
     themes: ["day-of", "schedule of the day", "calendar", "meeting", "appointment", "backlog", "up next", "done", "kanban", "board", "assign", "due", "follow-up", "prioritize", "what matters", "what's next", "status"],
     tone: "warm",
-    // The CSV-provided id (VWQuOfcP7ILB48IXXGXE) 404s "voice_not_found" in the live ElevenLabs
-    // account — confirmed via a live synthesizeSpeech call. Falling back to the placeholder (which
-    // resolveVoiceId's real-id regex rejects, routing to ELEVENLABS_DEFAULT_VOICE_ID) so Iris still
-    // gets audio instead of TTS failing outright. Swap in the correct id once it's confirmed.
-    voiceId: "iris",
+    voiceId: "0fbdXLXuDBZXm2IHek4L",
     special: "coordinator",
     avatarUrl: irisAsset.url,
     systemPrompt: p(
