@@ -25,6 +25,7 @@ import {
   type TavilySearchArgs,
 } from "./tavily-search.functions";
 import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
+import { DELEGATE_TO_SPECIALIST_TOOL, workerDirectory, getWorker, WORKER_ROLES } from "./agents/workers";
 import { FLAG_BLOCKER_TOOL } from "./tasks/task-agent-tools";
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
@@ -97,6 +98,10 @@ const Input = z.object({
   // agent reports the UTC date, which is a day ahead for users behind UTC in the
   // evening.
   timeZone: z.string().max(64).optional(),
+  // Pillar 2: artifacts to surface as "Open <name>" chips on the TARGET agent's reply this turn, even
+  // though this agent didn't create them — used by a delegation INTEGRATION turn to reference the
+  // specialist documents its workers produced. Purely presentational; carried in the durable payload.
+  attachArtifacts: z.array(z.object({ id: z.string(), name: z.string() })).max(12).optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
@@ -138,6 +143,23 @@ const OPERATING_CONTRACT =
   "long lists. When you produce a document via create_artifact, give it the FULL structure: an executive " +
   "conclusion, key findings with their evidence, analysis, prioritized recommendations (with owner/timing/" +
   "risk), risks & assumptions, and the sources you used.";
+
+// Persona-as-orchestrator layer (Pillar 2). Appended to every PERSONA's instructions (workers get
+// their own charter instead). It tells a persona it leads shared specialists it can delegate to, and
+// that it stays accountable for the single integrated answer. The worker roster is DATA (workers.ts),
+// so adding a specialist changes this block with zero code — same systematic-capability principle as
+// the capability hand-off. It does NOT fight HOUSE_STYLE: chat stays concise; delegation is a backstage
+// move whose visible surface is a brief "I've put the team on it" + the later integrated answer.
+const DELEGATION_DIRECTIVE =
+  "\n\nYou lead a team of shared specialists you can hand a workstream to with the delegate_to_specialist " +
+  "tool. Delegate when a request genuinely needs specialist depth, several parallel workstreams, or an " +
+  "independent review — not for something you can already answer well yourself. You remain ACCOUNTABLE: " +
+  "the specialists work behind the scenes and report to you, and YOU integrate their findings into the " +
+  "single answer the user sees (never hand back raw specialist reports). Available specialists:\n" +
+  workerDirectory() +
+  "\nDelegation is asynchronous — specialists take seconds to minutes. After you delegate, tell the user " +
+  "in one short line that you've put the team on it and will bring it together shortly; never invent or " +
+  "pre-empt their results. When their work comes back you'll be asked to integrate it.";
 
 // Scope-aware ownership hand-off — generated from `agent.capabilities` (agents.ts), NOT
 // hardcoded to any agent or job. Appended to every agent's instructions when the huddle
@@ -1002,6 +1024,78 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         outcome,
       });
 
+      // Pillar 2 — delegate_to_specialist dispatch (shared by BOTH the OpenAI and Lovable tool paths,
+      // mirroring create_artifact). It ENQUEUES a durable worker sub-turn per delegation and returns
+      // immediately — the persona keeps talking ("I've put the team on it"); the worker runs off the
+      // turn deadline and, when the last one finishes, an integration turn brings the persona back to
+      // synthesize (see runWorkerTurn). orchestrationId is per (turn, persona) so two personas in one
+      // group turn each integrate their own workstreams; ids are idempotent so a resume never
+      // double-dispatches. Only personas get this tool; a worker run never does (AC-5 — no nesting).
+      let delegationSeq = 0;
+      const dispatchDelegate = async (rawArgs: Record<string, unknown>): Promise<string> => {
+        const roleArg = String(rawArgs.role ?? "").trim();
+        const objective = String(rawArgs.objective ?? "").trim();
+        const inputs = rawArgs.inputs != null ? String(rawArgs.inputs).trim() : undefined;
+        const acceptance =
+          rawArgs.acceptance_criteria != null ? String(rawArgs.acceptance_criteria).trim() : undefined;
+        const worker = getWorker(roleArg);
+        if (!worker)
+          return JSON.stringify({
+            ok: false,
+            error: `unknown specialist role "${roleArg}"; choose one of: ${WORKER_ROLES.join(", ")}`,
+          });
+        if (!objective) return JSON.stringify({ ok: false, error: "objective is required" });
+        const claimKey = `delegate:${worker.id}:${objective.toLowerCase().slice(0, 80)}`;
+        if (!claimAction(claimKey)) {
+          recordToolUse(winner.id, "delegate_to_specialist", `already delegated ${worker.role} this turn — skipped duplicate`, true);
+          return JSON.stringify({ ok: true, deduped: true, dispatched: worker.id });
+        }
+        try {
+          const email =
+            (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+            data.caller?.entra_email ??
+            null;
+          const orchestrationId = `orch-${turnId ?? data.huddleId}-${winner.id}`;
+          const seq = delegationSeq++;
+          const workerTurnId = `worker-${orchestrationId}-${worker.id}-${seq}`;
+          const workerPayload = {
+            worker: {
+              role: worker.id,
+              objective,
+              inputs,
+              acceptance_criteria: acceptance,
+              personaId: winner.id,
+              personaName: winner.name,
+              orchestrationId,
+              originHuddleId: data.huddleId,
+              originScope: data.scope,
+            },
+            // Carried so the worker run resolves the same user + timezone as the persona, and so the
+            // integration turn can rebuild a valid runHuddleTurn input.
+            caller: data.caller,
+            timeZone: data.timeZone,
+            router: data.router,
+            agents: data.agents,
+            notify: "silent", // workers are internal — no push; only the integrated answer notifies.
+          };
+          const { enqueueTurn } = await import("./tasks/turns.server");
+          const fresh = await enqueueTurn(workerTurnId, data.huddleId, email, workerPayload);
+          if (fresh) void kickNextChunk(workerTurnId); // start now; cron drain backstops a lost kick
+          recordToolUse(winner.id, "delegate_to_specialist", `tasked ${worker.role}: ${objective.slice(0, 80)}`, true);
+          return JSON.stringify({
+            ok: true,
+            dispatched: worker.id,
+            role: worker.role,
+            async: true,
+            note: "The specialist is working now; you'll be brought back to integrate their findings when done. Tell the user you've put the team on it — do not fabricate results.",
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          recordToolUse(winner.id, "delegate_to_specialist", "delegation failed", false, msg);
+          return JSON.stringify({ ok: false, error: msg });
+        }
+      };
+
       const ceremonyDirective = ceremonyDirectiveById.get(nextId) ?? "";
       const handoff = handoffById.get(nextId);
       const handoffDirective = handoff
@@ -1121,6 +1215,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         memoryBlock +
         HOUSE_STYLE +
         OPERATING_CONTRACT +
+        DELEGATION_DIRECTIVE +
         execBlock;
 
       // Per-agent transcript: the current agent's own prior turns are role=assistant
@@ -1435,6 +1530,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             capabilityBlock +
             HOUSE_STYLE +
             OPERATING_CONTRACT +
+            DELEGATION_DIRECTIVE +
             (execContextBlock ?? "") +
             ragInstructions +
             webInstructions +
@@ -1617,6 +1713,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           const mergedTools = [
             createHuddleTaskTool,
             CREATE_ARTIFACT_TOOL,
+            DELEGATE_TO_SPECIALIST_TOOL,
             FLAG_BLOCKER_TOOL,
             SCHEDULE_REMINDER_TOOL,
             PRIORITIZE_TOOL,
@@ -1649,6 +1746,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }) => {
             if (c.name === "create_huddle_task") {
               return JSON.stringify(await createSuggestedTaskFromTool(c.arguments));
+            }
+            if (c.name === "delegate_to_specialist") {
+              return await dispatchDelegate(c.arguments);
             }
             if (c.name === "create_artifact") {
               const a = c.arguments as Record<string, unknown>;
@@ -2162,6 +2262,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 return JSON.stringify({ ok: false, error: msg });
               }
             },
+          });
+
+          // delegate_to_specialist — hand a workstream to a shared worker (mirrors OpenAI path).
+          lovableTools.delegate_to_specialist = tool({
+            description: DELEGATE_TO_SPECIALIST_TOOL.description,
+            inputSchema: z.object({
+              role: z.string(),
+              objective: z.string(),
+              inputs: z.string().optional(),
+              acceptance_criteria: z.string().optional(),
+            }),
+            execute: async (args) => dispatchDelegate(args as Record<string, unknown>),
           });
 
           // flag_blocker — the agent earns the "blocked" verdict by working the task (mirrors OpenAI path).
@@ -2762,6 +2874,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           id: (t.detail as string).slice("/artifacts/".length),
           name: /saved "(.+)"/.exec(t.summary)?.[1] ?? "Document",
         }));
+      // Pillar 2: a delegation INTEGRATION turn references specialist docs its WORKERS produced (this
+      // persona didn't call create_artifact for them), so surface them as chips too — but only on the
+      // target persona's reply, and dedup against anything it did save itself.
+      if (data.attachArtifacts?.length && nextId === data.targetAgentId) {
+        const seen = new Set(replyArtifacts.map((a) => a.id));
+        for (const a of data.attachArtifacts) {
+          if (!seen.has(a.id)) {
+            replyArtifacts.push({ id: a.id, name: a.name });
+            seen.add(a.id);
+          }
+        }
+      }
       replies.push({
         agentId: nextId,
         text: finalText,
@@ -3049,6 +3173,246 @@ async function kickNextChunk(turnId: string): Promise<void> {
   }
 }
 
+// ---- Pillar 2: worker sub-turn + fan-in integration ---------------------------------------------
+
+type WorkerPayload = {
+  role: string;
+  objective: string;
+  inputs?: string;
+  acceptance_criteria?: string;
+  personaId?: string;
+  personaName?: string;
+  orchestrationId?: string;
+  originHuddleId?: string;
+  originScope?: string;
+};
+type WorkerResult = {
+  role: string;
+  ok: boolean;
+  findings: string;
+  artifactId: string | null;
+  artifactName: string | null;
+  error: string;
+};
+
+/**
+ * Run one delegated WORKER sub-turn: a bounded specialist that does its own web-search + create_artifact
+ * (NO delegate tool → no nested orchestration, AC-5), then persists its structured findings and fans in
+ * to the persona's integration. Never throws out — a worker error is recorded and still counts toward
+ * the fan-in so the integration proceeds and notes the gap (AC-4).
+ */
+async function runWorkerTurn(record: {
+  id: string;
+  user_email: string | null;
+  payload: Record<string, unknown>;
+}): Promise<void> {
+  const { completeTurn } = await import("./tasks/turns.server");
+  const payload = record.payload as {
+    worker?: WorkerPayload;
+    caller?: { entra_object_id?: string; entra_email?: string };
+    timeZone?: string;
+    router?: unknown;
+    agents?: Record<string, { model?: string }>;
+  };
+  const w = payload.worker;
+  const result: WorkerResult = {
+    role: w?.role ?? "specialist",
+    ok: false,
+    findings: "",
+    artifactId: null,
+    artifactName: null,
+    error: "",
+  };
+
+  try {
+    if (!w?.role || !w.objective) throw new Error("malformed worker payload");
+    const worker = getWorker(w.role);
+    if (!worker) throw new Error(`unknown worker role: ${w.role}`);
+
+    const caller = payload.caller ?? {};
+    const email =
+      (await (await import("./journey/identity")).resolveTaskEmail(caller)) ?? caller.entra_email ?? null;
+
+    // Executive profile so the worker is executive-grade too (best-effort; "" when unset).
+    let execBlock = "";
+    try {
+      if (email) {
+        const { getUserContext, renderExecutiveContext } = await import("./identity/user-context.server");
+        execBlock = renderExecutiveContext(await getUserContext(email));
+      }
+    } catch {
+      /* profile optional */
+    }
+
+    const { workerPrompt } = await import("./agents/workers");
+    const instructions = workerPrompt(
+      worker,
+      {
+        objective: w.objective,
+        inputs: w.inputs,
+        acceptance_criteria: w.acceptance_criteria,
+        personaName: w.personaName,
+      },
+      { operatingContract: OPERATING_CONTRACT, execBlock },
+    );
+
+    // Worker tools: web search + create_artifact ONLY. Exactly one artifact per worker.
+    let artifactId: string | null = null;
+    let artifactName: string | null = null;
+    const onToolCall = async (c: { name: string; arguments: Record<string, unknown> }): Promise<string> => {
+      if (c.name === "tavily_web_search") {
+        const q = String(c.arguments.query ?? "").trim() || "unknown";
+        try {
+          const r = await tavilySearch({
+            query: q,
+            topic: c.arguments.topic as TavilySearchArgs["topic"],
+            search_depth: c.arguments.search_depth as TavilySearchArgs["search_depth"],
+            time_range: c.arguments.time_range as TavilySearchArgs["time_range"],
+            start_date: c.arguments.start_date as string | undefined,
+            end_date: c.arguments.end_date as string | undefined,
+            include_domains: c.arguments.include_domains as string[] | undefined,
+            exclude_domains: c.arguments.exclude_domains as string[] | undefined,
+            max_results: c.arguments.max_results as number | undefined,
+          });
+          return JSON.stringify(r);
+        } catch (err) {
+          return JSON.stringify({ error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      if (c.name === "create_artifact") {
+        const a = c.arguments;
+        const name = String(a.name ?? "").trim();
+        const content = String(a.content ?? "");
+        if (!name || !content) return JSON.stringify({ ok: false, error: "name and content are required" });
+        if (artifactId) return JSON.stringify({ ok: true, deduped: true, id: artifactId });
+        if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+        try {
+          const { createArtifact } = await import("./artifacts/artifacts.server");
+          const { id, deepLink } = await createArtifact({
+            userEmail: email,
+            agentId: w.personaId ?? null, // attribute to the accountable persona
+            taskId: a.task_id ? String(a.task_id) : null,
+            folder: String(a.folder ?? worker.role),
+            name,
+            mime: String(a.mime ?? "text/markdown"),
+            bytes: Buffer.from(content, "utf8"),
+          });
+          artifactId = id;
+          artifactName = name;
+          return JSON.stringify({ ok: true, id, deepLink });
+        } catch (err) {
+          return JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      return JSON.stringify({ error: `unknown tool: ${c.name}` });
+    };
+
+    const model = payload.agents?.[w.personaId ?? ""]?.model ?? "gpt-4o-mini";
+    const { callOpenAIResponses } = await import("./openai-responses.server");
+    const res = await callOpenAIResponses({
+      model,
+      instructions,
+      transcript: [{ role: "user", content: w.objective }],
+      tools: [TAVILY_WEB_SEARCH_TOOL, CREATE_ARTIFACT_TOOL],
+      onToolCall,
+      maxToolHops: 6,
+      promptCacheKey: `worker:${worker.id}`,
+    });
+    result.ok = true;
+    result.findings = res.text;
+    result.artifactId = artifactId;
+    result.artifactName = artifactName;
+  } catch (err) {
+    result.error = err instanceof Error ? err.message : String(err);
+  }
+
+  // Terminal: status='done' even on a worker error, so the fan-in sees every row as complete (AC-4).
+  try {
+    await completeTurn(record.id, { worker: result });
+  } catch {
+    /* best-effort persist */
+  }
+
+  if (w?.orchestrationId) {
+    try {
+      await maybeEnqueueIntegration(w.orchestrationId, record.user_email, payload);
+    } catch {
+      /* fan-in is non-fatal */
+    }
+  }
+}
+
+/**
+ * Fan-in: when EVERY worker sub-turn of an orchestration is terminal, enqueue exactly ONE integration
+ * turn (idempotent id → race-safe) in which the accountable persona critiques + integrates the workers'
+ * findings into the single answer the user sees, with their documents attached as chips (AC-3).
+ */
+async function maybeEnqueueIntegration(
+  orchestrationId: string,
+  userEmail: string | null,
+  workerPayload: {
+    worker?: WorkerPayload;
+    caller?: unknown;
+    timeZone?: string;
+    router?: unknown;
+    agents?: unknown;
+  },
+): Promise<void> {
+  const { getOrchestrationWorkers, enqueueTurn } = await import("./tasks/turns.server");
+  const rows = await getOrchestrationWorkers(orchestrationId);
+  if (!rows.length) return;
+  if (!rows.every((x) => x.status === "done" || x.status === "error")) return;
+
+  const w = workerPayload.worker;
+  const personaId = w?.personaId as AgentId | undefined;
+  if (!personaId || !AGENT_BY_ID[personaId]) return; // can't integrate without a valid persona
+  const originHuddleId = w?.originHuddleId ?? `dm-${personaId}`;
+  const originScope: "group" | "one-to-one" = w?.originScope === "group" ? "group" : "one-to-one";
+
+  // Per-worker findings budget so the assembled directive stays under the Input `text` 4000-char cap.
+  const perWorker = Math.max(300, Math.min(900, Math.floor(2600 / Math.max(1, rows.length))));
+  const attach: { id: string; name: string }[] = [];
+  const lines: string[] = [];
+  for (const row of rows) {
+    const wr = (row.result as { worker?: WorkerResult } | null)?.worker;
+    if (!wr) continue;
+    const label = getWorker(wr.role ?? "")?.role ?? wr.role ?? "specialist";
+    if (wr.artifactId) attach.push({ id: wr.artifactId, name: wr.artifactName ?? `${label} findings` });
+    const status = wr.ok ? "" : ` (INCOMPLETE${wr.error ? `: ${wr.error.slice(0, 100)}` : ""})`;
+    const doc = wr.artifactId ? ` [document: /artifacts/${wr.artifactId}]` : "";
+    const findings = (wr.findings ?? "").trim().slice(0, perWorker) || "(no findings returned)";
+    lines.push(`— ${label}${status}:${doc}\n${findings}`);
+  }
+
+  const directive = (
+    `Your specialists have finished the workstreams you delegated. Here is what each returned` +
+    `${attach.length ? " (their full documents are linked)" : ""}:\n\n${lines.join("\n\n")}\n\n` +
+    `Now do YOUR job as the accountable lead: critique any weak, unsupported, or conflicting points, ` +
+    `then integrate everything into ONE cohesive executive answer for the user — informative, then ` +
+    `analytical, then actionable, then strategic. Reference their documents; do NOT concatenate or ` +
+    `paste their reports. If a workstream came back incomplete, say so honestly and give your best ` +
+    `recommendation anyway.`
+  ).slice(0, 3990);
+
+  const integrationId = `integrate-${orchestrationId}`;
+  const integrationPayload = {
+    text: directive,
+    huddleId: originHuddleId,
+    scope: originScope,
+    members: [personaId],
+    targetAgentId: personaId,
+    history: [],
+    router: workerPayload.router,
+    agents: workerPayload.agents,
+    timeZone: workerPayload.timeZone,
+    caller: workerPayload.caller,
+    attachArtifacts: attach.length ? attach : undefined,
+    notify: "push",
+  };
+  const fresh = await enqueueTurn(integrationId, originHuddleId, userEmail, integrationPayload);
+  if (fresh) void kickNextChunk(integrationId);
+}
+
 async function executeClaimedTurn(record: {
   id: string;
   user_email: string | null;
@@ -3057,6 +3421,14 @@ async function executeClaimedTurn(record: {
 }): Promise<HuddleTurnResult | null> {
   const { failTurn } = await import("./tasks/turns.server");
   try {
+    // Pillar 2: a WORKER sub-turn (persona delegated a workstream) runs a bounded specialist instead of
+    // the normal multi-agent turn — its own web-search + create_artifact only (no delegate → no nesting),
+    // then fans in to the persona's integration. Self-contained (never throws out); returns null so the
+    // push/chunk logic below is skipped (workers are internal, notify:"silent").
+    if ((record.payload as { worker?: unknown }).worker) {
+      await runWorkerTurn(record);
+      return null;
+    }
     const data = Input.parse(record.payload);
     // DURABLE/CHUNKED run: the driver streams replies and persists the terminal 'done'/'partial' row
     // itself (saveTurnChunk), so we do NOT completeTurn here. A resumed chunk rebuilds its mid-turn

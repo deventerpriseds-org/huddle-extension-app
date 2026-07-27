@@ -333,6 +333,35 @@ export async function getUserTurnsSince(userEmail: string, sinceMs: number): Pro
   return res.rows.map(mapRow);
 }
 
+// ---- Delegation / orchestration (Pillar 2) -------------------------------------------------------
+
+export interface OrchestrationWorker {
+  id: string;
+  status: TurnStatus;
+  /** The worker's structured result once done: { worker: { role, ok, findings, artifactId, ... } }. */
+  result: unknown;
+}
+
+/** All worker sub-turn rows sharing an orchestrationId (a persona's delegated workstreams). The
+ *  fan-in read: a persona's integration fires only once EVERY worker row is terminal (done/error).
+ *  Keyed off the JSONB payload so no new table is needed — worker rows are pending_turns carrying
+ *  `payload.worker` + a shared `payload.worker.orchestrationId`. */
+export async function getOrchestrationWorkers(orchestrationId: string): Promise<OrchestrationWorker[]> {
+  await ensureBootstrapped();
+  const res = await getPool().query(
+    `SELECT id, status, result
+       FROM chat.pending_turns
+      WHERE payload -> 'worker' ->> 'orchestrationId' = $1
+      ORDER BY created_at ASC`,
+    [orchestrationId],
+  );
+  return res.rows.map((r) => ({
+    id: r.id as string,
+    status: r.status as TurnStatus,
+    result: r.result ?? null,
+  }));
+}
+
 export interface PushSubscriptionRecord {
   endpoint: string;
   p256dh: string;
