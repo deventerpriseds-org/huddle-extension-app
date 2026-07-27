@@ -232,6 +232,13 @@ export function closerDirective(type: CeremonyType, report: CeremonyReport): str
   return `\n\nCEREMONY — you are the scrum master CLOSING this ${VERB[type]}. The team has ALREADY given their updates — do NOT open the ceremony, do NOT ask anyone for updates, and do NOT say "let's begin" or "please share". Your only job now is to close it. ${close} Use ONLY the real data below; do not invent progress. Keep it tight.\n\n${reportDigest(report)}`;
 }
 
+/** A user BARGE-IN mid-ceremony: the addressed agent pauses the round-robin, answers the
+ *  interjection directly (or acts on it — e.g. files a task), then the relay resumes. Type-agnostic
+ *  so it works on a resumed chunk where the ceremony type isn't re-derived. */
+export function bargeDirective(text: string): string {
+  return `\n\nThe user just INTERJECTED during this live ceremony and said: "${text}". Pause and address them directly RIGHT NOW — answer their question, or if they asked to add/track/schedule/change something, use the appropriate tool (e.g. create_huddle_task) to do it and confirm briefly. Keep it to 1–2 sentences. Do NOT give a lane/stand-up update here — the round-robin will resume after you.`;
+}
+
 /** Narrate mode: Terry runs the whole ceremony solo from the data. */
 export function narrateDirective(type: CeremonyType, report: CeremonyReport): string {
   return `\n\nCEREMONY — you are the scrum master running this ${VERB[type]} SOLO (narrate mode). Deliver it as a brief round-robin yourself: one short line per lane (attribute each to its owner by @handle) covering done/next/blocked, then close with the blockers that need the user's decision. Use ONLY the real data below; do not invent anything.\n\n${reportDigest(report)}`;

@@ -16,6 +16,7 @@ import {
   openerDirective,
   closerDirective,
   narrateDirective,
+  bargeDirective,
   CEREMONY_WINDOW_HOURS,
   CEREMONY_HOST,
 } from "./tasks/ceremonies";
@@ -711,6 +712,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     let ceremonyActive = resume?.ceremonyActive ?? false;
     // Pending host CLOSE turn (set when a round-robin is built; survives chunk boundaries via progress).
     let ceremonyCloser: [AgentId, string] | null = resume?.ceremonyCloser ?? null;
+    // Transient per-dispatch directive for a barge-in responder. NOT persisted (cleared right after
+    // the dispatch); takes precedence over the standing ceremony directive in the scene builder.
+    const bargeDirectiveById = new Map<AgentId, string>();
     const ceremonyType = resume ? null : detectCeremony(data.text);
     if (ceremonyType) {
       // Resolve the sign-in email (possibly an alias) to the canonical journey email the mirror
@@ -1148,7 +1152,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         }
       };
 
-      const ceremonyDirective = ceremonyDirectiveById.get(nextId) ?? "";
+      // A barge-in directive (answering a live user interjection) takes precedence over the standing
+      // ceremony directive for this one dispatch, so the agent addresses the user instead of its lane.
+      const ceremonyDirective = bargeDirectiveById.get(nextId) ?? ceremonyDirectiveById.get(nextId) ?? "";
       const handoff = handoffById.get(nextId);
       const handoffDirective = handoff
         ? `\n\nYou were brought into this turn by ${handoff.fromName}, who handed this to you: "${handoff.ask}". Address exactly that in your lane — answer it directly or take the action they need. Do not re-ask what was already said or restate their message.`
@@ -3096,6 +3102,45 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     const chunkBudgetHit = () => chunked && Date.now() - turnStartMs > CHUNK_BUDGET_MS;
 
     if (ceremonyActive) {
+      // BARGE-IN: drain any user interjections queued on this turn (bargeCeremony appended them). Runs
+      // BETWEEN speakers — never mid-speaker — so a stand-up pauses politely for a question, answers
+      // it, then resumes the round-robin. Each barge is routed to the addressed/most-relevant agent
+      // (host fallback), dispatched with a barge directive so it answers the user (and can file a task)
+      // instead of giving its lane update. Claim is atomic + row-locked, so a resumed chunk can't
+      // re-handle it. Answering an owner's barge does NOT consume their round-robin slot.
+      const handleBarges = async () => {
+        if (!chunked || !turnId || !turnStore) return;
+        for (;;) {
+          if (replies.length >= replyCap) return;
+          const claimed = await turnStore.claimBarge(turnId);
+          if (!claimed) return;
+          const mentioned = parseMentions(claimed.text, AGENTS).filter((id) => data.members.includes(id));
+          const routedBarge = routeMessage({
+            text: claimed.text,
+            scope: "group",
+            members: data.members,
+            history: [],
+          });
+          const responder =
+            mentioned[0] ??
+            routedBarge.winners.find((id) => data.members.includes(id)) ??
+            (data.members.includes(CEREMONY_HOST) ? CEREMONY_HOST : null);
+          if (responder && AGENT_BY_ID[responder]) {
+            const wasSpoken = spoken.has(responder);
+            const stillQueued = queue.includes(responder);
+            bargeDirectiveById.set(responder, bargeDirective(claimed.text));
+            const r = await runBounded(responder, buildPrior());
+            mergeAgentResult(responder, r, [responder]);
+            bargeDirectiveById.delete(responder);
+            // Don't burn the responder's own round-robin turn: if they hadn't spoken their lane update
+            // yet (still queued), let them still give it after the interjection is handled.
+            if (stillQueued && !wasSpoken) spoken.delete(responder);
+            await streamChunk();
+          }
+          if (chunkBudgetHit()) return;
+        }
+      };
+
       // Ceremonies stay STRICTLY SEQUENTIAL: each participant (lane owners, then
       // the host/closer) speaks in turn seeing everything said before it.
       while (replies.length < replyCap) {
@@ -3103,12 +3148,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // (participants stay in `queue`). The host-closes-last ordering is preserved because the queue
         // order is preserved across the boundary.
         if (chunkBudgetHit() && queue.length > 0) break;
+        await handleBarges(); // answer any interjection BEFORE the next scheduled speaker
+        if (chunkBudgetHit() && queue.length > 0) break;
         const nextId = shiftEligible();
         if (nextId == null) break;
         const r = await runBounded(nextId, buildPrior());
         mergeAgentResult(nextId, r, [nextId]);
         await streamChunk();
       }
+      // A barge could land after the last owner but before the close — handle it, then Terry closes.
+      if (!(chunkBudgetHit() && queue.length > 0)) await handleBarges();
       // Terry CLOSES once every owner has spoken (queue drained). Direct runBounded call bypasses the
       // spoken-guard (host already opened). If the chunk budget is spent first, ceremonyCloser stays
       // set and survives in progress → the next chunk runs it (queue empty by then, so it's next up).
@@ -3210,6 +3259,26 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 export const sendHuddleMessage = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => Input.parse(raw))
   .handler(async ({ data }) => runHuddleTurn(data));
+
+// BARGE-IN: the user interjects during a live ceremony. Instead of a separate, uncoordinated turn,
+// we queue the message onto the RUNNING ceremony turn; its driver pops it between speakers, answers
+// it, then resumes the round-robin. Idempotent (barge id) + kicks the runner so a between-chunk
+// ceremony picks it up immediately. Returns queued=false if the ceremony already finished (the client
+// then falls back to a normal message).
+const BargeInput = z.object({
+  turnId: z.string().min(6).max(80),
+  text: z.string().min(1).max(2000),
+});
+export const bargeCeremony = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => BargeInput.parse(raw))
+  .handler(async ({ data }) => {
+    const { appendBarge } = await import("./tasks/turns.server");
+    const slug = data.text.slice(0, 32).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const bargeId = `barge-${data.turnId}-${slug}`;
+    const queued = await appendBarge(data.turnId, { id: bargeId, text: data.text });
+    if (queued) void kickNextChunk(data.turnId);
+    return { ok: true, queued };
+  });
 
 // ---- Durable, device-independent turns ------------------------------------------------------
 // A chat turn no longer depends on the phone holding a long fetch open. The client PERSISTS the

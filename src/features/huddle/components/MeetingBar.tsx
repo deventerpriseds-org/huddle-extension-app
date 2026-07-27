@@ -21,7 +21,7 @@ import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
 import { useHuddleStore, type CeremonyKind, type CeremonyTurn, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
 import { useGroupVoice } from "../hooks/useGroupVoice";
-import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates } from "../lib/huddle.functions";
+import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates, bargeCeremony } from "../lib/huddle.functions";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
@@ -223,6 +223,9 @@ function MeetingRoom({
   const [speakingId, setSpeakingId] = useState<AgentId | null>(null);
   const ceremonyAudioRef = useRef<HTMLAudioElement | null>(null);
   const ceremonyAliveRef = useRef(true);
+  // The durable turnId of the CURRENTLY running ceremony step — lets a user message barge into it
+  // (routed to bargeCeremony) instead of firing an uncoordinated parallel turn. Null when idle.
+  const activeCeremonyTurnRef = useRef<string | null>(null);
   useEffect(() => {
     ceremonyAliveRef.current = true;
     return () => {
@@ -388,6 +391,7 @@ function MeetingRoom({
         };
         const stepStart = Date.now();
         setPhase("Gathering the team…");
+        activeCeremonyTurnRef.current = turnId; // this step is now barge-able
         // Fire the durable turn but DON'T await the whole first chunk before rendering — poll alongside it.
         let enqErr: unknown = null;
         const enqP = enqueueHuddleTurn({ data: payload }).catch((e) => {
@@ -416,6 +420,7 @@ function MeetingRoom({
           if (!terminal) await new Promise((res) => setTimeout(res, 2000));
         }
         await enqP;
+        activeCeremonyTurnRef.current = null; // step finished — no longer barge-able
         // Hard enqueue failure (never even created the turn) and nothing streamed → surface it.
         if (enqErr && spoken.n === 0) throw enqErr instanceof Error ? enqErr : new Error(String(enqErr));
         if (!ceremonyAliveRef.current) return;
@@ -424,6 +429,7 @@ function MeetingRoom({
       patchMeeting({ ceremonyStatus: "done" });
     } catch (err) {
       setPhase("");
+      activeCeremonyTurnRef.current = null;
       patchMeeting({ ceremonyStatus: "error" });
       toast.error(err instanceof Error ? err.message : "The ceremony couldn't run. Try again.");
     }
@@ -433,6 +439,24 @@ function MeetingRoom({
     const text = input.trim();
     if (!text || busy || !meeting.members.length) return;
     const cfg = useBackendsStore.getState().config;
+
+    // BARGE-IN: if a ceremony is actively running, queue this onto the running turn instead of firing
+    // a parallel, uncoordinated turn. The relay pauses after the current speaker, answers it, then
+    // resumes — and the reply streams into the transcript via the ceremony's existing poll loop.
+    if (isCeremony && status === "running" && activeCeremonyTurnRef.current) {
+      const turnId = activeCeremonyTurnRef.current;
+      setInput("");
+      addMeetingTurns([{ text, user: true }]);
+      setPhase("Passing your message to the room…");
+      try {
+        const res = await bargeCeremony({ data: { turnId, text } });
+        if (!res.queued) toast("The room just wrapped — send that again to start a new thread.");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't reach the room.");
+      }
+      return;
+    }
+
     setInput("");
     setBusy(true);
     addMeetingTurns([{ text, user: true }]);

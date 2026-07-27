@@ -36,7 +36,11 @@ const firstOwner = order.find((id,i)=>i>0 && id!=="terry-locke");
 const openerText = replies[0]?.text ?? "";
 const opensFirst = order[0]==="terry-locke";
 const closesLast = order.length>1 && order[order.length-1]==="terry-locke";
-const namesOwner = firstOwner ? new RegExp(`\\b${NAMES[firstOwner]}\\b`,"i").test(openerText) : false;
+// Normalize literal escape sequences (\n \r \t) and real whitespace to spaces first — reply text can
+// carry a literal "\n\n" before the hand-off, which would put a word-char ('n') right before the name
+// and defeat a \b boundary even though the name IS present ("...\n\nCole Blake, you're up").
+const openerNorm = openerText.replace(/\\[nrt]/g, " ").replace(/\s+/g, " ");
+const namesOwner = firstOwner ? new RegExp(`\\b${NAMES[firstOwner]}\\b`,"i").test(openerNorm) : false;
 // Terry should appear exactly twice (open + close), everyone else once.
 const terryCount = order.filter(id=>id==="terry-locke").length;
 const owners = order.filter(id=>id!=="terry-locke");
