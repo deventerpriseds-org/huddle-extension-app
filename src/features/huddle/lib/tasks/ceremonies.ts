@@ -209,12 +209,14 @@ export function openerDirective(
         : type === "planning"
           ? "Open sprint planning: greet the team, note the overall load in one line, then hand off to each lane owner to propose what to take on."
           : "Open the sprint review: greet the team, frame what we set out to ship, then hand off to each lane owner to demo what their lane delivered.";
-  // Relay hand-off: name the owners you're passing to, in order, so it reads like a real stand-up
-  // ("Tess, you're up; then Finn.") — not a generic "over to the team."
-  const relay = handoffNames.length
-    ? ` End by handing the floor to the first owner BY NAME, then name who follows, in this order: ${handoffNames.join(", ")}. Address the first one directly (e.g. "${handoffNames[0]}, you're up").`
+  // Relay hand-off: the opener MUST pass the ball to the first teammate by name — a real stand-up
+  // opens with "Cole, you're up," not a generic "over to the team." Name only the FIRST owner (the
+  // immediate hand-off); reciting all nine is unnatural and the model drops it.
+  const relay = handoffNames.length ? ` The FIRST teammate to report is ${handoffNames[0]}.` : "";
+  const relayClose = handoffNames.length
+    ? ` Then your FINAL sentence MUST hand the floor to ${handoffNames[0]} BY NAME — say exactly "${handoffNames[0]}, you're up." Do NOT end the message without that hand-off line.`
     : "";
-  return `\n\nCEREMONY — you are the scrum master OPENING this ${VERB[type]}. You go FIRST, before anyone else has spoken. ${open}${relay} Keep it to 2–3 short sentences. Use ONLY the real data below; do NOT give the lane updates yourself (each owner will do their own), and do not invent progress.\n\n${reportDigest(report)}`;
+  return `\n\nCEREMONY — you are the scrum master OPENING this ${VERB[type]}. You go FIRST, before anyone else has spoken. ${open}${relay} Keep the framing to 2–3 short sentences.${relayClose} Use ONLY the real data below; do NOT give the lane updates yourself (each owner will do their own), and do not invent progress.\n\n${reportDigest(report)}`;
 }
 
 /** Terry's closing turn after the round-robin: synthesize + surface blockers to the user. */
