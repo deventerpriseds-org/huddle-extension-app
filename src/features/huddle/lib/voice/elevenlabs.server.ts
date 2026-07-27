@@ -170,7 +170,13 @@ const TTS_MODEL = (process.env.ELEVENLABS_TTS_MODEL ?? "").trim() || "eleven_fla
 // less monotone; `speed` fixes "too slow" (1.0 = normal, >1 faster). All env-tunable so the feel can
 // be dialed in from SWA app settings WITHOUT a code change / redeploy — confirm by ear and adjust.
 const num = (v: string | undefined, d: number) => {
-  const n = Number((v ?? "").trim());
+  const trimmed = (v ?? "").trim();
+  // An unset/empty app setting must fall back to the default, NOT parse as 0 — `Number("")` is `0`,
+  // which IS finite, so the old `Number.isFinite` guard alone let an empty ELEVENLABS_TTS_SPEED
+  // silently become `speed: 0.0`, which ElevenLabs rejects outright (valid range 0.7–1.2), breaking
+  // EVERY TTS call regardless of voice.
+  if (!trimmed) return d;
+  const n = Number(trimmed);
   return Number.isFinite(n) ? n : d;
 };
 const VOICE_SETTINGS = {
