@@ -22,6 +22,10 @@ import { finnReidKnowledge } from "./finn-reid.knowledge";
 import { samTrentKnowledge } from "./sam-trent.knowledge";
 import { tessSuttonKnowledge } from "./tess-sutton.knowledge";
 import { terryLockeKnowledge } from "./terry-locke.knowledge";
+import { coleBlakeKnowledge } from "./cole-blake.knowledge";
+import { elleRowanKnowledge } from "./elle-rowan.knowledge";
+import { liamKingsleyKnowledge } from "./liam-kingsley.knowledge";
+import { irisChaseKnowledge } from "./iris-chase.knowledge";
 
 export type { KnowledgePack } from "./types";
 export { renderKnowledgePack } from "./types";
@@ -29,11 +33,16 @@ export { renderKnowledgePack } from "./types";
 // The authored packs. Adding a brain = author the file + add it here. Order and
 // batching are documentation only — the map is keyed off each pack's agentId.
 // Batch 1 — highest-leverage professional lanes (finance, startup, product, agile).
+// Batch 2 — coaching/leadership lanes (career, EMBA, life strategy, delivery ops).
 export const ALL_PACKS: readonly KnowledgePack[] = [
   finnReidKnowledge,
   samTrentKnowledge,
   tessSuttonKnowledge,
   terryLockeKnowledge,
+  coleBlakeKnowledge,
+  elleRowanKnowledge,
+  liamKingsleyKnowledge,
+  irisChaseKnowledge,
 ];
 
 /** id → pack, built from each pack's own agentId (single source of truth). */
