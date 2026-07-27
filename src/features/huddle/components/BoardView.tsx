@@ -27,6 +27,7 @@ const COLUMNS: { key: string; label: string; statuses: string[]; setStatus: stri
   { key: "backlog", label: "Backlog", statuses: ["BACKLOG", "TODO", "PLANNING"], setStatus: "BACKLOG" },
   { key: "upnext", label: "Up next", statuses: ["READY", "UP_NEXT"], setStatus: "UP_NEXT" },
   { key: "doing", label: "Doing", statuses: ["DOING"], setStatus: "DOING" },
+  { key: "review", label: "Ready for review", statuses: ["IN_REVIEW"], setStatus: "IN_REVIEW" },
   { key: "blocked", label: "Blocked", statuses: ["BLOCKED"], setStatus: "BLOCKED" },
   { key: "done", label: "Done", statuses: ["DONE"], setStatus: "DONE" },
 ];

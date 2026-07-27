@@ -263,6 +263,24 @@ function stripAgentReplyLinks(text: string): string {
   });
 }
 
+// Per-agent WIP-limited board flow: an agent's DOING task moves to IN_REVIEW the instant it actually
+// finishes its work (saves an artifact) — never to DONE. DONE is set ONLY by the user, by hand, in the
+// board UI (see docs on the flow in tasks/autowork.server.ts). Best-effort/non-fatal, mirroring
+// flag_blocker's board-status write: a failure here never fails the artifact save that triggered it.
+async function markTaskInReview(taskId: string, caller: { entra_object_id?: string; entra_email?: string } | undefined): Promise<void> {
+  try {
+    const { invokeJourneyTool } = await import("./journey/proxy.functions");
+    await invokeJourneyTool({
+      toolName: "update_task",
+      args: { task_id: taskId, status: "IN_REVIEW" },
+      caller: caller ?? {},
+      context: { source: "huddle" },
+    });
+  } catch {
+    /* non-fatal — the board just won't reflect the move to "Ready for review" until a later sync */
+  }
+}
+
 // Cross-cutting tool resilience: EVERY agent tool call is bounded by a timeout and its errors are
 // turned into a normal tool RESULT (never a throw). A hung or failing tool must not sink the turn —
 // the model always gets something back and can still reply ("I hit a problem with X"). Applies to
@@ -1838,6 +1856,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   bytes: Buffer.from(content, "utf8"),
                 });
                 recordToolUse(winner.id, "create_artifact", `saved "${name}"`, true, deepLink);
+                if (a.task_id) await markTaskInReview(String(a.task_id), data.caller);
                 return JSON.stringify({ ok: true, id, deepLink });
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
@@ -2318,6 +2337,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   bytes: Buffer.from(content, "utf8"),
                 });
                 recordToolUse(winner.id, "create_artifact", `saved "${name}"`, true, deepLink);
+                if (a.task_id) await markTaskInReview(String(a.task_id), data.caller);
                 return JSON.stringify({ ok: true, id, deepLink });
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
@@ -3456,6 +3476,7 @@ async function runWorkerTurn(record: {
           });
           artifactId = id;
           artifactName = name;
+          if (a.task_id) await markTaskInReview(String(a.task_id), payload.caller);
           return JSON.stringify({ ok: true, id, deepLink });
         } catch (err) {
           return JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) });

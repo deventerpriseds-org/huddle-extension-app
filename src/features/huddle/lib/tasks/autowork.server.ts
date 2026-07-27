@@ -8,11 +8,22 @@
 // a mechanical stand-in wearing the agent's name — see memory.md hardening 2026-07-26); it only decides
 // WHICH agent researches WHAT, and lets the agent actually do it.
 //
+// Per-agent WIP-limited flow (each agent's OWN lane, independently gated):
+//   BACKLOG -> UP_NEXT (cap 3) -> DOING (cap 1) -> IN_REVIEW (cap 2) -> DONE
+// DONE is NEVER written by this engine (or any automation) — only the user sets it, by hand, in the
+// board UI. IN_REVIEW is written elsewhere (create_artifact's dispatch in huddle.functions.ts) the
+// instant an agent's DOING turn actually concludes — this file only decides what to PROMOTE/PULL.
+// When an agent already has REVIEW_CAP tasks sitting in IN_REVIEW, this engine freezes ALL further
+// intake for that agent (no BACKLOG->UP_NEXT, no UP_NEXT->DOING) until the user clears one via the
+// board — an already-running DOING turn is left to finish (it isn't aborted mid-flight), so review can
+// transiently sit at REVIEW_CAP+1 for a moment, but no NEW work starts until the user makes room.
+//
 // Honest failure mode: if an agent's turn fails (LLM quota/timeout), no artifact is produced, the task
 // stays a candidate, and it is retried on the next pass (fresh turn id per run). Nothing is faked.
 
 import { backlogSignature } from "./grooming.server";
 import { AGENT_BY_ID, type AgentId } from "../../data/agents";
+import type { BoardTaskRow } from "./tasks.server";
 
 type Caller = { entra_object_id?: string; entra_email?: string };
 
@@ -21,6 +32,7 @@ export interface AutoWorkRunResult {
   skipped: boolean;
   reason?: string;
   enqueued?: number; // agent research turns enqueued this pass
+  promoted?: number; // BACKLOG->UP_NEXT / UP_NEXT->DOING status writes this pass
   blocked?: number; // grooming-flagged blocked items surfaced
   remaining?: number; // candidates left for the next fire
   runId: string;
@@ -28,7 +40,11 @@ export interface AutoWorkRunResult {
 
 // Each candidate becomes a real agent turn (LLM + web search) that the heartbeat drains one-at-a-time and
 // that fires its own push on completion — so keep the per-pass fan-out small; the rest rotates in next fire.
-const AUTOWORK_MAX = 4;
+// DOING_CAP already limits this to ~1 per agent, so AUTOWORK_MAX is just an overall safety valve.
+const AUTOWORK_MAX = 8;
+const UP_NEXT_CAP = 3; // "2-3 items" staged per agent
+const DOING_CAP = 1; // one at a time, per agent
+const REVIEW_CAP = 2; // no more than 2 waiting for the user's review, per agent
 const COORDINATOR: AgentId = "terry-locke"; // surfaces blocked items (the research itself is per-agent)
 
 function agentRole(id: string | null): string {
@@ -117,11 +133,19 @@ async function surfaceBlocked(opts: { email: string; tz: string; caller: Caller;
   await enqueueTurn(`autowork-blocked-${opts.runId}`, `dm-${COORDINATOR}`, opts.email, payload);
 }
 
+interface AgentBucket {
+  backlog: BoardTaskRow[]; // not yet staged (BACKLOG/TODO/PLANNING/READY/null)
+  upNext: BoardTaskRow[];
+  doing: BoardTaskRow[];
+  inReview: BoardTaskRow[];
+}
+
 /**
- * Run one auto-work pass for a user: pick open, assigned, non-blocked tasks that don't yet have an
- * artifact, and ENQUEUE a real research turn for each assigned agent (the agent does the actual work when
- * the heartbeat drains it). Surfaces grooming's blocked items. Bounded per pass, idempotent (a task with
- * an artifact is skipped, so the backlog rotates across fires), a no-op when nothing's new. Never throws.
+ * Run one auto-work pass for a user: per assigned agent, top up UP_NEXT (cap 3) from BACKLOG, promote
+ * one UP_NEXT item to DOING if the agent has none in flight (cap 1), and ENQUEUE that agent's real
+ * research turn — unless the agent already has REVIEW_CAP tasks awaiting the user's review, in which
+ * case intake is frozen for that agent this pass. Surfaces grooming's blocked items. Idempotent (a task
+ * with an artifact is skipped), a no-op when nothing's new. Never throws.
  */
 export async function runScheduledAutoWork(
   caller: Caller | undefined,
@@ -139,13 +163,86 @@ export async function runScheduledAutoWork(
   const { listArtifacts } = await import("../artifacts/artifacts.server");
   const { enqueueTurn } = await import("./turns.server");
 
+  // Every open, assigned, unblocked task regardless of its current stage (BACKLOG..IN_REVIEW) — bucketed
+  // per agent below. Already ordered by priority_rank, so backlog/up-next slices stay priority-ordered.
   const assigned = await getOpenAssignedTasks(email);
   const signature = backlogSignature(assigned);
 
-  // Idempotency + rotation: a task already backed by an artifact is "done" — skip it. One artifact read.
+  if (!assigned.length && !opts.force) {
+    await setAutoWorkSignature(email, signature);
+    return { ok: true, skipped: true, reason: "empty", enqueued: 0, promoted: 0, blocked: 0, remaining: 0, runId };
+  }
+
+  const byAgent = new Map<string, AgentBucket>();
+  for (const t of assigned) {
+    const agent = t.assigned_agent;
+    if (!agent || !AGENT_BY_ID[agent as AgentId]) continue;
+    const bucket = byAgent.get(agent) ?? { backlog: [], upNext: [], doing: [], inReview: [] };
+    switch ((t.status ?? "").toUpperCase()) {
+      case "UP_NEXT":
+        bucket.upNext.push(t);
+        break;
+      case "DOING":
+        bucket.doing.push(t);
+        break;
+      case "IN_REVIEW":
+        bucket.inReview.push(t);
+        break;
+      default:
+        bucket.backlog.push(t); // BACKLOG/TODO/PLANNING/READY/null
+    }
+    byAgent.set(agent, bucket);
+  }
+
+  // Decide promotions per agent (in memory — the mirror hasn't synced yet), then write them all in one
+  // batch call to journey (mirrors grooming's batch write; one round-trip instead of N).
+  const promotions: { task_id: string; status: string }[] = [];
+  const doingCandidates: BoardTaskRow[] = [];
+  for (const bucket of byAgent.values()) {
+    const frozen = bucket.inReview.length >= REVIEW_CAP;
+    let doingList = bucket.doing;
+    if (!frozen) {
+      const room = Math.max(0, UP_NEXT_CAP - bucket.upNext.length);
+      const toPromote = bucket.backlog.slice(0, room);
+      for (const t of toPromote) promotions.push({ task_id: t.id, status: "UP_NEXT" });
+      const upNextAfterTopUp = [...bucket.upNext, ...toPromote];
+      if (bucket.doing.length < DOING_CAP && upNextAfterTopUp.length) {
+        const next = upNextAfterTopUp[0];
+        promotions.push({ task_id: next.id, status: "DOING" });
+        doingList = [...bucket.doing, next];
+      }
+    }
+    doingCandidates.push(...doingList.slice(0, DOING_CAP));
+  }
+
+  let promoted = 0;
+  if (promotions.length) {
+    try {
+      const { invokeJourneyTool } = await import("../journey/proxy.functions");
+      const r = await invokeJourneyTool({
+        toolName: "batch_update_tasks",
+        args: { updates: promotions },
+        caller: caller ?? {},
+        context: { source: "huddle" },
+      });
+      if (r.ok) {
+        try {
+          const p = JSON.parse(r.output || "{}") as { updated?: number };
+          promoted = typeof p.updated === "number" ? p.updated : promotions.length;
+        } catch {
+          promoted = promotions.length;
+        }
+      }
+    } catch {
+      /* promotion write failed — the backlog stays as-is and is retried next pass */
+    }
+  }
+
+  // Idempotency + rotation: a task already backed by an artifact is "done researching" — skip it (it's
+  // waiting on create_artifact's IN_REVIEW flip or the user's review, not on more work here).
   const existing = await listArtifacts(email);
   const withArtifact = new Set(existing.map((a) => a.task_id).filter(Boolean) as string[]);
-  const candidates = assigned.filter((t) => t.assigned_agent && AGENT_BY_ID[t.assigned_agent as AgentId] && !withArtifact.has(t.id));
+  const candidates = doingCandidates.filter((t) => !withArtifact.has(t.id));
 
   // Blocked = tasks an agent flagged (a task_blockers row) — with the REAL reason it recorded. Not a guess.
   const board = await getBoardTasks(email);
@@ -156,11 +253,6 @@ export async function runScheduledAutoWork(
       const b = blockers.get(t.id);
       return b ? `${t.title} — ${b.reason}` : t.title;
     });
-
-  if (!candidates.length && !opts.force) {
-    await setAutoWorkSignature(email, signature);
-    return { ok: true, skipped: true, reason: assigned.length ? "nothing_new" : "empty", enqueued: 0, blocked: blockedTitles.length, remaining: 0, runId };
-  }
 
   const batch = candidates.slice(0, AUTOWORK_MAX);
   let enqueued = 0;
@@ -185,5 +277,5 @@ export async function runScheduledAutoWork(
 
   await setAutoWorkSignature(email, signature);
   const remaining = Math.max(0, candidates.length - enqueued);
-  return { ok: true, skipped: false, enqueued, blocked: blockedTitles.length, remaining, runId };
+  return { ok: true, skipped: false, enqueued, promoted, blocked: blockedTitles.length, remaining, runId };
 }
