@@ -18,7 +18,7 @@ import {
   Video,
 } from "lucide-react";
 import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
-import { useHuddleStore, type CeremonyTurn, type MeetingState } from "../store";
+import { useHuddleStore, type CeremonyKind, type CeremonyTurn, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
 import { useGroupVoice } from "../hooks/useGroupVoice";
 import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates } from "../lib/huddle.functions";
@@ -199,6 +199,19 @@ function MeetingRoom({
   const isCeremony = !!meeting.ceremonyType;
   const status = meeting.ceremonyStatus;
 
+  // Where this meeting's turns are written. A ceremony ALWAYS runs in its own dedicated channel
+  // (`ceremony-<type>`), never the huddle that happened to be open — that's what kept spilling a
+  // full stand-up into an agent's 1:1. Any other multi-agent virtual meeting also refuses to write
+  // into a `dm-*` thread (falls back to the group channel). Non-ceremony calls in a real channel
+  // stay put.
+  const ceremonyChannel = (t: CeremonyKind) => `ceremony-${t === "review_retro" ? "review" : t}`;
+  const meetingHuddleId =
+    isCeremony && meeting.ceremonyType
+      ? ceremonyChannel(meeting.ceremonyType)
+      : isVirtual && activeHuddleId.startsWith("dm-")
+        ? "all-members"
+        : activeHuddleId;
+
   const [panel, setPanel] = useState<Panel>("transcript");
   const [showCaptions, setShowCaptions] = useState(true);
   const [input, setInput] = useState("");
@@ -284,7 +297,7 @@ function MeetingRoom({
         void groupVoice.start({
           members: meeting.members,
           caller,
-          huddleId: activeHuddleId,
+          huddleId: meetingHuddleId,
           onTurn: (t) => addMeetingTurns([t]),
         });
       } else {
@@ -360,10 +373,10 @@ function MeetingRoom({
         // in sub-45s chunks AND streams each turn to the store the instant it lands (status stays
         // 'running'). So we fire the durable turn and immediately POLL FROM t=0 — the first voice shows
         // in ~2s, not after a ~30s blank chunk. A live `phase` line shows what's happening throughout.
-        const turnId = `ceremony-${activeHuddleId}-${step}-${Date.now()}`;
+        const turnId = `ceremony-${meetingHuddleId}-${step}-${Date.now()}`;
         const payload = {
           text: CEREMONY_TRIGGER[step],
-          huddleId: activeHuddleId,
+          huddleId: meetingHuddleId,
           scope: "group" as const,
           members: meeting.members,
           history: [],
@@ -385,7 +398,7 @@ function MeetingRoom({
         let terminal = false;
         let guard = 0;
         while (!terminal && ceremonyAliveRef.current && guard++ < 150) {
-          const upd = await getTurnUpdates({ data: { huddleId: activeHuddleId, sinceMs: 0 } }).catch(() => null);
+          const upd = await getTurnUpdates({ data: { huddleId: meetingHuddleId, sinceMs: 0 } }).catch(() => null);
           const turn = upd?.turns?.find((t) => t.id === turnId);
           const reps = turn ? (turn.result?.replies ?? turn.replies ?? []) : [];
           if (reps.length > spoken.n) {
@@ -427,7 +440,7 @@ function MeetingRoom({
       const result = await sendHuddleMessage({
         data: {
           text,
-          huddleId: activeHuddleId,
+          huddleId: meetingHuddleId,
           scope: "group",
           members: meeting.members,
           history: [],

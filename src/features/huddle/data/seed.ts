@@ -122,6 +122,37 @@ export const HUDDLES: Huddle[] = [
     topic: "Launch coordination",
     demo: true,
   },
+  // Dedicated per-ceremony channels. Ceremonies (stand-up, retro, planning, review) run HERE, never in
+  // whatever huddle happens to be open — so a stand-up started from an agent's 1:1 no longer spills its
+  // whole round-robin into that private thread. Each ceremony's history is isolated and reviewable.
+  {
+    id: "ceremony-standup",
+    name: "Stand-up",
+    kind: "group",
+    members: AGENTS.map((a) => a.id),
+    topic: "Daily stand-up — Terry opens, each lane owner reports, blockers surface to you",
+  },
+  {
+    id: "ceremony-retro",
+    name: "Retro",
+    kind: "group",
+    members: AGENTS.map((a) => a.id),
+    topic: "Sprint retrospective — what went well, what to improve",
+  },
+  {
+    id: "ceremony-planning",
+    name: "Planning",
+    kind: "group",
+    members: AGENTS.map((a) => a.id),
+    topic: "Sprint planning — what each lane takes on next",
+  },
+  {
+    id: "ceremony-review",
+    name: "Review",
+    kind: "group",
+    members: AGENTS.map((a) => a.id),
+    topic: "Sprint review — what each lane delivered",
+  },
   // 1:1 huddles for the sidebar (Agent channels)
   ...AGENTS.map<Huddle>((a) => ({
     id: `dm-${a.id}`,

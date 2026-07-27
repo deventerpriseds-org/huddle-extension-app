@@ -810,7 +810,8 @@ function Composer({ huddle }: { huddle: Huddle }) {
         toast.error(dictation.error);
       }
     } else {
-      await dictation.start();
+      const err = await dictation.start();
+      if (err) toast.error(err);
     }
   }
 

@@ -10,7 +10,7 @@ export interface DictationController {
   level: number; // 0..1, for the recording meter
   error: string | null;
   supported: boolean;
-  start: () => Promise<void>;
+  start: () => Promise<string | null>; // resolves to an error message on failure, null on success
   stop: () => Promise<string>; // resolves to the transcript ("" on failure/empty)
   cancel: () => void;
 }
@@ -42,11 +42,12 @@ export function useDictation(): DictationController {
     setLevel(0);
   }, []);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (): Promise<string | null> => {
     setError(null);
     if (!supported) {
-      setError("Dictation isn't supported on this device.");
-      return;
+      const msg = "Dictation isn't supported on this device.";
+      setError(msg);
+      return msg;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -83,9 +84,18 @@ export function useDictation(): DictationController {
         rafRef.current = requestAnimationFrame(tick);
       };
       tick();
+      return null;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Microphone unavailable");
+      // Most commonly a denied mic permission — surface it so a tap that "does nothing" explains itself.
+      const msg =
+        err instanceof DOMException && (err.name === "NotAllowedError" || err.name === "SecurityError")
+          ? "Microphone blocked. Allow mic access for this site, then tap again."
+          : err instanceof Error
+            ? err.message
+            : "Microphone unavailable";
+      setError(msg);
       cleanup();
+      return msg;
     }
   }, [supported, cleanup]);
 
