@@ -299,6 +299,9 @@ type TurnResumeState = {
   interjectors: AgentId[];
   ceremonyActive: boolean;
   ceremonyDirectives: [AgentId, string][];
+  // Terry's CLOSING turn, pending until the round-robin drains: [closerId, rendered closerDirective].
+  // Kept out of ceremonyDirectives because the host already maps to the OPENER there; null once closed.
+  ceremonyCloser?: [AgentId, string] | null;
   replyCap: number;
   replies: { agentId: AgentId; text: string; fallbackNotes?: string[]; artifacts?: { id: string; name: string }[] }[];
   journeyTaskUpdates: import("./journey/types").JourneyTask[];
@@ -706,6 +709,8 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // detection is skipped (ceremonyType=null) — the turn was already classified on chunk 1.
     const ceremonyDirectiveById = new Map<AgentId, string>(resume?.ceremonyDirectives ?? []);
     let ceremonyActive = resume?.ceremonyActive ?? false;
+    // Pending host CLOSE turn (set when a round-robin is built; survives chunk boundaries via progress).
+    let ceremonyCloser: [AgentId, string] | null = resume?.ceremonyCloser ?? null;
     const ceremonyType = resume ? null : detectCeremony(data.text);
     if (ceremonyType) {
       // Resolve the sign-in email (possibly an alias) to the canonical journey email the mirror
@@ -762,13 +767,25 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         } else {
           const participants = roundRobinParticipants(report, data.members);
           const owners = lanesByOwner(report);
+          // Owners in speaking order → Terry names them in his opener hand-off ("Tess, you're up; then Finn").
+          const handoffNames = participants
+            .filter((p) => p !== CEREMONY_HOST)
+            .map((p) => AGENT_BY_ID[p]?.name ?? p);
           for (const p of participants) {
             // Host OPENS the ceremony (first in `participants`); lane owners then give their updates.
-            if (p === CEREMONY_HOST) ceremonyDirectiveById.set(p, openerDirective(ceremonyType, report));
+            if (p === CEREMONY_HOST)
+              ceremonyDirectiveById.set(p, openerDirective(ceremonyType, report, handoffNames));
             else {
               const lane = owners.get(p);
               if (lane) ceremonyDirectiveById.set(p, ownerDirective(ceremonyType, lane));
             }
+          }
+          // Arm Terry's CLOSING turn: after every owner has spoken, the host speaks once more to
+          // synthesize and surface blockers. Only when the host is present AND at least one owner
+          // spoke (participants = [host, ...owners], so length > 1). Runs as a post-loop step so the
+          // host isn't duplicated in the queue (the spoken-guard would skip a repeat there anyway).
+          if (data.members.includes(CEREMONY_HOST) && participants.length > 1) {
+            ceremonyCloser = [CEREMONY_HOST, closerDirective(ceremonyType, report)];
           }
           const scores = Object.fromEntries(
             participants.map((id, i) => [id, Number((1 - i * 0.1).toFixed(2))]),
@@ -3039,6 +3056,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       interjectors: [...interjectorSet],
       ceremonyActive,
       ceremonyDirectives: [...ceremonyDirectiveById.entries()],
+      ceremonyCloser,
       replyCap,
       replies,
       journeyTaskUpdates,
@@ -3090,6 +3108,24 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const r = await runBounded(nextId, buildPrior());
         mergeAgentResult(nextId, r, [nextId]);
         await streamChunk();
+      }
+      // Terry CLOSES once every owner has spoken (queue drained). Direct runBounded call bypasses the
+      // spoken-guard (host already opened). If the chunk budget is spent first, ceremonyCloser stays
+      // set and survives in progress → the next chunk runs it (queue empty by then, so it's next up).
+      if (
+        ceremonyCloser &&
+        queue.length === 0 &&
+        replies.length < replyCap &&
+        !chunkBudgetHit()
+      ) {
+        const [closerId, closerDir] = ceremonyCloser;
+        if (data.members.includes(closerId) && AGENT_BY_ID[closerId]) {
+          ceremonyDirectiveById.set(closerId, closerDir);
+          spoken.delete(closerId);
+          const r = await runBounded(closerId, buildPrior());
+          mergeAgentResult(closerId, r, [closerId]);
+        }
+        ceremonyCloser = null;
       }
     } else {
       // Normal group turn: the PRIMARY winner runs first (sequentially) so the
@@ -3148,7 +3184,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       );
       // Continue only if there is real work left AND we haven't hit the runaway cap AND the reply cap
       // still has room. Otherwise finalize DONE with whatever we have.
-      const hasMore = replies.length < replyCap && remainingEligible.length > 0 && !atChunkCap;
+      const hasMore =
+        replies.length < replyCap &&
+        !atChunkCap &&
+        (remainingEligible.length > 0 || ceremonyCloser != null);
       if (hasMore) {
         try {
           await turnStore.saveTurnChunk(turnId, replies, buildResumeState(), false);

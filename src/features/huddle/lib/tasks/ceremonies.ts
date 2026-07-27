@@ -196,16 +196,25 @@ function reportDigest(report: CeremonyReport): string {
 /** Terry's OPENING turn: he goes first — greets, frames the ceremony, surfaces the blockers that
  *  need the user, then hands off to the lane owners. (Users expect the scrum master to open a
  *  stand-up and pass it along, not for a lane owner to just start talking.) */
-export function openerDirective(type: CeremonyType, report: CeremonyReport): string {
+export function openerDirective(
+  type: CeremonyType,
+  report: CeremonyReport,
+  handoffNames: string[] = [],
+): string {
   const open =
     type === "standup"
-      ? "Open the stand-up: greet the team in one line, give a one-sentence read of where things stand, call out any blockers that need the user's decision (or say there are none), then hand off by inviting the lane owners to give their updates."
+      ? "Open the stand-up: greet the team in one line, give a one-sentence read of where things stand, call out any blockers that need the user's decision (or say there are none), then hand off to the lane owners to give their updates."
       : type === "retro"
-        ? "Open the retro: greet the team, frame the sprint in one line, then hand off by inviting each lane owner to share what went well and what to improve."
+        ? "Open the retro: greet the team, frame the sprint in one line, then hand off to each lane owner to share what went well and what to improve."
         : type === "planning"
-          ? "Open sprint planning: greet the team, note the overall load in one line, then hand off by inviting each lane owner to propose what to take on."
-          : "Open the sprint review: greet the team, frame what we set out to ship, then hand off by inviting each lane owner to demo what their lane delivered.";
-  return `\n\nCEREMONY — you are the scrum master OPENING this ${VERB[type]}. You go FIRST, before anyone else has spoken. ${open} Keep it to 2–3 short sentences. Use ONLY the real data below; do NOT give the lane updates yourself (each owner will do their own), and do not invent progress.\n\n${reportDigest(report)}`;
+          ? "Open sprint planning: greet the team, note the overall load in one line, then hand off to each lane owner to propose what to take on."
+          : "Open the sprint review: greet the team, frame what we set out to ship, then hand off to each lane owner to demo what their lane delivered.";
+  // Relay hand-off: name the owners you're passing to, in order, so it reads like a real stand-up
+  // ("Tess, you're up; then Finn.") — not a generic "over to the team."
+  const relay = handoffNames.length
+    ? ` End by handing the floor to the first owner BY NAME, then name who follows, in this order: ${handoffNames.join(", ")}. Address the first one directly (e.g. "${handoffNames[0]}, you're up").`
+    : "";
+  return `\n\nCEREMONY — you are the scrum master OPENING this ${VERB[type]}. You go FIRST, before anyone else has spoken. ${open}${relay} Keep it to 2–3 short sentences. Use ONLY the real data below; do NOT give the lane updates yourself (each owner will do their own), and do not invent progress.\n\n${reportDigest(report)}`;
 }
 
 /** Terry's closing turn after the round-robin: synthesize + surface blockers to the user. */
