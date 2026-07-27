@@ -24,17 +24,32 @@ const dmBefore = countTurns(await call(FN_POLL,{huddleId:ONE_TO_ONE,sinceMs:0}))
 
 const turnId = `ceremony-${CEREMONY}-standup-${Date.now()}`;
 const enqP = call(FN_ENQ,{text:"let's run the daily stand-up",huddleId:CEREMONY,scope:"group",members:M,history:[],router,agents,timeZone:"America/New_York",caller:CALLER,turnId});
-let seen=0,done=false,order=[],g=0;
-while(!done && g++<60){await new Promise(r=>setTimeout(r,2500));const p=await call(FN_POLL,{huddleId:CEREMONY,sinceMs:0});const turn=(p.val?.turns??[]).find(t=>t.id===turnId);if(!turn)continue;const reps=turn.result?.replies??turn.replies??[];if(reps.length>seen){for(const r of reps.slice(seen))order.push(r.agentId);seen=reps.length;}if(turn.status==="done"||turn.status==="error")done=true;}
+let seen=0,done=false,order=[],replies=[],g=0;
+while(!done && g++<80){await new Promise(r=>setTimeout(r,2500));const p=await call(FN_POLL,{huddleId:CEREMONY,sinceMs:0});const turn=(p.val?.turns??[]).find(t=>t.id===turnId);if(!turn)continue;const reps=turn.result?.replies??turn.replies??[];if(reps.length>seen){for(const r of reps.slice(seen)){order.push(r.agentId);replies.push(r);}seen=reps.length;}if(turn.status==="done"||turn.status==="error")done=true;}
 await enqP;
 
 const dmAfter = countTurns(await call(FN_POLL,{huddleId:ONE_TO_ONE,sinceMs:0}));
 const spilled = dmAfter - dmBefore;
+// First non-host owner in speaking order — Terry's opener must name them.
+const NAMES = { "cole-blake":"Cole","tess-sutton":"Tess","sam-trent":"Sam","finn-reid":"Finn","iris-chase":"Iris","elle-rowan":"Elle","cam-post":"Cam","ezra-miles":"Ezra","faith-hartley":"Faith","flex-grimes":"Flex","charleston-lewis":"Charleston","liam-kingsley":"Liam","troy-lennox":"Troy","eli-vaughn":"Eli" };
+const firstOwner = order.find((id,i)=>i>0 && id!=="terry-locke");
+const openerText = replies[0]?.text ?? "";
+const opensFirst = order[0]==="terry-locke";
+const closesLast = order.length>1 && order[order.length-1]==="terry-locke";
+const namesOwner = firstOwner ? new RegExp(`\\b${NAMES[firstOwner]}\\b`,"i").test(openerText) : false;
+// Terry should appear exactly twice (open + close), everyone else once.
+const terryCount = order.filter(id=>id==="terry-locke").length;
+const owners = order.filter(id=>id!=="terry-locke");
+const noDupOwner = new Set(owners).size === owners.length;
+
 console.log("ceremony channel:", CEREMONY);
-console.log("replies in ceremony channel:", order.length, "→", order.join(" → "));
-console.log("opener is Terry:", order[0]==="terry-locke" ? "PASS ✓" : `FAIL ✗ (${order[0]})`);
-console.log(`dm-terry-locke turns before/after: ${dmBefore}/${dmAfter}  (spilled ${spilled})`);
-console.log("no 1:1 spill:", spilled===0 ? "PASS ✓" : `FAIL ✗ (${spilled} turns leaked into the 1:1)`);
-const ok = order.length>0 && order[0]==="terry-locke" && spilled===0;
-console.log("\nISOLATION:", ok ? "PASS ✓✓" : "FAIL ✗");
+console.log("relay order:", order.length, "→", order.join(" → "));
+console.log("AC-1a opener is Terry:", opensFirst ? "PASS ✓" : `FAIL ✗ (${order[0]})`);
+console.log("AC-1b closer is Terry:", closesLast ? "PASS ✓" : `FAIL ✗ (last=${order[order.length-1]}, terryCount=${terryCount})`);
+console.log(`AC-2 opener names first owner (${firstOwner}→${NAMES[firstOwner]}):`, namesOwner ? "PASS ✓" : "FAIL ✗");
+console.log("     opener text:", JSON.stringify(openerText.slice(0,180)));
+console.log("AC-3 no owner spoke twice:", noDupOwner ? "PASS ✓" : "FAIL ✗");
+console.log(`AC-10 no 1:1 spill: dm-terry-locke ${dmBefore}/${dmAfter}`, spilled===0 ? "PASS ✓" : `FAIL ✗ (${spilled})`);
+const ok = opensFirst && closesLast && namesOwner && noDupOwner && spilled===0;
+console.log("\nRELAY + ISOLATION:", ok ? "PASS ✓✓" : "FAIL ✗");
 process.exit(ok?0:1);
