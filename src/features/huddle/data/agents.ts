@@ -109,7 +109,7 @@ export const AGENTS: Agent[] = [
       },
     ],
     tone: "direct",
-    voiceId: "terry",
+    voiceId: "pFZP5JQG7iQjIQuC4Bku",
     avatarUrl: terryAsset.url,
     systemPrompt: p(
       "Terry Locke, the scrum master who runs the team's process and cadence",
@@ -127,7 +127,7 @@ export const AGENTS: Agent[] = [
     domains: ["itinerary", "day plans", "calendar", "schedule", "queue", "tasks", "board", "follow-ups", "priorities", "delivery", "status"],
     themes: ["day-of", "schedule of the day", "calendar", "meeting", "appointment", "backlog", "up next", "done", "kanban", "board", "assign", "due", "follow-up", "prioritize", "what matters", "what's next", "status"],
     tone: "warm",
-    voiceId: "iris",
+    voiceId: "VWQuOfcP7ILB48IXXGXE",
     special: "coordinator",
     avatarUrl: irisAsset.url,
     systemPrompt: p(
@@ -146,7 +146,7 @@ export const AGENTS: Agent[] = [
     domains: ["budgeting", "credit optimization", "loans", "refinancing", "runway", "cashflow"],
     themes: ["budget", "credit", "soft-pull", "refinance", "runway", "invoice", "spend"],
     tone: "direct",
-    voiceId: "finn",
+    voiceId: "MEiBY6lrwud0dREUa5FQ",
     avatarUrl: finnAsset.url,
     systemPrompt: p(
       "Finn Reid, the finance strategist",
@@ -164,7 +164,7 @@ export const AGENTS: Agent[] = [
     domains: ["family", "family members", "kids", "spouse", "family appointments"],
     themes: ["dentist", "school", "kids", "spouse", "family event", "pickup", "childcare"],
     tone: "warm",
-    voiceId: "faith",
+    voiceId: "TgnhEILA8UwUqIMi20rp",
     avatarUrl: faithAsset.url,
     systemPrompt: p(
       "Faith Hartley, the family scheduler",
@@ -182,7 +182,7 @@ export const AGENTS: Agent[] = [
     domains: ["coursework", "essays", "deadlines", "applications"],
     themes: ["EMBA", "essay", "draft", "professor", "submit"],
     tone: "coach",
-    voiceId: "elle",
+    voiceId: "hGQkZQUA5RiOXIw7P9iO",
     avatarUrl: elleAsset.url,
     systemPrompt: p(
       "Elle Rowan, the EMBA planner",
@@ -200,7 +200,7 @@ export const AGENTS: Agent[] = [
     domains: ["workouts", "recovery", "training", "health"],
     themes: ["push-pull", "sets", "cardio", "run", "cooldown", "PR"],
     tone: "coach",
-    voiceId: "flex",
+    voiceId: "pDxcmDdBPmpAPjBko2mF",
     avatarUrl: flexAsset.url,
     systemPrompt: p(
       "Flex Grimes, the fitness coach",
@@ -218,7 +218,7 @@ export const AGENTS: Agent[] = [
     domains: ["errands", "home", "pickups", "deliveries"],
     themes: ["pharmacy", "dry-cleaning", "groceries pickup", "package"],
     tone: "direct",
-    voiceId: "ezra",
+    voiceId: "8kvxG72xUMYnIFhZYwWj",
     avatarUrl: ezraAsset.url,
     systemPrompt: p(
       "Ezra Miles, the errand runner",
@@ -236,7 +236,7 @@ export const AGENTS: Agent[] = [
     domains: ["startup", "MVP", "fundraising", "pitch", "GTM", "business model"],
     themes: ["seed", "deck", "raise", "investor", "launch", "mvp", "idea", "validate", "revenue"],
     tone: "direct",
-    voiceId: "sam",
+    voiceId: "0a8UYbCjeq4J2VKVWGdJ",
     avatarUrl: samAsset.url,
     systemPrompt: p(
       "Sam Trent, the startup planner who turns ideas into MVPs, pitches and a fundable business",
@@ -254,7 +254,7 @@ export const AGENTS: Agent[] = [
     domains: ["career", "reviews", "interviews", "growth"],
     themes: ["performance", "resume", "promotion", "1:1", "feedback"],
     tone: "coach",
-    voiceId: "cole",
+    voiceId: "o2zd9K5QOO7ppTb04Lx0",
     avatarUrl: coleAsset.url,
     systemPrompt: p(
       "Cole Blake, the career coach",
@@ -272,7 +272,7 @@ export const AGENTS: Agent[] = [
     domains: ["meals", "groceries", "nutrition", "prep"],
     themes: ["dinner", "recipe", "macros", "grocery list", "meal prep"],
     tone: "warm",
-    voiceId: "charleston",
+    voiceId: "9T9vSqRrPPxIs5wpyZfK",
     avatarUrl: charlestonAsset.url,
     systemPrompt: p(
       "Charleston Lewis, the personal chef",
@@ -290,7 +290,7 @@ export const AGENTS: Agent[] = [
     domains: ["admin", "adjustments", "edits", "updates", "cleanup"],
     themes: ["adjust", "edit", "update", "fix", "tidy", "reschedule existing", "amend"],
     tone: "formal",
-    voiceId: "eli",
+    voiceId: "TVtDNgumMv4lb9zzFzA2",
     avatarUrl: eliAsset.url,
     systemPrompt: p(
       "Eli Vaughn, the executive assistant",
@@ -308,7 +308,7 @@ export const AGENTS: Agent[] = [
     domains: ["goals", "habits", "long-term decisions"],
     themes: ["values", "quarterly", "reflection", "trade-off"],
     tone: "coach",
-    voiceId: "liam",
+    voiceId: "9rDVEB1kFor5yQ8AOjMo",
     systemPrompt: p(
       "Liam Kingsley, the life strategist",
       "thoughtful, longer-arc, Socratic",
@@ -325,7 +325,7 @@ export const AGENTS: Agent[] = [
     domains: ["emails", "slack replies", "social posts", "public messaging", "tone", "copy"],
     themes: ["reply", "email draft", "slack", "social post", "announcement", "tone", "wording"],
     tone: "warm",
-    voiceId: "cam",
+    voiceId: "kIfcKu9kr8RZrbz7H3ox",
     avatarUrl: camAsset.url,
     systemPrompt: p(
       "Cam Post, the communications agent",
@@ -343,7 +343,7 @@ export const AGENTS: Agent[] = [
     domains: ["flights", "hotels", "bookings", "travel logistics"],
     themes: ["flight", "hotel", "booking", "airport", "trip cost", "layover"],
     tone: "direct",
-    voiceId: "troy",
+    voiceId: "3QXPfzW1QCV55kXilPul",
     avatarUrl: troyAsset.url,
     systemPrompt: p(
       "Troy Lennox, the travel agent",
@@ -361,7 +361,7 @@ export const AGENTS: Agent[] = [
     domains: ["product", "apps", "features", "product roadmap", "releases", "what to build"],
     themes: ["feature", "ship", "build", "roadmap", "release", "backlog", "product", "app", "milestone", "scope"],
     tone: "wry",
-    voiceId: "tess",
+    voiceId: "l006hw6wZaEYAv80cbzj",
     avatarUrl: tessAsset.url,
     systemPrompt: p(
       "Tess Sutton, the product owner for the apps and products",
