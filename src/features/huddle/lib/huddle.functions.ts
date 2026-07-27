@@ -235,19 +235,25 @@ function isEchoOfPrior(text: string, priorReplies: { text: string }[]): boolean 
   return priorReplies.some((r) => replyJaccard(text, r.text) >= 0.72);
 }
 
-// A small model sometimes claims it "compiled a document" and INVENTS a link (often an unrelated
-// external site) instead of calling create_artifact — so no real chip renders and the link is fake
-// (the exact failure the user hit: "access it [here](salesforce.com)"). Prose rules alone don't bind a
-// small model (repo principle: a firing trap is signal → guard in code). When an agent produced NO real
-// artifact this turn AND its reply both claims a produced document AND carries a markdown link, strip
-// the fabricated link down to its anchor text — kills the fake URL, keeps the sentence. Narrow by
-// design (both conditions required) so genuine inline source citations are untouched.
-const DOC_CLAIM_RE =
-  /\b(compil|put together|prepar|assembl|draft|creat|attach|wrote up|written up)\w*\b[^.]{0,40}\b(document|doc|report|write-?up|analysis|brief|file|summary|deck)\b|\b(document|report|write-?up|brief|analysis)\b[^.]{0,30}\b(is\s+)?(available|attached|ready|below|here)\b|\b(access|find|view|download|open|read)\s+it\b/i;
-function sanitizeFabricatedDocLink(text: string): string {
-  if (!/\[[^\]]+\]\(https?:\/\/[^)\s]+\)/.test(text)) return text; // no markdown link → nothing to strip
-  if (!DOC_CLAIM_RE.test(text)) return text; // no "I made a document" claim → leave real citations alone
-  return text.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "$1");
+// A small model keeps hand-authoring a link to "the document" in its chat prose — either an INVENTED
+// external site ("access it [here](salesforce.com)") or a PLACEHOLDER ("[here](https://your-link-to-
+// artifact)") — even when it DID save a real artifact. The chip (from create_artifact) is the ONLY real
+// document link; a self-authored one is always fake or redundant. Prose rules don't bind a small model
+// (repo principle: a firing trap is signal → guard in code), so we sanitize EVERY reply:
+//   • a markdown link with a generic doc-pointer anchor (here/this/the document/…) or an obviously
+//     placeholder URL → drop it to plain anchor text (kills the fake "open the document" link);
+//   • any other markdown link (a genuine external citation like [McKinsey 2025](url)) → keep its URL as
+//     plain, non-clickable text "anchor (url)" so nothing useful is lost and nothing looks clickable-fake.
+const GENERIC_DOC_ANCHOR =
+  /^(here|this|that|link|this link|the link|it|view it|access it|read it|see it|open it|download|download it|this document|the document|document|this doc|the doc|doc|this file|the file|file|this report|the report|report|this analysis|the analysis|the artifact|this artifact|view the document|click here|the doc(ument)? here)$/i;
+const PLACEHOLDER_URL =
+  /(your-link|link-to|link-here|url-here|insert[-_]?link|example\.com|artifact-link|placeholder|yourdomain|to-artifact|<link>)/i;
+function stripAgentReplyLinks(text: string): string {
+  return text.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, anchor, url) => {
+    const a = String(anchor).trim();
+    if (GENERIC_DOC_ANCHOR.test(a) || PLACEHOLDER_URL.test(url)) return a; // fake/placeholder doc-link → drop URL
+    return `${a} (${url})`; // genuine citation → keep URL as plain, non-clickable text
+  });
 }
 
 // Cross-cutting tool resilience: EVERY agent tool call is bounded by a timeout and its errors are
@@ -2907,10 +2913,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
         }
       }
-      // Backstop the fabricated-document-link failure: if this agent saved NO real artifact this turn
-      // but its text claims a produced document and carries a markdown link, that link is invented —
-      // strip it to plain text so the user never gets a fake "open the document" link.
-      const safeText = replyArtifacts.length === 0 ? sanitizeFabricatedDocLink(finalText) : finalText;
+      // Backstop the fabricated-document-link failure (even when a REAL artifact was saved, the model may
+      // still hand-author a fake/placeholder link in prose). The chip is the only real document link; strip
+      // any self-authored markdown link from the text so the user never sees a fake "open the document" link.
+      const safeText = stripAgentReplyLinks(finalText);
       replies.push({
         agentId: nextId,
         text: safeText,
