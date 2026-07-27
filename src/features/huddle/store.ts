@@ -45,6 +45,9 @@ export interface MeetingState {
 interface HuddleState {
   activeHuddleId: string;
   view: View;
+  // Artifact to focus when the Artifacts view opens (set by clicking an "Open <name>" chip in chat).
+  // ArtifactsView reads it, opens that artifact, then clears it. Not persisted (transient UI intent).
+  activeArtifactId: string | null;
   huddles: Huddle[];
   messages: HuddleMessage[];
   tasks: Task[];
@@ -56,6 +59,8 @@ interface HuddleState {
   meeting: null | MeetingState;
   setActive: (id: string) => void;
   setView: (v: View) => void;
+  // Open the Artifacts view focused on a specific artifact (from a chat chip); null just clears focus.
+  openArtifactById: (id: string | null) => void;
   addUserMessage: (m: HuddleMessage) => void;
   addAgentMessage: (m: HuddleMessage) => void;
   logDecision: (d: RoutingDecision) => void;
@@ -110,6 +115,7 @@ function seedDefaults(): PersistedWorkspace {
 export const useHuddleStore = create<HuddleState>()((set) => ({
   activeHuddleId: "daily",
   view: "huddle",
+  activeArtifactId: null,
   huddles: HUDDLES,
   messages: SEED_MESSAGES,
   tasks: SEED_TASKS,
@@ -121,6 +127,8 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
   meeting: null,
   setActive: (id) => set({ activeHuddleId: id, view: "huddle" }),
   setView: (v) => set({ view: v }),
+  openArtifactById: (id) =>
+    set(id ? { activeArtifactId: id, view: "artifacts" } : { activeArtifactId: null }),
   addUserMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
   addAgentMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
   logDecision: (d) => set((s) => ({ decisions: [d, ...s.decisions].slice(0, 50) })),

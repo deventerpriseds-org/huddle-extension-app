@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Send, Sparkles, Video, Phone, ChevronDown, Mic, Square, Loader2, AudioLines, Plus, Users, Bell, BellRing } from "lucide-react";
+import { Send, Sparkles, Video, Phone, ChevronDown, Mic, Square, Loader2, AudioLines, Plus, Users, Bell, BellRing, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
@@ -345,6 +345,22 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
           )}
           {m.text}
         </div>
+        {m.artifacts && m.artifacts.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {m.artifacts.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                onClick={() => useHuddleStore.getState().openArtifactById(a.id)}
+                title={`Open ${a.name}`}
+                className="inline-flex items-center gap-1 rounded-md border border-hairline bg-surface px-2 py-1 text-xs text-foreground hover:bg-muted"
+              >
+                <FileText size={12} style={{ color: "var(--ai)" }} />
+                <span className="max-w-[220px] truncate">{a.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -486,7 +502,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
   type TurnResult = Awaited<ReturnType<typeof enqueueHuddleTurn>>["result"];
   function applyTurnStream(
     turnId: string,
-    replies: { agentId: AgentId; text: string }[] | undefined,
+    replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[] | undefined,
     result: TurnResult,
     final: boolean,
   ) {
@@ -505,6 +521,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
         text: reply.text,
         ts: Date.now() + i,
         replyTo: turnId,
+        artifacts: reply.artifacts,
       });
     });
 

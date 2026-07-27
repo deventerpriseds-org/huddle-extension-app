@@ -220,7 +220,7 @@ type TurnResumeState = {
   ceremonyActive: boolean;
   ceremonyDirectives: [AgentId, string][];
   replyCap: number;
-  replies: { agentId: AgentId; text: string; fallbackNotes?: string[] }[];
+  replies: { agentId: AgentId; text: string; fallbackNotes?: string[]; artifacts?: { id: string; name: string }[] }[];
   journeyTaskUpdates: import("./journey/types").JourneyTask[];
   suggestedTasks: SuggestedTaskDraft[];
   toolUses: import("../data/seed").ToolUseEvent[];
@@ -318,7 +318,15 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       );
     }
 
-    type Reply = { agentId: AgentId; text: string; fallbackNotes?: string[] };
+    type Reply = {
+      agentId: AgentId;
+      text: string;
+      fallbackNotes?: string[];
+      // Artifacts this reply produced (create_artifact) so the chat bubble can render a clickable
+      // "Open <name>" chip that opens the doc by id (fresh SAS on open). Derived from the agent's
+      // toolUses at merge time — see the reply-push site.
+      artifacts?: { id: string; name: string }[];
+    };
 
     // Journey-voice mirror: any task rows that journey returns from a tool call
     // are accumulated here and returned to the client so the huddle board can
@@ -2687,10 +2695,27 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           ? `${clean}\n\n_(fallback: ${outcome.perAgentFallbacks.join("; ")})_`
           : clean;
 
+      // Attach any artifacts this agent saved this turn so the chat bubble can render an "Open <name>"
+      // chip. Derived from its toolUses (create_artifact stores deepLink `/artifacts/<id>` in detail and
+      // `saved "<name>"` in summary) — already serialized through resume/chunk/durable paths, so no new
+      // per-agent buffer to thread. The client opens by id (fresh SAS), so this survives SAS expiry.
+      const replyArtifacts = r.toolUses
+        .filter(
+          (t) =>
+            t.tool === "create_artifact" &&
+            t.ok &&
+            typeof t.detail === "string" &&
+            t.detail.startsWith("/artifacts/"),
+        )
+        .map((t) => ({
+          id: (t.detail as string).slice("/artifacts/".length),
+          name: /saved "(.+)"/.exec(t.summary)?.[1] ?? "Document",
+        }));
       replies.push({
         agentId: nextId,
         text: finalText,
         fallbackNotes: outcome.perAgentFallbacks.length > 0 ? outcome.perAgentFallbacks : undefined,
+        artifacts: replyArtifacts.length ? replyArtifacts : undefined,
       });
       spoken.add(nextId);
 
@@ -3138,7 +3163,11 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
       error: t.error,
       updated_ms: t.updated_ms,
       seq: t.seq,
-      replies: (t.replies ?? []) as { agentId: AgentId; text: string }[],
+      replies: (t.replies ?? []) as {
+        agentId: AgentId;
+        text: string;
+        artifacts?: { id: string; name: string }[];
+      }[],
       result: (t.result ?? null) as HuddleTurnResult | null,
     }));
     return { turns };
@@ -3180,7 +3209,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
       id: string;
       huddleId: string;
       updated_ms: number;
-      replies: { agentId: AgentId; text: string }[];
+      replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
     };
     const empty: BackfillTurn[] = [];
     if (!data.caller?.entra_email) return { turns: empty };
@@ -3202,6 +3231,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
       replies: (((t.result as { replies?: unknown } | null)?.replies ?? t.replies ?? []) as {
         agentId: AgentId;
         text: string;
+        artifacts?: { id: string; name: string }[];
       }[]),
     }));
     return { turns };

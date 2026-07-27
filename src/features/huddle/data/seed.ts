@@ -21,6 +21,9 @@ export interface HuddleMessage {
     host: AgentId;
     joins: AgentId[];
   };
+  // Artifacts this agent reply produced — rendered as clickable "Open <name>" chips that open the doc
+  // by id in the Artifacts view (fresh SAS minted on open, so the link never expires).
+  artifacts?: { id: string; name: string }[];
 }
 
 export type HuddleScope = "one-to-one" | "group";
