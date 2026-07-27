@@ -56,14 +56,18 @@ console.log("  order:", base.order.join(" → "));
 
 console.log("== barge run ==");
 const dmBefore = ((await call(FN_POLL,{huddleId:ONE_TO_ONE,sinceMs:0})).val?.turns??[]).length;
-const bargeText = "Real quick everyone — what is our current cash runway in months?";
+// Targeted interjection → the router sends it to the specialist (Finn, finance) who answers with the
+// runway figure. (A message containing "everyone" is a BROADCAST and correctly goes to the host — a
+// different, also-valid path; we test the targeted case since "the right agent answers" is the point.)
+const bargeText = "Quick question for Finn — what is our current cash runway in months?";
 const run = await runStandup("barge", { after: 2, text: bargeText });
 const dmAfter = ((await call(FN_POLL,{huddleId:ONE_TO_ONE,sinceMs:0})).val?.turns??[]).length;
 console.log("  order:", run.order.join(" → "));
 
 const opensFirst = run.order[0]==="terry-locke";
 const closesLast = run.order.length>1 && run.order[run.order.length-1]==="terry-locke";
-const answered = run.replies.some(r => /runway/i.test((r.text??"").replace(/\\[nrt]/g," ")));
+// The barge responder should address the finance interjection — allow natural phrasings of "runway".
+const answered = run.replies.some(r => /runway|months? of (cash|runway)|cash (position|on hand)|burn rate/i.test((r.text??"").replace(/\\[nrt]/g," ")));
 const bargeOwners = new Set(run.order.filter(id=>id!=="terry-locke"));
 const dropped = baseOwners.filter(o => !bargeOwners.has(o));
 const noDrop = dropped.length===0;

@@ -1017,9 +1017,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     const runAgentTurn = async (
       nextId: AgentId,
       priorInThisTurn: string,
+      // For a BARGE-IN dispatch, the agent must answer the user's interjection — not the standing
+      // ceremony trigger ("let's run the daily stand-up"). Override the user message (and the
+      // force-tool regexes) with the barge text so the reply addresses what the user actually asked.
+      userTextOverride?: string,
     ): Promise<AgentTurnResult> => {
       const winner = AGENT_BY_ID[nextId]!;
       const agentBackend = agentsCfg[nextId] ?? { backend: "lovable" as const };
+      const userText = userTextOverride ?? data.text;
 
       // Per-agent output buffers. These SHADOW the outer shared arrays/helpers so
       // the (unmodified) dispatch body writes here; the driver merges them into
@@ -1293,7 +1298,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             content: `(context — ${a?.name ?? "another agent"} said): ${m.text}`,
           };
         })
-        .concat([{ role: "user" as const, content: data.text }]);
+        .concat([{ role: "user" as const, content: userText }]);
 
       const perAgentFallbacks: string[] = [];
       const timeSensitiveRe =
@@ -1304,11 +1309,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // route it to schedule_reminder and DON'T also force a task/web-search for the same message.
       const reminderRe =
         /\b(remind me|reminder|notify me|ping me|nudge me|alert me|wake me|set an alarm|alarm|message me (?:in|at|later|tonight|tomorrow)|text me (?:in|at))\b/i;
-      const forceReminder = reminderRe.test(data.text);
+      const forceReminder = reminderRe.test(userText);
       // Only the PRIMARY responder is forced to create the task. Interjectors surface information;
       // forcing them to also create produced duplicate cards (e.g. Troy AND Iris both creating).
-      const forceTaskCreation = !forceReminder && !isInterjector && createTaskRe.test(data.text);
-      const forceWebSearch = !forceReminder && !!agentBackend.webSearch && timeSensitiveRe.test(data.text);
+      const forceTaskCreation = !forceReminder && !isInterjector && createTaskRe.test(userText);
+      const forceWebSearch = !forceReminder && !!agentBackend.webSearch && timeSensitiveRe.test(userText);
 
       function resolveTaskLane(value: unknown): TaskLane {
         const lane = String(value ?? "")
@@ -3020,11 +3025,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // higher floor keeps a late-in-chunk agent from getting a near-zero bound that guarantees a
     // timeout-drop — the pre-wave budget gate re-queues agents there's no room for, so anything that
     // DOES start gets a workable slice. A per-agent timeout still bounds a single pathological agent.
-    const runBounded = (id: AgentId, prior: string): Promise<AgentTurnResult> => {
+    const runBounded = (id: AgentId, prior: string, userTextOverride?: string): Promise<AgentTurnResult> => {
       const floor = chunked ? 8_000 : 2_000;
       const remaining = Math.max(floor, deadlineMs - (Date.now() - turnStartMs));
       return Promise.race([
-        runAgentTurn(id, prior),
+        runAgentTurn(id, prior, userTextOverride),
         new Promise<AgentTurnResult>((resolve) =>
           setTimeout(() => {
             const nm = AGENT_BY_ID[id]?.name ?? id;
@@ -3129,7 +3134,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             const wasSpoken = spoken.has(responder);
             const stillQueued = queue.includes(responder);
             bargeDirectiveById.set(responder, bargeDirective(claimed.text));
-            const r = await runBounded(responder, buildPrior());
+            const r = await runBounded(responder, buildPrior(), claimed.text);
             mergeAgentResult(responder, r, [responder]);
             bargeDirectiveById.delete(responder);
             // Don't burn the responder's own round-robin turn: if they hadn't spoken their lane update
