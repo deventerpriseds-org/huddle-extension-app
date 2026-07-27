@@ -21,7 +21,7 @@ import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
 import { useHuddleStore, type CeremonyTurn, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
 import { useGroupVoice } from "../hooks/useGroupVoice";
-import { sendHuddleMessage } from "../lib/huddle.functions";
+import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates } from "../lib/huddle.functions";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
@@ -318,43 +318,75 @@ function MeetingRoom({
     patchMeeting({ ceremonyStatus: "running", transcript: [] });
     const steps = meeting.ceremonyType === "review_retro" ? ["review", "retro"] : [meeting.ceremonyType];
     let voiceOff = false; // once TTS fails (e.g. no default voice), fall back to text-only silently
-    try {
-      for (const step of steps) {
-        const result = await sendHuddleMessage({
-          data: {
-            text: CEREMONY_TRIGGER[step],
-            huddleId: activeHuddleId,
-            scope: "group",
-            members: meeting.members,
-            history: [],
-            router: { ...cfg.router, ceremonyMode: "round-robin" },
-            agents: cfg.agents,
-            caller,
-            timeZone: tz,
-          },
-        });
-        for (const r of result.replies ?? []) {
-          if (!ceremonyAliveRef.current) return;
-          const agentId = r.agentId as AgentId;
-          addMeetingTurns([{ agentId, text: r.text }]);
-          // Speak it aloud (the stand-up should be heard, not just read). Uses each agent's
-          // ElevenLabs voice — falls back to ELEVENLABS_DEFAULT_VOICE_ID until real ids are set.
-          if (!voiceOff) {
-            setSpeakingId(agentId);
-            try {
-              await speakCeremonyTurn(agentId, r.text);
-            } catch (e) {
-              voiceOff = true;
-              toast.error(
-                e instanceof Error && /voice/i.test(e.message)
-                  ? "No ElevenLabs voice configured — set ELEVENLABS_DEFAULT_VOICE_ID. Continuing in text."
-                  : "Voice playback failed — continuing in text.",
-              );
-            } finally {
-              setSpeakingId(null);
-            }
+
+    // Render + speak newly-arrived ceremony replies in order. `spoken.n` tracks how many we've handled
+    // so a re-poll only processes the new tail (idempotent against the growing durable replies array).
+    const emit = async (reps: { agentId: string; text: string }[], spoken: { n: number }) => {
+      for (let i = spoken.n; i < reps.length; i++) {
+        if (!ceremonyAliveRef.current) return;
+        const r = reps[i];
+        const agentId = r.agentId as AgentId;
+        addMeetingTurns([{ agentId, text: r.text }]);
+        spoken.n = i + 1;
+        // Speak it aloud (the stand-up should be heard, not just read). Uses each agent's ElevenLabs
+        // voice — falls back to ELEVENLABS_DEFAULT_VOICE_ID until real ids are set.
+        if (!voiceOff) {
+          setSpeakingId(agentId);
+          try {
+            await speakCeremonyTurn(agentId, r.text);
+          } catch (e) {
+            voiceOff = true;
+            toast.error(
+              e instanceof Error && /voice/i.test(e.message)
+                ? "No ElevenLabs voice configured — set ELEVENLABS_DEFAULT_VOICE_ID. Continuing in text."
+                : "Voice playback failed — continuing in text.",
+            );
+          } finally {
+            setSpeakingId(null);
           }
         }
+      }
+    };
+
+    try {
+      for (const step of steps) {
+        // DURABLE/CHUNKED, not a single synchronous call. A round-robin ceremony over the full room runs
+        // many agents sequentially and blows the ~45s hosting request ceiling → a synchronous
+        // sendHuddleMessage eventually 500s ("the ceremony couldn't run"). The durable path runs the
+        // ceremony in sub-45s chunks server-side and streams replies; we poll getTurnUpdates and
+        // speak each as it lands. Same infra normal turns use — no request-ceiling timeout.
+        const turnId = `ceremony-${activeHuddleId}-${step}-${Date.now()}`;
+        const payload = {
+          text: CEREMONY_TRIGGER[step],
+          huddleId: activeHuddleId,
+          scope: "group" as const,
+          members: meeting.members,
+          history: [],
+          router: { ...cfg.router, ceremonyMode: "round-robin" as const },
+          agents: cfg.agents,
+          caller,
+          timeZone: tz,
+          turnId,
+        };
+        const enq = await enqueueHuddleTurn({ data: payload });
+        const spoken = { n: 0 };
+        await emit(enq.result?.replies ?? [], spoken);
+        let terminal = enq.status === "done" || enq.status === "error";
+        let guard = 0;
+        // Poll until the turn finishes (or the user leaves). 60 * 4s = 4 min ceiling — a full-room
+        // standup is 2–3 chunks (~1–2 min); the guard just bounds a stuck runner.
+        while (!terminal && ceremonyAliveRef.current && guard++ < 60) {
+          await new Promise((res) => setTimeout(res, 4000));
+          const upd = await getTurnUpdates({ data: { huddleId: activeHuddleId, sinceMs: 0 } });
+          const turn = upd.turns.find((t) => t.id === turnId);
+          if (!turn) continue;
+          await emit(turn.result?.replies ?? turn.replies ?? [], spoken);
+          if (turn.status === "done" || turn.status === "error") {
+            terminal = true;
+            if (turn.status === "error") throw new Error(turn.error || "the ceremony run errored");
+          }
+        }
+        if (!ceremonyAliveRef.current) return;
       }
       patchMeeting({ ceremonyStatus: "done" });
     } catch (err) {
