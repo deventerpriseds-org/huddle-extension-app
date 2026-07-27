@@ -47,7 +47,9 @@ function researchDirective(task: { id: string; title: string; category: string |
     `analysis, the sources you used, and a clear recommendation or concrete next steps. Set task_id to ` +
     `"${task.id}" and folder to "${folder}".\n` +
     `2) In your reply, give the user a substantive summary of what you found and your recommendation — ` +
-    `enough detail to be useful on its own, not just "see the doc".\n` +
+    `enough detail to be useful on its own, not just "see the doc" — and frame the recommendation against ` +
+    `the user's stated goals, making the tie explicit (its impact on their revenue, brand/thought-leadership, ` +
+    `or career).\n` +
     `Almost always you CAN make progress by researching/drafting — do that. Only if you genuinely cannot ` +
     `advance this task on your own (it truly needs the user's decision, a credential, or a real-world/` +
     `capability the team lacks), call flag_blocker with task_id "${task.id}" and the SPECIFIC reason you ` +

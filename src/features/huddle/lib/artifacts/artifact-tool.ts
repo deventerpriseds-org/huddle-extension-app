@@ -9,10 +9,14 @@ export const CREATE_ARTIFACT_TOOL = {
   description:
     "Save your finished work — research findings, a written document, a roadmap, an analysis — as a " +
     "reviewable artifact the user can open and approve. Call this AFTER you've actually done the work. " +
-    "Put the FULL, detailed write-up in `content` as markdown (headings, findings, sources, and a clear " +
-    "recommendation) — not a summary; the document is the durable record. Link it to the task you were " +
-    "working on with `task_id` when you have one. Your chat reply should still give the user a substantive " +
-    "summary of what you found, but the complete detail belongs in the artifact.",
+    "Put the FULL, detailed write-up in `content` as markdown — not a summary; the document is the durable " +
+    "record. Give it the executive-grade STRUCTURE: (1) an Executive conclusion up top, (2) Key findings, " +
+    "each with the evidence/source behind it and your confidence, (3) Analysis — why it matters, causes, " +
+    "implications, (4) Recommendations — prioritized, each with owner, timing, and risk, split into immediate " +
+    "vs near-term vs strategic and flagging anything that needs the user's approval, (5) Risks & assumptions, " +
+    "and (6) Sources. Separate verified facts from assumptions. Link it to the task with `task_id` when you " +
+    "have one. Your chat reply should still give a substantive summary, but the complete structured detail " +
+    "belongs in the artifact.",
   parameters: {
     type: "object",
     properties: {

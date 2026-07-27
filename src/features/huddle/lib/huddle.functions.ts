@@ -114,6 +114,31 @@ const HOUSE_STYLE =
   " Your capabilities are exactly the tools you have this turn — nothing more. If you're asked or assigned something you cannot actually do with those tools (e.g. move money, buy something, take a real-world action only the user can), do NOT pretend, vaguely promise, or invent a result — say plainly in one sentence what you can't do and why. Almost always you CAN still make real progress by researching, analyzing, or drafting — do that instead. If it's a task on the board and you genuinely cannot advance it (it needs the user's decision, a credential, or a capability you don't have), call flag_blocker(task_id, reason) with the specific reason so the user knows exactly what you need." +
   " Never mention files, uploaded files, documents, attachments, or a knowledge base, and never say you searched them or \"couldn't find information in the uploaded files\" — file search is a silent background aid, not something to narrate. If it returns nothing useful, just answer the user directly from what you know, your live tools, and the conversation. Above all, ANSWER THE USER'S ACTUAL LAST MESSAGE: if they correct you (e.g. \"your time zone is wrong\") or ask something specific, address exactly that — never fall back to a canned \"I couldn't find that\" line that ignores what they just said.";
 
+// Executive-grade OUTPUT CONTRACT — the distilled essence of the Huddle agent operating standard
+// (full version: docs/huddle-agent-architecture.md). Appended to EVERY agent on BOTH backends. It raises
+// the SUBSTANCE bar without fighting the house style: chat replies stay concise (HOUSE_STYLE governs form),
+// while any DOCUMENT/ARTIFACT you produce gets the full structured treatment.
+const OPERATING_CONTRACT =
+  "\n\nYou are an accountable member of the user's executive team, not a search box. For any substantive " +
+  "request, think through four levels and let them shape your answer: informative (what the evidence " +
+  "establishes), analytical (why it matters — causes, patterns, implications), actionable (what to do, who " +
+  "owns it, in what order, and how success is measured), and strategic (tradeoffs, risks, opportunities, " +
+  "and the decisions that follow). Never hand over raw information without interpreting its relevance to " +
+  "the user's goals." +
+  " Evidence discipline: base material claims on the most authoritative source available; separate verified " +
+  "facts from assumptions and inferences; flag conflicting or missing evidence; and state a confidence level " +
+  "whenever uncertainty could change the recommendation — do not substitute confident wording for verification." +
+  " Make recommendations decision-ready: the action, the finding it rests on, the rationale, priority, owner, " +
+  "timing, key risks, and your confidence — and separate immediate actions from near-term ones, longer-term " +
+  "strategic moves, and decisions that need the user's approval." +
+  " Finish only when the work is genuinely usable: every requested deliverable exists, claims trace to " +
+  "evidence, uncertainties are disclosed, and the single clearest next action is explicit. Complete every " +
+  "non-blocked part first, then escalate (ask the user) before anything irreversible, external, or financial." +
+  " FORM: in chat, deliver all of this as tight, high-signal prose sized to the question — not headings or " +
+  "long lists. When you produce a document via create_artifact, give it the FULL structure: an executive " +
+  "conclusion, key findings with their evidence, analysis, prioritized recommendations (with owner/timing/" +
+  "risk), risks & assumptions, and the sources you used.";
+
 // Scope-aware ownership hand-off — generated from `agent.capabilities` (agents.ts), NOT
 // hardcoded to any agent or job. Appended to every agent's instructions when the huddle
 // contains at least one exclusive-capability owner. It encodes the two behaviours the user
@@ -764,6 +789,24 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // into each responding agent's prompt. This is what carries context across huddles (e.g. a fact
     // stated in the group channel is available in a later 1:1) without the agent having to ask.
     let memoryQueryVec: number[] | null | undefined;
+    // Turn-level cache of the Executive Profile block (same for all agents this turn; resolved once,
+    // email-scoped). "" when no profile is set → zero prompt overhead. Appended alongside OPERATING_CONTRACT.
+    let execContextBlock: string | undefined;
+    const resolveExecContext = async (): Promise<string> => {
+      if (execContextBlock !== undefined) return execContextBlock;
+      execContextBlock = "";
+      try {
+        const { resolveTaskEmail } = await import("./journey/identity");
+        const em = (await resolveTaskEmail(data.caller ?? {})) ?? data.caller?.entra_email ?? null;
+        if (em) {
+          const { getUserContext, renderExecutiveContext } = await import("./identity/user-context.server");
+          execContextBlock = renderExecutiveContext(await getUserContext(em));
+        }
+      } catch {
+        execContextBlock = "";
+      }
+      return execContextBlock;
+    };
 
     // Normalized titles of tasks already created THIS turn, so multiple responding agents (or a
     // re-run of the same turn) can't create duplicate board cards for one intent. See
@@ -1068,6 +1111,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         }
       }
 
+      const execBlock = await resolveExecContext();
       const appSystem =
         winner.systemPrompt +
         scene +
@@ -1075,7 +1119,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         taskToolInstructions +
         capabilityBlock +
         memoryBlock +
-        HOUSE_STYLE;
+        HOUSE_STYLE +
+        OPERATING_CONTRACT +
+        execBlock;
 
       // Per-agent transcript: the current agent's own prior turns are role=assistant
       // (unprefixed); other agents' turns are surfaced as role=user context so the
@@ -1379,12 +1425,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // it cuts the uncached input tokens per call, which lowers cost + TPM pressure (the throttle
           // that inflates multi-agent latency). Turn-specific directives sitting last also aids
           // instruction adherence via recency. Paired with a per-agent `promptCacheKey` for routing.
+          // execContextBlock is resolved once per turn (appSystem, which runs before this OpenAI branch,
+          // already awaited resolveExecContext). OPERATING_CONTRACT + the profile are both stable
+          // (static / stable-per-user), so they belong in the cache-stable prefix.
           const stableInstructions =
             (effectiveInstructions || winner.systemPrompt) +
             roster +
             taskToolInstructions +
             capabilityBlock +
             HOUSE_STYLE +
+            OPERATING_CONTRACT +
+            (execContextBlock ?? "") +
             ragInstructions +
             webInstructions +
             "\n\n" + PRIORITIZE_SYSTEM_HINT +
