@@ -232,6 +232,19 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
     setHydrated(true);
   }, []);
 
+  // Opening a huddle (mount or switch) lands you at the NEWEST message, like SMS — not at the top
+  // of history. Without this, back-filled/autonomous replies sit below the fold and read as
+  // "missing" until you scroll. Double rAF so it pins after the messages actually paint.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
+    });
+  }, [huddle.id]);
+
   // Reveal the latest message (and the typing indicator) when the transcript
   // grows or a turn starts. Instant + rAF (no smooth-scroll jank), and only when
   // the user is already near the bottom so it never yanks them out of history.

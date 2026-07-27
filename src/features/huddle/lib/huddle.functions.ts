@@ -142,7 +142,13 @@ const OPERATING_CONTRACT =
   " FORM: in chat, deliver all of this as tight, high-signal prose sized to the question — not headings or " +
   "long lists. When you produce a document via create_artifact, give it the FULL structure: an executive " +
   "conclusion, key findings with their evidence, analysis, prioritized recommendations (with owner/timing/" +
-  "risk), risks & assumptions, and the sources you used.";
+  "risk), risks & assumptions, and the sources you used." +
+  " Documents & links: when you save work with create_artifact the app renders it as a clickable chip on " +
+  "your message automatically — so NEVER write your own link to “the document,” never present an external " +
+  "website URL as a document you produced, and never say you compiled, attached, prepared, or created a " +
+  "document unless you actually called create_artifact THIS turn and it succeeded. If you did not save one, " +
+  "just give the findings directly in your message. You may cite a real source URL as a plain reference, " +
+  "but do not dress it up as “the document I put together.”";
 
 // Persona-as-orchestrator layer (Pillar 2). Appended to every PERSONA's instructions (workers get
 // their own charter instead). It tells a persona it leads shared specialists it can delegate to, and
@@ -227,6 +233,21 @@ function replyJaccard(a: string, b: string): number {
 }
 function isEchoOfPrior(text: string, priorReplies: { text: string }[]): boolean {
   return priorReplies.some((r) => replyJaccard(text, r.text) >= 0.72);
+}
+
+// A small model sometimes claims it "compiled a document" and INVENTS a link (often an unrelated
+// external site) instead of calling create_artifact — so no real chip renders and the link is fake
+// (the exact failure the user hit: "access it [here](salesforce.com)"). Prose rules alone don't bind a
+// small model (repo principle: a firing trap is signal → guard in code). When an agent produced NO real
+// artifact this turn AND its reply both claims a produced document AND carries a markdown link, strip
+// the fabricated link down to its anchor text — kills the fake URL, keeps the sentence. Narrow by
+// design (both conditions required) so genuine inline source citations are untouched.
+const DOC_CLAIM_RE =
+  /\b(compil|put together|prepar|assembl|draft|creat|attach|wrote up|written up)\w*\b[^.]{0,40}\b(document|doc|report|write-?up|analysis|brief|file|summary|deck)\b|\b(document|report|write-?up|brief|analysis)\b[^.]{0,30}\b(is\s+)?(available|attached|ready|below|here)\b|\b(access|find|view|download|open|read)\s+it\b/i;
+function sanitizeFabricatedDocLink(text: string): string {
+  if (!/\[[^\]]+\]\(https?:\/\/[^)\s]+\)/.test(text)) return text; // no markdown link → nothing to strip
+  if (!DOC_CLAIM_RE.test(text)) return text; // no "I made a document" claim → leave real citations alone
+  return text.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "$1");
 }
 
 // Cross-cutting tool resilience: EVERY agent tool call is bounded by a timeout and its errors are
@@ -2886,9 +2907,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
         }
       }
+      // Backstop the fabricated-document-link failure: if this agent saved NO real artifact this turn
+      // but its text claims a produced document and carries a markdown link, that link is invented —
+      // strip it to plain text so the user never gets a fake "open the document" link.
+      const safeText = replyArtifacts.length === 0 ? sanitizeFabricatedDocLink(finalText) : finalText;
       replies.push({
         agentId: nextId,
-        text: finalText,
+        text: safeText,
         fallbackNotes: outcome.perAgentFallbacks.length > 0 ? outcome.perAgentFallbacks : undefined,
         artifacts: replyArtifacts.length ? replyArtifacts : undefined,
       });
