@@ -172,7 +172,7 @@ export function ownerDirective(type: CeremonyType, lane: LaneReport): string {
         : type === "planning"
           ? "Propose what to take on next in your lane from the up-next/overdue items, hardest-or-soonest first. 1–2 sentences."
           : "Report what your lane delivered (the done items) — demo-ready wins. 1–2 sentences.";
-  return `\n\nCEREMONY — you are giving YOUR lane's update in a live ${VERB[type]} round-robin (the scrum master will close). ${frame} Use ONLY these real facts about your lane (${lane.category}); do NOT invent tasks, and do NOT comment on other lanes:
+  return `\n\nCEREMONY — the scrum master has OPENED this live ${VERB[type]} and handed off to the team; give YOUR lane's update in the round-robin. ${frame} Use ONLY these real facts about your lane (${lane.category}); do NOT invent tasks, and do NOT comment on other lanes:
 - done: ${fmtLines(lane.done)}
 - up next: ${fmtLines(lane.upNext)}
 - overdue: ${fmtLines(lane.overdue)}
@@ -191,6 +191,21 @@ function reportDigest(report: CeremonyReport): string {
     ? report.blockers.map((b) => `- ${b.category}: “${b.title}” (${b.why})`).join("\n")
     : "- none";
   return `Lanes:\n${laneLines || "- (no activity)"}\n\nBlockers needing the user:\n${blockerLines}`;
+}
+
+/** Terry's OPENING turn: he goes first — greets, frames the ceremony, surfaces the blockers that
+ *  need the user, then hands off to the lane owners. (Users expect the scrum master to open a
+ *  stand-up and pass it along, not for a lane owner to just start talking.) */
+export function openerDirective(type: CeremonyType, report: CeremonyReport): string {
+  const open =
+    type === "standup"
+      ? "Open the stand-up: greet the team in one line, give a one-sentence read of where things stand, call out any blockers that need the user's decision (or say there are none), then hand off by inviting the lane owners to give their updates."
+      : type === "retro"
+        ? "Open the retro: greet the team, frame the sprint in one line, then hand off by inviting each lane owner to share what went well and what to improve."
+        : type === "planning"
+          ? "Open sprint planning: greet the team, note the overall load in one line, then hand off by inviting each lane owner to propose what to take on."
+          : "Open the sprint review: greet the team, frame what we set out to ship, then hand off by inviting each lane owner to demo what their lane delivered.";
+  return `\n\nCEREMONY — you are the scrum master OPENING this ${VERB[type]}. You go FIRST, before anyone else has spoken. ${open} Keep it to 2–3 short sentences. Use ONLY the real data below; do NOT give the lane updates yourself (each owner will do their own), and do not invent progress.\n\n${reportDigest(report)}`;
 }
 
 /** Terry's closing turn after the round-robin: synthesize + surface blockers to the user. */
@@ -236,15 +251,17 @@ export function lanesByOwner(report: CeremonyReport): Map<AgentId, LaneReport> {
   return m;
 }
 
-/** Ordered participants for a round-robin: lane owners with activity, then the host to close. */
+/** Ordered participants for a round-robin: the HOST OPENS (goes first), then each lane owner with
+ *  activity gives their update. The scrum master framing the meeting and handing off is what users
+ *  expect — not a lane owner abruptly starting. */
 export function roundRobinParticipants(report: CeremonyReport, members: AgentId[]): AgentId[] {
   const owners: AgentId[] = [];
   for (const lane of report.lanes) {
     if (!owners.includes(lane.owner) && members.includes(lane.owner)) owners.push(lane.owner);
   }
   const host = members.includes(CEREMONY_HOST) ? [CEREMONY_HOST] : [];
-  // Host closes; ensure it's last even if it also owns a lane.
-  return [...owners.filter((o) => o !== CEREMONY_HOST), ...host];
+  // Host first (opener); lane owners follow. Host is de-duped from the owners list so it speaks once.
+  return [...host, ...owners.filter((o) => o !== CEREMONY_HOST)];
 }
 
 export { CEREMONY_HOST };

@@ -13,6 +13,7 @@ import {
   lanesByOwner,
   roundRobinParticipants,
   ownerDirective,
+  openerDirective,
   closerDirective,
   narrateDirective,
   CEREMONY_WINDOW_HOURS,
@@ -762,7 +763,8 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           const participants = roundRobinParticipants(report, data.members);
           const owners = lanesByOwner(report);
           for (const p of participants) {
-            if (p === CEREMONY_HOST) ceremonyDirectiveById.set(p, closerDirective(ceremonyType, report));
+            // Host OPENS the ceremony (first in `participants`); lane owners then give their updates.
+            if (p === CEREMONY_HOST) ceremonyDirectiveById.set(p, openerDirective(ceremonyType, report));
             else {
               const lane = owners.get(p);
               if (lane) ceremonyDirectiveById.set(p, ownerDirective(ceremonyType, lane));

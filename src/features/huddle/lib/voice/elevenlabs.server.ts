@@ -165,6 +165,22 @@ export async function getSignedUrl(elAgentId: string): Promise<string> {
 // fidelity for ~75ms first-byte, which is what keeps multi-agent turns feeling live.
 const TTS_MODEL = (process.env.ELEVENLABS_TTS_MODEL ?? "").trim() || "eleven_flash_v2_5";
 
+// Voice rendering settings. Without these, ElevenLabs uses the voice's saved defaults, which on the
+// Flash model read flat/robotic. Slightly lower stability + speaker boost make it more natural and
+// less monotone; `speed` fixes "too slow" (1.0 = normal, >1 faster). All env-tunable so the feel can
+// be dialed in from SWA app settings WITHOUT a code change / redeploy — confirm by ear and adjust.
+const num = (v: string | undefined, d: number) => {
+  const n = Number((v ?? "").trim());
+  return Number.isFinite(n) ? n : d;
+};
+const VOICE_SETTINGS = {
+  stability: num(process.env.ELEVENLABS_TTS_STABILITY, 0.4),
+  similarity_boost: num(process.env.ELEVENLABS_TTS_SIMILARITY, 0.8),
+  style: num(process.env.ELEVENLABS_TTS_STYLE, 0.3),
+  use_speaker_boost: (process.env.ELEVENLABS_TTS_SPEAKER_BOOST ?? "true").trim() !== "false",
+  speed: num(process.env.ELEVENLABS_TTS_SPEED, 1.0),
+};
+
 /**
  * One-shot text→speech in a given agent's voice, for the uniform streaming group
  * meeting (as opposed to the Conversational-AI orb used for 1:1). Returns raw mp3
@@ -181,7 +197,7 @@ export async function textToSpeech(text: string, agentVoiceId?: string): Promise
     {
       method: "POST",
       headers: { "xi-api-key": key, "content-type": "application/json" },
-      body: JSON.stringify({ text, model_id: TTS_MODEL }),
+      body: JSON.stringify({ text, model_id: TTS_MODEL, voice_settings: VOICE_SETTINGS }),
     },
   );
   if (!res.ok) {

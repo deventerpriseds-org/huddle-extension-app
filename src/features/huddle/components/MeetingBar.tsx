@@ -203,6 +203,9 @@ function MeetingRoom({
   const [showCaptions, setShowCaptions] = useState(true);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  // Live status line during a ceremony run (instrumentation): "Gathering the team… 8s" / "Sam Trent is
+  // speaking…" — so the room never looks frozen while the server streams turns.
+  const [phase, setPhase] = useState("");
   // Which agent is speaking during a scripted ceremony run (drives the spotlight while Start plays).
   const [speakingId, setSpeakingId] = useState<AgentId | null>(null);
   const ceremonyAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -328,6 +331,7 @@ function MeetingRoom({
         const agentId = r.agentId as AgentId;
         addMeetingTurns([{ agentId, text: r.text }]);
         spoken.n = i + 1;
+        setPhase(`${AGENT_BY_ID[agentId]?.name ?? "Someone"} is speaking…`);
         // Speak it aloud (the stand-up should be heard, not just read). Uses each agent's ElevenLabs
         // voice — falls back to ELEVENLABS_DEFAULT_VOICE_ID until real ids are set.
         if (!voiceOff) {
@@ -348,13 +352,14 @@ function MeetingRoom({
       }
     };
 
+    const nameOf = (id: string) => AGENT_BY_ID[id as AgentId]?.name ?? "the team";
     try {
       for (const step of steps) {
-        // DURABLE/CHUNKED, not a single synchronous call. A round-robin ceremony over the full room runs
-        // many agents sequentially and blows the ~45s hosting request ceiling → a synchronous
-        // sendHuddleMessage eventually 500s ("the ceremony couldn't run"). The durable path runs the
-        // ceremony in sub-45s chunks server-side and streams replies; we poll getTurnUpdates and
-        // speak each as it lands. Same infra normal turns use — no request-ceiling timeout.
+        // DURABLE/CHUNKED, not a single synchronous call. A round-robin over the full room runs many
+        // agents sequentially and blows the ~45s hosting ceiling → a sync call 500s. The server runs it
+        // in sub-45s chunks AND streams each turn to the store the instant it lands (status stays
+        // 'running'). So we fire the durable turn and immediately POLL FROM t=0 — the first voice shows
+        // in ~2s, not after a ~30s blank chunk. A live `phase` line shows what's happening throughout.
         const turnId = `ceremony-${activeHuddleId}-${step}-${Date.now()}`;
         const payload = {
           text: CEREMONY_TRIGGER[step],
@@ -368,28 +373,44 @@ function MeetingRoom({
           timeZone: tz,
           turnId,
         };
-        const enq = await enqueueHuddleTurn({ data: payload });
+        const stepStart = Date.now();
+        setPhase("Gathering the team…");
+        // Fire the durable turn but DON'T await the whole first chunk before rendering — poll alongside it.
+        let enqErr: unknown = null;
+        const enqP = enqueueHuddleTurn({ data: payload }).catch((e) => {
+          enqErr = e;
+          return null;
+        });
         const spoken = { n: 0 };
-        await emit(enq.result?.replies ?? [], spoken);
-        let terminal = enq.status === "done" || enq.status === "error";
+        let terminal = false;
         let guard = 0;
-        // Poll until the turn finishes (or the user leaves). 60 * 4s = 4 min ceiling — a full-room
-        // standup is 2–3 chunks (~1–2 min); the guard just bounds a stuck runner.
-        while (!terminal && ceremonyAliveRef.current && guard++ < 60) {
-          await new Promise((res) => setTimeout(res, 4000));
-          const upd = await getTurnUpdates({ data: { huddleId: activeHuddleId, sinceMs: 0 } });
-          const turn = upd.turns.find((t) => t.id === turnId);
-          if (!turn) continue;
-          await emit(turn.result?.replies ?? turn.replies ?? [], spoken);
-          if (turn.status === "done" || turn.status === "error") {
+        while (!terminal && ceremonyAliveRef.current && guard++ < 150) {
+          const upd = await getTurnUpdates({ data: { huddleId: activeHuddleId, sinceMs: 0 } }).catch(() => null);
+          const turn = upd?.turns?.find((t) => t.id === turnId);
+          const reps = turn ? (turn.result?.replies ?? turn.replies ?? []) : [];
+          if (reps.length > spoken.n) {
+            await emit(reps, spoken); // speaks each in order; phase set to "<name> is speaking…"
+          } else {
+            const secs = Math.round((Date.now() - stepStart) / 1000);
+            setPhase(spoken.n === 0 ? `Gathering the team… ${secs}s` : `Waiting for the next update… ${secs}s`);
+          }
+          if (turn && (turn.status === "done" || turn.status === "error")) {
+            await emit(turn.result?.replies ?? turn.replies ?? [], spoken); // drain the tail
             terminal = true;
             if (turn.status === "error") throw new Error(turn.error || "the ceremony run errored");
+            break;
           }
+          if (!terminal) await new Promise((res) => setTimeout(res, 2000));
         }
+        await enqP;
+        // Hard enqueue failure (never even created the turn) and nothing streamed → surface it.
+        if (enqErr && spoken.n === 0) throw enqErr instanceof Error ? enqErr : new Error(String(enqErr));
         if (!ceremonyAliveRef.current) return;
       }
+      setPhase("");
       patchMeeting({ ceremonyStatus: "done" });
     } catch (err) {
+      setPhase("");
       patchMeeting({ ceremonyStatus: "error" });
       toast.error(err instanceof Error ? err.message : "The ceremony couldn't run. Try again.");
     }
@@ -454,7 +475,13 @@ function MeetingRoom({
                 {caption}
               </div>
             )}
-            {isCeremony && !turns.length && (
+            {isCeremony && status === "running" && phase && (
+              <div className="flex items-center gap-2 text-center text-sm text-muted-foreground">
+                <Loader2 size={13} className="animate-spin" />
+                <span>{phase}</span>
+              </div>
+            )}
+            {isCeremony && !turns.length && status !== "running" && (
               <div className="text-center text-sm text-muted-foreground">
                 {meeting.members.length
                   ? `${meeting.members.length} in the room. Start the stand-up, or just talk.`
