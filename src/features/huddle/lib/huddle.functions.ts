@@ -102,6 +102,11 @@ const Input = z.object({
   // though this agent didn't create them — used by a delegation INTEGRATION turn to reference the
   // specialist documents its workers produced. Purely presentational; carried in the durable payload.
   attachArtifacts: z.array(z.object({ id: z.string(), name: z.string() })).max(12).optional(),
+  // System-originated turn (autowork research, standup/grooming digest, an owner follow-up, a delegation
+  // integration) — NOT a real user message. Its `text` is an internal DIRECTIVE, so the 1:1 pass-along
+  // and lane-deferral machinery must NOT run on it: doing so mis-reads the directive as "a user ask in
+  // the wrong lane" and spawns follow-ups that re-trigger follow-ups (the notification-barrage loop).
+  internal: z.boolean().optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
@@ -926,6 +931,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           agents: data.agents,
           timeZone: data.timeZone,
           caller: data.caller,
+          internal: true, // CRUCIAL: a follow-up must never spawn another follow-up (kills the loop)
         };
         const { enqueueTurn } = await import("./tasks/turns.server");
         const fresh = await enqueueTurn(id, ownerHuddle, email, followupPayload);
@@ -1133,7 +1139,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // budget" → Finn), tell THIS agent to defer and bring them in, even though that owner isn't in
       // the room. Deterministic + data-driven, so it covers every lane, not just the tool-owned ones.
       let laneDirective = "";
-      if (data.scope !== "group") {
+      if (data.scope !== "group" && !data.internal) {
         const owner = laneOwnerFor(data.text, nextId);
         if (owner && owner.id !== nextId) {
           const o = AGENT_BY_ID[owner.id];
@@ -2947,7 +2953,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // lane owner). If that owner isn't the addressed agent, enqueue a backend turn so they reply in
       // THEIR OWN DM — which fires the existing away-notification. Once per owner per turn; 1:1 only
       // (group turns bring the owner in via the normal re-queue above).
-      if (data.scope !== "group") {
+      // Only for a GENUINE user 1:1 message. Internal turns (autowork/standup/grooming/a prior
+      // follow-up/an integration) carry a directive as their `text`; running this on them mis-resolves a
+      // lane owner and spawns follow-ups that chain into a notification barrage (measured: autowork→Liam
+      // →Sam loop; Terry→Cole→Iris→Ezra chain). Gating on !data.internal confines the pass-along to real
+      // user asks and stops a follow-up from ever spawning another follow-up.
+      if (data.scope !== "group" && !data.internal) {
         const ownerId = capabilityOwnerFor(data.text)?.agent.id ?? laneOwnerFor(data.text, nextId)?.id ?? null;
         if (ownerId && ownerId !== nextId && !followupDelivered.has(ownerId)) {
           followupDelivered.add(ownerId);
@@ -3439,6 +3450,7 @@ async function maybeEnqueueIntegration(
     caller: workerPayload.caller,
     attachArtifacts: attach.length ? attach : undefined,
     notify: "push",
+    internal: true, // the persona is delivering the integrated answer — it must not defer/pass along
   };
   const fresh = await enqueueTurn(integrationId, originHuddleId, userEmail, integrationPayload);
   if (fresh) void kickNextChunk(integrationId);

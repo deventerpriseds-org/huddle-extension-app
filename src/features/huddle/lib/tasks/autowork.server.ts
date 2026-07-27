@@ -85,6 +85,9 @@ function turnPayload(task: { assigned_agent: string | null }, directive: string,
     // Triage: a routine research result should NOT buzz the phone — it lands in-app and rolls into the
     // standup digest. Only genuine blockers/decisions push (see surfaceBlocked).
     notify: "batch",
+    // System-originated: the assigned agent should DO the research, not defer/pass it along (the
+    // directive text would otherwise trip the 1:1 lane-handoff → follow-up barrage).
+    internal: true,
   };
 }
 
@@ -108,6 +111,7 @@ async function surfaceBlocked(opts: { email: string; tz: string; caller: Caller;
     caller: opts.caller,
     // Blocked items need the user's input → this one DOES buzz the phone.
     notify: "push",
+    internal: true, // system-originated directive — no pass-along/deferral machinery
   };
   const { enqueueTurn } = await import("./turns.server");
   await enqueueTurn(`autowork-blocked-${opts.runId}`, `dm-${COORDINATOR}`, opts.email, payload);
