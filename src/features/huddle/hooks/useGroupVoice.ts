@@ -138,6 +138,10 @@ export function useGroupVoice(): GroupVoiceController {
       setPhase("thinking");
       setPartial("");
       let userText = "";
+      // Distinguish a genuine transcription FAILURE from real silence — both used to collapse to
+      // the same "" and look identical to the user (mic seemingly not working); only the former
+      // should surface an error, the latter is just normal listening.
+      let sttFailed = false;
       try {
         const bytes = new Uint8Array(await blob.arrayBuffer());
         let bin = "";
@@ -146,11 +150,17 @@ export function useGroupVoice(): GroupVoiceController {
         const stt = await transcribeAudio({
           data: { audioBase64: btoa(bin), mimeType: blob.type || "audio/webm" },
         });
-        userText = stt.ok ? stt.text.trim() : "";
+        if (stt.ok) userText = stt.text.trim();
+        else sttFailed = true;
       } catch {
-        userText = "";
+        sttFailed = true;
       }
       if (!runningRef.current) return;
+      if (sttFailed) {
+        setError("Didn't catch that — try again.");
+        setPhase("listening");
+        return;
+      }
       if (userText.length < 2) {
         setPhase("listening");
         return;
@@ -160,6 +170,7 @@ export function useGroupVoice(): GroupVoiceController {
 
       // Route the turn to the whole room via the existing group engine.
       let replies: { agentId: AgentId; text: string }[] = [];
+      let turnFailed = false;
       try {
         const backends = useBackendsStore.getState().config;
         const result = await sendHuddleMessage({
@@ -178,8 +189,14 @@ export function useGroupVoice(): GroupVoiceController {
         replies = (result.replies ?? []).map((r) => ({ agentId: r.agentId as AgentId, text: r.text }));
       } catch {
         replies = [];
+        turnFailed = true;
       }
       if (!runningRef.current) return;
+      if (turnFailed) {
+        setError("Couldn't reach the team just now — try again.");
+        setPhase("listening");
+        return;
+      }
 
       // Voice each reply in turn; barge-in aborts the remaining queue.
       bargeRef.current = false;

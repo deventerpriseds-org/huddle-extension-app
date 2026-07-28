@@ -263,6 +263,18 @@ function stripAgentReplyLinks(text: string): string {
   });
 }
 
+// Backstop for the "I looked in your files" narration — house-style already bans it in prose, but
+// OpenAI's own file_search tool has a trained tendency to narrate a miss regardless (a prompt-only
+// rule doesn't reliably bind against a built-in tool's own habit — same reason stripAgentReplyLinks
+// exists above for fake document links, a different prose rule the model also didn't reliably follow).
+// Strips just the file-mention clause so the sentence still reads naturally, e.g. "I couldn't find the
+// email in the uploaded files." -> "I couldn't find the email." Confirmed live across iris-chase,
+// finn-reid, and cam-post.
+const FILE_MENTION_CLAUSE = /\s*\b(?:in|from|within)\s+(?:the|your|any|our)?\s*(?:uploaded\s+)?(?:files?|documents?|knowledge\s*base|attachments?)\b/gi;
+function stripFileMentionNarration(text: string): string {
+  return text.replace(FILE_MENTION_CLAUSE, "");
+}
+
 // Per-agent WIP-limited board flow: an agent's DOING task moves to IN_REVIEW the instant it actually
 // finishes its work (saves an artifact) — never to DONE. DONE is set ONLY by the user, by hand, in the
 // board UI (see docs on the flow in tasks/autowork.server.ts). Best-effort/non-fatal, mirroring
@@ -719,6 +731,17 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       return resultObj;
     };
 
+    // Turn-level memoized caller-email resolve — several independent spots (ceremony detection,
+    // resolveExecContext) used to each call resolveTaskEmail themselves, paying that round-trip
+    // twice per turn. One resolve, shared.
+    let resolvedCallerEmail: string | null | undefined;
+    const resolveCallerEmail = async (): Promise<string | null> => {
+      if (resolvedCallerEmail !== undefined) return resolvedCallerEmail;
+      const { resolveTaskEmail } = await import("./journey/identity");
+      resolvedCallerEmail = (await resolveTaskEmail(data.caller ?? {})) ?? data.caller?.entra_email ?? null;
+      return resolvedCallerEmail;
+    };
+
     // ---- Scrum ceremonies ----
     // A ceremony request (stand-up, retro, sprint planning, sprint review) overrides
     // normal routing: participants become the lane owners + the scrum master, each fed
@@ -737,8 +760,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     if (ceremonyType) {
       // Resolve the sign-in email (possibly an alias) to the canonical journey email the mirror
       // is keyed on — otherwise an aliased login grounds the ceremony in an empty task set.
-      const { resolveTaskEmail } = await import("./journey/identity");
-      const email = (await resolveTaskEmail(data.caller)) ?? data.caller?.entra_email;
+      const email = await resolveCallerEmail();
       if (!email) {
         const host = data.members.includes(CEREMONY_HOST) ? CEREMONY_HOST : routed.winners[0];
         return finalize({
@@ -891,8 +913,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       if (execContextBlock !== undefined) return execContextBlock;
       execContextBlock = "";
       try {
-        const { resolveTaskEmail } = await import("./journey/identity");
-        const em = (await resolveTaskEmail(data.caller ?? {})) ?? data.caller?.entra_email ?? null;
+        const em = await resolveCallerEmail();
         if (em) {
           const { getUserContext, renderExecutiveContext } = await import("./identity/user-context.server");
           execContextBlock = renderExecutiveContext(await getUserContext(em));
@@ -2972,7 +2993,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // Backstop the fabricated-document-link failure (even when a REAL artifact was saved, the model may
       // still hand-author a fake/placeholder link in prose). The chip is the only real document link; strip
       // any self-authored markdown link from the text so the user never sees a fake "open the document" link.
-      const safeText = stripAgentReplyLinks(finalText);
+      // Also backstop file_search's own narration tendency (house-style bans it in prose; the model still
+      // does it — see stripFileMentionNarration above).
+      const safeText = stripFileMentionNarration(stripAgentReplyLinks(finalText));
       replies.push({
         agentId: nextId,
         text: safeText,

@@ -8,7 +8,7 @@ export const PRIORITIZE_TOOL = {
   type: "function",
   name: "prioritize",
   description:
-    "Read and rank the user's real tasks from their live task data (priority, due dates, staleness, keywords). This is the ONLY way to answer questions about the user's tasks, backlog, agenda, priorities, or what's next — never answer those from memory or 'uploaded files'. Use `view` to pick which slice, optionally scoped to a `category`. Returns a scored, ordered list.",
+    "Read and rank the user's real tasks from their live task data (priority, due dates, staleness, keywords). This is the ONLY way to answer questions about the user's tasks, backlog, agenda, priorities, or what's next — never answer those from memory or a guess. Use `view` to pick which slice, optionally scoped to a `category`. Returns a scored, ordered list.",
   parameters: {
     type: "object",
     additionalProperties: false,
