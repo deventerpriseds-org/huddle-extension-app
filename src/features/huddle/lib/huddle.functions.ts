@@ -124,7 +124,7 @@ const HOUSE_STYLE =
   " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it \"has been sent\" or \"is done\" when it has not. Email specifically: text you write in the chat is \"draft text\" — only say you \"saved a draft to your inbox\" if you called the create_email_draft tool and it returned success, and only say an email was \"sent\" if send_email returned success." +
   " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message." +
   " Your capabilities are exactly the tools you have this turn — nothing more. If you're asked or assigned something you cannot actually do with those tools (e.g. move money, buy something, take a real-world action only the user can), do NOT pretend, vaguely promise, or invent a result — say plainly in one sentence what you can't do and why. Almost always you CAN still make real progress by researching, analyzing, or drafting — do that instead. If it's a task on the board and you genuinely cannot advance it (it needs the user's decision, a credential, or a capability you don't have), call flag_blocker(task_id, reason) with the specific reason so the user knows exactly what you need." +
-  " Never mention files, uploaded files, documents, attachments, or a knowledge base, and never say you searched them or \"couldn't find information in the uploaded files\" — file search is a silent background aid, not something to narrate. If it returns nothing useful, just answer the user directly from what you know, your live tools, and the conversation. Above all, ANSWER THE USER'S ACTUAL LAST MESSAGE: if they correct you (e.g. \"your time zone is wrong\") or ask something specific, address exactly that — never fall back to a canned \"I couldn't find that\" line that ignores what they just said.";
+  " A background lookup that comes up empty should be invisible to the user: never narrate that you searched, where you looked, or that something wasn't found — just answer directly from what you know, your live tools, and the conversation. Above all, ANSWER THE USER'S ACTUAL LAST MESSAGE: if they correct you (e.g. \"your time zone is wrong\") or ask something specific, address exactly that instead of falling back to a generic non-answer that ignores what they just said.";
 
 // Executive-grade OUTPUT CONTRACT — the distilled essence of the Huddle agent operating standard
 // (full version: docs/huddle-agent-architecture.md). Appended to EVERY agent on BOTH backends. It raises
@@ -263,13 +263,14 @@ function stripAgentReplyLinks(text: string): string {
   });
 }
 
-// Backstop for the "I looked in your files" narration — house-style already bans it in prose, but
-// OpenAI's own file_search tool has a trained tendency to narrate a miss regardless (a prompt-only
-// rule doesn't reliably bind against a built-in tool's own habit — same reason stripAgentReplyLinks
-// exists above for fake document links, a different prose rule the model also didn't reliably follow).
-// Strips just the file-mention clause so the sentence still reads naturally, e.g. "I couldn't find the
-// email in the uploaded files." -> "I couldn't find the email." Confirmed live across iris-chase,
-// finn-reid, and cam-post.
+// Backstop for the "I looked in your files" narration. Root cause traced to our OWN HOUSE_STYLE prompt
+// (below), which used to quote the banned phrase verbatim as a "don't say this" example — a model will
+// readily echo a quoted example even when it's framed as prohibited. HOUSE_STYLE no longer quotes it, but
+// this deterministic regex stays as a defense-in-depth backstop (a prose-only rule is never a hard
+// guarantee against any model/tool combination) — same reason stripAgentReplyLinks exists above for fake
+// document links, a different prose rule the model also didn't reliably follow). Strips just the
+// file-mention clause so the sentence still reads naturally, e.g. "I couldn't find the email in the
+// uploaded files." -> "I couldn't find the email." Confirmed live across iris-chase, finn-reid, and cam-post.
 const FILE_MENTION_CLAUSE = /\s*\b(?:in|from|within)\s+(?:the|your|any|our)?\s*(?:uploaded\s+)?(?:files?|documents?|knowledge\s*base|attachments?)\b/gi;
 function stripFileMentionNarration(text: string): string {
   return text.replace(FILE_MENTION_CLAUSE, "");
