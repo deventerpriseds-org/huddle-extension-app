@@ -502,9 +502,9 @@ function MeetingRoom({
         </Button>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {/* Stage — compact/content-height on mobile, fills the left column on desktop */}
-        <div className="flex min-h-0 flex-col lg:flex-1">
+        <div className="flex min-h-0 flex-col md:flex-1">
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-4 py-5 sm:px-8">
             <SpeakerSpotlight agent={spotlightAgent} speaking={speaking} />
             {showCaptions && caption && (
@@ -584,7 +584,7 @@ function MeetingRoom({
         </div>
 
         {/* Side panel — fills remaining height on mobile (transcript scrolls), fixed rail on desktop */}
-        <aside className="flex min-h-0 flex-1 flex-col border-t border-hairline lg:w-[360px] lg:flex-none lg:border-l lg:border-t-0">
+        <aside className="flex min-h-0 flex-1 flex-col border-t border-hairline md:w-[360px] md:flex-none md:border-l md:border-t-0">
           {panel === "people" ? (
             <PeoplePanel meeting={meeting} onToggle={toggleAgent} spotlightId={spotlightId} onSpotlight={setSpeaker} />
           ) : (

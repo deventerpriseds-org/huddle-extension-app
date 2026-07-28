@@ -195,7 +195,7 @@ export function HuddleApp() {
 
 
       {/* Desktop context panel */}
-      <div className="hidden h-full lg:flex">
+      <div className="hidden h-full md:flex">
         <ContextPanel />
       </div>
 
