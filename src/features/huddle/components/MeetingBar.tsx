@@ -18,10 +18,10 @@ import {
   Video,
 } from "lucide-react";
 import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
-import { useHuddleStore, type CeremonyTurn, type MeetingState } from "../store";
+import { useHuddleStore, type CeremonyKind, type CeremonyTurn, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
 import { useGroupVoice } from "../hooks/useGroupVoice";
-import { sendHuddleMessage } from "../lib/huddle.functions";
+import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates, bargeCeremony } from "../lib/huddle.functions";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
@@ -199,14 +199,33 @@ function MeetingRoom({
   const isCeremony = !!meeting.ceremonyType;
   const status = meeting.ceremonyStatus;
 
+  // Where this meeting's turns are written. A ceremony ALWAYS runs in its own dedicated channel
+  // (`ceremony-<type>`), never the huddle that happened to be open — that's what kept spilling a
+  // full stand-up into an agent's 1:1. Any other multi-agent virtual meeting also refuses to write
+  // into a `dm-*` thread (falls back to the group channel). Non-ceremony calls in a real channel
+  // stay put.
+  const ceremonyChannel = (t: CeremonyKind) => `ceremony-${t === "review_retro" ? "review" : t}`;
+  const meetingHuddleId =
+    isCeremony && meeting.ceremonyType
+      ? ceremonyChannel(meeting.ceremonyType)
+      : isVirtual && activeHuddleId.startsWith("dm-")
+        ? "all-members"
+        : activeHuddleId;
+
   const [panel, setPanel] = useState<Panel>("transcript");
   const [showCaptions, setShowCaptions] = useState(true);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  // Live status line during a ceremony run (instrumentation): "Gathering the team… 8s" / "Sam Trent is
+  // speaking…" — so the room never looks frozen while the server streams turns.
+  const [phase, setPhase] = useState("");
   // Which agent is speaking during a scripted ceremony run (drives the spotlight while Start plays).
   const [speakingId, setSpeakingId] = useState<AgentId | null>(null);
   const ceremonyAudioRef = useRef<HTMLAudioElement | null>(null);
   const ceremonyAliveRef = useRef(true);
+  // The durable turnId of the CURRENTLY running ceremony step — lets a user message barge into it
+  // (routed to bargeCeremony) instead of firing an uncoordinated parallel turn. Null when idle.
+  const activeCeremonyTurnRef = useRef<string | null>(null);
   useEffect(() => {
     ceremonyAliveRef.current = true;
     return () => {
@@ -281,7 +300,7 @@ function MeetingRoom({
         void groupVoice.start({
           members: meeting.members,
           caller,
-          huddleId: activeHuddleId,
+          huddleId: meetingHuddleId,
           onTurn: (t) => addMeetingTurns([t]),
         });
       } else {
@@ -318,46 +337,99 @@ function MeetingRoom({
     patchMeeting({ ceremonyStatus: "running", transcript: [] });
     const steps = meeting.ceremonyType === "review_retro" ? ["review", "retro"] : [meeting.ceremonyType];
     let voiceOff = false; // once TTS fails (e.g. no default voice), fall back to text-only silently
-    try {
-      for (const step of steps) {
-        const result = await sendHuddleMessage({
-          data: {
-            text: CEREMONY_TRIGGER[step],
-            huddleId: activeHuddleId,
-            scope: "group",
-            members: meeting.members,
-            history: [],
-            router: { ...cfg.router, ceremonyMode: "round-robin" },
-            agents: cfg.agents,
-            caller,
-            timeZone: tz,
-          },
-        });
-        for (const r of result.replies ?? []) {
-          if (!ceremonyAliveRef.current) return;
-          const agentId = r.agentId as AgentId;
-          addMeetingTurns([{ agentId, text: r.text }]);
-          // Speak it aloud (the stand-up should be heard, not just read). Uses each agent's
-          // ElevenLabs voice — falls back to ELEVENLABS_DEFAULT_VOICE_ID until real ids are set.
-          if (!voiceOff) {
-            setSpeakingId(agentId);
-            try {
-              await speakCeremonyTurn(agentId, r.text);
-            } catch (e) {
-              voiceOff = true;
-              toast.error(
-                e instanceof Error && /voice/i.test(e.message)
-                  ? "No ElevenLabs voice configured — set ELEVENLABS_DEFAULT_VOICE_ID. Continuing in text."
-                  : "Voice playback failed — continuing in text.",
-              );
-            } finally {
-              setSpeakingId(null);
-            }
+
+    // Render + speak newly-arrived ceremony replies in order. `spoken.n` tracks how many we've handled
+    // so a re-poll only processes the new tail (idempotent against the growing durable replies array).
+    const emit = async (reps: { agentId: string; text: string }[], spoken: { n: number }) => {
+      for (let i = spoken.n; i < reps.length; i++) {
+        if (!ceremonyAliveRef.current) return;
+        const r = reps[i];
+        const agentId = r.agentId as AgentId;
+        addMeetingTurns([{ agentId, text: r.text }]);
+        spoken.n = i + 1;
+        setPhase(`${AGENT_BY_ID[agentId]?.name ?? "Someone"} is speaking…`);
+        // Speak it aloud (the stand-up should be heard, not just read). Uses each agent's ElevenLabs
+        // voice — falls back to ELEVENLABS_DEFAULT_VOICE_ID until real ids are set.
+        if (!voiceOff) {
+          setSpeakingId(agentId);
+          try {
+            await speakCeremonyTurn(agentId, r.text);
+          } catch (e) {
+            voiceOff = true;
+            toast.error(
+              e instanceof Error && /voice/i.test(e.message)
+                ? "No ElevenLabs voice configured — set ELEVENLABS_DEFAULT_VOICE_ID. Continuing in text."
+                : "Voice playback failed — continuing in text.",
+            );
+          } finally {
+            setSpeakingId(null);
           }
         }
       }
+    };
+
+    const nameOf = (id: string) => AGENT_BY_ID[id as AgentId]?.name ?? "the team";
+    try {
+      for (const step of steps) {
+        // DURABLE/CHUNKED, not a single synchronous call. A round-robin over the full room runs many
+        // agents sequentially and blows the ~45s hosting ceiling → a sync call 500s. The server runs it
+        // in sub-45s chunks AND streams each turn to the store the instant it lands (status stays
+        // 'running'). So we fire the durable turn and immediately POLL FROM t=0 — the first voice shows
+        // in ~2s, not after a ~30s blank chunk. A live `phase` line shows what's happening throughout.
+        const turnId = `ceremony-${meetingHuddleId}-${step}-${Date.now()}`;
+        const payload = {
+          text: CEREMONY_TRIGGER[step],
+          huddleId: meetingHuddleId,
+          scope: "group" as const,
+          members: meeting.members,
+          history: [],
+          router: { ...cfg.router, ceremonyMode: "round-robin" as const },
+          agents: cfg.agents,
+          caller,
+          timeZone: tz,
+          turnId,
+        };
+        const stepStart = Date.now();
+        setPhase("Gathering the team…");
+        activeCeremonyTurnRef.current = turnId; // this step is now barge-able
+        // Fire the durable turn but DON'T await the whole first chunk before rendering — poll alongside it.
+        let enqErr: unknown = null;
+        const enqP = enqueueHuddleTurn({ data: payload }).catch((e) => {
+          enqErr = e;
+          return null;
+        });
+        const spoken = { n: 0 };
+        let terminal = false;
+        let guard = 0;
+        while (!terminal && ceremonyAliveRef.current && guard++ < 150) {
+          const upd = await getTurnUpdates({ data: { huddleId: meetingHuddleId, sinceMs: 0 } }).catch(() => null);
+          const turn = upd?.turns?.find((t) => t.id === turnId);
+          const reps = turn ? (turn.result?.replies ?? turn.replies ?? []) : [];
+          if (reps.length > spoken.n) {
+            await emit(reps, spoken); // speaks each in order; phase set to "<name> is speaking…"
+          } else {
+            const secs = Math.round((Date.now() - stepStart) / 1000);
+            setPhase(spoken.n === 0 ? `Gathering the team… ${secs}s` : `Waiting for the next update… ${secs}s`);
+          }
+          if (turn && (turn.status === "done" || turn.status === "error")) {
+            await emit(turn.result?.replies ?? turn.replies ?? [], spoken); // drain the tail
+            terminal = true;
+            if (turn.status === "error") throw new Error(turn.error || "the ceremony run errored");
+            break;
+          }
+          if (!terminal) await new Promise((res) => setTimeout(res, 2000));
+        }
+        await enqP;
+        activeCeremonyTurnRef.current = null; // step finished — no longer barge-able
+        // Hard enqueue failure (never even created the turn) and nothing streamed → surface it.
+        if (enqErr && spoken.n === 0) throw enqErr instanceof Error ? enqErr : new Error(String(enqErr));
+        if (!ceremonyAliveRef.current) return;
+      }
+      setPhase("");
       patchMeeting({ ceremonyStatus: "done" });
     } catch (err) {
+      setPhase("");
+      activeCeremonyTurnRef.current = null;
       patchMeeting({ ceremonyStatus: "error" });
       toast.error(err instanceof Error ? err.message : "The ceremony couldn't run. Try again.");
     }
@@ -367,6 +439,24 @@ function MeetingRoom({
     const text = input.trim();
     if (!text || busy || !meeting.members.length) return;
     const cfg = useBackendsStore.getState().config;
+
+    // BARGE-IN: if a ceremony is actively running, queue this onto the running turn instead of firing
+    // a parallel, uncoordinated turn. The relay pauses after the current speaker, answers it, then
+    // resumes — and the reply streams into the transcript via the ceremony's existing poll loop.
+    if (isCeremony && status === "running" && activeCeremonyTurnRef.current) {
+      const turnId = activeCeremonyTurnRef.current;
+      setInput("");
+      addMeetingTurns([{ text, user: true }]);
+      setPhase("Passing your message to the room…");
+      try {
+        const res = await bargeCeremony({ data: { turnId, text } });
+        if (!res.queued) toast("The room just wrapped — send that again to start a new thread.");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't reach the room.");
+      }
+      return;
+    }
+
     setInput("");
     setBusy(true);
     addMeetingTurns([{ text, user: true }]);
@@ -374,7 +464,7 @@ function MeetingRoom({
       const result = await sendHuddleMessage({
         data: {
           text,
-          huddleId: activeHuddleId,
+          huddleId: meetingHuddleId,
           scope: "group",
           members: meeting.members,
           history: [],
@@ -422,7 +512,13 @@ function MeetingRoom({
                 {caption}
               </div>
             )}
-            {isCeremony && !turns.length && (
+            {isCeremony && status === "running" && phase && (
+              <div className="flex items-center gap-2 text-center text-sm text-muted-foreground">
+                <Loader2 size={13} className="animate-spin" />
+                <span>{phase}</span>
+              </div>
+            )}
+            {isCeremony && !turns.length && status !== "running" && (
               <div className="text-center text-sm text-muted-foreground">
                 {meeting.members.length
                   ? `${meeting.members.length} in the room. Start the stand-up, or just talk.`

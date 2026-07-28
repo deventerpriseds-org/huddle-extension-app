@@ -55,6 +55,10 @@ ALTER TABLE chat.pending_turns ADD COLUMN IF NOT EXISTS replies  JSONB NOT NULL 
 ALTER TABLE chat.pending_turns ADD COLUMN IF NOT EXISTS progress JSONB;
 ALTER TABLE chat.pending_turns ADD COLUMN IF NOT EXISTS seq      INT  NOT NULL DEFAULT 0;
 ALTER TABLE chat.pending_turns ADD COLUMN IF NOT EXISTS chunks   INT  NOT NULL DEFAULT 0;
+-- Barge-in queue: user interjections sent DURING a live ceremony. The ceremony driver pops one
+-- between speakers (never mid-speaker), answers it, then resumes the round-robin — so a stand-up
+-- pauses politely for a question instead of talking over it. FIFO array of {id,text}.
+ALTER TABLE chat.pending_turns ADD COLUMN IF NOT EXISTS barge    JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 -- Web Push subscriptions so a reply that lands while the user is fully away (screen off, app closed)
 -- can buzz the phone. Keyed by endpoint (unique per browser/device).
@@ -276,6 +280,37 @@ export async function updateTurnReplies(
   );
 }
 
+/** Queue a user barge-in onto a live ceremony turn. Guarded so a finished turn ignores late barges
+ *  (the ceremony's over → the client treats it as a normal message). Returns true if it was queued. */
+export async function appendBarge(id: string, item: { id: string; text: string }): Promise<boolean> {
+  await ensureBootstrapped();
+  const res = await getPool().query(
+    `UPDATE chat.pending_turns
+       SET barge = barge || $2::jsonb, updated_at = now()
+     WHERE id = $1 AND status IN ('queued','running','partial')
+       AND NOT (barge @> $3::jsonb)`,
+    [id, JSON.stringify([item]), JSON.stringify([{ id: item.id }])],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/** Atomically pop the OLDEST pending barge (FIFO) for this turn, or null. Row-locked (FOR UPDATE) so a
+ *  resumed chunk can never re-handle the same interjection — the idempotency guard for the barge path. */
+export async function claimBarge(id: string): Promise<{ id: string; text: string } | null> {
+  await ensureBootstrapped();
+  const res = await getPool().query(
+    `WITH cur AS (SELECT barge FROM chat.pending_turns WHERE id = $1 FOR UPDATE)
+     UPDATE chat.pending_turns t
+        SET barge = t.barge - 0, updated_at = now()
+       FROM cur
+      WHERE t.id = $1 AND jsonb_array_length(cur.barge) > 0
+      RETURNING cur.barge -> 0 AS claimed`,
+    [id],
+  );
+  const claimed = res.rows[0]?.claimed;
+  return claimed && typeof claimed.text === "string" ? claimed : null;
+}
+
 export async function failTurn(id: string, error: string): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(
@@ -331,6 +366,35 @@ export async function getUserTurnsSince(userEmail: string, sinceMs: number): Pro
     [userEmail, Math.max(0, sinceMs)],
   );
   return res.rows.map(mapRow);
+}
+
+// ---- Delegation / orchestration (Pillar 2) -------------------------------------------------------
+
+export interface OrchestrationWorker {
+  id: string;
+  status: TurnStatus;
+  /** The worker's structured result once done: { worker: { role, ok, findings, artifactId, ... } }. */
+  result: unknown;
+}
+
+/** All worker sub-turn rows sharing an orchestrationId (a persona's delegated workstreams). The
+ *  fan-in read: a persona's integration fires only once EVERY worker row is terminal (done/error).
+ *  Keyed off the JSONB payload so no new table is needed — worker rows are pending_turns carrying
+ *  `payload.worker` + a shared `payload.worker.orchestrationId`. */
+export async function getOrchestrationWorkers(orchestrationId: string): Promise<OrchestrationWorker[]> {
+  await ensureBootstrapped();
+  const res = await getPool().query(
+    `SELECT id, status, result
+       FROM chat.pending_turns
+      WHERE payload -> 'worker' ->> 'orchestrationId' = $1
+      ORDER BY created_at ASC`,
+    [orchestrationId],
+  );
+  return res.rows.map((r) => ({
+    id: r.id as string,
+    status: r.status as TurnStatus,
+    result: r.result ?? null,
+  }));
 }
 
 export interface PushSubscriptionRecord {

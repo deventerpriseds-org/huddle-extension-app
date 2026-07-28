@@ -21,6 +21,9 @@ export interface HuddleMessage {
     host: AgentId;
     joins: AgentId[];
   };
+  // Artifacts this agent reply produced — rendered as clickable "Open <name>" chips that open the doc
+  // by id in the Artifacts view (fresh SAS minted on open, so the link never expires).
+  artifacts?: { id: string; name: string }[];
 }
 
 export type HuddleScope = "one-to-one" | "group";
@@ -118,6 +121,37 @@ export const HUDDLES: Huddle[] = [
     members: ["sam-trent", "tess-sutton", "terry-locke", "cole-blake", "eli-vaughn", "iris-chase"],
     topic: "Launch coordination",
     demo: true,
+  },
+  // Dedicated per-ceremony channels. Ceremonies (stand-up, retro, planning, review) run HERE, never in
+  // whatever huddle happens to be open — so a stand-up started from an agent's 1:1 no longer spills its
+  // whole round-robin into that private thread. Each ceremony's history is isolated and reviewable.
+  {
+    id: "ceremony-standup",
+    name: "Stand-up",
+    kind: "group",
+    members: AGENTS.map((a) => a.id),
+    topic: "Daily stand-up — Terry opens, each lane owner reports, blockers surface to you",
+  },
+  {
+    id: "ceremony-retro",
+    name: "Retro",
+    kind: "group",
+    members: AGENTS.map((a) => a.id),
+    topic: "Sprint retrospective — what went well, what to improve",
+  },
+  {
+    id: "ceremony-planning",
+    name: "Planning",
+    kind: "group",
+    members: AGENTS.map((a) => a.id),
+    topic: "Sprint planning — what each lane takes on next",
+  },
+  {
+    id: "ceremony-review",
+    name: "Review",
+    kind: "group",
+    members: AGENTS.map((a) => a.id),
+    topic: "Sprint review — what each lane delivered",
   },
   // 1:1 huddles for the sidebar (Agent channels)
   ...AGENTS.map<Huddle>((a) => ({

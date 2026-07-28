@@ -22,6 +22,8 @@ const DEFAULT_GROOM_HOURS = [4, 8, 12, 14, 18, 22];
 const DEFAULT_AUTOWORK_HOURS = [9, 13, 17];
 // Standup digest fires once in the morning — it summarizes the prior day's autonomous work + blockers.
 const DEFAULT_STANDUP_HOURS = [8];
+// Review digest: Iris's gentle nudge on what's waiting in "Ready for review" — 8am/11am/1pm/4pm/7pm.
+const DEFAULT_REVIEW_DIGEST_HOURS = [8, 11, 13, 16, 19];
 const DEFAULT_TZ = "America/New_York";
 
 /** ms to add to a UTC instant so that formatting it in `tz` yields the same wall-clock — i.e. tz offset. */
@@ -79,9 +81,9 @@ export function computeNextRun(hours: number[], tz: string, from: Date): Date {
 }
 
 /**
- * Ensure every user with an open backlog has an auto-groom job AND an auto-work job (idempotent; only new
- * rows get a next_run — a conflict never overwrites the claimed watermark). Adding a recurring job type is
- * one more row here + one more `fireJob` case.
+ * Ensure every user with an open backlog has an auto-groom, auto-work, standup-digest AND review-digest
+ * job (idempotent; only new rows get a next_run — a conflict never overwrites the claimed watermark).
+ * Adding a recurring job type is one more row here + one more `fireJob` case.
  */
 async function ensureGroomJobs(now: Date): Promise<void> {
   const emails = await getUsersWithOpenBacklog();
@@ -112,6 +114,15 @@ async function ensureGroomJobs(now: Date): Promise<void> {
       targetEmail: email,
       cadence: standup,
       nextRunAt: computeNextRun(standup.hours, standup.tz, now).toISOString(),
+      meta: {},
+    });
+    const reviewDigest = { tz: DEFAULT_TZ, hours: DEFAULT_REVIEW_DIGEST_HOURS };
+    await upsertScheduledJob({
+      id: `review-digest-${email}`,
+      jobType: "review-digest",
+      targetEmail: email,
+      cadence: reviewDigest,
+      nextRunAt: computeNextRun(reviewDigest.hours, reviewDigest.tz, now).toISOString(),
       meta: {},
     });
   }
@@ -150,6 +161,9 @@ async function fireJob(job: ScheduledJob, slotId: string): Promise<void> {
   } else if (job.job_type === "standup-digest") {
     // No force: a cadence fire is a no-op when nothing happened and nothing is blocked.
     await post("/api/public/run-standup");
+  } else if (job.job_type === "review-digest") {
+    // No force: a cadence fire is a no-op when nothing is waiting in review.
+    await post("/api/public/run-review-digest");
   }
   // Future: else if (job.job_type === "ceremony") { ... POST run-ceremony ... }
 }

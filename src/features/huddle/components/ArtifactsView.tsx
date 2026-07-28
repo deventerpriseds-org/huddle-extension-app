@@ -10,6 +10,7 @@ import {
   listArtifactsFn, getArtifactFn, reviewArtifactFn, createArtifactFn, mirrorArtifactFn, deleteArtifactFn,
 } from "../lib/artifacts/artifacts.functions";
 import type { ArtifactRow } from "../lib/artifacts/artifacts.server";
+import { useHuddleStore } from "../store";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -134,6 +135,17 @@ export function ArtifactsView() {
       }
     } catch { /* ignore */ }
   }, [caller]);
+
+  // A chat "Open <name>" chip sets activeArtifactId (+ view:"artifacts"); when this view receives it,
+  // open that artifact by id (fresh SAS via getArtifactFn) then clear the intent so later manual
+  // navigation isn't re-hijacked.
+  const activeArtifactId = useHuddleStore((s) => s.activeArtifactId);
+  const clearActiveArtifact = useHuddleStore((s) => s.openArtifactById);
+  useEffect(() => {
+    if (!activeArtifactId) return;
+    void openArtifact(activeArtifactId);
+    clearActiveArtifact(null);
+  }, [activeArtifactId, openArtifact, clearActiveArtifact]);
 
   const review = useCallback(async (action: "approve" | "changes" | "reopen") => {
     if (!caller || !sel) return;

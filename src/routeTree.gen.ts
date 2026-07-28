@@ -16,6 +16,7 @@ import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/
 import { Route as ApiPublicTasksSyncRouteImport } from './routes/api/public/tasks-sync'
 import { Route as ApiPublicRunTurnRouteImport } from './routes/api/public/run-turn'
 import { Route as ApiPublicRunStandupRouteImport } from './routes/api/public/run-standup'
+import { Route as ApiPublicRunReviewDigestRouteImport } from './routes/api/public/run-review-digest'
 import { Route as ApiPublicRunGroomingRouteImport } from './routes/api/public/run-grooming'
 import { Route as ApiPublicRunCeremonyRouteImport } from './routes/api/public/run-ceremony'
 import { Route as ApiPublicRunAutoworkRouteImport } from './routes/api/public/run-autowork'
@@ -55,6 +56,12 @@ const ApiPublicRunStandupRoute = ApiPublicRunStandupRouteImport.update({
   path: '/api/public/run-standup',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicRunReviewDigestRoute =
+  ApiPublicRunReviewDigestRouteImport.update({
+    id: '/api/public/run-review-digest',
+    path: '/api/public/run-review-digest',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicRunGroomingRoute = ApiPublicRunGroomingRouteImport.update({
   id: '/api/public/run-grooming',
   path: '/api/public/run-grooming',
@@ -84,6 +91,7 @@ export interface FileRoutesByFullPath {
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
   '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
@@ -96,6 +104,7 @@ export interface FileRoutesByTo {
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
   '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
@@ -110,6 +119,7 @@ export interface FileRoutesById {
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
   '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
@@ -124,6 +134,7 @@ export interface FileRouteTypes {
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-review-digest'
     | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
@@ -136,6 +147,7 @@ export interface FileRouteTypes {
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-review-digest'
     | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
@@ -149,6 +161,7 @@ export interface FileRouteTypes {
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-review-digest'
     | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
@@ -162,6 +175,7 @@ export interface RootRouteChildren {
   ApiPublicRunAutoworkRoute: typeof ApiPublicRunAutoworkRoute
   ApiPublicRunCeremonyRoute: typeof ApiPublicRunCeremonyRoute
   ApiPublicRunGroomingRoute: typeof ApiPublicRunGroomingRoute
+  ApiPublicRunReviewDigestRoute: typeof ApiPublicRunReviewDigestRoute
   ApiPublicRunStandupRoute: typeof ApiPublicRunStandupRoute
   ApiPublicRunTurnRoute: typeof ApiPublicRunTurnRoute
   ApiPublicTasksSyncRoute: typeof ApiPublicTasksSyncRoute
@@ -218,6 +232,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicRunStandupRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/run-review-digest': {
+      id: '/api/public/run-review-digest'
+      path: '/api/public/run-review-digest'
+      fullPath: '/api/public/run-review-digest'
+      preLoaderRoute: typeof ApiPublicRunReviewDigestRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/run-grooming': {
       id: '/api/public/run-grooming'
       path: '/api/public/run-grooming'
@@ -269,6 +290,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicRunAutoworkRoute: ApiPublicRunAutoworkRoute,
   ApiPublicRunCeremonyRoute: ApiPublicRunCeremonyRoute,
   ApiPublicRunGroomingRoute: ApiPublicRunGroomingRoute,
+  ApiPublicRunReviewDigestRoute: ApiPublicRunReviewDigestRoute,
   ApiPublicRunStandupRoute: ApiPublicRunStandupRoute,
   ApiPublicRunTurnRoute: ApiPublicRunTurnRoute,
   ApiPublicTasksSyncRoute: ApiPublicTasksSyncRoute,

@@ -75,6 +75,7 @@ async function surfaceDigest(opts: { email: string; tz: string; caller: Caller; 
     timeZone: opts.tz,
     caller: opts.caller,
     notify: "push", // the standup IS the daily nudge that replaces per-result buzzing
+    internal: true, // system-originated digest — never pass along / defer
   };
   const { enqueueTurn } = await import("./turns.server");
   const fresh = await enqueueTurn(`standup-${opts.runId}`, `dm-${COORDINATOR}`, opts.email, payload);

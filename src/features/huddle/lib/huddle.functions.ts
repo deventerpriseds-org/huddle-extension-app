@@ -13,8 +13,10 @@ import {
   lanesByOwner,
   roundRobinParticipants,
   ownerDirective,
+  openerDirective,
   closerDirective,
   narrateDirective,
+  bargeDirective,
   CEREMONY_WINDOW_HOURS,
   CEREMONY_HOST,
 } from "./tasks/ceremonies";
@@ -25,6 +27,7 @@ import {
   type TavilySearchArgs,
 } from "./tavily-search.functions";
 import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
+import { DELEGATE_TO_SPECIALIST_TOOL, workerDirectory, getWorker, WORKER_ROLES } from "./agents/workers";
 import { FLAG_BLOCKER_TOOL } from "./tasks/task-agent-tools";
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
@@ -97,6 +100,15 @@ const Input = z.object({
   // agent reports the UTC date, which is a day ahead for users behind UTC in the
   // evening.
   timeZone: z.string().max(64).optional(),
+  // Pillar 2: artifacts to surface as "Open <name>" chips on the TARGET agent's reply this turn, even
+  // though this agent didn't create them — used by a delegation INTEGRATION turn to reference the
+  // specialist documents its workers produced. Purely presentational; carried in the durable payload.
+  attachArtifacts: z.array(z.object({ id: z.string(), name: z.string() })).max(12).optional(),
+  // System-originated turn (autowork research, standup/grooming digest, an owner follow-up, a delegation
+  // integration) — NOT a real user message. Its `text` is an internal DIRECTIVE, so the 1:1 pass-along
+  // and lane-deferral machinery must NOT run on it: doing so mis-reads the directive as "a user ask in
+  // the wrong lane" and spawns follow-ups that re-trigger follow-ups (the notification-barrage loop).
+  internal: z.boolean().optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
@@ -113,6 +125,54 @@ const HOUSE_STYLE =
   " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message." +
   " Your capabilities are exactly the tools you have this turn — nothing more. If you're asked or assigned something you cannot actually do with those tools (e.g. move money, buy something, take a real-world action only the user can), do NOT pretend, vaguely promise, or invent a result — say plainly in one sentence what you can't do and why. Almost always you CAN still make real progress by researching, analyzing, or drafting — do that instead. If it's a task on the board and you genuinely cannot advance it (it needs the user's decision, a credential, or a capability you don't have), call flag_blocker(task_id, reason) with the specific reason so the user knows exactly what you need." +
   " Never mention files, uploaded files, documents, attachments, or a knowledge base, and never say you searched them or \"couldn't find information in the uploaded files\" — file search is a silent background aid, not something to narrate. If it returns nothing useful, just answer the user directly from what you know, your live tools, and the conversation. Above all, ANSWER THE USER'S ACTUAL LAST MESSAGE: if they correct you (e.g. \"your time zone is wrong\") or ask something specific, address exactly that — never fall back to a canned \"I couldn't find that\" line that ignores what they just said.";
+
+// Executive-grade OUTPUT CONTRACT — the distilled essence of the Huddle agent operating standard
+// (full version: docs/huddle-agent-architecture.md). Appended to EVERY agent on BOTH backends. It raises
+// the SUBSTANCE bar without fighting the house style: chat replies stay concise (HOUSE_STYLE governs form),
+// while any DOCUMENT/ARTIFACT you produce gets the full structured treatment.
+const OPERATING_CONTRACT =
+  "\n\nYou are an accountable member of the user's executive team, not a search box. For any substantive " +
+  "request, think through four levels and let them shape your answer: informative (what the evidence " +
+  "establishes), analytical (why it matters — causes, patterns, implications), actionable (what to do, who " +
+  "owns it, in what order, and how success is measured), and strategic (tradeoffs, risks, opportunities, " +
+  "and the decisions that follow). Never hand over raw information without interpreting its relevance to " +
+  "the user's goals." +
+  " Evidence discipline: base material claims on the most authoritative source available; separate verified " +
+  "facts from assumptions and inferences; flag conflicting or missing evidence; and state a confidence level " +
+  "whenever uncertainty could change the recommendation — do not substitute confident wording for verification." +
+  " Make recommendations decision-ready: the action, the finding it rests on, the rationale, priority, owner, " +
+  "timing, key risks, and your confidence — and separate immediate actions from near-term ones, longer-term " +
+  "strategic moves, and decisions that need the user's approval." +
+  " Finish only when the work is genuinely usable: every requested deliverable exists, claims trace to " +
+  "evidence, uncertainties are disclosed, and the single clearest next action is explicit. Complete every " +
+  "non-blocked part first, then escalate (ask the user) before anything irreversible, external, or financial." +
+  " FORM: in chat, deliver all of this as tight, high-signal prose sized to the question — not headings or " +
+  "long lists. When you produce a document via create_artifact, give it the FULL structure: an executive " +
+  "conclusion, key findings with their evidence, analysis, prioritized recommendations (with owner/timing/" +
+  "risk), risks & assumptions, and the sources you used." +
+  " Documents & links: when you save work with create_artifact the app renders it as a clickable chip on " +
+  "your message automatically — so NEVER write your own link to “the document,” never present an external " +
+  "website URL as a document you produced, and never say you compiled, attached, prepared, or created a " +
+  "document unless you actually called create_artifact THIS turn and it succeeded. If you did not save one, " +
+  "just give the findings directly in your message. You may cite a real source URL as a plain reference, " +
+  "but do not dress it up as “the document I put together.”";
+
+// Persona-as-orchestrator layer (Pillar 2). Appended to every PERSONA's instructions (workers get
+// their own charter instead). It tells a persona it leads shared specialists it can delegate to, and
+// that it stays accountable for the single integrated answer. The worker roster is DATA (workers.ts),
+// so adding a specialist changes this block with zero code — same systematic-capability principle as
+// the capability hand-off. It does NOT fight HOUSE_STYLE: chat stays concise; delegation is a backstage
+// move whose visible surface is a brief "I've put the team on it" + the later integrated answer.
+const DELEGATION_DIRECTIVE =
+  "\n\nYou lead a team of shared specialists you can hand a workstream to with the delegate_to_specialist " +
+  "tool. Delegate when a request genuinely needs specialist depth, several parallel workstreams, or an " +
+  "independent review — not for something you can already answer well yourself. You remain ACCOUNTABLE: " +
+  "the specialists work behind the scenes and report to you, and YOU integrate their findings into the " +
+  "single answer the user sees (never hand back raw specialist reports). Available specialists:\n" +
+  workerDirectory() +
+  "\nDelegation is asynchronous — specialists take seconds to minutes. After you delegate, tell the user " +
+  "in one short line that you've put the team on it and will bring it together shortly; never invent or " +
+  "pre-empt their results. When their work comes back you'll be asked to integrate it.";
 
 // Scope-aware ownership hand-off — generated from `agent.capabilities` (agents.ts), NOT
 // hardcoded to any agent or job. Appended to every agent's instructions when the huddle
@@ -182,6 +242,45 @@ function isEchoOfPrior(text: string, priorReplies: { text: string }[]): boolean 
   return priorReplies.some((r) => replyJaccard(text, r.text) >= 0.72);
 }
 
+// A small model keeps hand-authoring a link to "the document" in its chat prose — either an INVENTED
+// external site ("access it [here](salesforce.com)") or a PLACEHOLDER ("[here](https://your-link-to-
+// artifact)") — even when it DID save a real artifact. The chip (from create_artifact) is the ONLY real
+// document link; a self-authored one is always fake or redundant. Prose rules don't bind a small model
+// (repo principle: a firing trap is signal → guard in code), so we sanitize EVERY reply:
+//   • a markdown link with a generic doc-pointer anchor (here/this/the document/…) or an obviously
+//     placeholder URL → drop it to plain anchor text (kills the fake "open the document" link);
+//   • any other markdown link (a genuine external citation like [McKinsey 2025](url)) → keep its URL as
+//     plain, non-clickable text "anchor (url)" so nothing useful is lost and nothing looks clickable-fake.
+const GENERIC_DOC_ANCHOR =
+  /^(here|this|that|link|this link|the link|it|view it|access it|read it|see it|open it|download|download it|this document|the document|document|this doc|the doc|doc|this file|the file|file|this report|the report|report|this analysis|the analysis|the artifact|this artifact|view the document|click here|the doc(ument)? here)$/i;
+const PLACEHOLDER_URL =
+  /(your-link|link-to|link-here|url-here|insert[-_]?link|example\.com|artifact-link|placeholder|yourdomain|to-artifact|<link>)/i;
+function stripAgentReplyLinks(text: string): string {
+  return text.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, anchor, url) => {
+    const a = String(anchor).trim();
+    if (GENERIC_DOC_ANCHOR.test(a) || PLACEHOLDER_URL.test(url)) return a; // fake/placeholder doc-link → drop URL
+    return `${a} (${url})`; // genuine citation → keep URL as plain, non-clickable text
+  });
+}
+
+// Per-agent WIP-limited board flow: an agent's DOING task moves to IN_REVIEW the instant it actually
+// finishes its work (saves an artifact) — never to DONE. DONE is set ONLY by the user, by hand, in the
+// board UI (see docs on the flow in tasks/autowork.server.ts). Best-effort/non-fatal, mirroring
+// flag_blocker's board-status write: a failure here never fails the artifact save that triggered it.
+async function markTaskInReview(taskId: string, caller: { entra_object_id?: string; entra_email?: string } | undefined): Promise<void> {
+  try {
+    const { invokeJourneyTool } = await import("./journey/proxy.functions");
+    await invokeJourneyTool({
+      toolName: "update_task",
+      args: { task_id: taskId, status: "IN_REVIEW" },
+      caller: caller ?? {},
+      context: { source: "huddle" },
+    });
+  } catch {
+    /* non-fatal — the board just won't reflect the move to "Ready for review" until a later sync */
+  }
+}
+
 // Cross-cutting tool resilience: EVERY agent tool call is bounded by a timeout and its errors are
 // turned into a normal tool RESULT (never a throw). A hung or failing tool must not sink the turn —
 // the model always gets something back and can still reply ("I hit a problem with X"). Applies to
@@ -219,8 +318,11 @@ type TurnResumeState = {
   interjectors: AgentId[];
   ceremonyActive: boolean;
   ceremonyDirectives: [AgentId, string][];
+  // Terry's CLOSING turn, pending until the round-robin drains: [closerId, rendered closerDirective].
+  // Kept out of ceremonyDirectives because the host already maps to the OPENER there; null once closed.
+  ceremonyCloser?: [AgentId, string] | null;
   replyCap: number;
-  replies: { agentId: AgentId; text: string; fallbackNotes?: string[] }[];
+  replies: { agentId: AgentId; text: string; fallbackNotes?: string[]; artifacts?: { id: string; name: string }[] }[];
   journeyTaskUpdates: import("./journey/types").JourneyTask[];
   suggestedTasks: SuggestedTaskDraft[];
   toolUses: import("../data/seed").ToolUseEvent[];
@@ -318,7 +420,15 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       );
     }
 
-    type Reply = { agentId: AgentId; text: string; fallbackNotes?: string[] };
+    type Reply = {
+      agentId: AgentId;
+      text: string;
+      fallbackNotes?: string[];
+      // Artifacts this reply produced (create_artifact) so the chat bubble can render a clickable
+      // "Open <name>" chip that opens the doc by id (fresh SAS on open). Derived from the agent's
+      // toolUses at merge time — see the reply-push site.
+      artifacts?: { id: string; name: string }[];
+    };
 
     // Journey-voice mirror: any task rows that journey returns from a tool call
     // are accumulated here and returned to the client so the huddle board can
@@ -618,6 +728,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // detection is skipped (ceremonyType=null) — the turn was already classified on chunk 1.
     const ceremonyDirectiveById = new Map<AgentId, string>(resume?.ceremonyDirectives ?? []);
     let ceremonyActive = resume?.ceremonyActive ?? false;
+    // Pending host CLOSE turn (set when a round-robin is built; survives chunk boundaries via progress).
+    let ceremonyCloser: [AgentId, string] | null = resume?.ceremonyCloser ?? null;
+    // Transient per-dispatch directive for a barge-in responder. NOT persisted (cleared right after
+    // the dispatch); takes precedence over the standing ceremony directive in the scene builder.
+    const bargeDirectiveById = new Map<AgentId, string>();
     const ceremonyType = resume ? null : detectCeremony(data.text);
     if (ceremonyType) {
       // Resolve the sign-in email (possibly an alias) to the canonical journey email the mirror
@@ -674,12 +789,25 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         } else {
           const participants = roundRobinParticipants(report, data.members);
           const owners = lanesByOwner(report);
+          // Owners in speaking order → Terry names them in his opener hand-off ("Tess, you're up; then Finn").
+          const handoffNames = participants
+            .filter((p) => p !== CEREMONY_HOST)
+            .map((p) => AGENT_BY_ID[p]?.name ?? p);
           for (const p of participants) {
-            if (p === CEREMONY_HOST) ceremonyDirectiveById.set(p, closerDirective(ceremonyType, report));
+            // Host OPENS the ceremony (first in `participants`); lane owners then give their updates.
+            if (p === CEREMONY_HOST)
+              ceremonyDirectiveById.set(p, openerDirective(ceremonyType, report, handoffNames));
             else {
               const lane = owners.get(p);
               if (lane) ceremonyDirectiveById.set(p, ownerDirective(ceremonyType, lane));
             }
+          }
+          // Arm Terry's CLOSING turn: after every owner has spoken, the host speaks once more to
+          // synthesize and surface blockers. Only when the host is present AND at least one owner
+          // spoke (participants = [host, ...owners], so length > 1). Runs as a post-loop step so the
+          // host isn't duplicated in the queue (the spoken-guard would skip a repeat there anyway).
+          if (data.members.includes(CEREMONY_HOST) && participants.length > 1) {
+            ceremonyCloser = [CEREMONY_HOST, closerDirective(ceremonyType, report)];
           }
           const scores = Object.fromEntries(
             participants.map((id, i) => [id, Number((1 - i * 0.1).toFixed(2))]),
@@ -756,6 +884,24 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // into each responding agent's prompt. This is what carries context across huddles (e.g. a fact
     // stated in the group channel is available in a later 1:1) without the agent having to ask.
     let memoryQueryVec: number[] | null | undefined;
+    // Turn-level cache of the Executive Profile block (same for all agents this turn; resolved once,
+    // email-scoped). "" when no profile is set → zero prompt overhead. Appended alongside OPERATING_CONTRACT.
+    let execContextBlock: string | undefined;
+    const resolveExecContext = async (): Promise<string> => {
+      if (execContextBlock !== undefined) return execContextBlock;
+      execContextBlock = "";
+      try {
+        const { resolveTaskEmail } = await import("./journey/identity");
+        const em = (await resolveTaskEmail(data.caller ?? {})) ?? data.caller?.entra_email ?? null;
+        if (em) {
+          const { getUserContext, renderExecutiveContext } = await import("./identity/user-context.server");
+          execContextBlock = renderExecutiveContext(await getUserContext(em));
+        }
+      } catch {
+        execContextBlock = "";
+      }
+      return execContextBlock;
+    };
 
     // Normalized titles of tasks already created THIS turn, so multiple responding agents (or a
     // re-run of the same turn) can't create duplicate board cards for one intent. See
@@ -826,6 +972,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           agents: data.agents,
           timeZone: data.timeZone,
           caller: data.caller,
+          internal: true, // CRUCIAL: a follow-up must never spawn another follow-up (kills the loop)
         };
         const { enqueueTurn } = await import("./tasks/turns.server");
         const fresh = await enqueueTurn(id, ownerHuddle, email, followupPayload);
@@ -888,9 +1035,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     const runAgentTurn = async (
       nextId: AgentId,
       priorInThisTurn: string,
+      // For a BARGE-IN dispatch, the agent must answer the user's interjection — not the standing
+      // ceremony trigger ("let's run the daily stand-up"). Override the user message (and the
+      // force-tool regexes) with the barge text so the reply addresses what the user actually asked.
+      userTextOverride?: string,
     ): Promise<AgentTurnResult> => {
       const winner = AGENT_BY_ID[nextId]!;
       const agentBackend = agentsCfg[nextId] ?? { backend: "lovable" as const };
+      const userText = userTextOverride ?? data.text;
 
       // Per-agent output buffers. These SHADOW the outer shared arrays/helpers so
       // the (unmodified) dispatch body writes here; the driver merges them into
@@ -951,7 +1103,81 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         outcome,
       });
 
-      const ceremonyDirective = ceremonyDirectiveById.get(nextId) ?? "";
+      // Pillar 2 — delegate_to_specialist dispatch (shared by BOTH the OpenAI and Lovable tool paths,
+      // mirroring create_artifact). It ENQUEUES a durable worker sub-turn per delegation and returns
+      // immediately — the persona keeps talking ("I've put the team on it"); the worker runs off the
+      // turn deadline and, when the last one finishes, an integration turn brings the persona back to
+      // synthesize (see runWorkerTurn). orchestrationId is per (turn, persona) so two personas in one
+      // group turn each integrate their own workstreams; ids are idempotent so a resume never
+      // double-dispatches. Only personas get this tool; a worker run never does (AC-5 — no nesting).
+      let delegationSeq = 0;
+      const dispatchDelegate = async (rawArgs: Record<string, unknown>): Promise<string> => {
+        const roleArg = String(rawArgs.role ?? "").trim();
+        const objective = String(rawArgs.objective ?? "").trim();
+        const inputs = rawArgs.inputs != null ? String(rawArgs.inputs).trim() : undefined;
+        const acceptance =
+          rawArgs.acceptance_criteria != null ? String(rawArgs.acceptance_criteria).trim() : undefined;
+        const worker = getWorker(roleArg);
+        if (!worker)
+          return JSON.stringify({
+            ok: false,
+            error: `unknown specialist role "${roleArg}"; choose one of: ${WORKER_ROLES.join(", ")}`,
+          });
+        if (!objective) return JSON.stringify({ ok: false, error: "objective is required" });
+        const claimKey = `delegate:${worker.id}:${objective.toLowerCase().slice(0, 80)}`;
+        if (!claimAction(claimKey)) {
+          recordToolUse(winner.id, "delegate_to_specialist", `already delegated ${worker.role} this turn — skipped duplicate`, true);
+          return JSON.stringify({ ok: true, deduped: true, dispatched: worker.id });
+        }
+        try {
+          const email =
+            (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+            data.caller?.entra_email ??
+            null;
+          const orchestrationId = `orch-${turnId ?? data.huddleId}-${winner.id}`;
+          const seq = delegationSeq++;
+          const workerTurnId = `worker-${orchestrationId}-${worker.id}-${seq}`;
+          const workerPayload = {
+            worker: {
+              role: worker.id,
+              objective,
+              inputs,
+              acceptance_criteria: acceptance,
+              personaId: winner.id,
+              personaName: winner.name,
+              orchestrationId,
+              originHuddleId: data.huddleId,
+              originScope: data.scope,
+            },
+            // Carried so the worker run resolves the same user + timezone as the persona, and so the
+            // integration turn can rebuild a valid runHuddleTurn input.
+            caller: data.caller,
+            timeZone: data.timeZone,
+            router: data.router,
+            agents: data.agents,
+            notify: "silent", // workers are internal — no push; only the integrated answer notifies.
+          };
+          const { enqueueTurn } = await import("./tasks/turns.server");
+          const fresh = await enqueueTurn(workerTurnId, data.huddleId, email, workerPayload);
+          if (fresh) void kickNextChunk(workerTurnId); // start now; cron drain backstops a lost kick
+          recordToolUse(winner.id, "delegate_to_specialist", `tasked ${worker.role}: ${objective.slice(0, 80)}`, true);
+          return JSON.stringify({
+            ok: true,
+            dispatched: worker.id,
+            role: worker.role,
+            async: true,
+            note: "The specialist is working now; you'll be brought back to integrate their findings when done. Tell the user you've put the team on it — do not fabricate results.",
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          recordToolUse(winner.id, "delegate_to_specialist", "delegation failed", false, msg);
+          return JSON.stringify({ ok: false, error: msg });
+        }
+      };
+
+      // A barge-in directive (answering a live user interjection) takes precedence over the standing
+      // ceremony directive for this one dispatch, so the agent addresses the user instead of its lane.
+      const ceremonyDirective = bargeDirectiveById.get(nextId) ?? ceremonyDirectiveById.get(nextId) ?? "";
       const handoff = handoffById.get(nextId);
       const handoffDirective = handoff
         ? `\n\nYou were brought into this turn by ${handoff.fromName}, who handed this to you: "${handoff.ask}". Address exactly that in your lane — answer it directly or take the action they need. Do not re-ask what was already said or restate their message.`
@@ -961,7 +1187,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // budget" → Finn), tell THIS agent to defer and bring them in, even though that owner isn't in
       // the room. Deterministic + data-driven, so it covers every lane, not just the tool-owned ones.
       let laneDirective = "";
-      if (data.scope !== "group") {
+      if (data.scope !== "group" && !data.internal) {
         const owner = laneOwnerFor(data.text, nextId);
         if (owner && owner.id !== nextId) {
           const o = AGENT_BY_ID[owner.id];
@@ -1060,6 +1286,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         }
       }
 
+      const execBlock = await resolveExecContext();
       const appSystem =
         winner.systemPrompt +
         scene +
@@ -1067,7 +1294,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         taskToolInstructions +
         capabilityBlock +
         memoryBlock +
-        HOUSE_STYLE;
+        HOUSE_STYLE +
+        OPERATING_CONTRACT +
+        DELEGATION_DIRECTIVE +
+        execBlock;
 
       // Per-agent transcript: the current agent's own prior turns are role=assistant
       // (unprefixed); other agents' turns are surfaced as role=user context so the
@@ -1086,7 +1316,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             content: `(context — ${a?.name ?? "another agent"} said): ${m.text}`,
           };
         })
-        .concat([{ role: "user" as const, content: data.text }]);
+        .concat([{ role: "user" as const, content: userText }]);
 
       const perAgentFallbacks: string[] = [];
       const timeSensitiveRe =
@@ -1097,11 +1327,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // route it to schedule_reminder and DON'T also force a task/web-search for the same message.
       const reminderRe =
         /\b(remind me|reminder|notify me|ping me|nudge me|alert me|wake me|set an alarm|alarm|message me (?:in|at|later|tonight|tomorrow)|text me (?:in|at))\b/i;
-      const forceReminder = reminderRe.test(data.text);
+      const forceReminder = reminderRe.test(userText);
       // Only the PRIMARY responder is forced to create the task. Interjectors surface information;
       // forcing them to also create produced duplicate cards (e.g. Troy AND Iris both creating).
-      const forceTaskCreation = !forceReminder && !isInterjector && createTaskRe.test(data.text);
-      const forceWebSearch = !forceReminder && !!agentBackend.webSearch && timeSensitiveRe.test(data.text);
+      const forceTaskCreation = !forceReminder && !isInterjector && createTaskRe.test(userText);
+      const forceWebSearch = !forceReminder && !!agentBackend.webSearch && timeSensitiveRe.test(userText);
 
       function resolveTaskLane(value: unknown): TaskLane {
         const lane = String(value ?? "")
@@ -1371,12 +1601,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // it cuts the uncached input tokens per call, which lowers cost + TPM pressure (the throttle
           // that inflates multi-agent latency). Turn-specific directives sitting last also aids
           // instruction adherence via recency. Paired with a per-agent `promptCacheKey` for routing.
+          // execContextBlock is resolved once per turn (appSystem, which runs before this OpenAI branch,
+          // already awaited resolveExecContext). OPERATING_CONTRACT + the profile are both stable
+          // (static / stable-per-user), so they belong in the cache-stable prefix.
           const stableInstructions =
             (effectiveInstructions || winner.systemPrompt) +
             roster +
             taskToolInstructions +
             capabilityBlock +
             HOUSE_STYLE +
+            OPERATING_CONTRACT +
+            DELEGATION_DIRECTIVE +
+            (execContextBlock ?? "") +
             ragInstructions +
             webInstructions +
             "\n\n" + PRIORITIZE_SYSTEM_HINT +
@@ -1558,6 +1794,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           const mergedTools = [
             createHuddleTaskTool,
             CREATE_ARTIFACT_TOOL,
+            DELEGATE_TO_SPECIALIST_TOOL,
             FLAG_BLOCKER_TOOL,
             SCHEDULE_REMINDER_TOOL,
             PRIORITIZE_TOOL,
@@ -1591,6 +1828,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             if (c.name === "create_huddle_task") {
               return JSON.stringify(await createSuggestedTaskFromTool(c.arguments));
             }
+            if (c.name === "delegate_to_specialist") {
+              return await dispatchDelegate(c.arguments);
+            }
             if (c.name === "create_artifact") {
               const a = c.arguments as Record<string, unknown>;
               const name = String(a.name ?? "").trim();
@@ -1616,6 +1856,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   bytes: Buffer.from(content, "utf8"),
                 });
                 recordToolUse(winner.id, "create_artifact", `saved "${name}"`, true, deepLink);
+                if (a.task_id) await markTaskInReview(String(a.task_id), data.caller);
                 return JSON.stringify({ ok: true, id, deepLink });
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
@@ -2096,6 +2337,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   bytes: Buffer.from(content, "utf8"),
                 });
                 recordToolUse(winner.id, "create_artifact", `saved "${name}"`, true, deepLink);
+                if (a.task_id) await markTaskInReview(String(a.task_id), data.caller);
                 return JSON.stringify({ ok: true, id, deepLink });
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
@@ -2103,6 +2345,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 return JSON.stringify({ ok: false, error: msg });
               }
             },
+          });
+
+          // delegate_to_specialist — hand a workstream to a shared worker (mirrors OpenAI path).
+          lovableTools.delegate_to_specialist = tool({
+            description: DELEGATE_TO_SPECIALIST_TOOL.description,
+            inputSchema: z.object({
+              role: z.string(),
+              objective: z.string(),
+              inputs: z.string().optional(),
+              acceptance_criteria: z.string().optional(),
+            }),
+            execute: async (args) => dispatchDelegate(args as Record<string, unknown>),
           });
 
           // flag_blocker — the agent earns the "blocked" verdict by working the task (mirrors OpenAI path).
@@ -2687,10 +2941,43 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           ? `${clean}\n\n_(fallback: ${outcome.perAgentFallbacks.join("; ")})_`
           : clean;
 
+      // Attach any artifacts this agent saved this turn so the chat bubble can render an "Open <name>"
+      // chip. Derived from its toolUses (create_artifact stores deepLink `/artifacts/<id>` in detail and
+      // `saved "<name>"` in summary) — already serialized through resume/chunk/durable paths, so no new
+      // per-agent buffer to thread. The client opens by id (fresh SAS), so this survives SAS expiry.
+      const replyArtifacts = r.toolUses
+        .filter(
+          (t) =>
+            t.tool === "create_artifact" &&
+            t.ok &&
+            typeof t.detail === "string" &&
+            t.detail.startsWith("/artifacts/"),
+        )
+        .map((t) => ({
+          id: (t.detail as string).slice("/artifacts/".length),
+          name: /saved "(.+)"/.exec(t.summary)?.[1] ?? "Document",
+        }));
+      // Pillar 2: a delegation INTEGRATION turn references specialist docs its WORKERS produced (this
+      // persona didn't call create_artifact for them), so surface them as chips too — but only on the
+      // target persona's reply, and dedup against anything it did save itself.
+      if (data.attachArtifacts?.length && nextId === data.targetAgentId) {
+        const seen = new Set(replyArtifacts.map((a) => a.id));
+        for (const a of data.attachArtifacts) {
+          if (!seen.has(a.id)) {
+            replyArtifacts.push({ id: a.id, name: a.name });
+            seen.add(a.id);
+          }
+        }
+      }
+      // Backstop the fabricated-document-link failure (even when a REAL artifact was saved, the model may
+      // still hand-author a fake/placeholder link in prose). The chip is the only real document link; strip
+      // any self-authored markdown link from the text so the user never sees a fake "open the document" link.
+      const safeText = stripAgentReplyLinks(finalText);
       replies.push({
         agentId: nextId,
-        text: finalText,
+        text: safeText,
         fallbackNotes: outcome.perAgentFallbacks.length > 0 ? outcome.perAgentFallbacks : undefined,
+        artifacts: replyArtifacts.length ? replyArtifacts : undefined,
       });
       spoken.add(nextId);
 
@@ -2716,7 +3003,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // lane owner). If that owner isn't the addressed agent, enqueue a backend turn so they reply in
       // THEIR OWN DM — which fires the existing away-notification. Once per owner per turn; 1:1 only
       // (group turns bring the owner in via the normal re-queue above).
-      if (data.scope !== "group") {
+      // Only for a GENUINE user 1:1 message. Internal turns (autowork/standup/grooming/a prior
+      // follow-up/an integration) carry a directive as their `text`; running this on them mis-resolves a
+      // lane owner and spawns follow-ups that chain into a notification barrage (measured: autowork→Liam
+      // →Sam loop; Terry→Cole→Iris→Ezra chain). Gating on !data.internal confines the pass-along to real
+      // user asks and stops a follow-up from ever spawning another follow-up.
+      if (data.scope !== "group" && !data.internal) {
         const ownerId = capabilityOwnerFor(data.text)?.agent.id ?? laneOwnerFor(data.text, nextId)?.id ?? null;
         if (ownerId && ownerId !== nextId && !followupDelivered.has(ownerId)) {
           followupDelivered.add(ownerId);
@@ -2753,11 +3045,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // higher floor keeps a late-in-chunk agent from getting a near-zero bound that guarantees a
     // timeout-drop — the pre-wave budget gate re-queues agents there's no room for, so anything that
     // DOES start gets a workable slice. A per-agent timeout still bounds a single pathological agent.
-    const runBounded = (id: AgentId, prior: string): Promise<AgentTurnResult> => {
+    const runBounded = (id: AgentId, prior: string, userTextOverride?: string): Promise<AgentTurnResult> => {
       const floor = chunked ? 8_000 : 2_000;
       const remaining = Math.max(floor, deadlineMs - (Date.now() - turnStartMs));
       return Promise.race([
-        runAgentTurn(id, prior),
+        runAgentTurn(id, prior, userTextOverride),
         new Promise<AgentTurnResult>((resolve) =>
           setTimeout(() => {
             const nm = AGENT_BY_ID[id]?.name ?? id;
@@ -2795,6 +3087,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       interjectors: [...interjectorSet],
       ceremonyActive,
       ceremonyDirectives: [...ceremonyDirectiveById.entries()],
+      ceremonyCloser,
       replyCap,
       replies,
       journeyTaskUpdates,
@@ -2834,6 +3127,45 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     const chunkBudgetHit = () => chunked && Date.now() - turnStartMs > CHUNK_BUDGET_MS;
 
     if (ceremonyActive) {
+      // BARGE-IN: drain any user interjections queued on this turn (bargeCeremony appended them). Runs
+      // BETWEEN speakers — never mid-speaker — so a stand-up pauses politely for a question, answers
+      // it, then resumes the round-robin. Each barge is routed to the addressed/most-relevant agent
+      // (host fallback), dispatched with a barge directive so it answers the user (and can file a task)
+      // instead of giving its lane update. Claim is atomic + row-locked, so a resumed chunk can't
+      // re-handle it. Answering an owner's barge does NOT consume their round-robin slot.
+      const handleBarges = async () => {
+        if (!chunked || !turnId || !turnStore) return;
+        for (;;) {
+          if (replies.length >= replyCap) return;
+          const claimed = await turnStore.claimBarge(turnId);
+          if (!claimed) return;
+          const mentioned = parseMentions(claimed.text, AGENTS).filter((id) => data.members.includes(id));
+          const routedBarge = routeMessage({
+            text: claimed.text,
+            scope: "group",
+            members: data.members,
+            history: [],
+          });
+          const responder =
+            mentioned[0] ??
+            routedBarge.winners.find((id) => data.members.includes(id)) ??
+            (data.members.includes(CEREMONY_HOST) ? CEREMONY_HOST : null);
+          if (responder && AGENT_BY_ID[responder]) {
+            const wasSpoken = spoken.has(responder);
+            const stillQueued = queue.includes(responder);
+            bargeDirectiveById.set(responder, bargeDirective(claimed.text));
+            const r = await runBounded(responder, buildPrior(), claimed.text);
+            mergeAgentResult(responder, r, [responder]);
+            bargeDirectiveById.delete(responder);
+            // Don't burn the responder's own round-robin turn: if they hadn't spoken their lane update
+            // yet (still queued), let them still give it after the interjection is handled.
+            if (stillQueued && !wasSpoken) spoken.delete(responder);
+            await streamChunk();
+          }
+          if (chunkBudgetHit()) return;
+        }
+      };
+
       // Ceremonies stay STRICTLY SEQUENTIAL: each participant (lane owners, then
       // the host/closer) speaks in turn seeing everything said before it.
       while (replies.length < replyCap) {
@@ -2841,11 +3173,33 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // (participants stay in `queue`). The host-closes-last ordering is preserved because the queue
         // order is preserved across the boundary.
         if (chunkBudgetHit() && queue.length > 0) break;
+        await handleBarges(); // answer any interjection BEFORE the next scheduled speaker
+        if (chunkBudgetHit() && queue.length > 0) break;
         const nextId = shiftEligible();
         if (nextId == null) break;
         const r = await runBounded(nextId, buildPrior());
         mergeAgentResult(nextId, r, [nextId]);
         await streamChunk();
+      }
+      // A barge could land after the last owner but before the close — handle it, then Terry closes.
+      if (!(chunkBudgetHit() && queue.length > 0)) await handleBarges();
+      // Terry CLOSES once every owner has spoken (queue drained). Direct runBounded call bypasses the
+      // spoken-guard (host already opened). If the chunk budget is spent first, ceremonyCloser stays
+      // set and survives in progress → the next chunk runs it (queue empty by then, so it's next up).
+      if (
+        ceremonyCloser &&
+        queue.length === 0 &&
+        replies.length < replyCap &&
+        !chunkBudgetHit()
+      ) {
+        const [closerId, closerDir] = ceremonyCloser;
+        if (data.members.includes(closerId) && AGENT_BY_ID[closerId]) {
+          ceremonyDirectiveById.set(closerId, closerDir);
+          spoken.delete(closerId);
+          const r = await runBounded(closerId, buildPrior());
+          mergeAgentResult(closerId, r, [closerId]);
+        }
+        ceremonyCloser = null;
       }
     } else {
       // Normal group turn: the PRIMARY winner runs first (sequentially) so the
@@ -2904,7 +3258,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       );
       // Continue only if there is real work left AND we haven't hit the runaway cap AND the reply cap
       // still has room. Otherwise finalize DONE with whatever we have.
-      const hasMore = replies.length < replyCap && remainingEligible.length > 0 && !atChunkCap;
+      const hasMore =
+        replies.length < replyCap &&
+        !atChunkCap &&
+        (remainingEligible.length > 0 || ceremonyCloser != null);
       if (hasMore) {
         try {
           await turnStore.saveTurnChunk(turnId, replies, buildResumeState(), false);
@@ -2927,6 +3284,26 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 export const sendHuddleMessage = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => Input.parse(raw))
   .handler(async ({ data }) => runHuddleTurn(data));
+
+// BARGE-IN: the user interjects during a live ceremony. Instead of a separate, uncoordinated turn,
+// we queue the message onto the RUNNING ceremony turn; its driver pops it between speakers, answers
+// it, then resumes the round-robin. Idempotent (barge id) + kicks the runner so a between-chunk
+// ceremony picks it up immediately. Returns queued=false if the ceremony already finished (the client
+// then falls back to a normal message).
+const BargeInput = z.object({
+  turnId: z.string().min(6).max(80),
+  text: z.string().min(1).max(2000),
+});
+export const bargeCeremony = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => BargeInput.parse(raw))
+  .handler(async ({ data }) => {
+    const { appendBarge } = await import("./tasks/turns.server");
+    const slug = data.text.slice(0, 32).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const bargeId = `barge-${data.turnId}-${slug}`;
+    const queued = await appendBarge(data.turnId, { id: bargeId, text: data.text });
+    if (queued) void kickNextChunk(data.turnId);
+    return { ok: true, queued };
+  });
 
 // ---- Durable, device-independent turns ------------------------------------------------------
 // A chat turn no longer depends on the phone holding a long fetch open. The client PERSISTS the
@@ -2973,6 +3350,248 @@ async function kickNextChunk(turnId: string): Promise<void> {
   }
 }
 
+// ---- Pillar 2: worker sub-turn + fan-in integration ---------------------------------------------
+
+type WorkerPayload = {
+  role: string;
+  objective: string;
+  inputs?: string;
+  acceptance_criteria?: string;
+  personaId?: string;
+  personaName?: string;
+  orchestrationId?: string;
+  originHuddleId?: string;
+  originScope?: string;
+};
+type WorkerResult = {
+  role: string;
+  ok: boolean;
+  findings: string;
+  artifactId: string | null;
+  artifactName: string | null;
+  error: string;
+};
+
+/**
+ * Run one delegated WORKER sub-turn: a bounded specialist that does its own web-search + create_artifact
+ * (NO delegate tool → no nested orchestration, AC-5), then persists its structured findings and fans in
+ * to the persona's integration. Never throws out — a worker error is recorded and still counts toward
+ * the fan-in so the integration proceeds and notes the gap (AC-4).
+ */
+async function runWorkerTurn(record: {
+  id: string;
+  user_email: string | null;
+  payload: Record<string, unknown>;
+}): Promise<void> {
+  const { completeTurn } = await import("./tasks/turns.server");
+  const payload = record.payload as {
+    worker?: WorkerPayload;
+    caller?: { entra_object_id?: string; entra_email?: string };
+    timeZone?: string;
+    router?: unknown;
+    agents?: Record<string, { model?: string }>;
+  };
+  const w = payload.worker;
+  const result: WorkerResult = {
+    role: w?.role ?? "specialist",
+    ok: false,
+    findings: "",
+    artifactId: null,
+    artifactName: null,
+    error: "",
+  };
+
+  try {
+    if (!w?.role || !w.objective) throw new Error("malformed worker payload");
+    const worker = getWorker(w.role);
+    if (!worker) throw new Error(`unknown worker role: ${w.role}`);
+
+    const caller = payload.caller ?? {};
+    const email =
+      (await (await import("./journey/identity")).resolveTaskEmail(caller)) ?? caller.entra_email ?? null;
+
+    // Executive profile so the worker is executive-grade too (best-effort; "" when unset).
+    let execBlock = "";
+    try {
+      if (email) {
+        const { getUserContext, renderExecutiveContext } = await import("./identity/user-context.server");
+        execBlock = renderExecutiveContext(await getUserContext(email));
+      }
+    } catch {
+      /* profile optional */
+    }
+
+    const { workerPrompt } = await import("./agents/workers");
+    const instructions = workerPrompt(
+      worker,
+      {
+        objective: w.objective,
+        inputs: w.inputs,
+        acceptance_criteria: w.acceptance_criteria,
+        personaName: w.personaName,
+      },
+      { operatingContract: OPERATING_CONTRACT, execBlock },
+    );
+
+    // Worker tools: web search + create_artifact ONLY. Exactly one artifact per worker.
+    let artifactId: string | null = null;
+    let artifactName: string | null = null;
+    const onToolCall = async (c: { name: string; arguments: Record<string, unknown> }): Promise<string> => {
+      if (c.name === "tavily_web_search") {
+        const q = String(c.arguments.query ?? "").trim() || "unknown";
+        try {
+          const r = await tavilySearch({
+            query: q,
+            topic: c.arguments.topic as TavilySearchArgs["topic"],
+            search_depth: c.arguments.search_depth as TavilySearchArgs["search_depth"],
+            time_range: c.arguments.time_range as TavilySearchArgs["time_range"],
+            start_date: c.arguments.start_date as string | undefined,
+            end_date: c.arguments.end_date as string | undefined,
+            include_domains: c.arguments.include_domains as string[] | undefined,
+            exclude_domains: c.arguments.exclude_domains as string[] | undefined,
+            max_results: c.arguments.max_results as number | undefined,
+          });
+          return JSON.stringify(r);
+        } catch (err) {
+          return JSON.stringify({ error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      if (c.name === "create_artifact") {
+        const a = c.arguments;
+        const name = String(a.name ?? "").trim();
+        const content = String(a.content ?? "");
+        if (!name || !content) return JSON.stringify({ ok: false, error: "name and content are required" });
+        if (artifactId) return JSON.stringify({ ok: true, deduped: true, id: artifactId });
+        if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+        try {
+          const { createArtifact } = await import("./artifacts/artifacts.server");
+          const { id, deepLink } = await createArtifact({
+            userEmail: email,
+            agentId: w.personaId ?? null, // attribute to the accountable persona
+            taskId: a.task_id ? String(a.task_id) : null,
+            folder: String(a.folder ?? worker.role),
+            name,
+            mime: String(a.mime ?? "text/markdown"),
+            bytes: Buffer.from(content, "utf8"),
+          });
+          artifactId = id;
+          artifactName = name;
+          if (a.task_id) await markTaskInReview(String(a.task_id), payload.caller);
+          return JSON.stringify({ ok: true, id, deepLink });
+        } catch (err) {
+          return JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      return JSON.stringify({ error: `unknown tool: ${c.name}` });
+    };
+
+    const model = payload.agents?.[w.personaId ?? ""]?.model ?? "gpt-4o-mini";
+    const { callOpenAIResponses } = await import("./openai-responses.server");
+    const res = await callOpenAIResponses({
+      model,
+      instructions,
+      transcript: [{ role: "user", content: w.objective }],
+      tools: [TAVILY_WEB_SEARCH_TOOL, CREATE_ARTIFACT_TOOL],
+      onToolCall,
+      maxToolHops: 6,
+      promptCacheKey: `worker:${worker.id}`,
+    });
+    result.ok = true;
+    result.findings = res.text;
+    result.artifactId = artifactId;
+    result.artifactName = artifactName;
+  } catch (err) {
+    result.error = err instanceof Error ? err.message : String(err);
+  }
+
+  // Terminal: status='done' even on a worker error, so the fan-in sees every row as complete (AC-4).
+  try {
+    await completeTurn(record.id, { worker: result });
+  } catch {
+    /* best-effort persist */
+  }
+
+  if (w?.orchestrationId) {
+    try {
+      await maybeEnqueueIntegration(w.orchestrationId, record.user_email, payload);
+    } catch {
+      /* fan-in is non-fatal */
+    }
+  }
+}
+
+/**
+ * Fan-in: when EVERY worker sub-turn of an orchestration is terminal, enqueue exactly ONE integration
+ * turn (idempotent id → race-safe) in which the accountable persona critiques + integrates the workers'
+ * findings into the single answer the user sees, with their documents attached as chips (AC-3).
+ */
+async function maybeEnqueueIntegration(
+  orchestrationId: string,
+  userEmail: string | null,
+  workerPayload: {
+    worker?: WorkerPayload;
+    caller?: unknown;
+    timeZone?: string;
+    router?: unknown;
+    agents?: unknown;
+  },
+): Promise<void> {
+  const { getOrchestrationWorkers, enqueueTurn } = await import("./tasks/turns.server");
+  const rows = await getOrchestrationWorkers(orchestrationId);
+  if (!rows.length) return;
+  if (!rows.every((x) => x.status === "done" || x.status === "error")) return;
+
+  const w = workerPayload.worker;
+  const personaId = w?.personaId as AgentId | undefined;
+  if (!personaId || !AGENT_BY_ID[personaId]) return; // can't integrate without a valid persona
+  const originHuddleId = w?.originHuddleId ?? `dm-${personaId}`;
+  const originScope: "group" | "one-to-one" = w?.originScope === "group" ? "group" : "one-to-one";
+
+  // Per-worker findings budget so the assembled directive stays under the Input `text` 4000-char cap.
+  const perWorker = Math.max(300, Math.min(900, Math.floor(2600 / Math.max(1, rows.length))));
+  const attach: { id: string; name: string }[] = [];
+  const lines: string[] = [];
+  for (const row of rows) {
+    const wr = (row.result as { worker?: WorkerResult } | null)?.worker;
+    if (!wr) continue;
+    const label = getWorker(wr.role ?? "")?.role ?? wr.role ?? "specialist";
+    if (wr.artifactId) attach.push({ id: wr.artifactId, name: wr.artifactName ?? `${label} findings` });
+    const status = wr.ok ? "" : ` (INCOMPLETE${wr.error ? `: ${wr.error.slice(0, 100)}` : ""})`;
+    const doc = wr.artifactId ? ` [document: /artifacts/${wr.artifactId}]` : "";
+    const findings = (wr.findings ?? "").trim().slice(0, perWorker) || "(no findings returned)";
+    lines.push(`— ${label}${status}:${doc}\n${findings}`);
+  }
+
+  const directive = (
+    `Your specialists have finished the workstreams you delegated. Here is what each returned` +
+    `${attach.length ? " (their full documents are linked)" : ""}:\n\n${lines.join("\n\n")}\n\n` +
+    `Now do YOUR job as the accountable lead: critique any weak, unsupported, or conflicting points, ` +
+    `then integrate everything into ONE cohesive executive answer for the user — informative, then ` +
+    `analytical, then actionable, then strategic. Reference their documents; do NOT concatenate or ` +
+    `paste their reports. If a workstream came back incomplete, say so honestly and give your best ` +
+    `recommendation anyway.`
+  ).slice(0, 3990);
+
+  const integrationId = `integrate-${orchestrationId}`;
+  const integrationPayload = {
+    text: directive,
+    huddleId: originHuddleId,
+    scope: originScope,
+    members: [personaId],
+    targetAgentId: personaId,
+    history: [],
+    router: workerPayload.router,
+    agents: workerPayload.agents,
+    timeZone: workerPayload.timeZone,
+    caller: workerPayload.caller,
+    attachArtifacts: attach.length ? attach : undefined,
+    notify: "push",
+    internal: true, // the persona is delivering the integrated answer — it must not defer/pass along
+  };
+  const fresh = await enqueueTurn(integrationId, originHuddleId, userEmail, integrationPayload);
+  if (fresh) void kickNextChunk(integrationId);
+}
+
 async function executeClaimedTurn(record: {
   id: string;
   user_email: string | null;
@@ -2981,6 +3600,14 @@ async function executeClaimedTurn(record: {
 }): Promise<HuddleTurnResult | null> {
   const { failTurn } = await import("./tasks/turns.server");
   try {
+    // Pillar 2: a WORKER sub-turn (persona delegated a workstream) runs a bounded specialist instead of
+    // the normal multi-agent turn — its own web-search + create_artifact only (no delegate → no nesting),
+    // then fans in to the persona's integration. Self-contained (never throws out); returns null so the
+    // push/chunk logic below is skipped (workers are internal, notify:"silent").
+    if ((record.payload as { worker?: unknown }).worker) {
+      await runWorkerTurn(record);
+      return null;
+    }
     const data = Input.parse(record.payload);
     // DURABLE/CHUNKED run: the driver streams replies and persists the terminal 'done'/'partial' row
     // itself (saveTurnChunk), so we do NOT completeTurn here. A resumed chunk rebuilds its mid-turn
@@ -3138,7 +3765,11 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
       error: t.error,
       updated_ms: t.updated_ms,
       seq: t.seq,
-      replies: (t.replies ?? []) as { agentId: AgentId; text: string }[],
+      replies: (t.replies ?? []) as {
+        agentId: AgentId;
+        text: string;
+        artifacts?: { id: string; name: string }[];
+      }[],
       result: (t.result ?? null) as HuddleTurnResult | null,
     }));
     return { turns };
@@ -3180,7 +3811,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
       id: string;
       huddleId: string;
       updated_ms: number;
-      replies: { agentId: AgentId; text: string }[];
+      replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
     };
     const empty: BackfillTurn[] = [];
     if (!data.caller?.entra_email) return { turns: empty };
@@ -3202,6 +3833,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
       replies: (((t.result as { replies?: unknown } | null)?.replies ?? t.replies ?? []) as {
         agentId: AgentId;
         text: string;
+        artifacts?: { id: string; name: string }[];
       }[]),
     }));
     return { turns };

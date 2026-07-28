@@ -91,6 +91,7 @@ async function surfaceSummary(opts: {
     agents: { "terry-locke": { backend: "openai", journey: { enabled: true } } },
     timeZone: opts.tz,
     caller: opts.caller,
+    internal: true, // system-originated digest — never pass along / defer
   };
   const id = `groom-summary-${opts.runId}`;
   const { enqueueTurn } = await import("./turns.server");

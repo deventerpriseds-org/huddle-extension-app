@@ -62,7 +62,7 @@ export function HuddleApp() {
         id: string;
         huddleId: string;
         updated_ms: number;
-        replies: { agentId: AgentId; text: string }[];
+        replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
       }[]) {
         cursor = Math.max(cursor, t.updated_ms || 0);
         (t.replies ?? []).forEach((reply, i) => {
@@ -77,6 +77,7 @@ export function HuddleApp() {
             text: reply.text,
             ts: (t.updated_ms || Date.now()) + i,
             replyTo: t.id,
+            artifacts: reply.artifacts,
           });
         });
       }
