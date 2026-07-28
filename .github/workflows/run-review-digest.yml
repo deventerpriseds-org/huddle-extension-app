@@ -1,0 +1,48 @@
+name: Run agent review digest (manual/on-demand)
+
+# Manual/test trigger for the review-digest job. The scheduled path is the Huddle every-minute
+# scheduler POSTing /api/public/run-review-digest at 8/11/13/16/19 local; this workflow fires the
+# SAME route on demand (default force:true, so it runs even if nothing is waiting) for testing or an
+# ad-hoc "nudge me now". Uses the shared JOURNEY_PROXY_TOKEN org secret — no new secret.
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Caller email to run the review digest for (journey user)."
+        required: true
+        default: "von.ellis@enterpriseds.io"
+      force:
+        description: "Run even when nothing is waiting in review."
+        required: false
+        default: "true"
+      timeZone:
+        description: "IANA time zone."
+        required: false
+        default: "America/New_York"
+
+jobs:
+  run-review-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/public/run-review-digest
+        env:
+          SECRET: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          EMAIL: ${{ inputs.email }}
+          FORCE: ${{ inputs.force }}
+          TZ_INPUT: ${{ inputs.timeZone }}
+        run: |
+          if [ -z "$SECRET" ]; then echo "JOURNEY_PROXY_TOKEN secret not set"; exit 1; fi
+          RUN_ID="review-digest-manual-$(date -u +%Y%m%d%H%M%S)"
+          echo "Firing run-review-digest for $EMAIL (force=$FORCE, runId=$RUN_ID)"
+          HTTP=$(curl -s -o /tmp/review-digest.out -w "%{http_code}" -X POST \
+            -H "content-type: application/json" \
+            -H "x-webhook-secret: $SECRET" \
+            -d "{\"caller\":{\"entra_email\":\"$EMAIL\"},\"force\":$FORCE,\"timeZone\":\"$TZ_INPUT\",\"runId\":\"$RUN_ID\"}" \
+            "$BASE/api/public/run-review-digest")
+          echo "HTTP $HTTP"
+          echo "--- response ---"
+          cat /tmp/review-digest.out; echo
+          # 200 = ran (may be skipped/sent); anything else is a failure to surface.
+          if [ "$HTTP" != "200" ]; then echo "run-review-digest failed"; exit 1; fi
