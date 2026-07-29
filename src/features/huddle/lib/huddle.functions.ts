@@ -7,6 +7,7 @@ import { parseMentions, routeMessage, routeMessageLLM, laneOwnerFor, type Router
 import { isQuotaError, QUOTA_OUTAGE_INLINE, type FallbackEvent, type PromptDebug } from "./fallbacks";
 import { buildRoster } from "./roster";
 import { agentOwnsCapability, exclusiveCapabilities, capabilityOwnerFor } from "./capabilities";
+import { knowledgeBlockFor } from "./knowledge";
 import {
   detectCeremony,
   buildCeremonyReport,
@@ -1220,6 +1221,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         data.members,
         winner.id,
       );
+      // Knowledge-library "specialized brain": grounded, senior-professional expertise for
+      // this agent's discipline (data/knowledge/, read via lib/knowledge.ts). Stable per
+      // agent, so it belongs in the cacheable prefix. "" for agents without a pack yet.
+      const knowledgeBlock = knowledgeBlockFor(winner.id);
       const taskToolInstructions =
         "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it." +
         " NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled \"groom the backlog\" or \"assign the team\") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked.";
@@ -1289,6 +1294,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       const execBlock = await resolveExecContext();
       const appSystem =
         winner.systemPrompt +
+        knowledgeBlock +
         scene +
         roster +
         taskToolInstructions +
@@ -1606,6 +1612,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // (static / stable-per-user), so they belong in the cache-stable prefix.
           const stableInstructions =
             (effectiveInstructions || winner.systemPrompt) +
+            knowledgeBlock +
             roster +
             taskToolInstructions +
             capabilityBlock +
