@@ -252,6 +252,12 @@ in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's
   report came from an environment this sandbox cannot fully reproduce (here: real Entra auth + a real
   browser extension). Status downgraded to "implemented, mechanism verified locally, NOT yet confirmed
   live" until the user reports back after merge + deploy + their own re-test.
+- [2026-07-29] **CONFIRMED FIXED — this time for real.** Merged PR #17 (`16fedb4`), triggered
+  `deploy-swa.yml` on `main` manually (workflow_dispatch only), confirmed run completed/success against
+  the merge commit. User hard-refreshed live production with Grammarly still active (not disabled) and
+  confirmed the sidebar now renders correctly. This is the first item in this entire investigation
+  actually confirmed in the user's own environment, not just reproduced in a sandbox — the bar the
+  correction above says this should have met before being called done.
 - [2026-07-29] **Standing lesson: a "browser-specific" bug report is not always an engine-compatibility
   bug.** Spent real effort chasing CSS Media Queries Level 4 range-syntax support (a genuine, real
   category of Edge-vs-Chrome difference) before the user's own DevTools Styles-panel screenshot revealed

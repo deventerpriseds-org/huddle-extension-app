@@ -16,7 +16,10 @@ prior fix commits for these were pushed or orphaned.
 an already-OPEN, never-merged PR #15 — pushed, not orphaned, just never merged. Merged (`7cc5af9`),
 manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confirmed run completed/success).
 **Status:** open — PARTIALLY resolved, one direct contradiction not yet explained:
-- (1) desktop breakpoint/sidebar: **ROOT CAUSE IDENTIFIED, FIX IMPLEMENTED — NOT YET CONFIRMED LIVE.**
+- (1) desktop breakpoint/sidebar: **CONFIRMED FIXED LIVE by the user** (hard-refreshed production after
+  merge `16fedb4` + deploy, Grammarly still active, sidebar renders correctly). CLOSED.
+  [Prior text below retained for the investigation record.]
+  ~~ROOT CAUSE IDENTIFIED, FIX IMPLEMENTED — NOT YET CONFIRMED LIVE.~~
   (Corrected 2026-07-29: an earlier version of this entry said "found and fixed" before the fix had been
   merged, deployed, or seen by the user — caught by the user, not self-caught. Downgrading the claim.)
   After retracting a premature "verified"
