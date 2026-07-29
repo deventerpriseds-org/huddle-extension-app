@@ -6,6 +6,29 @@ Last updated: 2026-07-25
 
 ## Open
 
+### ACT-huddle-2: Agent avatar images 404 (Lovable-preview-only asset paths)
+**Requested:** 2026-07-29
+**Asked for:** fix the broken avatar photos across the app — every agent falls back to colored
+initials because the real images can't load.
+**Root cause (confirmed):** all 14 agent avatars are wired in `src/features/huddle/data/agents.ts`
+via `src/assets/agents/*.png.asset.json` pointer files, whose `url` field is a Lovable-platform-
+internal preview path (`/__l5e/assets-v1/...`) — only servable by Lovable's own hosting, never by
+this app's actual Azure Static Web App deployment. `AgentAvatar.tsx` already has a documented,
+working fallback (colored initials on image `onerror`), so nothing crashes — the photos just never
+show. Confirmed the real image bytes were NEVER committed to this repo (checked full git history,
+all branches) and confirmed the Lovable preview domain referenced in `__root.tsx` isn't reachable
+from this sandbox (403 CONNECT via the CCR egress proxy, same restriction as azurestaticapps.net).
+**Scope:** narrow — exactly 14 files, all agent avatars, all wired through the one `agents.ts` file.
+No other image in the app uses this broken pattern (confirmed via full-codebase grep for
+`.asset.json` imports and `__l5e` references).
+**Status:** BLOCKED on the user — they're retrieving the actual avatar image files (they may have
+Lovable project access to export them) and will hand them over. Once received: commit into this
+app's own `public/`/`src/assets/` so Vite/Azure SWA serves them directly, repoint `agents.ts`'s
+`avatarUrl` fields at the local paths, remove the now-unnecessary Lovable-path comment in
+`AgentAvatar.tsx`, verify no more 404s in the console.
+**Deferred by explicit user direction** ("for now i care about the meeting room looking correct")
+— not being worked until the images are provided.
+
 ### ACT-huddle-1: Desktop layout bugs — sidebar/menu missing, meeting view, mic barge-in, standup gap
 **Requested:** 2026-07-29
 **Asked for:** user reported 4 live bugs on production (https://icy-flower-0f415200f.7.azurestaticapps.net):
@@ -16,7 +39,10 @@ prior fix commits for these were pushed or orphaned.
 an already-OPEN, never-merged PR #15 — pushed, not orphaned, just never merged. Merged (`7cc5af9`),
 manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confirmed run completed/success).
 **Status:** open — PARTIALLY resolved, one direct contradiction not yet explained:
-- (1) desktop breakpoint/sidebar: **ROOT CAUSE IDENTIFIED, FIX IMPLEMENTED — NOT YET CONFIRMED LIVE.**
+- (1) desktop breakpoint/sidebar: **CONFIRMED FIXED LIVE by the user** (hard-refreshed production after
+  merge `16fedb4` + deploy, Grammarly still active, sidebar renders correctly). CLOSED.
+  [Prior text below retained for the investigation record.]
+  ~~ROOT CAUSE IDENTIFIED, FIX IMPLEMENTED — NOT YET CONFIRMED LIVE.~~
   (Corrected 2026-07-29: an earlier version of this entry said "found and fixed" before the fix had been
   merged, deployed, or seen by the user — caught by the user, not self-caught. Downgrading the claim.)
   After retracting a premature "verified"
@@ -47,6 +73,24 @@ manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confir
   dropdown button is physically overlapped by the ContextPanel's "Queue" tab at 768–850px specifically
   (click-intercepted, confirmed via Playwright error + bounding-box overlap), while ≥900px is clean.
   Untriaged, not fixed.
+- (1b) meeting-view "not snapping to place" (the other half of the original (1) complaint, separate
+  from the sidebar bug and NOT fixed by PR #15 or the Grammarly hardening): **root cause found, fix
+  implemented, MECHANISM independently verified — NOT YET CONFIRMED LIVE by the user.** User confirmed
+  via console (`window.innerWidth=1048`) this happens in BOTH Edge and Chrome — ruling out the
+  Grammarly/extension explanation, since that was Edge-specific. Reproduced locally with Playwright at
+  the user's exact 1048px width and measured the real bounding boxes: `MeetingBar.tsx`'s "stage" column
+  div (`flex min-h-0 flex-col md:flex-1`) was missing `min-w-0` — the classic flexbox trap where a flex
+  item won't shrink below its content's intrinsic width. The participant chip strip (up to 15 agents,
+  `overflow-x-auto`) forced the stage column to ~2216px wide in a 1048px viewport, pushing the sibling
+  `<aside>` (transcript/people panel, `md:w-[360px]`) entirely off-screen and shoving the centered avatar
+  to the edge of the mostly-invisible column — an exact match for the user's screenshots (avatar clipped,
+  no visible transcript panel). **Fix:** added `min-w-0` to that one div (one line). Independent
+  `verifier` subagent re-derived everything from scratch: reproduced the BEFORE state itself (measured
+  stage column at 2216px, aside at x=2216/off-screen), restored the fix and re-measured (stage column
+  688px = 1048−360, aside fully on-screen at x=688, avatar centered at x=344 = exactly half the stage
+  column), confirmed no regression in the mobile stacked layout at 500px, confirmed `tsc` clean — 7/7
+  PASS. Per the standing rule from earlier in this session: NOT calling this "fixed" until merged,
+  deployed, and the user has confirmed it live in their own browser.
 **Evidence:** PR #15 (github.com/deventerpriseds-org/huddle-extension-app/pull/15), merge commit `7cc5af9`,
 deploy run `30471382381` (conclusion success), verifier subagent report (git ancestry + deploy timestamp
 + independent Playwright repro), this session's own Playwright screenshots at real resolutions (not

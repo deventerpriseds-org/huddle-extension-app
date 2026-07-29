@@ -252,6 +252,12 @@ in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's
   report came from an environment this sandbox cannot fully reproduce (here: real Entra auth + a real
   browser extension). Status downgraded to "implemented, mechanism verified locally, NOT yet confirmed
   live" until the user reports back after merge + deploy + their own re-test.
+- [2026-07-29] **CONFIRMED FIXED — this time for real.** Merged PR #17 (`16fedb4`), triggered
+  `deploy-swa.yml` on `main` manually (workflow_dispatch only), confirmed run completed/success against
+  the merge commit. User hard-refreshed live production with Grammarly still active (not disabled) and
+  confirmed the sidebar now renders correctly. This is the first item in this entire investigation
+  actually confirmed in the user's own environment, not just reproduced in a sandbox — the bar the
+  correction above says this should have met before being called done.
 - [2026-07-29] **Standing lesson: a "browser-specific" bug report is not always an engine-compatibility
   bug.** Spent real effort chasing CSS Media Queries Level 4 range-syntax support (a genuine, real
   category of Edge-vs-Chrome difference) before the user's own DevTools Styles-panel screenshot revealed
@@ -259,3 +265,17 @@ in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's
   "works in Chrome, not in Edge" for what looks like a CSS/layout issue, check DevTools' Styles panel
   (not just Computed) for anything labeled "injected stylesheet" BEFORE reaching for engine-compatibility
   theories — extensions are common, cheap to rule in/out, and cost nothing to check first.
+- [2026-07-29] **Meeting-view "not snapping to place" root-caused and fixed — a genuinely different bug
+  from the sidebar collision, confirmed by the user reproducing in BOTH Edge and Chrome** (ruling out any
+  extension-specific explanation). `MeetingBar.tsx`'s stage column (`flex min-h-0 flex-col md:flex-1`)
+  was missing `min-w-0` — a classic flexbox trap: a flex item's default `min-width:auto` refuses to
+  shrink below its content's intrinsic width. The participant chip strip (`overflow-x-auto`, up to 15
+  agents) has enough intrinsic width to force the whole stage column to ~2216px in a 1048px viewport,
+  pushing the transcript/people `<aside>` (`md:w-[360px]`) entirely off-screen and shoving the centered
+  avatar to the visible edge of an oversized, mostly-invisible column. Reproduced the user's exact
+  screenshot locally via Playwright with real `getBoundingClientRect` measurements (stage column 2216px,
+  aside at x=2216/off-screen) before touching any code — one-line fix (`min-w-0` added), independently
+  re-measured by a `verifier` subagent that reproduced the BEFORE state itself (didn't just trust the
+  numbers): stage column → 688px (=1048−360), aside → fully on-screen at x=688, avatar centered at
+  x=344 (exactly half the stage column). No mobile-layout regression at 500px. `tsc` clean. NOT calling
+  this fixed until merged, deployed, and the user confirms it live — per the standing rule two entries up.
