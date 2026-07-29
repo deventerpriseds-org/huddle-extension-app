@@ -199,3 +199,49 @@ in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's
   despite no obvious gate found in source)? Asked user to check DOM presence + Computed `display` value +
   console errors to disambiguate — awaiting answer. This is the single most useful next fact: it cleanly
   separates "CSS never applies at this width" from "the component tree never mounts this subtree."
+- [2026-07-29] **ROOT CAUSE FOUND AND FIXED: third-party browser extension CSS collision, not an app
+  bug.** User confirmed `display:none` computed on the sidebar wrapper at `window.innerWidth=1048`
+  (genuinely wide, zoom ruled out). Ruled out CSS media-query range-syntax incompatibility (both
+  `matchMedia('(width>=48rem)')` and `matchMedia('(min-width:48rem)')` returned `true` in the user's
+  Edge — a very current Chromium 150, not outdated/managed, no extensions per the user's initial belief).
+  Pulled the exact deployed CSS locally (`npm run build:dev` with `NITRO_PRESET=node-server` — the
+  compiled filename `styles-H2YY_SaI.css` matched what the user's own DevTools referenced, confirming
+  byte-identical content to production) and verified the source CSS itself is CORRECT: `.hidden{display:
+  none}` and `.md\:flex{display:flex}` both live in the same `@layer utilities` block, correctly ordered
+  (`.md:flex` after `.hidden`, so it should win at ≥768px). The user's own DevTools Styles panel then
+  showed the actual culprit directly: an **"injected stylesheet"** rule `.hidden{display:none!important}`
+  beating everything — and `<body data-gr-ext-installed ...>` is Grammarly's DOM fingerprint. The
+  user's own "disable Grammarly" test was inconclusive (per-site toggle likely doesn't stop the
+  underlying content-script injection), but regardless of 100% attribution, the user asked to harden
+  against ANY extension defining a generic `.hidden` class, since Grammarly alone is common enough to
+  justify it.
+- [2026-07-29] **Hardening implemented and independently verified.** Added a namespaced Tailwind v4
+  custom utility `@utility app-hidden { display: none; }` in `src/styles.css` (follows the existing
+  `@utility hair {...}` precedent) so Tailwind auto-generates all variants. Renamed every REAL Tailwind
+  `hidden`/`md:hidden` utility usage (27 sites across 7 files: `sidebar.tsx` ×11, `HuddleView.tsx` ×2,
+  `MeetingBar.tsx` ×2, `BoardView.tsx` ×2, `HuddleApp.tsx` ×4, `SettingsSheet.tsx` ×1, `ArtifactsView.tsx`
+  ×5) to `app-hidden`/`md:app-hidden`, via an independent AC-writing subagent's audit (which caught a
+  more precise scope than my own initial estimate) followed by careful per-site edits — NOT a blind
+  find/replace, since "hidden" also appears as: `aria-hidden` attributes, the DIFFERENT `overflow-hidden`/
+  `overflow-x-hidden` utility, the native `hidden={...}` boolean DOM attribute (`sidebar.tsx:575`),
+  `:not([hidden])` (targets `cmdk`'s own attribute, `command.tsx`), `data-[state=hidden]` (Radix's own
+  state value, `navigation-menu.tsx`), and `hidden: cn(...)` (react-day-picker's external API key,
+  `calendar.tsx`) — all correctly left untouched. Verified: `tsc --noEmit` clean; a fresh production-style
+  build's compiled CSS contains `.app-hidden`/`.md\:app-hidden` and still contains the unrelated
+  `.overflow-hidden`/`.overflow-x-hidden` rules; a bare `.hidden{display:none}` rule is STILL emitted
+  (Tailwind's scanner picks up the substring from `data-[state=hidden]` etc.) but is dead/unapplied code
+  — confirmed no DOM element carries that class anymore. **Non-vacuous proof**: injected the exact rogue
+  `.hidden{display:none!important}` rule via Playwright — the renamed sidebar/rail elements stayed
+  `display:flex`, while a synthetic control element still using the OLD bare `hidden` class correctly
+  broke (`display:none`) under the identical injection, proving the test would have caught the original
+  bug. Independent `verifier` subagent re-ran all of this from scratch: 5/6 PASS (rename scope, tsc,
+  build/CSS, live hardening via injection, cleanup), 1 PARTIAL (MeetingBar/BoardView-specific DOM paths
+  not reachable live — blocked by this sandbox's lack of Azure PG/voice backend access, not a defect in
+  the change itself; explicitly flagged, not silently skipped).
+- [2026-07-29] **Standing lesson: a "browser-specific" bug report is not always an engine-compatibility
+  bug.** Spent real effort chasing CSS Media Queries Level 4 range-syntax support (a genuine, real
+  category of Edge-vs-Chrome difference) before the user's own DevTools Styles-panel screenshot revealed
+  the actual cause in one look: a third-party extension's injected stylesheet. When a user reports
+  "works in Chrome, not in Edge" for what looks like a CSS/layout issue, check DevTools' Styles panel
+  (not just Computed) for anything labeled "injected stylesheet" BEFORE reaching for engine-compatibility
+  theories — extensions are common, cheap to rule in/out, and cost nothing to check first.

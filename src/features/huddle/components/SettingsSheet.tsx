@@ -417,7 +417,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
             <div className="flex flex-wrap gap-2">
               <label className="inline-flex items-center gap-2 rounded-md border border-hairline px-3 py-2 text-sm hover:bg-muted cursor-pointer">
                 <Upload size={14} /> Upload config
-                <input type="file" accept="application/json" onChange={onUpload} className="hidden" />
+                <input type="file" accept="application/json" onChange={onUpload} className="app-hidden" />
               </label>
               <Button variant="outline" size="sm" onClick={onDownload}>
                 <Download size={14} className="mr-1" /> Download current

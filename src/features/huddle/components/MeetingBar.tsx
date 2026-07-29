@@ -501,10 +501,10 @@ function MeetingRoom({
         <span className="tabular-nums text-sm font-semibold">{fmtClock(now - meeting.startedAt)}</span>
         <span className="size-2 animate-pulse rounded-full bg-destructive" />
         <span className="text-sm font-semibold">{meetingLabel(meeting)}</span>
-        <span className="hidden text-[11px] text-muted-foreground sm:inline">
+        <span className="app-hidden text-[11px] text-muted-foreground sm:inline">
           ElevenLabs voice · Zoom bridge
         </span>
-        <span className="ml-auto hidden text-[11px] text-muted-foreground sm:inline">EDS workspace</span>
+        <span className="ml-auto app-hidden text-[11px] text-muted-foreground sm:inline">EDS workspace</span>
         <Button variant="ghost" size="icon" className="ml-auto sm:ml-0" onClick={collapse} aria-label="Collapse">
           <Minimize2 size={16} />
         </Button>

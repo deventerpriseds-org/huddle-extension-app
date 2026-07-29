@@ -239,7 +239,7 @@ export function ArtifactsView() {
   return (
     <div className="flex h-full min-h-0 w-full">
       {/* LEFT: folders + filters */}
-      <aside className="hidden md:flex w-56 shrink-0 flex-col gap-5 border-r bg-muted/30 p-3 overflow-y-auto">
+      <aside className="app-hidden md:flex w-56 shrink-0 flex-col gap-5 border-r bg-muted/30 p-3 overflow-y-auto">
         <div>
           <div className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Folders</div>
           <button
@@ -332,12 +332,12 @@ export function ArtifactsView() {
                     </div>
                   </div>
                   {g && (
-                    <div className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
-                      <AgentAvatar agent={g} size="xs" clickable={false} /> <span className="hidden lg:inline">{g.name}</span>
+                    <div className="app-hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
+                      <AgentAvatar agent={g} size="xs" clickable={false} /> <span className="app-hidden lg:inline">{g.name}</span>
                     </div>
                   )}
                   <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium", sm.cls)}>{sm.label}</span>
-                  <div className="hidden shrink-0 text-right text-xs text-muted-foreground tabular-nums sm:block">
+                  <div className="app-hidden shrink-0 text-right text-xs text-muted-foreground tabular-nums sm:block">
                     {ago(it.updated_at)}<div className="opacity-70">{fmtSize(it.size_bytes)}</div>
                   </div>
                 </button>
@@ -348,7 +348,7 @@ export function ArtifactsView() {
       </section>
 
       {/* RIGHT: preview + review */}
-      <aside className="hidden w-80 shrink-0 flex-col border-l md:flex">
+      <aside className="app-hidden w-80 shrink-0 flex-col border-l md:flex">
         {!sel ? (
           <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
             Select an artifact to preview and review it.

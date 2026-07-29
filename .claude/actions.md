@@ -16,19 +16,23 @@ prior fix commits for these were pushed or orphaned.
 an already-OPEN, never-merged PR #15 — pushed, not orphaned, just never merged. Merged (`7cc5af9`),
 manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confirmed run completed/success).
 **Status:** open — PARTIALLY resolved, one direct contradiction not yet explained:
-- (1) desktop breakpoint/sidebar: **RETRACTED "fixed" claim — user confirmed via hard-refresh screenshots
-  it is STILL broken live** (no menu/hamburger at wide width; hamburger appears only when shrunk). The
-  earlier "verified at real resolutions" claim was based entirely on `vite dev` (HMR dev server), which is
-  NOT representative of the deployed Nitro SSR build. Attempted to close the gap with `npm run build:dev`
-  (`NITRO_PRESET=node-server`) serving `.output/server/index.mjs` directly — found that
-  `VITE_E2E_AUTH_BYPASS` does not activate in ANY built bundle (`import.meta.env.DEV` is only true under
-  `vite dev`), so a real production-equivalent authenticated repro is NOT achievable from this sandbox at
-  all (OAuth redirects don't complete in headless CCR Chromium either). Code inspection (`HuddleApp.tsx`,
-  `Sidebar.tsx`) shows no JS conditional gating the sidebar — it's unconditionally rendered, only
-  CSS-hidden/shown — ruling out an obvious data-dependent crash, but not explaining the live discrepancy.
-  **STATUS: genuinely unresolved, blocked on inspecting the real live DOM** — needs the user (or a channel
-  with real Entra auth) to check whether the sidebar's wrapper `<div>` exists in the DOM at all around the
-  broken width (CSS-hidden vs. entirely absent would point to two very different root causes).
+- (1) desktop breakpoint/sidebar: **ROOT CAUSE FOUND AND FIXED.** After retracting a premature "verified"
+  claim (based on `vite dev`, not representative of the deployed Nitro build) and ruling out CSS
+  range-syntax incompatibility (both `matchMedia` forms returned `true` in the user's very current Edge),
+  the user's own DevTools Styles panel revealed the real cause directly: a third-party browser extension
+  (`data-gr-ext-installed` on `<body>` — Grammarly's fingerprint) injects a global, non-namespaced
+  `.hidden{display:none!important}` rule that collides with Tailwind's own generic `.hidden` utility
+  class and beats it regardless of the (independently confirmed correct) media-query/cascade order.
+  **Fix:** renamed every real `hidden`/`md:hidden` Tailwind usage (27 sites, 7 files) to a namespaced
+  `app-hidden`/`md:app-hidden` custom utility (`@utility app-hidden` in `src/styles.css`) so no
+  extension using the common word "hidden" can collide with it again — hardens against ANY such
+  extension, not just Grammarly. Independently verified (AC-writing + verifier subagents, both separate
+  from the implementing session): `tsc` clean, compiled CSS correct (unrelated `overflow-hidden` utility
+  untouched), and a non-vacuous live proof — injecting the exact rogue rule via Playwright leaves the
+  renamed sidebar/rail at `display:flex` while a control element still using the old bare class correctly
+  breaks under the same injection. One PARTIAL: MeetingBar/BoardView-specific DOM paths couldn't be
+  reached live in this sandbox (no Azure PG/voice backend access) — the mechanism is proven generically,
+  not each specific component's live render.
 - (2) mic "in use by Microsoft Edge" / can't barge in: PR #15's mic fix is click-feedback (toast) +
   error-surfacing only — confirmed via PR text this does NOT address an actual device-conflict. UNADDRESSED,
   not yet diagnosed.

@@ -304,7 +304,7 @@ export function BoardView() {
           ) : (
             <>
               {/* Desktop: full Kanban grid (swimlanes × status columns), drag to move. */}
-              <div className="hidden min-w-max space-y-3 md:block">
+              <div className="app-hidden min-w-max space-y-3 md:block">
                 <div className="flex gap-3 pl-[9px]">
                   {COLUMNS.map((c) => (
                     <div key={c.key} className="w-60 shrink-0 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -361,7 +361,7 @@ export function BoardView() {
 
               {/* Mobile: one status column at a time (tap the pills), swimlanes stacked, full-width
                   cards with a ⋮ menu to move/reassign (drag is unreliable on touch). */}
-              <div className="space-y-3 md:hidden">
+              <div className="space-y-3 md:app-hidden">
                 <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
                   {COLUMNS.map((c) => {
                     const n = filtered.filter((t) => columnKeyFor(t.status) === c.key).length;
