@@ -88,6 +88,14 @@ tasks / classify blocked — dovetails with ACT-4's blocked-surfacing residuals)
 ACT-4 residuals to fold into ACT-5: Terry's summary omitted the blocked items; `blocked-on-capability` tag not seen
 in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's tail (16+) un-groomed.
 
+### Mic fix (PR #19) — 2026-07-29, NOT YET CONFIRMED LIVE
+Root cause of "mic doesn't work": `useEffect(() => () => groupVoice.stop(), [groupVoice])` in MeetingBar.tsx
+used the whole `groupVoice` object as dep — new object every render — so every state change (idle→listening)
+called stop() and killed the mic immediately. Fixed: dep changed to `[groupVoice.stop]` (stable useCallback ref,
+only fires on unmount). Also improved getUserMedia error messages (NotReadableError → actionable text).
+Status: committed 95708f6, pushed to claude/setup-stop-hooks-skills-0h569y, PR #19 open, deploy triggered.
+Per standing rule: NOT calling this fixed until merged, deployed, and user confirms live.
+
 ## Hardening (append)
 - [2026-07-26] **MISTAKE: encoded "what the team can do" as a hand-written CAPABILITY PROMPT (prose) and
   had grooming GUESS "blocked" off a task title against it.** It drifted (under-claimed research/draft →

@@ -62,9 +62,11 @@ manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confir
   breaks under the same injection. One PARTIAL: MeetingBar/BoardView-specific DOM paths couldn't be
   reached live in this sandbox (no Azure PG/voice backend access) — the mechanism is proven generically,
   not each specific component's live render.
-- (2) mic "in use by Microsoft Edge" / can't barge in: PR #15's mic fix is click-feedback (toast) +
-  error-surfacing only — confirmed via PR text this does NOT address an actual device-conflict. UNADDRESSED,
-  not yet diagnosed.
+- (2) mic "in use by Microsoft Edge" / can't barge in: ROOT CAUSE FOUND + FIX IMPLEMENTED (NOT YET CONFIRMED
+  LIVE). The bug was a useEffect dependency error in MeetingBar.tsx — `groupVoice` (a new object every render)
+  was the dep, so every re-render (including idle→listening state change after mic start) called stop() and
+  killed the mic immediately. Fixed by using `[groupVoice.stop]` instead (stable useCallback). Also improved
+  getUserMedia error messaging. PR #19, commit 95708f6, deploy triggered 2026-07-29. Pending user live confirm.
 - (3) 30s standup-start gap: PR #15 explicitly states this is partial (poll-interval 2s→500ms +
   memoized resolve only); the real dominant cost (ceremony opener's own LLM call latency) is an
   acknowledged, still-open backlog item (CLAUDE.md "Backlog / known optimizations" #1). UNRESOLVED.

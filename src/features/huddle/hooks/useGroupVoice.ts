@@ -89,6 +89,7 @@ export function useGroupVoice(): GroupVoiceController {
   }, []);
 
   const stop = useCallback(() => {
+    console.log("[GroupVoice] stop() called — was running:", runningRef.current);
     runningRef.current = false;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
@@ -238,6 +239,7 @@ export function useGroupVoice(): GroupVoiceController {
       const blob = new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" });
       recordingRef.current = false;
       recRef.current = null;
+      console.log("[GroupVoice] blob captured — size:", blob.size, "bytes, running:", runningRef.current);
       if (blob.size > 1200 && runningRef.current) void runTurn(blob);
       else if (runningRef.current && statusRef.current === "listening") {
         /* too short — ignore, keep listening */
@@ -246,6 +248,7 @@ export function useGroupVoice(): GroupVoiceController {
     recRef.current = rec;
     rec.start();
     recordingRef.current = true;
+    console.log("[GroupVoice] recording started (mimeType:", mime || "browser default", ")");
   }, [runTurn]);
 
   const start = useCallback(
@@ -265,6 +268,7 @@ export function useGroupVoice(): GroupVoiceController {
         runningRef.current = true;
         mutedRef.current = false;
         setMuted(false);
+        console.log("[GroupVoice] mic acquired:", stream.getAudioTracks()[0]?.label ?? "unknown track");
 
         const AC =
           window.AudioContext ||
@@ -278,7 +282,9 @@ export function useGroupVoice(): GroupVoiceController {
         let lastTs = 0;
 
         setPhase("listening");
+        console.log("[GroupVoice] → listening (VAD loop starting)");
 
+        let logTick = 0;
         const tick = (ts: number) => {
           if (!runningRef.current) return;
           rafRef.current = requestAnimationFrame(tick);
@@ -298,6 +304,14 @@ export function useGroupVoice(): GroupVoiceController {
           if (speaking) speechRunRef.current += dt;
           else if (level < SPEECH_OFF) speechRunRef.current = 0;
 
+          // Log mic level ~every 500ms so the user can verify the VAD is picking up audio
+          logTick++;
+          if (logTick % 30 === 0) {
+            console.log(
+              `[GroupVoice] phase=${phase} level=${level.toFixed(3)} threshold=${SPEECH_ON} recording=${recordingRef.current} speechRun=${Math.round(speechRunRef.current)}ms`,
+            );
+          }
+
           if (phase === "listening") {
             if (mutedRef.current) return;
             if (!recordingRef.current && level > SPEECH_ON) {
@@ -316,6 +330,7 @@ export function useGroupVoice(): GroupVoiceController {
           } else if (phase === "speaking") {
             // Barge-in: sustained speech over the agents cuts playback + queue.
             if (speechRunRef.current > BARGEIN_MS) {
+              console.log("[GroupVoice] BARGE-IN triggered — speechRun:", Math.round(speechRunRef.current), "ms");
               bargeRef.current = true;
               if (audioRef.current) {
                 audioRef.current.pause();

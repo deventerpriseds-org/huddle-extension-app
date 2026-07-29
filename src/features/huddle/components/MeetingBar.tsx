@@ -553,6 +553,39 @@ function MeetingRoom({
             <YouTile muted={youMuted} name={user?.name ?? "You"} />
           </div>
 
+          {/* Voice status strip — visible debug pill so mic state is obvious without DevTools */}
+          {isVirtual && groupVoice.status !== "idle" && (
+            <div className="flex justify-center pb-1 pt-0.5">
+              <span
+                className={[
+                  "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+                  groupVoice.status === "listening" && "bg-green-500/15 text-green-400",
+                  groupVoice.status === "thinking" && "bg-amber-500/15 text-amber-400",
+                  groupVoice.status === "speaking" && "bg-blue-500/15 text-blue-400",
+                  groupVoice.status === "error" && "bg-destructive/15 text-destructive",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
+                <span
+                  className={[
+                    "size-1.5 rounded-full",
+                    groupVoice.status === "listening" && "animate-pulse bg-green-400",
+                    groupVoice.status === "thinking" && "animate-pulse bg-amber-400",
+                    groupVoice.status === "speaking" && "bg-blue-400",
+                    groupVoice.status === "error" && "bg-destructive",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                />
+                {groupVoice.status === "listening" && "Listening…"}
+                {groupVoice.status === "thinking" && "Thinking…"}
+                {groupVoice.status === "speaking" && `${groupVoice.activeSpeaker ? (groupVoice.activeSpeaker as string) : "Agent"} speaking`}
+                {groupVoice.status === "error" && (groupVoice.error ?? "Error")}
+              </span>
+            </div>
+          )}
+
           {/* Control bar */}
           <div className="flex flex-wrap items-center justify-center gap-2 border-t border-hairline px-4 py-3 sm:gap-3">
             {isCeremony && (
