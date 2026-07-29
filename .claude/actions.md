@@ -16,7 +16,10 @@ prior fix commits for these were pushed or orphaned.
 an already-OPEN, never-merged PR #15 — pushed, not orphaned, just never merged. Merged (`7cc5af9`),
 manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confirmed run completed/success).
 **Status:** open — PARTIALLY resolved, one direct contradiction not yet explained:
-- (1) desktop breakpoint/sidebar: **ROOT CAUSE FOUND AND FIXED.** After retracting a premature "verified"
+- (1) desktop breakpoint/sidebar: **ROOT CAUSE IDENTIFIED, FIX IMPLEMENTED — NOT YET CONFIRMED LIVE.**
+  (Corrected 2026-07-29: an earlier version of this entry said "found and fixed" before the fix had been
+  merged, deployed, or seen by the user — caught by the user, not self-caught. Downgrading the claim.)
+  After retracting a premature "verified"
   claim (based on `vite dev`, not representative of the deployed Nitro build) and ruling out CSS
   range-syntax incompatibility (both `matchMedia` forms returned `true` in the user's very current Edge),
   the user's own DevTools Styles panel revealed the real cause directly: a third-party browser extension

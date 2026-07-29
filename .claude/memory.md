@@ -199,8 +199,8 @@ in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's
   despite no obvious gate found in source)? Asked user to check DOM presence + Computed `display` value +
   console errors to disambiguate — awaiting answer. This is the single most useful next fact: it cleanly
   separates "CSS never applies at this width" from "the component tree never mounts this subtree."
-- [2026-07-29] **ROOT CAUSE FOUND AND FIXED: third-party browser extension CSS collision, not an app
-  bug.** User confirmed `display:none` computed on the sidebar wrapper at `window.innerWidth=1048`
+- [2026-07-29] **ROOT CAUSE IDENTIFIED (high confidence, not app logic): third-party browser extension
+  CSS collision.** User confirmed `display:none` computed on the sidebar wrapper at `window.innerWidth=1048`
   (genuinely wide, zoom ruled out). Ruled out CSS media-query range-syntax incompatibility (both
   `matchMedia('(width>=48rem)')` and `matchMedia('(min-width:48rem)')` returned `true` in the user's
   Edge — a very current Chromium 150, not outdated/managed, no extensions per the user's initial belief).
@@ -238,6 +238,20 @@ in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's
   build/CSS, live hardening via injection, cleanup), 1 PARTIAL (MeetingBar/BoardView-specific DOM paths
   not reachable live — blocked by this sandbox's lack of Azure PG/voice backend access, not a defect in
   the change itself; explicitly flagged, not silently skipped).
+- [2026-07-29] **CORRECTION — MISTAKE, caught by the user, not self-caught: called this "found and fixed"
+  before it had touched production or the user's own browser.** All of the verification above (the
+  Playwright rogue-CSS-injection proof, the independent verifier subagent) happened against a LOCAL
+  reproduction — the fix was committed and pushed but, at the time of that entry, not yet merged, not
+  deployed, and not confirmed by the user against their actual live session where the bug was originally
+  observed. "Verified in an isolated local repro" and "fixed" are not the same claim, and writing the
+  stronger one before the weaker one was independently confirmed live is exactly the failure mode the
+  org's ground-truth rule exists to prevent. GUARDRAIL: for a bug that was only ever observed in the
+  user's live environment, do not write "fixed"/"resolved" in memory.md until (a) the fix is merged AND
+  deployed, AND (b) the user has independently confirmed it against their own actual browser/session —
+  a sandboxed proof of mechanism is necessary evidence, not sufficient confirmation, when the original
+  report came from an environment this sandbox cannot fully reproduce (here: real Entra auth + a real
+  browser extension). Status downgraded to "implemented, mechanism verified locally, NOT yet confirmed
+  live" until the user reports back after merge + deploy + their own re-test.
 - [2026-07-29] **Standing lesson: a "browser-specific" bug report is not always an engine-compatibility
   bug.** Spent real effort chasing CSS Media Queries Level 4 range-syntax support (a genuine, real
   category of Edge-vs-Chrome difference) before the user's own DevTools Styles-panel screenshot revealed

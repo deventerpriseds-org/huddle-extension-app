@@ -435,3 +435,18 @@ Ordered roughly by leverage. Revisit once the core turn is reliably fast.
    window drift (17–22 in scheduling-defaults vs 17–19 in execute-tool `find_open_slots`) and the
    whole-hour truncation, and a capacity guard that flags overcommitment instead of scheduling into
    nonexistent time.
+
+## Don't claim a fix is "done" until the user confirms it live (hard-won, see also the org-wide rule)
+A sandboxed Playwright reproduction proves the FIX MECHANISM works; it does not prove the user's
+actual bug is fixed. This bit us directly: a missing-sidebar bug was root-caused to a browser
+extension's injected CSS (Grammarly) colliding with Tailwind's generic `.hidden` class, fixed with a
+27-site rename to a namespaced `app-hidden` utility, and independently verified via a Playwright test
+that injects the exact rogue rule and confirms the renamed elements survive it — all of which is real,
+solid evidence the mechanism works, but NONE of which is the same as the user seeing it work in their
+own browser. `memory.md`/`actions.md` were written as "found and fixed" before the fix had even been
+merged or deployed, let alone confirmed live — caught by the user, not self-caught.
+**Rule:** merge + deploy first, THEN ask the user for a live re-test, THEN write "fixed" — never before.
+Corollary: when an app has already shown real behavior differences across environments (dev server vs.
+production build vs. a specific real browser, as happened in this exact investigation), don't invest in
+a large, many-file implementation before a cheap, minimal check confirms the premise holds in the
+user's actual environment — a small preliminary test is worth more than a large correct-in-isolation fix.
