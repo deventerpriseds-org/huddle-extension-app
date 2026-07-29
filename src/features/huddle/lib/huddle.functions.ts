@@ -29,6 +29,7 @@ import {
 import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
 import { DELEGATE_TO_SPECIALIST_TOOL, workerDirectory, getWorker, WORKER_ROLES } from "./agents/workers";
 import { FLAG_BLOCKER_TOOL, CONFIRM_TASK_INTENT_TOOL } from "./tasks/task-agent-tools";
+import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
@@ -172,7 +173,8 @@ const DELEGATION_DIRECTIVE =
   workerDirectory() +
   "\nDelegation is asynchronous — specialists take seconds to minutes. After you delegate, tell the user " +
   "in one short line that you've put the team on it and will bring it together shortly; never invent or " +
-  "pre-empt their results. When their work comes back you'll be asked to integrate it.";
+  "pre-empt their results. When their work comes back you'll be asked to integrate it. " +
+  GENERIC_SUPPORT_NOTE;
 
 // Scope-aware ownership hand-off — generated from `agent.capabilities` (agents.ts), NOT
 // hardcoded to any agent or job. Appended to every agent's instructions when the huddle
