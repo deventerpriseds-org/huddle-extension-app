@@ -1,47 +1,70 @@
-import { useMemo, useState } from "react";
-import { Activity, Boxes, BookOpen, Sparkles, Wrench } from "lucide-react";
+import { useMemo } from "react";
+import { Activity, Boxes, BookOpen, PanelRightClose, Sparkles, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
-import { useHuddleStore, useToolUses, useVisibleDecisions, useVisibleMemory, useVisibleTasks } from "../store";
+import {
+  useHuddleStore,
+  useToolUses,
+  useVisibleDecisions,
+  useVisibleMemory,
+  useVisibleTasks,
+  type ContextPanelTab,
+} from "../store";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { AgentAvatar } from "./AgentAvatar";
 import type { Task, TaskLane } from "../data/seed";
 
-type Tab = "queue" | "activity" | "memory";
+type Tab = ContextPanelTab;
 
 export function ContextPanel() {
-  const [tab, setTab] = useState<Tab>("queue");
+  // Lifted into the shared store (not local useState) so the active tab survives this component
+  // unmounting/remounting when the panel is collapsed and re-expanded (see toggleContextPanelCollapsed).
+  const tab = useHuddleStore((s) => s.contextPanelTab);
+  const setTab = useHuddleStore((s) => s.setContextPanelTab);
+  const toggleContextPanelCollapsed = useHuddleStore((s) => s.toggleContextPanelCollapsed);
   return (
     <aside className="flex h-full w-80 shrink-0 flex-col border-l border-hairline bg-surface">
-      <nav className="flex border-b border-hairline px-2">
-        {(
-          [
-            { id: "queue", label: "Queue", Icon: Boxes, dot: false },
-            { id: "activity", label: "Activity", Icon: Activity, dot: true },
-            { id: "memory", label: "Memory", Icon: BookOpen, dot: false },
-          ] as const
-        ).map(({ id, label, Icon, dot }) => (
-          <button
-            key={id}
-            onClick={() => setTab(id)}
-            className={cn(
-              "relative flex flex-1 items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition",
-              tab === id ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Icon size={13} />
-            {label}
-            {dot && (
-              <span
-                className="inline-block size-1.5 rounded-full"
-                style={{ background: "var(--success)" }}
-              />
-            )}
-            {tab === id && (
-              <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />
-            )}
-          </button>
-        ))}
+      <nav className="flex items-center border-b border-hairline px-2">
+        <button
+          type="button"
+          onClick={toggleContextPanelCollapsed}
+          aria-label="Collapse activity panel"
+          aria-expanded={true}
+          title="Collapse activity panel"
+          className="mr-1 shrink-0 rounded-md p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        >
+          <PanelRightClose size={15} strokeWidth={1.8} />
+        </button>
+        <div className="flex flex-1">
+          {(
+            [
+              { id: "queue", label: "Queue", Icon: Boxes, dot: false },
+              { id: "activity", label: "Activity", Icon: Activity, dot: true },
+              { id: "memory", label: "Memory", Icon: BookOpen, dot: false },
+            ] as const
+          ).map(({ id, label, Icon, dot }) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className={cn(
+                "relative flex flex-1 items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition",
+                tab === id ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Icon size={13} />
+              {label}
+              {dot && (
+                <span
+                  className="inline-block size-1.5 rounded-full"
+                  style={{ background: "var(--success)" }}
+                />
+              )}
+              {tab === id && (
+                <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />
+              )}
+            </button>
+          ))}
+        </div>
       </nav>
 
       <div className="flex-1 overflow-y-auto p-3">

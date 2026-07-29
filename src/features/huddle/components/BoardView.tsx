@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck } from "lucide-react";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import type { BoardTaskRow } from "../lib/tasks/tasks.server";
+import { readBoolPref, writeBoolPref } from "../store";
 import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
 import { Button } from "@/components/ui/button";
@@ -41,6 +42,13 @@ type Lane = { key: string; label: string; agent: (typeof AGENTS)[number] | undef
 const UNASSIGNED = "__unassigned";
 const UNCATEGORIZED = "__uncat";
 
+// Quick-filters pill row: collapsed height caps at ~4 rows. Pills are ~22px tall (text-[11px] +
+// py-0.5 + border) with a 6px row gap (gap-1.5), so 4 rows ≈ 4*22 + 3*6 = 106px; rounded up a bit
+// for breathing room. The "Show more" toggle only renders when actual content exceeds this (measured
+// via ResizeObserver below), so it never appears for a row that already fits.
+const FILTERS_ROW_COLLAPSED_PX = 112;
+const FILTERS_EXPANDED_KEY = "huddle:boardFiltersExpanded";
+
 const PRIORITY_COLOR: Record<string, string> = {
   URGENT: "var(--destructive)",
   HIGH: "var(--warning)",
@@ -78,6 +86,11 @@ export function BoardView() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [activeCol, setActiveCol] = useState<string>("upnext"); // mobile: which status column is shown
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set()); // collapsed swimlanes
+  // Quick-filters pill row: default-collapsed to ~4 rows with a Show more/less toggle. Read the
+  // persisted preference synchronously (no flash), same pattern as Sidebar/ContextPanel collapse.
+  const [filtersExpanded, setFiltersExpanded] = useState<boolean>(() => readBoolPref(FILTERS_EXPANDED_KEY));
+  const [filtersOverflow, setFiltersOverflow] = useState(false);
+  const filtersRowRef = useRef<HTMLDivElement | null>(null);
   const toggleLane = (key: string) =>
     setCollapsed((s) => {
       const n = new Set(s);
@@ -114,6 +127,30 @@ export function BoardView() {
     const ids = new Set(tasks.map((t) => t.assigned_agent).filter(Boolean) as string[]);
     return AGENTS.filter((a) => ids.has(a.id));
   }, [tasks]);
+
+  // Measure the pill row's natural (unclamped) height against the collapsed cap — scrollHeight
+  // still reports the full content height even while overflow:hidden clips it — so the "Show more"
+  // toggle only appears when there's actually more than FILTERS_COLLAPSED_MAX_ROWS worth of pills.
+  useEffect(() => {
+    const el = filtersRowRef.current;
+    if (!el) {
+      setFiltersOverflow(false);
+      return;
+    }
+    const measure = () => setFiltersOverflow(el.scrollHeight > FILTERS_ROW_COLLAPSED_PX + 1);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [presentAgents, allTags]);
+
+  const toggleFiltersExpanded = () => {
+    setFiltersExpanded((prev) => {
+      const next = !prev;
+      writeBoolPref(FILTERS_EXPANDED_KEY, next);
+      return next;
+    });
+  };
 
   const filtered = useMemo(() => {
     return tasks.filter((t) => {
@@ -241,47 +278,74 @@ export function BoardView() {
           </Button>
         </header>
 
-        {/* Quick filters */}
+        {/* Quick filters — default-collapsed to ~4 rows (FILTERS_ROW_COLLAPSED_PX); "clear" and the
+            Show more/less toggle live outside the clamped area so they're always visible/reachable,
+            never scrolled out of view by the collapse. */}
         {(presentAgents.length > 0 || allTags.length > 0) && (
-          <div className="flex flex-wrap items-center gap-1.5 border-b border-hairline px-4 py-2 sm:px-6">
-            <Users size={13} className="text-muted-foreground" />
-            {presentAgents.map((a) => (
-              <button
-                key={a.id}
-                onClick={() => toggle(assigneeFilter, a.id, setAssigneeFilter)}
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] transition",
-                  assigneeFilter.has(a.id) ? "border-primary bg-primary/10 text-foreground" : "border-hairline text-muted-foreground hover:bg-muted",
+          <div className="border-b border-hairline px-4 py-2 sm:px-6">
+            <div
+              ref={filtersRowRef}
+              className="flex flex-wrap items-center gap-1.5"
+              style={!filtersExpanded ? { maxHeight: FILTERS_ROW_COLLAPSED_PX, overflow: "hidden" } : undefined}
+            >
+              <Users size={13} className="text-muted-foreground" />
+              {presentAgents.map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => toggle(assigneeFilter, a.id, setAssigneeFilter)}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] transition",
+                    assigneeFilter.has(a.id) ? "border-primary bg-primary/10 text-foreground" : "border-hairline text-muted-foreground hover:bg-muted",
+                  )}
+                >
+                  <AgentAvatar agent={a} size="xs" clickable={false} />
+                  {a.name.split(" ")[0]}
+                </button>
+              ))}
+              {allTags.length > 0 && <TagIcon size={13} className="ml-2 text-muted-foreground" />}
+              {allTags.map((tag) => (
+                <button
+                  key={tag}
+                  onClick={() => toggle(tagFilter, tag, setTagFilter)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[11px] transition",
+                    tagFilter.has(tag) ? "border-primary bg-primary/10 text-foreground" : "border-hairline text-muted-foreground hover:bg-muted",
+                    /blocked|capability/.test(tag) && !tagFilter.has(tag) && "text-destructive",
+                  )}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+
+            {(filtersOverflow || assigneeFilter.size > 0 || tagFilter.size > 0) && (
+              <div className="mt-1 flex items-center gap-3">
+                {filtersOverflow && (
+                  <button
+                    type="button"
+                    onClick={toggleFiltersExpanded}
+                    aria-expanded={filtersExpanded}
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    {filtersExpanded ? "Show less" : "Show more"}
+                    <ChevronDown
+                      size={12}
+                      className={cn("transition-transform", filtersExpanded && "rotate-180")}
+                    />
+                  </button>
                 )}
-              >
-                <AgentAvatar agent={a} size="xs" clickable={false} />
-                {a.name.split(" ")[0]}
-              </button>
-            ))}
-            {allTags.length > 0 && <TagIcon size={13} className="ml-2 text-muted-foreground" />}
-            {allTags.map((tag) => (
-              <button
-                key={tag}
-                onClick={() => toggle(tagFilter, tag, setTagFilter)}
-                className={cn(
-                  "rounded-full border px-2 py-0.5 text-[11px] transition",
-                  tagFilter.has(tag) ? "border-primary bg-primary/10 text-foreground" : "border-hairline text-muted-foreground hover:bg-muted",
-                  /blocked|capability/.test(tag) && !tagFilter.has(tag) && "text-destructive",
+                {(assigneeFilter.size > 0 || tagFilter.size > 0) && (
+                  <button
+                    onClick={() => {
+                      setAssigneeFilter(new Set());
+                      setTagFilter(new Set());
+                    }}
+                    className="text-[11px] text-muted-foreground underline hover:text-foreground"
+                  >
+                    clear
+                  </button>
                 )}
-              >
-                {tag}
-              </button>
-            ))}
-            {(assigneeFilter.size > 0 || tagFilter.size > 0) && (
-              <button
-                onClick={() => {
-                  setAssigneeFilter(new Set());
-                  setTagFilter(new Set());
-                }}
-                className="ml-1 text-[11px] text-muted-foreground underline hover:text-foreground"
-              >
-                clear
-              </button>
+              </div>
             )}
           </div>
         )}

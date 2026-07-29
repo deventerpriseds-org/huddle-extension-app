@@ -14,14 +14,23 @@ const items = [
 export function Rail() {
   const view = useHuddleStore((s) => s.view);
   const setView = useHuddleStore((s) => s.setView);
+  const sidebarCollapsed = useHuddleStore((s) => s.sidebarCollapsed);
+  const toggleSidebarCollapsed = useHuddleStore((s) => s.toggleSidebarCollapsed);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
     <nav className="flex h-full w-14 flex-col items-center justify-between bg-primary text-primary-foreground py-4">
       <div className="flex flex-col items-center gap-1">
-        <div className="mb-3 flex size-9 items-center justify-center rounded-lg bg-primary-foreground/10 text-primary-foreground font-bold">
+        <button
+          type="button"
+          onClick={toggleSidebarCollapsed}
+          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!sidebarCollapsed}
+          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="mb-3 flex size-9 items-center justify-center rounded-lg bg-primary-foreground/10 text-primary-foreground font-bold transition hover:bg-primary-foreground/20"
+        >
           H
-        </div>
+        </button>
         {items.map((it) => {
           const active =
             (it.id === "huddle" && view === "huddle") ||

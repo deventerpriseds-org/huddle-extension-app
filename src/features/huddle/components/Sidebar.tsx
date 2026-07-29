@@ -1,4 +1,4 @@
-import { LogOut, Plus, Users } from "lucide-react";
+import { LogOut, PanelLeftClose, Plus, Users } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS } from "../data/agents";
@@ -22,6 +22,7 @@ export function Sidebar() {
   const setActive = useHuddleStore((s) => s.setActive);
   const { user, signOut } = useAuth();
   const queryClient = useQueryClient();
+  const toggleSidebarCollapsed = useHuddleStore((s) => s.toggleSidebarCollapsed);
 
   const groups = huddles.filter((h) => h.kind === "group");
   const dms = huddles.filter((h) => h.kind === "one-to-one");
@@ -58,9 +59,21 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-hairline bg-surface">
-      <header className="border-b border-hairline px-4 py-3">
-        <div className="text-[13px] font-semibold text-foreground">EDS workspace</div>
-        <div className="text-[11px] text-muted-foreground">Huddle · {AGENTS.length} agents</div>
+      <header className="flex items-start justify-between gap-2 border-b border-hairline px-4 py-3">
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold text-foreground">EDS workspace</div>
+          <div className="text-[11px] text-muted-foreground">Huddle · {AGENTS.length} agents</div>
+        </div>
+        <button
+          type="button"
+          onClick={toggleSidebarCollapsed}
+          aria-label="Collapse sidebar"
+          aria-expanded={true}
+          title="Collapse sidebar"
+          className="-mr-1 -mt-0.5 shrink-0 rounded-md p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        >
+          <PanelLeftClose size={15} strokeWidth={1.8} />
+        </button>
       </header>
 
       <div className="flex-1 overflow-y-auto py-2">
