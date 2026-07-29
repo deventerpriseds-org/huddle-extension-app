@@ -27,3 +27,30 @@ export const FLAG_BLOCKER_TOOL = {
     required: ["task_id", "reason"],
   },
 } as const;
+
+// confirm_task_intent: locks in the WIP confirm-intent gate's Definition of Done
+// (docs/plan-wip-confirm-review-gate.md, Part 1). An assigned agent calls this ONLY after the user has
+// actually replied to its confirm-intent ask — confirming as-is, or with their additions/corrections
+// folded in. Writes tasks.task_engagement_state (confirm_status='confirmed') AND journey's
+// definition_of_done via update_task, so the DoD is durable on the canonical task and visible on the
+// board tooltip. This is what unblocks the task's UP_NEXT->DOING promotion.
+export const CONFIRM_TASK_INTENT_TOOL = {
+  type: "function",
+  name: "confirm_task_intent",
+  description:
+    "Lock in the Definition of Done for a task, AFTER the user has replied to your confirm-intent ask " +
+    "(confirming it, adding to it, or correcting it). Do NOT call this before they've actually responded — " +
+    "it's what moves the task from 'waiting on you to confirm' into active work. Pass the FINAL definition " +
+    "of done text, folding in whatever the user added or corrected.",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string", description: "The id of the task whose intent/DoD you're confirming." },
+      definition_of_done: {
+        type: "string",
+        description: "The concrete, testable Definition of Done as confirmed with the user (their corrections/additions folded in).",
+      },
+    },
+    required: ["task_id", "definition_of_done"],
+  },
+} as const;

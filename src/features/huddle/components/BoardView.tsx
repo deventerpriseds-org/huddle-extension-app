@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown } from "lucide-react";
+import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck } from "lucide-react";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import type { BoardTaskRow } from "../lib/tasks/tasks.server";
@@ -304,7 +304,7 @@ export function BoardView() {
           ) : (
             <>
               {/* Desktop: full Kanban grid (swimlanes × status columns), drag to move. */}
-              <div className="hidden min-w-max space-y-3 lg:block">
+              <div className="hidden min-w-max space-y-3 md:block">
                 <div className="flex gap-3 pl-[9px]">
                   {COLUMNS.map((c) => (
                     <div key={c.key} className="w-60 shrink-0 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -361,7 +361,7 @@ export function BoardView() {
 
               {/* Mobile: one status column at a time (tap the pills), swimlanes stacked, full-width
                   cards with a ⋮ menu to move/reassign (drag is unreliable on touch). */}
-              <div className="space-y-3 lg:hidden">
+              <div className="space-y-3 md:hidden">
                 <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
                   {COLUMNS.map((c) => {
                     const n = filtered.filter((t) => columnKeyFor(t.status) === c.key).length;
@@ -530,6 +530,16 @@ function BoardCard({
               </TooltipTrigger>
               <TooltipContent>Priority: {prio.toLowerCase()}{task.priority_rank ? ` · rank ${task.priority_rank}` : ""}</TooltipContent>
             </Tooltip>
+            {task.definition_of_done && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex items-center text-[10px] text-muted-foreground">
+                    <ClipboardCheck size={11} />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-64">Definition of done: {task.definition_of_done}</TooltipContent>
+              </Tooltip>
+            )}
             {task.due_date && (
               <span className={cn("inline-flex items-center gap-1 text-[10px]", overdue ? "text-destructive" : "text-muted-foreground")}>
                 <Clock size={11} />

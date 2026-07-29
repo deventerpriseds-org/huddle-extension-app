@@ -28,7 +28,7 @@ import {
 } from "./tavily-search.functions";
 import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
 import { DELEGATE_TO_SPECIALIST_TOOL, workerDirectory, getWorker, WORKER_ROLES } from "./agents/workers";
-import { FLAG_BLOCKER_TOOL } from "./tasks/task-agent-tools";
+import { FLAG_BLOCKER_TOOL, CONFIRM_TASK_INTENT_TOOL } from "./tasks/task-agent-tools";
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
@@ -124,7 +124,7 @@ const HOUSE_STYLE =
   " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it \"has been sent\" or \"is done\" when it has not. Email specifically: text you write in the chat is \"draft text\" — only say you \"saved a draft to your inbox\" if you called the create_email_draft tool and it returned success, and only say an email was \"sent\" if send_email returned success." +
   " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message." +
   " Your capabilities are exactly the tools you have this turn — nothing more. If you're asked or assigned something you cannot actually do with those tools (e.g. move money, buy something, take a real-world action only the user can), do NOT pretend, vaguely promise, or invent a result — say plainly in one sentence what you can't do and why. Almost always you CAN still make real progress by researching, analyzing, or drafting — do that instead. If it's a task on the board and you genuinely cannot advance it (it needs the user's decision, a credential, or a capability you don't have), call flag_blocker(task_id, reason) with the specific reason so the user knows exactly what you need." +
-  " Never mention files, uploaded files, documents, attachments, or a knowledge base, and never say you searched them or \"couldn't find information in the uploaded files\" — file search is a silent background aid, not something to narrate. If it returns nothing useful, just answer the user directly from what you know, your live tools, and the conversation. Above all, ANSWER THE USER'S ACTUAL LAST MESSAGE: if they correct you (e.g. \"your time zone is wrong\") or ask something specific, address exactly that — never fall back to a canned \"I couldn't find that\" line that ignores what they just said.";
+  " A background lookup that comes up empty should be invisible to the user: never narrate that you searched, where you looked, or that something wasn't found — just answer directly from what you know, your live tools, and the conversation. Above all, ANSWER THE USER'S ACTUAL LAST MESSAGE: if they correct you (e.g. \"your time zone is wrong\") or ask something specific, address exactly that instead of falling back to a generic non-answer that ignores what they just said.";
 
 // Executive-grade OUTPUT CONTRACT — the distilled essence of the Huddle agent operating standard
 // (full version: docs/huddle-agent-architecture.md). Appended to EVERY agent on BOTH backends. It raises
@@ -261,6 +261,19 @@ function stripAgentReplyLinks(text: string): string {
     if (GENERIC_DOC_ANCHOR.test(a) || PLACEHOLDER_URL.test(url)) return a; // fake/placeholder doc-link → drop URL
     return `${a} (${url})`; // genuine citation → keep URL as plain, non-clickable text
   });
+}
+
+// Backstop for the "I looked in your files" narration. Root cause traced to our OWN HOUSE_STYLE prompt
+// (below), which used to quote the banned phrase verbatim as a "don't say this" example — a model will
+// readily echo a quoted example even when it's framed as prohibited. HOUSE_STYLE no longer quotes it, but
+// this deterministic regex stays as a defense-in-depth backstop (a prose-only rule is never a hard
+// guarantee against any model/tool combination) — same reason stripAgentReplyLinks exists above for fake
+// document links, a different prose rule the model also didn't reliably follow). Strips just the
+// file-mention clause so the sentence still reads naturally, e.g. "I couldn't find the email in the
+// uploaded files." -> "I couldn't find the email." Confirmed live across iris-chase, finn-reid, and cam-post.
+const FILE_MENTION_CLAUSE = /\s*\b(?:in|from|within)\s+(?:the|your|any|our)?\s*(?:uploaded\s+)?(?:files?|documents?|knowledge\s*base|attachments?)\b/gi;
+function stripFileMentionNarration(text: string): string {
+  return text.replace(FILE_MENTION_CLAUSE, "");
 }
 
 // Per-agent WIP-limited board flow: an agent's DOING task moves to IN_REVIEW the instant it actually
@@ -719,6 +732,17 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       return resultObj;
     };
 
+    // Turn-level memoized caller-email resolve — several independent spots (ceremony detection,
+    // resolveExecContext) used to each call resolveTaskEmail themselves, paying that round-trip
+    // twice per turn. One resolve, shared.
+    let resolvedCallerEmail: string | null | undefined;
+    const resolveCallerEmail = async (): Promise<string | null> => {
+      if (resolvedCallerEmail !== undefined) return resolvedCallerEmail;
+      const { resolveTaskEmail } = await import("./journey/identity");
+      resolvedCallerEmail = (await resolveTaskEmail(data.caller ?? {})) ?? data.caller?.entra_email ?? null;
+      return resolvedCallerEmail;
+    };
+
     // ---- Scrum ceremonies ----
     // A ceremony request (stand-up, retro, sprint planning, sprint review) overrides
     // normal routing: participants become the lane owners + the scrum master, each fed
@@ -737,8 +761,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     if (ceremonyType) {
       // Resolve the sign-in email (possibly an alias) to the canonical journey email the mirror
       // is keyed on — otherwise an aliased login grounds the ceremony in an empty task set.
-      const { resolveTaskEmail } = await import("./journey/identity");
-      const email = (await resolveTaskEmail(data.caller)) ?? data.caller?.entra_email;
+      const email = await resolveCallerEmail();
       if (!email) {
         const host = data.members.includes(CEREMONY_HOST) ? CEREMONY_HOST : routed.winners[0];
         return finalize({
@@ -891,8 +914,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       if (execContextBlock !== undefined) return execContextBlock;
       execContextBlock = "";
       try {
-        const { resolveTaskEmail } = await import("./journey/identity");
-        const em = (await resolveTaskEmail(data.caller ?? {})) ?? data.caller?.entra_email ?? null;
+        const em = await resolveCallerEmail();
         if (em) {
           const { getUserContext, renderExecutiveContext } = await import("./identity/user-context.server");
           execContextBlock = renderExecutiveContext(await getUserContext(em));
@@ -1222,7 +1244,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       );
       const taskToolInstructions =
         "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it." +
-        " NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled \"groom the backlog\" or \"assign the team\") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked.";
+        " NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled \"groom the backlog\" or \"assign the team\") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked." +
+        " If the user states or implies a specific date (a day name, 'tomorrow', a calendar date, 'by Friday'), set the tool's `date` field — do not just leave it embedded in the title text where it can get lost." +
+        " Report the outcome honestly using exactly what the tool result gives you, in `note`/`outcome` — never invent a time or claim more certainty than that. A same-day scheduled time is provisional (the nightly planner can still move it overnight) — say something like \"I've got that for around 2:30 today\" rather than a firm commitment. A task with a due date but no start_time has no exact time yet — say the due date and that the planner will place a time, don't guess one. If the outcome says today was full and it landed elsewhere, say so plainly instead of a bare \"added it.\"";
 
       // AUTO memory retrieval: pull the most relevant shared/global memory for THIS agent and inject
       // it into the prompt, so recall works even when the model doesn't call `search_memory`. This is
@@ -1423,22 +1447,58 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         if (agentBackend.journey?.enabled && data.caller?.entra_email) {
           try {
             const { invokeJourneyTool } = await import("./journey/proxy.functions");
+            // Defense in depth: journey's `date` param only understands 'today'/'tomorrow'/YYYY-MM-DD.
+            // Validate here (don't just trust the tool description) so a model slip — a weekday name,
+            // "next Friday" — can't silently break the scheduling call; drop it and fall back to the
+            // title-text NL parser, which handles those phrases correctly.
+            const rawDate = typeof args.date === "string" ? args.date.trim().toLowerCase() : "";
+            const dateArg =
+              rawDate === "today" || rawDate === "tomorrow" || /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
+                ? rawDate
+                : undefined;
             const r = await invokeJourneyTool({
               toolName: "quick_create_task",
-              args: { title: task.title },
+              args: dateArg ? { title: task.title, date: dateArg } : { title: task.title },
               caller: data.caller ?? {},
               context: { source: "huddle", huddleId: data.huddleId, agentId: winner.id },
             });
             if (r.ok) {
               if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
               else suggestedTasks.push(task); // journey didn't echo a row — keep a Huddle card
+              // journey's `output` IS execute-tool's `result` object verbatim (huddle-proxy forwards
+              // exec.result, not the sibling exec.message string) — parse it so the model can report
+              // honestly instead of a flat "added it" that overclaims what actually happened (same-day
+              // placement is provisional until tonight's planner runs; a future due date has no exact
+              // time yet). Shape: {created, scheduled:[{title,time}], deferredToNightly:[{title,
+              // due_date}], tasks:[{due_date,start_time,is_scheduled,...}]} — see parseAndCreateTasks.
+              let outcomeNote: string | undefined;
+              let outcome: { due_date?: string | null; start_time?: string | null; is_scheduled?: boolean } | undefined;
+              try {
+                const parsed = JSON.parse(r.output) as {
+                  scheduled?: Array<{ title: string; time: string }>;
+                  deferredToNightly?: Array<{ title: string; due_date: string }>;
+                  tasks?: Array<{ due_date?: string | null; start_time?: string | null; is_scheduled?: boolean }>;
+                };
+                outcome = parsed.tasks?.[0];
+                if (parsed.scheduled && parsed.scheduled.length > 0) {
+                  outcomeNote = `scheduled at ${parsed.scheduled[0].time} today (provisional — the nightly planner may move it)`;
+                } else if (parsed.deferredToNightly && parsed.deferredToNightly.length > 0) {
+                  outcomeNote = `due ${parsed.deferredToNightly[0].due_date} — no exact time yet, the nightly planner will place one`;
+                } else if (outcome?.due_date && !outcome.start_time) {
+                  outcomeNote = `due ${outcome.due_date} — no exact time yet`;
+                } else if (!outcome?.due_date && !outcome?.start_time) {
+                  outcomeNote = "added to the backlog, unscheduled";
+                }
+              } catch {
+                /* r.output wasn't the expected JSON shape — outcome stays undefined, note omitted */
+              }
               recordToolUse(
                 winner.id,
                 "create_huddle_task",
-                `“${task.title}” → Huddle board + journey`,
+                `“${task.title}” → Huddle board + journey${outcomeNote ? ` — ${outcomeNote}` : ""}`,
                 true,
               );
-              return { ok: true, task, boards: ["huddle", "journey"] };
+              return { ok: true, task, boards: ["huddle", "journey"], outcome, note: outcomeNote };
             }
             const ev = recordFallback(
               "tool",
@@ -1695,6 +1755,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                     "Optional board lane: Backlog, Ready, Up next, Doing, Done, or Blocked. Defaults to Backlog.",
                 },
                 blockReason: { type: "string", description: "Optional blocker note." },
+                date: {
+                  type: "string",
+                  description:
+                    "Optional, ONLY for exactly 'today', 'tomorrow', or an explicit YYYY-MM-DD you are certain of. For any other date the user stated (a weekday name, 'next Tuesday', 'by Friday'), do NOT put it here — leave this unset and instead keep that exact date phrase in the title text (e.g. \"Renew passport by Friday\"), which is parsed correctly server-side. Putting an unsupported value here silently breaks scheduling.",
+                },
               },
               required: ["title"],
             },
@@ -1796,6 +1861,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             CREATE_ARTIFACT_TOOL,
             DELEGATE_TO_SPECIALIST_TOOL,
             FLAG_BLOCKER_TOOL,
+            CONFIRM_TASK_INTENT_TOOL,
             SCHEDULE_REMINDER_TOOL,
             PRIORITIZE_TOOL,
             ...groomTools,
@@ -1912,6 +1978,52 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            }
+            if (c.name === "confirm_task_intent") {
+              const a = c.arguments as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const dod = String(a.definition_of_done ?? "").trim();
+              if (!taskId || !dod) return JSON.stringify({ ok: false, error: "task_id and definition_of_done are required" });
+              if (!claimAction(`confirm_task_intent:${taskId}`)) {
+                recordToolUse(winner.id, "confirm_task_intent", "already confirmed this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true });
+              }
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { confirmTaskIntent } = await import("./tasks/tasks.server");
+                await confirmTaskIntent(taskId, email, dod);
+                // Durably on journey's canonical task too (flows to the mirror + board tooltip).
+                let journeySet = false;
+                let journeyError = "";
+                try {
+                  const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                  const r = await invokeJourneyTool({
+                    toolName: "update_task",
+                    args: { task_id: taskId, definition_of_done: dod },
+                    caller: data.caller ?? {},
+                    context: { source: "huddle" },
+                  });
+                  journeySet = !!r.ok;
+                  if (!r.ok) journeyError = String(r.error ?? r.output ?? "update_task_failed").slice(0, 160);
+                } catch (e) {
+                  journeyError = (e instanceof Error ? e.message : String(e)).slice(0, 160);
+                }
+                recordToolUse(
+                  winner.id,
+                  "confirm_task_intent",
+                  journeySet ? "DoD confirmed" : `DoD confirmed, journey write failed: ${journeyError}`,
+                  true,
+                  journeyError || undefined,
+                );
+                return JSON.stringify({ ok: true, task_id: taskId, journey_set: journeySet });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "confirm_task_intent", "confirm failed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             }
@@ -2297,6 +2409,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               ownerId: z.string().optional(),
               lane: z.string().optional(),
               blockReason: z.string().optional(),
+              date: z.string().optional(),
             }),
             execute: async (args) =>
               JSON.stringify(await createSuggestedTaskFromTool(args as Record<string, unknown>)),
@@ -2392,6 +2505,49 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            },
+          });
+
+          // confirm_task_intent — lock in the confirmed DoD (mirrors the OpenAI path).
+          lovableTools.confirm_task_intent = tool({
+            description: CONFIRM_TASK_INTENT_TOOL.description,
+            inputSchema: z.object({ task_id: z.string(), definition_of_done: z.string() }),
+            execute: async (args) => {
+              const a = args as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const dod = String(a.definition_of_done ?? "").trim();
+              if (!taskId || !dod) return JSON.stringify({ ok: false, error: "task_id and definition_of_done are required" });
+              if (!claimAction(`confirm_task_intent:${taskId}`)) {
+                recordToolUse(winner.id, "confirm_task_intent", "already confirmed this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true });
+              }
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { confirmTaskIntent } = await import("./tasks/tasks.server");
+                await confirmTaskIntent(taskId, email, dod);
+                let journeySet = false;
+                try {
+                  const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                  const r = await invokeJourneyTool({
+                    toolName: "update_task",
+                    args: { task_id: taskId, definition_of_done: dod },
+                    caller: data.caller ?? {},
+                    context: { source: "huddle" },
+                  });
+                  journeySet = !!r.ok;
+                } catch {
+                  /* non-fatal — the confirmed DoD is already durable in task_engagement_state */
+                }
+                recordToolUse(winner.id, "confirm_task_intent", journeySet ? "DoD confirmed" : "DoD confirmed, journey write failed", true);
+                return JSON.stringify({ ok: true, task_id: taskId, journey_set: journeySet });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "confirm_task_intent", "confirm failed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             },
@@ -2972,7 +3128,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // Backstop the fabricated-document-link failure (even when a REAL artifact was saved, the model may
       // still hand-author a fake/placeholder link in prose). The chip is the only real document link; strip
       // any self-authored markdown link from the text so the user never sees a fake "open the document" link.
-      const safeText = stripAgentReplyLinks(finalText);
+      // Also backstop file_search's own narration tendency (house-style bans it in prose; the model still
+      // does it — see stripFileMentionNarration above).
+      const safeText = stripFileMentionNarration(stripAgentReplyLinks(finalText));
       replies.push({
         agentId: nextId,
         text: safeText,

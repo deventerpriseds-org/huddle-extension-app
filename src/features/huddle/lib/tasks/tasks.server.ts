@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS tasks.journey_tasks (
   completed_at   TIMESTAMPTZ,
   assigned_agent TEXT,
   tags           TEXT[] NOT NULL DEFAULT '{}',
+  definition_of_done TEXT,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   synced_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -53,6 +54,9 @@ CREATE TABLE IF NOT EXISTS tasks.journey_tasks (
 -- Grooming fields synced back from journey (added after the table first shipped).
 ALTER TABLE tasks.journey_tasks ADD COLUMN IF NOT EXISTS assigned_agent TEXT;
 ALTER TABLE tasks.journey_tasks ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';
+-- WIP confirm-intent gate (docs/plan-wip-confirm-review-gate.md, Part 1): the DoD confirmed with the
+-- user before DOING, synced back from journey's definition_of_done column.
+ALTER TABLE tasks.journey_tasks ADD COLUMN IF NOT EXISTS definition_of_done TEXT;
 CREATE INDEX IF NOT EXISTS journey_tasks_user_email_idx ON tasks.journey_tasks (lower(user_email));
 CREATE INDEX IF NOT EXISTS journey_tasks_category_idx   ON tasks.journey_tasks (category);
 CREATE INDEX IF NOT EXISTS journey_tasks_assigned_idx   ON tasks.journey_tasks (assigned_agent);
@@ -105,6 +109,29 @@ CREATE TABLE IF NOT EXISTS tasks.task_blockers (
   flagged_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS task_blockers_user_idx ON tasks.task_blockers (lower(user_email));
+
+-- WIP confirm-intent gate + hardened review gate (docs/plan-wip-confirm-review-gate.md). One row per
+-- task, Huddle-native bookkeeping (journey only holds the confirmed definition_of_done itself).
+-- confirm_status: awaiting (not yet asked) -> asked (jittered ask fired, waiting on the user's reply)
+-- -> confirmed (DoD locked, eligible for UP_NEXT->DOING promotion). confirm_ask_at is a ONE-TIME
+-- jittered instant, set once and never recomputed (see ensureConfirmAskAt's set-once guard) so an
+-- unanswered ask can't be pushed out forever. revision_count is Part 2's corrective-pass counter for
+-- the post-create_artifact review gate. next_review_ping_at drives the 48h post-review recheck.
+CREATE TABLE IF NOT EXISTS tasks.task_engagement_state (
+  task_id             TEXT PRIMARY KEY,
+  user_email          TEXT NOT NULL,
+  confirm_status      TEXT NOT NULL DEFAULT 'awaiting',
+  proposed_dod        TEXT,
+  confirmed_dod       TEXT,
+  confirm_ask_at      TIMESTAMPTZ,
+  confirmed_at        TIMESTAMPTZ,
+  last_review_ping_at TIMESTAMPTZ,
+  next_review_ping_at TIMESTAMPTZ,
+  revision_count      INT NOT NULL DEFAULT 0,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS task_engagement_state_email_idx ON tasks.task_engagement_state (lower(user_email));
 
 -- GENERAL recurring-job scheduler, resident in Azure Huddle PG (NOT supabase). One heartbeat — the
 -- existing every-minute run-turn tick — dispatches every due job here, so any recurring/scheduled job
@@ -175,6 +202,7 @@ export interface JourneyTaskPayload {
   completed_at?: string | null;
   assigned_agent?: string | null;
   tags?: string[] | null;
+  definition_of_done?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -184,9 +212,9 @@ export async function upsertJourneyTask(row: JourneyTaskPayload, userEmail?: str
   await getPool().query(
     `INSERT INTO tasks.journey_tasks
        (id,user_id,user_email,title,description,status,priority,category,is_priority,priority_rank,
-        due_date,start_time,end_time,is_scheduled,pushed_count,board_id,completed_at,assigned_agent,tags,created_at,updated_at,synced_at)
+        due_date,start_time,end_time,is_scheduled,pushed_count,board_id,completed_at,assigned_agent,tags,definition_of_done,created_at,updated_at,synced_at)
      VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'MEDIUM'),$8,COALESCE($9,false),$10,
-             $11,$12,$13,COALESCE($14,false),COALESCE($15,0),$16,$17,$18,COALESCE($19::text[],'{}'::text[]),COALESCE($20,now()),COALESCE($21,now()),now())
+             $11,$12,$13,COALESCE($14,false),COALESCE($15,0),$16,$17,$18,COALESCE($19::text[],'{}'::text[]),$20,COALESCE($21,now()),COALESCE($22,now()),now())
      ON CONFLICT (id) DO UPDATE SET
        user_id=EXCLUDED.user_id, user_email=EXCLUDED.user_email, title=EXCLUDED.title,
        description=EXCLUDED.description, status=EXCLUDED.status, priority=EXCLUDED.priority,
@@ -194,13 +222,14 @@ export async function upsertJourneyTask(row: JourneyTaskPayload, userEmail?: str
        due_date=EXCLUDED.due_date, start_time=EXCLUDED.start_time, end_time=EXCLUDED.end_time,
        is_scheduled=EXCLUDED.is_scheduled, pushed_count=EXCLUDED.pushed_count, board_id=EXCLUDED.board_id,
        completed_at=EXCLUDED.completed_at, assigned_agent=EXCLUDED.assigned_agent, tags=EXCLUDED.tags,
+       definition_of_done=EXCLUDED.definition_of_done,
        updated_at=EXCLUDED.updated_at, synced_at=now()`,
     [
       row.id, row.user_id ?? null, userEmail ?? row.user_email ?? null, row.title, row.description ?? null,
       row.status ?? null, row.priority ?? null, row.category ?? null, row.is_priority ?? null, row.priority_rank ?? null,
       row.due_date ?? null, row.start_time ?? null, row.end_time ?? null, row.is_scheduled ?? null,
       row.pushed_count ?? null, row.board_id ?? null, row.completed_at ?? null, row.assigned_agent ?? null,
-      row.tags ?? null, row.created_at ?? null, row.updated_at ?? null,
+      row.tags ?? null, row.definition_of_done ?? null, row.created_at ?? null, row.updated_at ?? null,
     ],
   );
 
@@ -353,7 +382,7 @@ export async function setAutoWorkSignature(userEmail: string, signature: string)
 export async function getOpenAssignedTasks(userEmail: string, limit = 200): Promise<BoardTaskRow[]> {
   await ensureBootstrapped();
   const { rows } = await getPool().query<BoardTaskRow>(
-    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags
+    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done
        FROM tasks.journey_tasks t
       WHERE lower(user_email) = $1
         AND completed_at IS NULL
@@ -365,6 +394,83 @@ export async function getOpenAssignedTasks(userEmail: string, limit = 200): Prom
     [userEmail.toLowerCase(), limit],
   );
   return rows;
+}
+
+/** The WIP confirm-intent + review gate's per-task bookkeeping (docs/plan-wip-confirm-review-gate.md). */
+export interface TaskEngagementState {
+  task_id: string;
+  user_email: string;
+  confirm_status: "awaiting" | "asked" | "confirmed";
+  proposed_dod: string | null;
+  confirmed_dod: string | null;
+  confirm_ask_at: string | null;
+  confirmed_at: string | null;
+  last_review_ping_at: string | null;
+  next_review_ping_at: string | null;
+  revision_count: number;
+}
+
+const ENGAGEMENT_COLS =
+  "task_id,user_email,confirm_status,proposed_dod,confirmed_dod,confirm_ask_at,confirmed_at,last_review_ping_at,next_review_ping_at,revision_count";
+
+/** Batch-read engagement state for a set of task ids (a missing entry means "never asked yet"). */
+export async function getTaskEngagementStates(taskIds: string[]): Promise<Map<string, TaskEngagementState>> {
+  if (!taskIds.length) return new Map();
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<TaskEngagementState>(
+    `SELECT ${ENGAGEMENT_COLS} FROM tasks.task_engagement_state WHERE task_id = ANY($1::text[])`,
+    [taskIds],
+  );
+  return new Map(rows.map((r) => [r.task_id, r]));
+}
+
+export async function getTaskEngagementState(taskId: string): Promise<TaskEngagementState | null> {
+  const m = await getTaskEngagementStates([taskId]);
+  return m.get(taskId) ?? null;
+}
+
+/**
+ * Set a task's ONE-TIME jittered confirm-ask instant, but only if it doesn't already have one — a
+ * later call (e.g. next autowork pass, still before the jitter elapses) must NOT recompute a fresh
+ * value, or the ask would get pushed out forever. Creates the row in 'awaiting' status if it doesn't
+ * exist yet.
+ */
+export async function ensureConfirmAskAt(taskId: string, userEmail: string, askAtIso: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, confirm_status, confirm_ask_at)
+     VALUES ($1,$2,'awaiting',$3)
+     ON CONFLICT (task_id) DO UPDATE SET
+       confirm_ask_at = COALESCE(tasks.task_engagement_state.confirm_ask_at, EXCLUDED.confirm_ask_at),
+       updated_at = now()`,
+    [taskId, userEmail.toLowerCase(), askAtIso],
+  );
+}
+
+/**
+ * Transition awaiting -> asked (the confirm-intent DM was just enqueued). Returns whether THIS call
+ * made the transition, so a caller can tell "I just enqueued it" from "someone else already did."
+ */
+export async function markConfirmAsked(taskId: string): Promise<boolean> {
+  await ensureBootstrapped();
+  const { rowCount } = await getPool().query(
+    `UPDATE tasks.task_engagement_state SET confirm_status='asked', updated_at=now()
+      WHERE task_id = $1 AND confirm_status = 'awaiting'`,
+    [taskId],
+  );
+  return (rowCount ?? 0) > 0;
+}
+
+/** Lock in the confirmed Definition of Done (the confirm_task_intent tool handler calls this). */
+export async function confirmTaskIntent(taskId: string, userEmail: string, dod: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, confirm_status, confirmed_dod, confirmed_at)
+     VALUES ($1,$2,'confirmed',$3,now())
+     ON CONFLICT (task_id) DO UPDATE SET
+       confirm_status='confirmed', confirmed_dod=EXCLUDED.confirmed_dod, confirmed_at=now(), updated_at=now()`,
+    [taskId, userEmail.toLowerCase(), dod],
+  );
 }
 
 // ---- General recurring-job scheduler (Azure Huddle PG) ---------------------------------------------
@@ -464,6 +570,7 @@ export interface BoardTaskRow {
   completed_at: string | null;
   assigned_agent: string | null;
   tags: string[] | null;
+  definition_of_done: string | null;
 }
 
 /** Diagnostics: how many rows the mirror holds and under which emails (top 12). */
@@ -481,7 +588,7 @@ export async function getMirrorStats(): Promise<{ total: number; byEmail: { emai
 export async function getBoardTasks(userEmail: string): Promise<BoardTaskRow[]> {
   await ensureBootstrapped();
   const { rows } = await getPool().query<BoardTaskRow>(
-    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags
+    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done
        FROM tasks.journey_tasks
       WHERE lower(user_email) = $1
       ORDER BY updated_at DESC

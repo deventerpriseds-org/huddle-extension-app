@@ -172,12 +172,8 @@ export function ownerDirective(type: CeremonyType, lane: LaneReport): string {
         : type === "planning"
           ? "Propose what to take on next in your lane from the up-next/overdue items, hardest-or-soonest first. 1–2 sentences."
           : "Report what your lane delivered (the done items) — demo-ready wins. 1–2 sentences.";
-  return `\n\nCEREMONY — the scrum master has OPENED this live ${VERB[type]} and handed off to the team; give YOUR lane's update in the round-robin. ${frame} Use ONLY these real facts about your lane (${lane.category}); do NOT invent tasks, and do NOT comment on other lanes:
-- done: ${fmtLines(lane.done)}
-- up next: ${fmtLines(lane.upNext)}
-- overdue: ${fmtLines(lane.overdue)}
-- blocked: ${fmtBlocked(lane.blocked)}
-You MUST name the actual items in every bucket that is not "none" — do not summarize them away or skip them. Only if done, up next, overdue AND blocked are all "none" may you say you have nothing to report.`;
+  return `\n\nCEREMONY — the scrum master has OPENED this live ${VERB[type]} and handed off to the team; give YOUR lane's update in the round-robin. ${frame} Use ONLY these real facts about your lane (${lane.category}); do NOT invent tasks, and do NOT comment on other lanes. Done: ${fmtLines(lane.done)}. Up next: ${fmtLines(lane.upNext)}. Overdue: ${fmtLines(lane.overdue)}. Blocked: ${fmtBlocked(lane.blocked)}.
+You MUST name the actual items in every bucket that is not "none" — do not summarize them away or skip them. Only if done, up next, overdue AND blocked are all "none" may you say you have nothing to report. Weave all of this into 1–2 natural spoken sentences, the way you'd actually talk in a stand-up — never echo this back as a bulleted or labeled list (no "Done:"/"Up next:"/"Overdue:"/"Blocked:" headers, no line breaks between categories); that's the raw data, not a template to repeat.`;
 }
 
 function reportDigest(report: CeremonyReport): string {

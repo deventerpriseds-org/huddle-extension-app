@@ -348,7 +348,7 @@ export function ArtifactsView() {
       </section>
 
       {/* RIGHT: preview + review */}
-      <aside className="hidden w-80 shrink-0 flex-col border-l lg:flex">
+      <aside className="hidden w-80 shrink-0 flex-col border-l md:flex">
         {!sel ? (
           <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
             Select an artifact to preview and review it.

@@ -36,6 +36,7 @@ import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { MemoryDbPanel } from "./MemoryDbPanel";
 import { AccountSettingsPanel } from "./AccountSettingsPanel";
 import { ExecutiveProfilePanel } from "./ExecutiveProfilePanel";
+import { AgentWorkflowPanel } from "./AgentWorkflowPanel";
 import { ArtifactMirroringPanel } from "./ArtifactMirroringPanel";
 
 interface SettingsSheetProps {
@@ -148,6 +149,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
           <TabsContent value="account" className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
             <AccountSettingsPanel />
             <ExecutiveProfilePanel />
+            <AgentWorkflowPanel />
             <ArtifactMirroringPanel />
           </TabsContent>
 

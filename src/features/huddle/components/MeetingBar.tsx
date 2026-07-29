@@ -304,7 +304,12 @@ function MeetingRoom({
           onTurn: (t) => addMeetingTurns([t]),
         });
       } else {
+        // The mic is already listening past this point — every further click on this SAME button
+        // just mutes/unmutes it (there's no separate "start" affordance once live). That's easy to
+        // click blind not realizing you just muted yourself, so always confirm which way it flipped.
+        const wasMuted = groupVoice.muted;
         groupVoice.toggleMute();
+        toast(wasMuted ? "Mic live — go ahead" : "Microphone muted");
       }
     } else {
       voice.toggleMic();
@@ -417,7 +422,10 @@ function MeetingRoom({
             if (turn.status === "error") throw new Error(turn.error || "the ceremony run errored");
             break;
           }
-          if (!terminal) await new Promise((res) => setTimeout(res, 2000));
+          // Poll fast until the first reply lands (that's the wait the user actually feels —
+          // "clicking Start does nothing"); once the room is visibly live, back off so we're not
+          // hammering the server for the rest of a several-agent ceremony.
+          if (!terminal) await new Promise((res) => setTimeout(res, spoken.n === 0 ? 500 : 2000));
         }
         await enqP;
         activeCeremonyTurnRef.current = null; // step finished — no longer barge-able
@@ -502,9 +510,9 @@ function MeetingRoom({
         </Button>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {/* Stage — compact/content-height on mobile, fills the left column on desktop */}
-        <div className="flex min-h-0 flex-col lg:flex-1">
+        <div className="flex min-h-0 flex-col md:flex-1">
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-4 py-5 sm:px-8">
             <SpeakerSpotlight agent={spotlightAgent} speaking={speaking} />
             {showCaptions && caption && (
@@ -584,7 +592,7 @@ function MeetingRoom({
         </div>
 
         {/* Side panel — fills remaining height on mobile (transcript scrolls), fixed rail on desktop */}
-        <aside className="flex min-h-0 flex-1 flex-col border-t border-hairline lg:w-[360px] lg:flex-none lg:border-l lg:border-t-0">
+        <aside className="flex min-h-0 flex-1 flex-col border-t border-hairline md:w-[360px] md:flex-none md:border-l md:border-t-0">
           {panel === "people" ? (
             <PeoplePanel meeting={meeting} onToggle={toggleAgent} spotlightId={spotlightId} onSpotlight={setSpeaker} />
           ) : (
@@ -637,8 +645,10 @@ function RoomControl({
             onClick={onClick}
             aria-label={label}
             className={cn(
-              "size-11 rounded-xl bg-surface-2 text-foreground hover:bg-muted",
-              active && "bg-primary/20 text-primary hover:bg-primary/25",
+              "size-11 rounded-xl bg-surface-2 text-foreground transition-transform hover:bg-muted active:scale-95 focus-visible:ring-2 focus-visible:ring-primary/40",
+              active
+                ? "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 active:bg-primary/80"
+                : "active:bg-muted",
             )}
           >
             {icon}

@@ -35,6 +35,7 @@ export interface AutoWorkRunResult {
   promoted?: number; // BACKLOG->UP_NEXT / UP_NEXT->DOING status writes this pass
   blocked?: number; // grooming-flagged blocked items surfaced
   remaining?: number; // candidates left for the next fire
+  confirmAsked?: number; // confirm-intent DMs sent this pass (WIP confirm-intent gate)
   runId: string;
 }
 
@@ -78,7 +79,13 @@ function researchDirective(task: { id: string; title: string; category: string |
   );
 }
 
-function turnPayload(task: { assigned_agent: string | null }, directive: string, tz: string, caller: Caller) {
+function turnPayload(
+  task: { assigned_agent: string | null },
+  directive: string,
+  tz: string,
+  caller: Caller,
+  notify: "batch" | "push" = "batch",
+) {
   const agent = task.assigned_agent as string;
   return {
     text: directive,
@@ -99,12 +106,37 @@ function turnPayload(task: { assigned_agent: string | null }, directive: string,
     timeZone: tz,
     caller,
     // Triage: a routine research result should NOT buzz the phone — it lands in-app and rolls into the
-    // standup digest. Only genuine blockers/decisions push (see surfaceBlocked).
-    notify: "batch",
+    // standup digest. Only genuine blockers/decisions (and the confirm-intent ask) push.
+    notify,
     // System-originated: the assigned agent should DO the research, not defer/pass it along (the
     // directive text would otherwise trip the 1:1 lane-handoff → follow-up barrage).
     internal: true,
   };
+}
+
+// Confirm-intent gate jitter (docs/plan-wip-confirm-review-gate.md, Part 1): a fresh UP_NEXT candidate
+// gets a ONE-TIME random delay before its confirm-intent ask fires, so multiple agents' fresh items
+// don't all message the user in the same autowork pass. autowork itself only checks 3x/day (9/13/17
+// local, see scheduler.server.ts DEFAULT_AUTOWORK_HOURS) — that cadence is already confined to
+// reasonable hours, so no separate "working hours" calculation is needed here: whichever check first
+// lands after the jittered instant is when the ask actually fires.
+const CONFIRM_JITTER_MIN_MS = 15 * 60_000;
+const CONFIRM_JITTER_MAX_MS = 4 * 60 * 60_000;
+
+/** The directive the assigned agent runs to confirm intent + propose a Definition of Done. */
+function confirmIntentDirective(task: { id: string; title: string; assigned_agent: string | null }): string {
+  return (
+    `This task was just staged for you on the board: "${task.title}". Before starting the work, ` +
+    `confirm with the user what they actually want to achieve here — ground your understanding in ` +
+    `their Executive Profile and anything you remember about their goals (already in your context). ` +
+    `In ONE natural, brief message (not an interrogation): say what you believe they're trying to ` +
+    `accomplish with this task, propose a concrete, testable Definition of Done, and ask them to ` +
+    `confirm it, add to it, or correct it.\n` +
+    `Once you understand their reply (confirmed as-is, or with their additions/corrections folded in), ` +
+    `call confirm_task_intent with task_id "${task.id}" and the final definition_of_done text — this ` +
+    `locks it in and is what moves the task into active work. Do NOT call confirm_task_intent before ` +
+    `they've actually replied; this first message is only the ask. Do not create tasks or send email.`
+  );
 }
 
 /** Surface grooming-flagged blocked items in the coordinator's DM (report-only). One short turn. */
@@ -159,9 +191,18 @@ export async function runScheduledAutoWork(
   const email = (await resolveTaskEmail(caller)) ?? caller.entra_email;
   const tz = opts.timeZone ?? "America/New_York";
 
-  const { getOpenAssignedTasks, getBoardTasks, getTaskBlockers, setAutoWorkSignature } = await import("./tasks.server");
+  const {
+    getOpenAssignedTasks,
+    getBoardTasks,
+    getTaskBlockers,
+    setAutoWorkSignature,
+    getTaskEngagementStates,
+    ensureConfirmAskAt,
+    markConfirmAsked,
+  } = await import("./tasks.server");
   const { listArtifacts } = await import("../artifacts/artifacts.server");
   const { enqueueTurn } = await import("./turns.server");
+  const { isStructuredWorkflowRequired } = await import("../identity/agent-workflow-config.server");
 
   // Every open, assigned, unblocked task regardless of its current stage (BACKLOG..IN_REVIEW) — bucketed
   // per agent below. Already ordered by priority_rank, so backlog/up-next slices stay priority-ordered.
@@ -195,24 +236,81 @@ export async function runScheduledAutoWork(
   }
 
   // Decide promotions per agent (in memory — the mirror hasn't synced yet), then write them all in one
-  // batch call to journey (mirrors grooming's batch write; one round-trip instead of N).
+  // batch call to journey (mirrors grooming's batch write; one round-trip instead of N). UP_NEXT top-up
+  // from BACKLOG is unconditional (never gated); only the UP_NEXT->DOING step is gated behind the
+  // confirm-intent flow when requireStructuredWorkflow is ON for that agent (Part 0/1 of
+  // docs/plan-wip-confirm-review-gate.md) — a pending (asked-but-unconfirmed) task occupies its UP_NEXT
+  // slot but never competes for the DOING slot, so one unanswered ask can't starve the rest of the lane.
   const promotions: { task_id: string; status: string }[] = [];
-  const doingCandidates: BoardTaskRow[] = [];
-  for (const bucket of byAgent.values()) {
+  type Candidate = { agent: string; task: BoardTaskRow; doingList: BoardTaskRow[] };
+  const doingSlotCandidates: Candidate[] = [];
+  for (const [agent, bucket] of byAgent.entries()) {
     const frozen = bucket.inReview.length >= REVIEW_CAP;
-    let doingList = bucket.doing;
-    if (!frozen) {
-      const room = Math.max(0, UP_NEXT_CAP - bucket.upNext.length);
-      const toPromote = bucket.backlog.slice(0, room);
-      for (const t of toPromote) promotions.push({ task_id: t.id, status: "UP_NEXT" });
-      const upNextAfterTopUp = [...bucket.upNext, ...toPromote];
-      if (bucket.doing.length < DOING_CAP && upNextAfterTopUp.length) {
-        const next = upNextAfterTopUp[0];
-        promotions.push({ task_id: next.id, status: "DOING" });
-        doingList = [...bucket.doing, next];
+    if (frozen) continue;
+    const room = Math.max(0, UP_NEXT_CAP - bucket.upNext.length);
+    const toPromote = bucket.backlog.slice(0, room);
+    for (const t of toPromote) promotions.push({ task_id: t.id, status: "UP_NEXT" });
+    const upNextAfterTopUp = [...bucket.upNext, ...toPromote];
+    if (bucket.doing.length < DOING_CAP && upNextAfterTopUp.length) {
+      doingSlotCandidates.push({ agent, task: upNextAfterTopUp[0], doingList: bucket.doing });
+    }
+  }
+
+  const engagementByTaskId = await getTaskEngagementStates(doingSlotCandidates.map((c) => c.task.id));
+  const requiredByAgent = new Map(
+    await Promise.all(
+      [...new Set(doingSlotCandidates.map((c) => c.agent))].map(
+        async (agent): Promise<[string, boolean]> => [agent, await isStructuredWorkflowRequired(email, agent)],
+      ),
+    ),
+  );
+
+  const doingCandidates: BoardTaskRow[] = [];
+  const needsAskAt: string[] = [];
+  const confirmDue: { agent: string; task: BoardTaskRow }[] = [];
+  const now = Date.now();
+  for (const c of doingSlotCandidates) {
+    let doingList = c.doingList;
+    if (!requiredByAgent.get(c.agent)) {
+      promotions.push({ task_id: c.task.id, status: "DOING" });
+      doingList = [...c.doingList, c.task];
+    } else {
+      const state = engagementByTaskId.get(c.task.id);
+      const status = state?.confirm_status ?? "awaiting";
+      if (status === "confirmed") {
+        promotions.push({ task_id: c.task.id, status: "DOING" });
+        doingList = [...c.doingList, c.task];
+      } else if (status === "awaiting") {
+        if (!state?.confirm_ask_at) {
+          needsAskAt.push(c.task.id);
+        } else if (new Date(state.confirm_ask_at).getTime() <= now) {
+          confirmDue.push({ agent: c.agent, task: c.task });
+        }
+        // else: jitter hasn't elapsed yet — wait for a later pass
       }
+      // status === "asked": already sent, waiting on the user's reply — nothing to do this pass
     }
     doingCandidates.push(...doingList.slice(0, DOING_CAP));
+  }
+
+  if (needsAskAt.length) {
+    const jitterMs = () => CONFIRM_JITTER_MIN_MS + Math.random() * (CONFIRM_JITTER_MAX_MS - CONFIRM_JITTER_MIN_MS);
+    await Promise.all(
+      needsAskAt.map((taskId) => ensureConfirmAskAt(taskId, email, new Date(now + jitterMs()).toISOString()).catch(() => {})),
+    );
+  }
+
+  let confirmAsked = 0;
+  for (const { agent, task } of confirmDue) {
+    try {
+      const justAsked = await markConfirmAsked(task.id);
+      if (!justAsked) continue; // another pass already asked (race) — don't double-send
+      const id = `autowork-confirm-${runId}-${task.id}`;
+      await enqueueTurn(id, `dm-${agent}`, email, turnPayload({ assigned_agent: agent }, confirmIntentDirective(task), tz, caller, "push"));
+      confirmAsked++;
+    } catch {
+      /* enqueue failure is non-fatal — confirm_ask_at already passed, so it's retried next pass */
+    }
   }
 
   let promoted = 0;
@@ -277,5 +375,5 @@ export async function runScheduledAutoWork(
 
   await setAutoWorkSignature(email, signature);
   const remaining = Math.max(0, candidates.length - enqueued);
-  return { ok: true, skipped: false, enqueued, promoted, blocked: blockedTitles.length, remaining, runId };
+  return { ok: true, skipped: false, enqueued, promoted, blocked: blockedTitles.length, remaining, confirmAsked, runId };
 }
