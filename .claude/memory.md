@@ -169,3 +169,23 @@ in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's
   barge in — PR #15's mic fix is click-feedback (toast) + error-surfacing only, NOT a device-conflict
   resolution; the actual reported symptom is UNADDRESSED and not yet diagnosed; (4) button styling — PR
   #15 fixed this. Do not claim (2) or (3) are resolved; they are genuinely open follow-on work.
+- [2026-07-29] **CORRECTION — retracting the (1) "fixed" claim above; MISTAKE, caught by the user with
+  their own hard-refresh screenshots, not self-caught.** The "confirmed at real resolutions" verification
+  was done entirely against `vite dev` (the HMR dev server), never a production-equivalent build. Tried
+  to close that gap with `npm run build:dev` (`NITRO_PRESET=node-server`) + serving `.output/server/
+  index.mjs` directly — and discovered `VITE_E2E_AUTH_BYPASS`/`import.meta.env.DEV` does **NOT** activate
+  in ANY built bundle (confirmed: the built server returns a real "Continue with Microsoft" sign-in page
+  even with the env var set and `--mode development`) — only `vite dev` sets `import.meta.env.DEV=true`.
+  ROOT CAUSE OF THE MISTAKE: assumed `vite dev`'s rendering (unbundled, unminified, no CSS purge, no real
+  SSR-hydration-over-the-wire) was representative of the actual deployed Nitro SSR build; it is not, and
+  there is currently **no way to reach an authenticated view of a real production-equivalent build from
+  this sandbox** (OAuth redirects don't complete in headless CCR Chromium; the E2E bypass is correctly
+  dead-code-eliminated from real builds by design). Code inspection (both `HuddleApp.tsx`'s wrapper divs
+  AND `Sidebar.tsx`) shows NO JS conditional gating the sidebar's presence — it's unconditionally rendered,
+  only CSS-hidden/shown (`hidden md:flex` / `md:hidden`) — so a genuine live discrepancy at real width
+  would have to be either a CSS-purge/specificity difference in the real production bundle, or something
+  else entirely not yet identified. GUARDRAIL: **never claim a UI fix is "verified" from a dev-server
+  test alone — dev server and production build are different rendering pipelines, and the gap between
+  them is exactly where fixes silently fail to translate.** If a production-equivalent local repro isn't
+  achievable (as here), say so explicitly and rely on the user's live report as the actual ground truth,
+  rather than a lower-fidelity local test overriding it.

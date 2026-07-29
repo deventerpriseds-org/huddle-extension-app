@@ -16,14 +16,19 @@ prior fix commits for these were pushed or orphaned.
 an already-OPEN, never-merged PR #15 — pushed, not orphaned, just never merged. Merged (`7cc5af9`),
 manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confirmed run completed/success).
 **Status:** open — PARTIALLY resolved, one direct contradiction not yet explained:
-- (1) desktop breakpoint/sidebar: code inspected (pure CSS, `hidden md:flex`/`md:hidden`, consistent
-  768px breakpoint, no JS/hook gating) and re-verified via Playwright at real desktop resolutions
-  (1366×768, 1536×864, 1920×1080, 2560×1440) against the properly git-synced merged code — sidebar and
-  meeting view rendered correctly in every local test. **BUT the user reports it is STILL broken live in
-  production at a normal wide window**, which directly contradicts the local result. Not yet reconciled —
-  two live hypotheses (stale CDN/browser cache vs. a production-only runtime failure that a
-  zero-backend-secrets local dev server can't reproduce), narrowing questions sent to the user
-  (hard-refresh result + browser console errors) — awaiting their answer.
+- (1) desktop breakpoint/sidebar: **RETRACTED "fixed" claim — user confirmed via hard-refresh screenshots
+  it is STILL broken live** (no menu/hamburger at wide width; hamburger appears only when shrunk). The
+  earlier "verified at real resolutions" claim was based entirely on `vite dev` (HMR dev server), which is
+  NOT representative of the deployed Nitro SSR build. Attempted to close the gap with `npm run build:dev`
+  (`NITRO_PRESET=node-server`) serving `.output/server/index.mjs` directly — found that
+  `VITE_E2E_AUTH_BYPASS` does not activate in ANY built bundle (`import.meta.env.DEV` is only true under
+  `vite dev`), so a real production-equivalent authenticated repro is NOT achievable from this sandbox at
+  all (OAuth redirects don't complete in headless CCR Chromium either). Code inspection (`HuddleApp.tsx`,
+  `Sidebar.tsx`) shows no JS conditional gating the sidebar — it's unconditionally rendered, only
+  CSS-hidden/shown — ruling out an obvious data-dependent crash, but not explaining the live discrepancy.
+  **STATUS: genuinely unresolved, blocked on inspecting the real live DOM** — needs the user (or a channel
+  with real Entra auth) to check whether the sidebar's wrapper `<div>` exists in the DOM at all around the
+  broken width (CSS-hidden vs. entirely absent would point to two very different root causes).
 - (2) mic "in use by Microsoft Edge" / can't barge in: PR #15's mic fix is click-feedback (toast) +
   error-surfacing only — confirmed via PR text this does NOT address an actual device-conflict. UNADDRESSED,
   not yet diagnosed.
