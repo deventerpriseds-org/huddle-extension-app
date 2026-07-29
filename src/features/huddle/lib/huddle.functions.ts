@@ -1901,8 +1901,21 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               const a = c.arguments as Record<string, unknown>;
               const name = String(a.name ?? "").trim();
               const content = String(a.content ?? "");
+              const taskIdRaw = a.task_id ? String(a.task_id) : "";
               if (!name || !content) return JSON.stringify({ ok: false, error: "name and content are required" });
-              if (!claimAction(`create_artifact:${a.task_id ?? ""}:${name}`)) {
+              // Include the task's current revision_count in the dedup key so a revise-and-resave
+              // (same task+name, after the review gate below sends it back) isn't blocked as "already
+              // saved this turn" — only a TRUE repeat at the same revision is deduped.
+              let revisionCountForClaim = 0;
+              if (taskIdRaw) {
+                try {
+                  const { getTaskEngagementState } = await import("./tasks/tasks.server");
+                  revisionCountForClaim = (await getTaskEngagementState(taskIdRaw))?.revision_count ?? 0;
+                } catch {
+                  /* default 0 */
+                }
+              }
+              if (!claimAction(`create_artifact:${taskIdRaw}:${name}:${revisionCountForClaim}`)) {
                 recordToolUse(winner.id, "create_artifact", "already saved this turn — skipped duplicate", true);
                 return JSON.stringify({ ok: true, deduped: true });
               }
@@ -1915,15 +1928,33 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 const { id, deepLink } = await createArtifact({
                   userEmail: email,
                   agentId: winner.id,
-                  taskId: a.task_id ? String(a.task_id) : null,
+                  taskId: taskIdRaw || null,
                   folder: String(a.folder ?? "Research"),
                   name,
                   mime: String(a.mime ?? "text/markdown"),
                   bytes: Buffer.from(content, "utf8"),
                 });
-                recordToolUse(winner.id, "create_artifact", `saved "${name}"`, true, deepLink);
-                if (a.task_id) await markTaskInReview(String(a.task_id), data.caller);
-                return JSON.stringify({ ok: true, id, deepLink });
+                let reviewSuffix = "";
+                let review: { proceed: boolean; message: string; deficiencies?: string[] } | undefined;
+                if (taskIdRaw) {
+                  // Hardened review gate (docs/plan-wip-confirm-review-gate.md, Part 2) — a code MUST
+                  // when requireStructuredWorkflow is ON, not a prompt "should". A no-op when it's OFF.
+                  const { runReviewGate } = await import("./tasks/review-gate.server");
+                  const gate = await runReviewGate({ taskId: taskIdRaw, agentId: winner.id, email, content, claim: claimAction });
+                  if (gate.proceed) await markTaskInReview(taskIdRaw, data.caller);
+                  if (gate.gated) {
+                    reviewSuffix = ` · ${gate.note}`;
+                    review = {
+                      proceed: gate.proceed,
+                      message: gate.proceed
+                        ? "Review passed — this is now in the user's review queue."
+                        : `Sent back for one revision before it can move to review: ${(gate.deficiencies ?? []).join("; ")}. Address these and call create_artifact again with the same task_id and name to resave.`,
+                      deficiencies: gate.deficiencies,
+                    };
+                  }
+                }
+                recordToolUse(winner.id, "create_artifact", `saved "${name}"${reviewSuffix}`, true, deepLink);
+                return JSON.stringify({ ok: true, id, deepLink, ...(review ? { review } : {}) });
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "create_artifact", "save failed", false, msg);
@@ -2429,8 +2460,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               const a = args as Record<string, unknown>;
               const name = String(a.name ?? "").trim();
               const content = String(a.content ?? "");
+              const taskIdRaw = a.task_id ? String(a.task_id) : "";
               if (!name || !content) return JSON.stringify({ ok: false, error: "name and content are required" });
-              if (!claimAction(`create_artifact:${a.task_id ?? ""}:${name}`)) {
+              let revisionCountForClaim = 0;
+              if (taskIdRaw) {
+                try {
+                  const { getTaskEngagementState } = await import("./tasks/tasks.server");
+                  revisionCountForClaim = (await getTaskEngagementState(taskIdRaw))?.revision_count ?? 0;
+                } catch {
+                  /* default 0 */
+                }
+              }
+              if (!claimAction(`create_artifact:${taskIdRaw}:${name}:${revisionCountForClaim}`)) {
                 recordToolUse(winner.id, "create_artifact", "already saved this turn — skipped duplicate", true);
                 return JSON.stringify({ ok: true, deduped: true });
               }
@@ -2443,15 +2484,31 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 const { id, deepLink } = await createArtifact({
                   userEmail: email,
                   agentId: winner.id,
-                  taskId: a.task_id ? String(a.task_id) : null,
+                  taskId: taskIdRaw || null,
                   folder: String(a.folder ?? "Research"),
                   name,
                   mime: String(a.mime ?? "text/markdown"),
                   bytes: Buffer.from(content, "utf8"),
                 });
-                recordToolUse(winner.id, "create_artifact", `saved "${name}"`, true, deepLink);
-                if (a.task_id) await markTaskInReview(String(a.task_id), data.caller);
-                return JSON.stringify({ ok: true, id, deepLink });
+                let reviewSuffix = "";
+                let review: { proceed: boolean; message: string; deficiencies?: string[] } | undefined;
+                if (taskIdRaw) {
+                  const { runReviewGate } = await import("./tasks/review-gate.server");
+                  const gate = await runReviewGate({ taskId: taskIdRaw, agentId: winner.id, email, content, claim: claimAction });
+                  if (gate.proceed) await markTaskInReview(taskIdRaw, data.caller);
+                  if (gate.gated) {
+                    reviewSuffix = ` · ${gate.note}`;
+                    review = {
+                      proceed: gate.proceed,
+                      message: gate.proceed
+                        ? "Review passed — this is now in the user's review queue."
+                        : `Sent back for one revision before it can move to review: ${(gate.deficiencies ?? []).join("; ")}. Address these and call create_artifact again with the same task_id and name to resave.`,
+                      deficiencies: gate.deficiencies,
+                    };
+                  }
+                }
+                recordToolUse(winner.id, "create_artifact", `saved "${name}"${reviewSuffix}`, true, deepLink);
+                return JSON.stringify({ ok: true, id, deepLink, ...(review ? { review } : {}) });
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "create_artifact", "save failed", false, msg);

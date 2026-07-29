@@ -461,6 +461,24 @@ export async function markConfirmAsked(taskId: string): Promise<boolean> {
   return (rowCount ?? 0) > 0;
 }
 
+/**
+ * Bump the hardened review gate's corrective-pass counter (docs/plan-wip-confirm-review-gate.md,
+ * Part 2 correction #3) and return the new count, so the caller can enforce EXACTLY one revision —
+ * a second 'revise' verdict must fail open rather than loop forever.
+ */
+export async function incrementRevisionCount(taskId: string, userEmail: string): Promise<number> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ revision_count: number }>(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, revision_count)
+     VALUES ($1,$2,1)
+     ON CONFLICT (task_id) DO UPDATE SET
+       revision_count = tasks.task_engagement_state.revision_count + 1, updated_at = now()
+     RETURNING revision_count`,
+    [taskId, userEmail.toLowerCase()],
+  );
+  return rows[0]?.revision_count ?? 1;
+}
+
 /** Lock in the confirmed Definition of Done (the confirm_task_intent tool handler calls this). */
 export async function confirmTaskIntent(taskId: string, userEmail: string, dod: string): Promise<void> {
   await ensureBootstrapped();
