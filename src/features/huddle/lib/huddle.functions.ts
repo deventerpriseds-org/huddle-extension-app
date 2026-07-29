@@ -1465,20 +1465,30 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             if (r.ok) {
               if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
               else suggestedTasks.push(task); // journey didn't echo a row — keep a Huddle card
-              // journey's `output` carries the real scheduling outcome (message + per-task
-              // due_date/start_time/is_scheduled/deferredToNightly) — parse it so the model can
-              // report honestly instead of a flat "added it" that overclaims what actually happened
-              // (same-day placement is provisional until tonight's planner runs; a future due date
-              // has no exact time yet). See execute-tool's parseAndCreateTasks response shape.
+              // journey's `output` IS execute-tool's `result` object verbatim (huddle-proxy forwards
+              // exec.result, not the sibling exec.message string) — parse it so the model can report
+              // honestly instead of a flat "added it" that overclaims what actually happened (same-day
+              // placement is provisional until tonight's planner runs; a future due date has no exact
+              // time yet). Shape: {created, scheduled:[{title,time}], deferredToNightly:[{title,
+              // due_date}], tasks:[{due_date,start_time,is_scheduled,...}]} — see parseAndCreateTasks.
               let outcomeNote: string | undefined;
               let outcome: { due_date?: string | null; start_time?: string | null; is_scheduled?: boolean } | undefined;
               try {
                 const parsed = JSON.parse(r.output) as {
-                  message?: string;
-                  result?: { tasks?: Array<{ due_date?: string | null; start_time?: string | null; is_scheduled?: boolean }> };
+                  scheduled?: Array<{ title: string; time: string }>;
+                  deferredToNightly?: Array<{ title: string; due_date: string }>;
+                  tasks?: Array<{ due_date?: string | null; start_time?: string | null; is_scheduled?: boolean }>;
                 };
-                outcomeNote = parsed.message;
-                outcome = parsed.result?.tasks?.[0];
+                outcome = parsed.tasks?.[0];
+                if (parsed.scheduled && parsed.scheduled.length > 0) {
+                  outcomeNote = `scheduled at ${parsed.scheduled[0].time} today (provisional — the nightly planner may move it)`;
+                } else if (parsed.deferredToNightly && parsed.deferredToNightly.length > 0) {
+                  outcomeNote = `due ${parsed.deferredToNightly[0].due_date} — no exact time yet, the nightly planner will place one`;
+                } else if (outcome?.due_date && !outcome.start_time) {
+                  outcomeNote = `due ${outcome.due_date} — no exact time yet`;
+                } else if (!outcome?.due_date && !outcome?.start_time) {
+                  outcomeNote = "added to the backlog, unscheduled";
+                }
               } catch {
                 /* r.output wasn't the expected JSON shape — outcome stays undefined, note omitted */
               }
