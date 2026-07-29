@@ -1244,7 +1244,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       );
       const taskToolInstructions =
         "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it." +
-        " NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled \"groom the backlog\" or \"assign the team\") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked.";
+        " NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled \"groom the backlog\" or \"assign the team\") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked." +
+        " If the user states or implies a specific date (a day name, 'tomorrow', a calendar date, 'by Friday'), set the tool's `date` field — do not just leave it embedded in the title text where it can get lost." +
+        " Report the outcome honestly using exactly what the tool result gives you, in `note`/`outcome` — never invent a time or claim more certainty than that. A same-day scheduled time is provisional (the nightly planner can still move it overnight) — say something like \"I've got that for around 2:30 today\" rather than a firm commitment. A task with a due date but no start_time has no exact time yet — say the due date and that the planner will place a time, don't guess one. If the outcome says today was full and it landed elsewhere, say so plainly instead of a bare \"added it.\"";
 
       // AUTO memory retrieval: pull the most relevant shared/global memory for THIS agent and inject
       // it into the prompt, so recall works even when the model doesn't call `search_memory`. This is
@@ -1445,22 +1447,48 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         if (agentBackend.journey?.enabled && data.caller?.entra_email) {
           try {
             const { invokeJourneyTool } = await import("./journey/proxy.functions");
+            // Defense in depth: journey's `date` param only understands 'today'/'tomorrow'/YYYY-MM-DD.
+            // Validate here (don't just trust the tool description) so a model slip — a weekday name,
+            // "next Friday" — can't silently break the scheduling call; drop it and fall back to the
+            // title-text NL parser, which handles those phrases correctly.
+            const rawDate = typeof args.date === "string" ? args.date.trim().toLowerCase() : "";
+            const dateArg =
+              rawDate === "today" || rawDate === "tomorrow" || /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
+                ? rawDate
+                : undefined;
             const r = await invokeJourneyTool({
               toolName: "quick_create_task",
-              args: { title: task.title },
+              args: dateArg ? { title: task.title, date: dateArg } : { title: task.title },
               caller: data.caller ?? {},
               context: { source: "huddle", huddleId: data.huddleId, agentId: winner.id },
             });
             if (r.ok) {
               if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
               else suggestedTasks.push(task); // journey didn't echo a row — keep a Huddle card
+              // journey's `output` carries the real scheduling outcome (message + per-task
+              // due_date/start_time/is_scheduled/deferredToNightly) — parse it so the model can
+              // report honestly instead of a flat "added it" that overclaims what actually happened
+              // (same-day placement is provisional until tonight's planner runs; a future due date
+              // has no exact time yet). See execute-tool's parseAndCreateTasks response shape.
+              let outcomeNote: string | undefined;
+              let outcome: { due_date?: string | null; start_time?: string | null; is_scheduled?: boolean } | undefined;
+              try {
+                const parsed = JSON.parse(r.output) as {
+                  message?: string;
+                  result?: { tasks?: Array<{ due_date?: string | null; start_time?: string | null; is_scheduled?: boolean }> };
+                };
+                outcomeNote = parsed.message;
+                outcome = parsed.result?.tasks?.[0];
+              } catch {
+                /* r.output wasn't the expected JSON shape — outcome stays undefined, note omitted */
+              }
               recordToolUse(
                 winner.id,
                 "create_huddle_task",
-                `“${task.title}” → Huddle board + journey`,
+                `“${task.title}” → Huddle board + journey${outcomeNote ? ` — ${outcomeNote}` : ""}`,
                 true,
               );
-              return { ok: true, task, boards: ["huddle", "journey"] };
+              return { ok: true, task, boards: ["huddle", "journey"], outcome, note: outcomeNote };
             }
             const ev = recordFallback(
               "tool",
@@ -1717,6 +1745,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                     "Optional board lane: Backlog, Ready, Up next, Doing, Done, or Blocked. Defaults to Backlog.",
                 },
                 blockReason: { type: "string", description: "Optional blocker note." },
+                date: {
+                  type: "string",
+                  description:
+                    "Optional, ONLY for exactly 'today', 'tomorrow', or an explicit YYYY-MM-DD you are certain of. For any other date the user stated (a weekday name, 'next Tuesday', 'by Friday'), do NOT put it here — leave this unset and instead keep that exact date phrase in the title text (e.g. \"Renew passport by Friday\"), which is parsed correctly server-side. Putting an unsupported value here silently breaks scheduling.",
+                },
               },
               required: ["title"],
             },
@@ -2319,6 +2352,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               ownerId: z.string().optional(),
               lane: z.string().optional(),
               blockReason: z.string().optional(),
+              date: z.string().optional(),
             }),
             execute: async (args) =>
               JSON.stringify(await createSuggestedTaskFromTool(args as Record<string, unknown>)),
