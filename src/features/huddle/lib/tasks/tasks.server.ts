@@ -110,6 +110,29 @@ CREATE TABLE IF NOT EXISTS tasks.task_blockers (
 );
 CREATE INDEX IF NOT EXISTS task_blockers_user_idx ON tasks.task_blockers (lower(user_email));
 
+-- WIP confirm-intent gate + hardened review gate (docs/plan-wip-confirm-review-gate.md). One row per
+-- task, Huddle-native bookkeeping (journey only holds the confirmed definition_of_done itself).
+-- confirm_status: awaiting (not yet asked) -> asked (jittered ask fired, waiting on the user's reply)
+-- -> confirmed (DoD locked, eligible for UP_NEXT->DOING promotion). confirm_ask_at is a ONE-TIME
+-- jittered instant, set once and never recomputed (see ensureConfirmAskAt's set-once guard) so an
+-- unanswered ask can't be pushed out forever. revision_count is Part 2's corrective-pass counter for
+-- the post-create_artifact review gate. next_review_ping_at drives the 48h post-review recheck.
+CREATE TABLE IF NOT EXISTS tasks.task_engagement_state (
+  task_id             TEXT PRIMARY KEY,
+  user_email          TEXT NOT NULL,
+  confirm_status      TEXT NOT NULL DEFAULT 'awaiting',
+  proposed_dod        TEXT,
+  confirmed_dod       TEXT,
+  confirm_ask_at      TIMESTAMPTZ,
+  confirmed_at        TIMESTAMPTZ,
+  last_review_ping_at TIMESTAMPTZ,
+  next_review_ping_at TIMESTAMPTZ,
+  revision_count      INT NOT NULL DEFAULT 0,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS task_engagement_state_email_idx ON tasks.task_engagement_state (lower(user_email));
+
 -- GENERAL recurring-job scheduler, resident in Azure Huddle PG (NOT supabase). One heartbeat — the
 -- existing every-minute run-turn tick — dispatches every due job here, so any recurring/scheduled job
 -- (grooming today; ceremonies/digests next) is just a row: no new cron, no new secret. cadence holds
@@ -371,6 +394,83 @@ export async function getOpenAssignedTasks(userEmail: string, limit = 200): Prom
     [userEmail.toLowerCase(), limit],
   );
   return rows;
+}
+
+/** The WIP confirm-intent + review gate's per-task bookkeeping (docs/plan-wip-confirm-review-gate.md). */
+export interface TaskEngagementState {
+  task_id: string;
+  user_email: string;
+  confirm_status: "awaiting" | "asked" | "confirmed";
+  proposed_dod: string | null;
+  confirmed_dod: string | null;
+  confirm_ask_at: string | null;
+  confirmed_at: string | null;
+  last_review_ping_at: string | null;
+  next_review_ping_at: string | null;
+  revision_count: number;
+}
+
+const ENGAGEMENT_COLS =
+  "task_id,user_email,confirm_status,proposed_dod,confirmed_dod,confirm_ask_at,confirmed_at,last_review_ping_at,next_review_ping_at,revision_count";
+
+/** Batch-read engagement state for a set of task ids (a missing entry means "never asked yet"). */
+export async function getTaskEngagementStates(taskIds: string[]): Promise<Map<string, TaskEngagementState>> {
+  if (!taskIds.length) return new Map();
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<TaskEngagementState>(
+    `SELECT ${ENGAGEMENT_COLS} FROM tasks.task_engagement_state WHERE task_id = ANY($1::text[])`,
+    [taskIds],
+  );
+  return new Map(rows.map((r) => [r.task_id, r]));
+}
+
+export async function getTaskEngagementState(taskId: string): Promise<TaskEngagementState | null> {
+  const m = await getTaskEngagementStates([taskId]);
+  return m.get(taskId) ?? null;
+}
+
+/**
+ * Set a task's ONE-TIME jittered confirm-ask instant, but only if it doesn't already have one — a
+ * later call (e.g. next autowork pass, still before the jitter elapses) must NOT recompute a fresh
+ * value, or the ask would get pushed out forever. Creates the row in 'awaiting' status if it doesn't
+ * exist yet.
+ */
+export async function ensureConfirmAskAt(taskId: string, userEmail: string, askAtIso: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, confirm_status, confirm_ask_at)
+     VALUES ($1,$2,'awaiting',$3)
+     ON CONFLICT (task_id) DO UPDATE SET
+       confirm_ask_at = COALESCE(tasks.task_engagement_state.confirm_ask_at, EXCLUDED.confirm_ask_at),
+       updated_at = now()`,
+    [taskId, userEmail.toLowerCase(), askAtIso],
+  );
+}
+
+/**
+ * Transition awaiting -> asked (the confirm-intent DM was just enqueued). Returns whether THIS call
+ * made the transition, so a caller can tell "I just enqueued it" from "someone else already did."
+ */
+export async function markConfirmAsked(taskId: string): Promise<boolean> {
+  await ensureBootstrapped();
+  const { rowCount } = await getPool().query(
+    `UPDATE tasks.task_engagement_state SET confirm_status='asked', updated_at=now()
+      WHERE task_id = $1 AND confirm_status = 'awaiting'`,
+    [taskId],
+  );
+  return (rowCount ?? 0) > 0;
+}
+
+/** Lock in the confirmed Definition of Done (the confirm_task_intent tool handler calls this). */
+export async function confirmTaskIntent(taskId: string, userEmail: string, dod: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, confirm_status, confirmed_dod, confirmed_at)
+     VALUES ($1,$2,'confirmed',$3,now())
+     ON CONFLICT (task_id) DO UPDATE SET
+       confirm_status='confirmed', confirmed_dod=EXCLUDED.confirmed_dod, confirmed_at=now(), updated_at=now()`,
+    [taskId, userEmail.toLowerCase(), dod],
+  );
 }
 
 // ---- General recurring-job scheduler (Azure Huddle PG) ---------------------------------------------
