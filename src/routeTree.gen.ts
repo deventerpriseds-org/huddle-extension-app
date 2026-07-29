@@ -16,6 +16,7 @@ import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/
 import { Route as ApiPublicTasksSyncRouteImport } from './routes/api/public/tasks-sync'
 import { Route as ApiPublicRunTurnRouteImport } from './routes/api/public/run-turn'
 import { Route as ApiPublicRunStandupRouteImport } from './routes/api/public/run-standup'
+import { Route as ApiPublicRunReviewRecheckRouteImport } from './routes/api/public/run-review-recheck'
 import { Route as ApiPublicRunReviewDigestRouteImport } from './routes/api/public/run-review-digest'
 import { Route as ApiPublicRunGroomingRouteImport } from './routes/api/public/run-grooming'
 import { Route as ApiPublicRunCeremonyRouteImport } from './routes/api/public/run-ceremony'
@@ -56,6 +57,12 @@ const ApiPublicRunStandupRoute = ApiPublicRunStandupRouteImport.update({
   path: '/api/public/run-standup',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicRunReviewRecheckRoute =
+  ApiPublicRunReviewRecheckRouteImport.update({
+    id: '/api/public/run-review-recheck',
+    path: '/api/public/run-review-recheck',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicRunReviewDigestRoute =
   ApiPublicRunReviewDigestRouteImport.update({
     id: '/api/public/run-review-digest',
@@ -92,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
   '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
+  '/api/public/run-review-recheck': typeof ApiPublicRunReviewRecheckRoute
   '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
@@ -105,6 +113,7 @@ export interface FileRoutesByTo {
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
   '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
+  '/api/public/run-review-recheck': typeof ApiPublicRunReviewRecheckRoute
   '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
@@ -120,6 +129,7 @@ export interface FileRoutesById {
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
   '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
+  '/api/public/run-review-recheck': typeof ApiPublicRunReviewRecheckRoute
   '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
@@ -135,6 +145,7 @@ export interface FileRouteTypes {
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
     | '/api/public/run-review-digest'
+    | '/api/public/run-review-recheck'
     | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
@@ -148,6 +159,7 @@ export interface FileRouteTypes {
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
     | '/api/public/run-review-digest'
+    | '/api/public/run-review-recheck'
     | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
@@ -162,6 +174,7 @@ export interface FileRouteTypes {
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
     | '/api/public/run-review-digest'
+    | '/api/public/run-review-recheck'
     | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
@@ -176,6 +189,7 @@ export interface RootRouteChildren {
   ApiPublicRunCeremonyRoute: typeof ApiPublicRunCeremonyRoute
   ApiPublicRunGroomingRoute: typeof ApiPublicRunGroomingRoute
   ApiPublicRunReviewDigestRoute: typeof ApiPublicRunReviewDigestRoute
+  ApiPublicRunReviewRecheckRoute: typeof ApiPublicRunReviewRecheckRoute
   ApiPublicRunStandupRoute: typeof ApiPublicRunStandupRoute
   ApiPublicRunTurnRoute: typeof ApiPublicRunTurnRoute
   ApiPublicTasksSyncRoute: typeof ApiPublicTasksSyncRoute
@@ -230,6 +244,13 @@ declare module '@tanstack/react-router' {
       path: '/api/public/run-standup'
       fullPath: '/api/public/run-standup'
       preLoaderRoute: typeof ApiPublicRunStandupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/run-review-recheck': {
+      id: '/api/public/run-review-recheck'
+      path: '/api/public/run-review-recheck'
+      fullPath: '/api/public/run-review-recheck'
+      preLoaderRoute: typeof ApiPublicRunReviewRecheckRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/run-review-digest': {
@@ -291,6 +312,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicRunCeremonyRoute: ApiPublicRunCeremonyRoute,
   ApiPublicRunGroomingRoute: ApiPublicRunGroomingRoute,
   ApiPublicRunReviewDigestRoute: ApiPublicRunReviewDigestRoute,
+  ApiPublicRunReviewRecheckRoute: ApiPublicRunReviewRecheckRoute,
   ApiPublicRunStandupRoute: ApiPublicRunStandupRoute,
   ApiPublicRunTurnRoute: ApiPublicRunTurnRoute,
   ApiPublicTasksSyncRoute: ApiPublicTasksSyncRoute,

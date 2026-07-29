@@ -95,6 +95,15 @@ CREATE TABLE IF NOT EXISTS tasks.autowork_state (
   last_worked_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Watermark for the standup's "moved to review since last standup" bucket. tasks.scheduled_jobs'
+-- last_run_at is overwritten at CLAIM time (before the job body runs), so it can't answer "since when
+-- did I last actually build a brief" -- this small dedicated table (same pattern as groom/autowork
+-- state) owns that read/write point itself.
+CREATE TABLE IF NOT EXISTS tasks.standup_state (
+  user_email      TEXT PRIMARY KEY,
+  last_standup_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Agent-discovered blockers (ACT-5). "Blocked" is NOT guessed by grooming from a title + a hand-written
 -- capability list any more — it is EARNED: when an agent actually works a task and genuinely can't
 -- advance it, it records the specific real reason here (and sets the journey task status=BLOCKED, which
@@ -128,10 +137,14 @@ CREATE TABLE IF NOT EXISTS tasks.task_engagement_state (
   last_review_ping_at TIMESTAMPTZ,
   next_review_ping_at TIMESTAMPTZ,
   revision_count      INT NOT NULL DEFAULT 0,
+  entered_review_at   TIMESTAMPTZ,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS task_engagement_state_email_idx ON tasks.task_engagement_state (lower(user_email));
+-- entered_review_at: stamped whenever a task actually moves to IN_REVIEW (create_artifact's gated
+-- markTaskInReview call) -- the standup "moved to review" bucket reads this delta since the last run.
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS entered_review_at TIMESTAMPTZ;
 
 -- GENERAL recurring-job scheduler, resident in Azure Huddle PG (NOT supabase). One heartbeat — the
 -- existing every-minute run-turn tick — dispatches every due job here, so any recurring/scheduled job
@@ -373,6 +386,27 @@ export async function setAutoWorkSignature(userEmail: string, signature: string)
   );
 }
 
+/** The previous standup run's instant (null if never run), for the "moved to review since" bucket. */
+export async function getLastStandupAt(userEmail: string): Promise<string | null> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ last_standup_at: string }>(
+    `SELECT last_standup_at FROM tasks.standup_state WHERE lower(user_email) = $1`,
+    [userEmail.toLowerCase()],
+  );
+  return rows[0]?.last_standup_at ?? null;
+}
+
+/** Record this standup run's instant, so the NEXT run's "moved to review" bucket starts from here. */
+export async function setLastStandupAt(userEmail: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.standup_state (user_email, last_standup_at)
+     VALUES ($1, now())
+     ON CONFLICT (user_email) DO UPDATE SET last_standup_at = now()`,
+    [userEmail.toLowerCase()],
+  );
+}
+
 /**
  * Open tasks that are ASSIGNED to an agent and not blocked — the candidates an agent can attempt
  * autonomously (ACT-5). "Blocked" is authoritative from `tasks.task_blockers` (a row an agent wrote when
@@ -408,10 +442,11 @@ export interface TaskEngagementState {
   last_review_ping_at: string | null;
   next_review_ping_at: string | null;
   revision_count: number;
+  entered_review_at: string | null;
 }
 
 const ENGAGEMENT_COLS =
-  "task_id,user_email,confirm_status,proposed_dod,confirmed_dod,confirm_ask_at,confirmed_at,last_review_ping_at,next_review_ping_at,revision_count";
+  "task_id,user_email,confirm_status,proposed_dod,confirmed_dod,confirm_ask_at,confirmed_at,last_review_ping_at,next_review_ping_at,revision_count,entered_review_at";
 
 /** Batch-read engagement state for a set of task ids (a missing entry means "never asked yet"). */
 export async function getTaskEngagementStates(taskIds: string[]): Promise<Map<string, TaskEngagementState>> {
@@ -459,6 +494,55 @@ export async function markConfirmAsked(taskId: string): Promise<boolean> {
     [taskId],
   );
   return (rowCount ?? 0) > 0;
+}
+
+/** Stamp the instant a task actually moved to IN_REVIEW — call wherever markTaskInReview is called. */
+export async function markEnteredReview(taskId: string, userEmail: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, entered_review_at)
+     VALUES ($1,$2,now())
+     ON CONFLICT (task_id) DO UPDATE SET entered_review_at = now(), updated_at = now()`,
+    [taskId, userEmail.toLowerCase()],
+  );
+}
+
+/** Task ids that entered IN_REVIEW at or after `sinceIso`, for the standup's "moved to review" bucket. */
+export async function getTaskEngagementStatesSince(userEmail: string, sinceIso: string): Promise<Set<string>> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ task_id: string }>(
+    `SELECT task_id FROM tasks.task_engagement_state WHERE lower(user_email) = $1 AND entered_review_at >= $2`,
+    [userEmail.toLowerCase(), sinceIso],
+  );
+  return new Set(rows.map((r) => r.task_id));
+}
+
+/**
+ * Set a task's ONE-TIME jittered next 48h review-recheck instant, but only if it doesn't already have
+ * one — mirrors ensureConfirmAskAt's set-once guard, so a task that's been IN_REVIEW a while (deployed
+ * before this feature shipped) gets seeded once rather than immediately firing on the next pass.
+ */
+export async function ensureNextReviewPing(taskId: string, userEmail: string, whenIso: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, next_review_ping_at)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (task_id) DO UPDATE SET
+       next_review_ping_at = COALESCE(tasks.task_engagement_state.next_review_ping_at, EXCLUDED.next_review_ping_at),
+       updated_at = now()`,
+    [taskId, userEmail.toLowerCase(), whenIso],
+  );
+}
+
+/** Reschedule the NEXT 48h review-recheck after one just fired (unconditional, unlike the set-once seed). */
+export async function rescheduleNextReviewPing(taskId: string, whenIso: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE tasks.task_engagement_state
+        SET next_review_ping_at = $2, last_review_ping_at = now(), updated_at = now()
+      WHERE task_id = $1`,
+    [taskId, whenIso],
+  );
 }
 
 /**

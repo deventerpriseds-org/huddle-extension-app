@@ -1941,7 +1941,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   // when requireStructuredWorkflow is ON, not a prompt "should". A no-op when it's OFF.
                   const { runReviewGate } = await import("./tasks/review-gate.server");
                   const gate = await runReviewGate({ taskId: taskIdRaw, agentId: winner.id, email, content, claim: claimAction });
-                  if (gate.proceed) await markTaskInReview(taskIdRaw, data.caller);
+                  if (gate.proceed) {
+                    await markTaskInReview(taskIdRaw, data.caller);
+                    const { markEnteredReview, ensureNextReviewPing } = await import("./tasks/tasks.server");
+                    await markEnteredReview(taskIdRaw, email).catch(() => {});
+                    // Seed the 48h post-review recheck's first fire (jittered so multiple tasks
+                    // entering review together don't all ping 48h later in the same instant).
+                    const REVIEW_PING_BASE_MS = 48 * 60 * 60_000;
+                    const REVIEW_PING_JITTER_MS = 2 * 60 * 60_000;
+                    await ensureNextReviewPing(
+                      taskIdRaw,
+                      email,
+                      new Date(Date.now() + REVIEW_PING_BASE_MS + Math.random() * REVIEW_PING_JITTER_MS).toISOString(),
+                    ).catch(() => {});
+                  }
                   if (gate.gated) {
                     reviewSuffix = ` · ${gate.note}`;
                     review = {
@@ -2495,7 +2508,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 if (taskIdRaw) {
                   const { runReviewGate } = await import("./tasks/review-gate.server");
                   const gate = await runReviewGate({ taskId: taskIdRaw, agentId: winner.id, email, content, claim: claimAction });
-                  if (gate.proceed) await markTaskInReview(taskIdRaw, data.caller);
+                  if (gate.proceed) {
+                    await markTaskInReview(taskIdRaw, data.caller);
+                    const { markEnteredReview, ensureNextReviewPing } = await import("./tasks/tasks.server");
+                    await markEnteredReview(taskIdRaw, email).catch(() => {});
+                    // Seed the 48h post-review recheck's first fire (jittered so multiple tasks
+                    // entering review together don't all ping 48h later in the same instant).
+                    const REVIEW_PING_BASE_MS = 48 * 60 * 60_000;
+                    const REVIEW_PING_JITTER_MS = 2 * 60 * 60_000;
+                    await ensureNextReviewPing(
+                      taskIdRaw,
+                      email,
+                      new Date(Date.now() + REVIEW_PING_BASE_MS + Math.random() * REVIEW_PING_JITTER_MS).toISOString(),
+                    ).catch(() => {});
+                  }
                   if (gate.gated) {
                     reviewSuffix = ` · ${gate.note}`;
                     review = {
