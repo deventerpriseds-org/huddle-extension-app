@@ -1,0 +1,48 @@
+name: Run agent 48h review recheck (manual/on-demand)
+
+# Manual/test trigger for the 48h post-review recheck job. The scheduled path is the Huddle
+# every-minute scheduler POSTing /api/public/run-review-recheck at 10/16 local; this workflow fires
+# the SAME route on demand (default force:true) for testing or an ad-hoc "check now". Uses the shared
+# JOURNEY_PROXY_TOKEN org secret — no new secret.
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Caller email to run the review recheck for (journey user)."
+        required: true
+        default: "von.ellis@enterpriseds.io"
+      force:
+        description: "Run even when nothing is due."
+        required: false
+        default: "true"
+      timeZone:
+        description: "IANA time zone."
+        required: false
+        default: "America/New_York"
+
+jobs:
+  run-review-recheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/public/run-review-recheck
+        env:
+          SECRET: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          EMAIL: ${{ inputs.email }}
+          FORCE: ${{ inputs.force }}
+          TZ_INPUT: ${{ inputs.timeZone }}
+        run: |
+          if [ -z "$SECRET" ]; then echo "JOURNEY_PROXY_TOKEN secret not set"; exit 1; fi
+          RUN_ID="review-recheck-manual-$(date -u +%Y%m%d%H%M%S)"
+          echo "Firing run-review-recheck for $EMAIL (force=$FORCE, runId=$RUN_ID)"
+          HTTP=$(curl -s -o /tmp/review-recheck.out -w "%{http_code}" -X POST \
+            -H "content-type: application/json" \
+            -H "x-webhook-secret: $SECRET" \
+            -d "{\"caller\":{\"entra_email\":\"$EMAIL\"},\"force\":$FORCE,\"timeZone\":\"$TZ_INPUT\",\"runId\":\"$RUN_ID\"}" \
+            "$BASE/api/public/run-review-recheck")
+          echo "HTTP $HTTP"
+          echo "--- response ---"
+          cat /tmp/review-recheck.out; echo
+          # 200 = ran (may be skipped/pinged); anything else is a failure to surface.
+          if [ "$HTTP" != "200" ]; then echo "run-review-recheck failed"; exit 1; fi
