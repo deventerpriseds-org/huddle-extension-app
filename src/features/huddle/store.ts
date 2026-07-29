@@ -19,6 +19,33 @@ import {
 import type { JourneyTask } from "./lib/journey/types";
 
 type View = "huddle" | "board" | "artifacts";
+export type ContextPanelTab = "queue" | "activity" | "memory";
+
+// Pure client-device UI layout prefs (panel collapse, active side-panel tab) — deliberately NOT part
+// of PERSISTED_KEYS/getPersistablePayload: these are not workspace data, don't sync across devices,
+// and must survive sign-out (they describe how THIS device likes its chrome, not user content).
+const SIDEBAR_COLLAPSED_KEY = "huddle:sidebarCollapsed";
+const CONTEXT_PANEL_COLLAPSED_KEY = "huddle:contextPanelCollapsed";
+
+// Exported so other device-local UI prefs (e.g. BoardView's quick-filters row expand/collapse) reuse
+// the same read/write instead of re-implementing localStorage boolean plumbing.
+export function readBoolPref(key: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function writeBoolPref(key: string, value: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
 
 export type MeetingKind = "morning" | "midday" | "afternoon" | "adhoc" | "virtual-meeting";
 export type CeremonyKind = "standup" | "retro" | "planning" | "review" | "review_retro";
@@ -57,6 +84,14 @@ interface HuddleState {
   journeyTasks: JourneyTask[];
   showDemoData: boolean;
   meeting: null | MeetingState;
+  // Desktop panel chrome (device-local, read synchronously from localStorage so there's no
+  // collapsed-then-flash-expanded flicker on first paint — see readBoolPref above).
+  sidebarCollapsed: boolean;
+  contextPanelCollapsed: boolean;
+  contextPanelTab: ContextPanelTab;
+  toggleSidebarCollapsed: () => void;
+  toggleContextPanelCollapsed: () => void;
+  setContextPanelTab: (tab: ContextPanelTab) => void;
   setActive: (id: string) => void;
   setView: (v: View) => void;
   // Open the Artifacts view focused on a specific artifact (from a chat chip); null just clears focus.
@@ -125,6 +160,22 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
   journeyTasks: [],
   showDemoData: true,
   meeting: null,
+  sidebarCollapsed: readBoolPref(SIDEBAR_COLLAPSED_KEY),
+  contextPanelCollapsed: readBoolPref(CONTEXT_PANEL_COLLAPSED_KEY),
+  contextPanelTab: "queue",
+  toggleSidebarCollapsed: () =>
+    set((s) => {
+      const next = !s.sidebarCollapsed;
+      writeBoolPref(SIDEBAR_COLLAPSED_KEY, next);
+      return { sidebarCollapsed: next };
+    }),
+  toggleContextPanelCollapsed: () =>
+    set((s) => {
+      const next = !s.contextPanelCollapsed;
+      writeBoolPref(CONTEXT_PANEL_COLLAPSED_KEY, next);
+      return { contextPanelCollapsed: next };
+    }),
+  setContextPanelTab: (tab) => set({ contextPanelTab: tab }),
   setActive: (id) => set({ activeHuddleId: id, view: "huddle" }),
   setView: (v) => set({ view: v }),
   openArtifactById: (id) =>

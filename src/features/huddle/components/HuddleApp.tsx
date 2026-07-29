@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Menu, PanelRight, Settings } from "lucide-react";
+import { ChevronLeft, Menu, PanelRight, Settings } from "lucide-react";
 import { BoardView } from "./BoardView";
 import { ArtifactsView } from "./ArtifactsView";
 import { ContextPanel } from "./ContextPanel";
@@ -25,6 +25,9 @@ export function HuddleApp() {
   const view = useHuddleStore((s) => s.view);
   const huddles = useVisibleHuddles();
   const activeId = useHuddleStore((s) => s.activeHuddleId);
+  const sidebarCollapsed = useHuddleStore((s) => s.sidebarCollapsed);
+  const contextPanelCollapsed = useHuddleStore((s) => s.contextPanelCollapsed);
+  const toggleContextPanelCollapsed = useHuddleStore((s) => s.toggleContextPanelCollapsed);
 
   // GLOBAL durable-turn back-fill — the comms invariant: a message lands in the channel, THEN a
   // notification relays it if you're away. Autonomous replies (grooming summary, blocker surface,
@@ -152,9 +155,11 @@ export function HuddleApp() {
       <div className="app-hidden md:flex md:h-full">
         <Rail />
       </div>
-      <div className="app-hidden md:flex md:h-full">
-        <Sidebar />
-      </div>
+      {!sidebarCollapsed && (
+        <div className="app-hidden md:flex md:h-full">
+          <Sidebar />
+        </div>
+      )}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* Mobile top bar */}
@@ -194,9 +199,22 @@ export function HuddleApp() {
       </div>
 
 
-      {/* Desktop context panel */}
+      {/* Desktop context panel — collapses to a slim edge tab that re-expands it */}
       <div className="app-hidden h-full md:flex">
-        <ContextPanel />
+        {contextPanelCollapsed ? (
+          <button
+            type="button"
+            onClick={toggleContextPanelCollapsed}
+            aria-label="Expand activity panel"
+            aria-expanded={false}
+            title="Expand activity panel"
+            className="flex h-full w-3 shrink-0 items-center justify-center border-l border-hairline bg-surface text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          >
+            <ChevronLeft size={12} />
+          </button>
+        ) : (
+          <ContextPanel />
+        )}
       </div>
 
       {/* Mobile: sidebar sheet */}

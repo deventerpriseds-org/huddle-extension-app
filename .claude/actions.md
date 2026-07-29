@@ -103,9 +103,15 @@ discrepancy on (1); (2) and (3) need dedicated follow-on investigation (not star
 _(ACT-1 moved to Closed 2026-07-24 — see below.)_
 
 ### ACT-2: Enforce mandatory skills (AC / verify / track / remember / verifier)
-**Status:** done (pending activation) — hard gate (a–d) in huddle `.claude/settings.json` + eds-skills
-`setup.sh` (merged PRs #7/#8/#9). Activates next session/env build. **Evidence:** merge-logic validated
-(idempotent, non-clobbering); condition (c) now requires memory.md on every completion.
+**Status:** done, ACTIVATED AND VERIFIED LIVE (2026-07-29) — the `claude/setup-stop-hooks-skills-0h569y`
+branch (never previously merged) was fast-forward-merged into `eds-claude-skills` main, then `setup.sh`
+was run in this session. **Evidence (read back, not just the script's own echo):**
+`launcher-settings.json` shows `SessionStart -> _eds_version: 3` and `Stop -> _eds_version: 3`;
+`/root/.claude/skills/` now has 12 files (added `bootstrap`, `remember`, `track-actions`, `uat`,
+`uat-auth-bypass`, `design-library-uat`, `sync-setup-script` — none of these were present before);
+`/root/.claude/agents/verifier.md` registered (Agent tool now exposes `subagent_type: "verifier"`).
+This is a session-level (`/root/.claude/` home-dir) install, not repo-scoped — it's already active for
+all work in this session across journey-voice and huddle-extension-app, not just eds-claude-skills.
 
 ### ACT-3: create_huddle_task cross-turn dedup (board-clutter prevention)
 **Status:** open — deployed (PR #5) but **UNVERIFIED** (no verifier run yet).

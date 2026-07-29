@@ -17,6 +17,7 @@ export interface StandupRunResult {
   reason?: string;
   produced?: number; // artifacts delivered since yesterday
   blocked?: number;
+  movedToReview?: number; // tasks that entered IN_REVIEW since the last standup run
   runId: string;
 }
 
@@ -30,6 +31,7 @@ function agentName(id: string | null): string {
 
 function buildBrief(
   produced: { name: string; agentId: string | null; folder: string }[],
+  movedToReview: { title: string; agent: string | null }[],
   blocked: { title: string; reason?: string }[],
   priorities: { title: string; agent: string | null }[],
 ): string {
@@ -38,6 +40,12 @@ function buildBrief(
     lines.push(`Work the team completed since yesterday (${produced.length} document(s), for your review):`);
     for (const p of produced.slice(0, 8)) {
       lines.push(`- "${p.name}" by ${agentName(p.agentId)}${p.folder ? ` (${p.folder})` : ""}`);
+    }
+  }
+  if (movedToReview.length) {
+    lines.push("", `Moved to "Ready for review" since the last standup (${movedToReview.length}):`);
+    for (const t of movedToReview.slice(0, 8)) {
+      lines.push(`- "${t.title.slice(0, 120)}"${t.agent ? ` — ${agentName(t.agent)}` : ""}`);
     }
   }
   if (blocked.length) {
@@ -60,9 +68,10 @@ async function surfaceDigest(opts: { email: string; tz: string; caller: Caller; 
     `You (Terry Locke, coordinator) are delivering the user's MORNING STANDUP — a proactive daily summary; ` +
     `they did NOT ask just now. Here is what the team did, what's blocked, and today's priorities:\n\n${opts.brief}\n\n` +
     `Write ONE warm, well-organized standup message in your own voice: briefly recap what got done (name who ` +
-    `did what), then CLEARLY flag anything blocked pending the user and ask them to weigh in, then the top ` +
-    `priorities for today. This is a REPORT-ONLY turn — everything is already saved, so do NOT call any tool ` +
-    `and do not paste raw JSON. Keep it skimmable.`;
+    `did what), mention anything freshly moved into "ready for review" so they know it's waiting on them, ` +
+    `then CLEARLY flag anything blocked pending the user and ask them to weigh in, then the top priorities ` +
+    `for today. This is a REPORT-ONLY turn — everything is already saved, so do NOT call any tool and do not ` +
+    `paste raw JSON. Keep it skimmable.`;
   const payload = {
     text: directive,
     huddleId: `dm-${COORDINATOR}`,
@@ -102,7 +111,8 @@ export async function runScheduledStandup(
   const email = (await resolveTaskEmail(caller)) ?? caller.entra_email;
   const tz = opts.timeZone ?? "America/New_York";
 
-  const { getBoardTasks, getTaskBlockers } = await import("./tasks.server");
+  const { getBoardTasks, getTaskBlockers, getLastStandupAt, setLastStandupAt, getTaskEngagementStatesSince } =
+    await import("./tasks.server");
   const { listArtifacts } = await import("../artifacts/artifacts.server");
 
   const now = Date.now();
@@ -127,10 +137,21 @@ export async function runScheduledStandup(
     .slice(0, 5)
     .map((t) => ({ title: t.title, agent: t.assigned_agent }));
 
-  if (!produced.length && !blocked.length && !opts.force) {
+  // Tasks that moved to IN_REVIEW since the last standup actually ran (WIP confirm-intent gate, Part 1)
+  // — additive to Iris's separate passive review-digest, which reports the full "waiting now" snapshot.
+  const lastStandupAt = await getLastStandupAt(email);
+  const since = lastStandupAt ?? new Date(now - LOOKBACK_MS).toISOString();
+  const enteredReviewIds = await getTaskEngagementStatesSince(email, since);
+  const inReview = board.filter((t) => !t.completed_at && (t.status ?? "").toUpperCase() === "IN_REVIEW");
+  const movedToReview = inReview
+    .filter((t) => enteredReviewIds.has(t.id))
+    .map((t) => ({ title: t.title, agent: t.assigned_agent }));
+
+  if (!produced.length && !blocked.length && !movedToReview.length && !opts.force) {
     return { ok: true, skipped: true, reason: "nothing_to_report", produced: 0, blocked: 0, runId };
   }
 
-  await surfaceDigest({ email, tz, caller, brief: buildBrief(produced, blocked, priorities), runId });
-  return { ok: true, skipped: false, produced: produced.length, blocked: blocked.length, runId };
+  await surfaceDigest({ email, tz, caller, brief: buildBrief(produced, movedToReview, blocked, priorities), runId });
+  await setLastStandupAt(email).catch(() => {});
+  return { ok: true, skipped: false, produced: produced.length, blocked: blocked.length, movedToReview: movedToReview.length, runId };
 }

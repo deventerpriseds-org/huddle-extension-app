@@ -24,6 +24,10 @@ const DEFAULT_AUTOWORK_HOURS = [9, 13, 17];
 const DEFAULT_STANDUP_HOURS = [8];
 // Review digest: Iris's gentle nudge on what's waiting in "Ready for review" — 8am/11am/1pm/4pm/7pm.
 const DEFAULT_REVIEW_DIGEST_HOURS = [8, 11, 13, 16, 19];
+// 48h post-review recheck: per-task, per-agent check-ins (WIP confirm-intent gate, Part 1). The real
+// cadence is per-task (~48h, jittered), so this just needs to check often enough to catch due tasks
+// promptly — twice a day is plenty given the jitter spread.
+const DEFAULT_REVIEW_RECHECK_HOURS = [10, 16];
 const DEFAULT_TZ = "America/New_York";
 
 /** ms to add to a UTC instant so that formatting it in `tz` yields the same wall-clock — i.e. tz offset. */
@@ -125,6 +129,15 @@ async function ensureGroomJobs(now: Date): Promise<void> {
       nextRunAt: computeNextRun(reviewDigest.hours, reviewDigest.tz, now).toISOString(),
       meta: {},
     });
+    const reviewRecheck = { tz: DEFAULT_TZ, hours: DEFAULT_REVIEW_RECHECK_HOURS };
+    await upsertScheduledJob({
+      id: `review-recheck-${email}`,
+      jobType: "review-recheck",
+      targetEmail: email,
+      cadence: reviewRecheck,
+      nextRunAt: computeNextRun(reviewRecheck.hours, reviewRecheck.tz, now).toISOString(),
+      meta: {},
+    });
   }
 }
 
@@ -164,6 +177,9 @@ async function fireJob(job: ScheduledJob, slotId: string): Promise<void> {
   } else if (job.job_type === "review-digest") {
     // No force: a cadence fire is a no-op when nothing is waiting in review.
     await post("/api/public/run-review-digest");
+  } else if (job.job_type === "review-recheck") {
+    // No force: a cadence fire is a no-op when no IN_REVIEW task's 48h ping is due yet.
+    await post("/api/public/run-review-recheck");
   }
   // Future: else if (job.job_type === "ceremony") { ... POST run-ceremony ... }
 }
