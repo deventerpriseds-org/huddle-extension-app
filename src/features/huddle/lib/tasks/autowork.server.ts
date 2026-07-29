@@ -242,9 +242,14 @@ export async function runScheduledAutoWork(
   // docs/plan-wip-confirm-review-gate.md) — a pending (asked-but-unconfirmed) task occupies its UP_NEXT
   // slot but never competes for the DOING slot, so one unanswered ask can't starve the rest of the lane.
   const promotions: { task_id: string; status: string }[] = [];
-  type Candidate = { agent: string; task: BoardTaskRow; doingList: BoardTaskRow[] };
+  type Candidate = { agent: string; task: BoardTaskRow };
   const doingSlotCandidates: Candidate[] = [];
+  // Existing DOING tasks (already promoted, whether just now or in an earlier pass) always stay
+  // research candidates — retried every pass until an artifact exists — regardless of whether this
+  // agent is frozen or has room for a NEW promotion. Only a NEW UP_NEXT->DOING promotion is gated.
+  const doingCandidates: BoardTaskRow[] = [];
   for (const [agent, bucket] of byAgent.entries()) {
+    doingCandidates.push(...bucket.doing.slice(0, DOING_CAP));
     const frozen = bucket.inReview.length >= REVIEW_CAP;
     if (frozen) continue;
     const room = Math.max(0, UP_NEXT_CAP - bucket.upNext.length);
@@ -252,7 +257,7 @@ export async function runScheduledAutoWork(
     for (const t of toPromote) promotions.push({ task_id: t.id, status: "UP_NEXT" });
     const upNextAfterTopUp = [...bucket.upNext, ...toPromote];
     if (bucket.doing.length < DOING_CAP && upNextAfterTopUp.length) {
-      doingSlotCandidates.push({ agent, task: upNextAfterTopUp[0], doingList: bucket.doing });
+      doingSlotCandidates.push({ agent, task: upNextAfterTopUp[0] });
     }
   }
 
@@ -265,21 +270,18 @@ export async function runScheduledAutoWork(
     ),
   );
 
-  const doingCandidates: BoardTaskRow[] = [];
   const needsAskAt: string[] = [];
   const confirmDue: { agent: string; task: BoardTaskRow }[] = [];
   const now = Date.now();
   for (const c of doingSlotCandidates) {
-    let doingList = c.doingList;
+    let promotedToDoing = false;
     if (!requiredByAgent.get(c.agent)) {
-      promotions.push({ task_id: c.task.id, status: "DOING" });
-      doingList = [...c.doingList, c.task];
+      promotedToDoing = true;
     } else {
       const state = engagementByTaskId.get(c.task.id);
       const status = state?.confirm_status ?? "awaiting";
       if (status === "confirmed") {
-        promotions.push({ task_id: c.task.id, status: "DOING" });
-        doingList = [...c.doingList, c.task];
+        promotedToDoing = true;
       } else if (status === "awaiting") {
         if (!state?.confirm_ask_at) {
           needsAskAt.push(c.task.id);
@@ -290,7 +292,10 @@ export async function runScheduledAutoWork(
       }
       // status === "asked": already sent, waiting on the user's reply — nothing to do this pass
     }
-    doingCandidates.push(...doingList.slice(0, DOING_CAP));
+    if (promotedToDoing) {
+      promotions.push({ task_id: c.task.id, status: "DOING" });
+      doingCandidates.push(c.task);
+    }
   }
 
   if (needsAskAt.length) {
