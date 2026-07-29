@@ -1,5 +1,5 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-07-26
+Last updated: 2026-07-29
 
 ## Purpose & goals
 Huddle: a multi-agent AI life-assistant (15 role-agents) integrated with the **journey** app.
