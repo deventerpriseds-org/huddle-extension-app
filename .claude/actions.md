@@ -6,6 +6,29 @@ Last updated: 2026-07-25
 
 ## Open
 
+### ACT-huddle-2: Agent avatar images 404 (Lovable-preview-only asset paths)
+**Requested:** 2026-07-29
+**Asked for:** fix the broken avatar photos across the app — every agent falls back to colored
+initials because the real images can't load.
+**Root cause (confirmed):** all 14 agent avatars are wired in `src/features/huddle/data/agents.ts`
+via `src/assets/agents/*.png.asset.json` pointer files, whose `url` field is a Lovable-platform-
+internal preview path (`/__l5e/assets-v1/...`) — only servable by Lovable's own hosting, never by
+this app's actual Azure Static Web App deployment. `AgentAvatar.tsx` already has a documented,
+working fallback (colored initials on image `onerror`), so nothing crashes — the photos just never
+show. Confirmed the real image bytes were NEVER committed to this repo (checked full git history,
+all branches) and confirmed the Lovable preview domain referenced in `__root.tsx` isn't reachable
+from this sandbox (403 CONNECT via the CCR egress proxy, same restriction as azurestaticapps.net).
+**Scope:** narrow — exactly 14 files, all agent avatars, all wired through the one `agents.ts` file.
+No other image in the app uses this broken pattern (confirmed via full-codebase grep for
+`.asset.json` imports and `__l5e` references).
+**Status:** BLOCKED on the user — they're retrieving the actual avatar image files (they may have
+Lovable project access to export them) and will hand them over. Once received: commit into this
+app's own `public/`/`src/assets/` so Vite/Azure SWA serves them directly, repoint `agents.ts`'s
+`avatarUrl` fields at the local paths, remove the now-unnecessary Lovable-path comment in
+`AgentAvatar.tsx`, verify no more 404s in the console.
+**Deferred by explicit user direction** ("for now i care about the meeting room looking correct")
+— not being worked until the images are provided.
+
 ### ACT-huddle-1: Desktop layout bugs — sidebar/menu missing, meeting view, mic barge-in, standup gap
 **Requested:** 2026-07-29
 **Asked for:** user reported 4 live bugs on production (https://icy-flower-0f415200f.7.azurestaticapps.net):
