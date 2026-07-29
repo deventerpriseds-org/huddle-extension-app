@@ -62,11 +62,14 @@ manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confir
   breaks under the same injection. One PARTIAL: MeetingBar/BoardView-specific DOM paths couldn't be
   reached live in this sandbox (no Azure PG/voice backend access) — the mechanism is proven generically,
   not each specific component's live render.
-- (2) mic "in use by Microsoft Edge" / can't barge in: ROOT CAUSE FOUND + FIX IMPLEMENTED (NOT YET CONFIRMED
-  LIVE). The bug was a useEffect dependency error in MeetingBar.tsx — `groupVoice` (a new object every render)
-  was the dep, so every re-render (including idle→listening state change after mic start) called stop() and
-  killed the mic immediately. Fixed by using `[groupVoice.stop]` instead (stable useCallback). Also improved
-  getUserMedia error messaging. PR #19, commit 95708f6, deploy triggered 2026-07-29. Pending user live confirm.
+- (2) mic / barge-in: CONFIRMED WORKING — user tested, mic works, barge-in stops audio. The original
+  "in use by Microsoft Edge" wording was misleading; the real bug was the useEffect dep (`[groupVoice]`
+  new object every render → stop() called on every state change). Fixed in commit `95708f6`, PR #19 merged.
+  **Follow-on bug (standup ceremony voice chaos):** barge-in during a running ceremony sent a second
+  `sendHuddleMessage(scope:group)` turn ON TOP of the ceremony's durable turn — both streams raced,
+  producing overlapping, context-free agent replies mid-ceremony. Fixed: extracted `routeTurn(text)` in
+  MeetingBar.tsx (commit `f618a04`, merged to main, deployed run 30491913930 success). NOT YET CONFIRMED
+  LIVE by user.
 - (3) 30s standup-start gap: PR #15 explicitly states this is partial (poll-interval 2s→500ms +
   memoized resolve only); the real dominant cost (ceremony opener's own LLM call latency) is an
   acknowledged, still-open backlog item (CLAUDE.md "Backlog / known optimizations" #1). UNRESOLVED.

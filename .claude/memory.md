@@ -45,6 +45,7 @@ never clutters the user's task board. TanStack Start + React 19 + Vite + Nitro �
 | Artifact store Phase 2 (one-way OneDrive mirror) | done (verified live, verifier all-PASS AC-1..9) | Reuses app-only Graph `getAppToken` (no new secret); `PUT .../drive/root:/Huddle Artifacts/{lane}/{name}:/content` (path-keyed = idempotent overwrite). `artifacts.mirror_config` (email PK, 3 bools default true) + `getMirrorConfigFn`/`setMirrorConfigFn`/`mirrorArtifactFn` + on-approve NON-FATAL mirror in `reviewArtifactFn`. `onedrive.server.ts`. UI: `ArtifactMirroringPanel` (Settings→Account) + "Mirror now". **Live:** config round-trip on/on/on; approve ok=true despite mirror `needsConsent` (403 — Graph app lacks `Files.ReadWrite.All` consent, an ADMIN grant not a code fix); gdrive `{deferred:true}` (Phase 3). Verify: `mirror-verify.mjs`. PR #10. |
 | ACT-5 gate 1 — agent auto-work (research), GENUINELY agent-driven | done (verified live) | `create_artifact` agent tool (both dispatch paths) + `autowork.server.ts` ENQUEUES a real durable turn per assigned agent; heartbeat `drainQueuedTurns` runs it → the agent's LLM plans, calls `tavily_web_search` ITSELF, synthesizes in lane voice, saves via `create_artifact`, replies in `dm-<agent>` (rides send_push). Bounded 4/pass, idempotent (skip tasks with an artifact → rotates), honest failure (LLM down → retried, never faked). **Live proof:** 4 turns `done`, finn-reid `called_web_search=t called_create_artifact=t`, agent-chosen filenames (e.g. `schools_and_accelerators_list_compass.md`), Finn's substantive finance reply. `blob.server` lazy-loads @azure/storage-blob (client-graph-safe). NOT the earlier shortcut. Branch act5-autonomy. |
 | create_huddle_task cross-turn dedup | deployed, UNVERIFIED | merged PR #5; needs verifier |
+| routeTurn — ceremony-aware voice barge-in | deployed, NOT YET CONFIRMED LIVE | commit f618a04; standup chaos fix; voice barge-ins now route through bargeCeremony not sendHuddleMessage |
 | Quota surfacing + file-search fix | quota part OK; file-search narration root cause found + fixed (PR #15) | PR #4's prose-only house-style ban did not hold — live evidence (iris-chase, finn-reid, cam-post transcripts) showed repeated "...in the uploaded files" narration after it shipped. First pass (PR #15 round 2) added a regex backstop (`stripFileMentionNarration`, huddle.functions.ts) and blamed OpenAI's `file_search` tool's own trained miss-narration habit — **that causal claim was never actually proven** (no code inspects/logs real `file_search_call` execution; it was inferred from correlation, not observed) and was correctly challenged. Round 3 re-audited Huddle's OWN prompt-construction code instead and found the real, much stronger mechanism: `HOUSE_STYLE` itself — the block appended to EVERY agent's prompt every turn regardless of tool access — quoted the exact banned phrase verbatim as a "don't say this" example, which models readily echo despite the "don't" framing. Reworded HOUSE_STYLE to state the rule without quoting/listing the tabooed nouns. The regex backstop stays as defense-in-depth. Lesson: when a prose ban doesn't hold, audit for the ban ITSELF quoting the banned text before blaming an unverifiable model/tool tendency. |
 | Board test-task cleanup | done (verified) | 523 → 247 via journey REST workflow |
 | WIP confirm-intent gate + hardened review gate + anchor/worker table | **designed, NOT built — deliberately parked** | Full spec in `docs/plan-wip-confirm-review-gate.md`: (1) before UP_NEXT→DOING, the assigned agent must ad-hoc confirm its read on the goal + a proposed Definition of Done with the user (jittered, non-bursty timing) before locking it via a new `confirm_task_intent` tool; (2) the post-`create_artifact` review gate is **code-enforced (MUST)**, not a prompt nudge — auto-delegates to the existing `assignment-reviewer` worker, with Terry (scrum master) as the visible face reporting the verdict, since a "should" silently fails on a small model (same lesson as the HOUSE_STYLE/meta-task-guard fixes above); (3) a standing, research-grounded domain→role table (`lib/agents/domain-roles.ts`, not yet created) establishes each PERSONA as the real-world seniority anchor for their domain (Finn = Finance Strategist level, not junior analyst) with Pillar-2 workers reporting to them — portable across deployments since it's keyed by domain, not persona name; domains with no dedicated worker fall back to a generic "support team" reference. Diagram: https://claude.ai/code/artifact/d4163b8e-eb5b-41b0-99fa-49ae18e7a798. This supersedes task #37's vague framing for the WIP-lane slice specifically. **Do not build without re-reading the full doc first** — this session moved on to other priorities before implementation started. |
@@ -92,13 +93,24 @@ tasks / classify blocked — dovetails with ACT-4's blocked-surfacing residuals)
 ACT-4 residuals to fold into ACT-5: Terry's summary omitted the blocked items; `blocked-on-capability` tag not seen
 in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's tail (16+) un-groomed.
 
-### Mic fix (PR #19) — 2026-07-29, NOT YET CONFIRMED LIVE
+### Mic fix (PR #19) — 2026-07-29, CONFIRMED WORKING (user confirmed barge-in works)
 Root cause of "mic doesn't work": `useEffect(() => () => groupVoice.stop(), [groupVoice])` in MeetingBar.tsx
 used the whole `groupVoice` object as dep — new object every render — so every state change (idle→listening)
 called stop() and killed the mic immediately. Fixed: dep changed to `[groupVoice.stop]` (stable useCallback ref,
-only fires on unmount). Also improved getUserMedia error messages (NotReadableError → actionable text).
-Status: committed 95708f6, pushed to claude/setup-stop-hooks-skills-0h569y, PR #19 open, deploy triggered.
-Per standing rule: NOT calling this fixed until merged, deployed, and user confirms live.
+only fires on unmount). User confirmed mic now works initially and barge-in stops audio.
+
+### Standup ceremony voice barge-in chaos fix — 2026-07-29, DEPLOYED, NOT YET CONFIRMED LIVE
+Root cause: `useGroupVoice.runTurn()` always called `sendHuddleMessage(scope:"group")`, firing a second
+uncoordinated multi-agent turn ON TOP of the ceremony's own durable turn. Both streams generated replies
+simultaneously — agents talking over each other with context-free responses mid-ceremony.
+Fix: extracted `routeTurn(text)` useCallback in MeetingBar.tsx — the single function that decides if a message
+is a ceremony barge (`bargeCeremony`, returns `[]`) or falls through to the caller's routing (returns `undefined`).
+`sendMessage` (typed text) calls `routeTurn` instead of its own inline ceremony check. `groupVoice.start()` receives
+`routeMessage: routeTurn` so voice barge-ins during a ceremony route through the same path as typed text.
+No duplicate code; single source of truth for the ceremony-routing decision.
+`routeMessage` hook API added to `useGroupVoice` (`GroupVoiceConfig.routeMessage` override).
+Commit: `f618a04` on `claude/standup-voice-bargein`, merged into `main`, deployed (run 30491913930, success).
+Per standing rule: NOT calling this fixed until user confirms live.
 
 ## Hardening (append)
 - [2026-07-26] **MISTAKE: encoded "what the team can do" as a hand-written CAPABILITY PROMPT (prose) and
@@ -277,6 +289,14 @@ Per standing rule: NOT calling this fixed until merged, deployed, and user confi
   "works in Chrome, not in Edge" for what looks like a CSS/layout issue, check DevTools' Styles panel
   (not just Computed) for anything labeled "injected stylesheet" BEFORE reaching for engine-compatibility
   theories — extensions are common, cheap to rule in/out, and cost nothing to check first.
+- [2026-07-29] **MISTAKE (caught by user): built `routeVoiceMessage` as a separate callback duplicating
+  the ceremony check already inside `sendMessage`.** The rule "extend, don't duplicate" requires
+  finding what already does the thing and extending it — not standing up a parallel copy. The ceremony
+  check in `sendMessage` was the canonical logic; `routeVoiceMessage` reproduced it verbatim for the
+  voice path instead of extracting a shared function both callers use. GUARDRAIL: when adding a second
+  caller for an existing decision (typed text vs voice barge-in), the first instinct must be to extract
+  the decision into a shared function both callers invoke — not to copy the decision into the second
+  caller. If the code for two callsites looks identical, that's the smell: extract first.
 - [2026-07-29] **Meeting-view "not snapping to place" root-caused and fixed — a genuinely different bug
   from the sidebar collision, confirmed by the user reproducing in BOTH Edge and Chrome** (ruling out any
   extension-specific explanation). `MeetingBar.tsx`'s stage column (`flex min-h-0 flex-col md:flex-1`)
