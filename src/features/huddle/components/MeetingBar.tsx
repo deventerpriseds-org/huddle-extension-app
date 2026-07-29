@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AudioLines,
   Captions,
@@ -198,6 +198,11 @@ function MeetingRoom({
   const isVirtual = meeting.kind === "virtual-meeting";
   const isCeremony = !!meeting.ceremonyType;
   const status = meeting.ceremonyStatus;
+  // Refs so the voice routeMessage callback always sees current ceremony state without going stale
+  const isCeremonyRef = useRef(isCeremony);
+  const ceremonyStatusRef = useRef(status);
+  useEffect(() => { isCeremonyRef.current = isCeremony; }, [isCeremony]);
+  useEffect(() => { ceremonyStatusRef.current = status; }, [status]);
 
   // Where this meeting's turns are written. A ceremony ALWAYS runs in its own dedicated channel
   // (`ceremony-<type>`), never the huddle that happened to be open — that's what kept spilling a
@@ -288,6 +293,24 @@ function MeetingRoom({
 
   const micOn = isVirtual ? voiceLive && !groupVoice.muted : voice.status === "connected" && !voice.micMuted;
 
+  // Single ceremony-routing function — the ONE place where the bargeCeremony decision lives.
+  // Both typed sendMessage and voice barge-ins call this; neither duplicates the check.
+  // Reads isCeremonyRef/ceremonyStatusRef so it's always current even when captured in cfgRef.
+  // Returns [] → "ceremony loop handles voicing, caller does nothing further."
+  // Returns undefined → "not a ceremony barge, caller handles routing normally."
+  const routeTurn = useCallback(async (text: string): Promise<{ agentId: AgentId; text: string }[] | undefined> => {
+    if (isCeremonyRef.current && ceremonyStatusRef.current === "running" && activeCeremonyTurnRef.current) {
+      try {
+        const res = await bargeCeremony({ data: { turnId: activeCeremonyTurnRef.current, text } });
+        if (!res.queued) toast("The room just wrapped — send that again to start a new thread.");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't reach the room.");
+      }
+      return []; // ceremony loop voices the reply
+    }
+    return undefined; // not a ceremony barge — caller handles routing
+  }, []);
+
   function onMic() {
     if (isVirtual) {
       if (!groupVoice.supported) {
@@ -304,6 +327,7 @@ function MeetingRoom({
           caller,
           huddleId: meetingHuddleId,
           onTurn: (t) => addMeetingTurns([t]),
+          routeMessage: routeTurn,
         });
       } else {
         // The mic is already listening past this point — every further click on this SAME button
@@ -448,28 +472,19 @@ function MeetingRoom({
   async function sendMessage() {
     const text = input.trim();
     if (!text || busy || !meeting.members.length) return;
-    const cfg = useBackendsStore.getState().config;
+    setInput("");
+    addMeetingTurns([{ text, user: true }]);
 
-    // BARGE-IN: if a ceremony is actively running, queue this onto the running turn instead of firing
-    // a parallel, uncoordinated turn. The relay pauses after the current speaker, answers it, then
-    // resumes — and the reply streams into the transcript via the ceremony's existing poll loop.
-    if (isCeremony && status === "running" && activeCeremonyTurnRef.current) {
-      const turnId = activeCeremonyTurnRef.current;
-      setInput("");
-      addMeetingTurns([{ text, user: true }]);
+    const routed = await routeTurn(text);
+    if (routed !== undefined) {
+      // Ceremony handled it — show a status line and return; the poll loop will surface the reply.
       setPhase("Passing your message to the room…");
-      try {
-        const res = await bargeCeremony({ data: { turnId, text } });
-        if (!res.queued) toast("The room just wrapped — send that again to start a new thread.");
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Couldn't reach the room.");
-      }
       return;
     }
 
-    setInput("");
+    // Non-ceremony: send to all agents in the room.
+    const cfg = useBackendsStore.getState().config;
     setBusy(true);
-    addMeetingTurns([{ text, user: true }]);
     try {
       const result = await sendHuddleMessage({
         data: {
