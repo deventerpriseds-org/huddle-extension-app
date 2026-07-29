@@ -245,7 +245,9 @@ function MeetingRoom({
     if (voiceLive) groupVoice.setMembers(meeting.members);
   }, [meeting.members, voiceLive, groupVoice]);
   // Tear the mic down when the room unmounts (leave/collapse-away).
-  useEffect(() => () => groupVoice.stop(), [groupVoice]);
+  // Dep is groupVoice.stop (stable useCallback ref), NOT the whole object — the object is a new
+  // literal every render, so [groupVoice] would call stop() on every state change and kill the mic.
+  useEffect(() => () => groupVoice.stop(), [groupVoice.stop]);
   // Surface group-voice errors instead of failing silently.
   useEffect(() => {
     if (groupVoice.error) toast.error(groupVoice.error);

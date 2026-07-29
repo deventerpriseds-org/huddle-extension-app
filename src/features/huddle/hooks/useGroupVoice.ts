@@ -327,7 +327,16 @@ export function useGroupVoice(): GroupVoiceController {
         };
         rafRef.current = requestAnimationFrame(tick);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Microphone unavailable");
+        const name = err instanceof DOMException ? err.name : "";
+        const msg =
+          name === "NotReadableError"
+            ? "Your mic is in use by another app or tab — close it and try again."
+            : name === "NotAllowedError" || name === "PermissionDeniedError"
+              ? "Mic permission denied — click the lock icon in the address bar to allow access."
+              : err instanceof Error
+                ? err.message
+                : "Microphone unavailable";
+        setError(msg);
         setPhase("error");
         stop();
       }
