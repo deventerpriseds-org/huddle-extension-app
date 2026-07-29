@@ -93,7 +93,7 @@ function HuddleHeader({
 
   return (
     <header className="flex items-center justify-between gap-2 border-b border-hairline bg-surface px-3 py-2 sm:px-5 sm:py-3">
-      <div className="hidden items-center gap-3 min-w-0 sm:flex">
+      <div className="app-hidden items-center gap-3 min-w-0 sm:flex">
         <div className="flex size-8 items-center justify-center rounded-lg bg-muted">
           {huddle.kind === "group" ? (
             <span className="text-xs font-semibold text-muted-foreground">#</span>
@@ -112,7 +112,7 @@ function HuddleHeader({
           </p>
         </div>
         {huddle.kind === "group" && (
-          <div className="ml-3 hidden -space-x-1.5 sm:flex">
+          <div className="ml-3 app-hidden -space-x-1.5 sm:flex">
             {huddle.members.slice(0, 4).map((id) => (
               <AgentAvatar key={id} agent={AGENT_BY_ID[id]} size="sm" ring />
             ))}
