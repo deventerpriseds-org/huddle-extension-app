@@ -31,10 +31,6 @@ export interface GroupVoiceConfig {
   caller?: { entra_object_id?: string; entra_email?: string };
   huddleId?: string | null;
   onTurn?: (turn: GroupVoiceTurn) => void;
-  // Optional override for routing a transcribed utterance. Return an array of replies to voice, or
-  // an empty array [] to signal "I handled it — ceremony/external loop will emit the response."
-  // Return undefined to fall through to the default sendHuddleMessage(scope:group) path.
-  routeMessage?: (text: string) => Promise<{ agentId: AgentId; text: string }[] | undefined>;
 }
 
 export interface GroupVoiceController {
@@ -173,54 +169,28 @@ export function useGroupVoice(): GroupVoiceController {
       cfg.onTurn?.({ text: userText, user: true });
       setPartial(userText);
 
-      // Route the turn: if the caller provided a routeMessage override (e.g. to barge into a
-      // running ceremony instead of firing a parallel uncoordinated group turn), use it. A returned
-      // [] means the external loop handles voicing; undefined falls through to the default path.
+      // Route the turn to the whole room via the existing group engine.
       let replies: { agentId: AgentId; text: string }[] = [];
       let turnFailed = false;
-      if (cfg.routeMessage) {
-        try {
-          const overrideReplies = await cfg.routeMessage(userText);
-          if (!runningRef.current) return;
-          if (overrideReplies === undefined) {
-            // Override deferred — fall through to default routing below
-          } else {
-            // Override handled it (including [] = external loop voices the reply)
-            replies = overrideReplies;
-            if (replies.length === 0) {
-              // External loop will emit the response — just go back to listening
-              setPartial("");
-              if (runningRef.current) setPhase("listening");
-              return;
-            }
-          }
-        } catch {
-          turnFailed = true;
-        }
-      }
-
-      if (!turnFailed && replies.length === 0) {
-        // Default: route to the whole room via the group engine.
-        try {
-          const backends = useBackendsStore.getState().config;
-          const result = await sendHuddleMessage({
-            data: {
-              text: userText,
-              huddleId: cfg.huddleId ?? undefined,
-              scope: "group",
-              members: cfgRef.current?.members ?? cfg.members,
-              history: [],
-              router: backends.router,
-              agents: backends.agents,
-              caller: cfg.caller,
-              timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            },
-          });
-          replies = (result.replies ?? []).map((r) => ({ agentId: r.agentId as AgentId, text: r.text }));
-        } catch {
-          replies = [];
-          turnFailed = true;
-        }
+      try {
+        const backends = useBackendsStore.getState().config;
+        const result = await sendHuddleMessage({
+          data: {
+            text: userText,
+            huddleId: cfg.huddleId ?? undefined,
+            scope: "group",
+            members: cfgRef.current?.members ?? cfg.members,
+            history: [],
+            router: backends.router,
+            agents: backends.agents,
+            caller: cfg.caller,
+            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          },
+        });
+        replies = (result.replies ?? []).map((r) => ({ agentId: r.agentId as AgentId, text: r.text }));
+      } catch {
+        replies = [];
+        turnFailed = true;
       }
       if (!runningRef.current) return;
       if (turnFailed) {
