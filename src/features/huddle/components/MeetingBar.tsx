@@ -512,7 +512,7 @@ function MeetingRoom({
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {/* Stage — compact/content-height on mobile, fills the left column on desktop */}
-        <div className="flex min-h-0 flex-col md:flex-1">
+        <div className="flex min-h-0 min-w-0 flex-col md:flex-1">
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-4 py-5 sm:px-8">
             <SpeakerSpotlight agent={spotlightAgent} speaking={speaking} />
             {showCaptions && caption && (

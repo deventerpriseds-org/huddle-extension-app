@@ -73,6 +73,24 @@ manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confir
   dropdown button is physically overlapped by the ContextPanel's "Queue" tab at 768–850px specifically
   (click-intercepted, confirmed via Playwright error + bounding-box overlap), while ≥900px is clean.
   Untriaged, not fixed.
+- (1b) meeting-view "not snapping to place" (the other half of the original (1) complaint, separate
+  from the sidebar bug and NOT fixed by PR #15 or the Grammarly hardening): **root cause found, fix
+  implemented, MECHANISM independently verified — NOT YET CONFIRMED LIVE by the user.** User confirmed
+  via console (`window.innerWidth=1048`) this happens in BOTH Edge and Chrome — ruling out the
+  Grammarly/extension explanation, since that was Edge-specific. Reproduced locally with Playwright at
+  the user's exact 1048px width and measured the real bounding boxes: `MeetingBar.tsx`'s "stage" column
+  div (`flex min-h-0 flex-col md:flex-1`) was missing `min-w-0` — the classic flexbox trap where a flex
+  item won't shrink below its content's intrinsic width. The participant chip strip (up to 15 agents,
+  `overflow-x-auto`) forced the stage column to ~2216px wide in a 1048px viewport, pushing the sibling
+  `<aside>` (transcript/people panel, `md:w-[360px]`) entirely off-screen and shoving the centered avatar
+  to the edge of the mostly-invisible column — an exact match for the user's screenshots (avatar clipped,
+  no visible transcript panel). **Fix:** added `min-w-0` to that one div (one line). Independent
+  `verifier` subagent re-derived everything from scratch: reproduced the BEFORE state itself (measured
+  stage column at 2216px, aside at x=2216/off-screen), restored the fix and re-measured (stage column
+  688px = 1048−360, aside fully on-screen at x=688, avatar centered at x=344 = exactly half the stage
+  column), confirmed no regression in the mobile stacked layout at 500px, confirmed `tsc` clean — 7/7
+  PASS. Per the standing rule from earlier in this session: NOT calling this "fixed" until merged,
+  deployed, and the user has confirmed it live in their own browser.
 **Evidence:** PR #15 (github.com/deventerpriseds-org/huddle-extension-app/pull/15), merge commit `7cc5af9`,
 deploy run `30471382381` (conclusion success), verifier subagent report (git ancestry + deploy timestamp
 + independent Playwright repro), this session's own Playwright screenshots at real resolutions (not
