@@ -189,3 +189,13 @@ in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's
   them is exactly where fixes silently fail to translate.** If a production-equivalent local repro isn't
   achievable (as here), say so explicitly and rely on the user's live report as the actual ground truth,
   rather than a lower-fidelity local test overriding it.
+- [2026-07-29] **Confirmed clean repro, ruling out two confounds.** User tested with DevTools fully
+  closed + hard refresh on an already-wide/maximized window (so no docked-DevTools viewport-narrowing,
+  and no leftover open-drawer state from a prior narrow-width session): **neither the persistent
+  sidebar/rail NOR the mobile hamburger/drawer appears at all.** This is a genuine, real bug in the live
+  production build — not a devtools artifact, not stale cache (already ruled out via hard-refresh), not
+  a leftover UI-state carryover. Still unresolved: is the `hidden md:flex` wrapper div present in the DOM
+  with `display:none` computed (CSS/breakpoint bug) or absent from the DOM entirely (JS/render bug,
+  despite no obvious gate found in source)? Asked user to check DOM presence + Computed `display` value +
+  console errors to disambiguate — awaiting answer. This is the single most useful next fact: it cleanly
+  separates "CSS never applies at this width" from "the component tree never mounts this subtree."
