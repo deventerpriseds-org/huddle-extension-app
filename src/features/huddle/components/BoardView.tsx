@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown } from "lucide-react";
+import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck } from "lucide-react";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import type { BoardTaskRow } from "../lib/tasks/tasks.server";
@@ -530,6 +530,16 @@ function BoardCard({
               </TooltipTrigger>
               <TooltipContent>Priority: {prio.toLowerCase()}{task.priority_rank ? ` · rank ${task.priority_rank}` : ""}</TooltipContent>
             </Tooltip>
+            {task.definition_of_done && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex items-center text-[10px] text-muted-foreground">
+                    <ClipboardCheck size={11} />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-64">Definition of done: {task.definition_of_done}</TooltipContent>
+              </Tooltip>
+            )}
             {task.due_date && (
               <span className={cn("inline-flex items-center gap-1 text-[10px]", overdue ? "text-destructive" : "text-muted-foreground")}>
                 <Clock size={11} />

@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS tasks.journey_tasks (
   completed_at   TIMESTAMPTZ,
   assigned_agent TEXT,
   tags           TEXT[] NOT NULL DEFAULT '{}',
+  definition_of_done TEXT,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   synced_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -53,6 +54,9 @@ CREATE TABLE IF NOT EXISTS tasks.journey_tasks (
 -- Grooming fields synced back from journey (added after the table first shipped).
 ALTER TABLE tasks.journey_tasks ADD COLUMN IF NOT EXISTS assigned_agent TEXT;
 ALTER TABLE tasks.journey_tasks ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';
+-- WIP confirm-intent gate (docs/plan-wip-confirm-review-gate.md, Part 1): the DoD confirmed with the
+-- user before DOING, synced back from journey's definition_of_done column.
+ALTER TABLE tasks.journey_tasks ADD COLUMN IF NOT EXISTS definition_of_done TEXT;
 CREATE INDEX IF NOT EXISTS journey_tasks_user_email_idx ON tasks.journey_tasks (lower(user_email));
 CREATE INDEX IF NOT EXISTS journey_tasks_category_idx   ON tasks.journey_tasks (category);
 CREATE INDEX IF NOT EXISTS journey_tasks_assigned_idx   ON tasks.journey_tasks (assigned_agent);
@@ -175,6 +179,7 @@ export interface JourneyTaskPayload {
   completed_at?: string | null;
   assigned_agent?: string | null;
   tags?: string[] | null;
+  definition_of_done?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -184,9 +189,9 @@ export async function upsertJourneyTask(row: JourneyTaskPayload, userEmail?: str
   await getPool().query(
     `INSERT INTO tasks.journey_tasks
        (id,user_id,user_email,title,description,status,priority,category,is_priority,priority_rank,
-        due_date,start_time,end_time,is_scheduled,pushed_count,board_id,completed_at,assigned_agent,tags,created_at,updated_at,synced_at)
+        due_date,start_time,end_time,is_scheduled,pushed_count,board_id,completed_at,assigned_agent,tags,definition_of_done,created_at,updated_at,synced_at)
      VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'MEDIUM'),$8,COALESCE($9,false),$10,
-             $11,$12,$13,COALESCE($14,false),COALESCE($15,0),$16,$17,$18,COALESCE($19::text[],'{}'::text[]),COALESCE($20,now()),COALESCE($21,now()),now())
+             $11,$12,$13,COALESCE($14,false),COALESCE($15,0),$16,$17,$18,COALESCE($19::text[],'{}'::text[]),$20,COALESCE($21,now()),COALESCE($22,now()),now())
      ON CONFLICT (id) DO UPDATE SET
        user_id=EXCLUDED.user_id, user_email=EXCLUDED.user_email, title=EXCLUDED.title,
        description=EXCLUDED.description, status=EXCLUDED.status, priority=EXCLUDED.priority,
@@ -194,13 +199,14 @@ export async function upsertJourneyTask(row: JourneyTaskPayload, userEmail?: str
        due_date=EXCLUDED.due_date, start_time=EXCLUDED.start_time, end_time=EXCLUDED.end_time,
        is_scheduled=EXCLUDED.is_scheduled, pushed_count=EXCLUDED.pushed_count, board_id=EXCLUDED.board_id,
        completed_at=EXCLUDED.completed_at, assigned_agent=EXCLUDED.assigned_agent, tags=EXCLUDED.tags,
+       definition_of_done=EXCLUDED.definition_of_done,
        updated_at=EXCLUDED.updated_at, synced_at=now()`,
     [
       row.id, row.user_id ?? null, userEmail ?? row.user_email ?? null, row.title, row.description ?? null,
       row.status ?? null, row.priority ?? null, row.category ?? null, row.is_priority ?? null, row.priority_rank ?? null,
       row.due_date ?? null, row.start_time ?? null, row.end_time ?? null, row.is_scheduled ?? null,
       row.pushed_count ?? null, row.board_id ?? null, row.completed_at ?? null, row.assigned_agent ?? null,
-      row.tags ?? null, row.created_at ?? null, row.updated_at ?? null,
+      row.tags ?? null, row.definition_of_done ?? null, row.created_at ?? null, row.updated_at ?? null,
     ],
   );
 
@@ -353,7 +359,7 @@ export async function setAutoWorkSignature(userEmail: string, signature: string)
 export async function getOpenAssignedTasks(userEmail: string, limit = 200): Promise<BoardTaskRow[]> {
   await ensureBootstrapped();
   const { rows } = await getPool().query<BoardTaskRow>(
-    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags
+    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done
        FROM tasks.journey_tasks t
       WHERE lower(user_email) = $1
         AND completed_at IS NULL
@@ -464,6 +470,7 @@ export interface BoardTaskRow {
   completed_at: string | null;
   assigned_agent: string | null;
   tags: string[] | null;
+  definition_of_done: string | null;
 }
 
 /** Diagnostics: how many rows the mirror holds and under which emails (top 12). */
@@ -481,7 +488,7 @@ export async function getMirrorStats(): Promise<{ total: number; byEmail: { emai
 export async function getBoardTasks(userEmail: string): Promise<BoardTaskRow[]> {
   await ensureBootstrapped();
   const { rows } = await getPool().query<BoardTaskRow>(
-    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags
+    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done
        FROM tasks.journey_tasks
       WHERE lower(user_email) = $1
       ORDER BY updated_at DESC
