@@ -1,9 +1,44 @@
 # Plan: WIP confirm-intent gate + hardened review gate + anchor/worker domain table
 
-> **Status: designed, not yet built.** This doc is the durable record so the design survives across
-> sessions while other work takes priority. Nothing in this doc has shipped. When picking this back up,
-> start here — it supersedes the vague framing of task #37 for the WIP-lane slice specifically (the
-> fuller "daily experience" vision — phone calls, Slack-vs-email-vs-call triage — stays separate).
+> **Status: build starting.** This doc is the durable record so the design survives across sessions.
+> It supersedes the vague framing of task #37 for the WIP-lane slice specifically (the fuller "daily
+> experience" vision — phone calls, Slack-vs-email-vs-call triage — stays separate).
+
+## Part 0 — the toggle: required vs. discretionary, per agent or globally
+
+Everything below (confirm-intent/DoD, the hardened review gate) is gated behind one setting,
+**`requireStructuredWorkflow`**, resolved per-agent with a global default — the user wants to dial this
+per persona based on the results they're actually seeing, not have it hardcoded on for everyone forever.
+
+- **ON** for an agent → the full design below applies: confirm-intent + DoD required before DOING, and
+  the review gate is code-enforced before IN_REVIEW.
+- **OFF** for an agent → today's current, more autonomous `autowork.server.ts` behavior: promotes
+  straight to DOING, no forced confirm-intent, and review reverts to the agent's own judgment call (the
+  existing `DELEGATION_DIRECTIVE` language stays available — it can still choose to delegate for depth
+  or an independent review, just isn't forced to).
+
+**Storage** — mirrors the existing `artifacts.mirror_config` whole-object-upsert pattern (email PK):
+```
+identity.agent_workflow_config(
+  email TEXT PRIMARY KEY,
+  default_required BOOLEAN NOT NULL DEFAULT false,
+  agent_overrides JSONB NOT NULL DEFAULT '{}'::jsonb   -- {"finn-reid": true, "iris-chase": false, ...}
+)
+```
+Resolver: `isStructuredWorkflowRequired(email, agentId)` → `agent_overrides[agentId] ?? default_required`.
+
+**UI** — new Settings panel (same slot as `ExecutiveProfilePanel`/`ArtifactMirroringPanel`): one master
+switch plus a per-agent list of override toggles.
+
+**Honesty about enforcement strength — the two halves aren't equally enforceable:**
+- The **review gate** is a clean post-hoc code check (runs after `create_artifact`, independent of what
+  the model chose to do mid-turn) — this one really is a hard MUST when the toggle is ON.
+- The **doer requirement** (forcing delegation to a specialist worker) depends on the model actually
+  calling a tool during its own reasoning — inherently softer. When the toggle is ON, the directive
+  states delegation is required as strongly as possible, and the code detects (via `toolUses`this task's
+  DOING lifecycle) whether a `delegate_to_specialist` call actually happened; if not, this is flagged
+  (in Terry's review-gate report, at minimum) rather than silently treated as satisfied. Do not claim
+  this half is code-enforced with the same certainty as the review gate.
 
 ## Why (context)
 
@@ -28,8 +63,10 @@ confirms, adds on, or corrects. Only then does a formal DoD lock in, which the a
   relevant SELECTs (`tasks.server.ts`). Small DoD tooltip on `BoardView.tsx`'s `BoardCard` (no
   card-detail view exists today — this is the smallest additive surface).
 - huddle-only new table `tasks.task_engagement_state(task_id PK, confirm_status, proposed_dod,
-  confirmed_dod, confirm_ask_at, confirmed_at, last_review_ping_at, next_review_ping_at)` — mirrors the
-  existing `tasks.groom_state`/`task_blockers` side-table pattern; no journey-side schema needed.
+  confirmed_dod, confirm_ask_at, confirmed_at, last_review_ping_at, next_review_ping_at,
+  revision_count INT NOT NULL DEFAULT 0)` — mirrors the existing `tasks.groom_state`/`task_blockers`
+  side-table pattern; no journey-side schema needed. `revision_count` is Part 2's corrective-pass
+  counter (below) — it lives here, not a new table, since it's per-task engagement bookkeeping too.
 
 **Flow (rewrite the promotion step in `autowork.server.ts`, ~L197-216):**
 1. Tasks already in DOING before this ships are grandfathered — implicitly confirmed, never interrupted.
@@ -62,11 +99,60 @@ narration bug, the meta-task guard, exclusive-tool gating — a "should" instruc
 small model, and worse, *fails silently*: the user has no way to know a review never happened. A
 deliverable quietly becomes "done" without the check ever running.
 
-**The gate:** when `create_artifact` fires for a DoD-confirmed task, the code automatically calls
-`delegate_to_specialist(role: "assignment-reviewer", ...)` — no persona judgment call, nothing to
-forget — grading the deliverable against its confirmed DoD and the executive-output standard. On
-`revise`: exactly ONE bounded corrective pass by the originating agent, then re-graded. On `pass`: the
-task is allowed to actually land in IN_REVIEW.
+**The gate (revised after independent review — see "Corrections" below):** when `create_artifact`
+succeeds for a `requireStructuredWorkflow=true` task, the handler does NOT immediately call
+`markTaskInReview` (as it does unconditionally today, `huddle.functions.ts:1924`/`:3547`). Instead it
+makes ONE direct, synchronous, structured-output call — `callOpenAIRouter` (`openai-responses.server.ts`,
+the same single-shot strict-JSON pattern already used for router decisions), not the full async
+`delegate_to_specialist` path — using `assignment-reviewer`'s charter (`workers.ts:98-108`) as the
+system prompt, grading the artifact against the confirmed DoD. Schema:
+`{verdict: "pass"|"revise", deficiencies: string[]}` — a real code-readable field, not prose-sniffing.
+- **pass** → `markTaskInReview` runs now, same as today.
+- **revise**, `revision_count = 0` → increment `revision_count`, feed the deficiencies back to the
+  SAME agent for one corrective pass (fix + re-save via `create_artifact` again), then re-grade once.
+- **revise** again, or the grading call errors/times out → **fail open**: `markTaskInReview` runs
+  anyway, with a flagged note ("review incomplete" / the deficiencies), never loops a third time and
+  never leaves the task stuck. Mirrors the existing worker fan-in's own fail-open precedent (an errored
+  worker still counts toward fan-in rather than hanging the turn).
+
+Because this is one bounded extra call (not an async worker + fan-in round trip), the task's `DOING`
+WIP-cap slot is held only for that call's duration, not indefinitely — the review-gate window doesn't
+meaningfully compete with the cap accounting the way an async design would have.
+
+**Corrections from independent review, before any of this gets built:**
+1. The original draft said "auto-delegate to `delegate_to_specialist`" — that's async (worker sub-turn +
+   later fan-in integration), while `create_artifact`'s existing IN_REVIEW write is synchronous. Bolting
+   an async gate onto a synchronous write recreates the exact silent-pass-through bug this gate exists to
+   prevent. Fixed by using a direct synchronous structured call instead (above).
+2. `assignment-reviewer` as a plain Pillar-2 worker returns free text with no verdict field — "pass/revise
+   branching" on unstructured prose is itself a "should" pattern. Fixed by the `{verdict, deficiencies}`
+   JSON schema above.
+3. "Exactly one corrective pass" needs a persisted counter or a second `revise` verdict loops forever.
+   `task_engagement_state` gets a `revision_count INT NOT NULL DEFAULT 0` column (see Part 1 schema).
+4. **Toggle resolution is NOT baked into a turn's payload at enqueue time** — `enqueueTurn`'s payload is a
+   snapshot; a toggle flip mid-turn can't retroactively change an already-queued turn. Each gate resolves
+   `isStructuredWorkflowRequired` live, at its OWN dispatch moment — once at the UP_NEXT→DOING promotion
+   decision, and separately (and possibly differently, if flipped in between) at `create_artifact` time.
+   Both moments must independently call the resolver; neither trusts a value cached from earlier.
+5. `confirm_ask_at` must be written with a set-once guard (`WHERE confirm_ask_at IS NULL`, or an
+   `INSERT ... ON CONFLICT (task_id) DO NOTHING` before ever computing a new jittered value) — otherwise
+   every autowork pass before the jitter elapses recomputes a fresh `now() + random(...)`, pushing the ask
+   out forever. This is a hard requirement on the implementation, not an implementation detail to infer.
+6. A task whose `confirm_ask_at` fired long ago with no reply must not be silently stuck: it's surfaced as
+   awaiting-the-user (standup or Terry's report) and must NOT block that agent's other UP_NEXT slots from
+   cycling — `AGENT_BUCKET` accounting treats a `pending` (asked-but-unconfirmed) task as occupying its
+   UP_NEXT slot but never competing for the single DOING slot, so one unanswered confirm-intent DM can't
+   starve an agent's whole lane.
+7. **Ledger guard against duplicate dispatch in a group turn.** `confirm_task_intent` and the
+   post-`create_artifact` review-gate hook are both triggered from per-task autowork/turn state, not from
+   "whichever agent responds first in a group huddle" — but a group turn can still fan multiple queued
+   replies through the same dispatch path in one pass. Both must go through the existing
+   `turnActionLedger`/`claimAction(key)` primitive (already guarding `schedule_reminder`/`send_email`/
+   `create_email_draft`) keyed on `task_id` (e.g. `claimAction(\`confirm_task_intent:${taskId}\`)`,
+   `claimAction(\`review_gate:${taskId}:${revision_count}\`)`) so a second concurrent call for the same
+   task in the same turn is a no-op rather than double-confirming the DoD or double-running the review
+   grading call. This is the same primitive, not a new one — just extend its key space to these two
+   actions.
 
 **Terry (scrum master) is the visible face of this gate, not the judge.** He already owns
 "review"/"cadence"/"process" in his domain data (`agents.ts`), so he's the one who reports the verdict
