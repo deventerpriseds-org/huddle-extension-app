@@ -28,7 +28,7 @@ import {
 } from "./tavily-search.functions";
 import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
 import { DELEGATE_TO_SPECIALIST_TOOL, workerDirectory, getWorker, WORKER_ROLES } from "./agents/workers";
-import { FLAG_BLOCKER_TOOL } from "./tasks/task-agent-tools";
+import { FLAG_BLOCKER_TOOL, CONFIRM_TASK_INTENT_TOOL } from "./tasks/task-agent-tools";
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
@@ -1861,6 +1861,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             CREATE_ARTIFACT_TOOL,
             DELEGATE_TO_SPECIALIST_TOOL,
             FLAG_BLOCKER_TOOL,
+            CONFIRM_TASK_INTENT_TOOL,
             SCHEDULE_REMINDER_TOOL,
             PRIORITIZE_TOOL,
             ...groomTools,
@@ -1977,6 +1978,52 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            }
+            if (c.name === "confirm_task_intent") {
+              const a = c.arguments as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const dod = String(a.definition_of_done ?? "").trim();
+              if (!taskId || !dod) return JSON.stringify({ ok: false, error: "task_id and definition_of_done are required" });
+              if (!claimAction(`confirm_task_intent:${taskId}`)) {
+                recordToolUse(winner.id, "confirm_task_intent", "already confirmed this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true });
+              }
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { confirmTaskIntent } = await import("./tasks/tasks.server");
+                await confirmTaskIntent(taskId, email, dod);
+                // Durably on journey's canonical task too (flows to the mirror + board tooltip).
+                let journeySet = false;
+                let journeyError = "";
+                try {
+                  const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                  const r = await invokeJourneyTool({
+                    toolName: "update_task",
+                    args: { task_id: taskId, definition_of_done: dod },
+                    caller: data.caller ?? {},
+                    context: { source: "huddle" },
+                  });
+                  journeySet = !!r.ok;
+                  if (!r.ok) journeyError = String(r.error ?? r.output ?? "update_task_failed").slice(0, 160);
+                } catch (e) {
+                  journeyError = (e instanceof Error ? e.message : String(e)).slice(0, 160);
+                }
+                recordToolUse(
+                  winner.id,
+                  "confirm_task_intent",
+                  journeySet ? "DoD confirmed" : `DoD confirmed, journey write failed: ${journeyError}`,
+                  true,
+                  journeyError || undefined,
+                );
+                return JSON.stringify({ ok: true, task_id: taskId, journey_set: journeySet });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "confirm_task_intent", "confirm failed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             }
@@ -2458,6 +2505,49 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            },
+          });
+
+          // confirm_task_intent — lock in the confirmed DoD (mirrors the OpenAI path).
+          lovableTools.confirm_task_intent = tool({
+            description: CONFIRM_TASK_INTENT_TOOL.description,
+            inputSchema: z.object({ task_id: z.string(), definition_of_done: z.string() }),
+            execute: async (args) => {
+              const a = args as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const dod = String(a.definition_of_done ?? "").trim();
+              if (!taskId || !dod) return JSON.stringify({ ok: false, error: "task_id and definition_of_done are required" });
+              if (!claimAction(`confirm_task_intent:${taskId}`)) {
+                recordToolUse(winner.id, "confirm_task_intent", "already confirmed this turn — skipped duplicate", true);
+                return JSON.stringify({ ok: true, deduped: true });
+              }
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { confirmTaskIntent } = await import("./tasks/tasks.server");
+                await confirmTaskIntent(taskId, email, dod);
+                let journeySet = false;
+                try {
+                  const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                  const r = await invokeJourneyTool({
+                    toolName: "update_task",
+                    args: { task_id: taskId, definition_of_done: dod },
+                    caller: data.caller ?? {},
+                    context: { source: "huddle" },
+                  });
+                  journeySet = !!r.ok;
+                } catch {
+                  /* non-fatal — the confirmed DoD is already durable in task_engagement_state */
+                }
+                recordToolUse(winner.id, "confirm_task_intent", journeySet ? "DoD confirmed" : "DoD confirmed, journey write failed", true);
+                return JSON.stringify({ ok: true, task_id: taskId, journey_set: journeySet });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "confirm_task_intent", "confirm failed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             },
