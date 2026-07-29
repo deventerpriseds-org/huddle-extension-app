@@ -15,6 +15,15 @@ on:
   # push:
   #   branches: [main]
 
+# Serialize deploys — without this, two dispatches close together (e.g. two agent sessions each
+# deploying their own branch) run concurrently and whichever finishes last wins on the shared SWA,
+# regardless of which one actually has the more complete/correct code. This only prevents genuinely
+# overlapping runs from interleaving; it does NOT fix deploying the wrong branch — see CLAUDE.md's
+# "Deploy funnel: ALWAYS deploy main" rule for the actual fix (every deploy should target `main`).
+concurrency:
+  group: deploy-swa
+  cancel-in-progress: false
+
 env:
   SWA_NAME: enterpriseds-huddle-web
   AZURE_RESOURCE_GROUP: EnterpriseDS_ResourceGRP

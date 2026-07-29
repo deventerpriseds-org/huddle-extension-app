@@ -12,7 +12,11 @@ never clutters the user's task board. TanStack Start + React 19 + Vite + Nitro �
 - Turn engine: `runHuddleTurn` (src/features/huddle/lib/huddle.functions.ts). Router: `routing.ts`.
 - Databases: Azure PG `eds-postgresql/RAG_AI_Agents` (memory `rag_chunks`, `tasks.journey_tasks`
   mirror, `chat.pending_turns` durable turns). journey = Supabase `wwxgajrtmslzklnyplah` (canonical tasks).
-- Deploy: `deploy-swa.yml` (workflow_dispatch only; push-to-main is commented out) → prod = last branch deployed.
+- Deploy: `deploy-swa.yml` (workflow_dispatch only; push-to-main is commented out) → prod = last branch
+  deployed — **always deploy `main`, never a feature branch directly** (see CLAUDE.md "Deploy funnel"
+  rule; two concurrent sessions deploying different feature branches raced and clobbered each other's
+  fix in prod on 2026-07-29). Workflow now has a `concurrency: group: deploy-swa` guard too (defense in
+  depth against simultaneous runs; doesn't fix wrong-branch deploys by itself).
 
 ## Integrations
 | Service | Purpose | Status |

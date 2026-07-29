@@ -1,5 +1,36 @@
 # Huddle — working rules
 
+## Deploy funnel: ALWAYS deploy `main`, never a feature branch (hard rule — races corrupted prod twice)
+
+`deploy-swa.yml` is `workflow_dispatch`-only against whatever `ref` you pass it, and prod is simply
+"whatever branch was last dispatched" — there is no server-side check that the deployed ref is
+newer, more complete, or even related to the previous deploy. With multiple Claude sessions working
+different feature branches in parallel, this is a real race, not a hypothetical:
+
+**What actually happened (2026-07-29):** session A pushed a Sidebar/ContextPanel collapse feature to
+`act5-autonomy` and deployed it — but that branch had diverged from `main` before an unrelated
+extension-CSS-collision fix (`app-hidden` rename) landed there, so the deploy reintroduced the exact
+bug that fix solved. Session A merged `main` into `act5-autonomy` and redeployed — fixed, live. Nine
+minutes later session B deployed `claude/setup-stop-hooks-skills-0h569y` (a different feature branch,
+missing session A's work entirely) and silently overwrote session A's fix in prod. The user watched a
+button appear and then vanish again with no code change in between — pure deploy-order nondeterminism.
+
+**The fix — one rule, no exceptions:**
+1. **`main` is the only ref `deploy-swa.yml` is ever dispatched against.** Never deploy a feature/
+   working branch directly, no matter how confident you are it's ahead — "ahead of what" is exactly
+   the question a feature branch can't answer when other branches exist.
+2. **Before merging your branch into `main`, merge `main` into your branch first** (pull in whatever
+   landed there since you branched) and resolve conflicts by hand, keeping both sides' work — don't
+   let "ours"/"theirs" auto-resolution silently drop someone else's fix. Then merge your (now
+   up-to-date) branch into `main`, push, and deploy `main`.
+3. **If `main` is missing another branch's already-completed work** (discovered via `git log
+   <other-branch>..main`/`main..<other-branch>`), merge that branch into `main` too, in the same pass
+   — `main` should end every session as the union of all completed work, not just your own slice.
+4. This makes `git log --oneline -1 origin/main` (plus `git merge-base --is-ancestor` checks against
+   any branch you're about to touch) the one shared source of truth every session can check without
+   needing to coordinate with whichever other session is also running — no chat/locking needed, git
+   history already serializes it as long as everyone actually merges into `main` before deploying.
+
 ## Agent prompts are ADDITIVE-ONLY (hard rule)
 
 The agents' instruction content is a canonical asset. Do **not** replace, thin, shorten,
