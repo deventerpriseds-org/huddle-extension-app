@@ -197,3 +197,11 @@
 @utility hair {
   box-shadow: inset 0 0 0 1px var(--hairline);
 }
+
+/* Namespaced replacement for Tailwind's bare `hidden` utility. Browser extensions (Grammarly
+ * confirmed live) inject their own global, non-namespaced `.hidden{display:none!important}`
+ * rule that collides with the generic class name and silently breaks layout. `app-hidden` can't
+ * collide with a third-party stylesheet the same way. */
+@utility app-hidden {
+  display: none;
+}

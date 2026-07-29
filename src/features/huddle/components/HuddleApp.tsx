@@ -149,16 +149,16 @@ export function HuddleApp() {
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
       {/* Desktop rails */}
-      <div className="hidden md:flex md:h-full">
+      <div className="app-hidden md:flex md:h-full">
         <Rail />
       </div>
-      <div className="hidden md:flex md:h-full">
+      <div className="app-hidden md:flex md:h-full">
         <Sidebar />
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* Mobile top bar */}
-        <div className="flex items-center justify-between border-b border-hairline bg-surface px-3 py-2 md:hidden">
+        <div className="flex items-center justify-between border-b border-hairline bg-surface px-3 py-2 md:app-hidden">
           <button
             type="button"
             onClick={() => setNavOpen(true)}
@@ -195,7 +195,7 @@ export function HuddleApp() {
 
 
       {/* Desktop context panel */}
-      <div className="hidden h-full md:flex">
+      <div className="app-hidden h-full md:flex">
         <ContextPanel />
       </div>
 
