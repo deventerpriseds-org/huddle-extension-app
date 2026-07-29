@@ -125,3 +125,47 @@ in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's
   in the CCR session shell; the real merge-gate is GitHub's rule that a NEW workflow_dispatch file must be on the
   DEFAULT branch to be dispatchable. GUARDRAIL: when a secret is "needed," check the session env by all plausible
   names first, and state the true blocker (dispatch-on-default-branch), not a proxy for it.
+- [2026-07-29] PR #15 ("Fix meeting room: breakpoints, standup formatting/latency, barge-in, button styling,
+  file-search narration") was pushed to `act5-autonomy` by a prior session but the PR itself sat OPEN,
+  never merged — the fixes never reached `main` or production despite the branch itself being redeployed
+  directly to the SWA multiple times. Found by checking `git log main..origin/<branch>` across every
+  remote branch, not by trusting a "deployed" claim in a commit/PR body. Merged (`7cc5af9`), then manually
+  triggered `deploy-swa.yml` on `main` (workflow_dispatch only — push-to-main is commented out, so a merge
+  alone deploys nothing; confirmed run `30471382381` completed/success, `head_sha` = merge commit).
+  GUARDRAIL: "were the fix commits pushed" is not the same question as "are they in production" — check
+  `git log main..origin/<branch>` for EVERY remote branch when a user asks whether prior fixes landed, not
+  just the currently-checked-out branch.
+- [2026-07-29] MISTAKE (caught by the user, not self-caught): declared the breakpoint/meeting-view fix
+  "confirmed" from Playwright screenshots taken at 800–1280px viewport widths only — a range chosen to
+  match the PR AUTHOR's own bug description, not the user's actual screen. The user's real screenshots are
+  a normal ~1920px-wide desktop window; testing a narrow synthetic band doesn't validate what they
+  actually see. GUARDRAIL: when verifying a UI/layout fix, test at the resolutions the user (or real
+  users generally) actually use — common real desktop sizes (1366×768, 1536×864, 1920×1080, 2560×1440) —
+  not just the narrow range implicated by whichever root-cause theory is being tested. A fix can be real
+  for the theorized range and still say nothing about the reporter's actual environment.
+- [2026-07-29] A concurrently-spawned `verifier` subagent ran its own `git` operations (checked out
+  `origin/main`'s file content into the shared working tree without switching branches) against the SAME
+  local clone the main session was using, which is what the Stop-hook's git-check flagged as "uncommitted
+  changes" — not anything the session itself staged. Resolved by NOT touching git state until the
+  subagent's notification confirmed it was done, then reconciling with `git merge --ff-only origin/main`
+  (safe since the working tree already matched). GUARDRAIL: when a subagent is told to operate in a repo
+  path the main session is also using, treat any unexpected working-tree/index state as possibly the
+  subagent's in-flight work, not a mistake to immediately fix — wait for its completion notification
+  before writing to shared git state.
+- [2026-07-29] Re-verified at REAL desktop resolutions (1366×768, 1536×864, 1920×1080, 2560×1440) against
+  the properly-synced, merged+deployed code: sidebar renders correctly in the regular app shell at all
+  four; the full-screen meeting/call view (structurally matching the user's own screenshots — immersive,
+  no sidebar, avatar + roster row + control bar) also renders correctly, confirming the no-sidebar-in-a-
+  call state is BY DESIGN (fullscreen takeover), not the reported bug. Independent `verifier` subagent
+  additionally found a genuine NEW bug not in the original report: at 768–850px specifically (not a real
+  desktop width), the "Meeting" dropdown button is physically overlapped by the ContextPanel's "Queue"
+  tab, blocking the click — confirmed both by bounding-box math and a live Playwright click-intercept
+  error. Logged as new, separate, untriaged work (see actions.md ACT-huddle-1) — not yet fixed.
+- [2026-07-29] Of the user's original 4 reported bugs: (1) desktop sidebar/meeting-view layout — fixed and
+  independently re-verified at real resolutions (see above); (2) 30-second standup-start gap — PR #15
+  itself states this is only PARTIALLY addressed (poll-interval + memoization only; the actual dominant
+  cost, the ceremony opener's own LLM call latency, is an acknowledged, still-open backlog item — see
+  "Backlog / known optimizations" #1 in CLAUDE.md); (3) microphone "in use by Microsoft Edge" / can't
+  barge in — PR #15's mic fix is click-feedback (toast) + error-surfacing only, NOT a device-conflict
+  resolution; the actual reported symptom is UNADDRESSED and not yet diagnosed; (4) button styling — PR
+  #15 fixed this. Do not claim (2) or (3) are resolved; they are genuinely open follow-on work.

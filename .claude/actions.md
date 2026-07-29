@@ -6,6 +6,42 @@ Last updated: 2026-07-25
 
 ## Open
 
+### ACT-huddle-1: Desktop layout bugs — sidebar/menu missing, meeting view, mic barge-in, standup gap
+**Requested:** 2026-07-29
+**Asked for:** user reported 4 live bugs on production (https://icy-flower-0f415200f.7.azurestaticapps.net):
+(1) left sidebar/menu missing on desktop, meeting view not "snapping to place"; (2) mic says "in use by
+Microsoft Edge", can't barge in; (3) ~30s gap after clicking Start on a standup ceremony; (4) asked whether
+prior fix commits for these were pushed or orphaned.
+**Found:** fix commits (`c04d070`, `d6661e6` + 2 more rounds) existed on branch `act5-autonomy`, sitting in
+an already-OPEN, never-merged PR #15 — pushed, not orphaned, just never merged. Merged (`7cc5af9`),
+manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confirmed run completed/success).
+**Status:** open — PARTIALLY resolved, one direct contradiction not yet explained:
+- (1) desktop breakpoint/sidebar: code inspected (pure CSS, `hidden md:flex`/`md:hidden`, consistent
+  768px breakpoint, no JS/hook gating) and re-verified via Playwright at real desktop resolutions
+  (1366×768, 1536×864, 1920×1080, 2560×1440) against the properly git-synced merged code — sidebar and
+  meeting view rendered correctly in every local test. **BUT the user reports it is STILL broken live in
+  production at a normal wide window**, which directly contradicts the local result. Not yet reconciled —
+  two live hypotheses (stale CDN/browser cache vs. a production-only runtime failure that a
+  zero-backend-secrets local dev server can't reproduce), narrowing questions sent to the user
+  (hard-refresh result + browser console errors) — awaiting their answer.
+- (2) mic "in use by Microsoft Edge" / can't barge in: PR #15's mic fix is click-feedback (toast) +
+  error-surfacing only — confirmed via PR text this does NOT address an actual device-conflict. UNADDRESSED,
+  not yet diagnosed.
+- (3) 30s standup-start gap: PR #15 explicitly states this is partial (poll-interval 2s→500ms +
+  memoized resolve only); the real dominant cost (ceremony opener's own LLM call latency) is an
+  acknowledged, still-open backlog item (CLAUDE.md "Backlog / known optimizations" #1). UNRESOLVED.
+- (4) button styling: fixed by PR #15, not independently re-verified but low-risk/cosmetic.
+- **New bug found (not in original report):** independent `verifier` subagent found the "Meeting"
+  dropdown button is physically overlapped by the ContextPanel's "Queue" tab at 768–850px specifically
+  (click-intercepted, confirmed via Playwright error + bounding-box overlap), while ≥900px is clean.
+  Untriaged, not fixed.
+**Evidence:** PR #15 (github.com/deventerpriseds-org/huddle-extension-app/pull/15), merge commit `7cc5af9`,
+deploy run `30471382381` (conclusion success), verifier subagent report (git ancestry + deploy timestamp
++ independent Playwright repro), this session's own Playwright screenshots at real resolutions (not
+committed — scratch files, removed after use).
+**Next step:** waiting on user's hard-refresh + console-error report to resolve the live-vs-local
+discrepancy on (1); (2) and (3) need dedicated follow-on investigation (not started).
+
 _(ACT-1 moved to Closed 2026-07-24 — see below.)_
 
 ### ACT-2: Enforce mandatory skills (AC / verify / track / remember / verifier)
