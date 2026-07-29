@@ -67,9 +67,13 @@ manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confir
   new object every render → stop() called on every state change). Fixed in commit `95708f6`, PR #19 merged.
   **Follow-on bug (standup ceremony voice chaos):** barge-in during a running ceremony sent a second
   `sendHuddleMessage(scope:group)` turn ON TOP of the ceremony's durable turn — both streams raced,
-  producing overlapping, context-free agent replies mid-ceremony. Fixed: extracted `routeTurn(text)` in
-  MeetingBar.tsx (commit `f618a04`, merged to main, deployed run 30491913930 success). NOT YET CONFIRMED
-  LIVE by user.
+  producing overlapping, context-free agent replies mid-ceremony. `f618a04` attempted this fix but caused
+  a 60s ceremony-start hang (root cause undiagnosed; reverted as `b927f72`). Re-implemented correctly
+  as commit `864ea0e` this session (2026-07-29): `routeTurn` stable useCallback([]) reads live state via
+  refs (`isCeremonyRef`/`ceremonyStatusRef`/`activeCeremonyTurnRef`), passed as `routeMessage` to
+  groupVoice.start(); both typed and voice paths call it before sendHuddleMessage. Independent verifier
+  subagent: **6/6 ACs CONFIRMED** from code. Deployed main run 30498486170 `conclusion=success`.
+  NOT YET CONFIRMED LIVE by user — please hard-refresh production and run a standup ceremony to confirm.
 - (3) 30s standup-start gap: PR #15 explicitly states this is partial (poll-interval 2s→500ms +
   memoized resolve only); the real dominant cost (ceremony opener's own LLM call latency) is an
   acknowledged, still-open backlog item (CLAUDE.md "Backlog / known optimizations" #1). UNRESOLVED.
