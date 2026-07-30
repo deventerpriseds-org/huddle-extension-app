@@ -6,6 +6,16 @@ Last updated: 2026-07-30
 
 ## Open
 
+### ACT-huddle-3: 1:1 capability handoff — intent-semantic false positive (Iris "Mark that done" → Terry)
+**Requested:** 2026-07-30
+**Asked for:** When a user says "Mark that done" in a 1:1 with Iris, and Iris's own prior message mentioned
+a "backlog grooming" item, Iris incorrectly defers to Terry (capabilityHandoffBlock fires on the grooming
+word in context, not on user intent). User wants a systematic, trait-driven fix — NOT keyword exclusion lists.
+**Scope:** `huddle.functions.ts` (capabilityHandoffBlock prose + intent pre-classification), `capabilities.ts`
+(`capabilityOwnerFor` — currently a raw substring scan on text that may include agent-introduced context),
+`data/agents.ts` (AgentCapability interface). Must NOT regress ACT-1 verified live scenarios.
+**Status:** ACs being written (define-acceptance-criteria subagent running).
+
 ### ACT-huddle-2: Agent avatar images 404 (Lovable-preview-only asset paths)
 **Requested:** 2026-07-29
 **Asked for:** fix the broken avatar photos across the app — every agent falls back to colored

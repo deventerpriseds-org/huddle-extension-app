@@ -6,7 +6,7 @@ import type { HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
 import { parseMentions, routeMessage, routeMessageLLM, laneOwnerFor, type RouterInvocation, type RouteResult } from "./routing";
 import { isQuotaError, QUOTA_OUTAGE_INLINE, type FallbackEvent, type PromptDebug } from "./fallbacks";
 import { buildRoster } from "./roster";
-import { agentOwnsCapability, exclusiveCapabilities, capabilityOwnerFor } from "./capabilities";
+import { agentOwnsCapability, exclusiveCapabilities, capabilityOwnerFor, classifyTurnIntent, type TurnIntent } from "./capabilities";
 import {
   detectCeremony,
   buildCeremonyReport,
@@ -30,6 +30,10 @@ import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
 import { DELEGATE_TO_SPECIALIST_TOOL, workerDirectory, getWorker, WORKER_ROLES } from "./agents/workers";
 import { FLAG_BLOCKER_TOOL, CONFIRM_TASK_INTENT_TOOL } from "./tasks/task-agent-tools";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
+
+// Feature flag: gates the intent-classification guard on capability/lane hand-off.
+// Set to false for an instant rollback to the previous (trigger-word-only) behaviour.
+const TURN_INTENT_CLASSIFICATION = true;
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
@@ -206,7 +210,7 @@ function capabilityHandoffBlock(
   const rule =
     scope === "group"
       ? "If you are asked to do an exclusive job you do NOT own, do NOT attempt it and do NOT create a task about it — @mention the owner so they pick it up. If YOU own the job being asked for, just do it and briefly say what you did and why (e.g. \"took care of grooming — the backlog was stale\"); do not ask permission first or defer."
-      : "This is a 1:1, so the owner is NOT in this conversation. If you are asked to do an exclusive job you do NOT own, do NOT attempt it, do NOT improvise your own version of it (no grooming pass, no proposing owner assignments), and do NOT create a task about it. Say plainly, in one warm sentence, that the owner (refer to them by NAME, e.g. \"Terry\") is better suited and that you'll have them reach out — do NOT use an @handle (they are not in this 1:1; @ is for group rooms). The system brings them in automatically. If YOU are the owner, just do it.";
+      : "This is a 1:1, so the owner is NOT in this conversation. IMPORTANT: this deferral rule applies ONLY when the user's CURRENT message is explicitly asking you to PERFORM the capability (e.g. 'can you groom the backlog?', 'triage the backlog', 'plan the sprint'). Do NOT apply it when the user is: confirming something is done ('mark that done', 'that's finished', 'it's closed', 'already done'), asking a factual question about ownership ('who handles grooming?', 'what does Terry do?', 'is the session scheduled?'), acknowledging or thanking ('got it', 'ok', 'thanks'), or sharing information without requesting action. Never defer based on a related word appearing in earlier conversation turns — only the user's CURRENT message determines whether a performance request is being made. If you are asked to do an exclusive job you do NOT own, do NOT attempt it, do NOT improvise your own version of it (no grooming pass, no proposing owner assignments), and do NOT create a task about it. Say plainly, in one warm sentence, that the owner (refer to them by NAME, e.g. \"Terry\") is better suited and that you'll have them reach out — do NOT use an @handle (they are not in this 1:1; @ is for group rooms). The system brings them in automatically. If YOU are the owner, just do it.";
   return (
     "\n\nExclusive capabilities — only the named owner may perform each:\n" +
     directory +
@@ -1210,8 +1214,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // user's ask clearly belongs to another agent's lane (by domains/themes, e.g. "tighten my
       // budget" → Finn), tell THIS agent to defer and bring them in, even though that owner isn't in
       // the room. Deterministic + data-driven, so it covers every lane, not just the tool-owned ones.
+      // Intent-gated: only fire when the user is actually requesting an action to be performed — not
+      // when they are confirming completion, querying ownership, acknowledging, or informing.
+      const turnIntent: TurnIntent = TURN_INTENT_CLASSIFICATION ? classifyTurnIntent(data.text) : "perform";
       let laneDirective = "";
-      if (data.scope !== "group" && !data.internal) {
+      if (data.scope !== "group" && !data.internal && turnIntent === "perform") {
         const owner = laneOwnerFor(data.text, nextId);
         if (owner && owner.id !== nextId) {
           const o = AGENT_BY_ID[owner.id];
@@ -3251,7 +3258,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // lane owner and spawns follow-ups that chain into a notification barrage (measured: autowork→Liam
       // →Sam loop; Terry→Cole→Iris→Ezra chain). Gating on !data.internal confines the pass-along to real
       // user asks and stops a follow-up from ever spawning another follow-up.
-      if (data.scope !== "group" && !data.internal) {
+      // Intent-gated: only fire when the user is actually requesting an action to be PERFORMED — not
+      // when confirming completion, querying ownership, acknowledging, or informing. `turnIntent` is
+      // computed once near the top of this function (shared with the laneDirective guard).
+      if (data.scope !== "group" && !data.internal && turnIntent === "perform") {
         const ownerId = capabilityOwnerFor(data.text)?.agent.id ?? laneOwnerFor(data.text, nextId)?.id ?? null;
         if (ownerId && ownerId !== nextId && !followupDelivered.has(ownerId)) {
           followupDelivered.add(ownerId);
