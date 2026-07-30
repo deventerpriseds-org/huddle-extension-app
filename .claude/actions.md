@@ -6,20 +6,6 @@ Last updated: 2026-07-30
 
 ## Open
 
-### ACT-huddle-3: 1:1 capability handoff — intent-semantic false positive (Iris "Mark that done" → Terry)
-**Requested:** 2026-07-30
-**Asked for:** When a user says "Mark that done" in a 1:1 with Iris, and Iris's own prior message mentioned
-a "backlog grooming" item, Iris incorrectly defers to Terry (capabilityHandoffBlock fires on the grooming
-word in context, not on user intent). User wants a systematic, trait-driven fix — NOT keyword exclusion lists.
-**Scope:** `huddle.functions.ts` (capabilityHandoffBlock prose + intent pre-classification), `capabilities.ts`
-(`capabilityOwnerFor` — currently a raw substring scan on text that may include agent-introduced context),
-`data/agents.ts` (AgentCapability interface). Must NOT regress ACT-1 verified live scenarios.
-**ACs:** 15 approved (define-acceptance-criteria subagent ran).
-**Implementation:** PR #20 on branch `claude/iris-huddle-interaction-baj51c`.
-- `capabilities.ts`: `classifyTurnIntent()` + `TurnIntent` type — trait-driven, zero per-capability config.
-- `huddle.functions.ts`: `TURN_INTENT_CLASSIFICATION` flag, `turnIntent` gates both `laneDirective` and the
-  `capabilityOwnerFor`/`laneOwnerFor` back-channel. `capabilityHandoffBlock` 1:1 rule gets IMPORTANT qualifier.
-**Status:** VERIFIER RUNNING — awaiting independent subagent verification before merge + deploy.
 
 ### ACT-huddle-2: Agent avatar images 404 (Lovable-preview-only asset paths)
 **Requested:** 2026-07-29
@@ -179,6 +165,25 @@ deliver the summary to the user.
 verify why summaries aren't reaching the user.
 
 ## Closed
+
+### ACT-huddle-3: 1:1 capability handoff — intent-semantic false positive (Iris "Mark that done" → Terry)
+**Closed 2026-07-30.** Root cause was LLM-level: Iris's prior reply mentioning "backlog grooming" caused the
+model to apply `capabilityHandoffBlock`'s 1:1 deferral rule to the user's subsequent "Mark that done" — reading
+across turns rather than scoping to the current message. Code-level check (`capabilityOwnerFor("mark that done")`)
+was always null and correct; failure was purely in prompt interpretation.
+**Fix (systematic, data-driven):**
+- `capabilities.ts`: `classifyTurnIntent(text):TurnIntent` — trait-driven, zero per-capability config.
+  Returns `"perform"|"status"|"query"|"acknowledge"|"inform"`. Conservative (defaults "perform" when uncertain).
+- `huddle.functions.ts`: `TURN_INTENT_CLASSIFICATION = true` flag (instant rollback). `turnIntent` computed
+  once per turn, gates both the `laneDirective` injection AND the `capabilityOwnerFor`/`laneOwnerFor`
+  back-channel — both no-op when `turnIntent !== "perform"`. Group turns unaffected (`scope !== "group"` guard).
+  `capabilityHandoffBlock` 1:1 rule gets IMPORTANT qualifier as secondary prose layer.
+**Acceptance criteria:** 15 (define-acceptance-criteria subagent ran). Independent verifier: 14/15 PASS statically;
+AC-12 (live LLM turn: Iris doesn't defer on "Mark that done") requires user to test in the deployed app.
+**Evidence:** PR #20 (`claude/iris-huddle-interaction-baj51c` → main), commits 3b740bc + 7c64e52,
+deploy run 30564150593 (conclusion: success). Verifier subagent 14/15 PASS.
+**Pending user confirmation:** type "Mark that done" in dm-iris-chase → confirm Iris acknowledges/confirms
+without deferring to Terry. That closes AC-12 and completes this ACT.
 
 ### ACT-4: Auto backlog grooming + assignment on a cadence
 **Closed 2026-07-25.** Terry grooms/triages/assigns the backlog on a cadence (6×/day at 4/8/12/2/6/10 ET),
