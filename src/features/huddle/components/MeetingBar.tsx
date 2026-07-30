@@ -427,6 +427,10 @@ function MeetingRoom({
           turnId,
         };
         const stepStart = Date.now();
+        // Filter out old ceremony turns so LIMIT 20 never hides the current running turn.
+        // sinceMs: 0 returns ALL turns (ORDER BY updated_at ASC LIMIT 20), cutting off the newest
+        // when 20+ old turns exist. Using stepStart-5s ensures only turns from this session return.
+        const pollSinceMs = stepStart - 5_000;
         setPhase("Gathering the team…");
         activeCeremonyTurnRef.current = turnId; // this step is now barge-able
         // Fire the durable turn but DON'T await the whole first chunk before rendering — poll alongside it.
@@ -439,7 +443,7 @@ function MeetingRoom({
         let terminal = false;
         let guard = 0;
         while (!terminal && ceremonyAliveRef.current && guard++ < 150) {
-          const upd = await getTurnUpdates({ data: { huddleId: meetingHuddleId, sinceMs: 0 } }).catch(() => null);
+          const upd = await getTurnUpdates({ data: { huddleId: meetingHuddleId, sinceMs: pollSinceMs } }).catch(() => null);
           const turn = upd?.turns?.find((t) => t.id === turnId);
           const reps = turn ? (turn.result?.replies ?? turn.replies ?? []) : [];
           if (reps.length > spoken.n) {
