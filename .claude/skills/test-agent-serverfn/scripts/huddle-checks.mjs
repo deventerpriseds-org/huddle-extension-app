@@ -55,6 +55,21 @@ export const checks = [
   // "Meeting -> Daily stand-up -> Start" flow and measure actual wall-clock time to (a) first
   // transcript message, (b) ceremony completion — the exact experience being reported.
   async function standupCeremonyTiming({ page, check, screenshot }) {
+    // HuddleView renders `null` when activeHuddleId points at a huddle not in the visible list
+    // (e.g. the default "daily" demo huddle, filtered out for a real non-demo account) — which
+    // hides the whole header including the Meeting button. Select a REAL visible huddle from the
+    // sidebar first so the check reflects the actual user experience, not a stale demo default.
+    const groupSection = page.locator("div.mb-2", { has: page.locator("span", { hasText: "Group huddles" }) });
+    const firstGroupHuddle = groupSection.locator("div.flex.flex-col > button").first();
+    if (await firstGroupHuddle.count()) {
+      await firstGroupHuddle.click();
+      await page.waitForTimeout(300);
+    }
+
+    const meetingBtnVisible = await page.locator("button", { hasText: /^Meeting$/ }).count();
+    check("Meeting button visible after selecting a real huddle", meetingBtnVisible > 0);
+    if (!meetingBtnVisible) return;
+
     await page.locator("button", { hasText: /^Meeting$/ }).first().click();
     await page.waitForTimeout(300);
     await page.locator("text=Daily stand-up").first().click();
