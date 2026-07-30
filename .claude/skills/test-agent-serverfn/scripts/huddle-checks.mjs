@@ -61,16 +61,30 @@ export const checks = [
     // sidebar first so the check reflects the actual user experience, not a stale demo default.
     const groupSection = page.locator("div.mb-2", { has: page.locator("span", { hasText: "Group huddles" }) });
     const firstGroupHuddle = groupSection.locator("div.flex.flex-col > button").first();
-    if (await firstGroupHuddle.count()) {
+    // .count() doesn't auto-wait like .click() does — give the sidebar's async huddle list time
+    // to actually render (it can still be hydrating right after avatarImage404s's page.reload()).
+    const gotGroupHuddle = await firstGroupHuddle
+      .waitFor({ state: "visible", timeout: 8000 })
+      .then(() => true)
+      .catch(() => false);
+    if (gotGroupHuddle) {
       await firstGroupHuddle.click();
       await page.waitForTimeout(300);
     }
 
-    const meetingBtnVisible = await page.locator("button", { hasText: /^Meeting$/ }).count();
-    check("Meeting button visible after selecting a real huddle", meetingBtnVisible > 0);
+    const meetingBtn = page.locator("button", { hasText: /^Meeting$/ }).first();
+    const meetingBtnVisible = await meetingBtn
+      .waitFor({ state: "visible", timeout: 8000 })
+      .then(() => true)
+      .catch(() => false);
+    check(
+      "Meeting button visible after selecting a real huddle",
+      meetingBtnVisible,
+      gotGroupHuddle ? "selected a real group huddle first" : "no group huddle found to select — tried Meeting button directly",
+    );
     if (!meetingBtnVisible) return;
 
-    await page.locator("button", { hasText: /^Meeting$/ }).first().click();
+    await meetingBtn.click();
     await page.waitForTimeout(300);
     await page.locator("text=Daily stand-up").first().click();
     await page.waitForTimeout(500);
