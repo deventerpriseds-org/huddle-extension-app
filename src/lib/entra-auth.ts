@@ -44,11 +44,11 @@ function isBrowser() {
 function sanitizeMsalMessage(message: string) {
   return message
     .replace(
-      /([?&](?:code|client_info|id_token|access_token|refresh_token|state|session_state)=)[^&\s]+/gi,
+      /([?&](?:code|client_info|id_token|access_token|refresh_token|state|session_state|uat_token)=)[^&\s]+/gi,
       "$1[redacted]",
     )
     .replace(
-      /#(?:code|client_info|id_token|access_token|refresh_token|state|session_state)=[^\s]+/gi,
+      /#(?:code|client_info|id_token|access_token|refresh_token|state|session_state|uat_token)=[^\s]+/gi,
       "#[redacted]",
     )
     .slice(0, 700);
@@ -237,8 +237,54 @@ const E2E_ACCOUNT = {
   name: "E2E Dev",
 } as AccountInfo;
 
+// Production UAT bypass — separate from and does not touch E2E_BYPASS above. That bypass is
+// dev-build-only and can never reach production; this one is a runtime check that CAN ship in the
+// production bundle, but is inert unless a caller supplies a token matching a build-time secret
+// (VITE_UAT_BYPASS_TOKEN, sourced from the org secret UAT_BYPASS_TOKEN in deploy-swa.yml). Real OAuth
+// redirects can't complete from a CCR sandbox (egress proxied), so this is the only way to drive the
+// LIVE deployed app as a real authenticated user for verification. Server fns already trust
+// caller.entra_email in the payload (see board.functions.ts), so this only ever authenticates as the
+// one real designated UAT user below — it does not grant any new server-side privilege.
+const UAT_BYPASS_TOKEN = import.meta.env.VITE_UAT_BYPASS_TOKEN as string | undefined;
+const UAT_ACCOUNT = {
+  homeAccountId: "uat-von-ellis",
+  localAccountId: "uat-von-ellis",
+  environment: "uat",
+  tenantId: "uat",
+  username: "von.ellis@enterpriseds.io",
+  name: "Von Ellis (UAT)",
+} as AccountInfo;
+let uatBypassActive: boolean | null = null; // memoized per page load
+
+function checkUatBypass(): boolean {
+  if (uatBypassActive !== null) return uatBypassActive;
+  uatBypassActive = false;
+  if (!isBrowser() || !UAT_BYPASS_TOKEN) return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const supplied = params.get("uat_token");
+    if (supplied && supplied === UAT_BYPASS_TOKEN) {
+      uatBypassActive = true;
+      // Strip the token from the URL BEFORE tracing/rendering, so it never lingers in browser
+      // history/referrers and the activation trace's own captured href is already clean.
+      params.delete("uat_token");
+      const qs = params.toString();
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash,
+      );
+      traceAuth("uat-bypass:activated", { matched: true });
+    }
+  } catch {
+    /* ignore */
+  }
+  return uatBypassActive;
+}
+
 export function initMsal(): Promise<void> {
   if (E2E_BYPASS) return Promise.resolve();
+  if (checkUatBypass()) return Promise.resolve();
   if (!isBrowser()) return Promise.resolve();
   if (initPromise) {
     traceAuth("msal:init:reuse");
@@ -295,6 +341,7 @@ export function initMsal(): Promise<void> {
 
 export function getCurrentUser(): AccountInfo | null {
   if (E2E_BYPASS) return E2E_ACCOUNT;
+  if (checkUatBypass()) return UAT_ACCOUNT;
   const msal = getMsal();
   if (!msal) return null;
   const activeAccount = msal.getActiveAccount();
