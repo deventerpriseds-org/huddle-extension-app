@@ -1,5 +1,11 @@
 // Huddle-specific checks for the generic run-uat.mjs runner (eds-claude-skills' verify-work skill,
 // "GHA-verify variant"). This is the only app-specific file — run-uat.mjs itself is reusable as-is.
+//
+// ORDER MATTERS: avatarImage404s does a page.reload(), and the UAT auth bypass (?uat_token=) is
+// single-use — checkUatBypass() strips the param from the URL via history.replaceState once
+// consumed, and the bypass flag is in-memory only (no cookie/localStorage backing it). A reload
+// after that point loses auth entirely (confirmed live: sidebar goes from populated to zero
+// buttons post-reload). So avatarImage404s must run LAST — nothing after it can rely on auth.
 export const checks = [
   async function panelCollapse({ page, check, screenshot }) {
     const sidebarBefore = await page.locator('aside:has-text("EDS workspace")').count();
@@ -33,24 +39,6 @@ export const checks = [
     check("ContextPanel re-expands via the edge-tab", (await page.locator('nav button[aria-label="Collapse activity panel"]').count()) === 1);
   },
 
-  // ACT-huddle-2 regression guard: avatars now serve real images from public/agents/*.jpg
-  // (no more Lovable-preview .asset.json pointer paths) — assert no avatar-pattern 404s recur.
-  async function avatarImage404s({ page, check }) {
-    const failed404s = [];
-    const handler = (r) => { if (r.status() === 404) failed404s.push(r.url()); };
-    page.on("response", handler);
-    // Visiting Huddle view (default) renders every present agent's avatar in the roster/composer.
-    await page.reload({ waitUntil: "networkidle", timeout: 30000 });
-    await page.waitForTimeout(2000);
-    page.off("response", handler);
-    const avatarUrls = failed404s.filter((u) => /\/agents\/.*\.(jpg|jpeg|png)/i.test(u));
-    check(
-      "No avatar image 404s (ACT-huddle-2 regression guard)",
-      avatarUrls.length === 0,
-      avatarUrls.length ? `${avatarUrls.length} avatar 404s: ${avatarUrls.join(", ")}` : "all avatar images loaded",
-    );
-  },
-
   // The user's reported standup-ceremony gap (~93s hang before any reply appears). Drive the real
   // "Meeting -> Daily stand-up -> Start" flow and measure actual wall-clock time to (a) first
   // transcript message, (b) ceremony completion — the exact experience being reported.
@@ -61,8 +49,6 @@ export const checks = [
     // sidebar first so the check reflects the actual user experience, not a stale demo default.
     const groupSection = page.locator("div.mb-2", { has: page.locator("span", { hasText: "Group huddles" }) });
     const firstGroupHuddle = groupSection.locator("div.flex.flex-col > button").first();
-    // .count() doesn't auto-wait like .click() does — give the sidebar's async huddle list time
-    // to actually render (it can still be hydrating right after avatarImage404s's page.reload()).
     const gotGroupHuddle = await firstGroupHuddle
       .waitFor({ state: "visible", timeout: 8000 })
       .then(() => true)
@@ -140,5 +126,24 @@ export const checks = [
       doneMs !== null ? `completed after ${doneMs}ms total` : "did not complete within 180s timeout",
     );
     await screenshot("standup-final-state");
+  },
+
+  // ACT-huddle-2 regression guard: avatars now serve real images from public/agents/*.jpg
+  // (no more Lovable-preview .asset.json pointer paths) — assert no avatar-pattern 404s recur.
+  // MUST run last (see file-header note) — its page.reload() breaks the single-use UAT auth.
+  async function avatarImage404s({ page, check }) {
+    const failed404s = [];
+    const handler = (r) => { if (r.status() === 404) failed404s.push(r.url()); };
+    page.on("response", handler);
+    // Visiting Huddle view (default) renders every present agent's avatar in the roster/composer.
+    await page.reload({ waitUntil: "networkidle", timeout: 30000 });
+    await page.waitForTimeout(2000);
+    page.off("response", handler);
+    const avatarUrls = failed404s.filter((u) => /\/agents\/.*\.(jpg|jpeg|png)/i.test(u));
+    check(
+      "No avatar image 404s (ACT-huddle-2 regression guard)",
+      avatarUrls.length === 0,
+      avatarUrls.length ? `${avatarUrls.length} avatar 404s: ${avatarUrls.join(", ")}` : "all avatar images loaded",
+    );
   },
 ];
