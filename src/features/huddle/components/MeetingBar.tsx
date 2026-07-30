@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AudioLines,
   Captions,
@@ -226,6 +226,35 @@ function MeetingRoom({
   // The durable turnId of the CURRENTLY running ceremony step — lets a user message barge into it
   // (routed to bargeCeremony) instead of firing an uncoordinated parallel turn. Null when idle.
   const activeCeremonyTurnRef = useRef<string | null>(null);
+  // Mirror render-time values into refs so routeTurn (captured by groupVoice.start()) always
+  // reads current ceremony state without a stale closure.
+  const isCeremonyRef = useRef(isCeremony);
+  isCeremonyRef.current = isCeremony;
+  const ceremonyStatusRef = useRef(status);
+  ceremonyStatusRef.current = status;
+
+  // Single ceremony-routing decision — used by both sendMessage (typed) and groupVoice (voice).
+  // Returns [] when ceremony handled the message (caller stops), undefined to fall through.
+  // Empty deps are intentional: all state is read via stable refs above.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const routeTurn = useCallback(
+    async (text: string): Promise<{ agentId: AgentId; text: string }[] | undefined> => {
+      if (isCeremonyRef.current && ceremonyStatusRef.current === "running" && activeCeremonyTurnRef.current) {
+        const turnId = activeCeremonyTurnRef.current;
+        setPhase("Passing your message to the room…");
+        try {
+          const res = await bargeCeremony({ data: { turnId, text } });
+          if (!res.queued) toast("The room just wrapped — send that again to start a new thread.");
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Couldn't reach the room.");
+        }
+        return [];
+      }
+      return undefined;
+    },
+    [],
+  );
+
   useEffect(() => {
     ceremonyAliveRef.current = true;
     return () => {
@@ -304,6 +333,7 @@ function MeetingRoom({
           caller,
           huddleId: meetingHuddleId,
           onTurn: (t) => addMeetingTurns([t]),
+          routeMessage: routeTurn,
         });
       } else {
         // The mic is already listening past this point — every further click on this SAME button
@@ -397,6 +427,10 @@ function MeetingRoom({
           turnId,
         };
         const stepStart = Date.now();
+        // Filter out old ceremony turns so LIMIT 20 never hides the current running turn.
+        // sinceMs: 0 returns ALL turns (ORDER BY updated_at ASC LIMIT 20), cutting off the newest
+        // when 20+ old turns exist. Using stepStart-5s ensures only turns from this session return.
+        const pollSinceMs = stepStart - 5_000;
         setPhase("Gathering the team…");
         activeCeremonyTurnRef.current = turnId; // this step is now barge-able
         // Fire the durable turn but DON'T await the whole first chunk before rendering — poll alongside it.
@@ -407,9 +441,12 @@ function MeetingRoom({
         });
         const spoken = { n: 0 };
         let terminal = false;
-        let guard = 0;
-        while (!terminal && ceremonyAliveRef.current && guard++ < 150) {
-          const upd = await getTurnUpdates({ data: { huddleId: meetingHuddleId, sinceMs: 0 } }).catch(() => null);
+        // Time-based ceiling instead of a fixed iteration count so long ceremonies (100+ seconds)
+        // don't exhaust the poll window before the first partial reply lands. 150 iterations × 500ms
+        // = only 75 seconds — not enough for a 12-agent standup that can take 90–120 seconds.
+        const pollDeadline = stepStart + 5 * 60 * 1000;
+        while (!terminal && ceremonyAliveRef.current && Date.now() < pollDeadline) {
+          const upd = await getTurnUpdates({ data: { huddleId: meetingHuddleId, sinceMs: pollSinceMs } }).catch(() => null);
           const turn = upd?.turns?.find((t) => t.id === turnId);
           const reps = turn ? (turn.result?.replies ?? turn.replies ?? []) : [];
           if (reps.length > spoken.n) {
@@ -449,27 +486,14 @@ function MeetingRoom({
     const text = input.trim();
     if (!text || busy || !meeting.members.length) return;
     const cfg = useBackendsStore.getState().config;
-
-    // BARGE-IN: if a ceremony is actively running, queue this onto the running turn instead of firing
-    // a parallel, uncoordinated turn. The relay pauses after the current speaker, answers it, then
-    // resumes — and the reply streams into the transcript via the ceremony's existing poll loop.
-    if (isCeremony && status === "running" && activeCeremonyTurnRef.current) {
-      const turnId = activeCeremonyTurnRef.current;
-      setInput("");
-      addMeetingTurns([{ text, user: true }]);
-      setPhase("Passing your message to the room…");
-      try {
-        const res = await bargeCeremony({ data: { turnId, text } });
-        if (!res.queued) toast("The room just wrapped — send that again to start a new thread.");
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Couldn't reach the room.");
-      }
-      return;
-    }
-
     setInput("");
-    setBusy(true);
     addMeetingTurns([{ text, user: true }]);
+
+    // BARGE-IN routing: routeTurn handles ceremony turns; returns undefined to fall through.
+    const routed = await routeTurn(text);
+    if (routed !== undefined) return;
+
+    setBusy(true);
     try {
       const result = await sendHuddleMessage({
         data: {

@@ -31,6 +31,7 @@ export interface GroupVoiceConfig {
   caller?: { entra_object_id?: string; entra_email?: string };
   huddleId?: string | null;
   onTurn?: (turn: GroupVoiceTurn) => void;
+  routeMessage?: (text: string) => Promise<{ agentId: AgentId; text: string }[] | undefined>;
 }
 
 export interface GroupVoiceController {
@@ -168,6 +169,18 @@ export function useGroupVoice(): GroupVoiceController {
       }
       cfg.onTurn?.({ text: userText, user: true });
       setPartial(userText);
+
+      // If the caller has a custom router (e.g. an active ceremony), let it handle the turn first.
+      // Returning a non-undefined value means routing was handled; returning [] means "handled, no replies".
+      if (cfg.routeMessage) {
+        const override = await cfg.routeMessage(userText);
+        if (!runningRef.current) return;
+        if (override !== undefined) {
+          setPartial("");
+          if (runningRef.current) setPhase("listening");
+          return;
+        }
+      }
 
       // Route the turn to the whole room via the existing group engine.
       let replies: { agentId: AgentId; text: string }[] = [];

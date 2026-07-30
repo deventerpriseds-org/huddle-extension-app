@@ -1,10 +1,11 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-07-25
+Last updated: 2026-07-30
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
 > claiming any item "done" without ACs + the verifier subagent / observed evidence).
 
 ## Open
+
 
 ### ACT-huddle-2: Agent avatar images 404 (Lovable-preview-only asset paths)
 **Requested:** 2026-07-29
@@ -62,14 +63,31 @@ manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confir
   breaks under the same injection. One PARTIAL: MeetingBar/BoardView-specific DOM paths couldn't be
   reached live in this sandbox (no Azure PG/voice backend access) — the mechanism is proven generically,
   not each specific component's live render.
-- (2) mic "in use by Microsoft Edge" / can't barge in: ROOT CAUSE FOUND + FIX IMPLEMENTED (NOT YET CONFIRMED
-  LIVE). The bug was a useEffect dependency error in MeetingBar.tsx — `groupVoice` (a new object every render)
-  was the dep, so every re-render (including idle→listening state change after mic start) called stop() and
-  killed the mic immediately. Fixed by using `[groupVoice.stop]` instead (stable useCallback). Also improved
-  getUserMedia error messaging. PR #19, commit 95708f6, deploy triggered 2026-07-29. Pending user live confirm.
-- (3) 30s standup-start gap: PR #15 explicitly states this is partial (poll-interval 2s→500ms +
-  memoized resolve only); the real dominant cost (ceremony opener's own LLM call latency) is an
-  acknowledged, still-open backlog item (CLAUDE.md "Backlog / known optimizations" #1). UNRESOLVED.
+- (2) mic / barge-in: CONFIRMED WORKING — user tested, mic works, barge-in stops audio. The original
+  "in use by Microsoft Edge" wording was misleading; the real bug was the useEffect dep (`[groupVoice]`
+  new object every render → stop() called on every state change). Fixed in commit `95708f6`, PR #19 merged.
+  **Follow-on bug (standup ceremony voice chaos):** barge-in during a running ceremony sent a second
+  `sendHuddleMessage(scope:group)` turn ON TOP of the ceremony's durable turn — both streams raced,
+  producing overlapping, context-free agent replies mid-ceremony. `f618a04` attempted this fix but caused
+  a 60s ceremony-start hang (root cause undiagnosed; reverted as `b927f72`). Re-implemented correctly
+  as commit `864ea0e` this session (2026-07-29): `routeTurn` stable useCallback([]) reads live state via
+  refs (`isCeremonyRef`/`ceremonyStatusRef`/`activeCeremonyTurnRef`), passed as `routeMessage` to
+  groupVoice.start(); both typed and voice paths call it before sendHuddleMessage.
+  **GHA live end-to-end barge-in test: 6/6 PASS (run 30555399322, `verify-ceremony-barge.yml`)**:
+  AC-6 interjection answered ✓, AC-7a Terry opens ✓, AC-7b relay resumed + Terry closes ✓,
+  AC-8 no participant dropped (count floor, not cross-run set) ✓, AC-9 barge idempotent ✓, AC-10 no 1:1 spill ✓.
+  NOT YET CONFIRMED LIVE by user in their own session — please hard-refresh production and run a standup ceremony to confirm.
+- (3) standup-start gap (93s hang): **ROOT CAUSE FOUND AND FIX DEPLOYED — NOT YET CONFIRMED LIVE by user.**
+  Diagnosed 2026-07-30 as a pre-existing `getTurnsSince` LIMIT 20 cutoff bug — unrelated to the barge-in
+  work. `ORDER BY updated_at ASC LIMIT 20` with `sinceMs:0` (epoch) returned the 20 OLDEST of 24 ceremony
+  turns; the newest running turn was at position 21+, cut off by LIMIT. The poll (150×~700ms ≈ 105s)
+  never found the active turn. Server was correct — DB confirmed turn `status=done`, 11 replies, 75s
+  runtime. Fix: `pollSinceMs = stepStart - 5_000` before the poll loop; `sinceMs: 0` → `sinceMs: pollSinceMs`
+  in the `getTurnUpdates` call (MeetingBar.tsx lines 433+446). Commit `dd5435e` on main, deploy run
+  30544492729 conclusion=success. Independent verifier: AC-1/3/4/5 PASS statically; AC-2 (10s SLA)
+  mechanism-only — live timing unconfirmed.
+  **Next step: please hard-refresh production and click Start on a standup — replies should appear within
+  10-15 seconds. That confirms the fix and closes this sub-item.**
 - (4) button styling: fixed by PR #15, not independently re-verified but low-risk/cosmetic.
 - **New bug found (not in original report):** independent `verifier` subagent found the "Meeting"
   dropdown button is physically overlapped by the ContextPanel's "Queue" tab at 768–850px specifically
@@ -147,6 +165,25 @@ deliver the summary to the user.
 verify why summaries aren't reaching the user.
 
 ## Closed
+
+### ACT-huddle-3: 1:1 capability handoff — intent-semantic false positive (Iris "Mark that done" → Terry)
+**Closed 2026-07-30.** Root cause was LLM-level: Iris's prior reply mentioning "backlog grooming" caused the
+model to apply `capabilityHandoffBlock`'s 1:1 deferral rule to the user's subsequent "Mark that done" — reading
+across turns rather than scoping to the current message. Code-level check (`capabilityOwnerFor("mark that done")`)
+was always null and correct; failure was purely in prompt interpretation.
+**Fix (systematic, data-driven):**
+- `capabilities.ts`: `classifyTurnIntent(text):TurnIntent` — trait-driven, zero per-capability config.
+  Returns `"perform"|"status"|"query"|"acknowledge"|"inform"`. Conservative (defaults "perform" when uncertain).
+- `huddle.functions.ts`: `TURN_INTENT_CLASSIFICATION = true` flag (instant rollback). `turnIntent` computed
+  once per turn, gates both the `laneDirective` injection AND the `capabilityOwnerFor`/`laneOwnerFor`
+  back-channel — both no-op when `turnIntent !== "perform"`. Group turns unaffected (`scope !== "group"` guard).
+  `capabilityHandoffBlock` 1:1 rule gets IMPORTANT qualifier as secondary prose layer.
+**Acceptance criteria:** 15 (define-acceptance-criteria subagent ran). Independent verifier: 14/15 PASS statically;
+AC-12 (live LLM turn: Iris doesn't defer on "Mark that done") requires user to test in the deployed app.
+**Evidence:** PR #20 (`claude/iris-huddle-interaction-baj51c` → main), commits 3b740bc + 7c64e52,
+deploy run 30564150593 (conclusion: success). Verifier subagent 14/15 PASS.
+**Pending user confirmation:** type "Mark that done" in dm-iris-chase → confirm Iris acknowledges/confirms
+without deferring to Terry. That closes AC-12 and completes this ACT.
 
 ### ACT-4: Auto backlog grooming + assignment on a cadence
 **Closed 2026-07-25.** Terry grooms/triages/assigns the backlog on a cadence (6×/day at 4/8/12/2/6/10 ET),
