@@ -192,16 +192,10 @@ const DELEGATION_DIRECTIVE =
 //     to follow up. No agent ever performs an exclusive job it doesn't own.
 // This is the systematic version of the earlier grooming-only clause: it covers every
 // exclusive capability of every agent, present or future, with no per-case code.
-// includeRule controls whether the behavioural deferral/perform rule is appended after the
-// ownership directory. Pass false when the user's turn intent is "query" — Iris needs to
-// know who owns what to answer "who handles grooming?" but must not receive the deferral
-// prose (which the LLM will apply even to factual questions if it sees grooming in context).
-// For "status"/"acknowledge"/"inform" the caller returns "" directly (no block at all).
 function capabilityHandoffBlock(
   scope: "group" | "1:1",
   members: readonly AgentId[],
   selfId: AgentId,
-  includeRule = true,
 ): string {
   // Which exclusive owners to surface depends on scope. GROUP: only owners actually present
   // (they can be @mentioned into the turn). 1:1: the owner is NEVER in a 1:1 (a DM has one
@@ -213,9 +207,6 @@ function capabilityHandoffBlock(
   const directory = owned
     .map((o) => `- ${o.cap.label} → @${o.agent.handle}${o.agent.id === selfId ? " (you own this)" : ""}`)
     .join("\n");
-  if (!includeRule) {
-    return "\n\nCapability owners (for reference only):\n" + directory;
-  }
   const rule =
     scope === "group"
       ? "If you are asked to do an exclusive job you do NOT own, do NOT attempt it and do NOT create a task about it — @mention the owner so they pick it up. If YOU own the job being asked for, just do it and briefly say what you did and why (e.g. \"took care of grooming — the backlog was stale\"); do not ask permission first or defer."
@@ -1255,26 +1246,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       const roster = buildRoster(data.members, winner.id);
       // Data-driven, scope-aware ownership hand-off (agents.ts capabilities). Empty string
       // when no exclusive-capability owner is in this huddle, so zero prompt overhead then.
-      // Intent-gated for 1:1 — the LLM cannot reliably apply conditional prose instructions
-      // when a trigger-word from prior context is present. Structural suppression is the only
-      // reliable mechanism: do not send instructions the LLM should not act on.
-      //   "perform"     → full block (directory + deferral rule): Iris must defer correctly
-      //   "query"       → directory only (no rule): Iris needs "Terry owns grooming" to answer
-      //                   "who handles grooming?" but must not receive the deferral rule
-      //   everything else ("status"/"acknowledge"/"inform") → empty: no ownership context needed
-      // Group turns always receive the full block — the @mention rule is relevant regardless of intent.
-      const capabilityBlock: string = (() => {
-        if (data.scope === "group" || data.internal || !TURN_INTENT_CLASSIFICATION) {
-          return capabilityHandoffBlock(data.scope === "group" ? "group" : "1:1", data.members, winner.id);
-        }
-        if (turnIntent === "perform") {
-          return capabilityHandoffBlock("1:1", data.members, winner.id);
-        }
-        if (turnIntent === "query") {
-          return capabilityHandoffBlock("1:1", data.members, winner.id, /* includeRule */ false);
-        }
-        return ""; // status / acknowledge / inform — no ownership context needed
-      })();
+      const capabilityBlock = capabilityHandoffBlock(
+        data.scope === "group" ? "group" : "1:1",
+        data.members,
+        winner.id,
+      );
       const taskToolInstructions =
         "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it." +
         " NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled \"groom the backlog\" or \"assign the team\") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked." +

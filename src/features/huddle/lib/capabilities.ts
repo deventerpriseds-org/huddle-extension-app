@@ -38,10 +38,6 @@ const QUERY_RE: RegExp[] = [
 
 // Status: user is confirming or reporting that something is already done
 const STATUS_RE: RegExp[] = [
-  // Broad catch-all for "mark <anything up to 100 chars> as done/complete/etc."
-  // Covers long NPs ("mark the 'Update on backlog grooming' task... as done") that defeat
-  // the narrow \w+-only pattern below. Bounded to prevent catastrophic backtracking.
-  /\bmark\b.{0,100}\b(as )?(done|complete|finished|closed|resolved)\b/i,
   /\bmark(ed)?( (that|it|this|the \w+){0,3})? (as )?(done|complete|finished|closed|resolved)\b/i,
   /\bcheck(ed)? (that|it|this|the \w+( \w+){0,3}) off\b/i,
   /\b(that'?s|it'?s|this is|we'?re|i'?m) (done|finished|complete|completed|all done|resolved|sorted)\b/i,
