@@ -1,0 +1,32 @@
+name: Verify ceremony barge-in (live end-to-end)
+
+# Runs ceremony-barge-test.mjs against the deployed SWA.
+# The script: (1) runs a baseline standup to completion, (2) runs a second standup
+# and fires an interjection mid-run, then asserts AC-6 through AC-10:
+#   AC-6  interjection answered (a reply mentions "runway")
+#   AC-7a Terry opens (first speaker)
+#   AC-7b relay resumes and Terry closes (last speaker)
+#   AC-8  no participant dropped vs. baseline
+#   AC-9  barge idempotent (identical second send deduped: queued=false)
+#   AC-10 no 1:1 spill (dm-terry-locke turn count unchanged)
+# Wall-clock budget: ~10 min (two 90-120s standups + poll overhead).
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify-barge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run ceremony barge-in test
+        run: node .claude/skills/test-agent-serverfn/scripts/ceremony-barge-test.mjs

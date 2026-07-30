@@ -26,11 +26,15 @@ const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 // Run a stand-up to completion; optionally fire a barge once >=`bargeAfter` replies have streamed.
 async function runStandup(label, barge){
   const turnId = `ceremony-${CEREMONY}-standup-${label}-${Date.now()}`;
+  // sinceMs: 5s before enqueue avoids the LIMIT 20 cutoff bug: with sinceMs:0 the 20+ old
+  // ceremony-standup turns fill the result set, pushing this new turn past position 20 and
+  // making it invisible. Using stepStart-5s means only turns from this session appear.
+  const pollSinceMs = Date.now() - 5_000;
   const enqP = call(FN_ENQ,{text:"let's run the daily stand-up",huddleId:CEREMONY,scope:"group",members:M,history:[],router,agents,timeZone:"America/New_York",caller:CALLER,turnId});
   let seen=0,done=false,order=[],replies=[],g=0,barged=false,dedupResult=null;
   while(!done && g++<90){
     await sleep(2500);
-    const p=await call(FN_POLL,{huddleId:CEREMONY,sinceMs:0});
+    const p=await call(FN_POLL,{huddleId:CEREMONY,sinceMs:pollSinceMs});
     const turn=(p.val?.turns??[]).find(t=>t.id===turnId);
     if(turn){
       const reps=turn.result?.replies??turn.replies??[];
