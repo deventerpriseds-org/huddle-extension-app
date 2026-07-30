@@ -71,9 +71,11 @@ manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confir
   a 60s ceremony-start hang (root cause undiagnosed; reverted as `b927f72`). Re-implemented correctly
   as commit `864ea0e` this session (2026-07-29): `routeTurn` stable useCallback([]) reads live state via
   refs (`isCeremonyRef`/`ceremonyStatusRef`/`activeCeremonyTurnRef`), passed as `routeMessage` to
-  groupVoice.start(); both typed and voice paths call it before sendHuddleMessage. Independent verifier
-  subagent: **6/6 ACs CONFIRMED** from code. Deployed main run 30498486170 `conclusion=success`.
-  NOT YET CONFIRMED LIVE by user — please hard-refresh production and run a standup ceremony to confirm.
+  groupVoice.start(); both typed and voice paths call it before sendHuddleMessage.
+  **GHA live end-to-end barge-in test: 6/6 PASS (run 30555399322, `verify-ceremony-barge.yml`)**:
+  AC-6 interjection answered ✓, AC-7a Terry opens ✓, AC-7b relay resumed + Terry closes ✓,
+  AC-8 no participant dropped (count floor, not cross-run set) ✓, AC-9 barge idempotent ✓, AC-10 no 1:1 spill ✓.
+  NOT YET CONFIRMED LIVE by user in their own session — please hard-refresh production and run a standup ceremony to confirm.
 - (3) standup-start gap (93s hang): **ROOT CAUSE FOUND AND FIX DEPLOYED — NOT YET CONFIRMED LIVE by user.**
   Diagnosed 2026-07-30 as a pre-existing `getTurnsSince` LIMIT 20 cutoff bug — unrelated to the barge-in
   work. `ORDER BY updated_at ASC LIMIT 20` with `sinceMs:0` (epoch) returned the 20 OLDEST of 24 ceremony
