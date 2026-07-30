@@ -441,8 +441,11 @@ function MeetingRoom({
         });
         const spoken = { n: 0 };
         let terminal = false;
-        let guard = 0;
-        while (!terminal && ceremonyAliveRef.current && guard++ < 150) {
+        // Time-based ceiling instead of a fixed iteration count so long ceremonies (100+ seconds)
+        // don't exhaust the poll window before the first partial reply lands. 150 iterations × 500ms
+        // = only 75 seconds — not enough for a 12-agent standup that can take 90–120 seconds.
+        const pollDeadline = stepStart + 5 * 60 * 1000;
+        while (!terminal && ceremonyAliveRef.current && Date.now() < pollDeadline) {
           const upd = await getTurnUpdates({ data: { huddleId: meetingHuddleId, sinceMs: pollSinceMs } }).catch(() => null);
           const turn = upd?.turns?.find((t) => t.id === turnId);
           const reps = turn ? (turn.result?.replies ?? turn.replies ?? []) : [];
