@@ -77,11 +77,17 @@ export const checks = [
       .waitFor({ state: "visible", timeout: 8000 })
       .then(() => true)
       .catch(() => false);
-    check(
-      "Meeting button visible after selecting a real huddle",
-      meetingBtnVisible,
-      gotGroupHuddle ? "selected a real group huddle first" : "no group huddle found to select — tried Meeting button directly",
-    );
+
+    let detail = gotGroupHuddle ? "selected a real group huddle first" : "no group huddle found to select — tried Meeting button directly";
+    if (!meetingBtnVisible) {
+      // Diagnostic dump so a failure here tells us WHY instead of needing another blind guess-and-check round.
+      const groupHeadingCount = await page.locator("span", { hasText: "Group huddles" }).count();
+      const groupButtonCount = await groupSection.locator("button").count();
+      const dmHeadingCount = await page.locator("span", { hasText: "Agent channels" }).count();
+      const allButtonTexts = await page.locator("aside button, nav button").allInnerTexts();
+      detail = `groupHeading=${groupHeadingCount} groupButtons=${groupButtonCount} dmHeading=${dmHeadingCount} sidebarButtonTexts=${JSON.stringify(allButtonTexts.slice(0, 30))}`;
+    }
+    check("Meeting button visible after selecting a real huddle", meetingBtnVisible, detail);
     if (!meetingBtnVisible) return;
 
     await meetingBtn.click();
