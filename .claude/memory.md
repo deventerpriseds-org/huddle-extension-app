@@ -36,6 +36,7 @@ never clutters the user's task board. TanStack Start + React 19 + Vite + Nitro �
 | Feature | Status | Notes |
 |---|---|---|
 | 1:1 capability defer (grooming→Terry) | done (verified live) | Iris defers by NAME, no @, no task — harness observed |
+| ACT-huddle-3: intent-classification false-positive fix | deployed (PR #20), AC-12 awaiting live user confirmation | `classifyTurnIntent(text):TurnIntent` in `capabilities.ts` — trait-driven, zero per-capability config — gates both `laneDirective` and the back-channel (`capabilityOwnerFor`/`laneOwnerFor`) via `turnIntent === "perform"` checks in `runAgentTurn`. `TURN_INTENT_CLASSIFICATION` feature flag for instant rollback. 14/15 ACs pass statically (verifier confirmed); AC-12 (Iris handles "Mark that done" without deferring) requires live LLM turn to confirm. |
 | 1:1 domain lane handoff (budget→Finn) | done (verified live) | `laneOwnerFor`; AC-1/2/3 PASS observed |
 | 1:1 owner follow-up delivery (owner actually messages) | done (verified live) | AC-4/5/6 PASS (verifier). Back-channel `capabilityOwnerFor`/`laneOwnerFor` → `deliverOwnerFollowup` enqueues a REAL durable turn in `dm-<owner>` (rides send_push away-notif). Owner turns observed in dm-terry-locke + dm-finn-reid, "passed/mentioned by X" phrasing, confirm-before-act. |
 | meta-task guard (non-owner can't file exclusive-job card) | done (verified live) | `capabilityOwnerFor(title)` in `createSuggestedTaskFromTool` → deferred no-op. RE-TEST: tool attempted, `tasks:[]`. |
@@ -124,6 +125,21 @@ No duplicate code; single source of truth for the ceremony-routing decision.
 `routeMessage` hook API added to `useGroupVoice` (`GroupVoiceConfig.routeMessage` override).
 Commit: `f618a04` on `claude/standup-voice-bargein`, merged into `main`, deployed (run 30491913930, success).
 Per standing rule: NOT calling this fixed until user confirms live.
+
+### ACT-huddle-3: intent-classification fix for 1:1 false-positive deferrals — 2026-07-30, DEPLOYED (PR #20), AC-12 awaiting live user confirmation
+Root cause: `capabilityHandoffBlock`'s 1:1 deferral prose — "if the user asks you to perform capability X,
+defer to the owner" — was being applied by the LLM using full conversation context. When Iris's own prior
+reply mentioned "backlog grooming," the model saw the word, treated it as the user requesting grooming, and
+deferred "Mark that done" to Terry. `capabilityOwnerFor("mark that done")` returns null (code-level is fine);
+the failure was entirely at the LLM interpretation layer.
+Fix: `classifyTurnIntent(text):TurnIntent` in `capabilities.ts` — trait-driven, zero per-capability
+configuration — classifies the user's CURRENT message before any handoff logic runs. Both the `laneDirective`
+injection and the `capabilityOwnerFor`/`laneOwnerFor` back-channel in `runAgentTurn` are gated on
+`turnIntent === "perform"`. `TURN_INTENT_CLASSIFICATION = true` flag for instant rollback. `capabilityHandoffBlock`
+1:1 rule also gets an IMPORTANT qualifier as a secondary prose layer. 14/15 ACs verified by independent
+verifier subagent statically; AC-12 (live LLM turn: Iris handles "Mark that done" without deferring) requires
+user to test in the deployed app. Commits 3b740bc + 7c64e52 on main; deploy run 30564150593 success.
+NOT calling fixed until user confirms AC-12 live.
 
 ## Hardening (append)
 - [2026-07-26] **MISTAKE: encoded "what the team can do" as a hand-written CAPABILITY PROMPT (prose) and
@@ -326,3 +342,4 @@ Per standing rule: NOT calling this fixed until user confirms live.
   numbers): stage column → 688px (=1048−360), aside → fully on-screen at x=688, avatar centered at
   x=344 (exactly half the stage column). No mobile-layout regression at 500px. `tsc` clean. NOT calling
   this fixed until merged, deployed, and the user confirms it live — per the standing rule two entries up.
+- [2026-07-30] **MISTAKE: LLM deferral false-positive triggered by prior conversation context, not current user intent.** Iris had replied mentioning "backlog grooming" in an earlier turn; when the user then sent "Mark that done," the model read the earlier grooming word from the transcript history and applied the `capabilityHandoffBlock` 1:1 deferral rule — deferring a simple status confirmation to Terry as if the user were requesting grooming. The code-level check (`capabilityOwnerFor("mark that done")`) returns null and is correct; the failure was entirely in LLM prompt interpretation reading across turns. ROOT CAUSE: prose deferral rules can't be scoped to "only the user's current message" when the LLM processes the full conversation context holistically. A single `IMPORTANT` qualifier helps but doesn't reliably isolate. GUARDRAIL: **classify the semantic intent of the user's CURRENT message BEFORE any handoff/deferral logic runs.** `classifyTurnIntent(text):TurnIntent` in `capabilities.ts` uses pattern-matching on the current text only, returning `"perform"/"status"/"query"/"acknowledge"/"inform"`. Conservative by design (defaults to "perform" when uncertain). Gates `laneDirective` injection AND the back-channel (`capabilityOwnerFor`/`laneOwnerFor`) in `runAgentTurn` — both short-circuit when `turnIntent !== "perform"`. Zero per-capability configuration; adding a new capability to `agents.ts` is automatically covered. Feature-flagged (`TURN_INTENT_CLASSIFICATION`) for instant rollback. When tempted to add a prose qualifier to a shared prompt block to suppress LLM over-triggering, reach for a deterministic pre-classifier instead — prose qualifiers are advisory, classifiers are enforced.
