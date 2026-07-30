@@ -87,43 +87,58 @@ export const checks = [
     check("Standup ceremony room opens with a Start button", startVisible === 1);
     if (!startVisible) return;
 
+    // Baseline: turns.length===0 renders NO [data-testid="transcript-turn"] elements (just a
+    // placeholder div), so any count > 0 after Start is a genuine new turn — not a false positive
+    // from loose keyword matching against the whole page (the previous version of this check
+    // matched task-board text like "Priority"/"Blocked" that's on screen regardless of the
+    // ceremony, producing a bogus "51ms" first-reply reading that wasn't real evidence).
+    const turnRow = page.locator('[data-testid="transcript-turn"]');
+    const baselineTurns = await turnRow.count();
+
     const t0 = Date.now();
     await startBtn.click();
 
     // Time to first visible transcript reply.
     let firstReplyMs = null;
+    let firstReplyError = null;
     try {
       await page.waitForFunction(
-        () => document.querySelectorAll('[data-ceremony-turn], [class*="transcript"] [class*="message"]').length > 0
-          || /\b(runway|standup|blocked|priority|working on)\b/i.test(document.body.innerText),
+        (baseline) => document.querySelectorAll('[data-testid="transcript-turn"]').length > baseline,
+        baselineTurns,
         { timeout: 150000 },
       );
       firstReplyMs = Date.now() - t0;
-    } catch {
-      firstReplyMs = null;
+    } catch (err) {
+      firstReplyError = err.message;
     }
     check(
       "First standup reply appears within 15s (the user's expected/fixed latency)",
       firstReplyMs !== null && firstReplyMs <= 15000,
-      firstReplyMs !== null ? `first content observed after ${firstReplyMs}ms` : "no reply/content observed within 150s timeout",
+      firstReplyMs !== null
+        ? `first real transcript turn observed after ${firstReplyMs}ms`
+        : `no new transcript turn within 150s — ${firstReplyError ?? "unknown error"}`,
     );
     await screenshot("standup-in-progress");
 
     // Time to full ceremony completion (button reverts to "Run again").
     let doneMs = null;
+    let doneError = null;
     try {
       await page.waitForFunction(
         () => Array.from(document.querySelectorAll("button")).some((b) => b.textContent?.trim() === "Run again"),
         { timeout: 180000 },
       );
       doneMs = Date.now() - t0;
-    } catch {
-      doneMs = null;
+    } catch (err) {
+      doneError = err.message;
     }
+    const finalTurnCount = await turnRow.count();
     check(
       "Standup ceremony reaches completion (Run again shown)",
       doneMs !== null,
-      doneMs !== null ? `completed after ${doneMs}ms total` : "did not complete within 180s timeout",
+      doneMs !== null
+        ? `completed after ${doneMs}ms total, ${finalTurnCount} turns rendered`
+        : `did not reach completion — ${doneError ?? "unknown error"} (${finalTurnCount} turns rendered when this check gave up)`,
     );
     await screenshot("standup-final-state");
   },
