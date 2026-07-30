@@ -107,6 +107,41 @@ now applies to ≤ a handful of current-session turns — the cutoff bug is elim
 Commit dd5435e on main; deploy run 30544492729 concluded success. Independent verifier: PASS 4/5 statically confirmed;
 AC-2 (10s SLA) mechanism-proven, live timing requires user to test. NOT calling fixed until user confirms live.
 
+### Standup ceremony — LIVE BROWSER reproduction, 2026-07-30: DIFFERENT bug than the sinceMs fix above, STILL BROKEN
+First-ever real Playwright-in-browser drive of Meeting → Daily stand-up → Start against production (every prior
+verification of this flow called server fns directly over HTTP, never through the actual UI a real user clicks).
+Built via the new generalized `run-uat.mjs` + `huddle-checks.mjs` (see `gha-playwright-uat` skill in
+eds-claude-skills). Took several iterations to get a trustworthy check (see Hardening below) — final run
+(workflow 30587309137, commit 78182f7) is real evidence:
+- Meeting button → Daily stand-up → Start: all work, room opens fine.
+- After clicking Start: **zero new transcript turns rendered for 150+ seconds** (verified via a real
+  `data-testid="transcript-turn"` count, not loose keyword matching — see Hardening).
+- **Two HTTP 500s observed in the browser network log**: `enqueueHuddleTurn` (the fn Start calls to kick off the
+  turn) and `getTurnUpdates` (the fn the client polls for replies) — both server fns literally throwing 500,
+  server-side. This is NOT the sinceMs/LIMIT-20 cutoff bug (that was a silent success-but-hidden-by-poll-window
+  failure); this is the server function itself erroring.
+- Ruled out the known "wrong DB / discovery drift" incident (CLAUDE.md): the triggering deploy's "Resolve database
+  connection string" step logged `Assembled AZURE_PG_URL for eds-postgresql/RAG_AI_Agents` correctly.
+- **NOT YET ROOT-CAUSED** — no stack trace/error detail available from the client side (createServerFn masks
+  handler exceptions to a generic 500), and this session has no access to Azure Function App / Application
+  Insights logs to read the actual thrown error. Next step: add temporary detailed error logging (or a
+  try/catch that surfaces `err.message`) to `enqueueHuddleTurn`/`getTurnUpdates` in `huddle.functions.ts`,
+  redeploy, and re-trigger `verify-uat.yml` to capture the real exception.
+- This is the user's original reported experience, now reproduced with hard evidence (not inferred) for the
+  first time this session — do not report "fixed" until the actual 500 root cause is found and resolved.
+
+**Hardening on this check's own false positives (fixed along the way, informs future UAT checks):**
+- `avatarImage404s`'s `page.reload()` strips the single-use `?uat_token=` param (already consumed via
+  `history.replaceState`) and the bypass flag is in-memory only — any check running AFTER a reload loses auth
+  entirely (sidebar goes from populated to zero buttons). Fix: run reload-based checks LAST in the array.
+- The original "first reply within 15s" check matched `document.body.innerText` against loose keywords
+  (standup/blocked/priority/...) — these matched pre-existing task-board text behind the meeting overlay
+  regardless of whether a real reply had happened, producing a bogus "51ms" reading. Fixed by adding
+  `data-testid="transcript-turn"` to `TranscriptRow` (both user/agent branches, `MeetingBar.tsx`) and counting
+  real DOM turns before/after Start instead.
+- `.count()` doesn't auto-wait like `.click()` — a check that raced the sidebar's async huddle-list hydration
+  got a false 0. Use `.waitFor({state:"visible", timeout})` before counting.
+
 ### Mic fix (PR #19) — 2026-07-29, CONFIRMED WORKING (user confirmed barge-in works)
 Root cause of "mic doesn't work": `useEffect(() => () => groupVoice.stop(), [groupVoice])` in MeetingBar.tsx
 used the whole `groupVoice` object as dep — new object every render — so every state change (idle→listening)

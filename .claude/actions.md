@@ -6,29 +6,53 @@ Last updated: 2026-07-30
 
 ## Open
 
+### ACT-huddle-3: Standup ceremony hang — root cause is HTTP 500s on enqueueHuddleTurn/getTurnUpdates
+**Requested:** 2026-07-30 — "use the new uat skill to finally experience what i am experiencing with
+the standup." User has repeatedly complained about a multi-minute standup-ceremony hang; a prior
+session's `sinceMs` fix (see memory.md) addressed a DIFFERENT bug (a silent client-side poll-window
+cutoff) but was never confirmed live.
+**What was done:** built and dispatched the first-ever real browser-driven UAT of the actual
+Meeting → Daily stand-up → Start click flow against production, via the new generalized
+`run-uat.mjs` + `huddle-checks.mjs` (`gha-playwright-uat` skill). Iterated through several harness
+bugs (see memory.md Hardening) to get trustworthy evidence.
+**Found (real evidence, workflow run 30587309137, commit 78182f7):** the flow opens fine, but after
+clicking Start, **zero new transcript turns render for 150+ seconds**, and the browser network log
+shows **two HTTP 500s**: `enqueueHuddleTurn` (the fn Start calls) and `getTurnUpdates` (the client's
+poll fn) — both throwing server-side. Ruled out the known DB-discovery-drift issue (deploy log
+confirmed `Assembled AZURE_PG_URL for eds-postgresql/RAG_AI_Agents`).
+**Leading hypothesis (not yet confirmed):** this repo's own CLAUDE.md backlog items #2/#3 already
+document that Azure's Functions hosting has a **~45s response ceiling**, and multi-agent turns
+(a 12+ agent standup) can exceed it — "one stalled agent... can still drag a wave to the ~45s
+hosting ceiling and 500." A full fix (**resumable, incrementally-persisted turns** — chunk the
+ceremony into sub-45s runs, persist each reply as it lands, self-kick continuation) is already
+designed in `docs/plan-incremental-turn-streaming.md` but never built. This matches the observed
+failure mode closely but has NOT been confirmed as the actual thrown exception (no server-side
+stack trace available from this session — `createServerFn` masks handler exceptions to a generic
+500 client-side, and this session has no Azure Function App / Application Insights log access).
+**Status:** open — root cause STRONGLY suspected (not proven) to be the known, already-planned
+incremental-turn-streaming gap. Next step needs either (a) temporary detailed error logging added
+to `enqueueHuddleTurn`/`getTurnUpdates` + redeploy + re-trigger `verify-uat.yml` to capture the
+real exception, or (b) building the already-designed incremental-streaming plan outright. Neither
+attempted yet — flagging for the user rather than unilaterally starting a multi-file implementation.
+**Evidence:** workflow run https://github.com/deventerpriseds-org/huddle-extension-app/actions/runs/30587309137,
+job log lines showing the two `HTTP 500 .../_serverFn/<hash>` entries and the 150s/180s timeouts.
 
 ### ACT-huddle-2: Agent avatar images 404 (Lovable-preview-only asset paths)
 **Requested:** 2026-07-29
 **Asked for:** fix the broken avatar photos across the app — every agent falls back to colored
 initials because the real images can't load.
-**Root cause (confirmed):** all 14 agent avatars are wired in `src/features/huddle/data/agents.ts`
+**Root cause (confirmed):** all 14 agent avatars were wired in `src/features/huddle/data/agents.ts`
 via `src/assets/agents/*.png.asset.json` pointer files, whose `url` field is a Lovable-platform-
 internal preview path (`/__l5e/assets-v1/...`) — only servable by Lovable's own hosting, never by
-this app's actual Azure Static Web App deployment. `AgentAvatar.tsx` already has a documented,
-working fallback (colored initials on image `onerror`), so nothing crashes — the photos just never
-show. Confirmed the real image bytes were NEVER committed to this repo (checked full git history,
-all branches) and confirmed the Lovable preview domain referenced in `__root.tsx` isn't reachable
-from this sandbox (403 CONNECT via the CCR egress proxy, same restriction as azurestaticapps.net).
-**Scope:** narrow — exactly 14 files, all agent avatars, all wired through the one `agents.ts` file.
-No other image in the app uses this broken pattern (confirmed via full-codebase grep for
-`.asset.json` imports and `__l5e` references).
-**Status:** BLOCKED on the user — they're retrieving the actual avatar image files (they may have
-Lovable project access to export them) and will hand them over. Once received: commit into this
-app's own `public/`/`src/assets/` so Vite/Azure SWA serves them directly, repoint `agents.ts`'s
-`avatarUrl` fields at the local paths, remove the now-unnecessary Lovable-path comment in
-`AgentAvatar.tsx`, verify no more 404s in the console.
-**Deferred by explicit user direction** ("for now i care about the meeting room looking correct")
-— not being worked until the images are provided.
+this app's actual Azure Static Web App deployment.
+**Resolved 2026-07-30:** user provided the real 14 avatar images (zip upload). Resized/optimized
+(1024×1024 PNG → 256×256 JPEG q85, ~21MB → ~0.18MB total), committed to `public/agents/*.jpg`,
+`agents.ts` repointed at the local paths, old `.asset.json`/`src/assets/agents/` removed, stale
+comment in `AgentAvatar.tsx` updated. Commit `0f88d6a`, deployed (workflow run 30585250169,
+success), and **live-verified via the browser UAT harness** (workflow run 30587309137):
+`✅ No avatar image 404s (ACT-huddle-2 regression guard) — all avatar images loaded`. A permanent
+regression check (`avatarImage404s` in `huddle-checks.mjs`) now guards against this recurring.
+**Status:** closed.
 
 ### ACT-huddle-1: Desktop layout bugs — sidebar/menu missing, meeting view, mic barge-in, standup gap
 **Requested:** 2026-07-29
