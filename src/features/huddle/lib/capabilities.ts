@@ -23,13 +23,17 @@ const ACKNOWLEDGE_RE: RegExp[] = [
   /^[\p{Emoji_Presentation}\p{Extended_Pictographic}]+$/u,
 ];
 
-// Query: message is asking a factual question (ownership, existence, status)
+// Query: message is asking a factual question (ownership, existence, status).
+// NOTE: bare /\?$/ is intentionally absent — polite delegation requests
+// ("can you groom the backlog?", "could you triage this?") also end with "?"
+// but are perform requests, not queries. Only unambiguous question openers qualify.
 const QUERY_RE: RegExp[] = [
-  /\?$/,
   /^(who|what)\b/i,
   /^(is|are|does|do|did)\s/i,
-  /^can you (tell|explain|clarify|describe|show|help|find|check)\b/i,
+  /^can you (tell|explain|clarify)\b/i,
   /\b(who (handles?|owns?|does?|runs?|manages?|takes? care of))\b/i,
+  /^(how (does?|do|can|is|are|would|could|will|should|much|many))\b/i,
+  /^(any (updates?|news|progress|info|questions?|issues?|blockers?))\b/i,
 ];
 
 // Status: user is confirming or reporting that something is already done
