@@ -1,5 +1,5 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-07-25
+Last updated: 2026-07-30
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
 > claiming any item "done" without ACs + the verifier subagent / observed evidence).
@@ -74,9 +74,17 @@ manually triggered `deploy-swa.yml` on `main` (workflow_dispatch only — confir
   groupVoice.start(); both typed and voice paths call it before sendHuddleMessage. Independent verifier
   subagent: **6/6 ACs CONFIRMED** from code. Deployed main run 30498486170 `conclusion=success`.
   NOT YET CONFIRMED LIVE by user — please hard-refresh production and run a standup ceremony to confirm.
-- (3) 30s standup-start gap: PR #15 explicitly states this is partial (poll-interval 2s→500ms +
-  memoized resolve only); the real dominant cost (ceremony opener's own LLM call latency) is an
-  acknowledged, still-open backlog item (CLAUDE.md "Backlog / known optimizations" #1). UNRESOLVED.
+- (3) standup-start gap (93s hang): **ROOT CAUSE FOUND AND FIX DEPLOYED — NOT YET CONFIRMED LIVE by user.**
+  Diagnosed 2026-07-30 as a pre-existing `getTurnsSince` LIMIT 20 cutoff bug — unrelated to the barge-in
+  work. `ORDER BY updated_at ASC LIMIT 20` with `sinceMs:0` (epoch) returned the 20 OLDEST of 24 ceremony
+  turns; the newest running turn was at position 21+, cut off by LIMIT. The poll (150×~700ms ≈ 105s)
+  never found the active turn. Server was correct — DB confirmed turn `status=done`, 11 replies, 75s
+  runtime. Fix: `pollSinceMs = stepStart - 5_000` before the poll loop; `sinceMs: 0` → `sinceMs: pollSinceMs`
+  in the `getTurnUpdates` call (MeetingBar.tsx lines 433+446). Commit `dd5435e` on main, deploy run
+  30544492729 conclusion=success. Independent verifier: AC-1/3/4/5 PASS statically; AC-2 (10s SLA)
+  mechanism-only — live timing unconfirmed.
+  **Next step: please hard-refresh production and click Start on a standup — replies should appear within
+  10-15 seconds. That confirms the fix and closes this sub-item.**
 - (4) button styling: fixed by PR #15, not independently re-verified but low-risk/cosmetic.
 - **New bug found (not in original report):** independent `verifier` subagent found the "Meeting"
   dropdown button is physically overlapped by the ContextPanel's "Queue" tab at 768–850px specifically
