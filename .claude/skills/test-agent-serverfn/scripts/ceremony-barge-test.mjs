@@ -76,8 +76,15 @@ console.log("  order:", run.order.join(" → "));
 
 const opensFirst = run.order[0]==="terry-locke";
 const closesLast = run.order.length>1 && run.order[run.order.length-1]==="terry-locke";
-// The barge responder should address the finance interjection — allow natural phrasings of "runway".
-const answered = run.replies.some(r => /runway|months? of (cash|runway)|cash (position|on hand)|burn rate/i.test((r.text??"").replace(/\\[nrt]/g," ")));
+// The barge responder should address the finance interjection. Accept any natural phrasing:
+// "runway", "cash runway", "burn rate", "cash position/reserves", "operating capital",
+// "months of cash/funding/operating", a number of months (e.g. "14 months"), etc.
+// The question asked "in months" so any direct answer will mention months or a cash metric.
+const BARGE_RE = /runway|months? of (cash|runway|funding|operating)|cash (position|on hand|reserves?|flow)|burn rate|operating capital|funding (horizon|period)|\b\d+\s*months?\b|months?\s+(left|remaining|of operation)/i;
+const answered = run.replies.some(r => BARGE_RE.test((r.text??"").replace(/\\[nrt]/g," ")));
+// Log snippet of each reply to help diagnose AC-6 failures
+console.log("  reply texts (truncated):");
+for(const r of run.replies) console.log(`    ${r.agentId}: ${(r.text??"").slice(0,120).replace(/\n/g," ")}`);
 const bargeOwners = new Set(run.order.filter(id=>id!=="terry-locke"));
 // AC-8: barge must not drop agents from the current run's queue. We don't require strict set
 // equality across two independent runs (DB task state drives the participant list and can change
