@@ -1,0 +1,42 @@
+name: Verify panel collapse (live, real browser)
+
+# Runs verify-panel-collapse.mjs against the deployed SWA with a real Playwright browser, from this
+# runner's unrestricted network (GitHub Actions egress isn't behind the CCR sandbox's proxy policy).
+# Authenticates via the production UAT bypass (entra-auth.ts) using the org secret UAT_BYPASS_TOKEN —
+# never printed, only passed as an env var to the script. Screenshots are uploaded as an artifact so
+# they can be reviewed without needing browser access from the triggering session.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify-panel-collapse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Run panel-collapse verification
+        env:
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+        run: node .claude/skills/test-agent-serverfn/scripts/verify-panel-collapse.mjs
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-shots
+          path: uat-shots/
+          retention-days: 7

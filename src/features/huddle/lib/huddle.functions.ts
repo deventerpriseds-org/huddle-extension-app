@@ -3279,9 +3279,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // →Sam loop; Terry→Cole→Iris→Ezra chain). Gating on !data.internal confines the pass-along to real
       // user asks and stops a follow-up from ever spawning another follow-up.
       // Intent-gated: only fire when the user is actually requesting an action to be PERFORMED — not
-      // when confirming completion, querying ownership, acknowledging, or informing. `turnIntent` is
-      // computed once near the top of this function (shared with the laneDirective guard).
-      if (data.scope !== "group" && !data.internal && turnIntent === "perform") {
+      // when confirming completion, querying ownership, acknowledging, or informing. Recomputed here
+      // (classifyTurnIntent is a pure function of data.text) — the laneDirective guard's `turnIntent`
+      // above is declared in a different loop's block scope and isn't visible at this point.
+      const followupTurnIntent = TURN_INTENT_CLASSIFICATION ? classifyTurnIntent(data.text) : "perform";
+      if (data.scope !== "group" && !data.internal && followupTurnIntent === "perform") {
         const ownerId = capabilityOwnerFor(data.text)?.agent.id ?? laneOwnerFor(data.text, nextId)?.id ?? null;
         if (ownerId && ownerId !== nextId && !followupDelivered.has(ownerId)) {
           followupDelivered.add(ownerId);
