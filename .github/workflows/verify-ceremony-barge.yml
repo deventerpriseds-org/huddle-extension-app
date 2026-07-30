@@ -21,12 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
         with:
-          bun-version: latest
+          node-version: '22'
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci
 
       - name: Run ceremony barge-in test
         run: node .claude/skills/test-agent-serverfn/scripts/ceremony-barge-test.mjs
