@@ -14,7 +14,12 @@ word in context, not on user intent). User wants a systematic, trait-driven fix 
 **Scope:** `huddle.functions.ts` (capabilityHandoffBlock prose + intent pre-classification), `capabilities.ts`
 (`capabilityOwnerFor` — currently a raw substring scan on text that may include agent-introduced context),
 `data/agents.ts` (AgentCapability interface). Must NOT regress ACT-1 verified live scenarios.
-**Status:** ACs being written (define-acceptance-criteria subagent running).
+**ACs:** 15 approved (define-acceptance-criteria subagent ran).
+**Implementation:** PR #20 on branch `claude/iris-huddle-interaction-baj51c`.
+- `capabilities.ts`: `classifyTurnIntent()` + `TurnIntent` type — trait-driven, zero per-capability config.
+- `huddle.functions.ts`: `TURN_INTENT_CLASSIFICATION` flag, `turnIntent` gates both `laneDirective` and the
+  `capabilityOwnerFor`/`laneOwnerFor` back-channel. `capabilityHandoffBlock` 1:1 rule gets IMPORTANT qualifier.
+**Status:** VERIFIER RUNNING — awaiting independent subagent verification before merge + deploy.
 
 ### ACT-huddle-2: Agent avatar images 404 (Lovable-preview-only asset paths)
 **Requested:** 2026-07-29
