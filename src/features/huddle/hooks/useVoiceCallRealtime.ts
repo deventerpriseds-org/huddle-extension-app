@@ -38,7 +38,13 @@ import type { StartVoiceResult } from "../lib/voice/voice.functions";
 const POLL_INTERVAL_MS = 2500;
 const POLL_TIMEOUT_MS = 90_000;
 
-export function useVoiceCallRealtime(): VoiceCallController {
+export type VoiceCallRealtimeController = VoiceCallController & {
+  /** Send typed text through the same turn engine a spoken utterance uses. See the file-header
+   *  comment and this function's own comment for the concurrency/speak-flag notes. */
+  sendText: (agentId: AgentId, text: string, opts?: { speak?: boolean }) => Promise<void>;
+};
+
+export function useVoiceCallRealtime(): VoiceCallRealtimeController {
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [mode, setMode] = useState<"listening" | "speaking">("listening");
   const [captions, setCaptions] = useState<VoiceCaption[]>([]);
@@ -215,6 +221,34 @@ export function useVoiceCallRealtime(): VoiceCallController {
 
   const ceremony = useCeremonyVoice({ onBargeDetected });
 
+  // Typed-chat entry point into the SAME turn engine a spoken utterance uses — lets a chat
+  // message and a voice utterance to the same agent produce identical behavior (same
+  // enqueueHuddleTurn payload, same model/snapshot, same store writes). Takes agentId as a
+  // parameter rather than reading agentIdRef, so it works whether or not a voice connection has
+  // ever been started for this meeting (before connect(), while connected, or after disconnect
+  // — ceremony.voiceTurn's TTS synthesis is independent of the RTCPeerConnection's lifecycle).
+  // opts.speak (default true) lets a caller — e.g. a UAT harness impersonating the user — send
+  // text without triggering audible playback.
+  //
+  // Known v1 gap: a chat-triggered reply shares the same exchangeGen/AudioQueue as the voice
+  // path, so a concurrent voice barge can collaterally cut off a still-speaking chat reply (ilike
+  // any other superseded exchange, its text is still saved to the transcript — see runTurn/
+  // speakReply — only the audio is affected). Accepted for v1, same spirit as the barge-during-
+  // generation gap documented above.
+  const sendText = useCallback(
+    async (agentId: AgentId, text: string, opts?: { speak?: boolean }): Promise<void> => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      exchangeGenRef.current += 1;
+      const gen = exchangeGenRef.current;
+      const speak = opts?.speak ?? true;
+      const voiceTurn: CeremonyVoiceTurn = speak ? ceremony.voiceTurn : async () => {};
+      await runTurn(agentId, trimmed, gen, voiceTurn);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [runTurn],
+  );
+
   // Reflect the underlying WebRTC session's phase into this hook's VoiceCallController shape.
   // This is the authoritative error surface for the connect step: ceremony.startListening()'s own
   // setError/setPhase("error") calls land in ceremony's state asynchronously, so connect()'s
@@ -282,7 +316,7 @@ export function useVoiceCallRealtime(): VoiceCallController {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { status, mode, captions, micMuted, error, connect, disconnect, toggleMic };
+  return { status, mode, captions, micMuted, error, connect, disconnect, toggleMic, sendText };
 }
 
 type CeremonyVoiceTurn = ReturnType<typeof useCeremonyVoice>["voiceTurn"];
