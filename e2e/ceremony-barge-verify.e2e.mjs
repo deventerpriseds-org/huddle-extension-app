@@ -109,7 +109,13 @@ try {
   console.log("  ceremony started");
   await shot(page, "00-started");
 
+  // Reveal the compose box: a concurrent transcript-fix merge added a two-tab compose — the room
+  // textarea only renders when the Chat tab is active (showCompose = chatTab === "chat"; default
+  // "transcript"). Transcript rows render regardless of tab, so mid-block detection still works.
+  await page.click('[data-testid="tab-chat"]');
   const textarea = page.locator('textarea[placeholder*="Message the room"]');
+  await textarea.waitFor({ state: "visible", timeout: 8_000 });
+  console.log("  compose revealed (Chat tab)");
 
   for (const b of BARGES) {
     console.log(`\n=== ${b.id}: "${b.msg}" ===`);
