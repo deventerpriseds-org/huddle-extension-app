@@ -5,7 +5,10 @@ on:
 jobs:
   ceremony-barge:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 20, not 10: the test itself waits up to ~2min for the first spoken sentence + ~1min for the
+    # barge answer, and `playwright install --with-deps` occasionally spends several minutes on slow
+    # apt font mirrors — a 10min cap cancelled a run mid-install before the test could run.
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
