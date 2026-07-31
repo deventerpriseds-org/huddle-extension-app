@@ -33,7 +33,7 @@ negative here already cost real debugging time once; the mirror was correct, the
 Via Supabase MCP against project `wwxgajrtmslzklnyplah` — pick a real user's `user_id`:
 ```sql
 INSERT INTO public.tasks (user_id, title, category, status, priority)
-VALUES ('<user-uuid>', 'SYNC TEST - finalize seed round deck', 'VENTURES', 'PENDING', 'HIGH')
+VALUES ('<user-uuid>', 'Test-finalize seed round deck', 'VENTURES', 'PENDING', 'HIGH')
 RETURNING id;
 ```
 (Use the same path for UPDATE and DELETE to test those TG_OPs — DELETE is the only deletion signal.)
@@ -56,7 +56,9 @@ A POST to `/api/public/tasks-sync` with a missing/wrong `x-webhook-secret` must 
 
 ### 5. Clean up
 Delete the test task in journey; confirm it disappears from the mirror (again, allow for the async
-lag before concluding).
+lag before concluding). Title stays `Test-`-prefixed throughout (see CLAUDE.md's "Test-task naming
+convention") so any leftover is trivially findable/removable via the **`cleanup-board`** skill if
+this step is ever skipped or interrupted.
 
 ## Debugging misses
 - **Nothing in the mirror after >5s:** check journey's `net._http_response` for the pg_net call

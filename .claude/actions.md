@@ -1,10 +1,145 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
 > claiming any item "done" without ACs + the verifier subagent / observed evidence).
+>
+> **Numbering note:** `ACT-huddle-3/4/5` appear TWICE in this file — once here in Open (the
+> enqueueHuddleTurn-500s / barge-reliability / cross-talk-caption items from 2026-07-30) and once
+> under Closed (an unrelated, earlier capability-handoff fix, closed 2026-07-30). Pre-existing
+> collision, not fixed here — new items below continue from ACT-huddle-6 to avoid making it worse.
 
 ## Open
+
+### ACT-huddle-6: Cross-modality "same brain" — 1:1 chat vs. 1:1 meeting-room (voice) give different answers/capabilities
+**Requested:** 2026-07-31 — user's own words: "the outcomes I get from a one-on-one chat versus what
+I get when I hit the record button and I'm in the one and one meeting room [are] totally different
+so if I ask Iris... for what the day['s] schedule is she can return that to me when I do the same
+thing in the 1:1 meeting room they say they have no clue how to do that which tells me something's
+broken and that they're not the same brain... whether in a chat or meeting room or phone call etc
+it's all the same brain and the same person on the same personality same tools etc."
+**Expected outcome:** asking the same question (e.g. "what's on my schedule today") gets the same
+capability/answer regardless of modality — 1:1 text chat, 1:1 meeting-room (voice/recorded), or
+phone call — because it's the same agent, same tools, same personality underneath.
+**Investigation needed:** why does the meeting-room voice path (`useGroupVoiceRealtime` /
+ceremony voice pipeline) not have the same tool access (e.g. journey proxy tools like
+`get_calendar_events`/schedule lookups) or system-prompt parity as the normal chat turn path
+(`runHuddleTurn`)? Likely candidates: the voice path may route through a different/thinner prompt
+assembly or a restricted tool list, or the Realtime API session config doesn't register the same
+tool schemas the Responses-API chat path gets.
+**Status:** open — ACs pending `/define-acceptance-criteria`; not yet investigated.
+
+### ACT-huddle-7: Finish the ceremony voice rebuild — replace push-to-talk/MP3 with the working WebRTC mechanism
+**Requested:** 2026-07-31 — user's own words: "we talked about repairing a bad attempt at fixing the
+ceremony to use the successful [WebRTC] we've used other places instead of this push to talk option
+[that] is in place right now and a recorded MP3 that does not allow me to barge and when I do barge
+it's sitting in between the speakers so[,] supposedly[,] the answer[,] it's a bad design[,] it's not
+what I asked for so we talked about fixing that in great detail[.] [T]ake a look at the notes to see
+what was intended and we need an action to finish up that work."
+**Context (from this session/prior notes):** the ceremony transcript/voice path
+(`MeetingBar.tsx`'s `runCeremony`/`emit`/`speakCeremonyTurn`) still uses recorded-MP3 TTS with
+between-speaker-only barge handling — full text renders before audio plays, and a barge is queued
+and answered between speakers rather than truly interrupting mid-utterance. A first fix attempt was
+explicitly rejected by the user (skip-to-next-speaker instead of true resume; proportional-estimate
+captions instead of real timestamps) and was abandoned/lost. Separately, a concurrent session built
+`useGroupVoiceRealtime` (OpenAI Realtime WebRTC + VAD, ≤200ms barge detection, same-agent resume from
+the interrupted sentence, per-sentence EL TTS) for the live 1:1 voice-call path — already deployed
+and working. User wants that SAME mechanism extended to cover ceremonies instead of a from-scratch
+rebuild of the old approach.
+**Expected outcome:** during a ceremony, the user can barge in mid-sentence, the agent stops exactly
+where it is, answers the interruption, then resumes the SAME turn from the exact interrupted point
+and continues through its remaining checklist items — using the proven WebRTC mechanism, not the
+MP3/push-to-talk one.
+**Reference:** `docs/plan-ceremony-conversational-realism.md` (handoff summary section), the 30 ACs
+previously drafted for the mid-utterance-interrupt work, ACT-huddle-5 above.
+**Status:** open — ACs pending `/define-acceptance-criteria`; needs a design decision (extend
+`useGroupVoiceRealtime` to ceremonies vs. a ceremony-specific variant) before implementation.
+
+### ACT-huddle-8: Stop agents' own process/test tasks from polluting the user's personal board — agents need their own work-tracking
+**Requested:** 2026-07-31 — user's own words: "we need to have a guard against these test tasks and
+also just miscellaneous tests that are created by the agents for doing their own work[. I]t's
+polluting my board[. I] should be the only thing added to my personal board... things that I myself
+[added] or things that I've said that I want us to work on[. T]hey may need their own table where
+they can track items to be done[,] similar to our actions list... so they're not forgetting work and
+so that things are continuing to get done[,] but also not adding to my board which I'm supposed to
+be the center of focus and attention for... maybe that's something they should be aware of in their
+prompt[s]."
+**Already done today (narrower fix):** `create_huddle_task`'s capability meta-task guard now also
+blocks an agent from filing a card that restates ITS OWN just-performed exclusive-capability action
+(previously only blocked non-owners) — commit `a9bc974`, deployed, and 6 existing pollution rows
+(`Groom backlog`, `Assign tasks`, `Review backlog grooming outcomes`, `Add review gate check to
+write-up`, `Confirm review gate inclusion in write-up`, `Add a poll in Microsoft Teams`) deleted from
+journey's canonical `public.tasks` per user confirmation.
+**Still open — the fuller ask:** design and build a SEPARATE agent-internal work-tracking mechanism
+(a distinct table, analogous to this project's own `.claude/actions.md` concept) so agents can track
+their own multi-day/multi-week to-dos WITHOUT ever writing to the user's personal board, and update
+agent prompts/instructions so every agent is aware of this distinction (its own scratch list vs. the
+user's board). The user's board should contain ONLY items the user created or explicitly asked to
+have tracked.
+**Expected outcome:** the user's board is never touched by agent-internal process work again (not
+just the exact titles caught by the capability-trigger guard — general agent to-do/reminder content
+too), and agents have somewhere real to track their own ongoing work so nothing gets silently
+dropped across days/weeks.
+**Status:** open — ACs pending `/define-acceptance-criteria`; the narrower guard fix (above) is
+CLOSED, but this broader mechanism is NOT built yet.
+
+### ACT-huddle-9: Standup ceremony tiered test plan — Tier 1 (lightweight, screenshot-proven) then Tier 2 (full scripted UAT)
+**Requested:** 2026-07-31 — user's own words: "continue with the stand up[. T]here were a couple
+tests that we decided to do[,] like a tier one test [and] a tier 2 test[. T]he first test was
+supposed to do a lightweight[,] cheaper approach to making sure that the conversations between two
+or three agents and myself can go smoothly[,] whether via chat or voice[,] making sure the
+interruptions and everything else [go] fine[,] then going through a full UAT with a script that we
+have put together that should make sure we can capture all the screenshots we need[. T]he lower tier
+was supposed to have screenshots as well[,] but before [U]AT[,] screenshots to prove that this thing
+works before I jump into it and get the same errors I've been receiving right away."
+**Expected outcome:** Tier 1 = a cheap/lightweight check (chat AND voice, 2-3 agents + user,
+including interruption handling) that produces real screenshot evidence BEFORE Tier 2 runs — so
+Tier 2 isn't started blind into the same recurring errors. Tier 2 = the full scripted UAT capturing
+every screenshot the existing script calls for.
+**Status:** open — needs to look back at `docs/plan-ceremony-conversational-realism.md`,
+`.claude/memory.md`, and this file's ceremony-related entries (ACT-huddle-3/4/5/7 above) to resume
+exactly where the tiered plan left off. ACs pending `/define-acceptance-criteria`.
+
+### ACT-huddle-10: New skill — draft email replies via existing Graph/Outlook access (draft-only, never auto-send)
+**Requested:** 2026-07-31 — user's own words: "drafting skills... if I tell him I need to respond to
+the email from Bridget [Compter] he... should have access to my inbox through our [G]raph that we
+set up through Microsoft Outlook[. H]e should be able to review that email[,] confirm it's the right
+one[,] and put together a draft for me with a single click[/]a single copy [option]... to drop the
+right [reply] to my email... [it should] confirm the person or the email I was speaking of and draft
+a response[,] sitting in draft[,] and never... send[. T]hat should be [a] hard guard against sending
+emails out[. I] will do that for the moment[;] we can revisit that later[,] but for now no [auto-]
+sen[ding] on emails[,] just drafting."
+**Expected outcome:** user says something like "reply to the email from Bridget," the agent uses the
+existing app-only Graph client to find/confirm the right email, composes a reply, and saves it to
+the mailbox's Drafts folder only — with an easy one-click/copy path for the user to review and send
+themselves. Hard requirement: the agent must NEVER send an email on its own; sending is explicitly
+out of scope for now, to be revisited later per the user.
+**Status:** open — ACs pending `/define-acceptance-criteria`; not yet designed/built. Reuse the
+existing Graph app-only client (`email/graph-email.server.ts`, same one calendar reads already use)
+per this repo's "extend, don't duplicate" rule — do not mint a new Graph integration.
+
+### ACT-huddle-11: New skill — correspondence watcher/triage + reply-tracking (email + text), with drafting and "clean this up" rewriting
+**Requested:** 2026-07-31 — user's own words: "anything that the watcher picks up as [correspondence]
+— an email from my wife[,] an email from a co-worker[,] an email from someone at my bank — it needs
+to... notify me that I have a message... and [have] prepared a response[. I] can talk it through how
+to fix that or... just edit it myself from the draft[. B]ut... more importantly I just need to make
+sure that I don't get messages that I don't reply to or that I... go too long with a message I know
+about that I didn't miss but I'm just not responding in time[. H]e should be able to draft responses
+to emails[,] responses to text messages... if I give him specific text for a draft... he should be
+able to[,] like [Gr]ammar[ly] or... ChatGPT[,] clean it up and give me a version that is better
+suited." User is unsure whether this belongs in huddle-extension-app or journey-voice.
+**Expected outcome:** for correspondence from real people relevant to the user's life (wife, coworker,
+bank, education, bills, family, friends — and sensibly expanded categories), the user gets notified a
+message arrived, a draft reply is prepared for review/edit, and — most importantly — outstanding
+replies are TRACKED so the user never silently misses a message or lets a reply go stale without
+knowing it. Same drafting extends to text messages, and to general "clean this up" rewriting of
+user-supplied rough text into a better-suited version.
+**Open question (needs resolving, not guessing):** does "the watcher" here refer to the
+`mail-and-appointments` middleware app (per this repo's CLAUDE.md, M365 + Google email/calendar) —
+if so, is the correspondence-triage/reply-tracking logic better owned there, in journey-voice, or in
+huddle-extension-app? Investigate before designing ACs.
+**Status:** open — ACs pending `/define-acceptance-criteria`; not yet designed/built. Related to but
+distinct from ACT-huddle-10 (drafting mechanism may be shared; tracking/notification is the new part).
 
 ### ACT-huddle-3: Standup ceremony hang — root cause is HTTP 500s on enqueueHuddleTurn/getTurnUpdates
 **Requested:** 2026-07-30 — "use the new uat skill to finally experience what i am experiencing with
