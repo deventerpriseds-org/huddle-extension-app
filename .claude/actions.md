@@ -542,6 +542,14 @@ it); away-push reaching the phone is by-design (proven send_push path) but not s
 523 → 247 tasks. Workflow removed after use (PR #19). **Verification:** PASS (run log).
 
 ## Decisions & scope changes
+- [2026-07-31] **Ran `sync-setup-script` (eds-claude-skills) — the enforcement gate had never actually been
+  installed in this session.** `/root/.claude/launcher-settings.json` had zero `_eds`-tagged hooks before this
+  (verified by reading the file directly, not assumed). Cloned `eds-claude-skills` main fresh, ran `setup.sh`,
+  confirmed `_eds_version: 3` now present on both `SessionStart`/`Stop` hooks (matches `CURRENT_VERSION` in the
+  fresh clone), 13 skills + `verifier` agent registered. Going forward this session: the Stop-hook gate hard-
+  blocks any CODE-change completion claim unless an independent AC-writing subagent ran before implementation
+  and an independent `verifier` subagent ran after — self-verification no longer satisfies it. Docs/config-only
+  edits (like this one) remain exempt.
 - [2026-07-25] **Artifact store** (agent outputs → reviewable artifacts, ACT-5's output home): Azure Blob canonical
   (private `huddle-artifacts` container, 15-min read SAS) + `artifacts.items` metadata in RAG_AI_Agents; formats
   OOXML/PDF/MD; **one-way** OneDrive(Graph)/Google Drive(journey tokens) mirror deferred to Phase 2/3 (cols null now).
