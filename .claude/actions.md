@@ -368,6 +368,24 @@ speaking her transcript text should be seen."
     same-brain A/B (chat vs voice, same question) is the next step. LESSON logged in memory.md Hardening:
     fixing a disabled-BUTTON symptom is not the same as fixing the SEND PATH — trace the whole handler, not just
     the `disabled=` attribute.
+  - **[2026-07-31 FOLLOW-UP #2 — live user tested the send: "it never sent a message in the thread above, but yet
+    it sent it to my 1:1 chat thread successfully. as a result, iris never answered my chat in the 1:1 voice
+    meeting".]** DISPLAY bug, not a send/brain bug — proven with live-DB ground truth. `azure-pg-query` on
+    `chat.pending_turns` for `dm-iris-chase` showed the turn `u-voice-1785526228402` (the `u-voice-` prefix = the
+    `runTurn` path) status `done` WITH a reply, and an earlier row answered the web-search question CORRECTLY
+    ("Yes, I can perform a web search for you") — i.e. the same-brain switch works at the engine level; the send,
+    the brain, and the reply all succeeded. ROOT CAUSE: the 1:1 meeting transcript (`roomTurns` in MeetingBar.tsx)
+    rendered from `voice.captions` (ephemeral, component-local, cleared on every `connect()`, and a 1:1
+    auto-connects on open) while `runTurn` writes the user msg + reply to the DURABLE store thread `dm-<agent>`
+    (the same thread the 1:1 text chat reads) — two render sources for one conversation, so the message showed in
+    the DM chat but not the meeting transcript. FIX (downstream/display only): `roomTurns` for a 1:1 now maps from
+    `useHuddleStore.messages` filtered to `dm-<meeting.activeSpeakerId>`, so the meeting transcript IS the agent's
+    DM thread — durable and consistent across the Chat tab, the DM view, reconnects, and reloads. Independent
+    verifier PASS 8/8: proved the store-WRITE (`runTurn`→`dm-${agentId}`, both chat-send and voice-barge) and the
+    store-READ (`roomTurns`→`dm-${meeting.activeSpeakerId}`) key on the identical huddleId; group/ceremony path
+    unchanged; tsc clean; single-file diff. Commit `5f4ff85`, deployed to `main` via `deploy-swa.yml`. **Awaiting
+    the user's live retest** — open a 1:1 meeting, type in the Chat tab, confirm it appears in the transcript
+    above and Iris replies there; then the direct chat-vs-voice same-brain A/B is finally doable in-UI.
 
 ### ACT-huddle-3: Standup ceremony hang — root cause is HTTP 500s on enqueueHuddleTurn/getTurnUpdates
 **Requested:** 2026-07-30 — "use the new uat skill to finally experience what i am experiencing with
