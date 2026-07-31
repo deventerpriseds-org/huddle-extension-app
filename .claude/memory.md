@@ -496,6 +496,22 @@ user to test in the deployed app. NOT calling fixed until user confirms AC-12 li
     per-agent voices) while keeping OpenAI for STT/VAD, or does it assume OpenAI TTS end-to-end? Not
     answered by web search — needs the actual SDK source/docs read, not another search. Logged as
     ACT-huddle-15.
+    - **RESOLVED 2026-07-31 (by reading journey `RealtimeVoiceAssistant.ts`, the ground-truth
+      reference impl — NOT web search):** OpenAI Realtime and ElevenLabs voices **DO compose**. Only
+      OpenAI's *native end-to-end speech-to-speech* is OpenAI-voice-only. journey/Iris runs both:
+      Realtime in **text mode** (`modalities:['text']`), OpenAI's RTC audio track **muted** (it streams
+      audio even in text mode), Realtime's **native server-VAD turn-detection + barge** (`response.cancel`
+      on `input_audio_buffer.speech_started`), and the **text** voiced by ElevenLabs (per-agent `voiceId`)
+      through a unified PCM+MP3 audio queue. The "one voice per session / can't change mid-session" limit
+      is **moot** — voice is ElevenLabs per call, not the Realtime session — so all 15 distinct voices are
+      free. `gpt-realtime-2` (May 2026) did not change this. **Two roles for Realtime, pick deliberately:**
+      (a) **AS BRAIN** (journey/Iris — Realtime generates the reply; lowest latency but REPLACES Huddle's
+      `routeMessageLLM` routing + snapshots + owner-awareness); (b) **AS EAR ONLY** (Huddle
+      `useVoiceCallRealtime` — `create_response:false`, Realtime does VAD/STT/barge only and never
+      generates; every utterance routes through Huddle's OWN pipeline: `routeMessageLLM` → agent snapshot
+      + tools → reply, ElevenLabs voices it). **Huddle must use EAR-ONLY** to keep its brains/routing —
+      this is exactly how the ceremony barge should be rewired (today it BYPASSES `routeMessageLLM` with a
+      crude `parseMentions ?? currentSpeaker` + forced 1:1, which is why "hey terry" got answered by Cole).
   - **"Sandbox agents" clarified — NOT a cost-reduction feature.** In OpenAI's current terminology this
     means isolated CODE-EXECUTION compute environments for agents that write/run code (auto-provisioned
     E2B/Modal/Daytona/Cloudflare containers) — infra convenience for coding agents, doesn't reduce LLM
