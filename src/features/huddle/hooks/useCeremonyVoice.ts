@@ -292,16 +292,27 @@ export function useCeremonyVoice(hookOpts: {
     const gen = genRef.current;
 
     try {
-      const session = await getRealtimeSession({ data: {} });
-      if (!session.ok) throw new Error(session.error);
-      const ephemeralKey = session.clientSecret;
-
-      if (genRef.current !== gen) return;
-
+      // Grab the mic FIRST, before any network await. getUserMedia requires a live user-activation
+      // gesture on mobile browsers; the meeting-entry tap's activation is consumed if we await a
+      // network round-trip (getRealtimeSession) before it — so the mic silently never opens on
+      // mobile and the agent can't hear anything. Acquiring the stream up front runs it inside the
+      // still-fresh gesture window; the ephemeral session is minted after (its await is fine).
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       streamRef.current = stream;
+
+      if (genRef.current !== gen) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
+      const session = await getRealtimeSession({ data: {} });
+      if (!session.ok) {
+        stream.getTracks().forEach((t) => t.stop());
+        throw new Error(session.error);
+      }
+      const ephemeralKey = session.clientSecret;
 
       if (genRef.current !== gen) {
         stream.getTracks().forEach((t) => t.stop());

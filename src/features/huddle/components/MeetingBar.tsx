@@ -563,6 +563,9 @@ function MeetingRoom({
   }, [isVirtual, turns, storeMessages, meeting.activeSpeakerId]);
 
   const micOn = isVirtual ? voiceLive && !groupVoice.muted : voice.status === "connected" && !voice.micMuted;
+  // Voice not yet live — the mic button's tap will START/join the call (getUserMedia in the gesture),
+  // not toggle mute. Group: not live; 1:1: not connected. Drives the button's "Join" affordance.
+  const needsJoin = isVirtual ? !voiceLive : voice.status !== "connected";
 
   function onMic() {
     if (isVirtual) {
@@ -591,7 +594,18 @@ function MeetingRoom({
         toast(wasMuted ? "Mic live — go ahead" : "Microphone muted");
       }
     } else {
-      voice.toggleMic();
+      // 1:1 voice: the connection auto-starts on meeting open, but mobile browsers block
+      // getUserMedia outside a user gesture — so if it isn't connected yet (auto-start failed, or
+      // never got a gesture), THIS TAP (re)starts it, running getUserMedia inside the gesture. Any
+      // real failure surfaces via connect()'s status/error effect. Once connected, the same button
+      // toggles soft-mute (mirrors the group path's confirming toast so a blind tap is unambiguous).
+      if (voice.status !== "connected") {
+        void voice.connect(meeting.activeSpeakerId);
+      } else {
+        const wasMuted = voice.micMuted;
+        voice.toggleMic();
+        toast(wasMuted ? "Mic live — go ahead" : "Microphone muted");
+      }
     }
   }
 
@@ -906,8 +920,8 @@ function MeetingRoom({
               </Button>
             )}
             <RoomControl
-              label={micOn ? "Mic" : "Unmute"}
-              tip={isVirtual && !voiceLive ? "Join with voice" : micOn ? "Mute" : "Unmute"}
+              label={micOn ? "Mic" : needsJoin ? "Join" : "Unmute"}
+              tip={needsJoin ? "Join with voice" : micOn ? "Mute" : "Unmute"}
               icon={micOn ? <Mic size={18} /> : <MicOff size={18} />}
               active={micOn}
               onClick={onMic}
