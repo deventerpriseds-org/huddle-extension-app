@@ -54,6 +54,10 @@ export interface CeremonyTurn {
   text: string;
   user?: boolean;
   ts?: number; // epoch ms, stamped on append — drives the transcript's MM:SS timestamps
+  // Set true on the speaker row that was cut mid-sentence by a barge — renders an [interrupted] marker.
+  interrupted?: boolean;
+  // "barge" = the user's interjection; "answer" = the immediate reply spoken over the frozen ceremony.
+  kind?: "barge" | "answer";
 }
 export interface MeetingState {
   kind: MeetingKind;
@@ -116,6 +120,9 @@ interface HuddleState {
   removeAgent: (id: AgentId) => void;
   toggleAgent: (id: AgentId) => void;
   addMeetingTurns: (turns: CeremonyTurn[]) => void;
+  // Mark the most recent AGENT transcript row as interrupted (cut mid-sentence by a barge). No-op
+  // when the last row is a user turn or the transcript is empty (barge while nobody was speaking).
+  markLastAgentTurnInterrupted: () => void;
   setShowDemoData: (v: boolean) => void;
   addMemoryItem: (item: Omit<MemoryItem, "id"> & { id?: string }) => void;
   removeMemoryItem: (id: string) => void;
@@ -283,6 +290,20 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
       const now = Date.now();
       const stamped = turns.map((t) => ({ ...t, ts: t.ts ?? now }));
       return { meeting: { ...s.meeting, transcript: [...(s.meeting.transcript ?? []), ...stamped] } };
+    }),
+  markLastAgentTurnInterrupted: () =>
+    set((s) => {
+      if (!s.meeting) return {};
+      const t = s.meeting.transcript ?? [];
+      // Find the last AGENT row (skip trailing user rows, e.g. the just-added barge message).
+      let idx = -1;
+      for (let i = t.length - 1; i >= 0; i--) {
+        if (!t[i].user) { idx = i; break; }
+      }
+      if (idx === -1) return {};
+      const next = t.slice();
+      next[idx] = { ...next[idx], interrupted: true };
+      return { meeting: { ...s.meeting, transcript: next } };
     }),
   setShowDemoData: (v) => set({ showDemoData: v }),
   addMemoryItem: (item) =>

@@ -22,7 +22,8 @@ import { useHuddleStore, type CeremonyKind, type CeremonyTurn, type MeetingState
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
 import { useGroupVoice } from "../hooks/useGroupVoice";
 import { useCeremonyVoice } from "../hooks/useCeremonyVoice";
-import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates, bargeCeremony } from "../lib/huddle.functions";
+import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates } from "../lib/huddle.functions";
+import { parseMentions } from "../lib/routing";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
@@ -188,6 +189,7 @@ function MeetingRoom({
   const collapse = useHuddleStore((s) => s.toggleMeetingExpanded);
   const patchMeeting = useHuddleStore((s) => s.patchMeeting);
   const addMeetingTurns = useHuddleStore((s) => s.addMeetingTurns);
+  const markLastAgentTurnInterrupted = useHuddleStore((s) => s.markLastAgentTurnInterrupted);
   const toggleAgent = useHuddleStore((s) => s.toggleAgent);
   const setSpeaker = useHuddleStore((s) => s.setSpeaker);
   const activeHuddleId = useHuddleStore((s) => s.activeHuddleId);
@@ -223,8 +225,9 @@ function MeetingRoom({
   const [speakingId, setSpeakingId] = useState<AgentId | null>(null);
   const ceremonyAudioRef = useRef<HTMLAudioElement | null>(null);
   const ceremonyAliveRef = useRef(true);
-  // The durable turnId of the CURRENTLY running ceremony step — lets a user message barge into it
-  // (routed to bargeCeremony) instead of firing an uncoordinated parallel turn. Null when idle.
+  // The durable turnId of the CURRENTLY running ceremony step — non-null means a barge is possible
+  // (there's a live speaker to interrupt). Null when idle. The barge answer itself no longer routes
+  // through this turn's server queue; it's an immediate client-side sequence (runBargeSequence).
   const activeCeremonyTurnRef = useRef<string | null>(null);
   // Mirror render-time values into refs so routeTurn (captured by groupVoice.start()) always
   // reads current ceremony state without a stale closure.
@@ -233,11 +236,88 @@ function MeetingRoom({
   const ceremonyStatusRef = useRef(status);
   ceremonyStatusRef.current = status;
 
-  // Tracks how many ceremony replies have been fully voiced — lets onBargeDetected snapshot
-  // the count so emit() knows which reply was the first one voiced AFTER the barge.
+  // Tracks how many ceremony replies have been fully voiced (drives the "<name> is speaking…" phase).
   const spokenCountRef = useRef(0);
+  // True from the instant a barge freezes the speaker until its answer is voiced and the ceremony
+  // resumes. While true, emit() PARKS — no further scripted speaker is voiced — so the barge answer
+  // lands over the frozen speaker instead of behind the remaining round-robin (the "answer right
+  // there, not down the line" guarantee). Set synchronously at freeze time via onBargeStart.
   const bargeActiveRef = useRef(false);
-  const bargeAtSpokenRef = useRef(0);
+  // True only while runBargeSequence is actually running. Lets the freeze-time watchdog tell "a
+  // real barge is being handled" from "we froze + parked but STT never produced a message".
+  const bargeHandlingRef = useRef(false);
+  // Current-value mirrors so runBargeSequence (empty-dep useCallback) never reads a stale closure.
+  const membersRef = useRef(meeting.members);
+  membersRef.current = meeting.members;
+  const huddleIdRef = useRef(meetingHuddleId);
+  huddleIdRef.current = meetingHuddleId;
+
+  // The immediate-barge sequence (shared by typed + voice). Cut the speaker → show the user's
+  // message → answer RIGHT THERE over the frozen ceremony (a separate synchronous single-agent
+  // turn, NOT the server between-speakers queue) → mark the cut row → resume from the exact
+  // sentence. emit() is parked via bargeActiveRef for the whole sequence so no scripted speaker
+  // is voiced in the meantime. Empty deps: everything read via stable refs / stable store actions.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const runBargeSequence = useCallback(async (text: string) => {
+    bargeHandlingRef.current = true;
+    const members = membersRef.current;
+    // Who answers: an @mentioned member → the (frozen) current speaker → host → first member.
+    const mentioned = parseMentions(text, AGENTS.filter((a) => members.includes(a.id))).filter((id) =>
+      members.includes(id),
+    );
+    const interrupted = ceremonyVoiceRef.current.activeSpeaker; // survives bargeFreeze
+    const responder =
+      mentioned[0] ??
+      interrupted ??
+      (members.includes(HOST_ID) ? HOST_ID : members[0]);
+
+    // Mark the row that was actually cut (only if a speaker was mid-turn).
+    if (interrupted) markLastAgentTurnInterrupted();
+
+    try {
+      const cfg = useBackendsStore.getState().config;
+      // Separate synchronous single-agent turn (no turnId ⇒ not durable ⇒ the ceremony's
+      // getTurnUpdates poll can't see it). This is what makes the answer immediate instead of
+      // queued behind the remaining scripted speakers.
+      const res = await sendHuddleMessage({
+        data: {
+          text,
+          huddleId: huddleIdRef.current,
+          // one-to-one is REQUIRED for targetAgentId to be honored (routeMessage:86 ignores it under
+          // "group"). This forces exactly ONE responder — the addressed/current agent — answering
+          // the barge directly, which is the whole point of "answer right there".
+          scope: "one-to-one" as const,
+          members: [responder],
+          history: [],
+          targetAgentId: responder,
+          router: cfg.router,
+          agents: cfg.agents,
+          caller: callerRef.current,
+          timeZone: tzRef.current,
+        },
+      });
+      const answer = res.replies?.[0];
+      if (answer) {
+        setPhase(`${AGENT_BY_ID[answer.agentId as AgentId]?.name ?? "Someone"} is answering…`);
+        await ceremonyVoiceRef.current.speakInterjection(answer.agentId as AgentId, answer.text, {
+          onSentenceStart: (s) =>
+            addMeetingTurns([{ agentId: answer.agentId as AgentId, text: s, kind: "answer" }]),
+        });
+      }
+      // Resume the interrupted speaker from the exact sentence they were cut on.
+      setPhase("Resuming…");
+      await ceremonyVoiceRef.current.resumeFromFreeze();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't answer that just now.");
+    } finally {
+      // Unpark emit() so the ceremony continues, whatever happened above.
+      bargeHandlingRef.current = false;
+      bargeActiveRef.current = false;
+      setPhase("");
+    }
+  }, []);
+  const runBargeSequenceRef = useRef(runBargeSequence);
+  runBargeSequenceRef.current = runBargeSequence;
 
   // Single ceremony-routing decision — used by both sendMessage (typed) and groupVoice (voice).
   // Returns [] when ceremony handled the message (caller stops), undefined to fall through.
@@ -246,18 +326,13 @@ function MeetingRoom({
   const routeTurn = useCallback(
     async (text: string): Promise<{ agentId: AgentId; text: string }[] | undefined> => {
       if (isCeremonyRef.current && ceremonyStatusRef.current === "running" && activeCeremonyTurnRef.current) {
-        const turnId = activeCeremonyTurnRef.current;
-        // Stop mid-sentence like a real meeting: clear the AudioQueue + kill the voiceTurn
-        // loop so the current speaker actually goes quiet the instant the user cuts in.
-        // No "passing your message" narration — that concept doesn't exist in a live room.
-        ceremonyVoiceRef.current.stopListening();
+        // Typed barge: park emit + freeze the speaker mid-sentence (keeps the resume point), then
+        // run the immediate-answer sequence. The user's own message row was already rendered by
+        // sendMessage before this call — don't duplicate it here.
+        bargeActiveRef.current = true;
+        ceremonyVoiceRef.current.bargeFreeze();
         setPhase("");
-        try {
-          const res = await bargeCeremony({ data: { turnId, text } });
-          if (!res.queued) toast("The room just wrapped — send that again to start a new thread.");
-        } catch (err) {
-          toast.error(err instanceof Error ? err.message : "Couldn't reach the room.");
-        }
+        await runBargeSequenceRef.current(text);
         return [];
       }
       return undefined;
@@ -266,10 +341,27 @@ function MeetingRoom({
   );
 
   const ceremonyVoice = useCeremonyVoice({
-    onBargeDetected: (transcript) => {
-      bargeAtSpokenRef.current = spokenCountRef.current;
+    // Fires synchronously at freeze time (VAD speech_started) — park emit NOW, before STT resolves,
+    // so no scripted speaker slips through between the freeze and the transcript arriving.
+    onBargeStart: () => {
       bargeActiveRef.current = true;
-      void routeTurn(transcript);
+      setPhase("");
+      // Watchdog: if STT never yields a barge message (so onBargeDetected/runBargeSequence never
+      // run), don't leave emit parked forever — resume the frozen speaker and unpark.
+      window.setTimeout(() => {
+        if (bargeActiveRef.current && !bargeHandlingRef.current) {
+          bargeActiveRef.current = false;
+          setPhase("");
+          void ceremonyVoiceRef.current.resumeFromFreeze();
+        }
+      }, 12_000);
+    },
+    onBargeDetected: (transcript) => {
+      // Voice barge: render the user's spoken message as a visible user row (the typed path gets
+      // this from sendMessage; the voice path had no such insert — that's why spoken barges were
+      // invisible), then run the same immediate-answer sequence.
+      addMeetingTurns([{ text: transcript, user: true, kind: "barge" }]);
+      void runBargeSequenceRef.current(transcript);
     },
   });
   // Stable ref so async ceremony loops (emit) always get the latest controller.
@@ -309,6 +401,10 @@ function MeetingRoom({
   const caller = user
     ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
     : undefined;
+  const callerRef = useRef(caller);
+  callerRef.current = caller;
+  const tzRef = useRef(tz);
+  tzRef.current = tz;
 
   const turns = meeting.transcript ?? [];
 
@@ -392,6 +488,13 @@ function MeetingRoom({
     const emit = async (reps: { agentId: string; text: string }[], spoken: { n: number }) => {
       for (let i = spoken.n; i < reps.length; i++) {
         if (!ceremonyAliveRef.current) return;
+        // PARK while a barge is being handled — do NOT voice the next scripted speaker until the
+        // interjection is answered and the interrupted speaker has resumed. This is what keeps the
+        // barge answer "right there" instead of behind the remaining round-robin.
+        while (bargeActiveRef.current && ceremonyAliveRef.current) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        if (!ceremonyAliveRef.current) return;
         const r = reps[i];
         const agentId = r.agentId as AgentId;
         spoken.n = i + 1;
@@ -416,14 +519,8 @@ function MeetingRoom({
           // Text-only fallback when TTS is unavailable.
           addMeetingTurns([{ agentId, text: r.text }]);
         }
-
-        // After each reply: if this was the first reply voiced AFTER a barge, resume the
-        // interrupted agent from the sentence where the barge cut in.
-        if (bargeActiveRef.current && spoken.n > bargeAtSpokenRef.current) {
-          bargeActiveRef.current = false;
-          setPhase("Resuming…");
-          await ceremonyVoiceRef.current.resumeFromFreeze();
-        }
+        // Resume after a barge is now handled inside runBargeSequence (freeze → answer → resume),
+        // not here — emit only voices scripted speakers and parks (above) while a barge is in flight.
       }
     };
 
@@ -976,21 +1073,39 @@ function TranscriptRow({ turn, startedAt }: { turn: CeremonyTurn; startedAt: num
   const time = turn.ts ? fmtClock(turn.ts - startedAt) : "";
   if (turn.user) {
     return (
-      <div className="flex justify-end" data-testid="transcript-turn">
+      <div
+        className="flex justify-end"
+        data-testid="transcript-turn"
+        data-turn-user="true"
+        data-turn-kind={turn.kind ?? ""}
+      >
         <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-primary/15 px-3 py-2 text-sm">{turn.text}</div>
       </div>
     );
   }
   const agent = turn.agentId ? AGENT_BY_ID[turn.agentId] : undefined;
   return (
-    <div className="flex gap-2.5" data-testid="transcript-turn">
+    <div
+      className="flex gap-2.5"
+      data-testid="transcript-turn"
+      data-turn-agent="true"
+      data-turn-kind={turn.kind ?? ""}
+      data-turn-interrupted={turn.interrupted ? "true" : "false"}
+    >
       {agent ? <AgentAvatar agent={agent} size="sm" clickable={false} /> : <div className="size-7 rounded-full bg-muted" />}
       <div className="min-w-0">
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] font-semibold">{agent ? firstName(agent) : "Agent"}</span>
           {time && <span className="font-mono text-[10px] text-muted-foreground">{time}</span>}
         </div>
-        <div className="whitespace-pre-wrap text-sm text-foreground/90">{turn.text}</div>
+        <div className="whitespace-pre-wrap text-sm text-foreground/90">
+          {turn.text}
+          {turn.interrupted && (
+            <span data-testid="interrupted-marker" className="ml-1.5 align-baseline text-[11px] italic text-muted-foreground">
+              [interrupted]
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
