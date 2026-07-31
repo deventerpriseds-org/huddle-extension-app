@@ -20,6 +20,7 @@ import {
 import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
 import { useHuddleStore, type CeremonyKind, type CeremonyTurn, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
+import { useVoiceCallRealtime } from "../hooks/useVoiceCallRealtime";
 import { useGroupVoice } from "../hooks/useGroupVoice";
 import { useCeremonyVoice } from "../hooks/useCeremonyVoice";
 import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates, bargeCeremony } from "../lib/huddle.functions";
@@ -53,6 +54,15 @@ const CEREMONY_TRIGGER: Record<string, string> = {
 };
 const HOST_ID: AgentId = "terry-locke";
 
+// 1:1 voice call backend — reversible vendor switch, not a UI change (the orb stays the orb).
+// "openai": OpenAI Realtime WebRTC (STT/VAD/barge-in) + the agent's real canonical brain
+//   (same snapshot + model as text chat) via enqueueHuddleTurn, spoken with ElevenLabs TTS-only
+//   synthesis (useVoiceCallRealtime.ts). Current default.
+// "elevenlabs": the original ElevenLabs Conversational-AI orb (useVoiceCall.ts) — its own
+//   separate LLM + a thinner prompt. Kept fully intact; flip this one constant to revert to it
+//   instantly if the OpenAI path hits a snag. No other code changes needed either way.
+const VOICE_1ON1_BACKEND: "openai" | "elevenlabs" = "openai";
+
 function meetingLabel(m: MeetingState): string {
   if (m.kind === "virtual-meeting") return CEREMONY_LABEL[m.ceremonyType ?? "standup"] ?? "Virtual meeting";
   return KIND_LABEL[m.kind] ?? "Meeting";
@@ -74,7 +84,11 @@ function fmtClock(ms: number): string {
 export function MeetingLayer() {
   const meeting = useHuddleStore((s) => s.meeting);
   const leaveMeeting = useHuddleStore((s) => s.leaveMeeting);
-  const voice = useVoiceCall();
+  // Both hooks are always called (Rules of Hooks) — only the selected one is ever connect()ed;
+  // the other simply sits idle. Swapping VOICE_1ON1_BACKEND is the entire revert, nothing else.
+  const elevenLabsVoice = useVoiceCall();
+  const realtimeVoice = useVoiceCallRealtime();
+  const voice: VoiceCallController = VOICE_1ON1_BACKEND === "openai" ? realtimeVoice : elevenLabsVoice;
   const { connect, disconnect } = voice;
 
   const active = !!meeting;

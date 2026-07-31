@@ -1,0 +1,276 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import type { AgentId } from "../data/agents";
+import { AGENT_BY_ID } from "../data/agents";
+import { useHuddleStore } from "../store";
+import { useBackendsStore } from "../lib/agent-backends";
+import { useAuth } from "@/hooks/useAuth";
+import { useCeremonyVoice } from "./useCeremonyVoice";
+import { enqueueHuddleTurn, getTurnUpdates } from "../lib/huddle.functions";
+import type { VoiceCallController, VoiceStatus, VoiceCaption } from "./useVoiceCall";
+import type { StartVoiceResult } from "../lib/voice/voice.functions";
+
+// 1:1 voice call, OpenAI-backed — a reversible alternative to useVoiceCall.ts's ElevenLabs
+// Conversational-AI orb. Same public shape (VoiceCallController) so MeetingBar.tsx can swap
+// between the two with a single flag; see the VOICE_1ON1_BACKEND constant there.
+//
+// Brain: identical to text chat — OpenAI Realtime WebRTC (useCeremonyVoice, UNCHANGED) supplies
+// VAD/STT/barge-in only (modalities:["text"], create_response:false — it never generates a
+// reply itself). Each transcribed utterance is sent through the SAME enqueueHuddleTurn the text
+// composer uses, so the reply comes from the agent's canonical snapshot + configured OpenAI
+// model (not a separate, thinner ElevenLabs-hosted prompt/LLM). The reply is voiced with the
+// EXISTING ElevenLabs TTS-only synthesis (voiceTurn) — audio output only, no ElevenLabs brain.
+//
+// Both the user's utterance and the agent's reply are also written to the real message store
+// (addUserMessage/addAgentMessage), so a 1:1 voice exchange shows up in the text transcript too
+// — the old ElevenLabs orb never did this (its captions are ephemeral, component-local state).
+//
+// Known v1 gap (stated, not silently unhandled): if the user starts a new utterance while a
+// previous one is still awaiting its reply, the stale reply — once it arrives — is still saved
+// to the transcript for completeness, but is NOT spoken aloud (avoids talking over the user's
+// newer utterance / out-of-order audio). Barge-in DURING audio playback (not generation) is
+// still fully supported via useCeremonyVoice's existing freeze/resume mechanism.
+//
+// toggleMic is a soft/logical mute: incoming transcripts are ignored while muted, rather than
+// disabling the underlying microphone track (useCeremonyVoice doesn't expose that control, and
+// isn't modified here to keep this change purely additive).
+
+const POLL_INTERVAL_MS = 2500;
+const POLL_TIMEOUT_MS = 90_000;
+
+export function useVoiceCallRealtime(): VoiceCallController {
+  const [status, setStatus] = useState<VoiceStatus>("idle");
+  const [mode, setMode] = useState<"listening" | "speaking">("listening");
+  const [captions, setCaptions] = useState<VoiceCaption[]>([]);
+  const [micMuted, setMicMuted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const agentIdRef = useRef<AgentId | null>(null);
+  const micMutedRef = useRef(false);
+  micMutedRef.current = micMuted;
+  // Bumped on every new utterance; a reply belonging to a stale (superseded) exchange checks
+  // this before speaking so it never plays over a newer one (see the v1-gap note above).
+  const exchangeGenRef = useRef(0);
+  const connectedOnceRef = useRef(false);
+
+  const { user } = useAuth();
+
+  const addUserMessage = useHuddleStore((s) => s.addUserMessage);
+  const addAgentMessage = useHuddleStore((s) => s.addAgentMessage);
+
+  const setPhaseError = useCallback((message: string) => {
+    setStatus("error");
+    setError(message);
+    toast.error(message);
+  }, []);
+
+  const speakReply = useCallback(
+    async (agentId: AgentId, text: string, gen: number, voiceTurn: CeremonyVoiceTurn) => {
+      if (exchangeGenRef.current !== gen) return; // superseded — saved to transcript, not spoken
+      setCaptions((c) => [...c.slice(-40), { role: "agent", text }]);
+      await voiceTurn(agentId, text, { onSentenceStart: () => {} });
+    },
+    [],
+  );
+
+  const runTurn = useCallback(
+    async (agentId: AgentId, transcript: string, gen: number, voiceTurn: CeremonyVoiceTurn) => {
+      const huddleId = `dm-${agentId}`;
+      const now = Date.now();
+      const turnId = `u-voice-${now}`;
+
+      addUserMessage({ id: turnId, huddleId, author: { kind: "user" }, text: transcript, ts: now });
+      setCaptions((c) => [...c.slice(-40), { role: "user", text: transcript }]);
+
+      const history = useHuddleStore
+        .getState()
+        .messages.filter((m) => m.huddleId === huddleId)
+        .slice(-14)
+        .filter(
+          (m) =>
+            m.author.kind === "user" ||
+            m.author.kind === "system" ||
+            (m.author.kind === "agent" && !!AGENT_BY_ID[m.author.agentId as AgentId]),
+        )
+        .map((m) => ({
+          id: m.id,
+          huddleId: m.huddleId,
+          author: m.author,
+          text: m.text,
+          ts: m.ts,
+          mentions: m.mentions,
+          replyTo: m.replyTo,
+        }));
+
+      const backendsCfg = useBackendsStore.getState().config;
+      const payload = {
+        turnId,
+        text: transcript,
+        huddleId,
+        scope: "one-to-one" as const,
+        members: [agentId],
+        history,
+        targetAgentId: agentId,
+        router: backendsCfg.router,
+        agents: backendsCfg.agents,
+        caller: user
+          ? {
+              entra_object_id: user.localAccountId ?? user.homeAccountId,
+              entra_email: user.username,
+            }
+          : undefined,
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      };
+
+      const applyReplies = async (
+        replies: { agentId: AgentId; text: string }[] | undefined | null,
+      ) => {
+        for (const reply of replies ?? []) {
+          addAgentMessage({
+            id: `a-${turnId}-${reply.agentId}`,
+            huddleId,
+            author: { kind: "agent", agentId: reply.agentId },
+            text: reply.text,
+            ts: Date.now(),
+            replyTo: turnId,
+          });
+          await speakReply(reply.agentId, reply.text, gen, voiceTurn);
+        }
+      };
+
+      try {
+        const res = await enqueueHuddleTurn({ data: payload });
+        if (res.status === "done") {
+          await applyReplies(
+            res.result?.replies as { agentId: AgentId; text: string }[] | undefined,
+          );
+          return;
+        }
+        if (res.status === "error") {
+          if (exchangeGenRef.current === gen)
+            setPhaseError(res.error || "The reply failed — please try again.");
+          return;
+        }
+        // 'partial' | 'queued' | 'running' — poll until a terminal state, same pattern the text
+        // composer uses (getTurnUpdates), so a slower turn doesn't just go silent.
+        if (res.result?.replies?.length)
+          await applyReplies(res.result.replies as { agentId: AgentId; text: string }[]);
+        const deadline = Date.now() + POLL_TIMEOUT_MS;
+        const seen = new Set<string>();
+        while (Date.now() < deadline) {
+          if (exchangeGenRef.current !== gen) return; // superseded mid-poll
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+          const { turns } = await getTurnUpdates({ data: { huddleId, sinceMs: now - 5_000 } });
+          const t = turns.find((x) => x.id === turnId);
+          if (!t) continue;
+          const fresh = (t.replies ?? []).filter((r, i) => {
+            const key = `${t.id}-${i}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+          if (fresh.length) await applyReplies(fresh as { agentId: AgentId; text: string }[]);
+          if (t.status === "done") return;
+          if (t.status === "error") {
+            if (exchangeGenRef.current === gen)
+              setPhaseError(t.error || "The reply failed — please try again.");
+            return;
+          }
+        }
+        if (exchangeGenRef.current === gen)
+          setPhaseError("That reply is taking longer than expected.");
+      } catch (err) {
+        if (exchangeGenRef.current === gen) {
+          setPhaseError(err instanceof Error ? err.message : "Couldn't reach the assistant.");
+        }
+      }
+    },
+    [addUserMessage, addAgentMessage, speakReply, setPhaseError, user],
+  );
+
+  const onBargeDetected = useCallback(
+    (transcript: string) => {
+      if (micMutedRef.current) return;
+      const agentId = agentIdRef.current;
+      if (!agentId) return;
+      exchangeGenRef.current += 1;
+      const gen = exchangeGenRef.current;
+      void runTurn(agentId, transcript, gen, ceremony.voiceTurn);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [runTurn],
+  );
+
+  const ceremony = useCeremonyVoice({ onBargeDetected });
+
+  // Reflect the underlying WebRTC session's phase into this hook's VoiceCallController shape.
+  // This is the authoritative error surface for the connect step: ceremony.startListening()'s own
+  // setError/setPhase("error") calls land in ceremony's state asynchronously, so connect()'s
+  // resolved value can't reliably observe them — this effect fires once React re-renders with the
+  // updated status, which is when the failure actually becomes visible either way.
+  const lastToastedError = useRef<string | null>(null);
+  useEffect(() => {
+    if (!connectedOnceRef.current) return;
+    if (ceremony.status === "error") {
+      setStatus("error");
+      setError(ceremony.error);
+      if (ceremony.error && lastToastedError.current !== ceremony.error) {
+        lastToastedError.current = ceremony.error;
+        toast.error(ceremony.error);
+      }
+      return;
+    }
+    if (ceremony.status === "idle") {
+      // Only a real disconnect sets ceremony status back to idle after we've connected once —
+      // _voiceTurn returns to "listening" (not "idle") whenever the call is still active.
+      setStatus("idle");
+      return;
+    }
+    setStatus("connected");
+    setMode(ceremony.status === "speaking" ? "speaking" : "listening");
+  }, [ceremony.status, ceremony.error]);
+
+  const connect = useCallback(
+    async (agentId: AgentId): Promise<StartVoiceResult> => {
+      agentIdRef.current = agentId;
+      exchangeGenRef.current += 1; // invalidate any exchange from a previous call
+      setError(null);
+      setCaptions([]);
+      setMicMuted(false);
+      setStatus("connecting");
+      connectedOnceRef.current = true;
+      await ceremony.startListening();
+      // Success/failure of the connection itself is reported reactively (see the status effect
+      // below), not from this resolved value — MeetingBar.tsx doesn't consume connect()'s return
+      // value, and ceremony's own error state isn't reliably observable synchronously here. These
+      // fields exist only for structural VoiceCallController parity.
+      return { ok: true, signedUrl: "", elAgentId: agentId, hasVoice: true, created: false };
+    },
+    [ceremony],
+  );
+
+  const disconnect = useCallback(async () => {
+    exchangeGenRef.current += 1;
+    connectedOnceRef.current = false;
+    ceremony.stopListening();
+    setStatus("idle");
+    setMode("listening");
+  }, [ceremony]);
+
+  const toggleMic = useCallback(() => {
+    setMicMuted((m) => !m);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      connectedOnceRef.current = false;
+      exchangeGenRef.current += 1;
+      ceremony.stopListening();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return { status, mode, captions, micMuted, error, connect, disconnect, toggleMic };
+}
+
+type CeremonyVoiceTurn = ReturnType<typeof useCeremonyVoice>["voiceTurn"];
