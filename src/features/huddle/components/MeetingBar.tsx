@@ -20,7 +20,7 @@ import {
 import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
 import { useHuddleStore, type CeremonyKind, type CeremonyTurn, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
-import { useGroupVoice } from "../hooks/useGroupVoice";
+import { useGroupVoiceRealtime } from "../hooks/useGroupVoiceRealtime";
 import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates, bargeCeremony } from "../lib/huddle.functions";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import { useBackendsStore } from "../lib/agent-backends";
@@ -266,7 +266,7 @@ function MeetingRoom({
     };
   }, []);
 
-  const groupVoice = useGroupVoice();
+  const groupVoice = useGroupVoiceRealtime();
   const voiceLive = isVirtual && groupVoice.status !== "idle" && groupVoice.status !== "error";
 
   // Keep the live group-voice roster synced as agents are toggled in/out.

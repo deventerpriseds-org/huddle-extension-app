@@ -86,11 +86,24 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+**CURRENT TASKS (2026-07-31):**
+- **ACT-huddle-4 — Voice overhaul (OpenAI Realtime WebRTC):** IMPLEMENTATION COMPLETE — NOT YET DEPLOYED/VERIFIED LIVE.
+  Files created: `src/features/huddle/lib/voice/realtime.functions.ts` (server fn minting ephemeral key via
+  `POST /v1/realtime/sessions`), `src/features/huddle/hooks/useGroupVoiceRealtime.ts` (full new hook: AudioQueue class,
+  splitSentences, WebRTC RTCPeerConnection, oai-events DC, barge+resume, trailing transcript via onStart, gen counter).
+  MeetingBar.tsx updated (2 lines: import + hook swap). TypeScript: clean (0 errors). `useVoiceCall.ts`: unchanged (AC-15 ✓).
+  Still needs: commit+push, Playwright Phase 1 test (3-agent/2-item + screenshots), verifier subagent, deploy to main.
+  Architecture: OpenAI Realtime WebRTC for VAD/STT/barge detection + EL TTS for audio output + existing ceremony
+  turn engine untouched server-side. Mid-sentence barge: SAME agent resumes from interrupted sentence after answering.
+  Trailing transcript (captions-style, not pre-loaded). Two-phase test: (1) 3-agent/2-item precursor with
+  NEW pipeline + screenshots; (2) full ceremony UAT with real task mirror agenda + 6-screenshot proof sequence.
+- **ACT-huddle-3 — Mobile Composer overlay fix:** AC subagent ran (12 ACs delivered, awaiting user sign-off).
+  Waiting on user to confirm ACs before any code is written.
+
 ACT-1 (1:1 hand-off) and ACT-4 (auto backlog grooming) are COMPLETE and verified live; PR #6 (ACT-1 + ACT-4 code)
 is MERGED to main. ACT-4 built a GENERAL recurring-job scheduler in Azure Huddle PG (see feature table) — the
 substrate ACT-6 (ceremonies) should ride next (add a 'ceremony' case to fireJob + rows), rather than a bespoke cron.
-Next up: ACT-6 (ceremonies fire + standup summaries — now cheap on the scheduler), ACT-5 (agents self-start doable
-tasks / classify blocked — dovetails with ACT-4's blocked-surfacing residuals), and ACT-3 (dedup verify).
+Backlogged: ACT-6 (ceremonies fire + standup summaries), ACT-5 (agents self-start doable tasks), ACT-3 (dedup verify).
 ACT-4 residuals to fold into ACT-5: Terry's summary omitted the blocked items; `blocked-on-capability` tag not seen
 in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's tail (16+) un-groomed.
 

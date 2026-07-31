@@ -6,6 +6,42 @@ Last updated: 2026-07-30
 
 ## Open
 
+### ACT-huddle-4: Voice overhaul — OpenAI Realtime WebRTC + mid-sentence barge-in + resume
+**Requested:** 2026-07-31
+**Asked for:** Replace the current `useGroupVoice` MediaRecorder→Whisper→TTS push-to-talk loop with OpenAI
+Realtime WebRTC for VAD + barge detection, keeping EL TTS for audio output (custom voices). On barge, the
+SAME agent immediately stops mid-sentence, answers the barge question, then resumes from the interrupted
+sentence. Text is a trailing transcript (appears as audio plays, not pre-loaded). Ceremony agenda pulls
+from real task mirror data for full UAT.
+**Expected outcome:** User speaks mid-agent-sentence → audio stops within ~200ms → barge question answered
+→ same agent continues from the interrupted sentence → next agenda item covered → no items skipped. Text
+transcript is captions-style (trailing), not a pre-loaded full script.
+**Architecture:** OpenAI Realtime WebRTC (input only: VAD, STT, barge detection via
+`input_audio_buffer.speech_started`) + existing Huddle ceremony turn engine (no server change) + EL TTS
+`eleven_flash_v2_5` for output. Sentence-position tracking at barge time; same agent re-synthesizes from
+that sentence on resume.
+**Test plan:**
+- Phase 1 (precursor): 3 agents, 2 hardcoded agenda items, NEW OpenAI pipeline. Real Playwright
+  screenshots: agent speaking → barge mid-sentence → stop captured → barge answered → resume → completion.
+- Phase 2 (full UAT): Real standup ceremony, real task mirror agenda, full agent roster. Full screenshot
+  sequence per the proof spec (6 numbered PNGs).
+**Acceptance criteria:** 21 ACs signed off by user ("go"). Independent AC subagent ran.
+**Status:** implementation complete — 3 files written (realtime.functions.ts, useGroupVoiceRealtime.ts, MeetingBar.tsx 2-line swap). TypeScript: 0 errors. useVoiceCall.ts unchanged (AC-15 guard). Needs: commit+push, Playwright Phase 1 (screenshots), verifier subagent, merge to main + deploy.
+**Branch/PR:** claude/setup-stop-hooks-skills-0h569y
+
+---
+
+### ACT-huddle-3: Mobile Composer overlay — chat module missing on mobile
+**Requested:** 2026-07-30
+**Asked for:** "the chat module doesn't appear on mobile so I couldn't test texting" — two overlapping bugs:
+(1) `CollapsedPill` (`fixed inset-x-0 bottom-4 z-50`) in `MeetingBar.tsx` covers the `Composer` input in `HuddleView.tsx` — user cannot type while a meeting is collapsed; (2) `MeetingRoom` uses `fixed inset-0 z-50` (full-screen takeover); for 1:1 calls `canCompose=false` inside MeetingRoom = NO text input at all.
+**Expected outcome:** On mobile, the user can always type a message to the group or a 1:1 regardless of meeting state (collapsed pill or active call). The Composer input is never visually blocked or functionally disabled.
+**Acceptance criteria:** AC subagent pending
+**Status:** in-progress — AC subagent spawned, awaiting ACs before implementation
+**Branch/PR:** claude/setup-stop-hooks-skills-0h569y
+
+---
+
 ### ACT-huddle-2: Agent avatar images 404 (Lovable-preview-only asset paths)
 **Requested:** 2026-07-29
 **Asked for:** fix the broken avatar photos across the app — every agent falls back to colored
