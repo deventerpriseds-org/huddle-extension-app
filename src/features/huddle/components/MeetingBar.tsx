@@ -21,8 +21,8 @@ import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
 import { useHuddleStore, type CeremonyKind, type CeremonyTurn, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
 import { useGroupVoice } from "../hooks/useGroupVoice";
+import { useCeremonyVoice } from "../hooks/useCeremonyVoice";
 import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates, bargeCeremony } from "../lib/huddle.functions";
-import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
@@ -233,6 +233,12 @@ function MeetingRoom({
   const ceremonyStatusRef = useRef(status);
   ceremonyStatusRef.current = status;
 
+  // Tracks how many ceremony replies have been fully voiced — lets onBargeDetected snapshot
+  // the count so emit() knows which reply was the first one voiced AFTER the barge.
+  const spokenCountRef = useRef(0);
+  const bargeActiveRef = useRef(false);
+  const bargeAtSpokenRef = useRef(0);
+
   // Single ceremony-routing decision — used by both sendMessage (typed) and groupVoice (voice).
   // Returns [] when ceremony handled the message (caller stops), undefined to fall through.
   // Empty deps are intentional: all state is read via stable refs above.
@@ -255,10 +261,23 @@ function MeetingRoom({
     [],
   );
 
+  const ceremonyVoice = useCeremonyVoice({
+    onBargeDetected: (transcript) => {
+      bargeAtSpokenRef.current = spokenCountRef.current;
+      bargeActiveRef.current = true;
+      void routeTurn(transcript);
+    },
+  });
+  // Stable ref so async ceremony loops (emit) always get the latest controller.
+  const ceremonyVoiceRef = useRef(ceremonyVoice);
+  ceremonyVoiceRef.current = ceremonyVoice;
+
   useEffect(() => {
     ceremonyAliveRef.current = true;
     return () => {
       ceremonyAliveRef.current = false;
+      ceremonyVoiceRef.current.stopListening();
+      ceremonyVoiceRef.current.clearFreeze();
       if (ceremonyAudioRef.current) {
         ceremonyAudioRef.current.pause();
         ceremonyAudioRef.current.src = "";
@@ -348,64 +367,62 @@ function MeetingRoom({
     }
   }
 
-  // Speak one ceremony turn aloud in the agent's voice; resolves when playback ends.
-  async function speakCeremonyTurn(agentId: AgentId, text: string): Promise<void> {
-    const spoken = await synthesizeSpeech({ data: { text, agentId } });
-    if (!spoken.ok) throw new Error(spoken.error);
-    if (!ceremonyAliveRef.current) return;
-    await new Promise<void>((resolve) => {
-      const el = new Audio(`data:audio/mpeg;base64,${spoken.audioBase64}`);
-      ceremonyAudioRef.current = el;
-      const done = () => {
-        el.onended = null;
-        el.onerror = null;
-        if (ceremonyAudioRef.current === el) ceremonyAudioRef.current = null;
-        resolve();
-      };
-      el.onended = done;
-      el.onerror = done;
-      el.play().catch(done);
-    });
-  }
-
   async function runCeremony() {
     if (!meeting.ceremonyType || !meeting.members.length) return;
     const cfg = useBackendsStore.getState().config;
     patchMeeting({ ceremonyStatus: "running", transcript: [] });
     const steps = meeting.ceremonyType === "review_retro" ? ["review", "retro"] : [meeting.ceremonyType];
-    let voiceOff = false; // once TTS fails (e.g. no default voice), fall back to text-only silently
+    let voiceOff = false;
 
-    // Render + speak newly-arrived ceremony replies in order. `spoken.n` tracks how many we've handled
-    // so a re-poll only processes the new tail (idempotent against the growing durable replies array).
+    // Reset barge state at ceremony start.
+    spokenCountRef.current = 0;
+    bargeActiveRef.current = false;
+
+    // Start WebRTC mic listener so the user can barge in mid-utterance.
+    // Errors here are non-fatal — ceremony continues in text-only without voice barge-in.
+    void ceremonyVoiceRef.current.startListening();
+
+    // Render + speak newly-arrived ceremony replies in order.
+    // `spoken.n` tracks how many replies have been voiced (idempotent on re-poll).
+    // Trailing transcript: text is revealed PER SENTENCE as audio begins, not pre-loaded.
     const emit = async (reps: { agentId: string; text: string }[], spoken: { n: number }) => {
       for (let i = spoken.n; i < reps.length; i++) {
         if (!ceremonyAliveRef.current) return;
         const r = reps[i];
         const agentId = r.agentId as AgentId;
-        addMeetingTurns([{ agentId, text: r.text }]);
         spoken.n = i + 1;
+        spokenCountRef.current = spoken.n;
         setPhase(`${AGENT_BY_ID[agentId]?.name ?? "Someone"} is speaking…`);
-        // Speak it aloud (the stand-up should be heard, not just read). Uses each agent's ElevenLabs
-        // voice — falls back to ELEVENLABS_DEFAULT_VOICE_ID until real ids are set.
+
         if (!voiceOff) {
           setSpeakingId(agentId);
           try {
-            await speakCeremonyTurn(agentId, r.text);
-          } catch (e) {
+            await ceremonyVoiceRef.current.voiceTurn(agentId, r.text, {
+              // Trailing transcript: add each sentence to the transcript only when its audio starts.
+              onSentenceStart: (sentence) => addMeetingTurns([{ agentId, text: sentence }]),
+            });
+          } catch {
             voiceOff = true;
-            toast.error(
-              e instanceof Error && /voice/i.test(e.message)
-                ? "No ElevenLabs voice configured — set ELEVENLABS_DEFAULT_VOICE_ID. Continuing in text."
-                : "Voice playback failed — continuing in text.",
-            );
+            addMeetingTurns([{ agentId, text: r.text }]);
+            toast.error("Voice playback failed — continuing in text.");
           } finally {
             setSpeakingId(null);
           }
+        } else {
+          // Text-only fallback when TTS is unavailable.
+          addMeetingTurns([{ agentId, text: r.text }]);
+        }
+
+        // After each reply: if this was the first reply voiced AFTER a barge, resume the
+        // interrupted agent from the sentence where the barge cut in.
+        if (bargeActiveRef.current && spoken.n > bargeAtSpokenRef.current) {
+          bargeActiveRef.current = false;
+          setPhase("Resuming…");
+          await ceremonyVoiceRef.current.resumeFromFreeze();
         }
       }
     };
 
-    const nameOf = (id: string) => AGENT_BY_ID[id as AgentId]?.name ?? "the team";
     try {
       for (const step of steps) {
         // DURABLE/CHUNKED, not a single synchronous call. A round-robin over the full room runs many
@@ -479,6 +496,10 @@ function MeetingRoom({
       activeCeremonyTurnRef.current = null;
       patchMeeting({ ceremonyStatus: "error" });
       toast.error(err instanceof Error ? err.message : "The ceremony couldn't run. Try again.");
+    } finally {
+      ceremonyVoiceRef.current.stopListening();
+      ceremonyVoiceRef.current.clearFreeze();
+      bargeActiveRef.current = false;
     }
   }
 

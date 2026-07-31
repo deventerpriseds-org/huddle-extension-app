@@ -1,0 +1,383 @@
+import { useCallback, useRef, useState } from "react";
+import type { AgentId } from "../data/agents";
+import { synthesizeSpeech } from "../lib/voice/tts.functions";
+import { getRealtimeSession } from "../lib/voice/realtime.functions";
+
+// Ceremony voice: OpenAI Realtime WebRTC for VAD + mid-utterance barge detection only.
+// ElevenLabs per-sentence TTS for audio output (existing agent voices).
+//
+// Key behaviours:
+//  - Trailing transcript: text revealed per-sentence when that sentence's audio STARTS
+//  - Barge fires ≤200ms after speech onset (OAI server VAD `speech_started` event)
+//  - Audio frozen at current sentence boundary on barge; gen incremented to kill the loop
+//  - `resumeFromFreeze()` re-enters voiceTurn from the saved sentence using new gen
+//  - Remote OAI audio track muted immediately — OAI used for VAD+STT only
+
+export type CeremonyVoiceStatus = "idle" | "listening" | "speaking" | "frozen" | "error";
+
+export interface CeremonyVoiceController {
+  status: CeremonyVoiceStatus;
+  activeSpeaker: AgentId | null;
+  error: string | null;
+  supported: boolean;
+  startListening: () => Promise<void>;
+  stopListening: () => void;
+  /** Speak agentId's full text sentence-by-sentence; onSentenceStart fires when audio begins. */
+  voiceTurn: (
+    agentId: AgentId,
+    text: string,
+    opts: { onSentenceStart: (sentence: string) => void },
+  ) => Promise<void>;
+  /** Resume the frozen agent from the exact sentence where the barge interrupted them. */
+  resumeFromFreeze: () => Promise<void>;
+  clearFreeze: () => void;
+}
+
+// ── AudioQueue ────────────────────────────────────────────────────────────────
+class AudioQueue {
+  private queue: Array<{ base64: string; onStart?: () => void }> = [];
+  private current: HTMLAudioElement | null = null;
+  private playing = false;
+
+  add(base64: string, onStart?: () => void) {
+    this.queue.push({ base64, onStart });
+    if (!this.playing) this.drain();
+  }
+
+  private drain() {
+    const item = this.queue.shift();
+    if (!item) {
+      this.playing = false;
+      this.current = null;
+      return;
+    }
+    this.playing = true;
+    const el = new Audio(`data:audio/mpeg;base64,${item.base64}`);
+    this.current = el;
+    item.onStart?.();
+    const next = () => {
+      if (this.current === el) this.current = null;
+      this.drain();
+    };
+    el.onended = next;
+    el.onerror = next;
+    el.play().catch(next);
+  }
+
+  clearAndStop() {
+    this.queue = [];
+    this.playing = false;
+    if (this.current) {
+      this.current.onended = null;
+      this.current.onerror = null;
+      this.current.pause();
+      this.current.src = "";
+      this.current = null;
+    }
+  }
+
+  isActive() {
+    return this.playing;
+  }
+}
+
+function splitSentences(text: string): string[] {
+  const parts = text.split(/(?<=[.!?;])\s+/);
+  return parts.map((s) => s.trim()).filter(Boolean);
+}
+
+interface FreezePos {
+  agentId: AgentId;
+  text: string;
+  sentenceIdx: number;
+  onSentenceStart: (sentence: string) => void;
+}
+
+// ── hook ──────────────────────────────────────────────────────────────────────
+export function useCeremonyVoice(hookOpts: {
+  onBargeDetected: (transcript: string) => void;
+}): CeremonyVoiceController {
+  const [status, setStatus] = useState<CeremonyVoiceStatus>("idle");
+  const [activeSpeaker, setActiveSpeaker] = useState<AgentId | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const supported =
+    typeof window !== "undefined" &&
+    !!navigator.mediaDevices?.getUserMedia &&
+    typeof RTCPeerConnection !== "undefined";
+
+  const listenRef = useRef(false);
+  const statusRef = useRef<CeremonyVoiceStatus>("idle");
+
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const dcRef = useRef<RTCDataChannel | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const audioQueueRef = useRef<AudioQueue>(new AudioQueue());
+  // Saved when barge fires so resumeFromFreeze can restart from the same sentence.
+  const freezeRef = useRef<FreezePos | null>(null);
+
+  // Incremented on barge (kills the current voiceTurn loop) and on stopListening.
+  const genRef = useRef(0);
+
+  // Stable ref so the WebRTC message handler always has the latest callback.
+  const onBargeRef = useRef(hookOpts.onBargeDetected);
+  onBargeRef.current = hookOpts.onBargeDetected;
+
+  const setPhase = useCallback((s: CeremonyVoiceStatus) => {
+    statusRef.current = s;
+    setStatus(s);
+  }, []);
+
+  // ── _voiceTurn (internal) ─────────────────────────────────────────────────
+  // Called with a specific gen so the loop exits when genRef changes (barge/stop).
+  const _voiceTurn = useCallback(
+    async (
+      agentId: AgentId,
+      text: string,
+      onSentenceStart: (sentence: string) => void,
+      gen: number,
+      startSentenceIdx: number,
+    ) => {
+      if (genRef.current !== gen) return;
+      setPhase("speaking");
+      setActiveSpeaker(agentId);
+      const sentences = splitSentences(text);
+
+      for (let si = startSentenceIdx; si < sentences.length; si++) {
+        if (genRef.current !== gen) return;
+        const sentence = sentences[si];
+
+        // Save freeze position BEFORE synthesis — if barge fires during await synthesizeSpeech,
+        // the freeze will correctly point to this sentence.
+        freezeRef.current = { agentId, text, sentenceIdx: si, onSentenceStart };
+
+        let audio64 = "";
+        try {
+          const spoken = await synthesizeSpeech({ data: { text: sentence, agentId } });
+          if (genRef.current !== gen) return;
+          if (spoken.ok) audio64 = spoken.audioBase64;
+        } catch {
+          // Skip sentence on TTS error
+        }
+
+        if (genRef.current !== gen) return;
+        if (!audio64) continue;
+
+        // Wait for this sentence's audio to finish playing (or barge to stop the queue).
+        await new Promise<void>((resolve) => {
+          audioQueueRef.current.add(audio64, () => {
+            onSentenceStart(sentence);
+          });
+          const check = setInterval(() => {
+            if (!audioQueueRef.current.isActive() || genRef.current !== gen) {
+              clearInterval(check);
+              resolve();
+            }
+          }, 50);
+        });
+
+        if (genRef.current !== gen) return;
+      }
+
+      freezeRef.current = null;
+      setActiveSpeaker(null);
+      if (genRef.current === gen) setPhase(listenRef.current ? "listening" : "idle");
+    },
+    [setPhase],
+  );
+
+  // ── voiceTurn (public) ────────────────────────────────────────────────────
+  const voiceTurn = useCallback(
+    async (
+      agentId: AgentId,
+      text: string,
+      opts: { onSentenceStart: (sentence: string) => void },
+    ) => {
+      await _voiceTurn(agentId, text, opts.onSentenceStart, genRef.current, 0);
+    },
+    [_voiceTurn],
+  );
+
+  // ── resumeFromFreeze ──────────────────────────────────────────────────────
+  const resumeFromFreeze = useCallback(async () => {
+    const saved = freezeRef.current;
+    if (!saved) return;
+    freezeRef.current = null;
+    const gen = genRef.current; // picks up the new gen from after the barge
+    await _voiceTurn(saved.agentId, saved.text, saved.onSentenceStart, gen, saved.sentenceIdx);
+  }, [_voiceTurn]);
+
+  const clearFreeze = useCallback(() => {
+    freezeRef.current = null;
+  }, []);
+
+  // ── stopListening ─────────────────────────────────────────────────────────
+  const stopListening = useCallback(() => {
+    genRef.current += 1;
+    listenRef.current = false;
+    audioQueueRef.current.clearAndStop();
+    freezeRef.current = null;
+    dcRef.current?.close();
+    dcRef.current = null;
+    pcRef.current?.close();
+    pcRef.current = null;
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    setActiveSpeaker(null);
+    setPhase("idle");
+  }, [setPhase]);
+
+  // ── startListening ────────────────────────────────────────────────────────
+  const startListening = useCallback(async () => {
+    if (!supported) {
+      setError("Voice barge-in isn't supported on this device.");
+      setPhase("error");
+      return;
+    }
+    if (listenRef.current) return;
+    setError(null);
+    genRef.current += 1;
+    const gen = genRef.current;
+
+    try {
+      const session = await getRealtimeSession({ data: {} });
+      if (!session.ok) throw new Error(session.error);
+      const ephemeralKey = session.clientSecret;
+
+      if (genRef.current !== gen) return;
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      streamRef.current = stream;
+
+      if (genRef.current !== gen) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
+      const pc = new RTCPeerConnection();
+      pcRef.current = pc;
+
+      for (const track of stream.getAudioTracks()) {
+        pc.addTrack(track, stream);
+      }
+      // Mute remote track immediately — we use OAI Realtime for VAD+STT only, not output.
+      pc.ontrack = (e) => {
+        e.track.enabled = false;
+      };
+
+      const dc = pc.createDataChannel("oai-events");
+      dcRef.current = dc;
+
+      dc.onopen = () => {
+        dc.send(
+          JSON.stringify({
+            type: "session.update",
+            session: {
+              modalities: ["text"],
+              input_audio_transcription: { model: "whisper-1" },
+              turn_detection: {
+                type: "server_vad",
+                silence_duration_ms: 800,
+                threshold: 0.5,
+                create_response: false,
+              },
+            },
+          }),
+        );
+        listenRef.current = true;
+        setPhase("listening");
+      };
+
+      dc.onmessage = (e) => {
+        if (genRef.current !== gen) return;
+        let msg: { type: string; [k: string]: unknown };
+        try {
+          msg = JSON.parse(e.data as string) as { type: string; [k: string]: unknown };
+        } catch {
+          return;
+        }
+
+        switch (msg.type) {
+          case "input_audio_buffer.speech_started": {
+            // Barge detected: stop current audio and kill the voiceTurn loop via gen increment.
+            // freezeRef.current already points to the current sentence (set before synthesis).
+            if (statusRef.current === "speaking" || audioQueueRef.current.isActive()) {
+              audioQueueRef.current.clearAndStop();
+              genRef.current += 1; // kills the current _voiceTurn loop
+              setPhase("frozen");
+            }
+            dc.send(JSON.stringify({ type: "response.cancel" }));
+            break;
+          }
+
+          case "input_audio_buffer.committed":
+            dc.send(JSON.stringify({ type: "response.cancel" }));
+            break;
+
+          case "conversation.item.input_audio_transcription.completed": {
+            const transcript = (msg.transcript as string | undefined)?.trim() ?? "";
+            if (transcript.length >= 2) {
+              onBargeRef.current(transcript);
+            }
+            break;
+          }
+
+          case "error":
+            console.error("[CeremonyVoice] OAI error:", msg);
+            break;
+        }
+      };
+
+      dc.onerror = (e) => console.error("[CeremonyVoice] DC error:", e);
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const sdpRes = await fetch(
+        "https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${ephemeralKey}`,
+            "Content-Type": "application/sdp",
+          },
+          body: offer.sdp,
+        },
+      );
+      if (!sdpRes.ok) {
+        throw new Error(
+          `OAI Realtime SDP ${sdpRes.status}: ${(await sdpRes.text()).slice(0, 200)}`,
+        );
+      }
+      const answerSdp = await sdpRes.text();
+      await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+    } catch (err) {
+      if (genRef.current !== gen) return;
+      const name = err instanceof DOMException ? err.name : "";
+      const msg =
+        name === "NotAllowedError" || name === "PermissionDeniedError"
+          ? "Mic permission denied — allow access to enable voice barge-in."
+          : err instanceof Error
+            ? err.message
+            : "Microphone unavailable";
+      setError(msg);
+      setPhase("error");
+      stopListening();
+    }
+  }, [supported, setPhase, stopListening]);
+
+  return {
+    status,
+    activeSpeaker,
+    error,
+    supported,
+    startListening,
+    stopListening,
+    voiceTurn,
+    resumeFromFreeze,
+    clearFreeze,
+  };
+}
