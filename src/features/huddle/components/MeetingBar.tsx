@@ -964,7 +964,7 @@ function TranscriptPanel({
             </Button>
           </div>
           <p className="mt-1.5 px-1 text-[10px] text-muted-foreground">
-            Messages queue politely — answered after the current turn, not over the speaker.
+            Cut in any time — the current speaker stops and answers you.
           </p>
         </div>
       )}
