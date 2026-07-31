@@ -49,9 +49,24 @@ access.
 - AC-7: No newly-added `catch {}` silently swallows — every catch logs or returns the error.
 - AC-8: The existing chunking/resumable mechanism (`CHUNK_BUDGET_MS`, `progress`, `remainingQueue`)
   is untouched — this is diagnostic visibility only, not new chunking behavior.
-**Status:** open — ACs written, sign-off + implementation not yet started.
-**Evidence:** workflow run https://github.com/deventerpriseds-org/huddle-extension-app/actions/runs/30587309137,
-job log lines showing the two `HTTP 500 .../_serverFn/<hash>` entries and the 150s/180s timeouts.
+**Status:** CLOSED (the visibility fix) 2026-07-31 — implemented (commit `f8d07bb`), deployed
+(run 30592726001, success), and independently verified live by a cold `verifier` subagent:
+- AC-1/2/3/6: PASS — verifier found a genuine way to trigger a real backend exception (a huddleId
+  with an embedded NUL byte, which Postgres rejects as invalid UTF8) against LIVE production, and
+  confirmed both `enqueueHuddleTurn` and `getTurnUpdates` now return HTTP 200 with the real Postgres
+  error message in the body, instead of an opaque 500.
+- AC-4/7: PASS — diff-confirmed both new catches call `console.error` with the real `err` object
+  before returning; no swallowed catch.
+- AC-5/8: PASS — diff-confirmed the three success-path `return` statements and the `getTurns`
+  mapping are byte-identical to before (only re-indented); `CHUNK_BUDGET_MS`/`progress`/
+  `remainingQueue` don't appear anywhere in the diff. Live-confirmed via a real 7-agent turn on
+  production completing normally (`done`, all 7 agents replied, no drops).
+**Important scope note — this closes the VISIBILITY gap, not the underlying standup-hang complaint.**
+We now have a mechanism to see the real error the next time a ceremony 500s in production, instead
+of an opaque failure. The original user-reported hang is still open until a real occurrence is
+captured with this fix live and root-caused from the actual message it now returns.
+**Evidence:** workflow runs 30587309137 (original repro), 30592726001 (this fix's deploy); verifier
+subagent's live NUL-byte test and live 7-agent turn against https://icy-flower-0f415200f.7.azurestaticapps.net.
 
 ### ACT-huddle-4: Ceremony barge-in reliability — silent self-kick failure can strand a barge for ~60s
 **Requested:** 2026-07-30, following ACT-huddle-3 — user asked why a barged mid-ceremony message
