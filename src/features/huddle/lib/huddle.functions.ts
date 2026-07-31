@@ -3992,25 +3992,35 @@ export const enqueueHuddleTurn = createServerFn({ method: "POST" })
     } catch {
       email = data.caller?.entra_email ?? null;
     }
-    const { enqueueTurn, claimTurn, getTurn } = await import("./tasks/turns.server");
-    await enqueueTurn(turnId, data.huddleId, email, turnData);
-    // Claim + run right now (fast path). If another runner (cron) already grabbed it, fall through
-    // to reporting status so we never double-run (the client then polls getTurnUpdates for the result).
-    const claimed = await claimTurn(turnId);
-    if (claimed) {
-      const result = await executeClaimedTurn(claimed);
-      if (result) {
-        // The first chunk ran here. If more agents remain it's 'partial': return the replies produced
-        // so far AND status 'partial' so the client renders them immediately and keeps polling for the
-        // rest (streamed as later chunks land). Otherwise it's fully 'done'.
-        const partial = (result as { partial?: boolean }).partial === true;
-        return { turnId, status: (partial ? "partial" : "done") as string, result, error: null as string | null };
+    // ACT-huddle-3: everything below used to run unguarded — an exception anywhere in here (including
+    // inside executeClaimedTurn's own catch path, e.g. if failTurn's DB write itself throws) bypassed
+    // the chunked/resumable turn mechanism entirely and surfaced to the browser as an opaque 500 with
+    // no message. Wrap it so the real error is both logged server-side and returned to the client.
+    try {
+      const { enqueueTurn, claimTurn, getTurn } = await import("./tasks/turns.server");
+      await enqueueTurn(turnId, data.huddleId, email, turnData);
+      // Claim + run right now (fast path). If another runner (cron) already grabbed it, fall through
+      // to reporting status so we never double-run (the client then polls getTurnUpdates for the result).
+      const claimed = await claimTurn(turnId);
+      if (claimed) {
+        const result = await executeClaimedTurn(claimed);
+        if (result) {
+          // The first chunk ran here. If more agents remain it's 'partial': return the replies produced
+          // so far AND status 'partial' so the client renders them immediately and keeps polling for the
+          // rest (streamed as later chunks land). Otherwise it's fully 'done'.
+          const partial = (result as { partial?: boolean }).partial === true;
+          return { turnId, status: (partial ? "partial" : "done") as string, result, error: null as string | null };
+        }
+        const rec = await getTurn(turnId);
+        return { turnId, status: (rec?.status ?? "error") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
       }
       const rec = await getTurn(turnId);
-      return { turnId, status: (rec?.status ?? "error") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
+      return { turnId, status: (rec?.status ?? "queued") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[enqueueHuddleTurn] unhandled error (turn ${turnId}, huddle ${data.huddleId}):`, err);
+      return { turnId, status: "error" as string, result: null as HuddleTurnResult | null, error: message };
     }
-    const rec = await getTurn(turnId);
-    return { turnId, status: (rec?.status ?? "queued") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
   });
 
 /** The public VAPID key the browser needs to create a push subscription (null if push isn't set up). */
@@ -4024,30 +4034,47 @@ const TurnUpdatesInput = z.object({
   huddleId: z.string(),
   sinceMs: z.number().optional(),
 });
+type TurnUpdateDTO = {
+  id: string;
+  status: string;
+  error: string | null;
+  updated_ms: number;
+  seq: number;
+  replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
+  result: HuddleTurnResult | null;
+};
 export const getTurnUpdates = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => TurnUpdatesInput.parse(raw))
   .handler(async ({ data }) => {
-    const { getTurnsSince } = await import("./tasks/turns.server");
-    const rows = await getTurnsSince(data.huddleId, data.sinceMs ?? 0);
-    // Trim to a serializable DTO (drop the raw payload; type result like the live turn result).
-    // `replies` + `seq` carry the incrementally-streamed per-agent replies for in-flight
-    // ('partial'/'running') turns so the client renders them as they land; `result` is the full
-    // payload set once the turn is 'done'. The client keys agent messages on reply index (idempotent),
-    // so a partial turn re-appearing with more replies just appends the new ones.
-    const turns = rows.map((t) => ({
-      id: t.id,
-      status: t.status as string,
-      error: t.error,
-      updated_ms: t.updated_ms,
-      seq: t.seq,
-      replies: (t.replies ?? []) as {
-        agentId: AgentId;
-        text: string;
-        artifacts?: { id: string; name: string }[];
-      }[],
-      result: (t.result ?? null) as HuddleTurnResult | null,
-    }));
-    return { turns };
+    // ACT-huddle-3: this used to run unguarded — an exception from getTurnsSince surfaced to the
+    // browser as an opaque 500 with no message, indistinguishable from any other failure. Wrap it.
+    try {
+      const { getTurnsSince } = await import("./tasks/turns.server");
+      const rows = await getTurnsSince(data.huddleId, data.sinceMs ?? 0);
+      // Trim to a serializable DTO (drop the raw payload; type result like the live turn result).
+      // `replies` + `seq` carry the incrementally-streamed per-agent replies for in-flight
+      // ('partial'/'running') turns so the client renders them as they land; `result` is the full
+      // payload set once the turn is 'done'. The client keys agent messages on reply index (idempotent),
+      // so a partial turn re-appearing with more replies just appends the new ones.
+      const turns: TurnUpdateDTO[] = rows.map((t) => ({
+        id: t.id,
+        status: t.status as string,
+        error: t.error,
+        updated_ms: t.updated_ms,
+        seq: t.seq,
+        replies: (t.replies ?? []) as {
+          agentId: AgentId;
+          text: string;
+          artifacts?: { id: string; name: string }[];
+        }[],
+        result: (t.result ?? null) as HuddleTurnResult | null,
+      }));
+      return { turns };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[getTurnUpdates] unhandled error (huddle ${data.huddleId}):`, err);
+      return { turns: [] as TurnUpdateDTO[], error: message };
+    }
   });
 
 /** Reminders that have fired for a huddle since `sinceMs` — the client renders each as an agent message. */
