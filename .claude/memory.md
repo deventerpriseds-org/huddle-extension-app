@@ -1,5 +1,5 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 ## Purpose & goals
 Huddle: a multi-agent AI life-assistant (15 role-agents) integrated with the **journey** app.
@@ -99,6 +99,31 @@ Every mistake must make the next session more efficient. Append, never delete.
   a SEPARATE code path and is UNTOUCHED by this work. The other concurrent session flagged this correctly.
   ACT-huddle-5 caption-reveal (AC-1..AC-10) targets the ceremony TTS path — may be able to route ceremony
   audio through the new AudioQueue's onStart callback rather than building a second mechanism.
+
+  **[2026-07-31 CORRECTION / ADDITIVE UPDATE to the above ACT-huddle-4 entry]**
+  `useGroupVoiceRealtime.ts` was REVERTED from main (commit `a752d91`, "revert: restore useGroupVoice on
+  live group voice button (ceremony work is the real target)"). The live group voice mic/orb button path
+  was restored to the original `useGroupVoice` hook. The DEPLOY (run 30603377514) above reflects the now-
+  reverted state — it should NOT be taken as "this hook is in prod"; it was reverted in the same session.
+  The AudioQueue / WebRTC / FreezePos concepts from the reverted hook were repurposed into `useCeremonyVoice.ts`.
+  Created: **`useCeremonyVoice.ts`** (commit `5b89cfe`) — ceremony-specific voice hook. Contains AudioQueue
+  class, FreezePos interface, generation counter, WebRTC RTCPeerConnection with oai-events DataChannel for
+  VAD barge detection, ElevenLabs per-sentence TTS. Returns: `{ status, activeSpeaker, error, supported,
+  startListening, stopListening, voiceTurn, resumeFromFreeze, clearFreeze }`. IS in main.
+  `realtime.functions.ts` (ephemeral key server fn) also remains in main.
+  **New workflow**: `ceremony-barge-screenshots.yml` (commit `baeb23d`, main) — runs the Tier 1 barge test
+  and commits 6 PNG screenshots to the `ceremony-barge-screenshots` branch.
+  **Ceremony barge-in Tier 1 test** (`e2e/ceremony-barge-tier1.e2e.mjs`): **10/10 PASS**, GHA run
+  30638493304. Screenshots at `e2e/ceremony-screenshots/` committed to branch (SHA `0f630d1b`).
+  **ACT-huddle-12 logged** (actions.md, commit `bfa1c43`, main): ceremony UI redesign — Transcript tab +
+  Chat tab split, remove "Passing your message to the room", prove true mid-sentence TTS stop with a
+  content-specific barge response + ceremony resume. ACs proposed (AC-1..AC-9), awaiting user sign-off.
+  User's three criticisms of Tier 1 proof: (1) no visible transcript text while Terry was "speaking,"
+  (2) "Passing your message" is nonsensical in live virtual meetings, (3) agent reply proved nothing
+  about barge acknowledgment. Architecture mapped: spoken text appears via `onSentenceStart(sentence)` →
+  `addMeetingTurns` → `TranscriptRow` — text never stored as hook state; barge path sends to server but
+  does NOT clear client AudioQueue; "Passing your message" is at MeetingBar.tsx:250 in `routeTurn`.
+
 - **ACT-huddle-3 — Mobile Composer overlay fix:** AC subagent ran (12 ACs delivered, awaiting user sign-off).
   Waiting on user to confirm ACs before any code is written.
 
