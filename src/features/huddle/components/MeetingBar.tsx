@@ -870,7 +870,11 @@ function MeetingRoom({
               setInput={setInput}
               onSend={sendMessage}
               busy={busy}
-              membersCount={meeting.members.length}
+              // A 1:1 room never populates meeting.members (only ceremonies seat a roster there —
+              // see startMeeting in store.ts); a 1:1's send target is meeting.activeSpeakerId, which
+              // is always set. Using meeting.members.length here left the Send button permanently
+              // disabled for every 1:1, since it was always 0.
+              membersCount={isVirtual ? meeting.members.length : 1}
             />
           )}
         </aside>
