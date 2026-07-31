@@ -187,9 +187,30 @@ speaking her transcript text should be seen."
   500ms of the barge (`pauses 0→1`), Tess answered the barge specifically ("Seven times eleven is
   seventy-seven."), and "Passing your message" never appeared. Screenshots 00–06 on branch
   `ceremony-barge-screenshots`. **Still needs the user to confirm live in their own browser.**
-- **[OPEN]** Problem #1 — the two-tab **Transcript** + **Chat** ceremony UI redesign — and the
-  full "resume the ceremony from exactly where it stopped after the barge" behavior are NOT done here.
-  ACs pending `/define-acceptance-criteria`; requires the ceremony UI investigation before coding.
+- **[IMPLEMENTED — deployed to `main`, mechanism UAT PASS 8/9, content BLOCKED on OpenAI quota, NOT
+  user-confirmed]** "Option 1 + interrupted marker" for the immediate barge answer (commit `0d5ca1e`).
+  Root cause found first (user was right): a prior commit `5b89cfe` PROMISED mid-utterance barge but
+  only shipped the audio-stop half — the ANSWER still went through the server `handleBarges` which is
+  explicitly "between speakers, never mid-speaker" (`huddle.functions.ts:3417`), and the client resume
+  waited for that between-speakers reply. Fix decouples the barge answer from the server queue:
+  `useCeremonyVoice.bargeFreeze()` (stop audio + keep freezeRef + keep mic), render the user's message
+  immediately (voice path too — it never did before), fetch ONE answer via a scoped 1:1
+  `sendHuddleMessage(targetAgentId)` (scope MUST be one-to-one — `routeMessage:86` ignores targetAgentId
+  under "group"), speak it via `speakInterjection` (doesn't clobber freezeRef), mark the cut row
+  `[interrupted]`, then `resumeFromFreeze`; `emit()` parks via `bargeActiveRef` so no scripted speaker
+  slips in; freeze-time watchdog unparks if STT yields nothing. New testids on TranscriptRow. Independent
+  AC subagent wrote 12 ACs. GHA run **30648927649 = 8 passed / 1 failed**: AC-1 visible user barge row ✔,
+  AC-3 speaker cut ≤500ms (pause fired) ✔, AC-5 `[interrupted]` marker (count=1) ✔, AC-6 the answer row
+  (kind="answer", Terry) appeared BEFORE any scripted speaker ✔, no "queue politely"/"Passing your
+  message" ✔. **The 1 failure is AC-8 (answer contains "77") ONLY because the app's OpenAI account is
+  out of quota — every agent (barge answer AND all scripted speakers) returned "(couldn't respond —
+  OpenAI is out of API quota)".** That is an environment blocker, NOT a code defect (per CLAUDE.md
+  "fail fast on quota — don't interpret results until restored"). Screenshots 01–04 on branch
+  `ceremony-barge-screenshots` (02-barged shows the visible message + `[interrupted]` marker + corrected
+  hint copy). **AC-8 content + live user confirmation are BLOCKED until the OpenAI account is topped up.**
+- **[OPEN]** Problem #1 — the two-tab **Transcript** + **Chat** ceremony UI redesign — remains. (A live
+  "Live transcript" panel already exists; the explicit Chat/Transcript tab split does not.) Also open:
+  pivot to Option 3 (true broken-WORD text) if the sentence-granularity cut isn't crisp enough live.
 
 ### ACT-huddle-3: Standup ceremony hang — root cause is HTTP 500s on enqueueHuddleTurn/getTurnUpdates
 **Requested:** 2026-07-30 — "use the new uat skill to finally experience what i am experiencing with

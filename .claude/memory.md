@@ -146,6 +146,33 @@ Every mistake must make the next session more efficient. Append, never delete.
   Transcript/Chat UI redesign (problem #1) and full resume-from-interruption-point. Per org rule, NOT
   writing "fixed" — awaiting the user's own live browser confirmation.
 
+  **[2026-07-31 FOLLOW-UP #2 — "Option 1" immediate barge answer IMPLEMENTED, deployed, mechanism UAT
+  PASS 8/9, content BLOCKED on OpenAI quota]** User pushed back that the earlier fix still (a) hid the
+  barge message, (b) answered "down the line" not "right there", (c) showed no broken sentence — and told
+  me to check history because "wait a turn to respond was already promised fixed." GROUND TRUTH (git+code):
+  prior commit `5b89cfe` promised mid-utterance barge but only shipped the audio-stop; the ANSWER still
+  routed through server `handleBarges` ("between speakers, never mid-speaker", `huddle.functions.ts:3417`)
+  and the client resume waited on that between-speakers reply — so "wait a turn" was NEVER actually fixed,
+  only the audio-stop half was. Approved approach "Option 1 + interrupted marker" (pivot to Option 3 = true
+  broken-WORD later if needed). Implemented (commit `0d5ca1e`, on `main`): `useCeremonyVoice.bargeFreeze()`
+  (stop audio + PRESERVE freezeRef + keep WebRTC mic), `speakInterjection()` (voice the answer WITHOUT
+  clobbering freezeRef via `_voiceTurn(...,trackFreeze:false)`), `onBargeStart` hook (parks emit at freeze
+  time, closes the freeze→STT race). MeetingBar `runBargeSequence`: render user msg (voice path too — was
+  invisible), fetch ONE answer via scoped **1:1** `sendHuddleMessage(targetAgentId)` — scope MUST be
+  one-to-one, `routeMessage:86` ignores targetAgentId under "group" (real bug I caught) — speak over the
+  frozen ceremony, `markLastAgentTurnInterrupted()`, `resumeFromFreeze()`; `emit()` parks via
+  `bargeActiveRef`; 12s watchdog unparks if STT yields nothing. store: `CeremonyTurn.interrupted?/kind?` +
+  `markLastAgentTurnInterrupted`. TranscriptRow: `data-turn-user/agent/kind/interrupted` testids + visible
+  `[interrupted]`. Server barge queue LEFT in place (additive rule; now a no-op for the ceremony path).
+  tsc+vite build clean. GHA run **30648927649 = 8 passed / 1 failed**. PASS: AC-1 visible user barge row,
+  AC-3 cut ≤500ms (pause fired), AC-5 `[interrupted]` marker (count=1), AC-6 answer row (kind="answer")
+  BEFORE any scripted speaker, no "queue politely"/"Passing your message". **FAIL = AC-8 only** ("77" in the
+  answer) because the app's **OpenAI account is out of quota** — barge answer AND every scripted speaker
+  returned "(couldn't respond — OpenAI is out of API quota)". Environment blocker, not a code defect (see
+  CLAUDE.md "fail fast on quota"). AC-8 content + live user confirm BLOCKED until quota topped up. CI
+  timeout also raised 10→20min (a slow `playwright install` cancelled a run mid-install). Screenshots 01–04
+  on `ceremony-barge-screenshots` (02-barged proves message-visible + `[interrupted]` + corrected hint).
+
 - **ACT-huddle-3 — Mobile Composer overlay fix:** AC subagent ran (12 ACs delivered, awaiting user sign-off).
   Waiting on user to confirm ACs before any code is written.
 
