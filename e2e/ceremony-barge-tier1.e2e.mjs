@@ -1,20 +1,17 @@
 /**
- * Tier 1 ceremony barge-in test — MULTIPLE barges at different points.
+ * Ceremony mid-block barge-in — proves the behavior the user actually asked for:
+ *   ceremony runs with REAL multi-sentence blocks → barge an agent MID-BLOCK (sentences still
+ *   un-spoken) → the agent's audio stops → the barge is answered right there → the SAME agent
+ *   RETURNS and FINISHES the remaining sentences of that exact block → repeat for a DIFFERENT agent.
  *
- * Answers the user's actual ask: ceremony starts, then SEVERAL barges are fired at different
- * moments, each proving mid-sentence interruption → immediate on-topic answer → return to the
- * ceremony. A screenshot is captured at EVERY interrupt and EVERY return (not one frame).
+ * Stack under test (the user's confirmed architecture): ElevenLabs voices + OpenAI brain + OpenAI
+ * Realtime VAD/barge. OAI Realtime SDP is blocked so the VOICE VAD path is non-fatal; the typed
+ * barge path (shared runBargeSequence) is exercised.
  *
- * Screenshots per barge N (1..3): 0N-a-interrupt, 0N-b-answer, 0N-c-return.
- * Plus 00-speaking (first speaker) and 99-final.
+ * Screenshots per barge N: 0N-a-interrupt (mid-block), 0N-b-answer, 0N-c-finished (block completed).
  *
- * Each barge asks a DISTINCT, checkable question so the answer proves it addressed THAT barge:
- *   1) seven times eleven  → 77
- *   2) capital of France   → paris
- *   3) two plus two        → 4 / four
- *
- * OAI Realtime SDP is blocked so the voice VAD path is non-fatal; the typed barge path (shared
- * runBargeSequence) is exercised here.
+ * Requires the DOM hooks added for this: data-turn-agent-id, data-block-id, data-sentence-index,
+ * data-block-total on agent transcript rows.
  */
 
 import { chromium } from "playwright";
@@ -29,11 +26,9 @@ const CHROMIUM_PATH = (() => {
   try { return fs.existsSync(CCR_CHROMIUM) ? CCR_CHROMIUM : undefined; } catch { return undefined; }
 })();
 
-// Distinct barges fired at successive points in the ceremony.
 const BARGES = [
   { msg: "BARGE-1: quick one — what is seven times eleven?", re: "\\b77\\b|seventy[- ]seven" },
   { msg: "BARGE-2: and what is the capital of France?", re: "\\bparis\\b" },
-  { msg: "BARGE-3: last one — what is two plus two?", re: "\\b4\\b|\\bfour\\b" },
 ];
 
 let passed = 0, failed = 0;
@@ -47,41 +42,49 @@ async function shot(page, name) {
   await page.screenshot({ path: p, fullPage: false });
   console.log(`  📸  ${p}`);
 }
-async function rows(page) {
-  return page.$$eval('[data-testid="transcript-turn"]', (els) =>
+// All agent rows with their block provenance, in DOM order.
+async function agentRows(page) {
+  return page.$$eval('[data-testid="transcript-turn"][data-turn-agent="true"]', (els) =>
     els.map((e) => ({
-      text: (e.textContent || "").trim(),
-      user: e.getAttribute("data-turn-user") === "true",
+      agentId: e.getAttribute("data-turn-agent-id") || "",
       kind: e.getAttribute("data-turn-kind") || "",
       interrupted: e.getAttribute("data-turn-interrupted") === "true",
+      blockId: e.getAttribute("data-block-id") || "",
+      sentenceIndex: parseInt(e.getAttribute("data-sentence-index") || "-1", 10),
+      blockTotal: parseInt(e.getAttribute("data-block-total") || "0", 10),
+      text: (e.textContent || "").trim(),
     })),
   );
 }
-async function ceremonyRunning(page) {
-  // The "Running…" control is present while the ceremony step is live.
-  return (await page.locator('text=/Running…|is speaking|is answering|Resuming/').count()) > 0;
+// Find an agent that is CURRENTLY mid-block: a real block (>=3 sentences) with >=1 sentence
+// revealed and >=1 still un-spoken, not yet interrupted.
+async function findMidBlock(page) {
+  const rows = (await agentRows(page)).filter((r) => r.kind !== "answer" && r.blockId);
+  const byBlock = new Map();
+  for (const r of rows) {
+    if (!byBlock.has(r.blockId)) byBlock.set(r.blockId, { agentId: r.agentId, blockId: r.blockId, blockTotal: r.blockTotal, revealed: 0, interrupted: false });
+    const b = byBlock.get(r.blockId);
+    b.revealed += 1;
+    if (r.interrupted) b.interrupted = true;
+  }
+  const blocks = [...byBlock.values()];
+  const last = blocks[blocks.length - 1];
+  if (last && last.blockTotal >= 3 && last.revealed >= 1 && last.revealed < last.blockTotal && !last.interrupted) return last;
+  return null;
 }
 
 if (!UAT_TOKEN) { console.error("UAT_BYPASS_TOKEN env var is required"); process.exit(1); }
 fs.mkdirSync(SHOT_DIR, { recursive: true });
-console.log(`\nCeremony barge-in — MULTIPLE barges — ${BASE_URL}\n`);
+console.log(`\nCeremony MID-BLOCK barge — ${BASE_URL}\n`);
 
 const launchOpts = {
   headless: true,
-  args: [
-    "--use-fake-ui-for-media-stream",
-    "--use-fake-device-for-media-stream",
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--autoplay-policy=no-user-gesture-required",
-  ],
+  args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--no-sandbox", "--disable-setuid-sandbox", "--autoplay-policy=no-user-gesture-required"],
 };
 if (CHROMIUM_PATH) launchOpts.executablePath = CHROMIUM_PATH;
 
 const browser = await chromium.launch(launchOpts);
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-
-// Instrument Audio so we can prove the cut (AudioQueue uses detached `new Audio()` elements).
 await ctx.addInitScript(() => {
   window.__audioLog = [];
   const RealAudio = window.Audio;
@@ -114,100 +117,87 @@ try {
   await startBtn.click();
   ok(true, "Ceremony started");
 
-  // Wait for the first real spoken sentence.
-  await page.waitForFunction(
-    () => [...document.querySelectorAll('[data-testid="transcript-turn"]')]
-      .some((t) => (t.textContent || "").replace(/\s+/g, " ").trim().length >= 12),
-    { timeout: 120_000 },
-  );
-  await shot(page, "00-speaking");
-
   const textarea = page.locator('textarea[placeholder*="Message the room"]');
 
   for (let n = 0; n < BARGES.length; n++) {
     const b = BARGES[n];
     const tag = `0${n + 1}`;
-    console.log(`\n=== Barge ${n + 1}: "${b.msg}" ===`);
+    console.log(`\n=== Barge ${n + 1}: mid-block — "${b.msg}" ===`);
 
-    // Make sure the ceremony is still live and a speaker is (about to be) mid-turn.
-    if (!(await ceremonyRunning(page))) {
-      console.log(`  ⓘ  Ceremony no longer running — stopping at ${n} barges.`);
-      break;
+    // Wait until SOME agent is genuinely mid-block (real multi-sentence block, >=1 remaining).
+    console.log("  … waiting for an agent to be mid-block (real multi-sentence update)…");
+    let block = null;
+    const deadline = Date.now() + 150_000;
+    while (Date.now() < deadline) {
+      block = await findMidBlock(page);
+      if (block) break;
+      await page.waitForTimeout(150);
     }
-    // Nudge to a fresh speaking moment: wait briefly for a sentence to be on screen.
-    await page.waitForFunction(
-      () => [...document.querySelectorAll('[data-testid="transcript-turn"]')].some((t) => !t.getAttribute("data-turn-user")),
-      { timeout: 30_000 },
-    ).catch(() => {});
+    if (!block) { ok(false, `Barge ${n + 1}: never caught an agent mid-block`); break; }
+    ok(block.blockTotal >= 3 && block.revealed < block.blockTotal,
+      `Barge ${n + 1}: agent ${block.agentId} is MID-BLOCK (${block.revealed}/${block.blockTotal} sentences shown, ${block.blockTotal - block.revealed} remaining)`);
 
-    const rowsBefore = (await rows(page)).length;
-    const playsBefore = await page.evaluate(() => (window.__audioLog || []).filter((e) => e.ev === "play").length);
     const sendAt = await page.evaluate(() => Date.now());
-
-    await textarea.waitFor({ state: "visible", timeout: 10_000 });
+    const playsBefore = await page.evaluate(() => (window.__audioLog || []).filter((e) => e.ev === "play").length);
     await textarea.fill(b.msg);
     await textarea.press("Enter");
 
-    // Interrupt: user row visible + (if audio was playing) a pause fired.
+    // Interrupt: user row + the mid-block row marked interrupted + audio paused.
     let userSeen = false;
     for (let i = 0; i < 20; i++) {
-      if ((await rows(page)).some((r) => r.user && r.text.includes(b.msg.split(":")[1].trim().slice(0, 12)))) { userSeen = true; break; }
+      const rs = await page.$$eval('[data-testid="transcript-turn"][data-turn-user="true"]', (els) => els.map((e) => (e.textContent || "").trim()));
+      if (rs.some((t) => t.includes(b.msg.split(":")[1].trim().slice(0, 12)))) { userSeen = true; break; }
       await page.waitForTimeout(50);
     }
-    ok(userSeen, `Barge ${n + 1}: your message is visible in the transcript`);
+    ok(userSeen, `Barge ${n + 1}: your message is visible`);
     let paused = false;
     for (let i = 0; i < 10; i++) {
       paused = await page.evaluate((at) => (window.__audioLog || []).some((e) => e.ev === "pause" && e.t >= at), sendAt);
       if (paused) break;
       await page.waitForTimeout(50);
     }
-    if (playsBefore > 0) ok(paused, `Barge ${n + 1}: speaker cut within 500ms (pause fired)`);
-    else console.log(`  ⓘ  Barge ${n + 1}: no audio playing to cut at this instant`);
+    if (playsBefore > 0) ok(paused, `Barge ${n + 1}: speaker cut mid-block within 500ms (pause fired)`);
+    // The interrupted row must belong to THIS block.
+    const interruptedOnBlock = (await agentRows(page)).some((r) => r.blockId === block.blockId && r.interrupted);
+    ok(interruptedOnBlock, `Barge ${n + 1}: the interrupted [marker] is on ${block.agentId}'s mid-block row`);
     await shot(page, `${tag}-a-interrupt`);
 
-    // Answer: a kind="answer" row, appearing before any next scripted speaker, containing the answer.
+    // Answer right there — before any NEW different-agent scripted row.
     const rx = new RegExp(b.re, "i");
-    let answerRow = null;
+    let answer = null;
     for (let i = 0; i < 120; i++) {
-      const added = (await rows(page)).slice(rowsBefore);
-      const idx = added.findIndex((r) => !r.user && r.kind === "answer");
-      if (idx !== -1) {
-        // A NEW scripted speaker = an agent row that is NOT the answer and NOT the interrupted row
-        // (the cut speaker's own line legitimately precedes the answer). If one appears before the
-        // answer, the barge was handled "down the line" instead of right there.
-        const scriptedBefore = added.slice(0, idx).some((r) => !r.user && r.kind !== "answer" && !r.interrupted);
-        ok(!scriptedBefore, `Barge ${n + 1}: answer appears BEFORE any next scripted speaker`);
-        answerRow = added[idx];
+      const rows = await agentRows(page);
+      const ansIdx = rows.findIndex((r) => r.kind === "answer" && rx.test(r.text));
+      if (ansIdx !== -1) {
+        const newScriptedBefore = rows.slice(0, ansIdx).some(
+          (r) => r.kind !== "answer" && !r.interrupted && r.agentId !== block.agentId && r.blockId !== block.blockId,
+        );
+        ok(!newScriptedBefore, `Barge ${n + 1}: answer lands before any NEW scripted speaker`);
+        answer = rows[ansIdx];
         break;
       }
       await page.waitForTimeout(500);
     }
-    if (answerRow) ok(rx.test(answerRow.text), `Barge ${n + 1}: answer addresses it — "${answerRow.text.slice(0, 80)}"`);
-    else ok(false, `Barge ${n + 1}: no answer row appeared`);
+    ok(!!answer, `Barge ${n + 1}: answer addresses it — "${answer ? answer.text.slice(0, 70) : "(none)"}"`);
     await shot(page, `${tag}-b-answer`);
 
-    // Return: the ceremony continues — a new scripted speaker row (or speaking phase) after the answer.
-    const afterAns = (await rows(page)).length;
-    let returned = false;
-    try {
-      await page.waitForFunction(
-        (prev) => {
-          const t = document.querySelectorAll('[data-testid="transcript-turn"]');
-          if (t.length > prev) return true;
-          return [...document.querySelectorAll("span")].some((s) => /is speaking|Resuming/.test(s.textContent || ""));
-        },
-        afterAns, { timeout: 45_000 },
-      );
-      returned = true;
-    } catch { returned = false; }
-    ok(returned, `Barge ${n + 1}: ceremony returns/continues after the answer`);
-    await shot(page, `${tag}-c-return`);
+    // RETURN + FINISH: the SAME agent + SAME block reaches its LAST sentence AFTER the answer.
+    console.log("  … waiting for the SAME agent to finish the interrupted block…");
+    let finished = false;
+    for (let i = 0; i < 160; i++) {
+      const blockRows = (await agentRows(page)).filter((r) => r.blockId === block.blockId);
+      const maxIdx = Math.max(-1, ...blockRows.map((r) => r.sentenceIndex));
+      const sameAgent = blockRows.every((r) => r.agentId === block.agentId);
+      if (maxIdx >= block.blockTotal - 1 && sameAgent) { finished = true; break; }
+      await page.waitForTimeout(500);
+    }
+    ok(finished, `Barge ${n + 1}: agent ${block.agentId} RETURNED and FINISHED the block (reached sentence ${block.blockTotal}/${block.blockTotal})`);
+    await shot(page, `${tag}-c-finished`);
 
-    await page.waitForTimeout(1500); // let a new speaker get going before the next barge
+    await page.waitForTimeout(1000);
   }
 
   await shot(page, "99-final");
-
   const unexpected = consoleErrors.filter((e) => !/blocked-by-test|realtime|OAI error|NotSupportedError|media|play\(\)/.test(e));
   ok(unexpected.length === 0, `No unexpected console errors (${consoleErrors.length} total, ${unexpected.length} unexpected)`);
 } catch (err) {
@@ -219,7 +209,7 @@ try {
 }
 
 console.log(`\n${"─".repeat(60)}`);
-console.log(`Ceremony multi-barge:  ${passed} passed  ${failed} failed`);
+console.log(`Ceremony mid-block barge:  ${passed} passed  ${failed} failed`);
 if (failures.length) { console.log("\nFailures:"); failures.forEach((f) => console.log(`  ✘ ${f}`)); }
 console.log(`Screenshots: ${SHOT_DIR}/`);
 console.log("─".repeat(60));

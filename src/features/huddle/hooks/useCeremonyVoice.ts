@@ -22,11 +22,12 @@ export interface CeremonyVoiceController {
   supported: boolean;
   startListening: () => Promise<void>;
   stopListening: () => void;
-  /** Speak agentId's full text sentence-by-sentence; onSentenceStart fires when audio begins. */
+  /** Speak agentId's full text sentence-by-sentence; onSentenceStart fires when a sentence's audio
+   *  begins, with its 0-based index within the block and the block's total sentence count. */
   voiceTurn: (
     agentId: AgentId,
     text: string,
-    opts: { onSentenceStart: (sentence: string) => void },
+    opts: { onSentenceStart: (sentence: string, sentenceIndex: number, blockTotal: number) => void },
   ) => Promise<void>;
   /**
    * Freeze the current speaker on a barge WITHOUT tearing down voice: stop audio + kill the loop,
@@ -41,7 +42,7 @@ export interface CeremonyVoiceController {
   speakInterjection: (
     agentId: AgentId,
     text: string,
-    opts: { onSentenceStart: (sentence: string) => void },
+    opts: { onSentenceStart: (sentence: string, sentenceIndex: number, blockTotal: number) => void },
   ) => Promise<void>;
   /** Resume the frozen agent from the exact sentence where the barge interrupted them. */
   resumeFromFreeze: () => Promise<void>;
@@ -105,7 +106,7 @@ interface FreezePos {
   agentId: AgentId;
   text: string;
   sentenceIdx: number;
-  onSentenceStart: (sentence: string) => void;
+  onSentenceStart: (sentence: string, sentenceIndex: number, blockTotal: number) => void;
 }
 
 // ── hook ──────────────────────────────────────────────────────────────────────
@@ -155,7 +156,7 @@ export function useCeremonyVoice(hookOpts: {
     async (
       agentId: AgentId,
       text: string,
-      onSentenceStart: (sentence: string) => void,
+      onSentenceStart: (sentence: string, sentenceIndex: number, blockTotal: number) => void,
       gen: number,
       startSentenceIdx: number,
       // When false (barge ANSWER), do NOT touch freezeRef — the interrupted speaker's resume point
@@ -190,7 +191,7 @@ export function useCeremonyVoice(hookOpts: {
         // Wait for this sentence's audio to finish playing (or barge to stop the queue).
         await new Promise<void>((resolve) => {
           audioQueueRef.current.add(audio64, () => {
-            onSentenceStart(sentence);
+            onSentenceStart(sentence, si, sentences.length);
           });
           const check = setInterval(() => {
             if (!audioQueueRef.current.isActive() || genRef.current !== gen) {
@@ -217,7 +218,7 @@ export function useCeremonyVoice(hookOpts: {
     async (
       agentId: AgentId,
       text: string,
-      opts: { onSentenceStart: (sentence: string) => void },
+      opts: { onSentenceStart: (sentence: string, sentenceIndex: number, blockTotal: number) => void },
     ) => {
       await _voiceTurn(agentId, text, opts.onSentenceStart, genRef.current, 0);
     },
@@ -240,7 +241,7 @@ export function useCeremonyVoice(hookOpts: {
     async (
       agentId: AgentId,
       text: string,
-      opts: { onSentenceStart: (sentence: string) => void },
+      opts: { onSentenceStart: (sentence: string, sentenceIndex: number, blockTotal: number) => void },
     ) => {
       genRef.current += 1;
       const gen = genRef.current;
