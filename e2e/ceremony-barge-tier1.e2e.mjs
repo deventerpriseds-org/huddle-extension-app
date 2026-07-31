@@ -131,7 +131,7 @@ try {
   ok(true, "Meeting stage opened");
 
   // "Start" button must be enabled (roster pre-populated)
-  const startBtn = page.getByRole("button", { name: "Start" });
+  const startBtn = page.getByRole("button", { name: "Start", exact: true });
   await startBtn.waitFor({ state: "visible", timeout: 5_000 });
   const startDisabled = await startBtn.getAttribute("disabled");
   ok(startDisabled === null, "Start button is enabled (roster pre-populated)");
