@@ -348,6 +348,26 @@ speaking her transcript text should be seen."
   browser confirmation, and per the user's explicit plan, using the new Chat tab to impersonate them via text
   and directly compare 1:1 chat vs 1:1 voice answers is the next step once they confirm the tab renders.
   Also open: pivot to Option 3 (true broken-WORD text) if the sentence-granularity cut isn't crisp enough live.
+  - **[2026-07-31 FOLLOW-UP — live user tested: "it renders but the send button is disabled so i wasnt able to
+    test sending a message".]** TWO separate bugs, both from the same root cause: a 1:1/adhoc room NEVER populates
+    `meeting.members` (only `kind === "virtual-meeting"` ceremonies seat a roster there — `startMeeting` in
+    `store.ts`), yet two independent places gated on `meeting.members.length` which is therefore always 0 for a
+    1:1. **Bug A (button visually disabled):** the Send button's `disabled={busy || !input.trim() || !membersCount}`
+    got `membersCount={meeting.members.length}` (always 0). Fixed → `membersCount={isVirtual ? meeting.members.length : 1}`
+    (commit `81261b1`). **Bug B (caught by the FIRST verifier pass on `81261b1`, NOT self-caught — the button-only
+    fix was incomplete):** `sendMessage()` had its OWN separate, earlier, unconditional guard
+    `if (!text || busy || !meeting.members.length) return;` that ran BEFORE the `isVirtual` branch, so even with
+    the button enabled, clicking Send silently no-op'd (no send, no toast, `busy` never set). Fixed → guard gated
+    on `isVirtual` (`(isVirtual && !meeting.members.length)`) so it only applies to group/ceremony rooms
+    (commit `ee64c66`). Second independent verifier pass on `ee64c66` traced the full 1:1 call chain
+    variable-by-variable end-to-end and confirmed it now genuinely reaches `await sendChatText(targetId, text)`
+    (`targetId = meeting.activeSpeakerId`, always populated), group-room "Invite an agent first" behavior
+    unchanged, no other `meeting.members` gate anywhere in the send path (all 15 hits checked), `tsc` clean,
+    single-file diff. Deployed to `main` via `deploy-swa.yml` run 30657433120 = success, head_sha `ee64c66`.
+    **STILL awaiting the user's live confirmation** that they can now type + Send in the 1:1 Chat tab — then the
+    same-brain A/B (chat vs voice, same question) is the next step. LESSON logged in memory.md Hardening:
+    fixing a disabled-BUTTON symptom is not the same as fixing the SEND PATH — trace the whole handler, not just
+    the `disabled=` attribute.
 
 ### ACT-huddle-3: Standup ceremony hang — root cause is HTTP 500s on enqueueHuddleTurn/getTurnUpdates
 **Requested:** 2026-07-30 — "use the new uat skill to finally experience what i am experiencing with
