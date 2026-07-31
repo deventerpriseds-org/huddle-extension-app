@@ -1,0 +1,40 @@
+name: Verify barge routing (independent)
+
+# Independent verifier run: drives the LIVE app, types ceremony barges, captures the
+# [barge] decision console line + answer agent, and prints STRUCTURED RESULTS json.
+# Commits screenshots to the ceremony-barge-screenshots branch.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify-barge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright + Chromium
+        run: npm install playwright && npx playwright install chromium --with-deps
+
+      - name: Run barge routing verification
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          SHOT_DIR: e2e/verify-barge-shots
+        run: node e2e/ceremony-barge-verify.e2e.mjs
+
+      - name: Commit screenshots to repo
+        if: always()
+        run: |
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          git add e2e/verify-barge-shots/ || true
+          git diff --cached --quiet || git commit -m "chore: independent barge routing verification screenshots [ci skip]"
+          git push origin HEAD:ceremony-barge-screenshots --force || true
