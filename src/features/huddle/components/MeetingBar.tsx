@@ -215,6 +215,10 @@ function MeetingRoom({
   const setSpeaker = useHuddleStore((s) => s.setSpeaker);
   const activeHuddleId = useHuddleStore((s) => s.activeHuddleId);
   const activeHuddle = useHuddleStore((s) => s.huddles.find((h) => h.id === s.activeHuddleId));
+  // The durable message store — a 1:1 meeting's transcript renders from this (filtered to the
+  // agent's dm-<id> thread), NOT from the ephemeral voice.captions, so it stays consistent with
+  // the 1:1 text chat and survives connect() resets / reloads. See roomTurns below.
+  const storeMessages = useHuddleStore((s) => s.messages);
   const { user } = useAuth();
   const now = useNow();
 
@@ -469,13 +473,26 @@ function MeetingRoom({
 
   const roomTurns: CeremonyTurn[] = useMemo(() => {
     if (isVirtual) return turns;
-    // 1:1 orb: render its live captions as transcript rows.
-    return voice.captions.map((c) => ({
-      text: c.text,
-      user: c.role === "user",
-      agentId: c.role === "agent" ? meeting.activeSpeakerId : undefined,
-    }));
-  }, [isVirtual, turns, voice.captions, meeting.activeSpeakerId]);
+    // 1:1: the meeting transcript IS the agent's durable DM thread (dm-<agent>) — the very same
+    // store messages the 1:1 text chat renders. So a typed Chat-tab message and a spoken utterance
+    // both land here (runTurn writes user + agent messages to dm-<agent>) and stay consistent
+    // across tabs, reconnects, and reloads. This previously read voice.captions, which is
+    // ephemeral, component-local, and cleared on every connect() — so replies that WERE correctly
+    // saved to the store (confirmed live: dm-iris-chase turns all `done` with replies) never
+    // appeared in the meeting transcript, only in the separate DM chat view.
+    const dmId = `dm-${meeting.activeSpeakerId}`;
+    return storeMessages
+      .filter(
+        (m) =>
+          m.huddleId === dmId && (m.author.kind === "user" || m.author.kind === "agent"),
+      )
+      .map((m) => ({
+        text: m.text,
+        user: m.author.kind === "user",
+        agentId: m.author.kind === "agent" ? (m.author.agentId as AgentId) : undefined,
+        ts: m.ts,
+      }));
+  }, [isVirtual, turns, storeMessages, meeting.activeSpeakerId]);
 
   const micOn = isVirtual ? voiceLive && !groupVoice.muted : voice.status === "connected" && !voice.micMuted;
 
@@ -662,12 +679,14 @@ function MeetingRoom({
 
     if (!isVirtual) {
       // 1:1 / ad-hoc voice call — routes through the SAME turn engine (enqueueHuddleTurn, real
-      // snapshot + model) a spoken utterance uses, via useVoiceCallRealtime.sendText. The
-      // transcript display updates through voice.captions (sendText/runTurn already write those
-      // — see roomTurns below), not addMeetingTurns, which only feeds the ceremony transcript and
-      // is unused for this meeting kind. sendChatText is undefined on the ElevenLabs backend,
-      // which has no equivalent send path — the Chat compose box is disabled for that case
-      // instead of calling this function (see TranscriptPanel's composeAllowed).
+      // snapshot + model) a spoken utterance uses, via useVoiceCallRealtime.sendText. sendText/
+      // runTurn write the user message AND the reply to the durable dm-<agent> store thread, which
+      // is exactly what the meeting transcript now renders from (see roomTurns above) — the same
+      // store thread the 1:1 text chat uses, so both surfaces stay consistent. Not addMeetingTurns,
+      // which only feeds the ceremony transcript and is unused for this meeting kind. sendChatText
+      // is undefined on the ElevenLabs backend, which has no equivalent send path — the Chat
+      // compose box is disabled for that case instead of calling this function (see
+      // TranscriptPanel's composeAllowed).
       if (!sendChatText) return;
       const targetId = meeting.activeSpeakerId;
       if (!targetId) return;
