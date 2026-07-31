@@ -255,7 +255,17 @@ speaking her transcript text should be seen."
   OpenAI is out of API quota)".** That is an environment blocker, NOT a code defect (per CLAUDE.md
   "fail fast on quota — don't interpret results until restored"). Screenshots 01–04 on branch
   `ceremony-barge-screenshots` (02-barged shows the visible message + `[interrupted]` marker + corrected
-  hint copy). **AC-8 content + live user confirmation are BLOCKED until the OpenAI account is topped up.**
+  hint copy).
+  **[2026-07-31 UPDATE — user topped up OpenAI; RE-RAN with live agents → run 30650682960 (post-hardening)
+  = ALL PASS.** Real content: `AC-8: answer — "Terry: Seven times eleven is seventy-seven."` and `AC-6:
+  barge-answer row BEFORE any scripted speaker`. Full behavior proven end-to-end with live agents (visible
+  message + mid-sentence cut + `[interrupted]` + immediate on-topic answer BEFORE the round-robin + resume).
+  Screenshot 03-answered shows it in one frame. Hardening (commit `a7f42c1`, from the independent verifier's
+  review): AC-6 ordering decoupled from AC-8 content in the test; barge-answer `sendHuddleMessage` raced
+  against a 30s timeout so a stalled fetch can't leave `emit()` parked. Deployed to `main`, tsc+vite clean.
+  **STILL per org rule NOT writing "fixed" — awaiting the USER's own live browser confirmation.** Option 3
+  (true broken-WORD transcript text) remains the agreed pivot if the sentence-seam cut isn't crisp enough
+  live.**
 - **[OPEN]** Problem #1 — the two-tab **Transcript** + **Chat** ceremony UI redesign — remains. (A live
   "Live transcript" panel already exists; the explicit Chat/Transcript tab split does not.) Also open:
   pivot to Option 3 (true broken-WORD text) if the sentence-granularity cut isn't crisp enough live.
