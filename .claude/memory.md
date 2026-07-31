@@ -93,8 +93,12 @@ Every mistake must make the next session more efficient. Append, never delete.
   These are DIFFERENT, COMPLEMENTARY implementations: theirs = server-side reliability; mine = client-side WebRTC pipeline.
   Files created: `realtime.functions.ts` (ephemeral key server fn), `useGroupVoiceRealtime.ts` (full hook: AudioQueue, WebRTC, barge+resume, trailing transcript).
   MeetingBar.tsx: 2-line swap. TypeScript: clean. `useVoiceCall.ts`: unchanged (AC-15 ✓). Phase 1 e2e test committed.
-  Status: currently mid-merge (git merge origin/main, conflict in actions.md resolved --theirs but merge NOT committed).
-  Still needs: commit merge, push branch, merge to main, deploy to prod, user live confirmation.
+  Status: DEPLOYED to prod (run 30603377514, success, head=b573e82, 2026-07-31). NOT YET CONFIRMED LIVE by user.
+  IMPORTANT architectural note: this hook is wired to the LIVE GROUP VOICE path (mic/orb button in MeetingBar).
+  The standup CEREMONY TTS path (runCeremony → emit() → synthesizeSpeech per sentence → <audio> element) is
+  a SEPARATE code path and is UNTOUCHED by this work. The other concurrent session flagged this correctly.
+  ACT-huddle-5 caption-reveal (AC-1..AC-10) targets the ceremony TTS path — may be able to route ceremony
+  audio through the new AudioQueue's onStart callback rather than building a second mechanism.
 - **ACT-huddle-3 — Mobile Composer overlay fix:** AC subagent ran (12 ACs delivered, awaiting user sign-off).
   Waiting on user to confirm ACs before any code is written.
 
