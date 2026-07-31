@@ -6,7 +6,7 @@ import type { HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
 import { parseMentions, routeMessage, routeMessageLLM, laneOwnerFor, type RouterInvocation, type RouteResult } from "./routing";
 import { isQuotaError, QUOTA_OUTAGE_INLINE, type FallbackEvent, type PromptDebug } from "./fallbacks";
 import { buildRoster } from "./roster";
-import { agentOwnsCapability, exclusiveCapabilities, capabilityOwnerFor } from "./capabilities";
+import { agentOwnsCapability, exclusiveCapabilities, capabilityOwnerFor, classifyTurnIntent, type TurnIntent } from "./capabilities";
 import {
   detectCeremony,
   buildCeremonyReport,
@@ -30,6 +30,10 @@ import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
 import { DELEGATE_TO_SPECIALIST_TOOL, workerDirectory, getWorker, WORKER_ROLES } from "./agents/workers";
 import { FLAG_BLOCKER_TOOL, CONFIRM_TASK_INTENT_TOOL } from "./tasks/task-agent-tools";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
+
+// Feature flag: gates the intent-classification guard on capability/lane hand-off.
+// Set to false for an instant rollback to the previous (trigger-word-only) behaviour.
+const TURN_INTENT_CLASSIFICATION = true;
 
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
@@ -188,10 +192,16 @@ const DELEGATION_DIRECTIVE =
 //     to follow up. No agent ever performs an exclusive job it doesn't own.
 // This is the systematic version of the earlier grooming-only clause: it covers every
 // exclusive capability of every agent, present or future, with no per-case code.
+// includeRule: when false, return the ownership directory only (no behavioural deferral prose).
+// Used when intent is "query" — the agent needs "Terry owns grooming" to answer ownership
+// questions, but must not receive the deferral rule (LLMs apply prose contextually against full
+// conversation history; a trigger-word in prior turns will cause a false deferral regardless of
+// any "IMPORTANT: only when..." qualifier). For "status"/"ack"/"inform" the caller passes "".
 function capabilityHandoffBlock(
   scope: "group" | "1:1",
   members: readonly AgentId[],
   selfId: AgentId,
+  includeRule = true,
 ): string {
   // Which exclusive owners to surface depends on scope. GROUP: only owners actually present
   // (they can be @mentioned into the turn). 1:1: the owner is NEVER in a 1:1 (a DM has one
@@ -203,10 +213,13 @@ function capabilityHandoffBlock(
   const directory = owned
     .map((o) => `- ${o.cap.label} → @${o.agent.handle}${o.agent.id === selfId ? " (you own this)" : ""}`)
     .join("\n");
+  if (!includeRule) {
+    return "\n\nCapability owners (for reference only):\n" + directory;
+  }
   const rule =
     scope === "group"
       ? "If you are asked to do an exclusive job you do NOT own, do NOT attempt it and do NOT create a task about it — @mention the owner so they pick it up. If YOU own the job being asked for, just do it and briefly say what you did and why (e.g. \"took care of grooming — the backlog was stale\"); do not ask permission first or defer."
-      : "This is a 1:1, so the owner is NOT in this conversation. If you are asked to do an exclusive job you do NOT own, do NOT attempt it, do NOT improvise your own version of it (no grooming pass, no proposing owner assignments), and do NOT create a task about it. Say plainly, in one warm sentence, that the owner (refer to them by NAME, e.g. \"Terry\") is better suited and that you'll have them reach out — do NOT use an @handle (they are not in this 1:1; @ is for group rooms). The system brings them in automatically. If YOU are the owner, just do it.";
+      : "This is a 1:1, so the owner is NOT in this conversation. IMPORTANT: this deferral rule applies ONLY when the user's CURRENT message is explicitly asking you to PERFORM the capability (e.g. 'can you groom the backlog?', 'triage the backlog', 'plan the sprint'). Do NOT apply it when the user is: confirming something is done ('mark that done', 'that's finished', 'it's closed', 'already done'), asking a factual question about ownership ('who handles grooming?', 'what does Terry do?', 'is the session scheduled?'), acknowledging or thanking ('got it', 'ok', 'thanks'), or sharing information without requesting action. Never defer based on a related word appearing in earlier conversation turns — only the user's CURRENT message determines whether a performance request is being made. If you are asked to do an exclusive job you do NOT own, do NOT attempt it, do NOT improvise your own version of it (no grooming pass, no proposing owner assignments), and do NOT create a task about it. Say plainly, in one warm sentence, that the owner (refer to them by NAME, e.g. \"Terry\") is better suited and that you'll have them reach out — do NOT use an @handle (they are not in this 1:1; @ is for group rooms). The system brings them in automatically. If YOU are the owner, just do it.";
   return (
     "\n\nExclusive capabilities — only the named owner may perform each:\n" +
     directory +
@@ -1210,8 +1223,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // user's ask clearly belongs to another agent's lane (by domains/themes, e.g. "tighten my
       // budget" → Finn), tell THIS agent to defer and bring them in, even though that owner isn't in
       // the room. Deterministic + data-driven, so it covers every lane, not just the tool-owned ones.
+      // Intent-gated: only fire when the user is actually requesting an action to be performed — not
+      // when they are confirming completion, querying ownership, acknowledging, or informing.
+      const turnIntent: TurnIntent = TURN_INTENT_CLASSIFICATION ? classifyTurnIntent(data.text) : "perform";
       let laneDirective = "";
-      if (data.scope !== "group" && !data.internal) {
+      if (data.scope !== "group" && !data.internal && turnIntent === "perform") {
         const owner = laneOwnerFor(data.text, nextId);
         if (owner && owner.id !== nextId) {
           const o = AGENT_BY_ID[owner.id];
@@ -1239,11 +1255,22 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       const roster = buildRoster(data.members, winner.id);
       // Data-driven, scope-aware ownership hand-off (agents.ts capabilities). Empty string
       // when no exclusive-capability owner is in this huddle, so zero prompt overhead then.
-      const capabilityBlock = capabilityHandoffBlock(
-        data.scope === "group" ? "group" : "1:1",
-        data.members,
-        winner.id,
-      );
+      // Intent-gated for 1:1: structural suppression is the only reliable mechanism — do not
+      // send prose the LLM should not act on (qualifier text is applied against full history).
+      //   "perform"     → full block (directory + deferral rule)
+      //   "query"       → directory only, no rule (lets agent answer "who owns grooming?")
+      //   status/ack/inform → "" (no ownership context needed to say "got it")
+      // Group turns always receive the full block — @mention rule is relevant regardless of intent.
+      let capabilityBlock: string;
+      if (data.scope === "group" || data.internal || !TURN_INTENT_CLASSIFICATION) {
+        capabilityBlock = capabilityHandoffBlock(data.scope === "group" ? "group" : "1:1", data.members, winner.id);
+      } else if (turnIntent === "perform") {
+        capabilityBlock = capabilityHandoffBlock("1:1", data.members, winner.id);
+      } else if (turnIntent === "query") {
+        capabilityBlock = capabilityHandoffBlock("1:1", data.members, winner.id, false);
+      } else {
+        capabilityBlock = "";
+      }
       const taskToolInstructions =
         "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it." +
         " NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled \"groom the backlog\" or \"assign the team\") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked." +
@@ -3251,7 +3278,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // lane owner and spawns follow-ups that chain into a notification barrage (measured: autowork→Liam
       // →Sam loop; Terry→Cole→Iris→Ezra chain). Gating on !data.internal confines the pass-along to real
       // user asks and stops a follow-up from ever spawning another follow-up.
-      if (data.scope !== "group" && !data.internal) {
+      // Intent-gated: only fire when the user is actually requesting an action to be PERFORMED — not
+      // when confirming completion, querying ownership, acknowledging, or informing. Recomputed here
+      // (classifyTurnIntent is a pure function of data.text) — the laneDirective guard's `turnIntent`
+      // above is declared in a different loop's block scope and isn't visible at this point.
+      const followupTurnIntent = TURN_INTENT_CLASSIFICATION ? classifyTurnIntent(data.text) : "perform";
+      if (data.scope !== "group" && !data.internal && followupTurnIntent === "perform") {
         const ownerId = capabilityOwnerFor(data.text)?.agent.id ?? laneOwnerFor(data.text, nextId)?.id ?? null;
         if (ownerId && ownerId !== nextId && !followupDelivered.has(ownerId)) {
           followupDelivered.add(ownerId);
@@ -3574,23 +3606,40 @@ type HuddleTurnResult = Awaited<ReturnType<typeof runHuddleTurn>>;
 // journey's drain edge fn), authed with the shared JOURNEY_PROXY_TOKEN (NO new secret). The cron
 // heartbeat remains the guaranteed backstop if this request is frozen before the fetch lands. Base
 // URL: HUDDLE_APP_URL app setting, else the Azure runtime's WEBSITE_HOSTNAME.
+// ACT-huddle-4: this used to be a single unretried attempt with an empty catch — a failed self-kick
+// (network blip, cold-start, transient 5xx) was silently invisible and fell straight through to the
+// once-a-minute pg_cron backstop, which is exactly the "notices my barge after a large delay"
+// complaint. Retry a few times with short backoff before giving up, and log every failure so a
+// stranded barge is at least diagnosable. Missing config is logged distinctly from a transient
+// failure since retrying can never fix it.
+const KICK_MAX_ATTEMPTS = 3;
+const KICK_BACKOFF_MS = [250, 750];
 async function kickNextChunk(turnId: string): Promise<void> {
   const token = (process.env.JOURNEY_PROXY_TOKEN ?? "").trim();
-  if (!token) return;
   const rawBase =
     (process.env.HUDDLE_APP_URL ?? "").trim() ||
     (process.env.WEBSITE_HOSTNAME ? `https://${process.env.WEBSITE_HOSTNAME}` : "");
   const base = rawBase.replace(/\/$/, "");
-  if (!base) return;
-  try {
-    await fetch(`${base}/api/public/run-turn`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-webhook-secret": token },
-      body: JSON.stringify({ turnId }),
-    });
-  } catch {
-    /* fire-and-forget: the cron drain backstops a lost kick within a minute */
+  if (!token || !base) {
+    const missing = [!token && "JOURNEY_PROXY_TOKEN", !base && "HUDDLE_APP_URL/WEBSITE_HOSTNAME"].filter(Boolean).join(", ");
+    console.error(`[kickNextChunk] misconfigured (turn ${turnId}): ${missing} unset — self-kick disabled, relying on the cron backstop only (up to 60s)`);
+    return;
   }
+  for (let attempt = 1; attempt <= KICK_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(`${base}/api/public/run-turn`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-webhook-secret": token },
+        body: JSON.stringify({ turnId }),
+      });
+      if (res.ok) return;
+      console.error(`[kickNextChunk] non-2xx response (turn ${turnId}, attempt ${attempt}/${KICK_MAX_ATTEMPTS}): HTTP ${res.status}`);
+    } catch (err) {
+      console.error(`[kickNextChunk] fetch failed (turn ${turnId}, attempt ${attempt}/${KICK_MAX_ATTEMPTS}):`, err);
+    }
+    if (attempt < KICK_MAX_ATTEMPTS) await new Promise((r) => setTimeout(r, KICK_BACKOFF_MS[attempt - 1]));
+  }
+  console.error(`[kickNextChunk] all ${KICK_MAX_ATTEMPTS} attempts failed (turn ${turnId}) — deferring to the cron backstop (up to 60s)`);
 }
 
 // ---- Pillar 2: worker sub-turn + fan-in integration ---------------------------------------------
@@ -3960,25 +4009,35 @@ export const enqueueHuddleTurn = createServerFn({ method: "POST" })
     } catch {
       email = data.caller?.entra_email ?? null;
     }
-    const { enqueueTurn, claimTurn, getTurn } = await import("./tasks/turns.server");
-    await enqueueTurn(turnId, data.huddleId, email, turnData);
-    // Claim + run right now (fast path). If another runner (cron) already grabbed it, fall through
-    // to reporting status so we never double-run (the client then polls getTurnUpdates for the result).
-    const claimed = await claimTurn(turnId);
-    if (claimed) {
-      const result = await executeClaimedTurn(claimed);
-      if (result) {
-        // The first chunk ran here. If more agents remain it's 'partial': return the replies produced
-        // so far AND status 'partial' so the client renders them immediately and keeps polling for the
-        // rest (streamed as later chunks land). Otherwise it's fully 'done'.
-        const partial = (result as { partial?: boolean }).partial === true;
-        return { turnId, status: (partial ? "partial" : "done") as string, result, error: null as string | null };
+    // ACT-huddle-3: everything below used to run unguarded — an exception anywhere in here (including
+    // inside executeClaimedTurn's own catch path, e.g. if failTurn's DB write itself throws) bypassed
+    // the chunked/resumable turn mechanism entirely and surfaced to the browser as an opaque 500 with
+    // no message. Wrap it so the real error is both logged server-side and returned to the client.
+    try {
+      const { enqueueTurn, claimTurn, getTurn } = await import("./tasks/turns.server");
+      await enqueueTurn(turnId, data.huddleId, email, turnData);
+      // Claim + run right now (fast path). If another runner (cron) already grabbed it, fall through
+      // to reporting status so we never double-run (the client then polls getTurnUpdates for the result).
+      const claimed = await claimTurn(turnId);
+      if (claimed) {
+        const result = await executeClaimedTurn(claimed);
+        if (result) {
+          // The first chunk ran here. If more agents remain it's 'partial': return the replies produced
+          // so far AND status 'partial' so the client renders them immediately and keeps polling for the
+          // rest (streamed as later chunks land). Otherwise it's fully 'done'.
+          const partial = (result as { partial?: boolean }).partial === true;
+          return { turnId, status: (partial ? "partial" : "done") as string, result, error: null as string | null };
+        }
+        const rec = await getTurn(turnId);
+        return { turnId, status: (rec?.status ?? "error") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
       }
       const rec = await getTurn(turnId);
-      return { turnId, status: (rec?.status ?? "error") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
+      return { turnId, status: (rec?.status ?? "queued") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[enqueueHuddleTurn] unhandled error (turn ${turnId}, huddle ${data.huddleId}):`, err);
+      return { turnId, status: "error" as string, result: null as HuddleTurnResult | null, error: message };
     }
-    const rec = await getTurn(turnId);
-    return { turnId, status: (rec?.status ?? "queued") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
   });
 
 /** The public VAPID key the browser needs to create a push subscription (null if push isn't set up). */
@@ -3992,30 +4051,47 @@ const TurnUpdatesInput = z.object({
   huddleId: z.string(),
   sinceMs: z.number().optional(),
 });
+type TurnUpdateDTO = {
+  id: string;
+  status: string;
+  error: string | null;
+  updated_ms: number;
+  seq: number;
+  replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
+  result: HuddleTurnResult | null;
+};
 export const getTurnUpdates = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => TurnUpdatesInput.parse(raw))
   .handler(async ({ data }) => {
-    const { getTurnsSince } = await import("./tasks/turns.server");
-    const rows = await getTurnsSince(data.huddleId, data.sinceMs ?? 0);
-    // Trim to a serializable DTO (drop the raw payload; type result like the live turn result).
-    // `replies` + `seq` carry the incrementally-streamed per-agent replies for in-flight
-    // ('partial'/'running') turns so the client renders them as they land; `result` is the full
-    // payload set once the turn is 'done'. The client keys agent messages on reply index (idempotent),
-    // so a partial turn re-appearing with more replies just appends the new ones.
-    const turns = rows.map((t) => ({
-      id: t.id,
-      status: t.status as string,
-      error: t.error,
-      updated_ms: t.updated_ms,
-      seq: t.seq,
-      replies: (t.replies ?? []) as {
-        agentId: AgentId;
-        text: string;
-        artifacts?: { id: string; name: string }[];
-      }[],
-      result: (t.result ?? null) as HuddleTurnResult | null,
-    }));
-    return { turns };
+    // ACT-huddle-3: this used to run unguarded — an exception from getTurnsSince surfaced to the
+    // browser as an opaque 500 with no message, indistinguishable from any other failure. Wrap it.
+    try {
+      const { getTurnsSince } = await import("./tasks/turns.server");
+      const rows = await getTurnsSince(data.huddleId, data.sinceMs ?? 0);
+      // Trim to a serializable DTO (drop the raw payload; type result like the live turn result).
+      // `replies` + `seq` carry the incrementally-streamed per-agent replies for in-flight
+      // ('partial'/'running') turns so the client renders them as they land; `result` is the full
+      // payload set once the turn is 'done'. The client keys agent messages on reply index (idempotent),
+      // so a partial turn re-appearing with more replies just appends the new ones.
+      const turns: TurnUpdateDTO[] = rows.map((t) => ({
+        id: t.id,
+        status: t.status as string,
+        error: t.error,
+        updated_ms: t.updated_ms,
+        seq: t.seq,
+        replies: (t.replies ?? []) as {
+          agentId: AgentId;
+          text: string;
+          artifacts?: { id: string; name: string }[];
+        }[],
+        result: (t.result ?? null) as HuddleTurnResult | null,
+      }));
+      return { turns };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[getTurnUpdates] unhandled error (huddle ${data.huddleId}):`, err);
+      return { turns: [] as TurnUpdateDTO[], error: message };
+    }
   });
 
 /** Reminders that have fired for a huddle since `sinceMs` — the client renders each as an agent message. */

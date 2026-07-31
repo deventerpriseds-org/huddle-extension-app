@@ -3,20 +3,9 @@ import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
 import "@fontsource/inter/700.css";
 
-import terryAsset from "@/assets/agents/terry-locke.png.asset.json";
-import irisAsset from "@/assets/agents/iris-chase.png.asset.json";
-import tessAsset from "@/assets/agents/tess-sutton.png.asset.json";
-import finnAsset from "@/assets/agents/finn-reid.png.asset.json";
-import faithAsset from "@/assets/agents/faith-hartley.png.asset.json";
-import elleAsset from "@/assets/agents/elle-rowan.png.asset.json";
-import flexAsset from "@/assets/agents/flex-grimes.png.asset.json";
-import ezraAsset from "@/assets/agents/ezra-miles.png.asset.json";
-import samAsset from "@/assets/agents/sam-trent.png.asset.json";
-import coleAsset from "@/assets/agents/cole-blake.png.asset.json";
-import charlestonAsset from "@/assets/agents/charleston-lewis.png.asset.json";
-import eliAsset from "@/assets/agents/eli-vaughn.png.asset.json";
-import camAsset from "@/assets/agents/cam-post.png.asset.json";
-import troyAsset from "@/assets/agents/troy-lennox.png.asset.json";
+// Real avatar images, served directly from public/agents/ (Vite/Azure SWA serve public/ at the
+// site root). Previously these were .asset.json pointers into Lovable's internal preview hosting
+// (/__l5e/assets-v1/...), which 404s on the actual deployed app — see ACT-huddle-2 in actions.md.
 
 export type AgentId =
   | "terry-locke"
@@ -110,7 +99,7 @@ export const AGENTS: Agent[] = [
     ],
     tone: "direct",
     voiceId: "pFZP5JQG7iQjIQuC4Bku",
-    avatarUrl: terryAsset.url,
+    avatarUrl: "/agents/terry-locke.jpg",
     systemPrompt: p(
       "Terry Locke, the scrum master who runs the team's process and cadence",
       "measured, briefing-style, no fluff",
@@ -129,7 +118,7 @@ export const AGENTS: Agent[] = [
     tone: "warm",
     voiceId: "0fbdXLXuDBZXm2IHek4L",
     special: "coordinator",
-    avatarUrl: irisAsset.url,
+    avatarUrl: "/agents/iris-chase.jpg",
     systemPrompt: p(
       "Iris Chase, the team lead who owns the day plan, calendar and shared task board",
       "warm, orderly, day-of-focused",
@@ -147,7 +136,7 @@ export const AGENTS: Agent[] = [
     themes: ["budget", "credit", "soft-pull", "refinance", "runway", "invoice", "spend"],
     tone: "direct",
     voiceId: "MEiBY6lrwud0dREUa5FQ",
-    avatarUrl: finnAsset.url,
+    avatarUrl: "/agents/finn-reid.jpg",
     systemPrompt: p(
       "Finn Reid, the finance strategist",
       "professional and precise, with financial clarity and logic",
@@ -165,7 +154,7 @@ export const AGENTS: Agent[] = [
     themes: ["dentist", "school", "kids", "spouse", "family event", "pickup", "childcare"],
     tone: "warm",
     voiceId: "TgnhEILA8UwUqIMi20rp",
-    avatarUrl: faithAsset.url,
+    avatarUrl: "/agents/faith-hartley.jpg",
     systemPrompt: p(
       "Faith Hartley, the family scheduler",
       "warm, practical, calendar-native",
@@ -183,7 +172,7 @@ export const AGENTS: Agent[] = [
     themes: ["EMBA", "essay", "draft", "professor", "submit"],
     tone: "coach",
     voiceId: "hGQkZQUA5RiOXIw7P9iO",
-    avatarUrl: elleAsset.url,
+    avatarUrl: "/agents/elle-rowan.jpg",
     systemPrompt: p(
       "Elle Rowan, the EMBA planner",
       "coach-like, structured",
@@ -201,7 +190,7 @@ export const AGENTS: Agent[] = [
     themes: ["push-pull", "sets", "cardio", "run", "cooldown", "PR"],
     tone: "coach",
     voiceId: "pDxcmDdBPmpAPjBko2mF",
-    avatarUrl: flexAsset.url,
+    avatarUrl: "/agents/flex-grimes.jpg",
     systemPrompt: p(
       "Flex Grimes, the fitness coach",
       "energetic, terse, coach-style",
@@ -219,7 +208,7 @@ export const AGENTS: Agent[] = [
     themes: ["pharmacy", "dry-cleaning", "groceries pickup", "package"],
     tone: "direct",
     voiceId: "8kvxG72xUMYnIFhZYwWj",
-    avatarUrl: ezraAsset.url,
+    avatarUrl: "/agents/ezra-miles.jpg",
     systemPrompt: p(
       "Ezra Miles, the errand runner",
       "clipped, logistics-first",
@@ -237,7 +226,7 @@ export const AGENTS: Agent[] = [
     themes: ["seed", "deck", "raise", "investor", "launch", "mvp", "idea", "validate", "revenue"],
     tone: "direct",
     voiceId: "0a8UYbCjeq4J2VKVWGdJ",
-    avatarUrl: samAsset.url,
+    avatarUrl: "/agents/sam-trent.jpg",
     systemPrompt: p(
       "Sam Trent, the startup planner who turns ideas into MVPs, pitches and a fundable business",
       "sharp, opinionated, founder-mode",
@@ -255,7 +244,7 @@ export const AGENTS: Agent[] = [
     themes: ["performance", "resume", "promotion", "1:1", "feedback"],
     tone: "coach",
     voiceId: "o2zd9K5QOO7ppTb04Lx0",
-    avatarUrl: coleAsset.url,
+    avatarUrl: "/agents/cole-blake.jpg",
     systemPrompt: p(
       "Cole Blake, the career coach",
       "measured, developmental",
@@ -273,7 +262,7 @@ export const AGENTS: Agent[] = [
     themes: ["dinner", "recipe", "macros", "grocery list", "meal prep"],
     tone: "warm",
     voiceId: "9T9vSqRrPPxIs5wpyZfK",
-    avatarUrl: charlestonAsset.url,
+    avatarUrl: "/agents/charleston-lewis.jpg",
     systemPrompt: p(
       "Charleston Lewis, the personal chef",
       "warm, food-forward, practical",
@@ -291,7 +280,7 @@ export const AGENTS: Agent[] = [
     themes: ["adjust", "edit", "update", "fix", "tidy", "reschedule existing", "amend"],
     tone: "formal",
     voiceId: "TVtDNgumMv4lb9zzFzA2",
-    avatarUrl: eliAsset.url,
+    avatarUrl: "/agents/eli-vaughn.jpg",
     systemPrompt: p(
       "Eli Vaughn, the executive assistant",
       "polished, discreet, precise",
@@ -326,7 +315,7 @@ export const AGENTS: Agent[] = [
     themes: ["reply", "email draft", "slack", "social post", "announcement", "tone", "wording"],
     tone: "warm",
     voiceId: "kIfcKu9kr8RZrbz7H3ox",
-    avatarUrl: camAsset.url,
+    avatarUrl: "/agents/cam-post.jpg",
     systemPrompt: p(
       "Cam Post, the communications agent",
       "clear, polished and expressive, like a media-savvy professional",
@@ -344,7 +333,7 @@ export const AGENTS: Agent[] = [
     themes: ["flight", "hotel", "booking", "airport", "trip cost", "layover"],
     tone: "direct",
     voiceId: "3QXPfzW1QCV55kXilPul",
-    avatarUrl: troyAsset.url,
+    avatarUrl: "/agents/troy-lennox.jpg",
     systemPrompt: p(
       "Troy Lennox, the travel agent",
       "direct, logistics-first, pragmatic",
@@ -362,7 +351,7 @@ export const AGENTS: Agent[] = [
     themes: ["feature", "ship", "build", "roadmap", "release", "backlog", "product", "app", "milestone", "scope"],
     tone: "wry",
     voiceId: "l006hw6wZaEYAv80cbzj",
-    avatarUrl: tessAsset.url,
+    avatarUrl: "/agents/tess-sutton.jpg",
     systemPrompt: p(
       "Tess Sutton, the product owner for the apps and products",
       "brisk, wry, product-first",

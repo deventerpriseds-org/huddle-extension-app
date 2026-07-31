@@ -36,6 +36,7 @@ never clutters the user's task board. TanStack Start + React 19 + Vite + Nitro �
 | Feature | Status | Notes |
 |---|---|---|
 | 1:1 capability defer (grooming→Terry) | done (verified live) | Iris defers by NAME, no @, no task — harness observed |
+| ACT-huddle-3: intent-classification false-positive fix | deployed (PR #20), AC-12 awaiting live user confirmation | `classifyTurnIntent(text):TurnIntent` in `capabilities.ts` — trait-driven, zero per-capability config — gates both `laneDirective` and the back-channel (`capabilityOwnerFor`/`laneOwnerFor`) via `turnIntent === "perform"` checks in `runAgentTurn`. `TURN_INTENT_CLASSIFICATION` feature flag for instant rollback. 14/15 ACs pass statically (verifier confirmed); AC-12 (Iris handles "Mark that done" without deferring) requires live LLM turn to confirm. |
 | 1:1 domain lane handoff (budget→Finn) | done (verified live) | `laneOwnerFor`; AC-1/2/3 PASS observed |
 | 1:1 owner follow-up delivery (owner actually messages) | done (verified live) | AC-4/5/6 PASS (verifier). Back-channel `capabilityOwnerFor`/`laneOwnerFor` → `deliverOwnerFollowup` enqueues a REAL durable turn in `dm-<owner>` (rides send_push away-notif). Owner turns observed in dm-terry-locke + dm-finn-reid, "passed/mentioned by X" phrasing, confirm-before-act. |
 | meta-task guard (non-owner can't file exclusive-job card) | done (verified live) | `capabilityOwnerFor(title)` in `createSuggestedTaskFromTool` → deferred no-op. RE-TEST: tool attempted, `tasks:[]`. |
@@ -87,16 +88,13 @@ Every mistake must make the next session more efficient. Append, never delete.
 
 ## Active work
 **CURRENT TASKS (2026-07-31):**
-- **ACT-huddle-4 — Voice overhaul (OpenAI Realtime WebRTC):** IMPLEMENTATION COMPLETE — NOT YET DEPLOYED/VERIFIED LIVE.
-  Files created: `src/features/huddle/lib/voice/realtime.functions.ts` (server fn minting ephemeral key via
-  `POST /v1/realtime/sessions`), `src/features/huddle/hooks/useGroupVoiceRealtime.ts` (full new hook: AudioQueue class,
-  splitSentences, WebRTC RTCPeerConnection, oai-events DC, barge+resume, trailing transcript via onStart, gen counter).
-  MeetingBar.tsx updated (2 lines: import + hook swap). TypeScript: clean (0 errors). `useVoiceCall.ts`: unchanged (AC-15 ✓).
-  Still needs: commit+push, Playwright Phase 1 test (3-agent/2-item + screenshots), verifier subagent, deploy to main.
-  Architecture: OpenAI Realtime WebRTC for VAD/STT/barge detection + EL TTS for audio output + existing ceremony
-  turn engine untouched server-side. Mid-sentence barge: SAME agent resumes from interrupted sentence after answering.
-  Trailing transcript (captions-style, not pre-loaded). Two-phase test: (1) 3-agent/2-item precursor with
-  NEW pipeline + screenshots; (2) full ceremony UAT with real task mirror agenda + 6-screenshot proof sequence.
+- **ACT-huddle-4 — Voice overhaul (OpenAI Realtime WebRTC):** IMPLEMENTATION COMPLETE, VERIFIER 19/19 PASS, mid-merge into main.
+  NOTE: a concurrent session also closed "ACT-huddle-4" for a server-side kickNextChunk retry fix (`94cfc02` on main).
+  These are DIFFERENT, COMPLEMENTARY implementations: theirs = server-side reliability; mine = client-side WebRTC pipeline.
+  Files created: `realtime.functions.ts` (ephemeral key server fn), `useGroupVoiceRealtime.ts` (full hook: AudioQueue, WebRTC, barge+resume, trailing transcript).
+  MeetingBar.tsx: 2-line swap. TypeScript: clean. `useVoiceCall.ts`: unchanged (AC-15 ✓). Phase 1 e2e test committed.
+  Status: currently mid-merge (git merge origin/main, conflict in actions.md resolved --theirs but merge NOT committed).
+  Still needs: commit merge, push branch, merge to main, deploy to prod, user live confirmation.
 - **ACT-huddle-3 — Mobile Composer overlay fix:** AC subagent ran (12 ACs delivered, awaiting user sign-off).
   Waiting on user to confirm ACs before any code is written.
 
@@ -119,6 +117,41 @@ now applies to ≤ a handful of current-session turns — the cutoff bug is elim
 Commit dd5435e on main; deploy run 30544492729 concluded success. Independent verifier: PASS 4/5 statically confirmed;
 AC-2 (10s SLA) mechanism-proven, live timing requires user to test. NOT calling fixed until user confirms live.
 
+### Standup ceremony — LIVE BROWSER reproduction, 2026-07-30: DIFFERENT bug than the sinceMs fix above, STILL BROKEN
+First-ever real Playwright-in-browser drive of Meeting → Daily stand-up → Start against production (every prior
+verification of this flow called server fns directly over HTTP, never through the actual UI a real user clicks).
+Built via the new generalized `run-uat.mjs` + `huddle-checks.mjs` (see `gha-playwright-uat` skill in
+eds-claude-skills). Took several iterations to get a trustworthy check (see Hardening below) — final run
+(workflow 30587309137, commit 78182f7) is real evidence:
+- Meeting button → Daily stand-up → Start: all work, room opens fine.
+- After clicking Start: **zero new transcript turns rendered for 150+ seconds** (verified via a real
+  `data-testid="transcript-turn"` count, not loose keyword matching — see Hardening).
+- **Two HTTP 500s observed in the browser network log**: `enqueueHuddleTurn` (the fn Start calls to kick off the
+  turn) and `getTurnUpdates` (the fn the client polls for replies) — both server fns literally throwing 500,
+  server-side. This is NOT the sinceMs/LIMIT-20 cutoff bug (that was a silent success-but-hidden-by-poll-window
+  failure); this is the server function itself erroring.
+- Ruled out the known "wrong DB / discovery drift" incident (CLAUDE.md): the triggering deploy's "Resolve database
+  connection string" step logged `Assembled AZURE_PG_URL for eds-postgresql/RAG_AI_Agents` correctly.
+- **NOT YET ROOT-CAUSED** — no stack trace/error detail available from the client side (createServerFn masks
+  handler exceptions to a generic 500), and this session has no access to Azure Function App / Application
+  Insights logs to read the actual thrown error. Next step: add temporary detailed error logging (or a
+  try/catch that surfaces `err.message`) to `enqueueHuddleTurn`/`getTurnUpdates` in `huddle.functions.ts`,
+  redeploy, and re-trigger `verify-uat.yml` to capture the real exception.
+- This is the user's original reported experience, now reproduced with hard evidence (not inferred) for the
+  first time this session — do not report "fixed" until the actual 500 root cause is found and resolved.
+
+**Hardening on this check's own false positives (fixed along the way, informs future UAT checks):**
+- `avatarImage404s`'s `page.reload()` strips the single-use `?uat_token=` param (already consumed via
+  `history.replaceState`) and the bypass flag is in-memory only — any check running AFTER a reload loses auth
+  entirely (sidebar goes from populated to zero buttons). Fix: run reload-based checks LAST in the array.
+- The original "first reply within 15s" check matched `document.body.innerText` against loose keywords
+  (standup/blocked/priority/...) — these matched pre-existing task-board text behind the meeting overlay
+  regardless of whether a real reply had happened, producing a bogus "51ms" reading. Fixed by adding
+  `data-testid="transcript-turn"` to `TranscriptRow` (both user/agent branches, `MeetingBar.tsx`) and counting
+  real DOM turns before/after Start instead.
+- `.count()` doesn't auto-wait like `.click()` — a check that raced the sidebar's async huddle-list hydration
+  got a false 0. Use `.waitFor({state:"visible", timeout})` before counting.
+
 ### Mic fix (PR #19) — 2026-07-29, CONFIRMED WORKING (user confirmed barge-in works)
 Root cause of "mic doesn't work": `useEffect(() => () => groupVoice.stop(), [groupVoice])` in MeetingBar.tsx
 used the whole `groupVoice` object as dep — new object every render — so every state change (idle→listening)
@@ -137,6 +170,28 @@ No duplicate code; single source of truth for the ceremony-routing decision.
 `routeMessage` hook API added to `useGroupVoice` (`GroupVoiceConfig.routeMessage` override).
 Commit: `f618a04` on `claude/standup-voice-bargein`, merged into `main`, deployed (run 30491913930, success).
 Per standing rule: NOT calling this fixed until user confirms live.
+
+### ACT-huddle-3: intent-classification fix for 1:1 false-positive deferrals — 2026-07-30, RE-DEPLOYED, AC-12 awaiting live user confirmation
+Root cause: `capabilityHandoffBlock`'s 1:1 deferral prose was unconditionally injected, and LLMs apply prose
+against full conversation history — the IMPORTANT qualifier proved insufficient. When Iris's own prior reply
+mentioned "backlog grooming," the model applied the deferral rule to "Mark that done".
+Fix (current, commit 0d2b05f): (1) `capabilityHandoffBlock` gains `includeRule=true` param — when false,
+returns directory only, no rule prose; (2) call site uses a plain `let capabilityBlock` + if/else gate on
+`turnIntent` — `perform`→full block, `query`→directory only, status/ack/inform→""; (3) STATUS_RE broad
+catch-all for long NPs with apostrophes. No IIFE (an earlier broken commit 7a3006c used an IIFE which
+caused a "turnIntent is not defined" runtime error under Nitro/Vite SSR — reverted as 7b4ae92, fixed cleanly
+in 0d2b05f). Deploy run 30571325354 success. AC-12 (Iris handles "Mark that done" without deferring) requires
+user to test in the deployed app. NOT calling fixed until user confirms AC-12 live.
+
+## Multi-session coordination (PERMANENT STANDING RULE — add to every session)
+**Multiple concurrent Claude sessions work on this repo simultaneously.** Each session has its own feature branch. Main is the integration point. This has already caused prod regressions twice (see CLAUDE.md "Deploy funnel"). Before ANY merge/push to main:
+1. `git fetch origin` — check what OTHER sessions pushed to main since your last fetch.
+2. `git log --stat origin/main..HEAD` — verify YOUR commits are strictly additive vs what main has.
+3. `git show origin/main:<file>` — compare individual files before assuming your version is newer/better.
+4. NEVER resolve merge conflicts by taking one side wholesale (`--theirs`/`--ours`) without reading BOTH sides first — another session's work may be in the losing side.
+5. When `actions.md` or `memory.md` conflict, read BOTH versions and manually compose a merged result that preserves ALL entries from both sides — never silently drop the other session's tracking.
+
+**Also: main's `94cfc02` (ACT-huddle-4 server-side kickNextChunk retry) and this session's WebRTC client-side pipeline are COMPLEMENTARY, not conflicting. Both belong in main.**
 
 ## Hardening (append)
 - [2026-07-26] **MISTAKE: encoded "what the team can do" as a hand-written CAPABILITY PROMPT (prose) and
@@ -339,3 +394,5 @@ Per standing rule: NOT calling this fixed until user confirms live.
   numbers): stage column → 688px (=1048−360), aside → fully on-screen at x=688, avatar centered at
   x=344 (exactly half the stage column). No mobile-layout regression at 500px. `tsc` clean. NOT calling
   this fixed until merged, deployed, and the user confirms it live — per the standing rule two entries up.
+- [2026-07-30] **MISTAKE: LLM deferral false-positive triggered by prior conversation context, not current user intent.** Iris had replied mentioning "backlog grooming" in an earlier turn; when the user then sent "Mark that done," the model read the earlier grooming word from the transcript history and applied the `capabilityHandoffBlock` 1:1 deferral rule — deferring a simple status confirmation to Terry as if the user were requesting grooming. The code-level check (`capabilityOwnerFor("mark that done")`) returns null and is correct; the failure was entirely in LLM prompt interpretation reading across turns. ROOT CAUSE: prose deferral rules can't be scoped to "only the user's current message" when the LLM processes the full conversation context holistically. A single `IMPORTANT` qualifier helps but doesn't reliably isolate. GUARDRAIL: **classify the semantic intent of the user's CURRENT message BEFORE any handoff/deferral logic runs.** `classifyTurnIntent(text):TurnIntent` in `capabilities.ts` uses pattern-matching on the current text only, returning `"perform"/"status"/"query"/"acknowledge"/"inform"`. Conservative by design (defaults to "perform" when uncertain). Gates `laneDirective` injection AND the back-channel (`capabilityOwnerFor`/`laneOwnerFor`) in `runAgentTurn` — both short-circuit when `turnIntent !== "perform"`. **Also gates `capabilityBlock` itself** — directory+rule for "perform", directory-only for "query" (via `includeRule=false`), empty for status/ack/inform. Zero per-capability configuration. Feature-flagged (`TURN_INTENT_CLASSIFICATION`) for instant rollback. When tempted to add a prose qualifier to a shared prompt block to suppress LLM over-triggering, reach for a deterministic pre-classifier instead — prose qualifiers are advisory, classifiers are enforced.
+- [2026-07-30] **MISTAKE: IIFE pattern caused "turnIntent is not defined" runtime error under Nitro/Vite SSR.** An earlier attempt at the `capabilityBlock` gate used an IIFE (`const capabilityBlock: string = (() => { ... })()`). TypeScript (`tsc --noEmit`) passed; the Nitro/Vite SSR bundler produced a runtime reference error. The variable `turnIntent` is in scope in static analysis but the SSR transform broke lexical capture inside the IIFE. ROOT CAUSE: IIFEs can be opaque to tree-shaking/SSR bundlers in ways that plain `let` + `if`/`else` assignments are not. GUARDRAIL: **in SSR-bundled code (Nitro/Vite), prefer plain `let`/if-else variable assignments over IIFE patterns for control-flow-based initialization.** An IIFE that passes `tsc --noEmit` can still fail at Nitro runtime — the static checker and the SSR transform operate on different models of the code. If tsc passes and runtime fails, suspect SSR bundler scope issues and simplify the expression.

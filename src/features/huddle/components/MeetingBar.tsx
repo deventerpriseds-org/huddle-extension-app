@@ -951,14 +951,14 @@ function TranscriptRow({ turn, startedAt }: { turn: CeremonyTurn; startedAt: num
   const time = turn.ts ? fmtClock(turn.ts - startedAt) : "";
   if (turn.user) {
     return (
-      <div className="flex justify-end">
+      <div className="flex justify-end" data-testid="transcript-turn">
         <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-primary/15 px-3 py-2 text-sm">{turn.text}</div>
       </div>
     );
   }
   const agent = turn.agentId ? AGENT_BY_ID[turn.agentId] : undefined;
   return (
-    <div className="flex gap-2.5">
+    <div className="flex gap-2.5" data-testid="transcript-turn">
       {agent ? <AgentAvatar agent={agent} size="sm" clickable={false} /> : <div className="size-7 rounded-full bg-muted" />}
       <div className="min-w-0">
         <div className="flex items-center gap-1.5">

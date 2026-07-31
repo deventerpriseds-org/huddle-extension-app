@@ -47,9 +47,14 @@ jobs:
           for k in VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY; do
             if [ -n "${!k}" ]; then echo "$k: present"; else echo "$k: not set (Web Push disabled)"; fi
           done
+          # UAT bypass is optional — absence just means the prod UAT auth-bypass path stays inert
+          # (VITE_UAT_BYPASS_TOKEN resolves empty, the runtime check can never match). Never echo the
+          # value itself, only presence.
+          if [ -n "$UAT_BYPASS_TOKEN" ]; then echo "UAT_BYPASS_TOKEN: present"; else echo "UAT_BYPASS_TOKEN: MISSING (UAT bypass inert)"; fi
         env:
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -151,6 +156,7 @@ jobs:
             echo "VITE_ENTRA_AUTHORITY=${AUTH}"
             echo "VITE_ENTRA_TENANT_ID=${AZURE_TENANT_ID}"
             echo "VITE_ENTRA_TENANT_NAME=enterpriseds"
+            echo "VITE_UAT_BYPASS_TOKEN=${{ secrets.UAT_BYPASS_TOKEN }}"
           } > .env.production
           # Hand the resolved client id + authority to later steps so the server
           # runtime verifies tokens against the SAME authority the client used.
