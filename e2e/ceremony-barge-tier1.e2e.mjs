@@ -139,6 +139,9 @@ try {
 
     const sendAt = await page.evaluate(() => Date.now());
     const playsBefore = await page.evaluate(() => (window.__audioLog || []).filter((e) => e.ev === "play").length);
+    // Count agent rows at barge time so the ordering check considers ONLY rows added AFTER this barge
+    // (not the whole prior ceremony — that false-counted earlier speakers as "new").
+    const agentRowsAtBarge = (await agentRows(page)).length;
     await textarea.fill(b.msg);
     await textarea.press("Enter");
 
@@ -166,14 +169,16 @@ try {
     const rx = new RegExp(b.re, "i");
     let answer = null;
     for (let i = 0; i < 120; i++) {
-      const rows = await agentRows(page);
-      const ansIdx = rows.findIndex((r) => r.kind === "answer" && rx.test(r.text));
+      const added = (await agentRows(page)).slice(agentRowsAtBarge); // rows added AFTER this barge only
+      const ansIdx = added.findIndex((r) => r.kind === "answer" && rx.test(r.text));
       if (ansIdx !== -1) {
-        const newScriptedBefore = rows.slice(0, ansIdx).some(
+        // A NEW scripted speaker = an agent row after the barge that is not the answer, not the
+        // interrupted speaker's own block resuming, and belongs to a different agent+block.
+        const newScriptedBefore = added.slice(0, ansIdx).some(
           (r) => r.kind !== "answer" && !r.interrupted && r.agentId !== block.agentId && r.blockId !== block.blockId,
         );
         ok(!newScriptedBefore, `Barge ${n + 1}: answer lands before any NEW scripted speaker`);
-        answer = rows[ansIdx];
+        answer = added[ansIdx];
         break;
       }
       await page.waitForTimeout(500);
