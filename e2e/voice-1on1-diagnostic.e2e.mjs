@@ -183,13 +183,17 @@ try {
 
   console.log(`\n=== BODY TEXT SNIPPET ===\n${bodyText}\n`);
 
-  // Interpretation hint for the reader.
+  // Verdict. SDP success is 200 OR 201 (the /v1/realtime/calls answer comes back 201 Created).
+  const micLive = micLabels.includes("Mic");
+  const sdpOk = netEvents.some((e) => e.startsWith("OPENAI-REALTIME-SDP") && /status=20[01]/.test(e));
   if (openaiRealtimeCalls === 0) {
-    console.log("VERDICT HINT: 0 OpenAI Realtime calls → getRealtimeSession never returned a usable key → the mic can NEVER connect on ANY device (server-side / OpenAI Realtime availability). NOT the mobile gesture.");
+    console.log("VERDICT: FAIL — 0 OpenAI Realtime calls → getRealtimeSession never returned a usable key → the mic can NEVER connect (server-side / endpoint). NOT the mobile gesture.");
     failed = 1;
+  } else if (sdpOk && micLive) {
+    console.log(`VERDICT: PASS — voice connected end-to-end. getRealtimeSession ok, OpenAI Realtime SDP handshake succeeded (2xx), and the mic button reads "Mic" (live + unmuted). getUserMedia was called once (no re-render loop). NOTE: the runner uses a fake mic, so this proves the CONNECTION comes up, not that real speech is transcribed — that last mile needs a live human retest.`);
   } else {
-    const sdpOk = netEvents.some((e) => e.startsWith("OPENAI-REALTIME-SDP") && /status=200/.test(e));
-    console.log(`VERDICT HINT: OpenAI Realtime reached (${openaiRealtimeCalls}); SDP 200 = ${sdpOk}. If SDP is 200 and it connects here, the user's failure is specifically the mobile getUserMedia gesture window.`);
+    console.log(`VERDICT: PARTIAL — OpenAI Realtime reached (${openaiRealtimeCalls}); sdpOk=${sdpOk}; micLive=${micLive}. Connection did not fully settle; see the SDP status + console above.`);
+    failed = 1;
   }
 } catch (err) {
   console.error(`\nFATAL: ${err.message}`);
