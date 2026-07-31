@@ -1,5 +1,5 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-07-31 (ACT-huddle-12 problems #2 & #3 done — deployed + UAT PASS, tab redesign still open)
+Last updated: 2026-07-31 (ACT-huddle-12 problems #2 & #3 done — deployed + UAT PASS, tab redesign still open; ACT-huddle-13 added)
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
 > claiming any item "done" without ACs + the verifier subagent / observed evidence).
@@ -140,6 +140,54 @@ if so, is the correspondence-triage/reply-tracking logic better owned there, in 
 huddle-extension-app? Investigate before designing ACs.
 **Status:** open — ACs pending `/define-acceptance-criteria`; not yet designed/built. Related to but
 distinct from ACT-huddle-10 (drafting mechanism may be shared; tracking/notification is the new part).
+
+### ACT-huddle-13: Jira-style task tags (research) — a "parking lot" tag/lane that opts a task OUT of all automation
+**Requested:** 2026-07-31 — user's own words (lightly cleaned up): "how to add tags to the tasks similar
+to Jira (research). When I tell Iris to parking lot an item it should go back to the backlog with a
+parking lot tag, this should be a toggleable lane on the board that is default off. Only items that are
+NOT parking lot should be going through the automated workflow or scheduled in Huddle or nightly
+scheduling. Anything that has the parking lot tag should NOT be prompted to push through the work
+pipeline nor added to the nightly builder queue. Figure out how we can achieve this."
+**Expected outcome:**
+- General tagging capability on tasks (Jira-style), not just a single hardcoded "parking lot" value.
+- Telling Iris (or any agent) "parking lot this" moves the task back to `BACKLOG` status and applies a
+  `parking-lot` tag.
+- The board has a Parking Lot lane/column that's **toggleable and OFF by default** — hidden until the
+  user turns it on.
+- Any task carrying the `parking-lot` tag is **fully excluded** from: (a) Huddle's automated per-agent
+  work pipeline (BACKLOG→UP_NEXT→DOING promotion + auto-research turns), (b) any Huddle-scheduled/
+  cadence job that would act on it, and (c) journey's nightly scheduling/planner run. It should never be
+  silently picked up and pushed forward again once tagged.
+**Investigation already done this session (extend, don't duplicate — real prior art exists):**
+- **Tagging is NOT a new concept — `tags TEXT[]` already exists** on `tasks.journey_tasks`
+  (`tasks.server.ts:48,56`), already synced from journey's grooming write-back, already used for at
+  least one real tag (`blocked-on-capability`, per ACT-4's residuals). The "Jira-style tags" ask is
+  substantially about GENERALIZING and exposing this existing column/mechanism, not building a new one
+  — confirm whether journey's `public.tasks` already has a parallel `tags` column or whether it only
+  exists Huddle-side today (check before assuming).
+- **Toggleable board lanes are NOT new either** — `BoardView.tsx` already drives columns off a
+  data-driven array (`statuses` per column, e.g. the existing "Ready for review" column keyed off
+  `IN_REVIEW`, `BoardView.tsx:31`) and already has swimlane collapse/toggle state
+  (`toggleLane`/`collapsed`, `BoardView.tsx:88-94`). A Parking Lot lane is very likely a new column
+  entry in that same array plus a visibility flag, not a new UI system.
+- **Per-user toggle infrastructure already exists** — `agent_workflow_config` (this session's own
+  ACT-57: schema + resolver + Settings UI) is the natural home for a "show Parking Lot lane"
+  default-off preference, rather than inventing a second settings mechanism.
+- **Automation entry points that MUST filter out `parking-lot`-tagged tasks** (concrete, not
+  hypothetical — these are the actual candidate-selection sites):
+  1. `autowork.server.ts`'s per-agent bucketing query (where BACKLOG/UP_NEXT/DOING candidates are
+     selected for promotion — `autowork.server.ts:207+`) — needs a `NOT ('parking-lot' = ANY(tags))`
+     condition, or equivalent, at candidate-selection time.
+  2. `scheduler.server.ts`'s job dispatch (`fireJob`, e.g. the `auto-work`/grooming/standup cadence
+     jobs) — confirm whether any of these act on individual tasks directly (vs. just kicking off
+     `run-autowork`, which would already inherit the fix from (1)).
+  3. **journey's nightly scheduling/planner** (referenced in this repo's own `taskToolInstructions`:
+     "the nightly planner can still move it overnight") — this lives in journey-voice, not here; needs
+     its own investigation into where it selects candidate tasks for overnight placement.
+**Status:** open — this is explicitly scoped by the user as RESEARCH first ("figure out how we can
+achieve this"). Do not start implementation until a design (schema decision, exact filter sites in both
+repos, and the toggle UI) is written up and signed off — same discipline as every other feature this
+session (`/define-acceptance-criteria` after the design, not before).
 
 ### ACT-huddle-12: Ceremony UI redesign — Transcript tab + Chat tab; remove "Passing your message"; true mid-sentence barge stop
 **Requested:** 2026-07-31 — user's own words (paraphrased, full detail below): "we need both tabs —
