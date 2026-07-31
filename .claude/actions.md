@@ -1,5 +1,5 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-07-31 (ACT-huddle-12 problems #2 & #3 done — deployed + UAT PASS, tab redesign still open; ACT-huddle-13 added)
+Last updated: 2026-07-31 (ACT-huddle-12 problems #2 & #3 done — deployed + UAT PASS, tab redesign still open; ACT-huddle-13/14/15 added)
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
 > claiming any item "done" without ACs + the verifier subagent / observed evidence).
@@ -188,6 +188,68 @@ pipeline nor added to the nightly builder queue. Figure out how we can achieve t
 achieve this"). Do not start implementation until a design (schema decision, exact filter sites in both
 repos, and the toggle UI) is written up and signed off — same discipline as every other feature this
 session (`/define-acceptance-criteria` after the design, not before).
+
+### ACT-huddle-14: Decide GPT-4o → GPT-5.6 Luna/Terra migration — cost AND performance, not just cost
+**Requested:** 2026-07-31 — user's own words: "you need an act to determine if we should be going from
+gpt4o to gpt 5.6 luna or if that is going to hurt performance."
+**Research already done this session (WebSearch, since no Tavily connector is wired up — see the
+Decisions log entry on that):**
+- Pricing per 1M tokens (post the 2026-07-30 price cut): GPT-4o $2.50 in/$10.00 out; GPT-5.6 Terra
+  $2.00 in/$12.00 out (roughly a wash vs GPT-4o); GPT-5.6 Luna $0.20 in/$1.20 out (~92%/~88% cheaper).
+- Performance: OpenAI's own framing is that Luna is "the biggest step change in agentic behavior since
+  putting GPT-4o mini into production" — beats GPT-5.5 on Agents' Last Exam/HealthBench Professional/
+  DeepSWE, sits only 2.4 points behind the flagship Sol tier on Agents' Last Exam at ~1/5th the output
+  cost, and specifically strengthened tool-calling (moved OpenAI from single structured-output calls to
+  a full tool-calling agent loop; prompt-cache reuse jumped 24%→90%).
+- Confidence caveat: these figures come from convergent SECONDARY reporting (Yahoo Finance, CNBC,
+  VentureBeat, artificialanalysis.ai, Axios, qz.com all independently citing the same numbers) — two
+  direct WebFetch attempts at OpenAI's own pricing/announcement pages 403'd (bot-protected). High
+  confidence via convergence, not confirmed against the primary source directly.
+**Expected outcome:** a concrete per-agent model assignment (not a blanket swap) — e.g. Luna for
+high-volume/routine agents and tool-calling-heavy turns, Terra reserved for agents whose output quality
+matters more than routine chat (Terry's grooming/prioritization judgment, Sam's strategic replies) since
+Terra isn't meaningfully cheaper than GPT-4o. Decision must be backed by a LIVE quality comparison, not
+just published benchmarks — benchmarks are a starting hypothesis, not proof for Huddle's specific
+15-persona voice/tone/tool-use requirements.
+**Status:** open — ACs pending `/define-acceptance-criteria`. Suggested first step (not yet done): pick
+1-2 agents, run identical real turns against GPT-4o vs Luna vs Terra side-by-side (reply quality, tone
+fidelity to the persona snapshot, tool-call correctness, latency), before deciding on a broader swap.
+
+### ACT-huddle-15: Research — OpenAI Voice Agents SDK adoption + real API-cost-reduction levers (prompt caching, Batch API)
+**Requested:** 2026-07-31 — user's own words: "add an act for researching should we be using the concept
+of an openai voice agent? and also should we be using sandbox agents to avoid draining my api quota?"
+**Answered live this session (WebSearch) — logged here so the follow-through isn't lost:**
+- **OpenAI Voice Agents SDK** — a higher-level TypeScript layer over the same Realtime API
+  `useGroupVoiceRealtime.ts` already talks to directly, providing pre-built `RealtimeAgent`/
+  `RealtimeSession` abstractions plus tool-calling, guardrails, handoffs, and session-history helpers —
+  categories of code Huddle currently hand-rolls (WebRTC setup, the `oai-events` data channel, VAD barge
+  detection, the `AudioQueue` class, same-agent resume, the generation counter). Worth adopting IF it
+  doesn't force OpenAI's own TTS output — **unresolved open question:** does the SDK allow swapping in
+  ElevenLabs for output (which Huddle needs for its 15 distinct per-agent voice IDs) while keeping OpenAI
+  for STT/VAD/turn-detection, or does it assume OpenAI TTS end-to-end? This is the crux of whether
+  adoption is a clean win or fights the SDK's assumptions, and needs real investigation (read the SDK
+  source/docs, not another web search) before any decision.
+- **"Sandbox agents" — clarified, does NOT do what the name suggests for this use case.** In OpenAI's
+  current terminology this means isolated CODE-EXECUTION compute environments for agents that write and
+  run code (auto-provisioned containers via E2B/Modal/Daytona/Cloudflare/etc.) — infrastructure
+  convenience for coding agents, not a token/API cost-reduction mechanism. Huddle's agents are chat/
+  tool-calling agents, not code-execution agents, so this feature doesn't apply to the quota-drain
+  problem as asked.
+- **The REAL cost levers found (not yet exploited by Huddle):**
+  1. **Prompt caching — automatic, no opt-in.** Any repeated prompt prefix ≥1,024 tokens seen in the
+     last 5-10 minutes bills at 25% of normal input rate (75% savings). This is the EXACT thing already
+     flagged as backlog item #1 in this repo's CLAUDE.md ("Prompt-payload efficiency via provider prompt
+     caching") — Huddle hasn't reordered its prompt assembly (stable prefix: snapshot+house-style+tool
+     schemas+roster; volatile suffix: scene+memory+user msg) to actually earn the cache hits yet. Highest
+     leverage, lowest risk, no new adoption needed — just the reordering already on the backlog.
+  2. **Batch API — 50% off input+output, non-real-time only.** Doesn't apply to live chat turns, but
+     DOES apply to Huddle's already-async work that doesn't need an instant reply: nightly grooming, the
+     research/`create_artifact` turns, standup/review digests, the 48h review-recheck job. Currently none
+     of these are batched — real, unexploited savings on work that's already async by design.
+**Status:** open — the "should we" QUESTIONS were answered live above; what remains is (a) resolving the
+Voice-Agents-SDK/ElevenLabs-TTS compatibility question, (b) actually implementing the prompt-cache
+prefix reordering (backlog item #1), and (c) actually batching the eligible async jobs. ACs pending
+`/define-acceptance-criteria` once the ElevenLabs compatibility question is resolved.
 
 ### ACT-huddle-12: Ceremony UI redesign — Transcript tab + Chat tab; remove "Passing your message"; true mid-sentence barge stop
 **Requested:** 2026-07-31 — user's own words (paraphrased, full detail below): "we need both tabs —
@@ -640,6 +702,18 @@ it); away-push reaching the phone is by-design (proven send_push path) but not s
 523 → 247 tasks. Workflow removed after use (PR #19). **Verification:** PASS (run log).
 
 ## Decisions & scope changes
+- [2026-07-31] **User-stated premise did NOT hold on direct verification — no GitHub Actions workflow
+  uses Tavily in any of the 4 repos this session has access to.** User asked to document "a Tavily
+  action available in GH, with the API key in org secrets, used as a WebFetch-403 fallback." A subagent
+  searched `mcp__github__search_code` for `tavily`/`TAVILY`/`TAVILY_API_KEY`/`api.tavily.com` scoped to
+  each of journey-voice, android-bridge-template, bridge-builder, huddle-extension-app, AND
+  eds-claude-skills, plus read every repo's `.github/workflows/` listing directly — zero matches
+  anywhere. **What actually exists:** journey-voice has direct Tavily calls in two Supabase EDGE
+  FUNCTIONS (not GitHub Actions) — `supabase/functions/web-search/index.ts` and `execute-tool/index.ts`
+  (`webSearch()` helper), both reading `TAVILY_API_KEY` from Supabase edge-function secrets, not GitHub
+  org secrets. Not doing the requested CLAUDE.md/setup.sh update on an unconfirmed premise — flagging
+  this to the user for clarification (a repo not yet attached to this session? a different mechanism
+  meant?) rather than documenting something that doesn't exist for future sessions to chase.
 - [2026-07-31] **Ran `sync-setup-script` (eds-claude-skills) — the enforcement gate had never actually been
   installed in this session.** `/root/.claude/launcher-settings.json` had zero `_eds`-tagged hooks before this
   (verified by reading the file directly, not assumed). Cloned `eds-claude-skills` main fresh, ran `setup.sh`,
