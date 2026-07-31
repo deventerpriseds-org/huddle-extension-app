@@ -1,5 +1,5 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-07-31
+Last updated: 2026-07-31 (ACT-huddle-12 added)
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
 > claiming any item "done" without ACs + the verifier subagent / observed evidence).
@@ -140,6 +140,42 @@ if so, is the correspondence-triage/reply-tracking logic better owned there, in 
 huddle-extension-app? Investigate before designing ACs.
 **Status:** open — ACs pending `/define-acceptance-criteria`; not yet designed/built. Related to but
 distinct from ACT-huddle-10 (drafting mechanism may be shared; tracking/notification is the new part).
+
+### ACT-huddle-12: Ceremony UI redesign — Transcript tab + Chat tab; remove "Passing your message"; true mid-sentence barge stop
+**Requested:** 2026-07-31 — user's own words (paraphrased, full detail below): "we need both tabs —
+transcript which is simply what's said by anyone in order — and chat which is a text place for
+discussion with non-speakers and interruption if the current speaker. the concept of passing a
+message doesn't exist in the real world in live virtual meeting. it is nonsensical and counters my
+requirement of stop mid sentence if you are the current speaker and respond using your usual tools.
+the agent answered but we can't tell how long that took and the answer has nothing to do with the
+original message. there's a lag from clicking the button and the actual start. if terry was really
+speaking her transcript text should be seen."
+**Three distinct problems identified:**
+1. **UI is missing Transcript tab.** Ceremony currently only shows a chat-style panel. Real meetings
+   show a live running transcript of everything spoken (by all speakers) in chronological order. When
+   the test showed "is speaking…" with no visible text, there was no way to confirm Terry was actually
+   mid-sentence vs. loading.
+2. **"Passing your message" UX must be removed.** This concept has no equivalent in a real meeting.
+   A participant does not "pass" a message — they barge in and the current speaker stops. The label
+   is misleading and counters the core requirement.
+3. **True mid-sentence stop is not proven to work.** The test shows the agent eventually replies but:
+   (a) we can't tell how long it took; (b) the reply content didn't acknowledge the barge message
+   specifically; (c) it appeared to be the normal ceremony opening, not a barge response; (d) there
+   was no return-to-ceremony after the barge answer. Real barge-in requires: TTS stops the instant
+   the user sends chat input → agent acknowledges the specific barge content → agent resumes the
+   ceremony from exactly where it stopped.
+**Expected outcome:**
+- Ceremony view has **two tabs**: **Transcript** (chronological log of all spoken text — agent TTS
+  lines appear as the agent speaks them, timestamped, speaker-labeled) and **Chat** (text input area
+  for discussion and barge-in that works whether or not a speaker is currently talking).
+- "Passing your message" label/concept is completely removed from the UI and any relevant code.
+- A true barge-in demonstration is verifiable: (a) transcript shows agent mid-speech, (b) user chat
+  input stops TTS immediately, (c) agent's reply references the specific barge content, (d) timing
+  is visible (screenshots with timestamps or elapsed time), (e) ceremony resumes from the interruption
+  point after the barge is answered.
+- The test / screenshot proof shows all five of the above — not just "transcript grew from N to N+1."
+**Status:** open — ACs pending `/define-acceptance-criteria`; requires investigation of current
+ceremony UI code before implementation. Do not start coding until ACs are agreed.
 
 ### ACT-huddle-3: Standup ceremony hang — root cause is HTTP 500s on enqueueHuddleTurn/getTurnUpdates
 **Requested:** 2026-07-30 — "use the new uat skill to finally experience what i am experiencing with
