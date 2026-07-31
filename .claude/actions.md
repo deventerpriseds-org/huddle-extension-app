@@ -97,7 +97,27 @@ cross-talk.
 - AC-9: Multiple queued barges are answered FIFO; unspoken round-robin slots are preserved.
 - AC-10: A barge still queued when `CHUNK_BUDGET_MS` is hit survives the chunk boundary — drained by
   the next chunk/resume, never dropped.
-**Status:** open — ACs written, sign-off + implementation not yet started.
+**Status:** CLOSED 2026-07-31 — implemented (commit `94cfc02`), deployed (run 30594156826, success),
+independently verified live by a cold `verifier` subagent:
+- AC-2/3/4: PASS at the code level — diff confirms `KICK_MAX_ATTEMPTS=3`, backoff `[250,750]ms`,
+  distinct `console.error` lines for non-2xx / thrown-fetch / missing-config, and the misconfig
+  branch returns before ever attempting a fetch. **Live `console.error` OUTPUT in Azure logs remains
+  UNVERIFIED** — this session has no Azure Function App log-stream access, only code-level
+  confirmation that the calls are correctly wired.
+- AC-5/6/7/8/9/10 (regression guards): PASS — `git diff 94cfc02^ 94cfc02` touches only `kickNextChunk`
+  (one hunk); `appendBarge`/`claimBarge`/`handleBarges`/`CHUNK_BUDGET_MS` are byte-identical. Live
+  end-to-end confirmation via `ceremony-barge-test.mjs` against production: full 12-reply ceremony
+  completed, barge answered between speakers (not mid-reply), barge idempotency confirmed (2nd
+  identical send deduped), no dropped participants, no cross-huddle spill.
+- AC-1 (latency baseline) was descriptive/measurement scope, not separately re-run this session —
+  the live barge test's overall pass covers functional correctness, not a quantified before/after
+  latency comparison.
+**Evidence:** workflow run https://github.com/deventerpriseds-org/huddle-extension-app/actions/runs/30594156826;
+verifier's live run of `.claude/skills/test-agent-serverfn/scripts/ceremony-barge-test.mjs` against
+https://icy-flower-0f415200f.7.azurestaticapps.net (BARGE-IN: PASS, all sub-checks AC-6..AC-10 PASS).
+**Open follow-up (not blocking closure):** confirm the new `console.error` lines actually appear in
+Azure Function App logs the next time a self-kick genuinely fails in production — needs log access
+this session didn't have.
 
 ### ACT-huddle-5: Ceremony conversational realism — cross-talk relaxation + caption-style reveal
 **Requested:** 2026-07-30. User's core complaint, in their own words: it's "scripted with recordings
