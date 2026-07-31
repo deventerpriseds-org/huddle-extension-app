@@ -1426,22 +1426,34 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // (e.g. Iris filing "Groom and triage the backlog" — Terry's job). The owner was already
         // handed the ask via the back-channel, so the card would be pure clutter. Two prose
         // prohibitions (taskToolInstructions + capabilityHandoffBlock) proved unreliable on a small
-        // model, so enforce in code. Fires ONLY when the TITLE itself matches a capability trigger
-        // AND the filer isn't the owner — a genuine to-do ("renew passport") matches nothing and is
-        // untouched. Covers every agent/capability, mirroring the groom_backlog exclusive-tool gate.
+        // model, so enforce in code. Fires ONLY when the TITLE itself matches a capability trigger —
+        // a genuine to-do ("renew passport") matches nothing and is untouched. Covers every
+        // agent/capability, mirroring the groom_backlog exclusive-tool gate.
+        //
+        // Two shapes of the same failure, both blocked here: (1) cross-agent — a non-owner restates
+        // another agent's exclusive job; (2) self — the OWNER restates its OWN job after performing it
+        // (e.g. Terry filing "Groom backlog" right after grooming it, Cole filing "Assign tasks" right
+        // after assigning). Case (2) slipped through the original owner-mismatch-only check and
+        // polluted the live board (2026-07-31 incident) — the prose rule forbids restating a PERFORMED
+        // action regardless of who performed it, so the code guard must too.
         const titleOwner = capabilityOwnerFor(title);
-        if (titleOwner && titleOwner.agent.id !== winner.id) {
+        if (titleOwner) {
+          const isSelf = titleOwner.agent.id === winner.id;
           recordToolUse(
             winner.id,
             "create_huddle_task",
-            `blocked meta-task “${title.slice(0, 60)}” — ${titleOwner.cap.label} belongs to ${titleOwner.agent.name}`,
+            isSelf
+              ? `blocked self-restating meta-task “${title.slice(0, 60)}” — ${titleOwner.cap.label} is your own job, not a to-do`
+              : `blocked meta-task “${title.slice(0, 60)}” — ${titleOwner.cap.label} belongs to ${titleOwner.agent.name}`,
             true,
           );
           return {
             ok: true,
             deferred: true,
-            handedTo: titleOwner.agent.id,
-            note: `That's ${titleOwner.agent.name}'s exclusive job — it's been handed to them; do not file a task about it.`,
+            handedTo: isSelf ? undefined : titleOwner.agent.id,
+            note: isSelf
+              ? `That's your own job to perform, not a task to file — do it, don't card it.`
+              : `That's ${titleOwner.agent.name}'s exclusive job — it's been handed to them; do not file a task about it.`,
           };
         }
         // Cross-agent / re-run dedup: if this exact title was already created earlier in this turn,
