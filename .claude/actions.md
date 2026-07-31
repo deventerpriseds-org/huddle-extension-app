@@ -27,7 +27,11 @@ ceremony voice pipeline) not have the same tool access (e.g. journey proxy tools
 (`runHuddleTurn`)? Likely candidates: the voice path may route through a different/thinner prompt
 assembly or a restricted tool list, or the Realtime API session config doesn't register the same
 tool schemas the Responses-API chat path gets.
-**Status:** open — ACs pending `/define-acceptance-criteria`; not yet investigated.
+**Status:** LARGELY RESOLVED at the engine level + one follow-on bug fixed (all deployed; awaiting user's final live confirm).
+- **[DONE — deployed, live-DB confirmed]** The "different brain" root cause was the 1:1 VOICE orb using a SEPARATE ElevenLabs-hosted LLM+thin prompt, unchanged since day one. Reversible switch to OpenAI (same snapshot+model as chat) via `useVoiceCallRealtime` + `VOICE_1ON1_BACKEND="openai"` flag (ElevenLabs kept as fallback). Proven at the engine level: live `dm-iris-chase` turns show the voice/meeting path answering the web-search question CORRECTLY ("Yes, I can perform a live web search") — same as text chat.
+- **[DONE — deployed]** Transcript/Chat tabs in the 1:1 meeting pane (ACT-huddle-12 #1) + meeting transcript now renders from the durable `dm-<agent>` store thread (unified with the 1:1 text chat). Screenshots confirm both surfaces show one conversation.
+- **[DONE — deployed, verifier PASS 19/19]** Follow-on bug the user hit while testing: some 1:1 sends showed on screen but got no reply. Live DB proved they never created a server turn row — the enqueue POST failed at the transport layer and BOTH send paths silently swallowed it. Fixed with shared `resilientEnqueue` (retry + probe + surface real error). Commit `9bbc5e2`. See memory.md Hardening (silent send-drop).
+- **[OPEN — awaiting user]** Final live confirmation that (a) the meeting Chat tab now shows sends+replies, and (b) a failed send now surfaces a "Couldn't send —" error instead of vanishing. The real transport cause (why the POST aborts) is instrumented but not yet identified — the surfaced error will reveal it on the next occurrence. NOTE: this is the 1:1 path only; the GROUP ceremony voice path is ACT-huddle-7 (separate, not touched here).
 
 ### ACT-huddle-7: Finish the ceremony voice rebuild — replace push-to-talk/MP3 with the working WebRTC mechanism
 **Requested:** 2026-07-31 — user's own words: "we talked about repairing a bad attempt at fixing the
