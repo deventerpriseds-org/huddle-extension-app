@@ -112,11 +112,16 @@ export function MeetingLayer() {
     leaveMeeting();
   }
 
+  // Chat-tab typed-text send for a 1:1/ad-hoc call — only meaningful on the OpenAI-backed hook
+  // (it's what routes through the real turn engine); undefined on the ElevenLabs backend, which
+  // has no equivalent, so the Chat compose box is disabled with an explanation there instead.
+  const sendChatText = VOICE_1ON1_BACKEND === "openai" ? realtimeVoice.sendText : undefined;
+
   if (!meeting) return null;
   return (
     <TooltipProvider delayDuration={200}>
       {meeting.expanded ? (
-        <MeetingRoom meeting={meeting} voice={voice} onLeave={handleLeave} />
+        <MeetingRoom meeting={meeting} voice={voice} sendChatText={sendChatText} onLeave={handleLeave} />
       ) : (
         <CollapsedPill meeting={meeting} voice={voice} onLeave={handleLeave} />
       )}
@@ -194,10 +199,12 @@ type Panel = "transcript" | "people";
 function MeetingRoom({
   meeting,
   voice,
+  sendChatText,
   onLeave,
 }: {
   meeting: MeetingState;
   voice: VoiceCallController;
+  sendChatText: ((agentId: AgentId, text: string, opts?: { speak?: boolean }) => Promise<void>) | undefined;
   onLeave: () => void;
 }) {
   const collapse = useHuddleStore((s) => s.toggleMeetingExpanded);
@@ -229,6 +236,9 @@ function MeetingRoom({
         : activeHuddleId;
 
   const [panel, setPanel] = useState<Panel>("transcript");
+  // Inner tab within the transcript/chat pane (People vs Transcript is the outer `panel` toggle
+  // above). Same feed either way (roomTurns) — only the compose box's visibility differs by tab.
+  const [chatTab, setChatTab] = useState<"transcript" | "chat">("transcript");
   const [showCaptions, setShowCaptions] = useState(true);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -646,8 +656,30 @@ function MeetingRoom({
   async function sendMessage() {
     const text = input.trim();
     if (!text || busy || !meeting.members.length) return;
-    const cfg = useBackendsStore.getState().config;
     setInput("");
+
+    if (!isVirtual) {
+      // 1:1 / ad-hoc voice call — routes through the SAME turn engine (enqueueHuddleTurn, real
+      // snapshot + model) a spoken utterance uses, via useVoiceCallRealtime.sendText. The
+      // transcript display updates through voice.captions (sendText/runTurn already write those
+      // — see roomTurns below), not addMeetingTurns, which only feeds the ceremony transcript and
+      // is unused for this meeting kind. sendChatText is undefined on the ElevenLabs backend,
+      // which has no equivalent send path — the Chat compose box is disabled for that case
+      // instead of calling this function (see TranscriptPanel's composeAllowed).
+      if (!sendChatText) return;
+      const targetId = meeting.activeSpeakerId;
+      if (!targetId) return;
+      setBusy(true);
+      try {
+        await sendChatText(targetId, text);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Message failed.");
+      }
+      setBusy(false);
+      return;
+    }
+
+    const cfg = useBackendsStore.getState().config;
     addMeetingTurns([{ text, user: true }]);
 
     // BARGE-IN routing: routeTurn handles ceremony turns; returns undefined to fall through.
@@ -802,8 +834,11 @@ function MeetingRoom({
             <RoomControl
               label="Chat"
               icon={<MessageSquare size={18} />}
-              active={panel === "transcript"}
-              onClick={() => setPanel("transcript")}
+              active={panel === "transcript" && chatTab === "chat"}
+              onClick={() => {
+                setPanel("transcript");
+                setChatTab("chat");
+              }}
             />
             <Button variant="destructive" className="ml-1 gap-1.5" onClick={onLeave}>
               <LogOut size={16} /> Leave
@@ -823,7 +858,14 @@ function MeetingRoom({
               onToggleCaptions={() => setShowCaptions((v) => !v)}
               voiceStatus={isVirtual ? groupVoice.status : voice.status === "connected" ? "listening" : "idle"}
               partial={isVirtual ? groupVoice.partial : ""}
-              canCompose={isVirtual}
+              chatTab={chatTab}
+              onChatTabChange={setChatTab}
+              composeAllowed={isVirtual || !!sendChatText}
+              composeDisabledReason={
+                !isVirtual && !sendChatText
+                  ? 'Chat isn\'t available for this voice backend — use voice, or switch VOICE_1ON1_BACKEND to "openai".'
+                  : undefined
+              }
               input={input}
               setInput={setInput}
               onSend={sendMessage}
@@ -1006,7 +1048,10 @@ function TranscriptPanel({
   onToggleCaptions,
   voiceStatus,
   partial,
-  canCompose,
+  chatTab,
+  onChatTabChange,
+  composeAllowed,
+  composeDisabledReason,
   input,
   setInput,
   onSend,
@@ -1019,7 +1064,10 @@ function TranscriptPanel({
   onToggleCaptions: () => void;
   voiceStatus: string;
   partial: string;
-  canCompose: boolean;
+  chatTab: "transcript" | "chat";
+  onChatTabChange: (tab: "transcript" | "chat") => void;
+  composeAllowed: boolean;
+  composeDisabledReason?: string;
   input: string;
   setInput: (v: string) => void;
   onSend: () => void;
@@ -1040,11 +1088,40 @@ function TranscriptPanel({
           ? "Speaking…"
           : "";
 
+  // Same feed either tab (roomTurns) — only the compose box's presence differs. Transcript is
+  // always the read-only history; Chat is the same history with the send box revealed below it.
+  const showCompose = chatTab === "chat";
+
   return (
     <>
-      <div className="flex items-center justify-between border-b border-hairline px-4 py-2.5">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <MessageSquare size={15} className="text-muted-foreground" /> Live transcript
+      <div className="flex items-center justify-between border-b border-hairline px-4 py-2">
+        <div className="flex items-center gap-1" role="tablist" aria-label="Transcript or chat">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={chatTab === "transcript"}
+            data-testid="tab-transcript"
+            onClick={() => onChatTabChange("transcript")}
+            className={cn(
+              "rounded-full px-2.5 py-1 text-xs font-semibold transition-colors",
+              chatTab === "transcript" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Transcript
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={chatTab === "chat"}
+            data-testid="tab-chat"
+            onClick={() => onChatTabChange("chat")}
+            className={cn(
+              "rounded-full px-2.5 py-1 text-xs font-semibold transition-colors",
+              chatTab === "chat" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Chat
+          </button>
         </div>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1059,7 +1136,7 @@ function TranscriptPanel({
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {turns.length === 0 ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
-            {canCompose
+            {composeAllowed
               ? "No turns yet. Start the stand-up, send a message, or join with voice."
               : "The transcript will appear here as people speak."}
           </div>
@@ -1079,31 +1156,36 @@ function TranscriptPanel({
         )}
       </div>
 
-      {canCompose && (
-        <div className="border-t border-hairline p-3">
-          <div className="flex items-end gap-2">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  onSend();
-                }
-              }}
-              rows={1}
-              placeholder={membersCount ? "Message the room…" : "Invite an agent first…"}
-              className="min-h-10 flex-1 resize-none rounded-xl border border-hairline bg-surface-2 px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
-            />
-            <Button size="icon" className="size-10 shrink-0 rounded-full" onClick={onSend} disabled={busy || !input.trim() || !membersCount} aria-label="Send">
-              {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-            </Button>
+      {showCompose &&
+        (composeAllowed ? (
+          <div className="border-t border-hairline p-3">
+            <div className="flex items-end gap-2">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    onSend();
+                  }
+                }}
+                rows={1}
+                placeholder={membersCount ? "Message the room…" : "Invite an agent first…"}
+                className="min-h-10 flex-1 resize-none rounded-xl border border-hairline bg-surface-2 px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+              />
+              <Button size="icon" className="size-10 shrink-0 rounded-full" onClick={onSend} disabled={busy || !input.trim() || !membersCount} aria-label="Send">
+                {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+              </Button>
+            </div>
+            <p className="mt-1.5 px-1 text-[10px] text-muted-foreground">
+              Cut in any time — the current speaker stops and answers you.
+            </p>
           </div>
-          <p className="mt-1.5 px-1 text-[10px] text-muted-foreground">
-            Cut in any time — the current speaker stops and answers you.
-          </p>
-        </div>
-      )}
+        ) : (
+          <div className="border-t border-hairline p-3 text-center text-xs text-muted-foreground">
+            {composeDisabledReason ?? "Chat isn't available right now."}
+          </div>
+        ))}
     </>
   );
 }

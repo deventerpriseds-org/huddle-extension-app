@@ -1,5 +1,5 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-07-31 (ACT-huddle-12 problems #2 & #3 done — deployed + UAT PASS, tab redesign still open; ACT-huddle-13/14/15 added)
+Last updated: 2026-07-31 (ACT-huddle-12 problem #1 — Transcript/Chat tabs — implemented + deployed + verifier PASS, awaiting user live confirmation; also closes the mechanism for ACT-huddle-6 same-brain 1:1 chat/voice)
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
 > claiming any item "done" without ACs + the verifier subagent / observed evidence).
@@ -328,9 +328,26 @@ speaking her transcript text should be seen."
   **STILL per org rule NOT writing "fixed" — awaiting the USER's own live browser confirmation.** Option 3
   (true broken-WORD transcript text) remains the agreed pivot if the sentence-seam cut isn't crisp enough
   live.**
-- **[OPEN]** Problem #1 — the two-tab **Transcript** + **Chat** ceremony UI redesign — remains. (A live
-  "Live transcript" panel already exists; the explicit Chat/Transcript tab split does not.) Also open:
-  pivot to Option 3 (true broken-WORD text) if the sentence-granularity cut isn't crisp enough live.
+- **[IMPLEMENTED — deployed to `main`, independent verifier PASS 8/10 + PARTIAL 2/10 (browser-click-only,
+  code trace unambiguous), NOT yet user-confirmed live]** Problem #1 — the two-tab **Transcript** + **Chat**
+  meeting-pane UI. `MeetingRoom`'s existing live-transcript panel now has a `role="tablist"` Transcript/Chat
+  tab bar (`chatTab` state, default `"transcript"`); the Chat tab's compose box is gated on `chatTab==="chat"`
+  (independent of the room-control `panel` state) and — for 1:1 — sends through a NEW
+  `useVoiceCallRealtime.sendText(agentId, text, opts?)`, which calls the same internal `runTurn` (same
+  `enqueueHuddleTurn` payload shape) that 1:1 voice already uses. This is also the direct mechanism for
+  ACT-huddle-6 ("same brain"): 1:1 chat and 1:1 voice now provably share one send path into the OpenAI turn
+  engine — the two were NOT unified before this. Ceremony/group `sendMessage` branch is byte-identical
+  (confirmed via diff-hunk boundary check against `routeTurn`/`runBargeSequence`/`runCeremony`, all
+  untouched). ElevenLabs backend (`VOICE_1ON1_BACKEND !== "openai"`) disables the Chat tab's compose box
+  with a real message (`composeAllowed`/`composeDisabledReason`) instead of crashing. Commit `f11a289`
+  (merged with upstream `b3467b4` as `d83c254`), deployed via `deploy-swa.yml`. `tsc --noEmit` clean,
+  `bun run build` succeeded, `eslint` shows only pre-existing noise (confirmed no new warnings by diff-hunk
+  line-range check). Independent verifier found 0 FAIL; the 2 PARTIAL items (tab click, room-control button
+  click) are pure UI-interaction claims the verifier couldn't click a real browser to confirm — code-level
+  trace is deterministic/unambiguous. **STILL per org rule NOT writing "fixed"** — needs the user's own live
+  browser confirmation, and per the user's explicit plan, using the new Chat tab to impersonate them via text
+  and directly compare 1:1 chat vs 1:1 voice answers is the next step once they confirm the tab renders.
+  Also open: pivot to Option 3 (true broken-WORD text) if the sentence-granularity cut isn't crisp enough live.
 
 ### ACT-huddle-3: Standup ceremony hang — root cause is HTTP 500s on enqueueHuddleTurn/getTurnUpdates
 **Requested:** 2026-07-30 — "use the new uat skill to finally experience what i am experiencing with
