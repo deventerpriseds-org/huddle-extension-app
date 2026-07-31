@@ -189,6 +189,26 @@ achieve this"). Do not start implementation until a design (schema decision, exa
 repos, and the toggle UI) is written up and signed off — same discipline as every other feature this
 session (`/define-acceptance-criteria` after the design, not before).
 
+### ACT-huddle-16: Rewire ceremony voice to Realtime-as-EAR-ONLY + Huddle's real router/snapshots + ElevenLabs voices
+**Requested:** 2026-07-31 — user: current ceremony barge approach "is known not to work"; keep the
+brains/routing from the 1:1 chats (snapshots, semantic targeting awareness, owner awareness), use
+"elevenlabs voices tacked on to openai brains." No A/B testing wanted — build the right thing.
+**Ground-truth established this session:**
+- OpenAI Realtime + ElevenLabs voices DO compose (journey/Iris `RealtimeVoiceAssistant.ts`; see
+  memory.md "voice architecture"). Realtime text-mode + muted OpenAI audio + native VAD/barge
+  (`response.cancel` on `speech_started`) + ElevenLabs voices the text. Single-voice-per-session is moot.
+- **Root cause of the observed failures (Cole answering for Terry; generic 1:1 "upload your resume"
+  replies; Korean hallucination; same sentence re-spoken):** the ceremony barge in `MeetingBar.tsx`
+  `runBargeSequence` BYPASSES `routeMessageLLM` — it uses a crude `parseMentions(text) ?? currentSpeaker`
+  and forces `scope:"one-to-one"` with that agent, so the semantic addressing/owner-awareness that the
+  chat path (`routeMessageLLM`) has is never consulted, and the reply has no ceremony context.
+**Design (settled):** Realtime **AS EAR ONLY** (`create_response:false`) for VAD/STT/barge; every barge
+utterance routes through Huddle's OWN pipeline — `routeMessageLLM` (semantic "terry"-vs-mentioned +
+owner/capability awareness) → winning agent's snapshot + tools, **with ceremony context** (scene/agenda/
+prior speakers) → reply → ElevenLabs per-agent voice. Reuse the `useVoiceCallRealtime` pattern.
+**Status:** open — ACs being written by an independent AC subagent (2026-07-31); build to follow, then
+independent verifier. Supersedes the parseMentions/forced-1:1 barge path and the freeze/re-speak hack.
+
 ### ACT-huddle-14: Decide GPT-4o → GPT-5.6 Luna/Terra migration — cost AND performance, not just cost
 **Requested:** 2026-07-31 — user's own words: "you need an act to determine if we should be going from
 gpt4o to gpt 5.6 luna or if that is going to hurt performance."

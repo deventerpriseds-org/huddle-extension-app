@@ -24,7 +24,6 @@ import { useVoiceCallRealtime } from "../hooks/useVoiceCallRealtime";
 import { useGroupVoice } from "../hooks/useGroupVoice";
 import { useCeremonyVoice } from "../hooks/useCeremonyVoice";
 import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates } from "../lib/huddle.functions";
-import { parseMentions } from "../lib/routing";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
@@ -54,6 +53,66 @@ const CEREMONY_TRIGGER: Record<string, string> = {
   review: "let's run the sprint review",
 };
 const HOST_ID: AgentId = "terry-locke";
+
+// Coalesce the ceremony transcript (stored as per-sentence rows) into the HistoryMessage[] shape
+// sendHuddleMessage expects — the SAME { id, huddleId, author, text, ts } shape HuddleView builds, so
+// this reuses the existing history mechanism rather than inventing a parallel context path. Passing
+// it as `history` on a barge turn gives the router's ADDRESSED-BY-NAME logic and the responding agent
+// the live stand-up context (fixes the generic off-context "upload your resume" replies). Consecutive
+// per-sentence rows of the same agent block are merged into one message; the user's own just-added
+// interjection row is dropped (it's sent separately as `text`, so it isn't duplicated).
+function buildCeremonyHistory(
+  transcript: readonly CeremonyTurn[] | undefined,
+  huddleId: string,
+  bargeText: string,
+): {
+  id: string;
+  huddleId: string;
+  author: { kind: "user" } | { kind: "agent"; agentId: AgentId };
+  text: string;
+  ts: number;
+}[] {
+  const rows = transcript ?? [];
+  const out: {
+    id: string;
+    huddleId: string;
+    author: { kind: "user" } | { kind: "agent"; agentId: AgentId };
+    text: string;
+    ts: number;
+  }[] = [];
+  const trimmedBarge = bargeText.trim();
+  let seq = 0;
+  let lastBlockId: string | undefined;
+  let lastAgentId: AgentId | undefined;
+  for (const r of rows) {
+    const txt = r.text?.trim();
+    if (!txt) continue;
+    // Skip the user's own interjection row (added to the transcript just before this call).
+    if (r.user && txt === trimmedBarge) continue;
+    const author =
+      r.user
+        ? ({ kind: "user" } as const)
+        : r.agentId && AGENT_BY_ID[r.agentId]
+          ? ({ kind: "agent", agentId: r.agentId } as const)
+          : null;
+    if (!author) continue;
+    if (
+      author.kind === "agent" &&
+      out.length > 0 &&
+      lastAgentId === author.agentId &&
+      r.blockId &&
+      lastBlockId === r.blockId
+    ) {
+      out[out.length - 1].text = `${out[out.length - 1].text} ${txt}`.trim();
+      continue;
+    }
+    out.push({ id: `barge-hist-${seq++}`, huddleId, author, text: txt, ts: r.ts ?? Date.now() });
+    lastBlockId = r.blockId;
+    lastAgentId = author.kind === "agent" ? author.agentId : undefined;
+  }
+  // HistoryMessage caps at 40; the router only reads the last ~14, so the recent tail is enough.
+  return out.slice(-20);
+}
 
 // 1:1 voice call backend — reversible vendor switch, not a UI change (the orb stays the orb).
 // "openai": OpenAI Realtime WebRTC (STT/VAD/barge-in) + the agent's real canonical brain
@@ -284,6 +343,10 @@ function MeetingRoom({
   membersRef.current = meeting.members;
   const huddleIdRef = useRef(meetingHuddleId);
   huddleIdRef.current = meetingHuddleId;
+  // Live ceremony transcript mirror so runBargeSequence (empty-dep useCallback) can pass the recent
+  // stand-up context as `history` on the barge turn without a stale closure.
+  const transcriptRef = useRef(meeting.transcript);
+  transcriptRef.current = meeting.transcript;
 
   // The immediate-barge sequence (shared by typed + voice). Cut the speaker → show the user's
   // message → answer RIGHT THERE over the frozen ceremony (a separate synchronous single-agent
@@ -295,39 +358,34 @@ function MeetingRoom({
     const myGen = bargeGenRef.current; // captured at start; finally only unparks if still latest
     bargeHandlingRef.current = true;
     const members = membersRef.current;
-    // Who answers: an @mentioned member → the (frozen) current speaker → host → first member.
-    const mentioned = parseMentions(text, AGENTS.filter((a) => members.includes(a.id))).filter((id) =>
-      members.includes(id),
-    );
-    const interrupted = ceremonyVoiceRef.current.activeSpeaker; // survives bargeFreeze
-    const responder =
-      mentioned[0] ??
-      interrupted ??
-      (members.includes(HOST_ID) ? HOST_ID : members[0]);
-
-    // Mark the row that was actually cut (only if a speaker was mid-turn).
+    // The frozen speaker (the row actually being cut) survives bargeFreeze. Mark it interrupted so the
+    // transcript renders the cut — but this agent does NOT necessarily answer: the REAL router below
+    // decides who does, so "hey terry" reaches Terry even if Cole was mid-sentence.
+    const interrupted = ceremonyVoiceRef.current.activeSpeaker;
     if (interrupted) markLastAgentTurnInterrupted();
 
     try {
       const cfg = useBackendsStore.getState().config;
-      // Separate synchronous single-agent turn (no turnId ⇒ not durable ⇒ the ceremony's
-      // getTurnUpdates poll can't see it). This is what makes the answer immediate instead of
-      // queued behind the remaining scripted speakers.
-      // Bound the answer fetch so a stalled network call can never leave emit() parked forever
-      // (the finally below only runs once these awaits settle — a timeout guarantees they do).
+      // Route the barge through Huddle's REAL brain: a GROUP turn (scope:"group", the ceremony's full
+      // member list, NO targetAgentId) so routeMessageLLM's ADDRESSED-BY-NAME / owner-awareness picks
+      // the responder — not the frozen speaker (the old one-to-one path bypassed the router entirely,
+      // which is why the wrong agent answered). The recent ceremony transcript rides along as `history`
+      // and ceremonyBarge:true makes the server layer the existing bargeDirective() onto the
+      // responder's scene, so the reply is stand-up-aware and cut-in-aware instead of a generic
+      // off-context answer. Kept SYNCHRONOUS (no turnId ⇒ non-durable, invisible to the ceremony's
+      // getTurnUpdates poll) so the answer lands immediately over the frozen speaker. interjections
+      // off + soloOnCoverage keep the fan-out to essentially the primary — no pile-on, no stray side
+      // effects during a barge. The 30s race guarantees the finally() below always unparks emit().
       const res = await Promise.race([
         sendHuddleMessage({
           data: {
             text,
             huddleId: huddleIdRef.current,
-            // one-to-one is REQUIRED for targetAgentId to be honored (routeMessage:86 ignores it under
-            // "group"). This forces exactly ONE responder — the addressed/current agent — answering
-            // the barge directly, which is the whole point of "answer right there".
-            scope: "one-to-one" as const,
-            members: [responder],
-            history: [],
-            targetAgentId: responder,
-            router: cfg.router,
+            scope: "group" as const,
+            members,
+            history: buildCeremonyHistory(transcriptRef.current, huddleIdRef.current, text),
+            ceremonyBarge: true,
+            router: { ...cfg.router, interjections: false, soloOnCoverage: true },
             agents: cfg.agents,
             caller: callerRef.current,
             timeZone: tzRef.current,
@@ -337,6 +395,16 @@ function MeetingRoom({
           window.setTimeout(() => reject(new Error("barge answer timed out")), 30_000),
         ),
       ]);
+      // Surface the routing decision for verification (AC-13): who the router picked and why.
+      console.debug(
+        "[barge] decision",
+        res.decision?.reason,
+        "winner=",
+        res.decision?.winnerId ?? res.replies?.[0]?.agentId,
+      );
+      // Voice EXACTLY ONE reply — the router's PRIMARY (replies[0]) — over the frozen speaker. Any
+      // extra winners/interjectors are ignored for voicing (AC-12 wants one immediate answer, not a
+      // pile-on mid-barge).
       const answer = res.replies?.[0];
       if (answer) {
         setPhase(`${AGENT_BY_ID[answer.agentId as AgentId]?.name ?? "Someone"} is answering…`);
