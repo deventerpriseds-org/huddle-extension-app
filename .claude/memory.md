@@ -124,6 +124,28 @@ Every mistake must make the next session more efficient. Append, never delete.
   `addMeetingTurns` → `TranscriptRow` — text never stored as hook state; barge path sends to server but
   does NOT clear client AudioQueue; "Passing your message" is at MeetingBar.tsx:250 in `routeTurn`.
 
+  **[2026-07-31 FOLLOW-UP — ACT-huddle-12 problems #2 & #3 IMPLEMENTED, deployed, UAT PASS, NOT user-confirmed]**
+  Acted on the three criticisms. Fix (commit `e20903b`, on `main` via fast-forward; feature branch
+  `claude/setup-stop-hooks-skills-0h569y`): in `MeetingBar.routeTurn`, REMOVED `setPhase("Passing your
+  message to the room…")` and instead call `ceremonyVoiceRef.current.stopListening()` (clears the
+  AudioQueue + increments genRef to kill the `_voiceTurn` loop) then `setPhase("")`, BEFORE the async
+  `bargeCeremony` call — so the current speaker actually stops mid-sentence the instant the user cuts in,
+  and the nonsensical "passing" narration is gone. Note: `ceremonyVoiceRef` is declared AFTER `routeTurn`
+  in source order but the callback is only INVOKED post-mount, so the ref is populated by then (verified —
+  tsc clean, runtime PASS). Rewrote `ceremony-barge-tier1.e2e.mjs` to prove all three complaints:
+  (1) waits for a real transcript SENTENCE (≥15 chars) before barging — not just the "• speaking" dot;
+  (2) a MutationObserver asserts "Passing your message" NEVER appears; (3) a distinctive barge
+  ("what is seven times eleven?") whose reply must contain "77"/"seventy-seven" — proving the agent
+  addressed the barge content, not a generic opener. Audio-stop is observed via an `Audio()` constructor
+  wrapper (the AudioQueue uses DETACHED `new Audio()` elements `querySelector` can't see — a real gotcha).
+  Deploy `deploy-swa.yml` run 30644156945 = success; test `ceremony-barge-screenshots.yml` run
+  **30644546674 = 11 passed / 0 failed** — logged evidence: "Transcript shows spoken text before barge
+  (1 turns; longest 31 chars)", "Speaker cut off within 500ms of barge — pause() fired (pauses 0→1)",
+  Reply = `Tess: "Seven times eleven is seventy-seven."`, "No 'Passing your message'… ever appeared".
+  Screenshots 00–06 on branch `ceremony-barge-screenshots`. STILL OPEN in ACT-huddle-12: the two-tab
+  Transcript/Chat UI redesign (problem #1) and full resume-from-interruption-point. Per org rule, NOT
+  writing "fixed" — awaiting the user's own live browser confirmation.
+
 - **ACT-huddle-3 — Mobile Composer overlay fix:** AC subagent ran (12 ACs delivered, awaiting user sign-off).
   Waiting on user to confirm ACs before any code is written.
 

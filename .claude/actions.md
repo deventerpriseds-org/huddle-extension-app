@@ -1,5 +1,5 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-07-31 (ACT-huddle-12 added)
+Last updated: 2026-07-31 (ACT-huddle-12 problems #2 & #3 done — deployed + UAT PASS, tab redesign still open)
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
 > claiming any item "done" without ACs + the verifier subagent / observed evidence).
@@ -174,8 +174,22 @@ speaking her transcript text should be seen."
   is visible (screenshots with timestamps or elapsed time), (e) ceremony resumes from the interruption
   point after the barge is answered.
 - The test / screenshot proof shows all five of the above — not just "transcript grew from N to N+1."
-**Status:** open — ACs pending `/define-acceptance-criteria`; requires investigation of current
-ceremony UI code before implementation. Do not start coding until ACs are agreed.
+**Status:** PARTIALLY DONE (2 of 3 problems) — remainder open.
+- **[DONE — deployed to prod `main`, automated UAT PASS, NOT yet user-confirmed live]** Problem #2
+  ("Passing your message" removal) and problem #3 (true mid-sentence stop + barge-content reply):
+  `MeetingBar.routeTurn` now calls `ceremonyVoiceRef.current.stopListening()` (clears AudioQueue +
+  kills the voiceTurn loop) and `setPhase("")` before the async `bargeCeremony` call — the label is
+  gone and the current speaker goes quiet the instant the user cuts in. Commit `e20903b` (feature
+  branch merged fast-forward into `main`, deployed via `deploy-swa.yml` run 30644156945 = success).
+  Independent AC subagent wrote 10 ACs (user approved "go ahead"); `ceremony-barge-tier1.e2e.mjs`
+  rewritten to prove all three of the user's complaints. GHA run **30644546674 = 11 passed / 0 failed**:
+  transcript sentence text visible before barge ("longest 31 chars"), audio `pause()` fired within
+  500ms of the barge (`pauses 0→1`), Tess answered the barge specifically ("Seven times eleven is
+  seventy-seven."), and "Passing your message" never appeared. Screenshots 00–06 on branch
+  `ceremony-barge-screenshots`. **Still needs the user to confirm live in their own browser.**
+- **[OPEN]** Problem #1 — the two-tab **Transcript** + **Chat** ceremony UI redesign — and the
+  full "resume the ceremony from exactly where it stopped after the barge" behavior are NOT done here.
+  ACs pending `/define-acceptance-criteria`; requires the ceremony UI investigation before coding.
 
 ### ACT-huddle-3: Standup ceremony hang — root cause is HTTP 500s on enqueueHuddleTurn/getTurnUpdates
 **Requested:** 2026-07-30 — "use the new uat skill to finally experience what i am experiencing with
