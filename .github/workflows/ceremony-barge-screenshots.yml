@@ -1,0 +1,35 @@
+name: Ceremony barge-in screenshots (commit to repo)
+on:
+  workflow_dispatch:
+
+jobs:
+  ceremony-barge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright + Chromium
+        run: npm install playwright && npx playwright install chromium --with-deps
+
+      - name: Run ceremony barge-in Tier 1 test
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          SHOT_DIR: e2e/ceremony-screenshots
+        run: node e2e/ceremony-barge-tier1.e2e.mjs
+
+      - name: Commit screenshots to repo
+        if: always()
+        run: |
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          git add e2e/ceremony-screenshots/
+          git diff --cached --quiet || git commit -m "chore: ceremony barge-in Tier 1 screenshots [ci skip]"
+          git push origin HEAD:ceremony-barge-screenshots --force
