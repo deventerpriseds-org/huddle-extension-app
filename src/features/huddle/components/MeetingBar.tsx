@@ -528,7 +528,7 @@ function MeetingRoom({
     // Render + speak newly-arrived ceremony replies in order.
     // `spoken.n` tracks how many replies have been voiced (idempotent on re-poll).
     // Trailing transcript: text is revealed PER SENTENCE as audio begins, not pre-loaded.
-    const emit = async (reps: { agentId: string; text: string }[], spoken: { n: number }) => {
+    const emit = async (reps: { agentId: string; text: string }[], spoken: { n: number }, step: string) => {
       for (let i = spoken.n; i < reps.length; i++) {
         if (!ceremonyAliveRef.current) return;
         // PARK while a barge is being handled — do NOT voice the next scripted speaker until the
@@ -543,24 +543,30 @@ function MeetingRoom({
         spoken.n = i + 1;
         spokenCountRef.current = spoken.n;
         setPhase(`${AGENT_BY_ID[agentId]?.name ?? "Someone"} is speaking…`);
+        // One block == one agent reply. Every sentence-row of it shares this blockId; the SAME
+        // onSentenceStart closure is reused on resume (saved in freezeRef), so the resumed remainder
+        // of the block keeps the same blockId with continuing sentenceIndexes.
+        const blockId = `blk-${step}-${i}-${agentId}`;
 
         if (!voiceOff) {
           setSpeakingId(agentId);
           try {
             await ceremonyVoiceRef.current.voiceTurn(agentId, r.text, {
-              // Trailing transcript: add each sentence to the transcript only when its audio starts.
-              onSentenceStart: (sentence) => addMeetingTurns([{ agentId, text: sentence }]),
+              // Trailing transcript: add each sentence when its audio starts, tagged with its block
+              // + position so a test can prove mid-block interruption and same-block resume.
+              onSentenceStart: (sentence, sentenceIndex, blockTotal) =>
+                addMeetingTurns([{ agentId, text: sentence, blockId, sentenceIndex, blockTotal }]),
             });
           } catch {
             voiceOff = true;
-            addMeetingTurns([{ agentId, text: r.text }]);
+            addMeetingTurns([{ agentId, text: r.text, blockId, sentenceIndex: 0, blockTotal: 1 }]);
             toast.error("Voice playback failed — continuing in text.");
           } finally {
             setSpeakingId(null);
           }
         } else {
           // Text-only fallback when TTS is unavailable.
-          addMeetingTurns([{ agentId, text: r.text }]);
+          addMeetingTurns([{ agentId, text: r.text, blockId, sentenceIndex: 0, blockTotal: 1 }]);
         }
         // Resume after a barge is now handled inside runBargeSequence (freeze → answer → resume),
         // not here — emit only voices scripted speakers and parks (above) while a barge is in flight.
@@ -611,13 +617,13 @@ function MeetingRoom({
           const turn = upd?.turns?.find((t) => t.id === turnId);
           const reps = turn ? (turn.result?.replies ?? turn.replies ?? []) : [];
           if (reps.length > spoken.n) {
-            await emit(reps, spoken); // speaks each in order; phase set to "<name> is speaking…"
+            await emit(reps, spoken, step); // speaks each in order; phase set to "<name> is speaking…"
           } else {
             const secs = Math.round((Date.now() - stepStart) / 1000);
             setPhase(spoken.n === 0 ? `Gathering the team… ${secs}s` : `Waiting for the next update… ${secs}s`);
           }
           if (turn && (turn.status === "done" || turn.status === "error")) {
-            await emit(turn.result?.replies ?? turn.replies ?? [], spoken); // drain the tail
+            await emit(turn.result?.replies ?? turn.replies ?? [], spoken, step); // drain the tail
             terminal = true;
             if (turn.status === "error") throw new Error(turn.error || "the ceremony run errored");
             break;
@@ -1204,8 +1210,12 @@ function TranscriptRow({ turn, startedAt }: { turn: CeremonyTurn; startedAt: num
       className="flex gap-2.5"
       data-testid="transcript-turn"
       data-turn-agent="true"
+      data-turn-agent-id={turn.agentId ?? ""}
       data-turn-kind={turn.kind ?? ""}
       data-turn-interrupted={turn.interrupted ? "true" : "false"}
+      data-block-id={turn.blockId ?? ""}
+      data-sentence-index={turn.sentenceIndex ?? ""}
+      data-block-total={turn.blockTotal ?? ""}
     >
       {agent ? <AgentAvatar agent={agent} size="sm" clickable={false} /> : <div className="size-7 rounded-full bg-muted" />}
       <div className="min-w-0">

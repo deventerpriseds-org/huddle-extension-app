@@ -58,6 +58,13 @@ export interface CeremonyTurn {
   interrupted?: boolean;
   // "barge" = the user's interjection; "answer" = the immediate reply spoken over the frozen ceremony.
   kind?: "barge" | "answer";
+  // Block/sentence provenance so a test can prove "interrupted mid-block, ≥1 sentence remaining" and
+  // "the SAME agent resumed and finished the remaining sentences in order". A block = one agent reply;
+  // each sentence of it is a row sharing the same blockId. sentenceIndex is 0-based within the block;
+  // blockTotal is the block's total sentence count.
+  blockId?: string;
+  sentenceIndex?: number;
+  blockTotal?: number;
 }
 export interface MeetingState {
   kind: MeetingKind;
