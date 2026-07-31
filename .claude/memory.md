@@ -526,3 +526,16 @@ user to test in the deployed app. NOT calling fixed until user confirms AC-12 li
     standup/review digests, 48h review-recheck) — none of which are currently batched. Both logged under
     ACT-huddle-15 as the concrete follow-through, since the "should we" questions themselves were answered
     live in-conversation per the user's explicit request for immediacy.
+
+## ACT-huddle-16 — ceremony barge rewired to EAR-ONLY + real router (2026-07-31)
+The ceremony barge used to force scope:"one-to-one" + targetAgentId from `parseMentions ?? currentSpeaker`,
+bypassing `routeMessageLLM` — so "hey terry" was answered by whoever was mid-sentence (Cole), with no
+ceremony context (generic "upload your resume" replies) and a Korean hallucination. Rewired: barge now
+dispatches scope:"group" (no targetAgentId) → `routeMessageLLM`; `buildCeremonyHistory` feeds the ceremony
+transcript as `history`; `ceremonyBarge:true` layers the existing `bargeDirective()` onto the responder
+scene; voices only the router's primary via ElevenLabs; Realtime stays ear-only. **Verified live** (run
+30661958646, real router, quotaFallback:false, gpt-5.5): plain-text "terry, what's blocking the release?"
+while Cole mid-block → **Terry** answers with release-blocker content (ctxAware), not Cole, not generic.
+NOT yet user-confirmed live. **UX regression found** (from a concurrent transcript-fix merge): the barge
+compose box + "cut in any time" hint are behind a "Chat" tab (`showCompose = chatTab==="chat"`), hidden in
+the default Transcript view — cutting into a live ceremony now needs a tab switch. Open for user decision.
