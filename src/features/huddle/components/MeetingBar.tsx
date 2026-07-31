@@ -655,7 +655,9 @@ function MeetingRoom({
 
   async function sendMessage() {
     const text = input.trim();
-    if (!text || busy || !meeting.members.length) return;
+    // meeting.members is only meaningful for group/ceremony rooms (a 1:1 never populates it —
+    // see startMeeting in store.ts); gating on it unconditionally silently no-ops every 1:1 send.
+    if (!text || busy || (isVirtual && !meeting.members.length)) return;
     setInput("");
 
     if (!isVirtual) {
