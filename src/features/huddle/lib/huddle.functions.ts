@@ -114,6 +114,12 @@ const Input = z.object({
   // and lane-deferral machinery must NOT run on it: doing so mis-reads the directive as "a user ask in
   // the wrong lane" and spawns follow-ups that re-trigger follow-ups (the notification-barrage loop).
   internal: z.boolean().optional(),
+  // A live-ceremony BARGE-IN answered synchronously (the client's runBargeSequence, not the durable
+  // ceremony queue). When set on a group turn, the responder the router picks gets the existing
+  // bargeDirective() layered onto its scene — "the user just cut into a live stand-up, address them
+  // directly in 1–2 sentences, don't give a lane update" — so a barge answer is stand-up-aware
+  // instead of a generic off-context reply. Reuses the same bargeDirective() the durable path uses.
+  ceremonyBarge: z.boolean().optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
@@ -772,7 +778,16 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // Transient per-dispatch directive for a barge-in responder. NOT persisted (cleared right after
     // the dispatch); takes precedence over the standing ceremony directive in the scene builder.
     const bargeDirectiveById = new Map<AgentId, string>();
-    const ceremonyType = resume ? null : detectCeremony(data.text);
+    // Synchronous client barge (runBargeSequence): the whole group turn IS a live-ceremony interjection,
+    // so whichever agent the router picks answers it with the barge directive layered on (same
+    // bargeDirective() the durable ceremony path uses). Applies to every responder this turn since the
+    // client only voices the primary; the standing per-agent maps above stay empty on this path.
+    const turnBargeDirective =
+      data.ceremonyBarge && data.scope === "group" ? bargeDirective(data.text) : "";
+    // A synchronous barge is ALWAYS a normally-routed answer to a live interjection — never a nested
+    // ceremony. Skip detection so a barge whose text happens to look like a ceremony trigger can't
+    // re-enter the round-robin machinery; it goes straight to routeMessageLLM + the barge directive.
+    const ceremonyType = resume || turnBargeDirective ? null : detectCeremony(data.text);
     if (ceremonyType) {
       // Resolve the sign-in email (possibly an alias) to the canonical journey email the mirror
       // is keyed on — otherwise an aliased login grounds the ceremony in an empty task set.
@@ -1214,7 +1229,8 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
 
       // A barge-in directive (answering a live user interjection) takes precedence over the standing
       // ceremony directive for this one dispatch, so the agent addresses the user instead of its lane.
-      const ceremonyDirective = bargeDirectiveById.get(nextId) ?? ceremonyDirectiveById.get(nextId) ?? "";
+      const ceremonyDirective =
+        bargeDirectiveById.get(nextId) ?? ceremonyDirectiveById.get(nextId) ?? turnBargeDirective;
       const handoff = handoffById.get(nextId);
       const handoffDirective = handoff
         ? `\n\nYou were brought into this turn by ${handoff.fromName}, who handed this to you: "${handoff.ask}". Address exactly that in your lane — answer it directly or take the action they need. Do not re-ask what was already said or restate their message.`
