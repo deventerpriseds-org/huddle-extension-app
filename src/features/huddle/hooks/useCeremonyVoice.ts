@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { AgentId } from "../data/agents";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
-import { getRealtimeSession } from "../lib/voice/realtime.functions";
+import { getRealtimeSession, REALTIME_MODEL } from "../lib/voice/realtime.functions";
 
 // Ceremony voice: OpenAI Realtime WebRTC for VAD + mid-utterance barge detection only.
 // ElevenLabs per-sentence TTS for audio output (existing agent voices).
@@ -343,17 +343,24 @@ export function useCeremonyVoice(hookOpts: {
       dcRef.current = dc;
 
       dc.onopen = () => {
+        // GA session.update schema: transcription + turn_detection now nest under audio.input, and
+        // the model must NOT auto-respond (we use Realtime for VAD + STT only; the reply comes from
+        // our own turn engine). create_response:false suppresses the model's own answer.
         dc.send(
           JSON.stringify({
             type: "session.update",
             session: {
-              modalities: ["text"],
-              input_audio_transcription: { model: "whisper-1" },
-              turn_detection: {
-                type: "server_vad",
-                silence_duration_ms: 800,
-                threshold: 0.5,
-                create_response: false,
+              type: "realtime",
+              audio: {
+                input: {
+                  transcription: { model: "whisper-1" },
+                  turn_detection: {
+                    type: "server_vad",
+                    silence_duration_ms: 800,
+                    threshold: 0.5,
+                    create_response: false,
+                  },
+                },
               },
             },
           }),
@@ -409,8 +416,9 @@ export function useCeremonyVoice(hookOpts: {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
+      // GA WebRTC SDP exchange endpoint (was /v1/realtime in beta — now /v1/realtime/calls).
       const sdpRes = await fetch(
-        "https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03",
+        `https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(REALTIME_MODEL)}`,
         {
           method: "POST",
           headers: {
