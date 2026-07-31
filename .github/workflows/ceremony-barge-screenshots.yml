@@ -21,12 +21,12 @@ jobs:
       - name: Install Playwright + Chromium
         run: npm install playwright && npx playwright install chromium --with-deps
 
-      - name: Run ceremony barge-in Tier 1 test
+      - name: Run barge routing verification (independent verifier)
         env:
           APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
           UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
           SHOT_DIR: e2e/ceremony-screenshots
-        run: node e2e/ceremony-barge-tier1.e2e.mjs
+        run: node e2e/ceremony-barge-verify.e2e.mjs
 
       - name: Commit screenshots to repo
         if: always()
