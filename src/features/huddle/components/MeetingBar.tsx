@@ -279,23 +279,30 @@ function MeetingRoom({
       // Separate synchronous single-agent turn (no turnId ⇒ not durable ⇒ the ceremony's
       // getTurnUpdates poll can't see it). This is what makes the answer immediate instead of
       // queued behind the remaining scripted speakers.
-      const res = await sendHuddleMessage({
-        data: {
-          text,
-          huddleId: huddleIdRef.current,
-          // one-to-one is REQUIRED for targetAgentId to be honored (routeMessage:86 ignores it under
-          // "group"). This forces exactly ONE responder — the addressed/current agent — answering
-          // the barge directly, which is the whole point of "answer right there".
-          scope: "one-to-one" as const,
-          members: [responder],
-          history: [],
-          targetAgentId: responder,
-          router: cfg.router,
-          agents: cfg.agents,
-          caller: callerRef.current,
-          timeZone: tzRef.current,
-        },
-      });
+      // Bound the answer fetch so a stalled network call can never leave emit() parked forever
+      // (the finally below only runs once these awaits settle — a timeout guarantees they do).
+      const res = await Promise.race([
+        sendHuddleMessage({
+          data: {
+            text,
+            huddleId: huddleIdRef.current,
+            // one-to-one is REQUIRED for targetAgentId to be honored (routeMessage:86 ignores it under
+            // "group"). This forces exactly ONE responder — the addressed/current agent — answering
+            // the barge directly, which is the whole point of "answer right there".
+            scope: "one-to-one" as const,
+            members: [responder],
+            history: [],
+            targetAgentId: responder,
+            router: cfg.router,
+            agents: cfg.agents,
+            caller: callerRef.current,
+            timeZone: tzRef.current,
+          },
+        }),
+        new Promise<never>((_, reject) =>
+          window.setTimeout(() => reject(new Error("barge answer timed out")), 30_000),
+        ),
+      ]);
       const answer = res.replies?.[0];
       if (answer) {
         setPhase(`${AGENT_BY_ID[answer.agentId as AgentId]?.name ?? "Someone"} is answering…`);

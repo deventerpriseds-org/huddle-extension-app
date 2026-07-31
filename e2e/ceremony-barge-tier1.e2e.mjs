@@ -152,28 +152,31 @@ try {
   else console.log("  ⓘ  AC-3: no audio play() in headless — mid-sentence cut not exercisable here");
   await shot(page, "02-barged");
 
-  // AC-6 + AC-8: the answer lands RIGHT THERE (a barge-answer row containing 77), and it appears
-  // BEFORE any NEW scripted speaker row added after the barge.
-  console.log("Step 5: Wait for the immediate answer…");
-  let answered = false;
+  // AC-6 (ordering) and AC-8 (content) are checked SEPARATELY. AC-6 keys on the barge-answer ROW
+  // (kind="answer") appearing before any scripted speaker — this must hold regardless of the answer
+  // TEXT (so a degraded/quota reply can't mask the ordering pass). AC-8 keys on the "77" content.
+  console.log("Step 5: Wait for the immediate answer row…");
+  let answerRow = null;
   const rx = new RegExp(ANSWER_RE, "i");
   for (let i = 0; i < 120; i++) { // up to ~60s for one LLM reply
-    const rs = await rows(page);
-    const added = rs.slice(rowsBefore);
-    const answerIdx = added.findIndex((r) => !r.user && r.kind === "answer" && rx.test(r.text));
+    const added = (await rows(page)).slice(rowsBefore);
+    const answerIdx = added.findIndex((r) => !r.user && r.kind === "answer");
     if (answerIdx !== -1) {
-      // Is there any NEW *scripted* speaker (agent row, kind != answer) before the answer?
       const scriptedBefore = added.slice(0, answerIdx).some((r) => !r.user && r.kind !== "answer");
-      ok(true, `AC-8: answer addresses the barge — "${added[answerIdx].text.slice(0, 90)}"`);
-      ok(!scriptedBefore, "AC-6: answer appears BEFORE any next scripted speaker (immediate, not down the line)");
-      answered = true;
+      answerRow = added[answerIdx];
+      // AC-6: ordering — independent of the answer text.
+      ok(!scriptedBefore, "AC-6: barge-answer row appears BEFORE any next scripted speaker (immediate, not down the line)");
       break;
     }
     await page.waitForTimeout(500);
   }
-  if (!answered) {
+  if (answerRow) {
+    // AC-8: content — the answer addresses the barge.
+    ok(rx.test(answerRow.text), `AC-8: answer addresses the barge (contains 77) — "${answerRow.text.slice(0, 90)}"`);
+  } else {
     const added = (await rows(page)).slice(rowsBefore);
-    ok(false, `No immediate barge answer containing 77. Rows added: ${JSON.stringify(added.map((r) => ({ k: r.kind, u: r.user, t: r.text.slice(0, 50) })))}`);
+    ok(false, "AC-6: no barge-answer row (kind=\"answer\") appeared at all");
+    ok(false, `AC-8: no answer to check. Rows added: ${JSON.stringify(added.map((r) => ({ k: r.kind, u: r.user, t: r.text.slice(0, 50) })))}`);
   }
 
   // AC-5: the interrupted speaker's row carries an [interrupted] marker (only if a speaker was cut).
