@@ -3606,23 +3606,40 @@ type HuddleTurnResult = Awaited<ReturnType<typeof runHuddleTurn>>;
 // journey's drain edge fn), authed with the shared JOURNEY_PROXY_TOKEN (NO new secret). The cron
 // heartbeat remains the guaranteed backstop if this request is frozen before the fetch lands. Base
 // URL: HUDDLE_APP_URL app setting, else the Azure runtime's WEBSITE_HOSTNAME.
+// ACT-huddle-4: this used to be a single unretried attempt with an empty catch — a failed self-kick
+// (network blip, cold-start, transient 5xx) was silently invisible and fell straight through to the
+// once-a-minute pg_cron backstop, which is exactly the "notices my barge after a large delay"
+// complaint. Retry a few times with short backoff before giving up, and log every failure so a
+// stranded barge is at least diagnosable. Missing config is logged distinctly from a transient
+// failure since retrying can never fix it.
+const KICK_MAX_ATTEMPTS = 3;
+const KICK_BACKOFF_MS = [250, 750];
 async function kickNextChunk(turnId: string): Promise<void> {
   const token = (process.env.JOURNEY_PROXY_TOKEN ?? "").trim();
-  if (!token) return;
   const rawBase =
     (process.env.HUDDLE_APP_URL ?? "").trim() ||
     (process.env.WEBSITE_HOSTNAME ? `https://${process.env.WEBSITE_HOSTNAME}` : "");
   const base = rawBase.replace(/\/$/, "");
-  if (!base) return;
-  try {
-    await fetch(`${base}/api/public/run-turn`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-webhook-secret": token },
-      body: JSON.stringify({ turnId }),
-    });
-  } catch {
-    /* fire-and-forget: the cron drain backstops a lost kick within a minute */
+  if (!token || !base) {
+    const missing = [!token && "JOURNEY_PROXY_TOKEN", !base && "HUDDLE_APP_URL/WEBSITE_HOSTNAME"].filter(Boolean).join(", ");
+    console.error(`[kickNextChunk] misconfigured (turn ${turnId}): ${missing} unset — self-kick disabled, relying on the cron backstop only (up to 60s)`);
+    return;
   }
+  for (let attempt = 1; attempt <= KICK_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(`${base}/api/public/run-turn`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-webhook-secret": token },
+        body: JSON.stringify({ turnId }),
+      });
+      if (res.ok) return;
+      console.error(`[kickNextChunk] non-2xx response (turn ${turnId}, attempt ${attempt}/${KICK_MAX_ATTEMPTS}): HTTP ${res.status}`);
+    } catch (err) {
+      console.error(`[kickNextChunk] fetch failed (turn ${turnId}, attempt ${attempt}/${KICK_MAX_ATTEMPTS}):`, err);
+    }
+    if (attempt < KICK_MAX_ATTEMPTS) await new Promise((r) => setTimeout(r, KICK_BACKOFF_MS[attempt - 1]));
+  }
+  console.error(`[kickNextChunk] all ${KICK_MAX_ATTEMPTS} attempts failed (turn ${turnId}) — deferring to the cron backstop (up to 60s)`);
 }
 
 // ---- Pillar 2: worker sub-turn + fan-in integration ---------------------------------------------
