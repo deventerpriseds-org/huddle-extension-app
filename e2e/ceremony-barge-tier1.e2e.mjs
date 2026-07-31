@@ -172,7 +172,10 @@ try {
       const added = (await rows(page)).slice(rowsBefore);
       const idx = added.findIndex((r) => !r.user && r.kind === "answer");
       if (idx !== -1) {
-        const scriptedBefore = added.slice(0, idx).some((r) => !r.user && r.kind !== "answer");
+        // A NEW scripted speaker = an agent row that is NOT the answer and NOT the interrupted row
+        // (the cut speaker's own line legitimately precedes the answer). If one appears before the
+        // answer, the barge was handled "down the line" instead of right there.
+        const scriptedBefore = added.slice(0, idx).some((r) => !r.user && r.kind !== "answer" && !r.interrupted);
         ok(!scriptedBefore, `Barge ${n + 1}: answer appears BEFORE any next scripted speaker`);
         answerRow = added[idx];
         break;

@@ -257,6 +257,11 @@ function MeetingRoom({
   // lands over the frozen speaker instead of behind the remaining round-robin (the "answer right
   // there, not down the line" guarantee). Set synchronously at freeze time via onBargeStart.
   const bargeActiveRef = useRef(false);
+  // Monotonic barge id, bumped at each freeze. A barge sequence only clears the park if it is STILL
+  // the latest barge — so a 2nd barge that lands during the 1st's resume can't have the 1st's
+  // finally() unpark emit out from under it (which let a scripted speaker slip in before the 2nd
+  // answer — caught by the multi-barge test).
+  const bargeGenRef = useRef(0);
   // True only while runBargeSequence is actually running. Lets the freeze-time watchdog tell "a
   // real barge is being handled" from "we froze + parked but STT never produced a message".
   const bargeHandlingRef = useRef(false);
@@ -273,6 +278,7 @@ function MeetingRoom({
   // is voiced in the meantime. Empty deps: everything read via stable refs / stable store actions.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const runBargeSequence = useCallback(async (text: string) => {
+    const myGen = bargeGenRef.current; // captured at start; finally only unparks if still latest
     bargeHandlingRef.current = true;
     const members = membersRef.current;
     // Who answers: an @mentioned member → the (frozen) current speaker → host → first member.
@@ -331,10 +337,14 @@ function MeetingRoom({
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't answer that just now.");
     } finally {
-      // Unpark emit() so the ceremony continues, whatever happened above.
-      bargeHandlingRef.current = false;
-      bargeActiveRef.current = false;
-      setPhase("");
+      // Only unpark if no NEWER barge superseded this one — otherwise the newer barge owns the park
+      // and will clear it when IT finishes. This prevents an older barge's cleanup from letting a
+      // scripted speaker through before the newer barge's answer.
+      if (bargeGenRef.current === myGen) {
+        bargeHandlingRef.current = false;
+        bargeActiveRef.current = false;
+        setPhase("");
+      }
     }
   }, []);
   const runBargeSequenceRef = useRef(runBargeSequence);
@@ -350,6 +360,7 @@ function MeetingRoom({
         // Typed barge: park emit + freeze the speaker mid-sentence (keeps the resume point), then
         // run the immediate-answer sequence. The user's own message row was already rendered by
         // sendMessage before this call — don't duplicate it here.
+        bargeGenRef.current += 1;
         bargeActiveRef.current = true;
         ceremonyVoiceRef.current.bargeFreeze();
         setPhase("");
@@ -365,6 +376,7 @@ function MeetingRoom({
     // Fires synchronously at freeze time (VAD speech_started) — park emit NOW, before STT resolves,
     // so no scripted speaker slips through between the freeze and the transcript arriving.
     onBargeStart: () => {
+      bargeGenRef.current += 1;
       bargeActiveRef.current = true;
       setPhase("");
       // Watchdog: if STT never yields a barge message (so onBargeDetected/runBargeSequence never
