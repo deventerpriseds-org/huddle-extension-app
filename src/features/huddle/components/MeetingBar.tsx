@@ -155,10 +155,28 @@ export function MeetingLayer() {
   const isVirtual = meeting?.kind === "virtual-meeting";
   const speakerId = meeting?.activeSpeakerId;
 
-  // 1:1 / voice-call meetings drive the ElevenLabs orb; virtual meetings use group voice instead.
+  // 1:1 / voice-call meetings auto-connect the voice mic once on entry.
+  // CRITICAL: `connect` must NOT be in the dep array. Both voice hooks return a NEW object each
+  // render, so `connect`'s identity changes every render; depending on it re-fired this effect on
+  // EVERY render, calling connect()→startListening() in a tight loop. Each startListening bumps a
+  // generation counter, so every in-flight attempt saw itself superseded and bailed BEFORE minting
+  // the realtime session — the mic never actually connected (verified: getUserMedia was called
+  // dozens of times/sec and getRealtimeSession never once). We call the latest connect via a ref and
+  // gate on a per-speaker key so it fires exactly once per meeting entry; reset when the meeting ends.
+  const connectRef = useRef(connect);
+  connectRef.current = connect;
+  const connectedForRef = useRef<string | null>(null);
   useEffect(() => {
-    if (active && speakerId && !isVirtual) connect(speakerId);
-  }, [active, speakerId, isVirtual, connect]);
+    if (active && speakerId && !isVirtual) {
+      if (connectedForRef.current !== speakerId) {
+        connectedForRef.current = speakerId;
+        void connectRef.current(speakerId);
+      }
+    } else {
+      connectedForRef.current = null; // meeting ended / switched to a virtual meeting — allow reconnect
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, speakerId, isVirtual]);
 
   // Backstop teardown when the meeting ends by any path.
   useEffect(() => {

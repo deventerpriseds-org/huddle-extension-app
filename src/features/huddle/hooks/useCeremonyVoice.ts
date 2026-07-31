@@ -126,6 +126,11 @@ export function useCeremonyVoice(hookOpts: {
     typeof RTCPeerConnection !== "undefined";
 
   const listenRef = useRef(false);
+  // True from the instant startListening begins until it either finishes (data channel open) or
+  // fails. Re-entrancy guard: a second startListening() call while one is still in flight (before
+  // listenRef flips true at dc.onopen) must NOT proceed — otherwise it bumps genRef and starves the
+  // first attempt before it can mint the realtime session, and the mic never connects.
+  const connectingRef = useRef(false);
   const statusRef = useRef<CeremonyVoiceStatus>("idle");
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -267,6 +272,7 @@ export function useCeremonyVoice(hookOpts: {
   const stopListening = useCallback(() => {
     genRef.current += 1;
     listenRef.current = false;
+    connectingRef.current = false;
     audioQueueRef.current.clearAndStop();
     freezeRef.current = null;
     dcRef.current?.close();
@@ -286,7 +292,8 @@ export function useCeremonyVoice(hookOpts: {
       setPhase("error");
       return;
     }
-    if (listenRef.current) return;
+    if (listenRef.current || connectingRef.current) return;
+    connectingRef.current = true;
     setError(null);
     genRef.current += 1;
     const gen = genRef.current;
@@ -304,6 +311,7 @@ export function useCeremonyVoice(hookOpts: {
 
       if (genRef.current !== gen) {
         stream.getTracks().forEach((t) => t.stop());
+        connectingRef.current = false;
         return;
       }
 
@@ -316,6 +324,7 @@ export function useCeremonyVoice(hookOpts: {
 
       if (genRef.current !== gen) {
         stream.getTracks().forEach((t) => t.stop());
+        connectingRef.current = false;
         return;
       }
 
@@ -350,6 +359,7 @@ export function useCeremonyVoice(hookOpts: {
           }),
         );
         listenRef.current = true;
+        connectingRef.current = false; // fully connected — release the re-entrancy guard
         setPhase("listening");
       };
 
@@ -418,6 +428,7 @@ export function useCeremonyVoice(hookOpts: {
       const answerSdp = await sdpRes.text();
       await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
     } catch (err) {
+      connectingRef.current = false; // release the guard on every failure path (incl. the early return)
       if (genRef.current !== gen) return;
       const name = err instanceof DOMException ? err.name : "";
       const msg =
