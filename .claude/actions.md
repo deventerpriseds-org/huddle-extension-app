@@ -1,5 +1,5 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-07-31 (ACT-huddle-12 added)
+Last updated: 2026-07-31 (ACT-huddle-12 problems #2 & #3 done — deployed + UAT PASS, tab redesign still open; ACT-huddle-13/14/15 added)
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
 > claiming any item "done" without ACs + the verifier subagent / observed evidence).
@@ -141,6 +141,116 @@ huddle-extension-app? Investigate before designing ACs.
 **Status:** open — ACs pending `/define-acceptance-criteria`; not yet designed/built. Related to but
 distinct from ACT-huddle-10 (drafting mechanism may be shared; tracking/notification is the new part).
 
+### ACT-huddle-13: Jira-style task tags (research) — a "parking lot" tag/lane that opts a task OUT of all automation
+**Requested:** 2026-07-31 — user's own words (lightly cleaned up): "how to add tags to the tasks similar
+to Jira (research). When I tell Iris to parking lot an item it should go back to the backlog with a
+parking lot tag, this should be a toggleable lane on the board that is default off. Only items that are
+NOT parking lot should be going through the automated workflow or scheduled in Huddle or nightly
+scheduling. Anything that has the parking lot tag should NOT be prompted to push through the work
+pipeline nor added to the nightly builder queue. Figure out how we can achieve this."
+**Expected outcome:**
+- General tagging capability on tasks (Jira-style), not just a single hardcoded "parking lot" value.
+- Telling Iris (or any agent) "parking lot this" moves the task back to `BACKLOG` status and applies a
+  `parking-lot` tag.
+- The board has a Parking Lot lane/column that's **toggleable and OFF by default** — hidden until the
+  user turns it on.
+- Any task carrying the `parking-lot` tag is **fully excluded** from: (a) Huddle's automated per-agent
+  work pipeline (BACKLOG→UP_NEXT→DOING promotion + auto-research turns), (b) any Huddle-scheduled/
+  cadence job that would act on it, and (c) journey's nightly scheduling/planner run. It should never be
+  silently picked up and pushed forward again once tagged.
+**Investigation already done this session (extend, don't duplicate — real prior art exists):**
+- **Tagging is NOT a new concept — `tags TEXT[]` already exists** on `tasks.journey_tasks`
+  (`tasks.server.ts:48,56`), already synced from journey's grooming write-back, already used for at
+  least one real tag (`blocked-on-capability`, per ACT-4's residuals). The "Jira-style tags" ask is
+  substantially about GENERALIZING and exposing this existing column/mechanism, not building a new one
+  — confirm whether journey's `public.tasks` already has a parallel `tags` column or whether it only
+  exists Huddle-side today (check before assuming).
+- **Toggleable board lanes are NOT new either** — `BoardView.tsx` already drives columns off a
+  data-driven array (`statuses` per column, e.g. the existing "Ready for review" column keyed off
+  `IN_REVIEW`, `BoardView.tsx:31`) and already has swimlane collapse/toggle state
+  (`toggleLane`/`collapsed`, `BoardView.tsx:88-94`). A Parking Lot lane is very likely a new column
+  entry in that same array plus a visibility flag, not a new UI system.
+- **Per-user toggle infrastructure already exists** — `agent_workflow_config` (this session's own
+  ACT-57: schema + resolver + Settings UI) is the natural home for a "show Parking Lot lane"
+  default-off preference, rather than inventing a second settings mechanism.
+- **Automation entry points that MUST filter out `parking-lot`-tagged tasks** (concrete, not
+  hypothetical — these are the actual candidate-selection sites):
+  1. `autowork.server.ts`'s per-agent bucketing query (where BACKLOG/UP_NEXT/DOING candidates are
+     selected for promotion — `autowork.server.ts:207+`) — needs a `NOT ('parking-lot' = ANY(tags))`
+     condition, or equivalent, at candidate-selection time.
+  2. `scheduler.server.ts`'s job dispatch (`fireJob`, e.g. the `auto-work`/grooming/standup cadence
+     jobs) — confirm whether any of these act on individual tasks directly (vs. just kicking off
+     `run-autowork`, which would already inherit the fix from (1)).
+  3. **journey's nightly scheduling/planner** (referenced in this repo's own `taskToolInstructions`:
+     "the nightly planner can still move it overnight") — this lives in journey-voice, not here; needs
+     its own investigation into where it selects candidate tasks for overnight placement.
+**Status:** open — this is explicitly scoped by the user as RESEARCH first ("figure out how we can
+achieve this"). Do not start implementation until a design (schema decision, exact filter sites in both
+repos, and the toggle UI) is written up and signed off — same discipline as every other feature this
+session (`/define-acceptance-criteria` after the design, not before).
+
+### ACT-huddle-14: Decide GPT-4o → GPT-5.6 Luna/Terra migration — cost AND performance, not just cost
+**Requested:** 2026-07-31 — user's own words: "you need an act to determine if we should be going from
+gpt4o to gpt 5.6 luna or if that is going to hurt performance."
+**Research already done this session (WebSearch, since no Tavily connector is wired up — see the
+Decisions log entry on that):**
+- Pricing per 1M tokens (post the 2026-07-30 price cut): GPT-4o $2.50 in/$10.00 out; GPT-5.6 Terra
+  $2.00 in/$12.00 out (roughly a wash vs GPT-4o); GPT-5.6 Luna $0.20 in/$1.20 out (~92%/~88% cheaper).
+- Performance: OpenAI's own framing is that Luna is "the biggest step change in agentic behavior since
+  putting GPT-4o mini into production" — beats GPT-5.5 on Agents' Last Exam/HealthBench Professional/
+  DeepSWE, sits only 2.4 points behind the flagship Sol tier on Agents' Last Exam at ~1/5th the output
+  cost, and specifically strengthened tool-calling (moved OpenAI from single structured-output calls to
+  a full tool-calling agent loop; prompt-cache reuse jumped 24%→90%).
+- Confidence caveat: these figures come from convergent SECONDARY reporting (Yahoo Finance, CNBC,
+  VentureBeat, artificialanalysis.ai, Axios, qz.com all independently citing the same numbers) — two
+  direct WebFetch attempts at OpenAI's own pricing/announcement pages 403'd (bot-protected). High
+  confidence via convergence, not confirmed against the primary source directly.
+**Expected outcome:** a concrete per-agent model assignment (not a blanket swap) — e.g. Luna for
+high-volume/routine agents and tool-calling-heavy turns, Terra reserved for agents whose output quality
+matters more than routine chat (Terry's grooming/prioritization judgment, Sam's strategic replies) since
+Terra isn't meaningfully cheaper than GPT-4o. Decision must be backed by a LIVE quality comparison, not
+just published benchmarks — benchmarks are a starting hypothesis, not proof for Huddle's specific
+15-persona voice/tone/tool-use requirements.
+**Status:** open — ACs pending `/define-acceptance-criteria`. Suggested first step (not yet done): pick
+1-2 agents, run identical real turns against GPT-4o vs Luna vs Terra side-by-side (reply quality, tone
+fidelity to the persona snapshot, tool-call correctness, latency), before deciding on a broader swap.
+
+### ACT-huddle-15: Research — OpenAI Voice Agents SDK adoption + real API-cost-reduction levers (prompt caching, Batch API)
+**Requested:** 2026-07-31 — user's own words: "add an act for researching should we be using the concept
+of an openai voice agent? and also should we be using sandbox agents to avoid draining my api quota?"
+**Answered live this session (WebSearch) — logged here so the follow-through isn't lost:**
+- **OpenAI Voice Agents SDK** — a higher-level TypeScript layer over the same Realtime API
+  `useGroupVoiceRealtime.ts` already talks to directly, providing pre-built `RealtimeAgent`/
+  `RealtimeSession` abstractions plus tool-calling, guardrails, handoffs, and session-history helpers —
+  categories of code Huddle currently hand-rolls (WebRTC setup, the `oai-events` data channel, VAD barge
+  detection, the `AudioQueue` class, same-agent resume, the generation counter). Worth adopting IF it
+  doesn't force OpenAI's own TTS output — **unresolved open question:** does the SDK allow swapping in
+  ElevenLabs for output (which Huddle needs for its 15 distinct per-agent voice IDs) while keeping OpenAI
+  for STT/VAD/turn-detection, or does it assume OpenAI TTS end-to-end? This is the crux of whether
+  adoption is a clean win or fights the SDK's assumptions, and needs real investigation (read the SDK
+  source/docs, not another web search) before any decision.
+- **"Sandbox agents" — clarified, does NOT do what the name suggests for this use case.** In OpenAI's
+  current terminology this means isolated CODE-EXECUTION compute environments for agents that write and
+  run code (auto-provisioned containers via E2B/Modal/Daytona/Cloudflare/etc.) — infrastructure
+  convenience for coding agents, not a token/API cost-reduction mechanism. Huddle's agents are chat/
+  tool-calling agents, not code-execution agents, so this feature doesn't apply to the quota-drain
+  problem as asked.
+- **The REAL cost levers found (not yet exploited by Huddle):**
+  1. **Prompt caching — automatic, no opt-in.** Any repeated prompt prefix ≥1,024 tokens seen in the
+     last 5-10 minutes bills at 25% of normal input rate (75% savings). This is the EXACT thing already
+     flagged as backlog item #1 in this repo's CLAUDE.md ("Prompt-payload efficiency via provider prompt
+     caching") — Huddle hasn't reordered its prompt assembly (stable prefix: snapshot+house-style+tool
+     schemas+roster; volatile suffix: scene+memory+user msg) to actually earn the cache hits yet. Highest
+     leverage, lowest risk, no new adoption needed — just the reordering already on the backlog.
+  2. **Batch API — 50% off input+output, non-real-time only.** Doesn't apply to live chat turns, but
+     DOES apply to Huddle's already-async work that doesn't need an instant reply: nightly grooming, the
+     research/`create_artifact` turns, standup/review digests, the 48h review-recheck job. Currently none
+     of these are batched — real, unexploited savings on work that's already async by design.
+**Status:** open — the "should we" QUESTIONS were answered live above; what remains is (a) resolving the
+Voice-Agents-SDK/ElevenLabs-TTS compatibility question, (b) actually implementing the prompt-cache
+prefix reordering (backlog item #1), and (c) actually batching the eligible async jobs. ACs pending
+`/define-acceptance-criteria` once the ElevenLabs compatibility question is resolved.
+
 ### ACT-huddle-12: Ceremony UI redesign — Transcript tab + Chat tab; remove "Passing your message"; true mid-sentence barge stop
 **Requested:** 2026-07-31 — user's own words (paraphrased, full detail below): "we need both tabs —
 transcript which is simply what's said by anyone in order — and chat which is a text place for
@@ -174,8 +284,53 @@ speaking her transcript text should be seen."
   is visible (screenshots with timestamps or elapsed time), (e) ceremony resumes from the interruption
   point after the barge is answered.
 - The test / screenshot proof shows all five of the above — not just "transcript grew from N to N+1."
-**Status:** open — ACs pending `/define-acceptance-criteria`; requires investigation of current
-ceremony UI code before implementation. Do not start coding until ACs are agreed.
+**Status:** PARTIALLY DONE (2 of 3 problems) — remainder open.
+- **[DONE — deployed to prod `main`, automated UAT PASS, NOT yet user-confirmed live]** Problem #2
+  ("Passing your message" removal) and problem #3 (true mid-sentence stop + barge-content reply):
+  `MeetingBar.routeTurn` now calls `ceremonyVoiceRef.current.stopListening()` (clears AudioQueue +
+  kills the voiceTurn loop) and `setPhase("")` before the async `bargeCeremony` call — the label is
+  gone and the current speaker goes quiet the instant the user cuts in. Commit `e20903b` (feature
+  branch merged fast-forward into `main`, deployed via `deploy-swa.yml` run 30644156945 = success).
+  Independent AC subagent wrote 10 ACs (user approved "go ahead"); `ceremony-barge-tier1.e2e.mjs`
+  rewritten to prove all three of the user's complaints. GHA run **30644546674 = 11 passed / 0 failed**:
+  transcript sentence text visible before barge ("longest 31 chars"), audio `pause()` fired within
+  500ms of the barge (`pauses 0→1`), Tess answered the barge specifically ("Seven times eleven is
+  seventy-seven."), and "Passing your message" never appeared. Screenshots 00–06 on branch
+  `ceremony-barge-screenshots`. **Still needs the user to confirm live in their own browser.**
+- **[IMPLEMENTED — deployed to `main`, mechanism UAT PASS 8/9, content BLOCKED on OpenAI quota, NOT
+  user-confirmed]** "Option 1 + interrupted marker" for the immediate barge answer (commit `0d5ca1e`).
+  Root cause found first (user was right): a prior commit `5b89cfe` PROMISED mid-utterance barge but
+  only shipped the audio-stop half — the ANSWER still went through the server `handleBarges` which is
+  explicitly "between speakers, never mid-speaker" (`huddle.functions.ts:3417`), and the client resume
+  waited for that between-speakers reply. Fix decouples the barge answer from the server queue:
+  `useCeremonyVoice.bargeFreeze()` (stop audio + keep freezeRef + keep mic), render the user's message
+  immediately (voice path too — it never did before), fetch ONE answer via a scoped 1:1
+  `sendHuddleMessage(targetAgentId)` (scope MUST be one-to-one — `routeMessage:86` ignores targetAgentId
+  under "group"), speak it via `speakInterjection` (doesn't clobber freezeRef), mark the cut row
+  `[interrupted]`, then `resumeFromFreeze`; `emit()` parks via `bargeActiveRef` so no scripted speaker
+  slips in; freeze-time watchdog unparks if STT yields nothing. New testids on TranscriptRow. Independent
+  AC subagent wrote 12 ACs. GHA run **30648927649 = 8 passed / 1 failed**: AC-1 visible user barge row ✔,
+  AC-3 speaker cut ≤500ms (pause fired) ✔, AC-5 `[interrupted]` marker (count=1) ✔, AC-6 the answer row
+  (kind="answer", Terry) appeared BEFORE any scripted speaker ✔, no "queue politely"/"Passing your
+  message" ✔. **The 1 failure is AC-8 (answer contains "77") ONLY because the app's OpenAI account is
+  out of quota — every agent (barge answer AND all scripted speakers) returned "(couldn't respond —
+  OpenAI is out of API quota)".** That is an environment blocker, NOT a code defect (per CLAUDE.md
+  "fail fast on quota — don't interpret results until restored"). Screenshots 01–04 on branch
+  `ceremony-barge-screenshots` (02-barged shows the visible message + `[interrupted]` marker + corrected
+  hint copy).
+  **[2026-07-31 UPDATE — user topped up OpenAI; RE-RAN with live agents → run 30650682960 (post-hardening)
+  = ALL PASS.** Real content: `AC-8: answer — "Terry: Seven times eleven is seventy-seven."` and `AC-6:
+  barge-answer row BEFORE any scripted speaker`. Full behavior proven end-to-end with live agents (visible
+  message + mid-sentence cut + `[interrupted]` + immediate on-topic answer BEFORE the round-robin + resume).
+  Screenshot 03-answered shows it in one frame. Hardening (commit `a7f42c1`, from the independent verifier's
+  review): AC-6 ordering decoupled from AC-8 content in the test; barge-answer `sendHuddleMessage` raced
+  against a 30s timeout so a stalled fetch can't leave `emit()` parked. Deployed to `main`, tsc+vite clean.
+  **STILL per org rule NOT writing "fixed" — awaiting the USER's own live browser confirmation.** Option 3
+  (true broken-WORD transcript text) remains the agreed pivot if the sentence-seam cut isn't crisp enough
+  live.**
+- **[OPEN]** Problem #1 — the two-tab **Transcript** + **Chat** ceremony UI redesign — remains. (A live
+  "Live transcript" panel already exists; the explicit Chat/Transcript tab split does not.) Also open:
+  pivot to Option 3 (true broken-WORD text) if the sentence-granularity cut isn't crisp enough live.
 
 ### ACT-huddle-3: Standup ceremony hang — root cause is HTTP 500s on enqueueHuddleTurn/getTurnUpdates
 **Requested:** 2026-07-30 — "use the new uat skill to finally experience what i am experiencing with
@@ -578,6 +733,18 @@ it); away-push reaching the phone is by-design (proven send_push path) but not s
 523 → 247 tasks. Workflow removed after use (PR #19). **Verification:** PASS (run log).
 
 ## Decisions & scope changes
+- [2026-07-31] **User-stated premise did NOT hold on direct verification — no GitHub Actions workflow
+  uses Tavily in any of the 4 repos this session has access to.** User asked to document "a Tavily
+  action available in GH, with the API key in org secrets, used as a WebFetch-403 fallback." A subagent
+  searched `mcp__github__search_code` for `tavily`/`TAVILY`/`TAVILY_API_KEY`/`api.tavily.com` scoped to
+  each of journey-voice, android-bridge-template, bridge-builder, huddle-extension-app, AND
+  eds-claude-skills, plus read every repo's `.github/workflows/` listing directly — zero matches
+  anywhere. **What actually exists:** journey-voice has direct Tavily calls in two Supabase EDGE
+  FUNCTIONS (not GitHub Actions) — `supabase/functions/web-search/index.ts` and `execute-tool/index.ts`
+  (`webSearch()` helper), both reading `TAVILY_API_KEY` from Supabase edge-function secrets, not GitHub
+  org secrets. Not doing the requested CLAUDE.md/setup.sh update on an unconfirmed premise — flagging
+  this to the user for clarification (a repo not yet attached to this session? a different mechanism
+  meant?) rather than documenting something that doesn't exist for future sessions to chase.
 - [2026-07-31] **Ran `sync-setup-script` (eds-claude-skills) — the enforcement gate had never actually been
   installed in this session.** `/root/.claude/launcher-settings.json` had zero `_eds`-tagged hooks before this
   (verified by reading the file directly, not assumed). Cloned `eds-claude-skills` main fresh, ran `setup.sh`,

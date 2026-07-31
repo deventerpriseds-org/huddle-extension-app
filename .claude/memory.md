@@ -1,5 +1,5 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 ## Purpose & goals
 Huddle: a multi-agent AI life-assistant (15 role-agents) integrated with the **journey** app.
@@ -99,6 +99,80 @@ Every mistake must make the next session more efficient. Append, never delete.
   a SEPARATE code path and is UNTOUCHED by this work. The other concurrent session flagged this correctly.
   ACT-huddle-5 caption-reveal (AC-1..AC-10) targets the ceremony TTS path — may be able to route ceremony
   audio through the new AudioQueue's onStart callback rather than building a second mechanism.
+
+  **[2026-07-31 CORRECTION / ADDITIVE UPDATE to the above ACT-huddle-4 entry]**
+  `useGroupVoiceRealtime.ts` was REVERTED from main (commit `a752d91`, "revert: restore useGroupVoice on
+  live group voice button (ceremony work is the real target)"). The live group voice mic/orb button path
+  was restored to the original `useGroupVoice` hook. The DEPLOY (run 30603377514) above reflects the now-
+  reverted state — it should NOT be taken as "this hook is in prod"; it was reverted in the same session.
+  The AudioQueue / WebRTC / FreezePos concepts from the reverted hook were repurposed into `useCeremonyVoice.ts`.
+  Created: **`useCeremonyVoice.ts`** (commit `5b89cfe`) — ceremony-specific voice hook. Contains AudioQueue
+  class, FreezePos interface, generation counter, WebRTC RTCPeerConnection with oai-events DataChannel for
+  VAD barge detection, ElevenLabs per-sentence TTS. Returns: `{ status, activeSpeaker, error, supported,
+  startListening, stopListening, voiceTurn, resumeFromFreeze, clearFreeze }`. IS in main.
+  `realtime.functions.ts` (ephemeral key server fn) also remains in main.
+  **New workflow**: `ceremony-barge-screenshots.yml` (commit `baeb23d`, main) — runs the Tier 1 barge test
+  and commits 6 PNG screenshots to the `ceremony-barge-screenshots` branch.
+  **Ceremony barge-in Tier 1 test** (`e2e/ceremony-barge-tier1.e2e.mjs`): **10/10 PASS**, GHA run
+  30638493304. Screenshots at `e2e/ceremony-screenshots/` committed to branch (SHA `0f630d1b`).
+  **ACT-huddle-12 logged** (actions.md, commit `bfa1c43`, main): ceremony UI redesign — Transcript tab +
+  Chat tab split, remove "Passing your message to the room", prove true mid-sentence TTS stop with a
+  content-specific barge response + ceremony resume. ACs proposed (AC-1..AC-9), awaiting user sign-off.
+  User's three criticisms of Tier 1 proof: (1) no visible transcript text while Terry was "speaking,"
+  (2) "Passing your message" is nonsensical in live virtual meetings, (3) agent reply proved nothing
+  about barge acknowledgment. Architecture mapped: spoken text appears via `onSentenceStart(sentence)` →
+  `addMeetingTurns` → `TranscriptRow` — text never stored as hook state; barge path sends to server but
+  does NOT clear client AudioQueue; "Passing your message" is at MeetingBar.tsx:250 in `routeTurn`.
+
+  **[2026-07-31 FOLLOW-UP — ACT-huddle-12 problems #2 & #3 IMPLEMENTED, deployed, UAT PASS, NOT user-confirmed]**
+  Acted on the three criticisms. Fix (commit `e20903b`, on `main` via fast-forward; feature branch
+  `claude/setup-stop-hooks-skills-0h569y`): in `MeetingBar.routeTurn`, REMOVED `setPhase("Passing your
+  message to the room…")` and instead call `ceremonyVoiceRef.current.stopListening()` (clears the
+  AudioQueue + increments genRef to kill the `_voiceTurn` loop) then `setPhase("")`, BEFORE the async
+  `bargeCeremony` call — so the current speaker actually stops mid-sentence the instant the user cuts in,
+  and the nonsensical "passing" narration is gone. Note: `ceremonyVoiceRef` is declared AFTER `routeTurn`
+  in source order but the callback is only INVOKED post-mount, so the ref is populated by then (verified —
+  tsc clean, runtime PASS). Rewrote `ceremony-barge-tier1.e2e.mjs` to prove all three complaints:
+  (1) waits for a real transcript SENTENCE (≥15 chars) before barging — not just the "• speaking" dot;
+  (2) a MutationObserver asserts "Passing your message" NEVER appears; (3) a distinctive barge
+  ("what is seven times eleven?") whose reply must contain "77"/"seventy-seven" — proving the agent
+  addressed the barge content, not a generic opener. Audio-stop is observed via an `Audio()` constructor
+  wrapper (the AudioQueue uses DETACHED `new Audio()` elements `querySelector` can't see — a real gotcha).
+  Deploy `deploy-swa.yml` run 30644156945 = success; test `ceremony-barge-screenshots.yml` run
+  **30644546674 = 11 passed / 0 failed** — logged evidence: "Transcript shows spoken text before barge
+  (1 turns; longest 31 chars)", "Speaker cut off within 500ms of barge — pause() fired (pauses 0→1)",
+  Reply = `Tess: "Seven times eleven is seventy-seven."`, "No 'Passing your message'… ever appeared".
+  Screenshots 00–06 on branch `ceremony-barge-screenshots`. STILL OPEN in ACT-huddle-12: the two-tab
+  Transcript/Chat UI redesign (problem #1) and full resume-from-interruption-point. Per org rule, NOT
+  writing "fixed" — awaiting the user's own live browser confirmation.
+
+  **[2026-07-31 FOLLOW-UP #2 — "Option 1" immediate barge answer IMPLEMENTED, deployed, mechanism UAT
+  PASS 8/9, content BLOCKED on OpenAI quota]** User pushed back that the earlier fix still (a) hid the
+  barge message, (b) answered "down the line" not "right there", (c) showed no broken sentence — and told
+  me to check history because "wait a turn to respond was already promised fixed." GROUND TRUTH (git+code):
+  prior commit `5b89cfe` promised mid-utterance barge but only shipped the audio-stop; the ANSWER still
+  routed through server `handleBarges` ("between speakers, never mid-speaker", `huddle.functions.ts:3417`)
+  and the client resume waited on that between-speakers reply — so "wait a turn" was NEVER actually fixed,
+  only the audio-stop half was. Approved approach "Option 1 + interrupted marker" (pivot to Option 3 = true
+  broken-WORD later if needed). Implemented (commit `0d5ca1e`, on `main`): `useCeremonyVoice.bargeFreeze()`
+  (stop audio + PRESERVE freezeRef + keep WebRTC mic), `speakInterjection()` (voice the answer WITHOUT
+  clobbering freezeRef via `_voiceTurn(...,trackFreeze:false)`), `onBargeStart` hook (parks emit at freeze
+  time, closes the freeze→STT race). MeetingBar `runBargeSequence`: render user msg (voice path too — was
+  invisible), fetch ONE answer via scoped **1:1** `sendHuddleMessage(targetAgentId)` — scope MUST be
+  one-to-one, `routeMessage:86` ignores targetAgentId under "group" (real bug I caught) — speak over the
+  frozen ceremony, `markLastAgentTurnInterrupted()`, `resumeFromFreeze()`; `emit()` parks via
+  `bargeActiveRef`; 12s watchdog unparks if STT yields nothing. store: `CeremonyTurn.interrupted?/kind?` +
+  `markLastAgentTurnInterrupted`. TranscriptRow: `data-turn-user/agent/kind/interrupted` testids + visible
+  `[interrupted]`. Server barge queue LEFT in place (additive rule; now a no-op for the ceremony path).
+  tsc+vite build clean. GHA run **30648927649 = 8 passed / 1 failed**. PASS: AC-1 visible user barge row,
+  AC-3 cut ≤500ms (pause fired), AC-5 `[interrupted]` marker (count=1), AC-6 answer row (kind="answer")
+  BEFORE any scripted speaker, no "queue politely"/"Passing your message". **FAIL = AC-8 only** ("77" in the
+  answer) because the app's **OpenAI account is out of quota** — barge answer AND every scripted speaker
+  returned "(couldn't respond — OpenAI is out of API quota)". Environment blocker, not a code defect (see
+  CLAUDE.md "fail fast on quota"). AC-8 content + live user confirm BLOCKED until quota topped up. CI
+  timeout also raised 10→20min (a slow `playwright install` cancelled a run mid-install). Screenshots 01–04
+  on `ceremony-barge-screenshots` (02-barged proves message-visible + `[interrupted]` + corrected hint).
+
 - **ACT-huddle-3 — Mobile Composer overlay fix:** AC subagent ran (12 ACs delivered, awaiting user sign-off).
   Waiting on user to confirm ACs before any code is written.
 
@@ -405,3 +479,33 @@ user to test in the deployed app. NOT calling fixed until user confirms AC-12 li
 - [2026-07-31] **Live board pollution root-caused via ground-truth read of journey's canonical `public.tasks` (not the Huddle mirror, not a guess): 6 rows were agent process-narration, not test-harness leftovers.** User reported "my backlog is flooded with tasks I didn't create." Read `tasks.journey_tasks` mirror first (clean — 174 rows, no recent spike) before concluding no pollution; that was the WRONG place to stop — recreated the documented `apply-migration.yml` escape hatch (journey-voice CLAUDE.md) to read journey's OWN `public.tasks` directly (the canonical source, not a downstream mirror), and found 5 rows there matching this repo's own already-known failure class: an agent (Terry/Cole) filing a card that restates its OWN just-performed exclusive-capability action ("Groom backlog", "Assign tasks", "Review backlog grooming outcomes", "Add/Confirm review gate check to write-up") — plus the "Add a poll in Microsoft Teams" row from the mistake logged just above (confirmed stray by the user, deleted too). ROOT CAUSE (traced to the exact line): `createSuggestedTaskFromTool`'s meta-task guard only checked `titleOwner.agent.id !== winner.id` — it blocks a NON-owner from restating another agent's job, but let the OWNER itself restate its own job straight through, since that case was never covered. FIX (same mechanism, extended — not a new guard): removed the owner-mismatch condition so the guard fires whenever the title matches ANY capability trigger, self or cross-agent, with a distinct message for each case. Commit `a9bc974` (merged to main via `claude/new-session-eonf2r`, fast-forward, no conflicts), deployed (run 30635865798, conclusion success). 6 rows deleted from journey's canonical `public.tasks` (propagates to the Huddle mirror via the existing sync trigger) after explicit user confirmation. GUARDRAIL: when a user reports data-integrity pollution, read the PRIMARY canonical source first (here: journey's own table, not Huddle's read-only mirror) — a clean mirror does not mean clean data, only that the mirror's upstream hasn't been re-synced or that the canonical source itself needs checking directly.
 - [2026-07-31] User dictated 6 new asks in one message (cross-modality chat-vs-voice parity, finishing the WebRTC ceremony rebuild, a fuller agent-board-pollution fix beyond the guard above, the standup tiered-test plan, an email-draft skill, and a correspondence-watcher/reply-tracking skill) — logged as ACT-huddle-6 through ACT-huddle-11 in `.claude/actions.md`, all open, ACs pending `/define-acceptance-criteria`. Note: `track-actions` and other `eds-claude-skills` playbooks are flat `.md` reference files, NOT `Skill`-tool-invocable slash commands (confirmed live — `Skill({skill:"track-actions"})` returns "Unknown skill") — they must be read directly and followed manually, not invoked via the Skill tool.
 - [2026-07-31] **Ran the `sync-setup-script` playbook — this session's `eds-claude-skills` enforcement hooks had NEVER actually been installed.** Before this sync, `/root/.claude/launcher-settings.json` had zero `_eds`-tagged hooks at all (confirmed by reading the file directly) — only the base git-identity/git-check hooks. The `.md` skill files present in `/root/.claude/skills/` (including `track-actions`, `sync-setup-script` itself) had been copied in by whatever attached the org repo, but the actual Stop-hook verification gate + SessionStart discipline banner from `setup.sh` had never been merged in. Cloned `deventerpriseds-org/eds-claude-skills` fresh to `/tmp/eds-claude-skills-sync` (git clone, not raw curl — that 404s on this private repo per the skill's documented gotcha), ran `setup.sh`, and verified the live config changed (not just trusted the script's own echo): `_eds_version` is now **3** on both `SessionStart` and `Stop` hooks, matching `CURRENT_VERSION` in the freshly cloned script; 13 eds-skills + `verifier` agent registered. **Forward-looking implication for this session:** the Stop-hook gate is now live and will hard-block any completion claim on a CODE change unless an independent AC-writing subagent ran BEFORE implementation and an independent `verifier` subagent ran AFTER — self-authored ACs and self-gathered verification no longer satisfy it, even if well-formatted/concrete. Prior CODE work this session (e.g. the `a9bc974` meta-task-guard fix) predates the gate being active and was self-verified (tsc + live deploy check), not subagent-verified — fine retroactively since the gate wasn't live, but any FURTHER code change in this session must now go through the subagent AC/verify dance or the Stop hook will block. Docs/config-only edits remain exempt.
+- [2026-07-31] **No Tavily MCP connector is wired up in this session** (would need `TAVILY_API_KEY` per `setup-mcp` — it's a "configurable," not "pre-connected," server). Used the built-in `WebSearch` tool instead for model/pricing/voice-agent research below — same research capability, different backend. **User-stated premise about a Tavily GitHub Actions workflow did NOT hold on direct verification:** searched `mcp__github__search_code` for tavily-related terms across all 4 in-scope repos + eds-claude-skills, and read every repo's `.github/workflows/` listing directly — zero matches anywhere. What actually exists: journey-voice has direct Tavily calls in two SUPABASE EDGE FUNCTIONS (`web-search`, `execute-tool`'s `webSearch()` helper), not a GH Action, with `TAVILY_API_KEY` living in Supabase edge secrets, not GitHub org secrets. Did NOT write the requested CLAUDE.md/setup.sh fallback documentation on this unconfirmed premise — flagged to the user instead of guessing/fabricating. GUARDRAIL: a user's stated premise about "there is an X available" is a claim to verify against the primary source (the actual repos/workflows), not a fact to document on their say-so, however confident the framing — this is the same "ground-truth before answering" discipline as the board-pollution and mirror-vs-canonical incidents above, just applied to infrastructure claims instead of data claims.
+- [2026-07-31] **Model-cost/architecture research (WebSearch, live findings — not yet acted on):**
+  - **GPT-4o vs GPT-5.6 Luna/Terra:** post-2026-07-30-price-cut, GPT-4o is $2.50in/$10.00out per 1M
+    tokens; Terra is $2.00in/$12.00out (roughly a wash); Luna is $0.20in/$1.20out (~92%/~88% cheaper).
+    OpenAI's own framing: Luna is "the biggest step change in agentic behavior since putting GPT-4o mini
+    into production," beats GPT-5.5 on agentic benchmarks, sits only 2.4 points behind flagship Sol on
+    Agents' Last Exam at ~1/5th the cost. Confidence note: convergent SECONDARY sources (5+ independent
+    outlets agree) — two direct WebFetch attempts at openai.com 403'd, so not confirmed against the
+    primary page itself. Logged as ACT-huddle-14 — a real per-agent migration decision, not yet made.
+  - **OpenAI Voice Agents SDK:** a higher-level TS layer over the same Realtime API
+    `useGroupVoiceRealtime.ts` already uses directly — pre-built `RealtimeAgent`/`RealtimeSession`,
+    tool-calling, guardrails, handoffs, session history. Genuinely relevant since it covers categories of
+    code Huddle hand-rolled this session (WebRTC setup, VAD barge detection, `AudioQueue`, same-agent
+    resume). **Open, unresolved question:** does it allow ElevenLabs for TTS output (Huddle's 15 distinct
+    per-agent voices) while keeping OpenAI for STT/VAD, or does it assume OpenAI TTS end-to-end? Not
+    answered by web search — needs the actual SDK source/docs read, not another search. Logged as
+    ACT-huddle-15.
+  - **"Sandbox agents" clarified — NOT a cost-reduction feature.** In OpenAI's current terminology this
+    means isolated CODE-EXECUTION compute environments for agents that write/run code (auto-provisioned
+    E2B/Modal/Daytona/Cloudflare containers) — infra convenience for coding agents, doesn't reduce LLM
+    token/API cost, and doesn't apply to Huddle's chat/tool-calling agents at all.
+  - **The REAL API-cost levers (unexploited by Huddle currently):** (1) prompt caching — automatic, no
+    opt-in, 25% of normal input rate on any repeated ≥1024-token prefix seen in the last 5-10 min (75%
+    savings) — this is the EXACT thing already sitting as backlog item #1 in this repo's CLAUDE.md
+    ("Prompt-payload efficiency via provider prompt caching"), just not yet implemented (prompt assembly
+    isn't ordered stable-prefix-first yet); (2) Batch API — 50% off input+output for non-real-time work,
+    directly applicable to Huddle's already-async jobs (grooming, research/create_artifact turns,
+    standup/review digests, 48h review-recheck) — none of which are currently batched. Both logged under
+    ACT-huddle-15 as the concrete follow-through, since the "should we" questions themselves were answered
+    live in-conversation per the user's explicit request for immediacy.

@@ -28,6 +28,21 @@ export interface CeremonyVoiceController {
     text: string,
     opts: { onSentenceStart: (sentence: string) => void },
   ) => Promise<void>;
+  /**
+   * Freeze the current speaker on a barge WITHOUT tearing down voice: stop audio + kill the loop,
+   * but preserve the resume point (freezeRef) and keep the WebRTC mic open. Used by the typed-barge
+   * path so it behaves exactly like the voice VAD path. Idempotent.
+   */
+  bargeFreeze: () => void;
+  /**
+   * Speak an immediate barge ANSWER over the frozen ceremony, sentence-by-sentence, WITHOUT
+   * overwriting the interrupted speaker's freeze point — so resumeFromFreeze() still returns to them.
+   */
+  speakInterjection: (
+    agentId: AgentId,
+    text: string,
+    opts: { onSentenceStart: (sentence: string) => void },
+  ) => Promise<void>;
   /** Resume the frozen agent from the exact sentence where the barge interrupted them. */
   resumeFromFreeze: () => Promise<void>;
   clearFreeze: () => void;
@@ -96,6 +111,9 @@ interface FreezePos {
 // ── hook ──────────────────────────────────────────────────────────────────────
 export function useCeremonyVoice(hookOpts: {
   onBargeDetected: (transcript: string) => void;
+  /** Fires SYNCHRONOUSLY the instant a barge freezes the speaker (VAD speech_started), before STT
+   *  transcription resolves — lets the caller park its emit loop at freeze time, not transcript time. */
+  onBargeStart?: () => void;
 }): CeremonyVoiceController {
   const [status, setStatus] = useState<CeremonyVoiceStatus>("idle");
   const [activeSpeaker, setActiveSpeaker] = useState<AgentId | null>(null);
@@ -123,6 +141,8 @@ export function useCeremonyVoice(hookOpts: {
   // Stable ref so the WebRTC message handler always has the latest callback.
   const onBargeRef = useRef(hookOpts.onBargeDetected);
   onBargeRef.current = hookOpts.onBargeDetected;
+  const onBargeStartRef = useRef(hookOpts.onBargeStart);
+  onBargeStartRef.current = hookOpts.onBargeStart;
 
   const setPhase = useCallback((s: CeremonyVoiceStatus) => {
     statusRef.current = s;
@@ -138,6 +158,9 @@ export function useCeremonyVoice(hookOpts: {
       onSentenceStart: (sentence: string) => void,
       gen: number,
       startSentenceIdx: number,
+      // When false (barge ANSWER), do NOT touch freezeRef — the interrupted speaker's resume point
+      // must survive so resumeFromFreeze() returns to THEM, not to the answer.
+      trackFreeze = true,
     ) => {
       if (genRef.current !== gen) return;
       setPhase("speaking");
@@ -149,8 +172,8 @@ export function useCeremonyVoice(hookOpts: {
         const sentence = sentences[si];
 
         // Save freeze position BEFORE synthesis — if barge fires during await synthesizeSpeech,
-        // the freeze will correctly point to this sentence.
-        freezeRef.current = { agentId, text, sentenceIdx: si, onSentenceStart };
+        // the freeze will correctly point to this sentence. Skipped for a barge answer (trackFreeze=false).
+        if (trackFreeze) freezeRef.current = { agentId, text, sentenceIdx: si, onSentenceStart };
 
         let audio64 = "";
         try {
@@ -180,8 +203,10 @@ export function useCeremonyVoice(hookOpts: {
         if (genRef.current !== gen) return;
       }
 
-      freezeRef.current = null;
-      setActiveSpeaker(null);
+      if (trackFreeze) {
+        freezeRef.current = null;
+        setActiveSpeaker(null);
+      }
       if (genRef.current === gen) setPhase(listenRef.current ? "listening" : "idle");
     },
     [setPhase],
@@ -195,6 +220,31 @@ export function useCeremonyVoice(hookOpts: {
       opts: { onSentenceStart: (sentence: string) => void },
     ) => {
       await _voiceTurn(agentId, text, opts.onSentenceStart, genRef.current, 0);
+    },
+    [_voiceTurn],
+  );
+
+  // ── bargeFreeze ───────────────────────────────────────────────────────────
+  // Stop the current speaker on a barge but KEEP the resume point and the WebRTC mic. Same as the
+  // VAD inline handler, exposed so the typed-barge path behaves identically.
+  const bargeFreeze = useCallback(() => {
+    audioQueueRef.current.clearAndStop();
+    genRef.current += 1; // kills the live _voiceTurn loop; freezeRef is intentionally preserved
+    setPhase("frozen");
+  }, [setPhase]);
+
+  // ── speakInterjection ─────────────────────────────────────────────────────
+  // Voice an immediate barge ANSWER over the frozen ceremony WITHOUT overwriting freezeRef, so
+  // resumeFromFreeze() still returns to the interrupted speaker.
+  const speakInterjection = useCallback(
+    async (
+      agentId: AgentId,
+      text: string,
+      opts: { onSentenceStart: (sentence: string) => void },
+    ) => {
+      genRef.current += 1;
+      const gen = genRef.current;
+      await _voiceTurn(agentId, text, opts.onSentenceStart, gen, 0, /* trackFreeze */ false);
     },
     [_voiceTurn],
   );
@@ -302,13 +352,14 @@ export function useCeremonyVoice(hookOpts: {
 
         switch (msg.type) {
           case "input_audio_buffer.speech_started": {
-            // Barge detected: stop current audio and kill the voiceTurn loop via gen increment.
+            // Barge detected: freeze the speaker (stop audio + kill the loop, keep the resume point).
             // freezeRef.current already points to the current sentence (set before synthesis).
             if (statusRef.current === "speaking" || audioQueueRef.current.isActive()) {
-              audioQueueRef.current.clearAndStop();
-              genRef.current += 1; // kills the current _voiceTurn loop
-              setPhase("frozen");
+              bargeFreeze();
             }
+            // Fire SYNCHRONOUSLY so the caller parks its emit loop now — before STT resolves. Runs
+            // even between speakers (nothing to freeze) so a barge is never missed.
+            onBargeStartRef.current?.();
             dc.send(JSON.stringify({ type: "response.cancel" }));
             break;
           }
@@ -367,7 +418,7 @@ export function useCeremonyVoice(hookOpts: {
       setPhase("error");
       stopListening();
     }
-  }, [supported, setPhase, stopListening]);
+  }, [supported, setPhase, stopListening, bargeFreeze]);
 
   return {
     status,
@@ -377,6 +428,8 @@ export function useCeremonyVoice(hookOpts: {
     startListening,
     stopListening,
     voiceTurn,
+    bargeFreeze,
+    speakInterjection,
     resumeFromFreeze,
     clearFreeze,
   };
