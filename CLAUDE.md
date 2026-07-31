@@ -127,6 +127,21 @@ To exercise the pipeline end-to-end, use the **`verify-task-sync`** skill. To li
 (group conversations, routing, tool use) via the server function, use the **`test-agent-serverfn`**
 skill — both under `.claude/skills/`.
 
+## Test-task naming convention (hard rule — makes cleanup possible)
+**Any task written for testing/verification purposes — a test harness script
+(`test-agent-serverfn`'s scripts, `verify-task-sync`'s seed writes, any ad-hoc verification during
+development) — MUST use a `Test-` title prefix**, e.g. `Test-walk the dog`, `Test-verify barge-in
+reply`. The real caller identity (`von.ellis@enterpriseds.io`) resolves to the live user for
+`create_huddle_task`/`quick_create_task`, so every test task lands on the user's REAL board unless
+explicitly tagged — this has repeatedly polluted the live board (see the 2026-07-31 incident in
+`.claude/memory.md`, and the historic `cleanup-test-tasks.yml` precedent in journey-voice). The
+`Test-` prefix is what lets a cleanup pass tell "definitely a test artifact" apart from "needs human
+judgment" instead of guessing from content alone. Prefer `journey:{enabled:false}` for pure routing
+tests that don't need to exercise real task creation at all.
+**Use the `cleanup-board` skill** (`.claude/skills/cleanup-board/SKILL.md`) to review, present, and
+(only after explicit user confirmation) remove stray/test tasks from the board — never bulk-delete
+on inference alone.
+
 ## Chat memory & context architecture (relearned the hard way — read before touching "memory")
 How an agent gets context is TWO separate layers. Confusing them leads to wrong diagnoses.
 
