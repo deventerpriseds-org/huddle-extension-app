@@ -22,8 +22,8 @@ const sizeMap = {
 
 export function AgentAvatar({ agent, size = "md", ring, className, clickable = true }: Props) {
   const openAgent = useAgentPanelStore((s) => s.openAgent);
-  // The seeded avatarUrls are Lovable-preview-only paths (/__l5e/…) that 404 on the deployed app,
-  // so fall back to the colored initials chip whenever the image can't load.
+  // avatarUrls point at real images in public/agents/; fall back to the colored initials chip
+  // whenever an image genuinely fails to load (missing file, network issue).
   const [imgFailed, setImgFailed] = useState(false);
   const base = cn(
     "inline-flex items-center justify-center rounded-full overflow-hidden font-semibold text-white shrink-0 select-none",

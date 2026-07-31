@@ -1,0 +1,42 @@
+name: Verify UAT (live, real browser)
+
+# Generic GHA-runner Playwright harness (eds-claude-skills' verify-work skill, "GHA-verify
+# variant" / gha-playwright-uat pointer skill). run-uat.mjs is app-agnostic; huddle-checks.mjs
+# is the only app-specific piece — currently covers panel collapse, avatar-image regression
+# (ACT-huddle-2), and the standup-ceremony timing the user has reported as broken.
+# Replaces the deleted verify-panel-collapse.yml (superseded by this generic pair).
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify-uat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Run UAT
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          CHECKS_FILE: ${{ github.workspace }}/.claude/skills/test-agent-serverfn/scripts/huddle-checks.mjs
+          SHOT_DIR: uat-shots
+        run: node .claude/skills/test-agent-serverfn/scripts/run-uat.mjs
+
+      - name: Upload screenshots + results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-shots
+          path: uat-shots/
+          retention-days: 7

@@ -87,11 +87,21 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+**CURRENT TASKS (2026-07-31):**
+- **ACT-huddle-4 — Voice overhaul (OpenAI Realtime WebRTC):** IMPLEMENTATION COMPLETE, VERIFIER 19/19 PASS, mid-merge into main.
+  NOTE: a concurrent session also closed "ACT-huddle-4" for a server-side kickNextChunk retry fix (`94cfc02` on main).
+  These are DIFFERENT, COMPLEMENTARY implementations: theirs = server-side reliability; mine = client-side WebRTC pipeline.
+  Files created: `realtime.functions.ts` (ephemeral key server fn), `useGroupVoiceRealtime.ts` (full hook: AudioQueue, WebRTC, barge+resume, trailing transcript).
+  MeetingBar.tsx: 2-line swap. TypeScript: clean. `useVoiceCall.ts`: unchanged (AC-15 ✓). Phase 1 e2e test committed.
+  Status: currently mid-merge (git merge origin/main, conflict in actions.md resolved --theirs but merge NOT committed).
+  Still needs: commit merge, push branch, merge to main, deploy to prod, user live confirmation.
+- **ACT-huddle-3 — Mobile Composer overlay fix:** AC subagent ran (12 ACs delivered, awaiting user sign-off).
+  Waiting on user to confirm ACs before any code is written.
+
 ACT-1 (1:1 hand-off) and ACT-4 (auto backlog grooming) are COMPLETE and verified live; PR #6 (ACT-1 + ACT-4 code)
 is MERGED to main. ACT-4 built a GENERAL recurring-job scheduler in Azure Huddle PG (see feature table) — the
 substrate ACT-6 (ceremonies) should ride next (add a 'ceremony' case to fireJob + rows), rather than a bespoke cron.
-Next up: ACT-6 (ceremonies fire + standup summaries — now cheap on the scheduler), ACT-5 (agents self-start doable
-tasks / classify blocked — dovetails with ACT-4's blocked-surfacing residuals), and ACT-3 (dedup verify).
+Backlogged: ACT-6 (ceremonies fire + standup summaries), ACT-5 (agents self-start doable tasks), ACT-3 (dedup verify).
 ACT-4 residuals to fold into ACT-5: Terry's summary omitted the blocked items; `blocked-on-capability` tag not seen
 in the mirror; groom limit 15/pass + skip-on-unchanged leaves a static backlog's tail (16+) un-groomed.
 
@@ -106,6 +116,41 @@ Fix: `pollSinceMs = stepStart - 5_000` (5 seconds before poll start). Old turns 
 now applies to ≤ a handful of current-session turns — the cutoff bug is eliminated regardless of history depth.
 Commit dd5435e on main; deploy run 30544492729 concluded success. Independent verifier: PASS 4/5 statically confirmed;
 AC-2 (10s SLA) mechanism-proven, live timing requires user to test. NOT calling fixed until user confirms live.
+
+### Standup ceremony — LIVE BROWSER reproduction, 2026-07-30: DIFFERENT bug than the sinceMs fix above, STILL BROKEN
+First-ever real Playwright-in-browser drive of Meeting → Daily stand-up → Start against production (every prior
+verification of this flow called server fns directly over HTTP, never through the actual UI a real user clicks).
+Built via the new generalized `run-uat.mjs` + `huddle-checks.mjs` (see `gha-playwright-uat` skill in
+eds-claude-skills). Took several iterations to get a trustworthy check (see Hardening below) — final run
+(workflow 30587309137, commit 78182f7) is real evidence:
+- Meeting button → Daily stand-up → Start: all work, room opens fine.
+- After clicking Start: **zero new transcript turns rendered for 150+ seconds** (verified via a real
+  `data-testid="transcript-turn"` count, not loose keyword matching — see Hardening).
+- **Two HTTP 500s observed in the browser network log**: `enqueueHuddleTurn` (the fn Start calls to kick off the
+  turn) and `getTurnUpdates` (the fn the client polls for replies) — both server fns literally throwing 500,
+  server-side. This is NOT the sinceMs/LIMIT-20 cutoff bug (that was a silent success-but-hidden-by-poll-window
+  failure); this is the server function itself erroring.
+- Ruled out the known "wrong DB / discovery drift" incident (CLAUDE.md): the triggering deploy's "Resolve database
+  connection string" step logged `Assembled AZURE_PG_URL for eds-postgresql/RAG_AI_Agents` correctly.
+- **NOT YET ROOT-CAUSED** — no stack trace/error detail available from the client side (createServerFn masks
+  handler exceptions to a generic 500), and this session has no access to Azure Function App / Application
+  Insights logs to read the actual thrown error. Next step: add temporary detailed error logging (or a
+  try/catch that surfaces `err.message`) to `enqueueHuddleTurn`/`getTurnUpdates` in `huddle.functions.ts`,
+  redeploy, and re-trigger `verify-uat.yml` to capture the real exception.
+- This is the user's original reported experience, now reproduced with hard evidence (not inferred) for the
+  first time this session — do not report "fixed" until the actual 500 root cause is found and resolved.
+
+**Hardening on this check's own false positives (fixed along the way, informs future UAT checks):**
+- `avatarImage404s`'s `page.reload()` strips the single-use `?uat_token=` param (already consumed via
+  `history.replaceState`) and the bypass flag is in-memory only — any check running AFTER a reload loses auth
+  entirely (sidebar goes from populated to zero buttons). Fix: run reload-based checks LAST in the array.
+- The original "first reply within 15s" check matched `document.body.innerText` against loose keywords
+  (standup/blocked/priority/...) — these matched pre-existing task-board text behind the meeting overlay
+  regardless of whether a real reply had happened, producing a bogus "51ms" reading. Fixed by adding
+  `data-testid="transcript-turn"` to `TranscriptRow` (both user/agent branches, `MeetingBar.tsx`) and counting
+  real DOM turns before/after Start instead.
+- `.count()` doesn't auto-wait like `.click()` — a check that raced the sidebar's async huddle-list hydration
+  got a false 0. Use `.waitFor({state:"visible", timeout})` before counting.
 
 ### Mic fix (PR #19) — 2026-07-29, CONFIRMED WORKING (user confirmed barge-in works)
 Root cause of "mic doesn't work": `useEffect(() => () => groupVoice.stop(), [groupVoice])` in MeetingBar.tsx
@@ -137,6 +182,16 @@ catch-all for long NPs with apostrophes. No IIFE (an earlier broken commit 7a300
 caused a "turnIntent is not defined" runtime error under Nitro/Vite SSR — reverted as 7b4ae92, fixed cleanly
 in 0d2b05f). Deploy run 30571325354 success. AC-12 (Iris handles "Mark that done" without deferring) requires
 user to test in the deployed app. NOT calling fixed until user confirms AC-12 live.
+
+## Multi-session coordination (PERMANENT STANDING RULE — add to every session)
+**Multiple concurrent Claude sessions work on this repo simultaneously.** Each session has its own feature branch. Main is the integration point. This has already caused prod regressions twice (see CLAUDE.md "Deploy funnel"). Before ANY merge/push to main:
+1. `git fetch origin` — check what OTHER sessions pushed to main since your last fetch.
+2. `git log --stat origin/main..HEAD` — verify YOUR commits are strictly additive vs what main has.
+3. `git show origin/main:<file>` — compare individual files before assuming your version is newer/better.
+4. NEVER resolve merge conflicts by taking one side wholesale (`--theirs`/`--ours`) without reading BOTH sides first — another session's work may be in the losing side.
+5. When `actions.md` or `memory.md` conflict, read BOTH versions and manually compose a merged result that preserves ALL entries from both sides — never silently drop the other session's tracking.
+
+**Also: main's `94cfc02` (ACT-huddle-4 server-side kickNextChunk retry) and this session's WebRTC client-side pipeline are COMPLEMENTARY, not conflicting. Both belong in main.**
 
 ## Hardening (append)
 - [2026-07-26] **MISTAKE: encoded "what the team can do" as a hand-written CAPABILITY PROMPT (prose) and

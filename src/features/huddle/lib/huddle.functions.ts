@@ -3606,23 +3606,40 @@ type HuddleTurnResult = Awaited<ReturnType<typeof runHuddleTurn>>;
 // journey's drain edge fn), authed with the shared JOURNEY_PROXY_TOKEN (NO new secret). The cron
 // heartbeat remains the guaranteed backstop if this request is frozen before the fetch lands. Base
 // URL: HUDDLE_APP_URL app setting, else the Azure runtime's WEBSITE_HOSTNAME.
+// ACT-huddle-4: this used to be a single unretried attempt with an empty catch — a failed self-kick
+// (network blip, cold-start, transient 5xx) was silently invisible and fell straight through to the
+// once-a-minute pg_cron backstop, which is exactly the "notices my barge after a large delay"
+// complaint. Retry a few times with short backoff before giving up, and log every failure so a
+// stranded barge is at least diagnosable. Missing config is logged distinctly from a transient
+// failure since retrying can never fix it.
+const KICK_MAX_ATTEMPTS = 3;
+const KICK_BACKOFF_MS = [250, 750];
 async function kickNextChunk(turnId: string): Promise<void> {
   const token = (process.env.JOURNEY_PROXY_TOKEN ?? "").trim();
-  if (!token) return;
   const rawBase =
     (process.env.HUDDLE_APP_URL ?? "").trim() ||
     (process.env.WEBSITE_HOSTNAME ? `https://${process.env.WEBSITE_HOSTNAME}` : "");
   const base = rawBase.replace(/\/$/, "");
-  if (!base) return;
-  try {
-    await fetch(`${base}/api/public/run-turn`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-webhook-secret": token },
-      body: JSON.stringify({ turnId }),
-    });
-  } catch {
-    /* fire-and-forget: the cron drain backstops a lost kick within a minute */
+  if (!token || !base) {
+    const missing = [!token && "JOURNEY_PROXY_TOKEN", !base && "HUDDLE_APP_URL/WEBSITE_HOSTNAME"].filter(Boolean).join(", ");
+    console.error(`[kickNextChunk] misconfigured (turn ${turnId}): ${missing} unset — self-kick disabled, relying on the cron backstop only (up to 60s)`);
+    return;
   }
+  for (let attempt = 1; attempt <= KICK_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(`${base}/api/public/run-turn`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-webhook-secret": token },
+        body: JSON.stringify({ turnId }),
+      });
+      if (res.ok) return;
+      console.error(`[kickNextChunk] non-2xx response (turn ${turnId}, attempt ${attempt}/${KICK_MAX_ATTEMPTS}): HTTP ${res.status}`);
+    } catch (err) {
+      console.error(`[kickNextChunk] fetch failed (turn ${turnId}, attempt ${attempt}/${KICK_MAX_ATTEMPTS}):`, err);
+    }
+    if (attempt < KICK_MAX_ATTEMPTS) await new Promise((r) => setTimeout(r, KICK_BACKOFF_MS[attempt - 1]));
+  }
+  console.error(`[kickNextChunk] all ${KICK_MAX_ATTEMPTS} attempts failed (turn ${turnId}) — deferring to the cron backstop (up to 60s)`);
 }
 
 // ---- Pillar 2: worker sub-turn + fan-in integration ---------------------------------------------
@@ -3992,25 +4009,35 @@ export const enqueueHuddleTurn = createServerFn({ method: "POST" })
     } catch {
       email = data.caller?.entra_email ?? null;
     }
-    const { enqueueTurn, claimTurn, getTurn } = await import("./tasks/turns.server");
-    await enqueueTurn(turnId, data.huddleId, email, turnData);
-    // Claim + run right now (fast path). If another runner (cron) already grabbed it, fall through
-    // to reporting status so we never double-run (the client then polls getTurnUpdates for the result).
-    const claimed = await claimTurn(turnId);
-    if (claimed) {
-      const result = await executeClaimedTurn(claimed);
-      if (result) {
-        // The first chunk ran here. If more agents remain it's 'partial': return the replies produced
-        // so far AND status 'partial' so the client renders them immediately and keeps polling for the
-        // rest (streamed as later chunks land). Otherwise it's fully 'done'.
-        const partial = (result as { partial?: boolean }).partial === true;
-        return { turnId, status: (partial ? "partial" : "done") as string, result, error: null as string | null };
+    // ACT-huddle-3: everything below used to run unguarded — an exception anywhere in here (including
+    // inside executeClaimedTurn's own catch path, e.g. if failTurn's DB write itself throws) bypassed
+    // the chunked/resumable turn mechanism entirely and surfaced to the browser as an opaque 500 with
+    // no message. Wrap it so the real error is both logged server-side and returned to the client.
+    try {
+      const { enqueueTurn, claimTurn, getTurn } = await import("./tasks/turns.server");
+      await enqueueTurn(turnId, data.huddleId, email, turnData);
+      // Claim + run right now (fast path). If another runner (cron) already grabbed it, fall through
+      // to reporting status so we never double-run (the client then polls getTurnUpdates for the result).
+      const claimed = await claimTurn(turnId);
+      if (claimed) {
+        const result = await executeClaimedTurn(claimed);
+        if (result) {
+          // The first chunk ran here. If more agents remain it's 'partial': return the replies produced
+          // so far AND status 'partial' so the client renders them immediately and keeps polling for the
+          // rest (streamed as later chunks land). Otherwise it's fully 'done'.
+          const partial = (result as { partial?: boolean }).partial === true;
+          return { turnId, status: (partial ? "partial" : "done") as string, result, error: null as string | null };
+        }
+        const rec = await getTurn(turnId);
+        return { turnId, status: (rec?.status ?? "error") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
       }
       const rec = await getTurn(turnId);
-      return { turnId, status: (rec?.status ?? "error") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
+      return { turnId, status: (rec?.status ?? "queued") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[enqueueHuddleTurn] unhandled error (turn ${turnId}, huddle ${data.huddleId}):`, err);
+      return { turnId, status: "error" as string, result: null as HuddleTurnResult | null, error: message };
     }
-    const rec = await getTurn(turnId);
-    return { turnId, status: (rec?.status ?? "queued") as string, result: null as HuddleTurnResult | null, error: rec?.error ?? null };
   });
 
 /** The public VAPID key the browser needs to create a push subscription (null if push isn't set up). */
@@ -4024,30 +4051,47 @@ const TurnUpdatesInput = z.object({
   huddleId: z.string(),
   sinceMs: z.number().optional(),
 });
+type TurnUpdateDTO = {
+  id: string;
+  status: string;
+  error: string | null;
+  updated_ms: number;
+  seq: number;
+  replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
+  result: HuddleTurnResult | null;
+};
 export const getTurnUpdates = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => TurnUpdatesInput.parse(raw))
   .handler(async ({ data }) => {
-    const { getTurnsSince } = await import("./tasks/turns.server");
-    const rows = await getTurnsSince(data.huddleId, data.sinceMs ?? 0);
-    // Trim to a serializable DTO (drop the raw payload; type result like the live turn result).
-    // `replies` + `seq` carry the incrementally-streamed per-agent replies for in-flight
-    // ('partial'/'running') turns so the client renders them as they land; `result` is the full
-    // payload set once the turn is 'done'. The client keys agent messages on reply index (idempotent),
-    // so a partial turn re-appearing with more replies just appends the new ones.
-    const turns = rows.map((t) => ({
-      id: t.id,
-      status: t.status as string,
-      error: t.error,
-      updated_ms: t.updated_ms,
-      seq: t.seq,
-      replies: (t.replies ?? []) as {
-        agentId: AgentId;
-        text: string;
-        artifacts?: { id: string; name: string }[];
-      }[],
-      result: (t.result ?? null) as HuddleTurnResult | null,
-    }));
-    return { turns };
+    // ACT-huddle-3: this used to run unguarded — an exception from getTurnsSince surfaced to the
+    // browser as an opaque 500 with no message, indistinguishable from any other failure. Wrap it.
+    try {
+      const { getTurnsSince } = await import("./tasks/turns.server");
+      const rows = await getTurnsSince(data.huddleId, data.sinceMs ?? 0);
+      // Trim to a serializable DTO (drop the raw payload; type result like the live turn result).
+      // `replies` + `seq` carry the incrementally-streamed per-agent replies for in-flight
+      // ('partial'/'running') turns so the client renders them as they land; `result` is the full
+      // payload set once the turn is 'done'. The client keys agent messages on reply index (idempotent),
+      // so a partial turn re-appearing with more replies just appends the new ones.
+      const turns: TurnUpdateDTO[] = rows.map((t) => ({
+        id: t.id,
+        status: t.status as string,
+        error: t.error,
+        updated_ms: t.updated_ms,
+        seq: t.seq,
+        replies: (t.replies ?? []) as {
+          agentId: AgentId;
+          text: string;
+          artifacts?: { id: string; name: string }[];
+        }[],
+        result: (t.result ?? null) as HuddleTurnResult | null,
+      }));
+      return { turns };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[getTurnUpdates] unhandled error (huddle ${data.huddleId}):`, err);
+      return { turns: [] as TurnUpdateDTO[], error: message };
+    }
   });
 
 /** Reminders that have fired for a huddle since `sinceMs` — the client renders each as an agent message. */

@@ -6,29 +6,193 @@ Last updated: 2026-07-30
 
 ## Open
 
+### ACT-huddle-3: Standup ceremony hang — root cause is HTTP 500s on enqueueHuddleTurn/getTurnUpdates
+**Requested:** 2026-07-30 — "use the new uat skill to finally experience what i am experiencing with
+the standup." User has repeatedly complained about a multi-minute standup-ceremony hang; a prior
+session's `sinceMs` fix (see memory.md) addressed a DIFFERENT bug (a silent client-side poll-window
+cutoff) but was never confirmed live.
+**What was done:** built and dispatched the first-ever real browser-driven UAT of the actual
+Meeting → Daily stand-up → Start click flow against production, via the new generalized
+`run-uat.mjs` + `huddle-checks.mjs` (`gha-playwright-uat` skill). Iterated through several harness
+bugs (see memory.md Hardening) to get trustworthy evidence.
+**Found (real evidence, workflow run 30587309137, commit 78182f7):** the flow opens fine, but after
+clicking Start, **zero new transcript turns render for 150+ seconds**, and the browser network log
+shows **two HTTP 500s**: `enqueueHuddleTurn` (the fn Start calls) and `getTurnUpdates` (the client's
+poll fn) — both throwing server-side. Ruled out the known DB-discovery-drift issue (deploy log
+confirmed `Assembled AZURE_PG_URL for eds-postgresql/RAG_AI_Agents`).
+**CORRECTED 2026-07-30 (was wrong above):** the "~45s hosting ceiling, plan not built" hypothesis was
+WRONG — `docs/plan-incremental-turn-streaming.md` is **already implemented**, not just designed:
+`CHUNK_BUDGET_MS = 30_000`, a persisted `progress` column (`remainingQueue`), and a resumable driver
+loop with `chunkBudgetHit()` checks already exist in `huddle.functions.ts` (confirmed by direct grep,
+not the stale CLAUDE.md backlog note calling it "NEXT"). That mechanism exists specifically to avoid
+raw request-timeout 500s. **New, narrower leading hypothesis:** `enqueueHuddleTurn`'s handler
+(`huddle.functions.ts:3999-4001`) calls `executeClaimedTurn(claimed)` with **no try/catch** — an
+uncaught exception there bypasses the chunking safety net entirely and returns an opaque 500. Same
+gap in `getTurnUpdates` around `getTurnsSince`. This is a real bug (something is throwing), not a
+timeout — but the actual thrown error is still unknown; `createServerFn` masks handler exceptions to
+a generic 500 client-side, and this session has no Azure Function App / Application Insights log
+access.
+**ACs (independent subagent, cold-read of the code):**
+- AC-1: Given an error thrown inside `executeClaimedTurn`'s own catch path (e.g. `failTurn` itself
+  throws), when `enqueueHuddleTurn` runs, then the handler returns a structured response (not a raw
+  500) whose body includes the real thrown error's message.
+- AC-2: Given `enqueueTurn`/`claimTurn`/`getTurn` (calls outside `executeClaimedTurn`) throw, when
+  `enqueueHuddleTurn` runs, then the same structured-error handling applies — no unguarded call site.
+- AC-3: Given `getTurnsSince` throws inside `getTurnUpdates`, then it returns a structured error
+  instead of an opaque 500.
+- AC-4: Given any of the above, then the real error message/stack is logged server-side
+  (`console.error`), visible in the App Service log stream independent of the client response.
+- AC-5: Given no error occurs (happy/partial/queued paths), then the returned shape is byte-for-byte
+  unchanged from current behavior — zero behavioral change on success.
+- AC-6: Given the fix is live, when a real ceremony 500 next occurs in production, then the network
+  log shows a non-500 or a 500 whose body carries the real error — verified live, not inferred.
+- AC-7: No newly-added `catch {}` silently swallows — every catch logs or returns the error.
+- AC-8: The existing chunking/resumable mechanism (`CHUNK_BUDGET_MS`, `progress`, `remainingQueue`)
+  is untouched — this is diagnostic visibility only, not new chunking behavior.
+**Status:** CLOSED (the visibility fix) 2026-07-31 — implemented (commit `f8d07bb`), deployed
+(run 30592726001, success), and independently verified live by a cold `verifier` subagent:
+- AC-1/2/3/6: PASS — verifier found a genuine way to trigger a real backend exception (a huddleId
+  with an embedded NUL byte, which Postgres rejects as invalid UTF8) against LIVE production, and
+  confirmed both `enqueueHuddleTurn` and `getTurnUpdates` now return HTTP 200 with the real Postgres
+  error message in the body, instead of an opaque 500.
+- AC-4/7: PASS — diff-confirmed both new catches call `console.error` with the real `err` object
+  before returning; no swallowed catch.
+- AC-5/8: PASS — diff-confirmed the three success-path `return` statements and the `getTurns`
+  mapping are byte-identical to before (only re-indented); `CHUNK_BUDGET_MS`/`progress`/
+  `remainingQueue` don't appear anywhere in the diff. Live-confirmed via a real 7-agent turn on
+  production completing normally (`done`, all 7 agents replied, no drops).
+**Important scope note — this closes the VISIBILITY gap, not the underlying standup-hang complaint.**
+We now have a mechanism to see the real error the next time a ceremony 500s in production, instead
+of an opaque failure. The original user-reported hang is still open until a real occurrence is
+captured with this fix live and root-caused from the actual message it now returns.
+**Evidence:** workflow runs 30587309137 (original repro), 30592726001 (this fix's deploy); verifier
+subagent's live NUL-byte test and live 7-agent turn against https://icy-flower-0f415200f.7.azurestaticapps.net.
+
+### ACT-huddle-4: Ceremony barge-in reliability — silent self-kick failure can strand a barge for ~60s
+**Requested:** 2026-07-30, following ACT-huddle-3 — user asked why a barged mid-ceremony message
+sometimes gets answered "overtop" the running script after a large delay, and pushed back that
+"agents hearing each other" (the cross-talk fix under ACT-huddle-5) doesn't explain that on its own.
+**Found:** `bargeCeremony` (`huddle.functions.ts:3572-3581`) queues the barge then fires
+`kickNextChunk` fire-and-forget. `kickNextChunk` (3609-3626) wraps its self-POST in
+`try {} catch { /* cron drain backstops within a minute */ }` with **zero logging on failure** — if
+the same backend instability causing the ACT-huddle-3 500s also breaks this self-kick, the barge
+silently rides the once-a-minute pg_cron backstop instead of being answered promptly. Not yet proven
+this is happening (no failure logging exists to check), but it's a real, concrete gap independent of
+cross-talk.
+**ACs (independent subagent, cold-read of the code):**
+- AC-1: Barge-to-reply latency (successful kick) is measured end-to-end and materially faster than
+  the 60s cron backstop, with the current unretried baseline documented for comparison.
+- AC-2: A failed `kickNextChunk` fetch (throw or non-2xx) is logged server-side, distinguishable from
+  a successful kick — replacing today's empty `catch {}`.
+- AC-3: A failed self-kick retries a bounded number of times with backoff before deferring to cron,
+  rather than deferring on the very first failure.
+- AC-4: Missing `JOURNEY_PROXY_TOKEN`/`HUDDLE_APP_URL` (permanent misconfig, retrying can't help) is
+  logged distinctly from a transient fetch failure.
+- AC-5: Even with zero successful kicks, the cron backstop still eventually delivers the barge reply
+  — never permanently lost (regression guard on `claimBarge`'s row-locked FIFO).
+- AC-6: `appendBarge` called twice with the same barge id is idempotent — queued/answered once.
+- AC-7: Barging a turn that's already `done`/`error` returns `queued:false`; the client falls back to
+  a normal message rather than losing the text (regression guard on `MeetingBar.tsx:246-250`).
+- AC-8: A barge is only answered between speakers via `handleBarges()`, never mid-response.
+- AC-9: Multiple queued barges are answered FIFO; unspoken round-robin slots are preserved.
+- AC-10: A barge still queued when `CHUNK_BUDGET_MS` is hit survives the chunk boundary — drained by
+  the next chunk/resume, never dropped.
+**Status:** CLOSED 2026-07-31 — implemented (commit `94cfc02`), deployed (run 30594156826, success),
+independently verified live by a cold `verifier` subagent:
+- AC-2/3/4: PASS at the code level — diff confirms `KICK_MAX_ATTEMPTS=3`, backoff `[250,750]ms`,
+  distinct `console.error` lines for non-2xx / thrown-fetch / missing-config, and the misconfig
+  branch returns before ever attempting a fetch. **Live `console.error` OUTPUT in Azure logs remains
+  UNVERIFIED** — this session has no Azure Function App log-stream access, only code-level
+  confirmation that the calls are correctly wired.
+- AC-5/6/7/8/9/10 (regression guards): PASS — `git diff 94cfc02^ 94cfc02` touches only `kickNextChunk`
+  (one hunk); `appendBarge`/`claimBarge`/`handleBarges`/`CHUNK_BUDGET_MS` are byte-identical. Live
+  end-to-end confirmation via `ceremony-barge-test.mjs` against production: full 12-reply ceremony
+  completed, barge answered between speakers (not mid-reply), barge idempotency confirmed (2nd
+  identical send deduped), no dropped participants, no cross-huddle spill.
+- AC-1 (latency baseline) was descriptive/measurement scope, not separately re-run this session —
+  the live barge test's overall pass covers functional correctness, not a quantified before/after
+  latency comparison.
+**Evidence:** workflow run https://github.com/deventerpriseds-org/huddle-extension-app/actions/runs/30594156826;
+verifier's live run of `.claude/skills/test-agent-serverfn/scripts/ceremony-barge-test.mjs` against
+https://icy-flower-0f415200f.7.azurestaticapps.net (BARGE-IN: PASS, all sub-checks AC-6..AC-10 PASS).
+**Open follow-up (not blocking closure):** confirm the new `console.error` lines actually appear in
+Azure Function App logs the next time a self-kick genuinely fails in production — needs log access
+this session didn't have.
+
+### ACT-huddle-5: Ceremony conversational realism — cross-talk relaxation + caption-style reveal
+**Requested:** 2026-07-30. User's core complaint, in their own words: it's "scripted with recordings
+being read... not a natural group conversation at all," and proposed validating incrementally
+(2-agent barge/return-to-checklist first, then 3 agents with real Q&A) before scaling to the full
+15-agent roster. User explicitly asked NOT to have their suggestion rubber-stamped — wanted an
+independent read of the actual architecture first.
+**Found (independent Explore-agent investigation, cold-read):**
+1. Ceremony turns are genuinely LLM-generated per agent via the OpenAI Responses API with full tool
+   access (not templated/precomputed text) — grounded in real DB task data via a data-driven
+   checklist (`buildCeremonyReport`), with the LLM told to phrase it naturally. The Responses-API +
+   checklist architecture the user proposed is **already what's built** — not a gap.
+2. **The actual gap:** ceremony participants are deliberately denied visibility into what other
+   agents in the same run just said. The cross-talk block that exists for normal group turns
+   (`buildPrior()`) is explicitly gated off whenever a ceremony directive is active
+   (`priorInThisTurn && !ceremonyDirective`, `huddle.functions.ts:1250`), each directive says "do NOT
+   comment on other lanes," and the @mention re-queue is hard-disabled during ceremonies
+   (`ceremonyActive ? [] : parseMentions(...)`, `huddle.functions.ts:3255`). This is the concrete,
+   surgical fix target — not a rebuild.
+3. **Caption-style reveal (separate, additive UX finding):** in `emit()` (`MeetingBar.tsx:380-406`),
+   the full turn text is pushed to the transcript BEFORE the TTS audio is even synthesized/played —
+   confirmed by reading the code, not inferred. That's why it reads as "a script is already on
+   screen, then a recording plays it." Fix: reveal text progressively, timed to the audio element's
+   `timeupdate`/`duration`, not the full string up front.
+**ACs for the caption-reveal piece (independent subagent, cold-read of the code):**
+- AC-1: Text reveals progressively once audio starts, paced against `timeupdate`/`duration`.
+- AC-2: On `onended`, 100% of the turn's text is visible — no trailing unrevealed text.
+- AC-3: Revealed portion is monotonically non-decreasing — never flickers/hides shown text.
+- AC-4: When `voiceOff` (TTS already failed this ceremony), full text renders immediately — no
+  dependency on a nonexistent audio element, preserving the existing text-only fallback.
+- AC-5: On `onerror` or ceremony teardown mid-turn, the transcript still ends up showing full text —
+  never permanently truncated.
+- AC-6: Across a 5+ turn ceremony, no cumulative desync — each turn's reveal timer is scoped to that
+  turn's own audio duration, not a shared clock.
+- AC-7: If `duration` is unavailable/NaN/Infinity, reveal degrades gracefully to full text immediately
+  rather than hanging.
+- AC-8: Assistive-tech consideration — DOM/ARIA strategy avoids announcing every incremental
+  fragment (live-region gated to completion, or full text present in the a11y tree throughout).
+- AC-9: When `showCaptions` is false, no error and no unnecessary work against a hidden element.
+- AC-10: Reveal timing measured against actual audio playback stays within a stated tolerance
+  (e.g. ≤300ms average offset) — not just "looks fine."
+**Cross-talk relaxation ACs:** not yet written — needs its own staged plan doc first (see below) since
+it's a genuine behavior change to how every ceremony sounds, not a pure bug fix.
+**Status:** open. Plan doc `docs/plan-ceremony-conversational-realism.md` covers the staged
+2-agent → 3-agent validation approach for the cross-talk relaxation specifically. Nothing implemented
+yet — sign-off needed before touching any ceremony directive/prompt.
+
+### ACT-huddle-5 partial / WebRTC voice pipeline — 2026-07-31, branch claude/setup-stop-hooks-skills-0h569y
+**Implemented by this session (21 ACs, user "go" sign-off):** Replace the push-to-talk voice loop
+(`useGroupVoice`: MediaRecorder→Whisper→TTS, 350ms rAF barge detection) with OpenAI Realtime WebRTC
+for VAD/STT/barge-in detection + EL TTS per-sentence for audio output.
+**Files created:**
+- `src/features/huddle/lib/voice/realtime.functions.ts` — server fn minting ephemeral key via `POST /v1/realtime/sessions` (OPENAI_API_KEY stays server-side).
+- `src/features/huddle/hooks/useGroupVoiceRealtime.ts` — new hook: AudioQueue class (base64 MP3, onStart trailing transcript), WebRTC RTCPeerConnection + oai-events DC, `input_audio_buffer.speech_started` ≤200ms barge detection, same-agent resume from interrupted sentence, generation counter for orphaned-op prevention.
+- `e2e/voice-realtime-pipeline.e2e.mjs` — Phase 1 Playwright test (7/7 PASS against dev server).
+**MeetingBar.tsx:** 2-line swap (import + `useGroupVoiceRealtime()`). `useVoiceCall.ts`: unchanged (AC-15 ✓). TypeScript: clean (0 errors).
+**Verifier:** 19/19 PASS (independent cold-read subagent). Commits: `02981b6` + `cb98120` on branch.
+**Status:** NOT YET MERGED TO MAIN / NOT YET DEPLOYED. Mid-merge (conflict in actions.md resolved, merge commit pending). NOTE: concurrent session closed "ACT-huddle-4" for kickNextChunk retry (`94cfc02`) — that is a DIFFERENT, complementary fix. Both belong in main.
 
 ### ACT-huddle-2: Agent avatar images 404 (Lovable-preview-only asset paths)
 **Requested:** 2026-07-29
 **Asked for:** fix the broken avatar photos across the app — every agent falls back to colored
 initials because the real images can't load.
-**Root cause (confirmed):** all 14 agent avatars are wired in `src/features/huddle/data/agents.ts`
+**Root cause (confirmed):** all 14 agent avatars were wired in `src/features/huddle/data/agents.ts`
 via `src/assets/agents/*.png.asset.json` pointer files, whose `url` field is a Lovable-platform-
 internal preview path (`/__l5e/assets-v1/...`) — only servable by Lovable's own hosting, never by
-this app's actual Azure Static Web App deployment. `AgentAvatar.tsx` already has a documented,
-working fallback (colored initials on image `onerror`), so nothing crashes — the photos just never
-show. Confirmed the real image bytes were NEVER committed to this repo (checked full git history,
-all branches) and confirmed the Lovable preview domain referenced in `__root.tsx` isn't reachable
-from this sandbox (403 CONNECT via the CCR egress proxy, same restriction as azurestaticapps.net).
-**Scope:** narrow — exactly 14 files, all agent avatars, all wired through the one `agents.ts` file.
-No other image in the app uses this broken pattern (confirmed via full-codebase grep for
-`.asset.json` imports and `__l5e` references).
-**Status:** BLOCKED on the user — they're retrieving the actual avatar image files (they may have
-Lovable project access to export them) and will hand them over. Once received: commit into this
-app's own `public/`/`src/assets/` so Vite/Azure SWA serves them directly, repoint `agents.ts`'s
-`avatarUrl` fields at the local paths, remove the now-unnecessary Lovable-path comment in
-`AgentAvatar.tsx`, verify no more 404s in the console.
-**Deferred by explicit user direction** ("for now i care about the meeting room looking correct")
-— not being worked until the images are provided.
+this app's actual Azure Static Web App deployment.
+**Resolved 2026-07-30:** user provided the real 14 avatar images (zip upload). Resized/optimized
+(1024×1024 PNG → 256×256 JPEG q85, ~21MB → ~0.18MB total), committed to `public/agents/*.jpg`,
+`agents.ts` repointed at the local paths, old `.asset.json`/`src/assets/agents/` removed, stale
+comment in `AgentAvatar.tsx` updated. Commit `0f88d6a`, deployed (workflow run 30585250169,
+success), and **live-verified via the browser UAT harness** (workflow run 30587309137):
+`✅ No avatar image 404s (ACT-huddle-2 regression guard) — all avatar images loaded`. A permanent
+regression check (`avatarImage404s` in `huddle-checks.mjs`) now guards against this recurring.
+**Status:** closed.
 
 ### ACT-huddle-1: Desktop layout bugs — sidebar/menu missing, meeting view, mic barge-in, standup gap
 **Requested:** 2026-07-29
