@@ -1,0 +1,39 @@
+name: 1:1 voice connect diagnostic
+
+# Loads the DEPLOYED app in headless Chromium, opens the 1:1 with Iris, clicks "Start voice
+# conversation", and captures the connect flow (getRealtimeSession + OpenAI Realtime SDP + console
+# + screenshots) to pinpoint WHY the 1:1 voice mic never goes live. Does NOT block api.openai.com.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  voice-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Run 1:1 voice diagnostic
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          SHOT_DIR: voice-1on1-shots
+        run: node e2e/voice-1on1-diagnostic.e2e.mjs
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-1on1-shots
+          path: voice-1on1-shots/
+          retention-days: 7
