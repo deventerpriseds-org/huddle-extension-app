@@ -1,0 +1,40 @@
+name: Ceremony barge-in UAT (Tier 1)
+
+# Tier 1 Playwright test: ceremony starts → text barge → barge routed → answered → ceremony continues.
+# Captures 5 screenshots proving the OpenAI pipeline handled the barge end-to-end.
+# Does NOT require a live microphone; OAI Realtime SDP is blocked (non-fatal — test confirms
+# text-barge path works). Tier 2 (live VAD + freeze-resume) is a separate follow-on test.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ceremony-barge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Run ceremony barge-in Tier 1 test
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          SHOT_DIR: ceremony-barge-shots
+        run: node e2e/ceremony-barge-tier1.e2e.mjs
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ceremony-barge-shots
+          path: ceremony-barge-shots/
+          retention-days: 7
