@@ -122,16 +122,33 @@ export function useVoiceCallRealtime(): VoiceCallController {
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       };
 
+      // Mirrors HuddleView.tsx's applyTurnStream: `replies` is always the FULL cumulative list for
+      // this turn (each poll returns everything so far, not a delta — see getTurnUpdates' DTO
+      // comment), and dedup is by checking the STORE for `a-${turnId}-${i}` (index-based, matching
+      // every other writer of durable-turn replies in this codebase), not a locally-tracked Set —
+      // so calling this repeatedly with the same or a growing array is safely idempotent. Saving to
+      // the transcript always happens, even for a superseded exchange; only speakReply gen-checks,
+      // so a stale reply is preserved in history but never spoken over a newer one.
       const applyReplies = async (
         replies: { agentId: AgentId; text: string }[] | undefined | null,
       ) => {
-        for (const reply of replies ?? []) {
+        const list = replies ?? [];
+        const existing = new Set(
+          useHuddleStore
+            .getState()
+            .messages.filter((m) => m.id.startsWith(`a-${turnId}-`))
+            .map((m) => m.id),
+        );
+        for (let i = 0; i < list.length; i++) {
+          const mid = `a-${turnId}-${i}`;
+          if (existing.has(mid)) continue;
+          const reply = list[i];
           addAgentMessage({
-            id: `a-${turnId}-${reply.agentId}`,
+            id: mid,
             huddleId,
             author: { kind: "agent", agentId: reply.agentId },
             text: reply.text,
-            ts: Date.now(),
+            ts: Date.now() + i,
             replyTo: turnId,
           });
           await speakReply(reply.agentId, reply.text, gen, voiceTurn);
@@ -152,24 +169,19 @@ export function useVoiceCallRealtime(): VoiceCallController {
           return;
         }
         // 'partial' | 'queued' | 'running' — poll until a terminal state, same pattern the text
-        // composer uses (getTurnUpdates), so a slower turn doesn't just go silent.
+        // composer uses (getTurnUpdates), so a slower turn doesn't just go silent. Keeps polling
+        // (and saving replies to the transcript) even if superseded by a newer utterance — only
+        // speaking is gated on staleness (inside applyReplies -> speakReply), so nothing is lost.
         if (res.result?.replies?.length)
           await applyReplies(res.result.replies as { agentId: AgentId; text: string }[]);
         const deadline = Date.now() + POLL_TIMEOUT_MS;
-        const seen = new Set<string>();
         while (Date.now() < deadline) {
-          if (exchangeGenRef.current !== gen) return; // superseded mid-poll
           await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
           const { turns } = await getTurnUpdates({ data: { huddleId, sinceMs: now - 5_000 } });
           const t = turns.find((x) => x.id === turnId);
           if (!t) continue;
-          const fresh = (t.replies ?? []).filter((r, i) => {
-            const key = `${t.id}-${i}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
-          if (fresh.length) await applyReplies(fresh as { agentId: AgentId; text: string }[]);
+          if (t.replies?.length)
+            await applyReplies(t.replies as { agentId: AgentId; text: string }[]);
           if (t.status === "done") return;
           if (t.status === "error") {
             if (exchangeGenRef.current === gen)
