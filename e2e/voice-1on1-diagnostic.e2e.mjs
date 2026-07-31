@@ -50,6 +50,40 @@ const ctx = await browser.newContext({
   viewport: { width: 420, height: 880 }, // phone-ish, matches the user's device
   permissions: ["microphone"],
 });
+// Instrument BEFORE any app code runs: report secure-context/mediaDevices support (drives the
+// `supported` flag in useCeremonyVoice), and log every getUserMedia + RTCPeerConnection call so we
+// can see whether startListening even reaches the mic grab.
+await ctx.addInitScript(() => {
+  try {
+    console.log(
+      `[probe] isSecureContext=${window.isSecureContext} ` +
+        `hasMediaDevices=${!!navigator.mediaDevices} ` +
+        `hasGetUserMedia=${!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)} ` +
+        `hasRTCPeerConnection=${typeof RTCPeerConnection !== "undefined"}`,
+    );
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      const orig = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = (...a) => {
+        console.log("[probe] getUserMedia CALLED");
+        return orig(...a).then(
+          (s) => { console.log("[probe] getUserMedia OK"); return s; },
+          (e) => { console.log(`[probe] getUserMedia FAIL ${e && e.name}: ${e && e.message}`); throw e; },
+        );
+      };
+    }
+    const RealPC = window.RTCPeerConnection;
+    if (RealPC) {
+      window.RTCPeerConnection = function (...a) {
+        console.log("[probe] RTCPeerConnection CREATED");
+        return new RealPC(...a);
+      };
+      window.RTCPeerConnection.prototype = RealPC.prototype;
+    }
+  } catch (e) {
+    console.log(`[probe] init error ${e}`);
+  }
+});
+
 const page = await ctx.newPage();
 
 // ── capture everything ─────────────────────────────────────────────────────
@@ -113,10 +147,23 @@ try {
   await page.waitForTimeout(2000);
   await shot(page, "02-after-start-click");
 
-  // Give the connect flow time: getRealtimeSession → getUserMedia → SDP → data channel.
-  console.log("Step 3: Wait for the connect flow to settle (12s)…");
-  await page.waitForTimeout(12_000);
-  await shot(page, "03-after-connect-wait");
+  // Give the auto-connect flow time.
+  console.log("Step 3: Wait for the AUTO-connect flow to settle (8s)…");
+  await page.waitForTimeout(8_000);
+  await shot(page, "03-after-autoconnect-wait");
+
+  // Now explicitly tap the in-meeting mic/Join button (onMic → connect-on-tap, a real gesture).
+  console.log("Step 4: Tap the in-meeting mic/'Join' button (onMic connect path)…");
+  const joinBtn = page.locator('button:has-text("Join"), button:has-text("Unmute"), button:has-text("Mic")').first();
+  const haveJoin = (await joinBtn.count()) > 0;
+  console.log(`  in-meeting mic button present: ${haveJoin}`);
+  if (haveJoin) await joinBtn.click().catch((e) => console.log(`  mic click err: ${e.message}`));
+  await page.waitForTimeout(10_000);
+  await shot(page, "05-after-mic-tap-wait");
+
+  // Any toast text (sonner)?
+  const toasts = await page.locator("[data-sonner-toast]").allInnerTexts().catch(() => []);
+  console.log(`  toasts: ${JSON.stringify(toasts)}`);
 
   // Read the mic button label to see the resulting state.
   const micLabels = await page.locator("text=/^(Mic|Join|Unmute|Mute)$/").allInnerTexts().catch(() => []);
@@ -128,8 +175,11 @@ try {
   console.log(`  api.openai.com/v1/realtime calls: ${openaiRealtimeCalls}  ← 0 means the session key was never minted (universal server-side failure)`);
   netEvents.forEach((e) => console.log(`  · ${e}`));
 
-  console.log(`\n=== CONSOLE (last 60 lines) ===`);
-  consoleLines.slice(-60).forEach((l) => console.log(`  ${l}`));
+  console.log(`\n=== PROBE + VOICE CONSOLE LINES (the key ones) ===`);
+  const key = consoleLines.filter((l) => /\[probe\]|CeremonyVoice|realtime|Realtime|getUserMedia|RTCPeer|mic|Mic|voice|Voice|supported|not supported/.test(l));
+  (key.length ? key : consoleLines.slice(-40)).forEach((l) => console.log(`  ${l}`));
+  console.log(`\n=== CONSOLE (last 40 lines, all) ===`);
+  consoleLines.slice(-40).forEach((l) => console.log(`  ${l}`));
 
   console.log(`\n=== BODY TEXT SNIPPET ===\n${bodyText}\n`);
 
