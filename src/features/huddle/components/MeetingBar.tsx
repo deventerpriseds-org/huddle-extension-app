@@ -247,7 +247,11 @@ function MeetingRoom({
     async (text: string): Promise<{ agentId: AgentId; text: string }[] | undefined> => {
       if (isCeremonyRef.current && ceremonyStatusRef.current === "running" && activeCeremonyTurnRef.current) {
         const turnId = activeCeremonyTurnRef.current;
-        setPhase("Passing your message to the room…");
+        // Stop mid-sentence like a real meeting: clear the AudioQueue + kill the voiceTurn
+        // loop so the current speaker actually goes quiet the instant the user cuts in.
+        // No "passing your message" narration — that concept doesn't exist in a live room.
+        ceremonyVoiceRef.current.stopListening();
+        setPhase("");
         try {
           const res = await bargeCeremony({ data: { turnId, text } });
           if (!res.queued) toast("The room just wrapped — send that again to start a new thread.");

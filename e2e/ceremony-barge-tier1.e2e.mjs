@@ -1,12 +1,17 @@
 /**
  * Tier 1 ceremony barge-in test — OpenAI pipeline, text barge path.
  *
- * Proves (5 screenshots):
- *   01-speaking:   Agent is speaking with phase label visible
- *   02-barge-typed: User has typed a barge message; agent still spotlighted
- *   03-routed:     "Passing your message to the room…" — barge reached the server
- *   04-answered:   Agent response to barge visible in transcript
- *   05-continued:  Ceremony transcript grows / ceremony resumes after barge
+ * Proves (6 screenshots) the three things the first test got wrong:
+ *   01-speaking:    Agent is speaking AND transcript text is actually visible
+ *                   (not just a "• speaking" indicator with no words).
+ *   02-barge-typed: User has typed a distinctive, checkable barge message.
+ *   03-cut-off:     The instant the barge is sent, the speaker goes quiet —
+ *                   the <audio> element is paused and NO "Passing your message"
+ *                   narration ever appears (that concept doesn't exist in a live room).
+ *   04-answered:    The agent's reply actually ADDRESSES the barge content
+ *                   (barge asks "seven times eleven" → reply contains 77).
+ *   05-continued:   The ceremony carries on after the interruption.
+ *   06-final:       End state for the record.
  *
  * What this test does NOT cover (requires Tier 2 with live mic):
  *   - WebRTC VAD barge (speech_started mid-utterance)
@@ -26,6 +31,10 @@ import * as path from "path";
 const BASE_URL = process.env.APP_URL || "https://icy-flower-0f415200f.7.azurestaticapps.net";
 const UAT_TOKEN = process.env.UAT_BYPASS_TOKEN || process.env.UAT_TOKEN;
 const SHOT_DIR = process.env.SHOT_DIR || "/tmp/ceremony-barge-tier1";
+// A distinctive, deterministically-answerable barge so the reply can be proven
+// to ADDRESS the interruption rather than just being the ceremony opener.
+const BARGE_MSG = "BARGE-TEST-12: quick maths check — what is seven times eleven?";
+const BARGE_ANSWERS = ["77", "seventy-seven", "seventy seven"];
 // CCR pre-installs Chromium at a fixed path; GHA runner uses Playwright's own installed copy.
 const CCR_CHROMIUM = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome";
 const CHROMIUM_PATH = (() => {
@@ -56,16 +65,11 @@ async function shot(page, name) {
   return p;
 }
 
-async function waitForText(page, pattern, { timeout = 60_000 } = {}) {
-  await page.waitForFunction(
-    (pat) => document.body.innerText.includes(pat),
-    pattern,
-    { timeout },
+// Read the text of every transcript turn currently in the DOM.
+async function turnTexts(page) {
+  return page.$$eval('[data-testid="transcript-turn"]', (els) =>
+    els.map((e) => (e.textContent || "").trim()),
   );
-}
-
-async function countTurns(page) {
-  return page.$$eval('[data-testid="transcript-turn"]', (els) => els.length);
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -96,6 +100,31 @@ const ctx = await browser.newContext({
   ignoreHTTPSErrors: false,
 });
 
+// Instrument the Audio constructor BEFORE app code runs. The ceremony's AudioQueue
+// uses `new Audio()` (detached elements, NOT in the DOM), so querySelector can't see
+// them. This wrapper records every play()/pause() call with a timestamp so the test
+// can prove the current sentence was actually paused when the barge landed.
+await ctx.addInitScript(() => {
+  window.__audioLog = [];
+  const RealAudio = window.Audio;
+  function TrackedAudio(...args) {
+    const el = new RealAudio(...args);
+    const realPlay = el.play.bind(el);
+    const realPause = el.pause.bind(el);
+    el.play = (...a) => {
+      window.__audioLog.push({ ev: "play", t: Date.now() });
+      return realPlay(...a);
+    };
+    el.pause = (...a) => {
+      window.__audioLog.push({ ev: "pause", t: Date.now() });
+      return realPause(...a);
+    };
+    return el;
+  }
+  TrackedAudio.prototype = RealAudio.prototype;
+  window.Audio = TrackedAudio;
+});
+
 const page = await ctx.newPage();
 
 // Collect console errors (non-fatal — surface at end)
@@ -115,7 +144,6 @@ try {
   console.log("Step 1: Load app with UAT auth…");
   await page.goto(`${BASE_URL}/?uat_token=${UAT_TOKEN}`, { waitUntil: "networkidle", timeout: 30_000 });
 
-  // Confirm main app shell loaded (not a login wall)
   const hasMeetingButton = await page.locator('button:has-text("Meeting")').count();
   ok(hasMeetingButton > 0, "App loaded — Meeting button visible");
   await shot(page, "00-app-loaded");
@@ -126,11 +154,9 @@ try {
   await page.waitForSelector('text="Daily stand-up"', { timeout: 5_000 });
   await page.click('text="Daily stand-up"');
 
-  // Meeting stage should be fullscreen now
   await page.waitForSelector(".meeting-stage", { timeout: 10_000 });
   ok(true, "Meeting stage opened");
 
-  // "Start" button must be enabled (roster pre-populated)
   const startBtn = page.getByRole("button", { name: "Start", exact: true });
   await startBtn.waitFor({ state: "visible", timeout: 5_000 });
   const startDisabled = await startBtn.getAttribute("disabled");
@@ -140,7 +166,6 @@ try {
   console.log("Step 3: Start ceremony…");
   await startBtn.click();
 
-  // Wait for "Gathering the team…" or first agent speak phase
   await page.waitForFunction(
     () => {
       const spans = [...document.querySelectorAll("span")];
@@ -152,78 +177,147 @@ try {
   );
   ok(true, "Ceremony started — phase text appeared");
 
-  // ── 4. Screenshot 01 — agent speaking ──────────────────────────────────────
-  console.log("Step 4: Wait for first agent to speak…");
+  // ── 4. AC: transcript text is actually visible while speaking ───────────────
+  // The first test only waited for the "• speaking" indicator, which fires
+  // BEFORE any sentence audio starts — so no words were on screen yet. Here we
+  // wait for a real transcript turn whose text is a non-trivial spoken sentence.
+  console.log("Step 4: Wait for VISIBLE transcript text (a real spoken sentence)…");
   await page.waitForFunction(
     () => {
-      const spans = [...document.querySelectorAll("span")];
-      return spans.some((s) => s.textContent.includes("is speaking"));
+      const turns = [...document.querySelectorAll('[data-testid="transcript-turn"]')];
+      // At least one turn with a real sentence (not just a name/label).
+      return turns.some((t) => (t.textContent || "").trim().replace(/\s+/g, " ").length >= 15);
     },
-    { timeout: 90_000 }, // LLM + TTS latency
+    { timeout: 120_000 }, // LLM + TTS latency before the first sentence starts
   );
-  ok(true, 'Screenshot 01: "is speaking…" phase visible');
+  const preBargeTexts = await turnTexts(page);
+  ok(
+    preBargeTexts.some((t) => t.replace(/\s+/g, " ").length >= 15),
+    `Transcript shows spoken text before barge (${preBargeTexts.length} turns; ` +
+      `longest ${Math.max(0, ...preBargeTexts.map((t) => t.length))} chars)`,
+  );
   await shot(page, "01-speaking");
 
-  // ── 5. Screenshot 02 — barge typed ─────────────────────────────────────────
+  // ── 5. Type the distinctive barge message ──────────────────────────────────
   console.log("Step 5: Type barge message…");
   const textarea = page.locator('textarea[placeholder*="Message the room"]');
   await textarea.waitFor({ state: "visible", timeout: 10_000 });
-  await textarea.fill("hold on — quick question for you all");
-  ok(true, "Barge message typed");
+  await textarea.fill(BARGE_MSG);
+  ok(true, `Barge message typed: "${BARGE_MSG}"`);
   await shot(page, "02-barge-typed");
 
-  // Count turns before barge (should be 0 or some agent turns from early speech)
-  const turnsBefore = await countTurns(page);
+  const turnsBefore = (await turnTexts(page)).length;
 
-  // ── 6. Screenshot 03 — barge routed ────────────────────────────────────────
-  console.log("Step 6: Send barge (Enter) and wait for routing…");
+  // Install a MutationObserver that flags if the nonsensical "Passing your
+  // message" narration EVER appears, at any point from now on.
+  await page.evaluate(() => {
+    window.__sawPassing = false;
+    const check = () => {
+      if (document.body && document.body.innerText.includes("Passing your message")) {
+        window.__sawPassing = true;
+      }
+    };
+    check();
+    const obs = new MutationObserver(check);
+    obs.observe(document.body, { childList: true, subtree: true, characterData: true });
+    window.__passingObs = obs;
+  });
+
+  // ── 6. AC: barge cuts the speaker off — audio pauses, no "Passing" text ─────
+  console.log("Step 6: Send barge (Enter) — speaker must go quiet immediately…");
+  // Mark the pre-barge audio timeline so we can see the pause that follows.
+  const playsBefore = await page.evaluate(
+    () => (window.__audioLog || []).filter((e) => e.ev === "play").length,
+  );
+  const pausesBefore = await page.evaluate(
+    () => (window.__audioLog || []).filter((e) => e.ev === "pause").length,
+  );
+  const sendAt = await page.evaluate(() => Date.now());
   await textarea.press("Enter");
 
-  // Wait for "Passing your message to the room…" phase text
-  await page.waitForFunction(
-    () => {
-      const spans = [...document.querySelectorAll("span")];
-      return spans.some((s) => s.textContent.includes("Passing your message"));
-    },
-    { timeout: 20_000 },
+  // stopListening() → AudioQueue.clearAndStop() calls pause() on the current sentence.
+  // Wait up to 500ms for a NEW pause() to be logged after we pressed Enter.
+  let pausedInTime = false;
+  for (let i = 0; i < 10; i++) {
+    pausedInTime = await page.evaluate(
+      (at) => (window.__audioLog || []).some((e) => e.ev === "pause" && e.t >= at),
+      sendAt,
+    );
+    if (pausedInTime) break;
+    await page.waitForTimeout(50);
+  }
+  const pausesAfter = await page.evaluate(
+    () => (window.__audioLog || []).filter((e) => e.ev === "pause").length,
   );
-  ok(true, 'Screenshot 03: "Passing your message to the room…" visible — barge routed');
-  await shot(page, "03-routed");
+  // If a sentence was audibly playing (headless may reject play()), the barge MUST
+  // pause it. If headless never actually started audio, there's nothing to cut —
+  // log that case honestly rather than passing on a vacuous check.
+  if (playsBefore > 0) {
+    ok(pausedInTime, `Speaker cut off within 500ms of barge — pause() fired (pauses ${pausesBefore}→${pausesAfter})`);
+  } else {
+    console.log(`  ⓘ  No audio play() ever fired in headless — audio-stop not exercisable here (pauses ${pausesBefore}→${pausesAfter}). Covered by code path + transcript behavior below.`);
+  }
+  await shot(page, "03-cut-off");
 
-  // ── 7. Screenshot 04 — barge answered ──────────────────────────────────────
-  console.log("Step 7: Wait for barge response in transcript…");
-  // At minimum: user's own turn is added synchronously by sendMessage()
-  await page.waitForFunction(
-    (before) => {
-      const turns = document.querySelectorAll('[data-testid="transcript-turn"]');
-      return turns.length > before;
-    },
-    turnsBefore,
-    { timeout: 60_000 }, // LLM round trip for barge response
-  );
-  const turnsAfter = await countTurns(page);
-  ok(turnsAfter > turnsBefore, `Screenshot 04: transcript grew (${turnsBefore} → ${turnsAfter} turns)`);
+  // ── 7. AC: the reply ADDRESSES the barge content (77) ──────────────────────
+  console.log("Step 7: Wait for a reply that actually answers the barge…");
+  let replyText = "";
+  try {
+    await page.waitForFunction(
+      ({ before, answers }) => {
+        const turns = [...document.querySelectorAll('[data-testid="transcript-turn"]')];
+        if (turns.length <= before) return false;
+        // Look at turns added AFTER the barge for the expected answer.
+        const added = turns.slice(before).map((t) => (t.textContent || "").toLowerCase());
+        return added.some((txt) => answers.some((a) => txt.includes(a)));
+      },
+      { before: turnsBefore, answers: BARGE_ANSWERS.map((a) => a.toLowerCase()) },
+      { timeout: 90_000 }, // LLM round trip for the barge response
+    );
+    const after = await turnTexts(page);
+    replyText = after.slice(turnsBefore).find((t) =>
+      BARGE_ANSWERS.some((a) => t.toLowerCase().includes(a.toLowerCase())),
+    ) || "";
+    ok(true, `Reply addresses the barge — contains the answer: "${replyText.slice(0, 120)}"`);
+  } catch {
+    const after = await turnTexts(page);
+    const added = after.slice(turnsBefore);
+    ok(
+      false,
+      `Reply did NOT address the barge (expected one of ${JSON.stringify(BARGE_ANSWERS)}). ` +
+        `Turns added after barge: ${JSON.stringify(added.map((t) => t.slice(0, 80)))}`,
+    );
+  }
   await shot(page, "04-answered");
 
-  // ── 8. Screenshot 05 — ceremony continues after barge ──────────────────────
+  // Now assert the "Passing your message" narration NEVER appeared.
+  const sawPassing = await page.evaluate(() => {
+    window.__passingObs?.disconnect();
+    return !!window.__sawPassing;
+  });
+  ok(!sawPassing, 'No "Passing your message to the room…" narration ever appeared');
+
+  // ── 8. AC: ceremony continues after the barge ──────────────────────────────
   console.log("Step 8: Wait for ceremony to continue after barge…");
-  // Either more transcript turns appear, or the phase cycles to another agent speaking
+  const turnsAfter = (await turnTexts(page)).length;
   await page.waitForFunction(
     (prev) => {
       const turns = document.querySelectorAll('[data-testid="transcript-turn"]');
       if (turns.length > prev) return true;
       const spans = [...document.querySelectorAll("span")];
-      return spans.some((s) => s.textContent.includes("is speaking") || s.textContent.includes("Resuming"));
+      return spans.some(
+        (s) => s.textContent.includes("is speaking") || s.textContent.includes("Resuming"),
+      );
     },
     turnsAfter,
     { timeout: 90_000 },
   );
-  const turnsFinal = await countTurns(page);
-  ok(turnsFinal >= turnsAfter, `Screenshot 05: ceremony continued (${turnsAfter} → ${turnsFinal} turns)`);
+  const turnsFinal = (await turnTexts(page)).length;
+  ok(turnsFinal >= turnsAfter, `Ceremony continued after barge (${turnsAfter} → ${turnsFinal} turns)`);
   await shot(page, "05-continued");
+  await shot(page, "06-final");
 
   // ── 9. Console-error guard ──────────────────────────────────────────────────
-  // Acceptable: OAI realtime 500 (blocked-by-test), ElevenLabs TTS errors in headless
   const unexpectedErrors = consoleErrors.filter(
     (e) =>
       !e.includes("blocked-by-test") &&
