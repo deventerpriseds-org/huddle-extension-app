@@ -1151,3 +1151,14 @@ calendar could drift between channels.
 - [DONE] Data cleanup: deleted my 3 "Call the dentist" test-pollution tasks + the duplicate von.ellis@ profile (4132); alias + real dev@ board + auth left intact.
 - [DONE] Redeployed Huddle (cleared identity cache). LIVE-VERIFIED: schedule_and_priorities now returns the real dev@ board (count=10 scheduled, real tasks) for a von.ellis@ caller.
 - [OPEN — pre-existing, newly visible] schedule_and_priorities shows times in RAW UTC (10 AM ET task rendered "2 PM") and over-trims (2 of 6 shown). Fix = localize start_time to caller timeZone + surface all scheduled items. Awaiting user go-ahead.
+
+### ACT-huddle-22: "fix everything" batch (2026-08-01) — status
+DEPLOYED + VERIFIED (harness re-run 30714248222): P2-TAVILY USED (real-time web search works, graded on
+tool-use channel); D-FALLBACK surfaces tool failures; P1/P3/P3b/P-RETAIN/P-GROUND/P-ACCOUNT all PASS in text.
+DEPLOYED, NEEDS LIVE VOICE UAT (sandbox has no mic): V-ACK (b706... e74b160 — no-dead-air filler if barge answer
+>700ms); V-RESUME (b3a5970 — resume from next sentence, kills the real broken-record replay). Anti-repetition
+scene directive shipped but did NOT move P-REPEAT (prose advisory; the real broken-record was voice-resume = V-RESUME).
+EXTERNAL / NOT CODE: get_calendar_events fails = missing Calendars.Read admin consent (surfaced by D-FALLBACK).
+STILL TODO (follow-on harness builds): Tier B P1-HARD (journey-on DB verify) + P-NOFAKE (needs failing-tool injection +
+Test-/cleanup); Tier C P2 general tool-use (journey-on prioritize); Tier D P-LANE/P-ONCTX (needs ceremony round-robin
+harness + roster incl Eli/Elle/Faith/Troy); lane-confusion grounding fix; V-STT noise/accuracy (voice config).
