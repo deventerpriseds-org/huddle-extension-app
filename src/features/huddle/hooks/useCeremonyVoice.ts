@@ -354,10 +354,16 @@ export function useCeremonyVoice(hookOpts: {
               audio: {
                 input: {
                   transcription: { model: "whisper-1" },
+                  // semantic_vad detects end-of-turn by MEANING (a classifier), not raw audio energy.
+                  // server_vad (energy + fixed silence window) waited on background noise — it never
+                  // saw enough silence to end the turn, so the agent "ignored" the user, and stray
+                  // noise false-triggered barges that superseded the real reply. semantic_vad is
+                  // noise-robust with a bounded max wait (auto≈medium, ~4s), matching the natural
+                  // turn-taking of the ElevenLabs voice in journey / the boost coach. create_response
+                  // stays false — our own turn engine produces the reply, not the Realtime model.
                   turn_detection: {
-                    type: "server_vad",
-                    silence_duration_ms: 800,
-                    threshold: 0.5,
+                    type: "semantic_vad",
+                    eagerness: "auto",
                     create_response: false,
                   },
                 },
