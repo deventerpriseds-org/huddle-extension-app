@@ -66,12 +66,17 @@ for (const p of PHRASINGS) {
   for (let run = 1; run <= 2; run++) {
     const r = await send(p.text);
     const val = r.val || {};
-    const tools = (val.toolUses || []).map((t) => `${t.tool}${t.ok ? "" : "(err)"}`);
+    const tools = (val.toolUses || []).map((t) => `${t.tool}${t.ok ? "" : "(ERR)"}`);
     const reason = val.decision?.reason || val.decision?.mode || "(no decision)";
-    const reply = (val.replies || []).map((x) => String(x.text).replace(/\n/g, " ").slice(0, 160)).join(" | ");
+    const reply = (val.replies || []).map((x) => String(x.text).replace(/\n/g, " ")).join(" | ");
     console.log(`\n[${p.label}] run ${run} · http ${r.http}`);
     console.log(`  tools: ${tools.length ? tools.join(", ") : "(none)"}`);
+    // Show what each tool actually DID (summary/detail) — this is where a 403 calendar error or a
+    // real prioritize count is visible (actual behaviour vs the schema description).
+    for (const t of val.toolUses || []) {
+      console.log(`    · ${t.tool} ok=${t.ok} — ${String(t.summary || "").slice(0, 160)}${t.detail ? " :: " + String(t.detail).slice(0, 160) : ""}`);
+    }
     console.log(`  decision.reason: ${reason}`);
-    console.log(`  reply: ${reply || (r.raw ? "RAW:" + r.raw : JSON.stringify(val).slice(0, 300))}`);
+    console.log(`  reply: ${reply || (r.raw ? "RAW:" + r.raw : JSON.stringify(val).slice(0, 400))}`);
   }
 }

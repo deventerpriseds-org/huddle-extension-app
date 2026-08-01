@@ -1,0 +1,32 @@
+name: Agent server-fn UAT (natural messages, live)
+
+# Drives NATURAL user messages at a real agent through the deployed `sendHuddleMessage` server fn and
+# prints which tool actually fired + what it returned + the agent's real reply. GitHub runners are not
+# behind the CCR proxy, so they CAN reach *.azurestaticapps.net (the sandbox cannot). Default script is
+# the Iris schedule-vs-external-calendar routing UAT (ac3-iris-schedule.mjs): READ-only tools, journey
+# disabled, so nothing is written to the user's real board.
+
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: "test-agent-serverfn script to run"
+        required: false
+        default: ".claude/skills/test-agent-serverfn/scripts/ac3-iris-schedule.mjs"
+
+jobs:
+  agent-serverfn-uat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run agent server-fn UAT
+        env:
+          HUDDLE_BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          HUDDLE_CALLER: von.ellis@enterpriseds.io
+        run: node "${{ github.event.inputs.script }}"
