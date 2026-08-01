@@ -166,7 +166,7 @@ export async function executeRealtimeTool(
       const { dispatchPrioritize } = await import("../tasks/tools");
       const { resolveTaskEmail } = await import("../journey/identity");
       const email = (await resolveTaskEmail(ctx.caller)) ?? ctx.caller?.entra_email;
-      return done(await dispatchPrioritize(email, args));
+      return done(await dispatchPrioritize(email, args, ctx.timeZone));
     }
     if (name === "schedule_reminder") {
       const { dispatchScheduleReminder } = await import("../tasks/reminders");

@@ -2228,7 +2228,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               const email =
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
-              const out = await dispatchPrioritize(email, c.arguments);
+              const out = await dispatchPrioritize(email, c.arguments, data.timeZone);
               // Record it like every other tool (this was the ONE tool missing recordToolUse, which is
               // why it never showed in the tool trace / UAT even though it ran).
               let ok = true, detail = "";
@@ -2841,6 +2841,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                     data.caller?.entra_email,
                   args as Record<string, unknown>,
+                  data.timeZone,
                 ),
             });
           }
