@@ -915,3 +915,59 @@ it); away-push reaching the phone is by-design (proven send_push path) but not s
 ## Known issues
 - Day-plan TIMEZONE wrong (Iris scheduled off-tz). Diagnosed, unfixed.
 - create_huddle_task dedup / quota surfacing / file-search fix: deployed, UNVERIFIED.
+
+### ACT-huddle-17: VOICE/CEREMONY MASTER OPEN-ITEMS (compiled 2026-08-01) — single source of truth, nothing drops
+Compiled at the user's request after items kept getting "mentioned/designed but dropped." Do NOT mark any
+line done without live user confirmation OR a DB/query proof; keep this list current every session.
+
+## A. OPEN BUGS — diagnosed/found, NOT fixed (code proof of presence noted)
+A1. **Mic goes deaf after ONE barge (the user's ORIGINAL report: "can't hear me after using the mic once").**
+    Root cause CONFIRMED: `useCeremonyVoice.ts:380` `dc.onmessage = (e)=>{ if (genRef.current !== gen) return; ...}`
+    guards on the PLAYBACK gen counter, which bargeFreeze(233)/speakInterjection/resumeFromFreeze bump every
+    barge → after barge #1, genRef!=gen forever → the Realtime data-channel handler drops ALL further
+    speech_started/transcription events → mic dead. FIX: dedicated connGen ref for the onmessage staleness
+    guard (bumped only on startListening/stopListening), separate from playback genRef. NOT FIXED. I diagnosed
+    this then dropped it — highest priority.
+A2. **Transcript completeness — only the FIRST batch persists.** `chat.ceremony_transcript` proved to hold agent
+    rows (gap closed) but a full run wrote only 2 rows (Terry's opener); no barge/answer/later/user rows. Flush
+    stops after the first ~1s debounce. NOT FIXED.
+A3. **"remind me" intent misread.** Probe #3 found: "Iris, remind me what Sam said…" → Iris SET a reminder and
+    Sam asked "what time?" instead of just recalling. Colloquial "remind me" mis-parsed as a schedule command.
+    NOT FIXED.
+A4. **Re-speak loop on resume (broken-record).** `resumeFromFreeze` restarts the interrupted SENTENCE from its
+    start; user's live transcript shows the same "…deferred 108 times" line 3×. Should resume from the NEXT
+    sentence / not restart. NOT FIXED (also a decision — see B3).
+A5. **Old-chat bleed into ceremony opening.** Launching the meeting from a chat seeds the ceremony with the prior
+    chat's tail (Iris "You're welcome!", Terry "the uploaded files…" BEFORE the standup starts). Confirmed via 2
+    screenshots. NOT FIXED (explicitly deferred).
+
+## B. DECISIONS NEEDED FROM USER (product/UX forks — I will not guess)
+B1. **Chat-tab hides the barge box.** Compose box + "cut in any time" hint live under a "Chat" tab; default is
+    Transcript, so cutting into a live ceremony needs a tab switch. Surface it in the Transcript view? (from a
+    concurrent "transcript-fix" merge.)
+B2. **Ownership routing on task-status.** "Sam, change the task" routes to Tess (task-status owner), not Sam.
+    Arguably correct, but the addressed agent didn't act. Desired, or should the addressed agent do it?
+B3. **Resume behavior.** Re-speak the interrupted sentence (current) vs continue from the NEXT sentence (no
+    repeat). Ties to A4.
+B4. **file_search on the 4 agents with real vector stores** (charleston, elle, finn, cam) — disable to match
+    journey's snappier feel? (concurrent-session finding; adds latency + "uploaded files" narration.)
+
+## C. VERIFICATION OWED (code shipped, NOT proven to our standard / NOT user-confirmed live)
+C1. **Probe #1 hardened** — re-run with journey ENABLED + `Test-` tasks and confirm the ACTUAL task status flips
+    in the DB (current ORIENTED grade is verbal-only; no real write happened).
+C2. **Transcript read-back UI** — server fns exist (getCeremonyTranscript/listCeremonyRuns) but NO UI renders
+    them, so the USER still can't scroll back a session in-app (only via azure-pg-query). Gap for "review a session."
+C3. **Live user confirmation** owed for everything shipped-but-auto-verified-only: barge routes to the addressed
+    agent ("hey terry"→Terry); resume-and-finish; STT accuracy ("Sam" no longer "Damn"); semantic_vad turn-taking.
+
+## D. DONE + DEPLOYED (settled — do NOT re-open/re-litigate)
+D1. OpenAI-Realtime + ElevenLabs finding recorded in eds CLAUDE.md (propagated) + Huddle & Journey memory.
+D2. Tavily-fallback workflow fixed (YAML) + secret access → verified HTTP 200; CLAUDE.md note corrected.
+D3. Ceremony barge routes through routeMessageLLM + ceremony context (auto-verified live: Terry answers, ctxAware,
+    quotaFallback:false) — pending C3 user confirm.
+D4. `chat.ceremony_transcript` table + email-scoped save/get/list fns + client fire-and-forget wiring (agent rows
+    proven in DB) — completeness A2 still open.
+D5. STT whisper-1 → gpt-4o-transcribe (ceremony realtime + ephemeral-key fn) — pending C3 user confirm.
+D6. Kickoff trigger no longer written as a user memory chunk (gated on router.ceremonyMode).
+D7. Multi-turn conversational-quality harness (e2e/conversational-quality.mjs + conversational-quality.yml) — live,
+    graded (#3 RECALLED, #1 ORIENTED), reusable.
