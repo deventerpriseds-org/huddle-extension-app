@@ -159,3 +159,62 @@ realtime reply mode is flag-gated and reversible to the ElevenLabs/Responses pat
 - Live: the user talks to Flex and hears a reply start in <1s; asks Iris for the schedule in voice and
   gets the SAME answer as text chat (same-brain, tools work). Only THEN mark done.
 ```
+
+---
+
+## Acceptance Criteria (independent author, 2026-08-01) — build spec
+Observation channels: DIAG = GH-runner headless diagnostic (extend `voice-1on1-diagnostic.e2e.mjs`;
+CCR egress can't reach the SWA); PG = `azure-pg-query.yml`; CODE = static trace; HUMAN = live retest only.
+
+**A. Latency & audio**
+1. No-tool reply: first audio-delta arrives ≤1.5s after end-of-turn. (DIAG/HUMAN)
+2. Audio streams as ≥2 delta events then a done (not one blob). (DIAG)
+3. Remote WebRTC track UNMUTED (enabled=true) and inbound-rtp bytesReceived>0 while speaking. (DIAG getStats)
+4. Tool reply: audio begins after the tool round-trip, still streams. (DIAG/HUMAN)
+
+**B. Same brain — instructions & memory**
+5. Mint's `instructions` contains the agent's verbatim snapshot prompt (not thin). (CODE/DIAG)
+6. Auto-retrieved RAG memory (same searchChunks/embed as text) present in session instructions. (CODE/HUMAN)
+7. Voice & text call the SAME `assembleAgentInstructions` builder. (CODE)
+
+**C. Same brain — TOOL PARITY (hard requirement)**
+8. Minted `tools` == text `mergedTools` names (minus file_search KB + Terry grooming). (CODE)
+9. Flex's minted tools == Iris's minted tools minus KB/grooming (full base suite). (CODE)
+10. Same tool call → identical payload for Flex-voice, Iris-voice, Iris-text. (CODE/DIAG/PG)
+11. Mid-call function_call → shared executor → function_call_output → response.create → spoken answer uses REAL data. (DIAG/HUMAN)
+
+**D. Shared executor not a fork**
+12. Both text engine & realtime-tool fn call one `executeAgentTool(name,args,ctx)`. (CODE)
+13. Text turn behavior unchanged pre/post refactor. (CODE/PG)
+14. Realtime tool fn enforces caller email-scope (A never sees B's data). (CODE, adversarial)
+
+**E. Transcript unification**
+15. Both user utterance + agent reply written to `dm-<agent>` store, once each. (PG/DIAG)
+16. Realtime mode SKIPS the old enqueueHuddleTurn+poll → no duplicate reply row. (CODE/PG)
+
+**F. Barge / echo / turn-taking**
+17. User speech mid-reply → native interrupt cancels; audio stops promptly. (DIAG/HUMAN)
+18. Agent doesn't self-barge on its own speaker output (echo guard). (DIAG/HUMAN-real-speakerphone)
+19. Natural end-of-turn: doesn't talk over user, doesn't idle. (HUMAN; DIAG confirms config accepted)
+20. semantic_vad eagerness / turn-timeout is a NAMED tunable, not a buried literal. (CODE)
+
+**G. Voice identity**
+21. Per-agent OpenAI voice is DATA-driven (agents.ts), audibly distinct. (CODE/DIAG/HUMAN)
+
+**H. Regression guards**
+22. GROUP ceremony voice unchanged (ears-only, track muted, engine+ElevenLabs). (CODE/DIAG)
+23. `getRealtimeSession` with NO agentId → today's minimal ears-only mint. (CODE/DIAG)
+24. Plain text chat turn unchanged. (CODE/PG)
+25. Flag revert to ElevenLabs/Responses restores the old path (reversible). (CODE/DIAG)
+26. NO new org secret. (CODE/workflow review)
+
+**I. Build**
+27. tsc --noEmit zero errors. 28. production build succeeds.
+
+**J. Error/degradation**
+29. Mint failure → visible error, never a silent dead mic. (DIAG)
+30. 429/quota surfaced, not swallowed. (DIAG/CODE)
+31. Data channel dies → visible error/disconnected state, not stuck "connected". (DIAG)
+
+**HUMAN-only (mechanism-proof ≠ live confirmation):** AC-1,4,11,17 (real speech), 18 (real speakerphone),
+19 (turn feel), 21 (voices sound acceptable). Mark PARTIAL until the user retests live.
