@@ -40,6 +40,10 @@ const ctx = await browser.newContext({ permissions: ["microphone"] });
 const page = await ctx.newPage();
 page.on("console", (m) => console.log(`  [page:${m.type()}] ${m.text()}`));
 page.on("pageerror", (e) => console.log(`  [pageerror] ${e.message}`));
+// WebRTC getUserMedia/mediaDevices require a SECURE CONTEXT — about:blank is not one. Load a plain
+// https page (no CSP) so navigator.mediaDevices exists and our injected fetch to api.openai.com is
+// unrestricted. (The prior run failed here: "Cannot read properties of undefined (getUserMedia)".)
+await page.goto("https://example.com", { waitUntil: "domcontentloaded", timeout: 30_000 });
 
 // Everything runs inside the page (WebRTC needs a browser). Returns a structured verdict object.
 const result = await page.evaluate(
