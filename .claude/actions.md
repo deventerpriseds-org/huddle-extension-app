@@ -1166,14 +1166,19 @@ scene directive shipped but did NOT move P-REPEAT (prose advisory; the real brok
   genRef race (answer's speakInterjection bumps genRef) — user HEARS it, may not SEE it.
   - [OPEN, cosmetic] V-ACK filler transcript row lost to genRef race — voiced but not always rendered.
     Follow-on: persist/guard the ack row so it shows. Non-blocking (audible behavior works).
-- [DONE, deployed — verifying] **Phantom-garble fix** (user report: background noise/screenshot ->
-  gargled text -> phantom barge). Root cause: ceremony Realtime session.update had NO `language` + NO
-  `prompt` on transcription -> gpt-4o-transcribe hallucinated words from noise. Reproduced live
-  (resume-ack run 1 = 3 spurious [barge] decisions from the fake audio device). Fix (useCeremonyVoice,
-  journey-parity + native lever, commit d44789a): noise_reduction near_field + transcription
-  {gpt-4o-mini-transcribe, language en, standup prompt} + semantic_vad eagerness medium. Verifier:
-  `ceremony-noise-robustness.yml` drives a stand-up with the live noise mic, types nothing, asserts 0
-  phantom barges / 0 injected transcripts (baseline 3). Deployed via deploy-swa on main; running verifier.
+- [DONE, LIVE-VERIFIED] **Phantom-garble fix** (user report: background noise/screenshot -> gargled
+  text -> phantom barge). Root cause: ceremony Realtime session.update had NO `language` on
+  transcription -> gpt-4o-transcribe hallucinated words from noise. Reproduced live (resume-ack run 1 =
+  3 spurious [barge] decisions from the fake audio device). Fix in TWO iterations, each verified by
+  `ceremony-noise-robustness.yml` (live noise mic, no typed input, count phantom barges):
+  1. d44789a: noise_reduction near_field + transcription {mini-transcribe, language en, +prompt} +
+     semantic_vad eagerness medium -> speech_started 3->1, BUT the `prompt` was ECHOED verbatim as a
+     phantom barge (run 30718004622). Whisper-style models regurgitate their prompt on near-silence;
+     journey tolerates it (brain-mode, create_response:true) but this ceremony is ear-only so every
+     transcript IS a barge.
+  2. f5a306b: DROP the prompt (keep language en + noise_reduction + mini + eagerness medium).
+  **FINAL PASS (run 30718313943): speech_started 0, transcripts [], injected [], phantom barges 0**
+  over 40s live noise. Deployed to prod (deploy-swa on main). Awaiting user's live re-test to close.
   - [OPEN, follow-on] 1:1 voice hooks (useVoiceCallRealtime*) mint their own Realtime session — check
     if they share the no-language garble gap; separate surface from the stand-up the user reported.
 EXTERNAL / NOT CODE: get_calendar_events fails = missing Calendars.Read admin consent (surfaced by D-FALLBACK).
