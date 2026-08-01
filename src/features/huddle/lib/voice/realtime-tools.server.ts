@@ -51,7 +51,7 @@ const GET_CALENDAR_EVENTS_TOOL = {
   type: "function" as const,
   name: "get_calendar_events",
   description:
-    "Read the user's Microsoft/Outlook calendar for a day or range and return the actual events. Use this whenever the user asks what's on their calendar/schedule/agenda, or whether they're free/busy at a time. Reads REAL calendar data — never answer calendar questions from memory. Dates are ISO (YYYY-MM-DD or full ISO). Returns Microsoft/Outlook events; a Google-only calendar won't appear.",
+    "Read the user's raw Microsoft/Outlook calendar EVENTS (meetings, appointments) for a day or range, or whether they're free/busy at a specific time. Reads REAL calendar data — never answer from memory. Use this ONLY when the user explicitly asks about their Outlook/Microsoft calendar, a specific meeting/appointment, or free/busy at a time. Do NOT use it for \"what's on my schedule / agenda / day / plate\", tasks, priorities, or backlog — that is the user's COMBINED nightly schedule (tasks + calendar), which comes from the `prioritize` tool (view 'scheduled'), the source of truth. Dates are ISO (YYYY-MM-DD or full ISO). Returns Microsoft/Outlook events; a Google-only calendar won't appear.",
   parameters: {
     type: "object",
     additionalProperties: false,
