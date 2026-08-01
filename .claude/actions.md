@@ -1040,3 +1040,25 @@ LEFTOVER: verifier created remote branch `verify/forcers-ceremony-check` (inert 
 STILL OPEN: B2 code-guard (assigned_agent, Iris exempt) — next per user's "deploy now, B2 after". C3 user live confirmation: mic multi-barge, client-flush, ceremony opening in-browser. eds-claude-skills PR #13 (gate v4) awaiting review (no CI on that repo).
 
 ### A1 mic-deaf — USER-CONFIRMED LIVE (2026-08-01): user reports "the mic survives". Original bug resolved + confirmed in their environment. (Transcript client-flush + ceremony opening still pending user live confirm.)
+
+### ACT-huddle-19: REALIGNED PRIORITY — ceremony CONVERSATIONAL REALISM (2026-08-01, user redirect)
+User: the plumbing list (A1-A5/forcers/B2) was NOT the priority. The stand-up must be a NATURAL GROUP
+CONVERSATION — agents speaking for THEMSELVES and reacting to each other — the thing described
+repeatedly + documented in docs/plan-ceremony-conversational-realism.md. Key corrections:
+- "Terry reading for them" (@iris no activity, @finn no activity) = narrateDirective (narrate mode) =
+  REGRESSION/disconnect; it only showed in my TESTING (scheduled/headless run-ceremony path). The REAL
+  stand-up is round-robin: each agent gets ownerDirective and speaks for itself. My verification via the
+  scheduled path gave a FALSE picture — verify the INTERACTIVE path.
+- Three documented realism requirements (their words, said several times):
+  1. Natural group conversation / agents react to each other — cross-talk was gated off + directive said
+     "do NOT comment on other lanes". → DONE (branch, not deployed/validated): commit 16614d1 relaxes the
+     gate (ceremonyPriorReact = prior speaker's line) + rewords ownerDirective. Needs Stage-1 live (2 agents)
+     + user feel-test per the plan's staged validation. NOT claimed working.
+  2. Mid-utterance barge that STOPS the agent mid-sentence and RESUMES THE SAME agent in place (not skip to
+     next). 30 cold-read ACs already written (see plan doc). NOT built. Plan says get user go-ahead (scope).
+  3. Trailing transcript synced to audio via ElevenLabs /with-timestamps (text trails the voice, not the
+     full line appearing first = "reading a recording"). Part of the 30 ACs. NOT built.
+SEQUENCE: (1) deploy cross-talk relaxation → user feels it in a real stand-up; (2) then mid-utterance
+resume-in-place + trailing transcript (reuse the 30 ACs), staged 2→3→full, live-verified with real
+screenshots (user rejected server-fn-only "verified" before). A1(mic) is user-confirmed and was real
+barge-enabling plumbing; the rest of the plumbing is deployed but was NOT the experience.
