@@ -32,15 +32,6 @@ function jaccard(a: string, b: string): number {
   return inter / (ta.size + tb.size - inter);
 }
 
-// Pull COMPLETE sentences out of a streaming buffer; return them + the trailing partial (not yet spoken).
-function drainSentences(buf: string): { sentences: string[]; rest: string } {
-  const parts = buf.match(/[^.!?]*[.!?]+/g);
-  if (!parts) return { sentences: [], rest: buf };
-  const consumed = parts.join("");
-  const sentences = parts.map((p) => p.trim()).filter(Boolean);
-  return { sentences, rest: buf.slice(consumed.length) };
-}
-
 export type VoiceCallRealtimeSpeakController = VoiceCallController & {
   sendText: (agentId: AgentId, text: string) => Promise<void>;
 };
@@ -247,28 +238,26 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
           let msg: { type: string; [k: string]: unknown };
           try { msg = JSON.parse(e.data as string); } catch { return; }
           switch (msg.type) {
-            // Streaming reply TEXT → speak each complete sentence via EL TTS as it arrives.
+            // Accumulate the streamed reply text (do NOT synth per sentence — that caused the choppy
+            // ~1.6s inter-sentence pauses). We synth the WHOLE reply ONCE on .done for smooth,
+            // continuous audio. Per-sentence chunking existed for sentence-boundary barge; barge is now
+            // native (interrupt_response), so it's no longer needed.
             case "response.output_text.delta":
             case "response.text.delta": {
               const delta = (msg.delta as string) ?? "";
-              if (!delta || !agentIdRef.current) break;
-              sentenceBufRef.current += delta;
-              const { sentences, rest } = drainSentences(sentenceBufRef.current);
-              sentenceBufRef.current = rest;
-              for (const s of sentences) void speakSentence(s, agentIdRef.current, gen);
+              if (delta) sentenceBufRef.current += delta;
               break;
             }
             case "response.output_text.done":
             case "response.text.done": {
-              const full = ((msg.text as string) ?? "").trim();
-              // Speak any trailing partial sentence, then persist the full reply once.
-              const tail = sentenceBufRef.current.trim();
+              const full = (((msg.text as string) ?? "").trim()) || sentenceBufRef.current.trim();
               sentenceBufRef.current = "";
-              if (tail && agentIdRef.current) void speakSentence(tail, agentIdRef.current, gen);
               if (full && agentIdRef.current) {
                 lastAgentTextRef.current = full;
                 setCaptions((c) => [...c.slice(-40), { role: "agent", text: full }]);
                 persist("agent", agentIdRef.current, full);
+                // ONE synthesis for the whole (short) reply → smooth, gapless playback.
+                void speakSentence(full, agentIdRef.current, gen);
               }
               break;
             }
