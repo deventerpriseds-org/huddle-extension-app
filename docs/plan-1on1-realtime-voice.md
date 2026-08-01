@@ -47,9 +47,23 @@ platform (prompt + webhook tools + a generic non-snapshot LLM) — a second brai
 2. **Echo guard** — boost's Call.jsx mutes the mic / similarity-filters the user transcript against
    recent agent text while the agent speaks (kills speakerphone self-interruption). Huddle lacks this;
    add it (helps the "he ignores me / false barge" class of issues too).
-3. **ConvAI as a fast-path option for TOOL-LESS agents** — Flex has `tools:[]`, so Flex could run on
-   the ~15-line managed ConvAI path with zero same-brain loss. Keep as an option/fallback, not primary
-   (mixing two engines adds surface); revisit if the Realtime-with-tools build proves too heavy.
+3. ~~ConvAI fast-path for tool-less agents~~ **DROPPED (user directive 2026-08-01): there are NO
+   tool-less agents. Flex and EVERY agent must have the full tool set + everything else Iris has.**
+   So a single, uniform OpenAI-Realtime path for all agents — no per-agent engine split.
+
+## HARD REQUIREMENT — full tool parity for EVERY agent (user: "flex and all agents should have tools
+## and everything else iris has")
+Ground-truth: `runAgentTurn` already builds `mergedTools` (huddle.functions.ts:1916) UNCONDITIONALLY
+for every agent — create_huddle_task, artifacts, delegate, flag-blocker, confirm-intent, reminders,
+**prioritize**, + RAG memory + journey-proxy tools (calendar/schedule/send_push/…) + web search. The
+only per-agent variance is `snapshotTools` (file_search KNOWLEDGE BASES — Flex has none; that's data,
+not a capability tier) and grooming (Terry-exclusive by the ownership model). So "everything Iris has"
+= this base suite, which every agent already gets in TEXT.
+**The realtime voice session MUST inject this SAME per-agent `mergedTools` assembly** (via the extracted
+shared builder) so a voice reply from Flex has identical tool access to a voice reply from Iris. Verify
+parity explicitly: the SAME tool call succeeds for Flex-by-voice, Iris-by-voice, and Iris-by-text.
+(File_search KBs and Terry's grooming stay as-is — deliberate data/ownership, not a parity gap. If the
+user later wants Flex to also have a knowledge base, that's a separate additive data change.)
 
 ## The fix — journey's PROVEN Realtime pattern + boost's turn-tuning & echo-guard insights.
 ## Reference: journey `RealtimeVoiceAssistant` + `generate-realtime-token`; boost `Call.jsx` +
