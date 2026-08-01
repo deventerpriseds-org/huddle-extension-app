@@ -100,15 +100,18 @@ async function callFn(id, payload) {
   return d?.result ?? d;
 }
 
-function buildAgents() {
+// Per-agent config overrides let a specific probe turn ON a tool for ONE agent (e.g. webSearch for
+// P2-TAVILY) without changing the safe default (everything off, no board writes) for other probes.
+function buildAgents(overrides = {}) {
   const agents = {};
   for (const id of MEMBERS) {
     agents[id] = {
       backend: "openai",
       model: AGENT_MODEL,
       rag: { store: "azure", chunks: false, triples: false, fileSearch: false, sharing: "shared" },
-      journey: { enabled: false }, // never write to the real board
+      journey: { enabled: false }, // never write to the real board (default)
       webSearch: false,
+      ...(overrides[id] || {}),
     };
   }
   return agents;
@@ -132,7 +135,7 @@ function newConversation() {
 }
 
 // Send one user turn against the live group huddle; thread the reply back into history.
-async function sendTurn(ids, conv, text) {
+async function sendTurn(ids, conv, text, opts = {}) {
   const userMsg = {
     id: `q-${nowTs()}`,
     huddleId: HUDDLE_ID,
@@ -147,7 +150,7 @@ async function sendTurn(ids, conv, text) {
     members: MEMBERS,
     history: conv.history.slice(-30), // schema max 40; mirror HuddleView's recent-window threading
     router: ROUTER,
-    agents: buildAgents(),
+    agents: buildAgents(opts.agentsOverride || {}),
     timeZone: "America/New_York",
     caller: CALLER,
   };
@@ -482,6 +485,36 @@ async function probeRepeat(ids) {
   return { probe: "P-REPEAT-no-broken-record", grade: grade.grade, why: grade.why, inconclusive: grade.grade === "INCONCLUSIVE", maxWordOverlap: Number(maxSim.toFixed(3)), replies: texts, responded, decision_reasons: reasonsOf(conv), diag: diag(conv) };
 }
 
+// =================================================================================================
+// PROBE P2-TAVILY — REAL-TIME INFO VIA WEB SEARCH (must invoke the tool, not hedge/stale-guess)
+// Tier C: enables webSearch for ONE agent (read-only, no board write) and checks the toolUses channel.
+// =================================================================================================
+async function probeTavily(ids) {
+  console.log("\n\n========== PROBE P2-TAVILY — REAL-TIME INFO VIA WEB SEARCH ==========");
+  const conv = newConversation();
+  const t1 = await sendTurn(ids, conv,
+    "Iris, look this up on the web (don't answer from memory): what's one notable AI or tech news item from THIS week? Cite what you found.",
+    { agentsOverride: { "iris-chase": { webSearch: true } } });
+  const i1 = replyFrom(t1, "iris-chase");
+  const webCall = (t1.toolUses || []).find((t) => /web|tavily|search/i.test(String(t.tool || "")));
+  const invoked = !!webCall && webCall.ok !== false;
+  let grade;
+  if (fellBack(conv)) grade = { grade: "INCONCLUSIVE", why: "router fallback on a turn — not graded" };
+  else if (!i1.addressedResponded) grade = { grade: "INCONCLUSIVE", why: "iris-chase did not respond — cannot assess tool use" };
+  else if (!webCall) grade = { grade: "NO_TOOL", why: "no web_search/tavily invocation in toolUses — agent hedged or answered from stale general knowledge" };
+  else if (webCall.ok === false) grade = { grade: "TOOL_FAILED", why: `web_search invoked but returned ok:false (${webCall.summary ?? "no detail"}) — likely TAVILY_API_KEY not set` };
+  else {
+    grade = await judge(
+      "You grade whether a reply USES live web-search results (specific, current, sourced facts) or is a vague/stale answer. " +
+      "Grade USED if it cites a specific, plausibly-recent item as if pulled from the web. Grade STALE if it's generic, hedges, or clearly from general knowledge. " +
+      "Respond as JSON: {\"grade\":\"USED|STALE\",\"why\":\"one line\"}.",
+      `Agent reply (was asked to search the web):\n"""${i1.text}"""`);
+  }
+  console.log(`  web_search invoked: ${invoked}${webCall ? ` (ok=${webCall.ok})` : ""}`);
+  console.log(`GRADE: ${grade.grade} — ${grade.why}`);
+  return { probe: "P2-TAVILY-realtime-web", grade: grade.grade, why: grade.why, inconclusive: grade.grade === "INCONCLUSIVE", webInvoked: invoked, agent_reply: i1.text, addressedResponded: i1.addressedResponded, decision_reasons: reasonsOf(conv), diag: diag(conv) };
+}
+
 // ---- main -----------------------------------------------------------------------------------
 const ids = loadIds();
 console.log(`Base: ${BASE}`);
@@ -500,6 +533,7 @@ const results = {
   pGround: await probeGround(ids),
   pAccount: await probeAccount(ids),
   pRepeat: await probeRepeat(ids),
+  pTavily: await probeTavily(ids),
 };
 
 const all = Object.values(results);
