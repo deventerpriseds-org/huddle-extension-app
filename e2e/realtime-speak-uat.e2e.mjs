@@ -1,7 +1,9 @@
 // UAT — Approach A / Fast (A): OpenAI Realtime SPEAKS the 1:1 agent reply directly over WebRTC.
 // Runs on a GH runner (open internet, fake mic) because the CCR session egress can't reach the
 // deployed SWA or api.openai.com realtime. Drives the DEPLOYED app exactly as a user would:
-//   1. seed localStorage["huddle-voice-engine"] = realtime-speak, then RELOAD (hash nav won't re-init)
+//   1. pre-seed localStorage["huddle-voice-engine"] = realtime-speak via addInitScript (BEFORE app
+//      init, so zustand hydrates it on the first load) — no reload, because uat_token + ?huddle are
+//      single-use and a reload would drop them onto the login gate
 //   2. click "Start voice conversation" → the 1:1 voice meeting auto-connects (getRealtimeSession
 //      mints a SPEAKING session → api.openai.com/v1/realtime SDP 201 → WebRTC up)
 //   3. open the Chat tab, TYPE the agent's daily ask (routes through the hook's sendText → dc.send)
@@ -133,6 +135,14 @@ async function runAgent(agentSpec, engine) {
   });
   await ctx.clearCookies();
   await ctx.addInitScript(INIT_SCRIPT);
+  // Seed the voice engine BEFORE any app code runs, so zustand's persist store hydrates realtime-speak
+  // on the FIRST load. We must NOT reload to apply the seed: the uat_token bypass and the `huddle`
+  // deep-link are BOTH single-use (entra-auth strips uat_token, HuddleApp strips ?huddle, each via
+  // history.replaceState on first load) — a reload lands on the login gate with no deep-linked huddle,
+  // so the composer + "Start voice conversation" button never render. Pre-seed + single goto instead.
+  await ctx.addInitScript((mode) => {
+    try { localStorage.setItem("huddle-voice-engine", JSON.stringify({ state: { mode }, version: 0 })); } catch {}
+  }, engine);
   const page = await ctx.newPage();
 
   const consoleLines = [];
@@ -169,23 +179,24 @@ async function runAgent(agentSpec, engine) {
   };
 
   try {
-    // 1) Load, seed the engine, verify, reload.
+    // 1) Single goto — pre-seeded engine hydrates on first load; uat_token + huddle deep-link consumed once.
     await page.goto(`${BASE_URL}/?uat_token=${UAT_TOKEN}&huddle=dm-${id}`, { waitUntil: "networkidle", timeout: 45_000 });
-    await page.waitForTimeout(1200);
-    await page.evaluate((mode) => {
-      localStorage.setItem("huddle-voice-engine", JSON.stringify({ state: { mode }, version: 0 }));
-    }, engine);
-    const seeded = await page.evaluate(() => localStorage.getItem("huddle-voice-engine"));
-    console.log(`  seed huddle-voice-engine = ${seeded}`);
-    await page.reload({ waitUntil: "networkidle", timeout: 45_000 });
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(1800);
     const seededAfter = await page.evaluate(() => localStorage.getItem("huddle-voice-engine"));
-    console.log(`  after reload huddle-voice-engine = ${seededAfter}`);
+    console.log(`  huddle-voice-engine (read back) = ${seededAfter}`);
     let p = await shot(page, `${engine}-${id}-01-loaded`); if (p) { shotCount++; out.shots.push(p); }
 
-    // 2) Start the voice call.
+    // 2) Start the voice call — wait for the composer's voice button to render.
     const voiceBtn = page.locator('button[aria-label="Start voice conversation"]').first();
-    if ((await voiceBtn.count()) === 0) throw new Error('"Start voice conversation" button not found');
+    try {
+      await voiceBtn.waitFor({ state: "visible", timeout: 20_000 });
+    } catch {
+      const labels = await page.evaluate(() =>
+        Array.from(document.querySelectorAll("[aria-label]")).map((e) => e.getAttribute("aria-label")).slice(0, 40),
+      );
+      const body = (await page.locator("body").innerText().catch(() => "")).slice(0, 300).replace(/\s+/g, " ");
+      throw new Error(`"Start voice conversation" button not found. aria-labels=${JSON.stringify(labels)} body="${body}"`);
+    }
     await voiceBtn.click();
     console.log("  clicked Start voice conversation");
 
