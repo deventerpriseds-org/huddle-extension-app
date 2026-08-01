@@ -1113,3 +1113,10 @@ calendar could drift between channels.
 - [DONE] Behavioral UAT via new `agent-serverfn-uat.yml` (natural messages on a runner): "what's my schedule" → schedule_and_priorities (view scheduled, real item); "external Outlook calendar" → get_calendar_events.
 - [OPEN — admin action, not code] `get_calendar_events` returns **403 (Calendars.Read consent missing)** live — the "external calendar" path can't return data until an admin grants it. Combined schedule via schedule_and_priorities is unaffected.
 - [OPEN — user live retest] Confirm in a real Iris/Flex 1:1 (chat + voice).
+
+### ACT-huddle-13 (identity): Iris read the WRONG account (shadow profile) — real root cause of "bad schedule"
+**Root cause (DB-ground-truthed):** journey `resolveUserId` matched a DUPLICATE `von.ellis@` profile (created today 10:26) before the `user_email_aliases` entry that maps von.ellis@ → the real dev@ board (234 tasks). So agents read the empty/polluted shadow account.
+- [DONE] Durable guard: journey huddle-proxy `resolveUserId` now checks aliases BEFORE profiles.email (deployed, run 30713082429). A shadow profile can no longer hijack an aliased identity.
+- [DONE] Data cleanup: deleted my 3 "Call the dentist" test-pollution tasks + the duplicate von.ellis@ profile (4132); alias + real dev@ board + auth left intact.
+- [DONE] Redeployed Huddle (cleared identity cache). LIVE-VERIFIED: schedule_and_priorities now returns the real dev@ board (count=10 scheduled, real tasks) for a von.ellis@ caller.
+- [OPEN — pre-existing, newly visible] schedule_and_priorities shows times in RAW UTC (10 AM ET task rendered "2 PM") and over-trims (2 of 6 shown). Fix = localize start_time to caller timeZone + surface all scheduled items. Awaiting user go-ahead.
