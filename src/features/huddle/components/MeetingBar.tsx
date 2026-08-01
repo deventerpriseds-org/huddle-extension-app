@@ -495,25 +495,52 @@ function MeetingRoom({
       // getTurnUpdates poll) so the answer lands immediately over the frozen speaker. interjections
       // off + soloOnCoverage keep the fan-out to essentially the primary — no pile-on, no stray side
       // effects during a barge. The 30s race guarantees the finally() below always unparks emit().
-      const res = await Promise.race([
-        sendHuddleMessage({
-          data: {
-            text,
-            huddleId: huddleIdRef.current,
-            scope: "group" as const,
-            members,
-            history: buildCeremonyHistory(transcriptRef.current, huddleIdRef.current, text),
-            ceremonyBarge: true,
-            router: { ...cfg.router, interjections: false, soloOnCoverage: true },
-            agents: cfg.agents,
-            caller: callerRef.current,
-            timeZone: tzRef.current,
-          },
-        }),
-        new Promise<never>((_, reject) =>
-          window.setTimeout(() => reject(new Error("barge answer timed out")), 30_000),
-        ),
-      ]);
+      // V-ACK — no dead air. A barge answer can take a few seconds; if it's slow the user is left
+      // wondering "are you there?". If the reply hasn't landed within ~700ms, voice a short natural
+      // acknowledgment ("one moment, let me take a look") so they know they were heard. A FAST answer
+      // (<700ms) skips the filler — quick replies get no precursor. The real answer's speakInterjection
+      // bumps the playback gen and supersedes the filler cleanly; the filler never touches freezeRef,
+      // so resume still returns to the interrupted speaker. Reuse the frozen speaker as the ack voice.
+      const ackVoice = (interrupted as AgentId) || members[0];
+      const ackFillers = [
+        "One moment — let me take a look.",
+        "Sure, checking now.",
+        "Let me pull that up.",
+        "On it — one sec.",
+        "Give me a moment.",
+      ];
+      const ackTimer = window.setTimeout(() => {
+        if (ackVoice) {
+          const filler = ackFillers[Math.floor(Math.random() * ackFillers.length)];
+          void ceremonyVoiceRef.current.speakInterjection(ackVoice, filler, {
+            onSentenceStart: (s) => addMeetingTurns([{ agentId: ackVoice, text: s }]),
+          });
+        }
+      }, 700);
+      let res;
+      try {
+        res = await Promise.race([
+          sendHuddleMessage({
+            data: {
+              text,
+              huddleId: huddleIdRef.current,
+              scope: "group" as const,
+              members,
+              history: buildCeremonyHistory(transcriptRef.current, huddleIdRef.current, text),
+              ceremonyBarge: true,
+              router: { ...cfg.router, interjections: false, soloOnCoverage: true },
+              agents: cfg.agents,
+              caller: callerRef.current,
+              timeZone: tzRef.current,
+            },
+          }),
+          new Promise<never>((_, reject) =>
+            window.setTimeout(() => reject(new Error("barge answer timed out")), 30_000),
+          ),
+        ]);
+      } finally {
+        window.clearTimeout(ackTimer); // answer arrived (or errored) — no filler needed / stop the pending one
+      }
       // Surface the routing decision for verification (AC-13): who the router picked and why.
       console.debug(
         "[barge] decision",

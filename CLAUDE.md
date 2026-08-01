@@ -1,5 +1,19 @@
 # Huddle — working rules
 
+## Confirm the plan before building or deploying (hard rule — the user is firm on this)
+A small/specific ask is NOT license to expand it into a large build. When the user asks for one thing
+(e.g. "use the quality harness", "look at X"), do NOT turn it into a multi-feature build-and-ship
+without first stating the plan + scope and getting an **explicit go-ahead**. Mandatory before: anything
+that **deploys or changes live behavior**, multi-file/multi-feature building, or anything hard to
+reverse. Bias-to-action covers only reversible, non-destructive steps (reading, a read-only query) —
+not building and deploying changes the user didn't ask for. "I said I'd start and then did" is not
+confirmation. When in doubt, summarize what you're about to do and wait.
+   *(2026-08-01: asked to USE the conversational-quality harness, the agent instead built AND deployed
+   to prod — across many turns, unconfirmed — a mic-deaf fix, transcript persistence, forcer removal, a
+   task-ownership guard, and a ceremony cross-talk change. "I don't know why you just pushed ahead and
+   did this without confirming with me." Revert was then too risky (interleaved with another live
+   session), so the cost was permanent. Confirm first.)*
+
 ## Deploy funnel: ALWAYS deploy `main`, never a feature branch (hard rule — races corrupted prod twice)
 
 `deploy-swa.yml` is `workflow_dispatch`-only against whatever `ref` you pass it, and prod is simply
