@@ -34,6 +34,13 @@ const QUERY_RE: RegExp[] = [
   /\b(who (handles?|owns?|does?|runs?|manages?|takes? care of))\b/i,
   /^(how (does?|do|can|is|are|would|could|will|should|much|many))\b/i,
   /^(any (updates?|news|progress|info|questions?|issues?|blockers?))\b/i,
+  // RECALL is a query, not a command. "remind me / tell me / catch me up on WHAT we decided / WHO owns
+  // X / OF the name" asks the agent to surface a past fact — it is NOT a schedule-a-reminder request.
+  // Classifying it here (the ONE intent system) is what lets the reminder-force respect it, instead of
+  // a bespoke lookahead on the reminder regex. A genuine "remind me TO call at 5" has no interrogative
+  // and stays "perform".
+  /\b(remind|tell|catch|fill|update|brief)\s+me\b.*?\b(wh(?:at|o|en|ere|y|ich|om)|how)\b/i,
+  /\bremind me\s+of\b/i,
 ];
 
 // Status: user is confirming or reporting that something is already done

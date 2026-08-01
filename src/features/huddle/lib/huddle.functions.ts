@@ -1297,12 +1297,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it." +
         " NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled \"groom the backlog\" or \"assign the team\") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked." +
         " If the user states or implies a specific date (a day name, 'tomorrow', a calendar date, 'by Friday'), set the tool's `date` field — do not just leave it embedded in the title text where it can get lost." +
-        " Report the outcome honestly using exactly what the tool result gives you, in `note`/`outcome` — never invent a time or claim more certainty than that. A same-day scheduled time is provisional (the nightly planner can still move it overnight) — say something like \"I've got that for around 2:30 today\" rather than a firm commitment. A task with a due date but no start_time has no exact time yet — say the due date and that the planner will place a time, don't guess one. If the outcome says today was full and it landed elsewhere, say so plainly instead of a bare \"added it.\"" +
-        // B2: assignee-scoped status changes. Being addressed by name does not by itself grant the
-        // right to change an existing task's state — the board's ownership must stay honest. Each task
-        // carries an assignee (its `assigned_agent`, visible when you read the board). Data-driven and
-        // systematic: applies to every agent, no hardcoded names.
-        " CHANGING AN EXISTING TASK'S STATUS (mark done/in-progress, reopen, move a card, re-prioritize): do it yourself ONLY if that task is assigned to YOU (you are its assignee). If it is assigned to a different agent, that assignee makes the change — defer to them by name. If it is assigned to no one, or you are unsure who owns the board action, defer to @iris-chase, who owns the shared task board. Being addressed by name does not override this: acknowledge the ask, then route it to the assignee or the board owner instead of changing a task that isn't yours.";
+        " Report the outcome honestly using exactly what the tool result gives you, in `note`/`outcome` — never invent a time or claim more certainty than that. A same-day scheduled time is provisional (the nightly planner can still move it overnight) — say something like \"I've got that for around 2:30 today\" rather than a firm commitment. A task with a due date but no start_time has no exact time yet — say the due date and that the planner will place a time, don't guess one. If the outcome says today was full and it landed elsewhere, say so plainly instead of a bare \"added it.\"";
 
       // AUTO memory retrieval: pull the most relevant shared/global memory for THIS agent and inject
       // it into the prompt, so recall works even when the model doesn't call `search_memory`. This is
@@ -1411,14 +1406,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         /\b(add|create|make|log|track|put|place|capture|assign|todo|to-do|action item|follow[- ]?up)\b/i;
       // A reminder ("remind me in 30 min", "ping me at 3pm") is a timed nudge, NOT a backlog task —
       // route it to schedule_reminder and DON'T also force a task/web-search for the same message.
-      // "remind me" is intent-ambiguous: "remind me to call mom at 5" is a reminder, but "remind me
-      // what we decided / who owns X / of the name" is a RECALL request — forcing schedule_reminder on
-      // those set a future nudge instead of answering. The negative lookahead keeps recall phrasings
-      // (remind me what/who/when/where/why/which/whom/how/of …) out of the force, so they flow through
-      // normal answering (+ memory retrieval) instead. Genuine "remind me to …/in …/at …" still forces.
       const reminderRe =
-        /\b(remind me(?!\s+(?:wh(?:at|o|en|ere|y|ich|om)|how|of\b))|reminder|notify me|ping me|nudge me|alert me|wake me|set an alarm|alarm|message me (?:in|at|later|tonight|tomorrow)|text me (?:in|at))\b/i;
-      const forceReminder = reminderRe.test(userText);
+        /\b(remind me|reminder|notify me|ping me|nudge me|alert me|wake me|set an alarm|alarm|message me (?:in|at|later|tonight|tomorrow)|text me (?:in|at))\b/i;
+      // "remind me" is intent-ambiguous: "remind me to call mom at 5" is a schedule request, but "remind
+      // me what we decided / who owns X / of the name" is a RECALL. Rather than special-case the reminder
+      // regex, defer to the ONE semantic intent classifier (classifyTurnIntent): a recall classifies as
+      // "query", so excluding query keeps recalls out of schedule_reminder and lets them flow to normal
+      // answering + memory retrieval. Gate on !== "query" (not === "perform"): a genuine reminder is never
+      // an interrogative recall, but CAN trip a non-perform class — e.g. "notify me when it's done" reads
+      // as "status" via the embedded "it's done" — and must still force. Same principle as the
+      // ACT-huddle-3 handoff gate: intent lives in the classifier, not in per-forcer regex.
+      const forceReminder = turnIntent !== "query" && reminderRe.test(userText);
       // Only the PRIMARY responder is forced to create the task. Interjectors surface information;
       // forcing them to also create produced duplicate cards (e.g. Troy AND Iris both creating).
       const forceTaskCreation = !forceReminder && !isInterjector && createTaskRe.test(userText);
