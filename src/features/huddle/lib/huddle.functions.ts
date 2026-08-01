@@ -568,9 +568,15 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     const anyShared = ragAgents.some((a) => (a.cfg?.sharing ?? "shared") === "shared");
     const privateAgents = ragAgents.filter((a) => a.cfg?.sharing === "private").map((a) => a.id);
 
+    // A ceremony kickoff turn carries a SCRIPTED trigger phrase as `data.text` ("let's run the daily
+    // stand-up") — not a real user utterance — and is the only turn that sets `router.ceremonyMode`.
+    // Persisting it to rag_chunks polluted memory as if the user had said it, so skip the memory write
+    // for ceremony triggers. (The agent replies are still persisted normally on their own turns.)
+    const isCeremonyTrigger = !!routerCfg.ceremonyMode;
+
     // Skip on a resumed chunk — the user message was already persisted to memory on the first chunk;
     // re-writing it every continuation would duplicate the global chunk.
-    if (!resume && (anyShared || privateAgents.length > 0) && openaiKey) {
+    if (!resume && !isCeremonyTrigger && (anyShared || privateAgents.length > 0) && openaiKey) {
       (async () => {
         try {
           const { azurePgStore } = await import("./rag/azure-pg.server");

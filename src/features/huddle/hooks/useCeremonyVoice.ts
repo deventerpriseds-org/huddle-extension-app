@@ -328,7 +328,7 @@ export function useCeremonyVoice(hookOpts: {
             type: "session.update",
             session: {
               modalities: ["text"],
-              input_audio_transcription: { model: "whisper-1" },
+              input_audio_transcription: { model: "gpt-4o-transcribe" },
               turn_detection: {
                 type: "server_vad",
                 silence_duration_ms: 800,
