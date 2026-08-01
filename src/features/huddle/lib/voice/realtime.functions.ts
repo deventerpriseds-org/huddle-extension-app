@@ -84,7 +84,7 @@ export const getRealtimeSession = createServerFn({ method: "POST" })
           output_modalities: ["audio"],
           audio: {
             input: {
-              transcription: { model: "whisper-1" },
+              transcription: { model: "gpt-4o-transcribe" },
               turn_detection: {
                 type: "semantic_vad",
                 eagerness: data.eagerness ?? "auto",

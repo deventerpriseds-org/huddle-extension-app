@@ -26,6 +26,7 @@ import { useVoiceEngineStore } from "../lib/voice/voice-engine-store";
 import { useGroupVoice } from "../hooks/useGroupVoice";
 import { useCeremonyVoice } from "../hooks/useCeremonyVoice";
 import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates } from "../lib/huddle.functions";
+import { saveCeremonyTranscript } from "../lib/ceremony/ceremony-transcript.functions";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
@@ -383,6 +384,71 @@ function MeetingRoom({
   const transcriptRef = useRef(meeting.transcript);
   transcriptRef.current = meeting.transcript;
 
+  // --- Durable ceremony-transcript persistence (Azure PG `chat.ceremony_transcript`) ---------------
+  // The live transcript lives ONLY in ephemeral zustand (meeting.transcript, no persist middleware),
+  // so a finished/reloaded stand-up is unreviewable and a DB query returns zero agent lines. We mirror
+  // every ceremony turn to a durable table, EMAIL-scoped server-side. This is strictly FIRE-AND-FORGET
+  // and NON-BLOCKING: turns are buffered and flushed on a ~1s debounce (and on done/leave). A DB write
+  // failure can NEVER stall or break the ceremony — every path is wrapped and voided. `runId` is minted
+  // at ceremony start; `seq` is a strictly-increasing per-run cursor stamped in insertion order.
+  type PersistTurn = {
+    seq: number;
+    speaker: "user" | "agent" | "system";
+    agentId?: string;
+    text: string;
+    kind?: string;
+    interrupted?: boolean;
+    blockId?: string;
+    sentenceIndex?: number;
+    blockTotal?: number;
+    ts?: number;
+  };
+  const runIdRef = useRef<string | null>(null);
+  const seqRef = useRef(0);
+  const persistBufferRef = useRef<PersistTurn[]>([]);
+  const flushTimerRef = useRef<number | null>(null);
+
+  // Flush the buffered turns to the server (fire-and-forget). Safe to call any time; no-op if idle.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const flushCeremonyTranscript = useCallback(() => {
+    if (flushTimerRef.current != null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    const runId = runIdRef.current;
+    if (!runId || persistBufferRef.current.length === 0) return;
+    const turns = persistBufferRef.current.splice(0, persistBufferRef.current.length);
+    try {
+      void saveCeremonyTranscript({
+        data: { runId, huddleId: huddleIdRef.current, turns, caller: callerRef.current },
+      }).catch(() => {
+        /* fire-and-forget — a persistence failure must never surface to the ceremony */
+      });
+    } catch {
+      /* never throw from a persistence flush */
+    }
+  }, []);
+
+  // Buffer one ceremony turn + schedule a debounced flush. No-op when no run is active (runId unset),
+  // so typed/spoken messages outside a ceremony run are never persisted. Never throws.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const persistCeremonyTurn = useCallback((turn: Omit<PersistTurn, "seq">) => {
+    try {
+      if (!runIdRef.current) return;
+      persistBufferRef.current.push({ ...turn, seq: seqRef.current++ });
+      if (flushTimerRef.current == null) {
+        flushTimerRef.current = window.setTimeout(() => {
+          flushTimerRef.current = null;
+          flushCeremonyTranscript();
+        }, 1000);
+      }
+    } catch {
+      /* never throw from the hot path */
+    }
+  }, []);
+  const persistCeremonyTurnRef = useRef(persistCeremonyTurn);
+  persistCeremonyTurnRef.current = persistCeremonyTurn;
+
   // The immediate-barge sequence (shared by typed + voice). Cut the speaker → show the user's
   // message → answer RIGHT THERE over the frozen ceremony (a separate synchronous single-agent
   // turn, NOT the server between-speakers queue) → mark the cut row → resume from the exact
@@ -397,7 +463,18 @@ function MeetingRoom({
     // transcript renders the cut — but this agent does NOT necessarily answer: the REAL router below
     // decides who does, so "hey terry" reaches Terry even if Cole was mid-sentence.
     const interrupted = ceremonyVoiceRef.current.activeSpeaker;
-    if (interrupted) markLastAgentTurnInterrupted();
+    if (interrupted) {
+      markLastAgentTurnInterrupted();
+      // Persist the cut as a durable marker row (interrupted=true) for the run's review.
+      persistCeremonyTurnRef.current({
+        speaker: "system",
+        agentId: interrupted as string,
+        text: "[interrupted]",
+        kind: "interrupted",
+        interrupted: true,
+        ts: Date.now(),
+      });
+    }
 
     try {
       const cfg = useBackendsStore.getState().config;
@@ -444,8 +521,16 @@ function MeetingRoom({
       if (answer) {
         setPhase(`${AGENT_BY_ID[answer.agentId as AgentId]?.name ?? "Someone"} is answering…`);
         await ceremonyVoiceRef.current.speakInterjection(answer.agentId as AgentId, answer.text, {
-          onSentenceStart: (s) =>
-            addMeetingTurns([{ agentId: answer.agentId as AgentId, text: s, kind: "answer" }]),
+          onSentenceStart: (s) => {
+            addMeetingTurns([{ agentId: answer.agentId as AgentId, text: s, kind: "answer" }]);
+            persistCeremonyTurnRef.current({
+              speaker: "agent",
+              agentId: answer.agentId as string,
+              text: s,
+              kind: "answer",
+              ts: Date.now(),
+            });
+          },
         });
       }
       // Resume the interrupted speaker from the exact sentence they were cut on.
@@ -511,6 +596,7 @@ function MeetingRoom({
       // this from sendMessage; the voice path had no such insert — that's why spoken barges were
       // invisible), then run the same immediate-answer sequence.
       addMeetingTurns([{ text: transcript, user: true, kind: "barge" }]);
+      persistCeremonyTurnRef.current({ speaker: "user", text: transcript, kind: "barge", ts: Date.now() });
       void runBargeSequenceRef.current(transcript);
     },
   });
@@ -528,7 +614,10 @@ function MeetingRoom({
         ceremonyAudioRef.current.pause();
         ceremonyAudioRef.current.src = "";
       }
+      // Persist any buffered ceremony turns on leave/collapse-away so nothing is lost.
+      flushCeremonyTranscript();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const groupVoice = useGroupVoice();
@@ -655,6 +744,11 @@ function MeetingRoom({
     spokenCountRef.current = 0;
     bargeActiveRef.current = false;
 
+    // Mint a fresh run id + reset the durable-transcript cursor/buffer for this run.
+    runIdRef.current = crypto.randomUUID();
+    seqRef.current = 0;
+    persistBufferRef.current = [];
+
     // Start WebRTC mic listener so the user can barge in mid-utterance.
     // Errors here are non-fatal — ceremony continues in text-only without voice barge-in.
     void ceremonyVoiceRef.current.startListening();
@@ -688,12 +782,33 @@ function MeetingRoom({
             await ceremonyVoiceRef.current.voiceTurn(agentId, r.text, {
               // Trailing transcript: add each sentence when its audio starts, tagged with its block
               // + position so a test can prove mid-block interruption and same-block resume.
-              onSentenceStart: (sentence, sentenceIndex, blockTotal) =>
-                addMeetingTurns([{ agentId, text: sentence, blockId, sentenceIndex, blockTotal }]),
+              onSentenceStart: (sentence, sentenceIndex, blockTotal) => {
+                addMeetingTurns([{ agentId, text: sentence, blockId, sentenceIndex, blockTotal }]);
+                persistCeremonyTurnRef.current({
+                  speaker: "agent",
+                  agentId,
+                  text: sentence,
+                  blockId,
+                  sentenceIndex,
+                  blockTotal,
+                  kind: "",
+                  ts: Date.now(),
+                });
+              },
             });
           } catch {
             voiceOff = true;
             addMeetingTurns([{ agentId, text: r.text, blockId, sentenceIndex: 0, blockTotal: 1 }]);
+            persistCeremonyTurnRef.current({
+              speaker: "agent",
+              agentId,
+              text: r.text,
+              blockId,
+              sentenceIndex: 0,
+              blockTotal: 1,
+              kind: "",
+              ts: Date.now(),
+            });
             toast.error("Voice playback failed — continuing in text.");
           } finally {
             setSpeakingId(null);
@@ -701,6 +816,16 @@ function MeetingRoom({
         } else {
           // Text-only fallback when TTS is unavailable.
           addMeetingTurns([{ agentId, text: r.text, blockId, sentenceIndex: 0, blockTotal: 1 }]);
+          persistCeremonyTurnRef.current({
+            speaker: "agent",
+            agentId,
+            text: r.text,
+            blockId,
+            sentenceIndex: 0,
+            blockTotal: 1,
+            kind: "",
+            ts: Date.now(),
+          });
         }
         // Resume after a barge is now handled inside runBargeSequence (freeze → answer → resume),
         // not here — emit only voices scripted speakers and parks (above) while a barge is in flight.
@@ -775,6 +900,7 @@ function MeetingRoom({
       }
       setPhase("");
       patchMeeting({ ceremonyStatus: "done" });
+      flushCeremonyTranscript();
     } catch (err) {
       setPhase("");
       activeCeremonyTurnRef.current = null;
@@ -784,6 +910,8 @@ function MeetingRoom({
       ceremonyVoiceRef.current.stopListening();
       ceremonyVoiceRef.current.clearFreeze();
       bargeActiveRef.current = false;
+      // Flush any buffered turns from the run's tail (also covers error/leave-during-run).
+      flushCeremonyTranscript();
     }
   }
 
@@ -819,6 +947,14 @@ function MeetingRoom({
 
     const cfg = useBackendsStore.getState().config;
     addMeetingTurns([{ text, user: true }]);
+    // Persist the typed user turn to the durable run (no-op outside a ceremony run). If a ceremony
+    // step is live, routeTurn below will treat this as a barge, so tag it accordingly.
+    persistCeremonyTurn({
+      speaker: "user",
+      text,
+      kind: activeCeremonyTurnRef.current ? "barge" : "",
+      ts: Date.now(),
+    });
 
     // BARGE-IN routing: routeTurn handles ceremony turns; returns undefined to fall through.
     const routed = await routeTurn(text);
@@ -840,6 +976,9 @@ function MeetingRoom({
         },
       });
       addMeetingTurns((result.replies ?? []).map((r) => ({ agentId: r.agentId as AgentId, text: r.text })));
+      for (const r of result.replies ?? []) {
+        persistCeremonyTurn({ speaker: "agent", agentId: r.agentId as string, text: r.text, kind: "", ts: Date.now() });
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Message failed.");
     }

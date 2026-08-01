@@ -1,14 +1,16 @@
-name: Ceremony barge-in screenshots (commit to repo)
+name: Verify barge routing (independent)
+
+# Independent verifier run: drives the LIVE app, types ceremony barges, captures the
+# [barge] decision console line + answer agent, and prints STRUCTURED RESULTS json.
+# Commits screenshots to the ceremony-barge-screenshots branch.
+
 on:
   workflow_dispatch:
 
 jobs:
-  ceremony-barge:
+  verify-barge:
     runs-on: ubuntu-latest
-    # 20, not 10: the test itself waits up to ~2min for the first spoken sentence + ~1min for the
-    # barge answer, and `playwright install --with-deps` occasionally spends several minutes on slow
-    # apt font mirrors — a 10min cap cancelled a run mid-install before the test could run.
-    timeout-minutes: 20
+    timeout-minutes: 25
     permissions:
       contents: write
     steps:
@@ -21,11 +23,11 @@ jobs:
       - name: Install Playwright + Chromium
         run: npm install playwright && npx playwright install chromium --with-deps
 
-      - name: Run barge routing verification (independent verifier)
+      - name: Run barge routing verification
         env:
           APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
           UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
-          SHOT_DIR: e2e/ceremony-screenshots
+          SHOT_DIR: e2e/verify-barge-shots
         run: node e2e/ceremony-barge-verify.e2e.mjs
 
       - name: Commit screenshots to repo
@@ -33,6 +35,6 @@ jobs:
         run: |
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
-          git add e2e/ceremony-screenshots/
-          git diff --cached --quiet || git commit -m "chore: ceremony barge-in Tier 1 screenshots [ci skip]"
-          git push origin HEAD:ceremony-barge-screenshots --force
+          git add e2e/verify-barge-shots/ || true
+          git diff --cached --quiet || git commit -m "chore: independent barge routing verification screenshots [ci skip]"
+          git push origin HEAD:ceremony-barge-screenshots --force || true

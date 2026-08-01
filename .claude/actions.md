@@ -248,8 +248,22 @@ brains/routing from the 1:1 chats (snapshots, semantic targeting awareness, owne
 utterance routes through Huddle's OWN pipeline — `routeMessageLLM` (semantic "terry"-vs-mentioned +
 owner/capability awareness) → winning agent's snapshot + tools, **with ceremony context** (scene/agenda/
 prior speakers) → reply → ElevenLabs per-agent voice. Reuse the `useVoiceCallRealtime` pattern.
-**Status:** open — ACs being written by an independent AC subagent (2026-07-31); build to follow, then
-independent verifier. Supersedes the parseMentions/forced-1:1 barge path and the freeze/re-speak hack.
+**Status:** IMPLEMENTED + DEPLOYED + INDEPENDENTLY VERIFIED via automated live UAT — NOT yet
+user-confirmed live. Commit: barge now dispatches scope:"group" (no targetAgentId) → `routeMessageLLM`;
+`buildCeremonyHistory` feeds the ceremony transcript as `history`; `ceremonyBarge:true` layers the
+existing `bargeDirective()` onto the responder scene. Voices only the router's primary (ElevenLabs).
+Realtime ear-only confirmed (modalities:text, create_response:false, track disabled, response.cancel).
+**Verifier run 30661958646 (live app, real router — quotaFallback:false on all 3 barges, model
+gpt-5.5):** "terry, what's blocking the release?" fired while Cole mid-block → `winner=terry-locke`,
+answer references release blockers (ctxAware:true), NOT Cole, NOT generic. Non-addressed "biggest risk
+this sprint?" while Iris mid-block → routed to terry-locke (scrum master), not the frozen speaker.
+"is terry even here?" → router semantically picked terry-locke (about his role), not a name-force. One
+answer each, ceremony continued, 0 console errors. Screenshots on `ceremony-barge-screenshots` branch.
+**Two follow-ups discovered:** (1) UX REGRESSION from a concurrent "transcript-fix" merge — the barge
+compose box + "cut in any time" hint are behind a "Chat" tab (`showCompose = chatTab==="chat"`), hidden
+in the default Transcript view, so cutting into a live ceremony needs a tab switch; awaiting user
+decision to surface it in the transcript view. (2) optional "barge = primary-only" server flag to avoid
+group fan-out (only replies[0] is voiced regardless).
 
 ### ACT-huddle-14: Decide GPT-4o → GPT-5.6 Luna/Terra migration — cost AND performance, not just cost
 **Requested:** 2026-07-31 — user's own words: "you need an act to determine if we should be going from

@@ -353,7 +353,7 @@ export function useCeremonyVoice(hookOpts: {
               type: "realtime",
               audio: {
                 input: {
-                  transcription: { model: "whisper-1" },
+                  transcription: { model: "gpt-4o-transcribe" },
                   // semantic_vad detects end-of-turn by MEANING (a classifier), not raw audio energy.
                   // server_vad (energy + fixed silence window) waited on background noise — it never
                   // saw enough silence to end the turn, so the agent "ignored" the user, and stray
