@@ -7,12 +7,21 @@ Status: PLANNED — awaiting user sign-off before implementation (2026-08-01).
 generates. Existing multi-agent "reply streaming" (each agent's whole reply appears as it finishes)
 is a no-op for a 1:1 (one agent → one lump). The gap is TOKEN-LEVEL streaming within the single reply.
 
-## Decisive constraint
+## Decisive constraint — EMPIRICALLY CONFIRMED 2026-08-01
 Journey streams via **SSE from Supabase Edge (Deno)**, which supports held-open streaming responses.
 Huddle's Nitro preset is **azure-swa** — Azure Static Web Apps **buffers** Node function responses, so
 SSE / ReadableStream / OpenAI-stream-piped-to-client all get coalesced (Azure/static-web-apps#1180).
 Journey's transport does NOT port. We reuse the UX contract (grow one bubble; time-to-first-token) and
 voice sentence-cadence, not the transport.
+
+**Proof (not inference):** deployed a temporary `/api/public/stream-probe` route that emitted 6 chunks
+500ms apart, each stamped with a server-side elapsed-ms marker, and timed arrivals from an open-internet
+GH runner (the CCR proxy denies *.azurestaticapps.net so this can't run from the session). Result:
+server stamps were correctly spread (0/501/1002/1503/2003/2504ms) but **the client received ALL chunks
+at the same instant** (clientMs=3304, every inter-chunk gap=0), and the response carried
+**`content-length: 194` with NO `transfer-encoding: chunked`** — i.e. SWA fully buffered the stream,
+computed the length, and sent one complete response. SSE is ruled OUT; the poll-partial approach below
+is the only viable architecture. Probe route + `stream-probe.yml` workflow were removed after the test.
 
 ## Chosen approach — Option (b): server-side stream → durable `partial` field → existing poll
 Stream the OpenAI call SERVER-SIDE only (accumulate deltas; never hold a stream open to the browser),
