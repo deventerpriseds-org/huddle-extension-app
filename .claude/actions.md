@@ -1071,3 +1071,15 @@ instead. Guardrail ("confirm the plan before building/deploying; never push ahea
 (2) this repo's CLAUDE.md, (3) this repo's memory.md Hardening. eds-claude-skills PR #13 MERGED (Stop-gate
 v4 integration-trace item + the new global rule). NOTE: the central rule propagates on the next session
 build (or via the sync-setup-script skill); it's committed to eds main now.
+
+### ACT-huddle-21: conversational-quality probe registry → AC development (2026-08-01, user-approved)
+User re-grounded the priority: the QUALITY harness (graded coherence/awareness/follow-through/tool-use/
+recall), NOT functional 1s-and-0s. Analyzed real live transcripts (chat.pending_turns + chat.ceremony_
+transcript via azure-pg-query): the daily stand-up (11:30) AND the barge call ba9a6791 (15:43, 5 user
+barges persisted — A2 worked). Real failures found → combined ALL probes into canonical registry
+docs/ceremony-quality-probes.md (Tiers A text-graded, B journey-on DB, C tool-use, D ceremony-run, E
+voice-UAT + D-FALLBACK). User confirmed back-and-forth coverage (P-RETAIN, P-NOFAKE, P-REPEAT, V-RESUME,
+V-ACK, V-STT, D-FALLBACK) and APPROVED for AC development. Independent AC-writing subagent running on the
+full registry now. Build order: Tier A (re-runnable core) first, then B/C/D behind harness needs, E via
+voice UAT. Ack layer = filler-now/streamed-later, AFTER harness. Resume-in-place + cross-talk still to fix.
+NOTE: SSH commit-signing key file is 0 bytes (empty) in this env → commits show GitHub-Unverified; can't fix.
