@@ -264,12 +264,19 @@ export function useCeremonyVoice(hookOpts: {
   );
 
   // ── resumeFromFreeze ──────────────────────────────────────────────────────
+  // Resume the interrupted speaker from the sentence AFTER the one that was cut — NOT from the cut
+  // sentence itself. Re-speaking the interrupted sentence was the "broken record": on each barge the
+  // same line (which the user already heard, then barged over) got re-spoken, and multiple barges on
+  // one block stacked repeats ("Everything's moving smoothly" ×3 in the live call). Continuing from
+  // the next sentence removes the replay and "picks up on to the next item" as intended. If the whole
+  // block was a single sentence, there's nothing left to resume — that's fine (the barge answer stood
+  // in for it). Voice-path change — confirm the feel in a live stand-up.
   const resumeFromFreeze = useCallback(async () => {
     const saved = freezeRef.current;
     if (!saved) return;
     freezeRef.current = null;
     const gen = genRef.current; // picks up the new gen from after the barge
-    await _voiceTurn(saved.agentId, saved.text, saved.onSentenceStart, gen, saved.sentenceIdx);
+    await _voiceTurn(saved.agentId, saved.text, saved.onSentenceStart, gen, saved.sentenceIdx + 1);
   }, [_voiceTurn]);
 
   const clearFreeze = useCallback(() => {
