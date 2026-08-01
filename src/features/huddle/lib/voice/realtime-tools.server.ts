@@ -21,7 +21,7 @@
 import type { AgentId } from "../../data/agents";
 import { AGENT_BY_ID } from "../../data/agents";
 import { agentOwnsCapability } from "../capabilities";
-import { getAssistantSnapshot, snapshotResponsesTools } from "../openai-assistants.server";
+import { getAssistantSnapshot } from "../openai-assistants.server";
 import {
   fetchJourneyToolDefinitions,
   toResponsesTool,
@@ -43,6 +43,25 @@ export interface RealtimeToolContext {
   huddleId: string;
   timeZone?: string;
 }
+
+// get_calendar_events — the Huddle-native Microsoft/Outlook calendar read (the exact "what's on my
+// schedule" same-brain capability). Schema mirrors the text path's inline def (huddle.functions.ts),
+// sanitized to the Realtime-accepted shape (no `strict`). Executor reuses getGraphCalendarEvents.
+const GET_CALENDAR_EVENTS_TOOL = {
+  type: "function" as const,
+  name: "get_calendar_events",
+  description:
+    "Read the user's Microsoft/Outlook calendar for a day or range and return the actual events. Use this whenever the user asks what's on their calendar/schedule/agenda, or whether they're free/busy at a time. Reads REAL calendar data — never answer calendar questions from memory. Dates are ISO (YYYY-MM-DD or full ISO). Returns Microsoft/Outlook events; a Google-only calendar won't appear.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      start: { type: "string", description: "Start of the range, ISO date or datetime. Defaults to today." },
+      end: { type: "string", description: "End of the range, ISO date or datetime. Defaults to end of the start day." },
+    },
+    required: [],
+  },
+};
 
 const VOICE_HOUSE_STYLE =
   "\n\nYou are on a live VOICE call. Speak naturally in 1–3 short spoken sentences. No markdown, no " +
@@ -101,17 +120,14 @@ export async function buildRealtimeToolset(
   opts: { webSearch?: boolean; journey?: boolean } = {},
 ): Promise<{ tools: unknown[]; journeyNames: Set<string> }> {
   const agent = AGENT_BY_ID[agentId];
-  const raw: unknown[] = [PRIORITIZE_TOOL, SCHEDULE_REMINDER_TOOL];
+  const raw: unknown[] = [PRIORITIZE_TOOL, SCHEDULE_REMINDER_TOOL, GET_CALENDAR_EVENTS_TOOL];
 
   if (opts.webSearch !== false) raw.push(TAVILY_WEB_SEARCH_TOOL);
   if (agentOwnsCapability(agent, "backlog-grooming")) raw.push(GROOM_BACKLOG_TOOL);
 
-  // Non-function snapshot tools (file_search knowledge bases) if the agent has any.
-  const snapshot = getAssistantSnapshot(agentId);
-  const snapshotTools = snapshotResponsesTools(snapshot).filter(
-    (t) => (t as { type?: string })?.type !== "function",
-  );
-  raw.push(...snapshotTools);
+  // NOTE: file_search (snapshot knowledge bases) is deliberately OMITTED — the Realtime GA
+  // client_secrets endpoint only accepts tool types 'function' and 'mcp' and 400s on 'file_search',
+  // which would break the whole speaking-session mint. KBs stay a text-path capability.
 
   // Journey catalog (calendar, schedule, tasks, priorities, push, …) — the bulk of "same brain".
   const journeyNames = new Set<string>();
@@ -138,8 +154,27 @@ export async function executeRealtimeTool(
 ): Promise<{ output: string; ms: number }> {
   const t0 = Date.now();
   const done = (output: string) => ({ output, ms: Date.now() - t0 });
-  const NATIVE = new Set(["prioritize", "schedule_reminder", "groom_backlog", "tavily_web_search"]);
+  const NATIVE = new Set([
+    "prioritize",
+    "schedule_reminder",
+    "groom_backlog",
+    "tavily_web_search",
+    "get_calendar_events",
+  ]);
   try {
+    if (name === "get_calendar_events") {
+      const { resolveTaskEmail } = await import("../journey/identity");
+      const mailbox = (await resolveTaskEmail(ctx.caller)) ?? ctx.caller?.entra_email;
+      const tz = ctx.timeZone || "UTC";
+      const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+      const startRaw = typeof args.start === "string" && args.start.trim() ? args.start.trim() : todayStr;
+      const endRaw = typeof args.end === "string" && args.end.trim() ? args.end.trim() : startRaw;
+      const startISO = startRaw.length > 10 ? startRaw : `${startRaw.slice(0, 10)}T00:00:00`;
+      const endISO = endRaw.length > 10 ? endRaw : `${endRaw.slice(0, 10)}T23:59:59`;
+      const { getGraphCalendarEvents } = await import("../email/graph-email.server");
+      const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+      return done(JSON.stringify(r));
+    }
     if (name === "prioritize") {
       const { dispatchPrioritize } = await import("../tasks/tools");
       const { resolveTaskEmail } = await import("../journey/identity");
