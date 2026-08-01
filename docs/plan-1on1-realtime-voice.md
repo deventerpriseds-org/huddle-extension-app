@@ -34,26 +34,22 @@ Two DIFFERENT proven architectures for natural, low-latency voice:
   (`/v1/convai/conversation/get-signed-url?agent_id=`). Natural turn-taking = **`turn_v3` +
   `turn_timeout:8`**; native barge; echo-guard in the UI.
 
-## DIRECTIVE UPDATE (2026-08-01): build BOTH, runtime-switchable for live A/B
-The user: "do it in parallel so I can switch between the approaches to test which is performing better."
-So we do NOT pick one on paper — we ship BOTH behind a **runtime** toggle and let live use decide:
-- **Approach A — OpenAI Realtime speaks directly** (journey-style; same brain via session mint).
-- **Approach B — ElevenLabs Conversational AI** (boost-coach style; org skill `realtime-voice-agent`):
-  create a ConvAI agent (`/v1/convai/agents/create`, prompt+`gpt-4o-mini`+voice), mint a signed WS URL
-  server-side (`/v1/convai/conversation/get-signed-url`), connect with `@elevenlabs/client`
-  `Conversation.startSession({signedUrl})`; native barge; self-echo detection (jaccard vs last agent
-  text) + optional speakerphone mic-mute toggle; tune `turn_timeout`/`turn_eagerness`. Reuse
-  `ELEVENLABS_API_KEY`/`ELEVENLABS_DEFAULT_VOICE_ID` (no new secret).
-- **Runtime switch:** extend the 1:1 voice backend from a build constant (`VOICE_1ON1_BACKEND`) to a
-  USER-facing persisted setting (zustand+localStorage) with a control in the meeting pane / Settings —
-  modes: `realtime-speak` (A), `convai` (B), plus the existing path as fallback — so the user flips
-  A↔B live and compares latency/naturalness without a redeploy.
-- **Same-brain caveat for the A/B:** A carries the full Huddle brain (snapshot+RAG+governed mergedTools)
-  cleanly; B (ConvAI) uses its own agent config + a webhook tool → the SHARED executor for parity where
-  feasible, but its LLM/prompt integration is looser. The A/B is primarily a LATENCY/FEEL comparison;
-  weigh a "B feels faster" result against A's fuller same-brain fidelity.
-- **Delivery sequence (each deployed so the user can test as it lands):** (1) runtime switch scaffold +
-  Approach A; deploy → user compares A vs current. (2) Approach B; deploy → user compares A vs B.
+## DIRECTIVE (2026-08-01, corrected): build ONLY Approach A; compare against the EXISTING path
+The user: "do it in parallel so I can switch between the approaches to test which is performing better,"
+then: "stop trying to create ElevenLabs — you already have a version currently in place with the lag,
+that is what I will compare against."
+So:
+- **DO NOT build any ElevenLabs / ConvAI path.** The CURRENT live 1:1 voice path (today's default,
+  `useVoiceCallRealtime` = OpenAI Realtime STT → Responses turn → ElevenLabs TTS — the LAGGY one the
+  user is complaining about) is the **comparison BASELINE**. It already exists; leave it as-is.
+- **Build ONLY Approach A — OpenAI Realtime speaks directly** (journey-style; same brain via session
+  mint). This is the new fast path.
+- **Runtime switch:** extend the 1:1 voice backend from the build constant `VOICE_1ON1_BACKEND` to a
+  USER-facing persisted setting (zustand+localStorage) + a control in the meeting pane, offering:
+  `current` (the existing baseline) vs `realtime-speak` (new Approach A) — so the user flips live and
+  compares new-fast vs current-laggy without a redeploy. (The existing ElevenLabs ConvAI orb
+  `useVoiceCall` stays available but is NOT the focus.)
+- **Delivery:** one path to build (A) + the runtime switch; deploy → user A/B's A vs the current path.
 
 **A-side decision detail: journey's OpenAI-Realtime approach.** Reason (same-brain, extend-don't-duplicate):
 Huddle has 12+ distinct agents, each a rich snapshot prompt + shared Huddle tools + RAG. OpenAI Realtime
