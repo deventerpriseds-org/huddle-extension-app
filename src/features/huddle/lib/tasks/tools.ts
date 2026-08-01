@@ -3,6 +3,7 @@
 // ported journey engine and returns a ranked list. Shared like the router — Iris (day),
 // Liam (life), Tess (product), Sam (venture) all use the same tool with a different category.
 // Modeled on rag/tools.ts (schema + dispatch + system hint).
+import { formatInTz } from "../time";
 
 export const PRIORITIZE_TOOL = {
   type: "function",
@@ -36,29 +37,6 @@ export const PRIORITIZE_TOOL = {
 
 export const PRIORITIZE_SYSTEM_HINT =
   "For ANY question about the user's schedule, calendar, agenda, day, tasks, backlog, priorities, meetings, appointments, free/busy, or what to do next — including 'what's on my schedule/calendar/day today', 'what's on my plate', 'what's in my backlog', 'what's up next', 'what's overdue', 'what are my <area> priorities' — call the `schedule_and_priorities` tool and answer from its ranked results. It is the user's nightly-planned schedule + tasks, the source of truth. Use view 'scheduled' for 'what's on my schedule/calendar/day today'; otherwise pick the matching `view` (backlog / up_next / overdue / priorities) and the relevant `category`. Only an EXPLICIT 'external calendar' / 'Outlook calendar' request should use get_calendar_events instead. The start/due times it returns are ALREADY in the user's local timezone (each carries its zone abbreviation, e.g. '10:00 AM EDT') — state them exactly as given; do NOT convert or shift them. Never invent an ordering, and never tell the user their tasks/schedule aren't in your files or ask them to upload anything. If it returns an error, say you couldn't reach their schedule and offer to retry.";
-
-// Format a stored timestamptz (UTC) into the caller's LOCAL timezone with the zone abbreviation, e.g.
-// "Sat, Aug 1, 10:00 AM EDT". The model reads the tool output verbatim; returning raw UTC made it
-// report a 10 AM ET task as "2 PM" (the UTC hour) — inconsistently. Labeling the local time removes
-// the ambiguity so the agent states the time as-is without converting.
-function formatInTz(iso: string | null | undefined, timeZone: string): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return typeof iso === "string" ? iso : null;
-  try {
-    return new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      timeZoneName: "short",
-    }).format(d);
-  } catch {
-    return typeof iso === "string" ? iso : null;
-  }
-}
 
 /**
  * Execute a `prioritize` (schedule_and_priorities) tool call. Returns a JSON string (the model reads

@@ -2225,10 +2225,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             }
             if (c.name === "schedule_and_priorities") {
               const { dispatchPrioritize } = await import("./tasks/tools");
-              const email =
-                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
-                data.caller?.entra_email;
-              const out = await dispatchPrioritize(email, c.arguments, data.timeZone);
+              // One resolution gives BOTH the canonical email (to scope the read) and the canonical
+              // timezone (to localize the returned times). data.timeZone is the browser zone this turn.
+              const ident = await (await import("./journey/identity")).resolveJourneyIdentity(data.caller, data.timeZone);
+              const email = ident.email ?? data.caller?.entra_email;
+              const tz = ident.timeZone || data.timeZone || "UTC";
+              const out = await dispatchPrioritize(email, c.arguments, tz);
               // Record it like every other tool (this was the ONE tool missing recordToolUse, which is
               // why it never showed in the tool trace / UAT even though it ran).
               let ok = true, detail = "";
@@ -2836,13 +2838,14 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 category: z.string().optional(),
                 limit: z.number().optional(),
               }),
-              execute: async (args) =>
-                dispatchPrioritize(
-                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
-                    data.caller?.entra_email,
+              execute: async (args) => {
+                const ident = await (await import("./journey/identity")).resolveJourneyIdentity(data.caller, data.timeZone);
+                return dispatchPrioritize(
+                  ident.email ?? data.caller?.entra_email,
                   args as Record<string, unknown>,
-                  data.timeZone,
-                ),
+                  ident.timeZone || data.timeZone || "UTC",
+                );
+              },
             });
           }
 

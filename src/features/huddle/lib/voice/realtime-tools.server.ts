@@ -164,9 +164,10 @@ export async function executeRealtimeTool(
     }
     if (name === "schedule_and_priorities") {
       const { dispatchPrioritize } = await import("../tasks/tools");
-      const { resolveTaskEmail } = await import("../journey/identity");
-      const email = (await resolveTaskEmail(ctx.caller)) ?? ctx.caller?.entra_email;
-      return done(await dispatchPrioritize(email, args, ctx.timeZone));
+      const { resolveJourneyIdentity } = await import("../journey/identity");
+      const ident = await resolveJourneyIdentity(ctx.caller, ctx.timeZone);
+      const email = ident.email ?? ctx.caller?.entra_email;
+      return done(await dispatchPrioritize(email, args, ident.timeZone || ctx.timeZone || "UTC"));
     }
     if (name === "schedule_reminder") {
       const { dispatchScheduleReminder } = await import("../tasks/reminders");
