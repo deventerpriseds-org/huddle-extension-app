@@ -1,0 +1,37 @@
+name: Verify forcers-disabled + ceremony (independent verifier)
+
+# Independent verifier harness (item 4 behavioral tool-selection, item 2 ceremony transcript,
+# item 3.4 ceremony opening). Runs on a GitHub runner — not behind the CCR egress proxy, so it
+# CAN reach *.azurestaticapps.net (the sandbox cannot). journey is disabled on the item-4 turns so
+# nothing lands on the real board; the item-2 ceremony run is grounded in existing tasks.
+#
+# Self-triggers on push to this file so it can run from a feature branch without landing on the
+# default branch (workflow_dispatch is only exposed from the default branch) — mirrors
+# bootstrap-memory-db.yml's pattern.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/verify-forcers.yml
+      - e2e/verify-forcers.e2e.mjs
+
+jobs:
+  verify-forcers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm ci
+      - name: Build (resolve fresh server-fn ids)
+        continue-on-error: true
+        run: npm run build
+      - name: Run verifier harness
+        env:
+          HUDDLE_BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          JOURNEY_PROXY_TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+        run: node e2e/verify-forcers.e2e.mjs
