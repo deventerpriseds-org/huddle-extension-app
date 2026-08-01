@@ -1179,8 +1179,20 @@ scene directive shipped but did NOT move P-REPEAT (prose advisory; the real brok
   2. f5a306b: DROP the prompt (keep language en + noise_reduction + mini + eagerness medium).
   **FINAL PASS (run 30718313943): speech_started 0, transcripts [], injected [], phantom barges 0**
   over 40s live noise. Deployed to prod (deploy-swa on main). Awaiting user's live re-test to close.
-  - [OPEN, follow-on] 1:1 voice hooks (useVoiceCallRealtime*) mint their own Realtime session — check
-    if they share the no-language garble gap; separate surface from the stand-up the user reported.
+- [DONE, LIVE-VERIFIED] **Unify 1:1 + ceremony STT/VAD config** (user: "why aren't they using the same
+  brain and STT config"). Answer: BRAIN stays separate by necessity — 1:1 = single agent
+  (Realtime-as-brain, create_response:true); ceremony = many agents + router (Realtime-as-ears,
+  create_response:false, text engine composes). But STT/VAD is a cross-cutting concern that had drifted
+  (two hand-maintained copies) — that drift caused the garble. Fix (commit 5d3ed98): new
+  `lib/voice/realtime-audio.ts` `realtimeAudioInput()` = single source of truth, called by BOTH
+  realtime.functions.ts (1:1) and useCeremonyVoice.ts (ceremony). Per-mode deltas as args
+  (create_response, interrupt_response, eagerness). Dropped the transcription prompt from BOTH (echo),
+  added noise_reduction near_field to the 1:1. 1:1 invariants preserved (create/interrupt true,
+  output_modalities text, instructions/tools untouched). tsc clean. Deployed (deploy-swa on main).
+  **Verified BOTH harnesses on deployed config:** ceremony-noise-robustness (run 30721155427) PASS
+  0/0/0 (regression-guard holds); realtime-1on1-noise-robustness (run 30721156464, NEW — same test on
+  the 1:1) PASS — connected sdp201, speech_started 0, injected transcripts 0, phantom replies 0 over 40s
+  live noise. So the 1:1's no-language garble gap is CLOSED and both surfaces share one config.
 EXTERNAL / NOT CODE: get_calendar_events fails = missing Calendars.Read admin consent (surfaced by D-FALLBACK).
 STILL TODO (follow-on harness builds): Tier B P1-HARD (journey-on DB verify) + P-NOFAKE (needs failing-tool injection +
 Test-/cleanup); Tier C P2 general tool-use (journey-on prioritize); Tier D P-LANE/P-ONCTX (needs ceremony round-robin
