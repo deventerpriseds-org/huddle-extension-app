@@ -1038,3 +1038,5 @@ azure-pg-query (SWA host egress-denied to the session, so the sanctioned runner 
 Board hygiene: verifier deleted 2 test reminder rows (user_email NULL); 4.2 ran journey-disabled (no real-board write); no stray cards. Left 3 benign ceremony_transcript rows (run verify-cer-msah4r84).
 LEFTOVER: verifier created remote branch `verify/forcers-ceremony-check` (inert workflow, never merged, doesn't deploy). Remote delete 403s from the session (proxy) — DELETE MANUALLY via GitHub UI.
 STILL OPEN: B2 code-guard (assigned_agent, Iris exempt) — next per user's "deploy now, B2 after". C3 user live confirmation: mic multi-barge, client-flush, ceremony opening in-browser. eds-claude-skills PR #13 (gate v4) awaiting review (no CI on that repo).
+
+### A1 mic-deaf — USER-CONFIRMED LIVE (2026-08-01): user reports "the mic survives". Original bug resolved + confirmed in their environment. (Transcript client-flush + ceremony opening still pending user live confirm.)
