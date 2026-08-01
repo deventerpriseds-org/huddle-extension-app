@@ -1304,7 +1304,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // the fix for "forgot two lines ago" across huddles — history is per-huddle, but memory is not.
       let memoryBlock = "";
       const ragCfg = agentBackend.rag;
-      if (ragCfg && ragCfg.store === "azure" && ragCfg.chunks && openaiKey) {
+      // Skip auto-retrieval on a ceremony kickoff. The trigger ("let's run the daily stand-up") embeds
+      // to whatever the user was just chatting about, so retrieval pulled the prior casual discussion
+      // into the FIRST agent's opening — "Iris repeats our old discussion before Terry begins", and
+      // stale chunks (e.g. an "uploaded files" mention) surfaced too. A stand-up must open from its
+      // task grounding, not from memory. This is the read-side complement to the write-side skip above
+      // (isCeremonyTrigger): the ceremony neither writes the trigger to memory nor reads memory back in.
+      if (!isCeremonyTrigger && ragCfg && ragCfg.store === "azure" && ragCfg.chunks && openaiKey) {
         try {
           if (memoryQueryVec === undefined) {
             const { embed } = await import("./rag/embed.server");

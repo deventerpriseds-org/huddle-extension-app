@@ -436,6 +436,13 @@ function MeetingRoom({
     try {
       if (!runIdRef.current) return;
       persistBufferRef.current.push({ ...turn, seq: seqRef.current++ });
+      // Burst guard: sentences usually arrive slower than the 1s debounce so each flushes alone, but a
+      // fast run (text-only fallback, a multi-reply barge answer) can enqueue many at once — flush
+      // immediately at a threshold so a large buffer can never sit unpersisted waiting on the timer.
+      if (persistBufferRef.current.length >= 8) {
+        flushCeremonyTranscript();
+        return;
+      }
       if (flushTimerRef.current == null) {
         flushTimerRef.current = window.setTimeout(() => {
           flushTimerRef.current = null;
@@ -606,8 +613,21 @@ function MeetingRoom({
 
   useEffect(() => {
     ceremonyAliveRef.current = true;
+    // Mobile browsers frequently tear a tab down (backgrounding, app switch, phone lock) WITHOUT
+    // running React unmount cleanup — so the unmount flush below is not reliable on the exact surface
+    // where these ceremonies run. pagehide + visibilitychange:hidden are the delivery-guaranteed
+    // teardown signals; flush the buffered tail on them so a run's last turns are never lost when the
+    // user simply leaves. (Was the concrete tail-loss gap behind the truncated transcript.)
+    const flushOnHide = () => flushCeremonyTranscript();
+    const onVis = () => {
+      if (document.visibilityState === "hidden") flushCeremonyTranscript();
+    };
+    window.addEventListener("pagehide", flushOnHide);
+    document.addEventListener("visibilitychange", onVis);
     return () => {
       ceremonyAliveRef.current = false;
+      window.removeEventListener("pagehide", flushOnHide);
+      document.removeEventListener("visibilitychange", onVis);
       ceremonyVoiceRef.current.stopListening();
       ceremonyVoiceRef.current.clearFreeze();
       if (ceremonyAudioRef.current) {

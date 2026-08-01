@@ -6,6 +6,7 @@ import { AGENTS, type AgentId } from "../../data/agents";
 import type { CeremonyType } from "./ceremonies";
 import { runHuddleTurn } from "../huddle.functions";
 import { recordCeremonyRun } from "./tasks.server";
+import { appendCeremonyTurns } from "../ceremony/ceremony-transcript.server";
 
 export type CeremonyRunType = CeremonyType | "review_retro";
 export type CeremonyMode = "round-robin" | "narrate";
@@ -103,5 +104,24 @@ export async function runScheduledCeremony(opts: {
     transcript,
     auto_run: !!opts.autoRun,
   });
+  // ALSO persist to the fine-grained chat.ceremony_transcript store the review UI reads, so a
+  // scheduled/headless ceremony is reviewable through the SAME read-back path as an interactive one
+  // (extend the unified store to cover this path — not a second parallel reviewer). A scheduled run
+  // completes server-side with no barge stalls, so every reply lands: one row per agent turn, in
+  // order. appendCeremonyTurns never throws, so a persistence hiccup can't fail the ceremony.
+  const now = Date.now();
+  await appendCeremonyTurns(
+    opts.userEmail,
+    opts.runId,
+    "daily",
+    transcript.map((r, i) => ({
+      seq: i,
+      speaker: "agent" as const,
+      agentId: r.agentId,
+      text: r.text,
+      kind: "",
+      ts: now + i, // preserve insertion order in the seq/ts sort even at ms granularity
+    })),
+  );
   return { ceremonyType: opts.ceremonyType, mode, transcript, summary };
 }
