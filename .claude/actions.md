@@ -28,10 +28,24 @@ echo-guard. Uniform path for ALL agents.
 - [DONE 2026-08-01] **PREMISE CONFIRMED** via cheap probe (`realtime-speak-probe.yml` run 30682377534
   PASS): GA gpt-realtime over WebRTC speaks directly + tool + speaks real value. Build de-risked.
   Probe-found build insight recorded in memory: play the WebRTC RTP track (Huddle currently disables it).
-- [NEXT] Build: (1) data-driven per-agent OpenAI voice; (2) extend getRealtimeSession to bake
-  instructions+memory+governed tools+voice+create_response:true; (3) shared tool executor; (4) realtime
-  reply mode in useCeremonyVoice (unmute/attach track, tool round-trip, capture transcript); (5) echo
-  guard + turn tuning; (6) flag-flip 1:1 path. Then extend the diagnostic + deploy main + live retest.
+- [DONE — BUILT + DEPLOYED 2026-08-01, tsc+build clean, deploy run 30697904041 success] Approach A
+  (OpenAI Realtime speaks directly), runtime-switchable against the baseline. Files: `lib/voice/
+  agent-realtime-voice.ts` (data-driven OpenAI voice map), `lib/voice/realtime-tools.server.ts`
+  (assembleRealtimeInstructions [snapshot+RAG memory+voice house-style] + buildRealtimeToolset [governed
+  schemas] + executeRealtimeTool [DIRECT one-hop, reuses text dispatchers, instrumented ms]),
+  `lib/voice/realtime.functions.ts` (getRealtimeSession speaking-mint when agentId present:
+  create_response:true + interrupt_response:true + per-agent voice + tools + instructions; back-compat
+  ears-only when no agentId; + runRealtimeTool client-callable executor), `hooks/useVoiceCallRealtimeSpeak.ts`
+  (attaches+plays the remote WebRTC track, tool round-trip, transcript→dm-<agent> store, native barge +
+  self-echo guard, hard mic-mute), `lib/voice/voice-engine-store.ts` (persisted baseline|realtime-speak,
+  default baseline), MeetingBar wiring + "Baseline / ⚡ Fast (A)" header toggle (applies on next call).
+  NO ElevenLabs built (baseline = existing laggy path, per user). Tool executor is DIRECT (not journey's
+  slow execute-tool hop) + latency-instrumented, and reversible via the toggle (user guidance).
+- [OPEN — awaiting user LIVE A/B] User flips ⚡ Fast (A) in a 1:1 meeting header, leaves & rejoins, and
+  compares speak-latency + naturalness vs Baseline. NOT claimed working until confirmed live (premise
+  speak+tool was proven headless on gpt-realtime via realtime-speak-probe; the wired end-to-end path is
+  build/deploy-verified but not yet live-confirmed). v1 tool scope = journey catalog + prioritize +
+  reminders + web + grooming(owner); Huddle-native create_huddle_task/artifacts (turn-scoped) deferred.
 
 ### ACT-huddle-6: Cross-modality "same brain" — 1:1 chat vs. 1:1 meeting-room (voice) give different answers/capabilities
 **Requested:** 2026-07-31 — user's own words: "the outcomes I get from a one-on-one chat versus what
