@@ -7,6 +7,7 @@ import {
   executeRealtimeTool,
   type RealtimeCaller,
 } from "./realtime-tools.server";
+import { realtimeAudioInput } from "./realtime-audio";
 
 export type RealtimeSessionResult =
   | { ok: true; clientSecret: string }
@@ -87,24 +88,17 @@ export const getRealtimeSession = createServerFn({ method: "POST" })
           type: "realtime",
           model: REALTIME_MODEL,
           output_modalities: ["text"],
+          // STT/VAD comes from the SHARED config (realtime-audio.ts) so the 1:1 and the ceremony can
+          // never drift again. Brain-mode deltas stay here: create_response:true (Realtime IS the 1:1
+          // brain — false would make it go silent), interrupt_response:true (barge cancels the in-flight
+          // reply text), and the client's eagerness override. output_modalities/instructions/tools below
+          // are the "same brain" layer, unrelated to STT.
           audio: {
-            input: {
-              // Aligned to journey's proven web-voice STT settings (generate-realtime-token): the
-              // mini transcribe model, English pinned, and a domain-vocab prompt to bias STT toward
-              // the terms users actually say. noise_reduction is intentionally omitted (= none), same
-              // as journey.
-              transcription: {
-                model: "gpt-4o-mini-transcribe",
-                language: "en",
-                prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities",
-              },
-              turn_detection: {
-                type: "semantic_vad",
-                eagerness: data.eagerness ?? "medium",
-                create_response: true,
-                interrupt_response: true,
-              },
-            },
+            input: realtimeAudioInput({
+              createResponse: true,
+              interruptResponse: true,
+              eagerness: data.eagerness,
+            }),
           },
           tool_choice: "auto",
           tools: toolset.tools,
