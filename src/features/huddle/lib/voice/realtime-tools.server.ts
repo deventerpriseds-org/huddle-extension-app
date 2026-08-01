@@ -82,24 +82,36 @@ export async function assembleRealtimeInstructions(
   return base + memoryBlock + VOICE_HOUSE_STYLE;
 }
 
+// The app's function-tool schemas are shaped for the Responses/Chat APIs and carry fields the Realtime
+// GA `/v1/realtime/client_secrets` endpoint REJECTS — notably `strict` (verified live: a `strict` on a
+// session tool 400s the whole mint with "Unknown parameter: 'session.tools[0].strict'", so the speaking
+// session never connects for ANY agent). Whitelist ONLY the fields Realtime accepts for a function tool;
+// pass non-function tools (file_search) through untouched.
+function toRealtimeTool(t: unknown): unknown {
+  const rec = t as { type?: string; name?: string; description?: string; parameters?: unknown };
+  if (rec?.type !== "function") return t; // file_search etc. — leave as-is
+  return { type: "function", name: rec.name, description: rec.description, parameters: rec.parameters };
+}
+
 /** Governed tool schemas for the realtime session — mirrors the text path's mergedTools (minus the
- *  turn-scoped Huddle-native create tools, see file note), gated by the same ownership data. */
+ *  turn-scoped Huddle-native create tools, see file note), gated by the same ownership data, and
+ *  SANITIZED to the Realtime-accepted shape (drops `strict`/Responses-only fields). */
 export async function buildRealtimeToolset(
   agentId: AgentId,
   opts: { webSearch?: boolean; journey?: boolean } = {},
 ): Promise<{ tools: unknown[]; journeyNames: Set<string> }> {
   const agent = AGENT_BY_ID[agentId];
-  const tools: unknown[] = [PRIORITIZE_TOOL, SCHEDULE_REMINDER_TOOL];
+  const raw: unknown[] = [PRIORITIZE_TOOL, SCHEDULE_REMINDER_TOOL];
 
-  if (opts.webSearch !== false) tools.push(TAVILY_WEB_SEARCH_TOOL);
-  if (agentOwnsCapability(agent, "backlog-grooming")) tools.push(GROOM_BACKLOG_TOOL);
+  if (opts.webSearch !== false) raw.push(TAVILY_WEB_SEARCH_TOOL);
+  if (agentOwnsCapability(agent, "backlog-grooming")) raw.push(GROOM_BACKLOG_TOOL);
 
   // Non-function snapshot tools (file_search knowledge bases) if the agent has any.
   const snapshot = getAssistantSnapshot(agentId);
   const snapshotTools = snapshotResponsesTools(snapshot).filter(
     (t) => (t as { type?: string })?.type !== "function",
   );
-  tools.push(...snapshotTools);
+  raw.push(...snapshotTools);
 
   // Journey catalog (calendar, schedule, tasks, priorities, push, …) — the bulk of "same brain".
   const journeyNames = new Set<string>();
@@ -108,13 +120,13 @@ export async function buildRealtimeToolset(
       const defs = await fetchJourneyToolDefinitions();
       for (const d of defs) {
         journeyNames.add(d.name);
-        tools.push(toResponsesTool(d));
+        raw.push(toResponsesTool(d));
       }
     } catch {
       // Journey catalog unavailable — voice still works with the native tools above.
     }
   }
-  return { tools, journeyNames };
+  return { tools: raw.map(toRealtimeTool), journeyNames };
 }
 
 /** DIRECT, one-hop executor for a realtime tool call. Returns the tool output string + elapsed ms
