@@ -51,19 +51,26 @@ platform (prompt + webhook tools + a generic non-snapshot LLM) — a second brai
    tool-less agents. Flex and EVERY agent must have the full tool set + everything else Iris has.**
    So a single, uniform OpenAI-Realtime path for all agents — no per-agent engine split.
 
-## HARD REQUIREMENT — full tool parity for EVERY agent (user: "flex and all agents should have tools
-## and everything else iris has")
-Ground-truth: `runAgentTurn` already builds `mergedTools` (huddle.functions.ts:1916) UNCONDITIONALLY
-for every agent — create_huddle_task, artifacts, delegate, flag-blocker, confirm-intent, reminders,
-**prioritize**, + RAG memory + journey-proxy tools (calendar/schedule/send_push/…) + web search. The
-only per-agent variance is `snapshotTools` (file_search KNOWLEDGE BASES — Flex has none; that's data,
-not a capability tier) and grooming (Terry-exclusive by the ownership model). So "everything Iris has"
-= this base suite, which every agent already gets in TEXT.
-**The realtime voice session MUST inject this SAME per-agent `mergedTools` assembly** (via the extracted
-shared builder) so a voice reply from Flex has identical tool access to a voice reply from Iris. Verify
-parity explicitly: the SAME tool call succeeds for Flex-by-voice, Iris-by-voice, and Iris-by-text.
-(File_search KBs and Terry's grooming stay as-is — deliberate data/ownership, not a parity gap. If the
-user later wants Flex to also have a knowledge base, that's a separate additive data change.)
+## HARD REQUIREMENT — same STRUCTURE for every agent, governance intact (user clarification 2026-08-01)
+Corrected intent (the user was explicit): this is **NOT** "give Flex every tool flat." Tool/capability
+USE remains governed by the **owner / executioner / capability rules** (Terry owns grooming, exclusive
+capabilities in `agents.ts` via `lib/capabilities.ts`, etc.). The requirement is that **every agent is
+wired through the SAME data-driven STRUCTURE**, because those ownership/capability assignments **can
+rotate or be altered at any time** — so the mechanism must be identical for all agents and must
+propagate a rotation automatically, with zero per-agent code, to the VOICE path just as it does to text.
+This is exactly the repo's standing "Systematic capability, never a patch" / "data-driven ownership" rule.
+
+Ground-truth: `runAgentTurn` already builds `mergedTools` (huddle.functions.ts:1916) through that
+governed structure — a base suite EVERY agent gets (create_huddle_task, artifacts, delegate,
+flag-blocker, confirm-intent, reminders, **prioritize**, + RAG memory + journey-proxy tools
+(calendar/schedule/send_push/…) + web search) PLUS ownership-gated additions (`ownsGrooming ?
+GROOM_BACKLOG_TOOL : []`, exclusive capabilities) and per-agent data (`snapshotTools`/file_search KBs).
+**The realtime voice session MUST derive each agent's tools from this SAME governed builder** — not a
+hand-picked flat list — so: (a) Flex-by-voice has the identical STRUCTURE to Iris-by-voice; (b) what
+each can actually USE follows the current ownership/capability DATA; (c) if an owner/capability rotates,
+BOTH text and voice change together with no code edit. Verify: the SAME builder feeds text and voice;
+an ownership rotation (e.g. move grooming off Terry) flips the tool's presence in BOTH paths for the
+new owner and removes it for the old — proving structure-parity, not a flat grant.
 
 ## The fix — journey's PROVEN Realtime pattern + boost's turn-tuning & echo-guard insights.
 ## Reference: journey `RealtimeVoiceAssistant` + `generate-realtime-token`; boost `Call.jsx` +
@@ -177,11 +184,19 @@ CCR egress can't reach the SWA); PG = `azure-pg-query.yml`; CODE = static trace;
 6. Auto-retrieved RAG memory (same searchChunks/embed as text) present in session instructions. (CODE/HUMAN)
 7. Voice & text call the SAME `assembleAgentInstructions` builder. (CODE)
 
-**C. Same brain — TOOL PARITY (hard requirement)**
-8. Minted `tools` == text `mergedTools` names (minus file_search KB + Terry grooming). (CODE)
-9. Flex's minted tools == Iris's minted tools minus KB/grooming (full base suite). (CODE)
-10. Same tool call → identical payload for Flex-voice, Iris-voice, Iris-text. (CODE/DIAG/PG)
-11. Mid-call function_call → shared executor → function_call_output → response.create → spoken answer uses REAL data. (DIAG/HUMAN)
+**C. Same brain — STRUCTURE parity via the governed builder (hard requirement, corrected)**
+8. For a given agent, the minted `tools` == exactly what the SAME governed `mergedTools` builder yields
+   for that agent (base suite + ownership-gated additions + its snapshot/KB data) — derived, not a
+   hand-picked flat list. (CODE)
+9. Flex and Iris go through the IDENTICAL builder/structure; their minted toolsets differ ONLY where the
+   ownership/capability DATA differs (e.g. grooming for the current owner, per-agent KBs) — not by any
+   per-agent code branch. (CODE)
+10. Ownership rotation propagates: reassigning an exclusive capability (e.g. grooming) in the data flips
+    that tool's presence in BOTH the text mergedTools AND the voice mint for the new owner, and removes
+    it from the old — with no code change. (CODE, before/after the data change)
+11. A tool the agent IS entitled to use → mid-call function_call → shared executor → function_call_output
+    → response.create → spoken answer uses REAL data. A tool it is NOT entitled to (ownership-gated) is
+    absent from its session, exactly as in text. (DIAG/HUMAN/CODE)
 
 **D. Shared executor not a fork**
 12. Both text engine & realtime-tool fn call one `executeAgentTool(name,args,ctx)`. (CODE)
