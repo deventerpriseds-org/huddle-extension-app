@@ -11,6 +11,42 @@ Last updated: 2026-07-31 (ACT-huddle-12 problem #1 — Transcript/Chat tabs — 
 
 ## Open
 
+### ACT-huddle-13: 1:1 VOICE latency — make agents SPEAK journey-fast (OpenAI Realtime speaks directly)
+**Requested:** 2026-08-01 — user: "the delay for my convo with Flex to SPEAK takes way too long. much
+longer than the journey app"; "settings should match journey or the boost coach"; "flex and all agents
+should have tools and everything else iris has" (clarified: SAME data-driven capability/ownership
+STRUCTURE, not flat access — rotations must propagate to voice).
+**Expected outcome:** talking to an agent in a 1:1, the agent starts speaking in <~1s (journey-like),
+same brain (snapshot + memory + governed tools), tool answers use real data, natural turn-taking + barge.
+**Plan:** `docs/plan-1on1-realtime-voice.md` (+ 31 ACs). Let OpenAI Realtime generate the spoken reply
+over the existing WebRTC channel; bake instructions+memory+governed mergedTools+per-agent voice into the
+session at mint; tool-calls via a shared executor (extend, don't fork). Steal boost's turn-tuning +
+echo-guard. Uniform path for ALL agents.
+**Status:**
+- [DONE 2026-08-01] Ground-truthed current voice path + both references (journey OpenAI-Realtime chosen;
+  boost ElevenLabs ConvAI insights folded in). Plan + independent ACs written & committed.
+- [DONE 2026-08-01] **PREMISE CONFIRMED** via cheap probe (`realtime-speak-probe.yml` run 30682377534
+  PASS): GA gpt-realtime over WebRTC speaks directly + tool + speaks real value. Build de-risked.
+  Probe-found build insight recorded in memory: play the WebRTC RTP track (Huddle currently disables it).
+- [DONE — BUILT + DEPLOYED 2026-08-01, tsc+build clean, deploy run 30697904041 success] Approach A
+  (OpenAI Realtime speaks directly), runtime-switchable against the baseline. Files: `lib/voice/
+  agent-realtime-voice.ts` (data-driven OpenAI voice map), `lib/voice/realtime-tools.server.ts`
+  (assembleRealtimeInstructions [snapshot+RAG memory+voice house-style] + buildRealtimeToolset [governed
+  schemas] + executeRealtimeTool [DIRECT one-hop, reuses text dispatchers, instrumented ms]),
+  `lib/voice/realtime.functions.ts` (getRealtimeSession speaking-mint when agentId present:
+  create_response:true + interrupt_response:true + per-agent voice + tools + instructions; back-compat
+  ears-only when no agentId; + runRealtimeTool client-callable executor), `hooks/useVoiceCallRealtimeSpeak.ts`
+  (attaches+plays the remote WebRTC track, tool round-trip, transcript→dm-<agent> store, native barge +
+  self-echo guard, hard mic-mute), `lib/voice/voice-engine-store.ts` (persisted baseline|realtime-speak,
+  default baseline), MeetingBar wiring + "Baseline / ⚡ Fast (A)" header toggle (applies on next call).
+  NO ElevenLabs built (baseline = existing laggy path, per user). Tool executor is DIRECT (not journey's
+  slow execute-tool hop) + latency-instrumented, and reversible via the toggle (user guidance).
+- [OPEN — awaiting user LIVE A/B] User flips ⚡ Fast (A) in a 1:1 meeting header, leaves & rejoins, and
+  compares speak-latency + naturalness vs Baseline. NOT claimed working until confirmed live (premise
+  speak+tool was proven headless on gpt-realtime via realtime-speak-probe; the wired end-to-end path is
+  build/deploy-verified but not yet live-confirmed). v1 tool scope = journey catalog + prioritize +
+  reminders + web + grooming(owner); Huddle-native create_huddle_task/artifacts (turn-scoped) deferred.
+
 ### ACT-huddle-6: Cross-modality "same brain" — 1:1 chat vs. 1:1 meeting-room (voice) give different answers/capabilities
 **Requested:** 2026-07-31 — user's own words: "the outcomes I get from a one-on-one chat versus what
 I get when I hit the record button and I'm in the one and one meeting room [are] totally different
@@ -27,7 +63,13 @@ ceremony voice pipeline) not have the same tool access (e.g. journey proxy tools
 (`runHuddleTurn`)? Likely candidates: the voice path may route through a different/thinner prompt
 assembly or a restricted tool list, or the Realtime API session config doesn't register the same
 tool schemas the Responses-API chat path gets.
-**Status:** open — ACs pending `/define-acceptance-criteria`; not yet investigated.
+**Status:** LARGELY RESOLVED at the engine level + one follow-on bug fixed (all deployed; awaiting user's final live confirm).
+- **[DONE — deployed, live-DB confirmed]** The "different brain" root cause was the 1:1 VOICE orb using a SEPARATE ElevenLabs-hosted LLM+thin prompt, unchanged since day one. Reversible switch to OpenAI (same snapshot+model as chat) via `useVoiceCallRealtime` + `VOICE_1ON1_BACKEND="openai"` flag (ElevenLabs kept as fallback). Proven at the engine level: live `dm-iris-chase` turns show the voice/meeting path answering the web-search question CORRECTLY ("Yes, I can perform a live web search") — same as text chat.
+- **[DONE — deployed]** Transcript/Chat tabs in the 1:1 meeting pane (ACT-huddle-12 #1) + meeting transcript now renders from the durable `dm-<agent>` store thread (unified with the 1:1 text chat). Screenshots confirm both surfaces show one conversation.
+- **[DONE — deployed, verifier PASS 19/19]** Follow-on bug the user hit while testing: some 1:1 sends showed on screen but got no reply. Live DB proved they never created a server turn row — the enqueue POST failed at the transport layer and BOTH send paths silently swallowed it. Fixed with shared `resilientEnqueue` (retry + probe + surface real error). Commit `9bbc5e2`. See memory.md Hardening (silent send-drop).
+- **[DONE — deployed, verifier PASS 9/9 static]** 1:1 voice mic didn't go live on mobile (user: "the mic click does nothing so they can't hear me speak"; "as soon as I hit the button... it should be active and unmuted by default"). Root cause: `useCeremonyVoice.startListening` called `getUserMedia` AFTER `await getRealtimeSession()`, so the entry tap's mobile user-activation was gone by the time the mic was requested → silent no-op. Fix: grab the mic FIRST (before any network await), mint the session after, stop tracks on abort; plus the 1:1 mic button can now (re)connect on tap (was soft-mute only). Mic is unmuted by default on connect. Commit `53b18a2`. See memory.md Hardening (gesture-gated API before first await).
+- **[DONE — deployed, live headless-browser diagnostic PASS] The 1:1 voice mic actually never connected on ANY device — THREE stacked bugs, not the mobile gesture (my first two guesses were wrong layers).** Found via `e2e/voice-1on1-diagnostic.e2e.mjs` (`voice-1on1-diagnostic.yml`) — a headless Chromium run on the deployed app capturing the getRealtimeSession + OpenAI SDP network flow + screenshots. Bugs, each hiding the next: (1) a re-render starvation loop (`MeetingLayer` auto-connect effect depended on `connect`, whose identity changes every render → connect()/startListening() looped, each bumping genRef and bailing before minting the session; getUserMedia logged dozens of times/sec, getRealtimeSession never called) — fixed with a ref + per-speaker gate + `connectingRef` re-entrancy guard (commit `df087da`); (2) dead OpenAI mint endpoint `/v1/realtime/sessions` (404 "Invalid URL") — migrated to GA `POST /v1/realtime/client_secrets`, ephemeral key in top-level `value`, model `gpt-realtime`; (3) dead SDP endpoint `/v1/realtime` + beta session schema — migrated to GA `POST /v1/realtime/calls?model=…` and `session.update` under `audio.input` (commit `23cf7d8`). **PROOF (diagnostic run 30673159310 = success):** getRealtimeSession `ok:true` (`ek_…`), getUserMedia called ONCE, RTCPeerConnection created, OpenAI SDP `201` + valid answer SDP, mic button reads **"Mic"** (live+unmuted). The earlier mic-gesture reorder (`53b18a2`) stays (harmless, correct best-practice) but was NOT the actual fix. See memory.md Hardening (three stacked voice bugs).
+- **[OPEN — awaiting user]** Final LIVE confirmation on the user's own device that: (a) the meeting Chat tab shows sends+replies, (b) a failed send surfaces a "Couldn't send —" error instead of vanishing, and (c) entering the 1:1 voice meeting brings the mic up live+unmuted AND the agent actually HEARS/answers real speech. The diagnostic proves the CONNECTION now establishes end-to-end but uses a FAKE mic — so the real-speech STT/VAD path (GA `session.update` transcription + server_vad) is the one thing only a human retest can confirm. If speech still isn't picked up, it's in that GA session schema and the diagnostic + user report will localize it. NOTE: 1:1 path only; GROUP ceremony voice is ACT-huddle-7 (uses the same `useCeremonyVoice`, so it benefits from the same endpoint/loop fixes — worth a separate live check).
 
 ### ACT-huddle-7: Finish the ceremony voice rebuild — replace push-to-talk/MP3 with the working WebRTC mechanism
 **Requested:** 2026-07-31 — user's own words: "we talked about repairing a bad attempt at fixing the

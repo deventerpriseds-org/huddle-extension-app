@@ -7,6 +7,7 @@ import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
 import { useCeremonyVoice } from "./useCeremonyVoice";
 import { enqueueHuddleTurn, getTurnUpdates } from "../lib/huddle.functions";
+import { resilientEnqueue } from "../lib/resilient-enqueue";
 import type { VoiceCallController, VoiceStatus, VoiceCaption } from "./useVoiceCall";
 import type { StartVoiceResult } from "../lib/voice/voice.functions";
 
@@ -162,23 +163,43 @@ export function useVoiceCallRealtime(): VoiceCallRealtimeController {
       };
 
       try {
-        const res = await enqueueHuddleTurn({ data: payload });
-        if (res.status === "done") {
+        // resilientEnqueue retries a transient transport blip (idempotent on turnId), then — only if
+        // every attempt still throws — probes the server to tell "backgrounded but persisted" (fall
+        // through to the poll loop, which recovers it) from "never reached the server" (surface it, so
+        // a spoken/typed turn is never silently dropped — the bug this fixes). Otherwise the resolved
+        // status flows through exactly as before.
+        const outcome = await resilientEnqueue({
+          enqueue: () => enqueueHuddleTurn({ data: payload }),
+          probe: async () => {
+            const { turns } = await getTurnUpdates({ data: { huddleId, sinceMs: now - 5_000 } });
+            return turns.some((x) => x.id === turnId);
+          },
+        });
+        if (outcome.kind === "failed") {
+          // Every attempt threw AND no server turn exists — a real send failure, not a stale exchange.
+          if (exchangeGenRef.current === gen)
+            setPhaseError(`Couldn't send — ${outcome.error}`);
+          return;
+        }
+        // "resolved" → use the returned status. "persisted" → res is null, fall straight to the poll
+        // loop below (the turn is on the server; polling finds it and streams the reply).
+        const res = outcome.kind === "resolved" ? outcome.res : null;
+        if (res?.status === "done") {
           await applyReplies(
             res.result?.replies as { agentId: AgentId; text: string }[] | undefined,
           );
           return;
         }
-        if (res.status === "error") {
+        if (res?.status === "error") {
           if (exchangeGenRef.current === gen)
             setPhaseError(res.error || "The reply failed — please try again.");
           return;
         }
-        // 'partial' | 'queued' | 'running' — poll until a terminal state, same pattern the text
-        // composer uses (getTurnUpdates), so a slower turn doesn't just go silent. Keeps polling
-        // (and saving replies to the transcript) even if superseded by a newer utterance — only
-        // speaking is gated on staleness (inside applyReplies -> speakReply), so nothing is lost.
-        if (res.result?.replies?.length)
+        // 'partial' | 'queued' | 'running' (or a persisted-after-throw turn) — poll until a terminal
+        // state, same pattern the text composer uses (getTurnUpdates), so a slower turn doesn't just go
+        // silent. Keeps polling (and saving replies to the transcript) even if superseded by a newer
+        // utterance — only speaking is gated on staleness (inside applyReplies -> speakReply).
+        if (res?.result?.replies?.length)
           await applyReplies(res.result.replies as { agentId: AgentId; text: string }[]);
         const deadline = Date.now() + POLL_TIMEOUT_MS;
         while (Date.now() < deadline) {

@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { AgentId } from "../data/agents";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
-import { getRealtimeSession } from "../lib/voice/realtime.functions";
+import { getRealtimeSession, REALTIME_MODEL } from "../lib/voice/realtime.functions";
 
 // Ceremony voice: OpenAI Realtime WebRTC for VAD + mid-utterance barge detection only.
 // ElevenLabs per-sentence TTS for audio output (existing agent voices).
@@ -126,6 +126,11 @@ export function useCeremonyVoice(hookOpts: {
     typeof RTCPeerConnection !== "undefined";
 
   const listenRef = useRef(false);
+  // True from the instant startListening begins until it either finishes (data channel open) or
+  // fails. Re-entrancy guard: a second startListening() call while one is still in flight (before
+  // listenRef flips true at dc.onopen) must NOT proceed — otherwise it bumps genRef and starves the
+  // first attempt before it can mint the realtime session, and the mic never connects.
+  const connectingRef = useRef(false);
   const statusRef = useRef<CeremonyVoiceStatus>("idle");
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -267,6 +272,7 @@ export function useCeremonyVoice(hookOpts: {
   const stopListening = useCallback(() => {
     genRef.current += 1;
     listenRef.current = false;
+    connectingRef.current = false;
     audioQueueRef.current.clearAndStop();
     freezeRef.current = null;
     dcRef.current?.close();
@@ -286,18 +292,18 @@ export function useCeremonyVoice(hookOpts: {
       setPhase("error");
       return;
     }
-    if (listenRef.current) return;
+    if (listenRef.current || connectingRef.current) return;
+    connectingRef.current = true;
     setError(null);
     genRef.current += 1;
     const gen = genRef.current;
 
     try {
-      const session = await getRealtimeSession({ data: {} });
-      if (!session.ok) throw new Error(session.error);
-      const ephemeralKey = session.clientSecret;
-
-      if (genRef.current !== gen) return;
-
+      // Grab the mic FIRST, before any network await. getUserMedia requires a live user-activation
+      // gesture on mobile browsers; the meeting-entry tap's activation is consumed if we await a
+      // network round-trip (getRealtimeSession) before it — so the mic silently never opens on
+      // mobile and the agent can't hear anything. Acquiring the stream up front runs it inside the
+      // still-fresh gesture window; the ephemeral session is minted after (its await is fine).
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
@@ -305,6 +311,20 @@ export function useCeremonyVoice(hookOpts: {
 
       if (genRef.current !== gen) {
         stream.getTracks().forEach((t) => t.stop());
+        connectingRef.current = false;
+        return;
+      }
+
+      const session = await getRealtimeSession({ data: {} });
+      if (!session.ok) {
+        stream.getTracks().forEach((t) => t.stop());
+        throw new Error(session.error);
+      }
+      const ephemeralKey = session.clientSecret;
+
+      if (genRef.current !== gen) {
+        stream.getTracks().forEach((t) => t.stop());
+        connectingRef.current = false;
         return;
       }
 
@@ -323,22 +343,36 @@ export function useCeremonyVoice(hookOpts: {
       dcRef.current = dc;
 
       dc.onopen = () => {
+        // GA session.update schema: transcription + turn_detection now nest under audio.input, and
+        // the model must NOT auto-respond (we use Realtime for VAD + STT only; the reply comes from
+        // our own turn engine). create_response:false suppresses the model's own answer.
         dc.send(
           JSON.stringify({
             type: "session.update",
             session: {
-              modalities: ["text"],
-              input_audio_transcription: { model: "gpt-4o-transcribe" },
-              turn_detection: {
-                type: "server_vad",
-                silence_duration_ms: 800,
-                threshold: 0.5,
-                create_response: false,
+              type: "realtime",
+              audio: {
+                input: {
+                  transcription: { model: "gpt-4o-transcribe" },
+                  // semantic_vad detects end-of-turn by MEANING (a classifier), not raw audio energy.
+                  // server_vad (energy + fixed silence window) waited on background noise — it never
+                  // saw enough silence to end the turn, so the agent "ignored" the user, and stray
+                  // noise false-triggered barges that superseded the real reply. semantic_vad is
+                  // noise-robust with a bounded max wait (auto≈medium, ~4s), matching the natural
+                  // turn-taking of the ElevenLabs voice in journey / the boost coach. create_response
+                  // stays false — our own turn engine produces the reply, not the Realtime model.
+                  turn_detection: {
+                    type: "semantic_vad",
+                    eagerness: "auto",
+                    create_response: false,
+                  },
+                },
               },
             },
           }),
         );
         listenRef.current = true;
+        connectingRef.current = false; // fully connected — release the re-entrancy guard
         setPhase("listening");
       };
 
@@ -388,8 +422,9 @@ export function useCeremonyVoice(hookOpts: {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
+      // GA WebRTC SDP exchange endpoint (was /v1/realtime in beta — now /v1/realtime/calls).
       const sdpRes = await fetch(
-        "https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03",
+        `https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(REALTIME_MODEL)}`,
         {
           method: "POST",
           headers: {
@@ -407,6 +442,7 @@ export function useCeremonyVoice(hookOpts: {
       const answerSdp = await sdpRes.text();
       await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
     } catch (err) {
+      connectingRef.current = false; // release the guard on every failure path (incl. the early return)
       if (genRef.current !== gen) return;
       const name = err instanceof DOMException ? err.name : "";
       const msg =

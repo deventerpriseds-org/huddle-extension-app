@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
 import type { Huddle, HuddleMessage } from "../data/seed";
 import { enqueueHuddleTurn, getTurnUpdates, getReminderDeliveries, listCeremonyRuns } from "../lib/huddle.functions";
+import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
@@ -667,26 +668,41 @@ function Composer({ huddle }: { huddle: Huddle }) {
     };
 
     try {
-      // Fast path: run the turn now and render its result. The turn is ALSO persisted server-side,
-      // so if this request dies (app backgrounded / screen off) the reply isn't lost — the delivery
-      // loop below re-reads it on return, and the cron heartbeat finishes any turn we couldn't.
-      const res = await enqueueHuddleTurn({ data: payload });
-      if (res.status === "done") {
-        applyTurnStream(turnId, res.result?.replies, res.result, true);
-        clearPendingFor(turnId);
-      } else if (res.status === "partial") {
-        // The first chunk ran here — render its replies now, but KEEP the indicator up: more agents
-        // are still coming and the poll loop streams them in as later chunks complete.
-        applyTurnStream(turnId, res.result?.replies, res.result, false);
-      } else if (res.status === "error") {
-        toast.error(res.error || "Message failed");
+      // Fast path: run the turn now and render its result. The turn is ALSO persisted server-side, so
+      // if this request dies mid-flight the reply isn't lost. resilientEnqueue retries a transient
+      // transport blip (idempotent on turnId), then — only if every attempt still throws — probes the
+      // server to tell "backgrounded but persisted" (recover silently, as before) from "never reached
+      // the server" (surface it, so the send is never silently dropped — the bug this fixes).
+      const outcome = await resilientEnqueue({
+        enqueue: () => enqueueHuddleTurn({ data: payload }),
+        probe: async () => {
+          const { turns } = await getTurnUpdates({ data: { huddleId: huddle.id, sinceMs: now - 5_000 } });
+          return turns.some((t) => t.id === turnId);
+        },
+      });
+      if (outcome.kind === "resolved") {
+        const res = outcome.res;
+        if (res.status === "done") {
+          applyTurnStream(turnId, res.result?.replies, res.result, true);
+          clearPendingFor(turnId);
+        } else if (res.status === "partial") {
+          // The first chunk ran here — render its replies now, but KEEP the indicator up: more agents
+          // are still coming and the poll loop streams them in as later chunks complete.
+          applyTurnStream(turnId, res.result?.replies, res.result, false);
+        } else if (res.status === "error") {
+          toast.error(res.error || "Message failed");
+          clearPendingFor(turnId);
+        }
+        // partial/queued/running → leave the pending indicator up; the delivery loop streams the rest.
+      } else if (outcome.kind === "persisted") {
+        // Every attempt threw, but the turn IS on the server (app backgrounded mid-turn). Keep the
+        // indicator up; the deliver-on-reconnect poll + cron heartbeat finish it. Silent, as before.
+      } else {
+        // Every attempt threw AND no server turn exists — the send genuinely failed to reach the
+        // server. Surface it (with the real error) instead of silently losing the message.
+        toast.error(`Couldn't send — ${outcome.error}`);
         clearPendingFor(turnId);
       }
-      // partial/queued/running → leave the pending indicator up; the delivery loop streams the rest.
-    } catch {
-      // The request was cut off (typically the app was backgrounded mid-turn). Do NOT surface an
-      // error or clear pending — the turn keeps running server-side and the reply arrives on return
-      // (plus a push notification while away).
     } finally {
       setSending(false);
       requestAnimationFrame(() => inputRef.current?.focus());

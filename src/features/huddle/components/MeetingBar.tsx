@@ -21,6 +21,8 @@ import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
 import { useHuddleStore, type CeremonyKind, type CeremonyTurn, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
 import { useVoiceCallRealtime } from "../hooks/useVoiceCallRealtime";
+import { useVoiceCallRealtimeSpeak } from "../hooks/useVoiceCallRealtimeSpeak";
+import { useVoiceEngineStore } from "../lib/voice/voice-engine-store";
 import { useGroupVoice } from "../hooks/useGroupVoice";
 import { useCeremonyVoice } from "../hooks/useCeremonyVoice";
 import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates } from "../lib/huddle.functions";
@@ -145,21 +147,47 @@ function fmtClock(ms: number): string {
 export function MeetingLayer() {
   const meeting = useHuddleStore((s) => s.meeting);
   const leaveMeeting = useHuddleStore((s) => s.leaveMeeting);
-  // Both hooks are always called (Rules of Hooks) — only the selected one is ever connect()ed;
-  // the other simply sits idle. Swapping VOICE_1ON1_BACKEND is the entire revert, nothing else.
+  // All voice hooks are always called (Rules of Hooks) — only the selected one is ever connect()ed;
+  // the others sit idle. The 1:1 engine is a RUNTIME setting (voice-engine-store) so the user can flip
+  // between the current baseline and Approach A (Realtime speaks directly) live to A/B them.
   const elevenLabsVoice = useVoiceCall();
   const realtimeVoice = useVoiceCallRealtime();
-  const voice: VoiceCallController = VOICE_1ON1_BACKEND === "openai" ? realtimeVoice : elevenLabsVoice;
+  const realtimeSpeakVoice = useVoiceCallRealtimeSpeak();
+  const engineMode = useVoiceEngineStore((s) => s.mode);
+  const voice: VoiceCallController =
+    engineMode === "realtime-speak"
+      ? realtimeSpeakVoice
+      : VOICE_1ON1_BACKEND === "openai"
+        ? realtimeVoice
+        : elevenLabsVoice;
   const { connect, disconnect } = voice;
 
   const active = !!meeting;
   const isVirtual = meeting?.kind === "virtual-meeting";
   const speakerId = meeting?.activeSpeakerId;
 
-  // 1:1 / voice-call meetings drive the ElevenLabs orb; virtual meetings use group voice instead.
+  // 1:1 / voice-call meetings auto-connect the voice mic once on entry.
+  // CRITICAL: `connect` must NOT be in the dep array. Both voice hooks return a NEW object each
+  // render, so `connect`'s identity changes every render; depending on it re-fired this effect on
+  // EVERY render, calling connect()→startListening() in a tight loop. Each startListening bumps a
+  // generation counter, so every in-flight attempt saw itself superseded and bailed BEFORE minting
+  // the realtime session — the mic never actually connected (verified: getUserMedia was called
+  // dozens of times/sec and getRealtimeSession never once). We call the latest connect via a ref and
+  // gate on a per-speaker key so it fires exactly once per meeting entry; reset when the meeting ends.
+  const connectRef = useRef(connect);
+  connectRef.current = connect;
+  const connectedForRef = useRef<string | null>(null);
   useEffect(() => {
-    if (active && speakerId && !isVirtual) connect(speakerId);
-  }, [active, speakerId, isVirtual, connect]);
+    if (active && speakerId && !isVirtual) {
+      if (connectedForRef.current !== speakerId) {
+        connectedForRef.current = speakerId;
+        void connectRef.current(speakerId);
+      }
+    } else {
+      connectedForRef.current = null; // meeting ended / switched to a virtual meeting — allow reconnect
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, speakerId, isVirtual]);
 
   // Backstop teardown when the meeting ends by any path.
   useEffect(() => {
@@ -175,7 +203,12 @@ export function MeetingLayer() {
   // Chat-tab typed-text send for a 1:1/ad-hoc call — only meaningful on the OpenAI-backed hook
   // (it's what routes through the real turn engine); undefined on the ElevenLabs backend, which
   // has no equivalent, so the Chat compose box is disabled with an explanation there instead.
-  const sendChatText = VOICE_1ON1_BACKEND === "openai" ? realtimeVoice.sendText : undefined;
+  const sendChatText =
+    engineMode === "realtime-speak"
+      ? realtimeSpeakVoice.sendText
+      : VOICE_1ON1_BACKEND === "openai"
+        ? realtimeVoice.sendText
+        : undefined;
 
   if (!meeting) return null;
   return (
@@ -268,6 +301,8 @@ function MeetingRoom({
   onLeave: () => void;
 }) {
   const collapse = useHuddleStore((s) => s.toggleMeetingExpanded);
+  const engineMode = useVoiceEngineStore((s) => s.mode);
+  const setVoiceEngine = useVoiceEngineStore((s) => s.setMode);
   const patchMeeting = useHuddleStore((s) => s.patchMeeting);
   const addMeetingTurns = useHuddleStore((s) => s.addMeetingTurns);
   const markLastAgentTurnInterrupted = useHuddleStore((s) => s.markLastAgentTurnInterrupted);
@@ -652,6 +687,9 @@ function MeetingRoom({
   }, [isVirtual, turns, storeMessages, meeting.activeSpeakerId]);
 
   const micOn = isVirtual ? voiceLive && !groupVoice.muted : voice.status === "connected" && !voice.micMuted;
+  // Voice not yet live — the mic button's tap will START/join the call (getUserMedia in the gesture),
+  // not toggle mute. Group: not live; 1:1: not connected. Drives the button's "Join" affordance.
+  const needsJoin = isVirtual ? !voiceLive : voice.status !== "connected";
 
   function onMic() {
     if (isVirtual) {
@@ -680,7 +718,18 @@ function MeetingRoom({
         toast(wasMuted ? "Mic live — go ahead" : "Microphone muted");
       }
     } else {
-      voice.toggleMic();
+      // 1:1 voice: the connection auto-starts on meeting open, but mobile browsers block
+      // getUserMedia outside a user gesture — so if it isn't connected yet (auto-start failed, or
+      // never got a gesture), THIS TAP (re)starts it, running getUserMedia inside the gesture. Any
+      // real failure surfaces via connect()'s status/error effect. Once connected, the same button
+      // toggles soft-mute (mirrors the group path's confirming toast so a blind tap is unambiguous).
+      if (voice.status !== "connected") {
+        void voice.connect(meeting.activeSpeakerId);
+      } else {
+        const wasMuted = voice.micMuted;
+        voice.toggleMic();
+        toast(wasMuted ? "Mic live — go ahead" : "Microphone muted");
+      }
     }
   }
 
@@ -948,6 +997,23 @@ function MeetingRoom({
         <span className="tabular-nums text-sm font-semibold">{fmtClock(now - meeting.startedAt)}</span>
         <span className="size-2 animate-pulse rounded-full bg-destructive" />
         <span className="text-sm font-semibold">{meetingLabel(meeting)}</span>
+        {/* 1:1 voice-engine A/B toggle (runtime switch). Applies on the NEXT call — leave & rejoin. */}
+        {meeting.kind !== "virtual-meeting" && (
+          <button
+            type="button"
+            onClick={() => {
+              const next = engineMode === "realtime-speak" ? "baseline" : "realtime-speak";
+              setVoiceEngine(next);
+              toast.message(
+                `Voice engine: ${next === "realtime-speak" ? "⚡ Fast (Realtime speaks)" : "Baseline"} — leave & rejoin the call to apply.`,
+              );
+            }}
+            className="rounded-full border border-hairline px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted"
+            title="Switch the 1:1 voice engine for A/B testing. Takes effect on the next call (leave & rejoin)."
+          >
+            {engineMode === "realtime-speak" ? "⚡ Fast (A)" : "Baseline"}
+          </button>
+        )}
         <span className="app-hidden text-[11px] text-muted-foreground sm:inline">
           ElevenLabs voice · Zoom bridge
         </span>
@@ -1045,8 +1111,8 @@ function MeetingRoom({
               </Button>
             )}
             <RoomControl
-              label={micOn ? "Mic" : "Unmute"}
-              tip={isVirtual && !voiceLive ? "Join with voice" : micOn ? "Mute" : "Unmute"}
+              label={micOn ? "Mic" : needsJoin ? "Join" : "Unmute"}
+              tip={needsJoin ? "Join with voice" : micOn ? "Mute" : "Unmute"}
               icon={micOn ? <Mic size={18} /> : <MicOff size={18} />}
               active={micOn}
               onClick={onMic}
