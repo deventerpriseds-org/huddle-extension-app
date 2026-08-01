@@ -32,6 +32,20 @@ function jaccard(a: string, b: string): number {
   return inter / (ta.size + tb.size - inter);
 }
 
+// Detect a MULTI-PART ask (several requests bundled in one utterance) so we can return to the
+// unanswered parts after a barge. Counting "?" alone is too narrow — a natural multi-part ask usually
+// has ONE "?" ("what's my schedule, a quick workout, and can you remind me to call the dentist?"), so
+// we also count request/interrogative cues and take the max. >= 2 ⇒ treat as a multi-part agenda.
+function countAsks(text: string): number {
+  const s = text.toLowerCase();
+  const q = (s.match(/\?/g) ?? []).length;
+  const cues =
+    s.match(
+      /\b(what('?s)?|how|when|where|why|which|who|can you|could you|would you|remind me|add (a )?task|set (a )?reminder|tell me|give me|show me|find|schedule|then)\b/g,
+    ) ?? [];
+  return Math.max(q, cues.length);
+}
+
 export type VoiceCallRealtimeSpeakController = VoiceCallController & {
   sendText: (agentId: AgentId, text: string) => Promise<void>;
 };
@@ -77,6 +91,10 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   // answered, remember the original ask and RETURN to the unanswered parts after the tangent is handled.
   const agendaRef = useRef<{ text: string } | null>(null);
   const resumePendingRef = useRef(false);
+  // In-flight tool calls awaiting their result. The agenda-return response.create must only fire when the
+  // model is IDLE — not while a tool continuation is still coming (that would collide as an "active
+  // response"). We fire the resume on response.done only once this counter is back to 0.
+  const pendingToolsRef = useRef(0);
 
   const clearAudio = useCallback(() => {
     audioQueueRef.current = [];
@@ -268,11 +286,20 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
                 // ONE synthesis for the whole (short) reply → smooth, gapless playback.
                 void speak(full, agentIdRef.current, gen);
               }
-              // AGENDA RETURN (journey-style): if this reply was the answer to a barge that interrupted a
-              // multi-part ask, now steer the agent back to the parts it hasn't answered yet. Fire a
-              // response.create carrying a resume instruction (the model still has the original ask in
-              // context and dedupes what it already covered). One resume cycle per agenda.
-              if (resumePendingRef.current && agendaRef.current && dc.readyState === "open") {
+              break;
+            }
+            case "response.done": {
+              // AGENDA RETURN (journey-style) fires HERE, not on output_text.done: a single response can
+              // contain a text item AND a function_call item, so text.done can arrive while the response
+              // is still active — sending response.create then errors ("active response"). response.done
+              // means the model is idle for this response. Only resume once no tool continuation is
+              // pending (pendingTools===0), so we don't race the tool-result response.create.
+              if (
+                resumePendingRef.current &&
+                agendaRef.current &&
+                pendingToolsRef.current === 0 &&
+                dc.readyState === "open"
+              ) {
                 const original = agendaRef.current.text;
                 resumePendingRef.current = false;
                 agendaRef.current = null;
@@ -286,9 +313,6 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
                       `you've already covered them all, briefly ask what's next instead.`,
                   },
                 }));
-              } else if (agendaRef.current && !resumePendingRef.current) {
-                // Multi-part ask answered to completion without a barge — agenda satisfied.
-                agendaRef.current = null;
               }
               break;
             }
@@ -300,10 +324,14 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
               // desynced). (3) If a multi-part agenda is active and the agent was mid-reply, arm the
               // return-to-remaining after the interruption is handled.
               bargeEpochRef.current += 1;
-              const wasSpeaking = modeRef.current === "speaking" || audioPlayingRef.current;
               clearAudio();
               setModeBoth("listening");
-              if (agendaRef.current && wasSpeaking) resumePendingRef.current = true;
+              // Arm the agenda-return whenever a multi-part ask is active. We do NOT gate on "was the
+              // agent audibly speaking" — a barge can land mid-tool-call (the reply hasn't been voiced
+              // yet, e.g. during a ~10s prioritize round-trip) and that still interrupts the multi-part
+              // answer. The resume instruction is defensive ("cover any parts not yet answered; if all
+              // covered, briefly ask what's next"), so arming it is safe even if nothing was pending.
+              if (agendaRef.current) resumePendingRef.current = true;
               break;
             }
             case "conversation.item.input_audio_transcription.completed": {
@@ -320,8 +348,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
               // overwrite the agenda when this utterance IS the interruption during an armed agenda
               // (resumePending) — that one is the tangent, not a new agenda. Heuristic trigger: 2+ "?".
               if (!resumePendingRef.current) {
-                const questionCount = (t.match(/\?/g) ?? []).length;
-                agendaRef.current = questionCount >= 2 ? { text: t } : null;
+                agendaRef.current = countAsks(t) >= 2 ? { text: t } : null;
               }
               break;
             }
@@ -332,6 +359,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
               try { args = JSON.parse((msg.arguments as string) || "{}"); } catch { /* noop */ }
               const aId = agentIdRef.current;
               if (!aId) break;
+              pendingToolsRef.current += 1;
               void runRealtimeTool({
                 data: {
                   name, args, agentId: aId, caller: callerFor(),
@@ -350,7 +378,8 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
                   if (dc.readyState !== "open") return;
                   dc.send(JSON.stringify({ type: "conversation.item.create", item: { type: "function_call_output", call_id: callId, output: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) } }));
                   dc.send(JSON.stringify({ type: "response.create" }));
-                });
+                })
+                .finally(() => { pendingToolsRef.current = Math.max(0, pendingToolsRef.current - 1); });
               break;
             }
             case "error":
