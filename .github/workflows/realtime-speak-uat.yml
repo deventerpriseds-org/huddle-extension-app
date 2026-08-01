@@ -1,0 +1,40 @@
+name: Realtime-speak Fast (A) UAT
+
+# Batch-of-agents UAT for Approach A (OpenAI Realtime speaks the 1:1 reply directly over WebRTC).
+# Loads the DEPLOYED SWA in headless Chromium (fake mic), seeds Fast (A), connects, TYPES each
+# agent's daily ask, and proves it spoke (inbound-rtp audio bytesReceived>0) + a non-empty reply,
+# classifying against the poor-response taxonomy. Uploads per-step screenshots as the proof artifact.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  realtime-speak-uat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Run realtime-speak UAT
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          SHOT_DIR: uat-shots
+        run: node e2e/realtime-speak-uat.e2e.mjs
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: realtime-speak-uat-shots
+          path: uat-shots/
+          retention-days: 7
