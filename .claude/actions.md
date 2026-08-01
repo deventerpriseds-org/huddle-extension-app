@@ -1081,3 +1081,27 @@ SEQUENCE: (1) deploy cross-talk relaxation → user feels it in a real stand-up;
 resume-in-place + trailing transcript (reuse the 30 ACs), staged 2→3→full, live-verified with real
 screenshots (user rejected server-fn-only "verified" before). A1(mic) is user-confirmed and was real
 barge-enabling plumbing; the rest of the plumbing is deployed but was NOT the experience.
+
+### ACT-huddle-13 (regression fix + unification): "what's my schedule" pointed to Graph after this morning's changes
+**Reported:** 2026-08-01 — user: Iris answered schedule from the combined `prioritize` schedule earlier
+today, but after this morning's changes she points to Graph/Outlook. Then: "why aren't they using the
+same config… I don't need multiple versions of iris, just one — has audio voice attached or not."
+**Root cause (ground-truthed, git + source):** commit `28b6b3f` (12:24) wired `get_calendar_events`
+into the Fast (A) VOICE toolset; before that the voice toolset had NO calendar tool, so schedule could
+only hit `prioritize`. The tool's DESCRIPTION said "use whenever the user asks what's on their
+calendar/**schedule/agenda**", contradicting the voice house-style ("ALWAYS call prioritize for the
+schedule; get_calendar_events only for raw Outlook"). A tool description strongly steers tool choice →
+Iris drifted to Graph. Deeper cause: `get_calendar_events` was the ONE governed tool DECLARED TWICE
+(inline in huddle.functions.ts text engine + locally in voice/realtime-tools.server.ts) — every other
+tool (prioritize/schedule_reminder/groom_backlog/tavily) already imports a single shared def, so only
+calendar could drift between channels.
+**Fix (deployed):**
+- [DONE `e1269ed`] Rewrote the get_calendar_events description in BOTH copies to scope it to explicit
+  EXTERNAL Outlook/meeting/free-busy asks and defer "schedule/agenda/day/priorities" to `prioritize`.
+- [DONE `aa18169`] UNIFIED it: extracted the canonical schema to `lib/calendar/tools.ts`; both the text
+  turn engine and the voice toolset now import that single source (voice strips `strict` via
+  toRealtimeTool). One Iris, one tool config; a channel is just "audio attached or not". Terminology per
+  user: the tool = the EXTERNAL (Outlook/Microsoft) calendar; "schedule" = combined `prioritize`.
+  tsc+build clean; deploy run 30710369017 success.
+- [OPEN — verification in progress + user live retest] Confirm Iris routes "what's my schedule" →
+  prioritize and "what's on my external Outlook calendar" → get_calendar_events, in BOTH chat and voice.
