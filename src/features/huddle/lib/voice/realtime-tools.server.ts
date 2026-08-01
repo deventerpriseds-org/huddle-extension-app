@@ -31,6 +31,8 @@ import { PRIORITIZE_TOOL } from "../tasks/tools";
 import { SCHEDULE_REMINDER_TOOL } from "../tasks/reminders";
 import { GROOM_BACKLOG_TOOL } from "../tasks/groom";
 import { TAVILY_WEB_SEARCH_TOOL, tavilySearch, type TavilySearchArgs } from "../tavily-search.functions";
+// SINGLE SOURCE — the same get_calendar_events schema the text turn engine uses (no voice-local copy).
+import { GET_CALENDAR_EVENTS_TOOL } from "../calendar/tools";
 
 export interface RealtimeCaller {
   entra_object_id?: string;
@@ -43,25 +45,6 @@ export interface RealtimeToolContext {
   huddleId: string;
   timeZone?: string;
 }
-
-// get_calendar_events — the Huddle-native Microsoft/Outlook calendar read (the exact "what's on my
-// schedule" same-brain capability). Schema mirrors the text path's inline def (huddle.functions.ts),
-// sanitized to the Realtime-accepted shape (no `strict`). Executor reuses getGraphCalendarEvents.
-const GET_CALENDAR_EVENTS_TOOL = {
-  type: "function" as const,
-  name: "get_calendar_events",
-  description:
-    "Read the user's raw Microsoft/Outlook calendar EVENTS (meetings, appointments) for a day or range, or whether they're free/busy at a specific time. Reads REAL calendar data — never answer from memory. Use this ONLY when the user explicitly asks about their Outlook/Microsoft calendar, a specific meeting/appointment, or free/busy at a time. Do NOT use it for \"what's on my schedule / agenda / day / plate\", tasks, priorities, or backlog — that is the user's COMBINED nightly schedule (tasks + calendar), which comes from the `prioritize` tool (view 'scheduled'), the source of truth. Dates are ISO (YYYY-MM-DD or full ISO). Returns Microsoft/Outlook events; a Google-only calendar won't appear.",
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      start: { type: "string", description: "Start of the range, ISO date or datetime. Defaults to today." },
-      end: { type: "string", description: "End of the range, ISO date or datetime. Defaults to end of the start day." },
-    },
-    required: [],
-  },
-};
 
 const VOICE_HOUSE_STYLE =
   "\n\nYou are on a live VOICE call. Speak naturally in 1–3 short spoken sentences. No markdown, no " +

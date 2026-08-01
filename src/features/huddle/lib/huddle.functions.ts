@@ -27,6 +27,7 @@ import {
   type TavilySearchArgs,
 } from "./tavily-search.functions";
 import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
+import { GET_CALENDAR_EVENTS_TOOL } from "./calendar/tools";
 import { DELEGATE_TO_SPECIALIST_TOOL, workerDirectory, getWorker, WORKER_ROLES } from "./agents/workers";
 import { FLAG_BLOCKER_TOOL, CONFIRM_TASK_INTENT_TOOL } from "./tasks/task-agent-tools";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
@@ -1987,28 +1988,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               },
               strict: false,
             });
-            emailTools.push({
-              type: "function" as const,
-              name: "get_calendar_events",
-              description:
-                "Read the user's raw Microsoft/Outlook calendar EVENTS (meetings, appointments) for a day or range, or whether they're free/busy at a specific time. This reads REAL calendar data — never answer from memory or 'files'. Use this ONLY when the user explicitly asks about their Outlook/Microsoft calendar, a specific meeting/appointment, or free/busy at a time. Do NOT use it for \"what's on my schedule / agenda / day / plate\", tasks, priorities, or backlog — that is the user's COMBINED nightly schedule (tasks + calendar), which comes from the `prioritize` tool (view 'scheduled'), the source of truth. Dates are ISO (YYYY-MM-DD or full ISO datetime). Note: returns Microsoft/Outlook events; a Google-only calendar won't appear.",
-              parameters: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  start: {
-                    type: "string",
-                    description: "Start of the range, ISO date or datetime (e.g. 2026-07-21). Defaults to today.",
-                  },
-                  end: {
-                    type: "string",
-                    description: "End of the range, ISO date or datetime. Defaults to the end of the start day.",
-                  },
-                },
-                required: [],
-              },
-              strict: false,
-            });
+            // SINGLE SOURCE — same get_calendar_events schema the voice path uses (lib/calendar/tools).
+            emailTools.push(GET_CALENDAR_EVENTS_TOOL);
           }
 
           const { PRIORITIZE_TOOL } = await import("./tasks/tools");
