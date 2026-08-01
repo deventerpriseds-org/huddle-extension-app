@@ -1158,10 +1158,24 @@ tool-use channel); D-FALLBACK surfaces tool failures; P1/P3/P3b/P-RETAIN/P-GROUN
 DEPLOYED (b3a5970 V-RESUME, e74b160 V-ACK — both live on icy-flower): V-ACK (no-dead-air filler if barge answer
 >700ms); V-RESUME (resume from next sentence, kills the real broken-record replay). Anti-repetition
 scene directive shipped but did NOT move P-REPEAT (prose advisory; the real broken-record was voice-resume = V-RESUME).
-- [IN PROGRESS] Live UAT of V-ACK + V-RESUME: built `e2e/ceremony-barge-resume-ack.e2e.mjs` + workflow
-  `ceremony-barge-resume-ack.yml` — drives a real stand-up, typed-barge (identical runBargeSequence +
-  resumeFromFreeze as voice path), asserts no-replay + filler from durable DOM rows. Runs on a GH runner
-  (sandbox can't reach the SWA). Offline logic already proven: resume-index 5/5, ack-timer 6/6.
+- [DONE, live-verified] Live UAT of V-ACK + V-RESUME via `e2e/ceremony-barge-resume-ack.e2e.mjs` +
+  `ceremony-barge-resume-ack.yml` (typed-barge = identical runBargeSequence + resumeFromFreeze as voice).
+  **V-RESUME PASS** (run 30717203782/30717404525: sam-trent block cut@0, resumed 0->[1,2,3], no dup index).
+  **V-ACK PASS by AUDIO** (run 30717404525: filler `new Audio` @1203ms in the 700ms->answer window = "one
+  moment" voiced, no dead air). Judged on audio because the filler's transcript ROW can be lost to a
+  genRef race (answer's speakInterjection bumps genRef) — user HEARS it, may not SEE it.
+  - [OPEN, cosmetic] V-ACK filler transcript row lost to genRef race — voiced but not always rendered.
+    Follow-on: persist/guard the ack row so it shows. Non-blocking (audible behavior works).
+- [DONE, deployed — verifying] **Phantom-garble fix** (user report: background noise/screenshot ->
+  gargled text -> phantom barge). Root cause: ceremony Realtime session.update had NO `language` + NO
+  `prompt` on transcription -> gpt-4o-transcribe hallucinated words from noise. Reproduced live
+  (resume-ack run 1 = 3 spurious [barge] decisions from the fake audio device). Fix (useCeremonyVoice,
+  journey-parity + native lever, commit d44789a): noise_reduction near_field + transcription
+  {gpt-4o-mini-transcribe, language en, standup prompt} + semantic_vad eagerness medium. Verifier:
+  `ceremony-noise-robustness.yml` drives a stand-up with the live noise mic, types nothing, asserts 0
+  phantom barges / 0 injected transcripts (baseline 3). Deployed via deploy-swa on main; running verifier.
+  - [OPEN, follow-on] 1:1 voice hooks (useVoiceCallRealtime*) mint their own Realtime session — check
+    if they share the no-language garble gap; separate surface from the stand-up the user reported.
 EXTERNAL / NOT CODE: get_calendar_events fails = missing Calendars.Read admin consent (surfaced by D-FALLBACK).
 STILL TODO (follow-on harness builds): Tier B P1-HARD (journey-on DB verify) + P-NOFAKE (needs failing-tool injection +
 Test-/cleanup); Tier C P2 general tool-use (journey-on prioritize); Tier D P-LANE/P-ONCTX (needs ceremony round-robin

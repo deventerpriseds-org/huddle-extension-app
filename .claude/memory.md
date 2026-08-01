@@ -28,6 +28,25 @@ OpenAI voices. TRUE — but irrelevant, because we do NOT use Realtime's audio o
   "use the hybrid above," NOT "impossible." Do not make the user re-prove this. Code lives in
   `lib/voice/realtime.functions.ts` (text-out mint) + `useVoiceCallRealtimeSpeak.ts` (per-sentence EL TTS).
 
+## HARDENING (2026-08-01): phantom-garble = a CONFIG bug (no language pin), not a test artifact — and judge voice on AUDIO, not the transcript row
+Two lessons from live UAT of the stand-up barge fixes:
+1. **A test artifact can BE the real bug — don't suppress it, root-cause it.** The ceremony-barge UAT's
+   fake audio device fired 3 phantom `[barge] decisions` before any typed input. First instinct was to
+   disable the mic in the test. WRONG: that phantom garble is the user's real complaint ("background
+   noise / a screenshot shows up as gargled text"). Root cause: `useCeremonyVoice` session.update had NO
+   `language` and NO `prompt` on transcription → `gpt-4o-transcribe` hallucinated words out of noise.
+   Fix = journey-parity (journey never had this): `noise_reduction:{type:"near_field"}` +
+   `transcription:{model:"gpt-4o-mini-transcribe", language:"en", prompt:<standup vocab>}` +
+   `turn_detection:{semantic_vad, eagerness:"medium"}`. journey's config is the ground-truth reference —
+   read `journey-voice/supabase/functions/generate-realtime-token/index.ts`. (Verifier:
+   `ceremony-noise-robustness.yml` — live mic, no typed input, assert 0 phantom barges. Baseline 3.)
+2. **Judge voice behavior on the AUDIO, not the transcript row.** V-ACK's filler is voiced (`new Audio`
+   in AudioQueue.dequeue fires onStart right before play) but its transcript ROW can be LOST to a genRef
+   race (the answer's speakInterjection bumps genRef before the filler's row-add). The user HEARS "one
+   moment" but may not SEE it. A row-only assertion FALSE-FAILs. Hook `window.Audio` construction and
+   judge V-ACK on a play in the 700ms→answer window (run 30717404525: filler audio @1203ms = PASS).
+   Cosmetic follow-on: guard the ack row so it also renders.
+
 ## HARDENING (2026-08-01): a "6/6 PASS" UAT was a FALSE POSITIVE — measure the EXPERIENCE, not the mechanism
 The Fast (A) EL-voice hybrid passed a headless UAT 6/6, but the user's LIVE experience was bad. The UAT
 lied because it measured the wrong things: it (a) TYPED instead of speaking (no real mic), (b) ran ONE
