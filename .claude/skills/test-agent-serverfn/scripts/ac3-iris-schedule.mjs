@@ -59,7 +59,8 @@ async function send(text) {
 
 const PHRASINGS = [
   { label: "SCHEDULE (expect schedule_and_priorities)", text: "what's on my schedule today?" },
-  { label: "EXTERNAL OUTLOOK (expect get_calendar_events)", text: "what's on my external Outlook calendar today?" },
+  { label: "CALENDAR (expect get_calendar_events → combined schedule)", text: "what's on my calendar today?" },
+  { label: "EXTERNAL OUTLOOK (expect get_external_calendar_events)", text: "what's on my external Outlook calendar today?" },
 ];
 
 for (const p of PHRASINGS) {

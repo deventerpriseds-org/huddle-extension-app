@@ -89,10 +89,18 @@ export const getRealtimeSession = createServerFn({ method: "POST" })
           output_modalities: ["text"],
           audio: {
             input: {
-              transcription: { model: "gpt-4o-transcribe" },
+              // Aligned to journey's proven web-voice STT settings (generate-realtime-token): the
+              // mini transcribe model, English pinned, and a domain-vocab prompt to bias STT toward
+              // the terms users actually say. noise_reduction is intentionally omitted (= none), same
+              // as journey.
+              transcription: {
+                model: "gpt-4o-mini-transcribe",
+                language: "en",
+                prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities",
+              },
               turn_detection: {
                 type: "semantic_vad",
-                eagerness: data.eagerness ?? "auto",
+                eagerness: data.eagerness ?? "medium",
                 create_response: true,
                 interrupt_response: true,
               },

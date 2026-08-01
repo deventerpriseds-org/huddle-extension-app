@@ -31,8 +31,9 @@ import { PRIORITIZE_TOOL } from "../tasks/tools";
 import { SCHEDULE_REMINDER_TOOL } from "../tasks/reminders";
 import { GROOM_BACKLOG_TOOL } from "../tasks/groom";
 import { TAVILY_WEB_SEARCH_TOOL, tavilySearch, type TavilySearchArgs } from "../tavily-search.functions";
-// SINGLE SOURCE — the same get_calendar_events schema the text turn engine uses (no voice-local copy).
-import { GET_CALENDAR_EVENTS_TOOL } from "../calendar/tools";
+// SINGLE SOURCE — the same calendar schemas the text turn engine uses (no voice-local copy).
+// get_calendar_events = alias → combined schedule; get_external_calendar_events = raw Outlook (Graph).
+import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "../calendar/tools";
 
 export interface RealtimeCaller {
   entra_object_id?: string;
@@ -53,7 +54,7 @@ const VOICE_HOUSE_STYLE =
   "For the user's SCHEDULE, calendar, agenda, day, tasks, priorities, backlog, meetings, or 'what's on " +
   "my plate/day/calendar', ALWAYS call `schedule_and_priorities` (use view 'scheduled' for today's " +
   "schedule) — that is the user's combined nightly schedule (tasks + external calendar already merged), " +
-  "the source of truth. Use `get_calendar_events` ONLY if the user explicitly says 'external calendar' " +
+  "the source of truth. Use `get_external_calendar_events` ONLY if the user explicitly says 'external calendar' " +
   "or 'Outlook calendar' (rare). Don't narrate that you're using a tool.";
 
 /** Same-brain instructions for the realtime session: snapshot + auto-retrieved memory + voice style. */
@@ -107,7 +108,7 @@ export async function buildRealtimeToolset(
   opts: { webSearch?: boolean; journey?: boolean } = {},
 ): Promise<{ tools: unknown[]; journeyNames: Set<string> }> {
   const agent = AGENT_BY_ID[agentId];
-  const raw: unknown[] = [PRIORITIZE_TOOL, SCHEDULE_REMINDER_TOOL, GET_CALENDAR_EVENTS_TOOL];
+  const raw: unknown[] = [PRIORITIZE_TOOL, SCHEDULE_REMINDER_TOOL, GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL];
 
   if (opts.webSearch !== false) raw.push(TAVILY_WEB_SEARCH_TOOL);
   if (agentOwnsCapability(agent, "backlog-grooming")) raw.push(GROOM_BACKLOG_TOOL);
@@ -143,13 +144,14 @@ export async function executeRealtimeTool(
   const done = (output: string) => ({ output, ms: Date.now() - t0 });
   const NATIVE = new Set([
     "schedule_and_priorities",
+    "get_calendar_events",
+    "get_external_calendar_events",
     "schedule_reminder",
     "groom_backlog",
     "tavily_web_search",
-    "get_calendar_events",
   ]);
   try {
-    if (name === "get_calendar_events") {
+    if (name === "get_external_calendar_events") {
       const { resolveTaskEmail } = await import("../journey/identity");
       const mailbox = (await resolveTaskEmail(ctx.caller)) ?? ctx.caller?.entra_email;
       const tz = ctx.timeZone || "UTC";
@@ -162,12 +164,15 @@ export async function executeRealtimeTool(
       const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
       return done(JSON.stringify(r));
     }
-    if (name === "schedule_and_priorities") {
+    if (name === "schedule_and_priorities" || name === "get_calendar_events") {
       const { dispatchPrioritize } = await import("../tasks/tools");
       const { resolveJourneyIdentity } = await import("../journey/identity");
       const ident = await resolveJourneyIdentity(ctx.caller, ctx.timeZone);
       const email = ident.email ?? ctx.caller?.entra_email;
-      return done(await dispatchPrioritize(email, args, ident.timeZone || ctx.timeZone || "UTC"));
+      // get_calendar_events is a calendar-framed ALIAS → the same combined-schedule executor, defaulting
+      // to the day's scheduled view (a model-supplied view still wins).
+      const a = name === "get_calendar_events" ? { view: "scheduled", ...args } : args;
+      return done(await dispatchPrioritize(email, a, ident.timeZone || ctx.timeZone || "UTC"));
     }
     if (name === "schedule_reminder") {
       const { dispatchScheduleReminder } = await import("../tasks/reminders");

@@ -1,27 +1,43 @@
-// Canonical, SINGLE-SOURCE schema for the `get_calendar_events` agent tool.
+// SINGLE-SOURCE schemas for the two calendar-facing tools. There is ONE executor for "the user's
+// calendar/day" — dispatchPrioritize (the combined nightly schedule) — and `get_calendar_events` is
+// just an ALIAS that routes into it (see the dispatch paths), so there's ONE place to update. The
+// separate raw-Outlook read is quarantined behind an explicit name.
 //
-// WHY THIS FILE EXISTS: every other governed tool already has one shared definition that BOTH channels
-// import — `PRIORITIZE_TOOL` (tasks/tools), `SCHEDULE_REMINDER_TOOL` (tasks/reminders),
-// `GROOM_BACKLOG_TOOL` (tasks/groom), `TAVILY_WEB_SEARCH_TOOL` (tavily-search.functions). Calendar was
-// the ONE exception: it was declared inline in the text turn engine (huddle.functions.ts) AND
-// re-declared in the voice toolset (voice/realtime-tools.server.ts). Two copies = two Irises that drift
-// — which is exactly how "what's my schedule" came to mean the combined `prioritize` schedule in one
-// channel and raw Outlook in the other. There is ONE Iris; a channel is just "audio attached or not".
-// Both the text path and the voice path import THIS constant now, so a wording/behaviour change happens
-// in one place and every channel stays in lock-step.
-//
-// Executor: `getGraphCalendarEvents` in email/graph-email.server.ts (Microsoft Graph, app-only). Pure
-// data here (no server deps) so it is safe to static-import from either path.
-//
-// LANE (must match the schedule_and_priorities house-style, or tool choice drifts): this tool reads the
-// user's RAW external (Microsoft/Outlook) calendar EVENTS only. The user's SCHEDULE / agenda / day /
-// priorities is served by `schedule_and_priorities` (view 'scheduled') — their nightly-planned schedule
-// and tasks; the description below tells the model to route "schedule" there, not here.
+// Why: Huddle's native Microsoft/Outlook calendar read (getGraphCalendarEvents, added 2026-07-22)
+// started shadowing "what's on my calendar", but Outlook Graph is 403 (no Calendars.Read consent),
+// so calendar questions broke. The combined schedule (tasks + external calendar, built nightly) is the
+// real source of truth and is what should answer "calendar/schedule/day". So:
+//   - get_calendar_events        → the combined schedule (alias → dispatchPrioritize, view 'scheduled')
+//   - get_external_calendar_events → the RAW external Outlook/Microsoft calendar (Graph), explicit-only
+
+/** Calendar/day for the user — an ALIAS whose executor is the same combined schedule as
+ *  schedule_and_priorities (dispatch forces view 'scheduled'). No separate executor to keep in sync. */
 export const GET_CALENDAR_EVENTS_TOOL = {
   type: "function" as const,
   name: "get_calendar_events",
   description:
-    "Read the user's RAW EXTERNAL Microsoft/Outlook calendar directly. RARE — use this ONLY when the user EXPLICITLY says \"external calendar\", \"Outlook calendar\", or \"Microsoft calendar\" (they want to bypass their normal schedule and see the raw external calendar). Do NOT use it for ANY other wording — \"what's on my calendar / schedule / agenda / day / plate / today\", meetings, appointments, free/busy, tasks, priorities, or backlog ALL go to the `schedule_and_priorities` tool (view 'scheduled'), which is the user's nightly-planned schedule and tasks — the source of truth. Reads REAL calendar data — never answer from memory. Dates are ISO (YYYY-MM-DD or full ISO datetime). Returns Microsoft/Outlook events; a Google-only calendar won't appear.",
+    "The user's calendar / day / schedule — their COMBINED nightly schedule (tasks + calendar items), the source of truth. Use this for \"what's on my calendar / schedule / agenda / day / plate / today\", meetings, or appointments. Returns the day's scheduled items with times already in the user's timezone. (For the user's RAW external Outlook/Microsoft calendar specifically, use get_external_calendar_events instead — only when they explicitly ask for their external/Outlook calendar.)",
+  parameters: {
+    type: "object" as const,
+    additionalProperties: false,
+    properties: {
+      category: {
+        type: "string",
+        description: "Optional domain to scope to (LIFE, VENTURES, CAREER, EDUCATION, PERSONAL, PROF_EDUCATION). Omit to span everything.",
+      },
+    },
+    required: [] as string[],
+  },
+  strict: false,
+};
+
+/** RAW external Microsoft/Outlook calendar (Graph). Executor: getGraphCalendarEvents. Explicit-only —
+ *  needs Calendars.Read admin consent (403 until granted). */
+export const GET_EXTERNAL_CALENDAR_EVENTS_TOOL = {
+  type: "function" as const,
+  name: "get_external_calendar_events",
+  description:
+    "Read the user's RAW EXTERNAL Microsoft/Outlook calendar directly. RARE — use this ONLY when the user EXPLICITLY says \"external calendar\", \"Outlook calendar\", or \"Microsoft calendar\" (they want to bypass their normal schedule and see the raw external calendar). Do NOT use it for ANY other wording — \"what's on my calendar / schedule / agenda / day / plate / today\", meetings, appointments, tasks, priorities, or backlog ALL go to get_calendar_events / schedule_and_priorities. Reads REAL calendar data — never answer from memory. Dates are ISO (YYYY-MM-DD or full ISO datetime). Returns Microsoft/Outlook events; a Google-only calendar won't appear.",
   parameters: {
     type: "object" as const,
     additionalProperties: false,

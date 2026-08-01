@@ -27,7 +27,7 @@ import {
   type TavilySearchArgs,
 } from "./tavily-search.functions";
 import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
-import { GET_CALENDAR_EVENTS_TOOL } from "./calendar/tools";
+import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "./calendar/tools";
 import { DELEGATE_TO_SPECIALIST_TOOL, workerDirectory, getWorker, WORKER_ROLES } from "./agents/workers";
 import { FLAG_BLOCKER_TOOL, CONFIRM_TASK_INTENT_TOOL } from "./tasks/task-agent-tools";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
@@ -1988,8 +1988,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               },
               strict: false,
             });
-            // SINGLE SOURCE — same get_calendar_events schema the voice path uses (lib/calendar/tools).
-            emailTools.push(GET_CALENDAR_EVENTS_TOOL);
+            // Raw external Outlook/Microsoft calendar (Graph) — explicit-only, gated on Graph config.
+            emailTools.push(GET_EXTERNAL_CALENDAR_EVENTS_TOOL);
           }
 
           const { PRIORITIZE_TOOL } = await import("./tasks/tools");
@@ -2004,6 +2004,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             CONFIRM_TASK_INTENT_TOOL,
             SCHEDULE_REMINDER_TOOL,
             PRIORITIZE_TOOL,
+            GET_CALENDAR_EVENTS_TOOL, // calendar-framed alias → combined schedule (always available)
             ...groomTools,
             ...emailTools,
             ...snapshotTools,
@@ -2223,14 +2224,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               recordToolUse(winner.id, "schedule_reminder", ok ? "reminder scheduled" : "reminder · failed", ok);
               return out;
             }
-            if (c.name === "schedule_and_priorities") {
+            if (c.name === "schedule_and_priorities" || c.name === "get_calendar_events") {
               const { dispatchPrioritize } = await import("./tasks/tools");
               // One resolution gives BOTH the canonical email (to scope the read) and the canonical
               // timezone (to localize the returned times). data.timeZone is the browser zone this turn.
               const ident = await (await import("./journey/identity")).resolveJourneyIdentity(data.caller, data.timeZone);
               const email = ident.email ?? data.caller?.entra_email;
               const tz = ident.timeZone || data.timeZone || "UTC";
-              const out = await dispatchPrioritize(email, c.arguments, tz);
+              // get_calendar_events is a calendar-framed ALIAS → the SAME combined-schedule executor,
+              // defaulting to the day's scheduled view (a model-supplied view still wins). One executor.
+              const pArgs = c.name === "get_calendar_events" ? { view: "scheduled", ...c.arguments } : c.arguments;
+              const out = await dispatchPrioritize(email, pArgs, tz);
               // Record it like every other tool (this was the ONE tool missing recordToolUse, which is
               // why it never showed in the tool trace / UAT even though it ran).
               let ok = true, detail = "";
@@ -2239,7 +2243,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 ok = !p.error;
                 detail = p.error ? String(p.error) : `view=${p.view ?? "?"} count=${p.count ?? "?"}`;
               } catch { /* keep defaults */ }
-              recordToolUse(winner.id, "schedule_and_priorities", ok ? "read schedule/priorities" : "schedule read failed", ok, detail);
+              recordToolUse(winner.id, c.name, ok ? "read schedule/priorities" : "schedule read failed", ok, detail);
               return out;
             }
             if (c.name === "groom_backlog") {
@@ -2329,7 +2333,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 return JSON.stringify({ ok: false, error: msg });
               }
             }
-            if (c.name === "get_calendar_events") {
+            if (c.name === "get_external_calendar_events") {
               const a = c.arguments as Record<string, unknown>;
               try {
                 const tz = data.timeZone || "UTC";
@@ -2347,7 +2351,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
                 recordToolUse(
                   winner.id,
-                  "get_calendar_events",
+                  "get_external_calendar_events",
                   r.ok
                     ? `${r.events?.length ?? 0} event(s) ${startDay}${endDay !== startDay ? `..${endDay}` : ""}`
                     : "calendar read failed",
@@ -2357,8 +2361,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 if (!r.ok) {
                   const ev = recordFallback(
                     "tool",
-                    `${winner.name}: get_calendar_events failed — ${r.error ?? "unknown"}`,
-                    "get_calendar_events failed",
+                    `${winner.name}: get_external_calendar_events failed — ${r.error ?? "unknown"}`,
+                    "get_external_calendar_events failed",
                     winner.id,
                   );
                   perAgentFallbacks.push(ev.inline);
@@ -2366,7 +2370,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 return JSON.stringify(r);
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
-                recordToolUse(winner.id, "get_calendar_events", "calendar read crashed", false, msg);
+                recordToolUse(winner.id, "get_external_calendar_events", "calendar read crashed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             }
@@ -2847,6 +2851,21 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 );
               },
             });
+            // Calendar-framed ALIAS → the SAME combined-schedule executor (view 'scheduled'). One place
+            // to update; "what's on my calendar" returns the combined schedule, never raw Outlook.
+            lovableTools.get_calendar_events = tool({
+              description:
+                "The user's calendar / day / schedule — their COMBINED nightly schedule (tasks + calendar), the source of truth. Use for 'what's on my calendar/schedule/agenda/day', meetings, or appointments. (For the RAW external Outlook calendar specifically, use get_external_calendar_events.)",
+              inputSchema: z.object({ category: z.string().optional() }),
+              execute: async (args) => {
+                const ident = await (await import("./journey/identity")).resolveJourneyIdentity(data.caller, data.timeZone);
+                return dispatchPrioritize(
+                  ident.email ?? data.caller?.entra_email,
+                  { view: "scheduled", ...(args as Record<string, unknown>) },
+                  ident.timeZone || data.timeZone || "UTC",
+                );
+              },
+            });
           }
 
           // groom_backlog — gated on the data-driven grooming capability (agents.ts), with the
@@ -2944,9 +2963,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   return JSON.stringify(r);
                 },
               });
-              lovableTools.get_calendar_events = tool({
+              lovableTools.get_external_calendar_events = tool({
                 description:
-                  "Read the user's Microsoft/Outlook calendar for a day or range and return the actual events. Use for 'what's on my calendar/schedule/agenda' or free/busy questions — reads REAL data, never answer calendar questions from memory or 'files'. Note: Microsoft/Outlook events only.",
+                  "Read the user's RAW EXTERNAL Microsoft/Outlook calendar. RARE — only when the user explicitly asks for their external/Outlook/Microsoft calendar. For 'what's on my calendar/schedule/day', use get_calendar_events instead. Reads REAL data; Microsoft/Outlook events only.",
                 inputSchema: z.object({
                   start: z.string().optional(),
                   end: z.string().optional(),
@@ -2968,7 +2987,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
                   recordToolUse(
                     winner.id,
-                    "get_calendar_events",
+                    "get_external_calendar_events",
                     r.ok ? `${r.events?.length ?? 0} event(s)` : "calendar read failed",
                     r.ok,
                     r.ok ? undefined : r.error,
