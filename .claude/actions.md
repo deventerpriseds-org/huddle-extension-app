@@ -1062,3 +1062,12 @@ SEQUENCE: (1) deploy cross-talk relaxation → user feels it in a real stand-up;
 resume-in-place + trailing transcript (reuse the 30 ACs), staged 2→3→full, live-verified with real
 screenshots (user rejected server-fn-only "verified" before). A1(mic) is user-confirmed and was real
 barge-enabling plumbing; the rest of the plumbing is deployed but was NOT the experience.
+
+### ACT-huddle-20: NO REVERT + guardrail added (2026-08-01, user decision)
+User decision: do NOT revert the deployed changes (A1/A2/A5/forcers/B2/cross-talk) — too risky now
+(interleaved on main with another live session's EL-voice work); debug through any noticed degradations
+instead. Guardrail ("confirm the plan before building/deploying; never push ahead unconfirmed") added to:
+(1) eds-claude-skills CLAUDE.md GLOBAL-RULES block [central, propagates to every session via setup.sh],
+(2) this repo's CLAUDE.md, (3) this repo's memory.md Hardening. eds-claude-skills PR #13 MERGED (Stop-gate
+v4 integration-trace item + the new global rule). NOTE: the central rule propagates on the next session
+build (or via the sync-setup-script skill); it's committed to eds main now.
