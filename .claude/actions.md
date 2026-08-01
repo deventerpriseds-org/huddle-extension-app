@@ -1027,3 +1027,14 @@ Committed on branch (NOT deployed, NOT live-verified):
 - B2: prose reverted `d10a1c7`. Real form = code-enforced guard on assigned_agent (board-owner special:"coordinator" exempt) — needs a new mirror getter + confirmed journey update_task arg schema. User chose "Build B2 guard first" but then redirected to forcers; B2 guard STILL OWED.
 - eds-claude-skills `09fd6e4` (pushed): Stop-gate v4 item (g) integration/architecture trace for CODE changes + SESSION_CMD + docs.
 STILL OWED: B2 code-guard; AC-writing + verifier subagents for the Huddle code batch; merge→main→deploy; LIVE verification (forcer tool-calling, mic-deaf, transcript, ceremony opening); C1/C2/C3.
+
+### ACT-huddle-18 — VERIFICATION RESULTS (independent verifier, live, 2026-08-01)
+Deploy run 30703497116 (main) = success. Verifier drove real turns via GitHub runners + server-fn +
+azure-pg-query (SWA host egress-denied to the session, so the sanctioned runner path was used). 18 PASS / 0 FAIL / 3 INCONCLUSIVE-by-environment.
+- FORCERS DISABLED (highest risk) — CONFIRMED LIVE, NO REGRESSION: create_huddle_task fires on "add a task" 2/2 (card each); schedule_reminder fires on real reminder 2/2; RECALL "remind me what/who" does NOT schedule 2/2 (answers); web_search elected. Router ran cleanly (LLM router openai/gpt-4o-mini, no 429 fallback) — real semantic selection, not a quota artifact. NO "I'll add it, no card" recurrence.
+- A2 transcript — scheduled path CONFIRMED LIVE: run-ceremony→200/turns=3; chat.ceremony_transcript rows correct (huddle='daily', speaker='agent', seq 0-2, email-scoped, 0 cross-owner leak); 4 negative auth/validation cases → 401/400 with no rows. INCONCLUSIVE (browser-only): 2.5 pagehide flush, 2.6 burst flush → C3.
+- A5 old-chat bleed — CONFIRMED LIVE: ceremony opens grounded in real tasks (Terry/Iris on real "Call the dentist" task), no prior-chat rehash; regression guard 3.3 (normal turns still auto-retrieve) = RECALLED live.
+- A1 mic-deaf — invariant 13/13 offline + every guard/mutation site inspected (connGenRef only bumped at start/stopListening; dc.onmessage/onopen guard on connGen). INCONCLUSIVE (env): real-mic multi-barge 1.3 → needs USER live confirmation (C3).
+Board hygiene: verifier deleted 2 test reminder rows (user_email NULL); 4.2 ran journey-disabled (no real-board write); no stray cards. Left 3 benign ceremony_transcript rows (run verify-cer-msah4r84).
+LEFTOVER: verifier created remote branch `verify/forcers-ceremony-check` (inert workflow, never merged, doesn't deploy). Remote delete 403s from the session (proxy) — DELETE MANUALLY via GitHub UI.
+STILL OPEN: B2 code-guard (assigned_agent, Iris exempt) — next per user's "deploy now, B2 after". C3 user live confirmation: mic multi-barge, client-flush, ceremony opening in-browser. eds-claude-skills PR #13 (gate v4) awaiting review (no CI on that repo).
