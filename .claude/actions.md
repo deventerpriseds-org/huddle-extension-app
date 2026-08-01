@@ -41,11 +41,23 @@ echo-guard. Uniform path for ALL agents.
   default baseline), MeetingBar wiring + "Baseline / ⚡ Fast (A)" header toggle (applies on next call).
   NO ElevenLabs built (baseline = existing laggy path, per user). Tool executor is DIRECT (not journey's
   slow execute-tool hop) + latency-instrumented, and reversible via the toggle (user guidance).
-- [OPEN — awaiting user LIVE A/B] User flips ⚡ Fast (A) in a 1:1 meeting header, leaves & rejoins, and
-  compares speak-latency + naturalness vs Baseline. NOT claimed working until confirmed live (premise
-  speak+tool was proven headless on gpt-realtime via realtime-speak-probe; the wired end-to-end path is
-  build/deploy-verified but not yet live-confirmed). v1 tool scope = journey catalog + prioritize +
-  reminders + web + grooming(owner); Huddle-native create_huddle_task/artifacts (turn-scoped) deferred.
+- [DONE — reworked to EL-VOICE HYBRID + verifier 6/6, deployed 7fd11d3] User requirement: Fast (A) must
+  use the agent's ElevenLabs CLONED voice, not an OpenAI voice. Reworked: mint text-out
+  (output_modalities:['text']) → Realtime streams reply TEXT + tool-calls over the WebRTC data channel
+  (bypasses SWA buffering); `useVoiceCallRealtimeSpeak` speaks each sentence via `synthesizeSpeech`
+  (cloned voiceId). This is the PROVEN EL+Realtime hybrid now recorded in CLAUDE.md + memory.md (do NOT
+  re-assert impossible). Schedule ask → `prioritize` (combined nightly schedule), not raw Outlook.
+  **Independent verifier UAT (run 30702400059, 6/6 PASS + baseline regression, 20 screenshots, artifact
+  `realtime-speak-uat-shots`):** every agent connects (SDP 201) + speaks EL (text deltas + Audio.play +
+  synthesizeSpeech all fire) + real non-refusal replies + iris/terry fire `prioritize`; latency
+  716ms–3528ms; no 429. Bugs found+fixed en route by earlier verifier runs: `strict` field, `file_search`
+  type, missing get_calendar_events.
+- [OPEN — awaiting user LIVE A/B] The mechanism is verified end-to-end on the deployed SWA (typed-drive,
+  fake mic). Real-speech STT accuracy + subjective voice/latency feel = the human live check: user flips
+  ⚡ Fast (A) in a 1:1 header, leaves & rejoins, talks, compares vs Baseline.
+- [OPEN — admin action, not code] `Calendars.Read` consent missing on the Graph app → raw Outlook
+  `get_calendar_events` returns a permission error (affects text path too). Not needed for the combined
+  nightly `prioritize` schedule; only for explicit raw-Outlook asks.
 
 ### ACT-huddle-6: Cross-modality "same brain" — 1:1 chat vs. 1:1 meeting-room (voice) give different answers/capabilities
 **Requested:** 2026-07-31 — user's own words: "the outcomes I get from a one-on-one chat versus what
