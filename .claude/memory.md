@@ -1,6 +1,33 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-01
 
+## PROVEN, KNOWN-POSSIBLE: ElevenLabs cloned voices WORK with the OpenAI Realtime API — do NOT re-assert it's impossible
+**Standing fact (proven multiple times, incl. with the SWA). Any future session — and the current one —
+must treat this as SETTLED and lead with the workaround, never with "Realtime can't use an EL voice."**
+
+The narrow sub-fact that keeps getting mis-led-with: OpenAI Realtime's OWN audio output only offers
+OpenAI voices. TRUE — but irrelevant, because we do NOT use Realtime's audio output for the voice. The
+**proven hybrid** gets the EL cloned voice AND low latency:
+
+- **Realtime over WebRTC = the streaming BRAIN only.** Mint the session with `output_modalities:["text"]`
+  (+ `audio.input` transcription + `semantic_vad` `create_response:true`/`interrupt_response:true` +
+  the agent's tools/instructions). The model streams its reply TEXT + tool-calls over the WebRTC **data
+  channel**.
+- **ElevenLabs TTS = the VOICE.** The client speaks each streamed sentence through the existing EL TTS
+  (`synthesizeSpeech` / `useCeremonyVoice.voiceTurn`, the agent's cloned `voiceId`) as it arrives.
+- **WHY the SWA buffering finding does NOT block this (the key each session re-derives):** SWA buffering
+  only affects the SWA Node **function HTTP response**. The Realtime WebRTC connection is **peer-to-peer
+  browser↔OpenAI — it never touches the SWA function**, so its streamed text/tool-calls arrive with zero
+  SWA buffering. We PROVED both halves: `stream-probe` (SWA buffers HTTP: content-length set, no
+  transfer-encoding chunked) AND `realtime-speak-probe` (audio/text + a real tool result flow over
+  WebRTC, SDP 201). The WebRTC channel is the "piggyback" that dodges SWA.
+- **Result:** cloned voice preserved, ~1–1.5s to first spoken sentence (vs 5–10s for the old baseline
+  = Responses turn via SWA + poll + EL TTS). Trades a little vs a pure-OpenAI voice (~0.3–0.8s) — that
+  tradeoff is the ONLY open choice; the possibility itself is NOT in question.
+- **Behavioral rule for me:** when the user wants the EL voice on a realtime/fast path, the answer is
+  "use the hybrid above," NOT "impossible." Do not make the user re-prove this. Code lives in
+  `lib/voice/realtime.functions.ts` (text-out mint) + `useVoiceCallRealtimeSpeak.ts` (per-sentence EL TTS).
+
 ## Active work — 1:1 VOICE latency (journey-speed) — plan + premise CONFIRMED, build next (2026-08-01)
 User complaint: "the delay for my convo with Flex to SPEAK takes way too long, much longer than journey."
 It's a VOICE latency ask (not text). Today's 1:1 voice is SLOW because Realtime is ears-only
