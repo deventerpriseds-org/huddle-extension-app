@@ -980,3 +980,27 @@ B4 DECIDED: KEEP file_search. Reclassified: the "mentions uploaded files" bug is
    with agents that have file_search OFF (flex-grimes tools:[]), so it is SEEDED elsewhere = A5 (old-chat bleed).
    The "uploaded files" opener from Terry is A5, not a tools issue.
 Execution order (user endorsed, back-to-back, no per-item stops): A1 → A2 → B2 → A3 → A5 → C1 → C2 → C3.
+
+### ACT-huddle-18: RESUME POINT + router-consistency correction (2026-08-01, paused mid-batch)
+**Where I stopped:** executing ACT-huddle-17 back-to-back. DONE + committed on branch (NOT yet merged to
+main / NOT deployed): A1 mic-deaf (`5f7de66`, connGenRef + offline proof 13/13), A2 transcript
+completeness (`b67bb3d`: client pagehide/visibility + burst flush; server scheduled→chat.ceremony_transcript
+unify) + A5 old-chat bleed (same commit: gate RAG auto-retrieval on !isCeremonyTrigger), A3 remind-me
+(`e3943c4`), B2 assignee-scoped status (`635eda0`). origin/main merged into branch cleanly (`7b40a8a` — the
+Approach-A EL-voice hybrid landed on main; touched useVoiceCallRealtimeSpeak.ts NOT useCeremonyVoice.ts, so
+A1 stands). NOT started: C1 (probe#1 harden), C2 (read-back UI), C3 (live user confirm). NOT deployed yet.
+
+**USER CORRECTION (must reconcile before deploy): A3 + B2 bypassed the semantic intent/target system we
+already designed.** The designed system = `classifyTurnIntent(text):TurnIntent` (capabilities.ts —
+perform/status/query/acknowledge/inform, the ACT-huddle-3 pre-classifier that gates handoff/deferral) +
+`routeMessageLLM` semantic RESPONDER-target decomposition (primary/supporting/interjectors/
+explicitlyRequested) + `capabilityOwnerFor`/`laneOwnerFor` semantic owner resolution + CODE-ENFORCED guards
+(meta-task guard in createSuggestedTaskFromTool). memory.md line 531 guardrail: "reach for a deterministic
+pre-classifier, not a prose/regex patch — prose is advisory, classifiers are enforced." line 533: the user
+ALREADY caught me once reaching for an ad-hoc guard instead of this system.
+- A3 as-committed = a bespoke negative-lookahead REGEX bolted onto `reminderRe` → should instead gate
+  `forceReminder` on `classifyTurnIntent==="perform"` (recall "remind me what/who…" = query intent), routing
+  reminder-vs-recall through the ONE intent classifier.
+- B2 as-committed = a PROSE directive in taskToolInstructions → should instead be a code-enforced guard keyed
+  on the real `assigned_agent` (like the meta-task guard), + owner-resolution, not advisory prose.
+NEXT: rework A3 + B2 through the semantic intent/target system, then deploy main, then C1/C2/C3.
