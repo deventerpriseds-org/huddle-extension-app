@@ -52,9 +52,28 @@ echo-guard. Uniform path for ALL agents.
   synthesizeSpeech all fire) + real non-refusal replies + iris/terry fire `prioritize`; latency
   716ms–3528ms; no 429. Bugs found+fixed en route by earlier verifier runs: `strict` field, `file_search`
   type, missing get_calendar_events.
-- [OPEN — awaiting user LIVE A/B] The mechanism is verified end-to-end on the deployed SWA (typed-drive,
-  fake mic). Real-speech STT accuracy + subjective voice/latency feel = the human live check: user flips
-  ⚡ Fast (A) in a 1:1 header, leaves & rejoins, talks, compares vs Baseline.
+- [DONE — smoothness fix, deployed b65bf68] Whole-reply synth instead of per-sentence: accumulate the
+  streamed text and call `synthesizeSpeech` ONCE on `response.output_text.done` (was per-sentence, which
+  caused ~1.6s inter-sentence pauses). Per-sentence chunking existed for sentence-boundary barge; barge
+  is native now (interrupt_response), so it's no longer needed.
+- [DONE — barge polish (ghost-audio + journey-style agenda return), deployed 82bce40, verified live
+  run 30707326510 4/4 PASS] Two user-approved items:
+  (1) **Ghost-audio epoch guard** — `bargeEpochRef` bumps on every barge; `speak()` captures the epoch
+  before synth and DISCARDS the resolved audio if a barge happened while it was in flight → the
+  interrupted reply never leaks in over the user. Live: 0 ghost plays.
+  (2) **Journey-style agenda return** — a 2+ part ask arms `agendaRef`; a barge arms `resumePendingRef`;
+  when the model goes idle (`response.done`, no tool continuation pending) an agenda-return
+  `response.create` (carrying `instructions`) steers the agent back to the still-unanswered parts.
+  **Two bugs found live and fixed en route (first barge run 30706841546):** the trigger counted only "?"
+  so a natural 3-part ask (one "?") never armed → broadened to `countAsks()` (also counts request cues);
+  and it fired on `output_text.done` which can arrive mid-response (a text+function_call response) →
+  moved to `response.done` gated on a `pendingToolsRef` counter so it fires only when truly idle.
+  Live proof (run 30707326510): barge @19.16s → agenda-return `→OUT response.create [+instructions]`
+  @24.18s (at idle) → return reply covering workout + dentist; the "what day" tangent itself answered.
+- [OPEN — awaiting user LIVE A/B] The mechanism is verified end-to-end on the deployed SWA (real-mic
+  harness, multi-turn + barge). Real-speech STT accuracy + subjective voice/latency/smoothness feel =
+  the human live check: user flips ⚡ Fast (A) in a 1:1 header, leaves & rejoins, talks, barges, compares
+  vs Baseline.
 - [OPEN — admin action, not code] `Calendars.Read` consent missing on the Graph app → raw Outlook
   `get_calendar_events` returns a permission error (affects text path too). Not needed for the combined
   nightly `prioritize` schedule; only for explicit raw-Outlook asks.
