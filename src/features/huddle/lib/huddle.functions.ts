@@ -1406,8 +1406,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         /\b(add|create|make|log|track|put|place|capture|assign|todo|to-do|action item|follow[- ]?up)\b/i;
       // A reminder ("remind me in 30 min", "ping me at 3pm") is a timed nudge, NOT a backlog task —
       // route it to schedule_reminder and DON'T also force a task/web-search for the same message.
+      // "remind me" is intent-ambiguous: "remind me to call mom at 5" is a reminder, but "remind me
+      // what we decided / who owns X / of the name" is a RECALL request — forcing schedule_reminder on
+      // those set a future nudge instead of answering. The negative lookahead keeps recall phrasings
+      // (remind me what/who/when/where/why/which/whom/how/of …) out of the force, so they flow through
+      // normal answering (+ memory retrieval) instead. Genuine "remind me to …/in …/at …" still forces.
       const reminderRe =
-        /\b(remind me|reminder|notify me|ping me|nudge me|alert me|wake me|set an alarm|alarm|message me (?:in|at|later|tonight|tomorrow)|text me (?:in|at))\b/i;
+        /\b(remind me(?!\s+(?:wh(?:at|o|en|ere|y|ich|om)|how|of\b))|reminder|notify me|ping me|nudge me|alert me|wake me|set an alarm|alarm|message me (?:in|at|later|tonight|tomorrow)|text me (?:in|at))\b/i;
       const forceReminder = reminderRe.test(userText);
       // Only the PRIMARY responder is forced to create the task. Interjectors surface information;
       // forcing them to also create produced duplicate cards (e.g. Troy AND Iris both creating).
