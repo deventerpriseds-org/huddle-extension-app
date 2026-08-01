@@ -1255,6 +1255,23 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // ceremony directive for this one dispatch, so the agent addresses the user instead of its lane.
       const ceremonyDirective =
         bargeDirectiveById.get(nextId) ?? ceremonyDirectiveById.get(nextId) ?? turnBargeDirective;
+      // Ceremony cross-talk: a scheduled round-robin speaker sees the IMMEDIATELY-PRIOR speaker's line
+      // so it can briefly react before its own update — a natural group conversation instead of
+      // scripted monologues (the standing "do NOT comment on other lanes" gate is what made it feel
+      // read-aloud). Only the prior speaker's single line (bounds prompt growth across a 12-agent
+      // round-robin), and NOT on a barge dispatch (that answers the user, handled by bargeDirective).
+      const isScheduledCeremonyTurn =
+        !!ceremonyDirectiveById.get(nextId) && !bargeDirectiveById.get(nextId) && !turnBargeDirective;
+      const ceremonyPriorReact =
+        isScheduledCeremonyTurn && priorInThisTurn
+          ? (() => {
+              const lines = priorInThisTurn.split("\n").map((s) => s.trim()).filter(Boolean);
+              const last = lines[lines.length - 1] ?? "";
+              return last
+                ? `\n\nThe teammate right before you just said — ${last}\nYou MAY open with ONE brief, natural line acknowledging or reacting to that, the way a real teammate would in the room, BEFORE giving your own update — but stay in YOUR lane's facts; don't take over or re-report theirs. If there's nothing worth reacting to, just give your update.`
+                : "";
+            })()
+          : "";
       const handoff = handoffById.get(nextId);
       const handoffDirective = handoff
         ? `\n\nYou were brought into this turn by ${handoff.fromName}, who handed this to you: "${handoff.ask}". Address exactly that in your lane — answer it directly or take the action they need. Do not re-ask what was already said or restate their message.`
@@ -1290,7 +1307,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         priorInThisTurn && !ceremonyDirective
           ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
           : ""
-      }${interjectDirective}${ceremonyDirective}${handoffDirective}${laneDirective}`;
+      }${interjectDirective}${ceremonyDirective}${ceremonyPriorReact}${handoffDirective}${laneDirective}`;
 
       const roster = buildRoster(data.members, winner.id);
       // Data-driven, scope-aware ownership hand-off (agents.ts capabilities). Empty string
