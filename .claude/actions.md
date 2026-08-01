@@ -1152,6 +1152,37 @@ calendar could drift between channels.
 - [DONE] Redeployed Huddle (cleared identity cache). LIVE-VERIFIED: schedule_and_priorities now returns the real dev@ board (count=10 scheduled, real tasks) for a von.ellis@ caller.
 - [OPEN — pre-existing, newly visible] schedule_and_priorities shows times in RAW UTC (10 AM ET task rendered "2 PM") and over-trims (2 of 6 shown). Fix = localize start_time to caller timeZone + surface all scheduled items. Awaiting user go-ahead.
 
+### ACT-huddle-23 (DESIGN, awaiting sign-off): ceremony "smooth simulation" — kill dead space
+User wants a real-life-simulation stand-up. Grounded facts (Explore + grep, 2026-08-01):
+- **Dead space source = per-sentence serial synth.** `_voiceTurn` (useCeremonyVoice.ts:185-219) awaits
+  sentence N fully playing, THEN `synthesizeSpeech(N+1)` (:195) — no prefetch. EL is non-streaming
+  full-blob per sentence (elevenlabs.server.ts:196-219, eleven_flash_v2_5). Gap = next-sentence synth
+  latency. FIX = pipeline (prefetch N+1 during N) — keeps sentence boundaries for V-RESUME.
+- **~15s start = server durable-turn cold start** (enqueueHuddleTurn + claim + first agent model call +
+  synth). No client pre-server action today; hook at MeetingBar.tsx:801. FIX = immediate canned Terry
+  greeting (templated, flash ~75ms) covering the wait; transition on first real reply landing.
+- **Deferred queue EXISTS to extend:** enqueueTurn + kickNextChunk + executeClaimedTurn (fires send_push);
+  precedents deliverOwnerFollowup (huddle.functions.ts:1020) + autowork.server.ts runScheduledAutoWork
+  (:182,366). Flush queued "do-after" work at patchMeeting({ceremonyStatus:"done"}) MeetingBar.tsx:949.
+- **Ack is generic canned** (runBargeSequence ackFillers, MeetingBar.tsx:504-519), 700ms, ignores the
+  ask text. Need SEMANTIC + OWNERSHIP-AWARE ack.
+- **CORRECTED via the ACTUAL transcript (run read 2026-08-01, my earlier "assigned to Sam / ownership
+  defer" was FABRICATED — I hadn't read it):** Sam marked "investor pitch" done successfully (interrupted
+  s3/5, answered, resumed s4). IRIS did NOT hit the ownership guard — her update_task **FAILED with
+  "journey tool failed"** (tool/integration error), then she narrated the raw failure and the tasks
+  (her-lane "Prepare for gym", "Transfer 40k") were neither marked NOR saved anywhere = LOST. So the
+  Iris bug is a JOURNEY TOOL FAILURE + no doing-lane safety net, NOT an ownership deferral. (Separate
+  investigation: why did update_task fail for gym/40k?)
+- **Resume "doesn't continue the checklist" REPRODUCED in the transcript:** Iris's whole checklist was
+  ONE run-on sentence (seq16, index3: gym+40k+amex+passport+consulting). User barged mid-checklist;
+  resume jumped to s4 (closer) → every item after the barge point was DROPPED. Root causes stacked:
+  (a) checklist not split into per-item utterances; (b) my resume-from-next (sentenceIdx+1) skips it.
+  User wants REPEAT interrupted item + CONTINUE remaining. Needs per-item granularity + repeat-then-continue.
+- Ownership ack still applies where a defer IS correct, but the Iris case was a tool failure, not a defer.
+Proposed phasing: P1 fluid speech (pipeline) + Terry greeting; P2 semantic ownership-aware ack; P3 queue
+(default ack+queue, flush after end); P4 override matrix + offer-next-person latency hide. Poking holes
+with user; NO code until scope signed off.
+
 ### ACT-huddle-22: "fix everything" batch (2026-08-01) — status
 DEPLOYED + VERIFIED (harness re-run 30714248222): P2-TAVILY USED (real-time web search works, graded on
 tool-use channel); D-FALLBACK surfaces tool failures; P1/P3/P3b/P-RETAIN/P-GROUND/P-ACCOUNT all PASS in text.
