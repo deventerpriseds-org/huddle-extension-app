@@ -123,10 +123,10 @@ export async function executeRealtimeTool(
   name: string,
   args: Record<string, unknown>,
   ctx: RealtimeToolContext,
-  journeyNames: Set<string>,
 ): Promise<{ output: string; ms: number }> {
   const t0 = Date.now();
   const done = (output: string) => ({ output, ms: Date.now() - t0 });
+  const NATIVE = new Set(["prioritize", "schedule_reminder", "groom_backlog", "tavily_web_search"]);
   try {
     if (name === "prioritize") {
       const { dispatchPrioritize } = await import("../tasks/tools");
@@ -148,7 +148,9 @@ export async function executeRealtimeTool(
       const r = await tavilySearch(args as unknown as TavilySearchArgs);
       return done(JSON.stringify(r));
     }
-    if (journeyNames.has(name)) {
+    // Anything not native → route to the journey catalog directly (no per-call catalog fetch → lower
+    // latency). An unknown/unsupported name comes back as a journey error, surfaced to the model.
+    if (!NATIVE.has(name)) {
       const r = await invokeJourneyTool({
         toolName: name,
         args,

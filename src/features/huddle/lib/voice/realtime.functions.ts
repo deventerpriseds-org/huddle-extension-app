@@ -1,4 +1,13 @@
 import { createServerFn } from "@tanstack/react-start";
+import type { AgentId } from "../../data/agents";
+import { AGENT_BY_ID } from "../../data/agents";
+import { realtimeVoiceFor } from "./agent-realtime-voice";
+import {
+  assembleRealtimeInstructions,
+  buildRealtimeToolset,
+  executeRealtimeTool,
+  type RealtimeCaller,
+} from "./realtime-tools.server";
 
 export type RealtimeSessionResult =
   | { ok: true; clientSecret: string }
@@ -12,27 +21,92 @@ export type RealtimeSessionResult =
 // the client sends on the SDP call.
 export const REALTIME_MODEL = "gpt-realtime";
 
+// Approach A input: when `agentId` is present, mint a SPEAKING session (create_response:true) with the
+// agent's same brain (snapshot instructions + RAG memory + governed tools + its OpenAI voice). When
+// absent, mint today's minimal EARS-ONLY session (back-compat: group ceremonies + the current 1:1
+// baseline are unchanged — the client sends its own session.update there).
+interface RealtimeSessionInput {
+  agentId?: AgentId;
+  caller?: RealtimeCaller;
+  huddleId?: string;
+  memoryQuery?: string;
+  webSearch?: boolean;
+  journey?: boolean;
+  /** semantic_vad eagerness (barge-sensitivity knob — boost insight). auto|low|medium|high. */
+  eagerness?: "auto" | "low" | "medium" | "high";
+}
+
+function parseSessionInput(raw: unknown): RealtimeSessionInput {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const agentId =
+    typeof r.agentId === "string" && AGENT_BY_ID[r.agentId as AgentId]
+      ? (r.agentId as AgentId)
+      : undefined;
+  const caller = r.caller && typeof r.caller === "object" ? (r.caller as RealtimeCaller) : undefined;
+  const eagernessRaw = r.eagerness;
+  const eagerness =
+    eagernessRaw === "low" || eagernessRaw === "medium" || eagernessRaw === "high" || eagernessRaw === "auto"
+      ? eagernessRaw
+      : undefined;
+  return {
+    agentId,
+    caller,
+    huddleId: typeof r.huddleId === "string" ? r.huddleId : undefined,
+    memoryQuery: typeof r.memoryQuery === "string" ? r.memoryQuery : undefined,
+    webSearch: typeof r.webSearch === "boolean" ? r.webSearch : undefined,
+    journey: typeof r.journey === "boolean" ? r.journey : undefined,
+    eagerness,
+  };
+}
+
 export const getRealtimeSession = createServerFn({ method: "POST" })
-  .inputValidator((_raw: unknown) => ({}))
-  .handler(async (): Promise<RealtimeSessionResult> => {
+  .inputValidator((raw: unknown) => parseSessionInput(raw))
+  .handler(async ({ data }): Promise<RealtimeSessionResult> => {
     const key = (process.env.OPENAI_API_KEY ?? "").trim();
     if (!key) return { ok: false, error: "OPENAI_API_KEY not configured" };
     try {
-      // GA ephemeral-secret mint. Config is intentionally minimal here — the browser sends a full
-      // `session.update` (transcription + server_vad, create_response:false) over the data channel
-      // once the connection is open (see useCeremonyVoice.startListening).
+      // For the SPEAKING path (agentId present) we bake the full same-brain config at mint time
+      // (journey's proven pattern) so the model speaks directly with the right brain/voice/tools. For
+      // the ears-only path (no agentId) we keep the minimal mint and the client sends session.update.
+      let sessionBody: Record<string, unknown> = {
+        type: "realtime",
+        model: REALTIME_MODEL,
+      };
+
+      if (data.agentId) {
+        const [instructions, toolset] = await Promise.all([
+          assembleRealtimeInstructions(data.agentId, { memoryQuery: data.memoryQuery }),
+          buildRealtimeToolset(data.agentId, { webSearch: data.webSearch, journey: data.journey }),
+        ]);
+        sessionBody = {
+          type: "realtime",
+          model: REALTIME_MODEL,
+          output_modalities: ["audio"],
+          audio: {
+            input: {
+              transcription: { model: "whisper-1" },
+              turn_detection: {
+                type: "semantic_vad",
+                eagerness: data.eagerness ?? "auto",
+                create_response: true,
+                interrupt_response: true,
+              },
+            },
+            output: { voice: realtimeVoiceFor(data.agentId) },
+          },
+          tool_choice: "auto",
+          tools: toolset.tools,
+          instructions,
+        };
+      }
+
       const res = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${key}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          session: {
-            type: "realtime",
-            model: REALTIME_MODEL,
-          },
-        }),
+        body: JSON.stringify({ session: sessionBody }),
       });
       if (!res.ok) {
         const body = await res.text();
@@ -44,6 +118,41 @@ export const getRealtimeSession = createServerFn({ method: "POST" })
       const secret = body?.value ?? body?.client_secret?.value;
       if (!secret) return { ok: false, error: "OpenAI returned no ephemeral client secret" };
       return { ok: true, clientSecret: secret };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+export type RealtimeToolResult =
+  | { ok: true; output: string; ms: number }
+  | { ok: false; error: string };
+
+// Client-callable executor for a realtime data-channel tool call (Approach A). The browser forwards
+// `response.function_call_arguments.done` here; we run the tool DIRECTLY in-process (one hop, no
+// journey execute-tool edge indirection) and return the output + elapsed ms for latency instrumentation.
+export const runRealtimeTool = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => {
+    const r = (raw ?? {}) as Record<string, unknown>;
+    return {
+      name: String(r.name ?? ""),
+      args: (r.args && typeof r.args === "object" ? r.args : {}) as Record<string, unknown>,
+      agentId: (typeof r.agentId === "string" ? r.agentId : "") as AgentId,
+      caller: (r.caller && typeof r.caller === "object" ? r.caller : {}) as RealtimeCaller,
+      huddleId: typeof r.huddleId === "string" ? r.huddleId : "",
+      timeZone: typeof r.timeZone === "string" ? r.timeZone : undefined,
+    };
+  })
+  .handler(async ({ data }): Promise<RealtimeToolResult> => {
+    if (!data.name) return { ok: false, error: "missing tool name" };
+    if (!data.agentId || !AGENT_BY_ID[data.agentId]) return { ok: false, error: "invalid agentId" };
+    try {
+      const { output, ms } = await executeRealtimeTool(data.name, data.args, {
+        agentId: data.agentId,
+        caller: data.caller,
+        huddleId: data.huddleId,
+        timeZone: data.timeZone,
+      });
+      return { ok: true, output, ms };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
