@@ -525,6 +525,23 @@ solid evidence the mechanism works, but NONE of which is the same as the user se
 own browser. `memory.md`/`actions.md` were written as "found and fixed" before the fix had even been
 merged or deployed, let alone confirmed live — caught by the user, not self-caught.
 **Rule:** merge + deploy first, THEN ask the user for a live re-test, THEN write "fixed" — never before.
+
+### Perceptual/voice UAT: a synthetic harness is a SMOKE TEST, not proof (2026-08-01, hard-won twice)
+A headless harness driving a FAKE/SILENT audio device (`--use-fake-device-for-media-stream`), typed-not-
+spoken input, or canned fixtures proves only "the mechanism didn't crash in canned conditions." It CANNOT
+prove real-world voice behavior — mic sensitivity, VAD false-triggers, barge feel, TTS fluidity/choppiness,
+perceived latency. Reporting `0/0/0`/PASS off such a run is a FALSE POSITIVE (happened: the 1:1
+noise_reduction change passed a silent-device harness `0/0/0` and was FAR more sensitive live). For any
+perceptual/voice change: (1) never write PASS from a synthetic run — status is `MECHANISM ONLY, NOT
+USER-CONFIRMED`; (2) the USER confirming LIVE in their real environment is the verdict; (3) no "verified"
+without an ATTACHED artifact (screenshot / audio-play timeline / transcript rows / run artifact html_url).
+See the expanded rule in the central `verify-work` skill (eds-claude-skills).
+
+### Test tasks MUST be `Test-` prefixed or `journey:{enabled:false}` (relearned 2026-08-01)
+A UAT phrase like "remind me to call the dentist" in a harness CREATES A REAL task/reminder on the user's
+live board (caller resolves to the live user). The user saw a stray "dentist" task. Any harness that could
+create a task/reminder MUST use a `Test-` title or run with `journey:{enabled:false}`. Offenders to fix:
+`e2e/realtime-speak-barge.e2e.mjs`, `e2e/realtime-speak-multiturn.e2e.mjs`, `e2e/conversational-quality.mjs`.
 Corollary: when an app has already shown real behavior differences across environments (dev server vs.
 production build vs. a specific real browser, as happened in this exact investigation), don't invest in
 a large, many-file implementation before a cheap, minimal check confirms the premise holds in the
