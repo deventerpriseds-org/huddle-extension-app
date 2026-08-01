@@ -1,0 +1,43 @@
+name: Ceremony barge V-ACK + V-RESUME UAT
+
+# Drives a real Daily stand-up on the deployed SWA, catches a multi-sentence speaker mid-block,
+# barges via the TYPED path (identical runBargeSequence + resumeFromFreeze as the voice VAD path),
+# and reads the durable DOM transcript rows to prove:
+#   V-ACK    — a filler is voiced by the frozen speaker when the barge answer is slow (no dead air)
+#   V-RESUME — the interrupted speaker resumes from the NEXT sentence, never re-speaking the cut line
+# Runs on a GitHub runner (CCR sandbox cannot reach *.azurestaticapps.net). No microphone needed —
+# the typed barge exercises the same code path as a spoken one.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  resume-ack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Run V-ACK + V-RESUME UAT
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          SHOT_DIR: ceremony-barge-resume-ack-shots
+        run: node e2e/ceremony-barge-resume-ack.e2e.mjs
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ceremony-barge-resume-ack-shots
+          path: ceremony-barge-resume-ack-shots/
+          retention-days: 7
