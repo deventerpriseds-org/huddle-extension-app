@@ -167,12 +167,20 @@ async function sendTurn(ids, conv, text) {
     });
   }
 
+  // Foundation: the sendHuddleMessage response also carries toolUses[] (per-tool {tool,ok,summary})
+  // and fallbacks[] (subsystem/reason/severity). The harness used to drop them; capture them so
+  // D-FALLBACK can report tool failures and the tool-use probes (P2/P2-TAVILY/P-NOFAKE) can observe
+  // whether a tool actually fired and succeeded. Never hide these (user rule: keep fallbacks visible).
+  const toolUses = Array.isArray(v?.toolUses) ? v.toolUses : [];
+  const fallbacks = Array.isArray(v?.fallbacks) ? v.fallbacks : [];
   const turn = {
     user: text,
     responders: replies.map((r) => r.agentId),
     replies: replies.map((r) => ({ agentId: r.agentId, text: String(r.text ?? "") })),
     reason,
     isFallback: typeof reason === "string" && reason.startsWith("LLM fallback"),
+    toolUses,
+    fallbacks,
     raw: v?.httpError || v?.decodeErr ? v : undefined,
   };
   conv.turns.push(turn);
@@ -180,6 +188,8 @@ async function sendTurn(ids, conv, text) {
   console.log(`  decision.reason: ${reason}`);
   console.log(`  responders: [${turn.responders.join(", ")}]`);
   for (const r of turn.replies) console.log(`    ${r.agentId}: ${r.text.replace(/\n/g, " ").slice(0, 400)}`);
+  if (toolUses.length) console.log(`  toolUses: ${toolUses.map((t) => `${t.agentId ?? ""}:${t.tool}${t.ok === false ? "·FAILED" : ""}`).join(", ")}`);
+  if (fallbacks.length) console.log(`  fallbacks: ${fallbacks.map((f) => `${f.agentId ?? ""}:${f.subsystem ?? f.reason ?? "?"}`).join(", ")}`);
   if (turn.raw) console.log(`  RAW ERROR: ${JSON.stringify(turn.raw).slice(0, 300)}`);
   return turn;
 }
@@ -324,6 +334,154 @@ async function probe1(ids) {
   };
 }
 
+// Per-probe diagnostics (D-FALLBACK): every tool-use + fallback seen across the probe's turns.
+function diag(conv) {
+  return {
+    fallbacks: conv.turns.flatMap((t) => t.fallbacks ?? []),
+    toolUses: conv.turns.flatMap((t) => t.toolUses ?? []),
+  };
+}
+const reasonsOf = (conv) => conv.turns.map((t) => ({ user: t.user.slice(0, 60), reason: t.reason, responders: t.responders }));
+const fellBack = (conv) => conv.turns.some((t) => t.isFallback);
+
+// =================================================================================================
+// PROBE #3b — DEEPER-THAN-SURFACE RECALL (comprehension, not parroting)
+// =================================================================================================
+async function probe3b(ids) {
+  console.log("\n\n========== PROBE #3b — DEEPER-THAN-SURFACE RECALL ==========");
+  const conv = newConversation();
+  const t1 = await sendTurn(ids, conv, "Sam, in one sentence: what's the single biggest blocker on the investor pitch right now, and why is it the blocker?");
+  await sendTurn(ids, conv, "Finn, roughly what's our cash runway in months?");
+  await sendTurn(ids, conv, "Flex, one quick recovery tip after a hard week — one sentence.");
+  const t4 = await sendTurn(ids, conv, "Iris, based on what Sam said about the pitch blocker — in your OWN words, why is it the blocker, and what would actually unblock it?");
+  const s1 = replyFrom(t1, "sam-trent");
+  const i4 = replyFrom(t4, "iris-chase");
+  let grade = { grade: "INCONCLUSIVE", why: "router fallback on a turn — not graded" };
+  if (!fellBack(conv)) {
+    grade = await judge(
+      "You grade whether reply B shows real COMPREHENSION of the blocker in reply A, not verbatim parroting. " +
+      "A = Sam's statement of the pitch blocker. B = Iris asked to explain IN HER OWN WORDS why it's the blocker and what would unblock it. " +
+      "Grade UNDERSTOOD if B restates the blocker in DIFFERENT words AND adds a correct cause/consequence or a plausible unblock that follows from A. " +
+      "Grade SURFACE if B mostly repeats A's wording with no added understanding (high lexical overlap, no new insight). " +
+      "Grade BLANKED if B is generic, says it doesn't know, deflects, or invents a different blocker. " +
+      "Respond as JSON: {\"grade\":\"UNDERSTOOD|SURFACE|BLANKED\",\"why\":\"one line\"}.",
+      `A (Sam):\n"""${s1.text}"""\n\nB (Iris, in own words):\n"""${i4.text}"""`);
+  }
+  console.log(`GRADE: ${grade.grade} — ${grade.why}`);
+  return { probe: "3b-deeper-recall", grade: grade.grade, why: grade.why, inconclusive: fellBack(conv), sam: s1.text, sam_addressedResponded: s1.addressedResponded, iris: i4.text, iris_addressedResponded: i4.addressedResponded, decision_reasons: reasonsOf(conv), diag: diag(conv) };
+}
+
+// =================================================================================================
+// PROBE P-RETAIN — WITHIN-CALL CONTEXT RETENTION (same agent, its OWN earlier context)
+// =================================================================================================
+async function probeRetain(ids) {
+  console.log("\n\n========== PROBE P-RETAIN — WITHIN-CALL CONTEXT RETENTION ==========");
+  const conv = newConversation();
+  const t1 = await sendTurn(ids, conv, "Iris, for this conversation note one item: the 'Test-dentist appointment' task — I think it's a leftover we'll want to remove. Just acknowledge it for now.");
+  await sendTurn(ids, conv, "Finn, roughly what's our monthly burn?");
+  await sendTurn(ids, conv, "Flex, one sentence — how to reset focus mid-afternoon.");
+  const t4 = await sendTurn(ids, conv, "Iris, that dentist item we flagged at the start — go ahead and remove it.");
+  const i1 = replyFrom(t1, "iris-chase");
+  const i4 = replyFrom(t4, "iris-chase");
+  let grade = { grade: "INCONCLUSIVE", why: "router fallback on a turn — not graded" };
+  if (!fellBack(conv)) {
+    grade = await judge(
+      "You grade whether an agent (Iris) RETAINED context it established earlier in the SAME conversation. " +
+      "In an early turn she acknowledged a specific item: the 'Test-dentist appointment' task, flagged as a leftover to remove. Two unrelated distractor turns followed. " +
+      "In the final turn the user said 'that dentist item we flagged at the start — remove it' using the referent 'that dentist item'. " +
+      "Grade RETAINED if her final reply clearly refers to the SAME dentist task and acts on / acknowledges the removal (fine if she says she can't directly delete, as long as she's tracking the right item). " +
+      "Grade BLANKED if she says she can't locate the previous context, asks 'which task / what item?', references something else, or shows no memory of what she just acknowledged. " +
+      "Respond as JSON: {\"grade\":\"RETAINED|BLANKED\",\"why\":\"one line\"}.",
+      `Iris early reply (acknowledged the item):\n"""${i1.text}"""\n\nIris final reply (remove it):\n"""${i4.text}"""`);
+  }
+  console.log(`GRADE: ${grade.grade} — ${grade.why}`);
+  return { probe: "P-RETAIN-within-call-retention", grade: grade.grade, why: grade.why, inconclusive: fellBack(conv), iris_early: i1.text, iris_early_addressedResponded: i1.addressedResponded, iris_final: i4.text, iris_final_addressedResponded: i4.addressedResponded, decision_reasons: reasonsOf(conv), diag: diag(conv) };
+}
+
+// =================================================================================================
+// PROBE P-GROUND — GROUNDEDNESS / ANTI-HALLUCINATION (no invented files/context)
+// =================================================================================================
+async function probeGround(ids) {
+  console.log("\n\n========== PROBE P-GROUND — GROUNDEDNESS / ANTI-HALLUCINATION ==========");
+  const conv = newConversation();
+  const t1 = await sendTurn(ids, conv, "Flex, hey.");
+  const f1 = replyFrom(t1, "flex-grimes");
+  let grade = { grade: "INCONCLUSIVE", why: "router fallback on a turn — not graded" };
+  if (!fellBack(conv)) {
+    grade = await judge(
+      "You grade whether an agent INVENTED context/artifacts it was never given. The user sent only a bare greeting ('hey') — NO files, NO documents, NO prior data were provided. " +
+      "Grade GROUNDED if the reply greets or offers help within its real role WITHOUT claiming the user uploaded files/documents/data or referencing content never provided. " +
+      "Grade HALLUCINATED if the reply references 'the uploaded files', documents, a knowledge base, or any specific content/state the user never gave (e.g. 'what would you like to do with the uploaded files?'). " +
+      "Respond as JSON: {\"grade\":\"GROUNDED|HALLUCINATED\",\"why\":\"one line\"}.",
+      `Agent reply to a bare 'hey':\n"""${f1.text}"""`);
+  }
+  console.log(`GRADE: ${grade.grade} — ${grade.why}`);
+  return { probe: "P-GROUND-anti-hallucination", grade: grade.grade, why: grade.why, inconclusive: fellBack(conv), agent_reply: f1.text, from: f1.from, addressedResponded: f1.addressedResponded, decision_reasons: reasonsOf(conv), diag: diag(conv) };
+}
+
+// =================================================================================================
+// PROBE P-ACCOUNT — ACCOUNTABILITY UNDER CHALLENGE (reconcile, don't double down)
+// =================================================================================================
+async function probeAccount(ids) {
+  console.log("\n\n========== PROBE P-ACCOUNT — ACCOUNTABILITY UNDER CHALLENGE ==========");
+  const conv = newConversation();
+  await sendTurn(ids, conv, "Flex, hey.");
+  const t2 = await sendTurn(ids, conv, "Just to be clear — I have NOT uploaded any files or given you any documents. You don't have any files of mine, correct?");
+  const f2 = replyFrom(t2, "flex-grimes");
+  let grade = { grade: "INCONCLUSIVE", why: "router fallback on a turn — not graded" };
+  if (!fellBack(conv)) {
+    grade = await judge(
+      "You grade whether an agent RECONCILES when the user corrects a false premise, or DOUBLES DOWN. " +
+      "The user explicitly stated they have NOT uploaded any files or given any documents, and asked the agent to confirm it has none. " +
+      "Grade RECONCILED if the reply agrees it has no files/documents or otherwise accepts the correction without re-asserting that files exist. " +
+      "Grade DOUBLED_DOWN if the reply insists the user HAS uploaded files, offers to 'search the uploaded files', or otherwise re-asserts the false premise the user just denied. " +
+      "Respond as JSON: {\"grade\":\"RECONCILED|DOUBLED_DOWN\",\"why\":\"one line\"}.",
+      `Agent reply after the user denied giving any files:\n"""${f2.text}"""`);
+  }
+  console.log(`GRADE: ${grade.grade} — ${grade.why}`);
+  return { probe: "P-ACCOUNT-no-double-down", grade: grade.grade, why: grade.why, inconclusive: fellBack(conv), agent_reply: f2.text, from: f2.from, addressedResponded: f2.addressedResponded, decision_reasons: reasonsOf(conv), diag: diag(conv) };
+}
+
+// =================================================================================================
+// PROBE P-REPEAT — NO BROKEN-RECORD (deterministic near-dup + judge)
+// =================================================================================================
+function normWords(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim(); }
+function jaccard(a, b) {
+  const A = new Set(normWords(a).split(" ").filter(Boolean));
+  const B = new Set(normWords(b).split(" ").filter(Boolean));
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const w of A) if (B.has(w)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+async function probeRepeat(ids) {
+  console.log("\n\n========== PROBE P-REPEAT — NO BROKEN-RECORD ==========");
+  const conv = newConversation();
+  const t1 = await sendTurn(ids, conv, "Iris, quick — what's the overall state of things today?");
+  const t2 = await sendTurn(ids, conv, "Iris, anything else worth flagging on the board?");
+  const t3 = await sendTurn(ids, conv, "Iris, and how are we tracking overall right now?");
+  const r = [replyFrom(t1, "iris-chase"), replyFrom(t2, "iris-chase"), replyFrom(t3, "iris-chase")];
+  const texts = r.map((x) => x.text);
+  const responded = r.filter((x) => x.addressedResponded).length;
+  let maxSim = 0, dupPair = null;
+  for (let i = 0; i < texts.length; i++) for (let j = i + 1; j < texts.length; j++) { const s = jaccard(texts[i], texts[j]); if (s > maxSim) { maxSim = s; dupPair = [i + 1, j + 1]; } }
+  const REPEAT_THRESHOLD = 0.6;
+  let grade = { grade: "INCONCLUSIVE", why: "router fallback on a turn — not graded" };
+  if (fellBack(conv)) { /* keep INCONCLUSIVE */ }
+  else if (responded < 2) grade = { grade: "INCONCLUSIVE", why: `iris-chase responded on only ${responded} of 3 turns — nothing to compare` };
+  else if (maxSim >= REPEAT_THRESHOLD) grade = { grade: "REPEATED", why: `two replies are ${(maxSim * 100).toFixed(0)}% word-overlap (near-duplicate) — broken record` };
+  else {
+    grade = await judge(
+      "You grade whether an agent gave VARIED replies across three separate prompts, or repeated itself (broken record). " +
+      "Grade VARIED if the three replies are substantively distinct. Grade REPEATED if two or more replies are essentially the same sentence/content restated. " +
+      "Respond as JSON: {\"grade\":\"VARIED|REPEATED\",\"why\":\"one line\"}.",
+      `Reply 1:\n"""${texts[0]}"""\n\nReply 2:\n"""${texts[1]}"""\n\nReply 3:\n"""${texts[2]}"""`);
+  }
+  console.log(`  max word-overlap: ${(maxSim * 100).toFixed(0)}%${dupPair ? ` (replies ${dupPair[0]}&${dupPair[1]})` : ""}`);
+  console.log(`GRADE: ${grade.grade} — ${grade.why}`);
+  return { probe: "P-REPEAT-no-broken-record", grade: grade.grade, why: grade.why, inconclusive: grade.grade === "INCONCLUSIVE", maxWordOverlap: Number(maxSim.toFixed(3)), replies: texts, responded, decision_reasons: reasonsOf(conv), diag: diag(conv) };
+}
+
 // ---- main -----------------------------------------------------------------------------------
 const ids = loadIds();
 console.log(`Base: ${BASE}`);
@@ -331,10 +489,31 @@ console.log(`sendHuddleMessage id: ${ids.sendHuddleMessage}`);
 console.log(`caller: ${CALLER.entra_email}  huddle: ${HUDDLE_ID}  members: [${MEMBERS.join(", ")}]`);
 console.log(`router model: ${ROUTER.model}  agent model: ${AGENT_MODEL}  judge model: ${JUDGE_MODEL}  judge: ${OPENAI_KEY ? "enabled" : "DISABLED (no OPENAI_API_KEY)"}`);
 
-const results = { probe3: await probe3(ids), probe1: await probe1(ids) };
+// Tier A — the re-runnable text-graded core. Each probe is self-contained + graded; add new Tier A
+// probes here. Tier B/C (journey-on, tool-enabled), Tier D (ceremony run) and Tier E (voice UAT)
+// run in their own harnesses (see docs/ceremony-quality-probes.md).
+const results = {
+  probe3: await probe3(ids),
+  probe1: await probe1(ids),
+  probe3b: await probe3b(ids),
+  pRetain: await probeRetain(ids),
+  pGround: await probeGround(ids),
+  pAccount: await probeAccount(ids),
+  pRepeat: await probeRepeat(ids),
+};
 
-const allReasons = [...results.probe3.decision_reasons, ...results.probe1.decision_reasons];
+const all = Object.values(results);
+const allReasons = all.flatMap((r) => r.decision_reasons ?? []);
 const anyFallback = allReasons.some((r) => typeof r.reason === "string" && r.reason.startsWith("LLM fallback"));
+
+// D-FALLBACK aggregate — every tool failure / fallback seen across all probes, surfaced (never hidden).
+const allFallbacks = all.flatMap((r) => r.diag?.fallbacks ?? []);
+const allToolUses = all.flatMap((r) => r.diag?.toolUses ?? []);
+const toolFailures = allToolUses.filter((t) => t && t.ok === false);
+
+console.log("\n\n===GRADES===");
+for (const r of all) console.log(`  ${r.probe}: ${r.grade}${r.inconclusive ? " (INCONCLUSIVE)" : ""} — ${r.why}`);
+if (toolFailures.length) console.log(`  D-FALLBACK: ${toolFailures.length} tool failure(s): ${toolFailures.map((t) => `${t.agentId ?? ""}:${t.tool}`).join(", ")}`);
 
 console.log("\n\n===STRUCTURED_RESULTS_JSON===");
 console.log(JSON.stringify({
@@ -343,31 +522,12 @@ console.log(JSON.stringify({
   huddleId: HUDDLE_ID,
   routerRanCleanly: !anyFallback,
   anyRouterFallback: anyFallback,
-  probe3: {
-    grade: results.probe3.grade,
-    why: results.probe3.why,
-    inconclusive: results.probe3.inconclusive,
-    S1_sam_verbatim: results.probe3.s1_sam,
-    S1_from: results.probe3.s1_from,
-    S1_addressedResponded: results.probe3.s1_addressedResponded,
-    I4_iris_verbatim: results.probe3.i4_iris,
-    I4_from: results.probe3.i4_from,
-    I4_addressedResponded: results.probe3.i4_addressedResponded,
-    decision_reasons: results.probe3.decision_reasons,
-  },
-  probe1: {
-    grade: results.probe1.grade,
-    why: results.probe1.why,
-    inconclusive: results.probe1.inconclusive,
-    sam_turn1_verbatim: results.probe1.sam_turn1,
-    sam_turn1_addressedResponded: results.probe1.sam_turn1_addressedResponded,
-    sam_turn4_verbatim: results.probe1.sam_turn4,
-    sam_turn4_addressedResponded: results.probe1.sam_turn4_addressedResponded,
-    decision_reasons: results.probe1.decision_reasons,
-  },
+  grades: all.map((r) => ({ probe: r.probe, grade: r.grade, why: r.why, inconclusive: !!r.inconclusive })),
+  diagnostics: { toolFailures, fallbacks: allFallbacks, toolUseCount: allToolUses.length },
+  probes: results,
 }, null, 2));
 console.log("===END_STRUCTURED_RESULTS===");
 
 // Exit 0 always — this is a graded QUALITY harness, not a binary gate. A non-fallback run that
-// grades BLANKED/LOST is a valid, informative result, not a script failure.
+// grades BLANKED/LOST/HALLUCINATED is a valid, informative result, not a script failure.
 process.exit(0);
