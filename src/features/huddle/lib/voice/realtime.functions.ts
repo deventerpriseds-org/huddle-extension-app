@@ -7,7 +7,6 @@ import {
   executeRealtimeTool,
   type RealtimeCaller,
 } from "./realtime-tools.server";
-import { realtimeAudioInput } from "./realtime-audio";
 
 export type RealtimeSessionResult =
   | { ok: true; clientSecret: string }
@@ -88,17 +87,27 @@ export const getRealtimeSession = createServerFn({ method: "POST" })
           type: "realtime",
           model: REALTIME_MODEL,
           output_modalities: ["text"],
-          // STT/VAD comes from the SHARED config (realtime-audio.ts) so the 1:1 and the ceremony can
-          // never drift again. Brain-mode deltas stay here: create_response:true (Realtime IS the 1:1
-          // brain — false would make it go silent), interrupt_response:true (barge cancels the in-flight
-          // reply text), and the client's eagerness override. output_modalities/instructions/tools below
-          // are the "same brain" layer, unrelated to STT.
           audio: {
-            input: realtimeAudioInput({
-              createResponse: true,
-              interruptResponse: true,
-              eagerness: data.eagerness,
-            }),
+            input: {
+              // REVERTED to the 1:1's known-good STT config after the shared-config change made the 1:1
+              // FAR more sensitive in the user's real environment (2026-08-01). The headless harness
+              // (fake silent device, no real speech/ambient noise) could not catch it — do NOT re-apply
+              // noise_reduction/prompt-drop to the 1:1 without a LIVE user confirmation this time.
+              // Aligned to journey's proven web-voice STT: mini transcribe, English pinned, and a
+              // domain-vocab prompt to bias STT toward the terms users actually say. noise_reduction
+              // intentionally omitted (= none), same as journey.
+              transcription: {
+                model: "gpt-4o-mini-transcribe",
+                language: "en",
+                prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities",
+              },
+              turn_detection: {
+                type: "semantic_vad",
+                eagerness: data.eagerness ?? "medium",
+                create_response: true,
+                interrupt_response: true,
+              },
+            },
           },
           tool_choice: "auto",
           tools: toolset.tools,

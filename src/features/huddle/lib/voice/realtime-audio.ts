@@ -1,8 +1,9 @@
-// SINGLE SOURCE OF TRUTH for the OpenAI Realtime STT/VAD input config, shared by BOTH voice surfaces:
-//  - 1:1 Fast (A)   — realtime.functions.ts getRealtimeSession (agentId branch): Realtime is the BRAIN
-//                     (create_response:true, gpt-realtime generates the reply text, EL speaks it).
-//  - Ceremony       — useCeremonyVoice.ts session.update: Realtime is EARS-ONLY (create_response:false,
-//                     the multi-agent text engine + router compose the reply, EL speaks it per agent).
+// CEREMONY-ONLY OpenAI Realtime STT/VAD input config (useCeremonyVoice.ts session.update).
+// NOTE: this was briefly shared with the 1:1 Fast (A) voice, but applying it to the 1:1 made the 1:1
+// FAR more sensitive in the user's real environment (2026-08-01) — the 1:1 was reverted to its own
+// known-good inline config in realtime.functions.ts, so this module now serves ONLY the ceremony.
+// Do NOT re-unify without a LIVE user confirmation on BOTH surfaces (a headless silent-device harness
+// cannot catch real-world over-sensitivity).
 //
 // WHY this exists: the STT/VAD input layer (which transcription model, language pin, noise reduction,
 // end-of-turn detector) is a cross-cutting concern with NO reason to differ between the two surfaces —
