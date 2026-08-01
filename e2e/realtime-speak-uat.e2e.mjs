@@ -165,9 +165,13 @@ async function runAgent(agentSpec, engine) {
       sdpStatus = res.status();
     } else if (url.includes("/_serverFn/")) {
       let body = "";
-      try { body = (await res.text()).slice(0, 400); } catch {}
-      serverFnBodies.push(body);
-      if (/client_secrets|clientSecret|OPENAI/.test(body) && QUOTA_RE.test(body)) quotaHit = body.slice(0, 200);
+      try { body = (await res.text()).slice(0, 700); } catch {}
+      // Keep only realtime-session-looking replies (getRealtimeSession returns clientSecret on success
+      // or an "OpenAI client_secrets <status>: …" error string) so we can pin the connect-failure cause.
+      if (/client_secrets|clientSecret|ephemeral|realtime|Realtime|OPENAI_API_KEY|no ephemeral/.test(body)) {
+        serverFnBodies.push(body);
+        if (QUOTA_RE.test(body)) quotaHit = body.slice(0, 300);
+      }
     }
   });
 
@@ -212,6 +216,13 @@ async function runAgent(agentSpec, engine) {
     out.sdpStatus = sdpStatus;
     out.openaiRealtimeCalls = openaiRealtimeCalls;
     console.log(`  connected=${out.connected}  sdpStatus=${sdpStatus}  openaiRealtimeCalls=${openaiRealtimeCalls}`);
+    // Ground-truth the connect result: dump the getRealtimeSession serverFn reply (success carries
+    // clientSecret; failure carries "OpenAI client_secrets <status>: …" or "OPENAI_API_KEY not configured").
+    if (serverFnBodies.length) {
+      serverFnBodies.forEach((b, i) => console.log(`  getRealtimeSession reply[${i}]: ${b.replace(/\s+/g, " ").slice(0, 400)}`));
+    } else {
+      console.log("  getRealtimeSession reply: (none captured)");
+    }
     p = await shot(page, `${engine}-${id}-02-connected`); if (p) { shotCount++; out.shots.push(p); }
 
     if (engine === "baseline") {
