@@ -144,6 +144,14 @@ export function useCeremonyVoice(hookOpts: {
   // Incremented on barge (kills the current voiceTurn loop) and on stopListening.
   const genRef = useRef(0);
 
+  // Connection-lifetime counter — bumped ONLY when a listen session starts/stops, NEVER on a barge.
+  // The WebRTC event handlers (dc.onmessage/onopen) and the connection-setup aborts guard on THIS,
+  // not on genRef. genRef advances on every barge (bargeFreeze/speakInterjection bump it to kill the
+  // live playback loop), so a handler guarded on genRef would stop matching after the first barge and
+  // silently drop every later Realtime event (speech_started, transcription) — the "mic goes deaf
+  // after one barge" bug. connGenRef only changes when the connection itself is torn down/replaced.
+  const connGenRef = useRef(0);
+
   // Stable ref so the WebRTC message handler always has the latest callback.
   const onBargeRef = useRef(hookOpts.onBargeDetected);
   onBargeRef.current = hookOpts.onBargeDetected;
@@ -270,7 +278,8 @@ export function useCeremonyVoice(hookOpts: {
 
   // ── stopListening ─────────────────────────────────────────────────────────
   const stopListening = useCallback(() => {
-    genRef.current += 1;
+    genRef.current += 1; // kill any live playback loop
+    connGenRef.current += 1; // invalidate the torn-down connection so its stale handlers no-op
     listenRef.current = false;
     connectingRef.current = false;
     audioQueueRef.current.clearAndStop();
@@ -295,8 +304,10 @@ export function useCeremonyVoice(hookOpts: {
     if (listenRef.current || connectingRef.current) return;
     connectingRef.current = true;
     setError(null);
-    genRef.current += 1;
-    const gen = genRef.current;
+    // Connection-lifetime token — used by the WebRTC handlers/setup aborts below. Deliberately NOT
+    // genRef: a barge must not invalidate the connection (that was the mic-deaf bug).
+    connGenRef.current += 1;
+    const connGen = connGenRef.current;
 
     try {
       // Grab the mic FIRST, before any network await. getUserMedia requires a live user-activation
@@ -309,7 +320,7 @@ export function useCeremonyVoice(hookOpts: {
       });
       streamRef.current = stream;
 
-      if (genRef.current !== gen) {
+      if (connGenRef.current !== connGen) {
         stream.getTracks().forEach((t) => t.stop());
         connectingRef.current = false;
         return;
@@ -322,7 +333,7 @@ export function useCeremonyVoice(hookOpts: {
       }
       const ephemeralKey = session.clientSecret;
 
-      if (genRef.current !== gen) {
+      if (connGenRef.current !== connGen) {
         stream.getTracks().forEach((t) => t.stop());
         connectingRef.current = false;
         return;
@@ -343,6 +354,7 @@ export function useCeremonyVoice(hookOpts: {
       dcRef.current = dc;
 
       dc.onopen = () => {
+        if (connGenRef.current !== connGen) return; // connection superseded before it opened
         // GA session.update schema: transcription + turn_detection now nest under audio.input, and
         // the model must NOT auto-respond (we use Realtime for VAD + STT only; the reply comes from
         // our own turn engine). create_response:false suppresses the model's own answer.
@@ -377,7 +389,10 @@ export function useCeremonyVoice(hookOpts: {
       };
 
       dc.onmessage = (e) => {
-        if (genRef.current !== gen) return;
+        // Guard on the CONNECTION generation, not the playback genRef. A barge bumps genRef to kill
+        // the speaker's loop; if this handler keyed on genRef it would stop matching after the first
+        // barge and drop every later VAD/STT event — the mic-goes-deaf-after-one-barge bug.
+        if (connGenRef.current !== connGen) return;
         let msg: { type: string; [k: string]: unknown };
         try {
           msg = JSON.parse(e.data as string) as { type: string; [k: string]: unknown };
@@ -443,7 +458,7 @@ export function useCeremonyVoice(hookOpts: {
       await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
     } catch (err) {
       connectingRef.current = false; // release the guard on every failure path (incl. the early return)
-      if (genRef.current !== gen) return;
+      if (connGenRef.current !== connGen) return;
       const name = err instanceof DOMException ? err.name : "";
       const msg =
         name === "NotAllowedError" || name === "PermissionDeniedError"
