@@ -1,0 +1,46 @@
+name: Conversational quality (graded, live)
+
+# Multi-turn CONVERSATIONAL-QUALITY harness for the Huddle GROUP agents.
+# Runs e2e/conversational-quality.mjs against the deployed SWA (GitHub runners are not behind the
+# CCR proxy, so they can reach *.azurestaticapps.net; the sandbox cannot).
+#
+# It drives two graded multi-turn group conversations and grades QUALITY with an LLM judge:
+#   PROBE #3  cross-agent, cross-turn RECALL  → RECALLED / PARTIAL / BLANKED
+#   PROBE #1  follow-through + state memory   → ORIENTED / LOST
+# Every turn's decision.reason is captured; any `LLM fallback` (quota/429) marks the run
+# INCONCLUSIVE (the router never ran, so a grade would be meaningless).
+#
+# journey is disabled on every agent, so NO tasks are written to the user's real board.
+# Read the STRUCTURED_RESULTS_JSON block in the job logs for per-probe grade + verbatim evidence.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  conversational-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Build so the server-fn content-hash ids auto-resolve FRESH from .output (a stale committed
+      # id would 404/405 the whole run). Non-fatal: on a build hiccup the harness falls back to the
+      # committed .claude/skills/test-agent-serverfn/scripts/fn-ids.json.
+      - name: Build (resolve fresh server-fn ids)
+        continue-on-error: true
+        run: npm run build
+
+      - name: Run conversational-quality harness
+        env:
+          HUDDLE_BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          HUDDLE_CALLER: von.ellis@enterpriseds.io
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+        run: node e2e/conversational-quality.mjs
