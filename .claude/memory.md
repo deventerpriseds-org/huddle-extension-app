@@ -1,5 +1,33 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-07-31
+Last updated: 2026-08-01
+
+## Active work — 1:1 VOICE latency (journey-speed) — plan + premise CONFIRMED, build next (2026-08-01)
+User complaint: "the delay for my convo with Flex to SPEAK takes way too long, much longer than journey."
+It's a VOICE latency ask (not text). Today's 1:1 voice is SLOW because Realtime is ears-only
+(`create_response:false`, remote track muted) → transcript → full Responses turn (5–10s) → 2500ms poll
+→ ElevenLabs TTS. Plan (`docs/plan-1on1-realtime-voice.md`, ACs included): let OpenAI Realtime SPEAK
+the reply directly over the existing WebRTC channel (bypasses SWA buffering entirely — that's a
+peer-to-peer track), same brain preserved by baking snapshot instructions + RAG memory + the SAME
+governed `mergedTools` + per-agent voice into the session at mint; tool-calls run through the SAME
+executor. Studied BOTH references per the user: journey `RealtimeVoiceAssistant`+`generate-realtime-token`
+(OpenAI Realtime — chosen: brain under our control, best same-brain fit) vs boost coach ElevenLabs ConvAI
+(fully-managed but forks the brain — NOT chosen; steal its turn-tuning + echo-guard insights).
+- **User directive:** NOT flat tool access. Every agent uses the SAME data-driven capability/ownership
+  STRUCTURE (agents.ts + lib/capabilities.ts) so owner/capability ROTATIONS propagate to voice as to
+  text, zero per-agent code. Voice mint derives tools from the same governed `mergedTools`.
+- **PREMISE CONFIRMED (cheap probe, run 30682377534 PASS):** GA `gpt-realtime` over WebRTC speaks
+  directly + executes a tool + speaks the REAL returned value (transcript "The test value is
+  PINEAPPLE-42", 4475 audio bytes on inbound RTP track, SDP 201). Probe: `e2e/realtime-speak-probe.mjs`
+  + `realtime-speak-probe.yml` (mints ephemeral key, headless Chromium drives one turn+tool round-trip).
+- **CRITICAL BUILD INSIGHT (probe-found, would've been a first-shot bug):** over WebRTC, audio streams
+  on the **RTP media track**, NOT as data-channel `output_audio.delta` events (those are the WebSocket
+  transport). So the build must ATTACH/UNMUTE the remote track — Huddle's `useCeremonyVoice` currently
+  does `pc.ontrack = e => e.track.enabled = false` (disables it). Enable it + attach to an audio element.
+- Also confirmed this session: **Azure SWA BUFFERS streamed HTTP responses** (probe: content-length set,
+  no transfer-encoding chunked, all chunks arrive at once) → SSE to the browser is a dead end; irrelevant
+  to voice (WebRTC track bypasses SWA). Text token-streaming (if ever done) must use poll-partial.
+
+## Older status
 
 ## Purpose & goals
 Huddle: a multi-agent AI life-assistant (15 role-agents) integrated with the **journey** app.

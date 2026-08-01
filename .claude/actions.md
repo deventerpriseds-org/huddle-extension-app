@@ -11,6 +11,28 @@ Last updated: 2026-07-31 (ACT-huddle-12 problem #1 — Transcript/Chat tabs — 
 
 ## Open
 
+### ACT-huddle-13: 1:1 VOICE latency — make agents SPEAK journey-fast (OpenAI Realtime speaks directly)
+**Requested:** 2026-08-01 — user: "the delay for my convo with Flex to SPEAK takes way too long. much
+longer than the journey app"; "settings should match journey or the boost coach"; "flex and all agents
+should have tools and everything else iris has" (clarified: SAME data-driven capability/ownership
+STRUCTURE, not flat access — rotations must propagate to voice).
+**Expected outcome:** talking to an agent in a 1:1, the agent starts speaking in <~1s (journey-like),
+same brain (snapshot + memory + governed tools), tool answers use real data, natural turn-taking + barge.
+**Plan:** `docs/plan-1on1-realtime-voice.md` (+ 31 ACs). Let OpenAI Realtime generate the spoken reply
+over the existing WebRTC channel; bake instructions+memory+governed mergedTools+per-agent voice into the
+session at mint; tool-calls via a shared executor (extend, don't fork). Steal boost's turn-tuning +
+echo-guard. Uniform path for ALL agents.
+**Status:**
+- [DONE 2026-08-01] Ground-truthed current voice path + both references (journey OpenAI-Realtime chosen;
+  boost ElevenLabs ConvAI insights folded in). Plan + independent ACs written & committed.
+- [DONE 2026-08-01] **PREMISE CONFIRMED** via cheap probe (`realtime-speak-probe.yml` run 30682377534
+  PASS): GA gpt-realtime over WebRTC speaks directly + tool + speaks real value. Build de-risked.
+  Probe-found build insight recorded in memory: play the WebRTC RTP track (Huddle currently disables it).
+- [NEXT] Build: (1) data-driven per-agent OpenAI voice; (2) extend getRealtimeSession to bake
+  instructions+memory+governed tools+voice+create_response:true; (3) shared tool executor; (4) realtime
+  reply mode in useCeremonyVoice (unmute/attach track, tool round-trip, capture transcript); (5) echo
+  guard + turn tuning; (6) flag-flip 1:1 path. Then extend the diagnostic + deploy main + live retest.
+
 ### ACT-huddle-6: Cross-modality "same brain" — 1:1 chat vs. 1:1 meeting-room (voice) give different answers/capabilities
 **Requested:** 2026-07-31 — user's own words: "the outcomes I get from a one-on-one chat versus what
 I get when I hit the record button and I'm in the one and one meeting room [are] totally different
