@@ -1,7 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { AgentId } from "../../data/agents";
 import { AGENT_BY_ID } from "../../data/agents";
-import { realtimeVoiceFor } from "./agent-realtime-voice";
 import {
   assembleRealtimeInstructions,
   buildRealtimeToolset,
@@ -78,10 +77,16 @@ export const getRealtimeSession = createServerFn({ method: "POST" })
           assembleRealtimeInstructions(data.agentId, { memoryQuery: data.memoryQuery }),
           buildRealtimeToolset(data.agentId, { webSearch: data.webSearch, journey: data.journey }),
         ]);
+        // EL-VOICE HYBRID: Realtime is the fast streaming BRAIN only — it emits TEXT over the WebRTC
+        // data channel (create_response:true), which the client speaks sentence-by-sentence through
+        // ElevenLabs TTS (the agent's cloned voice). output_modalities is ["text"] — OpenAI does NOT
+        // generate audio (its voices aren't the EL cloned voices, and skipping audio-gen is faster/
+        // cheaper). Piggybacks the WebRTC channel so SWA buffering never applies. semantic_vad still
+        // handles end-of-turn + barge (interrupt_response cancels the in-flight text on user speech).
         sessionBody = {
           type: "realtime",
           model: REALTIME_MODEL,
-          output_modalities: ["audio"],
+          output_modalities: ["text"],
           audio: {
             input: {
               transcription: { model: "gpt-4o-transcribe" },
@@ -92,7 +97,6 @@ export const getRealtimeSession = createServerFn({ method: "POST" })
                 interrupt_response: true,
               },
             },
-            output: { voice: realtimeVoiceFor(data.agentId) },
           },
           tool_choice: "auto",
           tools: toolset.tools,

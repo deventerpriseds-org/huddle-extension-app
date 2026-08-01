@@ -1,16 +1,26 @@
-// UAT — Approach A / Fast (A): OpenAI Realtime SPEAKS the 1:1 agent reply directly over WebRTC.
-// Runs on a GH runner (open internet, fake mic) because the CCR session egress can't reach the
-// deployed SWA or api.openai.com realtime. Drives the DEPLOYED app exactly as a user would:
+// UAT — Approach A / Fast (A) EL-VOICE HYBRID: OpenAI Realtime is the streaming TEXT brain (WebRTC),
+// and the client speaks each streamed sentence through the agent's ElevenLabs cloned voice
+// (synthesizeSpeech → HTMLAudioElement). Runs on a GH runner (open internet, fake mic) because the CCR
+// session egress can't reach the deployed SWA or api.openai.com realtime. Drives the DEPLOYED app
+// exactly as a user would:
 //   1. pre-seed localStorage["huddle-voice-engine"] = realtime-speak via addInitScript (BEFORE app
 //      init, so zustand hydrates it on the first load) — no reload, because uat_token + ?huddle are
 //      single-use and a reload would drop them onto the login gate
-//   2. click "Start voice conversation" → the 1:1 voice meeting auto-connects (getRealtimeSession
-//      mints a SPEAKING session → api.openai.com/v1/realtime SDP 201 → WebRTC up)
+//   2. click "Start voice conversation" → the 1:1 voice meeting auto-connects (getRealtimeSession mints
+//      a TEXT-OUT session → api.openai.com/v1/realtime SDP 201 → WebRTC data channel up)
 //   3. open the Chat tab, TYPE the agent's daily ask (routes through the hook's sendText → dc.send)
-//   4. PROVE it spoke: the remote inbound-rtp AUDIO track has bytesReceived>0 (pc.getStats()) AND a
-//      non-empty agent reply transcript renders. Tool asks also expect a `[realtime-speak] tool …` log.
-//   5. screenshot every step + log per-step evidence (the screenshot proof: PNG artifact + logged facts)
-//   6. classify each reply against the poor-response taxonomy; PASS/FAIL each agent.
+//   4. PROVE it spoke — the HYBRID produces NO OpenAI audio track (session is output_modalities:["text"]),
+//      so inbound-rtp audio bytes are EXPECTED to be 0 and are NOT a pass signal. Instead "it spoke" is
+//      proven by ANY of these observed AFTER the ask:
+//        (a) streamed reply TEXT over the data channel — response.output_text.delta / .done
+//            (intercepted directly on the client-created "oai-events" data channel), and/or
+//        (b) the ElevenLabs audio actually played — HTMLMediaElement.prototype.play() fired on a
+//            data:audio/mpeg element (instrumented), and/or
+//        (c) the synthesizeSpeech server function was called — a /_serverFn/ POST returning audioBase64.
+//   5. CAPTURE the ACTUAL agent voice reply from the streamed data-channel transcript (the .done text),
+//      NOT from pre-existing reminder/alarm cards in the dm-<agent> thread (that mis-read bit the last run).
+//   6. screenshot every step + log per-step evidence (PNG artifact + logged facts).
+//   7. classify each reply against the poor-response taxonomy; PASS/FAIL each agent.
 // Plus AC-regression: one agent on Baseline still connects (reversibility).
 //
 // Env: APP_URL, UAT_BYPASS_TOKEN (or UAT_TOKEN), SHOT_DIR, CHROMIUM_PATH (optional).
@@ -30,20 +40,22 @@ if (!UAT_TOKEN) {
 }
 
 // The batch — distinct lanes + tool types + governance (mirrors docs/uat-realtime-voice.md).
+// `expectTool` names the specific tool a schedule/priorities/travel ask should fire (prioritize is the
+// combined nightly schedule — the source of truth — for schedule/agenda/priorities asks per VOICE_HOUSE_STYLE).
 const BATCH = [
-  { id: "iris-chase",       ask: "What's on my schedule today?",         tool: true,  lane: "EA/calendar" },
-  { id: "finn-reid",        ask: "How's my runway looking?",             tool: false, lane: "finance" },
-  { id: "flex-grimes",      ask: "Give me a quick workout for today.",   tool: false, lane: "fitness (original complaint agent)" },
-  { id: "troy-lennox",      ask: "Any trips coming up on my calendar?",  tool: true,  lane: "travel/calendar" },
-  { id: "terry-locke",      ask: "What should I prioritize?",            tool: true,  lane: "scrum/prioritize" },
-  { id: "charleston-lewis", ask: "Suggest dinner tonight.",             tool: false, lane: "dining" },
+  { id: "iris-chase",       ask: "What's on my schedule today?",        tool: true,  expectTool: "prioritize", lane: "EA/schedule" },
+  { id: "finn-reid",        ask: "How's my runway looking?",            tool: false, expectTool: null,         lane: "finance" },
+  { id: "flex-grimes",      ask: "Give me a quick workout for today.",  tool: false, expectTool: null,         lane: "fitness (original complaint agent)" },
+  { id: "troy-lennox",      ask: "Any trips coming up on my calendar?", tool: true,  expectTool: null,         lane: "travel/calendar" },
+  { id: "terry-locke",      ask: "What should I prioritize?",           tool: true,  expectTool: "prioritize", lane: "scrum/prioritize" },
+  { id: "charleston-lewis", ask: "Suggest dinner tonight.",            tool: false, expectTool: null,         lane: "dining" },
 ];
 
 const REFUSAL_RE = /\b(can'?t|cannot|no idea|don'?t know how|not able|as an ai|unable to|i do not have access|i don'?t have access)\b/i;
 const QUOTA_RE = /429|insufficient_quota|quota|rate.?limit/i;
 
 const CONNECT_TIMEOUT_MS = 30_000;
-const REPLY_TIMEOUT_MS = 40_000;
+const REPLY_TIMEOUT_MS = 45_000;
 
 const launchOpts = {
   args: [
@@ -58,21 +70,78 @@ if (CHROMIUM_PATH) launchOpts.executablePath = CHROMIUM_PATH;
 
 const browser = await chromium.launch(launchOpts);
 
-// Instrument every RTCPeerConnection into window.__pcs so we can getStats() on the remote audio track,
-// and probe media support / getUserMedia. Injected before ANY app code, re-runs on reload.
+// Injected before ANY app code, re-runs on reload. Instruments THREE spoke-proof signals for the hybrid:
+//  1. window.__pcs — every RTCPeerConnection (so we can still report inbound-rtp bytes for info only).
+//  2. Data-channel interception — wrap createDataChannel and addEventListener('message') on the app's
+//     own "oai-events" channel (independent of the app's dc.onmessage assignment; both fire). Accumulate
+//     the streamed reply TEXT (response.output_text.delta/.done, response.text.delta/.done) into
+//     window.__reply* and the requested tool names (response.function_call_arguments.done) into
+//     window.__toolCalls. This is the ACTUAL agent voice reply + real tool signal — not a DOM card.
+//  3. HTMLMediaElement.prototype.play — increment window.__audioPlays whenever an EL audio element plays.
 const INIT_SCRIPT = () => {
   try {
     window.__pcs = [];
+    window.__replyBuf = "";     // running buffer for the in-flight response
+    window.__replies = [];      // completed reply texts (one per response.*.done)
+    window.__replyDeltas = 0;   // count of text deltas observed
+    window.__toolCalls = [];    // tool names requested over the data channel
+    window.__dcErrors = [];     // OpenAI "error" events over the data channel
+    window.__audioPlays = 0;    // HTMLMediaElement.play() invocations (EL TTS playback)
+
+    // (2) Data-channel message interception.
     const RealPC = window.RTCPeerConnection;
     if (RealPC) {
-      const Wrapped = function (...a) {
+      const origCreate = RealPC.prototype.createDataChannel;
+      RealPC.prototype.createDataChannel = function (...a) {
+        const dc = origCreate.apply(this, a);
+        try {
+          dc.addEventListener("message", (e) => {
+            let msg;
+            try { msg = JSON.parse(e.data); } catch { return; }
+            const t = msg && msg.type;
+            if (t === "response.output_text.delta" || t === "response.text.delta") {
+              const d = (msg.delta || "");
+              window.__replyBuf += d;
+              window.__replyDeltas++;
+            } else if (t === "response.output_text.done" || t === "response.text.done") {
+              const full = ((msg.text || "").trim()) || window.__replyBuf.trim();
+              if (full) window.__replies.push(full);
+              window.__replyBuf = "";
+            } else if (t === "response.function_call_arguments.done") {
+              if (msg.name) { window.__toolCalls.push(msg.name); console.log(`[dc-probe] tool-call ${msg.name}`); }
+            } else if (t === "error") {
+              window.__dcErrors.push(JSON.stringify(msg).slice(0, 300));
+            }
+          });
+        } catch (err) { console.log(`[dc-probe] attach err ${err}`); }
+        return dc;
+      };
+
+      // (1) Track peer connections for informational inbound-rtp stats.
+      const WrappedPC = function (...a) {
         const pc = new RealPC(...a);
         try { window.__pcs.push(pc); } catch {}
         return pc;
       };
-      Wrapped.prototype = RealPC.prototype;
-      window.RTCPeerConnection = Wrapped;
+      WrappedPC.prototype = RealPC.prototype;
+      window.RTCPeerConnection = WrappedPC;
     }
+
+    // (3) EL audio playback proof.
+    const ME = window.HTMLMediaElement;
+    if (ME && ME.prototype && ME.prototype.play) {
+      const origPlay = ME.prototype.play;
+      ME.prototype.play = function (...a) {
+        try {
+          window.__audioPlays++;
+          const src = (this.currentSrc || this.src || "").slice(0, 24);
+          console.log(`[speak-probe] audio.play #${window.__audioPlays} src=${src}`);
+        } catch {}
+        return origPlay.apply(this, a);
+      };
+    }
+
+    // getUserMedia probe (mic connect visibility).
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       const orig = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
       navigator.mediaDevices.getUserMedia = (...a) => {
@@ -86,7 +155,8 @@ const INIT_SCRIPT = () => {
   } catch (e) { console.log(`[probe] init error ${e}`); }
 };
 
-// Sum inbound-rtp AUDIO bytesReceived across every peer connection on the page.
+// Sum inbound-rtp AUDIO bytesReceived — INFO ONLY for the hybrid (expected 0, text-out session has no
+// OpenAI audio track). Never a pass/fail signal.
 async function audioBytes(page) {
   return await page.evaluate(async () => {
     let total = 0;
@@ -102,6 +172,18 @@ async function audioBytes(page) {
   });
 }
 
+// Read the hybrid spoke-proof state captured in-page.
+async function speakState(page) {
+  return await page.evaluate(() => ({
+    replies: (window.__replies || []).slice(),
+    replyBuf: (window.__replyBuf || ""),
+    replyDeltas: window.__replyDeltas || 0,
+    toolCalls: (window.__toolCalls || []).slice(),
+    dcErrors: (window.__dcErrors || []).slice(),
+    audioPlays: window.__audioPlays || 0,
+  }));
+}
+
 const shot = async (page, name) => {
   const p = `${SHOT_DIR}/${name}.png`;
   try { await page.screenshot({ path: p, fullPage: true }); } catch (e) { console.log(`  screenshot err ${e.message}`); return null; }
@@ -110,22 +192,11 @@ const shot = async (page, name) => {
 
 const trunc = (s, n = 220) => (s && s.length > n ? s.slice(0, n) + "…" : s || "");
 
-// Read the agent reply transcript rows (dm-<agent> store → roomTurns → TranscriptRow).
-async function agentReplies(page) {
-  return await page.evaluate(() => {
-    const rows = Array.from(document.querySelectorAll('[data-turn-agent="true"]'));
-    return rows.map((r) => (r.innerText || "").replace(/\s+/g, " ").trim()).filter(Boolean);
-  });
-}
-async function userRowCount(page) {
-  return await page.evaluate(() => document.querySelectorAll('[data-turn-user="true"]').length);
-}
-
 let shotCount = 0;
 const results = [];
 
 async function runAgent(agentSpec, engine) {
-  const { id, ask, tool, lane } = agentSpec;
+  const { id, ask, tool, expectTool, lane } = agentSpec;
   const tag = engine === "baseline" ? `${id} [BASELINE]` : id;
   console.log(`\n${"═".repeat(70)}\n▶ ${tag}  (${lane})  engine=${engine}\n${"═".repeat(70)}`);
 
@@ -146,15 +217,19 @@ async function runAgent(agentSpec, engine) {
   const page = await ctx.newPage();
 
   const consoleLines = [];
-  const toolLogs = [];
+  const toolLogs = [];       // app's success log: "[realtime-speak] tool <name> <ms>ms"
+  const audioPlayLogs = [];  // "[speak-probe] audio.play …"
   page.on("console", (m) => {
     const t = m.text();
     consoleLines.push(t);
     if (/\[realtime-speak\] tool /.test(t)) toolLogs.push(t);
+    if (/\[speak-probe\] audio\.play/.test(t)) audioPlayLogs.push(t);
   });
   page.on("pageerror", (e) => consoleLines.push(`[pageerror] ${e.message}`));
 
   const serverFnBodies = [];
+  let synthCalls = 0;         // total synthesizeSpeech /_serverFn/ calls (returns audioBase64)
+  let synthCallsAtSend = 0;
   let sdpStatus = null;
   let openaiRealtimeCalls = 0;
   let quotaHit = null;
@@ -165,20 +240,24 @@ async function runAgent(agentSpec, engine) {
       sdpStatus = res.status();
     } else if (url.includes("/_serverFn/")) {
       let body = "";
-      try { body = (await res.text()).slice(0, 700); } catch {}
+      try { body = await res.text(); } catch {}
+      if (/audioBase64/.test(body)) synthCalls++;   // synthesizeSpeech reply
+      const head = body.slice(0, 700);
       // Keep only realtime-session-looking replies (getRealtimeSession returns clientSecret on success
       // or an "OpenAI client_secrets <status>: …" error string) so we can pin the connect-failure cause.
-      if (/client_secrets|clientSecret|ephemeral|realtime|Realtime|OPENAI_API_KEY|no ephemeral/.test(body)) {
-        serverFnBodies.push(body);
-        if (QUOTA_RE.test(body)) quotaHit = body.slice(0, 300);
+      if (/client_secrets|clientSecret|ephemeral|realtime|Realtime|OPENAI_API_KEY|no ephemeral/.test(head)) {
+        serverFnBodies.push(head);
+        if (QUOTA_RE.test(head)) quotaHit = head.slice(0, 300);
       }
     }
   });
 
   const out = {
-    id, engine, lane, ask,
-    connected: false, audioBytes: 0, replyText: "", toolLog: false, toolLogLines: [],
-    latencyMs: null, userRows: 0, agentRows: 0, toasts: [], classification: [], pass: false,
+    id, engine, lane, ask, expectTool,
+    connected: false, spoke: false, spokeSignals: [], replyText: "", replyDeltas: 0,
+    audioPlays: 0, synthCalls: 0, audioBytesInfo: 0,
+    toolFired: false, toolCalls: [], toolLogLines: [], expectedToolFired: null,
+    latencyMs: null, dcErrors: [], toasts: [], classification: [], pass: false,
     sdpStatus: null, openaiRealtimeCalls: 0, quota: null, shots: [],
   };
 
@@ -204,7 +283,8 @@ async function runAgent(agentSpec, engine) {
     await voiceBtn.click();
     console.log("  clicked Start voice conversation");
 
-    // 3) Wait for connect: mic label "Mic" OR an OpenAI Realtime SDP 2xx.
+    // 3) Wait for connect: mic label "Mic" OR an OpenAI Realtime SDP 2xx OR the data channel opened
+    //    (status=connected is set on dc.onopen; we detect it via SDP 201 which precedes dc.onopen).
     const connectDeadline = Date.now() + CONNECT_TIMEOUT_MS;
     while (Date.now() < connectDeadline) {
       if (quotaHit) throw new Error(`OPENAI QUOTA/429 during session mint: ${quotaHit}`);
@@ -241,66 +321,101 @@ async function runAgent(agentSpec, engine) {
       return out;
     }
 
+    // Give the data channel a beat to reach open (dc.onopen → status=connected → sendText works).
+    await page.waitForTimeout(1500);
+
     // 4) Open Chat tab and type the daily ask.
     const chatCtrl = page.locator('button[aria-label="Chat"]').first();
     if ((await chatCtrl.count()) > 0) { await chatCtrl.click(); await page.waitForTimeout(400); }
     const box = page.locator('textarea[placeholder="Message the room…"]').first();
     if ((await box.count()) === 0) throw new Error("chat compose textarea not found");
-    const beforeUserRows = await userRowCount(page);
-    const bytesBefore = await audioBytes(page);
+
+    // Snapshot spoke-proof baselines BEFORE the ask so we only count NEW signals (the actual reply, not
+    // any pre-existing card / prior response).
+    const pre = await speakState(page);
+    const repliesBefore = pre.replies.length;
+    const deltasBefore = pre.replyDeltas;
+    const audioPlaysBefore = pre.audioPlays;
+    const toolCallsBefore = pre.toolCalls.length;
+    synthCallsAtSend = synthCalls;
+    out.audioBytesInfo = await audioBytes(page);
+
     await box.fill(ask);
     const sendTs = Date.now();
     await box.press("Enter");
-    console.log(`  typed ask: "${ask}"  (userRows before=${beforeUserRows}, audioBytes before=${bytesBefore})`);
+    console.log(`  typed ask: "${ask}"  (repliesBefore=${repliesBefore} deltasBefore=${deltasBefore} audioPlaysBefore=${audioPlaysBefore} synthBefore=${synthCallsAtSend})`);
 
-    // 5) Poll for reply: agent transcript row + inbound audio bytes.
+    // 5) Poll for the spoke signals AND the streamed reply text.
     const replyDeadline = Date.now() + REPLY_TIMEOUT_MS;
-    let firstAudioAt = null, firstReplyAt = null;
+    let firstSpokeAt = null;
+    let st = pre;
     while (Date.now() < replyDeadline) {
       if (quotaHit) throw new Error(`OPENAI QUOTA/429 during reply: ${quotaHit}`);
-      const b = await audioBytes(page);
-      if (b > bytesBefore && firstAudioAt == null) firstAudioAt = Date.now();
-      out.audioBytes = b;
-      const replies = await agentReplies(page);
-      if (replies.length && firstReplyAt == null) firstReplyAt = Date.now();
-      out.replyText = replies.length ? replies[replies.length - 1] : "";
-      // Done when we have BOTH audio bytes and a non-empty reply, or the reply is clearly settled.
-      if (out.audioBytes > bytesBefore && out.replyText && out.replyText.split(/\s+/).length >= 2) {
-        // give the transcript a beat to finalize
-        await page.waitForTimeout(1500);
-        out.replyText = (await agentReplies(page)).slice(-1)[0] || out.replyText;
+      st = await speakState(page);
+      const newDeltas = st.replyDeltas - deltasBefore;
+      const newAudioPlays = st.audioPlays - audioPlaysBefore;
+      const newSynth = synthCalls - synthCallsAtSend;
+      if ((newDeltas > 0 || newAudioPlays > 0 || newSynth > 0) && firstSpokeAt == null) firstSpokeAt = Date.now();
+      // Settled when a new completed reply exists (a .done fired after the ask) with >=2 words.
+      const newReplies = st.replies.slice(repliesBefore);
+      const settledReply = newReplies.length ? newReplies[newReplies.length - 1] : "";
+      if (settledReply && settledReply.split(/\s+/).length >= 2) {
+        await page.waitForTimeout(1200); // let any trailing sentence + audio finalize
+        st = await speakState(page);
         break;
       }
-      await page.waitForTimeout(800);
+      await page.waitForTimeout(700);
     }
-    const firstSignal = firstAudioAt ?? firstReplyAt;
-    out.latencyMs = firstSignal ? firstSignal - sendTs : null;
-    out.userRows = await userRowCount(page);
-    out.agentRows = (await agentReplies(page)).length;
-    out.toolLog = toolLogs.length > 0;
+
+    const newReplies = st.replies.slice(repliesBefore);
+    // The actual streamed reply: the last completed .done text after the ask, else the trailing partial buffer.
+    out.replyText = newReplies.length ? newReplies[newReplies.length - 1] : (st.replyBuf || "").trim();
+    out.replyDeltas = st.replyDeltas - deltasBefore;
+    out.audioPlays = st.audioPlays - audioPlaysBefore;
+    out.synthCalls = synthCalls - synthCallsAtSend;
+    out.toolCalls = st.toolCalls.slice(toolCallsBefore);
+    out.dcErrors = st.dcErrors.slice();
+    out.audioBytesInfo = await audioBytes(page);
+    out.latencyMs = firstSpokeAt ? firstSpokeAt - sendTs : null;
+
+    // Spoke = streamed reply text (delta) OR EL audio actually played OR synthesizeSpeech called.
+    const spokeSignals = [];
+    if (out.replyDeltas > 0) spokeSignals.push(`text-delta(${out.replyDeltas})`);
+    if (out.audioPlays > 0) spokeSignals.push(`el-audio.play(${out.audioPlays})`);
+    if (out.synthCalls > 0) spokeSignals.push(`synthesizeSpeech(${out.synthCalls})`);
+    out.spokeSignals = spokeSignals;
+    out.spoke = spokeSignals.length > 0;
+
+    // Tool fired = app success log OR a data-channel tool-call event.
     out.toolLogLines = toolLogs.slice();
+    out.toolFired = toolLogs.length > 0 || out.toolCalls.length > 0;
+    if (expectTool) out.expectedToolFired = out.toolCalls.includes(expectTool) || toolLogs.some((l) => l.includes(` tool ${expectTool} `));
+
     out.toasts = await page.locator("[data-sonner-toast]").allInnerTexts().catch(() => []);
     out.quota = quotaHit;
     p = await shot(page, `${engine}-${id}-03-reply`); if (p) { shotCount++; out.shots.push(p); }
 
     // 6) Classify against the poor-response taxonomy.
     const cls = [];
-    if (out.audioBytes <= bytesBefore && !out.replyText) cls.push("silent");
+    if (!out.spoke && !out.replyText) cls.push("silent");
     if (out.replyText && REFUSAL_RE.test(out.replyText)) cls.push("refusal");
     if (out.replyText && out.replyText.split(/\s+/).length < 2) cls.push("too-short");
-    if (tool && !out.toolLog) cls.push("tool-dead");
+    if (tool && !out.toolFired) cls.push("tool-dead");
+    if (expectTool && out.expectedToolFired === false) cls.push(`wrong-tool(want ${expectTool}, got ${JSON.stringify(out.toolCalls)})`);
+    if (out.dcErrors.length) cls.push("dc-error");
     if (out.toasts.some((t) => /error|failed|couldn'?t/i.test(t))) cls.push("error");
     if (out.latencyMs != null && out.latencyMs > 4000) cls.push("slow");
     out.classification = cls.length ? cls : ["ok"];
 
-    // PASS = connected + spoke (audio bytes) + non-empty non-refusal reply + (tool fired if a tool ask).
-    // "slow" is soft (recorded, not a hard fail — runner latency ≠ user latency).
-    const hardFail = cls.filter((c) => c !== "slow" && c !== "ok");
-    out.pass = out.connected && out.audioBytes > bytesBefore && !!out.replyText && !hardFail.length;
+    // PASS = connected + spoke + non-empty non-refusal reply + (expected tool fired if one is named,
+    // else at least SOME tool fired for a tool ask). "slow" is soft (recorded, not a hard fail).
+    const softOk = new Set(["ok", "slow"]);
+    const hardFail = cls.filter((c) => !softOk.has(c) && !c.startsWith("slow"));
+    out.pass = out.connected && out.spoke && !!out.replyText && !hardFail.length;
 
-    console.log(`  audioBytes=${out.audioBytes} (Δ from ${bytesBefore})  latencyMs=${out.latencyMs}`);
-    console.log(`  userRows=${out.userRows} agentRows=${out.agentRows}  toolLog=${out.toolLog} ${JSON.stringify(out.toolLogLines)}`);
-    console.log(`  toasts=${JSON.stringify(out.toasts)}`);
+    console.log(`  spoke=${out.spoke} signals=${JSON.stringify(out.spokeSignals)}  latencyMs=${out.latencyMs}  inbound-rtp-bytes(info)=${out.audioBytesInfo}`);
+    console.log(`  toolFired=${out.toolFired} toolCalls=${JSON.stringify(out.toolCalls)} expectTool=${expectTool} expectedToolFired=${out.expectedToolFired} appToolLog=${JSON.stringify(out.toolLogLines)}`);
+    console.log(`  dcErrors=${JSON.stringify(out.dcErrors)}  toasts=${JSON.stringify(out.toasts)}`);
     console.log(`  reply="${trunc(out.replyText)}"`);
     console.log(`  classification=${JSON.stringify(out.classification)} → ${out.pass ? "PASS" : "FAIL"}`);
   } catch (err) {
@@ -314,7 +429,7 @@ async function runAgent(agentSpec, engine) {
   return out;
 }
 
-console.log(`\nRealtime-speak Fast (A) UAT — ${BASE_URL}\n`);
+console.log(`\nRealtime-speak Fast (A) EL-VOICE HYBRID UAT — ${BASE_URL}\n`);
 
 let quotaAbort = false;
 for (const spec of BATCH) {
@@ -344,8 +459,8 @@ console.log(`\n${"─".repeat(70)}\nPER-AGENT EVIDENCE\n${"─".repeat(70)}`);
 for (const r of results) {
   console.log(
     `${r.pass ? "PASS" : "FAIL"}  ${r.id}${r.engine === "baseline" ? " [baseline]" : ""}  ` +
-    `connected=${r.connected} audioBytes=${r.audioBytes} latencyMs=${r.latencyMs} ` +
-    `toolLog=${r.toolLog} class=${JSON.stringify(r.classification)}`,
+    `connected=${r.connected} spoke=${r.spoke}${r.spokeSignals && r.spokeSignals.length ? " " + JSON.stringify(r.spokeSignals) : ""} ` +
+    `latencyMs=${r.latencyMs} toolFired=${r.toolFired}${r.expectTool ? ` expected(${r.expectTool})=${r.expectedToolFired}` : ""} class=${JSON.stringify(r.classification)}`,
   );
   console.log(`      reply="${trunc(r.replyText, 160)}"  shots=${JSON.stringify(r.shots)}`);
   if (r.error) console.log(`      error=${r.error}`);

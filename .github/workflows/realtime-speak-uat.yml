@@ -1,9 +1,13 @@
 name: Realtime-speak Fast (A) UAT
 
-# Batch-of-agents UAT for Approach A (OpenAI Realtime speaks the 1:1 reply directly over WebRTC).
-# Loads the DEPLOYED SWA in headless Chromium (fake mic), seeds Fast (A), connects, TYPES each
-# agent's daily ask, and proves it spoke (inbound-rtp audio bytesReceived>0) + a non-empty reply,
-# classifying against the poor-response taxonomy. Uploads per-step screenshots as the proof artifact.
+# Batch-of-agents UAT for Approach A EL-VOICE HYBRID (OpenAI Realtime = streaming TEXT brain over the
+# WebRTC data channel; the client voices each streamed sentence via ElevenLabs → HTMLAudioElement).
+# Loads the DEPLOYED SWA in headless Chromium (fake mic), seeds Fast (A), connects, TYPES each agent's
+# daily ask, and proves it spoke via the HYBRID signals (streamed response.output_text delta/.done on the
+# data channel, OR HTMLMediaElement.play() of EL audio, OR a synthesizeSpeech /_serverFn/ call) — NOT
+# inbound-rtp audio bytes (a text-out session has no OpenAI audio track; bytes are EXPECTED 0). Captures
+# the ACTUAL streamed reply text (not pre-existing cards), classifies against the poor-response taxonomy,
+# and uploads per-step screenshots as the proof artifact.
 
 on:
   workflow_dispatch:

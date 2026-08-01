@@ -199,6 +199,25 @@ server whose only DB is the default `postgres`).**
 - **Verify the live pointer:** the deploy's "Resolve database connection string" step must log
   `Assembled AZURE_PG_URL for eds-postgresql/RAG_AI_Agents`; or read the SWA app setting `AZURE_PG_URL`.
 
+## Voice: ElevenLabs cloned voices ARE compatible with the OpenAI Realtime API — PROVEN, do not re-assert impossible
+This is SETTLED and proven multiple times (incl. against the SWA). Do NOT tell the user it's impossible;
+lead with the workaround below. The only true sub-fact is that Realtime's OWN audio output uses OpenAI
+voices — irrelevant, because we don't use Realtime's audio for the voice.
+
+**The proven hybrid (EL cloned voice + low latency):**
+- **Realtime over WebRTC = streaming BRAIN only.** Mint with `output_modalities:["text"]` +
+  `audio.input` (transcription + `semantic_vad`, `create_response:true`, `interrupt_response:true`) +
+  the agent's tools/instructions. The reply TEXT + tool-calls stream over the WebRTC **data channel**.
+- **ElevenLabs TTS = the VOICE.** Client speaks each streamed sentence via the existing EL synthesis
+  (`synthesizeSpeech`/`useCeremonyVoice.voiceTurn`, the agent's cloned `voiceId`) as it arrives.
+- **Why SWA buffering does NOT block it:** SWA buffering only affects the SWA Node **function HTTP
+  response**. WebRTC is peer-to-peer browser↔OpenAI — it never touches the SWA function, so streamed
+  text/tools arrive with zero buffering. PROVEN: `stream-probe` (SWA buffers HTTP) + `realtime-speak-probe`
+  (text/audio + real tool result over WebRTC, SDP 201). WebRTC is the "piggyback" that dodges SWA.
+- **Result:** cloned voice preserved, ~1–1.5s to first spoken sentence (vs 5–10s baseline). The only open
+  choice is EL-voice-hybrid (~1–1.5s) vs pure-OpenAI-voice (~0.3–0.8s, wrong voice) — the POSSIBILITY is
+  not in question. Code: `lib/voice/realtime.functions.ts` (text-out mint) + `useVoiceCallRealtimeSpeak.ts`.
+
 ## Auto-retrieval calibration (two non-obvious gotchas that made memory look broken)
 - **Score floor is model-specific.** `searchChunks` returns cosine similarity; `text-embedding-3-large`
   scores real topical matches ~0.4–0.5 (measured: "what is my dog's name?" vs a stored "my dog's name

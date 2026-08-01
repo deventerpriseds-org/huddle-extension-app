@@ -65,9 +65,12 @@ const GET_CALENDAR_EVENTS_TOOL = {
 
 const VOICE_HOUSE_STYLE =
   "\n\nYou are on a live VOICE call. Speak naturally in 1–3 short spoken sentences. No markdown, no " +
-  "lists, no emoji — this is read aloud. Ask one question at a time. When you need real data (the " +
-  "user's schedule, tasks, priorities, or a web fact) CALL the appropriate tool, then say the result " +
-  "in one short sentence. Don't narrate that you're using a tool.";
+  "lists, no emoji — this is read aloud. Ask one question at a time. When you need real data you MUST " +
+  "CALL a tool and answer from its result — never answer from memory or say the data isn't available. " +
+  "For the user's SCHEDULE, tasks, agenda, priorities, backlog, or 'what's on my plate/day', ALWAYS " +
+  "call `prioritize` (use view 'scheduled' for what's on today's schedule) — that is the user's " +
+  "combined nightly schedule (tasks + calendar), the source of truth. Use `get_calendar_events` only " +
+  "if the user explicitly asks about their raw Outlook calendar. Don't narrate that you're using a tool.";
 
 /** Same-brain instructions for the realtime session: snapshot + auto-retrieved memory + voice style. */
 export async function assembleRealtimeInstructions(
