@@ -1190,9 +1190,17 @@ scene directive shipped but did NOT move P-REPEAT (prose advisory; the real brok
   added noise_reduction near_field to the 1:1. 1:1 invariants preserved (create/interrupt true,
   output_modalities text, instructions/tools untouched). tsc clean. Deployed (deploy-swa on main).
   **Verified BOTH harnesses on deployed config:** ceremony-noise-robustness (run 30721155427) PASS
-  0/0/0 (regression-guard holds); realtime-1on1-noise-robustness (run 30721156464, NEW — same test on
-  the 1:1) PASS — connected sdp201, speech_started 0, injected transcripts 0, phantom replies 0 over 40s
-  live noise. So the 1:1's no-language garble gap is CLOSED and both surfaces share one config.
+  0/0/0; realtime-1on1-noise-robustness (run 30721156464) PASS 0/0/0 over 40s SILENT window.
+- [REVERTED — 1:1 only] The user reported the 1:1 became FAR MORE SENSITIVE live after the unification.
+  The headless harness (fake SILENT device, no real speech/ambient noise) gave a false PASS — it can
+  only prove "nothing fired in canned silence," NOT real-world sensitivity. Reverted realtime.functions.ts
+  to its known-good inline 1:1 config (commit a9dcdd3): mini-transcribe + language en + PROMPT, semantic_vad
+  eagerness override, create/interrupt true, NO noise_reduction. realtime-audio.ts is now CEREMONY-ONLY.
+  **Ceremony KEPT as-is per user (language en + near_field + no prompt).** So the two surfaces are NOT
+  unified — the 1:1 has its prompt+no-near_field config; the ceremony has near_field+no-prompt. Deployed.
+  **HARDENING: a silent-device headless harness is NOT proof of real-world voice behavior. For voice
+  sensitivity, the user's live experience is the verdict — do NOT declare PASS from a canned-silence run,
+  and get a LIVE confirmation before/against any VAD/noise_reduction change.**
 EXTERNAL / NOT CODE: get_calendar_events fails = missing Calendars.Read admin consent (surfaced by D-FALLBACK).
 STILL TODO (follow-on harness builds): Tier B P1-HARD (journey-on DB verify) + P-NOFAKE (needs failing-tool injection +
 Test-/cleanup); Tier C P2 general tool-use (journey-on prioritize); Tier D P-LANE/P-ONCTX (needs ceremony round-robin
