@@ -1105,3 +1105,11 @@ calendar could drift between channels.
   tsc+build clean; deploy run 30710369017 success.
 - [OPEN — verification in progress + user live retest] Confirm Iris routes "what's my schedule" →
   prioritize and "what's on my external Outlook calendar" → get_calendar_events, in BOTH chat and voice.
+
+### ACT-huddle-13 (follow-through): schedule tool actual-vs-described, rename, behavioral UAT
+**From:** 2026-08-01 user pushback — verifications short of real UAT; overclaimed tool behavior; "prioritize" name unintuitive.
+- [DONE f99c975, live-verified run 30711941193] Renamed wire tool `prioritize`→`schedule_and_priorities` across both dispatch paths + voice executor/native-set + system hint + calendar cross-ref (internal identifiers unchanged; snapshots untouched — they only use the verb).
+- [DONE] Added the missing `recordToolUse` for the tool (it was the one tool invisible in the trace though it ran) + corrected the description overclaim (reads the nightly-planned task mirror; NOT a verified tasks+calendar merge — that's upstream/journey).
+- [DONE] Behavioral UAT via new `agent-serverfn-uat.yml` (natural messages on a runner): "what's my schedule" → schedule_and_priorities (view scheduled, real item); "external Outlook calendar" → get_calendar_events.
+- [OPEN — admin action, not code] `get_calendar_events` returns **403 (Calendars.Read consent missing)** live — the "external calendar" path can't return data until an admin grants it. Combined schedule via schedule_and_priorities is unaffected.
+- [OPEN — user live retest] Confirm in a real Iris/Flex 1:1 (chat + voice).
