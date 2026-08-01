@@ -1155,10 +1155,18 @@ calendar could drift between channels.
 ### ACT-huddle-22: "fix everything" batch (2026-08-01) — status
 DEPLOYED + VERIFIED (harness re-run 30714248222): P2-TAVILY USED (real-time web search works, graded on
 tool-use channel); D-FALLBACK surfaces tool failures; P1/P3/P3b/P-RETAIN/P-GROUND/P-ACCOUNT all PASS in text.
-DEPLOYED, NEEDS LIVE VOICE UAT (sandbox has no mic): V-ACK (b706... e74b160 — no-dead-air filler if barge answer
->700ms); V-RESUME (b3a5970 — resume from next sentence, kills the real broken-record replay). Anti-repetition
+DEPLOYED (b3a5970 V-RESUME, e74b160 V-ACK — both live on icy-flower): V-ACK (no-dead-air filler if barge answer
+>700ms); V-RESUME (resume from next sentence, kills the real broken-record replay). Anti-repetition
 scene directive shipped but did NOT move P-REPEAT (prose advisory; the real broken-record was voice-resume = V-RESUME).
+- [IN PROGRESS] Live UAT of V-ACK + V-RESUME: built `e2e/ceremony-barge-resume-ack.e2e.mjs` + workflow
+  `ceremony-barge-resume-ack.yml` — drives a real stand-up, typed-barge (identical runBargeSequence +
+  resumeFromFreeze as voice path), asserts no-replay + filler from durable DOM rows. Runs on a GH runner
+  (sandbox can't reach the SWA). Offline logic already proven: resume-index 5/5, ack-timer 6/6.
 EXTERNAL / NOT CODE: get_calendar_events fails = missing Calendars.Read admin consent (surfaced by D-FALLBACK).
 STILL TODO (follow-on harness builds): Tier B P1-HARD (journey-on DB verify) + P-NOFAKE (needs failing-tool injection +
 Test-/cleanup); Tier C P2 general tool-use (journey-on prioritize); Tier D P-LANE/P-ONCTX (needs ceremony round-robin
 harness + roster incl Eli/Elle/Faith/Troy); lane-confusion grounding fix; V-STT noise/accuracy (voice config).
+
+### ACT-huddle-13 (timezone at the core): schedule times shown in UTC → localized
+- [DONE, live-verified] Canonical `profiles.timezone` (journey) + whoami returns/self-seeds it; Huddle `resolveTimeZone` (profile→browser→UTC) + one shared `lib/time.ts` `formatInTz` at the display edge; schedule_and_priorities (all 3 paths) localize via it. Mirror/data stays UTC (compute substrate). UAT: "4:00 PM EDT"/"11:00 AM EDT" correct (was UTC). Commits: journey cafb52d, huddle (main) + profiles.timezone migration.
+- [OPEN, separate] Agent over-trims scheduled list (shows 2 of N); get_calendar_events 403 (consent) + should read the canonical zone.
