@@ -21,8 +21,39 @@ Three stacked delays (Responses turn + poll + full-reply TTS) before the first s
 (confirmed 2026-08-01) does NOT matter here — the fix is on the WebRTC channel, which is peer-to-peer
 browser↔OpenAI and never touches the SWA function response.
 
-## The fix — mirror journey's PROVEN pattern (reference: journey `RealtimeVoiceAssistant` +
-## `generate-realtime-token`; boost coach). "Extend, don't duplicate."
+## Reference insights — journey vs boost coach (looked at BOTH, per the user)
+Two DIFFERENT proven architectures for natural, low-latency voice:
+- **journey = OpenAI Realtime** (WebRTC speech-to-speech). YOU inject instructions + RAG memory +
+  tool schemas at ephemeral-token mint; tools execute client-side over the data channel via a shared
+  executor. `create_response:true` + `interrupt_response:true` = speaks directly + native barge.
+  Heavy client (~1000 lines) but the LLM brain is fully under our control.
+- **boost coach = ElevenLabs Conversational AI** (`@elevenlabs/client` `Conversation.startSession`).
+  FULLY MANAGED (ElevenLabs does STT+LLM+TTS+turn-taking); client is ~15 lines. Brain = an ElevenLabs
+  agent config (`conversation_config.agent.prompt` + `llm:gpt-4o-mini` + `first_message`), voice =
+  `tts.voice_id`, tools = ElevenLabs server-tools (webhooks). Signed URL minted server-side
+  (`/v1/convai/conversation/get-signed-url?agent_id=`). Natural turn-taking = **`turn_v3` +
+  `turn_timeout:8`**; native barge; echo-guard in the UI.
+
+**Decision: primary = journey's OpenAI-Realtime approach.** Reason (same-brain, extend-don't-duplicate):
+Huddle has 12+ distinct agents, each a rich snapshot prompt + shared Huddle tools + RAG. OpenAI Realtime
+lets us inject the EXACT snapshot + memory + the SAME tool schemas and run tools through the SAME Huddle
+executor — one brain. ElevenLabs ConvAI would require a PARALLEL per-agent definition on the ElevenLabs
+platform (prompt + webhook tools + a generic non-snapshot LLM) — a second brain to maintain, a real
+"duplicate, don't extend" violation, and not truly same-brain.
+
+**Steal from boost regardless of engine:**
+1. **Turn-taking as a first-class tunable** — boost's `turn_timeout`/`turn_v3` ≙ tuning our
+   `semantic_vad` eagerness (the barge-sensitivity knob the user flagged). Expose + tune it.
+2. **Echo guard** — boost's Call.jsx mutes the mic / similarity-filters the user transcript against
+   recent agent text while the agent speaks (kills speakerphone self-interruption). Huddle lacks this;
+   add it (helps the "he ignores me / false barge" class of issues too).
+3. **ConvAI as a fast-path option for TOOL-LESS agents** — Flex has `tools:[]`, so Flex could run on
+   the ~15-line managed ConvAI path with zero same-brain loss. Keep as an option/fallback, not primary
+   (mixing two engines adds surface); revisit if the Realtime-with-tools build proves too heavy.
+
+## The fix — journey's PROVEN Realtime pattern + boost's turn-tuning & echo-guard insights.
+## Reference: journey `RealtimeVoiceAssistant` + `generate-realtime-token`; boost `Call.jsx` +
+## `appConvai.ts`. "Extend, don't duplicate."
 Let the OpenAI Realtime session GENERATE the spoken reply and stream it over the ALREADY-OPEN WebRTC
 audio track. Same brain is preserved by baking the agent's instructions + memory + tools + voice into
 the session at ephemeral-token-mint time, exactly as journey does. Tool calls come back over the data
@@ -82,6 +113,12 @@ dislikes the new voices after a live listen.
 6. `hooks/useVoiceCallRealtime.ts` — when realtime reply mode is on, DON'T enqueue a Responses turn;
    the reply comes from the WebRTC channel. Still write user + agent transcript to the store.
 7. `components/MeetingBar.tsx` — flip the 1:1 voice path to the realtime reply mode via the flag.
+8. **(boost insight) Turn-taking tuning** — expose the `semantic_vad` eagerness (and any turn-timeout
+   equivalent) as a tunable rather than a buried constant; set a natural default matched to journey/
+   boost feel. This is the barge-sensitivity knob the user flagged.
+9. **(boost insight) Echo guard** — while the agent's audio is playing, mute the mic OR similarity-
+   filter the incoming user transcript against the recent agent text (boost's Call.jsx pattern) so the
+   agent never barges on its own voice through the speaker. Reduces false barges / "he ignores me".
 
 ## Backward-compat / blast radius
 Group ceremony voice keeps the ears-only + our-engine path (create_response stays false there).
