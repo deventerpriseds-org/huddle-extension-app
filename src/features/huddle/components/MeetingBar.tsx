@@ -21,6 +21,8 @@ import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
 import { useHuddleStore, type CeremonyKind, type CeremonyTurn, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
 import { useVoiceCallRealtime } from "../hooks/useVoiceCallRealtime";
+import { useVoiceCallRealtimeSpeak } from "../hooks/useVoiceCallRealtimeSpeak";
+import { useVoiceEngineStore } from "../lib/voice/voice-engine-store";
 import { useGroupVoice } from "../hooks/useGroupVoice";
 import { useCeremonyVoice } from "../hooks/useCeremonyVoice";
 import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates } from "../lib/huddle.functions";
@@ -144,11 +146,19 @@ function fmtClock(ms: number): string {
 export function MeetingLayer() {
   const meeting = useHuddleStore((s) => s.meeting);
   const leaveMeeting = useHuddleStore((s) => s.leaveMeeting);
-  // Both hooks are always called (Rules of Hooks) — only the selected one is ever connect()ed;
-  // the other simply sits idle. Swapping VOICE_1ON1_BACKEND is the entire revert, nothing else.
+  // All voice hooks are always called (Rules of Hooks) — only the selected one is ever connect()ed;
+  // the others sit idle. The 1:1 engine is a RUNTIME setting (voice-engine-store) so the user can flip
+  // between the current baseline and Approach A (Realtime speaks directly) live to A/B them.
   const elevenLabsVoice = useVoiceCall();
   const realtimeVoice = useVoiceCallRealtime();
-  const voice: VoiceCallController = VOICE_1ON1_BACKEND === "openai" ? realtimeVoice : elevenLabsVoice;
+  const realtimeSpeakVoice = useVoiceCallRealtimeSpeak();
+  const engineMode = useVoiceEngineStore((s) => s.mode);
+  const voice: VoiceCallController =
+    engineMode === "realtime-speak"
+      ? realtimeSpeakVoice
+      : VOICE_1ON1_BACKEND === "openai"
+        ? realtimeVoice
+        : elevenLabsVoice;
   const { connect, disconnect } = voice;
 
   const active = !!meeting;
@@ -192,7 +202,12 @@ export function MeetingLayer() {
   // Chat-tab typed-text send for a 1:1/ad-hoc call — only meaningful on the OpenAI-backed hook
   // (it's what routes through the real turn engine); undefined on the ElevenLabs backend, which
   // has no equivalent, so the Chat compose box is disabled with an explanation there instead.
-  const sendChatText = VOICE_1ON1_BACKEND === "openai" ? realtimeVoice.sendText : undefined;
+  const sendChatText =
+    engineMode === "realtime-speak"
+      ? realtimeSpeakVoice.sendText
+      : VOICE_1ON1_BACKEND === "openai"
+        ? realtimeVoice.sendText
+        : undefined;
 
   if (!meeting) return null;
   return (
@@ -285,6 +300,8 @@ function MeetingRoom({
   onLeave: () => void;
 }) {
   const collapse = useHuddleStore((s) => s.toggleMeetingExpanded);
+  const engineMode = useVoiceEngineStore((s) => s.mode);
+  const setVoiceEngine = useVoiceEngineStore((s) => s.setMode);
   const patchMeeting = useHuddleStore((s) => s.patchMeeting);
   const addMeetingTurns = useHuddleStore((s) => s.addMeetingTurns);
   const markLastAgentTurnInterrupted = useHuddleStore((s) => s.markLastAgentTurnInterrupted);
@@ -841,6 +858,23 @@ function MeetingRoom({
         <span className="tabular-nums text-sm font-semibold">{fmtClock(now - meeting.startedAt)}</span>
         <span className="size-2 animate-pulse rounded-full bg-destructive" />
         <span className="text-sm font-semibold">{meetingLabel(meeting)}</span>
+        {/* 1:1 voice-engine A/B toggle (runtime switch). Applies on the NEXT call — leave & rejoin. */}
+        {meeting.kind !== "virtual-meeting" && (
+          <button
+            type="button"
+            onClick={() => {
+              const next = engineMode === "realtime-speak" ? "baseline" : "realtime-speak";
+              setVoiceEngine(next);
+              toast.message(
+                `Voice engine: ${next === "realtime-speak" ? "⚡ Fast (Realtime speaks)" : "Baseline"} — leave & rejoin the call to apply.`,
+              );
+            }}
+            className="rounded-full border border-hairline px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted"
+            title="Switch the 1:1 voice engine for A/B testing. Takes effect on the next call (leave & rejoin)."
+          >
+            {engineMode === "realtime-speak" ? "⚡ Fast (A)" : "Baseline"}
+          </button>
+        )}
         <span className="app-hidden text-[11px] text-muted-foreground sm:inline">
           ElevenLabs voice · Zoom bridge
         </span>
