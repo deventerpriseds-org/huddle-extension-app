@@ -151,6 +151,21 @@ await ctx.addInitScript(() => {
       navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException("mic disabled for typed-barge UAT", "NotAllowedError"));
     }
   } catch {}
+  // AUDIO TRUTH PROBE. The ceremony's AudioQueue does `new Audio("data:audio/mpeg;base64,…")` for EVERY
+  // sentence it voices, firing onStart synchronously right before el.play(). Timestamp each construction
+  // so V-ACK can be judged by whether audio ACTUALLY PLAYED in the filler window (700ms→answer), not by
+  // whether the transcript row survived a genRef race. This is the decisive signal.
+  try {
+    window.__audioPlays = [];
+    const OrigAudio = window.Audio;
+    if (OrigAudio) {
+      window.Audio = function (...a) {
+        try { window.__audioPlays.push({ t: Date.now(), len: String(a[0] || "").length }); } catch {}
+        return new OrigAudio(...a);
+      };
+      window.Audio.prototype = OrigAudio.prototype;
+    }
+  } catch {}
 });
 const page = await ctx.newPage();
 
@@ -279,20 +294,32 @@ try {
           : "block never produced a sentence beyond the barge point (couldn't observe resume)",
   };
 
-  // V-ACK verdict: filler present → PASS. No filler but answer was fast (<1200ms) → N/A (legit skip).
-  // No filler and answer slow → FAIL.
+  // AUDIO TRUTH: did a sentence actually get VOICED in the filler window (700ms → just before the
+  // answer)? new Audio() constructions after the barge, relative to bargeAtMs.
+  const audioPlaysRaw = await page.evaluate(() => (window.__audioPlays || []).slice()).catch(() => []);
+  const audioAfterBarge = audioPlaysRaw.map((a) => a.t - bargeAtMs).filter((rel) => rel >= 0).sort((a, b) => a - b);
+  // Filler window: audio that started after ~500ms but at least 300ms BEFORE the answer row landed.
+  const fillerWinEnd = answerLatency != null ? answerLatency - 300 : 30000;
+  const fillerAudio = audioAfterBarge.filter((rel) => rel >= 500 && rel <= fillerWinEnd);
+  const fillerVoiced = fillerRows.length > 0 || fillerAudio.length > 0;
+
+  // V-ACK verdict, judged on AUDIO (voiced) primarily, with the transcript row as corroboration.
+  // Voiced in the filler window → PASS. Answer fast (<1200ms) → N/A legit skip. Slow answer, nothing
+  // voiced in the window → FAIL (real dead-air gap).
   out.vAck = {
-    verdict: fillerRows.length ? "PASS" : answerLatency != null && answerLatency < 1200 ? "N/A_FAST_ANSWER" : "FAIL",
-    fillerObserved: fillerRows.length > 0,
+    verdict: fillerVoiced ? "PASS" : answerLatency != null && answerLatency < 1200 ? "N/A_FAST_ANSWER" : "FAIL",
+    fillerAudioVoiced: fillerAudio.length > 0,
+    fillerAudioRelMs: fillerAudio,
+    fillerRowObserved: fillerRows.length > 0,
     fillerText: fillerRows[0]?.text ?? null,
-    fillerLatencyMs: firstFillerMs != null ? firstFillerMs - bargeAtMs : null,
     answerLatencyMs: answerLatency,
     answerAgent: answerRows[0]?.agentId ?? null,
-    why: fillerRows.length
-      ? "frozen speaker voiced a filler before the (slow) answer — no dead air"
+    audioPlaysAfterBargeRelMs: audioAfterBarge,
+    why: fillerVoiced
+      ? `frozen speaker voiced a filler (audio@${fillerAudio.join(",")}ms${fillerRows.length ? " + row" : ", row lost to genRef race"}) before the slow answer — no dead air`
       : answerLatency != null && answerLatency < 1200
         ? "answer arrived <1.2s so the filler was correctly skipped (fast answers get no precursor)"
-        : "answer was slow but no filler was voiced",
+        : "answer was slow but NOTHING was voiced in the filler window — real dead-air gap",
   };
 
   out.interruptMarked = !!interruptedRow;
