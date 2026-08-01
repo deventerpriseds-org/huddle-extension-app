@@ -51,6 +51,21 @@ So:
   `useVoiceCall` stays available but is NOT the focus.)
 - **Delivery:** one path to build (A) + the runtime switch; deploy → user A/B's A vs the current path.
 
+### Tool-latency + reversibility (user guidance 2026-08-01)
+User: "the execute-tool approach in journey is slow; if it's too slow in this new build we will need to
+switch back." Design consequences (hard):
+- **Do NOT copy journey's `execute-tool` architecture** (a separate edge-function hop + cold start =
+  the slowness). Approach A's executor runs the tool **directly in-process in ONE Huddle server-fn hop**,
+  calling the SAME modules the text turn uses (`invokeJourneyTool`, `tavilySearch`, task/reminder/
+  prioritize fns) — no extra dispatch layer. Only tools that inherently proxy to journey carry journey's
+  own latency (unavoidable, same as text). So A's tool round-trip should be ≤ journey's, not equal.
+- **Instrument the tool round-trip** (ms from `function_call_arguments.done` → `function_call_output`
+  sent) and log it, so "too slow" is measured, not guessed. Surface it in the diagnostic.
+- **Reversibility is REQUIRED:** the runtime switch must let the user flip back to the baseline
+  instantly if A (or its tool latency) underperforms. Keep the baseline path fully intact; A is additive.
+- Note: conversational (no-tool) replies have NO tool hop → they get the full ~0.3–0.8s speak-directly
+  win regardless; the latency risk is specific to tool-requiring answers.
+
 **A-side decision detail: journey's OpenAI-Realtime approach.** Reason (same-brain, extend-don't-duplicate):
 Huddle has 12+ distinct agents, each a rich snapshot prompt + shared Huddle tools + RAG. OpenAI Realtime
 lets us inject the EXACT snapshot + memory + the SAME tool schemas and run tools through the SAME Huddle
