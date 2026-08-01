@@ -971,3 +971,12 @@ D5. STT whisper-1 → gpt-4o-transcribe (ceremony realtime + ephemeral-key fn) �
 D6. Kickoff trigger no longer written as a user memory chunk (gated on router.ceremonyMode).
 D7. Multi-turn conversational-quality harness (e2e/conversational-quality.mjs + conversational-quality.yml) — live,
     graded (#3 RECALLED, #1 ORIENTED), reusable.
+
+### ACT-huddle-17 — USER DECISIONS (2026-08-01), do not re-ask
+B1 RESOLVED: leave barge box behind the Chat tab (no change).
+B2 DECIDED: addressed agent ACTS only if they are the ASSIGNEE of the task; otherwise the owner handles it.
+B3 DEFERRED: keep current resume (re-speak the cut sentence) for now; revisit after user experiences it working.
+B4 DECIDED: KEEP file_search. Reclassified: the "mentions uploaded files" bug is NOT file_search — it reproduced
+   with agents that have file_search OFF (flex-grimes tools:[]), so it is SEEDED elsewhere = A5 (old-chat bleed).
+   The "uploaded files" opener from Terry is A5, not a tools issue.
+Execution order (user endorsed, back-to-back, no per-item stops): A1 → A2 → B2 → A3 → A5 → C1 → C2 → C3.
