@@ -328,7 +328,10 @@ const outCreate = evs.filter((e) => e.dir === "out" && e.type === "response.crea
 const turnEnds = (transcriptions.length ? transcriptions : (speechStopped.length ? speechStopped : committed))
   .map((e) => e.t).sort((a, b) => a - b);
 
-// For each user turn, first EL audio play AFTER that turn-end and before the next turn-end.
+// For each user turn, first EL audio play AFTER that turn-end and before the next turn-end, PLUS a
+// latency breakdown that localizes where the seconds go (userEnd → first response.created → tool-call
+// done → tool-result sent back → first text delta → first audible EL word).
+const firstAfter = (list, t, before) => { const e = list.find((x) => x.t >= t && x.t < before); return e ? e.t : null; };
 const perTurn = [];
 for (let i = 0; i < Math.max(turnEnds.length, schedule.length); i++) {
   const endT = turnEnds[i];
@@ -336,11 +339,18 @@ for (let i = 0; i < Math.max(turnEnds.length, schedule.length); i++) {
   const scheduledStartS = schedule[i] ? schedule[i].startS : null;
   const transcribed = i < transcriptions.length;
   let firstAudioGapMs = null, replyPlays = [], interGaps = [];
+  let firstRespAt = null, toolDoneAt = null, toolResultSentAt = null, textStartAt = null, usedTool = false;
   if (endT != null) {
     replyPlays = playTimes.filter((t) => t >= endT && t < nextEndT).sort((a, b) => a - b);
     if (replyPlays.length) firstAudioGapMs = replyPlays[0] - endT;
     for (let k = 1; k < replyPlays.length; k++) interGaps.push(replyPlays[k] - replyPlays[k - 1]);
+    firstRespAt = firstAfter(byType("response.created"), endT, nextEndT);
+    toolDoneAt = firstAfter(byType("response.function_call_arguments.done"), endT, nextEndT);
+    toolResultSentAt = firstAfter(evs.filter((e) => e.dir === "out" && e.type === "conversation.item.create"), endT, nextEndT);
+    textStartAt = firstAfter([...byType("response.output_text.delta"), ...byType("response.text.delta")].sort((a, b) => a.t - b.t), endT, nextEndT);
+    usedTool = toolDoneAt != null;
   }
+  const ms = (a, b) => (a != null && b != null ? b - a : null);
   perTurn.push({
     turn: i + 1,
     scheduledStartS,
@@ -351,6 +361,14 @@ for (let i = 0; i < Math.max(turnEnds.length, schedule.length); i++) {
     interSentenceGapsMs: interGaps,
     maxInterGapMs: interGaps.length ? Math.max(...interGaps) : null,
     avgInterGapMs: interGaps.length ? Math.round(interGaps.reduce((a, b) => a + b, 0) / interGaps.length) : null,
+    usedTool,
+    breakdown: {
+      userEnd_to_firstResponseMs: ms(endT, firstRespAt),
+      firstResponse_to_toolDoneMs: ms(firstRespAt, toolDoneAt),
+      toolDone_to_toolResultSentMs: ms(toolDoneAt, toolResultSentAt), // client-side tool EXECUTION time
+      toolResultSent_to_textStartMs: ms(toolResultSentAt, textStartAt),
+      textStart_to_firstAudibleMs: ms(textStartAt, replyPlays[0] ?? null), // EL synth of the 1st sentence
+    },
   });
 }
 
@@ -387,11 +405,25 @@ for (const t of perTurn) {
   console.log(`  turn ${t.turn}: avg=${t.avgInterGapMs ?? "n/a"} max=${t.maxInterGapMs ?? "n/a"}  gaps=${JSON.stringify(t.interSentenceGapsMs)}`);
 }
 
+console.log(`\nLATENCY BREAKDOWN per turn (where the seconds go, ms):`);
+for (const t of perTurn) {
+  if (t.turnEndRelS == null) continue;
+  const b = t.breakdown;
+  console.log(`  turn ${t.turn} (usedTool=${t.usedTool}):`);
+  console.log(`     userEnd→firstResponse=${b.userEnd_to_firstResponseMs}  firstResponse→toolArgsDone=${b.firstResponse_to_toolDoneMs}`);
+  console.log(`     toolArgsDone→toolResultSent(exec)=${b.toolDone_to_toolResultSentMs}  toolResultSent→textStart=${b.toolResultSent_to_textStartMs}  textStart→firstAudible(EL synth)=${b.textStart_to_firstAudibleMs}`);
+}
+
 console.log(`\nORDERED EVENT TIMELINE (relS | dir | type) — trimmed:`);
 const timeline = evs.map((e) => `  ${rel(e.t).padStart(6)}s ${e.dir === "out" ? "→OUT" : " IN "} ${e.type}`);
-// Trim: show all if <=120 lines, else head+tail.
-if (timeline.length <= 120) timeline.forEach((l) => console.log(l));
-else { timeline.slice(0, 70).forEach((l) => console.log(l)); console.log(`  … (${timeline.length - 120} events omitted) …`); timeline.slice(-50).forEach((l) => console.log(l)); }
+// Collapse consecutive same-type deltas (…delta xN) so the whole session fits without dropping structure.
+const collapsed = [];
+for (const e of evs) {
+  const last = collapsed[collapsed.length - 1];
+  if (last && last.type === e.type && last.dir === e.dir && /\.delta$/.test(e.type)) { last.n++; last.tLast = e.t; }
+  else collapsed.push({ ...e, n: 1, tLast: e.t });
+}
+collapsed.forEach((e) => console.log(`  ${rel(e.t).padStart(6)}s ${e.dir === "out" ? "→OUT" : " IN "} ${e.type}${e.n > 1 ? ` x${e.n} (→${rel(e.tLast)}s)` : ""}`));
 
 // Localize turn-2 death: after the 1st transcription, what's the last input-side event seen?
 if (transcribedTurns < schedule.length && speechStarted.length >= 1) {
