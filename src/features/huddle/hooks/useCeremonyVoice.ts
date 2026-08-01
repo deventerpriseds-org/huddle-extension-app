@@ -372,17 +372,30 @@ export function useCeremonyVoice(hookOpts: {
               type: "realtime",
               audio: {
                 input: {
-                  transcription: { model: "gpt-4o-transcribe" },
+                  // Suppress background noise BEFORE the VAD/STT ever sees it. `near_field` is tuned
+                  // for a laptop/headset mic at desk distance (the actual usage). This is the
+                  // OpenAI-native lever for the reported symptom: keyboard/screenshot/room noise
+                  // being transcribed into gibberish and injected as a phantom barge.
+                  noise_reduction: { type: "near_field" },
+                  // Match journey's PROVEN anti-garble transcription config. Without `language`, the
+                  // model infers language from the audio and hallucinates plausible words out of
+                  // noise (the "gargled text" the user saw). Pinning en + priming with the standup
+                  // vocabulary keeps stray sound from being decoded into text at all. mini-transcribe
+                  // is journey's model (faster/cheaper, noise-robust in that deployment).
+                  transcription: {
+                    model: "gpt-4o-mini-transcribe",
+                    language: "en",
+                    prompt: "daily standup, sprint, blockers, tasks, priorities, schedule, today, tomorrow",
+                  },
                   // semantic_vad detects end-of-turn by MEANING (a classifier), not raw audio energy.
                   // server_vad (energy + fixed silence window) waited on background noise — it never
                   // saw enough silence to end the turn, so the agent "ignored" the user, and stray
-                  // noise false-triggered barges that superseded the real reply. semantic_vad is
-                  // noise-robust with a bounded max wait (auto≈medium, ~4s), matching the natural
-                  // turn-taking of the ElevenLabs voice in journey / the boost coach. create_response
-                  // stays false — our own turn engine produces the reply, not the Realtime model.
+                  // noise false-triggered barges that superseded the real reply. `medium` matches
+                  // journey (slightly less trigger-happy than `auto`). create_response stays false —
+                  // our own turn engine produces the reply, not the Realtime model.
                   turn_detection: {
                     type: "semantic_vad",
-                    eagerness: "auto",
+                    eagerness: "medium",
                     create_response: false,
                   },
                 },

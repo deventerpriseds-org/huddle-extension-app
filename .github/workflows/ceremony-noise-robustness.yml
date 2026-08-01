@@ -1,0 +1,46 @@
+name: Ceremony noise-robustness UAT
+
+# Drives a real Daily stand-up with the fake audio device LIVE (the noise source that reproduced
+# phantom barges) and types NOTHING, asserting the mic produces no phantom barge and no garbled
+# transcript. Proves the useCeremonyVoice VAD/STT config fix (noise_reduction + language pin + prompt
+# + eagerness medium). Baseline pre-fix = 3 phantom barges; target = 0.
+
+on:
+  workflow_dispatch:
+    inputs:
+      watch_s:
+        description: "Seconds to watch the live mic with no typed input"
+        required: false
+        default: "40"
+
+jobs:
+  noise-robustness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Run noise-robustness UAT
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          SHOT_DIR: ceremony-noise-robustness-shots
+          WATCH_S: ${{ github.event.inputs.watch_s }}
+        run: node e2e/ceremony-noise-robustness.e2e.mjs
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ceremony-noise-robustness-shots
+          path: ceremony-noise-robustness-shots/
+          retention-days: 7
