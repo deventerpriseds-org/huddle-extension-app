@@ -1004,3 +1004,14 @@ ALREADY caught me once reaching for an ad-hoc guard instead of this system.
 - B2 as-committed = a PROSE directive in taskToolInstructions → should instead be a code-enforced guard keyed
   on the real `assigned_agent` (like the meta-task guard), + owner-resolution, not advisory prose.
 NEXT: rework A3 + B2 through the semantic intent/target system, then deploy main, then C1/C2/C3.
+
+### ACT-huddle-18 — UPDATE (2026-08-01, post user method-correction)
+Committed on branch (NOT deployed, NOT live-verified):
+- A1 mic-deaf `5f7de66` (connGenRef; offline 13/13)
+- A2 transcript `b67bb3d` (client pagehide/visibility+burst flush; server scheduled→chat.ceremony_transcript unify)
+- A5 old-chat bleed `b67bb3d` (RAG auto-retrieval gated on !isCeremonyTrigger; output-side FILE_MENTION_CLAUSE already covers 'uploaded files')
+- A3 remind-me: reworked through classifyTurnIntent (QUERY_RE recall→query) then SUPERSEDED by →
+- FORCERS DISABLED `1ac6033`: KEYWORD_TOOL_FORCING=false gates reminderRe/createTaskRe/timeSensitiveRe (divergent keyword-intent layer). Model-native/semantic tool_choice now. Reversible one-liner. **Re-exposes historic "I'll add it"/missed-reminder IF model under-calls — MUST verify live.**
+- B2: prose reverted `d10a1c7`. Real form = code-enforced guard on assigned_agent (board-owner special:"coordinator" exempt) — needs a new mirror getter + confirmed journey update_task arg schema. User chose "Build B2 guard first" but then redirected to forcers; B2 guard STILL OWED.
+- eds-claude-skills `09fd6e4` (pushed): Stop-gate v4 item (g) integration/architecture trace for CODE changes + SESSION_CMD + docs.
+STILL OWED: B2 code-guard; AC-writing + verifier subagents for the Huddle code batch; merge→main→deploy; LIVE verification (forcer tool-calling, mic-deaf, transcript, ceremony opening); C1/C2/C3.
