@@ -6,9 +6,12 @@
 
 export const PRIORITIZE_TOOL = {
   type: "function",
-  name: "prioritize",
+  // Wire name the model calls. Renamed from "prioritize" (unintuitive for schedule asks) to
+  // "schedule_and_priorities" — it serves BOTH the day/schedule and the backlog/priorities lanes via
+  // `view`. The JS const stays PRIORITIZE_TOOL and the dispatcher stays dispatchPrioritize (internal).
+  name: "schedule_and_priorities",
   description:
-    "Read and rank the user's real SCHEDULE and tasks from their live data. This is the user's COMBINED nightly schedule — their tasks AND their external calendar items already merged — plus priority/due-date/staleness scoring, and it is the source of truth. It is the ONLY way to answer ANY question about the user's schedule, calendar, agenda, day, \"what's on my calendar/plate/today\", meetings, appointments, free/busy, tasks, backlog, priorities, or what's next — never answer those from memory or a guess. For \"what's on my schedule/calendar/day today\" use view 'scheduled'. Use `view` to pick the slice, optionally scoped to a `category`. (ONLY an explicit \"external calendar\" / \"Outlook calendar\" ask should use get_calendar_events instead of this.) Returns a scored, ordered list.",
+    "Read and rank the user's real SCHEDULE and tasks from their live schedule data — their nightly-planned schedule (the scheduled items for a day) plus their open tasks/backlog, scored by priority, due dates, and staleness. This is the source of truth and the ONLY way to answer ANY question about the user's schedule, calendar, agenda, day, \"what's on my calendar/plate/today\", meetings, appointments, free/busy, tasks, backlog, priorities, or what's next — never answer those from memory or a guess. For \"what's on my schedule/calendar/day today\" use view 'scheduled'. Use `view` to pick the slice, optionally scoped to a `category`. (ONLY an explicit \"external calendar\" / \"Outlook calendar\" ask should use get_calendar_events instead.) Returns a scored, ordered list.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -32,7 +35,7 @@ export const PRIORITIZE_TOOL = {
 } as const;
 
 export const PRIORITIZE_SYSTEM_HINT =
-  "For ANY question about the user's schedule, calendar, agenda, day, tasks, backlog, priorities, meetings, appointments, free/busy, or what to do next — including 'what's on my schedule/calendar/day today', 'what's on my plate', 'what's in my backlog', 'what's up next', 'what's overdue', 'what are my <area> priorities' — call the `prioritize` tool and answer from its ranked results. It is the user's COMBINED nightly schedule (tasks + external calendar already merged), the source of truth. Use view 'scheduled' for 'what's on my schedule/calendar/day today'; otherwise pick the matching `view` (backlog / up_next / overdue / priorities) and the relevant `category`. Only an EXPLICIT 'external calendar' / 'Outlook calendar' request should use get_calendar_events instead. Never invent an ordering, and never tell the user their tasks/schedule aren't in your files or ask them to upload anything. If it returns an error, say you couldn't reach their schedule and offer to retry.";
+  "For ANY question about the user's schedule, calendar, agenda, day, tasks, backlog, priorities, meetings, appointments, free/busy, or what to do next — including 'what's on my schedule/calendar/day today', 'what's on my plate', 'what's in my backlog', 'what's up next', 'what's overdue', 'what are my <area> priorities' — call the `schedule_and_priorities` tool and answer from its ranked results. It is the user's nightly-planned schedule + tasks, the source of truth. Use view 'scheduled' for 'what's on my schedule/calendar/day today'; otherwise pick the matching `view` (backlog / up_next / overdue / priorities) and the relevant `category`. Only an EXPLICIT 'external calendar' / 'Outlook calendar' request should use get_calendar_events instead. Never invent an ordering, and never tell the user their tasks/schedule aren't in your files or ask them to upload anything. If it returns an error, say you couldn't reach their schedule and offer to retry.";
 
 /**
  * Execute a `prioritize` tool call. Returns a JSON string (the model reads it verbatim).

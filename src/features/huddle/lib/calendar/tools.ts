@@ -13,15 +13,15 @@
 // Executor: `getGraphCalendarEvents` in email/graph-email.server.ts (Microsoft Graph, app-only). Pure
 // data here (no server deps) so it is safe to static-import from either path.
 //
-// LANE (must match the prioritize house-style, or tool choice drifts): this tool reads the user's RAW
-// external (Microsoft/Outlook) calendar EVENTS only. The user's SCHEDULE / agenda / day / priorities is
-// the COMBINED nightly schedule (tasks + calendar) served by `prioritize` (view 'scheduled') — the
-// description below tells the model to route "schedule" there, not here.
+// LANE (must match the schedule_and_priorities house-style, or tool choice drifts): this tool reads the
+// user's RAW external (Microsoft/Outlook) calendar EVENTS only. The user's SCHEDULE / agenda / day /
+// priorities is served by `schedule_and_priorities` (view 'scheduled') — their nightly-planned schedule
+// and tasks; the description below tells the model to route "schedule" there, not here.
 export const GET_CALENDAR_EVENTS_TOOL = {
   type: "function" as const,
   name: "get_calendar_events",
   description:
-    "Read the user's RAW EXTERNAL Microsoft/Outlook calendar directly. RARE — use this ONLY when the user EXPLICITLY says \"external calendar\", \"Outlook calendar\", or \"Microsoft calendar\" (they want to bypass their normal schedule and see the raw external calendar). Do NOT use it for ANY other wording — \"what's on my calendar / schedule / agenda / day / plate / today\", meetings, appointments, free/busy, tasks, priorities, or backlog ALL go to the `prioritize` tool (view 'scheduled'), which is the user's COMBINED nightly schedule with their external calendar items ALREADY merged in — that is the source of truth. Reads REAL calendar data — never answer from memory. Dates are ISO (YYYY-MM-DD or full ISO datetime). Returns Microsoft/Outlook events; a Google-only calendar won't appear.",
+    "Read the user's RAW EXTERNAL Microsoft/Outlook calendar directly. RARE — use this ONLY when the user EXPLICITLY says \"external calendar\", \"Outlook calendar\", or \"Microsoft calendar\" (they want to bypass their normal schedule and see the raw external calendar). Do NOT use it for ANY other wording — \"what's on my calendar / schedule / agenda / day / plate / today\", meetings, appointments, free/busy, tasks, priorities, or backlog ALL go to the `schedule_and_priorities` tool (view 'scheduled'), which is the user's nightly-planned schedule and tasks — the source of truth. Reads REAL calendar data — never answer from memory. Dates are ISO (YYYY-MM-DD or full ISO datetime). Returns Microsoft/Outlook events; a Google-only calendar won't appear.",
   parameters: {
     type: "object" as const,
     additionalProperties: false,

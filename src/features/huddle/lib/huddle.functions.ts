@@ -2223,13 +2223,22 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               recordToolUse(winner.id, "schedule_reminder", ok ? "reminder scheduled" : "reminder · failed", ok);
               return out;
             }
-            if (c.name === "prioritize") {
+            if (c.name === "schedule_and_priorities") {
               const { dispatchPrioritize } = await import("./tasks/tools");
-              return dispatchPrioritize(
+              const email =
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
-                  data.caller?.entra_email,
-                c.arguments,
-              );
+                data.caller?.entra_email;
+              const out = await dispatchPrioritize(email, c.arguments);
+              // Record it like every other tool (this was the ONE tool missing recordToolUse, which is
+              // why it never showed in the tool trace / UAT even though it ran).
+              let ok = true, detail = "";
+              try {
+                const p = JSON.parse(out) as { error?: string; view?: string; count?: number };
+                ok = !p.error;
+                detail = p.error ? String(p.error) : `view=${p.view ?? "?"} count=${p.count ?? "?"}`;
+              } catch { /* keep defaults */ }
+              recordToolUse(winner.id, "schedule_and_priorities", ok ? "read schedule/priorities" : "schedule read failed", ok, detail);
+              return out;
             }
             if (c.name === "groom_backlog") {
               const { dispatchGroomBacklog } = await import("./tasks/groom");
@@ -2816,13 +2825,14 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             });
           }
 
-          // prioritize — shared prioritization tool (mirrors the OpenAI path).
+          // schedule_and_priorities — shared schedule/priorities tool (mirrors the OpenAI path).
           {
             const { dispatchPrioritize } = await import("./tasks/tools");
-            lovableTools.prioritize = tool({
+            lovableTools.schedule_and_priorities = tool({
               description:
-                "Rank the user's open tasks by what to do next (priority, due dates, staleness), optionally within a category (LIFE, VENTURES, CAREER, EDUCATION, PERSONAL, PROF_EDUCATION). Call it when the user asks what to focus on / prioritize / do next.",
+                "The user's schedule + tasks: their nightly-planned schedule (scheduled items for a day) plus their open tasks/backlog, ranked by priority, due dates, and staleness. Call it for ANY question about the user's schedule, calendar, agenda, day, meetings, tasks, backlog, priorities, or what's next. Use view 'scheduled' for 'what's on my schedule/calendar/day today'. (Only an explicit 'external/Outlook calendar' ask uses get_calendar_events instead.)",
               inputSchema: z.object({
+                view: z.enum(["priorities", "backlog", "up_next", "scheduled", "overdue"]).optional(),
                 category: z.string().optional(),
                 limit: z.number().optional(),
               }),

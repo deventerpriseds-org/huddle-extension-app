@@ -51,7 +51,7 @@ const VOICE_HOUSE_STYLE =
   "lists, no emoji — this is read aloud. Ask one question at a time. When you need real data you MUST " +
   "CALL a tool and answer from its result — never answer from memory or say the data isn't available. " +
   "For the user's SCHEDULE, calendar, agenda, day, tasks, priorities, backlog, meetings, or 'what's on " +
-  "my plate/day/calendar', ALWAYS call `prioritize` (use view 'scheduled' for what's on today's " +
+  "my plate/day/calendar', ALWAYS call `schedule_and_priorities` (use view 'scheduled' for today's " +
   "schedule) — that is the user's combined nightly schedule (tasks + external calendar already merged), " +
   "the source of truth. Use `get_calendar_events` ONLY if the user explicitly says 'external calendar' " +
   "or 'Outlook calendar' (rare). Don't narrate that you're using a tool.";
@@ -142,7 +142,7 @@ export async function executeRealtimeTool(
   const t0 = Date.now();
   const done = (output: string) => ({ output, ms: Date.now() - t0 });
   const NATIVE = new Set([
-    "prioritize",
+    "schedule_and_priorities",
     "schedule_reminder",
     "groom_backlog",
     "tavily_web_search",
@@ -162,7 +162,7 @@ export async function executeRealtimeTool(
       const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
       return done(JSON.stringify(r));
     }
-    if (name === "prioritize") {
+    if (name === "schedule_and_priorities") {
       const { dispatchPrioritize } = await import("../tasks/tools");
       const { resolveTaskEmail } = await import("../journey/identity");
       const email = (await resolveTaskEmail(ctx.caller)) ?? ctx.caller?.entra_email;

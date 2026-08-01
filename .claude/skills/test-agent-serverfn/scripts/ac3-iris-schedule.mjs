@@ -58,7 +58,7 @@ async function send(text) {
 }
 
 const PHRASINGS = [
-  { label: "SCHEDULE (expect prioritize)", text: "what's on my schedule today?" },
+  { label: "SCHEDULE (expect schedule_and_priorities)", text: "what's on my schedule today?" },
   { label: "EXTERNAL OUTLOOK (expect get_calendar_events)", text: "what's on my external Outlook calendar today?" },
 ];
 
