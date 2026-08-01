@@ -35,6 +35,16 @@ import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
 // Set to false for an instant rollback to the previous (trigger-word-only) behaviour.
 const TURN_INTENT_CLASSIFICATION = true;
 
+// Feature flag: keyword-driven TOOL FORCING (reminderRe/createTaskRe/timeSensitiveRe → tool_choice).
+// OFF by design. Those regexes were a DIVERGENT keyword-intent layer parallel to the semantic systems
+// (the LLM router + classifyTurnIntent) — deciding which tool to force from surface keywords instead of
+// meaning. That split is exactly what made "remind me what we decided" force schedule_reminder. With
+// this false, tool_choice stays model-native ("auto") and the agent selects tools SEMANTICALLY from
+// their descriptions. The regexes/branches are kept (not deleted) so this is a one-line rollback if the
+// model proves to under-call a tool on a given deployment — a reliability tradeoff that must be
+// confirmed on live turns (watch for the historic "I'll add it" with no card, or a missed reminder).
+const KEYWORD_TOOL_FORCING = false;
+
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
 const HistoryMessage = z.object({
@@ -1416,11 +1426,15 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // an interrogative recall, but CAN trip a non-perform class — e.g. "notify me when it's done" reads
       // as "status" via the embedded "it's done" — and must still force. Same principle as the
       // ACT-huddle-3 handoff gate: intent lives in the classifier, not in per-forcer regex.
-      const forceReminder = turnIntent !== "query" && reminderRe.test(userText);
-      // Only the PRIMARY responder is forced to create the task. Interjectors surface information;
-      // forcing them to also create produced duplicate cards (e.g. Troy AND Iris both creating).
-      const forceTaskCreation = !forceReminder && !isInterjector && createTaskRe.test(userText);
-      const forceWebSearch = !forceReminder && !!agentBackend.webSearch && timeSensitiveRe.test(userText);
+      // All three gate on KEYWORD_TOOL_FORCING (off by design — semantic tool selection instead; see the
+      // flag). The intra-flag structure is preserved for a clean rollback: the reminder→query exclusion,
+      // the primary-only task force (interjectors surfaced duplicate cards), and web-search on webSearch
+      // agents only. When the flag is false every one is false and tool_choice stays model-native.
+      const forceReminder = KEYWORD_TOOL_FORCING && turnIntent !== "query" && reminderRe.test(userText);
+      const forceTaskCreation =
+        KEYWORD_TOOL_FORCING && !forceReminder && !isInterjector && createTaskRe.test(userText);
+      const forceWebSearch =
+        KEYWORD_TOOL_FORCING && !forceReminder && !!agentBackend.webSearch && timeSensitiveRe.test(userText);
 
       function resolveTaskLane(value: unknown): TaskLane {
         const lane = String(value ?? "")
