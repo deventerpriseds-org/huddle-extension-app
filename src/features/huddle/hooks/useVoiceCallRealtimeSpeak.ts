@@ -32,6 +32,20 @@ function jaccard(a: string, b: string): number {
   return inter / (ta.size + tb.size - inter);
 }
 
+// Detect a MULTI-PART ask (several requests bundled in one utterance) so we can return to the
+// unanswered parts after a barge. Counting "?" alone is too narrow — a natural multi-part ask usually
+// has ONE "?" ("what's my schedule, a quick workout, and can you remind me to call the dentist?"), so
+// we also count request/interrogative cues and take the max. >= 2 ⇒ treat as a multi-part agenda.
+function countAsks(text: string): number {
+  const s = text.toLowerCase();
+  const q = (s.match(/\?/g) ?? []).length;
+  const cues =
+    s.match(
+      /\b(what('?s)?|how|when|where|why|which|who|can you|could you|would you|remind me|add (a )?task|set (a )?reminder|tell me|give me|show me|find|schedule|then)\b/g,
+    ) ?? [];
+  return Math.max(q, cues.length);
+}
+
 export type VoiceCallRealtimeSpeakController = VoiceCallController & {
   sendText: (agentId: AgentId, text: string) => Promise<void>;
 };
@@ -65,11 +79,22 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   const lastAgentTextRef = useRef("");
   const lastAgentSpokeAtRef = useRef(0);
 
-  // EL TTS playback queue (base64 MP3 per sentence, played sequentially).
+  // EL TTS playback queue (base64 MP3 per reply, played sequentially).
   const sentenceBufRef = useRef("");
   const audioQueueRef = useRef<string[]>([]);
   const audioPlayingRef = useRef(false);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  // Barge epoch — bumped on every user barge. A synth started before a barge is DISCARDED when it
+  // resolves after the barge (fixes the "ghost audio" that played the interrupted reply over the user).
+  const bargeEpochRef = useRef(0);
+  // Journey-style agenda tracking: when the user asks MULTIPLE things and interrupts before all are
+  // answered, remember the original ask and RETURN to the unanswered parts after the tangent is handled.
+  const agendaRef = useRef<{ text: string } | null>(null);
+  const resumePendingRef = useRef(false);
+  // In-flight tool calls awaiting their result. The agenda-return response.create must only fire when the
+  // model is IDLE — not while a tool continuation is still coming (that would collide as an "active
+  // response"). We fire the resume on response.done only once this counter is back to 0.
+  const pendingToolsRef = useRef(0);
 
   const clearAudio = useCallback(() => {
     audioQueueRef.current = [];
@@ -112,16 +137,18 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
     if (!audioPlayingRef.current) drainAudio();
   }, [drainAudio]);
 
-  // Synthesize one sentence in the agent's ElevenLabs cloned voice, then queue it (gen-checked so a
-  // superseded turn's late audio never plays).
-  const speakSentence = useCallback(async (sentence: string, agentId: AgentId, gen: number) => {
-    const s = sentence.trim();
+  // Synthesize a reply in the agent's ElevenLabs cloned voice, then queue it. Guards: `gen` (call
+  // superseded) AND `bargeEpoch` (a barge happened while this synth was in flight → discard the stale
+  // audio so it never plays over the user — the "ghost audio" fix).
+  const speak = useCallback(async (text: string, agentId: AgentId, gen: number) => {
+    const s = text.trim();
     if (!s) return;
+    const epoch = bargeEpochRef.current;
     try {
       const spoken = await synthesizeSpeech({ data: { text: s, agentId } });
-      if (genRef.current !== gen) return;
+      if (genRef.current !== gen || bargeEpochRef.current !== epoch) return;
       if (spoken.ok && spoken.audioBase64) enqueueAudio(spoken.audioBase64);
-    } catch { /* skip this sentence on TTS error */ }
+    } catch { /* skip on TTS error */ }
   }, [enqueueAudio]);
 
   const supported =
@@ -257,18 +284,54 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
                 setCaptions((c) => [...c.slice(-40), { role: "agent", text: full }]);
                 persist("agent", agentIdRef.current, full);
                 // ONE synthesis for the whole (short) reply → smooth, gapless playback.
-                void speakSentence(full, agentIdRef.current, gen);
+                void speak(full, agentIdRef.current, gen);
+              }
+              break;
+            }
+            case "response.done": {
+              // AGENDA RETURN (journey-style) fires HERE, not on output_text.done: a single response can
+              // contain a text item AND a function_call item, so text.done can arrive while the response
+              // is still active — sending response.create then errors ("active response"). response.done
+              // means the model is idle for this response. Only resume once no tool continuation is
+              // pending (pendingTools===0), so we don't race the tool-result response.create.
+              if (
+                resumePendingRef.current &&
+                agendaRef.current &&
+                pendingToolsRef.current === 0 &&
+                dc.readyState === "open"
+              ) {
+                const original = agendaRef.current.text;
+                resumePendingRef.current = false;
+                agendaRef.current = null;
+                dc.send(JSON.stringify({
+                  type: "response.create",
+                  response: {
+                    instructions:
+                      `The user earlier asked several things in one go: "${original}". You were interrupted ` +
+                      `before finishing. Now that you've addressed the interruption, continue and answer any ` +
+                      `of those parts you haven't fully covered yet — one short spoken answer at a time. If ` +
+                      `you've already covered them all, briefly ask what's next instead.`,
+                  },
+                }));
               }
               break;
             }
             case "input_audio_buffer.speech_started": {
-              // BARGE: user started talking → stop the EL audio already playing client-side. Do NOT send
-              // a manual response.cancel — the session's own `interrupt_response:true` cancels the
-              // in-flight model response server-side. The old manual cancel fired on EVERY speech-start
-              // (even with no active response), producing a spurious `error` each time and a desync that
-              // could kill a genuine barge-in reply (the "mic stopped after his first answer" report).
+              // BARGE: user started talking. (1) Bump the barge epoch so any EL synth already in flight is
+              // discarded when it resolves (no ghost audio over the user). (2) Stop the audio already
+              // playing. Do NOT send a manual response.cancel — the session's `interrupt_response:true`
+              // cancels the in-flight model response natively (the old manual cancel spammed errors and
+              // desynced). (3) If a multi-part agenda is active and the agent was mid-reply, arm the
+              // return-to-remaining after the interruption is handled.
+              bargeEpochRef.current += 1;
               clearAudio();
               setModeBoth("listening");
+              // Arm the agenda-return whenever a multi-part ask is active. We do NOT gate on "was the
+              // agent audibly speaking" — a barge can land mid-tool-call (the reply hasn't been voiced
+              // yet, e.g. during a ~10s prioritize round-trip) and that still interrupts the multi-part
+              // answer. The resume instruction is defensive ("cover any parts not yet answered; if all
+              // covered, briefly ask what's next"), so arming it is safe even if nothing was pending.
+              if (agendaRef.current) resumePendingRef.current = true;
               break;
             }
             case "conversation.item.input_audio_transcription.completed": {
@@ -281,6 +344,12 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
               if (echo || micMutedRef.current) break;
               setCaptions((c) => [...c.slice(-40), { role: "user", text: t }]);
               persist("user", agentIdRef.current, t);
+              // Track a multi-part ask so we can return to unanswered parts after a barge. Do NOT
+              // overwrite the agenda when this utterance IS the interruption during an armed agenda
+              // (resumePending) — that one is the tangent, not a new agenda. Heuristic trigger: 2+ "?".
+              if (!resumePendingRef.current) {
+                agendaRef.current = countAsks(t) >= 2 ? { text: t } : null;
+              }
               break;
             }
             case "response.function_call_arguments.done": {
@@ -290,6 +359,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
               try { args = JSON.parse((msg.arguments as string) || "{}"); } catch { /* noop */ }
               const aId = agentIdRef.current;
               if (!aId) break;
+              pendingToolsRef.current += 1;
               void runRealtimeTool({
                 data: {
                   name, args, agentId: aId, caller: callerFor(),
@@ -308,7 +378,8 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
                   if (dc.readyState !== "open") return;
                   dc.send(JSON.stringify({ type: "conversation.item.create", item: { type: "function_call_output", call_id: callId, output: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) } }));
                   dc.send(JSON.stringify({ type: "response.create" }));
-                });
+                })
+                .finally(() => { pendingToolsRef.current = Math.max(0, pendingToolsRef.current - 1); });
               break;
             }
             case "error":
@@ -340,7 +411,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
       }
       return ok();
     },
-    [supported, status, callerFor, persist, failWith, cleanup, clearAudio, setModeBoth, speakSentence],
+    [supported, status, callerFor, persist, failWith, cleanup, clearAudio, setModeBoth, speak],
   );
 
   const toggleMic = useCallback(() => {

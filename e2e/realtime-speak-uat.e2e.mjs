@@ -43,11 +43,11 @@ if (!UAT_TOKEN) {
 // `expectTool` names the specific tool a schedule/priorities/travel ask should fire (prioritize is the
 // combined nightly schedule — the source of truth — for schedule/agenda/priorities asks per VOICE_HOUSE_STYLE).
 const BATCH = [
-  { id: "iris-chase",       ask: "What's on my schedule today?",        tool: true,  expectTool: "prioritize", lane: "EA/schedule" },
+  { id: "iris-chase",       ask: "What's on my schedule today?",        tool: true,  expectTool: "schedule_and_priorities", lane: "EA/schedule" },
   { id: "finn-reid",        ask: "How's my runway looking?",            tool: false, expectTool: null,         lane: "finance" },
   { id: "flex-grimes",      ask: "Give me a quick workout for today.",  tool: false, expectTool: null,         lane: "fitness (original complaint agent)" },
   { id: "troy-lennox",      ask: "Any trips coming up on my calendar?", tool: true,  expectTool: null,         lane: "travel/calendar" },
-  { id: "terry-locke",      ask: "What should I prioritize?",           tool: true,  expectTool: "prioritize", lane: "scrum/prioritize" },
+  { id: "terry-locke",      ask: "What should I prioritize?",           tool: true,  expectTool: "schedule_and_priorities", lane: "scrum/prioritize" },
   { id: "charleston-lewis", ask: "Suggest dinner tonight.",            tool: false, expectTool: null,         lane: "dining" },
 ];
 

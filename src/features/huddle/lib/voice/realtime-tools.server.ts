@@ -31,6 +31,8 @@ import { PRIORITIZE_TOOL } from "../tasks/tools";
 import { SCHEDULE_REMINDER_TOOL } from "../tasks/reminders";
 import { GROOM_BACKLOG_TOOL } from "../tasks/groom";
 import { TAVILY_WEB_SEARCH_TOOL, tavilySearch, type TavilySearchArgs } from "../tavily-search.functions";
+// SINGLE SOURCE — the same get_calendar_events schema the text turn engine uses (no voice-local copy).
+import { GET_CALENDAR_EVENTS_TOOL } from "../calendar/tools";
 
 export interface RealtimeCaller {
   entra_object_id?: string;
@@ -44,33 +46,15 @@ export interface RealtimeToolContext {
   timeZone?: string;
 }
 
-// get_calendar_events — the Huddle-native Microsoft/Outlook calendar read (the exact "what's on my
-// schedule" same-brain capability). Schema mirrors the text path's inline def (huddle.functions.ts),
-// sanitized to the Realtime-accepted shape (no `strict`). Executor reuses getGraphCalendarEvents.
-const GET_CALENDAR_EVENTS_TOOL = {
-  type: "function" as const,
-  name: "get_calendar_events",
-  description:
-    "Read the user's Microsoft/Outlook calendar for a day or range and return the actual events. Use this whenever the user asks what's on their calendar/schedule/agenda, or whether they're free/busy at a time. Reads REAL calendar data — never answer calendar questions from memory. Dates are ISO (YYYY-MM-DD or full ISO). Returns Microsoft/Outlook events; a Google-only calendar won't appear.",
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      start: { type: "string", description: "Start of the range, ISO date or datetime. Defaults to today." },
-      end: { type: "string", description: "End of the range, ISO date or datetime. Defaults to end of the start day." },
-    },
-    required: [],
-  },
-};
-
 const VOICE_HOUSE_STYLE =
   "\n\nYou are on a live VOICE call. Speak naturally in 1–3 short spoken sentences. No markdown, no " +
   "lists, no emoji — this is read aloud. Ask one question at a time. When you need real data you MUST " +
   "CALL a tool and answer from its result — never answer from memory or say the data isn't available. " +
-  "For the user's SCHEDULE, tasks, agenda, priorities, backlog, or 'what's on my plate/day', ALWAYS " +
-  "call `prioritize` (use view 'scheduled' for what's on today's schedule) — that is the user's " +
-  "combined nightly schedule (tasks + calendar), the source of truth. Use `get_calendar_events` only " +
-  "if the user explicitly asks about their raw Outlook calendar. Don't narrate that you're using a tool.";
+  "For the user's SCHEDULE, calendar, agenda, day, tasks, priorities, backlog, meetings, or 'what's on " +
+  "my plate/day/calendar', ALWAYS call `schedule_and_priorities` (use view 'scheduled' for today's " +
+  "schedule) — that is the user's combined nightly schedule (tasks + external calendar already merged), " +
+  "the source of truth. Use `get_calendar_events` ONLY if the user explicitly says 'external calendar' " +
+  "or 'Outlook calendar' (rare). Don't narrate that you're using a tool.";
 
 /** Same-brain instructions for the realtime session: snapshot + auto-retrieved memory + voice style. */
 export async function assembleRealtimeInstructions(
@@ -158,7 +142,7 @@ export async function executeRealtimeTool(
   const t0 = Date.now();
   const done = (output: string) => ({ output, ms: Date.now() - t0 });
   const NATIVE = new Set([
-    "prioritize",
+    "schedule_and_priorities",
     "schedule_reminder",
     "groom_backlog",
     "tavily_web_search",
@@ -178,11 +162,11 @@ export async function executeRealtimeTool(
       const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
       return done(JSON.stringify(r));
     }
-    if (name === "prioritize") {
+    if (name === "schedule_and_priorities") {
       const { dispatchPrioritize } = await import("../tasks/tools");
       const { resolveTaskEmail } = await import("../journey/identity");
       const email = (await resolveTaskEmail(ctx.caller)) ?? ctx.caller?.entra_email;
-      return done(await dispatchPrioritize(email, args));
+      return done(await dispatchPrioritize(email, args, ctx.timeZone));
     }
     if (name === "schedule_reminder") {
       const { dispatchScheduleReminder } = await import("../tasks/reminders");

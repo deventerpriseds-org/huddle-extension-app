@@ -52,9 +52,28 @@ echo-guard. Uniform path for ALL agents.
   synthesizeSpeech all fire) + real non-refusal replies + iris/terry fire `prioritize`; latency
   716ms–3528ms; no 429. Bugs found+fixed en route by earlier verifier runs: `strict` field, `file_search`
   type, missing get_calendar_events.
-- [OPEN — awaiting user LIVE A/B] The mechanism is verified end-to-end on the deployed SWA (typed-drive,
-  fake mic). Real-speech STT accuracy + subjective voice/latency feel = the human live check: user flips
-  ⚡ Fast (A) in a 1:1 header, leaves & rejoins, talks, compares vs Baseline.
+- [DONE — smoothness fix, deployed b65bf68] Whole-reply synth instead of per-sentence: accumulate the
+  streamed text and call `synthesizeSpeech` ONCE on `response.output_text.done` (was per-sentence, which
+  caused ~1.6s inter-sentence pauses). Per-sentence chunking existed for sentence-boundary barge; barge
+  is native now (interrupt_response), so it's no longer needed.
+- [DONE — barge polish (ghost-audio + journey-style agenda return), deployed 82bce40, verified live
+  run 30707326510 4/4 PASS] Two user-approved items:
+  (1) **Ghost-audio epoch guard** — `bargeEpochRef` bumps on every barge; `speak()` captures the epoch
+  before synth and DISCARDS the resolved audio if a barge happened while it was in flight → the
+  interrupted reply never leaks in over the user. Live: 0 ghost plays.
+  (2) **Journey-style agenda return** — a 2+ part ask arms `agendaRef`; a barge arms `resumePendingRef`;
+  when the model goes idle (`response.done`, no tool continuation pending) an agenda-return
+  `response.create` (carrying `instructions`) steers the agent back to the still-unanswered parts.
+  **Two bugs found live and fixed en route (first barge run 30706841546):** the trigger counted only "?"
+  so a natural 3-part ask (one "?") never armed → broadened to `countAsks()` (also counts request cues);
+  and it fired on `output_text.done` which can arrive mid-response (a text+function_call response) →
+  moved to `response.done` gated on a `pendingToolsRef` counter so it fires only when truly idle.
+  Live proof (run 30707326510): barge @19.16s → agenda-return `→OUT response.create [+instructions]`
+  @24.18s (at idle) → return reply covering workout + dentist; the "what day" tangent itself answered.
+- [OPEN — awaiting user LIVE A/B] The mechanism is verified end-to-end on the deployed SWA (real-mic
+  harness, multi-turn + barge). Real-speech STT accuracy + subjective voice/latency/smoothness feel =
+  the human live check: user flips ⚡ Fast (A) in a 1:1 header, leaves & rejoins, talks, barges, compares
+  vs Baseline.
 - [OPEN — admin action, not code] `Calendars.Read` consent missing on the Graph app → raw Outlook
   `get_calendar_events` returns a permission error (affects text path too). Not needed for the combined
   nightly `prioritize` schedule; only for explicit raw-Outlook asks.
@@ -1094,3 +1113,41 @@ consent gap). KEY FINDING: within-call-retention + anti-hallucination PASS in cl
 barge path for them. Harness is reusable (conversational-quality.yml, re-run each change). NEXT (user's call): fix
 broken-record turn-engine bug, or Tier B/C (journey-on DB verify + tool-use probes) to widen coverage. Tier D ceremony
 run + Tier E voice UAT still pending. Ack layer (filler-now/streamed-later) + resume-in-place still to build.
+### ACT-huddle-13 (regression fix + unification): "what's my schedule" pointed to Graph after this morning's changes
+**Reported:** 2026-08-01 — user: Iris answered schedule from the combined `prioritize` schedule earlier
+today, but after this morning's changes she points to Graph/Outlook. Then: "why aren't they using the
+same config… I don't need multiple versions of iris, just one — has audio voice attached or not."
+**Root cause (ground-truthed, git + source):** commit `28b6b3f` (12:24) wired `get_calendar_events`
+into the Fast (A) VOICE toolset; before that the voice toolset had NO calendar tool, so schedule could
+only hit `prioritize`. The tool's DESCRIPTION said "use whenever the user asks what's on their
+calendar/**schedule/agenda**", contradicting the voice house-style ("ALWAYS call prioritize for the
+schedule; get_calendar_events only for raw Outlook"). A tool description strongly steers tool choice →
+Iris drifted to Graph. Deeper cause: `get_calendar_events` was the ONE governed tool DECLARED TWICE
+(inline in huddle.functions.ts text engine + locally in voice/realtime-tools.server.ts) — every other
+tool (prioritize/schedule_reminder/groom_backlog/tavily) already imports a single shared def, so only
+calendar could drift between channels.
+**Fix (deployed):**
+- [DONE `e1269ed`] Rewrote the get_calendar_events description in BOTH copies to scope it to explicit
+  EXTERNAL Outlook/meeting/free-busy asks and defer "schedule/agenda/day/priorities" to `prioritize`.
+- [DONE `aa18169`] UNIFIED it: extracted the canonical schema to `lib/calendar/tools.ts`; both the text
+  turn engine and the voice toolset now import that single source (voice strips `strict` via
+  toRealtimeTool). One Iris, one tool config; a channel is just "audio attached or not". Terminology per
+  user: the tool = the EXTERNAL (Outlook/Microsoft) calendar; "schedule" = combined `prioritize`.
+  tsc+build clean; deploy run 30710369017 success.
+- [OPEN — verification in progress + user live retest] Confirm Iris routes "what's my schedule" →
+  prioritize and "what's on my external Outlook calendar" → get_calendar_events, in BOTH chat and voice.
+
+### ACT-huddle-13 (follow-through): schedule tool actual-vs-described, rename, behavioral UAT
+**From:** 2026-08-01 user pushback — verifications short of real UAT; overclaimed tool behavior; "prioritize" name unintuitive.
+- [DONE f99c975, live-verified run 30711941193] Renamed wire tool `prioritize`→`schedule_and_priorities` across both dispatch paths + voice executor/native-set + system hint + calendar cross-ref (internal identifiers unchanged; snapshots untouched — they only use the verb).
+- [DONE] Added the missing `recordToolUse` for the tool (it was the one tool invisible in the trace though it ran) + corrected the description overclaim (reads the nightly-planned task mirror; NOT a verified tasks+calendar merge — that's upstream/journey).
+- [DONE] Behavioral UAT via new `agent-serverfn-uat.yml` (natural messages on a runner): "what's my schedule" → schedule_and_priorities (view scheduled, real item); "external Outlook calendar" → get_calendar_events.
+- [OPEN — admin action, not code] `get_calendar_events` returns **403 (Calendars.Read consent missing)** live — the "external calendar" path can't return data until an admin grants it. Combined schedule via schedule_and_priorities is unaffected.
+- [OPEN — user live retest] Confirm in a real Iris/Flex 1:1 (chat + voice).
+
+### ACT-huddle-13 (identity): Iris read the WRONG account (shadow profile) — real root cause of "bad schedule"
+**Root cause (DB-ground-truthed):** journey `resolveUserId` matched a DUPLICATE `von.ellis@` profile (created today 10:26) before the `user_email_aliases` entry that maps von.ellis@ → the real dev@ board (234 tasks). So agents read the empty/polluted shadow account.
+- [DONE] Durable guard: journey huddle-proxy `resolveUserId` now checks aliases BEFORE profiles.email (deployed, run 30713082429). A shadow profile can no longer hijack an aliased identity.
+- [DONE] Data cleanup: deleted my 3 "Call the dentist" test-pollution tasks + the duplicate von.ellis@ profile (4132); alias + real dev@ board + auth left intact.
+- [DONE] Redeployed Huddle (cleared identity cache). LIVE-VERIFIED: schedule_and_priorities now returns the real dev@ board (count=10 scheduled, real tasks) for a von.ellis@ caller.
+- [OPEN — pre-existing, newly visible] schedule_and_priorities shows times in RAW UTC (10 AM ET task rendered "2 PM") and over-trims (2 of 6 shown). Fix = localize start_time to caller timeZone + surface all scheduled items. Awaiting user go-ahead.
