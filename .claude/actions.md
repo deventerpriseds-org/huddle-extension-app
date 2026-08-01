@@ -1151,3 +1151,7 @@ calendar could drift between channels.
 - [DONE] Data cleanup: deleted my 3 "Call the dentist" test-pollution tasks + the duplicate von.ellis@ profile (4132); alias + real dev@ board + auth left intact.
 - [DONE] Redeployed Huddle (cleared identity cache). LIVE-VERIFIED: schedule_and_priorities now returns the real dev@ board (count=10 scheduled, real tasks) for a von.ellis@ caller.
 - [OPEN — pre-existing, newly visible] schedule_and_priorities shows times in RAW UTC (10 AM ET task rendered "2 PM") and over-trims (2 of 6 shown). Fix = localize start_time to caller timeZone + surface all scheduled items. Awaiting user go-ahead.
+
+### ACT-huddle-13 (timezone at the core): schedule times shown in UTC → localized
+- [DONE, live-verified] Canonical `profiles.timezone` (journey) + whoami returns/self-seeds it; Huddle `resolveTimeZone` (profile→browser→UTC) + one shared `lib/time.ts` `formatInTz` at the display edge; schedule_and_priorities (all 3 paths) localize via it. Mirror/data stays UTC (compute substrate). UAT: "4:00 PM EDT"/"11:00 AM EDT" correct (was UTC). Commits: journey cafb52d, huddle (main) + profiles.timezone migration.
+- [OPEN, separate] Agent over-trims scheduled list (shows 2 of N); get_calendar_events 403 (consent) + should read the canonical zone.
