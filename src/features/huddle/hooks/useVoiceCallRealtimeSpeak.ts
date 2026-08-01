@@ -273,10 +273,13 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
               break;
             }
             case "input_audio_buffer.speech_started": {
-              // BARGE: user started talking → stop EL playback + cancel the in-flight response.
+              // BARGE: user started talking → stop the EL audio already playing client-side. Do NOT send
+              // a manual response.cancel — the session's own `interrupt_response:true` cancels the
+              // in-flight model response server-side. The old manual cancel fired on EVERY speech-start
+              // (even with no active response), producing a spurious `error` each time and a desync that
+              // could kill a genuine barge-in reply (the "mic stopped after his first answer" report).
               clearAudio();
               setModeBoth("listening");
-              if (dc.readyState === "open") dc.send(JSON.stringify({ type: "response.cancel" }));
               break;
             }
             case "conversation.item.input_audio_transcription.completed": {

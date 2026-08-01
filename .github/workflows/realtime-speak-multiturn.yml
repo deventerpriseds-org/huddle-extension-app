@@ -1,0 +1,51 @@
+name: Realtime-speak MULTI-TURN (real-mic) UAT
+
+# ACCURATE reproduction of the Fast (A) EL-voice hybrid 1:1 voice experience. Unlike the prior
+# realtime-speak-uat.yml (typed one-shot, measured first-text-delta), this feeds a REAL 16kHz-mono WAV
+# (3 spoken phrases + silence gaps, generated via ElevenLabs REST) as the Chromium fake mic, lets the
+# session's semantic_vad segment the turns, and measures: (1) COLD time-to-first-AUDIBLE-word, (2) whether
+# the mic keeps transcribing on turn 2+, (3) inter-sentence smoothness — plus the full inbound+outbound
+# data-channel event timeline so the response-lifecycle desync is visible. Runs on a GH runner (open
+# internet + real OpenAI Realtime/EL reachability); the CCR session can't reach the SWA/OpenAI.
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: "Agent id (dm-<agent>) to test"
+        required: false
+        default: "flex-grimes"
+
+jobs:
+  realtime-speak-multiturn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Run multi-turn real-mic UAT
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_DEFAULT_VOICE_ID: ${{ secrets.ELEVENLABS_DEFAULT_VOICE_ID }}
+          AGENT_ID: ${{ github.event.inputs.agent }}
+          SHOT_DIR: uat-shots
+        run: node e2e/realtime-speak-multiturn.e2e.mjs
+
+      - name: Upload artifacts (screenshots + mic wav + capture json)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: realtime-speak-multiturn-shots
+          path: uat-shots/
+          retention-days: 7

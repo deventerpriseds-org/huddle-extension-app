@@ -28,6 +28,31 @@ OpenAI voices. TRUE — but irrelevant, because we do NOT use Realtime's audio o
   "use the hybrid above," NOT "impossible." Do not make the user re-prove this. Code lives in
   `lib/voice/realtime.functions.ts` (text-out mint) + `useVoiceCallRealtimeSpeak.ts` (per-sentence EL TTS).
 
+## HARDENING (2026-08-01): a "6/6 PASS" UAT was a FALSE POSITIVE — measure the EXPERIENCE, not the mechanism
+The Fast (A) EL-voice hybrid passed a headless UAT 6/6, but the user's LIVE experience was bad. The UAT
+lied because it measured the wrong things: it (a) TYPED instead of speaking (no real mic), (b) ran ONE
+turn per agent, (c) timed "first TEXT delta" not "time until audio is HEARD." Rule: for voice, the test
+MUST use real audio (Chromium `--use-file-for-fake-audio-capture=<wav>`, segmented by semantic_vad),
+run MULTIPLE turns, and measure **time-to-first-audible-word** (instrument `HTMLMediaElement.play`), or
+it does not reflect the user. Accurate harness: `e2e/realtime-speak-multiturn.e2e.mjs`.
+
+**Root causes (measured, runs 30703816932 / 30703965677):**
+- **Cold/first-reply delay 5–8s is the TOOL round-trip, not connect** (SDP 201 in ~2.4s). A `prioritize`
+  ask = ~4s client-side (dispatchPrioritize → Azure PG mirror) THEN a 2nd model response streams. NON-tool
+  turns are sub-second (~730ms TTFW). So tool-backed voice turns are slow (same tool latency the baseline
+  has); the voice architecture didn't cause it.
+- **Awkward inter-sentence pauses = 1.6–1.9s** because EL `synthesizeSpeech` is called SEQUENTIALLY per
+  sentence (discrete MP3s, next synthesized ~when prev ends). Baseline synthesizes the whole reply at once
+  → smooth-but-late; hybrid → fast-start-but-choppy. Proper fix = ElevenLabs STREAMING TTS (websocket)
+  fed by the Realtime text stream (continuous audio, no per-sentence stall) — that's how boost/ConvAI feel
+  smooth. Prefetch/parallel synth is a partial mitigation only.
+- **"Mic stopped after first answer" — input did NOT actually die** in a cleanly-spaced test (all turns
+  transcribed). Likely artifact = a 7–8s tool reply OVERLAPPING the next turn (reads as "ignored me") +
+  a real desync: the hook sends a manual `response.cancel` on EVERY `input_audio_buffer.speech_started`
+  while the session already has `interrupt_response:true` → a spurious inbound `error` each time, which
+  can kill a genuine BARGE-IN reply. FIX: drop the manual response.cancel (let interrupt_response handle
+  barge); test the barge-in variant (phrase 2 over the still-playing turn-1 reply) to nail it.
+
 ## Active work — 1:1 VOICE latency (journey-speed) — plan + premise CONFIRMED, build next (2026-08-01)
 User complaint: "the delay for my convo with Flex to SPEAK takes way too long, much longer than journey."
 It's a VOICE latency ask (not text). Today's 1:1 voice is SLOW because Realtime is ears-only
