@@ -1083,3 +1083,14 @@ V-ACK, V-STT, D-FALLBACK) and APPROVED for AC development. Independent AC-writin
 full registry now. Build order: Tier A (re-runnable core) first, then B/C/D behind harness needs, E via
 voice UAT. Ack layer = filler-now/streamed-later, AFTER harness. Resume-in-place + cross-talk still to fix.
 NOTE: SSH commit-signing key file is 0 bytes (empty) in this env → commits show GitHub-Unverified; can't fix.
+
+### ACT-huddle-21 UPDATE — Tier A harness LIVE + first graded run (2026-08-01, run 30710184021 success)
+Foundation (capture toolUses/fallbacks) + 5 Tier A probes built + committed (3550097) + ran live vs deployed agents:
+P3 RECALLED, P1 ORIENTED, P3b UNDERSTOOD, P-RETAIN RETAINED, P-GROUND GROUNDED, P-ACCOUNT RECONCILED — all PASS;
+**P-REPEAT REPEATED = real FAIL caught** (Iris same core message ×3, broken-record reproduces in the TEXT path = a
+turn-engine coherence bug). D-FALLBACK surfaced a real tool failure iris-chase:get_calendar_events (Calendars.Read
+consent gap). KEY FINDING: within-call-retention + anti-hallucination PASS in clean text turns → those live failures
+(Iris "couldn't locate context", Flex "uploaded files") are in the VOICE/BARGE path, not the brain — focus V-RESUME/
+barge path for them. Harness is reusable (conversational-quality.yml, re-run each change). NEXT (user's call): fix
+broken-record turn-engine bug, or Tier B/C (journey-on DB verify + tool-use probes) to widen coverage. Tier D ceremony
+run + Tier E voice UAT still pending. Ack layer (filler-now/streamed-later) + resume-in-place still to build.
