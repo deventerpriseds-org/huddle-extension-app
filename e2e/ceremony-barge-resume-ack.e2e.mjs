@@ -138,6 +138,20 @@ if (CHROMIUM_PATH) launchOpts.executablePath = CHROMIUM_PATH;
 
 const browser = await chromium.launch(launchOpts);
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+// KILL THE CEREMONY MIC. This is a TYPED-barge test (the typed path runs the identical
+// runBargeSequence + resumeFromFreeze as a spoken barge). The fake audio device otherwise feeds
+// noise into the ceremony's WebRTC VAD, which transcribes it as garbled speech and fires PHANTOM
+// voice-barges (observed: 3 spurious "[barge] decision" lines on ambiguous fragments before any typed
+// input), churning genRef/bargeActive and polluting the V-ACK/answer measurement. Rejecting
+// getUserMedia makes startListening() a non-fatal no-op (ceremony still voices normally), so ONLY the
+// typed barge exercises the code under test — a clean, single-barge reading.
+await ctx.addInitScript(() => {
+  try {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException("mic disabled for typed-barge UAT", "NotAllowedError"));
+    }
+  } catch {}
+});
 const page = await ctx.newPage();
 
 const bargeLog = [];
@@ -284,6 +298,9 @@ try {
   out.interruptMarked = !!interruptedRow;
   out.quotaFallback = bargeLog.some((b) => /LLM fallback|429|quota/i.test(b.text));
   out.routerRan = bargeLog.some((b) => /LLM router \(openai/i.test(b.text));
+  // Barge decisions relative to MY typed barge — any BEFORE 0ms are phantom (should be none now the
+  // mic is disabled); exactly one AT/after 0ms is my typed barge.
+  out.bargeDecisions = bargeLog.map((b) => ({ relMs: b.t - bargeAtMs, line: b.text.slice(0, 120) }));
 } catch (err) {
   if (err.message !== "no-mid-block") {
     console.error(`\nFATAL: ${err.message}`);
