@@ -45,6 +45,14 @@ const TURN_INTENT_CLASSIFICATION = true;
 // confirmed on live turns (watch for the historic "I'll add it" with no card, or a missed reminder).
 const KEYWORD_TOOL_FORCING = false;
 
+// Feature flag: B2 assignee-scoped task-STATUS changes. When on, an agent may change an existing
+// task's status (update_task with a `status` arg) ONLY if it is that task's assignee (assigned_agent)
+// or the board owner (special:"coordinator"). Otherwise the change is a graceful DEFERRAL to the
+// assignee — the board's ownership stays honest even when the user addressed a non-owner. Data-driven
+// off the real assigned_agent mirror; extends the existing meta-task-guard ownership model to status
+// changes (not just task creation). Set false to disable.
+const ASSIGNEE_SCOPED_STATUS = true;
+
 const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 
 const HistoryMessage = z.object({
@@ -1436,6 +1444,49 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       const forceWebSearch =
         KEYWORD_TOOL_FORCING && !forceReminder && !!agentBackend.webSearch && timeSensitiveRe.test(userText);
 
+      // B2 assignee-scoped status guard (shared by the OpenAI + Lovable journey dispatch). Returns a
+      // deferral RESULT object if `winner` may NOT change this task's status, or null to proceed.
+      // Extends the meta-task-guard ownership model to STATUS CHANGES: only the task's assignee
+      // (assigned_agent) or the board owner (special:"coordinator") may flip a status; anyone else
+      // defers to the assignee. Fails OPEN — unassigned/unknown/not-yet-mirrored tasks and any DB error
+      // proceed (no assignee to protect; a mirror lag must not block a legit update). Only blocks the
+      // real B2 case: a non-assignee changing a task that belongs to a DIFFERENT agent.
+      async function maybeDeferStatusChange(
+        toolName: string,
+        rawArgs: unknown,
+      ): Promise<{ ok: true; deferred: true; assignedTo: string; note: string } | null> {
+        if (!ASSIGNEE_SCOPED_STATUS || toolName !== "update_task") return null;
+        const a = (rawArgs ?? {}) as Record<string, unknown>;
+        // Cheap pre-checks first to avoid a DB hit when the guard can't apply.
+        if (a.status == null || String(a.status).trim() === "") return null; // not a status change
+        const isBoardOwner = winner.special === "coordinator";
+        if (isBoardOwner) return null; // board owner may change any task
+        const taskId = String(a.task_id ?? a.taskId ?? a.id ?? "").trim();
+        if (!taskId) return null; // can't resolve which task — don't block
+        const { getTaskAssignedAgent, shouldDeferStatusChange } = await import("./tasks/tasks.server");
+        const assignee = await getTaskAssignedAgent(taskId);
+        if (!assignee) return null; // unassigned/unknown/not-yet-mirrored → fail open
+        if (
+          !shouldDeferStatusChange({
+            toolName,
+            status: a.status,
+            taskId,
+            isBoardOwner,
+            assignee,
+            winnerId: winner.id,
+          })
+        ) {
+          return null;
+        }
+        const owner = AGENT_BY_ID[assignee as AgentId];
+        return {
+          ok: true,
+          deferred: true,
+          assignedTo: assignee,
+          note: `That task is assigned to ${owner?.name ?? assignee}. As ${winner.name} it isn't yours to re-status — defer to ${owner?.name ?? "its assignee"} (or the board owner) to make the change.`,
+        };
+      }
+
       function resolveTaskLane(value: unknown): TaskLane {
         const lane = String(value ?? "")
           .trim()
@@ -2361,6 +2412,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             }
             if (journeyNames.has(c.name)) {
               try {
+                const defer = await maybeDeferStatusChange(c.name, c.arguments);
+                if (defer) {
+                  recordToolUse(
+                    winner.id,
+                    c.name,
+                    `deferred — task assigned to ${defer.assignedTo}, not ${winner.id}`,
+                    true,
+                  );
+                  return JSON.stringify(defer);
+                }
                 const { invokeJourneyTool } = await import("./journey/proxy.functions");
                 const r = await invokeJourneyTool({
                   toolName: c.name,
@@ -3043,6 +3104,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   ),
                   execute: async (args) => {
                     try {
+                      const defer = await maybeDeferStatusChange(def.name, args);
+                      if (defer) {
+                        recordToolUse(
+                          winner.id,
+                          def.name,
+                          `deferred — task assigned to ${defer.assignedTo}, not ${winner.id}`,
+                          true,
+                        );
+                        return JSON.stringify(defer);
+                      }
                       const { invokeJourneyTool } = await import("./journey/proxy.functions");
                       const r = await invokeJourneyTool({
                         toolName: def.name,

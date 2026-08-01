@@ -266,6 +266,43 @@ export async function deleteJourneyTask(id: string): Promise<void> {
   await getPool().query(`DELETE FROM tasks.journey_tasks WHERE id = $1`, [id]);
 }
 
+// Pure decision for the B2 assignee-scoped status guard — separated so it is unit-testable with no DB.
+// TRUE = the change must be DEFERRED (winner is neither the assignee nor the board owner). Fails OPEN
+// (returns false) for everything ambiguous: not update_task, no status field (title/date edits),
+// board owner, no resolvable task id, unassigned/unknown task, or the winner IS the assignee.
+export function shouldDeferStatusChange(input: {
+  toolName: string;
+  status: unknown;
+  taskId: string;
+  isBoardOwner: boolean;
+  assignee: string | null;
+  winnerId: string;
+}): boolean {
+  if (input.toolName !== "update_task") return false;
+  if (input.status == null || String(input.status).trim() === "") return false;
+  if (input.isBoardOwner) return false;
+  if (!input.taskId) return false;
+  if (!input.assignee || input.assignee === input.winnerId) return false;
+  return true;
+}
+
+// The agent a task is assigned to (its `assigned_agent`), or null if unassigned / unknown / not yet
+// mirrored. Read-only, used by the B2 assignee-scoped status-change guard. Returns null (never throws)
+// on any error so the guard can fail OPEN — a DB hiccup must never block a legitimate task update.
+export async function getTaskAssignedAgent(id: string): Promise<string | null> {
+  if (!id) return null;
+  try {
+    await ensureBootstrapped();
+    const r = await getPool().query<{ assigned_agent: string | null }>(
+      `SELECT assigned_agent FROM tasks.journey_tasks WHERE id = $1`,
+      [id],
+    );
+    return r.rows[0]?.assigned_agent ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** A task row shaped for the stand-up report (keeps done/blocked, unlike the scorer feed). */
 export interface StandupTask {
   id: string;
