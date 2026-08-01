@@ -202,7 +202,14 @@ await browser.close();
 console.log("\n=== RESULT ===");
 console.log(JSON.stringify(result, null, 2));
 
-const spoke = result.audioDeltas > 0;
+// WebRTC transport streams audio on the RTP MEDIA TRACK, not as data-channel `output_audio.delta`
+// events (those are the WebSocket transport). So "it spoke" = real audio bytes arrived on the inbound
+// track AND/OR the audio lifecycle events fired — NOT audioDeltas>0. (First run mislabeled a success
+// because it counted data-channel deltas that don't exist over WebRTC.)
+const audioLifecycle = (result.events || []).some(
+  (e) => e === "response.output_audio.done" || e === "output_audio_buffer.started",
+);
+const spoke = result.bytesReceived > 0 || audioLifecycle;
 const toolWorked = result.toolCallSeen && /PINEAPPLE|42/i.test(result.transcript || "");
 console.log("\n=== VERDICT ===");
 console.log(`  SDP status:            ${result.sdpStatus}`);
