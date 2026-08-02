@@ -28,6 +28,17 @@ OpenAI voices. TRUE — but irrelevant, because we do NOT use Realtime's audio o
   "use the hybrid above," NOT "impossible." Do not make the user re-prove this. Code lives in
   `lib/voice/realtime.functions.ts` (text-out mint) + `useVoiceCallRealtimeSpeak.ts` (per-sentence EL TTS).
 
+## HARDENING (2026-08-02): `git add` aborts on a bad pathspec and stages NOTHING → verify the commit actually contains the code
+`git add fileA fileB fileC` where fileC was already `git rm`'d prints `fatal: pathspec … did not match`
+and stages NONE of A/B/C. The subsequent `git commit` then commits only what was already staged. This
+silently shipped a "P1 core" commit (972c990) that contained ONLY a test deletion — the real
+useCeremonyVoice.ts pipeline/splitter/resume code was never staged, never pushed, never deployed — yet
+I told the user "P1 is live." RULE: after committing a code change, VERIFY the code is actually in the
+commit/branch before claiming deployed — `git show HEAD:<file> | grep -c <new-symbol>` and
+`git show origin/main:<file> | grep -c <new-symbol>` must be non-zero. Never trust a commit message; a
+green deploy of a commit that lacks the code is a real false-"done". (Same family as the false-PASS
+harness lesson below: confirm the artifact, not the label.)
+
 ## HARDENING (2026-08-01): a SILENT-device headless harness is NOT proof of real-world voice sensitivity
 Adding `noise_reduction:{type:"near_field"}` + dropping the transcription prompt to the 1:1 Fast (A)
 voice (via the STT-config unification) made the 1:1 FAR more sensitive in the user's REAL environment.
