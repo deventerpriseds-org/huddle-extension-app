@@ -6,6 +6,52 @@
 // consumed, and the bypass flag is in-memory only (no cookie/localStorage backing it). A reload
 // after that point loses auth entirely (confirmed live: sidebar goes from populated to zero
 // buttons post-reload). So avatarImage404s must run LAST — nothing after it can rely on auth.
+// A barge answer must be the agent HEARING the user and responding — never one of the old hardcoded
+// client deferrals. If any of these phrases come back, the canned path is still firing.
+const CANNED_RE =
+  /i'?ll dig into that|take care of it (right )?after we wrap|knock it out as soon as we finish|i'?ll look into that|okay, i'?ll take care of that status|i'?ll get that updated/i;
+
+// Inject ONE barge by typing into the meeting Chat compose during a live ceremony — routeTurn treats a
+// typed message mid-ceremony as a barge (MeetingBar routeTurn → runBargeSequence → real
+// sendHuddleMessage(ceremonyBarge:true)), so this exercises the REAL barge response path (no mic). The
+// barge freezes the round-robin, so the newest transcript turn after it is the agent's answer.
+async function bargeOnce({ page, check, screenshot }, { label, text }) {
+  const turnSel = '[data-testid="transcript-turn"]';
+  const before = await page.locator(turnSel).count();
+  await page.locator('[data-testid="tab-chat"]').click().catch(() => {});
+  await page.waitForTimeout(300);
+  const box = page.locator('textarea[placeholder="Message the room…"]').first();
+  const haveBox = await box.count();
+  if (!haveBox) {
+    check(`Barge (${label}) — compose box present`, false, "no Message-the-room textarea found");
+    return "";
+  }
+  await box.fill(text);
+  await box.press("Enter");
+  // Wait for user row + agent answer row (>= before+2), bounded.
+  let got = false;
+  try {
+    await page.waitForFunction(
+      (b) => document.querySelectorAll('[data-testid="transcript-turn"]').length >= b + 2,
+      before,
+      { timeout: 35000 },
+    );
+    got = true;
+  } catch { /* timed out — capture whatever rendered */ }
+  await page.locator('[data-testid="tab-transcript"]').click().catch(() => {});
+  await page.waitForTimeout(600);
+  await screenshot(`barge-${label}`);
+  const turns = await page.locator(turnSel).allInnerTexts();
+  const reply = (turns[turns.length - 1] || "").replace(/\s+/g, " ").trim();
+  const canned = CANNED_RE.test(reply);
+  check(
+    `Barge (${label}): agent HEARD it and responded (not a canned deferral)`,
+    got && reply.length > 0 && !canned,
+    `reply="${reply.slice(0, 180)}"`,
+  );
+  return reply;
+}
+
 export const checks = [
   async function panelCollapse({ page, check, screenshot }) {
     const sidebarBefore = await page.locator('aside:has-text("EDS workspace")').count();
@@ -141,6 +187,46 @@ export const checks = [
         : `did not reach completion — ${doneError ?? "unknown error"} (${finalTurnCount} turns rendered when this check gave up)`,
     );
     await screenshot("standup-final-state");
+  },
+
+  // BARGE demonstration (user-requested ACs): drive the FOUR barge types through the real code path
+  // and prove each gets a real, heard response — not the old canned "I'll dig into that". Starts a
+  // fresh ceremony (Run again / Start), waits for it to be live, then injects each barge via chat.
+  //   1) quick question   2) tool-requiring   3) status update   4) needs-more-detail (ambiguous)
+  // Mutating barges use Test- titles (cleanup-able); status targets the task the tool barge just made.
+  async function standupBarges({ page, check, screenshot }) {
+    // Ensure a ceremony is live. After standupCeremonyTiming the room shows "Run again" (or "Start").
+    const startOrAgain = page
+      .locator("button", { hasText: /^(Run again|Start)$/ })
+      .first();
+    const canStart = await startOrAgain
+      .waitFor({ state: "visible", timeout: 8000 })
+      .then(() => true)
+      .catch(() => false);
+    check("Barge setup: a ceremony Start/Run-again control is available", canStart);
+    if (!canStart) return;
+
+    const turnSel = '[data-testid="transcript-turn"]';
+    const baseline = await page.locator(turnSel).count();
+    await startOrAgain.click();
+    // Wait until the ceremony is actually producing turns (live) before barging.
+    const live = await page
+      .waitForFunction(
+        (b) => document.querySelectorAll('[data-testid="transcript-turn"]').length > b,
+        baseline,
+        { timeout: 60000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    check("Barge setup: ceremony is live (a turn rendered) before barging", live);
+    if (!live) return;
+    await page.waitForTimeout(1500); // let a scripted speaker be mid-turn so the barge truly interrupts
+
+    await bargeOnce({ page, check, screenshot }, { label: "1-quick-question", text: "Quick question — how many blockers are on the board right now?" });
+    await bargeOnce({ page, check, screenshot }, { label: "2-tool", text: "Add a task called Test-barge-item to my backlog." });
+    await page.waitForTimeout(3000); // let the create propagate so the status barge can resolve it by name
+    await bargeOnce({ page, check, screenshot }, { label: "3-status-update", text: "Mark the Test-barge-item task as done." });
+    await bargeOnce({ page, check, screenshot }, { label: "4-needs-detail", text: "Hey, can you take care of that thing we talked about?" });
   },
 
   // ACT-huddle-2 regression guard: avatars now serve real images from public/agents/*.jpg
