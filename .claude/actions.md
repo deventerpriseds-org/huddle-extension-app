@@ -1293,10 +1293,35 @@ couldn't mark the 40k done. Repeatedly corrected shallow diagnoses (ownership gu
 4. **Separate fix — "board status = tracking, not executing":** a shared clarification so an agent doesn't refuse to
    mark a financial/sensitive card done (ticking the card ≠ moving the money). Fixes the 40k refusal.
 
-**OPEN QUESTIONS (do NOT implement until settled with user):** exact board-gate definition ("what's typically discussed
-in a sprint" — likely active WIP columns; possibly also `board_id`/is_scheduled); the reporting caps for done/backlog;
-whether to adopt the board's real status vs current bucketing; and the tracking-vs-executing clarification wording.
-**STATUS: investigation complete, design drafted, NOT built. Awaiting the user's calls on the open questions.**
+**DECISIONS (user, 2026-08-02):**
+- **The ceremony MUST NOT override the actual board status** — the board's real lanes drive reporting. STOP re-deriving
+  done/up-next/blocked from open-ness (`buildCeremonyReport`); bucket strictly by each task's real status column.
+- **Board-gate = the real lanes:** `UP_NEXT / DOING / IN_REVIEW / BLOCKED`, PLUS **DONE since the last stand-up the user
+  ATTENDED** (not a fixed 36h window). BACKLOG is excluded entirely. → This requires tracking **attendance**: a per-user
+  "last attended stand-up" timestamp; the DONE window = completed_at > that timestamp. (Shares the attendance signal
+  with ACT-huddle-25's EL gate — an unattended/autonomous run must NOT advance "last attended".)
+- Roster-domain routing of a still-unassigned *board* task = secondary refinement (fallthrough is mostly moot once the
+  gate drops raw Backlog).
+
+**STILL OPEN:** the "board status = tracking, not executing" clarification wording (fixes the 40k financial refusal).
+**STATUS: investigation complete, design DECIDED (above), NOT built. Ready to implement on go-ahead — build against the
+board's real status columns + attendance-scoped DONE, no re-derivation.**
+
+### ACT-huddle-25 (created 2026-08-02): don't burn ElevenLabs calls for text-only / unattended ceremonies & tasks
+**Trigger (user):** "make sure we aren't eating ElevenLabs calls for tasks/ceremonies that are all text or that I don't
+attend, so there is no voice being heard by me."
+**Ground-truth:** TTS is synthesized PER SENTENCE at `useCeremonyVoice.ts:198` (`synthesizeSpeech({text,agentId})` →
+`lib/voice/elevenlabs.server.ts` → EL API). The ONLY current gate is `voiceOff` (MeetingBar.tsx:945), which flips true
+only when TTS *fails* → text fallback. `document.visibilityState` is used solely to FLUSH the transcript
+(MeetingBar.tsx:807), NOT to stop synthesis. So a running ceremony synthesizes every sentence via ElevenLabs even when:
+the tab is hidden, the user walked away/isn't focused, or the context is text-only — i.e. voice nobody hears = wasted spend.
+**Scope (audit ALL EL call sites, gate each on "user present AND voice wanted"):**
+- Pause/skip synthesis when `document.visibilityState !== "visible"` (tab hidden / user away) — resume on return.
+- Skip entirely for text-only ceremonies/contexts (no voice mode) and for any run the user is not attending
+  (autonomous/durable/digest ceremonies have no client, but confirm no server-side EL path fires for them).
+- Tie into the ATTENDANCE signal from ACT-huddle-24 (the same "is the user actually here" fact gates both the DONE window
+  and whether we spend EL).
+**Net goal:** ElevenLabs is called ONLY when the user is actually present and listening. STATUS: logged, not built.
 
 ### ACT-huddle-22: "fix everything" batch (2026-08-01) — status
 DEPLOYED + VERIFIED (harness re-run 30714248222): P2-TAVILY USED (real-time web search works, graded on
