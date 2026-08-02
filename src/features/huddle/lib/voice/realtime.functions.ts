@@ -89,10 +89,13 @@ export const getRealtimeSession = createServerFn({ method: "POST" })
           output_modalities: ["text"],
           audio: {
             input: {
-              // Aligned to journey's proven web-voice STT settings (generate-realtime-token): the
-              // mini transcribe model, English pinned, and a domain-vocab prompt to bias STT toward
-              // the terms users actually say. noise_reduction is intentionally omitted (= none), same
-              // as journey.
+              // REVERTED to the 1:1's known-good STT config after the shared-config change made the 1:1
+              // FAR more sensitive in the user's real environment (2026-08-01). The headless harness
+              // (fake silent device, no real speech/ambient noise) could not catch it — do NOT re-apply
+              // noise_reduction/prompt-drop to the 1:1 without a LIVE user confirmation this time.
+              // Aligned to journey's proven web-voice STT: mini transcribe, English pinned, and a
+              // domain-vocab prompt to bias STT toward the terms users actually say. noise_reduction
+              // intentionally omitted (= none), same as journey.
               transcription: {
                 model: "gpt-4o-mini-transcribe",
                 language: "en",

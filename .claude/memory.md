@@ -28,6 +28,20 @@ OpenAI voices. TRUE — but irrelevant, because we do NOT use Realtime's audio o
   "use the hybrid above," NOT "impossible." Do not make the user re-prove this. Code lives in
   `lib/voice/realtime.functions.ts` (text-out mint) + `useVoiceCallRealtimeSpeak.ts` (per-sentence EL TTS).
 
+## HARDENING (2026-08-01): a SILENT-device headless harness is NOT proof of real-world voice sensitivity
+Adding `noise_reduction:{type:"near_field"}` + dropping the transcription prompt to the 1:1 Fast (A)
+voice (via the STT-config unification) made the 1:1 FAR more sensitive in the user's REAL environment.
+The `realtime-1on1-noise-robustness` harness PASSed 0/0/0 — because it drives a fake SILENT audio device
+for 40s: it can only prove "nothing fired during canned silence," NOT how the mic behaves with real
+ambient noise + real speech. I declared success from it; the user's live experience contradicted it and
+they (rightly) noted I had no screenshots/proof. **Rule for voice VAD/noise_reduction/STT changes: the
+USER's live experience is the verdict. A canned-silence headless run is at best a smoke test — never
+report it as "works." Get a live confirmation BEFORE trusting any sensitivity change, and prefer a cheap
+live check over a big unproven config change.** Reverted the 1:1 to its known-good config (mini + en +
+prompt, no near_field); kept the ceremony per the user. The two voice surfaces are intentionally NOT
+unified on STT now (1:1 = prompt/no-near_field; ceremony = near_field/no-prompt) — do NOT re-unify
+without a live OK on BOTH. (`lib/voice/realtime-audio.ts` is ceremony-only.)
+
 ## HARDENING (2026-08-01): phantom-garble = a CONFIG bug (no language pin), not a test artifact — and judge voice on AUDIO, not the transcript row
 Two lessons from live UAT of the stand-up barge fixes:
 1. **A test artifact can BE the real bug — don't suppress it, root-cause it.** The ceremony-barge UAT's

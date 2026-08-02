@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import type { AgentId } from "../data/agents";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import { getRealtimeSession, REALTIME_MODEL } from "../lib/voice/realtime.functions";
+import { realtimeAudioInput } from "../lib/voice/realtime-audio";
 
 // Ceremony voice: OpenAI Realtime WebRTC for VAD + mid-utterance barge detection only.
 // ElevenLabs per-sentence TTS for audio output (existing agent voices).
@@ -370,39 +371,14 @@ export function useCeremonyVoice(hookOpts: {
             type: "session.update",
             session: {
               type: "realtime",
+              // STT/VAD from the SHARED config (realtime-audio.ts) — identical to the 1:1 Fast (A)
+              // voice EXCEPT create_response:false. This is EARS-ONLY: the multi-agent text engine +
+              // router compose the reply (a stand-up is many agents taking turns — one Realtime session
+              // can't be all of them), then EL speaks it per agent. noise_reduction + language pin (no
+              // prompt — it echoes as a phantom barge here) do the anti-garble work. The shared config
+              // is why the ceremony can no longer drift away from the 1:1 and lose the language pin.
               audio: {
-                input: {
-                  // Suppress background noise BEFORE the VAD/STT ever sees it. `near_field` is tuned
-                  // for a laptop/headset mic at desk distance (the actual usage). This is the
-                  // OpenAI-native lever for the reported symptom: keyboard/screenshot/room noise
-                  // being transcribed into gibberish and injected as a phantom barge.
-                  noise_reduction: { type: "near_field" },
-                  // Anti-garble transcription. Without `language`, the model infers it from the audio
-                  // and hallucinates plausible words out of noise (the "gargled text" the user saw) —
-                  // pinning en fixes that. NO `prompt` here on purpose: journey keeps one, but journey
-                  // is Realtime-as-BRAIN (create_response:true) so a prompt echo never surfaces as a
-                  // user barge. This ceremony is EAR-ONLY (create_response:false) — every transcript
-                  // becomes a barge — and a Whisper-style prompt is echoed verbatim on near-silence
-                  // (verified live: the whole prompt string came back as a phantom barge), so priming
-                  // here would MANUFACTURE the very noise it's meant to prevent. Language pin +
-                  // noise_reduction do the anti-garble work; on noise the model now yields nothing to
-                  // inject. mini-transcribe is journey's model (faster/cheaper, noise-robust).
-                  transcription: {
-                    model: "gpt-4o-mini-transcribe",
-                    language: "en",
-                  },
-                  // semantic_vad detects end-of-turn by MEANING (a classifier), not raw audio energy.
-                  // server_vad (energy + fixed silence window) waited on background noise — it never
-                  // saw enough silence to end the turn, so the agent "ignored" the user, and stray
-                  // noise false-triggered barges that superseded the real reply. `medium` matches
-                  // journey (slightly less trigger-happy than `auto`). create_response stays false —
-                  // our own turn engine produces the reply, not the Realtime model.
-                  turn_detection: {
-                    type: "semantic_vad",
-                    eagerness: "medium",
-                    create_response: false,
-                  },
-                },
+                input: realtimeAudioInput({ createResponse: false }),
               },
             },
           }),

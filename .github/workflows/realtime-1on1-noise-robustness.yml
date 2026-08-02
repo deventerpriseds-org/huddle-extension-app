@@ -1,0 +1,52 @@
+name: 1:1 Fast (A) noise-robustness UAT
+
+# Drives a real 1:1 Fast (A) voice call with the fake audio device LIVE (noise source) and speaks
+# nothing, asserting the mic produces no noise-derived transcript and no unprompted agent reply (after
+# a settle window for any connect greeting). The 1:1 counterpart of ceremony-noise-robustness.yml —
+# proves the SHARED STT/VAD config (lib/voice/realtime-audio.ts: noise_reduction + language pin + no
+# prompt) now protects the 1:1 too.
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent_id:
+        description: "1:1 agent to call"
+        required: false
+        default: "flex-grimes"
+      watch_s:
+        description: "Seconds to watch the live mic with no real speech"
+        required: false
+        default: "40"
+
+jobs:
+  noise-robustness-1on1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Run 1:1 noise-robustness UAT
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          AGENT_ID: ${{ github.event.inputs.agent_id }}
+          WATCH_S: ${{ github.event.inputs.watch_s }}
+          SHOT_DIR: realtime-1on1-noise-shots
+        run: node e2e/realtime-1on1-noise-robustness.e2e.mjs
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: realtime-1on1-noise-shots
+          path: realtime-1on1-noise-shots/
+          retention-days: 7
