@@ -284,7 +284,11 @@ export function closerDirective(type: CeremonyType, report: CeremonyReport): str
  *  interjection directly (or acts on it — e.g. files a task), then the relay resumes. Type-agnostic
  *  so it works on a resumed chunk where the ceremony type isn't re-derived. */
 export function bargeDirective(text: string): string {
-  return `\n\nThe user just INTERJECTED during this live ceremony and said: "${text}". Pause and address them directly RIGHT NOW — answer their question, or if they asked to add/track/schedule/change something, use the appropriate tool (e.g. create_huddle_task) to do it and confirm briefly. Keep it to 1–2 sentences. Do NOT give a lane/stand-up update here — the round-robin will resume after you.`;
+  return `\n\nThe user just INTERJECTED during this live ceremony and said: "${text}". They cut in on purpose — HEAR them and respond to THIS specifically, not a script. Open with a brief, natural acknowledgment that reflects what they ACTUALLY said (e.g. "Got it —", "Sure —", "Good catch —"), then in the same breath do exactly what they asked:
+- A question (including about what you were just saying, e.g. "what are you looking into?" / "dig into what?") → ANSWER it directly from the current context.
+- A change/add/track/schedule/status request (e.g. "mark the investor pitch done", "park that item", "add a task") → actually USE the right tool (update_task / create_huddle_task / etc.) to do it, then confirm what you did in board terms.
+- Genuinely unclear → ask ONE short clarifying question.
+Keep it to 1–2 sentences, specific to THEIR words. NEVER reply with a stock filler or a canned deferral like "I'll dig into that" / "I'll take care of it after we wrap" — that ignores what they said. Do NOT resume your lane/stand-up update here; the round-robin resumes after you.`;
 }
 
 /** Narrate mode: Terry runs the whole ceremony solo from the data. */

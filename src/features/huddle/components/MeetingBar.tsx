@@ -18,7 +18,6 @@ import {
   Video,
 } from "lucide-react";
 import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
-import { bargeAckLine, classifyAsk } from "../lib/capabilities";
 import { useHuddleStore, type CeremonyKind, type CeremonyTurn, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
 import { useVoiceCallRealtime } from "../hooks/useVoiceCallRealtime";
@@ -609,8 +608,8 @@ function MeetingRoom({
     // for anything not a "quick-verbal" question and NEVER let the user's words reach the agent, so no
     // matter what the user said they got the same line and direct commands were swallowed. Rolled back
     // 2026-08-02 per a live report (transcript showed repeated "I'll dig into that" over real asks).
-    // Mid-turn tool latency is bounded by the 700ms filler ack + 30s race below — not by refusing to
-    // engage.
+    // Mid-turn latency is bounded by the 30s race below + a silent "…responding" phase indicator —
+    // not by refusing to engage or speaking a canned line.
 
     try {
       const cfg = useBackendsStore.getState().config;
@@ -624,47 +623,32 @@ function MeetingRoom({
       // getTurnUpdates poll) so the answer lands immediately over the frozen speaker. interjections
       // off + soloOnCoverage keep the fan-out to essentially the primary — no pile-on, no stray side
       // effects during a barge. The 30s race guarantees the finally() below always unparks emit().
-      // V-ACK — no dead air. A barge answer can take a few seconds; if it's slow the user is left
-      // wondering "are you there?". If the reply hasn't landed within ~700ms, voice a short natural
-      // acknowledgment ("one moment, let me take a look") so they know they were heard. A FAST answer
-      // (<700ms) skips the filler — quick replies get no precursor. The real answer's speakInterjection
-      // bumps the playback gen and supersedes the filler cleanly; the filler never touches freezeRef,
-      // so resume still returns to the interrupted speaker. Reuse the frozen speaker as the ack voice.
-      const ackVoice = (interrupted as AgentId) || members[0];
-      const ackTimer = window.setTimeout(() => {
-        if (ackVoice) {
-          // P2: type-aware, varied ack that restates the ACTION ("marking that now" / "let me pull
-          // that together") instead of a generic "one moment" — and never says "done" (bargeAckLine).
-          const filler = bargeAckLine(text);
-          void ceremonyVoiceRef.current.speakInterjection(ackVoice, filler, {
-            onSentenceStart: (s) => addMeetingTurns([{ agentId: ackVoice, text: s }]),
-          });
-        }
-      }, 700);
-      let res;
-      try {
-        res = await Promise.race([
-          sendHuddleMessage({
-            data: {
-              text,
-              huddleId: huddleIdRef.current,
-              scope: "group" as const,
-              members,
-              history: buildCeremonyHistory(transcriptRef.current, huddleIdRef.current, text),
-              ceremonyBarge: true,
-              router: { ...cfg.router, interjections: false, soloOnCoverage: true },
-              agents: cfg.agents,
-              caller: callerRef.current,
-              timeZone: tzRef.current,
-            },
-          }),
-          new Promise<never>((_, reject) =>
-            window.setTimeout(() => reject(new Error("barge answer timed out")), 30_000),
-          ),
-        ]);
-      } finally {
-        window.clearTimeout(ackTimer); // answer arrived (or errored) — no filler needed / stop the pending one
-      }
+      // NO canned client-side filler line. The user hears their words reach the agent and get the
+      // agent's OWN reply — the bargeDirective instructs it to open with a brief, natural
+      // acknowledgment ("Got it —") THEN address exactly what was said/asked. A hardcoded line spoken
+      // on a 700ms timer, BEFORE the agent had processed anything, was the "same response no matter
+      // what I say" the user hit (2026-08-02 live report) — removed. A silent "…responding" phase
+      // indicator covers the brief think time without putting words in the agent's mouth.
+      setPhase("Responding…");
+      const res = await Promise.race([
+        sendHuddleMessage({
+          data: {
+            text,
+            huddleId: huddleIdRef.current,
+            scope: "group" as const,
+            members,
+            history: buildCeremonyHistory(transcriptRef.current, huddleIdRef.current, text),
+            ceremonyBarge: true,
+            router: { ...cfg.router, interjections: false, soloOnCoverage: true },
+            agents: cfg.agents,
+            caller: callerRef.current,
+            timeZone: tzRef.current,
+          },
+        }),
+        new Promise<never>((_, reject) =>
+          window.setTimeout(() => reject(new Error("barge answer timed out")), 30_000),
+        ),
+      ]);
       // Surface the routing decision for verification (AC-13): who the router picked and why.
       console.debug(
         "[barge] decision",
