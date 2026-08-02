@@ -31,6 +31,8 @@ jobs:
           UAT_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
           CHECKS_FILE: ${{ github.workspace }}/.claude/skills/test-agent-serverfn/scripts/huddle-checks.mjs
           SHOT_DIR: uat-shots
+          UAT_VIEWPORT_W: '1000'
+          UAT_VIEWPORT_H: '680'
         run: node .claude/skills/test-agent-serverfn/scripts/run-uat.mjs
 
       - name: Upload screenshots + results
@@ -40,3 +42,21 @@ jobs:
           name: uat-shots
           path: uat-shots/
           retention-days: 7
+
+      # CCR sessions can't download the artifact zip (proxy blocks the blob redirect), so also emit
+      # each screenshot as base64 into the job log between markers — the session decodes them from
+      # get_job_logs and can surface them to the user. results.json is printed too.
+      - name: Emit screenshots as base64 into the log
+        if: always()
+        run: |
+          echo "===RESULTS_JSON_START==="
+          cat uat-shots/results.json 2>/dev/null || echo "{}"
+          echo "===RESULTS_JSON_END==="
+          for f in uat-shots/*.png; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f")
+            echo "===SHOT_START:${name}==="
+            base64 -w0 "$f"
+            echo ""
+            echo "===SHOT_END==="
+          done
