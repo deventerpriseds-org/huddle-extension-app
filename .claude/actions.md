@@ -1249,6 +1249,55 @@ BUILD LOG (user wants continuous loop, live-confirm each phase — no harness PA
   greeting cold-start cover, resume-repeat) — their ears are the verdict; NOT marking those "confirmed"
   until they hear it live.
 
+### ACT-huddle-24 (DESIGN, investigating — created 2026-08-02): stand-up should report the BOARD (active WIP), not the whole journey backlog
+**Trigger:** user saw Iris surface personal LIFE tasks ("gym", "Transfer 40k") in the stand-up as her "up next", and
+couldn't mark the 40k done. Repeatedly corrected shallow diagnoses (ownership guard, stale snapshot) — all wrong.
+
+**Ground-truthed findings (all evidence-backed, live/DB):**
+- **NOT the ownership guard.** `maybeDeferStatusChange` exempts `special:"coordinator"` (Iris) AND unassigned tasks
+  (`!assignee → return`), so it can never block her. Confirmed in code + empirically.
+- **Iris CAN change status** — live proof: on real task "Research Slack AI Agents" (`dd49c282`), `update_task ok=true`
+  (up next → to-do, net-zero). Run 30735247928-ish + gym run 91464804467.
+- **The "couldn't mark 40k done" is a MODEL SAFETY REFUSAL on financial tasks, not Iris.** Clean A/B on identical
+  DONE/LIFE/unassigned tasks: GYM ("Go to gym") → `update_task ok=true` twice ("reopened…", "marked done"); 40k
+  ("Transfer 40k") → REFUSED, no `update_task`: *"I cannot mark 'Transfer 40k' as done… ensure it's been executed in
+  your financial systems."* Same agent/lane/status/op — only the content differs. (Job 91464037675 vs 91464804467.)
+- **Why these land on Iris = FALLTHROUGH, not grooming.** DB: gym/40k are `assigned_agent = none`. Grooming
+  (`groom.ts`) only grooms OPEN tasks and assigns BY DOMAIN (would send gym→Flex, transfer→Finn) — it never touched
+  these. They fall through at ceremony time via `ownerForTask = assigned_agent ?? ownerForCategory('LIFE')=iris`
+  (ceremonies.ts:21-44). Open ones get bucketed into her lane's `upNext` by `buildCeremonyReport`.
+- **Root cause of the whole thing = the ceremony has NO board-membership gate.** `getStandupTasks` (tasks.server.ts:328)
+  pulls EVERY open journey task + recently-done (`completed_at IS NULL OR within window`), `LIMIT 1000` — raw ungroomed
+  personal to-dos included — and RE-DERIVES "up next" from open-ness instead of the board's real column. So a task
+  sitting in raw Backlog is narrated as "up next."
+
+**Board mechanics (the definition of "on the board" / what a sprint discusses):**
+- Continuous WIP-limited flow (no fixed sprint entity): `BACKLOG → UP_NEXT (cap 3/agent) → DOING (cap 1) → IN_REVIEW
+  (cap 2) → DONE` (autowork.server.ts:12,46-48). Only **assigned, unblocked** tasks are ever promoted (autowork:207);
+  unassigned tasks (gym/40k) never leave raw BACKLOG.
+- Board columns (BoardView.tsx:27-34): backlog[BACKLOG,TODO,PLANNING] · upnext[READY,UP_NEXT] · doing[DOING] ·
+  review[IN_REVIEW] · blocked[BLOCKED] · done[DONE]. There is a `board_id` field on tasks (tasks.server.ts:45) — another
+  possible membership signal.
+- So **active board = UP_NEXT/DOING/IN_REVIEW/BLOCKED** (capped, assigned-only) — that's "what a stand-up discusses";
+  BACKLOG is a holding area that grows to hundreds and must NOT be enumerated as "up next."
+
+**Design direction (user's 2-step, confirmed by mechanics):**
+1. **Step 1 — board-membership GATE** (before ownership): stand-up includes only tasks actually on the active board
+   (the WIP columns, assigned/promoted), NOT raw Backlog. This drops gym/40k regardless of LIFE→Iris (fallthrough only
+   fires on unassigned tasks, which the gate excludes).
+2. **Step 2 — lanes by owner** over the gated set. (LIFE→Iris fallthrough becomes moot; roster-domain routing of any
+   still-unassigned board task is a secondary refinement.)
+3. **Reporting LIMITS (user flagged): done & backlog grow to hundreds** → cap/window what's reported: recently-DONE
+   capped (top N/agent within window), BACKLOG not enumerated (a count at most), use the board's REAL status not
+   re-derived open-ness.
+4. **Separate fix — "board status = tracking, not executing":** a shared clarification so an agent doesn't refuse to
+   mark a financial/sensitive card done (ticking the card ≠ moving the money). Fixes the 40k refusal.
+
+**OPEN QUESTIONS (do NOT implement until settled with user):** exact board-gate definition ("what's typically discussed
+in a sprint" — likely active WIP columns; possibly also `board_id`/is_scheduled); the reporting caps for done/backlog;
+whether to adopt the board's real status vs current bucketing; and the tracking-vs-executing clarification wording.
+**STATUS: investigation complete, design drafted, NOT built. Awaiting the user's calls on the open questions.**
+
 ### ACT-huddle-22: "fix everything" batch (2026-08-01) — status
 DEPLOYED + VERIFIED (harness re-run 30714248222): P2-TAVILY USED (real-time web search works, graded on
 tool-use channel); D-FALLBACK surfaces tool failures; P1/P3/P3b/P-RETAIN/P-GROUND/P-ACCOUNT all PASS in text.
