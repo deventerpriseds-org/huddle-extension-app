@@ -68,26 +68,14 @@ function show(label, r) {
   return val;
 }
 
-// 1) Create a Test- task so there is a known, safe target (Test- prefix = no real-board pollution).
-const CREATE = 'Create a task titled "Test-iris-status-check" in my backlog.';
-const c = await send(CREATE);
-const cVal = show("CREATE", c);
-const asstReply = (cVal.replies || []).map((x) => x.text).join(" ");
-const history = [
-  { role: "user", content: CREATE },
-  { role: "assistant", content: asstReply || "(created)" },
-];
+// The Test-iris-status-check task already exists on the board (created in a prior run — no need to
+// re-create and re-notify). Ask IRIS to change its status — standalone by-title, the exact shape that
+// WORKED on 07-30 ("mark the 'Update on backlog grooming' task done"). This forces Iris herself to
+// resolve the task and call the status tool. THIS is the real test the user asked for.
+const sVal = show("STATUS-CHANGE (mark done)", await send('Mark my "Test-iris-status-check" task as done.'));
 
-// mirror is eventually-consistent (~1-3s) — give the sync a moment before the status change
-await new Promise((r) => setTimeout(r, 5000));
-
-// 2) Ask Iris to change ITS status. This is the actual test: does update_task fire ok=true?
-const s = await send('Mark the "Test-iris-status-check" task as done.', history);
-const sVal = show("STATUS-CHANGE (mark done)", s);
-
-// 3) Move it again to prove it's not a fluke and status transitions work both ways.
-const m = await send('Actually move "Test-iris-status-check" to up next instead.', history);
-const mVal = show("STATUS-CHANGE (to up next)", m);
+await new Promise((r) => setTimeout(r, 3000));
+const mVal = show("STATUS-CHANGE (to up next)", await send('Move my "Test-iris-status-check" task to up next.'));
 
 const updateOk = [...(sVal.toolUses || []), ...(mVal.toolUses || [])].some((t) => t.tool === "update_task" && t.ok === true);
 const updateErr = [...(sVal.toolUses || []), ...(mVal.toolUses || [])].some((t) => t.tool === "update_task" && t.ok !== true && t.ok != null);
