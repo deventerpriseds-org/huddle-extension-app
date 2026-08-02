@@ -99,7 +99,12 @@ class AudioQueue {
 }
 
 function splitSentences(text: string): string[] {
-  const parts = text.split(/(?<=[.!?;])\s+/);
+  // Split on a sentence-ender OPTIONALLY followed by a closing quote/paren/bracket, then whitespace.
+  // The optional closer is load-bearing: a checklist's items end with the period INSIDE the quote
+  // ("…'Transfer 40k.' Overdue…"), so the `.` is followed by `'`, not a space — the old `[.!?;]\s+`
+  // never split there and the entire checklist collapsed into ONE utterance (so a barge mid-list
+  // dropped every later item). Now each line becomes its own utterance → resume can continue the list.
+  const parts = text.split(/(?<=[.!?;]["'”’)\]]?)\s+/);
   return parts.map((s) => s.trim()).filter(Boolean);
 }
 
@@ -182,24 +187,36 @@ export function useCeremonyVoice(hookOpts: {
       setActiveSpeaker(agentId);
       const sentences = splitSentences(text);
 
+      // PIPELINE (kills the "one sentence at a time" dead space): synthesize sentence N+1 WHILE N is
+      // still playing, instead of serially (finish playing N → THEN synthesize N+1 → gap). We prime
+      // the first sentence's synth, then each iteration kicks off the NEXT synth before awaiting the
+      // current one's playback, so the next clip is ready the instant the current finishes → gapless.
+      // synthOne never throws (returns "" on error, which is skipped). A discarded prefetch after a
+      // barge is harmless (a wasted synth call).
+      const synthOne = async (s: string): Promise<string> => {
+        try {
+          const r = await synthesizeSpeech({ data: { text: s, agentId } });
+          return r.ok ? r.audioBase64 : "";
+        } catch {
+          return "";
+        }
+      };
+      let nextAudioP: Promise<string> =
+        startSentenceIdx < sentences.length ? synthOne(sentences[startSentenceIdx]) : Promise.resolve("");
+
       for (let si = startSentenceIdx; si < sentences.length; si++) {
         if (genRef.current !== gen) return;
         const sentence = sentences[si];
 
-        // Save freeze position BEFORE synthesis — if barge fires during await synthesizeSpeech,
-        // the freeze will correctly point to this sentence. Skipped for a barge answer (trackFreeze=false).
+        // Save freeze position BEFORE playback — if barge fires here, the freeze points to THIS
+        // sentence so resume repeats it and continues the rest. Skipped for a barge answer (trackFreeze=false).
         if (trackFreeze) freezeRef.current = { agentId, text, sentenceIdx: si, onSentenceStart };
 
-        let audio64 = "";
-        try {
-          const spoken = await synthesizeSpeech({ data: { text: sentence, agentId } });
-          if (genRef.current !== gen) return;
-          if (spoken.ok) audio64 = spoken.audioBase64;
-        } catch {
-          // Skip sentence on TTS error
-        }
-
+        const audio64 = await nextAudioP; // this sentence's clip (was prefetched during the previous one)
         if (genRef.current !== gen) return;
+        // Kick off the NEXT sentence's synth NOW so it overlaps this sentence's playback (no gap).
+        nextAudioP = si + 1 < sentences.length ? synthOne(sentences[si + 1]) : Promise.resolve("");
+
         if (!audio64) continue;
 
         // Wait for this sentence's audio to finish playing (or barge to stop the queue).
@@ -265,19 +282,18 @@ export function useCeremonyVoice(hookOpts: {
   );
 
   // ── resumeFromFreeze ──────────────────────────────────────────────────────
-  // Resume the interrupted speaker from the sentence AFTER the one that was cut — NOT from the cut
-  // sentence itself. Re-speaking the interrupted sentence was the "broken record": on each barge the
-  // same line (which the user already heard, then barged over) got re-spoken, and multiple barges on
-  // one block stacked repeats ("Everything's moving smoothly" ×3 in the live call). Continuing from
-  // the next sentence removes the replay and "picks up on to the next item" as intended. If the whole
-  // block was a single sentence, there's nothing left to resume — that's fine (the barge answer stood
-  // in for it). Voice-path change — confirm the feel in a live stand-up.
+  // Resume the interrupted speaker by REPEATING the item that was cut, then continuing the rest of the
+  // list (user's explicit preference — "repeat the last sentence from when it was interrupted, as it
+  // was before, and continue the full list of checklist items"). Restart at `sentenceIdx` (the cut
+  // item), NOT sentenceIdx+1. This is safe/natural now that checklists split per line (splitSentences
+  // fix) — repeating ONE short line re-establishes context; the earlier "broken record" was a whole
+  // run-on line repeating, which the per-line split removes. Voice-path change — confirm live.
   const resumeFromFreeze = useCallback(async () => {
     const saved = freezeRef.current;
     if (!saved) return;
     freezeRef.current = null;
     const gen = genRef.current; // picks up the new gen from after the barge
-    await _voiceTurn(saved.agentId, saved.text, saved.onSentenceStart, gen, saved.sentenceIdx + 1);
+    await _voiceTurn(saved.agentId, saved.text, saved.onSentenceStart, gen, saved.sentenceIdx);
   }, [_voiceTurn]);
 
   const clearFreeze = useCallback(() => {
