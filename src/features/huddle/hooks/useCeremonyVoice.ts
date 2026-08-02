@@ -194,6 +194,11 @@ export function useCeremonyVoice(hookOpts: {
       // synthOne never throws (returns "" on error, which is skipped). A discarded prefetch after a
       // barge is harmless (a wasted synth call).
       const synthOne = async (s: string): Promise<string> => {
+        // COST GUARD: never spend an ElevenLabs call when no one can hear it — the tab is hidden or the
+        // user has switched away. Checked at synth time (per sentence), so voicing resumes on its own the
+        // moment they return, with no visibilitychange listener to leak. Returns "" → treated as no-audio
+        // (transcript still rendered below). Also covers barge answers, which route through _voiceTurn.
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") return "";
         try {
           const r = await synthesizeSpeech({ data: { text: s, agentId } });
           return r.ok ? r.audioBase64 : "";
@@ -217,7 +222,13 @@ export function useCeremonyVoice(hookOpts: {
         // Kick off the NEXT sentence's synth NOW so it overlaps this sentence's playback (no gap).
         nextAudioP = si + 1 < sentences.length ? synthOne(sentences[si + 1]) : Promise.resolve("");
 
-        if (!audio64) continue;
+        // No audio for this sentence — either a synth error OR it was suppressed while the tab was hidden
+        // (no ElevenLabs spend). Still render the transcript line so a returning user sees what was said,
+        // then continue live. Voicing resumes automatically on the next sentence once the tab is visible.
+        if (!audio64) {
+          onSentenceStart(sentence, si, sentences.length);
+          continue;
+        }
 
         // Wait for this sentence's audio to finish playing (or barge to stop the queue).
         await new Promise<void>((resolve) => {
