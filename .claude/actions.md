@@ -1306,7 +1306,23 @@ couldn't mark the 40k done. Repeatedly corrected shallow diagnoses (ownership gu
 
 **DECIDED (user, 2026-08-02):** ALSO include the "board status = tracking, not executing" clarification (shared layer) —
 updating a card's status is TRACKING, not performing the underlying real-world action; fixes the 40k financial refusal.
-**STATUS: investigation complete, ALL design decisions made, NOT built. Ready to implement on the user's go-ahead.**
+**BUILT + DEPLOYED (2026-08-02, user go-ahead given):**
+- Part 1 (f3fc9ad): `buildCeremonyReport` buckets by REAL board status (`boardLaneFor`), surfaces active WIP +
+  DONE-this-week (window unified: standup 36h→168h so fetch==report window), excludes raw BACKLOG; all LaneReport
+  consumers migrated off `overdue`. Offline proof `scripts/ceremony-board-report.test.mjs` **21/21**.
+- Part 4 (fb0120d): additive "card status = tracking, not executing" in shared `taskToolInstructions` (both dispatch
+  paths). LIVE-VERIFIED: the financial refusal is GONE — across 3 post-deploy runs Iris no longer says "ensure it's
+  executed in your financial systems"; she treats a financial card as a normal look-up-and-mark (jobs 91470330878 /
+  91470566829). Gym control (91464804467) marks done ok; only DONE/unresolved tasks fail on lookup, not on refusal.
+- Part 3 (fe2e311): `useCeremonyVoice._voiceTurn` skips `synthesizeSpeech` when `document.visibilityState!="visible"`
+  (no EL spend when unheard); transcript still renders; resumes on return; no listener → no leak. tsc clean.
+- Deployed via deploy-swa on main (fe2e311). ACs written by an independent subagent (34 ACs); build satisfies the
+  offline ones; Parts 1/4 evidenced live; Part 3 is the USER's live/ears verdict per the perceptual-UAT rule.
+**FOLLOW-UP (separate, pre-existing — logged, not in this build's scope):** `get_tasks`/resolution SCOPE — the lookup
+returns scheduled/active tasks, so a DONE or fresh-unscheduled-backlog task can't be resolved by the agent to update
+it. This (not any refusal/guard) is why marking a DONE or brand-new card by title can fail. Worth widening the lookup.
+**HOUSEKEEPING owed:** remove stray test rows I created (`Check status of Test Iris` fa43588e — malformed status/no
+Test- prefix; `Test-wire 5000 dollars to vendor`) — DEFERRED pending user OK (destructive on the live board).
 
 ### ACT-huddle-25 (created 2026-08-02): don't burn ElevenLabs calls for text-only / unattended ceremonies & tasks
 **Trigger (user):** "make sure we aren't eating ElevenLabs calls for tasks/ceremonies that are all text or that I don't
@@ -1322,7 +1338,9 @@ the tab is hidden, the user walked away/isn't focused, or the context is text-on
   (autonomous/durable/digest ceremonies have no client, but confirm no server-side EL path fires for them).
 - Tie into the ATTENDANCE signal from ACT-huddle-24 (the same "is the user actually here" fact gates both the DONE window
   and whether we spend EL).
-**Net goal:** ElevenLabs is called ONLY when the user is actually present and listening. STATUS: logged, not built.
+**Net goal:** ElevenLabs is called ONLY when the user is actually present and listening. STATUS: BUILT + DEPLOYED
+(2026-08-02, commit fe2e311) — `_voiceTurn`'s `synthOne` gates on `document.visibilityState`. Live/ears verdict is
+the user's (perceptual-UAT rule): confirm no voice plays when the tab is hidden and it resumes on return.
 
 ### ACT-huddle-22: "fix everything" batch (2026-08-01) — status
 DEPLOYED + VERIFIED (harness re-run 30714248222): P2-TAVILY USED (real-time web search works, graded on
