@@ -74,7 +74,7 @@ function show(label, r) {
 // currently DONE — well-formed status). Reopen then re-close = net-zero, exercises update_task twice.
 // Tests whether Iris can resolve + change a DONE LIFE task (the exact scenario she was accused of
 // failing). If get_tasks only returns OPEN tasks, resolution — not the guard — is the limiter.
-const TARGET = "Transfer 40k";
+const TARGET = "Go to gym"; // CONTROL: a DONE LIFE task like the 40k, but NON-financial content
 const sVal = show("STATUS-CHANGE (reopen → up next)", await send(`Reopen my "${TARGET}" task — move it to up next.`));
 
 await new Promise((r) => setTimeout(r, 4000));
