@@ -1193,8 +1193,21 @@ BUILD LOG (user wants continuous loop, live-confirm each phase — no harness PA
   which dropped items). Offline resume-checklist 7/7 (Iris string 1->4 lines; resume [0,1,1,2,3,4]).
   1.4-1.6 host greeting (standupGreeting varied client-side template) covers ~15s cold start, fired
   after enqueue, emit awaits it. Deployed via deploy-swa on main. NEEDS live stand-up confirm.
-- P2 (ownership-aware varied ack), P3 (queue+DOING-lane-huddle-side+buzz), P4 (override+offer-next),
-  X.1 (journey-tool-failed root cause) = NEXT.
+- **P1 CORE CORRECTION (2026-08-02):** commit 972c990 "P1 core" only DELETED a test — git add aborted on
+  a bad pathspec + staged nothing, so pipeline/splitter/resume were NEVER in main/deploy despite me
+  saying "live". Redone in 86463b8 (verified origin/main has synthOne×4 + splitter + sentenceIdx); deploy
+  bh1zfcr05 success. Hardening logged (memory): verify code is in the commit/branch before claiming deployed.
+- **P2 DONE (deployed)** commit 00eb517: bargeAckLine(text) type-aware varied ack (fast-action→'marking
+  that now', slow→'let me pull that together'), NEVER says 'done'. Wired into runBargeSequence. Offline
+  barge-ack 7/7. LIVE-confirm the feel.
+- **X.1 diagnosed (needs repro for exact r.error):** Iris's "journey tool failed" is NOT the ownership
+  guard (that returns a "deferred" result, huddle.functions.ts:2428-2436) — it was the JOURNEY-SIDE tool
+  call erroring (r.error at :2460, only the generic label persisted to the transcript). Design implication
+  is already firm: P3 must route queued work to the task's real OWNER + never leave a failed task lost
+  (keep/retry/never-say-done). Exact r.error = a reproduction run (test-agent-serverfn) — TODO.
+- P3 (post-ceremony work queue → durable dm-<owner> turns via enqueueHuddleTurn + buzz; Huddle-side DOING
+  lane + retry) and P4 (override + offer-next) = NEXT. NOTE: P3 owner-routing + DOING-lane store are the
+  large server-side remainder; much of P3/P4 is only provable via live end-to-end UAT (journey integration).
 
 ### ACT-huddle-22: "fix everything" batch (2026-08-01) — status
 DEPLOYED + VERIFIED (harness re-run 30714248222): P2-TAVILY USED (real-time web search works, graded on
