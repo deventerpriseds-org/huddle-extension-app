@@ -261,6 +261,24 @@ pipeline nor added to the nightly builder queue. Figure out how we can achieve t
   work pipeline (BACKLOG→UP_NEXT→DOING promotion + auto-research turns), (b) any Huddle-scheduled/
   cadence job that would act on it, and (c) journey's nightly scheduling/planner run. It should never be
   silently picked up and pushed forward again once tagged.
+**BUILT + DEPLOYED 2026-08-02 (corrected scope: tag on card, NO new lane — user: "parking lot is
+supposed to be a tag… the backlog lane is fine"):**
+- **Tags already render on cards** (`BoardView.BoardCard` — `<Badge>` per tag) — so parking-lot needed
+  NO new display. ADDED: per-tag remove (×), a `+ tag` inline input, and a **"Parking lot" card-menu
+  item** that applies the `parking-lot` tag AND moves the card to `BACKLOG` in one step (toggles off);
+  parking-lot badge styled amber. Wired through the EXISTING `updateBoardTask` → journey `update_task`
+  (extended to accept `tags`) — no parallel system. (`36ef10f`)
+- **Exclusion from Huddle automation:** `autowork.server.ts` filters `!(tags).includes('parking-lot')`
+  at candidate selection — a parked task never promotes or enqueues a work turn. (`8010e7a`)
+- **Exclusion from journey nightly:** `nightly-schedule-builder` adds `.not('tags','cs','{parking-lot}')`
+  to all 3 candidate queries. Deployed. `public.tasks.tags` is NOT NULL default `'{}'`, so the
+  `NOT(tags @> …)`-drops-NULL footgun does NOT apply here (verified: 0 null rows; parked→excluded,
+  `'{}'`→included). (journey `24dca6a`)
+- **Agent action:** `taskToolInstructions` gains a PARKING LOT directive so "parking lot this" sets
+  BACKLOG + adds the tag via `update_task`. (`8010e7a`)
+- **STATUS: deployed, mechanism/SQL verified; NOT yet user-confirmed live.** Remaining to confirm: the
+  card `+ tag` / Parking-lot menu actually persists + shows the badge (Playwright board check or user),
+  and a parked task is skipped by an autowork pass.
 **Investigation already done this session (extend, don't duplicate — real prior art exists):**
 - **Tagging is NOT a new concept — `tags TEXT[]` already exists** on `tasks.journey_tasks`
   (`tasks.server.ts:48,56`), already synced from journey's grooming write-back, already used for at
