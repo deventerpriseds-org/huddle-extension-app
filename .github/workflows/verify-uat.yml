@@ -43,20 +43,17 @@ jobs:
           path: uat-shots/
           retention-days: 7
 
-      # CCR sessions can't download the artifact zip (proxy blocks the blob redirect), so also emit
-      # each screenshot as base64 into the job log between markers — the session decodes them from
-      # get_job_logs and can surface them to the user. results.json is printed too.
-      - name: Emit screenshots as base64 into the log
+      # CCR sessions can't download the artifact zip (proxy blocks the blob redirect), so publish the
+      # shots to a throwaway orphan branch the session CAN reach via git (the git proxy works). The
+      # session `git fetch origin uat-shots` and reads the PNGs + results.json straight off disk — no
+      # base64-through-logs context bloat. Force-pushed each run; safe to delete anytime.
+      - name: Publish shots to uat-shots branch
         if: always()
         run: |
-          echo "===RESULTS_JSON_START==="
-          cat uat-shots/results.json 2>/dev/null || echo "{}"
-          echo "===RESULTS_JSON_END==="
-          for f in uat-shots/*.png; do
-            [ -f "$f" ] || continue
-            name=$(basename "$f")
-            echo "===SHOT_START:${name}==="
-            base64 -w0 "$f"
-            echo ""
-            echo "===SHOT_END==="
-          done
+          git config user.email "actions@github.com"
+          git config user.name "gha-uat"
+          git checkout --orphan uat-shots
+          git reset >/dev/null 2>&1 || true
+          git add -f uat-shots/*.png uat-shots/results.json
+          git commit -q -m "uat shots — run ${{ github.run_id }}" || { echo "no shots to commit"; exit 0; }
+          git push -f origin uat-shots
