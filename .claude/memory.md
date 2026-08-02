@@ -734,15 +734,17 @@ hidden in the default Transcript view — cutting into a live ceremony needs a t
      `args.tags`, execute-tool:910), (b) EXCLUDE `'parking-lot' = ANY(tags)` from autowork candidate
      selection + journey nightly. Display is FREE (badge already renders). The Backlog lane is the home —
      no new lane, no new tag UI. (Earlier "Core + board lane" plan was over-built — dropped.)
-  2. **NEVER create real tasks to test barges.** A Playwright UI barge test that says "add a task…"
-     CREATES a real task on the live board (the browser uses the live user; journey is ON). This
-     polluted the board with "Test barge item" (deleted). The existing harness
-     `.claude/skills/test-agent-serverfn/scripts/ceremony-barge-test.mjs` runs with
-     `agents[*].journey:{enabled:false}` precisely so barges never write, fires the barge via the
-     `FN_BARGE` server fn, POLLS for the answer and matches it by CONTENT regex (not last-row), and
-     tests dedup + no-drop + no-1:1-spill. Barge tests MUST follow that pattern: journey-disabled or a
-     read-only ask. Playwright barge visuals should use NON-mutating texts; mutating tool/status barge
-     RESPONSES are proven via the journey-disabled harness.
+  2. **Test cards from barge tests are OK — for realism — BUT `Test-` prefixed AND cleaned up (user
+     preference, 2026-08-02).** The user does NOT mind a barge test creating real board cards (a
+     mutating tool/status barge is more realistic than journey-disabled), on TWO conditions: (a) the
+     created title carries a clear `Test-` prefix so cleanup can find it, and (b) the session ALWAYS
+     cleans up afterward — "don't forget to do so." (Note: the agent may STRIP the hyphen — my
+     "Test-barge-item" landed as "Test barge item", category LIFE — so the cleanup match must be loose,
+     e.g. `title ILIKE '%barge%'`, not exact.) Cleanup = delete the test rows from journey
+     `public.tasks` via Supabase MCP after the run (user a3378f93-…). The alternative journey-disabled
+     pattern (harness `ceremony-barge-test.mjs`, `agents[*].journey:{enabled:false}`, poll+content-match
+     for the answer, dedup/no-drop/no-spill ACs) is still the model for a PURE-routing barge test that
+     shouldn't write at all — but per the user, realistic write-through with prefix+cleanup is fine.
   3. **Playwright barge injection path (works):** typing in the meeting Chat compose
      (`textarea[placeholder="Message the room…"]` under `[data-testid="tab-chat"]`, Enter to send)
      DURING a live ceremony is treated as a barge — `MeetingBar.routeTurn` (isCeremony && status===
