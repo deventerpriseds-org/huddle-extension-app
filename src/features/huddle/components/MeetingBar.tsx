@@ -18,7 +18,7 @@ import {
   Video,
 } from "lucide-react";
 import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
-import { bargeAckLine } from "../lib/capabilities";
+import { bargeAckLine, classifyAsk } from "../lib/capabilities";
 import { useHuddleStore, type CeremonyKind, type CeremonyTurn, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
 import { useVoiceCallRealtime } from "../hooks/useVoiceCallRealtime";
@@ -166,6 +166,28 @@ function standupGreeting(): string {
     "we'll begin once everyone's present.",
   ]);
   return `${open} ${gather} — ${start}`;
+}
+
+// Which agent did the user address in a barge ("Iris, mark X done")? Prefer a leading first-name, else
+// any member's first name in the text. Null → none named (caller falls back to the frozen speaker).
+// Lightweight client-side resolution; the server router does the authoritative addressed-by-name pick.
+function resolveAddressed(text: string, members: AgentId[]): AgentId | null {
+  const t = text.trim().toLowerCase();
+  const first = (id: AgentId) => (AGENT_BY_ID[id]?.name.split(" ")[0] ?? "").toLowerCase();
+  const byLead = members.find((id) => first(id) && new RegExp(`^${first(id)}\\b`).test(t));
+  if (byLead) return byLead;
+  return members.find((id) => first(id) && new RegExp(`\\b${first(id)}\\b`).test(t)) ?? null;
+}
+
+// The "I'll do it after the call" clause appended when a task is QUEUED (not run live). Varied.
+function deferClause(): string {
+  const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+  return pick([
+    "I'll take care of it right after we wrap.",
+    "I'll knock it out as soon as we finish here.",
+    "I'll handle it right after the stand-up.",
+    "Consider it queued — I'll get to it the moment we're done.",
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +442,10 @@ function MeetingRoom({
   // stand-up context as `history` on the barge turn without a stale closure.
   const transcriptRef = useRef(meeting.transcript);
   transcriptRef.current = meeting.transcript;
+  // P3 — tasks the user hands out DURING the stand-up are captured here and flushed as autonomous
+  // durable turns when the ceremony ENDS (not run live, so the room isn't blocked for 10-15s). A quick
+  // question or an explicit "now" bypasses this and answers live. Idempotent-keyed on flush.
+  const ceremonyWorkQueueRef = useRef<{ text: string; agentId: AgentId }[]>([]);
 
   // --- Durable ceremony-transcript persistence (Azure PG `chat.ceremony_transcript`) ---------------
   // The live transcript lives ONLY in ephemeral zustand (meeting.transcript, no persist middleware),
@@ -518,6 +544,39 @@ function MeetingRoom({
         interrupted: true,
         ts: Date.now(),
       });
+    }
+
+    // P3: classify the barge. A TASK that isn't a quick question and isn't explicitly "now" is QUEUED
+    // for after the stand-up (run autonomously) rather than executed live — which blocks the room for
+    // ~10-15s (the exact dead air the user hit when Sam/Iris ran tools mid-call). The addressed agent
+    // acks + says it'll handle it after, the interrupted speaker resumes, and the room keeps moving.
+    // Quick questions and "now" fall through to the live answer below.
+    const asked = classifyAsk(text);
+    const addressed = resolveAddressed(text, members) ?? (interrupted as AgentId) ?? members[0];
+    if (asked.type !== "quick-verbal" && asked.urgency !== "now") {
+      try {
+        const ackLine = `${bargeAckLine(text)} ${deferClause()}`;
+        await ceremonyVoiceRef.current.speakInterjection(addressed, ackLine, {
+          onSentenceStart: (s) => {
+            addMeetingTurns([{ agentId: addressed, text: s }]);
+            persistCeremonyTurnRef.current({ speaker: "agent", agentId: addressed, text: s, kind: "ack-queued", ts: Date.now() });
+          },
+        });
+        const key = `${addressed}|${text.trim().toLowerCase()}`;
+        if (!ceremonyWorkQueueRef.current.some((w) => `${w.agentId}|${w.text.trim().toLowerCase()}` === key)) {
+          ceremonyWorkQueueRef.current.push({ text, agentId: addressed });
+        }
+        await ceremonyVoiceRef.current.resumeFromFreeze();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't queue that just now.");
+      } finally {
+        if (bargeGenRef.current === myGen) {
+          bargeHandlingRef.current = false;
+          bargeActiveRef.current = false;
+          setPhase("");
+        }
+      }
+      return;
     }
 
     try {
@@ -826,6 +885,7 @@ function MeetingRoom({
     // Reset barge state at ceremony start.
     spokenCountRef.current = 0;
     bargeActiveRef.current = false;
+    ceremonyWorkQueueRef.current = []; // P3: fresh per-run task queue
 
     // Mint a fresh run id + reset the durable-transcript cursor/buffer for this run.
     runIdRef.current = crypto.randomUUID();
@@ -1007,6 +1067,37 @@ function MeetingRoom({
       setPhase("");
       patchMeeting({ ceremonyStatus: "done" });
       flushCeremonyTranscript();
+      // P3: the stand-up is over — fire each queued task as an autonomous DURABLE turn in the addressed
+      // agent's DM (reusing enqueueTurn/kickNextChunk + its send_push buzz on completion). The agent's
+      // own ownership-handoff logic re-routes anything that isn't theirs; the directive forbids claiming
+      // "done" unless it actually completed and says to retry on tool failure (so nothing is lost).
+      // Idempotent turnId keeps a re-run from double-firing.
+      const workQueue = ceremonyWorkQueueRef.current.splice(0);
+      for (const item of workQueue) {
+        const slug = item.text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
+        const workTurnId = `standup-work-${runIdRef.current}-${item.agentId}-${slug}`;
+        const directive =
+          `During the stand-up you were asked to handle this: "${item.text}". Take care of it now — use whatever tool it needs. ` +
+          `If it isn't yours to do, hand it to the right owner. If a tool fails, keep it and retry, and tell me it's still in progress — ` +
+          `do NOT say it's done unless it actually completed. Then confirm the outcome.`;
+        void enqueueHuddleTurn({
+          data: {
+            text: directive,
+            huddleId: `dm-${item.agentId}`,
+            scope: "one-to-one" as const,
+            members: [item.agentId],
+            history: [],
+            router: cfg.router,
+            agents: cfg.agents,
+            caller,
+            timeZone: tz,
+            turnId: workTurnId,
+            notify: "push",
+          },
+        }).catch(() => {
+          /* a queued-work enqueue failure must never break ceremony teardown */
+        });
+      }
     } catch (err) {
       setPhase("");
       activeCeremonyTurnRef.current = null;
