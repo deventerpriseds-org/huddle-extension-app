@@ -28,27 +28,39 @@ async function bargeOnce({ page, check, screenshot }, { label, text }) {
   }
   await box.fill(text);
   await box.press("Enter");
-  // Wait for user row + agent answer row (>= before+2), bounded.
+  // A barge FREEZES the round-robin (bargeFreeze parks emit), so the transcript order is:
+  //   [before] = the user's barge row, [before+1] = the agent's ANSWER to it.
+  // Wait for that specific answer row — NOT just "+2 turns" (the ceremony's own scripted turns can
+  // satisfy +2 and make us fire the next barge before the agent responds: the user-reported rapid-fire).
   let got = false;
   try {
     await page.waitForFunction(
       (b) => document.querySelectorAll('[data-testid="transcript-turn"]').length >= b + 2,
       before,
-      { timeout: 35000 },
+      { timeout: 45000 },
     );
     got = true;
   } catch { /* timed out — capture whatever rendered */ }
+  // Read the ANSWER at index before+1 (right after the user's barge row), before the round-robin resumes.
+  const turnsNow = await page.locator(turnSel).allInnerTexts();
+  const reply = (turnsNow[before + 1] || turnsNow[turnsNow.length - 1] || "").replace(/\s+/g, " ").trim();
   await page.locator('[data-testid="tab-transcript"]').click().catch(() => {});
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(500);
   await screenshot(`barge-${label}`);
-  const turns = await page.locator(turnSel).allInnerTexts();
-  const reply = (turns[turns.length - 1] || "").replace(/\s+/g, " ").trim();
   const canned = CANNED_RE.test(reply);
   check(
     `Barge (${label}): agent HEARD it and responded (not a canned deferral)`,
     got && reply.length > 0 && !canned,
     `reply="${reply.slice(0, 180)}"`,
   );
+  // Let the answer finish + the round-robin RESUME before the next barge — do NOT rapid-fire over the
+  // agent (the exact bug the user flagged). Wait for the transcript to add at least one more turn
+  // (resume) or a bounded settle, whichever first.
+  const afterAnswer = await page.locator(turnSel).count();
+  await page
+    .waitForFunction((n) => document.querySelectorAll('[data-testid="transcript-turn"]').length > n, afterAnswer, { timeout: 12000 })
+    .catch(() => {});
+  await page.waitForTimeout(2500);
   return reply;
 }
 
