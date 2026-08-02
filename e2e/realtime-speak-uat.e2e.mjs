@@ -267,10 +267,10 @@ async function runAgent(agentSpec, engine) {
         serverFnBodies.push(head);               // getRealtimeSession mint (connect)
         kind = "mint";
         if (QUOTA_RE.test(head)) quotaHit = head.slice(0, 300);
-      } else if (body.length < 90 && /\bok\b|"ok"/.test(body) && !/output|function/.test(body)) {
-        // warmupRealtime returns just {ok:boolean} — tiny body, no secret/audio/output. Best-effort match;
-        // the raw serverFnLog below is the ground truth we actually read to confirm it fired on open.
-        warmupCalls++; if (warmupFirstAt == null) warmupFirstAt = now; kind = "warmup?";
+      } else if (/"k":\["ok"\]/.test(body)) {
+        // warmupRealtime resolves to exactly {ok:boolean} → its seroval keys array is ["ok"] alone.
+        // The mint is ["ok","clientSecret"] and synth carries audioBase64, so this precisely tags warmup.
+        warmupCalls++; if (warmupFirstAt == null) warmupFirstAt = now; kind = "warmup";
       }
       serverFnLog.push({ t: now, len: body.length, kind });
     }
