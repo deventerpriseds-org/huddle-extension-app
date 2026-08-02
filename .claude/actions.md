@@ -1303,9 +1303,9 @@ couldn't mark the 40k done. Repeatedly corrected shallow diagnoses (ownership gu
 - Roster-domain routing of a still-unassigned *board* task = secondary refinement (fallthrough is mostly moot once the
   gate drops raw Backlog).
 
-**STILL OPEN:** the "board status = tracking, not executing" clarification wording (fixes the 40k financial refusal).
-**STATUS: investigation complete, design DECIDED (above), NOT built. Ready to implement on go-ahead — build against the
-board's real status columns + attendance-scoped DONE, no re-derivation.**
+**DECIDED (user, 2026-08-02):** ALSO include the "board status = tracking, not executing" clarification (shared layer) —
+updating a card's status is TRACKING, not performing the underlying real-world action; fixes the 40k financial refusal.
+**STATUS: investigation complete, ALL design decisions made, NOT built. Ready to implement on the user's go-ahead.**
 
 ### ACT-huddle-25 (created 2026-08-02): don't burn ElevenLabs calls for text-only / unattended ceremonies & tasks
 **Trigger (user):** "make sure we aren't eating ElevenLabs calls for tasks/ceremonies that are all text or that I don't
