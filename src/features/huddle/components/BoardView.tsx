@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck, X, Plus } from "lucide-react";
+import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck, X, Plus, PauseCircle } from "lucide-react";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import type { BoardTaskRow } from "../lib/tasks/tasks.server";
@@ -62,7 +62,13 @@ function laneKeyFor(t: BoardTaskRow, groupBy: GroupBy): string {
   return "__all";
 }
 
+const isParked = (t: BoardTaskRow) => (t.tags ?? []).includes("parking-lot");
+
 function rankSort(a: BoardTaskRow, b: BoardTaskRow): number {
+  // Parked tasks are paused — sink them to the bottom of every lane regardless of rank/priority.
+  const pkA = isParked(a) ? 1 : 0;
+  const pkB = isParked(b) ? 1 : 0;
+  if (pkA !== pkB) return pkA - pkB;
   const ra = a.priority_rank ?? 9999;
   const rb = b.priority_rank ?? 9999;
   if (ra !== rb) return ra - rb;
@@ -165,6 +171,9 @@ export function BoardView() {
     });
   }, [tasks, assigneeFilter, tagFilter]);
 
+  // Parked tasks are paused (excluded from all automation) — surface a count so they aren't invisible.
+  const parkedCount = useMemo(() => tasks.filter(isParked).length, [tasks]);
+
   // Ordered swimlanes for the current grouping.
   const lanes = useMemo<Lane[]>(() => {
     if (groupBy === "none") return [{ key: "__all", label: "", agent: undefined }];
@@ -258,7 +267,13 @@ export function BoardView() {
         <header className="flex flex-wrap items-center gap-2 border-b border-hairline bg-surface px-4 py-2.5 sm:px-6">
           <div className="mr-2">
             <h1 className="text-sm font-semibold">Board</h1>
-            <p className="text-[11px] text-muted-foreground">{filtered.length} tasks · drag to reassign or move</p>
+            <p className="text-[11px] text-muted-foreground">
+              {filtered.length} tasks
+              {parkedCount > 0 && (
+                <> · <span className="text-amber-600 dark:text-amber-400">{parkedCount} parked</span></>
+              )}
+              {" · drag to reassign or move"}
+            </p>
           </div>
 
           {/* Group-by */}
@@ -315,6 +330,7 @@ export function BoardView() {
                     "rounded-full border px-2 py-0.5 text-[11px] transition",
                     tagFilter.has(tag) ? "border-primary bg-primary/10 text-foreground" : "border-hairline text-muted-foreground hover:bg-muted",
                     /blocked|capability/.test(tag) && !tagFilter.has(tag) && "text-destructive",
+                    tag === "parking-lot" && !tagFilter.has(tag) && "border-amber-500/40 text-amber-600 dark:text-amber-400",
                   )}
                 >
                   {tag}
@@ -537,6 +553,7 @@ function BoardCard({
         "relative overflow-hidden rounded-lg border border-hairline bg-card shadow-soft",
         draggable && "cursor-grab active:cursor-grabbing",
         fullWidth && "w-full",
+        parked && "opacity-60 saturate-50", // paused — de-emphasized vs active work
       )}
     >
       <div className="flex">
@@ -598,7 +615,12 @@ function BoardCard({
               </DropdownMenu>
             </div>
           )}
-          <div className={cn("text-[13px] font-medium leading-snug", onMove && "pr-6")}>{task.title}</div>
+          <div className={cn("flex items-start gap-1 text-[13px] font-medium leading-snug", onMove && "pr-6")}>
+            {parked && (
+              <PauseCircle size={13} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" aria-label="Parked — automation paused" />
+            )}
+            <span className="min-w-0">{task.title}</span>
+          </div>
           {(tags.length > 0 || onMove) && (
             <div className="mt-1.5 flex flex-wrap items-center gap-1">
               {tags.slice(0, 4).map((tag) => (
