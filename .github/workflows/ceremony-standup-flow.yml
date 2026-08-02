@@ -1,0 +1,43 @@
+name: Ceremony stand-up flow UAT (P3 queue-by-default)
+
+# End-to-end Playwright test of the P3 queue-by-default barge decision on the deployed app:
+#   - a TASK barge mid-ceremony is ACKNOWLEDGED + QUEUED (no live 10-15s answer), while
+#   - a QUICK question is answered LIVE.
+# Observed from durable transcript rows (data-testid contract). OAI Realtime SDP is blocked and
+# the mic is killed (typed-barge test) — the same runBargeSequence handles typed and spoken barges.
+# This proves the routing DECISION reached the deployed runtime; the audio "feel" (P1 gapless /
+# greeting) and the post-ceremony work-turn buzz are the user's ears / a DB check, not this harness.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  standup-flow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Run stand-up flow E2E (P3 queue-by-default)
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          SHOT_DIR: standup-flow-shots
+        run: node e2e/ceremony-standup-flow.e2e.mjs
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: standup-flow-shots
+          path: standup-flow-shots/
+          retention-days: 7
