@@ -76,14 +76,46 @@ const INFORM_RE: RegExp[] = [
   /^the .{1,50} (is|has been|was) (done|finished|complete|ready|sorted|resolved|set up|updated)[!.]*$/i,
 ];
 
+// Conversational preambles that carry NO intent. A natural barge often opens with one
+// ("quick question — what day is it?", "hey Sam, …", "sorry to interrupt, …"). The ^-anchored
+// intent patterns above would otherwise miss the real ask hiding AFTER the filler and fall
+// through to the "perform"/"slow" default — which is exactly what mis-QUEUED a live question in
+// a stand-up (observed: "quick question — what day is it today?" → deferred instead of answered).
+// Stripping the filler before matching fixes it for EVERY intent consumer, not just the barge.
+const PREAMBLE_RE =
+  /^\s*(?:(?:hey|hi|hello|yo|ok|okay|so|well|um+|uh+|erm|actually|alright)\b|(?:sorry(?:\s+to\s+interrupt)?|excuse me|pardon(?:\s+me)?)|(?:quick question|one quick (?:thing|question)|real quick|quick one|got a (?:quick )?(?:q|question)|just wondering|question)|(?:hey|hi|hello)\s+[a-z]+)\s*[,.!:—–-]*\s*/i;
+
+// Agent first names, derived from the roster (data-driven, never hardcoded) — a leading vocative
+// ("Finn, is the transfer done?") defeats the ^-anchors the same way a filler does; the addressee
+// is resolved separately (resolveAddressed), so dropping it for CLASSIFICATION only is safe.
+const AGENT_FIRST_NAMES = new Set(AGENTS.map((a) => a.name.split(/\s+/)[0].toLowerCase()));
+function stripLeadingVocative(t: string): string {
+  const m = /^([a-z]+)\s*[,:]\s+(.+)/i.exec(t);
+  if (m && AGENT_FIRST_NAMES.has(m[1].toLowerCase()) && m[2].trim()) return m[2].trim();
+  return t;
+}
+
+// Peel leading fillers + a vocative (a few times: "hey Finn, quick question — is it done?") so the
+// real ask reaches the anchored matchers. Falls back to the original if stripping empties it.
+function normalizeForIntent(text: string): string {
+  let s = text.trim();
+  for (let i = 0; i < 4; i++) {
+    const before = s;
+    const deFilled = s.replace(PREAMBLE_RE, "").trim();
+    s = stripLeadingVocative(deFilled || s);
+    if (s === before || !s.trim()) break;
+  }
+  return s.trim() || text.trim();
+}
+
 /**
  * Classify the semantic intent of a user message. Used to gate capability and lane
  * hand-off logic — those systems must only fire when the user is requesting an action
  * to be PERFORMED, not when they are confirming completion, querying ownership, etc.
  */
 export function classifyTurnIntent(text: string): TurnIntent {
-  const t = text.trim();
-  if (!t) return "acknowledge";
+  if (!text.trim()) return "acknowledge";
+  const t = normalizeForIntent(text);
 
   for (const re of ACKNOWLEDGE_RE) if (re.test(t)) return "acknowledge";
   for (const re of QUERY_RE) if (re.test(t)) return "query";
