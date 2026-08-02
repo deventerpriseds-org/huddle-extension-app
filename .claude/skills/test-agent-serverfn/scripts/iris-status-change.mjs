@@ -68,14 +68,15 @@ function show(label, r) {
   return val;
 }
 
-// The Test-iris-status-check task already exists on the board (created in a prior run — no need to
-// re-create and re-notify). Ask IRIS to change its status — standalone by-title, the exact shape that
-// WORKED on 07-30 ("mark the 'Update on backlog grooming' task done"). This forces Iris herself to
-// resolve the task and call the status tool. THIS is the real test the user asked for.
-const sVal = show("STATUS-CHANGE (mark done)", await send('Mark my "Test-iris-status-check" task as done.'));
+// Target the task that ACTUALLY exists (Iris paraphrased "Test-iris-status-check" → "Check status of
+// Test Iris", id fa43588e-… on the real board). Using the exact existing title removes the resolution
+// confound so the test isolates the one question: does Iris's update_task fire ok? Standalone by-title
+// = the exact shape that WORKED on 07-30 ("mark the 'Update on backlog grooming' task done").
+const TARGET = "Check status of Test Iris";
+const sVal = show("STATUS-CHANGE (mark done)", await send(`Mark my "${TARGET}" task as done.`));
 
 await new Promise((r) => setTimeout(r, 3000));
-const mVal = show("STATUS-CHANGE (to up next)", await send('Move my "Test-iris-status-check" task to up next.'));
+const mVal = show("STATUS-CHANGE (to up next)", await send(`Move my "${TARGET}" task to up next.`));
 
 const updateOk = [...(sVal.toolUses || []), ...(mVal.toolUses || [])].some((t) => t.tool === "update_task" && t.ok === true);
 const updateErr = [...(sVal.toolUses || []), ...(mVal.toolUses || [])].some((t) => t.tool === "update_task" && t.ok !== true && t.ok != null);
