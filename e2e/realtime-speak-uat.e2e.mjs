@@ -87,6 +87,9 @@ const INIT_SCRIPT = () => {
     window.__toolCalls = [];    // tool names requested over the data channel
     window.__dcErrors = [];     // OpenAI "error" events over the data channel
     window.__audioPlays = 0;    // HTMLMediaElement.play() invocations (EL TTS playback)
+    window.__firstDeltaAt = null; // ts of first streamed text delta (first-token marker)
+    window.__replyDoneAts = [];   // ts of each response.*.done (reply-complete markers)
+    window.__audioPlayAts = [];   // ts of each EL audio.play (per-sentence speak markers — Fix A)
 
     // (2) Data-channel message interception.
     const RealPC = window.RTCPeerConnection;
@@ -103,10 +106,12 @@ const INIT_SCRIPT = () => {
               const d = (msg.delta || "");
               window.__replyBuf += d;
               window.__replyDeltas++;
+              if (window.__firstDeltaAt == null) window.__firstDeltaAt = Date.now();
             } else if (t === "response.output_text.done" || t === "response.text.done") {
               const full = ((msg.text || "").trim()) || window.__replyBuf.trim();
               if (full) window.__replies.push(full);
               window.__replyBuf = "";
+              window.__replyDoneAts.push(Date.now());
             } else if (t === "response.function_call_arguments.done") {
               if (msg.name) { window.__toolCalls.push(msg.name); console.log(`[dc-probe] tool-call ${msg.name}`); }
             } else if (t === "error") {
@@ -134,6 +139,7 @@ const INIT_SCRIPT = () => {
       ME.prototype.play = function (...a) {
         try {
           window.__audioPlays++;
+          window.__audioPlayAts.push(Date.now());
           const src = (this.currentSrc || this.src || "").slice(0, 24);
           console.log(`[speak-probe] audio.play #${window.__audioPlays} src=${src}`);
         } catch {}
@@ -181,6 +187,9 @@ async function speakState(page) {
     toolCalls: (window.__toolCalls || []).slice(),
     dcErrors: (window.__dcErrors || []).slice(),
     audioPlays: window.__audioPlays || 0,
+    firstDeltaAt: window.__firstDeltaAt || null,
+    replyDoneAts: (window.__replyDoneAts || []).slice(),
+    audioPlayAts: (window.__audioPlayAts || []).slice(),
   }));
 }
 
@@ -233,22 +242,37 @@ async function runAgent(agentSpec, engine) {
   let sdpStatus = null;
   let openaiRealtimeCalls = 0;
   let quotaHit = null;
+  // A+B instrumentation (all Node-side wall-clock, ms):
+  const synthTimes = [];      // ts of every synthesizeSpeech call (Fix A: per-sentence cadence)
+  let firstSynthAt = null;    // ts of the first synth call after the ask (Fix A: time-to-voice)
+  let connectAt = null;       // ts of the first OpenAI Realtime SDP response (connect landed)
+  const serverFnLog = [];     // {t,len,kind} of EVERY serverFn response — lets us SEE the warmup (Fix B) empirically
+  let warmupCalls = 0;        // /_serverFn/ calls that look like warmupRealtime ({ok:…}, no secret/audio/output)
+  let warmupFirstAt = null;
   page.on("response", async (res) => {
     const url = res.url();
     if (url.includes("api.openai.com/v1/realtime")) {
       openaiRealtimeCalls++;
       sdpStatus = res.status();
+      if (connectAt == null) connectAt = Date.now();
     } else if (url.includes("/_serverFn/")) {
       let body = "";
       try { body = await res.text(); } catch {}
-      if (/audioBase64/.test(body)) synthCalls++;   // synthesizeSpeech reply
+      const now = Date.now();
       const head = body.slice(0, 700);
-      // Keep only realtime-session-looking replies (getRealtimeSession returns clientSecret on success
-      // or an "OpenAI client_secrets <status>: …" error string) so we can pin the connect-failure cause.
-      if (/client_secrets|clientSecret|ephemeral|realtime|Realtime|OPENAI_API_KEY|no ephemeral/.test(head)) {
-        serverFnBodies.push(head);
+      let kind = "other";
+      if (/audioBase64/.test(body)) {              // synthesizeSpeech reply (Fix A voice synth)
+        synthCalls++; synthTimes.push(now); if (firstSynthAt == null) firstSynthAt = now; kind = "synth";
+      } else if (/client_secrets|clientSecret|ephemeral|OPENAI_API_KEY|no ephemeral/.test(head)) {
+        serverFnBodies.push(head);               // getRealtimeSession mint (connect)
+        kind = "mint";
         if (QUOTA_RE.test(head)) quotaHit = head.slice(0, 300);
+      } else if (body.length < 90 && /\bok\b|"ok"/.test(body) && !/output|function/.test(body)) {
+        // warmupRealtime returns just {ok:boolean} — tiny body, no secret/audio/output. Best-effort match;
+        // the raw serverFnLog below is the ground truth we actually read to confirm it fired on open.
+        warmupCalls++; if (warmupFirstAt == null) warmupFirstAt = now; kind = "warmup?";
       }
+      serverFnLog.push({ t: now, len: body.length, kind });
     }
   });
 
@@ -259,7 +283,16 @@ async function runAgent(agentSpec, engine) {
     toolFired: false, toolCalls: [], toolLogLines: [], expectedToolFired: null,
     latencyMs: null, dcErrors: [], toasts: [], classification: [], pass: false,
     sdpStatus: null, openaiRealtimeCalls: 0, quota: null, shots: [],
+    // A+B metrics:
+    firstSynthMs: null,       // ask → first synthesizeSpeech call (Fix A: time-to-voice)
+    synthCallsInReply: 0,     // synth calls for this one reply (Fix A: >1 ⇒ per-sentence streaming)
+    streamingProven: false,   // first synth fired BEFORE reply finished streaming (Fix A hard proof)
+    firstSynthBeforeDoneMs: null, // how long before reply-done the voice started
+    warmupOnOpen: false,      // a warmup-shaped serverFn fired before connect (Fix B fired)
+    warmupToConnectMs: null,  // lead time warmup got before the SDP connect landed
+    serverFnTimeline: [],     // raw serverFn call log (ground truth for Fix B)
   };
+  let clickTs = null;
 
   try {
     // 1) Single goto — pre-seeded engine hydrates on first load; uat_token + huddle deep-link consumed once.
@@ -280,6 +313,7 @@ async function runAgent(agentSpec, engine) {
       const body = (await page.locator("body").innerText().catch(() => "")).slice(0, 300).replace(/\s+/g, " ");
       throw new Error(`"Start voice conversation" button not found. aria-labels=${JSON.stringify(labels)} body="${body}"`);
     }
+    clickTs = Date.now();
     await voiceBtn.click();
     console.log("  clicked Start voice conversation");
 
@@ -378,6 +412,30 @@ async function runAgent(agentSpec, engine) {
     out.audioBytesInfo = await audioBytes(page);
     out.latencyMs = firstSpokeAt ? firstSpokeAt - sendTs : null;
 
+    // ── Fix A (per-sentence streaming synth) — hard, non-perceptual proof ──────────────────────────
+    // Voice now starts at sentence 1, not after the whole reply. Two independent signals:
+    //  (1) >1 synth call for ONE reply ⇒ the client synthesized sentence-by-sentence.
+    //  (2) the FIRST synth call fired BEFORE the reply finished streaming (.done) ⇒ voice began while
+    //      later sentences were still arriving (old whole-reply behavior could only synth after .done).
+    out.synthCallsInReply = out.synthCalls;
+    out.firstSynthMs = firstSynthAt ? firstSynthAt - sendTs : null;
+    const doneAtsAfter = (st.replyDoneAts || []).filter((t) => t >= sendTs);
+    const firstDoneAt = doneAtsAfter.length ? doneAtsAfter[0] : null;
+    if (firstSynthAt && firstDoneAt) {
+      out.firstSynthBeforeDoneMs = firstDoneAt - firstSynthAt; // >0 ⇒ synth started before reply completed
+      out.streamingProven = firstSynthAt < firstDoneAt || out.synthCalls > 1;
+    } else {
+      out.streamingProven = out.synthCalls > 1;
+    }
+
+    // ── Fix B (pre-warm on 1:1 open) — mechanism-fired evidence ───────────────────────────────────
+    // The warmup serverFn should fire on meeting-active (before/around connect). connectAt = first SDP.
+    out.serverFnTimeline = serverFnLog
+      .map((e) => ({ ...e, sinceClick: clickTs ? e.t - clickTs : null }))
+      .slice(0, 20);
+    out.warmupOnOpen = warmupCalls > 0;
+    if (warmupFirstAt && connectAt) out.warmupToConnectMs = connectAt - warmupFirstAt; // >0 ⇒ warmup led connect
+
     // Spoke = streamed reply text (delta) OR EL audio actually played OR synthesizeSpeech called.
     const spokeSignals = [];
     if (out.replyDeltas > 0) spokeSignals.push(`text-delta(${out.replyDeltas})`);
@@ -417,6 +475,8 @@ async function runAgent(agentSpec, engine) {
     console.log(`  toolFired=${out.toolFired} toolCalls=${JSON.stringify(out.toolCalls)} expectTool=${expectTool} expectedToolFired=${out.expectedToolFired} appToolLog=${JSON.stringify(out.toolLogLines)}`);
     console.log(`  dcErrors=${JSON.stringify(out.dcErrors)}  toasts=${JSON.stringify(out.toasts)}`);
     console.log(`  reply="${trunc(out.replyText)}"`);
+    console.log(`  [Fix A] synthCallsInReply=${out.synthCallsInReply} firstSynthMs=${out.firstSynthMs} firstSynthBeforeDoneMs=${out.firstSynthBeforeDoneMs} audioPlays=${out.audioPlays} → streamingProven=${out.streamingProven}`);
+    console.log(`  [Fix B] warmupOnOpen=${out.warmupOnOpen} warmupToConnectMs=${out.warmupToConnectMs} serverFnTimeline=${JSON.stringify(out.serverFnTimeline)}`);
     console.log(`  classification=${JSON.stringify(out.classification)} → ${out.pass ? "PASS" : "FAIL"}`);
   } catch (err) {
     out.error = err.message;
@@ -463,8 +523,26 @@ for (const r of results) {
     `latencyMs=${r.latencyMs} toolFired=${r.toolFired}${r.expectTool ? ` expected(${r.expectTool})=${r.expectedToolFired}` : ""} class=${JSON.stringify(r.classification)}`,
   );
   console.log(`      reply="${trunc(r.replyText, 160)}"  shots=${JSON.stringify(r.shots)}`);
+  if (r.engine !== "baseline") {
+    console.log(`      [A] synthCallsInReply=${r.synthCallsInReply} firstSynthMs=${r.firstSynthMs} firstSynthBeforeDoneMs=${r.firstSynthBeforeDoneMs} audioPlays=${r.audioPlays} streamingProven=${r.streamingProven}`);
+    console.log(`      [B] warmupOnOpen=${r.warmupOnOpen} warmupToConnectMs=${r.warmupToConnectMs}`);
+  }
   if (r.error) console.log(`      error=${r.error}`);
 }
+
+// ── A+B roll-up (the whole point of this run) ────────────────────────────────
+const spoke = fast.filter((r) => r.spoke);
+const aProven = spoke.filter((r) => r.streamingProven).length;
+const bFired = fast.filter((r) => r.warmupOnOpen).length;
+const synthCounts = spoke.map((r) => r.synthCallsInReply);
+const firstSynthMsVals = spoke.map((r) => r.firstSynthMs).filter((v) => v != null);
+const avg = (a) => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : null);
+console.log(`\n${"─".repeat(70)}\nA+B RESULT\n${"─".repeat(70)}`);
+console.log(`Fix A (per-sentence streaming synth): streamingProven ${aProven}/${spoke.length} agents that spoke`);
+console.log(`  synthCallsInReply per agent = ${JSON.stringify(synthCounts)} (>1 ⇒ synthesized sentence-by-sentence)`);
+console.log(`  avg time-to-first-voice (firstSynthMs) = ${avg(firstSynthMsVals)}ms across ${firstSynthMsVals.length} agents`);
+console.log(`Fix B (pre-warm on 1:1 open): warmupOnOpen fired for ${bFired}/${fast.length} agents (raw serverFn timeline logged per-agent above)`);
+console.log(`NOTE: perceived "instant" is a LIVE-USER verdict; this run proves the MECHANISM (synth cadence + warmup firing), not the felt latency.`);
 
 console.log(`\nScreenshots uploaded: ${shotCount} (dir ${SHOT_DIR}/)`);
 if (quotaAbort) {
