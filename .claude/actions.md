@@ -279,6 +279,26 @@ supposed to be a tag… the backlog lane is fine"):**
 - **STATUS: deployed, mechanism/SQL verified; NOT yet user-confirmed live.** Remaining to confirm: the
   card `+ tag` / Parking-lot menu actually persists + shows the badge (Playwright board check or user),
   and a parked task is skipped by an autowork pass.
+**POLISH shipped 2026-08-02 (user: "polish parking lot as you proposed earlier"; scope = my judgment
+after they answered "no preference" to the scope question). Built + deployed `main` 2bdd8d5, SWA deploy
+success. 4 items:**
+- **Proactive park OFFER (behavioral, systematic layer):** additive `PROACTIVE PARKING` sentence in
+  `taskToolInstructions` (huddle.functions.ts:1338, concatenated into every turn incl. stand-up) — when
+  an agent sees a task deferred many times / chronically blocked (keyed off the `deferred N×` signal it
+  already cites), it OFFERS to park it and only parks AFTER the user confirms; never auto-parks, never
+  files a card. Directly targets the transcript finding (items deferred 100+× re-recited each stand-up).
+- **Dim + sort + pause (UI, BoardView.tsx):** parked cards render `opacity-60 saturate-50` + a
+  `PauseCircle` icon and sink to the bottom of every lane (via `rankSort`, so desktop AND mobile).
+- **Amber filter chip:** the `parking-lot` tag-filter chip is amber when unselected (matches the badge).
+- **`N parked` count** in the board header (hidden when 0; keys off `tags`, not the absent `pushed_count`).
+- Automation exclusion (autowork + journey nightly) UNCHANGED. Independent AC subagent wrote 30 ACs;
+  `vite build` clean; independent verifier running. Live visual (dim/amber/count) needs a parked task —
+  user-confirm by parking a card via the ⋮ menu.
+**Transcript review (07-31 all-members premium-tier + 07-27/28 stand-ups) delivered same turn:** went
+well = multi-lane routing held (Sam/Finn/Tess/Cole), no fabricated data, interjector restraint. Needs
+work = agents describe work instead of producing artifacts; "nothing to add" filler turns; stand-ups
+are read-outs that re-recite 100×-deferred blocked items with no unblock action; "Groom backlog" sits
+on the board as a process-pollution card. The deferred-item finding is what shaped the proactive-park polish.
 **Investigation already done this session (extend, don't duplicate — real prior art exists):**
 - **Tagging is NOT a new concept — `tags TEXT[]` already exists** on `tasks.journey_tasks`
   (`tasks.server.ts:48,56`), already synced from journey's grooming write-back, already used for at
