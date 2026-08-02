@@ -1205,9 +1205,18 @@ BUILD LOG (user wants continuous loop, live-confirm each phase — no harness PA
   call erroring (r.error at :2460, only the generic label persisted to the transcript). Design implication
   is already firm: P3 must route queued work to the task's real OWNER + never leave a failed task lost
   (keep/retry/never-say-done). Exact r.error = a reproduction run (test-agent-serverfn) — TODO.
-- P3 (post-ceremony work queue → durable dm-<owner> turns via enqueueHuddleTurn + buzz; Huddle-side DOING
-  lane + retry) and P4 (override + offer-next) = NEXT. NOTE: P3 owner-routing + DOING-lane store are the
-  large server-side remainder; much of P3/P4 is only provable via live end-to-end UAT (journey integration).
+- **P3-core DONE (deployed)** commit 673d953: a task-barge (fast-action/slow, not urgent) is QUEUED not
+  run live — addressed agent acks+defers (never says done), interrupted speaker resumes, room keeps
+  moving; at ceremony END each queued item fires a durable dm-<agent> turn (reuse enqueueTurn +
+  send_push buzz) with a directive: do it, hand off if not yours, retry on failure, never claim done
+  unless it completed. Quick/now still live. Offline queue-decision 10/10. tsc clean.
+  P3 FOLLOW-ONS (not built): exact-owner pre-resolution (route Iris's ask about Flex's task straight to
+  Flex — currently the addressed agent's own handoff logic re-routes downstream); a VISIBLE Huddle-side
+  DOING lane; explicit retry engine (currently relies on the durable-turn's kickNextChunk/cron).
+- REMAINING: end-to-end ceremony UAT harness (integration PROOF of queue-by-default + durable work turn),
+  P4 (slow+now offer-next latency hide), Cole/Sam host-naming mismatch fix, X.1 exact r.error repro.
+- STATUS: P0/P1/P2/P3-core built + deployed + OFFLINE-proven (classifier 32/32, resume 7/7, ack 7/7,
+  queue-decision 10/10). Integration + perceptual = live UAT (user's final end-to-end test).
 
 ### ACT-huddle-22: "fix everything" batch (2026-08-01) — status
 DEPLOYED + VERIFIED (harness re-run 30714248222): P2-TAVILY USED (real-time web search works, graded on
