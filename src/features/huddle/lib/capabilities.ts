@@ -20,6 +20,9 @@ export type TurnIntent = "perform" | "status" | "query" | "acknowledge" | "infor
 // Acknowledge: very short reactive messages ("thanks", "ok", "got it", emoji)
 const ACKNOWLEDGE_RE: RegExp[] = [
   /^(thanks|thank you|thx|ty|ok|okay|k|got it|got that|great|perfect|sounds good|sure|alright|noted|understood|cool|nice|yep|yup|nope|no problem|no worries|will do|roger|cheers|brilliant|awesome)\b[!.?]*$/i,
+  // Multi-word ack ("ok got it", "thanks, that's helpful") — bounded, and requires an ack-adjective
+  // ending so it can't swallow a command like "ok mark that done" (no helpful/good/clear tail).
+  /^(ok|okay|got it|alright|sure|thanks|thank you|great|perfect|cool|noted)\b.{0,25}\b(helpful|good|great|clear|makes sense|got it|thanks|appreciate)\b[!.?]*$/i,
   /^[\p{Emoji_Presentation}\p{Extended_Pictographic}]+$/u,
 ];
 
@@ -29,7 +32,11 @@ const ACKNOWLEDGE_RE: RegExp[] = [
 // but are perform requests, not queries. Only unambiguous question openers qualify.
 const QUERY_RE: RegExp[] = [
   /^(who|what)\b/i,
-  /^(is|are|does|do|did)\s/i,
+  // "is/are/does/did …?" openers. NOT bare "do" — "do it now" / "do the thing" are IMPERATIVES, not
+  // questions (that mis-tagged a command as a query). Keep "do you/we/they/I …?" as a real question.
+  /^(is|are|does|did)\s/i,
+  /^do\s+(you|we|they|i)\b/i,
+  /^how'?(s|re)\b/i, // "how's the burn", "how're we doing" — contraction openers the pattern below misses
   /^can you (tell|explain|clarify)\b/i,
   /\b(who (handles?|owns?|does?|runs?|manages?|takes? care of))\b/i,
   /^(how (does?|do|can|is|are|would|could|will|should|much|many))\b/i,
@@ -50,6 +57,10 @@ const STATUS_RE: RegExp[] = [
   // the narrow \w+-only pattern below. Bounded to prevent catastrophic backtracking.
   /\bmark\b.{0,100}\b(as )?(done|complete|finished|closed|resolved)\b/i,
   /\bmark(ed)?( (that|it|this|the \w+){0,3})? (as )?(done|complete|finished|closed|resolved)\b/i,
+  // "make X done" — the user says "make" as often as "mark" (real transcript: "make both the
+  // prepare for gym done and the transfer 40k done"). Bounded 0-120 chars to allow two-item asks.
+  /\bmake\b.{0,120}\b(done|complete|finished|closed|resolved)\b/i,
+  /\b(can you|could you|please)\b.{0,120}\b(done|complete|finished|closed|resolved)\b/i,
   /\bcheck(ed)? (that|it|this|the \w+( \w+){0,3}) off\b/i,
   /\b(that'?s|it'?s|this is|we'?re|i'?m) (done|finished|complete|completed|all done|resolved|sorted)\b/i,
   /^(done|finished|complete|completed|closed|resolved|wrapped( up)?)[!.]*$/i,
@@ -80,6 +91,51 @@ export function classifyTurnIntent(text: string): TurnIntent {
   for (const re of INFORM_RE) if (re.test(t)) return "inform";
 
   return "perform";
+}
+
+// ─── Ceremony ask classification (P0) ───────────────────────────────────────────
+// A stand-up barge falls into a TYPE that drives the flow, plus an URGENCY override:
+//   quick-verbal → answer inline, live (a question/ack — no mutation, safe to do now)
+//   fast-action  → a status flip ("mark/make X done"): ack + move to the Huddle DOING lane +
+//                  queue the real completion (status flips took 10-15s live, so they don't block)
+//   slow         → tool/research/multi-step work: ack + queue for after the ceremony
+// Built ON TOP of classifyTurnIntent (the ONE intent system) — NOT a parallel router. Conservative:
+// anything ambiguous falls to "slow" (defer/queue), never "quick-verbal", so a misread never
+// executes a task prematurely.
+export type AskType = "quick-verbal" | "fast-action" | "slow";
+export type AskUrgency = "default" | "now";
+export interface AskClass {
+  type: AskType;
+  urgency: AskUrgency;
+  intent: TurnIntent;
+}
+
+// Explicit "do it now" signals — the user overriding the default (which is defer/queue).
+const URGENCY_RE: RegExp[] = [
+  /\b(right now|right away|immediately|this second|this instant|do it now|now please|asap|straight away)\b/i,
+  /\bnow\b\s*[!.]*$/i, // trailing "now"
+  /^\s*now\b[,\s]/i, // leading "now,"
+];
+
+export function classifyAsk(text: string): AskClass {
+  const t = (text ?? "").trim();
+  const intent = classifyTurnIntent(t);
+  const urgency: AskUrgency = URGENCY_RE.some((re) => re.test(t)) ? "now" : "default";
+  let type: AskType;
+  switch (intent) {
+    case "query":
+    case "acknowledge":
+    case "inform":
+      type = "quick-verbal"; // just an answer — safe to voice live, no task work
+      break;
+    case "status":
+      type = "fast-action"; // a status flip
+      break;
+    default: // "perform" — and any future intent: default to the SAFE, deferred path
+      type = "slow";
+      break;
+  }
+  return { type, urgency, intent };
 }
 
 export interface OwnedCapability {
