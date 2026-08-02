@@ -41,6 +41,9 @@ export const updateBoardTask = createServerFn({ method: "POST" })
         status: z.string().optional(),
         assigned_agent: z.string().optional(),
         category: z.string().optional(),
+        // Full desired tag set (journey update_task REPLACES tags with this array). The card UI sends
+        // the whole array — existing + added, or existing minus removed — so this stays a plain set-op.
+        tags: z.array(z.string()).optional(),
       })
       .parse(raw),
   )
@@ -50,6 +53,7 @@ export const updateBoardTask = createServerFn({ method: "POST" })
     if (data.status !== undefined) args.status = data.status;
     if (data.assigned_agent !== undefined) args.assigned_agent = data.assigned_agent;
     if (data.category !== undefined) args.category = data.category;
+    if (data.tags !== undefined) args.tags = data.tags;
     try {
       const { invokeJourneyTool } = await import("../journey/proxy.functions");
       const r = await invokeJourneyTool({
