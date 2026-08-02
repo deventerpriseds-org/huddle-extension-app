@@ -74,11 +74,14 @@ function show(label, r) {
 // currently DONE — well-formed status). Reopen then re-close = net-zero, exercises update_task twice.
 // Tests whether Iris can resolve + change a DONE LIFE task (the exact scenario she was accused of
 // failing). If get_tasks only returns OPEN tasks, resolution — not the guard — is the limiter.
-const TARGET = "Go to gym"; // CONTROL: a DONE LIFE task like the 40k, but NON-financial content
+// VERIFY Part 4 (tracking-not-executing): the FINANCIAL task that Iris previously REFUSED to mark done
+// ("ensure it's been executed in your financial systems"). After the shared clarification she should
+// just change the card status. Reopen → then mark done (the turn where she used to refuse).
+const TARGET = "Transfer 40k";
 const sVal = show("STATUS-CHANGE (reopen → up next)", await send(`Reopen my "${TARGET}" task — move it to up next.`));
 
 await new Promise((r) => setTimeout(r, 4000));
-const mVal = show("STATUS-CHANGE (back to done)", await send(`Now mark "${TARGET}" as done again.`));
+const mVal = show("STATUS-CHANGE (mark the financial card done)", await send(`Now mark "${TARGET}" as done.`));
 
 const updateOk = [...(sVal.toolUses || []), ...(mVal.toolUses || [])].some((t) => t.tool === "update_task" && t.ok === true);
 const updateErr = [...(sVal.toolUses || []), ...(mVal.toolUses || [])].some((t) => t.tool === "update_task" && t.ok !== true && t.ok != null);
