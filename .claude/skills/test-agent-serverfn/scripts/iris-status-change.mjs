@@ -68,15 +68,15 @@ function show(label, r) {
   return val;
 }
 
-// Target the task that ACTUALLY exists (Iris paraphrased "Test-iris-status-check" → "Check status of
-// Test Iris", id fa43588e-… on the real board). Using the exact existing title removes the resolution
-// confound so the test isolates the one question: does Iris's update_task fire ok? Standalone by-title
-// = the exact shape that WORKED on 07-30 ("mark the 'Update on backlog grooming' task done").
-const TARGET = "Check status of Test Iris";
-const sVal = show("STATUS-CHANGE (mark done)", await send(`Mark my "${TARGET}" task as done.`));
+// Target a REAL, pre-existing, well-formed open task from the board (dd49c282, TODO, VENTURES,
+// scheduled) — created before today, avoids the malformed-status/paraphrase confounds entirely.
+// To leave the board unchanged we FLIP then REVERT (up next → back to to-do): net-zero, and it
+// exercises update_task twice. The one question: does Iris's update_task fire ok on a normal task?
+const TARGET = "Research Slack AI Agents";
+const sVal = show("STATUS-CHANGE (to up next)", await send(`Move my "${TARGET}" task to up next.`));
 
-await new Promise((r) => setTimeout(r, 3000));
-const mVal = show("STATUS-CHANGE (to up next)", await send(`Move my "${TARGET}" task to up next.`));
+await new Promise((r) => setTimeout(r, 4000));
+const mVal = show("STATUS-CHANGE (revert to to-do)", await send(`Actually move "${TARGET}" back to to-do.`));
 
 const updateOk = [...(sVal.toolUses || []), ...(mVal.toolUses || [])].some((t) => t.tool === "update_task" && t.ok === true);
 const updateErr = [...(sVal.toolUses || []), ...(mVal.toolUses || [])].some((t) => t.tool === "update_task" && t.ok !== true && t.ok != null);
