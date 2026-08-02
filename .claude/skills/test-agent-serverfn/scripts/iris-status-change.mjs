@@ -20,7 +20,9 @@ const agents = {
 };
 const router = { backend: "openai", model: "gpt-4o-mini", fastMode: false, strictPrompt: false, soloOnCoverage: true, interjections: false, maxInterjectors: 0 };
 
-const CONST = { 1: undefined, 2: null, 3: NaN, 4: Infinity, 5: -Infinity, 6: -0 };
+// Correct seroval constant indices (per repo CLAUDE.md): 0=null 1=undefined 2=true 3=false 4=-0
+// 5=Infinity 6=-Infinity 7=NaN. The previously-copied map mis-decoded `true`→null (false negatives).
+const CONST = { 0: null, 1: undefined, 2: true, 3: false, 4: -0, 5: Infinity, 6: -Infinity, 7: NaN };
 function decodeSeroval(root) {
   const reg = new Map();
   function walk(n) {
@@ -68,15 +70,15 @@ function show(label, r) {
   return val;
 }
 
-// Target a REAL, pre-existing, well-formed open task from the board (dd49c282, TODO, VENTURES,
-// scheduled) — created before today, avoids the malformed-status/paraphrase confounds entirely.
-// To leave the board unchanged we FLIP then REVERT (up next → back to to-do): net-zero, and it
-// exercises update_task twice. The one question: does Iris's update_task fire ok on a normal task?
-const TARGET = "Research Slack AI Agents";
-const sVal = show("STATUS-CHANGE (to up next)", await send(`Move my "${TARGET}" task to up next.`));
+// Target the ACTUAL task from the user's complaint: "Transfer 40k" (9a671827, LIFE, unassigned,
+// currently DONE — well-formed status). Reopen then re-close = net-zero, exercises update_task twice.
+// Tests whether Iris can resolve + change a DONE LIFE task (the exact scenario she was accused of
+// failing). If get_tasks only returns OPEN tasks, resolution — not the guard — is the limiter.
+const TARGET = "Transfer 40k";
+const sVal = show("STATUS-CHANGE (reopen → up next)", await send(`Reopen my "${TARGET}" task — move it to up next.`));
 
 await new Promise((r) => setTimeout(r, 4000));
-const mVal = show("STATUS-CHANGE (revert to to-do)", await send(`Actually move "${TARGET}" back to to-do.`));
+const mVal = show("STATUS-CHANGE (back to done)", await send(`Now mark "${TARGET}" as done again.`));
 
 const updateOk = [...(sVal.toolUses || []), ...(mVal.toolUses || [])].some((t) => t.tool === "update_task" && t.ok === true);
 const updateErr = [...(sVal.toolUses || []), ...(mVal.toolUses || [])].some((t) => t.tool === "update_task" && t.ok !== true && t.ok != null);
