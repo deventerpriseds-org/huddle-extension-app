@@ -723,3 +723,34 @@ hidden in the default Transcript view — cutting into a live ceremony needs a t
 
 - [2026-08-02] **Barge v2 (deployed, NOT user-confirmed): killed the canned client filler; agent produces the ack itself.** Even after v1 (route-every-barge-to-brain), the 700ms client-side `bargeAckLine` filler still SPOKE a hardcoded line before the agent processed anything → user: "if it just hears me on the mic it just gives a canned I'll dig into that." FIX (`f978cb1`, deployed main): removed the ackTimer/filler entirely (MeetingBar `runBargeSequence`); strengthened `bargeDirective` (ceremonies.ts) to instruct the agent to open with a brief NATURAL ack reflecting what was said, then answer/act (update_task/create_huddle_task), and NEVER emit a stock deferral. Silent "…responding" phase covers think time; 30s race bounds latency. Verdict = user's live voice test + fresh ceremony_transcript (barge row → kind=answer, agent words specific to the ask).
 - [2026-08-02] **Playwright UAT capability PROVEN (real, with screenshots).** `verify-uat.yml` (GHA) runs Chromium against the LIVE app (`icy-flower…azurestaticapps.net`) impersonating the user via `?uat_token=`/`UAT_BYPASS_TOKEN`, runs `huddle-checks.mjs`, uploads shots. CCR can't download the artifact zip (proxy blocks blob redirect, HTTP 000) — solution: workflow force-pushes shots to an orphan `uat-shots` branch (needs `permissions: contents: write`), session `git fetch`es it (binaries land on disk, zero context bloat), then SendUserFile. Run 30757492807: 13/14 checks PASS (sidebar/contextpanel collapse, standup opens, first reply 8.96s, 6 turns, no console/4xx errors); the 1 fail = a 30s completion-timeout assertion, NOT a crash — ceremony did NOT instantly complete this run. Delivered 4 screenshots to the user. This is how future UI/UAT proof is produced — real browser + shots, never a claim.
+
+- [2026-08-02] **CORRECTIONS from user (internalize):**
+  1. **Parking-lot is JUST A TAG shown on the card (Jira-style) — NOT a new lane.** Ground-truthed:
+     `BoardView.tsx` ALREADY renders `task.tags` as `<Badge>` chips on each card (`BoardCard`, line 511
+     `const tags = task.tags ?? []`; 574-586 renders up to 4, special-styles `/blocked|capability/`),
+     AND already has a tag FILTER (line 85 `tagFilter`, 121 `allTags`, 306 filter chips). The mirror
+     `tasks.journey_tasks.tags TEXT[]` is already synced. So parking-lot = (a) an agent action "parking
+     lot this" → journey `update_task(status:BACKLOG, tags += 'parking-lot')` (update_task already takes
+     `args.tags`, execute-tool:910), (b) EXCLUDE `'parking-lot' = ANY(tags)` from autowork candidate
+     selection + journey nightly. Display is FREE (badge already renders). The Backlog lane is the home —
+     no new lane, no new tag UI. (Earlier "Core + board lane" plan was over-built — dropped.)
+  2. **NEVER create real tasks to test barges.** A Playwright UI barge test that says "add a task…"
+     CREATES a real task on the live board (the browser uses the live user; journey is ON). This
+     polluted the board with "Test barge item" (deleted). The existing harness
+     `.claude/skills/test-agent-serverfn/scripts/ceremony-barge-test.mjs` runs with
+     `agents[*].journey:{enabled:false}` precisely so barges never write, fires the barge via the
+     `FN_BARGE` server fn, POLLS for the answer and matches it by CONTENT regex (not last-row), and
+     tests dedup + no-drop + no-1:1-spill. Barge tests MUST follow that pattern: journey-disabled or a
+     read-only ask. Playwright barge visuals should use NON-mutating texts; mutating tool/status barge
+     RESPONSES are proven via the journey-disabled harness.
+  3. **Playwright barge injection path (works):** typing in the meeting Chat compose
+     (`textarea[placeholder="Message the room…"]` under `[data-testid="tab-chat"]`, Enter to send)
+     DURING a live ceremony is treated as a barge — `MeetingBar.routeTurn` (isCeremony && status===
+     "running" && activeCeremonyTurn) → `runBargeSequence` → real `sendHuddleMessage(ceremonyBarge:true)`.
+     Capture pitfall: the "last transcript-turn" is racy (answers lag a beat); poll+content-match like
+     the harness instead.
+  4. **Playwright shots retrieval from a CCR session:** the artifact zip is proxy-blocked (HTTP 000) and
+     base64-in-logs bloats context. WORKING path: the `verify-uat.yml` job force-pushes shots to an
+     orphan `uat-shots` branch (needs `permissions: contents: write` on the job) → session
+     `git fetch origin uat-shots` and reads PNGs off disk (zero context) → SendUserFile. run-uat.mjs
+     reads `UAT_VIEWPORT_W/H`; app-agnostic; huddle-checks.mjs is the only app-specific file.
