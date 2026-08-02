@@ -1234,12 +1234,20 @@ BUILD LOG (user wants continuous loop, live-confirm each phase — no harness PA
   Terry names the actual first speaker BY CONSTRUCTION. The reported "said Cole, Sam spoke" = the user's
   own barge to Sam pulling him in early (barge answer renders right after the opener) — correct behavior.
   No fix invented (ground-truth rule).
-- REMAINING: run the extended standup-flow UAT against the P4 deploy (integration PROOF of all 3 paths);
-  P3 follow-ons (exact-owner pre-resolution, VISIBLE Huddle-side DOING lane, explicit retry engine);
-  X.1 exact r.error repro; the user's FINAL end-to-end LIVE/perceptual UAT (they test feel themselves).
+- **INTEGRATION PROOF DONE (2026-08-02):** the extended standup-flow UAT PASSED on the P4 deploy TWICE
+  — my run 30732802143 and an INDEPENDENT verifier subagent's fresh re-dispatch 30732909733, both verdict
+  PASS with distinct live outputs (TASK→queued no-answer; QUICK "quick question — what day is it today?"
+  →Iris answered live "Today is Sunday, August 2, 2026."; NOW→Sam nowClause "On it right now — I'll ping
+  you the second it's done", background, no live block). Verifier confirmed 5/5 claims (code reads,
+  tsc EXIT=0, no smart quotes, git ancestry b9375a5+10c1c00 under origin/main 284861a). 0 refuted.
+- REMAINING (follow-ons, NOT blockers — nothing is lost today; queued/now work routes to agents' DMs with
+  buzzes): a VISIBLE Huddle-side DOING lane (user flagged Huddle-side); exact-owner pre-resolution; an
+  explicit retry engine; X.1 exact r.error repro. Each needs a user go-ahead before building.
 - STATUS: P0/P1/P2/P3-core/P4 + preamble fix all built + deployed + OFFLINE-proven (classifier 39/39,
-  resume 7/7, ack 7/7, queue-decision 12/12; tsc clean). Integration harness re-run pending on the P4
-  deploy. Perceptual/feel = the user's final live UAT.
+  resume 7/7, ack 7/7, queue-decision 12/12; tsc clean) + INTEGRATION-proven live (2× PASS, one
+  independent). The ONE thing still open = the user's FINAL perceptual/feel UAT (P1 audio gaplessness,
+  greeting cold-start cover, resume-repeat) — their ears are the verdict; NOT marking those "confirmed"
+  until they hear it live.
 
 ### ACT-huddle-22: "fix everything" batch (2026-08-01) — status
 DEPLOYED + VERIFIED (harness re-run 30714248222): P2-TAVILY USED (real-time web search works, graded on
