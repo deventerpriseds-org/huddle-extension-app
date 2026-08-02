@@ -1213,10 +1213,33 @@ BUILD LOG (user wants continuous loop, live-confirm each phase — no harness PA
   P3 FOLLOW-ONS (not built): exact-owner pre-resolution (route Iris's ask about Flex's task straight to
   Flex — currently the addressed agent's own handoff logic re-routes downstream); a VISIBLE Huddle-side
   DOING lane; explicit retry engine (currently relies on the durable-turn's kickNextChunk/cron).
-- REMAINING: end-to-end ceremony UAT harness (integration PROOF of queue-by-default + durable work turn),
-  P4 (slow+now offer-next latency hide), Cole/Sam host-naming mismatch fix, X.1 exact r.error repro.
-- STATUS: P0/P1/P2/P3-core built + deployed + OFFLINE-proven (classifier 32/32, resume 7/7, ack 7/7,
-  queue-decision 10/10). Integration + perceptual = live UAT (user's final end-to-end test).
+- **END-TO-END UAT HARNESS (2026-08-02)** commit ce7cf01: `e2e/ceremony-standup-flow.e2e.mjs` +
+  `ceremony-standup-flow.yml` — drives a REAL deployed stand-up, fires typed barges, reads durable
+  transcript rows. First run 30732347524 FAILED and CAUGHT A REAL BUG (see PREAMBLE FIX): the QUICK
+  barge "quick question — what day is it today?" was mis-QUEUED (deferred), not answered live.
+- **PREAMBLE FIX (2026-08-02)** commit b9375a5 (deployed run 30732511963 success): `classifyTurnIntent`
+  now `normalizeForIntent()`s first — strips leading conversational fillers ("quick question", "hey",
+  "sorry to interrupt") + a leading agent-name vocative (data-driven off the roster) before the
+  ^-anchored intent matchers. The filler was defeating the anchors → real ask fell through to
+  perform/slow → a live question got queued. Systematic (helps every intent consumer). Offline
+  classifier extended 32→39 cases (7 preamble/vocative), 100%.
+- **P4 DONE (deployed)** commit 10c1c00: an urgent barge ("do X right now") no longer runs live (10-15s
+  block). It's acked with a nowClause ("starting it now in the background") and FIRED IMMEDIATELY as a
+  durable dm-<agent> turn — runs while the round-robin keeps moving, buzzes when ready. Default-urgency
+  still queues for ceremony end. Both share ONE fireStandupWorkTurn helper (no drift). Only quick verbal
+  Qs answer live. Offline decision now three-way LIVE/QUEUE/NOW 12/12. Harness extended w/ a NOW barge.
+- **Cole/Sam host-naming: NOT A CODE BUG (ground-truthed 2026-08-02).** openerDirective forces Terry to
+  say exactly "<handoffNames[0]>, you're up" where handoffNames[0] === participants[1] (first lane
+  owner), and the ceremony loop runs owners in that exact participants order (sequential shiftEligible).
+  Terry names the actual first speaker BY CONSTRUCTION. The reported "said Cole, Sam spoke" = the user's
+  own barge to Sam pulling him in early (barge answer renders right after the opener) — correct behavior.
+  No fix invented (ground-truth rule).
+- REMAINING: run the extended standup-flow UAT against the P4 deploy (integration PROOF of all 3 paths);
+  P3 follow-ons (exact-owner pre-resolution, VISIBLE Huddle-side DOING lane, explicit retry engine);
+  X.1 exact r.error repro; the user's FINAL end-to-end LIVE/perceptual UAT (they test feel themselves).
+- STATUS: P0/P1/P2/P3-core/P4 + preamble fix all built + deployed + OFFLINE-proven (classifier 39/39,
+  resume 7/7, ack 7/7, queue-decision 12/12; tsc clean). Integration harness re-run pending on the P4
+  deploy. Perceptual/feel = the user's final live UAT.
 
 ### ACT-huddle-22: "fix everything" batch (2026-08-01) — status
 DEPLOYED + VERIFIED (harness re-run 30714248222): P2-TAVILY USED (real-time web search works, graded on

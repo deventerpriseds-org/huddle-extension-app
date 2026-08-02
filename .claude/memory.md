@@ -53,6 +53,28 @@ prompt, no near_field); kept the ceremony per the user. The two voice surfaces a
 unified on STT now (1:1 = prompt/no-near_field; ceremony = near_field/no-prompt) — do NOT re-unify
 without a live OK on BOTH. (`lib/voice/realtime-audio.ts` is ceremony-only.)
 
+## HARDENING (2026-08-02): a FAILING integration UAT caught a real prod bug — anchored classifiers need preamble-stripping
+Building the end-to-end stand-up UAT (`e2e/ceremony-standup-flow.e2e.mjs`) paid off on its FIRST run
+(30732347524 FAIL): the QUICK barge "quick question — what day is it today?" was mis-QUEUED (Sam acked +
+deferred) instead of answered live. Root cause = a REAL production bug, not a harness artifact: every
+`^`-anchored intent pattern in `capabilities.ts` (QUERY_RE `^(who|what)`, etc.) is defeated by a leading
+conversational filler — "quick question —", "hey", "sorry to interrupt", or a vocative "Finn," — so the
+real ask falls through to the perform/slow default and a live question gets queued. Fix (b9375a5):
+`classifyTurnIntent` now runs `normalizeForIntent()` first — peels known fillers + a roster-derived
+leading agent-name vocative before matching. Systematic (every intent consumer benefits), data-driven
+(names from AGENTS, never hardcoded). Lessons: (1) a natural utterance rarely starts with the keyword an
+anchored regex expects — normalize preambles/vocatives before `^`-matching; (2) writing the integration
+UAT is worth it even when offline unit tests are green — the unit tests used bare phrases and never
+exercised the preamble path the real barge hits. Offline classifier extended 32→39 (100%).
+
+Also this session: **P4** — an urgent barge ("do X right now") fires a durable work-turn IMMEDIATELY in
+the background (never blocks the room 10-15s), acked with a "starting it now in the background" clause;
+default-urgency still queues for ceremony end; both share ONE `fireStandupWorkTurn` helper. **Cole/Sam
+host-naming was NOT a code bug** (ground-truthed): `openerDirective` forces Terry to name
+`handoffNames[0]` === `participants[1]` and the loop runs owners in that exact order, so the host names
+the actual first speaker by construction; the reported mismatch was the user's own barge to Sam pulling
+him in early. Did not invent a fix (ground-truth rule).
+
 ## HARDENING (2026-08-01): phantom-garble = a CONFIG bug (no language pin), not a test artifact — and judge voice on AUDIO, not the transcript row
 Two lessons from live UAT of the stand-up barge fixes:
 1. **A test artifact can BE the real bug — don't suppress it, root-cause it.** The ceremony-barge UAT's
