@@ -1296,10 +1296,11 @@ couldn't mark the 40k done. Repeatedly corrected shallow diagnoses (ownership gu
 **DECISIONS (user, 2026-08-02):**
 - **The ceremony MUST NOT override the actual board status** — the board's real lanes drive reporting. STOP re-deriving
   done/up-next/blocked from open-ness (`buildCeremonyReport`); bucket strictly by each task's real status column.
-- **Board-gate = the real lanes:** `UP_NEXT / DOING / IN_REVIEW / BLOCKED`, PLUS **DONE since the last stand-up the user
-  ATTENDED** (not a fixed 36h window). BACKLOG is excluded entirely. → This requires tracking **attendance**: a per-user
-  "last attended stand-up" timestamp; the DONE window = completed_at > that timestamp. (Shares the attendance signal
-  with ACT-huddle-25's EL gate — an unattended/autonomous run must NOT advance "last attended".)
+- **Board-gate = the real lanes:** `UP_NEXT / DOING / IN_REVIEW / BLOCKED`, PLUS **DONE**. BACKLOG excluded entirely.
+- **DONE window — INTERIM (user, 2026-08-02):** use **"this week" (last 7 days)** for now. The IDEAL — "DONE since the
+  last stand-up the user was AWARE of" (so a finished dependency is never missed vs. silently done) — is DEFERRED until we
+  settle a real awareness-tracking mechanism (attendance/ack). Build the 7-day window now; leave a clear seam to swap in
+  the awareness-scoped window later. (EL gate in ACT-25 uses tab-PRESENCE, which is independent of this deferred piece.)
 - Roster-domain routing of a still-unassigned *board* task = secondary refinement (fallthrough is mostly moot once the
   gate drops raw Backlog).
 
