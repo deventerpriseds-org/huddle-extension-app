@@ -9,6 +9,9 @@ name: Verify UAT (live, real browser)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   verify-uat:
     runs-on: ubuntu-latest
