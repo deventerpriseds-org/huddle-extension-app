@@ -166,6 +166,18 @@ export const checks = [
     );
     await screenshot("standup-in-progress");
 
+    // ── BARGE demonstration (ACT-huddle-26) ── the ceremony is now LIVE (first reply rendered), so
+    // inject the FOUR barge types via chat and prove each gets a real, HEARD answer — not the old
+    // canned "I'll dig into that". This is the exact routeTurn→runBargeSequence→sendHuddleMessage
+    // (ceremonyBarge) path a spoken barge hits. Mutating barges use Test- titles; the status barge
+    // targets the task the tool barge just created (resolved by the fuzzy get_tasks).
+    await page.waitForTimeout(1200); // let a scripted speaker be mid-turn so the barge truly cuts in
+    await bargeOnce({ page, check, screenshot }, { label: "1-quick-question", text: "Quick question — how many blockers are on the board right now?" });
+    await bargeOnce({ page, check, screenshot }, { label: "2-tool", text: "Add a task called Test-barge-item to my backlog." });
+    await page.waitForTimeout(3000); // let the create propagate so the status barge resolves it by name
+    await bargeOnce({ page, check, screenshot }, { label: "3-status-update", text: "Mark the Test-barge-item task as done." });
+    await bargeOnce({ page, check, screenshot }, { label: "4-needs-detail", text: "Hey, can you take care of that thing we talked about?" });
+
     // Time to full ceremony completion (button reverts to "Run again").
     let doneMs = null;
     let doneError = null;
@@ -187,46 +199,6 @@ export const checks = [
         : `did not reach completion — ${doneError ?? "unknown error"} (${finalTurnCount} turns rendered when this check gave up)`,
     );
     await screenshot("standup-final-state");
-  },
-
-  // BARGE demonstration (user-requested ACs): drive the FOUR barge types through the real code path
-  // and prove each gets a real, heard response — not the old canned "I'll dig into that". Starts a
-  // fresh ceremony (Run again / Start), waits for it to be live, then injects each barge via chat.
-  //   1) quick question   2) tool-requiring   3) status update   4) needs-more-detail (ambiguous)
-  // Mutating barges use Test- titles (cleanup-able); status targets the task the tool barge just made.
-  async function standupBarges({ page, check, screenshot }) {
-    // Ensure a ceremony is live. After standupCeremonyTiming the room shows "Run again" (or "Start").
-    const startOrAgain = page
-      .locator("button", { hasText: /^(Run again|Start)$/ })
-      .first();
-    const canStart = await startOrAgain
-      .waitFor({ state: "visible", timeout: 8000 })
-      .then(() => true)
-      .catch(() => false);
-    check("Barge setup: a ceremony Start/Run-again control is available", canStart);
-    if (!canStart) return;
-
-    const turnSel = '[data-testid="transcript-turn"]';
-    const baseline = await page.locator(turnSel).count();
-    await startOrAgain.click();
-    // Wait until the ceremony is actually producing turns (live) before barging.
-    const live = await page
-      .waitForFunction(
-        (b) => document.querySelectorAll('[data-testid="transcript-turn"]').length > b,
-        baseline,
-        { timeout: 60000 },
-      )
-      .then(() => true)
-      .catch(() => false);
-    check("Barge setup: ceremony is live (a turn rendered) before barging", live);
-    if (!live) return;
-    await page.waitForTimeout(1500); // let a scripted speaker be mid-turn so the barge truly interrupts
-
-    await bargeOnce({ page, check, screenshot }, { label: "1-quick-question", text: "Quick question — how many blockers are on the board right now?" });
-    await bargeOnce({ page, check, screenshot }, { label: "2-tool", text: "Add a task called Test-barge-item to my backlog." });
-    await page.waitForTimeout(3000); // let the create propagate so the status barge can resolve it by name
-    await bargeOnce({ page, check, screenshot }, { label: "3-status-update", text: "Mark the Test-barge-item task as done." });
-    await bargeOnce({ page, check, screenshot }, { label: "4-needs-detail", text: "Hey, can you take care of that thing we talked about?" });
   },
 
   // ACT-huddle-2 regression guard: avatars now serve real images from public/agents/*.jpg
