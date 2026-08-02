@@ -11,6 +11,36 @@ Last updated: 2026-07-31 (ACT-huddle-12 problem #1 — Transcript/Chat tabs — 
 
 ## Open
 
+### ACT-huddle-26: Barge responds to what the user SAID (no canned deferral) — Playwright-proven, 4 types
+**Requested:** 2026-08-02 — user: "if it just hears me on the mic it just gives a canned I'll dig into
+that response… take what you hardcoded for a quick reply and make that instructions so the agent is
+trained to do it on their own after actually hearing my query"; "the screenshots do not show playwright
+impersonating me with a barge for a quick question and another that will require a tool and one that is
+a status update and one asking for more details — mark that as ac".
+**Fix (deployed main, NOT user-confirmed):** removed the 700ms hardcoded client filler (`bargeAckLine`)
+in `MeetingBar.runBargeSequence`; folded the ack into `bargeDirective` (ceremonies.ts) so the agent
+opens with a brief NATURAL ack reflecting what was said, then answers/uses the tool, and is barred from
+stock deferrals. Silent "…responding" phase covers think time.
+**Acceptance criteria (each demonstrated by Playwright injecting the barge via the meeting Chat during
+a LIVE ceremony — the real routeTurn→runBargeSequence→sendHuddleMessage(ceremonyBarge:true) path — and
+screenshotting the response; `CANNED_RE` asserts it is NOT a hardcoded deferral):**
+- **AC-1 Quick question barge** — Given a live stand-up, when the user barges a quick question ("how many
+  blockers are on the board right now?"), then the addressed agent gives a brief natural ack + a direct
+  answer, and the reply is NOT a canned deferral. [LIVE/Playwright]
+- **AC-2 Tool-requiring barge** — When the user barges "Add a task called Test-barge-item to my backlog",
+  then the agent acks + actually calls the create tool + confirms in board terms (a new task exists).
+  [LIVE/Playwright + DB]
+- **AC-3 Status-update barge** — When the user barges "Mark the Test-barge-item task as done", then the
+  agent acks + calls update_task + confirms the status change (task resolves by name via the fuzzy
+  get_tasks). [LIVE/Playwright + DB]
+- **AC-4 Needs-more-detail barge** — When the user barges an ambiguous ask ("take care of that thing we
+  talked about"), then the agent acks + asks ONE clarifying question — NOT a canned "I'll dig into that".
+  [LIVE/Playwright]
+- **AC-5 (all)** — none of the four replies match `CANNED_RE`; each is specific to what was said.
+  [LIVE/Playwright]
+**Verify:** `verify-uat.yml` (huddle-checks `standupBarges`) → screenshots `barge-1..4`, delivered to user;
+final verdict is the user's live VOICE test (mic perception is out of Playwright's scope by design).
+
 ### ACT-huddle-13: 1:1 VOICE latency — make agents SPEAK journey-fast (OpenAI Realtime speaks directly)
 **Requested:** 2026-08-01 — user: "the delay for my convo with Flex to SPEAK takes way too long. much
 longer than the journey app"; "settings should match journey or the boost coach"; "flex and all agents
