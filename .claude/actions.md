@@ -1179,9 +1179,22 @@ User wants a real-life-simulation stand-up. Grounded facts (Explore + grep, 2026
   (a) checklist not split into per-item utterances; (b) my resume-from-next (sentenceIdx+1) skips it.
   User wants REPEAT interrupted item + CONTINUE remaining. Needs per-item granularity + repeat-then-continue.
 - Ownership ack still applies where a defer IS correct, but the Iris case was a tool failure, not a defer.
-Proposed phasing: P1 fluid speech (pipeline) + Terry greeting; P2 semantic ownership-aware ack; P3 queue
-(default ack+queue, flush after end); P4 override matrix + offer-next-person latency hide. Poking holes
-with user; NO code until scope signed off.
+Phasing P0-P4 signed off by user (decisions: fix Cole/Sam host-naming; DOING lane = HUDDLE side not the
+user's board; 150ms gapless threshold; Q1 status=ack+doing+queue never say-done-early; Q2 buzz-per-task).
+BUILD LOG (user wants continuous loop, live-confirm each phase — no harness PASS for perceptual):
+- **P0 DONE (offline)** commit af8a0a6: `classifyAsk` in capabilities.ts = {type: quick-verbal|fast-action|
+  slow, urgency: default|now} extending classifyTurnIntent. Fixed real gaps: 'make X done' (not just 'mark'),
+  'do it now' no longer misread as a question, "how's" = query. ask-classification 32/32; regression
+  reminder-intent 17/17, b2-status-guard 9/9.
+- **P1 DONE (deployed, awaiting LIVE user confirm)** commits cea38a5 + 1c264f8:
+  1.1 pipeline synth (synth N+1 while N plays) — kills inter-item dead space [LIVE].
+  1.2 splitSentences fix — period-inside-quote ('40k.') now splits, so a checklist isn't one utterance.
+  1.3 resume repeats interrupted line + continues (restart at sentenceIdx, reverting resume-from-next
+  which dropped items). Offline resume-checklist 7/7 (Iris string 1->4 lines; resume [0,1,1,2,3,4]).
+  1.4-1.6 host greeting (standupGreeting varied client-side template) covers ~15s cold start, fired
+  after enqueue, emit awaits it. Deployed via deploy-swa on main. NEEDS live stand-up confirm.
+- P2 (ownership-aware varied ack), P3 (queue+DOING-lane-huddle-side+buzz), P4 (override+offer-next),
+  X.1 (journey-tool-failed root cause) = NEXT.
 
 ### ACT-huddle-22: "fix everything" batch (2026-08-01) — status
 DEPLOYED + VERIFIED (harness re-run 30714248222): P2-TAVILY USED (real-time web search works, graded on
