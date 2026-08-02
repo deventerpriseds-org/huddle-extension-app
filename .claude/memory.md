@@ -208,6 +208,15 @@ never clutters the user's task board. TanStack Start + React 19 + Vite + Nitro �
 
 ## Hardening (STANDING RULE: on any mistake → root cause → add a guardrail → log it here)
 Every mistake must make the next session more efficient. Append, never delete.
+- [2026-08-02] MISTAKE: asked to review the last stand-up, I queried `chat.pending_turns`, didn't find
+  today's ceremony there, and told the user their voice-ceremony turns "aren't being persisted" —
+  recommending transcript-persistence work that ALREADY EXISTS. ROOT CAUSE: read one proxy store and
+  concluded "not saved" without checking the RIGHT source (ground-truth rule). Ceremonies persist to a
+  DEDICATED table `chat.ceremony_transcript` (`lib/ceremony/ceremony-transcript.server.ts`), NOT
+  pending_turns; the run was fully there (46 turns w/ barges + interrupts). GUARDRAIL: CLAUDE.md
+  "Reading the live Huddle DB" now documents `chat.ceremony_transcript` as THE ceremony/stand-up source
+  (never infer "not saved" from pending_turns absence). Before proposing to BUILD any store/subsystem,
+  grep for the existing one first (extend-don't-duplicate) — `grep -ri ceremon lib/` would have found it.
 - [2026-07-24] MISTAKE: self-graded a partial result "PASS" without the verifier subagent / full ACs.
   ROOT CAUSE: no enforcement of verify-work; ACs conflated. GUARDRAIL: hard-block Stop gate (settings.json
   + eds-skills setup.sh) refuses "done" without ACs + independent verification; verifier subagent mandatory.
