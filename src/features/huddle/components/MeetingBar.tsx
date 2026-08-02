@@ -602,48 +602,15 @@ function MeetingRoom({
       });
     }
 
-    // Classify the barge. Only a genuine quick VERBAL question (a lookup/ack — no mutation, ~1-3s) is
-    // answered LIVE below. Anything that PERFORMS work (a status flip or a tool/research task) never
-    // runs live — that's the ~10-15s dead air the user hit when Sam/Iris ran tools mid-call. Two
-    // deferred paths, split by URGENCY:
-    //   • default → QUEUE for after the stand-up (P3): ack + "after we wrap", pushed to the work queue.
-    //   • "now"   → FIRE IMMEDIATELY in the background (P4): ack + "on it now", a durable turn kicked off
-    //               at once so it runs WHILE the round-robin keeps moving — latency hidden, room never
-    //               blocks, and the result buzzes in when ready. Respects "now" without freezing anyone.
-    // Either way the interrupted speaker resumes and the agent NEVER says "done" before it's proven.
-    const asked = classifyAsk(text);
-    const addressed = resolveAddressed(text, members) ?? (interrupted as AgentId) ?? members[0];
-    if (asked.type !== "quick-verbal") {
-      const nowMode = asked.urgency === "now";
-      try {
-        const ackLine = `${bargeAckLine(text)} ${nowMode ? nowClause() : deferClause()}`;
-        await ceremonyVoiceRef.current.speakInterjection(addressed, ackLine, {
-          onSentenceStart: (s) => {
-            addMeetingTurns([{ agentId: addressed, text: s }]);
-            persistCeremonyTurnRef.current({ speaker: "agent", agentId: addressed, text: s, kind: nowMode ? "ack-now" : "ack-queued", ts: Date.now() });
-          },
-        });
-        if (nowMode) {
-          // Kick the work off immediately in the background — do NOT wait for ceremony end.
-          fireStandupWorkTurnRef.current({ text, agentId: addressed }, "now");
-        } else {
-          const key = `${addressed}|${text.trim().toLowerCase()}`;
-          if (!ceremonyWorkQueueRef.current.some((w) => `${w.agentId}|${w.text.trim().toLowerCase()}` === key)) {
-            ceremonyWorkQueueRef.current.push({ text, agentId: addressed });
-          }
-        }
-        await ceremonyVoiceRef.current.resumeFromFreeze();
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Couldn't queue that just now.");
-      } finally {
-        if (bargeGenRef.current === myGen) {
-          bargeHandlingRef.current = false;
-          bargeActiveRef.current = false;
-          setPhase("");
-        }
-      }
-      return;
-    }
+    // EVERY barge routes through Huddle's REAL brain (the group turn below) so the addressed agent
+    // actually HEARS and answers what the user said — a status change ("mark that investor pitch
+    // done"), a question ("what are you looking into?"), a correction — instead of a canned, hardcoded
+    // "I'll dig into that" deferral. The earlier P3/P4 classify-and-defer path replied with a fixed ack
+    // for anything not a "quick-verbal" question and NEVER let the user's words reach the agent, so no
+    // matter what the user said they got the same line and direct commands were swallowed. Rolled back
+    // 2026-08-02 per a live report (transcript showed repeated "I'll dig into that" over real asks).
+    // Mid-turn tool latency is bounded by the 700ms filler ack + 30s race below — not by refusing to
+    // engage.
 
     try {
       const cfg = useBackendsStore.getState().config;
