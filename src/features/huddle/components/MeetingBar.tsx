@@ -18,6 +18,7 @@ import {
   Video,
 } from "lucide-react";
 import { AGENT_BY_ID, AGENTS, type Agent, type AgentId } from "../data/agents";
+import { bargeAckLine } from "../lib/capabilities";
 import { useHuddleStore, type CeremonyKind, type CeremonyTurn, type MeetingState } from "../store";
 import { useVoiceCall, type VoiceCallController } from "../hooks/useVoiceCall";
 import { useVoiceCallRealtime } from "../hooks/useVoiceCallRealtime";
@@ -538,16 +539,11 @@ function MeetingRoom({
       // bumps the playback gen and supersedes the filler cleanly; the filler never touches freezeRef,
       // so resume still returns to the interrupted speaker. Reuse the frozen speaker as the ack voice.
       const ackVoice = (interrupted as AgentId) || members[0];
-      const ackFillers = [
-        "One moment — let me take a look.",
-        "Sure, checking now.",
-        "Let me pull that up.",
-        "On it — one sec.",
-        "Give me a moment.",
-      ];
       const ackTimer = window.setTimeout(() => {
         if (ackVoice) {
-          const filler = ackFillers[Math.floor(Math.random() * ackFillers.length)];
+          // P2: type-aware, varied ack that restates the ACTION ("marking that now" / "let me pull
+          // that together") instead of a generic "one moment" — and never says "done" (bargeAckLine).
+          const filler = bargeAckLine(text);
           void ceremonyVoiceRef.current.speakInterjection(ackVoice, filler, {
             onSentenceStart: (s) => addMeetingTurns([{ agentId: ackVoice, text: s }]),
           });

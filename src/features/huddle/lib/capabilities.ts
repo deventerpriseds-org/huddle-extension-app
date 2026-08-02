@@ -138,6 +138,37 @@ export function classifyAsk(text: string): AskClass {
   return { type, urgency, intent };
 }
 
+// Immediate, TYPE-AWARE, VARIED acknowledgement voiced the instant the user hands an agent a task —
+// so they're never met with silence while the real (10-15s) answer is produced. It restates the ACTION
+// ("marking that now" / "let me pull that together"), varied per call (same meaning, different words),
+// and CRITICALLY never says "done" — the confirmed completion + "done" comes later from the queue/buzz
+// (P3), because saying done-before-done is unsafe. Owner-aware phrasing (defer to the owner) is layered
+// on server-side where the task→owner is resolved; this client line covers the gap immediately.
+export function bargeAckLine(text: string): string {
+  const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+  const { type } = classifyAsk(text);
+  if (type === "fast-action")
+    return pick([
+      "On it — marking that now.",
+      "Sure, I'll get that updated.",
+      "Got it — updating that now.",
+      "Okay, I'll take care of that status.",
+    ]);
+  if (type === "slow")
+    return pick([
+      "On it — let me pull that together.",
+      "Sure, I'll dig into that.",
+      "Got it — I'll look into that.",
+      "Okay, let me work on that.",
+    ]);
+  return pick([
+    "One moment — let me take a look.",
+    "Sure, checking now.",
+    "Let me pull that up.",
+    "Give me a moment.",
+  ]);
+}
+
 export interface OwnedCapability {
   agent: Agent;
   cap: AgentCapability;
