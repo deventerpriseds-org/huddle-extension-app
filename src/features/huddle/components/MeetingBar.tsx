@@ -142,6 +142,31 @@ function fmtClock(ms: number): string {
     .padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
 }
 
+// Client-side templated greeting for the host to speak the INSTANT "Start" is clicked — covers the
+// ~15s server cold start (durable turn enqueue + first agent's model call) with a live voice instead of
+// dead air. NOT a static string and NOT an LLM turn (which would have the same 15s lag): it's a template
+// with randomized phrasing slots, so Terry says the same thing a little differently each time. Spoken
+// via the normal per-sentence ceremony voice; the emit loop awaits it before the first scripted block.
+function standupGreeting(): string {
+  const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+  const hour = new Date().getHours();
+  const tod = hour < 12 ? "Morning" : hour < 17 ? "Afternoon" : "Evening";
+  const open = pick([`${tod}, everyone.`, `${tod}, team.`, `Alright, ${tod.toLowerCase()} all.`, `Hey team, ${tod.toLowerCase()}.`]);
+  const gather = pick([
+    "Let me get everyone together",
+    "Give me a second to pull everyone in",
+    "Just gathering the team",
+    "Rounding everyone up",
+  ]);
+  const start = pick([
+    "we'll kick off the stand-up as soon as everyone's here.",
+    "and we'll start the moment we're all in.",
+    "we'll get rolling as soon as the room's set.",
+    "we'll begin once everyone's present.",
+  ]);
+  return `${open} ${gather} — ${start}`;
+}
+
 // ---------------------------------------------------------------------------
 
 export function MeetingLayer() {
@@ -797,6 +822,10 @@ function MeetingRoom({
     patchMeeting({ ceremonyStatus: "running", transcript: [] });
     const steps = meeting.ceremonyType === "review_retro" ? ["review", "retro"] : [meeting.ceremonyType];
     let voiceOff = false;
+    // Greeting the host speaks immediately to cover the server cold start; emit() awaits it before the
+    // first scripted block so they never overlap (both would share the audio queue). Fired below AFTER
+    // the durable turn is enqueued so the greeting's playback overlaps the server work.
+    let greetingP: Promise<void> | null = null;
 
     // Reset barge state at ceremony start.
     spokenCountRef.current = 0;
@@ -815,6 +844,16 @@ function MeetingRoom({
     // `spoken.n` tracks how many replies have been voiced (idempotent on re-poll).
     // Trailing transcript: text is revealed PER SENTENCE as audio begins, not pre-loaded.
     const emit = async (reps: { agentId: string; text: string }[], spoken: { n: number }, step: string) => {
+      // Let the host's opening greeting finish before voicing the first scripted block — they share the
+      // audio queue, so overlapping them would garble both. Only the first emit call waits; then cleared.
+      if (greetingP) {
+        try {
+          await greetingP;
+        } catch {
+          /* greeting failed — proceed to the scripted turns regardless */
+        }
+        greetingP = null;
+      }
       for (let i = spoken.n; i < reps.length; i++) {
         if (!ceremonyAliveRef.current) return;
         // PARK while a barge is being handled — do NOT voice the next scripted speaker until the
@@ -923,6 +962,19 @@ function MeetingRoom({
           enqErr = e;
           return null;
         });
+        // Cover the ~15s cold start: the host greets NOW (step 0 only), its playback overlapping the
+        // durable-turn work just fired. emit() awaits greetingP before the first scripted block.
+        if (step === steps[0] && !greetingP) {
+          const greeter = meeting.members.includes(HOST_ID) ? HOST_ID : meeting.members[0];
+          greetingP = ceremonyVoiceRef.current
+            .voiceTurn(greeter, standupGreeting(), {
+              onSentenceStart: (s) => {
+                addMeetingTurns([{ agentId: greeter, text: s }]);
+                persistCeremonyTurnRef.current({ speaker: "agent", agentId: greeter, text: s, kind: "greeting", ts: Date.now() });
+              },
+            })
+            .catch(() => {});
+        }
         const spoken = { n: 0 };
         let terminal = false;
         // Time-based ceiling instead of a fixed iteration count so long ceremonies (100+ seconds)
