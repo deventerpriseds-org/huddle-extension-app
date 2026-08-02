@@ -48,9 +48,11 @@ const QUOTA_RE = /429|insufficient_quota|quota|rate.?limit/i;
 const SR = 16000; // 16 kHz mono, 16-bit — Chromium fake-audio-capture wants a mono 16kHz WAV.
 
 // The 3 spoken user phrases (multi-turn). flex is the fitness agent; keep them short + distinct-lane.
+// NOTE: phrase 2 creates a REAL task on the user's live board — it MUST be Test- prefixed (hard rule:
+// no test tasks without a Test- title), so a cleanup pass can identify it.
 const PHRASES = [
   "What's on my schedule today?",
-  "Add a task to call the dentist tomorrow.",
+  "Add a task called Test-dentist for tomorrow.",
   "What's a quick workout I can do right now?",
 ];
 const LEAD_SILENCE_S = 6;  // covers COLD connect (getUserMedia→mint→SDP→dc.open) before phrase1 plays

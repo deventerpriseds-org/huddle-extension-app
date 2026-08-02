@@ -46,7 +46,9 @@ const SR = 16000;
 
 // The MULTI-PART ask (3 questions in one utterance) then the BARGE (a tangent that interrupts Q1's answer).
 // Topics chosen distinct so coverage is checkable: schedule / workout / dentist ; barge = "what day is it".
-const Q_PHRASE = "I've got three quick things: what's on my schedule today, what's a quick workout I can do right now, and can you remind me to call the dentist?";
+// NOTE: the 3rd ask creates a REAL reminder on the user's live board — it MUST be Test- prefixed
+// (hard rule: no test tasks without a Test- title). "Test-dentist" keeps the `dentist` coverage key.
+const Q_PHRASE = "I've got three quick things: what's on my schedule today, what's a quick workout I can do right now, and can you remind me about my Test-dentist appointment?";
 const BARGE_PHRASE = "Wait, hold on, what day is it today?";
 // Topic keyword sets for coverage (any hit counts). Lowercased match on captured reply text.
 const TOPICS = {
