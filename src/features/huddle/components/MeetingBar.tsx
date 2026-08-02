@@ -190,6 +190,20 @@ function deferClause(): string {
   ]);
 }
 
+// P4 — the "on it NOW, but the room keeps moving" clause. Used when the user tags a non-trivial task
+// as urgent ("right now") mid-ceremony: we can't finish a 10-15s tool run without freezing the room,
+// so the agent starts it IMMEDIATELY in the background (a durable turn fired at once, not deferred to
+// ceremony end) and says so — latency hidden, nothing blocks, the result buzzes in when ready. Varied.
+function nowClause(): string {
+  const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+  return pick([
+    "Starting it now in the background — I'll surface it the moment it's ready.",
+    "On it right now — I'll ping you the second it's done, no need to wait.",
+    "Kicking it off now — the stand-up keeps moving and I'll bring it back when it lands.",
+    "Running it now behind the scenes — I'll surface the result as soon as it's in.",
+  ]);
+}
+
 // ---------------------------------------------------------------------------
 
 export function MeetingLayer() {
@@ -447,6 +461,48 @@ function MeetingRoom({
   // question or an explicit "now" bypasses this and answers live. Idempotent-keyed on flush.
   const ceremonyWorkQueueRef = useRef<{ text: string; agentId: AgentId }[]>([]);
 
+  // Fire ONE stand-up task as an autonomous durable turn in the addressed agent's DM (reusing
+  // enqueueTurn/kickNextChunk + its send_push buzz on completion). Shared by two callers:
+  //   mode "after" — the ceremony-end flush of the queued default-urgency tasks; and
+  //   mode "now"   — P4: an urgent ("right now") task fired the INSTANT it's asked, so it runs in the
+  //                 background while the round-robin keeps moving (latency hidden, room never blocks).
+  // The agent's own ownership-handoff re-routes anything that isn't theirs; the directive FORBIDS
+  // claiming "done" unless it actually completed and says to retry on tool failure (so nothing is lost).
+  // Idempotent turnId keeps a re-fire from double-running. Stable ([] deps, refs only) so the empty-dep
+  // runBargeSequence can call it without a stale closure.
+  const fireStandupWorkTurn = useCallback((item: { text: string; agentId: AgentId }, mode: "now" | "after") => {
+    const cfg = useBackendsStore.getState().config;
+    const slug = item.text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
+    const workTurnId = `standup-work-${runIdRef.current}-${item.agentId}-${slug}`;
+    const lead =
+      mode === "now"
+        ? `During the stand-up the user asked you to handle this RIGHT NOW: "${item.text}". Start it immediately`
+        : `During the stand-up you were asked to handle this: "${item.text}". Take care of it now`;
+    const directive =
+      `${lead} — use whatever tool it needs. If it isn't yours to do, hand it to the right owner. If a tool ` +
+      `fails, keep it and retry, and tell me it's still in progress — do NOT say it's done unless it actually ` +
+      `completed. Then confirm the outcome the moment it's ready.`;
+    void enqueueHuddleTurn({
+      data: {
+        text: directive,
+        huddleId: `dm-${item.agentId}`,
+        scope: "one-to-one" as const,
+        members: [item.agentId],
+        history: [],
+        router: cfg.router,
+        agents: cfg.agents,
+        caller: callerRef.current,
+        timeZone: tzRef.current,
+        turnId: workTurnId,
+        notify: "push",
+      },
+    }).catch(() => {
+      /* a work-turn enqueue failure must never break the barge flow or ceremony teardown */
+    });
+  }, []);
+  const fireStandupWorkTurnRef = useRef(fireStandupWorkTurn);
+  fireStandupWorkTurnRef.current = fireStandupWorkTurn;
+
   // --- Durable ceremony-transcript persistence (Azure PG `chat.ceremony_transcript`) ---------------
   // The live transcript lives ONLY in ephemeral zustand (meeting.transcript, no persist middleware),
   // so a finished/reloaded stand-up is unreviewable and a DB query returns zero agent lines. We mirror
@@ -546,25 +602,35 @@ function MeetingRoom({
       });
     }
 
-    // P3: classify the barge. A TASK that isn't a quick question and isn't explicitly "now" is QUEUED
-    // for after the stand-up (run autonomously) rather than executed live — which blocks the room for
-    // ~10-15s (the exact dead air the user hit when Sam/Iris ran tools mid-call). The addressed agent
-    // acks + says it'll handle it after, the interrupted speaker resumes, and the room keeps moving.
-    // Quick questions and "now" fall through to the live answer below.
+    // Classify the barge. Only a genuine quick VERBAL question (a lookup/ack — no mutation, ~1-3s) is
+    // answered LIVE below. Anything that PERFORMS work (a status flip or a tool/research task) never
+    // runs live — that's the ~10-15s dead air the user hit when Sam/Iris ran tools mid-call. Two
+    // deferred paths, split by URGENCY:
+    //   • default → QUEUE for after the stand-up (P3): ack + "after we wrap", pushed to the work queue.
+    //   • "now"   → FIRE IMMEDIATELY in the background (P4): ack + "on it now", a durable turn kicked off
+    //               at once so it runs WHILE the round-robin keeps moving — latency hidden, room never
+    //               blocks, and the result buzzes in when ready. Respects "now" without freezing anyone.
+    // Either way the interrupted speaker resumes and the agent NEVER says "done" before it's proven.
     const asked = classifyAsk(text);
     const addressed = resolveAddressed(text, members) ?? (interrupted as AgentId) ?? members[0];
-    if (asked.type !== "quick-verbal" && asked.urgency !== "now") {
+    if (asked.type !== "quick-verbal") {
+      const nowMode = asked.urgency === "now";
       try {
-        const ackLine = `${bargeAckLine(text)} ${deferClause()}`;
+        const ackLine = `${bargeAckLine(text)} ${nowMode ? nowClause() : deferClause()}`;
         await ceremonyVoiceRef.current.speakInterjection(addressed, ackLine, {
           onSentenceStart: (s) => {
             addMeetingTurns([{ agentId: addressed, text: s }]);
-            persistCeremonyTurnRef.current({ speaker: "agent", agentId: addressed, text: s, kind: "ack-queued", ts: Date.now() });
+            persistCeremonyTurnRef.current({ speaker: "agent", agentId: addressed, text: s, kind: nowMode ? "ack-now" : "ack-queued", ts: Date.now() });
           },
         });
-        const key = `${addressed}|${text.trim().toLowerCase()}`;
-        if (!ceremonyWorkQueueRef.current.some((w) => `${w.agentId}|${w.text.trim().toLowerCase()}` === key)) {
-          ceremonyWorkQueueRef.current.push({ text, agentId: addressed });
+        if (nowMode) {
+          // Kick the work off immediately in the background — do NOT wait for ceremony end.
+          fireStandupWorkTurnRef.current({ text, agentId: addressed }, "now");
+        } else {
+          const key = `${addressed}|${text.trim().toLowerCase()}`;
+          if (!ceremonyWorkQueueRef.current.some((w) => `${w.agentId}|${w.text.trim().toLowerCase()}` === key)) {
+            ceremonyWorkQueueRef.current.push({ text, agentId: addressed });
+          }
         }
         await ceremonyVoiceRef.current.resumeFromFreeze();
       } catch (err) {
@@ -1067,37 +1133,11 @@ function MeetingRoom({
       setPhase("");
       patchMeeting({ ceremonyStatus: "done" });
       flushCeremonyTranscript();
-      // P3: the stand-up is over — fire each queued task as an autonomous DURABLE turn in the addressed
-      // agent's DM (reusing enqueueTurn/kickNextChunk + its send_push buzz on completion). The agent's
-      // own ownership-handoff logic re-routes anything that isn't theirs; the directive forbids claiming
-      // "done" unless it actually completed and says to retry on tool failure (so nothing is lost).
-      // Idempotent turnId keeps a re-run from double-firing.
+      // P3: the stand-up is over — fire each DEFAULT-urgency queued task as an autonomous durable turn
+      // (the "now"-tagged ones already fired mid-ceremony via P4). Shared helper = one code path, so the
+      // directive/idempotency/buzz behaviour can't drift between the two callers.
       const workQueue = ceremonyWorkQueueRef.current.splice(0);
-      for (const item of workQueue) {
-        const slug = item.text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
-        const workTurnId = `standup-work-${runIdRef.current}-${item.agentId}-${slug}`;
-        const directive =
-          `During the stand-up you were asked to handle this: "${item.text}". Take care of it now — use whatever tool it needs. ` +
-          `If it isn't yours to do, hand it to the right owner. If a tool fails, keep it and retry, and tell me it's still in progress — ` +
-          `do NOT say it's done unless it actually completed. Then confirm the outcome.`;
-        void enqueueHuddleTurn({
-          data: {
-            text: directive,
-            huddleId: `dm-${item.agentId}`,
-            scope: "one-to-one" as const,
-            members: [item.agentId],
-            history: [],
-            router: cfg.router,
-            agents: cfg.agents,
-            caller,
-            timeZone: tz,
-            turnId: workTurnId,
-            notify: "push",
-          },
-        }).catch(() => {
-          /* a queued-work enqueue failure must never break ceremony teardown */
-        });
-      }
+      for (const item of workQueue) fireStandupWorkTurnRef.current(item, "after");
     } catch (err) {
       setPhase("");
       activeCeremonyTurnRef.current = null;

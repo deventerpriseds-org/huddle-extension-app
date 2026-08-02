@@ -31,6 +31,8 @@ fs.mkdirSync(SHOT_DIR, { recursive: true });
 // Defer/ack phrases the queued path voices (MeetingBar deferClause + bargeAckLine, never "done").
 const DEFER_RE = /(take care of it right after|knock it out as soon|handle it right after|consider it queued|after we wrap|after the stand)/i;
 const ACK_RE = /(marking that now|get that updated|updating that now|take care of that status|pull that together|dig into|look into|work on that)/i;
+// P4 "now" phrases the fire-immediately path voices (MeetingBar nowClause) — background, room keeps moving.
+const NOW_RE = /(starting it now|on it right now|kicking it off now|running it now|in the background|behind the scenes|ping you the second|surface it the moment|surface the result)/i;
 
 async function agentRows(page) {
   return page.$$eval('[data-testid="transcript-turn"][data-turn-agent="true"]', (els) =>
@@ -76,7 +78,7 @@ async function barge(page, label, msg, textarea) {
   for (let i = 0; i < 70; i++) {
     added = (await agentRows(page)).slice(rowsBefore);
     if (added.some((r) => r.kind === "answer")) break; // a live answer appeared — stop early
-    if (i > 20 && added.some((r) => DEFER_RE.test(r.text))) break; // defer ack settled, no answer
+    if (i > 20 && added.some((r) => DEFER_RE.test(r.text) || NOW_RE.test(r.text))) break; // defer/now ack settled, no answer
     await page.waitForTimeout(500);
   }
   return {
@@ -84,6 +86,7 @@ async function barge(page, label, msg, textarea) {
     hasAnswerRow: added.some((r) => r.kind === "answer"),
     hasDeferRow: added.some((r) => DEFER_RE.test(r.text)),
     hasAckRow: added.some((r) => ACK_RE.test(r.text)),
+    hasNowRow: added.some((r) => NOW_RE.test(r.text)),
     sample: added.slice(0, 6).map((r) => ({ agentId: r.agentId, kind: r.kind, text: r.text.slice(0, 90) })),
   };
 }
@@ -110,17 +113,24 @@ try {
   // post-ceremony work-turn can never mutate a real board item (Test-task naming hard rule).
   out.task = await barge(page, "task", "Sam, you can mark the Test-investor-pitch task done.", textarea);
   await shot(page, "01-after-task");
-  // QUICK barge → expect a live answer.
+  // QUICK barge → expect a live answer (preamble stripped so the question is recognised).
   out.quick = await barge(page, "quick", "quick question — what day is it today?", textarea);
   await shot(page, "02-after-quick");
+  // NOW barge (P4) → expect a "now" ack (fired immediately in the background), NO live answer, NO defer.
+  // References a Test- item so the immediate background work-turn can't mutate a real board item.
+  out.now = await barge(page, "now", "Sam, pull the Test-Q3-numbers report right now.", textarea);
+  await shot(page, "03-after-now");
 
   const taskQueued = (out.task.hasDeferRow || out.task.hasAckRow) && !out.task.hasAnswerRow;
   const quickLive = out.quick.hasAnswerRow;
-  out.verdict = taskQueued && quickLive ? "PASS" : "FAIL";
+  const nowFired = out.now.hasNowRow && !out.now.hasAnswerRow && !out.now.hasDeferRow;
+  out.verdict = taskQueued && quickLive && nowFired ? "PASS" : "FAIL";
   out.why =
     `TASK barge: deferRow=${out.task.hasDeferRow} ackRow=${out.task.hasAckRow} answerRow=${out.task.hasAnswerRow} → ` +
     `${taskQueued ? "QUEUED (ack, no live answer) ✓" : "NOT clearly queued ✗"}; ` +
-    `QUICK barge: answerRow=${out.quick.hasAnswerRow} → ${quickLive ? "answered LIVE ✓" : "no live answer ✗"}`;
+    `QUICK barge: answerRow=${out.quick.hasAnswerRow} → ${quickLive ? "answered LIVE ✓" : "no live answer ✗"}; ` +
+    `NOW barge: nowRow=${out.now.hasNowRow} answerRow=${out.now.hasAnswerRow} deferRow=${out.now.hasDeferRow} → ` +
+    `${nowFired ? "FIRED NOW (background, no live block) ✓" : "NOT clearly now-fired ✗"}`;
 } catch (err) {
   out.fatal = err.message;
   await shot(page, "99-fatal");

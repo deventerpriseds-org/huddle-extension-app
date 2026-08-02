@@ -1,26 +1,33 @@
-// P3 — offline proof of the queue-vs-live barge decision (MeetingBar runBargeSequence predicate:
-// a task that is NOT quick-verbal and NOT urgency:"now" is QUEUED for after; else answered live).
-// Uses the same classifyAsk the runtime uses. Run with bun: bun scripts/queue-decision.test.mjs
+// P3/P4 — offline proof of the barge decision (MeetingBar runBargeSequence). THREE outcomes:
+//   LIVE  — a quick VERBAL question/ack: answered inline, live (~1-3s, no mutation).
+//   QUEUE — a non-quick task at default urgency: acked + queued, fired autonomously AFTER the stand-up.
+//   NOW   — a non-quick task tagged "right now": acked + fired IMMEDIATELY in the background so it runs
+//           while the round-robin keeps moving (P4 latency-hide). Not answered live, not deferred to end.
+// A task NEVER runs live (that was the 10-15s dead air). Uses the same classifyAsk the runtime uses.
+// Run with bun: bun scripts/queue-decision.test.mjs
 import { classifyAsk } from "../src/features/huddle/lib/capabilities.ts";
 
-// The runtime predicate, mirrored: queue when type != quick-verbal AND urgency != now.
+// The runtime predicate, mirrored: quick-verbal → LIVE; else NOW if urgency=now, else QUEUE.
 const decide = (text) => {
   const a = classifyAsk(text);
-  return a.type !== "quick-verbal" && a.urgency !== "now" ? "QUEUE" : "LIVE";
+  if (a.type === "quick-verbal") return "LIVE";
+  return a.urgency === "now" ? "NOW" : "QUEUE";
 };
 
-// [text, expected] — includes the real transcript barges.
+// [text, expected] — includes the real transcript barges + preamble-wrapped variants.
 const CASES = [
   ["Hey Sam, that investor pitch task, you can mark that done.", "QUEUE"], // fast-action, default
   ["Iris, you can make both the prepare for gym done and the transfer 40k done.", "QUEUE"], // fast-action, default
   ["research Agentforce by Salesforce", "QUEUE"], // slow, default
   ["draft the investor update email", "QUEUE"], // slow, default
   ["what day is it today?", "LIVE"], // quick-verbal → answer live
+  ["quick question — what day is it today?", "LIVE"], // preamble stripped → still a live question
   ["who owns the release?", "LIVE"], // quick-verbal
   ["how's the burn looking?", "LIVE"], // quick-verbal
-  ["mark that done now", "LIVE"], // fast-action but "now" → do it live
-  ["research Agentforce right now", "LIVE"], // slow but "now" → live (offer-next handles latency in P4)
-  ["do it now", "LIVE"], // urgency now
+  ["mark that done now", "NOW"], // fast-action + now → fire immediately, background
+  ["research Agentforce right now", "NOW"], // slow + now → fire immediately, background (latency hidden)
+  ["do it now", "NOW"], // urgency now (imperative, not a question)
+  ["hey Sam, close out the amex payment right away", "NOW"], // preamble + now
 ];
 
 let passed = 0, failed = 0;
