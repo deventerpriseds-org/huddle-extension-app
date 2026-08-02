@@ -135,6 +135,27 @@ export const getRealtimeSession = createServerFn({ method: "POST" })
     }
   });
 
+// PRE-WARM (Fix B): fire-and-forget from the client the moment a 1:1 meeting view opens (before the
+// user clicks/speaks). It runs the SAME expensive prep the real mint does — assembleRealtimeInstructions
+// (warms the SWA function process + RAG/Azure-PG connection) and buildRealtimeToolset (warms + CACHES
+// the journey tool catalog, 60s TTL) — but does NOT mint an OpenAI session (ephemeral keys expire in
+// ~1 min, so pre-minting would waste them). So the cold-start (~15s the user feels) happens in the
+// background while they read the screen; the real connect then reuses the warm process + cached catalog.
+export const warmupRealtime = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => parseSessionInput(raw))
+  .handler(async ({ data }): Promise<{ ok: boolean }> => {
+    if (!data.agentId) return { ok: false };
+    try {
+      await Promise.all([
+        assembleRealtimeInstructions(data.agentId, { memoryQuery: data.memoryQuery }),
+        buildRealtimeToolset(data.agentId, { webSearch: data.webSearch, journey: data.journey }),
+      ]);
+      return { ok: true };
+    } catch {
+      return { ok: false }; // warmup is best-effort — never surface an error to the UI
+    }
+  });
+
 export type RealtimeToolResult =
   | { ok: true; output: string; ms: number }
   | { ok: false; error: string };

@@ -189,6 +189,17 @@ export function MeetingLayer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, speakerId, isVirtual]);
 
+  // Fix B: pre-warm the Fast (A) server voice path the instant a 1:1 opens (no mic, no gesture, no
+  // OpenAI mint) so the cold-start work (SWA fn spin-up + RAG/PG + journey catalog cache) is done
+  // before the user taps to talk — hides most of the ~15s cold start, especially on mobile where the
+  // real connect waits for a tap. Idempotent per agent (warmedRef inside the hook).
+  useEffect(() => {
+    if (active && speakerId && !isVirtual && engineMode === "realtime-speak") {
+      realtimeSpeakVoice.warmup(speakerId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, speakerId, isVirtual, engineMode]);
+
   // Backstop teardown when the meeting ends by any path.
   useEffect(() => {
     if (!active) void disconnect();

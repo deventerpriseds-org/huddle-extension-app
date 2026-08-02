@@ -5,7 +5,7 @@ import { AGENT_BY_ID } from "../data/agents";
 import { useHuddleStore } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
-import { getRealtimeSession, runRealtimeTool, REALTIME_MODEL } from "../lib/voice/realtime.functions";
+import { getRealtimeSession, runRealtimeTool, warmupRealtime, REALTIME_MODEL } from "../lib/voice/realtime.functions";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import type { VoiceCallController, VoiceStatus, VoiceCaption } from "./useVoiceCall";
 import type { StartVoiceResult } from "../lib/voice/voice.functions";
@@ -48,6 +48,8 @@ function countAsks(text: string): number {
 
 export type VoiceCallRealtimeSpeakController = VoiceCallController & {
   sendText: (agentId: AgentId, text: string) => Promise<void>;
+  /** Pre-warm the server voice path for an agent (Fix B) — call on 1:1 meeting open, before Start. */
+  warmup: (agentId: AgentId) => void;
 };
 
 export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
@@ -80,7 +82,10 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   const lastAgentSpokeAtRef = useRef(0);
 
   // EL TTS playback queue (base64 MP3 per reply, played sequentially).
+  // sentenceBufRef = text NOT yet sent to synth (drains sentence-by-sentence as it streams in);
+  // fullBufRef = the entire reply text so far (for the transcript/caption, persisted once on done).
   const sentenceBufRef = useRef("");
+  const fullBufRef = useRef("");
   const audioQueueRef = useRef<string[]>([]);
   const audioPlayingRef = useRef(false);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -95,11 +100,14 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   // model is IDLE — not while a tool continuation is still coming (that would collide as an "active
   // response"). We fire the resume on response.done only once this counter is back to 0.
   const pendingToolsRef = useRef(0);
+  // Fix B: pre-warm once per agent (per mount) so the cold-start server work happens before Start.
+  const warmedRef = useRef<AgentId | null>(null);
 
   const clearAudio = useCallback(() => {
     audioQueueRef.current = [];
     audioPlayingRef.current = false;
     sentenceBufRef.current = "";
+    fullBufRef.current = "";
     if (currentAudioRef.current) {
       currentAudioRef.current.onended = null;
       currentAudioRef.current.onerror = null;
@@ -150,6 +158,34 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
       if (spoken.ok && spoken.audioBase64) enqueueAudio(spoken.audioBase64);
     } catch { /* skip on TTS error */ }
   }, [enqueueAudio]);
+
+  // STREAMING SYNTH (Fix A): drain COMPLETE sentences from the pending buffer and synth each the moment
+  // it's ready — so first audio starts after sentence 1, not the whole reply (~2.6s → ~1s). Synth runs
+  // ahead of playback (the queue plays sequentially), so it stays gapless — no choppy per-sentence
+  // pauses. `force` (on response.done) flushes the trailing partial. We batch up to the LAST terminator
+  // so multiple short sentences go in one synth call, and hold a chunk until it's ≥ MIN so we never
+  // synth a tiny fragment. SWA buffers HTTP, and the EL key is server-side, so this per-sentence
+  // approach (repeated small synth calls) is the streaming form that actually works here — not a
+  // client websocket. Same model, same characters → same cost.
+  const MIN_SPEAK_CHARS = 18;
+  const pumpSpeech = useCallback(
+    (agentId: AgentId, gen: number, force: boolean) => {
+      const buf = sentenceBufRef.current;
+      if (!buf.trim()) { if (force) sentenceBufRef.current = ""; return; }
+      if (force) {
+        sentenceBufRef.current = "";
+        void speak(buf, agentId, gen);
+        return;
+      }
+      // Cut at the LAST sentence/clause boundary; keep the incomplete tail buffered.
+      const m = buf.match(/^([\s\S]*[.!?\n])([\s\S]*)$/);
+      if (m && m[1].trim().length >= MIN_SPEAK_CHARS) {
+        sentenceBufRef.current = m[2];
+        void speak(m[1], agentId, gen);
+      }
+    },
+    [speak],
+  );
 
   const supported =
     typeof window !== "undefined" &&
@@ -265,26 +301,29 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
           let msg: { type: string; [k: string]: unknown };
           try { msg = JSON.parse(e.data as string); } catch { return; }
           switch (msg.type) {
-            // Accumulate the streamed reply text (do NOT synth per sentence — that caused the choppy
-            // ~1.6s inter-sentence pauses). We synth the WHOLE reply ONCE on .done for smooth,
-            // continuous audio. Per-sentence chunking existed for sentence-boundary barge; barge is now
-            // native (interrupt_response), so it's no longer needed.
+            // STREAMING SYNTH: accumulate the reply text AND drain complete sentences to synth as they
+            // arrive (pumpSpeech), so the first sentence is spoken ~1s in instead of after the whole
+            // reply. Pipelined (synth ahead of playback) → still gapless, no choppy pauses.
             case "response.output_text.delta":
             case "response.text.delta": {
               const delta = (msg.delta as string) ?? "";
-              if (delta) sentenceBufRef.current += delta;
+              if (delta && agentIdRef.current) {
+                sentenceBufRef.current += delta;
+                fullBufRef.current += delta;
+                pumpSpeech(agentIdRef.current, gen, false);
+              }
               break;
             }
             case "response.output_text.done":
             case "response.text.done": {
-              const full = (((msg.text as string) ?? "").trim()) || sentenceBufRef.current.trim();
-              sentenceBufRef.current = "";
+              // Flush the trailing partial sentence, then persist the full reply once for the transcript.
+              if (agentIdRef.current) pumpSpeech(agentIdRef.current, gen, true);
+              const full = (((msg.text as string) ?? "").trim()) || fullBufRef.current.trim();
+              fullBufRef.current = "";
               if (full && agentIdRef.current) {
                 lastAgentTextRef.current = full;
                 setCaptions((c) => [...c.slice(-40), { role: "agent", text: full }]);
                 persist("agent", agentIdRef.current, full);
-                // ONE synthesis for the whole (short) reply → smooth, gapless playback.
-                void speak(full, agentIdRef.current, gen);
               }
               break;
             }
@@ -411,7 +450,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
       }
       return ok();
     },
-    [supported, status, callerFor, persist, failWith, cleanup, clearAudio, setModeBoth, speak],
+    [supported, status, callerFor, persist, failWith, cleanup, clearAudio, setModeBoth, pumpSpeech],
   );
 
   const toggleMic = useCallback(() => {
@@ -435,7 +474,34 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
     [persist],
   );
 
+  // Fix B — pre-warm the server voice path (no mic, no OpenAI mint): warms the SWA fn + RAG/PG + caches
+  // the journey catalog so the real connect isn't paying cold-start. Fire-and-forget, once per agent.
+  const warmup = useCallback(
+    (agentId: AgentId) => {
+      if (!agentId || !AGENT_BY_ID[agentId] || warmedRef.current === agentId) return;
+      warmedRef.current = agentId;
+      const backendsCfg = useBackendsStore.getState().config;
+      const agentCfg = backendsCfg.agents?.[agentId];
+      const recentText = useHuddleStore
+        .getState()
+        .messages.filter((m) => m.huddleId === `dm-${agentId}`)
+        .slice(-1)
+        .map((m) => m.text)
+        .join(" ");
+      void warmupRealtime({
+        data: {
+          agentId,
+          caller: callerFor(),
+          memoryQuery: recentText || undefined,
+          webSearch: agentCfg?.webSearch,
+          journey: agentCfg?.journey?.enabled,
+        },
+      }).catch(() => { warmedRef.current = null; /* let a later open retry */ });
+    },
+    [callerFor],
+  );
+
   useEffect(() => () => cleanup(), [cleanup]);
 
-  return { status, mode, captions, micMuted, error, connect, disconnect, toggleMic, sendText };
+  return { status, mode, captions, micMuted, error, connect, disconnect, toggleMic, sendText, warmup };
 }

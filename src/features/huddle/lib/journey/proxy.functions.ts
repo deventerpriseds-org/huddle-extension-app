@@ -53,12 +53,22 @@ async function journeyFetch(path: string, init?: RequestInit): Promise<Response>
 // Server-only helpers (also usable directly from other server modules).
 // -------------------------------------------------------------------------
 
+// Short-TTL cache for the journey tool catalog. The catalog is effectively static within a session, so
+// caching it lets the voice pre-warm (warmupRealtime) fetch it once and the real connect reuse it —
+// removing a cold journey-edge HTTP round-trip from the connect critical path. 60s is long enough to
+// bridge warmup→connect, short enough that a catalog change propagates quickly.
+let _catalogCache: { at: number; tools: JourneyToolDefinition[] } | null = null;
+const CATALOG_TTL_MS = 60_000;
+
 export async function fetchJourneyToolDefinitions(): Promise<JourneyToolDefinition[]> {
+  if (_catalogCache && Date.now() - _catalogCache.at < CATALOG_TTL_MS) return _catalogCache.tools;
   const res = await journeyFetch("/tools", { method: "GET" });
   if (!res.ok) throw new Error(`journey /tools ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const body = (await res.json()) as JourneyToolsListResponse;
   if (!body.ok) throw new Error(body.error ?? "journey /tools returned ok=false");
-  return body.tools ?? [];
+  const tools = body.tools ?? [];
+  _catalogCache = { at: Date.now(), tools };
+  return tools;
 }
 
 /** Convert a journey ToolDefinition into an OpenAI Responses `type:"function"` tool. */
