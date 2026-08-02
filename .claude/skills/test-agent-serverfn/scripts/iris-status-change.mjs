@@ -74,14 +74,15 @@ function show(label, r) {
 // currently DONE — well-formed status). Reopen then re-close = net-zero, exercises update_task twice.
 // Tests whether Iris can resolve + change a DONE LIFE task (the exact scenario she was accused of
 // failing). If get_tasks only returns OPEN tasks, resolution — not the guard — is the limiter.
-// VERIFY Part 4 (tracking-not-executing): the FINANCIAL task that Iris previously REFUSED to mark done
-// ("ensure it's been executed in your financial systems"). After the shared clarification she should
-// just change the card status. Reopen → then mark done (the turn where she used to refuse).
-const TARGET = "Transfer 40k";
-const sVal = show("STATUS-CHANGE (reopen → up next)", await send(`Reopen my "${TARGET}" task — move it to up next.`));
-
-await new Promise((r) => setTimeout(r, 4000));
-const mVal = show("STATUS-CHANGE (mark the financial card done)", await send(`Now mark "${TARGET}" as done.`));
+// VERIFY Part 4 (tracking-not-executing) on an OPEN financial task, so resolution isn't the blocker
+// (the DONE "Transfer 40k" isn't returned by the open-task lookup). Financial content ("wire $5,000")
+// is what used to trigger the refusal. Test- prefixed → cleanable. Create → then mark done.
+const CREATE = 'Create a task titled "Test-wire 5000 dollars to vendor" in my backlog.';
+show("CREATE (open financial task)", await send(CREATE));
+await new Promise((r) => setTimeout(r, 6000));
+// Loosely referenced so get_tasks finds it by content even if the model paraphrased the title.
+const sVal = show("STATUS-CHANGE (mark financial card done)", await send('Mark my "wire 5000 dollars to vendor" task as done.'));
+const mVal = { toolUses: [] }; // single status turn for this check
 
 const updateOk = [...(sVal.toolUses || []), ...(mVal.toolUses || [])].some((t) => t.tool === "update_task" && t.ok === true);
 const updateErr = [...(sVal.toolUses || []), ...(mVal.toolUses || [])].some((t) => t.tool === "update_task" && t.ok !== true && t.ok != null);
