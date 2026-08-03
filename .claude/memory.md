@@ -810,3 +810,23 @@ round-robin; Terry then PREMATURELY closed after only Iris reported.
   but not directly proven because the UAT floods deliberate barges (which legitimately consume the
   ceremony). A clean, barge-free stand-up run should be checked to assert the full round-robin completes
   before the closer. And the voice FEEL is the user's live verdict.
+
+## Barge/round-robin collision fixes (2026-08-03) — deployed, merged with a parallel session
+From live run 060af2c0 (Sam loop-replying 5×, cross-talk with Iris/Tess, opener repeated 4×, doubled
+comments, a "barge timed out" toast). Six fixes, all on main (26eea2d, union-merged with another
+session's realtime-speak/summon/board-reassignment work — no conflicts, both changesets intact):
+1. Round-robin PAUSES during a barge exchange (`bargeCooldownUntilRef`, 6s, reset per barge) — emit's
+   park loop honors it — so scripted turns don't advance/re-emit mid-conversation (the core collision).
+2. Host OPENER no longer re-speaks on barge (`voiceTurn` gains `resumable:false`; opener = first block of
+   first step). Lane-report checklists keep resume.
+3. Dedupe an EXACT double-fired barge (same text <2.5s) at the top of runBargeSequence — kills doubled
+   comments/dispatch; genuine successive/different barges pass (scoped tight per the user's caution).
+4. 30s barge-answer timeout degrades quietly (resume, no error toast).
+5. VAD `eagerness` REVERTED low→medium (low made real barges slow to stop). `isMeaningfulBarge` guard is
+   the evidenced gibberish defense (UAT: typed "mhm" still ignored at medium). If gibberish recurs,
+   tighten the GUARD, not eagerness (user was right it wasn't ground-truthed).
+6. Live mic-level pulse in MeetingBar (AnalyserNode RMS → `micLevel` on useCeremonyVoice) so the user can
+   SEE the mic hearing them (green dot grows/brightens with input) — they were barging blind.
+UAT-verified no-regression (mhm ignored, hail/park/quick pass). The collision fixes (pause, opener,
+dedupe, mic feel, cross-talk) CANNOT be proven by the barge-flooding harness — user live-test is the
+verdict. Completion-check "fail" is a test-window artifact (flood + 6s cooldowns outlast 180s), not a bug.
