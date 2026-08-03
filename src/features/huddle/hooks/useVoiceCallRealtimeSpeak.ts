@@ -6,6 +6,7 @@ import { useHuddleStore } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
 import { getRealtimeSession, runRealtimeTool, warmupRealtime, REALTIME_MODEL } from "../lib/voice/realtime.functions";
+import { SUMMON_BUZZ_URL, SUMMON_GREETING_DELAY_MS, pickSummonGreeting } from "../lib/voice/summon";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import type { VoiceCallController, VoiceStatus, VoiceCaption } from "./useVoiceCall";
 import type { StartVoiceResult } from "../lib/voice/voice.functions";
@@ -50,6 +51,8 @@ export type VoiceCallRealtimeSpeakController = VoiceCallController & {
   sendText: (agentId: AgentId, text: string) => Promise<void>;
   /** Pre-warm the server voice path for an agent (Fix B) — call on 1:1 meeting open, before Start. */
   warmup: (agentId: AgentId) => void;
+  /** Buzz + canned cloned-voice greeting when a 1:1 voice view opens (simulates paging the agent). */
+  summon: (agentId: AgentId) => void;
 };
 
 export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
@@ -102,6 +105,8 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   const pendingToolsRef = useRef(0);
   // Fix B: pre-warm once per agent (per mount) so the cold-start server work happens before Start.
   const warmedRef = useRef<AgentId | null>(null);
+  // Summon greeting fires once per meeting open; reset in cleanup so reopening the view replays it.
+  const summonedRef = useRef<AgentId | null>(null);
 
   const clearAudio = useCallback(() => {
     audioQueueRef.current = [];
@@ -203,6 +208,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   const cleanup = useCallback(() => {
     genRef.current += 1;
     connectingRef.current = false;
+    summonedRef.current = null; // allow the summon greeting to replay next open
     clearAudio();
     try { dcRef.current?.close(); } catch { /* noop */ }
     dcRef.current = null;
@@ -501,7 +507,32 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
     [callerFor],
   );
 
+  // SUMMON — on 1:1 voice open, play the intercom buzz, then have the agent answer with a canned greeting
+  // in its cloned voice. The greeting rides the SAME audio queue as real replies (enqueueAudio), so it's
+  // barge-interruptible and NOT cancelled by the concurrent auto-connect (connect() doesn't clear the
+  // queue). Idempotent per agent per mount; reset in cleanup so reopening the view replays it.
+  const summon = useCallback(
+    (agentId: AgentId) => {
+      if (!agentId || !AGENT_BY_ID[agentId] || summonedRef.current === agentId) return;
+      summonedRef.current = agentId;
+      // 1) Buzz (local asset — plays inside the open gesture's activation window).
+      try {
+        const buzz = new Audio(SUMMON_BUZZ_URL);
+        buzz.volume = 0.6;
+        void buzz.play().catch(() => { /* autoplay blocked before a gesture — non-fatal */ });
+      } catch { /* noop */ }
+      // 2) Greeting — synth in the agent's cloned voice a beat later, so the buzz lands first.
+      const greeting = pickSummonGreeting();
+      window.setTimeout(() => {
+        void synthesizeSpeech({ data: { text: greeting, agentId } })
+          .then((r) => { if (r.ok && r.audioBase64) enqueueAudio(r.audioBase64); })
+          .catch(() => { /* skip on TTS error */ });
+      }, SUMMON_GREETING_DELAY_MS);
+    },
+    [enqueueAudio],
+  );
+
   useEffect(() => () => cleanup(), [cleanup]);
 
-  return { status, mode, captions, micMuted, error, connect, disconnect, toggleMic, sendText, warmup };
+  return { status, mode, captions, micMuted, error, connect, disconnect, toggleMic, sendText, warmup, summon };
 }

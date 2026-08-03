@@ -13,22 +13,11 @@ import {
   upsertScheduledJob,
   type ScheduledJob,
 } from "./tasks.server";
+import { resolveJobCadence, DEFAULT_TZ, type JobCadence, type JobTypeKey } from "../identity/scheduling-config.server";
 
-// Default auto-groom cadence: six local checks a day (a fresh groom only fires if the backlog actually
-// changed — the run-grooming change-gate handles that; here we just decide WHEN to check).
-const DEFAULT_GROOM_HOURS = [4, 8, 12, 14, 18, 22];
-// Auto-work runs less often than grooming (it does live web research + artifact writes). It fires
-// AFTER grooming has assigned/triaged, so agents pick up freshly-assigned work.
-const DEFAULT_AUTOWORK_HOURS = [9, 13, 17];
-// Standup digest fires once in the morning — it summarizes the prior day's autonomous work + blockers.
-const DEFAULT_STANDUP_HOURS = [8];
-// Review digest: Iris's gentle nudge on what's waiting in "Ready for review" — 8am/11am/1pm/4pm/7pm.
-const DEFAULT_REVIEW_DIGEST_HOURS = [8, 11, 13, 16, 19];
-// 48h post-review recheck: per-task, per-agent check-ins (WIP confirm-intent gate, Part 1). The real
-// cadence is per-task (~48h, jittered), so this just needs to check often enough to catch due tasks
-// promptly — twice a day is plenty given the jitter spread.
-const DEFAULT_REVIEW_RECHECK_HOURS = [10, 16];
-const DEFAULT_TZ = "America/New_York";
+// Cadences (which hours, which days) are a user-editable Setting (Settings → Account → Scheduling),
+// not a hardcoded constant — see scheduling-config.server.ts. SCHEDULING_DEFAULTS there is what a
+// brand-new user starts with; resolveJobCadence() is what actually runs, per-user, live.
 
 /** ms to add to a UTC instant so that formatting it in `tz` yields the same wall-clock — i.e. tz offset. */
 function tzOffsetMs(tz: string, date: Date): number {
@@ -55,11 +44,16 @@ function localWallToUtc(tz: string, year: number, month1: number, day: number, h
   return new Date(guess - tzOffsetMs(tz, new Date(guess)));
 }
 
-/** Next UTC instant strictly after `from` whose local (tz) time is one of `hours`:00. */
-export function computeNextRun(hours: number[], tz: string, from: Date): Date {
+/** Next UTC instant strictly after `from` whose local (tz) time is one of `hours`:00, optionally
+ * restricted to specific local weekdays (`daysOfWeek`, Date.getDay() convention: 0=Sun..6=Sat;
+ * omitted/empty = every day). Scans a full 8-day window so a single-day-of-week cadence (e.g.
+ * "Monday only") always finds its next occurrence, not just a 3-day lookahead built for daily use. */
+export function computeNextRun(hours: number[], tz: string, from: Date, daysOfWeek?: number[]): Date {
   const slots = [...new Set(hours.filter((h) => Number.isInteger(h) && h >= 0 && h <= 23))].sort((a, b) => a - b);
   if (!slots.length) return new Date(from.getTime() + 3_600_000);
-  // Anchor on the local calendar day of `from`, scan today + next 2 days for the first future slot.
+  const dayFilter = daysOfWeek && daysOfWeek.length ? new Set(daysOfWeek) : null;
+  // Anchor on the local calendar day of `from`, scan today + next 7 days (a full week, so a
+  // single-weekday cadence is guaranteed to find its next slot) for the first future match.
   const local = new Intl.DateTimeFormat("en-CA", {
     timeZone: tz,
     year: "numeric",
@@ -70,10 +64,15 @@ export function computeNextRun(hours: number[], tz: string, from: Date): Date {
   let y = +lp.year;
   let m = +lp.month;
   let d = +lp.day;
-  for (let dayOffset = 0; dayOffset < 3; dayOffset++) {
-    for (const h of slots) {
-      const cand = localWallToUtc(tz, y, m, d, h);
-      if (cand.getTime() > from.getTime()) return cand;
+  for (let dayOffset = 0; dayOffset < 8; dayOffset++) {
+    const localNoon = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+    const localDow = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(localNoon);
+    const dowIndex = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(localDow);
+    if (!dayFilter || dayFilter.has(dowIndex)) {
+      for (const h of slots) {
+        const cand = localWallToUtc(tz, y, m, d, h);
+        if (cand.getTime() > from.getTime()) return cand;
+      }
     }
     // advance one local day
     const next = new Date(Date.UTC(y, m - 1, d + 1, 12, 0, 0));
@@ -84,60 +83,37 @@ export function computeNextRun(hours: number[], tz: string, from: Date): Date {
   return new Date(from.getTime() + 3_600_000);
 }
 
+/** One row description: the job-type key scheduling-config.server.ts knows it by, the id prefix,
+ * and the job_type string stored on the row / matched in fireJob. Adding a new recurring job type is
+ * one more entry here + a default in SCHEDULING_DEFAULTS + one more `fireJob` case — no new cron. */
+const JOB_ROWS: { key: JobTypeKey; idPrefix: string; jobType: string }[] = [
+  { key: "groom", idPrefix: "groom", jobType: "groom" },
+  { key: "autowork", idPrefix: "autowork", jobType: "auto-work" },
+  { key: "standup", idPrefix: "standup", jobType: "standup-digest" },
+  { key: "reviewDigest", idPrefix: "review-digest", jobType: "review-digest" },
+  { key: "reviewRecheck", idPrefix: "review-recheck", jobType: "review-recheck" },
+];
+
 /**
- * Ensure every user with an open backlog has an auto-groom, auto-work, standup-digest AND review-digest
- * job (idempotent; only new rows get a next_run — a conflict never overwrites the claimed watermark).
- * Adding a recurring job type is one more row here + one more `fireJob` case.
+ * Ensure every user with an open backlog has a row for every job type in JOB_ROWS (idempotent; only
+ * new rows get a next_run seeded — an existing row's next_run_at is left alone so a pending fire
+ * isn't disturbed, but `cadence` DOES refresh every tick, so a live Settings change to hours/days
+ * takes effect on that job's next fire without needing to delete/recreate anything).
  */
 async function ensureGroomJobs(now: Date): Promise<void> {
   const emails = await getUsersWithOpenBacklog();
   for (const email of emails) {
-    const groom = { tz: DEFAULT_TZ, hours: DEFAULT_GROOM_HOURS };
-    await upsertScheduledJob({
-      id: `groom-${email}`,
-      jobType: "groom",
-      targetEmail: email,
-      cadence: groom,
-      // On first insert this seeds the next fire; on conflict it's ignored (next_run_at not overwritten).
-      nextRunAt: computeNextRun(groom.hours, groom.tz, now).toISOString(),
-      meta: {},
-    });
-    const autowork = { tz: DEFAULT_TZ, hours: DEFAULT_AUTOWORK_HOURS };
-    await upsertScheduledJob({
-      id: `autowork-${email}`,
-      jobType: "auto-work",
-      targetEmail: email,
-      cadence: autowork,
-      nextRunAt: computeNextRun(autowork.hours, autowork.tz, now).toISOString(),
-      meta: {},
-    });
-    const standup = { tz: DEFAULT_TZ, hours: DEFAULT_STANDUP_HOURS };
-    await upsertScheduledJob({
-      id: `standup-${email}`,
-      jobType: "standup-digest",
-      targetEmail: email,
-      cadence: standup,
-      nextRunAt: computeNextRun(standup.hours, standup.tz, now).toISOString(),
-      meta: {},
-    });
-    const reviewDigest = { tz: DEFAULT_TZ, hours: DEFAULT_REVIEW_DIGEST_HOURS };
-    await upsertScheduledJob({
-      id: `review-digest-${email}`,
-      jobType: "review-digest",
-      targetEmail: email,
-      cadence: reviewDigest,
-      nextRunAt: computeNextRun(reviewDigest.hours, reviewDigest.tz, now).toISOString(),
-      meta: {},
-    });
-    const reviewRecheck = { tz: DEFAULT_TZ, hours: DEFAULT_REVIEW_RECHECK_HOURS };
-    await upsertScheduledJob({
-      id: `review-recheck-${email}`,
-      jobType: "review-recheck",
-      targetEmail: email,
-      cadence: reviewRecheck,
-      nextRunAt: computeNextRun(reviewRecheck.hours, reviewRecheck.tz, now).toISOString(),
-      meta: {},
-    });
+    for (const row of JOB_ROWS) {
+      const cadence: JobCadence = await resolveJobCadence(email, row.key);
+      await upsertScheduledJob({
+        id: `${row.idPrefix}-${email}`,
+        jobType: row.jobType,
+        targetEmail: email,
+        cadence,
+        nextRunAt: computeNextRun(cadence.hours, cadence.tz, now, cadence.daysOfWeek).toISOString(),
+        meta: {},
+      });
+    }
   }
 }
 
@@ -205,10 +181,11 @@ export async function runDueScheduledJobs(): Promise<number> {
   let fired = 0;
   for (const job of claimed) {
     const tz = job.cadence?.tz ?? DEFAULT_TZ;
-    const hours = job.cadence?.hours ?? DEFAULT_GROOM_HOURS;
+    const hours = job.cadence?.hours?.length ? job.cadence.hours : [8];
+    const daysOfWeek = job.cadence?.daysOfWeek;
     // Advance to the real next slot (claim held it ~90s; overwrite with the true next fire time).
     try {
-      await setScheduledJobNextRun(job.id, computeNextRun(hours, tz, now).toISOString());
+      await setScheduledJobNextRun(job.id, computeNextRun(hours, tz, now, daysOfWeek).toISOString());
     } catch {
       /* if this fails the 90s hold retries the job later — idempotent slot id prevents a double run */
     }

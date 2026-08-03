@@ -390,6 +390,59 @@ just published benchmarks — benchmarks are a starting hypothesis, not proof fo
 1-2 agents, run identical real turns against GPT-4o vs Luna vs Terra side-by-side (reply quality, tone
 fidelity to the persona snapshot, tool-call correctness, latency), before deciding on a broader swap.
 
+### ACT-huddle-16: Board reassignment silently reverts — mirror-sync race
+**Requested:** 2026-07-31 — user: "I clicked the assign to option on a card and assigned it to Tess
+but it didn't reassign after processing as if it failed."
+**Root cause (traced by reading the code, not guessed):** `BoardView.tsx`'s `applyMove` writes to
+journey (canonical) via `updateBoardTask` — succeeds immediately — then scheduled a SINGLE
+`refetch()` at a fixed 2.5s delay. `refetch()` reads the Huddle MIRROR (`tasks.journey_tasks`),
+which syncs asynchronously (`pg_net`, "eventually consistent, ~1-3s but not guaranteed" per this
+repo's own CLAUDE.md). If the mirror hadn't caught up by 2.5s, the blind refetch silently overwrote
+the correct optimistic UI with the stale pre-write row — looking exactly like the assignment failed,
+even though the write succeeded.
+**Fix:** replaced the fixed-delay refetch with `waitForMirrorSync` — polls `getBoardTasks` (6
+attempts, 700ms apart) until the specific patched field is actually visible, and only then replaces
+state. If it never catches up within budget, the optimistic state is left alone instead of being
+clobbered with a known-stale read (the next natural refetch reconciles once sync lands).
+**Status:** implemented, `tsc` clean. AC-writing subagent dispatched; verifier not yet run — do not
+mark closed until independently verified.
+
+### ACT-huddle-17: Grooming cadence → Monday mornings only, and ALL job cadences made user-editable (Settings, not code)
+**Requested:** 2026-07-31 — user: "Terry is grooming too often[,] change it to Monday mornings
+and[,] whatever currently falls in Monday morning[,] stop the rest. This also needs to be a manual
+config in settings so I can increase if I need to without code[,] just like every value[,] so they
+don't get lost in code and not able to be changed or even be forgotten."
+**Built:**
+- `identity/scheduling-config.server.ts` (new) — email-scoped Azure PG table
+  `identity.scheduling_config`, `resolveJobCadence(email, jobType)` merges a per-user override over
+  a shipped default. Covers ALL 5 scheduled job types (groom/autowork/standup/reviewDigest/
+  reviewRecheck) with the SAME mechanism — not a grooming-only patch, per this repo's own
+  "systematic capability, never a patch" standing principle.
+- `identity/scheduling-config.functions.ts` (new) — client-callable get/set server fns, same
+  caller-resolution pattern as `agent-workflow-config.functions.ts`.
+- `SchedulingPanel.tsx` (new, wired into `SettingsSheet.tsx`) — per-job-type hours + day-of-week
+  editor, reset-to-default per job.
+- `scheduler.server.ts`: `computeNextRun` gained an optional `daysOfWeek` filter (Date.getDay()
+  convention, 0=Sun..6=Sat) and its day-scan window widened from 3 to 8 days (a 3-day window can
+  miss a single-weekday cadence entirely). `ensureGroomJobs` now resolves live per-user cadence via
+  `resolveJobCadence` for every job type instead of hardcoded constants.
+- `tasks.server.ts`: `ScheduledJob`/`upsertScheduledJob` cadence type gained optional
+  `daysOfWeek?: number[]`. Confirmed the existing upsert already refreshes `cadence` on conflict
+  (only `next_run_at` is left alone) — so a live Settings edit takes effect on the job's NEXT fire
+  without needing the row deleted/recreated.
+- **New grooming default: `{hours:[8], daysOfWeek:[1]}`** (Monday 8am ET) — down from
+  `[4,8,12,14,18,22]` every day. The other 4 job types' defaults are unchanged, just gained the
+  (unused-by-default) `daysOfWeek` capability.
+**Verified offline (standalone script against the real `computeNextRun`, not a reimplementation):**
+Monday-8am cadence resolves correctly from every day of the week (Mon/Tue/Fri/Sun all → next
+Monday 8am); the exact boundary case (dispatched AT Monday 8am, and just after) correctly rolls to
+the FOLLOWING Monday, not the same day; a multi-day cadence (Mon+Thu) correctly finds Thursday when
+queried after Monday's slot has passed; the no-daysOfWeek (every-day) case is byte-for-byte
+unchanged behavior from before this change (regression-checked).
+**Status:** implemented, `tsc` clean, core scheduling logic independently offline-verified. AC-writing
+subagent dispatched; live verifier (real DB read/write, Settings UI round-trip) not yet run — do not
+mark closed until independently verified.
+
 ### ACT-huddle-15: Research — OpenAI Voice Agents SDK adoption + real API-cost-reduction levers (prompt caching, Batch API)
 **Requested:** 2026-07-31 — user's own words: "add an act for researching should we be using the concept
 of an openai voice agent? and also should we be using sandbox agents to avoid draining my api quota?"
