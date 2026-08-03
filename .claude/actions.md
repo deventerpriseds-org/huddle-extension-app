@@ -1520,3 +1520,22 @@ harness + roster incl Eli/Elle/Faith/Troy); lane-confusion grounding fix; V-STT 
 ### ACT-huddle-13 (timezone at the core): schedule times shown in UTC → localized
 - [DONE, live-verified] Canonical `profiles.timezone` (journey) + whoami returns/self-seeds it; Huddle `resolveTimeZone` (profile→browser→UTC) + one shared `lib/time.ts` `formatInTz` at the display edge; schedule_and_priorities (all 3 paths) localize via it. Mirror/data stays UTC (compute substrate). UAT: "4:00 PM EDT"/"11:00 AM EDT" correct (was UTC). Commits: journey cafb52d, huddle (main) + profiles.timezone migration.
 - [OPEN, separate] Agent over-trims scheduled list (shows 2 of N); get_calendar_events 403 (consent) + should read the canonical zone.
+
+### ACT-huddle-17 (parity principle — official architecture decision, user-stated 2026-08-03)
+Huddle ⇄ journey are symmetric standalone-but-integration-intended apps. Each owns the FULL
+prioritization/scheduling/task capability and must run ALONE producing the SAME outcome; integration
+TOGGLES OFF the redundant half on one side so exactly one engine drives at a time (neither is
+subordinate). Full principle + the collision it prevents recorded in memory.md (ACT-huddle-17).
+- [OPEN — design] Unify the scoring engine: journey `schedulingCandidates.ts` and Huddle `scoring.ts`
+  must be provably identical (today drifted: journey has topic-map/assignment-grace; Huddle has a
+  staleness penalty). One canonical algorithm or a parity test.
+- [OPEN — design] Integration toggle: exactly one driver when integrated; grooming/autowork/nightly are
+  the automation layer, run on one side only. journey = natural driver today (calendar/capacity-aware);
+  Huddle consumes but retains the equivalent engine for journey-off.
+- [OPEN — data parity] Standalone-Huddle create path must write `tasks.journey_tasks` directly (mirror
+  feeds it only when integrated). Same table, feeder swaps with the toggle.
+- [OPEN — bug, confirmed] grooming (`groom.ts:168`) blind-replaces the tags array with only the LLM's
+  tags → strips `parking-lot` (and any control tag) every pass, un-parking tasks. Contained fix ready
+  (exclude parked from grooming candidates + preserve control tags), pending user go-ahead.
+- [OPEN — bug] near-duplicate tasks ("Prepare investor pitch" vs "Lock investor pitch") — parking one
+  doesn't park the twin; scheduler booked the un-parked one. Separate dedup concern.
