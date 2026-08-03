@@ -234,6 +234,26 @@ export const checks = [
     const micReady = await page.evaluate(() => !!window.__fakeMicReady);
     const micErr = micReady ? "" : await page.evaluate(() => window.__fakeMicError || "unknown");
     check("Fake mic installed (getUserMedia stub ready for voice barge)", micReady, micErr);
+
+    // NOISE GUARD (the user's report: mic noise → "Mhm."/"어?" → agents answered nothing): a filler barge
+    // must be IGNORED — no agent reply, ceremony just continues. Typed here per the user's "type mhm".
+    {
+      const turnSel = '[data-testid="transcript-turn"]';
+      await page.locator('[data-testid="tab-chat"]').click().catch(() => {});
+      await page.waitForTimeout(300);
+      const noiseBox = page.locator('textarea[placeholder="Message the room…"]').first();
+      if (await noiseBox.count()) {
+        const beforeNoise = await page.locator(turnSel).count();
+        await noiseBox.fill("mhm");
+        await noiseBox.press("Enter");
+        await page.waitForTimeout(6000); // give it ample time to (wrongly) wake an agent
+        const afterNoise = await page.locator(turnSel).count();
+        await page.locator('[data-testid="tab-transcript"]').click().catch(() => {});
+        await screenshot("noise-mhm-ignored");
+        // A real barge answer would add ≥2 rows (user + agent). The guard should add at most the user echo.
+        check("Typed 'mhm' noise barge is IGNORED (no agent reply)", afterNoise - beforeNoise <= 1, `delta=${afterNoise - beforeNoise} (>1 ⇒ an agent wrongly answered the noise)`);
+      }
+    }
     // Stage 1 — bare hail: expect a brief ack ("yes?"), NOT a lane update, NOT a park.
     const hailReply = await voiceBarge({ page, check, screenshot }, { label: "1-hail", text: "Hey, Sam." });
     check("Hail 'Hey Sam' gets a short ready-ack, not a lane update", /\b(yes|go ahead|what'?s up|listening|sir)\b/i.test(hailReply) && hailReply.length < 90, `hailReply="${hailReply.slice(0, 120)}"`);

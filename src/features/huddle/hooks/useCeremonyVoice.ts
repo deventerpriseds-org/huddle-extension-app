@@ -413,7 +413,9 @@ export function useCeremonyVoice(hookOpts: {
               // prompt — it echoes as a phantom barge here) do the anti-garble work. The shared config
               // is why the ceremony can no longer drift away from the 1:1 and lose the language pin.
               audio: {
-                input: realtimeAudioInput({ createResponse: false }),
+                // eagerness:"low" — a stand-up barge is deliberate; medium tripped speech_started on a
+                // phone buzz / alert / near-silence and hallucinated it into a gibberish barge ("Mhm.", "어?").
+                input: realtimeAudioInput({ createResponse: false, eagerness: "low" }),
               },
             },
           }),

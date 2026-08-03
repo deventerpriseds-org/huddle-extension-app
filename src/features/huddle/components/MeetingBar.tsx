@@ -179,6 +179,23 @@ function resolveAddressed(text: string, members: AgentId[]): AgentId | null {
 }
 
 // The "I'll do it after the call" clause appended when a task is QUEUED (not run live). Varied.
+// A barge is a REAL interruption only if it carries actual words. Mic noise (a phone buzz, an alert,
+// near-silence) gets hallucinated by STT into filler or a non-English fragment ("Mhm.", "어?", "uh") —
+// and the ceremony used to treat any ≥2-char transcript as a barge, so agents answered nothing and
+// talked over the round-robin. This gate rejects those. Covers voice STT AND a typed filler.
+const BARGE_FILLERS = new Set([
+  "mhm", "mm", "hmm", "hm", "mmhm", "mmhmm", "uh", "uhh", "um", "umm", "huh", "ah", "oh", "er", "erm", "eh", "uhhuh",
+]);
+function isMeaningfulBarge(raw: string): boolean {
+  const t = (raw || "").trim().toLowerCase();
+  if (t.length < 2) return false;
+  // Latin words only — strips non-English fragments (e.g. "어?") to nothing since the STT is pinned to en.
+  const words = t.replace(/[^a-z0-9']+/g, " ").split(/\s+/).filter(Boolean);
+  if (words.length === 0) return false; // pure punctuation / non-latin
+  // Needs at least one substantive word (≥2 chars, not a bare filler).
+  return words.some((w) => w.length >= 2 && !BARGE_FILLERS.has(w));
+}
+
 function deferClause(): string {
   const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
   return pick([
@@ -583,6 +600,22 @@ function MeetingRoom({
   const runBargeSequence = useCallback(async (text: string) => {
     const myGen = bargeGenRef.current; // captured at start; finally only unparks if still latest
     bargeHandlingRef.current = true;
+    // NOISE GUARD: if the "barge" is filler/gibberish (mic noise, not real speech), do NOT wake an agent.
+    // Resume the (possibly) frozen speaker and unpark emit, exactly like the finally does — then bail.
+    // This is the fix for "the mic kept responding when I never said anything" (seq 5/7: "Mhm.", "어?").
+    if (!isMeaningfulBarge(text)) {
+      try {
+        await ceremonyVoiceRef.current.resumeFromFreeze();
+      } catch {
+        /* nothing was frozen (e.g. a typed filler between speakers) — fine */
+      }
+      if (bargeGenRef.current === myGen) {
+        bargeHandlingRef.current = false;
+        bargeActiveRef.current = false;
+        setPhase("");
+      }
+      return;
+    }
     const members = membersRef.current;
     // The frozen speaker (the row actually being cut) survives bargeFreeze. Mark it interrupted so the
     // transcript renders the cut — but this agent does NOT necessarily answer: the REAL router below
