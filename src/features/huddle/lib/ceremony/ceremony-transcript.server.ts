@@ -48,6 +48,14 @@ CREATE INDEX IF NOT EXISTS ceremony_transcript_run_idx
   ON chat.ceremony_transcript (user_email, run_id, seq);
 CREATE INDEX IF NOT EXISTS ceremony_transcript_recent_idx
   ON chat.ceremony_transcript (user_email, created_at DESC);
+
+-- Tool-call tracking (added 2026-08-02): a kind='tool' row records an ACTUAL tool invocation during a
+-- ceremony turn, so a reviewer can prove "the agent SAID it parked but no update_task row exists" vs
+-- "row exists, tool_ok=false". Additive columns — ADD COLUMN IF NOT EXISTS keeps existing rows intact.
+ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS tool_name  TEXT;
+ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS tool_args  JSONB;
+ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS tool_ok    BOOLEAN;
+ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS tool_error TEXT;
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -152,6 +160,57 @@ export async function appendCeremonyTurns(
   } catch (err) {
     console.error("[ceremony-transcript] append failed:", err);
     return { ok: false, inserted: 0 };
+  }
+}
+
+// One tool invocation made during a ceremony turn (server-side — the model's tool calls run in
+// runHuddleTurn, not on the client, so the client-buffered spoken transcript can't see them).
+export interface CeremonyToolCallInput {
+  agentId?: string | null;
+  toolName: string;
+  args?: unknown;
+  ok: boolean;
+  error?: string | null;
+  summary?: string | null;
+  ts?: number | null; // epoch ms
+}
+
+// Persist ONE tool call against a run. Fire-and-forget safe: NEVER throws — a tracking-write failure
+// must never break a live ceremony turn. The row is speaker='agent', kind='tool'; seq is max(seq)+1
+// for the run so a tool row sorts just after whatever had been said when it fired.
+export async function appendCeremonyToolCall(
+  email: string,
+  runId: string,
+  huddleId: string,
+  call: CeremonyToolCallInput,
+): Promise<{ ok: boolean }> {
+  if (!email || !runId || !huddleId || !call?.toolName) return { ok: false };
+  try {
+    await ensureBootstrapped();
+    await getPool().query(
+      `INSERT INTO chat.ceremony_transcript
+         (run_id, huddle_id, user_email, seq, speaker, agent_id, text, kind, ts,
+          tool_name, tool_args, tool_ok, tool_error)
+       SELECT $1, $2, $3,
+              COALESCE((SELECT MAX(seq) FROM chat.ceremony_transcript WHERE run_id = $1 AND user_email = $3), 0) + 1,
+              'agent', $4, $5, 'tool', $6, $7, $8, $9, $10`,
+      [
+        runId,
+        huddleId,
+        email,
+        call.agentId ?? null,
+        call.summary ?? `${call.toolName} ${call.ok ? "ok" : "FAILED"}`,
+        call.ts != null ? new Date(call.ts).toISOString() : null,
+        call.toolName,
+        call.args != null ? JSON.stringify(call.args) : null,
+        call.ok,
+        call.error ?? null,
+      ],
+    );
+    return { ok: true };
+  } catch (err) {
+    console.error("[ceremony-transcript] tool-call append failed:", err);
+    return { ok: false };
   }
 }
 

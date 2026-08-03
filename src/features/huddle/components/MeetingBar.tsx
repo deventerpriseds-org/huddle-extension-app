@@ -639,6 +639,7 @@ function MeetingRoom({
             members,
             history: buildCeremonyHistory(transcriptRef.current, huddleIdRef.current, text),
             ceremonyBarge: true,
+            ceremonyRunId: runIdRef.current ?? undefined, // tag tool calls to this run for debug tracking
             router: { ...cfg.router, interjections: false, soloOnCoverage: true },
             agents: cfg.agents,
             caller: callerRef.current,

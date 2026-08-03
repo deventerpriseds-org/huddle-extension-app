@@ -139,6 +139,10 @@ const Input = z.object({
   // directly in 1–2 sentences, don't give a lane update" — so a barge answer is stand-up-aware
   // instead of a generic off-context reply. Reuses the same bargeDirective() the durable path uses.
   ceremonyBarge: z.boolean().optional(),
+  // Live-ceremony run id (client-minted in MeetingBar). When present, every tool this turn invokes is
+  // persisted to chat.ceremony_transcript (kind='tool') so a reviewer can prove "the agent SAID it
+  // parked but no update_task row exists" vs "row exists, tool_ok=false". Debug tracking only.
+  ceremonyRunId: z.string().optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
@@ -789,6 +793,29 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       return resolvedCallerEmail;
     };
 
+    // Ceremony tool-call tracking. When the client passes a ceremonyRunId (a live stand-up/barge turn),
+    // persist every tool invocation to chat.ceremony_transcript (kind='tool') so "said it vs did it" is
+    // provable after the run — the exact gap behind "the agent said it parked but it didn't stick".
+    // Fire-and-forget: never blocks or breaks the turn. Email is pre-resolved because recordToolUse is
+    // synchronous; resolved only when a run is actually present.
+    const ceremonyToolRunId = data.ceremonyRunId ?? null;
+    const ceremonyToolEmail = ceremonyToolRunId ? await resolveCallerEmail() : null;
+    const trackCeremonyTool = (agentId: AgentId, tool: string, ok: boolean, detail?: string) => {
+      if (!ceremonyToolRunId || !ceremonyToolEmail) return;
+      void import("./ceremony/ceremony-transcript.server")
+        .then((m) =>
+          m.appendCeremonyToolCall(ceremonyToolEmail, ceremonyToolRunId, data.huddleId, {
+            agentId,
+            toolName: tool,
+            ok,
+            error: ok ? null : (detail ?? null),
+            summary: detail ?? null,
+            ts: Date.now(),
+          }),
+        )
+        .catch(() => {});
+    };
+
     // ---- Scrum ceremonies ----
     // A ceremony request (stand-up, retro, sprint planning, sprint review) overrides
     // normal routing: participants become the lane owners + the scrum master, each fed
@@ -1167,6 +1194,8 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           ok,
           detail,
         });
+        // Durably record this tool call against the ceremony run (no-op outside a ceremony).
+        trackCeremonyTool(agentId, tool, ok, summary || detail);
       };
       // Snapshot the fully-populated buffers into a result. Called at each return
       // point (after all pushes), so the buffers are complete.
