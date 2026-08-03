@@ -26,6 +26,11 @@ export function pickSummonGreeting(): string {
   return SUMMON_GREETINGS[Math.floor(Math.random() * SUMMON_GREETINGS.length)];
 }
 
-// How long after the buzz starts before the agent speaks its greeting — lets the short buzz land first
-// so it reads as "buzz → they pick up" rather than both at once.
-export const SUMMON_GREETING_DELAY_MS = 550;
+// Wait for the meeting WINDOW to actually be open (rendered/painted) + the audio pipeline to be ready
+// before the buzz plays — otherwise the buzz fires on raw meeting-open and trails off before the user
+// perceives the window as open. Tunable: raise if the buzz still lands too early, lower if it feels late.
+export const SUMMON_OPEN_DELAY_MS = 650;
+
+// Fallback cap: fire the greeting this long after the buzz STARTS even if its "ended" event never comes
+// (e.g. autoplay blocked the buzz, or the element errored). Normally the greeting fires when the buzz ends.
+export const SUMMON_GREETING_MAX_WAIT_MS = 1500;
