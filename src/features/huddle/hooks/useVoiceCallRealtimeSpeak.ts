@@ -6,7 +6,7 @@ import { useHuddleStore } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
 import { getRealtimeSession, runRealtimeTool, warmupRealtime, REALTIME_MODEL } from "../lib/voice/realtime.functions";
-import { SUMMON_BUZZ_URL, SUMMON_GREETING_DELAY_MS, pickSummonGreeting } from "../lib/voice/summon";
+import { SUMMON_BUZZ_URL, SUMMON_OPEN_DELAY_MS, SUMMON_GREETING_MAX_WAIT_MS, pickSummonGreeting } from "../lib/voice/summon";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import type { VoiceCallController, VoiceStatus, VoiceCaption } from "./useVoiceCall";
 import type { StartVoiceResult } from "../lib/voice/voice.functions";
@@ -515,19 +515,28 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
     (agentId: AgentId) => {
       if (!agentId || !AGENT_BY_ID[agentId] || summonedRef.current === agentId) return;
       summonedRef.current = agentId;
-      // 1) Buzz (local asset — plays inside the open gesture's activation window).
-      try {
-        const buzz = new Audio(SUMMON_BUZZ_URL);
-        buzz.volume = 0.6;
-        void buzz.play().catch(() => { /* autoplay blocked before a gesture — non-fatal */ });
-      } catch { /* noop */ }
-      // 2) Greeting — synth in the agent's cloned voice a beat later, so the buzz lands first.
       const greeting = pickSummonGreeting();
-      window.setTimeout(() => {
+      const speakGreeting = () => {
         void synthesizeSpeech({ data: { text: greeting, agentId } })
           .then((r) => { if (r.ok && r.audioBase64) enqueueAudio(r.audioBase64); })
           .catch(() => { /* skip on TTS error */ });
-      }, SUMMON_GREETING_DELAY_MS);
+      };
+      // WAIT for the window to actually be open (rendered/painted) + audio ready before buzzing — firing on
+      // raw meeting-open makes the buzz trail off before the user perceives the window as open.
+      window.setTimeout(() => {
+        let greeted = false;
+        const fireGreeting = () => { if (!greeted) { greeted = true; speakGreeting(); } };
+        try {
+          // 1) Buzz (local asset), then 2) greeting AFTER the buzz finishes so they never overlap.
+          const buzz = new Audio(SUMMON_BUZZ_URL);
+          buzz.volume = 0.6;
+          buzz.addEventListener("ended", fireGreeting, { once: true });
+          buzz.addEventListener("error", fireGreeting, { once: true });
+          void buzz.play().catch(() => { /* autoplay may block; the cap below still greets */ });
+        } catch { /* noop */ }
+        // Fallback cap: greet even if the buzz's "ended"/"error" never fires (blocked/failed playback).
+        window.setTimeout(fireGreeting, SUMMON_GREETING_MAX_WAIT_MS);
+      }, SUMMON_OPEN_DELAY_MS);
     },
     [enqueueAudio],
   );
