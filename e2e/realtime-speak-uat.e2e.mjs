@@ -344,11 +344,21 @@ async function runAgent(agentSpec, engine) {
     p = await shot(page, `${engine}-${id}-02-connected`); if (p) { shotCount++; out.shots.push(p); }
 
     if (engine === "baseline") {
-      // Regression: only prove the baseline path still connects.
-      out.classification = out.connected ? ["ok"] : ["error"];
-      out.pass = out.connected;
+      // Regression + SUMMON-ON-DEFAULT: the summon (buzz + greeting) must fire on the DEFAULT baseline
+      // engine — the config real users actually have. The earlier false pass came from ONLY testing the
+      // seeded realtime-speak engine; this asserts summon is engine-independent by checking it here too.
+      await page.waitForTimeout(2200); // let the buzz + greeting synth complete before snapshotting
+      const s0 = await speakState(page);
+      out.summonGreetingSynth = synthCalls;
+      out.summonAudioPlays = s0.audioPlays;
+      out.summonFired = synthCalls > 0 || s0.audioPlays > 0;
+      const pb = await shot(page, `${engine}-${id}-02b-summon`); if (pb) { shotCount++; out.shots.push(pb); }
+      console.log(`  [SUMMON on baseline] preAskSynth=${out.summonGreetingSynth} preAskAudioPlays=${out.summonAudioPlays} → summonFired=${out.summonFired}`);
+      // PASS requires BOTH: baseline still connects AND summon fired on this default engine.
+      out.classification = out.connected && out.summonFired ? ["ok"] : ["error"];
+      out.pass = out.connected && out.summonFired;
       out.quota = quotaHit;
-      console.log(`  [BASELINE regression] connected=${out.connected} → ${out.pass ? "PASS" : "FAIL"}`);
+      console.log(`  [BASELINE] connected=${out.connected} summonFired=${out.summonFired} → ${out.pass ? "PASS" : "FAIL"}`);
       return out;
     }
 

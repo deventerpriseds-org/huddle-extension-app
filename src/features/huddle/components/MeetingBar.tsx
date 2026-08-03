@@ -279,14 +279,19 @@ export function MeetingLayer() {
   }, [active, speakerId, isVirtual, engineMode]);
 
   // SUMMON: buzz the person + have the agent answer with a canned cloned-voice greeting the moment a 1:1
-  // voice view opens (like being paged into the room). Idempotent per open (summonedRef inside the hook,
-  // reset on teardown) so it plays once per entry and replays on reopen. realtime-speak only for now.
+  // or ad-hoc voice view opens (like being paged into the room). Idempotent per open (summonedRef inside
+  // the hook, reset on teardown) so it plays once per entry and replays on reopen.
+  // ENGINE-INDEPENDENT (fixed): summon is NOT gated on the realtime-speak engine — it fires on the
+  // DEFAULT (baseline) engine too, which is what users actually have. `realtimeSpeakVoice` is always
+  // instantiated (see above) and `summon()` only does a TTS synth + local audio playback (no realtime
+  // WebRTC connection), so it works regardless of which 1:1 voice engine is active. Excludes virtual
+  // meetings (ceremonies have their own host greeting).
   useEffect(() => {
-    if (active && speakerId && !isVirtual && engineMode === "realtime-speak") {
+    if (active && speakerId && !isVirtual) {
       realtimeSpeakVoice.summon(speakerId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, speakerId, isVirtual, engineMode]);
+  }, [active, speakerId, isVirtual]);
 
   // Backstop teardown when the meeting ends by any path.
   useEffect(() => {
