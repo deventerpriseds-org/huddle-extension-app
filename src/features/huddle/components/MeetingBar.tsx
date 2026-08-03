@@ -676,6 +676,19 @@ function MeetingRoom({
           },
         });
       }
+      // Two-stage barge: if the agent's answer AWAITS the user — a bare-hail ack ("Yes? Go ahead.") or
+      // a clarifying question — don't rush back to the round-robin. Hold frozen (mic still open) for a
+      // short grace window so the user's actual command/answer lands as its own barge; if nothing comes,
+      // resume so the ceremony never hangs. A follow-up barge bumps bargeGen → its handler owns the
+      // resume and this older one bails (the gen check below), so we never double-resume.
+      const answerText = (answer?.text ?? "").trim();
+      const awaitingUser =
+        /\?$/.test(answerText) || (answerText.length < 40 && /\b(go ahead|yes\b|listening|what'?s up)/i.test(answerText));
+      if (awaitingUser) {
+        setPhase("Listening…");
+        await new Promise((r) => window.setTimeout(r, 7000));
+        if (bargeGenRef.current !== myGen) return; // the follow-up barge took over — it will resume
+      }
       // Resume the interrupted speaker from the exact sentence they were cut on.
       setPhase("Resuming…");
       await ceremonyVoiceRef.current.resumeFromFreeze();
