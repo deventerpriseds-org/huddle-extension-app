@@ -291,6 +291,10 @@ async function runAgent(agentSpec, engine) {
     warmupOnOpen: false,      // a warmup-shaped serverFn fired before connect (Fix B fired)
     warmupToConnectMs: null,  // lead time warmup got before the SDP connect landed
     serverFnTimeline: [],     // raw serverFn call log (ground truth for Fix B)
+    // SUMMON (buzz + cloned-voice greeting on open):
+    summonFired: false,       // a greeting synth and/or buzz audio played BEFORE any user input
+    summonGreetingSynth: 0,   // synthesizeSpeech calls before the ask (the greeting)
+    summonAudioPlays: 0,      // audio.play() before the ask (buzz + greeting)
   };
   let clickTs = null;
 
@@ -356,7 +360,20 @@ async function runAgent(agentSpec, engine) {
     }
 
     // Give the data channel a beat to reach open (dc.onopen → status=connected → sendText works).
-    await page.waitForTimeout(1500);
+    // This window also covers the SUMMON (buzz + greeting) that fires on 1:1 open — the greeting synth
+    // (SUMMON_GREETING_DELAY_MS ~550ms + ~1s synth) completes here, BEFORE we type any ask.
+    await page.waitForTimeout(2200);
+
+    // SUMMON proof: BEFORE any user input, a greeting synth (synthesizeSpeech) should have fired and audio
+    // should have played (buzz + greeting). synthCalls/audioPlays here are pre-ask ⇒ attributable to summon.
+    {
+      const s0 = await speakState(page);
+      out.summonGreetingSynth = synthCalls;     // synthesizeSpeech calls before any ask (greeting)
+      out.summonAudioPlays = s0.audioPlays;      // audio.play() before any ask (buzz + greeting)
+      out.summonFired = synthCalls > 0 || s0.audioPlays > 0;
+      const p2 = await shot(page, `${engine}-${id}-02b-summon`); if (p2) { shotCount++; out.shots.push(p2); }
+      console.log(`  [SUMMON] preAskSynth=${out.summonGreetingSynth} preAskAudioPlays=${out.summonAudioPlays} → summonFired=${out.summonFired}`);
+    }
 
     // 4) Open Chat tab and type the daily ask.
     const chatCtrl = page.locator('button[aria-label="Chat"]').first();
@@ -542,7 +559,11 @@ console.log(`Fix A (per-sentence streaming synth): streamingProven ${aProven}/${
 console.log(`  synthCallsInReply per agent = ${JSON.stringify(synthCounts)} (>1 ⇒ synthesized sentence-by-sentence)`);
 console.log(`  avg time-to-first-voice (firstSynthMs) = ${avg(firstSynthMsVals)}ms across ${firstSynthMsVals.length} agents`);
 console.log(`Fix B (pre-warm on 1:1 open): warmupOnOpen fired for ${bFired}/${fast.length} agents (raw serverFn timeline logged per-agent above)`);
-console.log(`NOTE: perceived "instant" is a LIVE-USER verdict; this run proves the MECHANISM (synth cadence + warmup firing), not the felt latency.`);
+const summonFired = fast.filter((r) => r.summonFired).length;
+const summonSynthCounts = fast.map((r) => r.summonGreetingSynth);
+console.log(`SUMMON (buzz + cloned-voice greeting on open): fired for ${summonFired}/${fast.length} agents BEFORE any user input`);
+console.log(`  pre-ask greeting synths per agent = ${JSON.stringify(summonSynthCounts)} (>0 ⇒ agent greeted on open); pre-ask audioPlays = ${JSON.stringify(fast.map((r) => r.summonAudioPlays))} (buzz + greeting)`);
+console.log(`NOTE: perceived "instant"/the buzz+greeting FEEL is a LIVE-USER verdict; this run proves the MECHANISM (synth cadence + warmup + summon firing), not the felt experience.`);
 
 console.log(`\nScreenshots uploaded: ${shotCount} (dir ${SHOT_DIR}/)`);
 if (quotaAbort) {
