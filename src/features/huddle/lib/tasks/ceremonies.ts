@@ -284,11 +284,17 @@ export function closerDirective(type: CeremonyType, report: CeremonyReport): str
  *  interjection directly (or acts on it — e.g. files a task), then the relay resumes. Type-agnostic
  *  so it works on a resumed chunk where the ceremony type isn't re-derived. */
 export function bargeDirective(text: string): string {
-  return `\n\nThe user just INTERJECTED during this live ceremony and said: "${text}". They cut in on purpose — HEAR them and respond to THIS specifically, not a script. Open with a brief, natural acknowledgment that reflects what they ACTUALLY said (e.g. "Got it —", "Sure —", "Good catch —"), then in the same breath do exactly what they asked:
-- A question (including about what you were just saying, e.g. "what are you looking into?" / "dig into what?") → ANSWER it directly from the current context.
-- A change/add/track/schedule/status request (e.g. "mark the investor pitch done", "park that item", "add a task") → actually USE the right tool (update_task / create_huddle_task / etc.) to do it, then confirm what you did in board terms.
-- Genuinely unclear → ask ONE short clarifying question.
-Keep it to 1–2 sentences, specific to THEIR words. NEVER reply with a stock filler or a canned deferral like "I'll dig into that" / "I'll take care of it after we wrap" — that ignores what they said. Do NOT resume your lane/stand-up update here; the round-robin resumes after you.`;
+  return `\n\nThe user just INTERJECTED during this live ceremony and said: "${text}". They cut in on purpose — HEAR them and respond to THIS specifically, not a script.
+
+FIRST decide which of these it is:
+- BARE HAIL (they only called your name with no request yet — e.g. just "Hey Sam", "Sam?", "you there?") → reply with ONE short ready acknowledgment ("Yes?—go ahead.") and STOP. Do not guess a task, do not act. Wait for their actual request. A content-free "yes?" is acceptable ONLY in this bare-hail case.
+- A REAL request (a question, or a change/add/track/schedule/status command) → open with a brief acknowledgment that NAMES the specific thing they asked about — say the actual subject back ("the investor pitch", "the Nexus item"), e.g. "No problem — parking the investor pitch now." NEVER a generic "got it, on it" / "I'll dig into that" that could apply to anything: that does not prove you heard THEM and is exactly the wrong response. Then in the same breath do exactly what they asked:
+  - A question (including about what you were just saying, e.g. "what are you looking into?" / "dig into what?", or "more detail on that") → ANSWER it directly from the current context.
+  - A change/add/track/schedule/status request (e.g. "mark the investor pitch done", "park that item", "add a task") → actually USE the right tool (update_task / create_huddle_task / etc.) to do it, then confirm what you did in board terms.
+
+Resolving "that"/"it": if they refer to "that", "it", "this one", resolve it from what was JUST said in this ceremony and NAME it explicitly in your reply. If genuinely more than one thing could be meant, ask ONE short "which one — the X or the Y?" question instead of guessing.
+
+Confirm what you did EXACTLY ONCE — never restate the same confirmation two or three times. Keep it to 1–2 sentences, specific to THEIR words. NEVER reply with a stock filler or a canned deferral like "I'll dig into that" / "I'll take care of it after we wrap" — that ignores what they said. Do NOT resume your lane/stand-up update here; the round-robin resumes after you.`;
 }
 
 /** Narrate mode: Terry runs the whole ceremony solo from the data. */
