@@ -23,10 +23,69 @@ function check(name, pass, detail) {
   console.log(`${pass ? "✅" : "❌"} ${name}${detail ? " — " + detail : ""}`);
 }
 
+// Fake-mic mode (FAKE_MIC=1): stub getUserMedia with a Web Audio graph so a check can inject REAL
+// synthesized speech into the app's microphone on demand via window.__playBarge(base64). This drives
+// the actual VAD→barge→STT path (not a typed shortcut). App-agnostic — the check supplies the audio.
+const FAKE_MIC = process.env.FAKE_MIC === "1";
+function fakeMicInit() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const actx = new AC();
+    const dest = actx.createMediaStreamDestination();
+    // A zero-gain oscillator keeps the mic track "live" (some VAD stacks drop a silent-from-birth track).
+    const osc = actx.createOscillator();
+    const g = actx.createGain();
+    g.gain.value = 0;
+    osc.connect(g);
+    g.connect(dest);
+    osc.start();
+    window.__uatAudioCtx = actx;
+    const realGUM =
+      navigator.mediaDevices && navigator.mediaDevices.getUserMedia
+        ? navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices)
+        : null;
+    if (navigator.mediaDevices) {
+      navigator.mediaDevices.getUserMedia = async (c) => {
+        if (c && c.audio) return dest.stream; // the app's "microphone" is now our graph
+        return realGUM ? realGUM(c) : dest.stream;
+      };
+    }
+    // Decode a base64 clip (MP3 from ElevenLabs) and play it INTO the fake mic. Resolves when it ends.
+    window.__playBarge = async (base64) => {
+      try {
+        if (actx.state === "suspended") await actx.resume();
+      } catch {}
+      const bin = atob(base64);
+      const u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      const audioBuf = await actx.decodeAudioData(u8.buffer);
+      const src = actx.createBufferSource();
+      src.buffer = audioBuf;
+      src.connect(dest);
+      src.start();
+      return await new Promise((res) => {
+        src.onended = () => res(audioBuf.duration);
+      });
+    };
+    window.__fakeMicReady = true;
+  } catch (e) {
+    window.__fakeMicError = String(e);
+  }
+}
+
 (async () => {
   const { checks } = await import(pathToFileURL(CHECKS_FILE).href);
-  const browser = await chromium.launch();
-  const page = await browser.newPage({ viewport: VIEWPORT });
+  const browser = await chromium.launch({
+    args: FAKE_MIC
+      ? ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+      : [],
+  });
+  const context = await browser.newContext({
+    viewport: VIEWPORT,
+    ...(FAKE_MIC ? { permissions: ["microphone"] } : {}),
+  });
+  if (FAKE_MIC) await context.addInitScript(fakeMicInit);
+  const page = await context.newPage();
 
   const consoleErrors = [];
   const failedRequests = [];

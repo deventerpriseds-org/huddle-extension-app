@@ -64,6 +64,48 @@ async function bargeOnce({ page, check, screenshot }, { label, text }) {
   return reply;
 }
 
+// ── Real voice barge: synthesize the phrase with ElevenLabs, play it INTO the fake mic (run-uat's
+//    FAKE_MIC stub), and let the app's REAL VAD→barge→STT path hear it. Unlike a typed barge, this
+//    exercises detection latency, the interrupt, and transcription of real speech.
+const EL_KEY = process.env.ELEVENLABS_API_KEY;
+const EL_VOICE = process.env.ELEVENLABS_DEFAULT_VOICE_ID || process.env.ELEVENLABS_VOICE_ID;
+async function ttsClipBase64(text) {
+  if (!EL_KEY || !EL_VOICE) return null;
+  try {
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${EL_VOICE}`, {
+      method: "POST",
+      headers: { "xi-api-key": EL_KEY, "content-type": "application/json", accept: "audio/mpeg" },
+      body: JSON.stringify({ text, model_id: "eleven_flash_v2_5" }),
+    });
+    if (!r.ok) return null;
+    return Buffer.from(await r.arrayBuffer()).toString("base64");
+  } catch {
+    return null;
+  }
+}
+async function voiceBarge({ page, check, screenshot }, { label, text }) {
+  const turnSel = '[data-testid="transcript-turn"]';
+  const b64 = await ttsClipBase64(text);
+  if (!b64) {
+    check(`Voice barge (${label}) — ElevenLabs clip ready`, false, "no clip (missing EL key/voice or API error)");
+    return "";
+  }
+  const before = await page.locator(turnSel).count();
+  await page.evaluate((b) => (window.__playBarge ? window.__playBarge(b) : Promise.reject("no fake mic")), b64).catch(() => {});
+  let got = false;
+  try {
+    await page.waitForFunction((n) => document.querySelectorAll('[data-testid="transcript-turn"]').length >= n + 2, before, { timeout: 45000 });
+    got = true;
+  } catch { /* capture whatever rendered */ }
+  const turns = await page.locator(turnSel).allInnerTexts();
+  const reply = (turns[before + 1] || turns[turns.length - 1] || "").replace(/\s+/g, " ").trim();
+  await page.locator('[data-testid="tab-transcript"]').click().catch(() => {});
+  await screenshot(`vbarge-${label}`);
+  check(`Voice barge (${label}) HEARD through the mic and answered`, got && reply.length > 0 && !CANNED_RE.test(reply), `reply="${reply.slice(0, 160)}"`);
+  await page.waitForTimeout(2500);
+  return reply;
+}
+
 export const checks = [
   async function panelCollapse({ page, check, screenshot }) {
     const sidebarBefore = await page.locator('aside:has-text("EDS workspace")').count();
@@ -184,11 +226,24 @@ export const checks = [
     // (ceremonyBarge) path a spoken barge hits. Mutating barges use Test- titles; the status barge
     // targets the task the tool barge just created (resolved by the fuzzy get_tasks).
     await page.waitForTimeout(1200); // let a scripted speaker be mid-turn so the barge truly cuts in
-    await bargeOnce({ page, check, screenshot }, { label: "1-quick-question", text: "Quick question — how many blockers are on the board right now?" });
-    await bargeOnce({ page, check, screenshot }, { label: "2-tool", text: "Add a task called Test-barge-item to my backlog." });
-    await page.waitForTimeout(3000); // let the create propagate so the status barge resolves it by name
-    await bargeOnce({ page, check, screenshot }, { label: "3-status-update", text: "Mark the Test-barge-item task as done." });
-    await bargeOnce({ page, check, screenshot }, { label: "4-needs-detail", text: "Hey, can you take care of that thing we talked about?" });
+    // ── Two-stage VOICE-barge scenario (the user's exact flow) via real synthesized speech through the
+    //    mic (FAKE_MIC + ElevenLabs), so the REAL VAD→barge→STT path runs. Screenshots + ceremony_transcript
+    //    (spoken rows + kind='tool' rows) + journey DB then tell us, per AC: did Sam ACK the hail (stage 1)?
+    //    did the park NAME the pitch + actually persist (stage 2)? quick query answered live? long task
+    //    deferred or does it freeze the room?
+    const micReady = await page.evaluate(() => !!window.__fakeMicReady);
+    const micErr = micReady ? "" : await page.evaluate(() => window.__fakeMicError || "unknown");
+    check("Fake mic installed (getUserMedia stub ready for voice barge)", micReady, micErr);
+    // Stage 1 — bare hail: expect a brief ack ("yes?"), NOT a lane update, NOT a park.
+    const hailReply = await voiceBarge({ page, check, screenshot }, { label: "1-hail", text: "Hey, Sam." });
+    check("Hail 'Hey Sam' gets a short ready-ack, not a lane update", /\b(yes|go ahead|what'?s up|listening|sir)\b/i.test(hailReply) && hailReply.length < 90, `hailReply="${hailReply.slice(0, 120)}"`);
+    // Stage 2 — the real command: expect an ack that NAMES the pitch + a real persisted park.
+    const parkReply = await voiceBarge({ page, check, screenshot }, { label: "2-park", text: "Sam, put the investor pitch in the parking lot." });
+    check("Park ack NAMES the investor pitch (not a generic 'got it')", /investor pitch|pitch/i.test(parkReply), `parkReply="${parkReply.slice(0, 160)}"`);
+    // Quick query — expect a live answer during the ceremony.
+    await voiceBarge({ page, check, screenshot }, { label: "3-quick", text: "How many blockers are on the board right now?" });
+    // Long task — does it defer with a specific ack, or freeze the room? (baseline: expected to freeze today)
+    await voiceBarge({ page, check, screenshot }, { label: "4-long-task", text: "Research the competitor's premium pricing and write it up for me." });
 
     // Time to full ceremony completion (button reverts to "Run again").
     let doneMs = null;

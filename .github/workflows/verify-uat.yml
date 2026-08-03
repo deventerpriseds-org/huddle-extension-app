@@ -36,6 +36,10 @@ jobs:
           SHOT_DIR: uat-shots
           UAT_VIEWPORT_W: '1000'
           UAT_VIEWPORT_H: '680'
+          # Real voice barge: synthesized speech (ElevenLabs) injected into a stubbed mic → real VAD/STT.
+          FAKE_MIC: '1'
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_DEFAULT_VOICE_ID: ${{ secrets.ELEVENLABS_DEFAULT_VOICE_ID }}
         run: node .claude/skills/test-agent-serverfn/scripts/run-uat.mjs
 
       - name: Upload screenshots + results
