@@ -787,3 +787,46 @@ Debugged end-to-end via a NEW real-voice UAT harness + tool-call tracking. Both 
   command — MeetingBar resume-after-hail); quick-vs-long clean defer (long task currently delegates to a
   specialist off-ceremony — acceptable but not the explicit "ack + defer to after"); headless OAI-Realtime
   errors / ceremony completion timeout in verify-uat (may be headless-specific).
+
+## Mic over-sensitivity / false-barge fix (2026-08-03) — FIXED + UAT-verified
+Live run 4a58a61b: user never spoke, but mic noise → STT hallucinated "Mhm." (seq 5) and "어?" (seq 7) →
+false barges → Elle Rowan answered nothing (incl. "uploaded file" narration) and talked over the
+round-robin; Terry then PREMATURELY closed after only Iris reported.
+- ROOT CAUSE (config): ceremony VAD `eagerness:"medium"` tripped speech_started on noise, and
+  useCeremonyVoice fired a barge on ANY ≥2-char transcript (its own comment said so) — so "Mhm."/"어?"
+  became barges.
+- FIX (deployed): (1) ceremony `realtimeAudioInput({ eagerness:"low" })`; (2) `isMeaningfulBarge()` guard
+  at the TOP of `runBargeSequence` (MeetingBar) — single funnel for voice STT AND typed — rejects filler
+  ("mhm/uh/hmm/huh") and non-Latin ("어?"): resumes the frozen speaker + unparks, wakes NO agent.
+- UAT-VERIFIED (verify-uat, real voice harness): typed "mhm" → delta=1, NO agent reply; a run's transcript
+  shows "mhm" barge (seq 2) with no response. All real barges still work (hail, park w/ content ack, quick,
+  long). So the mic no longer responds to nothing.
+- WHY DEBUGGING MISSED IT ORIGINALLY: the voice harness injects a CLEAN synthesized signal into a stubbed
+  mic — no room noise / phone buzz / acoustic bleed — so by construction it can't produce noise-triggered
+  false barges (the exact residual gap flagged when the harness was built). Real-mic-only. The premature
+  close slipped a CHECK gap too: completion check only asserts "Run again" appeared, not that all lane
+  owners reported first.
+- STILL TO CONFIRM: premature close — LIKELY resolved (it was caused by the noise barges, now ignored),
+  but not directly proven because the UAT floods deliberate barges (which legitimately consume the
+  ceremony). A clean, barge-free stand-up run should be checked to assert the full round-robin completes
+  before the closer. And the voice FEEL is the user's live verdict.
+
+## Barge/round-robin collision fixes (2026-08-03) — deployed, merged with a parallel session
+From live run 060af2c0 (Sam loop-replying 5×, cross-talk with Iris/Tess, opener repeated 4×, doubled
+comments, a "barge timed out" toast). Six fixes, all on main (26eea2d, union-merged with another
+session's realtime-speak/summon/board-reassignment work — no conflicts, both changesets intact):
+1. Round-robin PAUSES during a barge exchange (`bargeCooldownUntilRef`, 6s, reset per barge) — emit's
+   park loop honors it — so scripted turns don't advance/re-emit mid-conversation (the core collision).
+2. Host OPENER no longer re-speaks on barge (`voiceTurn` gains `resumable:false`; opener = first block of
+   first step). Lane-report checklists keep resume.
+3. Dedupe an EXACT double-fired barge (same text <2.5s) at the top of runBargeSequence — kills doubled
+   comments/dispatch; genuine successive/different barges pass (scoped tight per the user's caution).
+4. 30s barge-answer timeout degrades quietly (resume, no error toast).
+5. VAD `eagerness` REVERTED low→medium (low made real barges slow to stop). `isMeaningfulBarge` guard is
+   the evidenced gibberish defense (UAT: typed "mhm" still ignored at medium). If gibberish recurs,
+   tighten the GUARD, not eagerness (user was right it wasn't ground-truthed).
+6. Live mic-level pulse in MeetingBar (AnalyserNode RMS → `micLevel` on useCeremonyVoice) so the user can
+   SEE the mic hearing them (green dot grows/brightens with input) — they were barging blind.
+UAT-verified no-regression (mhm ignored, hail/park/quick pass). The collision fixes (pause, opener,
+dedupe, mic feel, cross-talk) CANNOT be proven by the barge-flooding harness — user live-test is the
+verdict. Completion-check "fail" is a test-window artifact (flood + 6s cooldowns outlast 180s), not a bug.
