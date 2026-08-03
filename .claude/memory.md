@@ -787,3 +787,26 @@ Debugged end-to-end via a NEW real-voice UAT harness + tool-call tracking. Both 
   command — MeetingBar resume-after-hail); quick-vs-long clean defer (long task currently delegates to a
   specialist off-ceremony — acceptable but not the explicit "ack + defer to after"); headless OAI-Realtime
   errors / ceremony completion timeout in verify-uat (may be headless-specific).
+
+## Mic over-sensitivity / false-barge fix (2026-08-03) — FIXED + UAT-verified
+Live run 4a58a61b: user never spoke, but mic noise → STT hallucinated "Mhm." (seq 5) and "어?" (seq 7) →
+false barges → Elle Rowan answered nothing (incl. "uploaded file" narration) and talked over the
+round-robin; Terry then PREMATURELY closed after only Iris reported.
+- ROOT CAUSE (config): ceremony VAD `eagerness:"medium"` tripped speech_started on noise, and
+  useCeremonyVoice fired a barge on ANY ≥2-char transcript (its own comment said so) — so "Mhm."/"어?"
+  became barges.
+- FIX (deployed): (1) ceremony `realtimeAudioInput({ eagerness:"low" })`; (2) `isMeaningfulBarge()` guard
+  at the TOP of `runBargeSequence` (MeetingBar) — single funnel for voice STT AND typed — rejects filler
+  ("mhm/uh/hmm/huh") and non-Latin ("어?"): resumes the frozen speaker + unparks, wakes NO agent.
+- UAT-VERIFIED (verify-uat, real voice harness): typed "mhm" → delta=1, NO agent reply; a run's transcript
+  shows "mhm" barge (seq 2) with no response. All real barges still work (hail, park w/ content ack, quick,
+  long). So the mic no longer responds to nothing.
+- WHY DEBUGGING MISSED IT ORIGINALLY: the voice harness injects a CLEAN synthesized signal into a stubbed
+  mic — no room noise / phone buzz / acoustic bleed — so by construction it can't produce noise-triggered
+  false barges (the exact residual gap flagged when the harness was built). Real-mic-only. The premature
+  close slipped a CHECK gap too: completion check only asserts "Run again" appeared, not that all lane
+  owners reported first.
+- STILL TO CONFIRM: premature close — LIKELY resolved (it was caused by the noise barges, now ignored),
+  but not directly proven because the UAT floods deliberate barges (which legitimately consume the
+  ceremony). A clean, barge-free stand-up run should be checked to assert the full round-robin completes
+  before the closer. And the voice FEEL is the user's live verdict.
