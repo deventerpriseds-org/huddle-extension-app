@@ -221,7 +221,10 @@ async function runAgent(agentSpec, engine) {
   // history.replaceState on first load) — a reload lands on the login gate with no deep-linked huddle,
   // so the composer + "Start voice conversation" button never render. Pre-seed + single goto instead.
   await ctx.addInitScript((mode) => {
-    try { localStorage.setItem("huddle-voice-engine", JSON.stringify({ state: { mode }, version: 0 })); } catch {}
+    // version:1 + userChose:true = seed an EXPLICIT engine pick, so the v0→v1 migration (which promotes
+    // baseline→realtime-speak on un-chosen defaults) leaves the seeded engine alone. Without this, a
+    // seeded "baseline" would be silently migrated to realtime-speak and the baseline test would be moot.
+    try { localStorage.setItem("huddle-voice-engine", JSON.stringify({ state: { mode, userChose: true }, version: 1 })); } catch {}
   }, engine);
   const page = await ctx.newPage();
 
