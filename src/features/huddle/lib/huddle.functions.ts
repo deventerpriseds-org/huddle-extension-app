@@ -800,7 +800,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // synchronous; resolved only when a run is actually present.
     const ceremonyToolRunId = data.ceremonyRunId ?? null;
     const ceremonyToolEmail = ceremonyToolRunId ? await resolveCallerEmail() : null;
-    const trackCeremonyTool = (agentId: AgentId, tool: string, ok: boolean, detail?: string) => {
+    const trackCeremonyTool = (
+      agentId: AgentId,
+      tool: string,
+      ok: boolean,
+      summary?: string,
+      errorDetail?: string,
+      args?: unknown,
+    ) => {
       if (!ceremonyToolRunId || !ceremonyToolEmail) return;
       void import("./ceremony/ceremony-transcript.server")
         .then((m) =>
@@ -808,8 +815,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             agentId,
             toolName: tool,
             ok,
-            error: ok ? null : (detail ?? null),
-            summary: detail ?? null,
+            error: ok ? null : (errorDetail ?? summary ?? null), // the REAL tool error, not the summary
+            summary: summary ?? null,
+            args, // what the tool was actually called with — the key debug signal
             ts: Date.now(),
           }),
         )
@@ -1184,6 +1192,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         summary: string,
         ok: boolean,
         detail?: string,
+        args?: unknown,
       ) => {
         toolUses.push({
           id: `tu-${Date.now()}-${winner.id}-${tuSeq++}`,
@@ -1194,8 +1203,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           ok,
           detail,
         });
-        // Durably record this tool call against the ceremony run (no-op outside a ceremony).
-        trackCeremonyTool(agentId, tool, ok, summary || detail);
+        // Durably record this tool call against the ceremony run (no-op outside a ceremony) — the real
+        // error + the args are what make a failure debuggable.
+        trackCeremonyTool(agentId, tool, ok, summary, detail, args);
       };
       // Snapshot the fully-populated buffers into a result. Called at each return
       // point (after all pushes), so the buffers are complete.
@@ -2484,7 +2494,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   c.name,
                   r.ok ? `journey-voice · ok` : `journey-voice · failed`,
                   !!r.ok,
-                  r.ok ? undefined : r.error,
+                  r.ok ? undefined : String(r.error ?? r.output ?? "unknown"),
+                  c.arguments,
                 );
                 if (!r.ok) {
                   const ev = recordFallback(
