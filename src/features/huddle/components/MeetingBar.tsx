@@ -463,6 +463,18 @@ function MeetingRoom({
   // True only while runBargeSequence is actually running. Lets the freeze-time watchdog tell "a
   // real barge is being handled" from "we froze + parked but STT never produced a message".
   const bargeHandlingRef = useRef(false);
+  // Round-robin PAUSE window: after a real barge, hold the scripted round-robin for a few seconds so it
+  // doesn't advance to the next speaker (or let the opener resume) WHILE the user is mid-exchange. Each
+  // new barge pushes it out. This is the collision fix — barge conversation vs. scripted turns (the
+  // cross-talk + Sam-loop + opener-repeat the user saw came from the round-robin marching on regardless).
+  const bargeCooldownUntilRef = useRef(0);
+  const BARGE_COOLDOWN_MS = 6000;
+  // Dedupe a DOUBLE-FIRED barge: semantic_vad can emit the same utterance twice (a partial then a final),
+  // which double-marked the speaker interrupted and double-dispatched the answer (the "doubled comments"
+  // + part of Sam's loop). Only an EXACT-same transcript within a tight window is treated as one barge —
+  // a genuine successive/different barge always passes, so back-and-forth conversation is untouched.
+  const lastBargeTextRef = useRef("");
+  const lastBargeAtRef = useRef(0);
   // Current-value mirrors so runBargeSequence (empty-dep useCallback) never reads a stale closure.
   const membersRef = useRef(meeting.members);
   membersRef.current = meeting.members;
@@ -616,6 +628,16 @@ function MeetingRoom({
       }
       return;
     }
+    // Dedupe an EXACT double-fire (same words within a tight window) — one interruption, not two.
+    const norm = text.trim().toLowerCase();
+    const now = Date.now();
+    if (norm === lastBargeTextRef.current && now - lastBargeAtRef.current < 2500) {
+      return; // duplicate dispatch of the same utterance — ignore (genuine different barges pass)
+    }
+    lastBargeTextRef.current = norm;
+    lastBargeAtRef.current = now;
+    // A REAL barge just started — pause the scripted round-robin so it doesn't advance mid-exchange.
+    bargeCooldownUntilRef.current = Date.now() + BARGE_COOLDOWN_MS;
     const members = membersRef.current;
     // The frozen speaker (the row actually being cut) survives bargeFreeze. Mark it interrupted so the
     // transcript renders the cut — but this agent does NOT necessarily answer: the REAL router below
@@ -726,7 +748,17 @@ function MeetingRoom({
       setPhase("Resuming…");
       await ceremonyVoiceRef.current.resumeFromFreeze();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't answer that just now.");
+      // The 30s barge-answer race timing out is NOT a user-facing error — it means the turn stalled
+      // (usually the round-robin collision). Degrade quietly: resume the speaker, no scary toast. Only
+      // a genuine unexpected failure gets a subtle notice.
+      const msg = err instanceof Error ? err.message : "";
+      if (/tim(ed)? ?out/i.test(msg)) {
+        try {
+          await ceremonyVoiceRef.current.resumeFromFreeze();
+        } catch { /* nothing to resume */ }
+      } else {
+        toast.error(msg || "Couldn't answer that just now.");
+      }
     } finally {
       // Only unpark if no NEWER barge superseded this one — otherwise the newer barge owns the park
       // and will clear it when IT finishes. This prevents an older barge's cleanup from letting a
@@ -734,6 +766,9 @@ function MeetingRoom({
       if (bargeGenRef.current === myGen) {
         bargeHandlingRef.current = false;
         bargeActiveRef.current = false;
+        // Keep the round-robin paused a few seconds past the answer so a follow-up barge continues the
+        // exchange rather than landing over a freshly-resumed scripted speaker (the cross-talk).
+        bargeCooldownUntilRef.current = Date.now() + BARGE_COOLDOWN_MS;
         setPhase("");
       }
     }
@@ -979,7 +1014,7 @@ function MeetingRoom({
         // PARK while a barge is being handled — do NOT voice the next scripted speaker until the
         // interjection is answered and the interrupted speaker has resumed. This is what keeps the
         // barge answer "right there" instead of behind the remaining round-robin.
-        while (bargeActiveRef.current && ceremonyAliveRef.current) {
+        while ((bargeActiveRef.current || Date.now() < bargeCooldownUntilRef.current) && ceremonyAliveRef.current) {
           await new Promise((r) => setTimeout(r, 50));
         }
         if (!ceremonyAliveRef.current) return;
@@ -997,6 +1032,11 @@ function MeetingRoom({
           setSpeakingId(agentId);
           try {
             await ceremonyVoiceRef.current.voiceTurn(agentId, r.text, {
+              // The host OPENER (first block of the first step) does NOT re-speak on barge — a barge
+              // during the open cuts it and the exchange continues; re-speaking the opener line on each
+              // barge is what repeated "…blockage in Prof Education…" 4× (seq 4/10/11/19). Lane reports
+              // (checklists) keep resume so a mid-list barge continues the list.
+              resumable: !(step === steps[0] && i === 0),
               // Trailing transcript: add each sentence when its audio starts, tagged with its block
               // + position so a test can prove mid-block interruption and same-block resume.
               onSentenceStart: (sentence, sentenceIndex, blockTotal) => {
@@ -1275,6 +1315,27 @@ function MeetingRoom({
               <div className="flex items-center gap-2 text-center text-sm text-muted-foreground">
                 <Loader2 size={13} className="animate-spin" />
                 <span>{phase}</span>
+              </div>
+            )}
+            {/* Live mic pulse — grows/brightens with what the mic hears, so the user can SEE it's on
+                and picking them up (they couldn't tell before, and barged blind). */}
+            {isCeremony && status === "running" && (
+              <div
+                className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground"
+                title="Your mic is live — this pulses with what it hears"
+              >
+                <span className="relative inline-flex size-4 items-center justify-center">
+                  <span
+                    className="inline-block rounded-full bg-emerald-500"
+                    style={{
+                      width: 7 + ceremonyVoice.micLevel * 13,
+                      height: 7 + ceremonyVoice.micLevel * 13,
+                      opacity: 0.35 + ceremonyVoice.micLevel * 0.65,
+                      transition: "width 90ms linear, height 90ms linear, opacity 90ms linear",
+                    }}
+                  />
+                </span>
+                <span>{ceremonyVoice.micLevel > 0.08 ? "mic — hearing you" : "mic — listening"}</span>
               </div>
             )}
             {isCeremony && !turns.length && status !== "running" && (

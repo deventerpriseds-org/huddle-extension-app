@@ -20,6 +20,8 @@ export interface CeremonyVoiceController {
   status: CeremonyVoiceStatus;
   activeSpeaker: AgentId | null;
   error: string | null;
+  /** Live mic input level (0..1) for a UI pulse — shows the user the mic is hearing them. */
+  micLevel: number;
   supported: boolean;
   startListening: () => Promise<void>;
   stopListening: () => void;
@@ -130,6 +132,11 @@ export function useCeremonyVoice(hookOpts: {
   const [status, setStatus] = useState<CeremonyVoiceStatus>("idle");
   const [activeSpeaker, setActiveSpeaker] = useState<AgentId | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Live mic input level (0..1), so the UI can show a pulse that moves with what the mic is picking up —
+  // the user couldn't tell the mic was hearing them. Fed by an AnalyserNode on the local mic stream.
+  const [micLevel, setMicLevel] = useState(0);
+  const micRafRef = useRef<number | null>(null);
+  const micCtxRef = useRef<AudioContext | null>(null);
 
   const supported =
     typeof window !== "undefined" &&
@@ -333,6 +340,13 @@ export function useCeremonyVoice(hookOpts: {
     pcRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    if (micRafRef.current != null) {
+      cancelAnimationFrame(micRafRef.current);
+      micRafRef.current = null;
+    }
+    micCtxRef.current?.close().catch(() => {});
+    micCtxRef.current = null;
+    setMicLevel(0);
     setActiveSpeaker(null);
     setPhase("idle");
   }, [setPhase]);
@@ -362,6 +376,37 @@ export function useCeremonyVoice(hookOpts: {
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       streamRef.current = stream;
+
+      // Mic-level meter: RMS of the local mic, throttled to ~12fps, so the UI can pulse with the user's
+      // voice (they had no signal the mic was live). Best-effort — never block or throw the ceremony.
+      try {
+        const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const actx = new AC();
+        micCtxRef.current = actx;
+        const analyser = actx.createAnalyser();
+        analyser.fftSize = 512;
+        actx.createMediaStreamSource(stream).connect(analyser);
+        const buf = new Uint8Array(analyser.frequencyBinCount);
+        let last = 0;
+        const tick = () => {
+          analyser.getByteTimeDomainData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i++) {
+            const v = (buf[i] - 128) / 128;
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / buf.length);
+          const t = typeof performance !== "undefined" ? performance.now() : 0;
+          if (t - last > 80) {
+            last = t;
+            setMicLevel(Math.min(1, rms * 4)); // boost so speech reads as a clear pulse
+          }
+          micRafRef.current = requestAnimationFrame(tick);
+        };
+        micRafRef.current = requestAnimationFrame(tick);
+      } catch {
+        /* mic meter is best-effort */
+      }
 
       if (connGenRef.current !== connGen) {
         stream.getTracks().forEach((t) => t.stop());
@@ -413,9 +458,11 @@ export function useCeremonyVoice(hookOpts: {
               // prompt — it echoes as a phantom barge here) do the anti-garble work. The shared config
               // is why the ceremony can no longer drift away from the 1:1 and lose the language pin.
               audio: {
-                // eagerness:"low" — a stand-up barge is deliberate; medium tripped speech_started on a
-                // phone buzz / alert / near-silence and hallucinated it into a gibberish barge ("Mhm.", "어?").
-                input: realtimeAudioInput({ createResponse: false, eagerness: "low" }),
+                // eagerness back to "medium": "low" made real barges slow to stop (VAD heard the user
+                // later too). The isMeaningfulBarge() guard in runBargeSequence is the EVIDENCED gibberish
+                // defense (typed-"mhm" UAT proved it wakes no agent); if noise ever slips through, tighten
+                // the GUARD, not this. medium keeps the prompt barge-stop the user needs.
+                input: realtimeAudioInput({ createResponse: false }),
               },
             },
           }),
@@ -513,6 +560,7 @@ export function useCeremonyVoice(hookOpts: {
     status,
     activeSpeaker,
     error,
+    micLevel,
     supported,
     startListening,
     stopListening,
