@@ -200,6 +200,16 @@ export function MeetingLayer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, speakerId, isVirtual, engineMode]);
 
+  // SUMMON: buzz the person + have the agent answer with a canned cloned-voice greeting the moment a 1:1
+  // voice view opens (like being paged into the room). Idempotent per open (summonedRef inside the hook,
+  // reset on teardown) so it plays once per entry and replays on reopen. realtime-speak only for now.
+  useEffect(() => {
+    if (active && speakerId && !isVirtual && engineMode === "realtime-speak") {
+      realtimeSpeakVoice.summon(speakerId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, speakerId, isVirtual, engineMode]);
+
   // Backstop teardown when the meeting ends by any path.
   useEffect(() => {
     if (!active) void disconnect();
