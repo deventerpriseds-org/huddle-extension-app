@@ -765,3 +765,25 @@ hidden in the default Transcript view — cutting into a live ceremony needs a t
      orphan `uat-shots` branch (needs `permissions: contents: write` on the job) → session
      `git fetch origin uat-shots` and reads PNGs off disk (zero context) → SendUserFile. run-uat.mjs
      reads `UAT_VIEWPORT_W/H`; app-agnostic; huddle-checks.mjs is the only app-specific file.
+
+## Ceremony voice-barge overhaul (2026-08-03) — status + proven mechanisms
+Debugged end-to-end via a NEW real-voice UAT harness + tool-call tracking. Both are permanent assets.
+- **Real voice-barge harness (user's idea, works):** `run-uat.mjs` FAKE_MIC=1 stubs getUserMedia with a
+  Web Audio graph + `window.__playBarge(base64)`; `huddle-checks.mjs` synthesizes the barge line via
+  ElevenLabs and plays it into the mic → the REAL VAD→barge→STT path runs headlessly (not a typed
+  shortcut). verify-uat passes ELEVENLABS_API_KEY/ELEVENLABS_DEFAULT_VOICE_ID + FAKE_MIC=1.
+- **Tool-call tracking:** every ceremony tool call is a `kind='tool'` row in `chat.ceremony_transcript`
+  with `tool_name/tool_ok/tool_error/tool_args`. Extends the existing `recordToolUse` funnel. The ARGS
+  capture is what pinpointed the park bug — do NOT drop it. Query the newest run's tool rows to debug.
+- **FIXED + proven (tool_ok + journey DB):** hail two-stage ack ("Hey Sam"→"Yes? Go ahead"); PARK sticks
+  — journey `update_task` now resolves a title/slug→id (fuzzy, split on /[^a-z0-9]+/ so "investor-pitch"
+  and "investor_pitch_task_id" tokenize to real words) and parking clears is_scheduled/start_time/end_time;
+  clean host open (greeting `resumable:false` so a barge no longer re-speaks it — was seq 1/6/10).
+- **Root-cause lesson:** the park "said it but didn't stick" was TWO bugs — (1) agent passed a slug as
+  task_id, resolver split on whitespace only → one glued token → no match; (2) parked items kept their
+  schedule. Both fixed. The agent is non-deterministic (sometimes get_tasks-first, sometimes slug) — the
+  server-side resolver makes update_task robust either way.
+- **STILL OPEN:** two-stage WAIT (after hail-ack the round-robin resumes instead of holding for the
+  command — MeetingBar resume-after-hail); quick-vs-long clean defer (long task currently delegates to a
+  specialist off-ceremony — acceptable but not the explicit "ack + defer to after"); headless OAI-Realtime
+  errors / ceremony completion timeout in verify-uat (may be headless-specific).
