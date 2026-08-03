@@ -369,6 +369,49 @@ from the session → workflow closes it" loop does NOT help, because the session
   `payload->>'text'` = the user message, agent replies in the `replies` column (chunked turns) or
   `result->'replies'` (sync-completed). Every user message is also a `public.rag_chunks` row
   (`source = huddle:<id>`). Filter by recent `updated_at` — the DB is effectively single-user.
+- **Reading a CEREMONY / stand-up transcript — use `chat.ceremony_transcript`, NOT `chat.pending_turns`
+  (hard-won 2026-08-02).** Voice ceremonies (MeetingBar/`useCeremonyVoice`) run through the ephemeral
+  zustand `meeting.transcript` and are persisted to their OWN durable table **`chat.ceremony_transcript`**
+  (`lib/ceremony/ceremony-transcript.server.ts` — `appendCeremonyTurns`/`getCeremonyRun`/`listCeremonyRuns`).
+  They do **NOT** write `chat.pending_turns` — so a stand-up will be ABSENT from pending_turns while fully
+  present in `ceremony_transcript`. Columns that make it the right source for reviewing barge behavior:
+  `run_id` (one ceremony; `huddle_id`='ceremony-standup'), `seq` (spoken order), `speaker`
+  ('user'|'agent'|'system'), `agent_id`, `kind` ('greeting'|'answer'|'barge'|'interrupted'|…),
+  `interrupted` (bool), `block_id`/`sentence_index`/`block_total` (the sentence-level chunking the barge
+  interrupts). Newest run: `SELECT run_id FROM chat.ceremony_transcript ORDER BY created_at DESC LIMIT 1`,
+  then dump `WHERE run_id=… ORDER BY seq`. **NEVER conclude "the ceremony wasn't saved" from its absence
+  in pending_turns — that is reading the wrong proxy; check `ceremony_transcript` first.**
+
+## Playwright UI/UAT + barge testing (proven paths, 2026-08-02)
+- **Live-app Playwright runs in GHA**, not the CCR sandbox: `verify-uat.yml` (`workflow_dispatch`) runs
+  Chromium against the deployed SWA (`icy-flower-0f415200f.7.azurestaticapps.net`), impersonating the
+  user via `?uat_token=`/`UAT_BYPASS_TOKEN` (single-use — consumed on first load, so any `page.reload()`
+  check must run LAST). Runner = app-agnostic `.claude/skills/test-agent-serverfn/scripts/run-uat.mjs`;
+  the ONLY app-specific file is `huddle-checks.mjs` (a `checks` array of `{page,check,screenshot}` fns).
+- **Getting the screenshots back to the session:** the artifact zip is proxy-blocked (HTTP 000) and
+  base64-in-logs bloats context. `verify-uat.yml` force-pushes shots to an orphan **`uat-shots` branch**
+  (job has `permissions: contents: write`); session `git fetch origin uat-shots` → `git show
+  origin/uat-shots:uat-shots/<f>.png > /tmp/<f>.png` → `SendUserFile`. Delete the branch after. (Full
+  pattern in the central `gha-playwright-uat` skill.)
+- **Injecting a BARGE from Playwright (no mic):** typing into the meeting Chat compose
+  (`textarea[placeholder="Message the room…"]` under `[data-testid="tab-chat"]`, Enter) DURING a live
+  ceremony is treated as a barge — `MeetingBar.routeTurn` (isCeremony && status==="running" &&
+  activeCeremonyTurn) → `runBargeSequence` → real `sendHuddleMessage(ceremonyBarge:true)`. This tests
+  the RESPONSE logic; mic/VAD/voice perception stays a user-live check. Capture the answer by
+  poll+content-match (like `ceremony-barge-test.mjs`), NOT the last transcript row (answers lag a beat).
+- **Barge/agent test cards on the real board:** the user is OK with realistic write-through IF the title
+  is `Test-` prefixed AND cleaned up after (delete `title ILIKE '%…%'` from journey `public.tasks` via
+  Supabase MCP — the agent may strip hyphens, so match loosely). The zero-write alternative is the
+  `ceremony-barge-test.mjs` harness with `agents[*].journey:{enabled:false}`.
+
+## Board tags already exist (Jira-style) — parking-lot is JUST a tag, no new lane
+`BoardView.tsx` already renders `task.tags` as `<Badge>` chips on each card (`BoardCard`, up to 4, with
+`/blocked|capability/` styled destructive) AND has a tag filter (`tagFilter`/`allTags`/filter chips).
+The mirror `tasks.journey_tasks.tags TEXT[]` is synced from journey; `update_task` already accepts
+`args.tags` (journey execute-tool). So a "parking-lot" tag needs NO new UI — it shows on the card for
+free. The feature = (a) an agent action "parking lot this" → `update_task(status:BACKLOG, tags +=
+'parking-lot')`, (b) exclude `'parking-lot' = ANY(tags)` from `autowork.server.ts` candidate selection
++ journey's nightly planner. Backlog is the home lane — do NOT build a new lane.
 
 ## Waiting on deploys/CI: poll for the terminal state, never blind-sleep (user preference)
 The user dislikes fixed wait timers — they over-wait and are inefficient. Do NOT `sleep 300` then check.

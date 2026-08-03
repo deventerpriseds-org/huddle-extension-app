@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck } from "lucide-react";
+import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck, X, Plus, PauseCircle } from "lucide-react";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import type { BoardTaskRow } from "../lib/tasks/tasks.server";
@@ -62,7 +62,13 @@ function laneKeyFor(t: BoardTaskRow, groupBy: GroupBy): string {
   return "__all";
 }
 
+const isParked = (t: BoardTaskRow) => (t.tags ?? []).includes("parking-lot");
+
 function rankSort(a: BoardTaskRow, b: BoardTaskRow): number {
+  // Parked tasks are paused — sink them to the bottom of every lane regardless of rank/priority.
+  const pkA = isParked(a) ? 1 : 0;
+  const pkB = isParked(b) ? 1 : 0;
+  if (pkA !== pkB) return pkA - pkB;
   const ra = a.priority_rank ?? 9999;
   const rb = b.priority_rank ?? 9999;
   if (ra !== rb) return ra - rb;
@@ -165,6 +171,9 @@ export function BoardView() {
     });
   }, [tasks, assigneeFilter, tagFilter]);
 
+  // Parked tasks are paused (excluded from all automation) — surface a count so they aren't invisible.
+  const parkedCount = useMemo(() => tasks.filter(isParked).length, [tasks]);
+
   // Ordered swimlanes for the current grouping.
   const lanes = useMemo<Lane[]>(() => {
     if (groupBy === "none") return [{ key: "__all", label: "", agent: undefined }];
@@ -190,8 +199,46 @@ export function BoardView() {
 
   // Shared write-back: optimistic update + persist to journey. Used by drag (desktop) and the
   // card action menu (mobile).
+  //
+  // Post-write reconciliation is a POLL, not a single fixed-delay refetch. `updateBoardTask`
+  // writes to journey (canonical) and returns success as soon as THAT write lands — the Huddle
+  // mirror (`tasks.journey_tasks`) catches up asynchronously via pg_net, typically ~1-3s but not
+  // guaranteed. A single refetch at a fixed delay races that sync: if the mirror hasn't caught up
+  // yet, `getBoardTasks` returns the pre-write row and blindly overwrites the correct optimistic
+  // UI with stale data — looking exactly like the move/reassignment silently failed, even though
+  // the write succeeded. Poll until the specific field we just changed is actually visible in the
+  // mirror before trusting a refetch to replace optimistic state; if it never catches up within
+  // the budget, leave the optimistic state as-is rather than revert to a known-stale read.
+  const waitForMirrorSync = useCallback(
+    async (
+      taskId: string,
+      patch: { status?: string; assigned_agent?: string; category?: string },
+    ): Promise<BoardTaskRow[] | null> => {
+      const maxAttempts = 6;
+      const delayMs = 700;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        await new Promise((r) => setTimeout(r, delayMs));
+        const res = await getBoardTasks({ data: { caller } });
+        const t = res.tasks.find((x) => x.id === taskId);
+        if (
+          t &&
+          (patch.status === undefined || t.status === patch.status) &&
+          (patch.assigned_agent === undefined || (t.assigned_agent ?? "") === (patch.assigned_agent ?? "")) &&
+          (patch.category === undefined || t.category === patch.category)
+        ) {
+          return res.tasks;
+        }
+      }
+      return null;
+    },
+    [caller],
+  );
+
   const applyMove = useCallback(
-    async (taskId: string, patch: { status?: string; assigned_agent?: string; category?: string }) => {
+    async (
+      taskId: string,
+      patch: { status?: string; assigned_agent?: string; category?: string; tags?: string[] },
+    ) => {
       if (!Object.keys(patch).length) return;
       let prev: BoardTaskRow[] = [];
       setTasks((ts) => {
@@ -204,6 +251,7 @@ export function BoardView() {
                 assigned_agent:
                   patch.assigned_agent !== undefined ? patch.assigned_agent || null : t.assigned_agent,
                 category: patch.category ?? t.category,
+                tags: patch.tags ?? t.tags,
               }
             : t,
         );
@@ -214,14 +262,18 @@ export function BoardView() {
           setTasks(prev);
           toast.error(r.error || "Couldn't move the task.");
         } else {
-          setTimeout(() => void refetch(), 2500);
+          const fresh = await waitForMirrorSync(taskId, patch);
+          if (fresh) setTasks(fresh);
+          // else: mirror hasn't caught up within budget — keep the optimistic state rather than
+          // clobber it with a read we know is stale. The next natural refetch will reconcile once
+          // the async sync lands.
         }
       } catch (e) {
         setTasks(prev);
         toast.error(e instanceof Error ? e.message : "Move failed.");
       }
     },
-    [caller, refetch],
+    [caller, waitForMirrorSync],
   );
 
   function onDrop(colKey: string, laneKey: string) {
@@ -254,7 +306,13 @@ export function BoardView() {
         <header className="flex flex-wrap items-center gap-2 border-b border-hairline bg-surface px-4 py-2.5 sm:px-6">
           <div className="mr-2">
             <h1 className="text-sm font-semibold">Board</h1>
-            <p className="text-[11px] text-muted-foreground">{filtered.length} tasks · drag to reassign or move</p>
+            <p className="text-[11px] text-muted-foreground">
+              {filtered.length} tasks
+              {parkedCount > 0 && (
+                <> · <span className="text-amber-600 dark:text-amber-400">{parkedCount} parked</span></>
+              )}
+              {" · drag to reassign or move"}
+            </p>
           </div>
 
           {/* Group-by */}
@@ -311,6 +369,7 @@ export function BoardView() {
                     "rounded-full border px-2 py-0.5 text-[11px] transition",
                     tagFilter.has(tag) ? "border-primary bg-primary/10 text-foreground" : "border-hairline text-muted-foreground hover:bg-muted",
                     /blocked|capability/.test(tag) && !tagFilter.has(tag) && "text-destructive",
+                    tag === "parking-lot" && !tagFilter.has(tag) && "border-amber-500/40 text-amber-600 dark:text-amber-400",
                   )}
                 >
                   {tag}
@@ -502,7 +561,7 @@ function BoardCard({
   onDragStart?: () => void;
   onDragEnd?: () => void;
   fullWidth?: boolean;
-  onMove?: (id: string, patch: { status?: string; assigned_agent?: string }) => void;
+  onMove?: (id: string, patch: { status?: string; assigned_agent?: string; tags?: string[] }) => void;
 }) {
   const agent = task.assigned_agent ? AGENT_BY_ID[task.assigned_agent as AgentId] : undefined;
   const stripe = agent ? `var(${agent.colorVar})` : "var(--hairline)";
@@ -510,6 +569,19 @@ function BoardCard({
   const prio = (task.priority ?? "MEDIUM").toUpperCase();
   const tags = task.tags ?? [];
   const draggable = !!onDragStart;
+  const [addingTag, setAddingTag] = useState(false);
+  const [tagInput, setTagInput] = useState("");
+  // Tags on a card are a plain set. update_task REPLACES the array, so add/remove send the whole set.
+  const norm = (t: string) => t.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+  const addTag = (raw: string) => {
+    const t = norm(raw);
+    if (!t || tags.includes(t)) { setTagInput(""); setAddingTag(false); return; }
+    onMove?.(task.id, { tags: [...tags, t] });
+    setTagInput("");
+    setAddingTag(false);
+  };
+  const removeTag = (t: string) => onMove?.(task.id, { tags: tags.filter((x) => x !== t) });
+  const parked = tags.includes("parking-lot");
 
   return (
     <div
@@ -520,6 +592,7 @@ function BoardCard({
         "relative overflow-hidden rounded-lg border border-hairline bg-card shadow-soft",
         draggable && "cursor-grab active:cursor-grabbing",
         fullWidth && "w-full",
+        parked && "opacity-60 saturate-50", // paused — de-emphasized vs active work
       )}
     >
       <div className="flex">
@@ -566,22 +639,76 @@ function BoardCard({
                       ))}
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
+                  <DropdownMenuSeparator />
+                  {/* Parking lot = tag + Backlog in one move; excludes the task from all automation. */}
+                  <DropdownMenuItem
+                    onClick={() =>
+                      parked
+                        ? onMove(task.id, { tags: tags.filter((x) => x !== "parking-lot") })
+                        : onMove(task.id, { tags: [...tags, "parking-lot"], status: "BACKLOG" })
+                    }
+                  >
+                    {parked ? "Remove from parking lot" : "Parking lot (pause automation)"}
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
           )}
-          <div className={cn("text-[13px] font-medium leading-snug", onMove && "pr-6")}>{task.title}</div>
-          {tags.length > 0 && (
-            <div className="mt-1.5 flex flex-wrap gap-1">
+          <div className={cn("flex items-start gap-1 text-[13px] font-medium leading-snug", onMove && "pr-6")}>
+            {parked && (
+              <PauseCircle size={13} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" aria-label="Parked — automation paused" />
+            )}
+            <span className="min-w-0">{task.title}</span>
+          </div>
+          {(tags.length > 0 || onMove) && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
               {tags.slice(0, 4).map((tag) => (
                 <Badge
                   key={tag}
                   variant="secondary"
-                  className={cn("px-1.5 py-0 text-[9px]", /blocked|capability/.test(tag) && "bg-destructive/15 text-destructive")}
+                  className={cn(
+                    "gap-0.5 px-1.5 py-0 text-[9px]",
+                    /blocked|capability/.test(tag) && "bg-destructive/15 text-destructive",
+                    tag === "parking-lot" && "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+                  )}
                 >
                   {tag}
+                  {onMove && (
+                    <button
+                      type="button"
+                      aria-label={`Remove tag ${tag}`}
+                      className="ml-0.5 opacity-60 hover:opacity-100"
+                      onClick={() => removeTag(tag)}
+                    >
+                      <X size={9} />
+                    </button>
+                  )}
                 </Badge>
               ))}
+              {onMove &&
+                (addingTag ? (
+                  <input
+                    autoFocus
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onBlur={() => (tagInput ? addTag(tagInput) : setAddingTag(false))}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") addTag(tagInput);
+                      else if (e.key === "Escape") { setTagInput(""); setAddingTag(false); }
+                    }}
+                    placeholder="tag…"
+                    className="h-4 w-16 rounded border border-hairline bg-transparent px-1 text-[9px] outline-none focus:border-primary"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    aria-label="Add tag"
+                    className="flex items-center gap-0.5 rounded border border-dashed border-hairline px-1 py-0 text-[9px] text-muted-foreground hover:border-primary hover:text-foreground"
+                    onClick={() => setAddingTag(true)}
+                  >
+                    <Plus size={9} /> tag
+                  </button>
+                ))}
             </div>
           )}
           <div className="mt-2 flex items-center gap-2">

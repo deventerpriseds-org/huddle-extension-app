@@ -142,6 +142,84 @@ function fmtClock(ms: number): string {
     .padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
 }
 
+// Client-side templated greeting for the host to speak the INSTANT "Start" is clicked — covers the
+// ~15s server cold start (durable turn enqueue + first agent's model call) with a live voice instead of
+// dead air. NOT a static string and NOT an LLM turn (which would have the same 15s lag): it's a template
+// with randomized phrasing slots, so Terry says the same thing a little differently each time. Spoken
+// via the normal per-sentence ceremony voice; the emit loop awaits it before the first scripted block.
+function standupGreeting(): string {
+  const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+  const hour = new Date().getHours();
+  const tod = hour < 12 ? "Morning" : hour < 17 ? "Afternoon" : "Evening";
+  const open = pick([`${tod}, everyone.`, `${tod}, team.`, `Alright, ${tod.toLowerCase()} all.`, `Hey team, ${tod.toLowerCase()}.`]);
+  const gather = pick([
+    "Let me get everyone together",
+    "Give me a second to pull everyone in",
+    "Just gathering the team",
+    "Rounding everyone up",
+  ]);
+  const start = pick([
+    "we'll kick off the stand-up as soon as everyone's here.",
+    "and we'll start the moment we're all in.",
+    "we'll get rolling as soon as the room's set.",
+    "we'll begin once everyone's present.",
+  ]);
+  return `${open} ${gather} — ${start}`;
+}
+
+// Which agent did the user address in a barge ("Iris, mark X done")? Prefer a leading first-name, else
+// any member's first name in the text. Null → none named (caller falls back to the frozen speaker).
+// Lightweight client-side resolution; the server router does the authoritative addressed-by-name pick.
+function resolveAddressed(text: string, members: AgentId[]): AgentId | null {
+  const t = text.trim().toLowerCase();
+  const first = (id: AgentId) => (AGENT_BY_ID[id]?.name.split(" ")[0] ?? "").toLowerCase();
+  const byLead = members.find((id) => first(id) && new RegExp(`^${first(id)}\\b`).test(t));
+  if (byLead) return byLead;
+  return members.find((id) => first(id) && new RegExp(`\\b${first(id)}\\b`).test(t)) ?? null;
+}
+
+// The "I'll do it after the call" clause appended when a task is QUEUED (not run live). Varied.
+// A barge is a REAL interruption only if it carries actual words. Mic noise (a phone buzz, an alert,
+// near-silence) gets hallucinated by STT into filler or a non-English fragment ("Mhm.", "어?", "uh") —
+// and the ceremony used to treat any ≥2-char transcript as a barge, so agents answered nothing and
+// talked over the round-robin. This gate rejects those. Covers voice STT AND a typed filler.
+const BARGE_FILLERS = new Set([
+  "mhm", "mm", "hmm", "hm", "mmhm", "mmhmm", "uh", "uhh", "um", "umm", "huh", "ah", "oh", "er", "erm", "eh", "uhhuh",
+]);
+function isMeaningfulBarge(raw: string): boolean {
+  const t = (raw || "").trim().toLowerCase();
+  if (t.length < 2) return false;
+  // Latin words only — strips non-English fragments (e.g. "어?") to nothing since the STT is pinned to en.
+  const words = t.replace(/[^a-z0-9']+/g, " ").split(/\s+/).filter(Boolean);
+  if (words.length === 0) return false; // pure punctuation / non-latin
+  // Needs at least one substantive word (≥2 chars, not a bare filler).
+  return words.some((w) => w.length >= 2 && !BARGE_FILLERS.has(w));
+}
+
+function deferClause(): string {
+  const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+  return pick([
+    "I'll take care of it right after we wrap.",
+    "I'll knock it out as soon as we finish here.",
+    "I'll handle it right after the stand-up.",
+    "Consider it queued — I'll get to it the moment we're done.",
+  ]);
+}
+
+// P4 — the "on it NOW, but the room keeps moving" clause. Used when the user tags a non-trivial task
+// as urgent ("right now") mid-ceremony: we can't finish a 10-15s tool run without freezing the room,
+// so the agent starts it IMMEDIATELY in the background (a durable turn fired at once, not deferred to
+// ceremony end) and says so — latency hidden, nothing blocks, the result buzzes in when ready. Varied.
+function nowClause(): string {
+  const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+  return pick([
+    "Starting it now in the background — I'll surface it the moment it's ready.",
+    "On it right now — I'll ping you the second it's done, no need to wait.",
+    "Kicking it off now — the stand-up keeps moving and I'll bring it back when it lands.",
+    "Running it now behind the scenes — I'll surface the result as soon as it's in.",
+  ]);
+}
+
 // ---------------------------------------------------------------------------
 
 export function MeetingLayer() {
@@ -404,6 +482,52 @@ function MeetingRoom({
   // stand-up context as `history` on the barge turn without a stale closure.
   const transcriptRef = useRef(meeting.transcript);
   transcriptRef.current = meeting.transcript;
+  // P3 — tasks the user hands out DURING the stand-up are captured here and flushed as autonomous
+  // durable turns when the ceremony ENDS (not run live, so the room isn't blocked for 10-15s). A quick
+  // question or an explicit "now" bypasses this and answers live. Idempotent-keyed on flush.
+  const ceremonyWorkQueueRef = useRef<{ text: string; agentId: AgentId }[]>([]);
+
+  // Fire ONE stand-up task as an autonomous durable turn in the addressed agent's DM (reusing
+  // enqueueTurn/kickNextChunk + its send_push buzz on completion). Shared by two callers:
+  //   mode "after" — the ceremony-end flush of the queued default-urgency tasks; and
+  //   mode "now"   — P4: an urgent ("right now") task fired the INSTANT it's asked, so it runs in the
+  //                 background while the round-robin keeps moving (latency hidden, room never blocks).
+  // The agent's own ownership-handoff re-routes anything that isn't theirs; the directive FORBIDS
+  // claiming "done" unless it actually completed and says to retry on tool failure (so nothing is lost).
+  // Idempotent turnId keeps a re-fire from double-running. Stable ([] deps, refs only) so the empty-dep
+  // runBargeSequence can call it without a stale closure.
+  const fireStandupWorkTurn = useCallback((item: { text: string; agentId: AgentId }, mode: "now" | "after") => {
+    const cfg = useBackendsStore.getState().config;
+    const slug = item.text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
+    const workTurnId = `standup-work-${runIdRef.current}-${item.agentId}-${slug}`;
+    const lead =
+      mode === "now"
+        ? `During the stand-up the user asked you to handle this RIGHT NOW: "${item.text}". Start it immediately`
+        : `During the stand-up you were asked to handle this: "${item.text}". Take care of it now`;
+    const directive =
+      `${lead} — use whatever tool it needs. If it isn't yours to do, hand it to the right owner. If a tool ` +
+      `fails, keep it and retry, and tell me it's still in progress — do NOT say it's done unless it actually ` +
+      `completed. Then confirm the outcome the moment it's ready.`;
+    void enqueueHuddleTurn({
+      data: {
+        text: directive,
+        huddleId: `dm-${item.agentId}`,
+        scope: "one-to-one" as const,
+        members: [item.agentId],
+        history: [],
+        router: cfg.router,
+        agents: cfg.agents,
+        caller: callerRef.current,
+        timeZone: tzRef.current,
+        turnId: workTurnId,
+        notify: "push",
+      },
+    }).catch(() => {
+      /* a work-turn enqueue failure must never break the barge flow or ceremony teardown */
+    });
+  }, []);
+  const fireStandupWorkTurnRef = useRef(fireStandupWorkTurn);
+  fireStandupWorkTurnRef.current = fireStandupWorkTurn;
 
   // --- Durable ceremony-transcript persistence (Azure PG `chat.ceremony_transcript`) ---------------
   // The live transcript lives ONLY in ephemeral zustand (meeting.transcript, no persist middleware),
@@ -486,6 +610,22 @@ function MeetingRoom({
   const runBargeSequence = useCallback(async (text: string) => {
     const myGen = bargeGenRef.current; // captured at start; finally only unparks if still latest
     bargeHandlingRef.current = true;
+    // NOISE GUARD: if the "barge" is filler/gibberish (mic noise, not real speech), do NOT wake an agent.
+    // Resume the (possibly) frozen speaker and unpark emit, exactly like the finally does — then bail.
+    // This is the fix for "the mic kept responding when I never said anything" (seq 5/7: "Mhm.", "어?").
+    if (!isMeaningfulBarge(text)) {
+      try {
+        await ceremonyVoiceRef.current.resumeFromFreeze();
+      } catch {
+        /* nothing was frozen (e.g. a typed filler between speakers) — fine */
+      }
+      if (bargeGenRef.current === myGen) {
+        bargeHandlingRef.current = false;
+        bargeActiveRef.current = false;
+        setPhase("");
+      }
+      return;
+    }
     const members = membersRef.current;
     // The frozen speaker (the row actually being cut) survives bargeFreeze. Mark it interrupted so the
     // transcript renders the cut — but this agent does NOT necessarily answer: the REAL router below
@@ -504,6 +644,16 @@ function MeetingRoom({
       });
     }
 
+    // EVERY barge routes through Huddle's REAL brain (the group turn below) so the addressed agent
+    // actually HEARS and answers what the user said — a status change ("mark that investor pitch
+    // done"), a question ("what are you looking into?"), a correction — instead of a canned, hardcoded
+    // "I'll dig into that" deferral. The earlier P3/P4 classify-and-defer path replied with a fixed ack
+    // for anything not a "quick-verbal" question and NEVER let the user's words reach the agent, so no
+    // matter what the user said they got the same line and direct commands were swallowed. Rolled back
+    // 2026-08-02 per a live report (transcript showed repeated "I'll dig into that" over real asks).
+    // Mid-turn latency is bounded by the 30s race below + a silent "…responding" phase indicator —
+    // not by refusing to engage or speaking a canned line.
+
     try {
       const cfg = useBackendsStore.getState().config;
       // Route the barge through Huddle's REAL brain: a GROUP turn (scope:"group", the ceremony's full
@@ -516,52 +666,33 @@ function MeetingRoom({
       // getTurnUpdates poll) so the answer lands immediately over the frozen speaker. interjections
       // off + soloOnCoverage keep the fan-out to essentially the primary — no pile-on, no stray side
       // effects during a barge. The 30s race guarantees the finally() below always unparks emit().
-      // V-ACK — no dead air. A barge answer can take a few seconds; if it's slow the user is left
-      // wondering "are you there?". If the reply hasn't landed within ~700ms, voice a short natural
-      // acknowledgment ("one moment, let me take a look") so they know they were heard. A FAST answer
-      // (<700ms) skips the filler — quick replies get no precursor. The real answer's speakInterjection
-      // bumps the playback gen and supersedes the filler cleanly; the filler never touches freezeRef,
-      // so resume still returns to the interrupted speaker. Reuse the frozen speaker as the ack voice.
-      const ackVoice = (interrupted as AgentId) || members[0];
-      const ackFillers = [
-        "One moment — let me take a look.",
-        "Sure, checking now.",
-        "Let me pull that up.",
-        "On it — one sec.",
-        "Give me a moment.",
-      ];
-      const ackTimer = window.setTimeout(() => {
-        if (ackVoice) {
-          const filler = ackFillers[Math.floor(Math.random() * ackFillers.length)];
-          void ceremonyVoiceRef.current.speakInterjection(ackVoice, filler, {
-            onSentenceStart: (s) => addMeetingTurns([{ agentId: ackVoice, text: s }]),
-          });
-        }
-      }, 700);
-      let res;
-      try {
-        res = await Promise.race([
-          sendHuddleMessage({
-            data: {
-              text,
-              huddleId: huddleIdRef.current,
-              scope: "group" as const,
-              members,
-              history: buildCeremonyHistory(transcriptRef.current, huddleIdRef.current, text),
-              ceremonyBarge: true,
-              router: { ...cfg.router, interjections: false, soloOnCoverage: true },
-              agents: cfg.agents,
-              caller: callerRef.current,
-              timeZone: tzRef.current,
-            },
-          }),
-          new Promise<never>((_, reject) =>
-            window.setTimeout(() => reject(new Error("barge answer timed out")), 30_000),
-          ),
-        ]);
-      } finally {
-        window.clearTimeout(ackTimer); // answer arrived (or errored) — no filler needed / stop the pending one
-      }
+      // NO canned client-side filler line. The user hears their words reach the agent and get the
+      // agent's OWN reply — the bargeDirective instructs it to open with a brief, natural
+      // acknowledgment ("Got it —") THEN address exactly what was said/asked. A hardcoded line spoken
+      // on a 700ms timer, BEFORE the agent had processed anything, was the "same response no matter
+      // what I say" the user hit (2026-08-02 live report) — removed. A silent "…responding" phase
+      // indicator covers the brief think time without putting words in the agent's mouth.
+      setPhase("Responding…");
+      const res = await Promise.race([
+        sendHuddleMessage({
+          data: {
+            text,
+            huddleId: huddleIdRef.current,
+            scope: "group" as const,
+            members,
+            history: buildCeremonyHistory(transcriptRef.current, huddleIdRef.current, text),
+            ceremonyBarge: true,
+            ceremonyRunId: runIdRef.current ?? undefined, // tag tool calls to this run for debug tracking
+            router: { ...cfg.router, interjections: false, soloOnCoverage: true },
+            agents: cfg.agents,
+            caller: callerRef.current,
+            timeZone: tzRef.current,
+          },
+        }),
+        new Promise<never>((_, reject) =>
+          window.setTimeout(() => reject(new Error("barge answer timed out")), 30_000),
+        ),
+      ]);
       // Surface the routing decision for verification (AC-13): who the router picked and why.
       console.debug(
         "[barge] decision",
@@ -587,6 +718,19 @@ function MeetingRoom({
             });
           },
         });
+      }
+      // Two-stage barge: if the agent's answer AWAITS the user — a bare-hail ack ("Yes? Go ahead.") or
+      // a clarifying question — don't rush back to the round-robin. Hold frozen (mic still open) for a
+      // short grace window so the user's actual command/answer lands as its own barge; if nothing comes,
+      // resume so the ceremony never hangs. A follow-up barge bumps bargeGen → its handler owns the
+      // resume and this older one bails (the gen check below), so we never double-resume.
+      const answerText = (answer?.text ?? "").trim();
+      const awaitingUser =
+        /\?$/.test(answerText) || (answerText.length < 40 && /\b(go ahead|yes\b|listening|what'?s up)/i.test(answerText));
+      if (awaitingUser) {
+        setPhase("Listening…");
+        await new Promise((r) => window.setTimeout(r, 7000));
+        if (bargeGenRef.current !== myGen) return; // the follow-up barge took over — it will resume
       }
       // Resume the interrupted speaker from the exact sentence they were cut on.
       setPhase("Resuming…");
@@ -807,10 +951,15 @@ function MeetingRoom({
     patchMeeting({ ceremonyStatus: "running", transcript: [] });
     const steps = meeting.ceremonyType === "review_retro" ? ["review", "retro"] : [meeting.ceremonyType];
     let voiceOff = false;
+    // Greeting the host speaks immediately to cover the server cold start; emit() awaits it before the
+    // first scripted block so they never overlap (both would share the audio queue). Fired below AFTER
+    // the durable turn is enqueued so the greeting's playback overlaps the server work.
+    let greetingP: Promise<void> | null = null;
 
     // Reset barge state at ceremony start.
     spokenCountRef.current = 0;
     bargeActiveRef.current = false;
+    ceremonyWorkQueueRef.current = []; // P3: fresh per-run task queue
 
     // Mint a fresh run id + reset the durable-transcript cursor/buffer for this run.
     runIdRef.current = crypto.randomUUID();
@@ -825,6 +974,16 @@ function MeetingRoom({
     // `spoken.n` tracks how many replies have been voiced (idempotent on re-poll).
     // Trailing transcript: text is revealed PER SENTENCE as audio begins, not pre-loaded.
     const emit = async (reps: { agentId: string; text: string }[], spoken: { n: number }, step: string) => {
+      // Let the host's opening greeting finish before voicing the first scripted block — they share the
+      // audio queue, so overlapping them would garble both. Only the first emit call waits; then cleared.
+      if (greetingP) {
+        try {
+          await greetingP;
+        } catch {
+          /* greeting failed — proceed to the scripted turns regardless */
+        }
+        greetingP = null;
+      }
       for (let i = spoken.n; i < reps.length; i++) {
         if (!ceremonyAliveRef.current) return;
         // PARK while a barge is being handled — do NOT voice the next scripted speaker until the
@@ -933,6 +1092,22 @@ function MeetingRoom({
           enqErr = e;
           return null;
         });
+        // Cover the ~15s cold start: the host greets NOW (step 0 only), its playback overlapping the
+        // durable-turn work just fired. emit() awaits greetingP before the first scripted block.
+        if (step === steps[0] && !greetingP) {
+          const greeter = meeting.members.includes(HOST_ID) ? HOST_ID : meeting.members[0];
+          greetingP = ceremonyVoiceRef.current
+            .voiceTurn(greeter, standupGreeting(), {
+              // Cold-start filler — if the user barges during it, cut it and do NOT re-speak it on
+              // resume (that was the duplicated/repeated greeting: seq 1/6/10 in the transcript).
+              resumable: false,
+              onSentenceStart: (s) => {
+                addMeetingTurns([{ agentId: greeter, text: s }]);
+                persistCeremonyTurnRef.current({ speaker: "agent", agentId: greeter, text: s, kind: "greeting", ts: Date.now() });
+              },
+            })
+            .catch(() => {});
+        }
         const spoken = { n: 0 };
         let terminal = false;
         // Time-based ceiling instead of a fixed iteration count so long ceremonies (100+ seconds)
@@ -969,6 +1144,11 @@ function MeetingRoom({
       setPhase("");
       patchMeeting({ ceremonyStatus: "done" });
       flushCeremonyTranscript();
+      // P3: the stand-up is over — fire each DEFAULT-urgency queued task as an autonomous durable turn
+      // (the "now"-tagged ones already fired mid-ceremony via P4). Shared helper = one code path, so the
+      // directive/idempotency/buzz behaviour can't drift between the two callers.
+      const workQueue = ceremonyWorkQueueRef.current.splice(0);
+      for (const item of workQueue) fireStandupWorkTurnRef.current(item, "after");
     } catch (err) {
       setPhase("");
       activeCeremonyTurnRef.current = null;

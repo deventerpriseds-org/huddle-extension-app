@@ -11,6 +11,36 @@ Last updated: 2026-07-31 (ACT-huddle-12 problem #1 — Transcript/Chat tabs — 
 
 ## Open
 
+### ACT-huddle-26: Barge responds to what the user SAID (no canned deferral) — Playwright-proven, 4 types
+**Requested:** 2026-08-02 — user: "if it just hears me on the mic it just gives a canned I'll dig into
+that response… take what you hardcoded for a quick reply and make that instructions so the agent is
+trained to do it on their own after actually hearing my query"; "the screenshots do not show playwright
+impersonating me with a barge for a quick question and another that will require a tool and one that is
+a status update and one asking for more details — mark that as ac".
+**Fix (deployed main, NOT user-confirmed):** removed the 700ms hardcoded client filler (`bargeAckLine`)
+in `MeetingBar.runBargeSequence`; folded the ack into `bargeDirective` (ceremonies.ts) so the agent
+opens with a brief NATURAL ack reflecting what was said, then answers/uses the tool, and is barred from
+stock deferrals. Silent "…responding" phase covers think time.
+**Acceptance criteria (each demonstrated by Playwright injecting the barge via the meeting Chat during
+a LIVE ceremony — the real routeTurn→runBargeSequence→sendHuddleMessage(ceremonyBarge:true) path — and
+screenshotting the response; `CANNED_RE` asserts it is NOT a hardcoded deferral):**
+- **AC-1 Quick question barge** — Given a live stand-up, when the user barges a quick question ("how many
+  blockers are on the board right now?"), then the addressed agent gives a brief natural ack + a direct
+  answer, and the reply is NOT a canned deferral. [LIVE/Playwright]
+- **AC-2 Tool-requiring barge** — When the user barges "Add a task called Test-barge-item to my backlog",
+  then the agent acks + actually calls the create tool + confirms in board terms (a new task exists).
+  [LIVE/Playwright + DB]
+- **AC-3 Status-update barge** — When the user barges "Mark the Test-barge-item task as done", then the
+  agent acks + calls update_task + confirms the status change (task resolves by name via the fuzzy
+  get_tasks). [LIVE/Playwright + DB]
+- **AC-4 Needs-more-detail barge** — When the user barges an ambiguous ask ("take care of that thing we
+  talked about"), then the agent acks + asks ONE clarifying question — NOT a canned "I'll dig into that".
+  [LIVE/Playwright]
+- **AC-5 (all)** — none of the four replies match `CANNED_RE`; each is specific to what was said.
+  [LIVE/Playwright]
+**Verify:** `verify-uat.yml` (huddle-checks `standupBarges`) → screenshots `barge-1..4`, delivered to user;
+final verdict is the user's live VOICE test (mic perception is out of Playwright's scope by design).
+
 ### ACT-huddle-13: 1:1 VOICE latency — make agents SPEAK journey-fast (OpenAI Realtime speaks directly)
 **Requested:** 2026-08-01 — user: "the delay for my convo with Flex to SPEAK takes way too long. much
 longer than the journey app"; "settings should match journey or the boost coach"; "flex and all agents
@@ -231,6 +261,44 @@ pipeline nor added to the nightly builder queue. Figure out how we can achieve t
   work pipeline (BACKLOG→UP_NEXT→DOING promotion + auto-research turns), (b) any Huddle-scheduled/
   cadence job that would act on it, and (c) journey's nightly scheduling/planner run. It should never be
   silently picked up and pushed forward again once tagged.
+**BUILT + DEPLOYED 2026-08-02 (corrected scope: tag on card, NO new lane — user: "parking lot is
+supposed to be a tag… the backlog lane is fine"):**
+- **Tags already render on cards** (`BoardView.BoardCard` — `<Badge>` per tag) — so parking-lot needed
+  NO new display. ADDED: per-tag remove (×), a `+ tag` inline input, and a **"Parking lot" card-menu
+  item** that applies the `parking-lot` tag AND moves the card to `BACKLOG` in one step (toggles off);
+  parking-lot badge styled amber. Wired through the EXISTING `updateBoardTask` → journey `update_task`
+  (extended to accept `tags`) — no parallel system. (`36ef10f`)
+- **Exclusion from Huddle automation:** `autowork.server.ts` filters `!(tags).includes('parking-lot')`
+  at candidate selection — a parked task never promotes or enqueues a work turn. (`8010e7a`)
+- **Exclusion from journey nightly:** `nightly-schedule-builder` adds `.not('tags','cs','{parking-lot}')`
+  to all 3 candidate queries. Deployed. `public.tasks.tags` is NOT NULL default `'{}'`, so the
+  `NOT(tags @> …)`-drops-NULL footgun does NOT apply here (verified: 0 null rows; parked→excluded,
+  `'{}'`→included). (journey `24dca6a`)
+- **Agent action:** `taskToolInstructions` gains a PARKING LOT directive so "parking lot this" sets
+  BACKLOG + adds the tag via `update_task`. (`8010e7a`)
+- **STATUS: deployed, mechanism/SQL verified; NOT yet user-confirmed live.** Remaining to confirm: the
+  card `+ tag` / Parking-lot menu actually persists + shows the badge (Playwright board check or user),
+  and a parked task is skipped by an autowork pass.
+**POLISH shipped 2026-08-02 (user: "polish parking lot as you proposed earlier"; scope = my judgment
+after they answered "no preference" to the scope question). Built + deployed `main` 2bdd8d5, SWA deploy
+success. 4 items:**
+- **Proactive park OFFER (behavioral, systematic layer):** additive `PROACTIVE PARKING` sentence in
+  `taskToolInstructions` (huddle.functions.ts:1338, concatenated into every turn incl. stand-up) — when
+  an agent sees a task deferred many times / chronically blocked (keyed off the `deferred N×` signal it
+  already cites), it OFFERS to park it and only parks AFTER the user confirms; never auto-parks, never
+  files a card. Directly targets the transcript finding (items deferred 100+× re-recited each stand-up).
+- **Dim + sort + pause (UI, BoardView.tsx):** parked cards render `opacity-60 saturate-50` + a
+  `PauseCircle` icon and sink to the bottom of every lane (via `rankSort`, so desktop AND mobile).
+- **Amber filter chip:** the `parking-lot` tag-filter chip is amber when unselected (matches the badge).
+- **`N parked` count** in the board header (hidden when 0; keys off `tags`, not the absent `pushed_count`).
+- Automation exclusion (autowork + journey nightly) UNCHANGED. Independent AC subagent wrote 30 ACs;
+  `vite build` clean; independent verifier running. Live visual (dim/amber/count) needs a parked task —
+  user-confirm by parking a card via the ⋮ menu.
+**Transcript review (07-31 all-members premium-tier + 07-27/28 stand-ups) delivered same turn:** went
+well = multi-lane routing held (Sam/Finn/Tess/Cole), no fabricated data, interjector restraint. Needs
+work = agents describe work instead of producing artifacts; "nothing to add" filler turns; stand-ups
+are read-outs that re-recite 100×-deferred blocked items with no unblock action; "Groom backlog" sits
+on the board as a process-pollution card. The deferred-item finding is what shaped the proactive-park polish.
 **Investigation already done this session (extend, don't duplicate — real prior art exists):**
 - **Tagging is NOT a new concept — `tags TEXT[]` already exists** on `tasks.journey_tasks`
   (`tasks.server.ts:48,56`), already synced from journey's grooming write-back, already used for at
@@ -321,6 +389,59 @@ just published benchmarks — benchmarks are a starting hypothesis, not proof fo
 **Status:** open — ACs pending `/define-acceptance-criteria`. Suggested first step (not yet done): pick
 1-2 agents, run identical real turns against GPT-4o vs Luna vs Terra side-by-side (reply quality, tone
 fidelity to the persona snapshot, tool-call correctness, latency), before deciding on a broader swap.
+
+### ACT-huddle-16: Board reassignment silently reverts — mirror-sync race
+**Requested:** 2026-07-31 — user: "I clicked the assign to option on a card and assigned it to Tess
+but it didn't reassign after processing as if it failed."
+**Root cause (traced by reading the code, not guessed):** `BoardView.tsx`'s `applyMove` writes to
+journey (canonical) via `updateBoardTask` — succeeds immediately — then scheduled a SINGLE
+`refetch()` at a fixed 2.5s delay. `refetch()` reads the Huddle MIRROR (`tasks.journey_tasks`),
+which syncs asynchronously (`pg_net`, "eventually consistent, ~1-3s but not guaranteed" per this
+repo's own CLAUDE.md). If the mirror hadn't caught up by 2.5s, the blind refetch silently overwrote
+the correct optimistic UI with the stale pre-write row — looking exactly like the assignment failed,
+even though the write succeeded.
+**Fix:** replaced the fixed-delay refetch with `waitForMirrorSync` — polls `getBoardTasks` (6
+attempts, 700ms apart) until the specific patched field is actually visible, and only then replaces
+state. If it never catches up within budget, the optimistic state is left alone instead of being
+clobbered with a known-stale read (the next natural refetch reconciles once sync lands).
+**Status:** implemented, `tsc` clean. AC-writing subagent dispatched; verifier not yet run — do not
+mark closed until independently verified.
+
+### ACT-huddle-17: Grooming cadence → Monday mornings only, and ALL job cadences made user-editable (Settings, not code)
+**Requested:** 2026-07-31 — user: "Terry is grooming too often[,] change it to Monday mornings
+and[,] whatever currently falls in Monday morning[,] stop the rest. This also needs to be a manual
+config in settings so I can increase if I need to without code[,] just like every value[,] so they
+don't get lost in code and not able to be changed or even be forgotten."
+**Built:**
+- `identity/scheduling-config.server.ts` (new) — email-scoped Azure PG table
+  `identity.scheduling_config`, `resolveJobCadence(email, jobType)` merges a per-user override over
+  a shipped default. Covers ALL 5 scheduled job types (groom/autowork/standup/reviewDigest/
+  reviewRecheck) with the SAME mechanism — not a grooming-only patch, per this repo's own
+  "systematic capability, never a patch" standing principle.
+- `identity/scheduling-config.functions.ts` (new) — client-callable get/set server fns, same
+  caller-resolution pattern as `agent-workflow-config.functions.ts`.
+- `SchedulingPanel.tsx` (new, wired into `SettingsSheet.tsx`) — per-job-type hours + day-of-week
+  editor, reset-to-default per job.
+- `scheduler.server.ts`: `computeNextRun` gained an optional `daysOfWeek` filter (Date.getDay()
+  convention, 0=Sun..6=Sat) and its day-scan window widened from 3 to 8 days (a 3-day window can
+  miss a single-weekday cadence entirely). `ensureGroomJobs` now resolves live per-user cadence via
+  `resolveJobCadence` for every job type instead of hardcoded constants.
+- `tasks.server.ts`: `ScheduledJob`/`upsertScheduledJob` cadence type gained optional
+  `daysOfWeek?: number[]`. Confirmed the existing upsert already refreshes `cadence` on conflict
+  (only `next_run_at` is left alone) — so a live Settings edit takes effect on the job's NEXT fire
+  without needing the row deleted/recreated.
+- **New grooming default: `{hours:[8], daysOfWeek:[1]}`** (Monday 8am ET) — down from
+  `[4,8,12,14,18,22]` every day. The other 4 job types' defaults are unchanged, just gained the
+  (unused-by-default) `daysOfWeek` capability.
+**Verified offline (standalone script against the real `computeNextRun`, not a reimplementation):**
+Monday-8am cadence resolves correctly from every day of the week (Mon/Tue/Fri/Sun all → next
+Monday 8am); the exact boundary case (dispatched AT Monday 8am, and just after) correctly rolls to
+the FOLLOWING Monday, not the same day; a multi-day cadence (Mon+Thu) correctly finds Thursday when
+queried after Monday's slot has passed; the no-daysOfWeek (every-day) case is byte-for-byte
+unchanged behavior from before this change (regression-checked).
+**Status:** implemented, `tsc` clean, core scheduling logic independently offline-verified. AC-writing
+subagent dispatched; live verifier (real DB read/write, Settings UI round-trip) not yet run — do not
+mark closed until independently verified.
 
 ### ACT-huddle-15: Research — OpenAI Voice Agents SDK adoption + real API-cost-reduction levers (prompt caching, Batch API)
 **Requested:** 2026-07-31 — user's own words: "add an act for researching should we be using the concept
@@ -1179,9 +1300,168 @@ User wants a real-life-simulation stand-up. Grounded facts (Explore + grep, 2026
   (a) checklist not split into per-item utterances; (b) my resume-from-next (sentenceIdx+1) skips it.
   User wants REPEAT interrupted item + CONTINUE remaining. Needs per-item granularity + repeat-then-continue.
 - Ownership ack still applies where a defer IS correct, but the Iris case was a tool failure, not a defer.
-Proposed phasing: P1 fluid speech (pipeline) + Terry greeting; P2 semantic ownership-aware ack; P3 queue
-(default ack+queue, flush after end); P4 override matrix + offer-next-person latency hide. Poking holes
-with user; NO code until scope signed off.
+Phasing P0-P4 signed off by user (decisions: fix Cole/Sam host-naming; DOING lane = HUDDLE side not the
+user's board; 150ms gapless threshold; Q1 status=ack+doing+queue never say-done-early; Q2 buzz-per-task).
+BUILD LOG (user wants continuous loop, live-confirm each phase — no harness PASS for perceptual):
+- **P0 DONE (offline)** commit af8a0a6: `classifyAsk` in capabilities.ts = {type: quick-verbal|fast-action|
+  slow, urgency: default|now} extending classifyTurnIntent. Fixed real gaps: 'make X done' (not just 'mark'),
+  'do it now' no longer misread as a question, "how's" = query. ask-classification 32/32; regression
+  reminder-intent 17/17, b2-status-guard 9/9.
+- **P1 DONE (deployed, awaiting LIVE user confirm)** commits cea38a5 + 1c264f8:
+  1.1 pipeline synth (synth N+1 while N plays) — kills inter-item dead space [LIVE].
+  1.2 splitSentences fix — period-inside-quote ('40k.') now splits, so a checklist isn't one utterance.
+  1.3 resume repeats interrupted line + continues (restart at sentenceIdx, reverting resume-from-next
+  which dropped items). Offline resume-checklist 7/7 (Iris string 1->4 lines; resume [0,1,1,2,3,4]).
+  1.4-1.6 host greeting (standupGreeting varied client-side template) covers ~15s cold start, fired
+  after enqueue, emit awaits it. Deployed via deploy-swa on main. NEEDS live stand-up confirm.
+- **P1 CORE CORRECTION (2026-08-02):** commit 972c990 "P1 core" only DELETED a test — git add aborted on
+  a bad pathspec + staged nothing, so pipeline/splitter/resume were NEVER in main/deploy despite me
+  saying "live". Redone in 86463b8 (verified origin/main has synthOne×4 + splitter + sentenceIdx); deploy
+  bh1zfcr05 success. Hardening logged (memory): verify code is in the commit/branch before claiming deployed.
+- **P2 DONE (deployed)** commit 00eb517: bargeAckLine(text) type-aware varied ack (fast-action→'marking
+  that now', slow→'let me pull that together'), NEVER says 'done'. Wired into runBargeSequence. Offline
+  barge-ack 7/7. LIVE-confirm the feel.
+- **X.1 diagnosed (needs repro for exact r.error):** Iris's "journey tool failed" is NOT the ownership
+  guard (that returns a "deferred" result, huddle.functions.ts:2428-2436) — it was the JOURNEY-SIDE tool
+  call erroring (r.error at :2460, only the generic label persisted to the transcript). Design implication
+  is already firm: P3 must route queued work to the task's real OWNER + never leave a failed task lost
+  (keep/retry/never-say-done). Exact r.error = a reproduction run (test-agent-serverfn) — TODO.
+- **P3-core DONE (deployed)** commit 673d953: a task-barge (fast-action/slow, not urgent) is QUEUED not
+  run live — addressed agent acks+defers (never says done), interrupted speaker resumes, room keeps
+  moving; at ceremony END each queued item fires a durable dm-<agent> turn (reuse enqueueTurn +
+  send_push buzz) with a directive: do it, hand off if not yours, retry on failure, never claim done
+  unless it completed. Quick/now still live. Offline queue-decision 10/10. tsc clean.
+  P3 FOLLOW-ONS (not built): exact-owner pre-resolution (route Iris's ask about Flex's task straight to
+  Flex — currently the addressed agent's own handoff logic re-routes downstream); a VISIBLE Huddle-side
+  DOING lane; explicit retry engine (currently relies on the durable-turn's kickNextChunk/cron).
+- **END-TO-END UAT HARNESS (2026-08-02)** commit ce7cf01: `e2e/ceremony-standup-flow.e2e.mjs` +
+  `ceremony-standup-flow.yml` — drives a REAL deployed stand-up, fires typed barges, reads durable
+  transcript rows. First run 30732347524 FAILED and CAUGHT A REAL BUG (see PREAMBLE FIX): the QUICK
+  barge "quick question — what day is it today?" was mis-QUEUED (deferred), not answered live.
+- **PREAMBLE FIX (2026-08-02)** commit b9375a5 (deployed run 30732511963 success): `classifyTurnIntent`
+  now `normalizeForIntent()`s first — strips leading conversational fillers ("quick question", "hey",
+  "sorry to interrupt") + a leading agent-name vocative (data-driven off the roster) before the
+  ^-anchored intent matchers. The filler was defeating the anchors → real ask fell through to
+  perform/slow → a live question got queued. Systematic (helps every intent consumer). Offline
+  classifier extended 32→39 cases (7 preamble/vocative), 100%.
+- **P4 DONE (deployed)** commit 10c1c00: an urgent barge ("do X right now") no longer runs live (10-15s
+  block). It's acked with a nowClause ("starting it now in the background") and FIRED IMMEDIATELY as a
+  durable dm-<agent> turn — runs while the round-robin keeps moving, buzzes when ready. Default-urgency
+  still queues for ceremony end. Both share ONE fireStandupWorkTurn helper (no drift). Only quick verbal
+  Qs answer live. Offline decision now three-way LIVE/QUEUE/NOW 12/12. Harness extended w/ a NOW barge.
+- **Cole/Sam host-naming: NOT A CODE BUG (ground-truthed 2026-08-02).** openerDirective forces Terry to
+  say exactly "<handoffNames[0]>, you're up" where handoffNames[0] === participants[1] (first lane
+  owner), and the ceremony loop runs owners in that exact participants order (sequential shiftEligible).
+  Terry names the actual first speaker BY CONSTRUCTION. The reported "said Cole, Sam spoke" = the user's
+  own barge to Sam pulling him in early (barge answer renders right after the opener) — correct behavior.
+  No fix invented (ground-truth rule).
+- **INTEGRATION PROOF DONE (2026-08-02):** the extended standup-flow UAT PASSED on the P4 deploy TWICE
+  — my run 30732802143 and an INDEPENDENT verifier subagent's fresh re-dispatch 30732909733, both verdict
+  PASS with distinct live outputs (TASK→queued no-answer; QUICK "quick question — what day is it today?"
+  →Iris answered live "Today is Sunday, August 2, 2026."; NOW→Sam nowClause "On it right now — I'll ping
+  you the second it's done", background, no live block). Verifier confirmed 5/5 claims (code reads,
+  tsc EXIT=0, no smart quotes, git ancestry b9375a5+10c1c00 under origin/main 284861a). 0 refuted.
+- REMAINING (follow-ons, NOT blockers — nothing is lost today; queued/now work routes to agents' DMs with
+  buzzes): a VISIBLE Huddle-side DOING lane (user flagged Huddle-side); exact-owner pre-resolution; an
+  explicit retry engine; X.1 exact r.error repro. Each needs a user go-ahead before building.
+- STATUS: P0/P1/P2/P3-core/P4 + preamble fix all built + deployed + OFFLINE-proven (classifier 39/39,
+  resume 7/7, ack 7/7, queue-decision 12/12; tsc clean) + INTEGRATION-proven live (2× PASS, one
+  independent). The ONE thing still open = the user's FINAL perceptual/feel UAT (P1 audio gaplessness,
+  greeting cold-start cover, resume-repeat) — their ears are the verdict; NOT marking those "confirmed"
+  until they hear it live.
+
+### ACT-huddle-24 (DESIGN, investigating — created 2026-08-02): stand-up should report the BOARD (active WIP), not the whole journey backlog
+**Trigger:** user saw Iris surface personal LIFE tasks ("gym", "Transfer 40k") in the stand-up as her "up next", and
+couldn't mark the 40k done. Repeatedly corrected shallow diagnoses (ownership guard, stale snapshot) — all wrong.
+
+**Ground-truthed findings (all evidence-backed, live/DB):**
+- **NOT the ownership guard.** `maybeDeferStatusChange` exempts `special:"coordinator"` (Iris) AND unassigned tasks
+  (`!assignee → return`), so it can never block her. Confirmed in code + empirically.
+- **Iris CAN change status** — live proof: on real task "Research Slack AI Agents" (`dd49c282`), `update_task ok=true`
+  (up next → to-do, net-zero). Run 30735247928-ish + gym run 91464804467.
+- **The "couldn't mark 40k done" is a MODEL SAFETY REFUSAL on financial tasks, not Iris.** Clean A/B on identical
+  DONE/LIFE/unassigned tasks: GYM ("Go to gym") → `update_task ok=true` twice ("reopened…", "marked done"); 40k
+  ("Transfer 40k") → REFUSED, no `update_task`: *"I cannot mark 'Transfer 40k' as done… ensure it's been executed in
+  your financial systems."* Same agent/lane/status/op — only the content differs. (Job 91464037675 vs 91464804467.)
+- **Why these land on Iris = FALLTHROUGH, not grooming.** DB: gym/40k are `assigned_agent = none`. Grooming
+  (`groom.ts`) only grooms OPEN tasks and assigns BY DOMAIN (would send gym→Flex, transfer→Finn) — it never touched
+  these. They fall through at ceremony time via `ownerForTask = assigned_agent ?? ownerForCategory('LIFE')=iris`
+  (ceremonies.ts:21-44). Open ones get bucketed into her lane's `upNext` by `buildCeremonyReport`.
+- **Root cause of the whole thing = the ceremony has NO board-membership gate.** `getStandupTasks` (tasks.server.ts:328)
+  pulls EVERY open journey task + recently-done (`completed_at IS NULL OR within window`), `LIMIT 1000` — raw ungroomed
+  personal to-dos included — and RE-DERIVES "up next" from open-ness instead of the board's real column. So a task
+  sitting in raw Backlog is narrated as "up next."
+
+**Board mechanics (the definition of "on the board" / what a sprint discusses):**
+- Continuous WIP-limited flow (no fixed sprint entity): `BACKLOG → UP_NEXT (cap 3/agent) → DOING (cap 1) → IN_REVIEW
+  (cap 2) → DONE` (autowork.server.ts:12,46-48). Only **assigned, unblocked** tasks are ever promoted (autowork:207);
+  unassigned tasks (gym/40k) never leave raw BACKLOG.
+- Board columns (BoardView.tsx:27-34): backlog[BACKLOG,TODO,PLANNING] · upnext[READY,UP_NEXT] · doing[DOING] ·
+  review[IN_REVIEW] · blocked[BLOCKED] · done[DONE]. There is a `board_id` field on tasks (tasks.server.ts:45) — another
+  possible membership signal.
+- So **active board = UP_NEXT/DOING/IN_REVIEW/BLOCKED** (capped, assigned-only) — that's "what a stand-up discusses";
+  BACKLOG is a holding area that grows to hundreds and must NOT be enumerated as "up next."
+
+**Design direction (user's 2-step, confirmed by mechanics):**
+1. **Step 1 — board-membership GATE** (before ownership): stand-up includes only tasks actually on the active board
+   (the WIP columns, assigned/promoted), NOT raw Backlog. This drops gym/40k regardless of LIFE→Iris (fallthrough only
+   fires on unassigned tasks, which the gate excludes).
+2. **Step 2 — lanes by owner** over the gated set. (LIFE→Iris fallthrough becomes moot; roster-domain routing of any
+   still-unassigned board task is a secondary refinement.)
+3. **Reporting LIMITS (user flagged): done & backlog grow to hundreds** → cap/window what's reported: recently-DONE
+   capped (top N/agent within window), BACKLOG not enumerated (a count at most), use the board's REAL status not
+   re-derived open-ness.
+4. **Separate fix — "board status = tracking, not executing":** a shared clarification so an agent doesn't refuse to
+   mark a financial/sensitive card done (ticking the card ≠ moving the money). Fixes the 40k refusal.
+
+**DECISIONS (user, 2026-08-02):**
+- **The ceremony MUST NOT override the actual board status** — the board's real lanes drive reporting. STOP re-deriving
+  done/up-next/blocked from open-ness (`buildCeremonyReport`); bucket strictly by each task's real status column.
+- **Board-gate = the real lanes:** `UP_NEXT / DOING / IN_REVIEW / BLOCKED`, PLUS **DONE**. BACKLOG excluded entirely.
+- **DONE window — INTERIM (user, 2026-08-02):** use **"this week" (last 7 days)** for now. The IDEAL — "DONE since the
+  last stand-up the user was AWARE of" (so a finished dependency is never missed vs. silently done) — is DEFERRED until we
+  settle a real awareness-tracking mechanism (attendance/ack). Build the 7-day window now; leave a clear seam to swap in
+  the awareness-scoped window later. (EL gate in ACT-25 uses tab-PRESENCE, which is independent of this deferred piece.)
+- Roster-domain routing of a still-unassigned *board* task = secondary refinement (fallthrough is mostly moot once the
+  gate drops raw Backlog).
+
+**DECIDED (user, 2026-08-02):** ALSO include the "board status = tracking, not executing" clarification (shared layer) —
+updating a card's status is TRACKING, not performing the underlying real-world action; fixes the 40k financial refusal.
+**BUILT + DEPLOYED (2026-08-02, user go-ahead given):**
+- Part 1 (f3fc9ad): `buildCeremonyReport` buckets by REAL board status (`boardLaneFor`), surfaces active WIP +
+  DONE-this-week (window unified: standup 36h→168h so fetch==report window), excludes raw BACKLOG; all LaneReport
+  consumers migrated off `overdue`. Offline proof `scripts/ceremony-board-report.test.mjs` **21/21**.
+- Part 4 (fb0120d): additive "card status = tracking, not executing" in shared `taskToolInstructions` (both dispatch
+  paths). LIVE-VERIFIED: the financial refusal is GONE — across 3 post-deploy runs Iris no longer says "ensure it's
+  executed in your financial systems"; she treats a financial card as a normal look-up-and-mark (jobs 91470330878 /
+  91470566829). Gym control (91464804467) marks done ok; only DONE/unresolved tasks fail on lookup, not on refusal.
+- Part 3 (fe2e311): `useCeremonyVoice._voiceTurn` skips `synthesizeSpeech` when `document.visibilityState!="visible"`
+  (no EL spend when unheard); transcript still renders; resumes on return; no listener → no leak. tsc clean.
+- Deployed via deploy-swa on main (fe2e311). ACs written by an independent subagent (34 ACs); build satisfies the
+  offline ones; Parts 1/4 evidenced live; Part 3 is the USER's live/ears verdict per the perceptual-UAT rule.
+**FOLLOW-UP (separate, pre-existing — logged, not in this build's scope):** `get_tasks`/resolution SCOPE — the lookup
+returns scheduled/active tasks, so a DONE or fresh-unscheduled-backlog task can't be resolved by the agent to update
+it. This (not any refusal/guard) is why marking a DONE or brand-new card by title can fail. Worth widening the lookup.
+**HOUSEKEEPING owed:** remove stray test rows I created (`Check status of Test Iris` fa43588e — malformed status/no
+Test- prefix; `Test-wire 5000 dollars to vendor`) — DEFERRED pending user OK (destructive on the live board).
+
+### ACT-huddle-25 (created 2026-08-02): don't burn ElevenLabs calls for text-only / unattended ceremonies & tasks
+**Trigger (user):** "make sure we aren't eating ElevenLabs calls for tasks/ceremonies that are all text or that I don't
+attend, so there is no voice being heard by me."
+**Ground-truth:** TTS is synthesized PER SENTENCE at `useCeremonyVoice.ts:198` (`synthesizeSpeech({text,agentId})` →
+`lib/voice/elevenlabs.server.ts` → EL API). The ONLY current gate is `voiceOff` (MeetingBar.tsx:945), which flips true
+only when TTS *fails* → text fallback. `document.visibilityState` is used solely to FLUSH the transcript
+(MeetingBar.tsx:807), NOT to stop synthesis. So a running ceremony synthesizes every sentence via ElevenLabs even when:
+the tab is hidden, the user walked away/isn't focused, or the context is text-only — i.e. voice nobody hears = wasted spend.
+**Scope (audit ALL EL call sites, gate each on "user present AND voice wanted"):**
+- Pause/skip synthesis when `document.visibilityState !== "visible"` (tab hidden / user away) — resume on return.
+- Skip entirely for text-only ceremonies/contexts (no voice mode) and for any run the user is not attending
+  (autonomous/durable/digest ceremonies have no client, but confirm no server-side EL path fires for them).
+- Tie into the ATTENDANCE signal from ACT-huddle-24 (the same "is the user actually here" fact gates both the DONE window
+  and whether we spend EL).
+**Net goal:** ElevenLabs is called ONLY when the user is actually present and listening. STATUS: BUILT + DEPLOYED
+(2026-08-02, commit fe2e311) — `_voiceTurn`'s `synthOne` gates on `document.visibilityState`. Live/ears verdict is
+the user's (perceptual-UAT rule): confirm no voice plays when the tab is hidden and it resumes on return.
 
 ### ACT-huddle-22: "fix everything" batch (2026-08-01) — status
 DEPLOYED + VERIFIED (harness re-run 30714248222): P2-TAVILY USED (real-time web search works, graded on

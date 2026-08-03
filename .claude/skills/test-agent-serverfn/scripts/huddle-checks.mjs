@@ -6,6 +6,106 @@
 // consumed, and the bypass flag is in-memory only (no cookie/localStorage backing it). A reload
 // after that point loses auth entirely (confirmed live: sidebar goes from populated to zero
 // buttons post-reload). So avatarImage404s must run LAST — nothing after it can rely on auth.
+// A barge answer must be the agent HEARING the user and responding — never one of the old hardcoded
+// client deferrals. If any of these phrases come back, the canned path is still firing.
+const CANNED_RE =
+  /i'?ll dig into that|take care of it (right )?after we wrap|knock it out as soon as we finish|i'?ll look into that|okay, i'?ll take care of that status|i'?ll get that updated/i;
+
+// Inject ONE barge by typing into the meeting Chat compose during a live ceremony — routeTurn treats a
+// typed message mid-ceremony as a barge (MeetingBar routeTurn → runBargeSequence → real
+// sendHuddleMessage(ceremonyBarge:true)), so this exercises the REAL barge response path (no mic). The
+// barge freezes the round-robin, so the newest transcript turn after it is the agent's answer.
+async function bargeOnce({ page, check, screenshot }, { label, text }) {
+  const turnSel = '[data-testid="transcript-turn"]';
+  const before = await page.locator(turnSel).count();
+  await page.locator('[data-testid="tab-chat"]').click().catch(() => {});
+  await page.waitForTimeout(300);
+  const box = page.locator('textarea[placeholder="Message the room…"]').first();
+  const haveBox = await box.count();
+  if (!haveBox) {
+    check(`Barge (${label}) — compose box present`, false, "no Message-the-room textarea found");
+    return "";
+  }
+  await box.fill(text);
+  await box.press("Enter");
+  // A barge FREEZES the round-robin (bargeFreeze parks emit), so the transcript order is:
+  //   [before] = the user's barge row, [before+1] = the agent's ANSWER to it.
+  // Wait for that specific answer row — NOT just "+2 turns" (the ceremony's own scripted turns can
+  // satisfy +2 and make us fire the next barge before the agent responds: the user-reported rapid-fire).
+  let got = false;
+  try {
+    await page.waitForFunction(
+      (b) => document.querySelectorAll('[data-testid="transcript-turn"]').length >= b + 2,
+      before,
+      { timeout: 45000 },
+    );
+    got = true;
+  } catch { /* timed out — capture whatever rendered */ }
+  // Read the ANSWER at index before+1 (right after the user's barge row), before the round-robin resumes.
+  const turnsNow = await page.locator(turnSel).allInnerTexts();
+  const reply = (turnsNow[before + 1] || turnsNow[turnsNow.length - 1] || "").replace(/\s+/g, " ").trim();
+  await page.locator('[data-testid="tab-transcript"]').click().catch(() => {});
+  await page.waitForTimeout(500);
+  await screenshot(`barge-${label}`);
+  const canned = CANNED_RE.test(reply);
+  check(
+    `Barge (${label}): agent HEARD it and responded (not a canned deferral)`,
+    got && reply.length > 0 && !canned,
+    `reply="${reply.slice(0, 180)}"`,
+  );
+  // Let the answer finish + the round-robin RESUME before the next barge — do NOT rapid-fire over the
+  // agent (the exact bug the user flagged). Wait for the transcript to add at least one more turn
+  // (resume) or a bounded settle, whichever first.
+  const afterAnswer = await page.locator(turnSel).count();
+  await page
+    .waitForFunction((n) => document.querySelectorAll('[data-testid="transcript-turn"]').length > n, afterAnswer, { timeout: 12000 })
+    .catch(() => {});
+  await page.waitForTimeout(2500);
+  return reply;
+}
+
+// ── Real voice barge: synthesize the phrase with ElevenLabs, play it INTO the fake mic (run-uat's
+//    FAKE_MIC stub), and let the app's REAL VAD→barge→STT path hear it. Unlike a typed barge, this
+//    exercises detection latency, the interrupt, and transcription of real speech.
+const EL_KEY = process.env.ELEVENLABS_API_KEY;
+const EL_VOICE = process.env.ELEVENLABS_DEFAULT_VOICE_ID || process.env.ELEVENLABS_VOICE_ID;
+async function ttsClipBase64(text) {
+  if (!EL_KEY || !EL_VOICE) return null;
+  try {
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${EL_VOICE}`, {
+      method: "POST",
+      headers: { "xi-api-key": EL_KEY, "content-type": "application/json", accept: "audio/mpeg" },
+      body: JSON.stringify({ text, model_id: "eleven_flash_v2_5" }),
+    });
+    if (!r.ok) return null;
+    return Buffer.from(await r.arrayBuffer()).toString("base64");
+  } catch {
+    return null;
+  }
+}
+async function voiceBarge({ page, check, screenshot }, { label, text }) {
+  const turnSel = '[data-testid="transcript-turn"]';
+  const b64 = await ttsClipBase64(text);
+  if (!b64) {
+    check(`Voice barge (${label}) — ElevenLabs clip ready`, false, "no clip (missing EL key/voice or API error)");
+    return "";
+  }
+  const before = await page.locator(turnSel).count();
+  await page.evaluate((b) => (window.__playBarge ? window.__playBarge(b) : Promise.reject("no fake mic")), b64).catch(() => {});
+  let got = false;
+  try {
+    await page.waitForFunction((n) => document.querySelectorAll('[data-testid="transcript-turn"]').length >= n + 2, before, { timeout: 45000 });
+    got = true;
+  } catch { /* capture whatever rendered */ }
+  const turns = await page.locator(turnSel).allInnerTexts();
+  const reply = (turns[before + 1] || turns[turns.length - 1] || "").replace(/\s+/g, " ").trim();
+  await page.locator('[data-testid="tab-transcript"]').click().catch(() => {});
+  await screenshot(`vbarge-${label}`);
+  check(`Voice barge (${label}) HEARD through the mic and answered`, got && reply.length > 0 && !CANNED_RE.test(reply), `reply="${reply.slice(0, 160)}"`);
+  await page.waitForTimeout(2500);
+  return reply;
+}
+
 export const checks = [
   async function panelCollapse({ page, check, screenshot }) {
     const sidebarBefore = await page.locator('aside:has-text("EDS workspace")').count();
@@ -119,6 +219,51 @@ export const checks = [
         : `no new transcript turn within 150s — ${firstReplyError ?? "unknown error"}`,
     );
     await screenshot("standup-in-progress");
+
+    // ── BARGE demonstration (ACT-huddle-26) ── the ceremony is now LIVE (first reply rendered), so
+    // inject the FOUR barge types via chat and prove each gets a real, HEARD answer — not the old
+    // canned "I'll dig into that". This is the exact routeTurn→runBargeSequence→sendHuddleMessage
+    // (ceremonyBarge) path a spoken barge hits. Mutating barges use Test- titles; the status barge
+    // targets the task the tool barge just created (resolved by the fuzzy get_tasks).
+    await page.waitForTimeout(1200); // let a scripted speaker be mid-turn so the barge truly cuts in
+    // ── Two-stage VOICE-barge scenario (the user's exact flow) via real synthesized speech through the
+    //    mic (FAKE_MIC + ElevenLabs), so the REAL VAD→barge→STT path runs. Screenshots + ceremony_transcript
+    //    (spoken rows + kind='tool' rows) + journey DB then tell us, per AC: did Sam ACK the hail (stage 1)?
+    //    did the park NAME the pitch + actually persist (stage 2)? quick query answered live? long task
+    //    deferred or does it freeze the room?
+    const micReady = await page.evaluate(() => !!window.__fakeMicReady);
+    const micErr = micReady ? "" : await page.evaluate(() => window.__fakeMicError || "unknown");
+    check("Fake mic installed (getUserMedia stub ready for voice barge)", micReady, micErr);
+
+    // NOISE GUARD (the user's report: mic noise → "Mhm."/"어?" → agents answered nothing): a filler barge
+    // must be IGNORED — no agent reply, ceremony just continues. Typed here per the user's "type mhm".
+    {
+      const turnSel = '[data-testid="transcript-turn"]';
+      await page.locator('[data-testid="tab-chat"]').click().catch(() => {});
+      await page.waitForTimeout(300);
+      const noiseBox = page.locator('textarea[placeholder="Message the room…"]').first();
+      if (await noiseBox.count()) {
+        const beforeNoise = await page.locator(turnSel).count();
+        await noiseBox.fill("mhm");
+        await noiseBox.press("Enter");
+        await page.waitForTimeout(6000); // give it ample time to (wrongly) wake an agent
+        const afterNoise = await page.locator(turnSel).count();
+        await page.locator('[data-testid="tab-transcript"]').click().catch(() => {});
+        await screenshot("noise-mhm-ignored");
+        // A real barge answer would add ≥2 rows (user + agent). The guard should add at most the user echo.
+        check("Typed 'mhm' noise barge is IGNORED (no agent reply)", afterNoise - beforeNoise <= 1, `delta=${afterNoise - beforeNoise} (>1 ⇒ an agent wrongly answered the noise)`);
+      }
+    }
+    // Stage 1 — bare hail: expect a brief ack ("yes?"), NOT a lane update, NOT a park.
+    const hailReply = await voiceBarge({ page, check, screenshot }, { label: "1-hail", text: "Hey, Sam." });
+    check("Hail 'Hey Sam' gets a short ready-ack, not a lane update", /\b(yes|go ahead|what'?s up|listening|sir)\b/i.test(hailReply) && hailReply.length < 90, `hailReply="${hailReply.slice(0, 120)}"`);
+    // Stage 2 — the real command: expect an ack that NAMES the pitch + a real persisted park.
+    const parkReply = await voiceBarge({ page, check, screenshot }, { label: "2-park", text: "Sam, put the investor pitch in the parking lot." });
+    check("Park ack NAMES the investor pitch (not a generic 'got it')", /investor pitch|pitch/i.test(parkReply), `parkReply="${parkReply.slice(0, 160)}"`);
+    // Quick query — expect a live answer during the ceremony.
+    await voiceBarge({ page, check, screenshot }, { label: "3-quick", text: "How many blockers are on the board right now?" });
+    // Long task — does it defer with a specific ack, or freeze the room? (baseline: expected to freeze today)
+    await voiceBarge({ page, check, screenshot }, { label: "4-long-task", text: "Research the competitor's premium pricing and write it up for me." });
 
     // Time to full ceremony completion (button reverts to "Run again").
     let doneMs = null;

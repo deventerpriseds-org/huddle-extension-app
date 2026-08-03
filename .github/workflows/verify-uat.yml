@@ -9,6 +9,9 @@ name: Verify UAT (live, real browser)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   verify-uat:
     runs-on: ubuntu-latest
@@ -31,6 +34,12 @@ jobs:
           UAT_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
           CHECKS_FILE: ${{ github.workspace }}/.claude/skills/test-agent-serverfn/scripts/huddle-checks.mjs
           SHOT_DIR: uat-shots
+          UAT_VIEWPORT_W: '1000'
+          UAT_VIEWPORT_H: '680'
+          # Real voice barge: synthesized speech (ElevenLabs) injected into a stubbed mic → real VAD/STT.
+          FAKE_MIC: '1'
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_DEFAULT_VOICE_ID: ${{ secrets.ELEVENLABS_DEFAULT_VOICE_ID }}
         run: node .claude/skills/test-agent-serverfn/scripts/run-uat.mjs
 
       - name: Upload screenshots + results
@@ -40,3 +49,18 @@ jobs:
           name: uat-shots
           path: uat-shots/
           retention-days: 7
+
+      # CCR sessions can't download the artifact zip (proxy blocks the blob redirect), so publish the
+      # shots to a throwaway orphan branch the session CAN reach via git (the git proxy works). The
+      # session `git fetch origin uat-shots` and reads the PNGs + results.json straight off disk — no
+      # base64-through-logs context bloat. Force-pushed each run; safe to delete anytime.
+      - name: Publish shots to uat-shots branch
+        if: always()
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "gha-uat"
+          git checkout --orphan uat-shots
+          git reset >/dev/null 2>&1 || true
+          git add -f uat-shots/*.png uat-shots/results.json
+          git commit -q -m "uat shots — run ${{ github.run_id }}" || { echo "no shots to commit"; exit 0; }
+          git push -f origin uat-shots

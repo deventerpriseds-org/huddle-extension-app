@@ -43,8 +43,11 @@ export function ownerForTask(t: Pick<StandupTask, "assigned_agent" | "category">
   return ownerForCategory(t.category);
 }
 
+// The completed-within window per ceremony. This is BOTH the fetch window (getStandupTasks) AND the
+// DONE report window (buildCeremonyReport) — same number so they can never desync. Stand-up = "this
+// week" (7d), the user's interim rule (was 36h); the others keep their sprint horizons.
 export const CEREMONY_WINDOW_HOURS: Record<CeremonyType, number> = {
-  standup: 36, // since yesterday
+  standup: 168, // "this week" (7 days) — DONE reported since ~a week ago
   retro: 336, // ~2 weeks (a sprint)
   planning: 720, // ~30 days of backlog to plan from
   review: 336, // what shipped this sprint
@@ -58,62 +61,102 @@ export interface TaskLine {
 export interface BlockedLine extends TaskLine {
   why: string;
 }
+// Per-owner lane report, bucketed by the task's REAL board status column (never re-derived). Mirrors
+// the board's columns 1:1 so the stand-up says exactly what the board shows.
 export interface LaneReport {
   category: string;
   owner: AgentId;
-  done: TaskLine[];
   upNext: TaskLine[];
+  doing: TaskLine[];
+  inReview: TaskLine[];
   blocked: BlockedLine[];
-  overdue: TaskLine[];
+  done: TaskLine[];
+  backlog: TaskLine[];
 }
 export interface CeremonyReport {
   type: CeremonyType;
   windowHours: number;
   lanes: LaneReport[];
   blockers: (BlockedLine & { category: string; owner: AgentId })[];
-  counts: { done: number; upNext: number; blocked: number; overdue: number };
+  counts: { upNext: number; doing: number; inReview: number; blocked: number; done: number; backlog: number };
 }
 
 const line = (t: StandupTask): TaskLine => ({ title: t.title, priority: t.priority, due_date: t.due_date });
 
-/** Bucket the mirror tasks into per-lane done / up-next / blocked / overdue. Shared by all ceremonies. */
+// SERVER-SIDE mirror of BoardView.tsx's status→column mapping — the single source of "which board lane
+// a task is in." Keep in sync with COLUMNS in BoardView.tsx. The ceremony reports by THIS, so a task
+// never appears in a lane different from where the board shows it (no re-deriving from open-ness/due).
+export type BoardLane = "backlog" | "upNext" | "doing" | "inReview" | "blocked" | "done";
+export function boardLaneFor(status: string | null): BoardLane {
+  const s = (status ?? "").toUpperCase();
+  if (s === "UP_NEXT" || s === "READY") return "upNext";
+  if (s === "DOING") return "doing";
+  if (s === "IN_REVIEW") return "inReview";
+  if (s === "BLOCKED") return "blocked";
+  if (s === "DONE") return "done";
+  return "backlog"; // BACKLOG / TODO / PLANNING / null — the raw holding area
+}
+
+// Which board lanes each ceremony SURFACES. Bucketing is ALWAYS by real status; this only selects what
+// gets reported. Stand-up = the active board (WIP) + recent done — NEVER the raw backlog (grows to 100s).
+const CEREMONY_LANES: Record<CeremonyType, BoardLane[]> = {
+  standup: ["blocked", "doing", "upNext", "inReview", "done"],
+  review: ["done", "inReview", "blocked"], // what shipped / is ready
+  retro: ["done", "inReview", "blocked", "doing"], // what happened this sprint
+  planning: ["backlog", "upNext", "blocked"], // plan FROM the backlog (the one ceremony that needs it)
+};
+
+/** Bucket the mirror tasks into per-owner lanes BY THEIR REAL BOARD STATUS, then surface only the lanes
+ *  this ceremony reports. The stand-up thus reflects the board exactly — active WIP + done-this-week,
+ *  never the raw backlog, and never a re-derived "up next." */
 export function buildCeremonyReport(type: CeremonyType, tasks: StandupTask[]): CeremonyReport {
   const now = Date.now();
-  // Group by OWNER (assignee-first, category fallback) so each agent gets one lane = their queue.
+  // DONE report window == the fetch window (same number → can't desync). Stand-up = 7d ("this week").
+  const doneWindowMs = CEREMONY_WINDOW_HOURS[type] * 60 * 60 * 1000;
   const byOwner = new Map<AgentId, LaneReport>();
-  const laneFor = (t: StandupTask): LaneReport => {
+  const laneReport = (t: StandupTask): LaneReport => {
     const owner = ownerForTask(t);
-    let lane = byOwner.get(owner);
-    if (!lane) {
-      lane = { category: (t.category ?? "GENERAL").toUpperCase(), owner, done: [], upNext: [], blocked: [], overdue: [] };
-      byOwner.set(owner, lane);
+    let lr = byOwner.get(owner);
+    if (!lr) {
+      lr = { category: (t.category ?? "GENERAL").toUpperCase(), owner, upNext: [], doing: [], inReview: [], blocked: [], done: [], backlog: [] };
+      byOwner.set(owner, lr);
     }
-    return lane;
+    return lr;
   };
 
   for (const t of tasks) {
-    const lane = laneFor(t);
-    if (t.completed_at) {
-      lane.done.push(line(t));
-    } else if (t.status === "BLOCKED" || (t.pushed_count ?? 0) >= 3) {
-      const why = t.status === "BLOCKED" ? "marked blocked" : `deferred ${t.pushed_count}×`;
-      lane.blocked.push({ ...line(t), why });
-    } else if (t.due_date && new Date(t.due_date).getTime() < now) {
-      lane.overdue.push(line(t));
-    } else {
-      lane.upNext.push(line(t));
+    const bl = boardLaneFor(t.status);
+    // DONE is windowed to "this week" — a card finished long ago is not stand-up news.
+    if (bl === "done") {
+      // Report a DONE card only if it was completed within the window. completed_at is the truth;
+      // fall back to updated_at if it's missing; if BOTH are absent we can't prove recency → exclude.
+      const doneAtRaw = t.completed_at ?? t.updated_at;
+      const doneAt = doneAtRaw ? new Date(doneAtRaw).getTime() : 0;
+      if (!doneAt || now - doneAt > doneWindowMs) continue;
     }
+    const lr = laneReport(t);
+    if (bl === "blocked") lr.blocked.push({ ...line(t), why: "marked blocked" });
+    else lr[bl].push(line(t));
   }
 
-  const lanes = [...byOwner.values()].filter(
-    (l) => l.done.length || l.upNext.length || l.blocked.length || l.overdue.length,
-  );
-  const blockers = lanes.flatMap((l) => l.blocked.map((b) => ({ ...b, category: l.category, owner: l.owner })));
+  // Surface only the lanes this ceremony reports; drop owners with nothing reportable.
+  const surface = new Set<BoardLane>(CEREMONY_LANES[type]);
+  const reportable = (l: LaneReport): number =>
+    (["upNext", "doing", "inReview", "done", "backlog"] as const).reduce(
+      (n, k) => n + (surface.has(k) ? l[k].length : 0),
+      surface.has("blocked") ? l.blocked.length : 0,
+    );
+  const lanes = [...byOwner.values()].filter((l) => reportable(l) > 0);
+  const blockers = surface.has("blocked")
+    ? lanes.flatMap((l) => l.blocked.map((b) => ({ ...b, category: l.category, owner: l.owner })))
+    : [];
   const counts = {
-    done: lanes.reduce((n, l) => n + l.done.length, 0),
     upNext: lanes.reduce((n, l) => n + l.upNext.length, 0),
+    doing: lanes.reduce((n, l) => n + l.doing.length, 0),
+    inReview: lanes.reduce((n, l) => n + l.inReview.length, 0),
     blocked: lanes.reduce((n, l) => n + l.blocked.length, 0),
-    overdue: lanes.reduce((n, l) => n + l.overdue.length, 0),
+    done: lanes.reduce((n, l) => n + l.done.length, 0),
+    backlog: lanes.reduce((n, l) => n + l.backlog.length, 0),
   };
   return { type, windowHours: CEREMONY_WINDOW_HOURS[type], lanes, blockers, counts };
 }
@@ -166,21 +209,30 @@ function fmtBlocked(items: BlockedLine[], max = 6): string {
 export function ownerDirective(type: CeremonyType, lane: LaneReport): string {
   const frame =
     type === "standup"
-      ? "Give your stand-up update for your lane: what moved (done), what's next, and anything blocked. 1–2 sentences, conversational."
+      ? "Give your stand-up update for your lane: what you're doing now, what's up next, anything in review, and anything blocked. 1–2 sentences, conversational."
       : type === "retro"
-        ? "Give your retro read for your lane: what shipped, what stalled or got blocked, what slipped. 1–2 sentences."
+        ? "Give your retro read for your lane: what shipped, what stalled or got blocked. 1–2 sentences."
         : type === "planning"
-          ? "Propose what to take on next in your lane from the up-next/overdue items, hardest-or-soonest first. 1–2 sentences."
+          ? "Propose what to take on next in your lane from the backlog/up-next items, hardest-or-soonest first. 1–2 sentences."
           : "Report what your lane delivered (the done items) — demo-ready wins. 1–2 sentences.";
-  return `\n\nCEREMONY — the scrum master has OPENED this live ${VERB[type]} and handed off to the team; give YOUR lane's update in the round-robin. ${frame} You MAY briefly acknowledge or react to the previous speaker (a sentence, not a debate) before your own update — like a real teammate would — but the substance must be YOUR lane's facts; do not take over or re-report another lane's work. Use ONLY these real facts about your lane (${lane.category}); do NOT invent tasks. Done: ${fmtLines(lane.done)}. Up next: ${fmtLines(lane.upNext)}. Overdue: ${fmtLines(lane.overdue)}. Blocked: ${fmtBlocked(lane.blocked)}.
-You MUST name the actual items in every bucket that is not "none" — do not summarize them away or skip them. Only if done, up next, overdue AND blocked are all "none" may you say you have nothing to report. Weave all of this into 1–2 natural spoken sentences, the way you'd actually talk in a stand-up — never echo this back as a bulleted or labeled list (no "Done:"/"Up next:"/"Overdue:"/"Blocked:" headers, no line breaks between categories); that's the raw data, not a template to repeat.`;
+  // Facts drawn from the board's REAL lanes — only the lanes this ceremony reports (CEREMONY_LANES).
+  const surface = new Set<BoardLane>(CEREMONY_LANES[type]);
+  const facts: string[] = [];
+  if (surface.has("doing")) facts.push(`Doing: ${fmtLines(lane.doing)}`);
+  if (surface.has("upNext")) facts.push(`Up next: ${fmtLines(lane.upNext)}`);
+  if (surface.has("inReview")) facts.push(`In review: ${fmtLines(lane.inReview)}`);
+  if (surface.has("blocked")) facts.push(`Blocked: ${fmtBlocked(lane.blocked)}`);
+  if (surface.has("done")) facts.push(`Done this week: ${fmtLines(lane.done)}`);
+  if (surface.has("backlog")) facts.push(`Backlog: ${fmtLines(lane.backlog)}`);
+  return `\n\nCEREMONY — the scrum master has OPENED this live ${VERB[type]} and handed off to the team; give YOUR lane's update in the round-robin. ${frame} You MAY briefly acknowledge or react to the previous speaker (a sentence, not a debate) before your own update — like a real teammate would — but the substance must be YOUR lane's facts; do not take over or re-report another lane's work. Use ONLY these real facts about your lane (${lane.category}); do NOT invent tasks. ${facts.join(". ")}.
+You MUST name the actual items in every bucket that is not "none" — do not summarize them away or skip them. Only if every bucket above is "none" may you say you have nothing to report. Weave all of this into 1–2 natural spoken sentences, the way you'd actually talk in a stand-up — never echo this back as a bulleted or labeled list (no "Doing:"/"Up next:"/"In review:"/"Blocked:"/"Done:" headers, no line breaks between categories); that's the raw data, not a template to repeat.`;
 }
 
 function reportDigest(report: CeremonyReport): string {
   const laneLines = report.lanes
     .map(
       (l) =>
-        `- ${l.category} (@${l.owner}): done ${l.done.length}, next ${l.upNext.length}, overdue ${l.overdue.length}, blocked ${l.blocked.length}`,
+        `- ${l.category} (@${l.owner}): doing ${l.doing.length}, next ${l.upNext.length}, review ${l.inReview.length}, blocked ${l.blocked.length}, done ${l.done.length}`,
     )
     .join("\n");
   const blockerLines = report.blockers.length
@@ -232,7 +284,17 @@ export function closerDirective(type: CeremonyType, report: CeremonyReport): str
  *  interjection directly (or acts on it — e.g. files a task), then the relay resumes. Type-agnostic
  *  so it works on a resumed chunk where the ceremony type isn't re-derived. */
 export function bargeDirective(text: string): string {
-  return `\n\nThe user just INTERJECTED during this live ceremony and said: "${text}". Pause and address them directly RIGHT NOW — answer their question, or if they asked to add/track/schedule/change something, use the appropriate tool (e.g. create_huddle_task) to do it and confirm briefly. Keep it to 1–2 sentences. Do NOT give a lane/stand-up update here — the round-robin will resume after you.`;
+  return `\n\nThe user just INTERJECTED during this live ceremony and said: "${text}". They cut in on purpose — HEAR them and respond to THIS specifically, not a script.
+
+FIRST decide which of these it is:
+- BARE HAIL (they only called your name with no request yet — e.g. just "Hey Sam", "Sam?", "you there?") → reply with ONE short ready acknowledgment ("Yes?—go ahead.") and STOP. Do not guess a task, do not act. Wait for their actual request. A content-free "yes?" is acceptable ONLY in this bare-hail case.
+- A REAL request (a question, or a change/add/track/schedule/status command) → open with a brief acknowledgment that NAMES the specific thing they asked about — say the actual subject back ("the investor pitch", "the Nexus item"), e.g. "No problem — parking the investor pitch now." NEVER a generic "got it, on it" / "I'll dig into that" that could apply to anything: that does not prove you heard THEM and is exactly the wrong response. Then in the same breath do exactly what they asked:
+  - A question (including about what you were just saying, e.g. "what are you looking into?" / "dig into what?", or "more detail on that") → ANSWER it directly from the current context.
+  - A change/add/track/schedule/status request (e.g. "mark the investor pitch done", "park that item", "add a task") → actually USE the right tool (update_task / create_huddle_task / etc.) to do it, then confirm what you did in board terms.
+
+Resolving "that"/"it": if they refer to "that", "it", "this one", resolve it from what was JUST said in this ceremony and NAME it explicitly in your reply. If genuinely more than one thing could be meant, ask ONE short "which one — the X or the Y?" question instead of guessing. Likewise if the task they NAME matches MORE THAN ONE task (e.g. a lookup returns both "Prepare investor pitch" and "Lock investor pitch"), do NOT just pick one — ask which one before you change anything.
+
+Confirm what you did EXACTLY ONCE — never restate the same confirmation two or three times. Keep it to 1–2 sentences, specific to THEIR words. NEVER reply with a stock filler or a canned deferral like "I'll dig into that" / "I'll take care of it after we wrap" — that ignores what they said. Do NOT resume your lane/stand-up update here; the round-robin resumes after you.`;
 }
 
 /** Narrate mode: Terry runs the whole ceremony solo from the data. */
@@ -249,17 +311,21 @@ export function lanesByOwner(report: CeremonyReport): Map<AgentId, LaneReport> {
       m.set(lane.owner, {
         category: lane.category,
         owner: lane.owner,
-        done: [...lane.done],
         upNext: [...lane.upNext],
+        doing: [...lane.doing],
+        inReview: [...lane.inReview],
         blocked: [...lane.blocked],
-        overdue: [...lane.overdue],
+        done: [...lane.done],
+        backlog: [...lane.backlog],
       });
     } else {
       cur.category += `/${lane.category}`;
-      cur.done.push(...lane.done);
       cur.upNext.push(...lane.upNext);
+      cur.doing.push(...lane.doing);
+      cur.inReview.push(...lane.inReview);
       cur.blocked.push(...lane.blocked);
-      cur.overdue.push(...lane.overdue);
+      cur.done.push(...lane.done);
+      cur.backlog.push(...lane.backlog);
     }
   }
   return m;

@@ -206,7 +206,12 @@ export async function runScheduledAutoWork(
 
   // Every open, assigned, unblocked task regardless of its current stage (BACKLOG..IN_REVIEW) — bucketed
   // per agent below. Already ordered by priority_rank, so backlog/up-next slices stay priority-ordered.
-  const assigned = await getOpenAssignedTasks(email);
+  // PARKING LOT: a task tagged `parking-lot` opts OUT of all automation — it is filtered here at
+  // candidate-selection time, so it is never promoted (BACKLOG→UP_NEXT→DOING) and never enqueues a work
+  // turn. It stays on the board (typically Backlog) with the tag until the user un-parks it. (ACT-13.)
+  const assigned = (await getOpenAssignedTasks(email)).filter(
+    (t) => !(t.tags ?? []).includes("parking-lot"),
+  );
   const signature = backlogSignature(assigned);
 
   if (!assigned.length && !opts.force) {

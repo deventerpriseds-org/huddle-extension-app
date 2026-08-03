@@ -46,6 +46,16 @@ const CASES = [
   // ambiguous perform → must default to slow (safe), never quick-verbal
   ["handle the consulting project assignments", "slow", "default"],
   ["take care of the blocked items", "slow", "default"],
+
+  // conversational-preamble robustness (the stand-up FAIL: a filler defeated the ^-anchors →
+  // a live question got mis-QUEUED). Stripping the filler must recover the real intent.
+  ["quick question — what day is it today?", "quick-verbal", "default"],
+  ["hey, quick question, who owns the release?", "quick-verbal", "default"],
+  ["sorry to interrupt, is the transfer done?", "quick-verbal", "default"],
+  ["hey Finn, is the burn still on track?", "quick-verbal", "default"],
+  ["Finn, what's the runway looking like?", "quick-verbal", "default"],
+  ["so, mark the investor pitch as done", "fast-action", "default"],
+  ["hey Sam, research Agentforce right now", "slow", "now"],
 ];
 
 let typeOk = 0, urgOk = 0, bothOk = 0;

@@ -139,6 +139,10 @@ const Input = z.object({
   // directly in 1–2 sentences, don't give a lane update" — so a barge answer is stand-up-aware
   // instead of a generic off-context reply. Reuses the same bargeDirective() the durable path uses.
   ceremonyBarge: z.boolean().optional(),
+  // Live-ceremony run id (client-minted in MeetingBar). When present, every tool this turn invokes is
+  // persisted to chat.ceremony_transcript (kind='tool') so a reviewer can prove "the agent SAID it
+  // parked but no update_task row exists" vs "row exists, tool_ok=false". Debug tracking only.
+  ceremonyRunId: z.string().optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
@@ -789,6 +793,37 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       return resolvedCallerEmail;
     };
 
+    // Ceremony tool-call tracking. When the client passes a ceremonyRunId (a live stand-up/barge turn),
+    // persist every tool invocation to chat.ceremony_transcript (kind='tool') so "said it vs did it" is
+    // provable after the run — the exact gap behind "the agent said it parked but it didn't stick".
+    // Fire-and-forget: never blocks or breaks the turn. Email is pre-resolved because recordToolUse is
+    // synchronous; resolved only when a run is actually present.
+    const ceremonyToolRunId = data.ceremonyRunId ?? null;
+    const ceremonyToolEmail = ceremonyToolRunId ? await resolveCallerEmail() : null;
+    const trackCeremonyTool = (
+      agentId: AgentId,
+      tool: string,
+      ok: boolean,
+      summary?: string,
+      errorDetail?: string,
+      args?: unknown,
+    ) => {
+      if (!ceremonyToolRunId || !ceremonyToolEmail) return;
+      void import("./ceremony/ceremony-transcript.server")
+        .then((m) =>
+          m.appendCeremonyToolCall(ceremonyToolEmail, ceremonyToolRunId, data.huddleId, {
+            agentId,
+            toolName: tool,
+            ok,
+            error: ok ? null : (errorDetail ?? summary ?? null), // the REAL tool error, not the summary
+            summary: summary ?? null,
+            args, // what the tool was actually called with — the key debug signal
+            ts: Date.now(),
+          }),
+        )
+        .catch(() => {});
+    };
+
     // ---- Scrum ceremonies ----
     // A ceremony request (stand-up, retro, sprint planning, sprint review) overrides
     // normal routing: participants become the lane owners + the scrum master, each fed
@@ -1157,6 +1192,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         summary: string,
         ok: boolean,
         detail?: string,
+        args?: unknown,
       ) => {
         toolUses.push({
           id: `tu-${Date.now()}-${winner.id}-${tuSeq++}`,
@@ -1167,6 +1203,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           ok,
           detail,
         });
+        // Durably record this tool call against the ceremony run (no-op outside a ceremony) — the real
+        // error + the args are what make a failure debuggable.
+        trackCeremonyTool(agentId, tool, ok, summary, detail, args);
       };
       // Snapshot the fully-populated buffers into a result. Called at each return
       // point (after all pushes), so the buffers are complete.
@@ -1333,7 +1372,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it." +
         " NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled \"groom the backlog\" or \"assign the team\") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked." +
         " If the user states or implies a specific date (a day name, 'tomorrow', a calendar date, 'by Friday'), set the tool's `date` field — do not just leave it embedded in the title text where it can get lost." +
-        " Report the outcome honestly using exactly what the tool result gives you, in `note`/`outcome` — never invent a time or claim more certainty than that. A same-day scheduled time is provisional (the nightly planner can still move it overnight) — say something like \"I've got that for around 2:30 today\" rather than a firm commitment. A task with a due date but no start_time has no exact time yet — say the due date and that the planner will place a time, don't guess one. If the outcome says today was full and it landed elsewhere, say so plainly instead of a bare \"added it.\"";
+        " Report the outcome honestly using exactly what the tool result gives you, in `note`/`outcome` — never invent a time or claim more certainty than that. A same-day scheduled time is provisional (the nightly planner can still move it overnight) — say something like \"I've got that for around 2:30 today\" rather than a firm commitment. A task with a due date but no start_time has no exact time yet — say the due date and that the planner will place a time, don't guess one. If the outcome says today was full and it landed elsewhere, say so plainly instead of a bare \"added it.\"" +
+        " CARD STATUS IS TRACKING, NOT EXECUTION. Updating a task's board status — marking it done, moving it to a lane (via `update_task`) — only changes the CARD; it does NOT perform, execute, or confirm the underlying real-world action (a payment, a money transfer, an errand, a message). When the user asks to mark a card done, just change the status — do NOT refuse, and do NOT demand proof that the real-world thing actually happened (e.g. \"make sure the transfer was executed in your financial systems\"); whether the real-world action occurred is the USER's call, not yours to gate. Confirm strictly in board terms (\"marked that card done\") and NEVER claim you performed the real-world action yourself." +
+        " PARKING LOT: when the user asks to \"parking lot\" / \"park\" a task (or pause its automation), call `update_task` for that task with status:\"BACKLOG\" and its tags set to include \"parking-lot\" (preserve any existing tags — read them first if unsure). This moves it to Backlog and opts it OUT of all automated work (no promotion, no auto-research, no nightly scheduling) until the user un-parks it. Confirm you parked it. To un-park, call `update_task` with the \"parking-lot\" tag removed." +
+        " PROACTIVE PARKING (offer, never silently do it): if you notice a task that has been deferred many times (a high 'deferred N×' count) or has stayed blocked across multiple stand-ups, briefly OFFER to park it — e.g. \"'<title>' has been deferred 11× and keeps surfacing; want me to park it so it stops filling the stand-up and the work queue?\" — and only call `update_task` to park it AFTER the user agrees. This keeps chronically-stalled items from dominating every stand-up and the automation queue. Do NOT auto-park without the user's explicit confirmation, and do NOT open a card about parking it.";
 
       // AUTO memory retrieval: pull the most relevant shared/global memory for THIS agent and inject
       // it into the prompt, so recall works even when the model doesn't call `search_memory`. This is
@@ -2452,7 +2494,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   c.name,
                   r.ok ? `journey-voice · ok` : `journey-voice · failed`,
                   !!r.ok,
-                  r.ok ? undefined : r.error,
+                  r.ok ? undefined : String(r.error ?? r.output ?? "unknown"),
+                  c.arguments,
                 );
                 if (!r.ok) {
                   const ev = recordFallback(
