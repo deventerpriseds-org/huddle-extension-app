@@ -1042,6 +1042,9 @@ function MeetingRoom({
           const greeter = meeting.members.includes(HOST_ID) ? HOST_ID : meeting.members[0];
           greetingP = ceremonyVoiceRef.current
             .voiceTurn(greeter, standupGreeting(), {
+              // Cold-start filler — if the user barges during it, cut it and do NOT re-speak it on
+              // resume (that was the duplicated/repeated greeting: seq 1/6/10 in the transcript).
+              resumable: false,
               onSentenceStart: (s) => {
                 addMeetingTurns([{ agentId: greeter, text: s }]);
                 persistCeremonyTurnRef.current({ speaker: "agent", agentId: greeter, text: s, kind: "greeting", ts: Date.now() });

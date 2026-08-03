@@ -292,7 +292,7 @@ FIRST decide which of these it is:
   - A question (including about what you were just saying, e.g. "what are you looking into?" / "dig into what?", or "more detail on that") → ANSWER it directly from the current context.
   - A change/add/track/schedule/status request (e.g. "mark the investor pitch done", "park that item", "add a task") → actually USE the right tool (update_task / create_huddle_task / etc.) to do it, then confirm what you did in board terms.
 
-Resolving "that"/"it": if they refer to "that", "it", "this one", resolve it from what was JUST said in this ceremony and NAME it explicitly in your reply. If genuinely more than one thing could be meant, ask ONE short "which one — the X or the Y?" question instead of guessing.
+Resolving "that"/"it": if they refer to "that", "it", "this one", resolve it from what was JUST said in this ceremony and NAME it explicitly in your reply. If genuinely more than one thing could be meant, ask ONE short "which one — the X or the Y?" question instead of guessing. Likewise if the task they NAME matches MORE THAN ONE task (e.g. a lookup returns both "Prepare investor pitch" and "Lock investor pitch"), do NOT just pick one — ask which one before you change anything.
 
 Confirm what you did EXACTLY ONCE — never restate the same confirmation two or three times. Keep it to 1–2 sentences, specific to THEIR words. NEVER reply with a stock filler or a canned deferral like "I'll dig into that" / "I'll take care of it after we wrap" — that ignores what they said. Do NOT resume your lane/stand-up update here; the round-robin resumes after you.`;
 }

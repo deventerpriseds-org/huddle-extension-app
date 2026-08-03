@@ -28,7 +28,12 @@ export interface CeremonyVoiceController {
   voiceTurn: (
     agentId: AgentId,
     text: string,
-    opts: { onSentenceStart: (sentence: string, sentenceIndex: number, blockTotal: number) => void },
+    opts: {
+      onSentenceStart: (sentence: string, sentenceIndex: number, blockTotal: number) => void;
+      /** When false, a barge during this turn does NOT set a resume point, so it is never re-spoken
+       *  (use for the host's cold-start greeting — it's filler, not a lane report). Default true. */
+      resumable?: boolean;
+    },
   ) => Promise<void>;
   /**
    * Freeze the current speaker on a barge WITHOUT tearing down voice: stop audio + kill the loop,
@@ -260,9 +265,12 @@ export function useCeremonyVoice(hookOpts: {
     async (
       agentId: AgentId,
       text: string,
-      opts: { onSentenceStart: (sentence: string, sentenceIndex: number, blockTotal: number) => void },
+      opts: {
+        onSentenceStart: (sentence: string, sentenceIndex: number, blockTotal: number) => void;
+        resumable?: boolean;
+      },
     ) => {
-      await _voiceTurn(agentId, text, opts.onSentenceStart, genRef.current, 0);
+      await _voiceTurn(agentId, text, opts.onSentenceStart, genRef.current, 0, opts.resumable ?? true);
     },
     [_voiceTurn],
   );
