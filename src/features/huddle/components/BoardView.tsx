@@ -190,6 +190,41 @@ export function BoardView() {
 
   // Shared write-back: optimistic update + persist to journey. Used by drag (desktop) and the
   // card action menu (mobile).
+  //
+  // Post-write reconciliation is a POLL, not a single fixed-delay refetch. `updateBoardTask`
+  // writes to journey (canonical) and returns success as soon as THAT write lands — the Huddle
+  // mirror (`tasks.journey_tasks`) catches up asynchronously via pg_net, typically ~1-3s but not
+  // guaranteed. A single refetch at a fixed delay races that sync: if the mirror hasn't caught up
+  // yet, `getBoardTasks` returns the pre-write row and blindly overwrites the correct optimistic
+  // UI with stale data — looking exactly like the move/reassignment silently failed, even though
+  // the write succeeded. Poll until the specific field we just changed is actually visible in the
+  // mirror before trusting a refetch to replace optimistic state; if it never catches up within
+  // the budget, leave the optimistic state as-is rather than revert to a known-stale read.
+  const waitForMirrorSync = useCallback(
+    async (
+      taskId: string,
+      patch: { status?: string; assigned_agent?: string; category?: string },
+    ): Promise<BoardTaskRow[] | null> => {
+      const maxAttempts = 6;
+      const delayMs = 700;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        await new Promise((r) => setTimeout(r, delayMs));
+        const res = await getBoardTasks({ data: { caller } });
+        const t = res.tasks.find((x) => x.id === taskId);
+        if (
+          t &&
+          (patch.status === undefined || t.status === patch.status) &&
+          (patch.assigned_agent === undefined || (t.assigned_agent ?? "") === (patch.assigned_agent ?? "")) &&
+          (patch.category === undefined || t.category === patch.category)
+        ) {
+          return res.tasks;
+        }
+      }
+      return null;
+    },
+    [caller],
+  );
+
   const applyMove = useCallback(
     async (taskId: string, patch: { status?: string; assigned_agent?: string; category?: string }) => {
       if (!Object.keys(patch).length) return;
@@ -214,14 +249,18 @@ export function BoardView() {
           setTasks(prev);
           toast.error(r.error || "Couldn't move the task.");
         } else {
-          setTimeout(() => void refetch(), 2500);
+          const fresh = await waitForMirrorSync(taskId, patch);
+          if (fresh) setTasks(fresh);
+          // else: mirror hasn't caught up within budget — keep the optimistic state rather than
+          // clobber it with a read we know is stale. The next natural refetch will reconcile once
+          // the async sync lands.
         }
       } catch (e) {
         setTasks(prev);
         toast.error(e instanceof Error ? e.message : "Move failed.");
       }
     },
-    [caller, refetch],
+    [caller, waitForMirrorSync],
   );
 
   function onDrop(colKey: string, laneKey: string) {

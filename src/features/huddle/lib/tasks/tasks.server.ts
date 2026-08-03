@@ -581,7 +581,8 @@ export interface ScheduledJob {
   id: string;
   job_type: string;
   target_email: string;
-  cadence: { tz?: string; hours?: number[] };
+  // daysOfWeek uses JS Date.getDay() convention: 0=Sun..6=Sat. Omitted/empty = every day.
+  cadence: { tz?: string; hours?: number[]; daysOfWeek?: number[] };
   meta: Record<string, unknown>;
 }
 
@@ -597,12 +598,15 @@ export async function getUsersWithOpenBacklog(): Promise<string[]> {
   return rows.map((r) => r.email).filter(Boolean);
 }
 
-/** Upsert a scheduled job (idempotent on id). Only seeds next_run_at when the row is first created. */
+/** Upsert a scheduled job (idempotent on id). Only seeds next_run_at when the row is first created.
+ * `cadence` IS refreshed on every call (ON CONFLICT), so a live config change (e.g. a user editing
+ * the Scheduling settings panel) takes effect on the job's NEXT fire without needing to delete/
+ * recreate the row — only next_run_at is left alone so a pending fire isn't disturbed mid-flight. */
 export async function upsertScheduledJob(job: {
   id: string;
   jobType: string;
   targetEmail: string;
-  cadence: { tz?: string; hours?: number[] };
+  cadence: { tz?: string; hours?: number[]; daysOfWeek?: number[] };
   nextRunAt: string;
   meta?: Record<string, unknown>;
 }): Promise<void> {
