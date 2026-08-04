@@ -917,7 +917,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         const narrate = routerCfg.ceremonyMode === "narrate";
         const host = data.members.includes(CEREMONY_HOST) ? CEREMONY_HOST : routed.winners[0];
 
-        if (narrate || report.lanes.length === 0) {
+        // F9 — participant set is derived ONCE here (shared roundRobinParticipants) so who speaks is the
+        // ONLY source of who is dispatched (AC-F10.3). speakingOwners drops truly-nothing owners (and, for a
+        // stand-up, done-only owners). No owner with live work → the host narrates solo (degenerate case),
+        // never an invented owner.
+        const participants = roundRobinParticipants(report, data.members);
+        const speakingOwners = participants.filter((p) => p !== CEREMONY_HOST);
+
+        if (narrate || speakingOwners.length === 0) {
           // Solo: the scrum master narrates (or there's simply no lane activity to round-robin).
           ceremonyDirectiveById.set(host, narrateDirective(ceremonyType, report));
           routed = {
@@ -933,7 +940,6 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             },
           };
         } else {
-          const participants = roundRobinParticipants(report, data.members);
           const owners = lanesByOwner(report);
           // Owners in speaking order → Terry names them in his opener hand-off ("Tess, you're up; then Finn").
           const handoffNames = participants

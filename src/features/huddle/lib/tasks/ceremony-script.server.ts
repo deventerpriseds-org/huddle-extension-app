@@ -65,14 +65,18 @@ function planSlots(
   members: AgentId[],
 ): { slot: string; agentId: AgentId; directive: string }[] {
   const hostPresent = members.includes(CEREMONY_HOST);
-  // No lane activity → the scrum master narrates the whole thing solo (same as the round-robin's
+  // Participant set is derived from the SHARED roundRobinParticipants (identical to huddle.functions.ts's
+  // round-robin), so both engines yield the SAME who-speaks / order / handoff / closer (AC-R1). F9 —
+  // speakingOwners drops truly-nothing owners (and done-only owners for a stand-up).
+  const participants = roundRobinParticipants(report, members);
+  const speakingOwners = participants.filter((p) => p !== CEREMONY_HOST);
+  // No owner with live work → the scrum master narrates the whole thing solo (same as the round-robin's
   // narrate branch). Falls back to the first member if the host isn't in the room.
-  if (report.lanes.length === 0) {
+  if (speakingOwners.length === 0) {
     const host = hostPresent ? CEREMONY_HOST : members[0];
     if (!host) return [];
     return [{ slot: "narrate", agentId: host, directive: narrateDirective(type, report) }];
   }
-  const participants = roundRobinParticipants(report, members);
   const owners = lanesByOwner(report);
   const handoffNames = participants
     .filter((p) => p !== CEREMONY_HOST)
