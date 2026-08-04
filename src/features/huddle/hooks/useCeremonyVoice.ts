@@ -68,6 +68,19 @@ export interface CeremonyVoiceController {
   /** Resume the frozen agent from the exact sentence where the barge interrupted them. */
   resumeFromFreeze: () => Promise<void>;
   clearFreeze: () => void;
+  /** E (F13) — voice ONE short, honest tool-progress cue in agentId's cloned voice while a barge answer
+   *  is still being produced. trackFreeze is off, so the interrupted speaker's resume point survives and
+   *  resumeFromFreeze() still returns to them. Aborts instantly if a newer gen (the real answer, a new
+   *  barge, or stopNarration) supersedes it. */
+  narrate: (
+    agentId: AgentId,
+    text: string,
+    opts?: { onStart?: (text: string) => void },
+  ) => Promise<void>;
+  /** E (F13) — cut any in-flight narration cue the instant the real answer is ready: bump gen (kills the
+   *  cue loop) + clear the audio queue (stops a cue clip mid-play), so a cue can never overrun the answer
+   *  or bleed into the next speaker. */
+  stopNarration: () => void;
 }
 
 // ── AudioQueue ────────────────────────────────────────────────────────────────
@@ -343,6 +356,34 @@ export function useCeremonyVoice(hookOpts: {
     freezeRef.current = null;
   }, []);
 
+  // ── narrate / stopNarration (E — F13) ──────────────────────────────────────
+  // Voice a single short tool-progress cue WITHOUT overwriting the interrupted speaker's freeze point
+  // (trackFreeze=false), so resumeFromFreeze() still returns to them. It rides the SAME genRef + AudioQueue
+  // as every other utterance: a newer gen (the answer's speakInterjection, a fresh barge, or stopNarration)
+  // aborts the cue loop and clearAndStop cuts a clip mid-play — so a cue never overruns the answer or the
+  // next scripted speaker. Routes through the same visibility/cost-guarded synth (synthOne) in agentId's
+  // cloned voice.
+  const narrate = useCallback(
+    async (agentId: AgentId, text: string, opts?: { onStart?: (text: string) => void }) => {
+      genRef.current += 1;
+      const gen = genRef.current;
+      await _voiceTurn(
+        agentId,
+        text,
+        (sentence) => opts?.onStart?.(sentence),
+        gen,
+        0,
+        /* trackFreeze */ false,
+      );
+    },
+    [_voiceTurn],
+  );
+
+  const stopNarration = useCallback(() => {
+    genRef.current += 1; // supersede any in-flight cue loop
+    audioQueueRef.current.clearAndStop(); // cut a cue clip that's still playing
+  }, []);
+
   // ── stopListening ─────────────────────────────────────────────────────────
   const stopListening = useCallback(() => {
     genRef.current += 1; // kill any live playback loop
@@ -600,5 +641,7 @@ export function useCeremonyVoice(hookOpts: {
     speakInterjection,
     resumeFromFreeze,
     clearFreeze,
+    narrate,
+    stopNarration,
   };
 }

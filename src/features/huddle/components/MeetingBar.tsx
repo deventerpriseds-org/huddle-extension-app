@@ -27,7 +27,7 @@ import { useGroupVoice } from "../hooks/useGroupVoice";
 import { useCeremonyVoice, type CeremonyVoiceTurnOutcome } from "../hooks/useCeremonyVoice";
 import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates } from "../lib/huddle.functions";
 import { getCeremonyScript } from "../lib/tasks/ceremony-script.functions";
-import { saveCeremonyTranscript } from "../lib/ceremony/ceremony-transcript.functions";
+import { saveCeremonyTranscript, getCeremonyToolEvents } from "../lib/ceremony/ceremony-transcript.functions";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
@@ -219,6 +219,52 @@ function nowClause(): string {
     "Kicking it off now — the stand-up keeps moving and I'll bring it back when it lands.",
     "Running it now behind the scenes — I'll surface the result as soon as it's in.",
   ]);
+}
+
+// D (F12) — a barge that reaches the agent but comes back with NO spoken reply must still say
+// something. When the server returns zero replies, the client voices this minimal, varied, templated
+// ack (in the addressed/frozen agent's cloned voice) so the user is never met with total silence.
+function bargeFallbackAck(): string {
+  const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+  return pick([
+    "Got it — I'm on that. I'll bring you the result right after we wrap.",
+    "Heard you — I'll pull that together and follow up right after the stand-up.",
+    "On it — I'll get that to you the moment we finish here.",
+    "Understood — I'll run that down and surface it right after we wrap up.",
+  ]);
+}
+
+// E (F13) — HONEST tool-progress cue phrasing. Maps a REAL tool name (from a real tool-START event) to a
+// short spoken cue that matches what that tool actually does — NEVER a mismatched action (no "searching
+// the web" for a board update). Exact names first, then keyword fallback for name variants, then a
+// generic "one moment". A start-cue NEVER claims results (that stage is only reachable once the tool has
+// actually ended / the answer is ready). Small varied pool per tool so repeats don't sound canned.
+function toolCue(toolName: string): string {
+  const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+  const n = (toolName || "").toLowerCase();
+  const exact: Record<string, string[]> = {
+    tavily_web_search: ["Running a search on that.", "Let me look that up.", "Searching that now."],
+    update_task: ["Updating that on the board.", "Making that change on the board now."],
+    create_huddle_task: ["Adding that to the board.", "Putting that on the board now."],
+    get_calendar_events: ["Checking your calendar.", "Let me look at your calendar."],
+    get_external_calendar_events: ["Checking your calendar.", "Let me look at your calendar."],
+    create_artifact: ["Writing that up.", "Putting that together now."],
+    schedule_and_priorities: ["Pulling up your priorities.", "Let me pull up your priorities."],
+    prioritize: ["Pulling up your priorities.", "Let me pull up your priorities."],
+    schedule_reminder: ["Setting that reminder.", "Getting that reminder set."],
+    send_email: ["Getting that email out.", "Sending that now."],
+    create_email_draft: ["Drafting that email.", "Putting that draft together."],
+    flag_blocker: ["Flagging that as a blocker.", "Marking that blocked now."],
+  };
+  if (exact[n]) return pick(exact[n]);
+  // Keyword fallback for name variants — still honest, matched to what the tool clearly does.
+  if (/search|web|tavily/.test(n)) return pick(["Running a search on that.", "Let me look that up."]);
+  if (/calendar|event/.test(n)) return pick(["Checking your calendar.", "Let me look at your calendar."]);
+  if (/priorit|schedule/.test(n)) return pick(["Pulling up your priorities."]);
+  if (/task|board/.test(n)) return pick(["Updating that on the board."]);
+  if (/artifact|doc|write/.test(n)) return pick(["Writing that up."]);
+  if (/email|draft/.test(n)) return pick(["Getting that together."]);
+  return pick(["One moment.", "Bear with me a second.", "Give me one second on that."]);
 }
 
 // ---------------------------------------------------------------------------
@@ -682,6 +728,12 @@ function MeetingRoom({
     // Mid-turn latency is bounded by the 30s race below + a silent "…responding" phase indicator —
     // not by refusing to engage or speaking a canned line.
 
+    // E (F13) — narration state, declared BEFORE the try so the catch/finally can stop the loop too.
+    // narrationStop is flipped the instant the answer (or a failure) is known so no cue can outlive it.
+    const narrationRunId = runIdRef.current;
+    let narrationStop = false;
+    let narrationLoop: Promise<void> = Promise.resolve();
+
     try {
       const cfg = useBackendsStore.getState().config;
       // Route the barge through Huddle's REAL brain: a GROUP turn (scope:"group", the ceremony's full
@@ -701,6 +753,62 @@ function MeetingRoom({
       // what I say" the user hit (2026-08-02 live report) — removed. A silent "…responding" phase
       // indicator covers the brief think time without putting words in the agent's mouth.
       setPhase("Responding…");
+      // E (F13) — HONEST, event-driven tool-progress narration, run CONCURRENTLY with the answer.
+      // It polls the REAL server-side tool lifecycle for THIS run (ceremonyRunId, persisted per tool
+      // START) and voices ONE short cue per tool-start, in that tool's OWN agent voice. This is NOT a
+      // timer that guesses progress: a cue fires ONLY when a real tool-start event is observed; if the
+      // answer needs no tool, nothing is ever spoken. It composes with — never replaces — the answer
+      // (voiced below). Every cue is gated on this barge's gen + the park (bargeGenRef===myGen &&
+      // bargeActiveRef), re-checked before each cue, so a stale/unparked cue never enqueues audio and
+      // never talks over the answer or the next scripted speaker.
+      narrationLoop = (async () => {
+        if (!narrationRunId) return;
+        let sinceId = "0";
+        const spoken = new Set<string>();
+        while (!narrationStop && bargeGenRef.current === myGen && bargeActiveRef.current) {
+          await new Promise((r) => window.setTimeout(r, 700));
+          if (narrationStop || bargeGenRef.current !== myGen || !bargeActiveRef.current) break;
+          let events: {
+            id: string;
+            agentId: string | null;
+            toolName: string;
+            phase: "start" | "end";
+            ok: boolean | null;
+          }[] = [];
+          try {
+            const resp = await getCeremonyToolEvents({
+              data: { runId: narrationRunId, sinceId, caller: callerRef.current },
+            });
+            events = resp.events;
+          } catch {
+            events = [];
+          }
+          if (events.length === 0) continue;
+          sinceId = events[events.length - 1].id;
+          for (const ev of events) {
+            // Re-check the gate before EACH cue — the floor may have moved between poll and speak.
+            if (narrationStop || bargeGenRef.current !== myGen || !bargeActiveRef.current) break;
+            if (ev.phase !== "start") continue; // start-cue only; "results" comes from the real answer
+            if (spoken.has(ev.id)) continue;
+            spoken.add(ev.id);
+            // Voice in the tool's OWN agent (the responder that ran it) — falls back to the frozen
+            // speaker / first member only if the event somehow lacks an agent.
+            const voiceId =
+              (ev.agentId as AgentId | null) ?? (interrupted as AgentId | null) ?? members[0];
+            if (!voiceId) continue;
+            await ceremonyVoiceRef.current.narrate(voiceId, toolCue(ev.toolName), {
+              onStart: (s) =>
+                persistCeremonyTurnRef.current({
+                  speaker: "agent",
+                  agentId: voiceId as string,
+                  text: s,
+                  kind: "narration",
+                  ts: Date.now(),
+                }),
+            });
+          }
+        }
+      })();
       const res = await Promise.race([
         sendHuddleMessage({
           data: {
@@ -721,6 +829,10 @@ function MeetingRoom({
           window.setTimeout(() => reject(new Error("barge answer timed out")), 30_000),
         ),
       ]);
+      // ANSWER IS READY — stop narration and CUT any in-flight cue this instant (AC-E4), so the cue can
+      // never overrun the real answer. stopNarration bumps gen + clears the audio queue.
+      narrationStop = true;
+      ceremonyVoiceRef.current.stopNarration();
       // Surface the routing decision for verification (AC-13): who the router picked and why.
       console.debug(
         "[barge] decision",
@@ -746,7 +858,32 @@ function MeetingRoom({
             });
           },
         });
+      } else {
+        // D (F12) CLIENT BACKSTOP — the server returned NO reply at all. A barge must never end in total
+        // silence: voice a minimal, varied, templated ack in the addressed (or frozen) agent's cloned
+        // voice. The server backstop already turns a tool-ran-but-empty turn into a spoken deferral, so
+        // this fires only for a genuinely empty result — but it guarantees the user always hears back.
+        const ackAgent =
+          resolveAddressed(text, membersRef.current) ?? (interrupted as AgentId | null) ?? members[0];
+        if (ackAgent) {
+          const ack = bargeFallbackAck();
+          setPhase(`${AGENT_BY_ID[ackAgent]?.name ?? "Someone"} is answering…`);
+          await ceremonyVoiceRef.current.speakInterjection(ackAgent, ack, {
+            onSentenceStart: (s) => {
+              addMeetingTurns([{ agentId: ackAgent, text: s, kind: "answer" }]);
+              persistCeremonyTurnRef.current({
+                speaker: "agent",
+                agentId: ackAgent as string,
+                text: s,
+                kind: "answer",
+                ts: Date.now(),
+              });
+            },
+          });
+        }
       }
+      // Let the narration loop fully settle (it already exited on narrationStop) before resuming.
+      await narrationLoop.catch(() => {});
       // Two-stage barge: if the agent's answer AWAITS the user — a bare-hail ack ("Yes? Go ahead.") or
       // a clarifying question — don't rush back to the round-robin. Hold frozen (mic still open) for a
       // short grace window so the user's actual command/answer lands as its own barge; if nothing comes,
@@ -764,6 +901,11 @@ function MeetingRoom({
       setPhase("Resuming…");
       await ceremonyVoiceRef.current.resumeFromFreeze();
     } catch (err) {
+      // E: the answer failed/stalled — stop narration and cut any in-flight cue so it can't outlive the
+      // barge or bleed into the resumed speaker.
+      narrationStop = true;
+      ceremonyVoiceRef.current.stopNarration();
+      await narrationLoop.catch(() => {});
       // The 30s barge-answer race timing out is NOT a user-facing error — it means the turn stalled
       // (usually the round-robin collision). Degrade quietly: resume the speaker, no scary toast. Only
       // a genuine unexpected failure gets a subtle notice.

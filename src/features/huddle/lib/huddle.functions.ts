@@ -286,6 +286,23 @@ function isEchoOfPrior(text: string, priorReplies: { text: string }[]): boolean 
   return priorReplies.some((r) => replyJaccard(text, r.text) >= 0.72);
 }
 
+// D (F12) — server-side backstop for the "ran a tool, said nothing" barge. When a CEREMONY BARGE
+// responder executes a real tool but the model returns EMPTY text, we must NOT emit a silent
+// tool-only turn (the exact bug: Terry ran three web searches, spoke zero words). Synthesize a
+// minimal, HONEST reply: acknowledge + defer to after the stand-up (we don't have a spoken
+// deliverable in hand, so we say we'll follow up — never fabricate a result). Varied so a repeat
+// doesn't sound canned. The bargeDirective now also instructs the model to say this itself; this is
+// the code guarantee for when it still comes back empty.
+function bargeToolDeferralText(): string {
+  const opts = [
+    "Got it — I ran that down and I'll bring you the result right after we wrap.",
+    "On it — I pulled that up; I'll get you the details the moment the stand-up finishes.",
+    "Heard you — I checked into that and I'll follow up with what I found right after we're done here.",
+    "Understood — I looked into it; I'll surface the full result as soon as we close out the stand-up.",
+  ];
+  return opts[Math.floor(Math.random() * opts.length)];
+}
+
 // A small model keeps hand-authoring a link to "the document" in its chat prose — either an INVENTED
 // external site ("access it [here](salesforce.com)") or a PLACEHOLDER ("[here](https://your-link-to-
 // artifact)") — even when it DID save a real artifact. The chip (from create_artifact) is the ONLY real
@@ -818,6 +835,22 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             error: ok ? null : (errorDetail ?? summary ?? null), // the REAL tool error, not the summary
             summary: summary ?? null,
             args, // what the tool was actually called with — the key debug signal
+            ts: Date.now(),
+          }),
+        )
+        .catch(() => {});
+    };
+    // E (F13) — tool-lifecycle START marker. Persisted the instant a tool BEGINS executing (not at its
+    // end, like trackCeremonyTool) so the client narration driver can voice an HONEST, event-driven cue
+    // ("running a search…") keyed to a tool that is actually running now — never on a timer/guess.
+    // Fire-and-forget; no-op outside a ceremony/barge run (no ceremonyRunId).
+    const trackCeremonyToolStart = (agentId: AgentId, tool: string) => {
+      if (!ceremonyToolRunId || !ceremonyToolEmail) return;
+      void import("./ceremony/ceremony-transcript.server")
+        .then((m) =>
+          m.appendCeremonyToolStart(ceremonyToolEmail, ceremonyToolRunId, data.huddleId, {
+            agentId,
+            toolName: tool,
             ts: Date.now(),
           }),
         )
@@ -2074,6 +2107,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             name: string;
             arguments: Record<string, unknown>;
           }) => {
+            // E (F13): a REAL tool is about to run — mark its START so the client can voice an honest,
+            // event-driven progress cue for it (no-op outside a ceremony/barge run).
+            trackCeremonyToolStart(winner.id, c.name);
             if (c.name === "create_huddle_task") {
               return JSON.stringify(await createSuggestedTaskFromTool(c.arguments));
             }
@@ -3269,6 +3305,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           if (toolNames.length > 0) {
             recordToolUse(winner.id, "tool_catalog", `offered: ${toolNames.join(", ")}`, true);
           }
+          // E (F13): emit a tool-START marker for the Lovable backend too (the OpenAI path hooks this in
+          // combinedOnToolCall). Wrap each tool's execute ONCE so the client's progress narration covers
+          // both engines. Purely additive — it calls the original execute unchanged; no-op outside a run.
+          for (const name of toolNames) {
+            const t = lovableTools[name] as { execute?: (...a: unknown[]) => unknown };
+            const orig = t.execute;
+            if (typeof orig === "function") {
+              t.execute = (...args: unknown[]) => {
+                trackCeremonyToolStart(winner.id, name);
+                return orig(...args);
+              };
+            }
+          }
 
           const lovableToolChoice =
             forceReminder && lovableTools.schedule_reminder
@@ -3310,7 +3359,24 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           clean = text.trim();
         }
 
-        if (!clean) return bundle({ kind: "skip" });
+        if (!clean) {
+          // D (F12): a CEREMONY BARGE responder that RAN a real tool but produced no spoken text must
+          // NOT go silent — instead of skipping, emit an honest ack+deferral so the user always hears a
+          // response after their interjection. Only real executions count (exclude the offering log
+          // `tool_catalog` and the "offered (forced …)" pre-records, which aren't tool runs).
+          const ranRealTool = toolUses.some(
+            (t) => t.tool !== "tool_catalog" && !/^offered\b/i.test(t.summary),
+          );
+          if (turnBargeDirective && ranRealTool) {
+            return bundle({
+              kind: "reply",
+              clean: bargeToolDeferralText(),
+              isInterjector: false,
+              perAgentFallbacks,
+            });
+          }
+          return bundle({ kind: "skip" });
+        }
 
         // Persist prompt debug for this reply.
         prompts.push({

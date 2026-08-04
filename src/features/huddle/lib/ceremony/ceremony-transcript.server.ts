@@ -214,6 +214,92 @@ export async function appendCeremonyToolCall(
   }
 }
 
+// E (F13) — tool-lifecycle START marker. The existing appendCeremonyToolCall records a tool at its
+// END (ok/summary known). For HONEST, event-driven progress narration the client also needs to know a
+// tool has just STARTED (so it can voice "running a search…" the instant the search actually begins,
+// never on a guess). We persist a kind='tool_start' row keyed to the run; the client polls
+// getCeremonyToolEvents during a barge and voices ONE cue per real start. Fire-and-forget safe: a
+// tracking-write failure must NEVER break a live ceremony turn. tool_ok is left NULL (not yet known).
+export async function appendCeremonyToolStart(
+  email: string,
+  runId: string,
+  huddleId: string,
+  call: { agentId?: string | null; toolName: string; ts?: number | null },
+): Promise<{ ok: boolean }> {
+  if (!email || !runId || !huddleId || !call?.toolName) return { ok: false };
+  try {
+    await ensureBootstrapped();
+    await getPool().query(
+      `INSERT INTO chat.ceremony_transcript
+         (run_id, huddle_id, user_email, seq, speaker, agent_id, text, kind, ts, tool_name)
+       SELECT $1, $2, $3,
+              COALESCE((SELECT MAX(seq) FROM chat.ceremony_transcript WHERE run_id = $1 AND user_email = $3), 0) + 1,
+              'agent', $4, $5, 'tool_start', $6, $7`,
+      [
+        runId,
+        huddleId,
+        email,
+        call.agentId ?? null,
+        `${call.toolName} started`,
+        call.ts != null ? new Date(call.ts).toISOString() : null,
+        call.toolName,
+      ],
+    );
+    return { ok: true };
+  } catch (err) {
+    console.error("[ceremony-transcript] tool-start append failed:", err);
+    return { ok: false };
+  }
+}
+
+// E (F13) — lean tool-lifecycle feed for the client narration driver. Returns the tool START ('tool_start')
+// and END ('tool') rows for a run newer than `sinceId` (a `> id` cursor), oldest-first, email-scoped so a
+// wrong owner gets []. Deliberately narrow (id/agent/tool/phase/ok only) so it stays cheap to poll every
+// ~700ms during a barge — it is NOT the full-transcript read (getCeremonyRun).
+export interface CeremonyToolEvent {
+  id: string;
+  agentId: string | null;
+  toolName: string;
+  phase: "start" | "end";
+  ok: boolean | null;
+}
+export async function getCeremonyToolEvents(
+  email: string,
+  runId: string,
+  sinceId: string,
+): Promise<CeremonyToolEvent[]> {
+  if (!email || !runId) return [];
+  try {
+    await ensureBootstrapped();
+    const r = await getPool().query<{
+      id: string;
+      agent_id: string | null;
+      tool_name: string | null;
+      kind: string | null;
+      tool_ok: boolean | null;
+    }>(
+      `SELECT id, agent_id, tool_name, kind, tool_ok
+       FROM chat.ceremony_transcript
+       WHERE user_email = $1 AND run_id = $2 AND kind IN ('tool_start','tool') AND id > $3
+       ORDER BY id ASC
+       LIMIT 50`,
+      [email, runId, sinceId || "0"],
+    );
+    return r.rows
+      .filter((row) => !!row.tool_name)
+      .map((row) => ({
+        id: String(row.id),
+        agentId: row.agent_id,
+        toolName: row.tool_name as string,
+        phase: row.kind === "tool_start" ? ("start" as const) : ("end" as const),
+        ok: row.tool_ok,
+      }));
+  } catch (err) {
+    console.error("[ceremony-transcript] getToolEvents failed:", err);
+    return [];
+  }
+}
+
 // Ordered rows for one run, scoped to the caller's email — a wrong owner returns [].
 export async function getCeremonyRun(email: string, runId: string): Promise<CeremonyTranscriptRow[]> {
   if (!email || !runId) return [];
