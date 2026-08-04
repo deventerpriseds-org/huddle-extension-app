@@ -14,6 +14,7 @@ import { AGENT_BY_ID, type AgentId } from "../data/agents";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useBackendsStore, ASSISTANT_IDS } from "../lib/agent-backends";
 import { getAgentDebug, refetchAgentSnapshot } from "../lib/agent-inspect.functions";
+import { AgentVoiceField } from "./AgentVoiceField";
 import { saveMemoryItem, listMemoryItems, deleteMemoryItem } from "../lib/rag.functions";
 import { provisionAgentVectorStores } from "../lib/openai-provisioning.functions";
 import { AgentAvatar } from "./AgentAvatar";
@@ -301,6 +302,14 @@ export function AgentSettingsDrawer() {
                     <Field label="RAG triples" value={String(backend?.rag?.triples ?? false)} />
                     <Field label="File search" value={String(backend?.rag?.fileSearch ?? false)} />
                     <Field label="RAG sharing" value={backend?.rag?.sharing ?? "shared"} />
+                  </div>
+                </section>
+
+                {/* Voice (ElevenLabs) — editable + testable per agent, persisted globally (shared component) */}
+                <section>
+                  <SectionTitle>Voice (ElevenLabs)</SectionTitle>
+                  <div className="mt-2 rounded-lg border border-hairline bg-surface p-3">
+                    <AgentVoiceField agentId={openId} />
                   </div>
                 </section>
 

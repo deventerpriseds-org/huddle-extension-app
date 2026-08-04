@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, Upload, RotateCcw, X, Database, Loader2, Settings2 } from "lucide-react";
+import { Download, Upload, RotateCcw, X, Database, Loader2, Settings2, ChevronRight } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
@@ -327,12 +327,15 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
 
                   <Button
                     size="sm"
-                    variant="outline"
-                    className="w-full justify-start"
+                    variant="secondary"
+                    className="w-full justify-between font-medium shadow-sm ring-1 ring-hairline hover:bg-primary hover:text-primary-foreground"
                     onClick={() => openAgentDrawer(a.id)}
                   >
-                    <Settings2 size={14} className="mr-1.5" />
-                    Open full agent settings (prompt, memory, hosted tools)
+                    <span className="flex items-center">
+                      <Settings2 size={14} className="mr-1.5" />
+                      Full agent settings — prompt, memory, voice, tools
+                    </span>
+                    <ChevronRight size={15} />
                   </Button>
 
                   <div className="grid grid-cols-2 gap-2">

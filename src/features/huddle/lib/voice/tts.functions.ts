@@ -15,6 +15,9 @@ const AgentIds = AGENTS.map((a) => a.id) as [AgentId, ...AgentId[]];
 const Input = z.object({
   text: z.string().min(1).max(4000),
   agentId: z.enum(AgentIds),
+  // Optional explicit voice id — used by the Settings "Test voice" button to preview an UNSAVED value.
+  // When absent, the effective voice resolves server-side to the saved override or the agents.ts default.
+  voiceId: z.string().trim().optional(),
 });
 
 export type SpeakResult =
@@ -29,7 +32,10 @@ export const synthesizeSpeech = createServerFn({ method: "POST" })
     const agent = AGENT_BY_ID[data.agentId];
     if (!agent) return { ok: false, error: `Unknown agent: ${data.agentId}` };
     try {
-      const audioBase64 = await textToSpeech(data.text, agent.voiceId);
+      // Effective voice = explicit test value → saved per-agent override → agents.ts default.
+      const { resolveEffectiveVoiceId } = await import("./voice-config.server");
+      const voiceId = (await resolveEffectiveVoiceId(data.agentId, data.voiceId)) ?? agent.voiceId;
+      const audioBase64 = await textToSpeech(data.text, voiceId);
       return { ok: true, audioBase64, mimeType: "audio/mpeg" };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
