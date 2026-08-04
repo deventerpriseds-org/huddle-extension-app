@@ -21,6 +21,33 @@ agent turn. When the turn makes tool calls, the final spoken reply comes back em
 `runHuddleTurn` in `huddle.functions.ts`, `useCeremonyVoice.ts` `speakInterjection`.
 **Also covers:** the earlier "Terry never responded to my end action" (same family).
 
+## Workstream E — Tool-usage progress narration ("thinking out loud") to kill dead air (NEW)
+**Problem:** while a tool runs (a barge search, any tool call) there's dead silence — the user hears
+nothing and doesn't know anything is happening. Robo-support solves this with staged spoken cues.
+**Goal (user's model):** *"Yes sir?… let me check that… I'll run a web search… okay, some results…
+one more moment, I'm pulling it together… here's what I found."* — the agent narrates its own progress
+in ITS cloned voice, so the gap is filled naturally.
+**Mechanism (general — D is its first consumer):**
+- Staged, VARIED filler phrases (not one repeated line), templated so they're instant + free (no LLM):
+  - **ack:** "Yes sir?" / "On it." / "Sure — let me check that."
+  - **working:** "Let me look that up." / "Running a quick search." / "One moment, pulling this together." / "Almost there."
+  - **handoff to result:** the real answer (Workstream D) lands here.
+- **Cadence:** emit one cue when a tool starts; if it runs long, another every few seconds; stop the
+  instant the real answer is ready.
+- **Voice:** ElevenLabs in the agent's `voiceId` (same `voiceTurn`/synth path).
+- **Suppression (user's hard constraint):** only when this agent holds the ACTIVE audio floor. If the
+  answer is DEFERRED (coming later, not now) → skip the narration (at most a single "I'll pull that
+  together and send it after standup"). NEVER talk over the next scripted speaker — reuse the driver's
+  park/serialize + genRef so if the floor moves on, narration stops immediately.
+**Requires:** the client to observe the tool lifecycle (tool-start / results-in / answer-ready). For a
+barge this means either streaming the barge turn's tool events to the client, or the server emitting
+interim "narration" markers the client voices. Scope the hook during implementation.
+**Files:** `useCeremonyVoice.ts` (a `narrate`/filler path alongside `speakInterjection`), `MeetingBar.tsx`
+(drive it off the barge/tool lifecycle), the `ceremonyBarge` turn path in `huddle.functions.ts` (surface
+tool-lifecycle signals).
+**Composes with D:** D guarantees the answer is spoken; E fills the wait before it. Together = ack →
+progress → result/defer, no dead air, no silence.
+
 ## Workstream B — Round-robin plan: who speaks, handoff, close (F9, F10, F11)
 **Problems:** F9 empty-lane agents get a slot and then invent work; F10 handoff to Eli who never goes;
 F11 premature close (Eli named, never went, Terry closed anyway).
@@ -59,7 +86,8 @@ config difference before assuming.
 **Action:** confirm via a transcript + her lane data + snapshot diff before writing any Elle-specific fix.
 
 ## Proposed sequence
-1. **D (F12)** — silent barge is the worst; fix first.
+1. **D + E together (F12 + narration)** — the full barge experience (ack → progress narration → result/
+   defer). Silent barge is the worst; this is the headline fix.
 2. **B (F9/F10/F11)** — structural; also kills the fabrication incentive.
 3. **A (F3–F6/F8)** — content polish on top of B.
 4. **C (F7)** — verify it's just the empty-lane case (probably resolved by B), else targeted.
