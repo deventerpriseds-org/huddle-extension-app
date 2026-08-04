@@ -14,8 +14,7 @@ import { AGENT_BY_ID, type AgentId } from "../data/agents";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useBackendsStore, ASSISTANT_IDS } from "../lib/agent-backends";
 import { getAgentDebug, refetchAgentSnapshot } from "../lib/agent-inspect.functions";
-import { synthesizeSpeech } from "../lib/voice/tts.functions";
-import { getVoiceOverridesFn, setVoiceOverrideFn } from "../lib/voice/voice-config.functions";
+import { AgentVoiceField } from "./AgentVoiceField";
 import { saveMemoryItem, listMemoryItems, deleteMemoryItem } from "../lib/rag.functions";
 import { provisionAgentVectorStores } from "../lib/openai-provisioning.functions";
 import { AgentAvatar } from "./AgentAvatar";
@@ -51,10 +50,6 @@ export function AgentSettingsDrawer() {
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [provisioning, setProvisioning] = useState(false);
-  // Per-agent voice id (ElevenLabs). `voiceInput` is the editable field (override or default); busy tags
-  // which voice action is in flight.
-  const [voiceInput, setVoiceInput] = useState("");
-  const [voiceBusy, setVoiceBusy] = useState<null | "test" | "save" | "reset">(null);
 
   async function refreshMemoryList(agentId: string) {
     setMemoryLoading(true);
@@ -74,7 +69,6 @@ export function AgentSettingsDrawer() {
       setCtxText("");
       setCtxScope("agent");
       setMemoryItems([]);
-      setVoiceInput("");
       return;
     }
     setLoading(true);
@@ -87,60 +81,8 @@ export function AgentSettingsDrawer() {
         toast.error(err instanceof Error ? err.message : "Failed to load agent debug"),
       )
       .finally(() => setLoading(false));
-    // Seed the voice field with the saved override if any, else the agents.ts default.
-    const fallbackVoice = AGENT_BY_ID[openId]?.voiceId ?? "";
-    getVoiceOverridesFn()
-      .then((r) => setVoiceInput((r.ok && r.overrides[openId]) || fallbackVoice))
-      .catch(() => setVoiceInput(fallbackVoice));
     refreshMemoryList(openId);
   }, [openId]);
-
-  async function handleTestVoice() {
-    if (!openId) return;
-    setVoiceBusy("test");
-    try {
-      const name = AGENT_BY_ID[openId]?.name ?? "your assistant";
-      const r = await synthesizeSpeech({
-        data: { agentId: openId, text: `Hi, this is ${name}. How do I sound?`, voiceId: voiceInput.trim() || undefined },
-      });
-      if (r.ok && r.audioBase64) await new Audio(`data:audio/mpeg;base64,${r.audioBase64}`).play().catch(() => {});
-      else toast.error(r.ok ? "No audio returned" : r.error);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Test failed");
-    } finally {
-      setVoiceBusy(null);
-    }
-  }
-
-  async function handleSaveVoice() {
-    if (!openId) return;
-    setVoiceBusy("save");
-    try {
-      const r = await setVoiceOverrideFn({ data: { agentId: openId, voiceId: voiceInput.trim() } });
-      if (r.ok) toast.success("Voice saved — applies to every voice path.");
-      else toast.error(r.error);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Save failed");
-    } finally {
-      setVoiceBusy(null);
-    }
-  }
-
-  async function handleResetVoice() {
-    if (!openId) return;
-    setVoiceBusy("reset");
-    try {
-      const r = await setVoiceOverrideFn({ data: { agentId: openId, voiceId: "" } });
-      if (r.ok) {
-        setVoiceInput(AGENT_BY_ID[openId]?.voiceId ?? "");
-        toast.success("Reset to the default voice.");
-      } else toast.error(r.error);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Reset failed");
-    } finally {
-      setVoiceBusy(null);
-    }
-  }
 
   async function handleSaveContext() {
     if (!openId) return;
@@ -363,38 +305,11 @@ export function AgentSettingsDrawer() {
                   </div>
                 </section>
 
-                {/* Voice (ElevenLabs) — editable + testable per agent, persisted globally */}
+                {/* Voice (ElevenLabs) — editable + testable per agent, persisted globally (shared component) */}
                 <section>
                   <SectionTitle>Voice (ElevenLabs)</SectionTitle>
-                  <div className="mt-2 flex flex-col gap-2 rounded-lg border border-hairline bg-surface p-3 text-[12px]">
-                    <label className="font-medium" htmlFor="voice-id-input">Voice ID</label>
-                    <input
-                      id="voice-id-input"
-                      type="text"
-                      value={voiceInput}
-                      onChange={(e) => setVoiceInput(e.target.value)}
-                      placeholder={agent?.voiceId}
-                      spellCheck={false}
-                      className="w-full rounded-md border border-hairline bg-background px-2 py-1.5 font-mono text-[12px]"
-                    />
-                    <div className="text-[11px] text-muted-foreground">
-                      Default: <code>{agent?.voiceId}</code>. <b>Test</b> previews the value above without
-                      saving; <b>Save</b> applies it to every voice path (1:1, ceremony, group) across devices.
-                    </div>
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      <Button size="sm" variant="secondary" disabled={voiceBusy !== null || !voiceInput.trim()} onClick={handleTestVoice}>
-                        {voiceBusy === "test" ? <Loader2 size={13} className="animate-spin" /> : null}
-                        <span className="ml-1.5">Test voice</span>
-                      </Button>
-                      <Button size="sm" disabled={voiceBusy !== null} onClick={handleSaveVoice}>
-                        {voiceBusy === "save" ? <Loader2 size={13} className="animate-spin" /> : null}
-                        <span className="ml-1.5">Save</span>
-                      </Button>
-                      <Button size="sm" variant="ghost" disabled={voiceBusy !== null} onClick={handleResetVoice}>
-                        {voiceBusy === "reset" ? <Loader2 size={13} className="animate-spin" /> : null}
-                        <span className="ml-1.5">Reset to default</span>
-                      </Button>
-                    </div>
+                  <div className="mt-2 rounded-lg border border-hairline bg-surface p-3">
+                    <AgentVoiceField agentId={openId} />
                   </div>
                 </section>
 

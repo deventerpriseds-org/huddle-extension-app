@@ -39,6 +39,7 @@ import { ExecutiveProfilePanel } from "./ExecutiveProfilePanel";
 import { AgentWorkflowPanel } from "./AgentWorkflowPanel";
 import { ArtifactMirroringPanel } from "./ArtifactMirroringPanel";
 import { SchedulingPanel } from "./SchedulingPanel";
+import { AgentVoiceField } from "./AgentVoiceField";
 
 interface SettingsSheetProps {
   open: boolean;
@@ -373,6 +374,10 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                       </p>
                     </div>
                   )}
+
+                  <div className="border-t border-hairline pt-2">
+                    <AgentVoiceField agentId={a.id} />
+                  </div>
 
                   <AgentContextEditor agentId={a.id} />
                 </div>
