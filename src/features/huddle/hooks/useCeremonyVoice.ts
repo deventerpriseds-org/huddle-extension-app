@@ -16,6 +16,19 @@ import { realtimeAudioInput } from "../lib/voice/realtime-audio";
 
 export type CeremonyVoiceStatus = "idle" | "listening" | "speaking" | "frozen" | "error";
 
+/** Why a voiceTurn returned: it played every sentence ("completed"), or a barge/stop bumped genRef and
+ *  cut it short ("aborted"). The ceremony driver (MeetingBar.emit) uses this to only advance to the next
+ *  scripted speaker on a true completion — on an abort it stays parked until the barge is resolved and
+ *  resumeFromFreeze() finishes the interrupted speaker, so two agents never overlap on the audio queue. */
+export type CeremonyVoiceTurnOutcome = "completed" | "aborted";
+
+// Self-barge bleed floor (0..1 on the boosted mic-level scale, ~rms*4). When our own ElevenLabs TTS is
+// actively playing and the LIVE mic level is BELOW this, a VAD `speech_started` is treated as our own
+// audio echoing into the mic (residual bleed past echoCancellation), NOT the user — so it does not barge.
+// A real utterance is loud enough to clear the floor and still barges. Perceptual — tune against a live
+// mic if self-barges slip through (raise it) or real barges get eaten (lower it).
+const SELF_BARGE_BLEED_FLOOR = 0.08;
+
 export interface CeremonyVoiceController {
   status: CeremonyVoiceStatus;
   activeSpeaker: AgentId | null;
@@ -36,7 +49,7 @@ export interface CeremonyVoiceController {
        *  (use for the host's cold-start greeting — it's filler, not a lane report). Default true. */
       resumable?: boolean;
     },
-  ) => Promise<void>;
+  ) => Promise<CeremonyVoiceTurnOutcome>;
   /**
    * Freeze the current speaker on a barge WITHOUT tearing down voice: stop audio + kill the loop,
    * but preserve the resume point (freezeRef) and keep the WebRTC mic open. Used by the typed-barge
@@ -137,6 +150,9 @@ export function useCeremonyVoice(hookOpts: {
   const [micLevel, setMicLevel] = useState(0);
   const micRafRef = useRef<number | null>(null);
   const micCtxRef = useRef<AudioContext | null>(null);
+  // Live mirror of the mic level, updated EVERY analyser tick (not throttled like the state setter) so
+  // the barge handler reads a fresh value without a stale render closure. Used by the self-barge gate.
+  const micLevelRef = useRef(0);
 
   const supported =
     typeof window !== "undefined" &&
@@ -193,8 +209,8 @@ export function useCeremonyVoice(hookOpts: {
       // When false (barge ANSWER), do NOT touch freezeRef — the interrupted speaker's resume point
       // must survive so resumeFromFreeze() returns to THEM, not to the answer.
       trackFreeze = true,
-    ) => {
-      if (genRef.current !== gen) return;
+    ): Promise<CeremonyVoiceTurnOutcome> => {
+      if (genRef.current !== gen) return "aborted";
       setPhase("speaking");
       setActiveSpeaker(agentId);
       const sentences = splitSentences(text);
@@ -222,7 +238,7 @@ export function useCeremonyVoice(hookOpts: {
         startSentenceIdx < sentences.length ? synthOne(sentences[startSentenceIdx]) : Promise.resolve("");
 
       for (let si = startSentenceIdx; si < sentences.length; si++) {
-        if (genRef.current !== gen) return;
+        if (genRef.current !== gen) return "aborted";
         const sentence = sentences[si];
 
         // Save freeze position BEFORE playback — if barge fires here, the freeze points to THIS
@@ -230,7 +246,7 @@ export function useCeremonyVoice(hookOpts: {
         if (trackFreeze) freezeRef.current = { agentId, text, sentenceIdx: si, onSentenceStart };
 
         const audio64 = await nextAudioP; // this sentence's clip (was prefetched during the previous one)
-        if (genRef.current !== gen) return;
+        if (genRef.current !== gen) return "aborted";
         // Kick off the NEXT sentence's synth NOW so it overlaps this sentence's playback (no gap).
         nextAudioP = si + 1 < sentences.length ? synthOne(sentences[si + 1]) : Promise.resolve("");
 
@@ -255,7 +271,7 @@ export function useCeremonyVoice(hookOpts: {
           }, 50);
         });
 
-        if (genRef.current !== gen) return;
+        if (genRef.current !== gen) return "aborted";
       }
 
       if (trackFreeze) {
@@ -263,6 +279,7 @@ export function useCeremonyVoice(hookOpts: {
         setActiveSpeaker(null);
       }
       if (genRef.current === gen) setPhase(listenRef.current ? "listening" : "idle");
+      return "completed";
     },
     [setPhase],
   );
@@ -276,8 +293,8 @@ export function useCeremonyVoice(hookOpts: {
         onSentenceStart: (sentence: string, sentenceIndex: number, blockTotal: number) => void;
         resumable?: boolean;
       },
-    ) => {
-      await _voiceTurn(agentId, text, opts.onSentenceStart, genRef.current, 0, opts.resumable ?? true);
+    ): Promise<CeremonyVoiceTurnOutcome> => {
+      return _voiceTurn(agentId, text, opts.onSentenceStart, genRef.current, 0, opts.resumable ?? true);
     },
     [_voiceTurn],
   );
@@ -396,10 +413,12 @@ export function useCeremonyVoice(hookOpts: {
             sum += v * v;
           }
           const rms = Math.sqrt(sum / buf.length);
+          const level = Math.min(1, rms * 4); // boost so speech reads as a clear pulse
+          micLevelRef.current = level; // fresh every tick for the self-barge gate
           const t = typeof performance !== "undefined" ? performance.now() : 0;
           if (t - last > 80) {
             last = t;
-            setMicLevel(Math.min(1, rms * 4)); // boost so speech reads as a clear pulse
+            setMicLevel(level);
           }
           micRafRef.current = requestAnimationFrame(tick);
         };
@@ -486,6 +505,18 @@ export function useCeremonyVoice(hookOpts: {
 
         switch (msg.type) {
           case "input_audio_buffer.speech_started": {
+            // SELF-BARGE SUPPRESSION: our own ElevenLabs TTS can leak into the mic even with
+            // echoCancellation on. If the audio queue is actively playing AND the live mic level is
+            // below the bleed floor, this "speech" is our own audio echoing back, not the user — do
+            // NOT freeze or park. A real utterance is loud enough to clear the floor and still barges.
+            const selfBleed =
+              audioQueueRef.current.isActive() && micLevelRef.current < SELF_BARGE_BLEED_FLOOR;
+            if (selfBleed) {
+              // Still cancel any model response (we never use Realtime's own audio) but leave the
+              // ceremony speaker running — this was our own bleed, not a barge.
+              dc.send(JSON.stringify({ type: "response.cancel" }));
+              break;
+            }
             // Barge detected: freeze the speaker (stop audio + kill the loop, keep the resume point).
             // freezeRef.current already points to the current sentence (set before synthesis).
             if (statusRef.current === "speaking" || audioQueueRef.current.isActive()) {

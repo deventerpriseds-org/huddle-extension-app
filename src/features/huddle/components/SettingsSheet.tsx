@@ -49,6 +49,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const config = useBackendsStore((s) => s.config);
   const setRouter = useBackendsStore((s) => s.setRouter);
   const setAgent = useBackendsStore((s) => s.setAgent);
+  const setCeremonyEngine = useBackendsStore((s) => s.setCeremonyEngine);
   const replaceConfig = useBackendsStore((s) => s.replaceConfig);
   const resetToDefaults = useBackendsStore((s) => s.resetToDefaults);
   const showDemoData = useHuddleStore((s) => s.showDemoData);
@@ -213,6 +214,24 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
               <Switch
                 checked={config.router.soloOnCoverage}
                 onCheckedChange={(v) => setRouter({ soloOnCoverage: v })}
+              />
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border border-hairline p-3">
+              <div className="pr-3">
+                <Label className="text-sm">Optimized ceremony engine</Label>
+                <p className="text-xs text-muted-foreground">
+                  Speak stand-ups from a cached per-agent script (a grooming
+                  payoff, refreshed when the board changes) with a one-shot
+                  parallel fan-out when the cache is cold — no per-agent server
+                  round-robin, so it starts in ~1s instead of long gaps between
+                  speakers. Off keeps today's exact round-robin engine. The
+                  cloned ElevenLabs voice is used either way.
+                </p>
+              </div>
+              <Switch
+                checked={config.ceremonyEngine === "current-optimized"}
+                onCheckedChange={(v) => setCeremonyEngine(v ? "current-optimized" : "current")}
               />
             </div>
 

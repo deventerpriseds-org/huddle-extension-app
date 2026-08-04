@@ -24,8 +24,9 @@ import { useVoiceCallRealtime } from "../hooks/useVoiceCallRealtime";
 import { useVoiceCallRealtimeSpeak } from "../hooks/useVoiceCallRealtimeSpeak";
 import { useVoiceEngineStore } from "../lib/voice/voice-engine-store";
 import { useGroupVoice } from "../hooks/useGroupVoice";
-import { useCeremonyVoice } from "../hooks/useCeremonyVoice";
+import { useCeremonyVoice, type CeremonyVoiceTurnOutcome } from "../hooks/useCeremonyVoice";
 import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates } from "../lib/huddle.functions";
+import { getCeremonyScript } from "../lib/tasks/ceremony-script.functions";
 import { saveCeremonyTranscript } from "../lib/ceremony/ceremony-transcript.functions";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
@@ -993,8 +994,9 @@ function MeetingRoom({
     let voiceOff = false;
     // Greeting the host speaks immediately to cover the server cold start; emit() awaits it before the
     // first scripted block so they never overlap (both would share the audio queue). Fired below AFTER
-    // the durable turn is enqueued so the greeting's playback overlaps the server work.
-    let greetingP: Promise<void> | null = null;
+    // the durable turn is enqueued so the greeting's playback overlaps the server work. Typed as
+    // Promise<unknown> because voiceTurn now resolves to a completed/aborted outcome (we ignore it here).
+    let greetingP: Promise<unknown> | null = null;
 
     // Reset barge state at ceremony start.
     spokenCountRef.current = 0;
@@ -1035,18 +1037,21 @@ function MeetingRoom({
         if (!ceremonyAliveRef.current) return;
         const r = reps[i];
         const agentId = r.agentId as AgentId;
-        spoken.n = i + 1;
-        spokenCountRef.current = spoken.n;
         setPhase(`${AGENT_BY_ID[agentId]?.name ?? "Someone"} is speaking…`);
         // One block == one agent reply. Every sentence-row of it shares this blockId; the SAME
         // onSentenceStart closure is reused on resume (saved in freezeRef), so the resumed remainder
         // of the block keeps the same blockId with continuing sentenceIndexes.
         const blockId = `blk-${step}-${i}-${agentId}`;
 
+        // Whether THIS speaker finished on its own or was cut by a barge (genRef abort). We only
+        // advance spoken.n once the speaker is fully handled — a true completion, OR an abort that the
+        // barge sequence then answers + resumes. Advancing before voicing (the old bug) let the
+        // round-robin march to the next scripted speaker over a barge → two agents' audio overlapped.
+        let outcome: CeremonyVoiceTurnOutcome = "completed";
         if (!voiceOff) {
           setSpeakingId(agentId);
           try {
-            await ceremonyVoiceRef.current.voiceTurn(agentId, r.text, {
+            outcome = await ceremonyVoiceRef.current.voiceTurn(agentId, r.text, {
               // The host OPENER (first block of the first step) does NOT re-speak on barge — a barge
               // during the open cuts it and the exchange continues; re-speaking the opener line on each
               // barge is what repeated "…blockage in Prof Education…" 4× (seq 4/10/11/19). Lane reports
@@ -1099,13 +1104,72 @@ function MeetingRoom({
             ts: Date.now(),
           });
         }
-        // Resume after a barge is now handled inside runBargeSequence (freeze → answer → resume),
-        // not here — emit only voices scripted speakers and parks (above) while a barge is in flight.
+
+        if (outcome === "aborted") {
+          // A barge froze THIS speaker (genRef bumped). Do NOT advance to the next scripted speaker:
+          // runBargeSequence answers the interjection and resumeFromFreeze() re-voices THIS speaker to
+          // completion. Stay parked until the barge fully resolves (bargeActive clears + cooldown
+          // elapses — the resume finishes within that window), THEN count this speaker done and move on.
+          // This is what keeps the barge answer "right there" and prevents two agents' audio overlapping.
+          while ((bargeActiveRef.current || Date.now() < bargeCooldownUntilRef.current) && ceremonyAliveRef.current) {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          if (!ceremonyAliveRef.current) return;
+        }
+        // Speaker i is fully handled (completed on its own, or aborted → answered → resumed) — advance.
+        spoken.n = i + 1;
+        spokenCountRef.current = spoken.n;
+        // Resume after a barge is handled inside runBargeSequence (freeze → answer → resume), not here —
+        // emit only voices scripted speakers and parks (above) while a barge is in flight.
       }
     };
 
     try {
       for (const step of steps) {
+        // ── CURRENT-OPTIMIZED ENGINE (ACT-huddle-18) ──────────────────────────────────────────────
+        // When selected, try the cache/fan-out script FIRST: one server call returns every speaker's
+        // TEXT (cache-fresh from the grooming payoff, or a one-shot parallel fan-out when cold), which
+        // we voice straight to TTS with NO per-agent server round-robin. On any non-ok result (no
+        // account, cold+partial generation, not configured, error) we fall through to the UNCHANGED
+        // round-robin below so nothing is ever dropped. When the engine is "current" this whole block
+        // is skipped — the original path runs byte-for-byte (no cache read, no fan-out).
+        if (cfg.ceremonyEngine === "current-optimized") {
+          activeCeremonyTurnRef.current = `optimized-${meetingHuddleId}-${step}`; // barge-able
+          // Cover generation latency with the host greeting (step 0 only), same as the round-robin path.
+          if (step === steps[0] && !greetingP) {
+            const greeter = meeting.members.includes(HOST_ID) ? HOST_ID : meeting.members[0];
+            greetingP = ceremonyVoiceRef.current
+              .voiceTurn(greeter, standupGreeting(), {
+                resumable: false,
+                onSentenceStart: (s) => {
+                  addMeetingTurns([{ agentId: greeter, text: s }]);
+                  persistCeremonyTurnRef.current({ speaker: "agent", agentId: greeter, text: s, kind: "greeting", ts: Date.now() });
+                },
+              })
+              .catch(() => {});
+          }
+          setPhase("Preparing updates…");
+          let slots: { agentId: string; text: string }[] | null = null;
+          try {
+            const script = await getCeremonyScript({
+              data: { ceremonyType: step, members: meeting.members, caller, timeZone: tz },
+            });
+            if (script?.ok && Array.isArray(script.slots) && script.slots.length) slots = script.slots;
+          } catch {
+            slots = null;
+          }
+          if (slots) {
+            const spoken = { n: 0 };
+            await emit(slots, spoken, step); // shares the barge/park/resume driver with the round-robin
+            activeCeremonyTurnRef.current = null;
+            if (!ceremonyAliveRef.current) return;
+            continue; // step done via the optimized path — skip the round-robin below
+          }
+          // Cold/failed/no-account → degrade to the round-robin below. greetingP is already set (and
+          // possibly resolved), so the round-robin won't re-fire the greeting; emit awaits it as usual.
+          activeCeremonyTurnRef.current = null;
+        }
+
         // DURABLE/CHUNKED, not a single synchronous call. A round-robin over the full room runs many
         // agents sequentially and blows the ~45s hosting ceiling → a sync call 500s. The server runs it
         // in sub-45s chunks AND streams each turn to the store the instant it lands (status stays

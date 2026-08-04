@@ -87,6 +87,25 @@ CREATE TABLE IF NOT EXISTS tasks.groom_state (
   last_groomed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Per-agent standup-update TEXT cache for the "current-optimized" ceremony engine (ACT-huddle-18).
+-- Keyed to the SAME backlogSignature the groom_state watermark uses (hash over open tasks'
+-- id/title/status/due_date + count) so parking/editing/deleting a task changes the key and a stale
+-- entry is never read. TEXT ONLY — never audio: the cloned ElevenLabs voice is chosen at synth time by
+-- agentId. The slot column distinguishes the host's opener from its closer (both terry-locke) and each
+-- owner's lane update. Filled as a grooming payoff (same pass as setGroomSignature) and by the ceremony
+-- cold-path fan-out. One row per (user, ceremony, slot).
+CREATE TABLE IF NOT EXISTS tasks.standup_cache (
+  user_email    TEXT NOT NULL,
+  ceremony_type TEXT NOT NULL,
+  slot          TEXT NOT NULL,
+  agent_id      TEXT NOT NULL,
+  signature     TEXT NOT NULL,
+  update_text   TEXT NOT NULL,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_email, ceremony_type, slot)
+);
+CREATE INDEX IF NOT EXISTS standup_cache_sig_idx ON tasks.standup_cache (lower(user_email), ceremony_type, signature);
+
 -- Change-detection watermark for ACT-5 auto-work (agents self-starting research on assigned tasks).
 -- Same idea as groom_state: skip a pass when the open-assigned backlog hasn't changed since last run.
 CREATE TABLE IF NOT EXISTS tasks.autowork_state (
@@ -333,6 +352,11 @@ export async function getStandupTasks(userEmail: string, windowHours = 36): Prom
        FROM tasks.journey_tasks
       WHERE lower(user_email) = $1
         AND (completed_at IS NULL OR completed_at >= now() - ($2 * interval '1 hour'))
+        -- PARKING LOT (ACT-6.2): a task the user deliberately set aside must NEVER surface in a
+        -- ceremony update. Filter it at the SOURCE so EVERY consumer (the round-robin in
+        -- huddle.functions.ts AND the current-optimized cache/fan-out) gets an already-clean set —
+        -- buildCeremonyReport does not filter it, and rankTasks/grooming only filter their own paths.
+        AND NOT ('parking-lot' = ANY(tags))
       LIMIT 1000`,
     [userEmail.toLowerCase(), hrs],
   );
@@ -400,6 +424,68 @@ export async function setGroomSignature(userEmail: string, signature: string): P
      ON CONFLICT (user_email) DO UPDATE SET signature=EXCLUDED.signature, last_groomed_at=now()`,
     [userEmail.toLowerCase(), signature],
   );
+}
+
+/** One cached per-agent ceremony-update line (TEXT only — the voice is chosen at synth time by agentId). */
+export interface StandupCacheEntry {
+  slot: string;
+  agent_id: string;
+  update_text: string;
+}
+
+/**
+ * Read the per-agent standup-update cache, but ONLY the rows matching the current backlog signature —
+ * a signature mismatch returns nothing, so a stale (pre-change) script is never spoken. Ordered by
+ * insertion so the caller can reconstruct the spoken order.
+ */
+export async function getStandupCache(
+  userEmail: string,
+  ceremonyType: string,
+  signature: string,
+): Promise<StandupCacheEntry[]> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<StandupCacheEntry>(
+    `SELECT slot, agent_id, update_text FROM tasks.standup_cache
+      WHERE lower(user_email) = $1 AND ceremony_type = $2 AND signature = $3
+      ORDER BY updated_at`,
+    [userEmail.toLowerCase(), ceremonyType, signature],
+  );
+  return rows;
+}
+
+/**
+ * Replace the standup cache for one (user, ceremony) at a given signature. Upserts each slot and then
+ * clears any row left over from an OLDER signature, so getStandupCache (which filters by signature) can
+ * only ever return a consistent, current set. Only fully-generated scripts should be written here — a
+ * failed slot must be OMITTED (never cache a failed generation).
+ */
+export async function setStandupCache(
+  userEmail: string,
+  ceremonyType: string,
+  signature: string,
+  entries: { slot: string; agentId: string; text: string }[],
+): Promise<void> {
+  if (!entries.length) return;
+  await ensureBootstrapped();
+  const email = userEmail.toLowerCase();
+  for (const e of entries) {
+    await getPool().query(
+      `INSERT INTO tasks.standup_cache (user_email, ceremony_type, slot, agent_id, signature, update_text)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (user_email, ceremony_type, slot) DO UPDATE
+         SET agent_id = EXCLUDED.agent_id, signature = EXCLUDED.signature,
+             update_text = EXCLUDED.update_text, updated_at = now()`,
+      [email, ceremonyType, e.slot, e.agentId, signature, e.text],
+    );
+  }
+  // Drop any slot that belongs to a superseded signature (e.g. a participant who dropped out).
+  await getPool()
+    .query(
+      `DELETE FROM tasks.standup_cache
+        WHERE lower(user_email) = $1 AND ceremony_type = $2 AND signature <> $3`,
+      [email, ceremonyType, signature],
+    )
+    .catch(() => {});
 }
 
 /** The last auto-work signature for a user (null if never run), for the ACT-5 change gate. */
