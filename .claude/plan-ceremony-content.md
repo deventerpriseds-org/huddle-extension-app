@@ -69,6 +69,13 @@ of sync.
 **Fix (data-driven):**
 - **F9:** build the owner list from agents that actually have open lane items (from `getStandupTasks`
   per lane). No real work → not a speaking slot. (Removes the fabrication incentive at the source.)
+  - **RESOLVED (F9.4):** BLOCKED counts as REAL news (the user needs to hear it) — a blocked-only agent
+    KEEPS its slot; only agents with genuinely NOTHING reportable (no active/doing/up-next/in-review/
+    blocked, after the parking-lot + window filters) are dropped. "empty" ≠ blocked.
+  - **INVESTIGATE:** `buildCeremonyReport` already filters `reportable(l) > 0` and `getStandupTasks`
+    already excludes parking-lot — yet Faith got a slot and fabricated. Ground-truth WHY: did she have a
+    real task she mis-described (→ F8/directive fix, Workstream A) or is participant selection broader
+    than `reportable>0` (→ real F9 gap)? Fix the actual root, don't assume.
 - **F10:** any "over to you, X" handoff must target the ACTUAL next participant in the plan, or be
   dropped entirely and let the driver sequence — never name an agent who isn't scheduled.
 - **F11:** the closer (host) runs as the final slot ONLY after every planned participant has spoken —
