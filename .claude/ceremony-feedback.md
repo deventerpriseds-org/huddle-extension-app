@@ -45,3 +45,14 @@ Categories: **driver** (playback/barge sequencing) · **content** (what agents s
 
 ## Parking-lot (confirmed working)
 - User re-tested 2026-08-04 after the grooming+prioritize deploy: **no problems** — parked cards behave, no timeout. Parking-lot fix set (grooming exclude + preserve tags, prioritize exclude) = USER-CONFIRMED.
+
+## Barge duplication — ROOT CAUSES + fix (2a8f433, pending verify + live-test)
+**Duplicate agent responses (F14):** barge dispatched as a multi-winner GROUP turn (`MeetingBar.tsx:812`);
+server runs EVERY routed winner + its tools up to 4 (`huddle.functions.ts:1029/1160`), client voices only
+`replies[0]` (`:846`); `soloOnCoverage` (`routing.ts:280`) only cuts when primary keyword-score ≥0.15 →
+off-lane asks keep the extras → iris+elle both ran the UPenn search. FIX: cap a ceremonyBarge turn to ONE
+responder server-side. (Double-voice via emit RULED OUT — barge non-durable, no turnId.)
+**Duplicate/wrong transcriptions + repeated lines:** meaningful/dedup gates run AFTER the write —
+`onBargeDetected` (`MeetingBar.tsx:976`) persists every STT completion before `isMeaningfulBarge`/dedup;
+`resumeFromFreeze` (`useCeremonyVoice.ts:347`) re-persists the cut sentence (no blockId:sentenceIndex
+dedup). FIX: gate onBargeDetected before persist; idempotent sentence emit on (blockId,sentenceIndex).
