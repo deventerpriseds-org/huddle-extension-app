@@ -1539,3 +1539,33 @@ subordinate). Full principle + the collision it prevents recorded in memory.md (
   (exclude parked from grooming candidates + preserve control tags), pending user go-ahead.
 - [OPEN — bug] near-duplicate tasks ("Prepare investor pitch" vs "Lock investor pitch") — parking one
   doesn't park the twin; scheduler booked the un-parked one. Separate dedup concern.
+
+### ACT-huddle-18 (ceremony speed — TWO toggleable engines, optimize current first, then streaming; compare & pick default)
+User directive (2026-08-04): develop so we can TOGGLE between approaches and switch back if a new one
+isn't better or has unforeseen issues. Build TWO best-case options, compare live, pick the default going
+forward. ElevenLabs cloned voice stays in BOTH (required — OpenAI realtime native audio can't do per-agent
+cloned voices; only the TEXT half is the slow part = the sequential server round-robin).
+- [OPEN — Phase 1, FIRST] Optimize the CURRENT approach (server text-gen + ElevenLabs voice), behind a
+  toggle so the untouched current path stays selectable:
+  - Cache standup updates as a payoff of grooming, refresh only on board-signature change (extend
+    grooming — it already has board + LLM + the `backlogSignature` change-gate). Ceremony reads cache →
+    straight to TTS (~1s, no 40s/25s gaps).
+  - Parallel fan-out fallback when the cache is cold (generate all agents at once, not round-robin).
+  - Driver fixes: serialize-on-abort (emit must not advance the speaker when voiceTurn returns via a
+    barge/genRef abort) + self-barge gate (ignore VAD speech_started while our own TTS is playing).
+- [OPEN — Phase 2, AFTER] Streaming option: OpenAI Realtime as streaming BRAIN (text-mode), per agent,
+  fed instructions + board data → ElevenLabs voices each sentence live (the proven 1:1 pattern in
+  `useVoiceCallRealtimeSpeak`, extended to multi-agent with the router).
+- [OPEN — toggle] A config/settings switch selects engine (current-optimized | streaming) so we can A/B
+  live and set the default. Must be able to switch BACK to today's exact behavior at any time.
+
+### ACT-huddle-17 update — parking-lot leak is BROADER than grooming (live-confirmed by user 2026-08-04)
+User test: parked tasks kept the `parking-lot` tag before AND after a fresh grooming, yet Terry's grooming
+reply ranked a PARKED task ("Prepare investor pitch") #3 Urgent, assigned to Sam Trent (screenshot). So the
+leak is not only the tag-strip — grooming assigns/ranks parked tasks, AND the `prioritize` tool surfaces them.
+- [DONE — committed, NOT deployed] grooming: exclude parked from candidates + preserve control tags (bebc385).
+- [DONE — committed, NOT deployed] `scoring.ts:rankTasks` now filters `parking-lot` (single-sourced, so the
+  `prioritize` tool + every view drops parked tasks — the "agents still prioritize it" leak).
+- [OPEN — consider] the PARK action could also clear stale `assigned_agent`/`priority_rank`/`is_scheduled` so
+  a parked task visibly leaves the active lane (today it keeps them; rankTasks now hides it regardless).
+- [OPEN] deploy decision (main + deploy-swa) — not yet deployed; pending user go-ahead.

@@ -880,3 +880,20 @@ ONE side. When integrated today, journey is the natural single driver (the only 
 calendar, daily capacity, and deadline pre-placement) and Huddle consumes its verdict — BUT Huddle must
 retain the equivalent engine for the journey-off case. Grooming feeds `is_priority`/`priority_rank` INTO
 the engine (which already weights them) rather than being a third independent order.
+
+## ACT-huddle-18 + parking-lot leak breadth (2026-08-04)
+**Ceremony speed — two toggleable engines (user directive).** Build the ceremony optimization so we can
+toggle between approaches and revert if a new one isn't better. Phase 1 = optimize the CURRENT approach
+(cache standup text as a grooming payoff, refresh on `backlogSignature` change; parallel fan-out fallback;
+driver fixes serialize-on-abort + self-barge gate) behind a toggle that keeps today's exact path selectable.
+Phase 2 = streaming engine (OpenAI Realtime brain text-mode per agent + ElevenLabs voice, the 1:1
+`useVoiceCallRealtimeSpeak` pattern extended to multi-agent via the router). ElevenLabs cloned voice stays in
+BOTH — the slow part is the TEXT (sequential server round-robin), NOT the MP3 synth. Config toggle selects the
+default; must A/B live. (ACT-huddle-18 in actions.md.)
+
+**Parking-lot leak is broader than the grooming tag-strip (live-confirmed).** User test: parked tasks kept the
+tag through a fresh grooming, yet Terry ranked a PARKED task #3 Urgent — grooming assigns/ranks parked tasks
+AND `prioritize` surfaces them. Fixes (committed, NOT deployed): (1) grooming excludes parked from candidates +
+preserves control tags (bebc385); (2) `scoring.ts:rankTasks` filters `parking-lot` single-sourced so the
+`prioritize` tool + every view drop parked tasks. Open: park action could also clear stale
+`assigned_agent`/`priority_rank`/`is_scheduled`; deploy pending user go-ahead.
