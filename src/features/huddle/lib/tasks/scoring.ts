@@ -125,6 +125,11 @@ export function rankTasks(tasks: ScorableTask[], limit = 25): RankedTask[] {
   return tasks
     .filter((t) => t.status !== "DONE" && t.status !== "BLOCKED")
     .filter((t) => !t.completed_at)
+    // PARKING LOT (ACT-13/ACT-17): a `parking-lot`-tagged task opts OUT of all automation, including the
+    // prioritization every agent reads. Even if it still carries a stale assigned_agent/priority_rank from
+    // before it was parked, it must not surface as work to prioritize (the standup/agent leak: grooming
+    // ranked a parked "Prepare investor pitch" #3 Urgent). Single-sourced here so every prioritize view drops it.
+    .filter((t) => !(t.tags ?? []).includes("parking-lot"))
     .map((t) => ({ t, score: scoreTask(t) }))
     .sort((a, b) => {
       const aPri = a.t.is_priority ? 1 : 0;
