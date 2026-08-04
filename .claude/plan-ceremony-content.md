@@ -39,9 +39,21 @@ in ITS cloned voice, so the gap is filled naturally.
   answer is DEFERRED (coming later, not now) → skip the narration (at most a single "I'll pull that
   together and send it after standup"). NEVER talk over the next scripted speaker — reuse the driver's
   park/serialize + genRef so if the floor moves on, narration stops immediately.
-**Requires:** the client to observe the tool lifecycle (tool-start / results-in / answer-ready). For a
-barge this means either streaming the barge turn's tool events to the client, or the server emitting
-interim "narration" markers the client voices. Scope the hook during implementation.
+**Honesty + timing constraints (user, HARD — narration must never lie or pad):**
+- **Tool-event-driven, not a timed script.** Each cue fires the instant an ACTUAL tool step is taken and
+  reflects THAT step. Never say a later stage before it happens — e.g. don't say "checking the results"
+  before the search has run; if the search then blocks/fails, you must not have already claimed results.
+- **Phrasing matches the actual tool.** Map cue→tool type: `web_search`→"running a search",
+  `schedule_and_priorities`→"pulling up your priorities", `update_task`→"updating that on the board",
+  `get_calendar_events`→"checking your calendar", `create_artifact`→"writing that up", etc.; generic
+  fallback ("one moment") for unknown tools. NEVER mismatch (no "searching the web" for a task update).
+- **No time-padding.** Cues track the REAL lifecycle and STOP the instant the tool returns / the answer
+  is ready — never play out a fixed 20s script over an 8s tool. Keep each cue SHORT so one cue can't
+  overrun a fast tool; if the tool finishes mid-cue, cut to the result.
+**Requires:** the client to observe the REAL tool lifecycle (which tool started, when it returned,
+answer-ready). This means streaming the barge turn's tool-call events to the client (tool name + start
++ end), or the server emitting per-tool narration markers the client voices. The cue set is keyed by
+tool name so it's honest by construction. Scope the exact hook during implementation.
 **Files:** `useCeremonyVoice.ts` (a `narrate`/filler path alongside `speakInterjection`), `MeetingBar.tsx`
 (drive it off the barge/tool lifecycle), the `ceremonyBarge` turn path in `huddle.functions.ts` (surface
 tool-lifecycle signals).
