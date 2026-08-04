@@ -139,6 +139,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
         <Tabs defaultValue="router" className="flex-1 min-h-0 flex flex-col">
           <TabsList className="mx-5 mt-4">
             <TabsTrigger value="account">Account</TabsTrigger>
+            <TabsTrigger value="scheduling">Scheduling</TabsTrigger>
             <TabsTrigger value="router">Router</TabsTrigger>
             <TabsTrigger value="agents">Agents</TabsTrigger>
             <TabsTrigger value="memory">Memory</TabsTrigger>
@@ -151,8 +152,12 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
             <AccountSettingsPanel />
             <ExecutiveProfilePanel />
             <AgentWorkflowPanel />
-            <SchedulingPanel />
             <ArtifactMirroringPanel />
+          </TabsContent>
+
+          {/* ---- Scheduling ---- */}
+          <TabsContent value="scheduling" className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+            <SchedulingPanel />
           </TabsContent>
 
           {/* ---- Router ---- */}
