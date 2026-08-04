@@ -1030,6 +1030,19 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     const spoken = new Set<AgentId>(resume?.spoken ?? []);
     const replies: Reply[] = resume ? [...resume.replies] : [];
 
+    // A ceremony barge is voiced by the client from `replies[0]` ONLY, but the server would otherwise
+    // run every routed winner + interjector — each executing its own tools redundantly (iris/elle/eli
+    // all running the same lookup). `soloOnCoverage` does not reliably cut to one. So pin a fresh barge
+    // turn to exactly ONE responder: the router's first winner (the addressed/primary agent — the LLM
+    // router already honors a barge addressed by name), dropping the rest and all interjectors. Only the
+    // client capping the voice can't stop the server-side tool runs, so this must happen here.
+    if (turnBargeDirective && !resume && queue.length > 1) {
+      const primary = queue[0];
+      queue.length = 0;
+      queue.push(primary);
+      interjectorSet.clear();
+    }
+
     // Embedding of the user's message for AUTO memory retrieval, computed at most once per turn
     // (undefined = not yet computed, null = embedding failed). Recall must not depend on the model
     // electing to call `search_memory`: we proactively pull the most relevant SHARED/global memory

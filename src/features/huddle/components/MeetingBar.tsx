@@ -977,8 +977,19 @@ function MeetingRoom({
       // Voice barge: render the user's spoken message as a visible user row (the typed path gets
       // this from sendMessage; the voice path had no such insert — that's why spoken barges were
       // invisible), then run the same immediate-answer sequence.
-      addMeetingTurns([{ text: transcript, user: true, kind: "barge" }]);
-      persistCeremonyTurnRef.current({ speaker: "user", text: transcript, kind: "barge", ts: Date.now() });
+      // GATE BEFORE PERSIST: only a barge that will actually wake an agent becomes a user row.
+      // `semantic_vad` and STT emit filler ("Mhm."/"Hm.") and duplicate segments that runBargeSequence
+      // rejects downstream (isMeaningfulBarge at :190 / exact-dup at :694) — but this callback used to
+      // render+persist EVERY transcript upstream of those gates, writing phantom "barge" rows that no
+      // agent answered. Apply the SAME gates here first; filler/dup transcripts still go to
+      // runBargeSequence (so the frozen speaker resumes) but never become a row.
+      const norm = transcript.trim().toLowerCase();
+      const now = Date.now();
+      const isExactDup = norm === lastBargeTextRef.current && now - lastBargeAtRef.current < 2500;
+      if (isMeaningfulBarge(transcript) && !isExactDup) {
+        addMeetingTurns([{ text: transcript, user: true, kind: "barge" }]);
+        persistCeremonyTurnRef.current({ speaker: "user", text: transcript, kind: "barge", ts: Date.now() });
+      }
       void runBargeSequenceRef.current(transcript);
     },
   });
@@ -1150,6 +1161,13 @@ function MeetingRoom({
     seqRef.current = 0;
     persistBufferRef.current = [];
 
+    // Sentence-emit dedup for this run. resumeFromFreeze() RE-speaks the cut sentence (intended — the
+    // audio repeats to re-establish context) reusing the SAME onSentenceStart closure, which would
+    // otherwise render+persist that `(blockId, sentenceIndex)` a SECOND time (the "Cole's line twice"
+    // bug). Track emitted keys so the duplicate transcript row is suppressed while the audio still
+    // repeats. Keyed per-run; a fresh ceremony starts empty.
+    const emittedSentenceKeys = new Set<string>();
+
     // Start WebRTC mic listener so the user can barge in mid-utterance.
     // Errors here are non-fatal — ceremony continues in text-only without voice barge-in.
     void ceremonyVoiceRef.current.startListening();
@@ -1202,6 +1220,11 @@ function MeetingRoom({
               // Trailing transcript: add each sentence when its audio starts, tagged with its block
               // + position so a test can prove mid-block interruption and same-block resume.
               onSentenceStart: (sentence, sentenceIndex, blockTotal) => {
+                // Idempotent per (blockId, sentenceIndex): resumeFromFreeze re-speaks the cut sentence
+                // (audio repeat is intended) but must NOT write a second transcript row for it.
+                const key = `${blockId}:${sentenceIndex}`;
+                if (emittedSentenceKeys.has(key)) return;
+                emittedSentenceKeys.add(key);
                 addMeetingTurns([{ agentId, text: sentence, blockId, sentenceIndex, blockTotal }]);
                 persistCeremonyTurnRef.current({
                   speaker: "agent",
