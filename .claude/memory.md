@@ -831,6 +831,27 @@ UAT-verified no-regression (mhm ignored, hail/park/quick pass). The collision fi
 dedupe, mic feel, cross-talk) CANNOT be proven by the barge-flooding harness — user live-test is the
 verdict. Completion-check "fail" is a test-window artifact (flood + 6s cooldowns outlast 180s), not a bug.
 
+- [2026-07-31] **Board reassignment mirror-sync race (ACT-huddle-27) + configurable job cadences
+  (ACT-huddle-28) — both implemented, 17/17 ACs PASS at code-level/executed-logic, NOT yet live-
+  confirmed.** User reported assigning a card to Tess appeared to silently revert. Root cause traced
+  by reading the code: `BoardView.tsx`'s `applyMove` writes to journey then does a single fixed-2.5s
+  `refetch()` from the Huddle MIRROR, which syncs asynchronously — a slow sync meant the refetch could
+  overwrite a correct optimistic update with stale pre-write data. Fixed with `waitForMirrorSync`, a
+  poll (6×700ms) that only replaces state once the specific patched field is confirmed, never reverting
+  to a known-stale read on timeout. Separately, grooming's hardcoded 6x/day cadence was cut to Monday
+  8am ET only, and ALL 5 scheduled job types (groom/autowork/standup/reviewDigest/reviewRecheck) were
+  made user-editable via a new Settings → Scheduling panel (`identity.scheduling_config`, email-scoped,
+  same pattern as `agent_workflow_config`) instead of hardcoded constants — per the user's explicit
+  ask that cadences shouldn't be "lost in code... forgotten." `computeNextRun` gained an optional
+  `daysOfWeek` filter and its scan window widened 3→8 days (a 3-day window can miss a single-weekday
+  cadence). GUARDRAIL: an independent verifier ran a harness with the EXACT operators copied verbatim
+  from the real code (not a reimplementation) and directly executed the real `computeNextRun` —
+  stronger evidence than a code read, but it explicitly flagged live-browser and live-Azure-PG
+  confirmation as UNVERIFIED (no such access in this sandbox) rather than assuming PASS. Per this
+  repo's own hard rule, NOT writing "fixed"/"done" until merged, deployed, AND the user confirms
+  live — deploying now, then need real confirmation: (1) reassign a card and watch it hold instead of
+  revert, (2) open Settings → Scheduling and confirm Terry's grooming shows Monday 8am, edit an hour,
+  reload, confirm it persisted.
 ## ACT-huddle-17 — Parity principle: Huddle ⇄ journey are symmetric standalone engines, integration-gated (2026-08-03)
 
 **Stated by the user as an official architecture decision. This governs ALL task/priority/scheduling work.**

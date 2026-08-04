@@ -390,7 +390,7 @@ just published benchmarks — benchmarks are a starting hypothesis, not proof fo
 1-2 agents, run identical real turns against GPT-4o vs Luna vs Terra side-by-side (reply quality, tone
 fidelity to the persona snapshot, tool-call correctness, latency), before deciding on a broader swap.
 
-### ACT-huddle-16: Board reassignment silently reverts — mirror-sync race
+### ACT-huddle-27: Board reassignment silently reverts — mirror-sync race
 **Requested:** 2026-07-31 — user: "I clicked the assign to option on a card and assigned it to Tess
 but it didn't reassign after processing as if it failed."
 **Root cause (traced by reading the code, not guessed):** `BoardView.tsx`'s `applyMove` writes to
@@ -404,10 +404,15 @@ even though the write succeeded.
 attempts, 700ms apart) until the specific patched field is actually visible, and only then replaces
 state. If it never catches up within budget, the optimistic state is left alone instead of being
 clobbered with a known-stale read (the next natural refetch reconciles once sync lands).
-**Status:** implemented, `tsc` clean. AC-writing subagent dispatched; verifier not yet run — do not
-mark closed until independently verified.
+**Status:** Implemented, `tsc` clean. Independent verifier: **17/17 PASS** on code-level + executed-
+logic evidence (a harness running the exact operators/conditions copied verbatim from `applyMove`/
+`waitForMirrorSync`, mocked I/O — stronger than a code read, not a live reproduction). Explicitly
+flagged **UNVERIFIED** (not skipped, not assumed): no live browser or live Azure PG mirror access in
+this sandbox, so the actual race condition has not been reproduced/confirmed against the real
+deployed app. Per this repo's own hard rule, NOT calling this "fixed" until merged, deployed, and
+the user confirms live (drag/reassign a real card, watch it hold rather than revert).
 
-### ACT-huddle-17: Grooming cadence → Monday mornings only, and ALL job cadences made user-editable (Settings, not code)
+### ACT-huddle-28: Grooming cadence → Monday mornings only, and ALL job cadences made user-editable (Settings, not code)
 **Requested:** 2026-07-31 — user: "Terry is grooming too often[,] change it to Monday mornings
 and[,] whatever currently falls in Monday morning[,] stop the rest. This also needs to be a manual
 config in settings so I can increase if I need to without code[,] just like every value[,] so they
@@ -439,9 +444,17 @@ Monday 8am); the exact boundary case (dispatched AT Monday 8am, and just after) 
 the FOLLOWING Monday, not the same day; a multi-day cadence (Mon+Thu) correctly finds Thursday when
 queried after Monday's slot has passed; the no-daysOfWeek (every-day) case is byte-for-byte
 unchanged behavior from before this change (regression-checked).
-**Status:** implemented, `tsc` clean, core scheduling logic independently offline-verified. AC-writing
-subagent dispatched; live verifier (real DB read/write, Settings UI round-trip) not yet run — do not
-mark closed until independently verified.
+**Status:** Implemented, `tsc` clean. Independent verifier: **17/17 PASS** (shared verification pass
+with ACT-huddle-27 above) — re-ran `computeNextRun` directly (not reimplemented) confirming the
+Monday-8am math including the exact-boundary-second case, confirmed the `upsertScheduledJob` SQL
+refreshes `cadence` without disturbing a pending `next_run_at`, confirmed all 5 job types share the
+identical resolution path, confirmed the other 4 job types' defaults are byte-identical to the
+pre-change hardcoded constants, confirmed `resetToDefault` deletes the override key (not just resets
+values), confirmed `resolveJobCadence` never throws. Explicitly flagged **UNVERIFIED**: no live Azure
+PG write access or live Settings-UI round-trip in this sandbox — the actual DB table
+(`identity.scheduling_config`) and the deployed Settings panel have not been exercised live. NOT
+calling this "done" until deployed and confirmed live (open Settings → Scheduling, edit an hour,
+reload, confirm it persisted).
 
 ### ACT-huddle-15: Research — OpenAI Voice Agents SDK adoption + real API-cost-reduction levers (prompt caching, Batch API)
 **Requested:** 2026-07-31 — user's own words: "add an act for researching should we be using the concept
