@@ -94,6 +94,13 @@ const JOB_ROWS: { key: JobTypeKey; idPrefix: string; jobType: string }[] = [
   { key: "reviewRecheck", idPrefix: "review-recheck", jobType: "review-recheck" },
 ];
 
+/** Reverse lookup: the `job_type` string stored on a row -> the JobTypeKey scheduling-config knows it
+ * by, so a claimed job can re-resolve its EFFECTIVE cadence live rather than trusting whatever cadence
+ * happens to be stored on the row (see runDueScheduledJobs — that stored value only gets refreshed by
+ * ensureGroomJobs, which is gated on the user currently having an open backlog; a user with an empty
+ * backlog at every post-config-change tick would otherwise keep firing on a stale cadence forever). */
+const JOB_TYPE_KEY: Record<string, JobTypeKey> = Object.fromEntries(JOB_ROWS.map((r) => [r.jobType, r.key]));
+
 /**
  * Ensure every user with an open backlog has a row for every job type in JOB_ROWS (idempotent; only
  * new rows get a next_run seeded — an existing row's next_run_at is left alone so a pending fire
@@ -125,7 +132,9 @@ function selfBase(): string {
   return raw.replace(/\/$/, "");
 }
 
-/** Fire one due job in its OWN request (fire-and-forget) so heavy work never blocks the heartbeat tick. */
+/** Fire one due job in its OWN request (fire-and-forget) so heavy work never blocks the heartbeat tick.
+ * `job.cadence` is expected to already be the freshly-resolved value (see runDueScheduledJobs) — only
+ * its `tz` is read here, to stamp the outbound timeZone. */
 async function fireJob(job: ScheduledJob, slotId: string): Promise<void> {
   const token = (process.env.JOURNEY_PROXY_TOKEN ?? "").trim();
   const base = selfBase();
@@ -180,12 +189,25 @@ export async function runDueScheduledJobs(): Promise<number> {
   }
   let fired = 0;
   for (const job of claimed) {
-    const tz = job.cadence?.tz ?? DEFAULT_TZ;
-    const hours = job.cadence?.hours?.length ? job.cadence.hours : [8];
-    const daysOfWeek = job.cadence?.daysOfWeek;
+    // Re-resolve the EFFECTIVE cadence live rather than trusting job.cadence as claimed — that stored
+    // value only gets refreshed opportunistically by ensureGroomJobs (gated on open-backlog membership),
+    // so a user with no open backlog at the ticks since a Settings change would otherwise keep this job
+    // firing on its old cadence indefinitely (it reschedules itself from whatever cadence it fired with).
+    const key = JOB_TYPE_KEY[job.job_type];
+    let cadence = job.cadence;
+    if (key) {
+      try {
+        cadence = await resolveJobCadence(job.target_email, key);
+      } catch {
+        /* resolveJobCadence already falls back to the default internally; this catch is belt-and-braces */
+      }
+    }
+    const tz = cadence?.tz ?? DEFAULT_TZ;
+    const hours = cadence?.hours?.length ? cadence.hours : [8];
+    const daysOfWeek = cadence?.daysOfWeek;
     // Advance to the real next slot (claim held it ~90s; overwrite with the true next fire time).
     try {
-      await setScheduledJobNextRun(job.id, computeNextRun(hours, tz, now, daysOfWeek).toISOString());
+      await setScheduledJobNextRun(job.id, computeNextRun(hours, tz, now, daysOfWeek).toISOString(), cadence);
     } catch {
       /* if this fails the 90s hold retries the job later — idempotent slot id prevents a double run */
     }
@@ -200,7 +222,7 @@ export async function runDueScheduledJobs(): Promise<number> {
     })
       .format(now)
       .replace(/[^0-9]/g, "");
-    void fireJob(job, `${job.id}-${slotKey}`);
+    void fireJob({ ...job, cadence }, `${job.id}-${slotKey}`);
     fired++;
   }
   return fired;

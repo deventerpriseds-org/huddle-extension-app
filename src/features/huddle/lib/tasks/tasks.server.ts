@@ -691,13 +691,26 @@ export async function claimDueScheduledJobs(limit = 20): Promise<ScheduledJob[]>
   return rows;
 }
 
-/** Write a job's real next fire time (computed by the dispatcher with DST-correct local-time logic). */
-export async function setScheduledJobNextRun(id: string, nextRunAtIso: string): Promise<void> {
+/** Write a job's real next fire time (computed by the dispatcher with DST-correct local-time logic).
+ * Optionally also self-heals the stored `cadence` column to the freshly-resolved value the dispatcher
+ * just used, so a direct DB read reflects reality even if ensureGroomJobs hasn't touched this row. */
+export async function setScheduledJobNextRun(
+  id: string,
+  nextRunAtIso: string,
+  cadence?: { tz?: string; hours?: number[]; daysOfWeek?: number[] },
+): Promise<void> {
   await ensureBootstrapped();
-  await getPool().query(
-    `UPDATE tasks.scheduled_jobs SET next_run_at = $2, updated_at = now() WHERE id = $1`,
-    [id, nextRunAtIso],
-  );
+  if (cadence) {
+    await getPool().query(
+      `UPDATE tasks.scheduled_jobs SET next_run_at = $2, cadence = $3::jsonb, updated_at = now() WHERE id = $1`,
+      [id, nextRunAtIso, JSON.stringify(cadence)],
+    );
+  } else {
+    await getPool().query(
+      `UPDATE tasks.scheduled_jobs SET next_run_at = $2, updated_at = now() WHERE id = $1`,
+      [id, nextRunAtIso],
+    );
+  }
 }
 
 /** A mirror row shaped for the Kanban board (all tasks, including done). */
