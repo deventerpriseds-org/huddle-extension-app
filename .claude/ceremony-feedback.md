@@ -25,6 +25,10 @@ Categories: **driver** (playback/barge sequencing) · **content** (what agents s
 
 | F13 | Kill dead air during tool use with spoken "thinking out loud" progress cues (robo-support style): "Yes sir?… let me check that… running a search… one moment, pulling it together… here's what I found." | driver+content | [DEPLOYED 9a3730d — pending live mic test] New mechanism (Workstream E in plan-ceremony-content.md): staged, varied templated filler in the agent's cloned voice during a tool run; suppressed/skipped if deferred or not the active floor (never talk over the next person). Composes with F12 (D). | OPEN — with D |
 
+| F14 | Barge triggers a MULTI-AGENT "fight" — I addressed one agent but several answer/contend. | driver+routing | [confirmed 2026-08-04] On a single "Hey terry" barge, terry+iris+elle all fired (tool rows 65-68s). The barge runs as a GROUP turn (`sendHuddleMessage(ceremonyBarge, scope:"group")`) so the router picks multiple winners. FIX: scope a barge to ONE responder (addressed agent / right owner). D-v2. | OPEN — high |
+| F15 | Barge answer arrives late/out of order — "at the end after others have gone"; and agents speak AFTER the ceremony closed like a flush, so my reply lands on an already-closed ceremony. | driver+lifecycle | The barge turn is async (durable, slow with tools) and not synchronized with the round-robin/close; the answer is voiced whenever it resolves. FIX: voice the answer AT the barge point (ordered), and GATE the close so a pending barge holds the ceremony open — no post-close flush. D-v2. | OPEN — high |
+| F16 | Calling the wrong agent (Tess instead of Terry) completely threw Tess off and started a scramble. | driver+routing | Mis-addressed barge isn't handled — the wrong agent flails / contends. FIX: addressed agent cleanly hands to the right owner (no fight). D-v2. | OPEN — high |
+
 ## Latest transcript evidence (run pulled 2026-08-04, `chat.ceremony_transcript`)
 - **F3 CONFIRMED** — Cole's block literally repeats Terry's handoff: seq 5–6 Terry says *"I'll hand it over to Cole Blake for the career updates. / Cole Blake, you're up."* then seq 7–8 **cole-blake** opens with the SAME two lines verbatim, and again at seq 14 *"Cole Blake, you're up." / "Thanks!"* before his real update. The owner's generated update is swallowing the host's handoff text. (This same echo drives F4/F5/F6 — the performative/self-referential preamble.)
 - **F8 CONFIRMED** — seq 41 faith-hartley: *"I'm currently coordinating family calendar events, and there's nothing else in progress, in review, or blocked."* (fabricated; not a real board item).
@@ -38,3 +42,6 @@ Categories: **driver** (playback/barge sequencing) · **content** (what agents s
 - **F1 (lifecycle)** is independent of the engine — it's the attended-vs-automated signal.
 - **F2 (driver)** is addressed by Phase 1 R5a; confirm live once Phase 1 is deployed.
 - Ground-truth: each item should be checked against `chat.ceremony_transcript` for the run before marking FIXED/confirmed.
+
+## Parking-lot (confirmed working)
+- User re-tested 2026-08-04 after the grooming+prioritize deploy: **no problems** — parked cards behave, no timeout. Parking-lot fix set (grooming exclude + preserve tags, prioritize exclude) = USER-CONFIRMED.
