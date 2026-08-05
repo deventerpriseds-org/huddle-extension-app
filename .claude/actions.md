@@ -1,5 +1,23 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-08-05 (ACT-huddle-19 — ceremony single-responder barge + summons + dismiss deployed; mechanism confirmed on live app, perceptual verdict pending user)
+Last updated: 2026-08-05 (ACT-huddle-20 — ceremony barge/standup polish deployed; NEW open item: agents lack a task-detail/DoD/artifact read tool)
+
+### ACT-huddle-20 (ceremony barge + stand-up polish — deployed live 2026-08-05, iterated from real transcripts)
+Driven by the user's live stand-up transcripts + the persisted `barge_route` logging. All DEPLOYED on main:
+- [DONE] Un-named barge pins to the interlocutor (named→current→most-recent speaker→host); `getLastSpeaker`.
+- [DONE] Instant barge row at speech-onset (`resolvePendingBarge`); sustained-speech cut-through (220ms).
+- [DONE] Barge routing decision persisted to transcript (`kind:"barge_route"`: target/winner/reason).
+- [DONE] Iris hijack fixed — function-word/1-char opener ("I…") no longer false-matches a name (addressedAgent STOPWORDS; 18/18 offline).
+- [DONE] Phantom "running a search" replay fixed — narration cursor persists across barges; `search_memory` gets its own cue.
+- [DONE] Host opener RESUMES after a barge (was non-resumable → jumped to next speaker).
+- [DONE] Grounding contradiction fixed — the date/time is answered from CONTEXT, not force-web-searched.
+- [DONE] Stand-up = STATUS REPORT only (additive ownerDirective): no asking the user / running a persona routine; blocker-only owners just state the blocker.
+- [DONE] Elle scripted-ask REMOVED from her snapshot (user-approved subtraction) — root cause was a literal "if no schedule, ask: [3 Qs]" in her persona.
+- [DONE] Handoff BEAT (~1.6s) between speakers + DYNAMIC varied sign-off (instruction, not script) → interjection window + barge-in-beat attributes to previous speaker.
+- [DONE] "Don't disavow a real board item" (additive bargeDirective) — Sam's "Research competitor's premium pricing" IS on the board as DONE today; he wrongly retracted it.
+- [CONFIRMED] Stand-up DONE window = 168h / 7 days (`CEREMONY_WINDOW_HOURS.standup`); fetch + report share it.
+- [OPEN — NEEDS DIRECTION] **Agents have no task-DETAIL read tool.** The mirror CAN store per-task `description` + `definition_of_done` (columns exist, synced from journey), but: (a) the stand-up feeds agents only task TITLES (`ownerDirective`/`reportDigest` via `fmtLines`), not description/DoD/artifact; (b) there is NO `get_task_details`/read-artifact tool wired for ceremony/barge agents (they have get_tasks[thin], create_artifact[write], flag_blocker, confirm_task_intent, propose_approach, update_task). The DoD/acceptance-criteria machinery (`workers.ts`/`workability.ts`/confirm-intent gate) is for the delegated-worker→review flow, not a stand-up agent answering "what's the detail?" → this is WHY Sam couldn't answer specifics. Proposed: surface description/DoD (+ linked artifact) in ceremony context AND add a get_task_details/read-artifact tool. Data-population (are description/DoD actually filled?) is a journey-side question. Pending user go-ahead — real feature, possibly journey-touching.
+- [OPEN — USER LIVE TEST] all perceptual behavior (cut-off feel, beat pacing, varied sign-offs) is the user's live verdict.
+
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
 > claiming any item "done" without ACs + the verifier subagent / observed evidence).
