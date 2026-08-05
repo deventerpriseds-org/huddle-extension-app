@@ -52,10 +52,28 @@ jobs:
             ffmpeg -y -loglevel error -i /tmp/el_raw.wav -af "apad=pad_dur=2" -ar 16000 -ac 1 -c:a pcm_s16le /tmp/hey-terry.wav
           fi
           echo "Final WAV: $(wc -c < /tmp/hey-terry.wav) bytes"
+          # Follow-up clip (a real question) to test the full summons -> ack -> ask -> answer exchange.
+          FTEXT="What is blocked?"
+          FOK=0
+          if [ -n "$ELEVENLABS_API_KEY" ]; then
+            FHTTP=$(curl -sS -o /tmp/f.mp3 -w "%{http_code}" \
+              -X POST "https://api.elevenlabs.io/v1/text-to-speech/${VOICE}?output_format=mp3_44100_128" \
+              -H "xi-api-key: ${ELEVENLABS_API_KEY}" -H "Content-Type: application/json" \
+              -d "{\"text\":\"${FTEXT}\",\"model_id\":\"eleven_turbo_v2_5\"}")
+            if [ "$FHTTP" = "200" ] && [ "$(wc -c < /tmp/f.mp3)" -gt 2000 ]; then FOK=1; fi
+          fi
+          if [ "$FOK" = "1" ]; then
+            ffmpeg -y -loglevel error -i /tmp/f.mp3 -af "apad=pad_dur=2" -ar 16000 -ac 1 -c:a pcm_s16le /tmp/followup.wav
+          else
+            espeak-ng -v en -s 150 -w /tmp/f_raw.wav "$FTEXT"
+            ffmpeg -y -loglevel error -i /tmp/f_raw.wav -af "apad=pad_dur=2" -ar 16000 -ac 1 -c:a pcm_s16le /tmp/followup.wav
+          fi
+          echo "Follow-up WAV: $(wc -c < /tmp/followup.wav) bytes"
 
       - name: Run ceremony name-call UAT
         env:
           APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
           UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
           WAV_PATH: /tmp/hey-terry.wav
+          FOLLOWUP_WAV_PATH: /tmp/followup.wav
         run: node e2e/ceremony-namecall-uat.e2e.mjs

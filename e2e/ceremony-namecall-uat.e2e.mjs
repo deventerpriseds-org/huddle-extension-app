@@ -35,6 +35,16 @@ if (HEY_TERRY_B64.length < 1000) {
   console.error(`FATAL: WAV too small (${HEY_TERRY_B64.length} b64 chars)`);
   process.exit(2);
 }
+// Optional follow-up clip (a real question) to test the FULL exchange: summons -> "Yes sir" -> ask ->
+// real answer. If absent, we still assess ack + speaker-resume.
+let FOLLOWUP_B64 = "";
+const FOLLOWUP_WAV_PATH = process.env.FOLLOWUP_WAV_PATH || "/tmp/followup.wav";
+try {
+  FOLLOWUP_B64 = readFileSync(FOLLOWUP_WAV_PATH).toString("base64");
+  console.log(`Follow-up WAV ${FOLLOWUP_WAV_PATH}: ${FOLLOWUP_B64.length} b64 chars`);
+} catch {
+  console.log("No follow-up WAV — will test ack + speaker-resume only.");
+}
 
 const initScript = `
   // Synthetic, injectable microphone. Overrides getUserMedia so the app's mic IS a Web Audio graph we
@@ -196,16 +206,43 @@ try {
   injectedAt = Date.now();
   console.log(`  injected 'Hey Terry' (clip ${Math.round(dur * 1000)}ms) at t0 while '${speaker || "?"}' spoke`);
 
-  // Step 4: watch the WHOLE exchange for ~30s, then read it for coherence.
-  console.log("Step 4: capture the full exchange…");
-  await page.waitForTimeout(30000);
+  // Step 4: wait for the "Yes sir" ack, THEN speak my real follow-up (the whole point of a summons),
+  // then capture the full two-part exchange.
+  console.log("Step 4: wait for ack, then inject the follow-up question…");
+  let ackAt = 0;
+  for (let i = 0; i < 25 && !ackAt; i++) {
+    const rows = await allRows(page);
+    if (rows.slice(rowsAtInject).some((r) => r.who === "agent" && /yes,?\s*sir/i.test(r.text))) ackAt = Date.now();
+    else await page.waitForTimeout(400);
+  }
+  console.log(`  ack ${ackAt ? `seen after ${ackAt - injectedAt}ms` : "NOT seen within ~10s"}`);
+  let followupText = "";
+  if (FOLLOWUP_B64) {
+    await page.waitForTimeout(800);
+    const fdur = await page.evaluate((b64) => window.__inject(b64), FOLLOWUP_B64);
+    followupText = "what is blocked";
+    console.log(`  injected follow-up 'What is blocked?' (clip ${Math.round(fdur * 1000)}ms)`);
+  }
+  // Give the follow-up its full turn (substantive barge = real router/model, ~10-15s) + any resume.
+  await page.waitForTimeout(FOLLOWUP_B64 ? 30000 : 18000);
+
   const rows = await allRows(page);
-  const after = rows.slice(rowsAtInject); // rows added AFTER the barge
-  const userBarge = after.find((r) => r.who === "user");
+  const after = rows.slice(rowsAtInject);
+  const userRows = after.filter((r) => r.who === "user");
   const ack = after.find((r) => r.who === "agent" && /yes,?\s*sir/i.test(r.text));
   const interruptedRow = rows.find((r) => r.interrupted);
   const ackIdx = ack ? after.indexOf(ack) : -1;
-  const continued = ackIdx >= 0 && after.slice(ackIdx + 1).some((r) => r.who === "agent" && r.text.length > 3);
+  const afterAck = ackIdx >= 0 ? after.slice(ackIdx + 1) : [];
+  // Did the interrupted lane owner RESUME after the ack?
+  const speakerResumed = !!speaker && afterAck.some((r) => r.who === "agent" && r.agentId === speaker);
+  // Did a substantive answer (not another "Yes sir") come after the ack (the follow-up got answered)?
+  const substantiveAnswer = afterAck.find(
+    (r) => r.who === "agent" && r.text.length > 25 && !/yes,?\s*sir/i.test(r.text),
+  );
+  // Premature close = the ONLY thing after the ack is Terry wrapping up ("close the stand-up / advise /
+  // proceed") with no resume and no real answer.
+  const closeRow = afterAck.find((r) => r.agentId === "terry-locke" && /clos(e|ing)|advise|proceed|wrap/i.test(r.text));
+  const prematureClose = !!closeRow && !speakerResumed && !substantiveAnswer;
 
   console.log(`\n  ---- FULL transcript (${rows.length} rows; * = after barge) ----`);
   rows.forEach((r, i) => {
@@ -215,7 +252,16 @@ try {
     console.log(`  ${mark} [${who}${flags ? " " + flags : ""}] ${r.text.slice(0, 90)}`);
   });
 
-  ackSeen = { userBarge: !!userBarge, ack, interruptedRow: !!interruptedRow, continued, speaker };
+  ackSeen = {
+    userBargeCount: userRows.length,
+    ack,
+    interruptedRow: !!interruptedRow,
+    speakerResumed,
+    substantiveAnswer,
+    prematureClose,
+    speaker,
+    testedFollowup: !!FOLLOWUP_B64,
+  };
 } catch (e) {
   console.log(`\nERROR: ${e.message}`);
 } finally {
@@ -229,20 +275,27 @@ if (!ackSeen) {
   process.exit(1);
 }
 const c = ackSeen;
-console.log(`  barged while:            ${c.speaker || "(no lane owner reached)"}`);
-console.log(`  user barge row present:  ${c.userBarge}`);
+console.log(`  barged while:              ${c.speaker || "(no lane owner reached)"}`);
+console.log(`  user barge turns:          ${c.userBargeCount}`);
 console.log(`  a speaker was interrupted: ${c.interruptedRow}`);
-console.log(`  Terry acked "Yes sir":   ${c.ack ? `YES (kind=${c.ack.kind})` : "NO"}`);
-console.log(`  ceremony continued after ack: ${c.continued}`);
-const coherent = c.userBarge && c.ack && c.continued;
+console.log(`  Terry acked "Yes sir":     ${c.ack ? `YES (kind=${c.ack.kind})` : "NO"}`);
+console.log(`  interrupted speaker resumed: ${c.speakerResumed}`);
+console.log(`  follow-up got a real answer: ${c.substantiveAnswer ? "YES" : "no"}${c.testedFollowup ? "" : " (follow-up not tested)"}`);
+console.log(`  PREMATURE CLOSE after ack: ${c.prematureClose}`);
+// Coherent = barge registered + acked + NOT a premature close + (the interrupted speaker resumed OR the
+// follow-up got a real answer). This is the whole-exchange bar, not a "Yes sir" substring.
+const coherent =
+  c.userBargeCount > 0 && c.ack && !c.prematureClose && (c.speakerResumed || c.substantiveAnswer);
 if (coherent) {
-  console.log(`\nPASS(coherent) — barge registered, Terry acked "Yes sir", and the stand-up continued. Read the full transcript above to confirm it reads naturally.`);
+  console.log(`\nPASS(coherent) — summons acked, floor held, and the stand-up ${c.substantiveAnswer ? "answered the follow-up" : "resumed the interrupted speaker"} — no premature close. Read the transcript above.`);
   process.exit(0);
 } else {
   const gaps = [];
-  if (!c.userBarge) gaps.push("barge never registered as a user turn (VAD/STT or capture gap)");
+  if (!c.userBargeCount) gaps.push("barge never registered as a user turn (VAD/STT or capture gap)");
   if (!c.ack) gaps.push('no "Yes sir" ack from Terry');
-  if (c.ack && !c.continued) gaps.push("ack fired but the ceremony did NOT resume after (dead-air/close)");
+  if (c.prematureClose) gaps.push("PREMATURE CLOSE — Terry wrapped the stand-up right after the ack instead of holding the floor / resuming");
+  if (c.ack && !c.prematureClose && !c.speakerResumed && !c.substantiveAnswer)
+    gaps.push("ack fired but nothing coherent followed (speaker did not resume and follow-up got no real answer)");
   console.log(`\nFAIL(incoherent) — ${gaps.join("; ")}. This is a real issue to fix, not to wave through.`);
   process.exit(1);
 }

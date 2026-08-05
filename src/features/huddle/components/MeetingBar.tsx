@@ -559,6 +559,10 @@ function MeetingRoom({
   // cross-talk + Sam-loop + opener-repeat the user saw came from the round-robin marching on regardless).
   const bargeCooldownUntilRef = useRef(0);
   const BARGE_COOLDOWN_MS = 6000;
+  // After a bare name-call ack ("Yes sir"), the user is about to say what they actually want — hold the
+  // floor (mic open, round-robin parked) this long so their real command lands as its own barge before
+  // the stand-up resumes. Longer than BARGE_COOLDOWN_MS: a summons explicitly invites a follow-up.
+  const NAME_CALL_HOLD_MS = 12000;
   // Dedupe a DOUBLE-FIRED barge: semantic_vad can emit the same utterance twice (a partial then a final),
   // which double-marked the speaker interrupted and double-dispatched the answer (the "doubled comments"
   // + part of Sam's loop). Only an EXACT-same transcript within a tight window is treated as one barge —
@@ -768,6 +772,20 @@ function MeetingRoom({
     // row was already written by onBargeDetected / sendMessage; here we only add the agent's ack.
     const nameCallAgent = bareNameCall(text, membersRef.current);
     if (nameCallAgent) {
+      // Mark the speaker we cut (if any) as interrupted so the transcript shows the cut — they RESUME
+      // after the exchange (below), they don't just vanish.
+      const cutSpeaker = ceremonyVoiceRef.current.activeSpeaker;
+      if (cutSpeaker && cutSpeaker !== nameCallAgent) {
+        markLastAgentTurnInterrupted();
+        persistCeremonyTurnRef.current({
+          speaker: "system",
+          agentId: cutSpeaker as string,
+          text: "[interrupted]",
+          kind: "interrupted",
+          interrupted: true,
+          ts: Date.now(),
+        });
+      }
       // Gate on this barge's gen, re-checked right before speaking (like the narration loop) — a newer
       // barge bumps bargeGenRef and this older ack bails without enqueuing audio.
       if (bargeGenRef.current === myGen) {
@@ -785,14 +803,25 @@ function MeetingRoom({
           },
         });
       }
-      // Keep the round-robin paused for the follow-up, then release the park (bargeActive off, cooldown
-      // extended). If no follow-up barge arrives, the cooldown lapses and emit() proceeds; the frozen
-      // speaker's freezeRef survives so a follow-up barge's resumeFromFreeze() still returns to them.
-      // ZERO calls to sendHuddleMessage / router / tools / getCeremonyToolEvents on this path.
+      // A summons INHERENTLY awaits the user's real message. HOLD the floor (mic open, round-robin
+      // parked via bargeActive) for a grace window so their command lands as its own barge and gets the
+      // full router answer. If they say nothing, RESUME the interrupted speaker from where they were cut
+      // — do NOT let the ceremony march on to the close (that abandoned the speaker and closed early).
+      // A follow-up barge bumps bargeGen → its handler owns the resume and this one bails (gen check).
+      // ZERO calls to sendHuddleMessage / router / tools on this path.
       if (bargeGenRef.current === myGen) {
+        setPhase("Listening…");
+        bargeCooldownUntilRef.current = Date.now() + NAME_CALL_HOLD_MS;
+        await new Promise((r) => window.setTimeout(r, NAME_CALL_HOLD_MS));
+        if (bargeGenRef.current !== myGen) return; // follow-up barge took over — it owns the resume
+        setPhase("Resuming…");
+        try {
+          await ceremonyVoiceRef.current.resumeFromFreeze();
+        } catch {
+          /* nothing frozen to resume */
+        }
         bargeHandlingRef.current = false;
         bargeActiveRef.current = false;
-        bargeCooldownUntilRef.current = Date.now() + BARGE_COOLDOWN_MS;
         setPhase("");
       }
       return;
