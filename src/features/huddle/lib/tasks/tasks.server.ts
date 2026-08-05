@@ -1039,6 +1039,9 @@ export interface BoardTaskRow {
   assigned_agent: string | null;
   tags: string[] | null;
   definition_of_done: string | null;
+  // The agent's saved outputs for this task (newest first), so the board card can link to them the same
+  // way the chat thread does. Populated by getBoardTasks; absent on getOpenAssignedTasks (auto-work path).
+  artifacts?: { id: string; name: string; status: string | null }[];
 }
 
 /** Diagnostics: how many rows the mirror holds and under which emails (top 12). */
@@ -1052,18 +1055,39 @@ export async function getMirrorStats(): Promise<{ total: number; byEmail: { emai
   return { total, byEmail: rows };
 }
 
-/** All of a user's mirrored tasks for the board (newest-updated first, capped). */
+/** All of a user's mirrored tasks for the board (newest-updated first, capped). Each row carries its
+ * saved artifacts (id + name + status, newest first) so a card can link to the agent's creations the
+ * same way the chat thread does. The artifact join is best-effort: if the artifacts schema isn't present
+ * (fresh DB before any artifact was ever saved), it falls back to the plain task query. */
 export async function getBoardTasks(userEmail: string): Promise<BoardTaskRow[]> {
   await ensureBootstrapped();
-  const { rows } = await getPool().query<BoardTaskRow>(
-    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done
-       FROM tasks.journey_tasks
-      WHERE lower(user_email) = $1
-      ORDER BY updated_at DESC
-      LIMIT 500`,
-    [userEmail.toLowerCase()],
-  );
-  return rows;
+  const email = userEmail.toLowerCase();
+  const withArtifacts = `
+    SELECT t.id,t.title,t.status,t.priority,t.category,t.is_priority,t.priority_rank,t.due_date,
+           t.completed_at,t.assigned_agent,t.tags,t.definition_of_done,
+           COALESCE((
+             SELECT json_agg(json_build_object('id',a.id,'name',a.name,'status',a.status) ORDER BY a.created_at DESC)
+               FROM artifacts.items a
+              WHERE a.task_id = t.id AND lower(a.user_email) = $1
+           ), '[]'::json) AS artifacts
+      FROM tasks.journey_tasks t
+     WHERE lower(t.user_email) = $1
+     ORDER BY t.updated_at DESC
+     LIMIT 500`;
+  const plain = `
+    SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done
+      FROM tasks.journey_tasks
+     WHERE lower(user_email) = $1
+     ORDER BY updated_at DESC
+     LIMIT 500`;
+  try {
+    const { rows } = await getPool().query<BoardTaskRow>(withArtifacts, [email]);
+    return rows;
+  } catch {
+    // artifacts.items not bootstrapped yet (or transient) — the board still works without the links.
+    const { rows } = await getPool().query<BoardTaskRow>(plain, [email]);
+    return rows;
+  }
 }
 
 export interface CeremonyRunRecord {
