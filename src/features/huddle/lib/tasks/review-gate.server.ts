@@ -49,7 +49,7 @@ export async function runReviewGate(opts: {
   content: string;
   claim: (key: string) => boolean;
 }): Promise<ReviewGateResult> {
-  const { isStructuredWorkflowRequired } = await import("../identity/agent-workflow-config.server");
+  const { isStructuredWorkflowRequired, getWorkflowCaps } = await import("../identity/agent-workflow-config.server");
   const required = await isStructuredWorkflowRequired(opts.email, opts.agentId).catch(() => false);
   if (!required) return { gated: false, proceed: true, note: "" };
 
@@ -57,6 +57,7 @@ export async function runReviewGate(opts: {
   const state = await getTaskEngagementState(opts.taskId).catch(() => null);
   const revisionCount = state?.revision_count ?? 0;
   const dod = state?.confirmed_dod?.trim();
+  const caps = await getWorkflowCaps(opts.email, opts.agentId).catch(() => ({ approach: 3, review: 3, question: 2 }));
 
   if (!opts.claim(`review_gate:${opts.taskId}:${revisionCount}`)) {
     // Another dispatch in this same turn already ran (or is running) the grading for this exact
@@ -83,21 +84,21 @@ export async function runReviewGate(opts: {
     if (verdict.verdict === "pass") {
       return { gated: true, proceed: true, note: "review pass: cleared" };
     }
-    if (revisionCount === 0) {
+    if (revisionCount + 1 < caps.review) {
       await incrementRevisionCount(opts.taskId, opts.email).catch(() => {});
       return {
         gated: true,
         proceed: false,
-        note: `sent back for one revision — ${verdict.deficiencies.slice(0, 3).join("; ")}`,
+        note: `sent back for revision (${revisionCount + 1}/${caps.review}) — ${verdict.deficiencies.slice(0, 3).join("; ")}`,
         deficiencies: verdict.deficiencies,
       };
     }
-    // Already revised once and still flagged — fail open (exactly one corrective pass; never hold
-    // the WIP slot or loop indefinitely). The deficiencies ride along so the user/Terry can see them.
+    // Cap exhausted and still flagged — fail open (never hold the WIP slot or loop indefinitely).
+    // The deficiencies ride along so the user/Terry can see them.
     return {
       gated: true,
       proceed: true,
-      note: `review incomplete after one revision, proceeding — flagged: ${verdict.deficiencies.slice(0, 3).join("; ")}`,
+      note: `review incomplete after ${caps.review} revisions, proceeding — flagged: ${verdict.deficiencies.slice(0, 3).join("; ")}`,
       deficiencies: verdict.deficiencies,
     };
   } catch (err) {
