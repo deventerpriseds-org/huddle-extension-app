@@ -1,0 +1,65 @@
+name: Realtime pre-warm mechanism probe
+
+# Proves the load-bearing assumption behind the ceremony mic pre-warm (dd061d0): that OpenAI Realtime
+# accepts a TRACKLESS audio transceiver and receives audio after a later replaceTrack (no renegotiation).
+# Synthesizes a real "Hey Terry" utterance with ElevenLabs, feeds it as the fake mic, and asserts OpenAI
+# transcribes "terry" on the pre-warmed transceiver. Runs the COLD flow as a control. No app deploy needed.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install ffmpeg + espeak (fallback) + Playwright Chromium
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg espeak-ng
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Synthesize "Hey Terry" with ElevenLabs (fallback: espeak)
+        env:
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_DEFAULT_VOICE_ID: ${{ secrets.ELEVENLABS_DEFAULT_VOICE_ID }}
+        run: |
+          set +e
+          VOICE="${ELEVENLABS_DEFAULT_VOICE_ID:-21m00Tcm4TlvDq8ikWAM}"
+          TEXT="Hey Terry, can you hear me?"
+          OK=0
+          if [ -n "$ELEVENLABS_API_KEY" ]; then
+            echo "Requesting ElevenLabs TTS (voice=$VOICE)…"
+            HTTP=$(curl -sS -o /tmp/el.mp3 -w "%{http_code}" \
+              -X POST "https://api.elevenlabs.io/v1/text-to-speech/${VOICE}?output_format=mp3_44100_128" \
+              -H "xi-api-key: ${ELEVENLABS_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -d "{\"text\":\"${TEXT}\",\"model_id\":\"eleven_turbo_v2_5\"}")
+            echo "ElevenLabs HTTP ${HTTP}, mp3 bytes: $(wc -c < /tmp/el.mp3 2>/dev/null || echo 0)"
+            if [ "$HTTP" = "200" ] && [ "$(wc -c < /tmp/el.mp3)" -gt 2000 ]; then OK=1; fi
+          else
+            echo "ELEVENLABS_API_KEY empty — will use espeak fallback."
+          fi
+          if [ "$OK" = "1" ]; then
+            echo "Using ElevenLabs audio."
+            ffmpeg -y -loglevel error -i /tmp/el.mp3 -af "apad=pad_dur=3" -ar 16000 -ac 1 -c:a pcm_s16le /tmp/hey-terry.wav
+          else
+            echo "Falling back to espeak-ng synthesis (real speech, non-EL voice)."
+            espeak-ng -v en -s 150 -w /tmp/el_raw.wav "$TEXT"
+            ffmpeg -y -loglevel error -i /tmp/el_raw.wav -af "apad=pad_dur=3" -ar 16000 -ac 1 -c:a pcm_s16le /tmp/hey-terry.wav
+          fi
+          echo "Final WAV: $(wc -c < /tmp/hey-terry.wav) bytes"
+          ffprobe -hide_banner /tmp/hey-terry.wav 2>&1 | grep -E "Duration|Stream" || true
+
+      - name: Run pre-warm mechanism probe
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          WAV_PATH: /tmp/hey-terry.wav
+        run: node e2e/realtime-prewarm-probe.e2e.mjs
