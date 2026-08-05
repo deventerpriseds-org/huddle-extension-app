@@ -35,7 +35,58 @@ the chain.
   session is dead this environment. Drive live grooming/board checks through GHA workflows
   (`run-grooming.yml`, `azure-pg-query.yml`, `board-uat.yml`) whose runners CAN reach the SWA.
 
-## Ceremony barge → SINGLE responder + STT-tolerant summons + dismiss (2026-08-05) — deployed, MECHANISM confirmed on live app, perceptual verdict PENDING user
+## Ceremony barge — Iris hijack + phantom "running a search" (2026-08-05, 8718277) — deployed, PENDING user live test
+The barge_route logging (added eb16af7) immediately paid off — the next live transcript (104 rows) showed:
+- **Iris hijack:** `resolveAddressedAgent` (addressedAgent.ts) prefix-matched the single letter **"i"** to
+  **"Iris"** (scoreName prefix branch: 0.6 + len penalty ≈ 1.35, under the 3.0 gate), so EVERY barge that
+  OPENED with "I" resolved to Iris and overrode the interlocutor-pin ("Iris, why are you speaking? I never
+  mentioned you"). FIX: a name token that is a common English **function word** (STOPWORDS: pronouns/
+  articles/aux/prepositions) or **< 2 chars** is NOT an address → `none` → pins to the interlocutor. Real
+  leading names still resolve; "Al"/"El"→Elle still work (not function words). `e2e/addressedAgent.test.mjs`
+  +6 regression cases, **18/18** offline (run with `bun`).
+- **Phantom search cue:** the barge narration loop reset its tool-event cursor to `"0"` EVERY barge, so
+  `getCeremonyToolEvents` replayed the whole run and re-voiced the FIRST real `tavily_web_search` cue on
+  every later barge even when nothing searched ("you keep saying you're running a search… these aren't
+  things that should be searched" / "Searching what?"). FIX: `bargeToolSinceRef` now PERSISTS across barges
+  (reset only per ceremony at runId mint), so only genuinely-new tool starts get a cue. Also added a
+  `search_memory` toolCue ("checking my notes") so a memory lookup isn't announced as a web search.
+- **Lesson:** persisting the routing decision to the transcript (barge_route) is what made these two
+  diagnosable in ONE read instead of guessing — keep that logging.
+
+## Ceremony barge — un-named routing hole + avalanche cut-through + self-memory (2026-08-05, eb16af7) — deployed, PENDING user live test
+CORRECTION to the section below: "single-responder confirmed on live app" was OVERSTATED — it was only
+ever proven for a NAMED summons ("Hey Terry"), which is handled CLIENT-SIDE (instant ack, no server
+routing). The user's real transcript (run a5567839, ran 12:52 on ca7ad60 which deployed 12:47 — so NOT
+stale code) exposed the gap: an UN-NAMED barge ("run a web search for UPenn certs") that landed right
+after a summons released the speaker's floor had NO activeSpeaker → fell through to the multi-winner
+router → the web-search OWNER **Faith** won, an agent the user never addressed ("why was Faith talking
+at all"). Ground-truthed: delegate_to_specialist is ASYNC, so Faith was the real turn WINNER, not a
+delegated worker — i.e. the client sent a bad/absent targetAgentId OR the fast-path didn't fire.
+- **FIXES (eb16af7, deployed main):**
+  1. **Pin un-named barge to the INTERLOCUTOR** (MeetingBar `bargeTarget`): named → current speaker →
+     MOST-RECENT speaker (`getLastSpeaker()` on useCeremonyVoice, a ref set on every turn, never reset)
+     → host. Always sends a valid targetAgentId so the server fast-path forces the interlocutor; the
+     router can never surface a topic/capability owner.
+  2. **Instant barge row at speech-ONSET** (`resolvePendingBarge` store action + `pending` flag): a
+     provisional "…" user row renders at onBargeStart, filled with the real words at STT (or dropped if
+     filler). Fixes "my message shows up late, after the log-jam flushes."
+  3. **Sustained cut-through** (useCeremonyVoice speech_started): a below-floor onset is held for
+     `SUSTAINED_BARGE_CONFIRM_MS=220`ms — if speech is still going (no speech_stopped), it cuts through;
+     a brief TTS-echo blip stops first and is ignored. Sustained double-talk barges beat the 0.08 floor.
+  4. **Self-memory** (ceremonies.ts bargeDirective, ADDITIVE): during a stand-up the transcript is
+     authoritative for "what did you say / what's in review"; never contradict your own earlier update
+     or trust a stale RAG hit over it (the Cole "backlog grooming" vs "Jotform→N8N" contradiction).
+  5. **Barge routing decision is now PERSISTED** to the ceremony transcript (`kind:"barge_route"`:
+     barge text, client target, server winner, matched?, reason) — so "why did agent X answer" is a
+     LOGGED FACT next run, not a guess. Query it alongside the transcript rows.
+- **NOT the floor / NOT suppression:** the 132s gap in that transcript was the user LISTENING to Faith's
+  long answer + the round-robin, NOT the mic suppressing them (user corrected this). Do not "fix" that.
+- **STATUS:** deployed, tsc+vite build clean. Perceptual (cut-off feel, instant-row, sustained
+  cut-through) = USER's live verdict; the next real transcript's `barge_route` + `mic_timing` rows will
+  show whether un-named barges now pin to the interlocutor and barge_to_stop dropped. NOT "fixed" until
+  the user confirms live.
+
+## Ceremony barge → SINGLE responder + STT-tolerant summons + dismiss (2026-08-05) — deployed, MECHANISM confirmed for NAMED barges only (see correction above)
 Prior live transcript showed: a barge addressed to one agent answered by the WRONG agent (the active
 speaker), a narration/answer CHORUS (multiple agents piling onto one barge), casual "Yes?—go ahead"
 register instead of formal, and "So, never mind" HALLUCINATING a file-request turn. Root: every ceremony

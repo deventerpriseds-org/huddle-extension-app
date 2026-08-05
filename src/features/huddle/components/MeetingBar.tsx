@@ -273,6 +273,7 @@ function toolCue(toolName: string): string {
   const n = (toolName || "").toLowerCase();
   const exact: Record<string, string[]> = {
     tavily_web_search: ["Running a search on that.", "Let me look that up.", "Searching that now."],
+    search_memory: ["Let me check my notes on that.", "Pulling that from memory."],
     update_task: ["Updating that on the board.", "Making that change on the board now."],
     create_huddle_task: ["Adding that to the board.", "Putting that on the board now."],
     get_calendar_events: ["Checking your calendar.", "Let me look at your calendar."],
@@ -485,6 +486,7 @@ function MeetingRoom({
   const setVoiceEngine = useVoiceEngineStore((s) => s.setMode);
   const patchMeeting = useHuddleStore((s) => s.patchMeeting);
   const addMeetingTurns = useHuddleStore((s) => s.addMeetingTurns);
+  const resolvePendingBarge = useHuddleStore((s) => s.resolvePendingBarge);
   const markLastAgentTurnInterrupted = useHuddleStore((s) => s.markLastAgentTurnInterrupted);
   const toggleAgent = useHuddleStore((s) => s.toggleAgent);
   const setSpeaker = useHuddleStore((s) => s.setSpeaker);
@@ -646,6 +648,12 @@ function MeetingRoom({
     ts?: number;
   };
   const runIdRef = useRef<string | null>(null);
+  // Cursor into this run's tool-START events for the barge narration cues. It must PERSIST across barges:
+  // resetting it to "0" per barge made getCeremonyToolEvents replay the WHOLE run every time, so the first
+  // real web-search cue ("Running a search on that.") was re-voiced on EVERY later barge even when nothing
+  // was searched (the "you keep saying you're running a search / Searching what?" complaint). Reset only
+  // when a NEW ceremony starts.
+  const bargeToolSinceRef = useRef("0");
   const seqRef = useRef(0);
   const persistBufferRef = useRef<PersistTurn[]>([]);
   const flushTimerRef = useRef<number | null>(null);
@@ -891,13 +899,18 @@ function MeetingRoom({
       return;
     }
 
-    // SINGLE RESPONDER for this barge: the resolved addressed agent, else the agent who was JUST speaking
-    // — never a multi-winner group pick. The server's ceremony-barge fast path forces exactly this agent,
-    // which kills the wrong-agent grab, the pile-on, and the narration chorus in one move.
-    const bargeTarget: AgentId | undefined =
+    // SINGLE RESPONDER for this barge — pinned to the user's INTERLOCUTOR, never a topic/capability
+    // router pick. Resolution order (AC-4): named agent → current speaker → MOST-RECENT speaker → host.
+    // The most-recent fallback is the fix for "why was Faith talking at all": an un-named barge that
+    // landed right after a summons released Terry's floor had no `activeSpeaker`, fell to the router, and
+    // the web-search OWNER (Faith) won — an agent the user never addressed. Pinning to the last speaker
+    // and always sending a valid targetAgentId makes the server fast-path force exactly the interlocutor.
+    const bargeTarget: AgentId =
       addressed.kind === "agent"
         ? (addressed.agentId as AgentId)
-        : ((ceremonyVoiceRef.current.activeSpeaker as AgentId | null) ?? members[0]);
+        : ((ceremonyVoiceRef.current.activeSpeaker as AgentId | null) ??
+          (ceremonyVoiceRef.current.getLastSpeaker() as AgentId | null) ??
+          members[0]);
 
     // The frozen speaker (the row actually being cut) survives bargeFreeze. Mark it interrupted so the
     // transcript renders the cut — but this agent does NOT necessarily answer (the bargeTarget above does).
@@ -964,7 +977,8 @@ function MeetingRoom({
       // never talks over the answer or the next scripted speaker.
       narrationLoop = (async () => {
         if (!narrationRunId) return;
-        let sinceId = "0";
+        // Persistent run-level cursor (NOT reset per barge) — only NEW tool starts get a cue, so an
+        // earlier barge's search is never replayed on a later barge that isn't searching.
         const spoken = new Set<string>();
         while (!narrationStop && bargeGenRef.current === myGen && bargeActiveRef.current) {
           await new Promise((r) => window.setTimeout(r, 700));
@@ -978,14 +992,14 @@ function MeetingRoom({
           }[] = [];
           try {
             const resp = await getCeremonyToolEvents({
-              data: { runId: narrationRunId, sinceId, caller: callerRef.current },
+              data: { runId: narrationRunId, sinceId: bargeToolSinceRef.current, caller: callerRef.current },
             });
             events = resp.events;
           } catch {
             events = [];
           }
           if (events.length === 0) continue;
-          sinceId = events[events.length - 1].id;
+          bargeToolSinceRef.current = events[events.length - 1].id;
           for (const ev of events) {
             // Re-check the gate before EACH cue — the floor may have moved between poll and speak.
             if (narrationStop || bargeGenRef.current !== myGen || !bargeActiveRef.current) break;
@@ -1042,6 +1056,29 @@ function MeetingRoom({
         "winner=",
         res.decision?.winnerId ?? res.replies?.[0]?.agentId,
       );
+      // PERSIST the routing decision to the ceremony transcript so "why did agent X answer this barge"
+      // is a LOGGED FACT next time, not a guess — the exact question ("why was Faith talking at all")
+      // this run couldn't answer. Records the barge text, who the CLIENT pinned it to (bargeTarget), who
+      // the SERVER actually made winner, and the reason. If target !== winner, that's the routing bug on
+      // record. System row (kind:"barge_route"), never spoken, best-effort — must not block the answer.
+      try {
+        const winnerId = res.decision?.winnerId ?? res.replies?.[0]?.agentId ?? null;
+        persistCeremonyTurnRef.current({
+          speaker: "system",
+          kind: "barge_route",
+          text: JSON.stringify({
+            barge: text.slice(0, 160),
+            addressed: addressed.kind,
+            target: bargeTarget,
+            winner: winnerId,
+            matched: bargeTarget === winnerId,
+            reason: res.decision?.reason ?? null,
+          }),
+          ts: Date.now(),
+        });
+      } catch {
+        /* logging is best-effort; never break the barge path */
+      }
       // Voice EXACTLY ONE reply — the router's PRIMARY (replies[0]) — over the frozen speaker. Any
       // extra winners/interjectors are ignored for voicing (AC-12 wants one immediate answer, not a
       // pile-on mid-barge).
@@ -1173,13 +1210,20 @@ function MeetingRoom({
       });
       bargeGenRef.current += 1;
       bargeActiveRef.current = true;
-      setPhase("");
+      // INSTANT FEEDBACK: render the user's barge row NOW, at speech-onset, before STT resolves the
+      // words — so the transcript reflects the interrupt immediately instead of appearing only after
+      // the wave has flushed and STT returns (the "my message shows up late, after the log-jam" report).
+      // resolvePendingBarge (in onBargeDetected / the watchdog) fills in the real text or drops it.
+      const myBargeGen = bargeGenRef.current;
+      addMeetingTurns([{ user: true, kind: "barge", text: "…", pending: true }]);
+      setPhase("Go ahead —");
       // Watchdog: if STT never yields a barge message (so onBargeDetected/runBargeSequence never
-      // run), don't leave emit parked forever — resume the frozen speaker and unpark.
+      // run), don't leave emit parked forever — resume the frozen speaker, unpark, drop the pending row.
       window.setTimeout(() => {
-        if (bargeActiveRef.current && !bargeHandlingRef.current) {
+        if (bargeGenRef.current === myBargeGen && bargeActiveRef.current && !bargeHandlingRef.current) {
           bargeActiveRef.current = false;
           setPhase("");
+          resolvePendingBarge(null); // STT never resolved — remove the provisional row
           void ceremonyVoiceRef.current.resumeFromFreeze();
         }
       }, 12_000);
@@ -1198,8 +1242,14 @@ function MeetingRoom({
       const now = Date.now();
       const isExactDup = norm === lastBargeTextRef.current && now - lastBargeAtRef.current < 2500;
       if (isMeaningfulBarge(transcript) && !isExactDup) {
-        addMeetingTurns([{ text: transcript, user: true, kind: "barge" }]);
+        // Fill the provisional onset row with the real words (resolvePendingBarge appends one if none
+        // exists, e.g. the typed path), instead of adding a duplicate row.
+        resolvePendingBarge(transcript);
         persistCeremonyTurnRef.current({ speaker: "user", text: transcript, kind: "barge", ts: Date.now() });
+      } else {
+        // Filler ("Mhm.")/duplicate — the provisional onset row was not a real barge; drop it so no
+        // phantom "…" user row lingers.
+        resolvePendingBarge(null);
       }
       void runBargeSequenceRef.current(transcript);
     },
@@ -1426,6 +1476,7 @@ function MeetingRoom({
 
     // Mint a fresh run id + reset the durable-transcript cursor/buffer for this run.
     runIdRef.current = crypto.randomUUID();
+    bargeToolSinceRef.current = "0"; // fresh tool-cue cursor per ceremony
     seqRef.current = 0;
     persistBufferRef.current = [];
 
@@ -1493,11 +1544,16 @@ function MeetingRoom({
           setSpeakingId(agentId);
           try {
             outcome = await ceremonyVoiceRef.current.voiceTurn(agentId, r.text, {
-              // The host OPENER (first block of the first step) does NOT re-speak on barge — a barge
-              // during the open cuts it and the exchange continues; re-speaking the opener line on each
-              // barge is what repeated "…blockage in Prof Education…" 4× (seq 4/10/11/19). Lane reports
-              // (checklists) keep resume so a mid-list barge continues the list.
-              resumable: !(step === steps[0] && i === 0),
+              // EVERY scripted turn — including the host's opening summary — resumes from the exact
+              // sentence it was cut on (the user's "pause the movie, rewind 5s, continue" model). The
+              // opener was previously NON-resumable (to stop it repeating on barges), but that made the
+              // host jump to the next speaker instead of finishing — the user's report: "why did we jump
+              // to Cole instead of you finishing what you were saying before I jumped in?". Resume is now
+              // safe here: resumeFromFreeze consumes freezeRef (sets it null), so a single barge resumes
+              // ONCE from the cut sentence, not the old 4×-repeat (which came from re-speaking on every
+              // barge). If a repeat resurfaces under rapid multi-barge, tighten resume dedup — do NOT
+              // re-disable resume, which reintroduces the jump-forward the user is reporting now.
+              resumable: true,
               // Trailing transcript: add each sentence when its audio starts, tagged with its block
               // + position so a test can prove mid-block interruption and same-block resume.
               onSentenceStart: (sentence, sentenceIndex, blockTotal) => {

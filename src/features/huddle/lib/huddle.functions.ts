@@ -470,14 +470,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     }
     function groundingBlock(hasWeb: boolean): string {
       const freshness = hasWeb
-        ? '- If a request depends on anything time-sensitive or verifiable — "today", "now", "latest", "current", "this week/month/year", a version or release number, a price, a score, standings, recent news, or who currently holds a role — you MUST call the `tavily_web_search` tool and answer ONLY from its results. Never answer these from memory. When unsure whether a fact is still current, search.'
-        : "- You do NOT have a web-search tool this turn. For anything time-sensitive or verifiable (dates, prices, versions, standings, recent news), say plainly that you can't verify it right now rather than guessing — do not assert a specific current fact you cannot confirm.";
+        ? '- The CURRENT DATE, TIME, and DAY are GIVEN to you in CONTEXT below and are authoritative — answer "today", "the date", "what day is it", "the time", "this week" DIRECTLY from that CONTEXT. Do NOT web-search for the date/time; you already have it. For OTHER time-sensitive or verifiable facts you do NOT already have — external "latest"/"current" info, a version or release number, a price, a score, standings, recent news, who currently holds a role, a public link — you MUST call the `tavily_web_search` tool and answer ONLY from its results; never guess those from memory.'
+        : "- The CURRENT DATE, TIME, and DAY are given to you in CONTEXT below — answer date/time questions directly from it. You do NOT have a web-search tool this turn, so for OTHER verifiable facts (prices, versions, standings, recent news), say plainly you can't verify it right now rather than guessing.";
       return (
         "\n\nKNOWLEDGE AND FRESHNESS\n" +
         "- Your training data has a fixed cutoff. You do NOT inherently know the current date, time, prices, product versions, releases, standings, or news — these change after your cutoff.\n" +
         "- Trust the CONTEXT below over your own assumptions; never compute or guess the current date.\n" +
         freshness +
-        "\n- Never state a specific date, version, price, or standing you did not just retrieve from a tool.\n\n" +
+        "\n- Never state a specific version, price, or standing you did not just retrieve from a tool. (The current date/time is the ONE exception — it is given to you in CONTEXT below, so state it directly.)\n\n" +
         "CONTEXT\n" +
         (localNow
           ? `- Current date and time (the user's local time): ${localNow}\n` +

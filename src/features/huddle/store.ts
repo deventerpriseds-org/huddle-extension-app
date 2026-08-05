@@ -58,6 +58,10 @@ export interface CeremonyTurn {
   interrupted?: boolean;
   // "barge" = the user's interjection; "answer" = the immediate reply spoken over the frozen ceremony.
   kind?: "barge" | "answer";
+  // A provisional barge row rendered at speech-ONSET (before STT resolves the words) so the transcript
+  // reflects the interrupt instantly. resolvePendingBarge() later fills its text (real transcript) or
+  // removes it (filler/echo). Never persisted server-side while pending.
+  pending?: boolean;
   // Block/sentence provenance so a test can prove "interrupted mid-block, ≥1 sentence remaining" and
   // "the SAME agent resumed and finished the remaining sentences in order". A block = one agent reply;
   // each sentence of it is a row sharing the same blockId. sentenceIndex is 0-based within the block;
@@ -127,6 +131,9 @@ interface HuddleState {
   removeAgent: (id: AgentId) => void;
   toggleAgent: (id: AgentId) => void;
   addMeetingTurns: (turns: CeremonyTurn[]) => void;
+  // Resolve the provisional (pending) barge row rendered at speech-onset: pass the real transcript to
+  // fill it in, or null to remove it (the "barge" was filler/echo). No-op if no pending row exists.
+  resolvePendingBarge: (text: string | null) => void;
   // Mark the most recent AGENT transcript row as interrupted (cut mid-sentence by a barge). No-op
   // when the last row is a user turn or the transcript is empty (barge while nobody was speaking).
   markLastAgentTurnInterrupted: () => void;
@@ -310,6 +317,27 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
       if (idx === -1) return {};
       const next = t.slice();
       next[idx] = { ...next[idx], interrupted: true };
+      return { meeting: { ...s.meeting, transcript: next } };
+    }),
+  resolvePendingBarge: (text) =>
+    set((s) => {
+      if (!s.meeting) return {};
+      const t = s.meeting.transcript ?? [];
+      // The most-recent pending barge row (rendered at speech-onset).
+      let idx = -1;
+      for (let i = t.length - 1; i >= 0; i--) {
+        if (t[i].pending) { idx = i; break; }
+      }
+      const next = t.slice();
+      if (idx === -1) {
+        // No provisional row (e.g. typed-barge path never rendered one): append the real transcript so a
+        // meaningful barge is still shown; nothing to do for a filler drop.
+        if (text !== null) next.push({ user: true, kind: "barge", text, ts: Date.now() });
+      } else if (text === null) {
+        next.splice(idx, 1); // filler/echo — drop the provisional row
+      } else {
+        next[idx] = { ...next[idx], text, pending: false }; // fill in the real transcript
+      }
       return { meeting: { ...s.meeting, transcript: next } };
     }),
   setShowDemoData: (v) => set({ showDemoData: v }),

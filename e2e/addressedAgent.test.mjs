@@ -59,6 +59,16 @@ check("Sam, mark the pitch done", resolveAddressedAgent("Sam, mark the investor 
 check("what is blocked (no name)", resolveAddressedAgent("What is blocked?", P), { kind: "none" });
 check("gibberish", resolveAddressedAgent("mhm okay right", P), { kind: "none" });
 
+// REGRESSION — function-word openers must NOT hijack to a name (the live "Iris" bug). A barge that
+// begins with a pronoun/article previously prefix-matched its first letter to a name ("i" -> "Iris").
+check('"I never mentioned uploaded files" -> none (not Iris)', resolveAddressedAgent("I never mentioned uploaded files.", P, "iris-chase"), { kind: "none" });
+check('"I met you, Terry" -> not Iris', resolveAddressedAgent("I met you, Terry.", P, "iris-chase").agentId ?? "none", "none");
+check('"It\'s not the University" -> none', resolveAddressedAgent("It's not the University of Pennsylvania.", P, "terry-locke"), { kind: "none" });
+check('"No, just continue" -> none', resolveAddressedAgent("No, just go ahead and continue.", P, "terry-locke"), { kind: "none" });
+check('"I don\'t know why you\'re involved, Iris" -> none (complaint, not address)', resolveAddressedAgent("I don't know why you're involved, Iris.", P, "iris-chase"), { kind: "none" });
+// A real leading name still resolves even with a following clause.
+check('"Iris, why are you speaking" -> Iris (real address)', resolveAddressedAgent("Iris, why are you speaking?", P).agentId, "iris-chase");
+
 // Genuinely ambiguous (Elle AND Eli present), no context -> clarify.
 const amb = resolveAddressedAgent("El", P2);
 check("El w/ Elle+Eli present -> ambiguous", amb.kind, "ambiguous");
