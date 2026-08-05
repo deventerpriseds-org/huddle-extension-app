@@ -164,6 +164,21 @@ CREATE INDEX IF NOT EXISTS task_engagement_state_email_idx ON tasks.task_engagem
 -- entered_review_at: stamped whenever a task actually moves to IN_REVIEW (create_artifact's gated
 -- markTaskInReview call) -- the standup "moved to review" bucket reads this delta since the last run.
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS entered_review_at TIMESTAMPTZ;
+-- Approach gate (docs/plan-approach-clarify-gate.md): AFTER confirm_status='confirmed' (DoD locked with
+-- the user), the assigned agent drafts an APPROACH (the how) and a sub-agent (approach-gate.server.ts)
+-- grades it pass/revise — bounded, invisible to the user unless the cap is exhausted. approach_status:
+-- pending (not yet approved) -> approved (eligible for real DOING work) | escalated (cap exhausted, the
+-- agent told the user directly instead of looping forever).
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS proposed_approach TEXT;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_revision_count INT NOT NULL DEFAULT 0;
+-- Mid-work clarifying question (ask_clarifying_question tool): clarify_status='open' pauses that task's
+-- autowork research cadence until answered. clarify_count is the lifetime cap counter (bounded — an agent
+-- that's still stuck after the cap must flag_blocker or proceed on its own judgment, not keep asking).
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS clarify_status TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS clarify_count INT NOT NULL DEFAULT 0;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS open_question TEXT;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS open_question_asked_at TIMESTAMPTZ;
 
 -- GENERAL recurring-job scheduler, resident in Azure Huddle PG (NOT supabase). One heartbeat — the
 -- existing every-minute run-turn tick — dispatches every due job here, so any recurring/scheduled job
@@ -319,6 +334,18 @@ export async function getTaskAssignedAgent(id: string): Promise<string | null> {
     return r.rows[0]?.assigned_agent ?? null;
   } catch {
     return null;
+  }
+}
+
+/** A task's title, for the approach gate's grading prompt. Fails open (empty string) on any error. */
+export async function getTaskTitle(id: string): Promise<string> {
+  if (!id) return "";
+  try {
+    await ensureBootstrapped();
+    const r = await getPool().query<{ title: string | null }>(`SELECT title FROM tasks.journey_tasks WHERE id = $1`, [id]);
+    return r.rows[0]?.title ?? "";
+  } catch {
+    return "";
   }
 }
 
@@ -566,10 +593,18 @@ export interface TaskEngagementState {
   next_review_ping_at: string | null;
   revision_count: number;
   entered_review_at: string | null;
+  approach_status: "pending" | "approved" | "escalated";
+  proposed_approach: string | null;
+  approach_revision_count: number;
+  clarify_status: "none" | "open";
+  clarify_count: number;
+  open_question: string | null;
+  open_question_asked_at: string | null;
 }
 
 const ENGAGEMENT_COLS =
-  "task_id,user_email,confirm_status,proposed_dod,confirmed_dod,confirm_ask_at,confirmed_at,last_review_ping_at,next_review_ping_at,revision_count,entered_review_at";
+  "task_id,user_email,confirm_status,proposed_dod,confirmed_dod,confirm_ask_at,confirmed_at,last_review_ping_at,next_review_ping_at,revision_count,entered_review_at," +
+  "approach_status,proposed_approach,approach_revision_count,clarify_status,clarify_count,open_question,open_question_asked_at";
 
 /** Batch-read engagement state for a set of task ids (a missing entry means "never asked yet"). */
 export async function getTaskEngagementStates(taskIds: string[]): Promise<Map<string, TaskEngagementState>> {
@@ -684,6 +719,81 @@ export async function incrementRevisionCount(taskId: string, userEmail: string):
     [taskId, userEmail.toLowerCase()],
   );
   return rows[0]?.revision_count ?? 1;
+}
+
+// ---- Approach gate (extends the review gate to the START of work, not just the end) ----------------
+// After confirm_task_intent locks the DoD, the assigned agent drafts an APPROACH and a sub-agent
+// (approach-gate.server.ts) grades it pass/revise, bounded by a configurable per-agent cap. Mirrors
+// incrementRevisionCount's shape exactly, just for the approach-revision counter.
+
+/** Bump the approach gate's corrective-pass counter and return the new count. */
+export async function incrementApproachRevisionCount(taskId: string, userEmail: string): Promise<number> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ approach_revision_count: number }>(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_revision_count)
+     VALUES ($1,$2,1)
+     ON CONFLICT (task_id) DO UPDATE SET
+       approach_revision_count = tasks.task_engagement_state.approach_revision_count + 1, updated_at = now()
+     RETURNING approach_revision_count`,
+    [taskId, userEmail.toLowerCase()],
+  );
+  return rows[0]?.approach_revision_count ?? 1;
+}
+
+/** The approach gate passed — lock in the approach and make the task eligible for real DOING work. */
+export async function approveApproach(taskId: string, userEmail: string, approach: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_status, proposed_approach)
+     VALUES ($1,$2,'approved',$3)
+     ON CONFLICT (task_id) DO UPDATE SET
+       approach_status='approved', proposed_approach=EXCLUDED.proposed_approach, updated_at=now()`,
+    [taskId, userEmail.toLowerCase(), approach],
+  );
+}
+
+/** The approach gate's cap was exhausted without a pass — escalate to the user instead of looping. */
+export async function escalateApproach(taskId: string, userEmail: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_status)
+     VALUES ($1,$2,'escalated')
+     ON CONFLICT (task_id) DO UPDATE SET approach_status='escalated', updated_at=now()`,
+    [taskId, userEmail.toLowerCase()],
+  );
+}
+
+// ---- Mid-work clarifying question (bounded, rate-limited — see ask_clarifying_question tool) --------
+
+/**
+ * Open a clarifying question for a task — pauses autowork's research cadence for it until answered.
+ * Returns the new lifetime count so the caller can enforce the configurable per-task cap; only one
+ * question may be open at a time (enforced by the caller checking clarify_status first).
+ */
+export async function openClarifyingQuestion(taskId: string, userEmail: string, question: string): Promise<number> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ clarify_count: number }>(
+    `INSERT INTO tasks.task_engagement_state
+       (task_id, user_email, clarify_status, clarify_count, open_question, open_question_asked_at)
+     VALUES ($1,$2,'open',1,$3,now())
+     ON CONFLICT (task_id) DO UPDATE SET
+       clarify_status='open', clarify_count = tasks.task_engagement_state.clarify_count + 1,
+       open_question=EXCLUDED.open_question, open_question_asked_at=now(), updated_at=now()
+     RETURNING clarify_count`,
+    [taskId, userEmail.toLowerCase(), question],
+  );
+  return rows[0]?.clarify_count ?? 1;
+}
+
+/** The agent has what it needed — resume normal autowork research cadence for this task. */
+export async function closeClarifyingQuestion(taskId: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE tasks.task_engagement_state
+        SET clarify_status='none', open_question=NULL, updated_at=now()
+      WHERE task_id = $1`,
+    [taskId],
+  );
 }
 
 /** Lock in the confirmed Definition of Done (the confirm_task_intent tool handler calls this). */

@@ -54,3 +54,71 @@ export const CONFIRM_TASK_INTENT_TOOL = {
     required: ["task_id", "definition_of_done"],
   },
 } as const;
+
+// propose_approach: the pre-work half of the hardened workflow gate (approach-gate.server.ts). Called
+// ONCE, immediately after confirm_task_intent, in the same reply — the assigned agent drafts HOW it
+// plans to reach the confirmed Definition of Done, and a sub-agent grades it pass/revise before any
+// real research/work starts. This never involves the user directly; it's purely between the agent and
+// the reviewing sub-agent, bounded by a configurable cap. Only on cap exhaustion does the tool result
+// tell the agent to raise it with the user itself.
+export const PROPOSE_APPROACH_TOOL = {
+  type: "function",
+  name: "propose_approach",
+  description:
+    "Call this ONCE, immediately after confirm_task_intent succeeds — before doing any actual work. " +
+    "Describe HOW you plan to reach the confirmed Definition of Done: method, sources, structure, " +
+    "level of depth. A reviewer grades it for soundness and value; you'll get back either approval " +
+    "(proceed with the work) or specific feedback to revise and call this again with an improved " +
+    "approach. Do not start researching or drafting the actual deliverable until this returns approved.",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string", description: "The id of the task this approach is for." },
+      approach: {
+        type: "string",
+        description: "Concrete plan for how you'll get to the Definition of Done — method, sources, structure, scope.",
+      },
+    },
+    required: ["task_id", "approach"],
+  },
+} as const;
+
+// ask_clarifying_question / resolve_clarifying_question: a bounded, rate-limited channel for an agent
+// to get more detail from the user MID-WORK, without spamming — one open question per task at a time,
+// capped lifetime total (identity/agent-workflow-config.server.ts). This is for a genuine unknown that
+// blocks good work, not routine narration; flag_blocker remains the right call for a true dead-end.
+export const ASK_CLARIFYING_QUESTION_TOOL = {
+  type: "function",
+  name: "ask_clarifying_question",
+  description:
+    "Ask the user ONE clarifying question mid-work, when you've hit a genuine unknown that would " +
+    "meaningfully change your approach or waste effort if you guessed wrong — not for routine checks. " +
+    "This is rate-limited: you can only have one open question per task at a time, and a small lifetime " +
+    "cap per task. Your reply text IS the question sent to the user; this tool just records it. Once " +
+    "they answer (a normal message in this chat) and you've incorporated it, call " +
+    "resolve_clarifying_question so your normal work cadence resumes. If you're truly stuck rather than " +
+    "just wanting more detail, use flag_blocker instead.",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string", description: "The id of the task you need clarification on." },
+      question: { type: "string", description: "The specific question — this should match what you're asking the user in your reply." },
+    },
+    required: ["task_id", "question"],
+  },
+} as const;
+
+export const RESOLVE_CLARIFYING_QUESTION_TOOL = {
+  type: "function",
+  name: "resolve_clarifying_question",
+  description:
+    "Call this once the user has answered your open clarifying question and you've incorporated their " +
+    "answer, so the task's normal work cadence resumes.",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string", description: "The id of the task whose open question is now resolved." },
+    },
+    required: ["task_id"],
+  },
+} as const;

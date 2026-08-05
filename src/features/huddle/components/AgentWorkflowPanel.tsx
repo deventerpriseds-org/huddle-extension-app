@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
 import { AGENTS } from "../data/agents";
 import { getMyWorkflowConfigFn, setMyWorkflowConfigFn } from "../lib/identity/agent-workflow-config.functions";
 import { toast } from "sonner";
+
+interface Caps {
+  approach: number;
+  review: number;
+  question: number;
+}
+const DEFAULT_CAPS: Caps = { approach: 3, review: 3, question: 2 };
 
 // "Required vs discretionary" toggle for the WIP confirm-intent + review gate (Settings → Account).
 // ON for an agent: it must confirm intent + a Definition of Done before DOING, and finished work is
@@ -18,6 +26,7 @@ export function AgentWorkflowPanel() {
   );
   const [defaultRequired, setDefaultRequired] = useState(false);
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+  const [caps, setCaps] = useState<Caps>(DEFAULT_CAPS);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -29,6 +38,7 @@ export function AgentWorkflowPanel() {
         if (res.config) {
           setDefaultRequired(res.config.default_required);
           setOverrides(res.config.agent_overrides);
+          setCaps({ ...DEFAULT_CAPS, ...res.config.default_caps });
         }
       } catch { /* keep defaults */ }
       setReady(true);
@@ -36,7 +46,7 @@ export function AgentWorkflowPanel() {
   }, [caller]);
 
   const persist = useCallback(
-    async (next: { default_required?: boolean; agent_overrides?: Record<string, boolean> }) => {
+    async (next: { default_required?: boolean; agent_overrides?: Record<string, boolean>; default_caps?: Caps }) => {
       if (!caller) return;
       setSaving(true);
       try {
@@ -45,6 +55,7 @@ export function AgentWorkflowPanel() {
         else if (res.config) {
           setDefaultRequired(res.config.default_required);
           setOverrides(res.config.agent_overrides);
+          setCaps({ ...DEFAULT_CAPS, ...res.config.default_caps });
         }
       } catch {
         toast.error("Couldn't save that setting.");
@@ -80,6 +91,16 @@ export function AgentWorkflowPanel() {
       void persist({ agent_overrides: next });
     },
     [overrides, persist],
+  );
+
+  const updateCap = useCallback(
+    (field: keyof Caps, value: number) => {
+      if (!Number.isFinite(value) || value < 0) return;
+      const next = { ...caps, [field]: Math.round(value) };
+      setCaps(next);
+      void persist({ default_caps: next });
+    },
+    [caps, persist],
   );
 
   return (
@@ -122,6 +143,52 @@ export function AgentWorkflowPanel() {
             </div>
           );
         })}
+      </div>
+
+      <div className="mt-4 border-t pt-4">
+        <h4 className="mb-1 text-sm font-semibold">Auto-work loop limits</h4>
+        <p className="mb-3 text-xs text-muted-foreground">
+          Before starting, an agent's planned approach is graded automatically and revised until it's
+          sound — same for the finished work against the review gate. Both loop on their own, invisible
+          to you, up to these caps; only when a cap is hit does the agent stop and ask you directly
+          instead of continuing to loop. The question cap limits how many times an agent can check in
+          with you mid-task before it has to proceed on its own judgment or flag a real blocker.
+        </p>
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <Label className="mb-1 block text-xs text-muted-foreground">Approach revisions</Label>
+            <Input
+              type="number"
+              min={1}
+              max={10}
+              value={caps.approach}
+              disabled={!ready || saving}
+              onChange={(e) => updateCap("approach", Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <Label className="mb-1 block text-xs text-muted-foreground">Review revisions</Label>
+            <Input
+              type="number"
+              min={1}
+              max={10}
+              value={caps.review}
+              disabled={!ready || saving}
+              onChange={(e) => updateCap("review", Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <Label className="mb-1 block text-xs text-muted-foreground">Clarifying questions</Label>
+            <Input
+              type="number"
+              min={0}
+              max={10}
+              value={caps.question}
+              disabled={!ready || saving}
+              onChange={(e) => updateCap("question", Number(e.target.value))}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );

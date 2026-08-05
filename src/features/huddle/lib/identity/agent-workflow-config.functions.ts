@@ -13,9 +13,18 @@ async function callerEmail(caller: { entra_object_id?: string; entra_email?: str
   return (await resolveTaskEmail(caller)) ?? caller.entra_email;
 }
 
+const Caps = z.object({
+  approach: z.number().int().min(1).max(10),
+  review: z.number().int().min(1).max(10),
+  question: z.number().int().min(0).max(10),
+});
+const PartialCaps = Caps.partial();
+
 const ConfigInput = z.object({
   default_required: z.boolean().optional(),
   agent_overrides: z.record(z.string(), z.boolean()).optional(),
+  default_caps: Caps.optional(),
+  agent_cap_overrides: z.record(z.string(), PartialCaps).optional(),
 });
 
 export const getMyWorkflowConfigFn = createServerFn({ method: "POST" })
