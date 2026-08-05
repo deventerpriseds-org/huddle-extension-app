@@ -45,6 +45,18 @@ try {
 } catch {
   console.log("No follow-up WAV — will test ack + speaker-resume only.");
 }
+// Optional tool-barge clip (F12): a request that forces a tool (web_search). The agent must NOT go
+// silent — it must speak an ack/progress/result.
+let TOOLBARGE_B64 = "";
+const TOOLBARGE_WAV_PATH = process.env.TOOLBARGE_WAV_PATH || "";
+if (TOOLBARGE_WAV_PATH) {
+  try {
+    TOOLBARGE_B64 = readFileSync(TOOLBARGE_WAV_PATH).toString("base64");
+    console.log(`Tool-barge WAV ${TOOLBARGE_WAV_PATH}: ${TOOLBARGE_B64.length} b64 chars`);
+  } catch {
+    console.log("No tool-barge WAV.");
+  }
+}
 
 const initScript = `
   // Synthetic, injectable microphone. Overrides getUserMedia so the app's mic IS a Web Audio graph we
@@ -226,7 +238,22 @@ try {
   // Give the follow-up its full turn (substantive barge = real router/model, ~10-15s) + any resume.
   await page.waitForTimeout(FOLLOWUP_B64 ? 30000 : 18000);
 
+  // Step 5 (F12): a barge that forces a TOOL must NOT go silent — the agent must speak an
+  // ack/progress/result. This is the exact failure the user reported (Terry ran searches, said nothing).
+  let toolTested = false;
+  let toolStartIdx = 0;
+  if (TOOLBARGE_B64) {
+    toolTested = true;
+    toolStartIdx = (await allRows(page)).length;
+    const tdur = await page.evaluate((b64) => window.__inject(b64), TOOLBARGE_B64);
+    console.log(`Step 5: injected tool-barge 'look up the UPenn AI course link' (clip ${Math.round(tdur * 1000)}ms) — F12`);
+    await page.waitForTimeout(38000); // web_search + narration + spoken result/defer
+  }
+
   const rows = await allRows(page);
+  const toolSpoke =
+    toolTested &&
+    rows.slice(toolStartIdx).some((r) => r.who === "agent" && r.text.replace(/yes,?\s*sir/i, "").trim().length > 8);
   const after = rows.slice(rowsAtInject);
   const userRows = after.filter((r) => r.who === "user");
   const ack = after.find((r) => r.who === "agent" && /yes,?\s*sir/i.test(r.text));
@@ -261,6 +288,8 @@ try {
     prematureClose,
     speaker,
     testedFollowup: !!FOLLOWUP_B64,
+    toolTested,
+    toolSpoke,
   };
 } catch (e) {
   console.log(`\nERROR: ${e.message}`);
@@ -282,12 +311,17 @@ console.log(`  Terry acked "Yes sir":     ${c.ack ? `YES (kind=${c.ack.kind})` :
 console.log(`  interrupted speaker resumed: ${c.speakerResumed}`);
 console.log(`  follow-up got a real answer: ${c.substantiveAnswer ? "YES" : "no"}${c.testedFollowup ? "" : " (follow-up not tested)"}`);
 console.log(`  PREMATURE CLOSE after ack: ${c.prematureClose}`);
+console.log(`  tool-barge (F12) got a spoken response: ${c.toolTested ? (c.toolSpoke ? "YES" : "NO — SILENT") : "(tool-barge not tested)"}`);
 // Coherent = barge registered + acked + NOT a premature close + (the interrupted speaker resumed OR the
-// follow-up got a real answer). This is the whole-exchange bar, not a "Yes sir" substring.
+// follow-up got a real answer) + (if a tool-barge was tested) it was NOT silent. Whole-exchange bar.
 const coherent =
-  c.userBargeCount > 0 && c.ack && !c.prematureClose && (c.speakerResumed || c.substantiveAnswer);
+  c.userBargeCount > 0 &&
+  c.ack &&
+  !c.prematureClose &&
+  (c.speakerResumed || c.substantiveAnswer) &&
+  (!c.toolTested || c.toolSpoke);
 if (coherent) {
-  console.log(`\nPASS(coherent) — summons acked, floor held, and the stand-up ${c.substantiveAnswer ? "answered the follow-up" : "resumed the interrupted speaker"} — no premature close. Read the transcript above.`);
+  console.log(`\nPASS(coherent) — summons acked, floor held, follow-up ${c.substantiveAnswer ? "answered" : "handled"}${c.toolTested ? ", tool-barge spoke a response" : ""} — no premature close, no dead air. Read the transcript above.`);
   process.exit(0);
 } else {
   const gaps = [];
@@ -296,6 +330,7 @@ if (coherent) {
   if (c.prematureClose) gaps.push("PREMATURE CLOSE — Terry wrapped the stand-up right after the ack instead of holding the floor / resuming");
   if (c.ack && !c.prematureClose && !c.speakerResumed && !c.substantiveAnswer)
     gaps.push("ack fired but nothing coherent followed (speaker did not resume and follow-up got no real answer)");
+  if (c.toolTested && !c.toolSpoke) gaps.push("F12 — the tool-barge got NO spoken response (dead air after a tool request)");
   console.log(`\nFAIL(incoherent) — ${gaps.join("; ")}. This is a real issue to fix, not to wave through.`);
   process.exit(1);
 }
