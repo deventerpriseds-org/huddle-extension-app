@@ -197,6 +197,34 @@ function isMeaningfulBarge(raw: string): boolean {
   return words.some((w) => w.length >= 2 && !BARGE_FILLERS.has(w));
 }
 
+// Leading greeting tokens that carry no instruction — stripped alongside BARGE_FILLERS and the named
+// agent's first name when testing for a "bare name-call".
+const NAME_CALL_GREETINGS = new Set(["hey", "hi", "hello", "ok", "okay", "yo"]);
+
+// A BARE NAME-CALL is the user just SAYING an agent's name — optionally with a greeting/filler — and
+// nothing substantive ("Terry?", "hey Iris", "yo, Cole"). It returns that agent's id so the ceremony
+// can answer instantly with a client-side "Yes sir" ack (NO model turn). Returns null — i.e. NOT a
+// name-call, fall through to the real router — for anything with an actual instruction/question, no
+// name, or MORE THAN ONE named member (garbled STT / ambiguous). This is the guard against swallowing
+// a real command: a name PLUS any substantive word is never a name-call, so "Iris, mark X done" always
+// reaches the agent's brain. Mirrors resolveAddressed's roster-driven name matching; no hardcoded names.
+function bareNameCall(text: string, members: AgentId[]): AgentId | null {
+  const first = (id: AgentId) => (AGENT_BY_ID[id]?.name.split(" ")[0] ?? "").toLowerCase();
+  const t = text.toLowerCase();
+  const named = members.filter((id) => {
+    const f = first(id);
+    return f && new RegExp(`\\b${f}\\b`).test(t);
+  });
+  if (named.length !== 1) return null; // no name, or >1 name (ambiguous) → not a name-call
+  const addressed = named[0];
+  const addressedFirst = first(addressed);
+  const words = t.replace(/[^a-z0-9']+/g, " ").split(/\s+/).filter(Boolean);
+  const leftover = words.filter(
+    (w) => w !== addressedFirst && !NAME_CALL_GREETINGS.has(w) && !BARGE_FILLERS.has(w),
+  );
+  return leftover.length === 0 ? addressed : null;
+}
+
 function deferClause(): string {
   const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
   return pick([
@@ -726,6 +754,50 @@ function MeetingRoom({
     lastBargeAtRef.current = now;
     // A REAL barge just started — pause the scripted round-robin so it doesn't advance mid-exchange.
     bargeCooldownUntilRef.current = Date.now() + BARGE_COOLDOWN_MS;
+
+    // ── BARE NAME-CALL SHORT-CIRCUIT (instant ack, NO model turn) ─────────────────────────────────
+    // If the user just said an agent's name and nothing else ("Terry?", "hey Iris"), the ADDRESSED
+    // agent instantly acknowledges in ITS OWN cloned voice with a literal "Yes sir" — no router, no
+    // OpenAI, no tools — so a name-call feels immediate instead of waiting ~2-5s for a server turn.
+    // We use narrate() (trackFreeze OFF) so the frozen scripted speaker's resume point (freezeRef) is
+    // preserved; the round-robin stays PAUSED for the user's follow-up command, which lands as its own
+    // barge and DOES run the full router path (+ resumeFromFreeze on the original speaker). Anything
+    // with a substantive instruction/question, no name, or >1 name is NOT a name-call (bareNameCall
+    // returns null) and falls through to the real brain below — the guard against the 2026-08-02
+    // swallowed-command regression: a command must always reach the agent. The user's `kind:"barge"`
+    // row was already written by onBargeDetected / sendMessage; here we only add the agent's ack.
+    const nameCallAgent = bareNameCall(text, membersRef.current);
+    if (nameCallAgent) {
+      // Gate on this barge's gen, re-checked right before speaking (like the narration loop) — a newer
+      // barge bumps bargeGenRef and this older ack bails without enqueuing audio.
+      if (bargeGenRef.current === myGen) {
+        setPhase(`${AGENT_BY_ID[nameCallAgent]?.name ?? "Someone"} is answering…`);
+        await ceremonyVoiceRef.current.narrate(nameCallAgent, "Yes sir", {
+          onStart: (s) => {
+            addMeetingTurns([{ agentId: nameCallAgent, text: s, kind: "answer" }]);
+            persistCeremonyTurnRef.current({
+              speaker: "agent",
+              agentId: nameCallAgent as string,
+              text: s,
+              kind: "ack",
+              ts: Date.now(),
+            });
+          },
+        });
+      }
+      // Keep the round-robin paused for the follow-up, then release the park (bargeActive off, cooldown
+      // extended). If no follow-up barge arrives, the cooldown lapses and emit() proceeds; the frozen
+      // speaker's freezeRef survives so a follow-up barge's resumeFromFreeze() still returns to them.
+      // ZERO calls to sendHuddleMessage / router / tools / getCeremonyToolEvents on this path.
+      if (bargeGenRef.current === myGen) {
+        bargeHandlingRef.current = false;
+        bargeActiveRef.current = false;
+        bargeCooldownUntilRef.current = Date.now() + BARGE_COOLDOWN_MS;
+        setPhase("");
+      }
+      return;
+    }
+
     const members = membersRef.current;
     // The frozen speaker (the row actually being cut) survives bargeFreeze. Mark it interrupted so the
     // transcript renders the cut — but this agent does NOT necessarily answer: the REAL router below
@@ -1266,6 +1338,16 @@ function MeetingRoom({
     // meeting mic control (onMic's ceremony branch → ceremonyVoice.startListening()). Reset the timing
     // markers for a fresh run.
     micTimingRef.current = { tUnmute: 0, tReady: 0, tSpeech: 0 };
+
+    // PRE-WARM the barge realtime transport NOW (ceremony start), so the user's FIRST unmute is
+    // near-instant instead of paying the ~2s cold WebRTC connect + the connect-on-unmute window that
+    // dropped the first utterance. This does NOT acquire the mic — no getUserMedia, no live audio
+    // leaves the device (a trackless transceiver sends silence until unmute); the mic hardware is
+    // engaged only inside the unmute tap (onMic → startListening's warm fast path, getUserMedia in that
+    // gesture). Best-effort + idempotent: a warm failure just means unmute does a full cold connect.
+    if (ceremonyVoiceRef.current.supported) {
+      void ceremonyVoiceRef.current.warmSession();
+    }
 
     // Render + speak newly-arrived ceremony replies in order.
     // `spoken.n` tracks how many replies have been voiced (idempotent on re-poll).

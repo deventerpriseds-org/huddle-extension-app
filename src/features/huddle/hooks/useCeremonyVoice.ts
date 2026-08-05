@@ -40,6 +40,14 @@ export interface CeremonyVoiceController {
    *  ACTUAL capture state, not merely that a ceremony is running. False when muted, stopped, or errored. */
   listening: boolean;
   supported: boolean;
+  /** Pre-establish the realtime transport (ephemeral token + RTCPeerConnection + data channel +
+   *  VAD/STT session.update) at ceremony START, WITHOUT acquiring the microphone, so the first
+   *  unmute is near-instant (getUserMedia + replaceTrack onto a pre-negotiated transceiver — no ~2s
+   *  cold WebRTC connect). Truly silent until unmute: a trackless audio transceiver sends silence and
+   *  no mic hardware is acquired here. Idempotent (no-op if already warm/connecting/listening) and
+   *  best-effort (on failure it tears the half-open transport down and unmute falls back to a full
+   *  cold startListening). Scoped to the ceremony path — the 1:1 realtime voice never calls it. */
+  warmSession: () => Promise<void>;
   startListening: () => Promise<void>;
   /** Stop the barge mic. Default (full stop) also cuts any live agent playback + resume point — used on
    *  ceremony end / unmount / error. `{ keepAudio: true }` is a CAPTURE-ONLY stop (mic mute): it tears
@@ -145,7 +153,7 @@ function splitSentences(text: string): string[] {
   // ("…'Transfer 40k.' Overdue…"), so the `.` is followed by `'`, not a space — the old `[.!?;]\s+`
   // never split there and the entire checklist collapsed into ONE utterance (so a barge mid-list
   // dropped every later item). Now each line becomes its own utterance → resume can continue the list.
-  const parts = text.split(/(?<=[.!?;]["'”’)\]]?)\s+/);
+  const parts = text.split(/(?<=[.!?;]["'"')\]]?)\s+/);
   return parts.map((s) => s.trim()).filter(Boolean);
 }
 
@@ -199,6 +207,12 @@ export function useCeremonyVoice(hookOpts: {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  // Pre-warm (mic pre-warm): the audio transceiver's sender, held so an unmute can swap a live mic
+  // track onto the already-negotiated m-line via replaceTrack() (no renegotiation). warmReadyRef flips
+  // true once a warm transport's data channel is open + configured; startListening reads it to take the
+  // near-instant fast path instead of a full cold connect. Both are cleared on any stopListening.
+  const audioSenderRef = useRef<RTCRtpSender | null>(null);
+  const warmReadyRef = useRef(false);
 
   const audioQueueRef = useRef<AudioQueue>(new AudioQueue());
   // Saved when barge fires so resumeFromFreeze can restart from the same sentence.
@@ -423,6 +437,10 @@ export function useCeremonyVoice(hookOpts: {
     dcRef.current = null;
     pcRef.current?.close();
     pcRef.current = null;
+    // Warm transport is gone once pc/dc close — clear the warm flags so a later unmute reconnects cold
+    // rather than trying to replaceTrack onto a dead sender.
+    audioSenderRef.current = null;
+    warmReadyRef.current = false;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     if (micRafRef.current != null) {
@@ -448,146 +466,77 @@ export function useCeremonyVoice(hookOpts: {
     setPhase("idle");
   }, [setPhase]);
 
-  // ── startListening ────────────────────────────────────────────────────────
-  const startListening = useCallback(async () => {
-    if (!supported) {
-      setError("Voice barge-in isn't supported on this device.");
-      setPhase("error");
-      return;
-    }
-    if (listenRef.current || connectingRef.current) return;
-    connectingRef.current = true;
-    // Reactive capture-engaged flag set optimistically at invocation (not at dc.onopen) so the mute
-    // control + AC-18 teardown recognise the mic as engaged during the brief connect window; a failure
-    // path (getUserMedia denied, SDP error) runs stopListening() below, which clears it back to false.
-    setListening(true);
-    setError(null);
-    // Connection-lifetime token — used by the WebRTC handlers/setup aborts below. Deliberately NOT
-    // genRef: a barge must not invalidate the connection (that was the mic-deaf bug).
-    connGenRef.current += 1;
-    const connGen = connGenRef.current;
-
+  // ── shared connection helpers (used by warmSession + the cold startListening fallback) ────────────
+  // Best-effort mic-level meter (RMS → 0..1 pulse) on a local stream, throttled to ~12fps, so the UI
+  // can pulse with the user's voice. Self-stops if this connection is superseded (connGen bumped).
+  // Never throws. Extracted so the warm→unmute fast path and the cold fallback wire it identically.
+  const setupMicMeter = useCallback((stream: MediaStream, connGen: number) => {
     try {
-      // Grab the mic FIRST, before any network await. getUserMedia requires a live user-activation
-      // gesture on mobile browsers; the meeting-entry tap's activation is consumed if we await a
-      // network round-trip (getRealtimeSession) before it — so the mic silently never opens on
-      // mobile and the agent can't hear anything. Acquiring the stream up front runs it inside the
-      // still-fresh gesture window; the ephemeral session is minted after (its await is fine).
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-      streamRef.current = stream;
-
-      // Mic-level meter: RMS of the local mic, throttled to ~12fps, so the UI can pulse with the user's
-      // voice (they had no signal the mic was live). Best-effort — never block or throw the ceremony.
-      try {
-        const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        const actx = new AC();
-        micCtxRef.current = actx;
-        const analyser = actx.createAnalyser();
-        analyser.fftSize = 512;
-        actx.createMediaStreamSource(stream).connect(analyser);
-        const buf = new Uint8Array(analyser.frequencyBinCount);
-        let last = 0;
-        const tick = () => {
-          // Scope the loop to THIS connection attempt: if a mute (capture-only stop) or a newer connect
-          // superseded it mid-connect (connGenRef bumped), self-stop instead of spinning forever on a
-          // dead analyser — the fast unmute→mute teardown leaves no runaway rAF.
-          if (connGenRef.current !== connGen) {
-            actx.close().catch(() => {});
-            return;
-          }
-          analyser.getByteTimeDomainData(buf);
-          let sum = 0;
-          for (let i = 0; i < buf.length; i++) {
-            const v = (buf[i] - 128) / 128;
-            sum += v * v;
-          }
-          const rms = Math.sqrt(sum / buf.length);
-          const level = Math.min(1, rms * 4); // boost so speech reads as a clear pulse
-          micLevelRef.current = level; // fresh every tick for the self-barge gate
-          const t = typeof performance !== "undefined" ? performance.now() : 0;
-          if (t - last > 80) {
-            last = t;
-            setMicLevel(level);
-          }
-          micRafRef.current = requestAnimationFrame(tick);
-        };
+      const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const actx = new AC();
+      micCtxRef.current = actx;
+      const analyser = actx.createAnalyser();
+      analyser.fftSize = 512;
+      actx.createMediaStreamSource(stream).connect(analyser);
+      const buf = new Uint8Array(analyser.frequencyBinCount);
+      let last = 0;
+      const tick = () => {
+        if (connGenRef.current !== connGen) {
+          actx.close().catch(() => {});
+          return;
+        }
+        analyser.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const v = (buf[i] - 128) / 128;
+          sum += v * v;
+        }
+        const rms = Math.sqrt(sum / buf.length);
+        const level = Math.min(1, rms * 4); // boost so speech reads as a clear pulse
+        micLevelRef.current = level; // fresh every tick for the self-barge gate
+        const t = typeof performance !== "undefined" ? performance.now() : 0;
+        if (t - last > 80) {
+          last = t;
+          setMicLevel(level);
+        }
         micRafRef.current = requestAnimationFrame(tick);
-      } catch {
-        /* mic meter is best-effort */
-      }
-
-      if (connGenRef.current !== connGen) {
-        stream.getTracks().forEach((t) => t.stop());
-        connectingRef.current = false;
-        return;
-      }
-
-      const session = await getRealtimeSession({ data: {} });
-      if (!session.ok) {
-        stream.getTracks().forEach((t) => t.stop());
-        throw new Error(session.error);
-      }
-      const ephemeralKey = session.clientSecret;
-
-      if (connGenRef.current !== connGen) {
-        stream.getTracks().forEach((t) => t.stop());
-        connectingRef.current = false;
-        return;
-      }
-
-      const pc = new RTCPeerConnection();
-      pcRef.current = pc;
-
-      for (const track of stream.getAudioTracks()) {
-        pc.addTrack(track, stream);
-      }
-      // Mute remote track immediately — we use OAI Realtime for VAD+STT only, not output.
-      pc.ontrack = (e) => {
-        e.track.enabled = false;
       };
+      micRafRef.current = requestAnimationFrame(tick);
+    } catch {
+      /* mic meter is best-effort */
+    }
+  }, []);
 
-      const dc = pc.createDataChannel("oai-events");
-      dcRef.current = dc;
-
+  // Wire the realtime data channel's VAD/STT handlers. `onOpen` runs AFTER the session.update is sent —
+  // the cold path flips listenRef/status there; the warm path just records readiness. Extracted so the
+  // barge-detection logic (self-bleed suppression, freeze, transcript dispatch) can never drift between
+  // the warm pre-connect and the cold fallback. Guards on the CONNECTION generation (connGenRef), NOT
+  // the playback genRef — a barge bumps genRef, so a genRef-keyed handler would drop every later VAD/STT
+  // event after the first barge (the mic-goes-deaf-after-one-barge bug).
+  const attachDcHandlers = useCallback(
+    (dc: RTCDataChannel, connGen: number, onOpen: () => void) => {
       dc.onopen = () => {
         if (connGenRef.current !== connGen) return; // connection superseded before it opened
-        // GA session.update schema: transcription + turn_detection now nest under audio.input, and
-        // the model must NOT auto-respond (we use Realtime for VAD + STT only; the reply comes from
-        // our own turn engine). create_response:false suppresses the model's own answer.
+        // GA session.update schema: transcription + turn_detection nest under audio.input; the model
+        // must NOT auto-respond (EARS-ONLY — our multi-agent text engine + router compose the reply,
+        // then EL speaks it per agent). create_response:false suppresses the model's own answer. Config
+        // comes from the SHARED realtimeAudioInput (realtime-audio.ts) so the ceremony can't silently
+        // drift from the 1:1 and lose its language pin / noise_reduction (that caused phantom barges).
+        // eagerness stays "medium": "low" made real barges slow to stop; the isMeaningfulBarge() guard
+        // in runBargeSequence is the evidenced gibberish defense — tighten the GUARD, not this.
         dc.send(
           JSON.stringify({
             type: "session.update",
             session: {
               type: "realtime",
-              // STT/VAD from the SHARED config (realtime-audio.ts) — identical to the 1:1 Fast (A)
-              // voice EXCEPT create_response:false. This is EARS-ONLY: the multi-agent text engine +
-              // router compose the reply (a stand-up is many agents taking turns — one Realtime session
-              // can't be all of them), then EL speaks it per agent. noise_reduction + language pin (no
-              // prompt — it echoes as a phantom barge here) do the anti-garble work. The shared config
-              // is why the ceremony can no longer drift away from the 1:1 and lose the language pin.
-              audio: {
-                // eagerness back to "medium": "low" made real barges slow to stop (VAD heard the user
-                // later too). The isMeaningfulBarge() guard in runBargeSequence is the EVIDENCED gibberish
-                // defense (typed-"mhm" UAT proved it wakes no agent); if noise ever slips through, tighten
-                // the GUARD, not this. medium keeps the prompt barge-stop the user needs.
-                input: realtimeAudioInput({ createResponse: false }),
-              },
+              audio: { input: realtimeAudioInput({ createResponse: false }) },
             },
           }),
         );
-        listenRef.current = true;
-        connectingRef.current = false; // fully connected — release the re-entrancy guard
-        setListening(true); // idempotent; VAD/STT is now live
-        setPhase("listening");
-        onDataChannelOpenRef.current?.(); // instrumentation anchor: t_datachannel_open (mic ready)
+        onOpen();
       };
 
       dc.onmessage = (e) => {
-        // Guard on the CONNECTION generation, not the playback genRef. A barge bumps genRef to kill
-        // the speaker's loop; if this handler keyed on genRef it would stop matching after the first
-        // barge and drop every later VAD/STT event — the mic-goes-deaf-after-one-barge bug.
         if (connGenRef.current !== connGen) return;
         let msg: { type: string; [k: string]: unknown };
         try {
@@ -641,29 +590,211 @@ export function useCeremonyVoice(hookOpts: {
       };
 
       dc.onerror = (e) => console.error("[CeremonyVoice] DC error:", e);
+    },
+    [bargeFreeze],
+  );
 
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      // GA WebRTC SDP exchange endpoint (was /v1/realtime in beta — now /v1/realtime/calls).
-      const sdpRes = await fetch(
-        `https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(REALTIME_MODEL)}`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${ephemeralKey}`,
-            "Content-Type": "application/sdp",
-          },
-          body: offer.sdp,
+  // WebRTC SDP offer/answer with OpenAI's realtime calls endpoint (GA: /v1/realtime/calls). Throws on
+  // a non-ok SDP. Shared by warmSession and the cold startListening fallback.
+  const negotiate = useCallback(async (pc: RTCPeerConnection, ephemeralKey: string) => {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const sdpRes = await fetch(
+      `https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(REALTIME_MODEL)}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ephemeralKey}`,
+          "Content-Type": "application/sdp",
         },
-      );
-      if (!sdpRes.ok) {
-        throw new Error(
-          `OAI Realtime SDP ${sdpRes.status}: ${(await sdpRes.text()).slice(0, 200)}`,
-        );
+        body: offer.sdp,
+      },
+    );
+    if (!sdpRes.ok) {
+      throw new Error(`OAI Realtime SDP ${sdpRes.status}: ${(await sdpRes.text()).slice(0, 200)}`);
+    }
+    const answerSdp = await sdpRes.text();
+    await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+  }, []);
+
+  // ── warmSession (mic pre-warm) ────────────────────────────────────────────
+  // Pre-establish the realtime transport (token + pc + dc + VAD/STT config) at ceremony start WITHOUT
+  // acquiring the microphone, so the first unmute is near-instant. A trackless sendrecv audio
+  // transceiver negotiates the audio m-line NOW (so unmute needs no renegotiation) and sends pure
+  // silence until a live mic track is swapped in via replaceTrack() on unmute — no getUserMedia here,
+  // no mic hardware acquired, no live audio can leave the device before the user unmutes (F17). The
+  // ephemeral key only authenticates the initial SDP; the WebRTC session stays up afterward, so warming
+  // at ceremony start remains valid through the (later) unmute. Idempotent + best-effort.
+  const warmSession = useCallback(async () => {
+    if (!supported) return;
+    if (pcRef.current || connectingRef.current || listenRef.current) return; // already warm/connecting/live
+    connectingRef.current = true;
+    setError(null);
+    connGenRef.current += 1;
+    const connGen = connGenRef.current;
+    try {
+      const session = await getRealtimeSession({ data: {} });
+      if (!session.ok) throw new Error(session.error);
+      if (connGenRef.current !== connGen) {
+        connectingRef.current = false;
+        return;
       }
-      const answerSdp = await sdpRes.text();
-      await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+      const ephemeralKey = session.clientSecret;
+
+      const pc = new RTCPeerConnection();
+      pcRef.current = pc;
+      // Trackless sendrecv audio transceiver: negotiates the audio m-line up front (so unmute is a
+      // no-renegotiation replaceTrack) and sends silence until the mic is attached. NO getUserMedia.
+      const transceiver = pc.addTransceiver("audio", { direction: "sendrecv" });
+      audioSenderRef.current = transceiver.sender;
+      // Mute remote track immediately — we use OAI Realtime for VAD+STT only, not output.
+      pc.ontrack = (e) => {
+        e.track.enabled = false;
+      };
+
+      const dc = pc.createDataChannel("oai-events");
+      dcRef.current = dc;
+      attachDcHandlers(dc, connGen, () => {
+        // Warm-ready: transport up + VAD/STT configured, but the mic is NOT engaged (no getUserMedia
+        // yet). Do NOT set listening/status — that only happens on unmute. This flag lets startListening
+        // take the near-instant replaceTrack fast path. No onDataChannelOpen anchor here: that anchor
+        // means "mic ready after unmute", which the fast path fires once the mic is actually engaged.
+        warmReadyRef.current = true;
+        connectingRef.current = false;
+      });
+      await negotiate(pc, ephemeralKey);
+    } catch (err) {
+      connectingRef.current = false;
+      if (connGenRef.current !== connGen) return;
+      // Warm is best-effort: on failure tear down the half-open transport + clear the warm flags so
+      // unmute falls back to a full cold startListening. No user-facing error (the mic never engaged).
+      warmReadyRef.current = false;
+      audioSenderRef.current = null;
+      dcRef.current?.close();
+      dcRef.current = null;
+      pcRef.current?.close();
+      pcRef.current = null;
+      void err;
+    }
+  }, [supported, attachDcHandlers, negotiate]);
+
+  // ── startListening ────────────────────────────────────────────────────────
+  const startListening = useCallback(async () => {
+    if (!supported) {
+      setError("Voice barge-in isn't supported on this device.");
+      setPhase("error");
+      return;
+    }
+    if (listenRef.current || connectingRef.current) return;
+
+    // FAST PATH (warm reuse): warmSession already connected the transport at ceremony start. Acquire the
+    // mic HERE — inside this unmute tap's user-activation gesture (mobile requires getUserMedia in a
+    // gesture) — and swap it onto the pre-negotiated transceiver via replaceTrack (no renegotiation, no
+    // new SDP). unmute→ready is then just the getUserMedia latency instead of the ~2s cold WebRTC
+    // connect. Until now the mic sent silence (trackless transceiver), so no live audio left the device.
+    if (warmReadyRef.current && audioSenderRef.current && pcRef.current) {
+      connectingRef.current = true;
+      setListening(true); // optimistic capture-engaged flag (see cold path note)
+      setError(null);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        streamRef.current = stream;
+        const track = stream.getAudioTracks()[0];
+        if (track) await audioSenderRef.current.replaceTrack(track);
+        setupMicMeter(stream, connGenRef.current);
+        listenRef.current = true;
+        connectingRef.current = false;
+        setListening(true);
+        setPhase("listening");
+        onDataChannelOpenRef.current?.(); // mic is now live — instrumentation anchor (ms_unmute_to_ready)
+        return;
+      } catch (err) {
+        // getUserMedia denied/failed on the warm session: surface it but KEEP the warm transport intact
+        // (mic simply not engaged) so the user can retry the unmute — do NOT tear down pc/dc.
+        connectingRef.current = false;
+        setListening(false);
+        const name = err instanceof DOMException ? err.name : "";
+        setError(
+          name === "NotAllowedError" || name === "PermissionDeniedError"
+            ? "Mic permission denied — allow access to enable voice barge-in."
+            : err instanceof Error
+              ? err.message
+              : "Microphone unavailable",
+        );
+        setPhase("error");
+        return;
+      }
+    }
+
+    // COLD FALLBACK (no warm session): establish the full transport now — the original proven flow.
+    connectingRef.current = true;
+    // Reactive capture-engaged flag set optimistically at invocation (not at dc.onopen) so the mute
+    // control + AC-18 teardown recognise the mic as engaged during the brief connect window; a failure
+    // path (getUserMedia denied, SDP error) runs stopListening() below, which clears it back to false.
+    setListening(true);
+    setError(null);
+    // Connection-lifetime token — used by the WebRTC handlers/setup aborts below. Deliberately NOT
+    // genRef: a barge must not invalidate the connection (that was the mic-deaf bug).
+    connGenRef.current += 1;
+    const connGen = connGenRef.current;
+
+    try {
+      // Grab the mic FIRST, before any network await. getUserMedia requires a live user-activation
+      // gesture on mobile browsers; the meeting-entry tap's activation is consumed if we await a
+      // network round-trip (getRealtimeSession) before it — so the mic silently never opens on
+      // mobile and the agent can't hear anything. Acquiring the stream up front runs it inside the
+      // still-fresh gesture window; the ephemeral session is minted after (its await is fine).
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      streamRef.current = stream;
+
+      // Mic-level meter (best-effort — never blocks/throws the ceremony).
+      setupMicMeter(stream, connGen);
+
+      if (connGenRef.current !== connGen) {
+        stream.getTracks().forEach((t) => t.stop());
+        connectingRef.current = false;
+        return;
+      }
+
+      const session = await getRealtimeSession({ data: {} });
+      if (!session.ok) {
+        stream.getTracks().forEach((t) => t.stop());
+        throw new Error(session.error);
+      }
+      const ephemeralKey = session.clientSecret;
+
+      if (connGenRef.current !== connGen) {
+        stream.getTracks().forEach((t) => t.stop());
+        connectingRef.current = false;
+        return;
+      }
+
+      const pc = new RTCPeerConnection();
+      pcRef.current = pc;
+
+      for (const track of stream.getAudioTracks()) {
+        pc.addTrack(track, stream);
+      }
+      // Mute remote track immediately — we use OAI Realtime for VAD+STT only, not output.
+      pc.ontrack = (e) => {
+        e.track.enabled = false;
+      };
+
+      const dc = pc.createDataChannel("oai-events");
+      dcRef.current = dc;
+      attachDcHandlers(dc, connGen, () => {
+        listenRef.current = true;
+        connectingRef.current = false; // fully connected — release the re-entrancy guard
+        setListening(true); // idempotent; VAD/STT is now live
+        setPhase("listening");
+        onDataChannelOpenRef.current?.(); // instrumentation anchor: t_datachannel_open (mic ready)
+      });
+
+      await negotiate(pc, ephemeralKey);
     } catch (err) {
       connectingRef.current = false; // release the guard on every failure path (incl. the early return)
       if (connGenRef.current !== connGen) return;
@@ -683,7 +814,7 @@ export function useCeremonyVoice(hookOpts: {
       // downgrades a "listening" status). The ceremony continues in text/audio with no crash.
       stopListening({ keepAudio: true });
     }
-  }, [supported, setPhase, stopListening, bargeFreeze]);
+  }, [supported, setPhase, stopListening, bargeFreeze, attachDcHandlers, negotiate, setupMicMeter]);
 
   return {
     status,
@@ -692,6 +823,7 @@ export function useCeremonyVoice(hookOpts: {
     micLevel,
     listening,
     supported,
+    warmSession,
     startListening,
     stopListening,
     voiceTurn,
