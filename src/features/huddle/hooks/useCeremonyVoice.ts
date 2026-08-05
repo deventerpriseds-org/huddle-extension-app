@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentId } from "../data/agents";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import { getRealtimeSession, REALTIME_MODEL } from "../lib/voice/realtime.functions";
@@ -213,6 +213,13 @@ export function useCeremonyVoice(hookOpts: {
   // near-instant fast path instead of a full cold connect. Both are cleared on any stopListening.
   const audioSenderRef = useRef<RTCRtpSender | null>(null);
   const warmReadyRef = useRef(false);
+  // An unmute tapped WHILE warmSession is still connecting (connectingRef true) would hit startListening's
+  // re-entrancy guard and be silently DROPPED — the user taps, nothing happens (mic never engages). Instead
+  // we QUEUE it here: warm-ready (or warm-failed) fires the queued unmute, so a single tap during the ~2s
+  // warm window always engages the mic the instant the transport is ready. startListeningRef breaks the
+  // definition-order cycle (warmSession is defined before startListening).
+  const pendingUnmuteRef = useRef(false);
+  const startListeningRef = useRef<(() => Promise<void>) | null>(null);
 
   const audioQueueRef = useRef<AudioQueue>(new AudioQueue());
   // Saved when barge fires so resumeFromFreeze can restart from the same sentence.
@@ -661,10 +668,20 @@ export function useCeremonyVoice(hookOpts: {
         // means "mic ready after unmute", which the fast path fires once the mic is actually engaged.
         warmReadyRef.current = true;
         connectingRef.current = false;
+        // Honor an unmute the user tapped during the warm connect (queued, not dropped).
+        if (pendingUnmuteRef.current) {
+          pendingUnmuteRef.current = false;
+          void startListeningRef.current?.();
+        }
       });
       await negotiate(pc, ephemeralKey);
     } catch (err) {
       connectingRef.current = false;
+      // A tap during a warm that then FAILED must still engage the mic — fall through to a cold connect.
+      if (pendingUnmuteRef.current) {
+        pendingUnmuteRef.current = false;
+        void startListeningRef.current?.();
+      }
       if (connGenRef.current !== connGen) return;
       // Warm is best-effort: on failure tear down the half-open transport + clear the warm flags so
       // unmute falls back to a full cold startListening. No user-facing error (the mic never engaged).
@@ -685,7 +702,14 @@ export function useCeremonyVoice(hookOpts: {
       setPhase("error");
       return;
     }
-    if (listenRef.current || connectingRef.current) return;
+    if (listenRef.current) return; // already live
+    if (connectingRef.current) {
+      // Something (usually warmSession) is mid-connect. Do NOT drop the tap — queue it; warm-ready/failed
+      // fires it. This is the fix for "I tapped unmute during the warm window and nothing happened."
+      pendingUnmuteRef.current = true;
+      return;
+    }
+    pendingUnmuteRef.current = false; // we are engaging now — any queued request is being satisfied
 
     // FAST PATH (warm reuse): warmSession already connected the transport at ceremony start. Acquire the
     // mic HERE — inside this unmute tap's user-activation gesture (mobile requires getUserMedia in a
@@ -815,6 +839,12 @@ export function useCeremonyVoice(hookOpts: {
       stopListening({ keepAudio: true });
     }
   }, [supported, setPhase, stopListening, bargeFreeze, attachDcHandlers, negotiate, setupMicMeter]);
+
+  // Keep the ref pointing at the latest startListening so warmSession (defined earlier) can fire a queued
+  // unmute without a definition-order cycle.
+  useEffect(() => {
+    startListeningRef.current = startListening;
+  }, [startListening]);
 
   return {
     status,

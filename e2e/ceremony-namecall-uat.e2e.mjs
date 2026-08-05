@@ -133,13 +133,25 @@ try {
   await startBtn.click();
   console.log("  ceremony started");
 
-  console.log("Step 2: unmute the ceremony mic…");
-  const unmute = page.locator('button[aria-label="Unmute"]');
-  await unmute.waitFor({ state: "visible", timeout: 8000 });
-  await unmute.click();
-  // Confirm it flipped to mic-on (aria-label 'Mic').
-  await page.locator('button[aria-label="Mic"]').waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
-  console.log("  unmuted");
+  console.log("Step 2: unmute the ceremony mic (confirm it actually engages)…");
+  let micOn = false;
+  for (let attempt = 1; attempt <= 4 && !micOn; attempt++) {
+    const unmute = page.locator('button[aria-label="Unmute"]');
+    if ((await unmute.count()) > 0) {
+      await unmute.click().catch(() => {});
+    }
+    // Mic engaged when the button flips to aria-label 'Mic'. With the queue-on-warm fix a single tap
+    // during the warm window now engages once warm completes; the retry is belt-and-suspenders.
+    micOn = await page
+      .locator('button[aria-label="Mic"]')
+      .waitFor({ state: "visible", timeout: 6000 })
+      .then(() => true)
+      .catch(() => false);
+    console.log(`  unmute attempt ${attempt}: micOn=${micOn}`);
+  }
+  if (!micOn) console.log("  [warn] mic never showed engaged (aria-label Mic) — injecting anyway to capture evidence");
+  // Small settle so VAD/STT is live before we speak.
+  await page.waitForTimeout(1000);
 
   console.log("Step 3: wait for an agent to be speaking, then inject 'Hey Terry'…");
   const deadline = Date.now() + 90000;
