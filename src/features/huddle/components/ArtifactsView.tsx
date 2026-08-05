@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FolderOpen, FileText, FileSpreadsheet, Presentation, FileImage, File as FileIcon,
-  Check, Undo2, Download, ExternalLink, Loader2, RefreshCw, Plus, Cloud, Trash2,
+  Check, Undo2, Download, ExternalLink, Loader2, RefreshCw, Plus, Cloud, Trash2, ArrowLeft,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
@@ -283,7 +283,7 @@ export function ArtifactsView() {
       </aside>
 
       {/* CENTER: list */}
-      <section className="flex min-w-0 flex-1 flex-col">
+      <section className={cn("min-w-0 flex-1 flex-col", selId ? "app-hidden md:flex" : "flex")}>
         <div className="flex items-center gap-2 border-b px-4 py-2.5">
           <div className="text-sm text-muted-foreground">
             <span className="text-foreground font-medium">Artifacts</span>
@@ -347,12 +347,24 @@ export function ArtifactsView() {
         </div>
       </section>
 
-      {/* RIGHT: preview + review */}
-      <aside className="app-hidden w-80 shrink-0 flex-col border-l md:flex">
+      {/* RIGHT: preview + review — full-width takeover on mobile, side panel on md+ */}
+      <aside className={cn("shrink-0 flex-col border-l md:flex md:w-80", selId ? "flex w-full" : "app-hidden w-80")}>
+        {selId && (
+          <button
+            onClick={() => { setSelId(null); setSel(null); setSelText(null); }}
+            className="md:hidden flex items-center gap-1.5 border-b px-4 py-2.5 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft size={15} /> Back to list
+          </button>
+        )}
         {!sel ? (
-          <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-            Select an artifact to preview and review it.
-          </div>
+          selId ? (
+            <div className="flex h-full items-center justify-center"><Loader2 className="animate-spin" size={18} /></div>
+          ) : (
+            <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+              Select an artifact to preview and review it.
+            </div>
+          )
         ) : (
           <ArtifactPreview sel={sel} text={selText} busy={busy} onReview={review} onMirror={mirror} onDelete={remove} />
         )}
