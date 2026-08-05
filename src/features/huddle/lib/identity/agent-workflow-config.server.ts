@@ -67,8 +67,14 @@ export interface AgentWorkflowConfig {
   agent_cap_overrides: Record<string, Partial<WorkflowCaps>>;
 }
 
+// Gate is ON by default (2026-08-05): the confirm-intent/DoD gate is a SAFETY gate, so a user (or an
+// email-scoping miss) with no explicit config row must land on "required", never "autonomous". This also
+// makes the gate immune to the caller→email resolution being fragile (resolveTaskEmail falls back to the
+// raw login email when journey `whoami` transiently fails, so the same user can be scoped under two
+// emails — dev@ vs von.ellis@): with default ON, ANY resolved email with no explicit off yields gate-on.
+// A user who genuinely wants autonomous agents sets default_required=false explicitly.
 const DEFAULT_CONFIG: AgentWorkflowConfig = {
-  default_required: false,
+  default_required: true,
   agent_overrides: {},
   default_caps: DEFAULT_CAPS,
   agent_cap_overrides: {},

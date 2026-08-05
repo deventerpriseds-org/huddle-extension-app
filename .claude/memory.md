@@ -1,7 +1,35 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-05
 
-## WIP confirm-gate was ENABLED but LEAKING → made fail-closed + assist/produce router + chain scoped (2026-08-05) — deployed on main, ground-truthed
+## CORRECTION + real root cause: WIP gate leaked because it was EMAIL-SCOPED under the wrong email; fix = default ON (2026-08-05) — deployed, ground-truthed
+The "fail-closed" entry below was necessary but NOT sufficient — it did not stop the leak, and my "gate held,
+IN_REVIEW 0" claim from a GROOMING run was FALSE (grooming's promoteOnly chain never exercises the DOING/flip
+gate, so it never tests it). The FULL auto-work pass (`run-autowork.yml`) is the real gate test, and it still
+leaked (flipped unconfirmed tasks to IN_REVIEW, enqueued a research turn).
+- **REAL root cause (ground-truthed):** the gate is EMAIL-SCOPED. Mirror tasks/engagement/autowork resolve the
+  caller to the **canonical journey email `dev@enterpriseds.io`** via `resolveTaskEmail`→`resolveJourneyIdentity`
+  (journey `whoami` → `{user_id, email}`). But the workflow-config row (`default_required=true`) was written under
+  the **raw login `von.ellis@enterpriseds.io`** — because `resolveTaskEmail` **falls back to the raw login when
+  `whoami` transiently fails** (identity.ts catch → `return {}`). So the gate read config under `dev@`, found 0
+  rows, and `getAgentWorkflowConfig` returned `DEFAULT_CONFIG.default_required = FALSE` → gate silently OFF. Same
+  person, two emails, two scoping keys. (Confirmed live: `tasks.journey_tasks.user_email='dev@enterpriseds.io'`
+  for all 170 rows; config row was `von.ellis@…`.)
+- **FIX (deployed): a safety gate must default ON.** `DEFAULT_CONFIG.default_required = true`
+  (agent-workflow-config.server.ts). Now ANY resolved email with no explicit row → gate ON, so the gate is IMMUNE
+  to the email-scoping fragility. VERIFIED with **zero config rows**: `run-autowork.yml` → `enqueued:0`, IN_REVIEW
+  **0**, DOING **0**, and confirm reach-outs armed (8/12 UP_NEXT have `confirm_ask_at`). A user who wants
+  autonomous agents sets `default_required=false` explicitly.
+- **Data note (be-ready-to-undo):** I temporarily added a `dev@` config row to unblock, then DELETED it once
+  default-on shipped (reverted). A vestigial `von.ellis@` row (default_required=true) still exists — harmless with
+  default-on; leave the user's own setting.
+- **Deeper systematic fix (PLANNED, not built): scope email-scoped state by the stable journey `user_id`, not by
+  email.** `resolveJourneyIdentity` ALREADY returns `user_id` — the app just keys on the (fallback-prone) email.
+  Keying identity.*/tasks.*/artifacts.*/agent_workflow_config on `user_id` collapses the two emails to one user and
+  kills this class of bug. Big cross-cutting change (mirror scoping is journey-side too) — get sign-off first.
+- **Verification discipline learned:** to test the confirm-intent/DoD gate, drive `run-autowork.yml` (the FULL
+  pass), NOT grooming — grooming's promoteOnly never promotes to DOING or flips, so it can't reveal a gate leak.
+
+## WIP confirm-gate fail-closed + assist/produce router + chain scoped (2026-08-05) — deployed on main (necessary, not sufficient — see correction above)
 The user's `identity.agent_workflow_config.default_required` was **true** (gate ON, set 2026-08-04 23:59),
 yet 8 tasks reached IN_REVIEW with `confirm_status='awaiting'`, `confirm_ask_at=NULL` ("Go to church",
 faith-hartley, LIFE — an agent "researched" a personal errand into an artifact and it auto-flipped to
