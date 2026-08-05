@@ -35,9 +35,17 @@ export interface CeremonyVoiceController {
   error: string | null;
   /** Live mic input level (0..1) for a UI pulse — shows the user the mic is hearing them. */
   micLevel: number;
+  /** Reactive mirror of whether the barge mic capture session is engaged (from startListening through
+   *  teardown). Drives the mic mute/unmute affordance + the "listening" pill so the UI reflects the
+   *  ACTUAL capture state, not merely that a ceremony is running. False when muted, stopped, or errored. */
+  listening: boolean;
   supported: boolean;
   startListening: () => Promise<void>;
-  stopListening: () => void;
+  /** Stop the barge mic. Default (full stop) also cuts any live agent playback + resume point — used on
+   *  ceremony end / unmount / error. `{ keepAudio: true }` is a CAPTURE-ONLY stop (mic mute): it tears
+   *  down getUserMedia tracks + pc/dc + the mic analyser and invalidates the connection, but leaves the
+   *  AudioQueue / genRef / freezeRef untouched so a speaking agent keeps talking. */
+  stopListening: (opts?: { keepAudio?: boolean }) => void;
   /** Speak agentId's full text sentence-by-sentence; onSentenceStart fires when a sentence's audio
    *  begins, with its 0-based index within the block and the block's total sentence count. */
   voiceTurn: (
@@ -154,10 +162,18 @@ export function useCeremonyVoice(hookOpts: {
   /** Fires SYNCHRONOUSLY the instant a barge freezes the speaker (VAD speech_started), before STT
    *  transcription resolves — lets the caller park its emit loop at freeze time, not transcript time. */
   onBargeStart?: () => void;
+  /** Instrumentation anchor: fires when the WebRTC data channel opens and VAD/STT is live
+   *  (t_datachannel_open) — the mic is now actually ready to hear a barge. */
+  onDataChannelOpen?: () => void;
+  /** Instrumentation anchor: fires the instant a barge stops the agent audio (bargeFreeze →
+   *  clearAndStop, t_audio_stopped). */
+  onAudioStopped?: () => void;
 }): CeremonyVoiceController {
   const [status, setStatus] = useState<CeremonyVoiceStatus>("idle");
   const [activeSpeaker, setActiveSpeaker] = useState<AgentId | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Reactive capture-engaged flag (see controller doc). Set at startListening and cleared on any stop.
+  const [listening, setListening] = useState(false);
   // Live mic input level (0..1), so the UI can show a pulse that moves with what the mic is picking up —
   // the user couldn't tell the mic was hearing them. Fed by an AnalyserNode on the local mic stream.
   const [micLevel, setMicLevel] = useState(0);
@@ -204,6 +220,10 @@ export function useCeremonyVoice(hookOpts: {
   onBargeRef.current = hookOpts.onBargeDetected;
   const onBargeStartRef = useRef(hookOpts.onBargeStart);
   onBargeStartRef.current = hookOpts.onBargeStart;
+  const onDataChannelOpenRef = useRef(hookOpts.onDataChannelOpen);
+  onDataChannelOpenRef.current = hookOpts.onDataChannelOpen;
+  const onAudioStoppedRef = useRef(hookOpts.onAudioStopped);
+  onAudioStoppedRef.current = hookOpts.onAudioStopped;
 
   const setPhase = useCallback((s: CeremonyVoiceStatus) => {
     statusRef.current = s;
@@ -317,6 +337,7 @@ export function useCeremonyVoice(hookOpts: {
   // VAD inline handler, exposed so the typed-barge path behaves identically.
   const bargeFreeze = useCallback(() => {
     audioQueueRef.current.clearAndStop();
+    onAudioStoppedRef.current?.(); // instrumentation anchor: t_audio_stopped (never blocks the barge)
     genRef.current += 1; // kills the live _voiceTurn loop; freezeRef is intentionally preserved
     setPhase("frozen");
   }, [setPhase]);
@@ -385,13 +406,19 @@ export function useCeremonyVoice(hookOpts: {
   }, []);
 
   // ── stopListening ─────────────────────────────────────────────────────────
-  const stopListening = useCallback(() => {
-    genRef.current += 1; // kill any live playback loop
+  // Default = FULL stop (ceremony end / unmount / error): also cuts live playback + the resume point.
+  // `{ keepAudio: true }` = CAPTURE-ONLY stop (mic mute): tear down the mic + WebRTC transport but leave
+  // audioQueueRef / genRef / freezeRef untouched so a speaking agent keeps talking (the mute must not
+  // cut agent audio). Both paths invalidate connGenRef so the torn-down connection's stale WebRTC
+  // handlers no-op, and both release listenRef/connectingRef so a later unmute reconnects cleanly.
+  const stopListening = useCallback((opts?: { keepAudio?: boolean }) => {
+    const keepAudio = opts?.keepAudio ?? false;
     connGenRef.current += 1; // invalidate the torn-down connection so its stale handlers no-op
     listenRef.current = false;
     connectingRef.current = false;
-    audioQueueRef.current.clearAndStop();
-    freezeRef.current = null;
+    setListening(false);
+    // Mic + WebRTC transport teardown (both paths): stop the getUserMedia tracks, close pc/dc, and
+    // stop the mic-level analyser. This is what actually releases the microphone.
     dcRef.current?.close();
     dcRef.current = null;
     pcRef.current?.close();
@@ -405,6 +432,18 @@ export function useCeremonyVoice(hookOpts: {
     micCtxRef.current?.close().catch(() => {});
     micCtxRef.current = null;
     setMicLevel(0);
+    if (keepAudio) {
+      // Mic mute: do NOT touch genRef / audioQueue / freezeRef — a mid-sentence agent keeps speaking and
+      // its resume point survives. Only reflect that the mic is no longer listening; if we were idling on
+      // "listening", drop to "idle" (a speaking/frozen agent keeps its status until its loop completes,
+      // at which point _voiceTurn settles to "idle" because listenRef is now false).
+      if (statusRef.current === "listening") setPhase("idle");
+      return;
+    }
+    // Full stop.
+    genRef.current += 1; // kill any live playback loop
+    audioQueueRef.current.clearAndStop();
+    freezeRef.current = null;
     setActiveSpeaker(null);
     setPhase("idle");
   }, [setPhase]);
@@ -418,6 +457,10 @@ export function useCeremonyVoice(hookOpts: {
     }
     if (listenRef.current || connectingRef.current) return;
     connectingRef.current = true;
+    // Reactive capture-engaged flag set optimistically at invocation (not at dc.onopen) so the mute
+    // control + AC-18 teardown recognise the mic as engaged during the brief connect window; a failure
+    // path (getUserMedia denied, SDP error) runs stopListening() below, which clears it back to false.
+    setListening(true);
     setError(null);
     // Connection-lifetime token — used by the WebRTC handlers/setup aborts below. Deliberately NOT
     // genRef: a barge must not invalidate the connection (that was the mic-deaf bug).
@@ -447,6 +490,13 @@ export function useCeremonyVoice(hookOpts: {
         const buf = new Uint8Array(analyser.frequencyBinCount);
         let last = 0;
         const tick = () => {
+          // Scope the loop to THIS connection attempt: if a mute (capture-only stop) or a newer connect
+          // superseded it mid-connect (connGenRef bumped), self-stop instead of spinning forever on a
+          // dead analyser — the fast unmute→mute teardown leaves no runaway rAF.
+          if (connGenRef.current !== connGen) {
+            actx.close().catch(() => {});
+            return;
+          }
           analyser.getByteTimeDomainData(buf);
           let sum = 0;
           for (let i = 0; i < buf.length; i++) {
@@ -529,7 +579,9 @@ export function useCeremonyVoice(hookOpts: {
         );
         listenRef.current = true;
         connectingRef.current = false; // fully connected — release the re-entrancy guard
+        setListening(true); // idempotent; VAD/STT is now live
         setPhase("listening");
+        onDataChannelOpenRef.current?.(); // instrumentation anchor: t_datachannel_open (mic ready)
       };
 
       dc.onmessage = (e) => {
@@ -624,7 +676,12 @@ export function useCeremonyVoice(hookOpts: {
             : "Microphone unavailable";
       setError(msg);
       setPhase("error");
-      stopListening();
+      // CAPTURE-ONLY cleanup: an unmute can now fail WHILE an agent is mid-sentence (the mic is engaged
+      // by a user tap, not only at ceremony start). Tear down the half-open mic/transport + clear
+      // `listening`, but leave the AudioQueue/genRef/freezeRef intact so the ceremony keeps talking —
+      // a failed unmute must not kill agent audio. setPhase("error") above is preserved (keepAudio only
+      // downgrades a "listening" status). The ceremony continues in text/audio with no crash.
+      stopListening({ keepAudio: true });
     }
   }, [supported, setPhase, stopListening, bargeFreeze]);
 
@@ -633,6 +690,7 @@ export function useCeremonyVoice(hookOpts: {
     activeSpeaker,
     error,
     micLevel,
+    listening,
     supported,
     startListening,
     stopListening,
