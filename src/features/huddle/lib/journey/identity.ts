@@ -23,6 +23,7 @@ export async function resolveJourneyIdentity(
   // Serve from cache once we have a timezone; if a cached entry lacks one but we now have a browser
   // zone to seed, fall through and re-resolve (whoami will persist it canonically).
   if (hit && (hit.timeZone || !browserTimeZone)) return hit;
+  const { cacheJourneyIdentity, getCachedJourneyIdentity } = await import("../identity/identity.server");
   try {
     const r = await invokeJourneyTool({
       toolName: "whoami",
@@ -40,12 +41,33 @@ export async function resolveJourneyIdentity(
         timeZone: parsed.timezone || undefined,
       };
       cache.set(login, id);
+      await cacheJourneyIdentity(login, id); // durable last-known-good (self-guarded; never throws)
       return id;
     }
   } catch {
-    /* fall through to the raw login email */
+    /* whoami errored — fall through to the DURABLE cache below */
   }
+  // whoami unavailable (error or non-ok): serve the last-known-good resolution instead of returning {}
+  // (which made resolveTaskEmail fall back to the RAW login email, scoping the same user under a second
+  // email and blanking the UI on a transient blip — 2026-08-05). Deliberately NOT written to the
+  // in-memory cache, so the next call re-attempts whoami and recovers fresh the instant it's back.
+  const cached = await getCachedJourneyIdentity(login);
+  if (cached && (cached.userId || cached.email)) return cached;
   return {};
+}
+
+/**
+ * The STABLE identity key for scoping Huddle-owned state: the user's `entra_object_id`, resolved
+ * whoami-independently. Order: the caller's own object id (interactive paths) → the local profile_emails
+ * map by login email (server/cadence paths) → null. FAIL-CLOSED: returns null rather than guessing, so a
+ * caller never silently scopes state under the wrong email. (Phase 0 of docs/plan-user-id-unification.md —
+ * added but not yet consumed; Phase 1 switches stores to key on this.)
+ */
+export async function resolveUserId(caller: Caller): Promise<string | null> {
+  const oid = caller?.entra_object_id?.trim();
+  if (oid) return oid;
+  const { resolveObjectIdByEmail } = await import("../identity/identity.server");
+  return resolveObjectIdByEmail(caller?.entra_email);
 }
 
 /** The email to scope mirror reads by — the canonical journey email, or the raw login as a fallback. */
