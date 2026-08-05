@@ -45,7 +45,7 @@ export const listArtifactsFn = createServerFn({ method: "POST" })
 
 export const getArtifactFn = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => z.object({ caller: Caller, id: z.string().min(1) }).parse(raw))
-  .handler(async ({ data }): Promise<{ artifact: (ArtifactRow & { url: string | null }) | null }> => {
+  .handler(async ({ data }): Promise<{ artifact: (ArtifactRow & { url: string | null; text: string | null }) | null }> => {
     const email = await callerEmail(data.caller);
     if (!email) return { artifact: null };
     try {
