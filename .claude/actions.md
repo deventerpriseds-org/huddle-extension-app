@@ -1,5 +1,23 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-08-05 (ACT-huddle-19 — ceremony single-responder barge + summons + dismiss deployed; mechanism confirmed on live app, perceptual verdict pending user)
+Last updated: 2026-08-05 (ACT-huddle-20 — ceremony barge/standup polish deployed; NEW open item: agents lack a task-detail/DoD/artifact read tool)
+
+### ACT-huddle-20 (ceremony barge + stand-up polish — deployed live 2026-08-05, iterated from real transcripts)
+Driven by the user's live stand-up transcripts + the persisted `barge_route` logging. All DEPLOYED on main:
+- [DONE] Un-named barge pins to the interlocutor (named→current→most-recent speaker→host); `getLastSpeaker`.
+- [DONE] Instant barge row at speech-onset (`resolvePendingBarge`); sustained-speech cut-through (220ms).
+- [DONE] Barge routing decision persisted to transcript (`kind:"barge_route"`: target/winner/reason).
+- [DONE] Iris hijack fixed — function-word/1-char opener ("I…") no longer false-matches a name (addressedAgent STOPWORDS; 18/18 offline).
+- [DONE] Phantom "running a search" replay fixed — narration cursor persists across barges; `search_memory` gets its own cue.
+- [DONE] Host opener RESUMES after a barge (was non-resumable → jumped to next speaker).
+- [DONE] Grounding contradiction fixed — the date/time is answered from CONTEXT, not force-web-searched.
+- [DONE] Stand-up = STATUS REPORT only (additive ownerDirective): no asking the user / running a persona routine; blocker-only owners just state the blocker.
+- [DONE] Elle scripted-ask REMOVED from her snapshot (user-approved subtraction) — root cause was a literal "if no schedule, ask: [3 Qs]" in her persona.
+- [DONE] Handoff BEAT (~1.6s) between speakers + DYNAMIC varied sign-off (instruction, not script) → interjection window + barge-in-beat attributes to previous speaker.
+- [DONE] "Don't disavow a real board item" (additive bargeDirective) — Sam's "Research competitor's premium pricing" IS on the board as DONE today; he wrongly retracted it.
+- [CONFIRMED] Stand-up DONE window = 168h / 7 days (`CEREMONY_WINDOW_HOURS.standup`); fetch + report share it.
+- [TO DO — VERY SOON, user-greenlit scope] **`get_task_details` read tool — ALL SURFACES.** Agents currently have NO way to read a ticket's detail (description/DoD/deliverable) — the stand-up feeds only TITLES and there is no detail-read tool (get_tasks is thin; create_artifact is write-only). This is why Sam couldn't answer "what competitor/pricing?". Build a `get_task_details` tool that returns a task's description + `definition_of_done` + status/priority/due + linked artifacts (query `tasks.journey_tasks` + `artifacts.items` join, like `getBoardTasks`; add `description`, which `BoardTaskRow` omits). Mirror the `PRIORITIZE_TOOL`/`dispatchPrioritize` pattern in `lib/tasks/tools.ts` and **register in `runHuddleTurn` (both OpenAI + Lovable dispatch paths)** so it works EVERYWHERE the brain is active — group chat (all-members), 1:1 DMs, 1:1 VOICE calls, AND ceremonies — NOT ceremony-only (user's explicit scope). Add a system hint so the model calls it for "what's the detail/DoD/deliverable on X". Optional add-on: surface DoD in the ceremony `ownerDirective` context. Data (DoD/description) is populated via the confirm-intent/produce flow; artifacts already link to tasks (getBoardTasks). Investigated + pattern confirmed; ready to build on go.
+- [OPEN — USER LIVE TEST] all perceptual behavior (cut-off feel, beat pacing, varied sign-offs) is the user's live verdict.
+
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
 > claiming any item "done" without ACs + the verifier subagent / observed evidence).
