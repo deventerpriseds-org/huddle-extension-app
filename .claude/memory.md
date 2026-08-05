@@ -1,7 +1,7 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-05
 
-## Ceremony-barge routing UNIFIED into the router — "user calls Finn, Terry answers" fixed (2026-08-05) — built + tested, NOT yet deployed/user-confirmed
+## Ceremony-barge routing UNIFIED into the router — "user calls Finn, Terry answers" fixed (2026-08-05) — DEPLOYED main (run 31030010818 success), mechanism verified offline, NOT yet user-confirmed live
 Ground-truthed from the live standup transcript (run 16:24:35, `chat.ceremony_transcript`): the barge was
 **"Great, while you're doing that, uh, Finn, are you here?"** — "Finn" is **mid-sentence**; the client
 `resolveAddressedAgent` only checked the FIRST non-greeting token ("great"), returned `addressed:"none"`,
@@ -35,8 +35,10 @@ not `members`. So the router CAN reach Finn; the fast-path bypass just never let
   interlocutor, anti-Faith, @mention, non-barge→null so group chat untouched, absent-name→interlocutor).
   `scripts/router-winners.test.ts` 9/9 unchanged. `tsc --noEmit` + `npm run build` clean.
 - **NOT yet:** deployed to prod, or user-confirmed LIVE in a real standup (per the hard rule — mechanism
-  proven offline ≠ user's bug fixed). Branch `claude/setup-stop-hooks-skills-0h569y` (the deploy-race branch —
-  deploy `main` ONLY, merge main↔branch first).
+  proven offline ≠ user's bug fixed). **DEPLOYED on main (deploy-swa run 31030010818, success) via PR #23
+  (merged).** SWA is a server-side deploy → an already-loaded standup page must HARD-REFRESH before the fix
+  applies. NEXT: user runs a real standup, calls a non-speaking teammate by name mid-sentence; confirm via
+  `chat.ceremony_transcript` `barge_route` that `winner` = the named agent (not the interlocutor).
 
 ## WIP confirm-gate was ENABLED but LEAKING → made fail-closed + assist/produce router + chain scoped (2026-08-05) — deployed on main, ground-truthed
 ## CORRECTION + real root cause: WIP gate leaked because it was EMAIL-SCOPED under the wrong email; fix = default ON (2026-08-05) — deployed, ground-truthed
