@@ -126,7 +126,7 @@ const CONFIRM_JITTER_MAX_MS = 4 * 60 * 60_000;
 /** The directive the assigned agent runs to confirm intent + propose a Definition of Done. */
 function confirmIntentDirective(task: { id: string; title: string; assigned_agent: string | null }): string {
   return (
-    `This task was just staged for you on the board: "${task.title}". Before starting the work, ` +
+    `This task is on the board for you: "${task.title}". Before starting (or continuing) the work, ` +
     `confirm with the user what they actually want to achieve here — ground your understanding in ` +
     `their Executive Profile and anything you remember about their goals (already in your context). ` +
     `In ONE natural, brief message (not an interrogation): say what you believe they're trying to ` +
@@ -247,14 +247,18 @@ export async function runScheduledAutoWork(
   // docs/plan-wip-confirm-review-gate.md) — a pending (asked-but-unconfirmed) task occupies its UP_NEXT
   // slot but never competes for the DOING slot, so one unanswered ask can't starve the rest of the lane.
   const promotions: { task_id: string; status: string }[] = [];
-  type Candidate = { agent: string; task: BoardTaskRow };
+  // freshPromotion=false candidates are tasks ALREADY sitting in DOING (however they got there — a
+  // normal earlier promotion, or a race/stale-mirror read that skipped the gate entirely, as happened
+  // 2026-08-05: a task reached DOING and completed to IN_REVIEW without ever confirming intent). They
+  // must pass the SAME confirm-intent check as a fresh UP_NEXT->DOING promotion before they're eligible
+  // for a new research turn — closing that gap regardless of how a task lands in DOING.
+  type Candidate = { agent: string; task: BoardTaskRow; freshPromotion: boolean };
   const doingSlotCandidates: Candidate[] = [];
-  // Existing DOING tasks (already promoted, whether just now or in an earlier pass) always stay
-  // research candidates — retried every pass until an artifact exists — regardless of whether this
-  // agent is frozen or has room for a NEW promotion. Only a NEW UP_NEXT->DOING promotion is gated.
   const doingCandidates: BoardTaskRow[] = [];
   for (const [agent, bucket] of byAgent.entries()) {
-    doingCandidates.push(...bucket.doing.slice(0, DOING_CAP));
+    for (const t of bucket.doing.slice(0, DOING_CAP)) {
+      doingSlotCandidates.push({ agent, task: t, freshPromotion: false });
+    }
     const frozen = bucket.inReview.length >= REVIEW_CAP;
     if (frozen) continue;
     const room = Math.max(0, UP_NEXT_CAP - bucket.upNext.length);
@@ -262,7 +266,7 @@ export async function runScheduledAutoWork(
     for (const t of toPromote) promotions.push({ task_id: t.id, status: "UP_NEXT" });
     const upNextAfterTopUp = [...bucket.upNext, ...toPromote];
     if (bucket.doing.length < DOING_CAP && upNextAfterTopUp.length) {
-      doingSlotCandidates.push({ agent, task: upNextAfterTopUp[0] });
+      doingSlotCandidates.push({ agent, task: upNextAfterTopUp[0], freshPromotion: true });
     }
   }
 
@@ -298,7 +302,7 @@ export async function runScheduledAutoWork(
       // status === "asked": already sent, waiting on the user's reply — nothing to do this pass
     }
     if (promotedToDoing) {
-      promotions.push({ task_id: c.task.id, status: "DOING" });
+      if (c.freshPromotion) promotions.push({ task_id: c.task.id, status: "DOING" });
       doingCandidates.push(c.task);
     }
   }
