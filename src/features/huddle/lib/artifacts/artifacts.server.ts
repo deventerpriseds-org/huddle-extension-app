@@ -155,11 +155,17 @@ export async function listArtifacts(userEmail: string, f: ArtifactFilters = {}):
   return rows;
 }
 
+// Mime families the preview pane renders as text. Kept in sync with ArtifactsView.tsx's preview branch.
+const TEXT_PREVIEW_MIME = /^(text\/|application\/json|application\/csv)/;
+// Above this, skip the server-side text read (still get a working download link) — a preview pane
+// isn't the place to pull multi-MB files into memory on every open.
+const TEXT_PREVIEW_MAX_BYTES = 2_000_000;
+
 /** One artifact (scoped by email — a wrong owner gets null, so no cross-user read / SAS leak) + a fresh SAS url. */
 export async function getArtifact(
   userEmail: string,
   id: string,
-): Promise<(ArtifactRow & { url: string | null; blob_size: number | null }) | null> {
+): Promise<(ArtifactRow & { url: string | null; blob_size: number | null; text: string | null }) | null> {
   await ensureBootstrapped();
   const { rows } = await getPool().query<ArtifactRow>(
     `SELECT ${SELECT_COLS} FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
@@ -174,7 +180,16 @@ export async function getArtifact(
     url = null; // storage misconfigured — metadata still returns, UI shows no preview
   }
   const blob_size = await artifactBlobSize(row.blob_path);
-  return { ...row, url, blob_size };
+  // Read the text server-side (not via the client fetching the SAS url) — the storage account has no
+  // CORS rule for the app's origin, so a browser-side fetch() of the SAS URL is silently blocked while
+  // <img>/<iframe> loads of the same URL work fine (they aren't CORS-checked). Reading here sidesteps
+  // that entirely: this is a normal server-to-server Blob SDK call, no browser CORS involved.
+  let text: string | null = null;
+  if (TEXT_PREVIEW_MIME.test(row.mime) && (blob_size ?? 0) > 0 && (blob_size ?? 0) <= TEXT_PREVIEW_MAX_BYTES) {
+    const bytes = await getArtifactBlobBytes(row.blob_path);
+    if (bytes) text = bytes.toString("utf8").slice(0, 20_000);
+  }
+  return { ...row, url, blob_size, text };
 }
 
 /**
