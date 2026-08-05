@@ -1,6 +1,40 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-05
 
+## Grooming now CHAINS an auto-work pass so "Up next" fills (2026-08-05) — deployed on main, ground-truthed + Playwright-proven
+The gap: grooming (`dispatchGroomBacklog`, groom.ts) assigns/tags/ranks the backlog but **NEVER writes
+status** — so "Up next" (board lanes READY/UP_NEXT) stayed empty after a groom. Filling Up next is
+**auto-work's** job (`runScheduledAutoWork`, autowork.server.ts: BACKLOG→UP_NEXT cap 3/agent), which ran
+only on its own nightly cadence — so a fresh groom never populated Up next until hours later. This is the
+"separated responsibility from the nightly schedule builder" the user recalled; by-design, just missing
+the chain.
+- **FIX:** after a successful grooming write (`written > 0`), `dispatchGroomBacklog` waits
+  `MIRROR_SYNC_WAIT_MS=2500` (let journey's async pg_net mirror sync land the fresh ranks/assignments),
+  then runs ONE `runScheduledAutoWork(caller, {force:true})` bounded by `AUTOWORK_DEADLINE_MS=15000` in
+  try/catch — non-fatal so a slow/failed pass never hangs or fails the groom. Adds `promoted` + an
+  `autoworkNote` to the returned JSON. Auto-work buckets by journey status, so a task journey ALREADY
+  scheduled to UP_NEXT is kept and only counts against cap 3 (tops up around journey's schedule, not over
+  it) — the user's chosen "always top up to 3 (current behavior)" policy; auto-work SELECTION needed no
+  change, only the chaining.
+- **Both grooming paths flow through `dispatchGroomBacklog`, so both chain:** the in-chat `groom_backlog`
+  tool (Terry, huddle.functions.ts:2432/3162; the 55s `TOOL_TIMEOUT_OVERRIDES` at line 359 absorbs the
+  extra latency) AND the scheduled route `/api/public/run-grooming` → `runScheduledGrooming`
+  (grooming.server.ts:147, one pass). No double auto-work (the separate run-autowork cadence is
+  independent + idempotent).
+- **VERIFIED LIVE (deployed main):** baseline mirror = **UP_NEXT 0** (all BACKLOG/TODO/BLOCKED, the user's
+  "blank Up next"); `run-grooming.yml` (force:true) → `groomed:19`; re-queried mirror → **UP_NEXT 6,
+  DOING 1**. board-uat.yml (mobile Playwright) then showed the live pill row `Backlog 15 · Up next 6 ·
+  Doing 1 · Ready for review 4` with the Up-next lane populated (Sam #4/#9, Cole #8/#14, tags+avatars).
+  5/5 checks green.
+- **Testability:** `BoardCard` now carries `data-testid="board-card"` + `data-task-id` (BoardView.tsx) —
+  before, the board-uat card selector matched nothing and the visible-cards check passed only via an
+  empty-state fallback. board-uat's Up-next assertion keys off the pill's own count + absence of the
+  "Nothing in …" empty state (the authoritative live signal).
+- **Gotcha relearned:** the CCR session's egress now BLOCKS the SWA host `icy-flower-…azurestaticapps.net`
+  ("Host not in allowlist") — the `getTurnUpdates`/`sendHuddleMessage` server-fn fast-path from the
+  session is dead this environment. Drive live grooming/board checks through GHA workflows
+  (`run-grooming.yml`, `azure-pg-query.yml`, `board-uat.yml`) whose runners CAN reach the SWA.
+
 ## Ceremony barge → SINGLE responder + STT-tolerant summons + dismiss (2026-08-05) — deployed, MECHANISM confirmed on live app, perceptual verdict PENDING user
 Prior live transcript showed: a barge addressed to one agent answered by the WRONG agent (the active
 speaker), a narration/answer CHORUS (multiple agents piling onto one barge), casual "Yes?—go ahead"
