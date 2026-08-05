@@ -218,12 +218,12 @@ function fmtLines(items: TaskLine[], max = 6): string {
   if (!items.length) return "none";
   return items
     .slice(0, max)
-    .map((t) => `“${t.title}”${t.due_date ? ` (due ${fmtDate(t.due_date)})` : ""}${t.priority ? ` [${t.priority}]` : ""}`)
+    .map((t) => `"${t.title}"${t.due_date ? ` (due ${fmtDate(t.due_date)})` : ""}${t.priority ? ` [${t.priority}]` : ""}`)
     .join("; ");
 }
 function fmtBlocked(items: BlockedLine[], max = 6): string {
   if (!items.length) return "none";
-  return items.slice(0, max).map((b) => `“${b.title}” (${b.why})`).join("; ");
+  return items.slice(0, max).map((b) => `"${b.title}" (${b.why})`).join("; ");
 }
 
 /**
@@ -261,7 +261,7 @@ function reportDigest(report: CeremonyReport): string {
     )
     .join("\n");
   const blockerLines = report.blockers.length
-    ? report.blockers.map((b) => `- ${b.category}: “${b.title}” (${b.why})`).join("\n")
+    ? report.blockers.map((b) => `- ${b.category}: "${b.title}" (${b.why})`).join("\n")
     : "- none";
   return `Lanes:\n${laneLines || "- (no activity)"}\n\nBlockers needing the user:\n${blockerLines}`;
 }
@@ -314,7 +314,7 @@ export function bargeDirective(text: string): string {
 FIRST decide which of these it is:
 - BARE HAIL (they only called your name with no request yet — e.g. just "Hey Sam", "Sam?", "you there?") → reply with ONE short ready acknowledgment ("Yes?—go ahead.") and STOP. Do not guess a task, do not act. Wait for their actual request. A content-free "yes?" is acceptable ONLY in this bare-hail case.
 - A REAL request (a question, or a change/add/track/schedule/status command) → open with a brief acknowledgment that NAMES the specific thing they asked about — say the actual subject back ("the investor pitch", "the Nexus item"), e.g. "No problem — parking the investor pitch now." NEVER a generic "got it, on it" / "I'll dig into that" that could apply to anything: that does not prove you heard THEM and is exactly the wrong response. Then in the same breath do exactly what they asked:
-  - A question (including about what you were just saying, e.g. "what are you looking into?" / "dig into what?", or "more detail on that") → ANSWER it directly from the current context.
+  - A question (including about what you were just saying, e.g. "what are you looking into?" / "dig into what?", or "more detail on that") → ANSWER it directly from the current context. You JUST walked the board in this very stand-up, so if the answer is already known (e.g. you named a blocker moments ago, or it's in the update in front of you), STATE IT PLAINLY AND SPECIFICALLY NOW — name the actual task/blocker/status. Do NOT deflect a question you can already answer with "I'll follow up after the stand-up"; that deferral is ONLY for when you genuinely had to run a tool that hasn't returned yet (next paragraph), never for something you already know.
   - A change/add/track/schedule/status request (e.g. "mark the investor pitch done", "park that item", "add a task") → actually USE the right tool (update_task / create_huddle_task / etc.) to do it, then confirm what you did in board terms.
 
 Resolving "that"/"it": if they refer to "that", "it", "this one", resolve it from what was JUST said in this ceremony and NAME it explicitly in your reply. If genuinely more than one thing could be meant, ask ONE short "which one — the X or the Y?" question instead of guessing. Likewise if the task they NAME matches MORE THAN ONE task (e.g. a lookup returns both "Prepare investor pitch" and "Lock investor pitch"), do NOT just pick one — ask which one before you change anything.

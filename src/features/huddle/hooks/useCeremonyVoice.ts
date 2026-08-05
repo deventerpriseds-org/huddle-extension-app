@@ -561,9 +561,9 @@ export function useCeremonyVoice(hookOpts: {
             const selfBleed =
               audioQueueRef.current.isActive() && micLevelRef.current < SELF_BARGE_BLEED_FLOOR;
             if (selfBleed) {
-              // Still cancel any model response (we never use Realtime's own audio) but leave the
-              // ceremony speaker running — this was our own bleed, not a barge.
-              dc.send(JSON.stringify({ type: "response.cancel" }));
+              // Our own bleed, not a barge — leave the ceremony speaker running. NO response.cancel:
+              // this session is ears-only (create_response:false) so OpenAI never generates a response;
+              // a cancel here has nothing to cancel and only returns an "error" event (log spam).
               break;
             }
             // Barge detected: freeze the speaker (stop audio + kill the loop, keep the resume point).
@@ -572,15 +572,11 @@ export function useCeremonyVoice(hookOpts: {
               bargeFreeze();
             }
             // Fire SYNCHRONOUSLY so the caller parks its emit loop now — before STT resolves. Runs
-            // even between speakers (nothing to freeze) so a barge is never missed.
+            // even between speakers (nothing to freeze) so a barge is never missed. No response.cancel
+            // (ears-only session — nothing to cancel; see selfBleed note above).
             onBargeStartRef.current?.();
-            dc.send(JSON.stringify({ type: "response.cancel" }));
             break;
           }
-
-          case "input_audio_buffer.committed":
-            dc.send(JSON.stringify({ type: "response.cancel" }));
-            break;
 
           case "conversation.item.input_audio_transcription.completed": {
             const transcript = (msg.transcript as string | undefined)?.trim() ?? "";
