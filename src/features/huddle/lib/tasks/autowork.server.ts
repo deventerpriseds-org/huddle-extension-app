@@ -24,6 +24,7 @@
 import { backlogSignature } from "./grooming.server";
 import { AGENT_BY_ID, type AgentId } from "../../data/agents";
 import type { BoardTaskRow } from "./tasks.server";
+import { classifyTaskMode, modeProposalHint } from "./workability";
 
 type Caller = { entra_object_id?: string; entra_email?: string };
 
@@ -124,7 +125,18 @@ const CONFIRM_JITTER_MIN_MS = 15 * 60_000;
 const CONFIRM_JITTER_MAX_MS = 4 * 60 * 60_000;
 
 /** The directive the assigned agent runs to confirm intent + propose a Definition of Done. */
-function confirmIntentDirective(task: { id: string; title: string; assigned_agent: string | null }): string {
+function confirmIntentDirective(task: {
+  id: string;
+  title: string;
+  assigned_agent: string | null;
+  category?: string | null;
+  tags?: string[] | null;
+}): string {
+  // Assist/produce router: shape the proposal so the user CONFIRMS a concrete assumed action rather than
+  // explaining from scratch, and so an assist task (e.g. "Go to church") proposes a reminder, not a
+  // fabricated document. The mode hint also tells the agent to self-correct if the mode is wrong — the
+  // user's confirmation is the final catch for a mis-classification.
+  const mode = classifyTaskMode(task);
   return (
     `This task is on the board for you: "${task.title}". Before starting (or continuing) the work, ` +
     `confirm with the user what they actually want to achieve here — ground your understanding in ` +
@@ -132,6 +144,7 @@ function confirmIntentDirective(task: { id: string; title: string; assigned_agen
     `In ONE natural, brief message (not an interrogation): say what you believe they're trying to ` +
     `accomplish with this task, propose a concrete, testable Definition of Done, and ask them to ` +
     `confirm it, add to it, or correct it.\n` +
+    `${modeProposalHint(mode)}\n` +
     `Once you understand their reply (confirmed as-is, or with their additions/corrections folded in), ` +
     `call confirm_task_intent with task_id "${task.id}" and the final definition_of_done text — this ` +
     `locks it in. Do NOT call confirm_task_intent before they've actually replied; this first message ` +
@@ -189,7 +202,7 @@ interface AgentBucket {
  */
 export async function runScheduledAutoWork(
   caller: Caller | undefined,
-  opts: { timeZone?: string; force?: boolean; runId?: string } = {},
+  opts: { timeZone?: string; force?: boolean; runId?: string; promoteOnly?: boolean } = {},
 ): Promise<AutoWorkRunResult> {
   const runId =
     opts.runId?.trim() || `autowork-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -278,6 +291,39 @@ export async function runScheduledAutoWork(
     }
   }
 
+  // promoteOnly (the grooming→auto-work chain): ONLY top up UP_NEXT from the freshly-ranked backlog.
+  // Do NOT promote to DOING, enqueue research turns, or flip anything to review — all of that belongs to
+  // the full cadence pass, behind the confirm-intent gate. `promotions` at this point holds ONLY the
+  // BACKLOG→UP_NEXT top-up (DOING entries are pushed later, after the gate), and staging into UP_NEXT
+  // starts no work, so it needs no confirmation. This is what makes grooming fill "Up next" without ever
+  // "working" an unconfirmed task.
+  if (opts.promoteOnly) {
+    let promoted = 0;
+    if (promotions.length) {
+      try {
+        const { invokeJourneyTool } = await import("../journey/proxy.functions");
+        const r = await invokeJourneyTool({
+          toolName: "batch_update_tasks",
+          args: { updates: promotions },
+          caller: caller ?? {},
+          context: { source: "huddle" },
+        });
+        if (r.ok) {
+          try {
+            const p = JSON.parse(r.output || "{}") as { updated?: number };
+            promoted = typeof p.updated === "number" ? p.updated : promotions.length;
+          } catch {
+            promoted = promotions.length;
+          }
+        }
+      } catch {
+        /* top-up write failed — backlog stays as-is, retried by the next full pass */
+      }
+    }
+    await setAutoWorkSignature(email, signature);
+    return { ok: true, skipped: false, reason: "promote_only", enqueued: 0, promoted, blocked: 0, remaining: 0, runId };
+  }
+
   const engagementByTaskId = await getTaskEngagementStates(doingSlotCandidates.map((c) => c.task.id));
   const requiredByAgent = new Map(
     await Promise.all(
@@ -293,7 +339,9 @@ export async function runScheduledAutoWork(
   for (const c of doingSlotCandidates) {
     let promotedToDoing = false;
     const state = engagementByTaskId.get(c.task.id);
-    if (!requiredByAgent.get(c.agent)) {
+    if (!(requiredByAgent.get(c.agent) ?? true)) {
+      // Fail-closed: an agent missing from the map (or a fail-open upstream) defaults to REQUIRED, so a
+      // config hiccup can never silently treat a task as ungated and auto-promote it to DOING.
       promotedToDoing = true;
     } else {
       const status = state?.confirm_status ?? "awaiting";

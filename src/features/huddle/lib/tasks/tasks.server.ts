@@ -867,9 +867,20 @@ export async function ensureReviewFlip(
   // regardless of how it got into DOING — autowork's own promotion path is gated separately
   // (autowork.server.ts), but this is the single choke point every create_artifact dispatch path
   // shares, so it's the one place that closes the gap for ALL of them at once.
-  if (agentId) {
-    const { isStructuredWorkflowRequired } = await import("../identity/agent-workflow-config.server");
-    if (await isStructuredWorkflowRequired(userEmail, agentId)) {
+  {
+    const { isStructuredWorkflowRequired, isStructuredWorkflowRequiredForUser } = await import(
+      "../identity/agent-workflow-config.server"
+    );
+    // Resolve the requirement even when the caller passed a null agentId (the WorkerPayload
+    // `w.personaId ?? null` path) — previously `if (agentId)` skipped the gate entirely for a null
+    // persona, a genuine bypass. With no agent, fall back to the user-level default. Both resolvers
+    // fail CLOSED (require confirmation on a config-read error), and the flip requires an AFFIRMATIVE
+    // confirm_status==='confirmed' — never "proceed unless proven required" — so no combination of a
+    // null agent, a fail-open, or a stale read can push unconfirmed work into review.
+    const required = agentId
+      ? await isStructuredWorkflowRequired(userEmail, agentId)
+      : await isStructuredWorkflowRequiredForUser(userEmail);
+    if (required) {
       const state = await getTaskEngagementState(taskId);
       if (state?.confirm_status !== "confirmed") {
         return { ok: false, blocked: false, pendingConfirm: true };

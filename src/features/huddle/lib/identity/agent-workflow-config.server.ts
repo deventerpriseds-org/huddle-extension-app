@@ -144,16 +144,40 @@ export async function getWorkflowCaps(email: string, agentId: string): Promise<W
 /**
  * Resolve whether the confirm-intent/DoD gate + hardened review gate are REQUIRED for this
  * agent, right now, for this email. Per-agent override wins; falls back to the global default.
- * Never throws — a config-read failure resolves to `false` (today's existing, more autonomous
- * behavior) rather than silently blocking work.
+ * Never throws — but on a config-read failure it FAILS CLOSED (returns `true`, i.e. require
+ * confirmation). Rationale (2026-08-05 incident): the old fail-OPEN (`return false`) silently
+ * disabled BOTH gates during a transient config-pool error, letting 8 unconfirmed tasks reach
+ * IN_REVIEW. Holding a task out of review is recoverable (retried next pass); wrongly flipping
+ * unconfirmed work into review is not — so when in doubt, require the confirm. The error is logged
+ * (previously swallowed), so a recurring config failure is visible instead of silently permissive.
  */
 export async function isStructuredWorkflowRequired(email: string, agentId: string): Promise<boolean> {
   try {
     const cfg = await getAgentWorkflowConfig(email);
     const override = cfg.agent_overrides[agentId];
     return typeof override === "boolean" ? override : cfg.default_required;
-  } catch {
-    return false;
+  } catch (err) {
+    console.error(
+      `[isStructuredWorkflowRequired] config read failed for ${email}/${agentId}; failing CLOSED (required=true):`,
+      err instanceof Error ? err.message : err,
+    );
+    return true;
+  }
+}
+
+/**
+ * User-level requirement when the agent is unknown (e.g. an artifact save with no bound persona).
+ * Same fail-closed contract as `isStructuredWorkflowRequired` — a config-read failure returns `true`.
+ */
+export async function isStructuredWorkflowRequiredForUser(email: string): Promise<boolean> {
+  try {
+    return (await getAgentWorkflowConfig(email)).default_required;
+  } catch (err) {
+    console.error(
+      `[isStructuredWorkflowRequiredForUser] config read failed for ${email}; failing CLOSED (required=true):`,
+      err instanceof Error ? err.message : err,
+    );
+    return true;
   }
 }
 

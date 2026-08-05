@@ -234,7 +234,9 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
         await new Promise((r) => setTimeout(r, MIRROR_SYNC_WAIT_MS));
         const { runScheduledAutoWork } = await import("./autowork.server");
         const aw = await withTimeout(
-          runScheduledAutoWork(caller, { force: true }),
+          // promoteOnly: fill "Up next" from the freshly-ranked backlog ONLY. Grooming must NOT trigger
+          // research turns or review flips — those run on the auto-work cadence, behind the confirm gate.
+          runScheduledAutoWork(caller, { force: true, promoteOnly: true }),
           AUTOWORK_DEADLINE_MS,
           "post-groom autowork",
         );
