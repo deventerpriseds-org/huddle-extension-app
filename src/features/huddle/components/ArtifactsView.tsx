@@ -61,7 +61,7 @@ function ago(iso: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-type FullArtifact = ArtifactRow & { url?: string | null };
+type FullArtifact = ArtifactRow & { url?: string | null; text?: string | null };
 
 // E2E-only fixtures — DOUBLE-GATED (Vite DEV build AND VITE_E2E_AUTH_BYPASS=1), so this whole block is
 // dead-code-eliminated in the production bundle. It lets headless Playwright drive the real component
@@ -124,15 +124,12 @@ export function ArtifactsView() {
     setSel(null);
     setSelText(null);
     try {
+      // Text preview content comes back from the server call itself (read server-side via the Blob
+      // SDK) rather than a client-side fetch of the SAS url — the storage account has no CORS rule for
+      // this origin, so a browser fetch() of that url is silently blocked (img/iframe loads aren't).
       const { artifact } = await getArtifactFn({ data: { caller, id } });
       setSel(artifact);
-      // Fetch text content for markdown/plain/csv/json previews via the short-lived SAS.
-      if (artifact?.url && /^(text\/|application\/json|application\/csv)/.test(artifact.mime)) {
-        try {
-          const r = await fetch(artifact.url);
-          setSelText((await r.text()).slice(0, 20000));
-        } catch { setSelText(null); }
-      }
+      setSelText(artifact?.text ?? null);
     } catch { /* ignore */ }
   }, [caller]);
 
