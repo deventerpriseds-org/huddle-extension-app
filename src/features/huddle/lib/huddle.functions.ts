@@ -339,21 +339,8 @@ function stripFileMentionNarration(text: string): string {
 
 // Per-agent WIP-limited board flow: an agent's DOING task moves to IN_REVIEW the instant it actually
 // finishes its work (saves an artifact) — never to DONE. DONE is set ONLY by the user, by hand, in the
-// board UI (see docs on the flow in tasks/autowork.server.ts). Best-effort/non-fatal, mirroring
-// flag_blocker's board-status write: a failure here never fails the artifact save that triggered it.
-async function markTaskInReview(taskId: string, caller: { entra_object_id?: string; entra_email?: string } | undefined): Promise<void> {
-  try {
-    const { invokeJourneyTool } = await import("./journey/proxy.functions");
-    await invokeJourneyTool({
-      toolName: "update_task",
-      args: { task_id: taskId, status: "IN_REVIEW" },
-      caller: caller ?? {},
-      context: { source: "huddle" },
-    });
-  } catch {
-    /* non-fatal — the board just won't reflect the move to "Ready for review" until a later sync */
-  }
-}
+// board UI (see docs on the flow in tasks/autowork.server.ts). The actual flip + retry + blocked-flag
+// logic lives in tasks/tasks.server.ts's ensureReviewFlip (used here and by autowork's self-heal pass).
 
 // Cross-cutting tool resilience: EVERY agent tool call is bounded by a timeout and its errors are
 // turned into a normal tool RESULT (never a throw). A hung or failing tool must not sink the turn —
@@ -2180,18 +2167,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   const { runReviewGate } = await import("./tasks/review-gate.server");
                   const gate = await runReviewGate({ taskId: taskIdRaw, agentId: winner.id, email, content, claim: claimAction });
                   if (gate.proceed) {
-                    await markTaskInReview(taskIdRaw, data.caller);
-                    const { markEnteredReview, ensureNextReviewPing } = await import("./tasks/tasks.server");
-                    await markEnteredReview(taskIdRaw, email).catch(() => {});
-                    // Seed the 48h post-review recheck's first fire (jittered so multiple tasks
-                    // entering review together don't all ping 48h later in the same instant).
-                    const REVIEW_PING_BASE_MS = 48 * 60 * 60_000;
-                    const REVIEW_PING_JITTER_MS = 2 * 60 * 60_000;
-                    await ensureNextReviewPing(
-                      taskIdRaw,
-                      email,
-                      new Date(Date.now() + REVIEW_PING_BASE_MS + Math.random() * REVIEW_PING_JITTER_MS).toISOString(),
-                    ).catch(() => {});
+                    const { ensureReviewFlip } = await import("./tasks/tasks.server");
+                    await ensureReviewFlip(taskIdRaw, email, data.caller, winner.id);
                   }
                   if (gate.gated) {
                     reviewSuffix = ` · ${gate.note}`;
@@ -2772,18 +2749,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   const { runReviewGate } = await import("./tasks/review-gate.server");
                   const gate = await runReviewGate({ taskId: taskIdRaw, agentId: winner.id, email, content, claim: claimAction });
                   if (gate.proceed) {
-                    await markTaskInReview(taskIdRaw, data.caller);
-                    const { markEnteredReview, ensureNextReviewPing } = await import("./tasks/tasks.server");
-                    await markEnteredReview(taskIdRaw, email).catch(() => {});
-                    // Seed the 48h post-review recheck's first fire (jittered so multiple tasks
-                    // entering review together don't all ping 48h later in the same instant).
-                    const REVIEW_PING_BASE_MS = 48 * 60 * 60_000;
-                    const REVIEW_PING_JITTER_MS = 2 * 60 * 60_000;
-                    await ensureNextReviewPing(
-                      taskIdRaw,
-                      email,
-                      new Date(Date.now() + REVIEW_PING_BASE_MS + Math.random() * REVIEW_PING_JITTER_MS).toISOString(),
-                    ).catch(() => {});
+                    const { ensureReviewFlip } = await import("./tasks/tasks.server");
+                    await ensureReviewFlip(taskIdRaw, email, data.caller, winner.id);
                   }
                   if (gate.gated) {
                     reviewSuffix = ` · ${gate.note}`;
@@ -4060,7 +4027,10 @@ async function runWorkerTurn(record: {
           });
           artifactId = id;
           artifactName = name;
-          if (a.task_id) await markTaskInReview(String(a.task_id), payload.caller);
+          if (a.task_id) {
+            const { ensureReviewFlip } = await import("./tasks/tasks.server");
+            await ensureReviewFlip(String(a.task_id), email, payload.caller, w.personaId ?? null);
+          }
           return JSON.stringify({ ok: true, id, deepLink });
         } catch (err) {
           return JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) });

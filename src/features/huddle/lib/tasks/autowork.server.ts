@@ -352,6 +352,19 @@ export async function runScheduledAutoWork(
   const withArtifact = new Set(existing.map((a) => a.task_id).filter(Boolean) as string[]);
   const candidates = doingCandidates.filter((t) => !withArtifact.has(t.id));
 
+  // Self-heal: a DOING task that already has an artifact should have flipped to IN_REVIEW the instant
+  // it was saved (create_artifact -> ensureReviewFlip, tasks.server.ts). If that write is still pending
+  // — e.g. the review gate sent it back for one revision and the corrective pass never came — it would
+  // otherwise sit here silently forever, since the idempotency filter above never reconsiders it. Retry
+  // the flip every pass instead; ensureReviewFlip itself flags a repeatedly-failing task via
+  // task_blockers, which drops it out of getOpenAssignedTasks so it surfaces to the user rather than
+  // looping invisibly. (This is what stranded 5 real tasks for ~9 days — 2026-08-04 incident.)
+  const stuckWithArtifact = doingCandidates.filter((t) => withArtifact.has(t.id));
+  if (stuckWithArtifact.length) {
+    const { ensureReviewFlip } = await import("./tasks.server");
+    await Promise.all(stuckWithArtifact.map((t) => ensureReviewFlip(t.id, email, caller, t.assigned_agent).catch(() => {})));
+  }
+
   // Blocked = tasks an agent flagged (a task_blockers row) — with the REAL reason it recorded. Not a guess.
   const board = await getBoardTasks(email);
   const blockers = await getTaskBlockers(email);

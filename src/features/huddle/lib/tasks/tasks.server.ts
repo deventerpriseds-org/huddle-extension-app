@@ -698,6 +698,61 @@ export async function confirmTaskIntent(taskId: string, userEmail: string, dod: 
   );
 }
 
+/**
+ * Flip a task DOING -> IN_REVIEW the instant finished work is saved, retrying once before giving up
+ * silently. This replaces a bare fire-and-forget journey write that used to swallow its own failure
+ * (huddle.functions.ts's old markTaskInReview): if the write failed, the task kept its artifact but
+ * never left DOING, and nothing ever looked at it again — autowork.server.ts treats "has an artifact"
+ * as "already handled," so the task was permanently stuck with no signal to the user. Five real tasks
+ * were found stranded this way for ~9 days (2026-08-04 incident).
+ *
+ * On a second consecutive failure, flag it via the SAME task_blockers mechanism flag_blocker uses
+ * (setTaskBlocker) instead of retrying forever — getOpenAssignedTasks already excludes blocked tasks,
+ * so this surfaces the stall in the user's blocked report rather than looping silently.
+ */
+export async function ensureReviewFlip(
+  taskId: string,
+  userEmail: string,
+  caller: { entra_object_id?: string; entra_email?: string } | undefined,
+  agentId?: string | null,
+): Promise<{ ok: boolean; blocked: boolean }> {
+  const { invokeJourneyTool } = await import("../journey/proxy.functions");
+  const attempt = async (): Promise<boolean> => {
+    try {
+      const r = await invokeJourneyTool({
+        toolName: "update_task",
+        args: { task_id: taskId, status: "IN_REVIEW" },
+        caller: caller ?? {},
+        context: { source: "huddle" },
+      });
+      return r.ok;
+    } catch {
+      return false;
+    }
+  };
+  for (let i = 0; i < 2; i++) {
+    if (await attempt()) {
+      await markEnteredReview(taskId, userEmail).catch(() => {});
+      const REVIEW_PING_BASE_MS = 48 * 60 * 60_000;
+      const REVIEW_PING_JITTER_MS = 2 * 60 * 60_000;
+      await ensureNextReviewPing(
+        taskId,
+        userEmail,
+        new Date(Date.now() + REVIEW_PING_BASE_MS + Math.random() * REVIEW_PING_JITTER_MS).toISOString(),
+      ).catch(() => {});
+      await clearTaskBlocker(taskId).catch(() => {});
+      return { ok: true, blocked: false };
+    }
+  }
+  await setTaskBlocker(
+    userEmail,
+    taskId,
+    "Finished work couldn't be marked ready for review after two attempts — needs a look.",
+    agentId ?? null,
+  ).catch(() => {});
+  return { ok: false, blocked: true };
+}
+
 // ---- General recurring-job scheduler (Azure Huddle PG) ---------------------------------------------
 
 export interface ScheduledJob {
