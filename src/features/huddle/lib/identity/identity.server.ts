@@ -44,6 +44,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS profiles_username_lower_key
   ON identity.profiles (lower(username));
 CREATE UNIQUE INDEX IF NOT EXISTS profile_emails_email_lower_key
   ON identity.profile_emails (lower(email));
+
+-- Durable last-known-good cache of the journey identity resolution (whoami), keyed by the sign-in
+-- (login) email. Purpose: when journey whoami transiently fails, resolveJourneyIdentity serves the
+-- last successful { user_id, canonical email, timezone } from here INSTEAD of falling back to the raw
+-- login email — which was scoping the same user under two emails (dev@ vs von.ellis@) and blanking the
+-- UI on a whoami blip (2026-08-05). Additive/read-model only; safe to truncate (repopulates on the next
+-- successful whoami).
+CREATE TABLE IF NOT EXISTS identity.identity_cache (
+  login_email TEXT PRIMARY KEY,
+  user_id     TEXT,
+  email       TEXT,
+  time_zone   TEXT,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -265,6 +279,69 @@ export async function addEmail(oid: string, email: string): Promise<ProfileBundl
   const bundle = await fetchBundle(oid);
   if (!bundle) throw new Error("Profile not found");
   return bundle;
+}
+
+/**
+ * Resolve an email to its owning profile's stable `entra_object_id` via the local profile_emails map.
+ * This is the LOCAL, whoami-independent identity key: both of a user's emails (dev@ / von.ellis@) point
+ * at one object_id. Returns null when the email isn't linked to any profile (fail-closed for callers).
+ */
+export async function resolveObjectIdByEmail(email: string | undefined | null): Promise<string | null> {
+  const e = (email ?? "").trim();
+  if (!e) return null;
+  try {
+    await ensureBootstrapped();
+    const r = await getPool().query<{ entra_object_id: string }>(
+      `SELECT entra_object_id FROM identity.profile_emails WHERE lower(email) = lower($1) LIMIT 1`,
+      [e],
+    );
+    return r.rowCount && r.rowCount > 0 ? r.rows[0].entra_object_id : null;
+  } catch {
+    return null; // identity DB unavailable — caller decides (fail-closed)
+  }
+}
+
+/** Persist the last successful journey-identity resolution for a login email (best-effort upsert). */
+export async function cacheJourneyIdentity(
+  loginEmail: string,
+  id: { userId?: string; email?: string; timeZone?: string },
+): Promise<void> {
+  const login = (loginEmail ?? "").trim().toLowerCase();
+  if (!login) return;
+  try {
+    await ensureBootstrapped();
+    await getPool().query(
+      `INSERT INTO identity.identity_cache (login_email, user_id, email, time_zone, updated_at)
+       VALUES ($1,$2,$3,$4, now())
+       ON CONFLICT (login_email) DO UPDATE SET
+         user_id = COALESCE(EXCLUDED.user_id, identity.identity_cache.user_id),
+         email = COALESCE(EXCLUDED.email, identity.identity_cache.email),
+         time_zone = COALESCE(EXCLUDED.time_zone, identity.identity_cache.time_zone),
+         updated_at = now()`,
+      [login, id.userId ?? null, id.email ?? null, id.timeZone ?? null],
+    );
+  } catch {
+    /* best-effort — a cache write failure must never break identity resolution */
+  }
+}
+
+/** Read the durable last-known-good journey identity for a login email (used when whoami fails). */
+export async function getCachedJourneyIdentity(
+  loginEmail: string,
+): Promise<{ userId?: string; email?: string; timeZone?: string } | null> {
+  const login = (loginEmail ?? "").trim().toLowerCase();
+  if (!login) return null;
+  try {
+    await ensureBootstrapped();
+    const r = await getPool().query<{ user_id: string | null; email: string | null; time_zone: string | null }>(
+      `SELECT user_id, email, time_zone FROM identity.identity_cache WHERE login_email = $1`,
+      [login],
+    );
+    if (!r.rowCount) return null;
+    return { userId: r.rows[0].user_id ?? undefined, email: r.rows[0].email ?? undefined, timeZone: r.rows[0].time_zone ?? undefined };
+  } catch {
+    return null;
+  }
 }
 
 export async function removeEmail(oid: string, emailId: string): Promise<ProfileBundle> {

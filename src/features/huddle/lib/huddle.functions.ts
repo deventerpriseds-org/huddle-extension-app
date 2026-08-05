@@ -698,26 +698,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // responder set): the queue + decision come straight from the persisted progress. `routed` is a
     // thin shell carrying only the frozen decision; the driver reads the remaining queue, not winners.
     let routed: RouteResult;
+    // A ceremony barge no longer force-pins a target and skips the router. It flows through the SAME
+    // router (routeMessageLLM / routeMessage), which runs the deterministic barge quick-route FIRST
+    // (named agent → @mention → interlocutor, no LLM) and only falls to the semantic route when
+    // nothing resolves. `data.targetAgentId` on a barge carries the INTERLOCUTOR (who held the floor),
+    // passed to the router as `interlocutorId` — the authoritative name pick is now the router's.
+    const isBarge = !!data.ceremonyBarge;
     if (resume) {
       routed = { winners: [], interjectors: [], decision: resume.decision };
-    } else if (data.ceremonyBarge && data.targetAgentId && data.members.includes(data.targetAgentId)) {
-      // CEREMONY BARGE FAST PATH: the client already resolved WHO this barge is addressed to (or the
-      // agent who was just speaking). Route to that ONE agent — skip the multi-winner LLM router
-      // entirely. This is what makes a barge fast and single-voiced: no pile-on, no wrong-agent grab,
-      // no narration chorus. Scoped to ceremonyBarge, so the normal all-members group chat (which has
-      // no target and relies on the content router) is untouched.
-      routed = {
-        winners: [data.targetAgentId],
-        interjectors: [],
-        decision: {
-          signal: "mention",
-          winnerId: data.targetAgentId,
-          runnerUpId: null,
-          interjected: false,
-          scores: { [data.targetAgentId]: 1 },
-          reason: "ceremony barge → addressed agent (fast path, single responder)",
-        },
-      };
     } else {
     const explicitMentions = parseMentions(
       data.text,
@@ -727,9 +715,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // winners AND a prose-named work-owner is still routed — see routing.ts). Previously any @mention
     // forced the deterministic mention-only route, dropping the prose-named collaborator ("Tess, scope
     // X, then @cole …" → Cole only). 1:1 and missing-key still fall back to keyword routing below.
+    // A ceremony barge routes through the LLM path too (scope is "group"); its `targetAgentId` is the
+    // interlocutor, not a hard 1:1 target, so it must NOT disqualify LLM routing the way a real 1:1
+    // target does. The barge quick-route inside the router resolves the winner deterministically before
+    // any LLM call anyway — the LLM only runs if a barge names nobody and has no interlocutor.
     const canLLMRoute =
       data.scope === "group" &&
-      !data.targetAgentId &&
+      (isBarge || !data.targetAgentId) &&
       (routerCfg.backend === "openai" ? !!openaiKey : !!lovableKey);
 
     if (
@@ -765,7 +757,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           scope: data.scope,
           members: data.members,
           history: data.history as HuddleMessage[],
-          targetAgentId: data.targetAgentId,
+          // On a barge, targetAgentId is the interlocutor, not a hard target → pass it as such.
+          targetAgentId: isBarge ? undefined : data.targetAgentId,
+          ceremonyBarge: isBarge,
+          interlocutorId: isBarge ? data.targetAgentId : undefined,
         },
         invocation,
       );
@@ -788,7 +783,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         scope: data.scope,
         members: data.members,
         history: data.history as HuddleMessage[],
-        targetAgentId: data.targetAgentId,
+        targetAgentId: isBarge ? undefined : data.targetAgentId,
+        ceremonyBarge: isBarge,
+        interlocutorId: isBarge ? data.targetAgentId : undefined,
       });
     }
     } // end !resume routing

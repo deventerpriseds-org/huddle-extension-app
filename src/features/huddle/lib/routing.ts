@@ -2,6 +2,7 @@ import { generateText, NoObjectGeneratedError, Output } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type Agent, type AgentId } from "../data/agents";
 import { ownershipMarker } from "./capabilities";
+import { resolveAddressedAgent } from "./addressedAgent";
 import type { HuddleMessage, RoutingDecision } from "../data/seed";
 
 // stem match — first 5 chars, word-boundary
@@ -64,6 +65,15 @@ export interface RouteInput {
   members: AgentId[];
   history: HuddleMessage[];
   targetAgentId?: AgentId;
+  /**
+   * Ceremony-barge context. When `ceremonyBarge` is set, routing runs the deterministic
+   * barge quick-route FIRST (named agent → @mention → interlocutor), and only falls to the
+   * semantic LLM route when nothing resolves. `interlocutorId` is who currently holds the
+   * floor (the agent just speaking / most-recently spoke) — an un-named barge is directed at
+   * THEM (the movie-pause model), never a topic/capability grab.
+   */
+  ceremonyBarge?: boolean;
+  interlocutorId?: AgentId;
 }
 
 export interface RouteResult {
@@ -78,7 +88,65 @@ export interface RouteResult {
   interjectors?: AgentId[];
 }
 
+/**
+ * Deterministic ceremony-barge resolution — the UNIFIED quick track. Returns a single-responder
+ * RouteResult with NO LLM call when it can, or null when the caller should run the full semantic
+ * route. This is the one place the "quick vs complex" decision lives (it replaces the old
+ * huddle.functions.ts fast-path bypass that skipped the router entirely). Order:
+ *   1. A present agent NAMED anywhere in the barge (STT-tolerant, all tokens — via the shared
+ *      resolveAddressedAgent, with the interlocutor as the fuzzy anchor/tiebreak). "…Finn, are you
+ *      here?" → Finn, with zero LLM latency. This is the fix for "user says Finn, Terry answers".
+ *   2. An explicit @mention.
+ *   3. No name resolved → the interlocutor (whoever holds the floor). An un-named barge is a
+ *      pause-and-continue directed at the current speaker — NEVER a topic/capability grab (the
+ *      "why was Faith talking" regression guard).
+ *   4. No name AND no known interlocutor (rare — a barge in the opening beat) → null, so the caller
+ *      runs the full LLM route.
+ * Returns null for any non-barge input, so normal group/1:1 routing is completely untouched.
+ */
+export function bargeQuickRoute(input: RouteInput): RouteResult | null {
+  if (!input.ceremonyBarge) return null;
+  const present = AGENTS.filter((a) => input.members.includes(a.id));
+  if (present.length === 0) return null;
+
+  const single = (id: AgentId, reason: string): RouteResult => ({
+    winners: [id],
+    interjectors: [],
+    decision: {
+      signal: "mention",
+      scores: { [id]: 1 } as Partial<Record<AgentId, number>>,
+      winnerId: id,
+      runnerUpId: null,
+      interjected: false,
+      reason,
+    },
+  });
+
+  // 1. Named agent — the authoritative addressed-by-name pick (shared resolver, all tokens).
+  const presentMembers = present.map((a) => ({ id: a.id, firstName: a.name.split(" ")[0] }));
+  const addressed = resolveAddressedAgent(input.text, presentMembers, input.interlocutorId ?? null);
+  if (addressed.kind === "agent" && input.members.includes(addressed.agentId as AgentId)) {
+    return single(addressed.agentId as AgentId, "ceremony barge → named agent (quick, no LLM)");
+  }
+
+  // 2. Explicit @mention.
+  const mentioned = parseMentions(input.text, present).filter((id) => input.members.includes(id));
+  if (mentioned.length > 0) {
+    return single(mentioned[0], "ceremony barge → @mention (quick, no LLM)");
+  }
+
+  // 3. No name → hold the floor with the interlocutor (movie-pause model; anti-Faith-grab guard).
+  if (input.interlocutorId && input.members.includes(input.interlocutorId)) {
+    return single(input.interlocutorId, "ceremony barge → interlocutor (no name; hold the floor)");
+  }
+
+  // 4. No name, no interlocutor → let the caller run the full semantic route.
+  return null;
+}
+
 export function routeMessage(input: RouteInput): RouteResult {
+  const barge = bargeQuickRoute(input);
+  if (barge) return barge;
   const { text, scope, members, history, targetAgentId } = input;
   const present = AGENTS.filter((a) => members.includes(a.id));
 
@@ -326,6 +394,12 @@ export async function routeMessageLLM(
   input: RouteInput,
   invocation: RouterInvocation,
 ): Promise<RouteResult> {
+  // Ceremony barge → deterministic quick track FIRST (named agent / @mention / interlocutor), no LLM
+  // call. Only a barge that resolves to NOTHING (no name, no interlocutor) falls through to the
+  // semantic route below. Non-barge input returns null here and routes exactly as before.
+  const barge = bargeQuickRoute(input);
+  if (barge) return barge;
+
   const { text, scope, members, history, targetAgentId } = input;
   const present = AGENTS.filter((a) => members.includes(a.id));
 

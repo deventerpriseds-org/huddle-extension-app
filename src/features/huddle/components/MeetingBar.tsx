@@ -906,21 +906,21 @@ function MeetingRoom({
       return;
     }
 
-    // SINGLE RESPONDER for this barge — pinned to the user's INTERLOCUTOR, never a topic/capability
-    // router pick. Resolution order (AC-4): named agent → current speaker → MOST-RECENT speaker → host.
-    // The most-recent fallback is the fix for "why was Faith talking at all": an un-named barge that
-    // landed right after a summons released Terry's floor had no `activeSpeaker`, fell to the router, and
-    // the web-search OWNER (Faith) won — an agent the user never addressed. Pinning to the last speaker
-    // and always sending a valid targetAgentId makes the server fast-path force exactly the interlocutor.
-    const bargeTarget: AgentId =
-      addressed.kind === "agent"
-        ? (addressed.agentId as AgentId)
-        : ((ceremonyVoiceRef.current.activeSpeaker as AgentId | null) ??
-          (ceremonyVoiceRef.current.getLastSpeaker() as AgentId | null) ??
-          members[0]);
+    // The INTERLOCUTOR — whoever holds the floor (current speaker → most-recent speaker → host). This
+    // is sent to the server as the barge's `targetAgentId`, but the server now treats it as a HINT, not
+    // a hard pin: the unified router (routeMessageLLM/bargeQuickRoute) resolves an addressed NAME from
+    // the barge text itself (STT-tolerant, all tokens) and only falls back to this interlocutor when the
+    // barge names nobody. That fixes both live bugs at once: "…Finn, are you here?" now reaches Finn
+    // (the server reads the mid-sentence name the client's pre-resolve may miss), while a genuinely
+    // un-named barge still holds the floor with the interlocutor — never a topic grab ("why was Faith
+    // talking"). The client no longer force-pins the addressed agent; the server is authoritative.
+    const interlocutorId: AgentId =
+      (ceremonyVoiceRef.current.activeSpeaker as AgentId | null) ??
+      (ceremonyVoiceRef.current.getLastSpeaker() as AgentId | null) ??
+      members[0];
 
     // The frozen speaker (the row actually being cut) survives bargeFreeze. Mark it interrupted so the
-    // transcript renders the cut — but this agent does NOT necessarily answer (the bargeTarget above does).
+    // transcript renders the cut — but this agent does NOT necessarily answer (the server-resolved winner does).
     const interrupted = ceremonyVoiceRef.current.activeSpeaker;
     if (interrupted) {
       markLastAgentTurnInterrupted();
@@ -953,14 +953,15 @@ function MeetingRoom({
 
     try {
       const cfg = useBackendsStore.getState().config;
-      // Route the barge through Huddle's REAL brain, but as a SINGLE-RESPONDER turn: scope:"group" (so
-      // the responder gets the full ceremony scene/roster) + ceremonyBarge:true + targetAgentId=
-      // bargeTarget (the client-resolved addressed agent, else the agent just speaking). The server's
-      // ceremony-barge fast path (huddle.functions.ts) sees ceremonyBarge+targetAgentId and forces
-      // winners:[targetAgentId] — the multi-winner LLM router is SKIPPED entirely, which is what kills
-      // the wrong-agent grab, the pile-on, and the narration chorus. (We resolve WHO on the client
-      // because it has the live activeSpeaker + STT-tolerant name match; the router's semantic pick
-      // was overkill for a barge and is what let the wrong agent answer.) The recent ceremony
+      // Route the barge through Huddle's REAL brain, as a SINGLE-RESPONDER turn: scope:"group" (so the
+      // responder gets the full ceremony scene/roster) + ceremonyBarge:true + targetAgentId=
+      // interlocutorId (who held the floor). The server's UNIFIED barge router (bargeQuickRoute in
+      // routing.ts) treats targetAgentId as the interlocutor HINT, resolves an addressed NAME from the
+      // text first (STT-tolerant, all tokens — catches a mid-sentence "…Finn, are you here?" the client
+      // pre-resolve may miss), and only falls back to the interlocutor when the barge names nobody. Still
+      // a single responder — no pile-on, no chorus — but now the RIGHT one: the authoritative name pick
+      // moved server-side (the old client fast-path pin let the interlocutor answer over a named agent).
+      // The recent ceremony
       // transcript rides along as `history` and ceremonyBarge:true makes the server layer the existing
       // bargeDirective() onto the responder's scene, so the reply is stand-up-aware and cut-in-aware
       // instead of a generic off-context answer. Kept SYNCHRONOUS (no turnId ⇒ non-durable, invisible
@@ -1040,7 +1041,7 @@ function MeetingRoom({
             members,
             history: buildCeremonyHistory(transcriptRef.current, huddleIdRef.current, text),
             ceremonyBarge: true,
-            targetAgentId: bargeTarget, // server ceremony-barge fast path → this ONE agent answers
+            targetAgentId: interlocutorId, // interlocutor HINT; server resolves the addressed name from text
             ceremonyRunId: runIdRef.current ?? undefined, // tag tool calls to this run for debug tracking
             router: { ...cfg.router, interjections: false, soloOnCoverage: true },
             agents: cfg.agents,
@@ -1065,9 +1066,10 @@ function MeetingRoom({
       );
       // PERSIST the routing decision to the ceremony transcript so "why did agent X answer this barge"
       // is a LOGGED FACT next time, not a guess — the exact question ("why was Faith talking at all")
-      // this run couldn't answer. Records the barge text, who the CLIENT pinned it to (bargeTarget), who
-      // the SERVER actually made winner, and the reason. If target !== winner, that's the routing bug on
-      // record. System row (kind:"barge_route"), never spoken, best-effort — must not block the answer.
+      // this run couldn't answer. Records the barge text, the client's pre-resolve kind, the interlocutor
+      // hint sent, who the SERVER actually made winner, and the reason. winner !== interlocutor now means
+      // the server correctly REDIRECTED to a named agent (the fix working), not a bug. System row
+      // (kind:"barge_route"), never spoken, best-effort — must not block the answer.
       try {
         const winnerId = res.decision?.winnerId ?? res.replies?.[0]?.agentId ?? null;
         persistCeremonyTurnRef.current({
@@ -1076,9 +1078,9 @@ function MeetingRoom({
           text: JSON.stringify({
             barge: text.slice(0, 160),
             addressed: addressed.kind,
-            target: bargeTarget,
+            interlocutor: interlocutorId,
             winner: winnerId,
-            matched: bargeTarget === winnerId,
+            redirected: interlocutorId !== winnerId,
             reason: res.decision?.reason ?? null,
           }),
           ts: Date.now(),
