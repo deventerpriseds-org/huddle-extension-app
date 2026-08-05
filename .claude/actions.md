@@ -1,5 +1,5 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-07-31 (ACT-huddle-12 problem #1 — Transcript/Chat tabs — implemented + deployed + verifier PASS, awaiting user live confirmation; also closes the mechanism for ACT-huddle-6 same-brain 1:1 chat/voice)
+Last updated: 2026-08-05 (ACT-huddle-19 — ceremony single-responder barge + summons + dismiss deployed; mechanism confirmed on live app, perceptual verdict pending user)
 
 > Enforced by `.claude/settings.json` (SessionStart surfaces this; the Stop gate blocks
 > claiming any item "done" without ACs + the verifier subagent / observed evidence).
@@ -1552,6 +1552,21 @@ subordinate). Full principle + the collision it prevents recorded in memory.md (
   (exclude parked from grooming candidates + preserve control tags), pending user go-ahead.
 - [OPEN — bug] near-duplicate tasks ("Prepare investor pitch" vs "Lock investor pitch") — parking one
   doesn't park the twin; scheduler booked the un-parked one. Separate dedup concern.
+
+### ACT-huddle-19 (ceremony barge → ONE right responder + STT-tolerant summons + dismiss)
+User (2026-08-05, from a live transcript): barges hit the WRONG agent, a narration/answer CHORUS piled on,
+"Yes?—go ahead" casual register, and "So, never mind" hallucinated a file-request. Directive: a lightning
+fast router routes every ceremony barge to ONE agent; must NOT impact the all-members group chat; ambiguous
+name → 1-line clarify; foundation first: "hey Sam" → instant cut-off + quick formal ack.
+- [DONE — deployed on main ca7ad60] Client resolves ONE responder (`addressedAgent.ts`) → `targetAgentId`;
+  server ceremony-barge fast path forces `winners:[target]`, skips multi-winner router (scoped to
+  `ceremonyBarge` only — all-members chat untouched). Instant formal summons ack; ambiguous → 1-line
+  clarify; dismiss → resume, no turn. Evidence: run 31007112517 (Elle mid-update → "Hey Terry" → TERRY
+  acks; single-agent coherent answers; tool-barge speaks). Read critically, not by string-match.
+- [DONE — this session] harness ack-detector fixed to `\bsir\b` (was `/yes,?\s*sir/`, false smoke fail);
+  stale barge-routing comment corrected to match the single-responder design. main = 96773b4.
+- [OPEN — USER LIVE TEST] cut-off immediacy + voice FEEL is the user's verdict ("I will test it myself").
+  Synthetic harness is smoke/logic only. Dismiss path + resume-after-final-barge not exercised by this run.
 
 ### ACT-huddle-18 (ceremony speed — TWO toggleable engines, optimize current first, then streaming; compare & pick default)
 User directive (2026-08-04): develop so we can TOGGLE between approaches and switch back if a new one
