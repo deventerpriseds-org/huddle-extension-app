@@ -53,13 +53,14 @@ export const loadWorkspace = createServerFn({ method: "POST" })
   .inputValidator((d) => AuthInput.parse(d))
   .handler(async ({ data }) => {
     const { verifyEntraIdToken } = await import("@/lib/entra-verify.server");
-    const { getOrCreateProfile } = await import(
+    const { getOrCreateProfile, canonicalOid } = await import(
       "@/features/huddle/lib/identity/identity.server"
     );
     const claims = await verifyEntraIdToken(data.idToken);
+    const oid = await canonicalOid(claims.oid, claims.email);
     // Ensure the profile row exists so FK is satisfied on subsequent save.
-    await getOrCreateProfile({ oid: claims.oid, email: claims.email, name: claims.name });
-    return loadImpl(claims.oid);
+    await getOrCreateProfile({ oid, email: claims.email, name: claims.name });
+    return loadImpl(oid);
   });
 
 export const saveWorkspace = createServerFn({ method: "POST" })
@@ -71,7 +72,9 @@ export const saveWorkspace = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const { verifyEntraIdToken } = await import("@/lib/entra-verify.server");
+    const { canonicalOid } = await import("@/features/huddle/lib/identity/identity.server");
     const claims = await verifyEntraIdToken(data.idToken);
+    const oid = await canonicalOid(claims.oid, claims.email);
     let parsed: unknown;
     try {
       parsed = JSON.parse(data.stateJson);
@@ -81,7 +84,7 @@ export const saveWorkspace = createServerFn({ method: "POST" })
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("Workspace state must be an object");
     }
-    return saveImpl(claims.oid, parsed, data.version ?? WORKSPACE_VERSION);
+    return saveImpl(oid, parsed, data.version ?? WORKSPACE_VERSION);
   });
 
 export const CURRENT_WORKSPACE_VERSION = WORKSPACE_VERSION;
