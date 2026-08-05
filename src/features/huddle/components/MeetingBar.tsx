@@ -933,16 +933,20 @@ function MeetingRoom({
 
     try {
       const cfg = useBackendsStore.getState().config;
-      // Route the barge through Huddle's REAL brain: a GROUP turn (scope:"group", the ceremony's full
-      // member list, NO targetAgentId) so routeMessageLLM's ADDRESSED-BY-NAME / owner-awareness picks
-      // the responder — not the frozen speaker (the old one-to-one path bypassed the router entirely,
-      // which is why the wrong agent answered). The recent ceremony transcript rides along as `history`
-      // and ceremonyBarge:true makes the server layer the existing bargeDirective() onto the
-      // responder's scene, so the reply is stand-up-aware and cut-in-aware instead of a generic
-      // off-context answer. Kept SYNCHRONOUS (no turnId ⇒ non-durable, invisible to the ceremony's
-      // getTurnUpdates poll) so the answer lands immediately over the frozen speaker. interjections
-      // off + soloOnCoverage keep the fan-out to essentially the primary — no pile-on, no stray side
-      // effects during a barge. The 30s race guarantees the finally() below always unparks emit().
+      // Route the barge through Huddle's REAL brain, but as a SINGLE-RESPONDER turn: scope:"group" (so
+      // the responder gets the full ceremony scene/roster) + ceremonyBarge:true + targetAgentId=
+      // bargeTarget (the client-resolved addressed agent, else the agent just speaking). The server's
+      // ceremony-barge fast path (huddle.functions.ts) sees ceremonyBarge+targetAgentId and forces
+      // winners:[targetAgentId] — the multi-winner LLM router is SKIPPED entirely, which is what kills
+      // the wrong-agent grab, the pile-on, and the narration chorus. (We resolve WHO on the client
+      // because it has the live activeSpeaker + STT-tolerant name match; the router's semantic pick
+      // was overkill for a barge and is what let the wrong agent answer.) The recent ceremony
+      // transcript rides along as `history` and ceremonyBarge:true makes the server layer the existing
+      // bargeDirective() onto the responder's scene, so the reply is stand-up-aware and cut-in-aware
+      // instead of a generic off-context answer. Kept SYNCHRONOUS (no turnId ⇒ non-durable, invisible
+      // to the ceremony's getTurnUpdates poll) so the answer lands immediately over the frozen speaker.
+      // interjections off + soloOnCoverage are belt-and-suspenders (the fast path already forces one
+      // winner). The 30s race guarantees the finally() below always unparks emit().
       // NO canned client-side filler line. The user hears their words reach the agent and get the
       // agent's OWN reply — the bargeDirective instructs it to open with a brief, natural
       // acknowledgment ("Got it —") THEN address exactly what was said/asked. A hardcoded line spoken
