@@ -117,6 +117,14 @@ try {
   await startBtn.click();
   ok(true, "Ceremony started");
 
+  // The compose textarea only renders when the Chat tab is active (showCompose = chatTab === "chat";
+  // default is "transcript"). Without this click the textarea never mounts and the barge fill() below
+  // times out — which is exactly why the previous tier1 run failed. Matches ceremony-barge-verify /
+  // ceremony-barge-resume-ack which already reveal the compose this way.
+  await page.click('[data-testid="tab-chat"]');
+  await page.locator('textarea[placeholder*="Message the room"]').waitFor({ state: "visible", timeout: 5_000 });
+  ok(true, "Compose revealed (Chat tab)");
+
   const textarea = page.locator('textarea[placeholder*="Message the room"]');
 
   for (let n = 0; n < BARGES.length; n++) {

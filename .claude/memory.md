@@ -852,3 +852,69 @@ verdict. Completion-check "fail" is a test-window artifact (flood + 6s cooldowns
   live — deploying now, then need real confirmation: (1) reassign a card and watch it hold instead of
   revert, (2) open Settings → Scheduling and confirm Terry's grooming shows Monday 8am, edit an hour,
   reload, confirm it persisted.
+## ACT-huddle-17 — Parity principle: Huddle ⇄ journey are symmetric standalone engines, integration-gated (2026-08-03)
+
+**Stated by the user as an official architecture decision. This governs ALL task/priority/scheduling work.**
+
+Huddle and journey are **two standalone-but-integration-intended apps**. Each must own the FULL
+prioritization + scheduling + task capability and be able to run ALONE producing the **SAME outcome**.
+Integration does NOT make one authoritative over the other — it **toggles OFF the redundant half** on
+one side so **exactly one engine drives at a time**. Neither is subordinate; they are peers with a
+collision-avoidance switch.
+
+**The collision this principle exists to prevent (observed live 2026-08-03):** when integrated, BOTH
+halves ran at once — journey's `nightly-schedule-builder` + Huddle's grooming (Terry LLM `priority_rank`)
++ Huddle's deterministic `scoreTask` were **three concurrent rankers** over the same rows on three
+clocks. Grooming's tag-writeback (`groom.ts:168`) rebuilds the tags array from ONLY the LLM's fresh
+descriptive tags and REPLACES the whole array, so it **stripped `parking-lot` from every parked task**
+(confirmed: both parked rows lost the tag at the same 16:01 batch write; journey went from 2 parked → 0),
+silently un-parking them so the nightly builder re-scheduled them. Two investor-pitch rows also revealed
+a near-duplicate-task problem (parking one twin doesn't park the other). That double-run IS the collision
+the toggle must prevent.
+
+**Required parity — three layers:**
+1. **ENGINE parity.** journey `src/lib/schedulingCandidates.ts` (scoreSchedulingCandidate/select/explain)
+   and Huddle `src/features/huddle/lib/tasks/scoring.ts` (scoreTask/rankTasks) must produce IDENTICAL
+   results. They have DRIFTED: journey has topic-map (+2) and assignment-grace (0-7d overdue → +10,
+   force URGENT); Huddle has a staleness penalty (−10/−3 for old non-important) that journey's scoring
+   block lacks. **Drift = a bug against parity**, not a feature. Fix = unify to one canonical algorithm
+   (single shared source, or a parity test proving equivalence). Grooming's LLM rank is NOT the engine —
+   it's an automation layer on top.
+2. **DATA parity.** Huddle's `tasks.journey_tasks` is really "Huddle's task table." **Integrated:** fed
+   one-way by the mirror (journey `public.tasks` → trigger `notify_huddle_task_sync` → edge fn → webhook
+   → this table). **Standalone Huddle (no journey):** Huddle's OWN create path writes tasks DIRECTLY into
+   the same table (not through the mirror sync path). Same table, the feeder swaps with the toggle.
+3. **AUTOMATION layer.** grooming (assign/tag/rank), autowork (WIP promotion + research), and nightly
+   scheduling are the automation each app "adds to the same flow." When integrated, run exactly ONE
+   side's automation; the other consumes the result.
+
+**Standalone behaviors the design MUST preserve:**
+- **Huddle OFF:** journey continues prioritization by pulling from its own manual board + its automation.
+  Unchanged from journey's normal life.
+- **journey OFF:** Huddle runs the SAME engine over its own (natively-populated) tasks and produces the
+  SAME schedule; grooming/autowork are Huddle's automation on top.
+- **Both ON (today):** exactly one driver; the mirror is the data path. This is the collision fix.
+
+**Implication for "which engine is best" — it is NOT pick-a-winner-and-subordinate.** Unify the engine
+so both sides are provably equivalent, then add an integration toggle that runs the engine on exactly
+ONE side. When integrated today, journey is the natural single driver (the only one aware of the real
+calendar, daily capacity, and deadline pre-placement) and Huddle consumes its verdict — BUT Huddle must
+retain the equivalent engine for the journey-off case. Grooming feeds `is_priority`/`priority_rank` INTO
+the engine (which already weights them) rather than being a third independent order.
+
+## ACT-huddle-18 + parking-lot leak breadth (2026-08-04)
+**Ceremony speed — two toggleable engines (user directive).** Build the ceremony optimization so we can
+toggle between approaches and revert if a new one isn't better. Phase 1 = optimize the CURRENT approach
+(cache standup text as a grooming payoff, refresh on `backlogSignature` change; parallel fan-out fallback;
+driver fixes serialize-on-abort + self-barge gate) behind a toggle that keeps today's exact path selectable.
+Phase 2 = streaming engine (OpenAI Realtime brain text-mode per agent + ElevenLabs voice, the 1:1
+`useVoiceCallRealtimeSpeak` pattern extended to multi-agent via the router). ElevenLabs cloned voice stays in
+BOTH — the slow part is the TEXT (sequential server round-robin), NOT the MP3 synth. Config toggle selects the
+default; must A/B live. (ACT-huddle-18 in actions.md.)
+
+**Parking-lot leak is broader than the grooming tag-strip (live-confirmed).** User test: parked tasks kept the
+tag through a fresh grooming, yet Terry ranked a PARKED task #3 Urgent — grooming assigns/ranks parked tasks
+AND `prioritize` surfaces them. Fixes (committed, NOT deployed): (1) grooming excludes parked from candidates +
+preserves control tags (bebc385); (2) `scoring.ts:rankTasks` filters `parking-lot` single-sourced so the
+`prioritize` tool + every view drop parked tasks. Open: park action could also clear stale
+`assigned_agent`/`priority_rank`/`is_scheduled`; deploy pending user go-ahead.

@@ -263,7 +263,9 @@ export function useVoiceCallRealtime(): VoiceCallRealtimeController {
       exchangeGenRef.current += 1;
       const gen = exchangeGenRef.current;
       const speak = opts?.speak ?? true;
-      const voiceTurn: CeremonyVoiceTurn = speak ? ceremony.voiceTurn : async () => {};
+      const voiceTurn: CeremonyVoiceTurn = speak
+        ? ceremony.voiceTurn
+        : async () => "completed" as const;
       await runTurn(agentId, trimmed, gen, voiceTurn);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -29,7 +29,13 @@ import {
 import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
 import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "./calendar/tools";
 import { DELEGATE_TO_SPECIALIST_TOOL, workerDirectory, getWorker, WORKER_ROLES } from "./agents/workers";
-import { FLAG_BLOCKER_TOOL, CONFIRM_TASK_INTENT_TOOL } from "./tasks/task-agent-tools";
+import {
+  FLAG_BLOCKER_TOOL,
+  CONFIRM_TASK_INTENT_TOOL,
+  PROPOSE_APPROACH_TOOL,
+  ASK_CLARIFYING_QUESTION_TOOL,
+  RESOLVE_CLARIFYING_QUESTION_TOOL,
+} from "./tasks/task-agent-tools";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
 
 // Feature flag: gates the intent-classification guard on capability/lane hand-off.
@@ -286,6 +292,23 @@ function isEchoOfPrior(text: string, priorReplies: { text: string }[]): boolean 
   return priorReplies.some((r) => replyJaccard(text, r.text) >= 0.72);
 }
 
+// D (F12) — server-side backstop for the "ran a tool, said nothing" barge. When a CEREMONY BARGE
+// responder executes a real tool but the model returns EMPTY text, we must NOT emit a silent
+// tool-only turn (the exact bug: Terry ran three web searches, spoke zero words). Synthesize a
+// minimal, HONEST reply: acknowledge + defer to after the stand-up (we don't have a spoken
+// deliverable in hand, so we say we'll follow up — never fabricate a result). Varied so a repeat
+// doesn't sound canned. The bargeDirective now also instructs the model to say this itself; this is
+// the code guarantee for when it still comes back empty.
+function bargeToolDeferralText(): string {
+  const opts = [
+    "Got it — I ran that down and I'll bring you the result right after we wrap.",
+    "On it — I pulled that up; I'll get you the details the moment the stand-up finishes.",
+    "Heard you — I checked into that and I'll follow up with what I found right after we're done here.",
+    "Understood — I looked into it; I'll surface the full result as soon as we close out the stand-up.",
+  ];
+  return opts[Math.floor(Math.random() * opts.length)];
+}
+
 // A small model keeps hand-authoring a link to "the document" in its chat prose — either an INVENTED
 // external site ("access it [here](salesforce.com)") or a PLACEHOLDER ("[here](https://your-link-to-
 // artifact)") — even when it DID save a real artifact. The chip (from create_artifact) is the ONLY real
@@ -322,21 +345,8 @@ function stripFileMentionNarration(text: string): string {
 
 // Per-agent WIP-limited board flow: an agent's DOING task moves to IN_REVIEW the instant it actually
 // finishes its work (saves an artifact) — never to DONE. DONE is set ONLY by the user, by hand, in the
-// board UI (see docs on the flow in tasks/autowork.server.ts). Best-effort/non-fatal, mirroring
-// flag_blocker's board-status write: a failure here never fails the artifact save that triggered it.
-async function markTaskInReview(taskId: string, caller: { entra_object_id?: string; entra_email?: string } | undefined): Promise<void> {
-  try {
-    const { invokeJourneyTool } = await import("./journey/proxy.functions");
-    await invokeJourneyTool({
-      toolName: "update_task",
-      args: { task_id: taskId, status: "IN_REVIEW" },
-      caller: caller ?? {},
-      context: { source: "huddle" },
-    });
-  } catch {
-    /* non-fatal — the board just won't reflect the move to "Ready for review" until a later sync */
-  }
-}
+// board UI (see docs on the flow in tasks/autowork.server.ts). The actual flip + retry + blocked-flag
+// logic lives in tasks/tasks.server.ts's ensureReviewFlip (used here and by autowork's self-heal pass).
 
 // Cross-cutting tool resilience: EVERY agent tool call is bounded by a timeout and its errors are
 // turned into a normal tool RESULT (never a throw). A hung or failing tool must not sink the turn —
@@ -823,6 +833,22 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         )
         .catch(() => {});
     };
+    // E (F13) — tool-lifecycle START marker. Persisted the instant a tool BEGINS executing (not at its
+    // end, like trackCeremonyTool) so the client narration driver can voice an HONEST, event-driven cue
+    // ("running a search…") keyed to a tool that is actually running now — never on a timer/guess.
+    // Fire-and-forget; no-op outside a ceremony/barge run (no ceremonyRunId).
+    const trackCeremonyToolStart = (agentId: AgentId, tool: string) => {
+      if (!ceremonyToolRunId || !ceremonyToolEmail) return;
+      void import("./ceremony/ceremony-transcript.server")
+        .then((m) =>
+          m.appendCeremonyToolStart(ceremonyToolEmail, ceremonyToolRunId, data.huddleId, {
+            agentId,
+            toolName: tool,
+            ts: Date.now(),
+          }),
+        )
+        .catch(() => {});
+    };
 
     // ---- Scrum ceremonies ----
     // A ceremony request (stand-up, retro, sprint planning, sprint review) overrides
@@ -884,7 +910,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         const narrate = routerCfg.ceremonyMode === "narrate";
         const host = data.members.includes(CEREMONY_HOST) ? CEREMONY_HOST : routed.winners[0];
 
-        if (narrate || report.lanes.length === 0) {
+        // F9 — participant set is derived ONCE here (shared roundRobinParticipants) so who speaks is the
+        // ONLY source of who is dispatched (AC-F10.3). speakingOwners drops truly-nothing owners (and, for a
+        // stand-up, done-only owners). No owner with live work → the host narrates solo (degenerate case),
+        // never an invented owner.
+        const participants = roundRobinParticipants(report, data.members);
+        const speakingOwners = participants.filter((p) => p !== CEREMONY_HOST);
+
+        if (narrate || speakingOwners.length === 0) {
           // Solo: the scrum master narrates (or there's simply no lane activity to round-robin).
           ceremonyDirectiveById.set(host, narrateDirective(ceremonyType, report));
           routed = {
@@ -900,7 +933,6 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             },
           };
         } else {
-          const participants = roundRobinParticipants(report, data.members);
           const owners = lanesByOwner(report);
           // Owners in speaking order → Terry names them in his opener hand-off ("Tess, you're up; then Finn").
           const handoffNames = participants
@@ -990,6 +1022,19 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     const queue: AgentId[] = resume ? [...resume.remainingQueue] : [...routed.winners, ...interjectorSet];
     const spoken = new Set<AgentId>(resume?.spoken ?? []);
     const replies: Reply[] = resume ? [...resume.replies] : [];
+
+    // A ceremony barge is voiced by the client from `replies[0]` ONLY, but the server would otherwise
+    // run every routed winner + interjector — each executing its own tools redundantly (iris/elle/eli
+    // all running the same lookup). `soloOnCoverage` does not reliably cut to one. So pin a fresh barge
+    // turn to exactly ONE responder: the router's first winner (the addressed/primary agent — the LLM
+    // router already honors a barge addressed by name), dropping the rest and all interjectors. Only the
+    // client capping the voice can't stop the server-side tool runs, so this must happen here.
+    if (turnBargeDirective && !resume && queue.length > 1) {
+      const primary = queue[0];
+      queue.length = 0;
+      queue.push(primary);
+      interjectorSet.clear();
+    }
 
     // Embedding of the user's message for AUTO memory retrieval, computed at most once per turn
     // (undefined = not yet computed, null = embedding failed). Recall must not depend on the model
@@ -2050,6 +2095,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             DELEGATE_TO_SPECIALIST_TOOL,
             FLAG_BLOCKER_TOOL,
             CONFIRM_TASK_INTENT_TOOL,
+            PROPOSE_APPROACH_TOOL,
+            ASK_CLARIFYING_QUESTION_TOOL,
+            RESOLVE_CLARIFYING_QUESTION_TOOL,
             SCHEDULE_REMINDER_TOOL,
             PRIORITIZE_TOOL,
             GET_CALENDAR_EVENTS_TOOL, // calendar-framed alias → combined schedule (always available)
@@ -2080,6 +2128,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             name: string;
             arguments: Record<string, unknown>;
           }) => {
+            // E (F13): a REAL tool is about to run — mark its START so the client can voice an honest,
+            // event-driven progress cue for it (no-op outside a ceremony/barge run).
+            trackCeremonyToolStart(winner.id, c.name);
             if (c.name === "create_huddle_task") {
               return JSON.stringify(await createSuggestedTaskFromTool(c.arguments));
             }
@@ -2131,18 +2182,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   const { runReviewGate } = await import("./tasks/review-gate.server");
                   const gate = await runReviewGate({ taskId: taskIdRaw, agentId: winner.id, email, content, claim: claimAction });
                   if (gate.proceed) {
-                    await markTaskInReview(taskIdRaw, data.caller);
-                    const { markEnteredReview, ensureNextReviewPing } = await import("./tasks/tasks.server");
-                    await markEnteredReview(taskIdRaw, email).catch(() => {});
-                    // Seed the 48h post-review recheck's first fire (jittered so multiple tasks
-                    // entering review together don't all ping 48h later in the same instant).
-                    const REVIEW_PING_BASE_MS = 48 * 60 * 60_000;
-                    const REVIEW_PING_JITTER_MS = 2 * 60 * 60_000;
-                    await ensureNextReviewPing(
-                      taskIdRaw,
-                      email,
-                      new Date(Date.now() + REVIEW_PING_BASE_MS + Math.random() * REVIEW_PING_JITTER_MS).toISOString(),
-                    ).catch(() => {});
+                    const { ensureReviewFlip } = await import("./tasks/tasks.server");
+                    const flip = await ensureReviewFlip(taskIdRaw, email, data.caller, winner.id);
+                    if (flip.pendingConfirm) {
+                      reviewSuffix = " · saved, but held out of review — confirm intent with the user first";
+                      review = {
+                        proceed: false,
+                        message:
+                          "Your work is saved, but this task can't move to the user's review queue yet: you never confirmed the Definition of Done with them. Send them the confirm-intent ask now (what you believe they wanted + the DoD, and ask them to confirm/correct it), then call confirm_task_intent once they reply.",
+                      };
+                    }
                   }
                   if (gate.gated) {
                     reviewSuffix = ` · ${gate.note}`;
@@ -2257,6 +2306,92 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "confirm_task_intent", "confirm failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            }
+            if (c.name === "propose_approach") {
+              const a = c.arguments as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const approach = String(a.approach ?? "").trim();
+              if (!taskId || !approach) return JSON.stringify({ ok: false, error: "task_id and approach are required" });
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { getTaskTitle } = await import("./tasks/tasks.server");
+                const title = await getTaskTitle(taskId);
+                const { runApproachGate } = await import("./tasks/approach-gate.server");
+                const gate = await runApproachGate({ taskId, agentId: winner.id, email, taskTitle: title, approach, claim: claimAction });
+                recordToolUse(
+                  winner.id,
+                  "propose_approach",
+                  gate.approved ? "approach approved" : gate.escalated ? "approach escalated to user" : `sent back — ${gate.note}`,
+                  true,
+                );
+                return JSON.stringify({
+                  ok: true,
+                  approved: gate.approved,
+                  escalated: gate.escalated,
+                  note: gate.note,
+                  ...(gate.deficiencies ? { deficiencies: gate.deficiencies } : {}),
+                });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "propose_approach", "approach gate failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            }
+            if (c.name === "ask_clarifying_question") {
+              const a = c.arguments as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const question = String(a.question ?? "").trim();
+              if (!taskId || !question) return JSON.stringify({ ok: false, error: "task_id and question are required" });
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { getTaskEngagementState, openClarifyingQuestion } = await import("./tasks/tasks.server");
+                const { getWorkflowCaps } = await import("./identity/agent-workflow-config.server");
+                const state = await getTaskEngagementState(taskId);
+                if (state?.clarify_status === "open") {
+                  recordToolUse(winner.id, "ask_clarifying_question", "already has an open question — wait for the reply", false);
+                  return JSON.stringify({
+                    ok: false,
+                    error: "This task already has an open question awaiting the user's reply — wait for their answer before asking another.",
+                  });
+                }
+                const caps = await getWorkflowCaps(email, winner.id).catch(() => ({ approach: 3, review: 3, question: 2 }));
+                const currentCount = state?.clarify_count ?? 0;
+                if (currentCount >= caps.question) {
+                  recordToolUse(winner.id, "ask_clarifying_question", `cap reached (${caps.question})`, false);
+                  return JSON.stringify({
+                    ok: false,
+                    error: `You've already asked the max (${caps.question}) clarifying questions on this task. Proceed on your best judgment, or call flag_blocker if you genuinely cannot continue.`,
+                  });
+                }
+                const count = await openClarifyingQuestion(taskId, email, question);
+                recordToolUse(winner.id, "ask_clarifying_question", `asked (${count}/${caps.question}): ${question.slice(0, 80)}`, true);
+                return JSON.stringify({ ok: true, task_id: taskId, count, cap: caps.question });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "ask_clarifying_question", "ask failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            }
+            if (c.name === "resolve_clarifying_question") {
+              const a = c.arguments as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              if (!taskId) return JSON.stringify({ ok: false, error: "task_id is required" });
+              try {
+                const { closeClarifyingQuestion } = await import("./tasks/tasks.server");
+                await closeClarifyingQuestion(taskId);
+                recordToolUse(winner.id, "resolve_clarifying_question", "resumed", true);
+                return JSON.stringify({ ok: true });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "resolve_clarifying_question", "resolve failed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             }
@@ -2723,18 +2858,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   const { runReviewGate } = await import("./tasks/review-gate.server");
                   const gate = await runReviewGate({ taskId: taskIdRaw, agentId: winner.id, email, content, claim: claimAction });
                   if (gate.proceed) {
-                    await markTaskInReview(taskIdRaw, data.caller);
-                    const { markEnteredReview, ensureNextReviewPing } = await import("./tasks/tasks.server");
-                    await markEnteredReview(taskIdRaw, email).catch(() => {});
-                    // Seed the 48h post-review recheck's first fire (jittered so multiple tasks
-                    // entering review together don't all ping 48h later in the same instant).
-                    const REVIEW_PING_BASE_MS = 48 * 60 * 60_000;
-                    const REVIEW_PING_JITTER_MS = 2 * 60 * 60_000;
-                    await ensureNextReviewPing(
-                      taskIdRaw,
-                      email,
-                      new Date(Date.now() + REVIEW_PING_BASE_MS + Math.random() * REVIEW_PING_JITTER_MS).toISOString(),
-                    ).catch(() => {});
+                    const { ensureReviewFlip } = await import("./tasks/tasks.server");
+                    const flip = await ensureReviewFlip(taskIdRaw, email, data.caller, winner.id);
+                    if (flip.pendingConfirm) {
+                      reviewSuffix = " · saved, but held out of review — confirm intent with the user first";
+                      review = {
+                        proceed: false,
+                        message:
+                          "Your work is saved, but this task can't move to the user's review queue yet: you never confirmed the Definition of Done with them. Send them the confirm-intent ask now (what you believe they wanted + the DoD, and ask them to confirm/correct it), then call confirm_task_intent once they reply.",
+                      };
+                    }
                   }
                   if (gate.gated) {
                     reviewSuffix = ` · ${gate.note}`;
@@ -2845,6 +2978,108 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "confirm_task_intent", "confirm failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            },
+          });
+
+          // propose_approach — pre-work approach gate (mirrors the OpenAI path).
+          lovableTools.propose_approach = tool({
+            description: PROPOSE_APPROACH_TOOL.description,
+            inputSchema: z.object({ task_id: z.string(), approach: z.string() }),
+            execute: async (args) => {
+              const a = args as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const approach = String(a.approach ?? "").trim();
+              if (!taskId || !approach) return JSON.stringify({ ok: false, error: "task_id and approach are required" });
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { getTaskTitle } = await import("./tasks/tasks.server");
+                const title = await getTaskTitle(taskId);
+                const { runApproachGate } = await import("./tasks/approach-gate.server");
+                const gate = await runApproachGate({ taskId, agentId: winner.id, email, taskTitle: title, approach, claim: claimAction });
+                recordToolUse(
+                  winner.id,
+                  "propose_approach",
+                  gate.approved ? "approach approved" : gate.escalated ? "approach escalated to user" : `sent back — ${gate.note}`,
+                  true,
+                );
+                return JSON.stringify({
+                  ok: true,
+                  approved: gate.approved,
+                  escalated: gate.escalated,
+                  note: gate.note,
+                  ...(gate.deficiencies ? { deficiencies: gate.deficiencies } : {}),
+                });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "propose_approach", "approach gate failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            },
+          });
+
+          // ask_clarifying_question / resolve_clarifying_question — bounded mid-work Q&A (mirrors the OpenAI path).
+          lovableTools.ask_clarifying_question = tool({
+            description: ASK_CLARIFYING_QUESTION_TOOL.description,
+            inputSchema: z.object({ task_id: z.string(), question: z.string() }),
+            execute: async (args) => {
+              const a = args as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const question = String(a.question ?? "").trim();
+              if (!taskId || !question) return JSON.stringify({ ok: false, error: "task_id and question are required" });
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { getTaskEngagementState, openClarifyingQuestion } = await import("./tasks/tasks.server");
+                const { getWorkflowCaps } = await import("./identity/agent-workflow-config.server");
+                const state = await getTaskEngagementState(taskId);
+                if (state?.clarify_status === "open") {
+                  recordToolUse(winner.id, "ask_clarifying_question", "already has an open question — wait for the reply", false);
+                  return JSON.stringify({
+                    ok: false,
+                    error: "This task already has an open question awaiting the user's reply — wait for their answer before asking another.",
+                  });
+                }
+                const caps = await getWorkflowCaps(email, winner.id).catch(() => ({ approach: 3, review: 3, question: 2 }));
+                const currentCount = state?.clarify_count ?? 0;
+                if (currentCount >= caps.question) {
+                  recordToolUse(winner.id, "ask_clarifying_question", `cap reached (${caps.question})`, false);
+                  return JSON.stringify({
+                    ok: false,
+                    error: `You've already asked the max (${caps.question}) clarifying questions on this task. Proceed on your best judgment, or call flag_blocker if you genuinely cannot continue.`,
+                  });
+                }
+                const count = await openClarifyingQuestion(taskId, email, question);
+                recordToolUse(winner.id, "ask_clarifying_question", `asked (${count}/${caps.question}): ${question.slice(0, 80)}`, true);
+                return JSON.stringify({ ok: true, task_id: taskId, count, cap: caps.question });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "ask_clarifying_question", "ask failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            },
+          });
+          lovableTools.resolve_clarifying_question = tool({
+            description: RESOLVE_CLARIFYING_QUESTION_TOOL.description,
+            inputSchema: z.object({ task_id: z.string() }),
+            execute: async (args) => {
+              const a = args as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              if (!taskId) return JSON.stringify({ ok: false, error: "task_id is required" });
+              try {
+                const { closeClarifyingQuestion } = await import("./tasks/tasks.server");
+                await closeClarifyingQuestion(taskId);
+                recordToolUse(winner.id, "resolve_clarifying_question", "resumed", true);
+                return JSON.stringify({ ok: true });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "resolve_clarifying_question", "resolve failed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             },
@@ -3275,6 +3510,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           if (toolNames.length > 0) {
             recordToolUse(winner.id, "tool_catalog", `offered: ${toolNames.join(", ")}`, true);
           }
+          // E (F13): emit a tool-START marker for the Lovable backend too (the OpenAI path hooks this in
+          // combinedOnToolCall). Wrap each tool's execute ONCE so the client's progress narration covers
+          // both engines. Purely additive — it calls the original execute unchanged; no-op outside a run.
+          for (const name of toolNames) {
+            const t = lovableTools[name] as { execute?: (...a: unknown[]) => unknown };
+            const orig = t.execute;
+            if (typeof orig === "function") {
+              t.execute = (...args: unknown[]) => {
+                trackCeremonyToolStart(winner.id, name);
+                return orig(...args);
+              };
+            }
+          }
 
           const lovableToolChoice =
             forceReminder && lovableTools.schedule_reminder
@@ -3316,7 +3564,24 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           clean = text.trim();
         }
 
-        if (!clean) return bundle({ kind: "skip" });
+        if (!clean) {
+          // D (F12): a CEREMONY BARGE responder that RAN a real tool but produced no spoken text must
+          // NOT go silent — instead of skipping, emit an honest ack+deferral so the user always hears a
+          // response after their interjection. Only real executions count (exclude the offering log
+          // `tool_catalog` and the "offered (forced …)" pre-records, which aren't tool runs).
+          const ranRealTool = toolUses.some(
+            (t) => t.tool !== "tool_catalog" && !/^offered\b/i.test(t.summary),
+          );
+          if (turnBargeDirective && ranRealTool) {
+            return bundle({
+              kind: "reply",
+              clean: bargeToolDeferralText(),
+              isInterjector: false,
+              perAgentFallbacks,
+            });
+          }
+          return bundle({ kind: "skip" });
+        }
 
         // Persist prompt debug for this reply.
         prompts.push({
@@ -3981,8 +4246,16 @@ async function runWorkerTurn(record: {
           });
           artifactId = id;
           artifactName = name;
-          if (a.task_id) await markTaskInReview(String(a.task_id), payload.caller);
-          return JSON.stringify({ ok: true, id, deepLink });
+          let pendingConfirmNote: string | undefined;
+          if (a.task_id) {
+            const { ensureReviewFlip } = await import("./tasks/tasks.server");
+            const flip = await ensureReviewFlip(String(a.task_id), email, payload.caller, w.personaId ?? null);
+            if (flip.pendingConfirm) {
+              pendingConfirmNote =
+                "Saved, but held out of the user's review queue — you never confirmed the Definition of Done with them. Send the confirm-intent ask now (what you believe they wanted + the DoD) and call confirm_task_intent once they reply.";
+            }
+          }
+          return JSON.stringify({ ok: true, id, deepLink, ...(pendingConfirmNote ? { note: pendingConfirmNote } : {}) });
         } catch (err) {
           return JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) });
         }

@@ -103,7 +103,14 @@ export async function dispatchGroomBacklog(
   try {
     const _tRead0 = Date.now();
     const { getTasksForUser } = await import("./tasks.server");
-    const tasks = await getTasksForUser(email, category);
+    // PARKING LOT (ACT-13/ACT-17): a task tagged `parking-lot` opts OUT of all automation. Grooming must
+    // NOT re-classify it — beyond churning a task the user deliberately set aside, the tags writeback
+    // below REPLACES the whole tags array, which would silently STRIP `parking-lot` and un-park the task,
+    // letting journey's nightly builder re-schedule it. Filter parked tasks out here so grooming never
+    // touches them (mirrors autowork.server.ts candidate filtering).
+    const tasks = (await getTasksForUser(email, category)).filter(
+      (t) => !(t.tags ?? []).includes("parking-lot"),
+    );
     const _readMs = Date.now() - _tRead0;
     if (!tasks.length) {
       return JSON.stringify({ groomed: 0, message: "No open tasks to groom." });
@@ -170,10 +177,16 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     // Compute everything Huddle-side, then push ALL updates to journey in ONE batch call
     // (not N per-task round-trips). Bounded by a timeout so the turn never hangs. Grooming only
     // assigns/tags/prioritizes — it never sets a blocked status (the owning agent does that by working it).
+    // Grooming REPLACES a task's tags with the model's fresh descriptive tags. Preserve user CONTROL
+    // tags the model doesn't know about (ACT-17 parity: an automation pass must never clobber a user's
+    // deliberate control state). `parking-lot` is already filtered out above; keeping it here too — plus
+    // `blocked` — makes the writeback safe even if a parked task ever reaches this point.
+    const CONTROL_TAGS = new Set(["parking-lot", "blocked"]);
+    const tagsById = new Map(slice.map((t) => [t.id, (t.tags ?? []).map((x) => String(x).toLowerCase())]));
     const updates = assignments.map((a) => {
-      const tags = Array.from(
-        new Set(Array.isArray(a.tags) ? a.tags.map((t) => String(t).toLowerCase()) : []),
-      ).slice(0, 5);
+      const llmTags = Array.isArray(a.tags) ? a.tags.map((t) => String(t).toLowerCase()) : [];
+      const preserved = (tagsById.get(a.id) ?? []).filter((t) => CONTROL_TAGS.has(t));
+      const tags = Array.from(new Set([...llmTags, ...preserved])).slice(0, 5);
       const rank = rankById.get(a.id);
       return { task_id: a.id, assigned_agent: a.assigned_agent, tags, priority: a.priority, ...(rank ? { rank } : {}) };
     });

@@ -106,6 +106,30 @@ const CEREMONY_LANES: Record<CeremonyType, BoardLane[]> = {
   planning: ["backlog", "upNext", "blocked"], // plan FROM the backlog (the one ceremony that needs it)
 };
 
+// Which board lanes earn an agent a LIVE SPEAKING SLOT in the round-robin (F9). This is a SUBSET of
+// CEREMONY_LANES: a lane can be REPORTABLE (its items show in the host's digest/counts) without warranting
+// its owner a live turn. For the STAND-UP, RESOLVED F9.4 fixes the keep-set to
+// {blocked, doing, upNext, inReview} — a stand-up is about forward-looking work + blockers, so a lane whose
+// ONLY items are DONE-this-week is NOT a speaking slot (its done still surfaces in the host's opener/close
+// via reportDigest). BLOCKED explicitly KEEPS the slot (blocked is real news the user must hear).
+// For every OTHER ceremony the slot-set == CEREMONY_LANES (a review/retro EXISTS to voice done items, so
+// done must earn a slot there). Data-driven: adding an agent needs zero change; adding a ceremony type
+// adds one entry here alongside CEREMONY_LANES.
+const CEREMONY_SLOT_LANES: Record<CeremonyType, BoardLane[]> = {
+  standup: ["blocked", "doing", "upNext", "inReview"], // F9.4: DONE alone ≠ a live stand-up slot
+  review: ["done", "inReview", "blocked"],
+  retro: ["done", "inReview", "blocked", "doing"],
+  planning: ["backlog", "upNext", "blocked"],
+};
+
+/** F9 — does this lane hold work that warrants its owner a LIVE SPEAKING SLOT for this ceremony? True iff
+ *  any slot-eligible bucket (CEREMONY_SLOT_LANES) is non-empty. Used by roundRobinParticipants so a
+ *  truly-nothing owner (and, for a stand-up, a done-only owner) is never forced into a slot where they'd
+ *  invent work — while their DONE items still appear in the host's digest (they stay in report.lanes). */
+export function hasSpeakingWork(type: CeremonyType, lane: LaneReport): boolean {
+  return CEREMONY_SLOT_LANES[type].some((k) => lane[k].length > 0);
+}
+
 /** Bucket the mirror tasks into per-owner lanes BY THEIR REAL BOARD STATUS, then surface only the lanes
  *  this ceremony reports. The stand-up thus reflects the board exactly — active WIP + done-this-week,
  *  never the raw backlog, and never a re-derived "up next." */
@@ -225,7 +249,8 @@ export function ownerDirective(type: CeremonyType, lane: LaneReport): string {
   if (surface.has("done")) facts.push(`Done this week: ${fmtLines(lane.done)}`);
   if (surface.has("backlog")) facts.push(`Backlog: ${fmtLines(lane.backlog)}`);
   return `\n\nCEREMONY — the scrum master has OPENED this live ${VERB[type]} and handed off to the team; give YOUR lane's update in the round-robin. ${frame} You MAY briefly acknowledge or react to the previous speaker (a sentence, not a debate) before your own update — like a real teammate would — but the substance must be YOUR lane's facts; do not take over or re-report another lane's work. Use ONLY these real facts about your lane (${lane.category}); do NOT invent tasks. ${facts.join(". ")}.
-You MUST name the actual items in every bucket that is not "none" — do not summarize them away or skip them. Only if every bucket above is "none" may you say you have nothing to report. Weave all of this into 1–2 natural spoken sentences, the way you'd actually talk in a stand-up — never echo this back as a bulleted or labeled list (no "Doing:"/"Up next:"/"In review:"/"Blocked:"/"Done:" headers, no line breaks between categories); that's the raw data, not a template to repeat.`;
+You MUST name the actual items in every bucket that is not "none" — do not summarize them away or skip them. Only if every bucket above is "none" may you say you have nothing to report. Weave all of this into 1–2 natural spoken sentences, the way you'd actually talk in a stand-up — never echo this back as a bulleted or labeled list (no "Doing:"/"Up next:"/"In review:"/"Blocked:"/"Done:" headers, no line breaks between categories); that's the raw data, not a template to repeat.
+End with YOUR OWN update and STOP. The scrum master runs the running order and will bring in whoever is next — so do NOT call on, hand the floor to, or name who goes next: no "over to you, <name>", no "how about you, <name>?", no "you're up, <name>". Naming or picking the next speaker is never your job here, and the person you'd name may not even be in this round-robin.`;
 }
 
 function reportDigest(report: CeremonyReport): string {
@@ -294,7 +319,9 @@ FIRST decide which of these it is:
 
 Resolving "that"/"it": if they refer to "that", "it", "this one", resolve it from what was JUST said in this ceremony and NAME it explicitly in your reply. If genuinely more than one thing could be meant, ask ONE short "which one — the X or the Y?" question instead of guessing. Likewise if the task they NAME matches MORE THAN ONE task (e.g. a lookup returns both "Prepare investor pitch" and "Lock investor pitch"), do NOT just pick one — ask which one before you change anything.
 
-Confirm what you did EXACTLY ONCE — never restate the same confirmation two or three times. Keep it to 1–2 sentences, specific to THEIR words. NEVER reply with a stock filler or a canned deferral like "I'll dig into that" / "I'll take care of it after we wrap" — that ignores what they said. Do NOT resume your lane/stand-up update here; the round-robin resumes after you.`;
+Confirm what you did EXACTLY ONCE — never restate the same confirmation two or three times. Keep it to 1–2 sentences, specific to THEIR words. NEVER reply with a stock filler or a canned deferral like "I'll dig into that" / "I'll take care of it after we wrap" — that ignores what they said. Do NOT resume your lane/stand-up update here; the round-robin resumes after you.
+
+If you RAN A TOOL (a search, a lookup, a board update) but don't have a finished, speakable answer to give right now, you MUST STILL SAY SOMETHING — never go silent after using a tool. Acknowledge the specific thing they asked about BY NAME and tell them you'll follow up with the result after the stand-up (e.g. "I ran a search on the UPenn AI course — I'll send you the link right after we wrap."). A named acknowledgment + an explicit "I'll follow up after standup" is required; a tool-only turn with no spoken words, or a generic no-subject ack, is never acceptable.`;
 }
 
 /** Narrate mode: Terry runs the whole ceremony solo from the data. */
@@ -331,17 +358,30 @@ export function lanesByOwner(report: CeremonyReport): Map<AgentId, LaneReport> {
   return m;
 }
 
-/** Ordered participants for a round-robin: the HOST OPENS (goes first), then each lane owner with
- *  activity gives their update. The scrum master framing the meeting and handing off is what users
- *  expect — not a lane owner abruptly starting. */
+/** Ordered participants for a round-robin: the HOST OPENS (goes first), then each lane owner WITH LIVE
+ *  SPEAKING WORK gives their update. The scrum master framing the meeting and handing off is what users
+ *  expect — not a lane owner abruptly starting.
+ *
+ *  F9 — an owner earns a slot ONLY if some slot-eligible bucket is non-empty (hasSpeakingWork). An owner
+ *  present in report.lanes but whose only items are DONE-this-week (stand-up) — or no reportable buckets at
+ *  all — is dropped from the SPEAKING order; their done still surfaces in the host's digest (they remain in
+ *  report.lanes). Aggregated across ALL of an owner's lanes, so an owner with one live lane + one done-only
+ *  lane still speaks. The HOST is always included when present (opener/closer) regardless of its own lane —
+ *  "host always opens/closes even with no personal items." */
 export function roundRobinParticipants(report: CeremonyReport, members: AgentId[]): AgentId[] {
+  const speaks = new Set<AgentId>();
+  for (const lane of report.lanes) {
+    if (members.includes(lane.owner) && hasSpeakingWork(report.type, lane)) speaks.add(lane.owner);
+  }
   const owners: AgentId[] = [];
   for (const lane of report.lanes) {
-    if (!owners.includes(lane.owner) && members.includes(lane.owner)) owners.push(lane.owner);
+    if (lane.owner !== CEREMONY_HOST && speaks.has(lane.owner) && !owners.includes(lane.owner)) {
+      owners.push(lane.owner);
+    }
   }
   const host = members.includes(CEREMONY_HOST) ? [CEREMONY_HOST] : [];
-  // Host first (opener); lane owners follow. Host is de-duped from the owners list so it speaks once.
-  return [...host, ...owners.filter((o) => o !== CEREMONY_HOST)];
+  // Host first (opener); lane owners with live work follow, in first-appearance order.
+  return [...host, ...owners];
 }
 
 export { CEREMONY_HOST };

@@ -87,6 +87,25 @@ CREATE TABLE IF NOT EXISTS tasks.groom_state (
   last_groomed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Per-agent standup-update TEXT cache for the "current-optimized" ceremony engine (ACT-huddle-18).
+-- Keyed to the SAME backlogSignature the groom_state watermark uses (hash over open tasks'
+-- id/title/status/due_date + count) so parking/editing/deleting a task changes the key and a stale
+-- entry is never read. TEXT ONLY — never audio: the cloned ElevenLabs voice is chosen at synth time by
+-- agentId. The slot column distinguishes the host's opener from its closer (both terry-locke) and each
+-- owner's lane update. Filled as a grooming payoff (same pass as setGroomSignature) and by the ceremony
+-- cold-path fan-out. One row per (user, ceremony, slot).
+CREATE TABLE IF NOT EXISTS tasks.standup_cache (
+  user_email    TEXT NOT NULL,
+  ceremony_type TEXT NOT NULL,
+  slot          TEXT NOT NULL,
+  agent_id      TEXT NOT NULL,
+  signature     TEXT NOT NULL,
+  update_text   TEXT NOT NULL,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_email, ceremony_type, slot)
+);
+CREATE INDEX IF NOT EXISTS standup_cache_sig_idx ON tasks.standup_cache (lower(user_email), ceremony_type, signature);
+
 -- Change-detection watermark for ACT-5 auto-work (agents self-starting research on assigned tasks).
 -- Same idea as groom_state: skip a pass when the open-assigned backlog hasn't changed since last run.
 CREATE TABLE IF NOT EXISTS tasks.autowork_state (
@@ -145,6 +164,21 @@ CREATE INDEX IF NOT EXISTS task_engagement_state_email_idx ON tasks.task_engagem
 -- entered_review_at: stamped whenever a task actually moves to IN_REVIEW (create_artifact's gated
 -- markTaskInReview call) -- the standup "moved to review" bucket reads this delta since the last run.
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS entered_review_at TIMESTAMPTZ;
+-- Approach gate (docs/plan-approach-clarify-gate.md): AFTER confirm_status='confirmed' (DoD locked with
+-- the user), the assigned agent drafts an APPROACH (the how) and a sub-agent (approach-gate.server.ts)
+-- grades it pass/revise — bounded, invisible to the user unless the cap is exhausted. approach_status:
+-- pending (not yet approved) -> approved (eligible for real DOING work) | escalated (cap exhausted, the
+-- agent told the user directly instead of looping forever).
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS proposed_approach TEXT;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_revision_count INT NOT NULL DEFAULT 0;
+-- Mid-work clarifying question (ask_clarifying_question tool): clarify_status='open' pauses that task's
+-- autowork research cadence until answered. clarify_count is the lifetime cap counter (bounded — an agent
+-- that's still stuck after the cap must flag_blocker or proceed on its own judgment, not keep asking).
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS clarify_status TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS clarify_count INT NOT NULL DEFAULT 0;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS open_question TEXT;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS open_question_asked_at TIMESTAMPTZ;
 
 -- GENERAL recurring-job scheduler, resident in Azure Huddle PG (NOT supabase). One heartbeat — the
 -- existing every-minute run-turn tick — dispatches every due job here, so any recurring/scheduled job
@@ -222,6 +256,20 @@ export interface JourneyTaskPayload {
 
 export async function upsertJourneyTask(row: JourneyTaskPayload, userEmail?: string | null): Promise<void> {
   await ensureBootstrapped();
+
+  // Reassignment invalidates confirm-intent/approach state (relearned 2026-08-05): confirm_status and
+  // approach_status are earned by the AGENT who did the asking/proposing — if grooming (or anything
+  // else) hands the task to a DIFFERENT agent, that new agent must not silently inherit 'confirmed'/
+  // 'approved' status it never itself produced, or it sails straight to DOING/IN_REVIEW without ever
+  // asking the user. Compare against the currently-mirrored assigned_agent BEFORE the upsert overwrites it.
+  const incomingAgent = row.assigned_agent ?? null;
+  if (incomingAgent) {
+    const prevAgent = await getTaskAssignedAgent(row.id);
+    if (prevAgent && prevAgent !== incomingAgent) {
+      await resetEngagementOnReassignment(row.id).catch(() => {});
+    }
+  }
+
   await getPool().query(
     `INSERT INTO tasks.journey_tasks
        (id,user_id,user_email,title,description,status,priority,category,is_priority,priority_rank,
@@ -303,6 +351,18 @@ export async function getTaskAssignedAgent(id: string): Promise<string | null> {
   }
 }
 
+/** A task's title, for the approach gate's grading prompt. Fails open (empty string) on any error. */
+export async function getTaskTitle(id: string): Promise<string> {
+  if (!id) return "";
+  try {
+    await ensureBootstrapped();
+    const r = await getPool().query<{ title: string | null }>(`SELECT title FROM tasks.journey_tasks WHERE id = $1`, [id]);
+    return r.rows[0]?.title ?? "";
+  } catch {
+    return "";
+  }
+}
+
 /** A task row shaped for the stand-up report (keeps done/blocked, unlike the scorer feed). */
 export interface StandupTask {
   id: string;
@@ -333,6 +393,11 @@ export async function getStandupTasks(userEmail: string, windowHours = 36): Prom
        FROM tasks.journey_tasks
       WHERE lower(user_email) = $1
         AND (completed_at IS NULL OR completed_at >= now() - ($2 * interval '1 hour'))
+        -- PARKING LOT (ACT-6.2): a task the user deliberately set aside must NEVER surface in a
+        -- ceremony update. Filter it at the SOURCE so EVERY consumer (the round-robin in
+        -- huddle.functions.ts AND the current-optimized cache/fan-out) gets an already-clean set —
+        -- buildCeremonyReport does not filter it, and rankTasks/grooming only filter their own paths.
+        AND NOT ('parking-lot' = ANY(tags))
       LIMIT 1000`,
     [userEmail.toLowerCase(), hrs],
   );
@@ -400,6 +465,68 @@ export async function setGroomSignature(userEmail: string, signature: string): P
      ON CONFLICT (user_email) DO UPDATE SET signature=EXCLUDED.signature, last_groomed_at=now()`,
     [userEmail.toLowerCase(), signature],
   );
+}
+
+/** One cached per-agent ceremony-update line (TEXT only — the voice is chosen at synth time by agentId). */
+export interface StandupCacheEntry {
+  slot: string;
+  agent_id: string;
+  update_text: string;
+}
+
+/**
+ * Read the per-agent standup-update cache, but ONLY the rows matching the current backlog signature —
+ * a signature mismatch returns nothing, so a stale (pre-change) script is never spoken. Ordered by
+ * insertion so the caller can reconstruct the spoken order.
+ */
+export async function getStandupCache(
+  userEmail: string,
+  ceremonyType: string,
+  signature: string,
+): Promise<StandupCacheEntry[]> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<StandupCacheEntry>(
+    `SELECT slot, agent_id, update_text FROM tasks.standup_cache
+      WHERE lower(user_email) = $1 AND ceremony_type = $2 AND signature = $3
+      ORDER BY updated_at`,
+    [userEmail.toLowerCase(), ceremonyType, signature],
+  );
+  return rows;
+}
+
+/**
+ * Replace the standup cache for one (user, ceremony) at a given signature. Upserts each slot and then
+ * clears any row left over from an OLDER signature, so getStandupCache (which filters by signature) can
+ * only ever return a consistent, current set. Only fully-generated scripts should be written here — a
+ * failed slot must be OMITTED (never cache a failed generation).
+ */
+export async function setStandupCache(
+  userEmail: string,
+  ceremonyType: string,
+  signature: string,
+  entries: { slot: string; agentId: string; text: string }[],
+): Promise<void> {
+  if (!entries.length) return;
+  await ensureBootstrapped();
+  const email = userEmail.toLowerCase();
+  for (const e of entries) {
+    await getPool().query(
+      `INSERT INTO tasks.standup_cache (user_email, ceremony_type, slot, agent_id, signature, update_text)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (user_email, ceremony_type, slot) DO UPDATE
+         SET agent_id = EXCLUDED.agent_id, signature = EXCLUDED.signature,
+             update_text = EXCLUDED.update_text, updated_at = now()`,
+      [email, ceremonyType, e.slot, e.agentId, signature, e.text],
+    );
+  }
+  // Drop any slot that belongs to a superseded signature (e.g. a participant who dropped out).
+  await getPool()
+    .query(
+      `DELETE FROM tasks.standup_cache
+        WHERE lower(user_email) = $1 AND ceremony_type = $2 AND signature <> $3`,
+      [email, ceremonyType, signature],
+    )
+    .catch(() => {});
 }
 
 /** The last auto-work signature for a user (null if never run), for the ACT-5 change gate. */
@@ -480,10 +607,18 @@ export interface TaskEngagementState {
   next_review_ping_at: string | null;
   revision_count: number;
   entered_review_at: string | null;
+  approach_status: "pending" | "approved" | "escalated";
+  proposed_approach: string | null;
+  approach_revision_count: number;
+  clarify_status: "none" | "open";
+  clarify_count: number;
+  open_question: string | null;
+  open_question_asked_at: string | null;
 }
 
 const ENGAGEMENT_COLS =
-  "task_id,user_email,confirm_status,proposed_dod,confirmed_dod,confirm_ask_at,confirmed_at,last_review_ping_at,next_review_ping_at,revision_count,entered_review_at";
+  "task_id,user_email,confirm_status,proposed_dod,confirmed_dod,confirm_ask_at,confirmed_at,last_review_ping_at,next_review_ping_at,revision_count,entered_review_at," +
+  "approach_status,proposed_approach,approach_revision_count,clarify_status,clarify_count,open_question,open_question_asked_at";
 
 /** Batch-read engagement state for a set of task ids (a missing entry means "never asked yet"). */
 export async function getTaskEngagementStates(taskIds: string[]): Promise<Map<string, TaskEngagementState>> {
@@ -600,6 +735,81 @@ export async function incrementRevisionCount(taskId: string, userEmail: string):
   return rows[0]?.revision_count ?? 1;
 }
 
+// ---- Approach gate (extends the review gate to the START of work, not just the end) ----------------
+// After confirm_task_intent locks the DoD, the assigned agent drafts an APPROACH and a sub-agent
+// (approach-gate.server.ts) grades it pass/revise, bounded by a configurable per-agent cap. Mirrors
+// incrementRevisionCount's shape exactly, just for the approach-revision counter.
+
+/** Bump the approach gate's corrective-pass counter and return the new count. */
+export async function incrementApproachRevisionCount(taskId: string, userEmail: string): Promise<number> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ approach_revision_count: number }>(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_revision_count)
+     VALUES ($1,$2,1)
+     ON CONFLICT (task_id) DO UPDATE SET
+       approach_revision_count = tasks.task_engagement_state.approach_revision_count + 1, updated_at = now()
+     RETURNING approach_revision_count`,
+    [taskId, userEmail.toLowerCase()],
+  );
+  return rows[0]?.approach_revision_count ?? 1;
+}
+
+/** The approach gate passed — lock in the approach and make the task eligible for real DOING work. */
+export async function approveApproach(taskId: string, userEmail: string, approach: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_status, proposed_approach)
+     VALUES ($1,$2,'approved',$3)
+     ON CONFLICT (task_id) DO UPDATE SET
+       approach_status='approved', proposed_approach=EXCLUDED.proposed_approach, updated_at=now()`,
+    [taskId, userEmail.toLowerCase(), approach],
+  );
+}
+
+/** The approach gate's cap was exhausted without a pass — escalate to the user instead of looping. */
+export async function escalateApproach(taskId: string, userEmail: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_status)
+     VALUES ($1,$2,'escalated')
+     ON CONFLICT (task_id) DO UPDATE SET approach_status='escalated', updated_at=now()`,
+    [taskId, userEmail.toLowerCase()],
+  );
+}
+
+// ---- Mid-work clarifying question (bounded, rate-limited — see ask_clarifying_question tool) --------
+
+/**
+ * Open a clarifying question for a task — pauses autowork's research cadence for it until answered.
+ * Returns the new lifetime count so the caller can enforce the configurable per-task cap; only one
+ * question may be open at a time (enforced by the caller checking clarify_status first).
+ */
+export async function openClarifyingQuestion(taskId: string, userEmail: string, question: string): Promise<number> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ clarify_count: number }>(
+    `INSERT INTO tasks.task_engagement_state
+       (task_id, user_email, clarify_status, clarify_count, open_question, open_question_asked_at)
+     VALUES ($1,$2,'open',1,$3,now())
+     ON CONFLICT (task_id) DO UPDATE SET
+       clarify_status='open', clarify_count = tasks.task_engagement_state.clarify_count + 1,
+       open_question=EXCLUDED.open_question, open_question_asked_at=now(), updated_at=now()
+     RETURNING clarify_count`,
+    [taskId, userEmail.toLowerCase(), question],
+  );
+  return rows[0]?.clarify_count ?? 1;
+}
+
+/** The agent has what it needed — resume normal autowork research cadence for this task. */
+export async function closeClarifyingQuestion(taskId: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE tasks.task_engagement_state
+        SET clarify_status='none', open_question=NULL, updated_at=now()
+      WHERE task_id = $1`,
+    [taskId],
+  );
+}
+
 /** Lock in the confirmed Definition of Done (the confirm_task_intent tool handler calls this). */
 export async function confirmTaskIntent(taskId: string, userEmail: string, dod: string): Promise<void> {
   await ensureBootstrapped();
@@ -610,6 +820,97 @@ export async function confirmTaskIntent(taskId: string, userEmail: string, dod: 
        confirm_status='confirmed', confirmed_dod=EXCLUDED.confirmed_dod, confirmed_at=now(), updated_at=now()`,
     [taskId, userEmail.toLowerCase(), dod],
   );
+}
+
+/**
+ * A task's assignee changed (e.g. a grooming re-pass) — the previous assignee's confirm-intent/approach
+ * state was earned by THEM, not the new assignee, so it must not silently carry over (the new agent
+ * would otherwise inherit 'confirmed'/'approved' status it never itself proposed to the user, and sail
+ * straight to DOING/IN_REVIEW without asking — the same failure mode as the 2026-08-05 incident, just
+ * via reassignment instead of a stale-mirror race). Resets to a clean slate so the new assignee goes
+ * through the full ask + approach process. A no-op if the task has no engagement row yet.
+ */
+export async function resetEngagementOnReassignment(taskId: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE tasks.task_engagement_state
+        SET confirm_status='awaiting', proposed_dod=NULL, confirmed_dod=NULL, confirm_ask_at=NULL,
+            confirmed_at=NULL, revision_count=0,
+            approach_status='pending', proposed_approach=NULL, approach_revision_count=0,
+            clarify_status='none', clarify_count=0, open_question=NULL, open_question_asked_at=NULL,
+            updated_at=now()
+      WHERE task_id = $1`,
+    [taskId],
+  );
+}
+
+/**
+ * Flip a task DOING -> IN_REVIEW the instant finished work is saved, retrying once before giving up
+ * silently. This replaces a bare fire-and-forget journey write that used to swallow its own failure
+ * (huddle.functions.ts's old markTaskInReview): if the write failed, the task kept its artifact but
+ * never left DOING, and nothing ever looked at it again — autowork.server.ts treats "has an artifact"
+ * as "already handled," so the task was permanently stuck with no signal to the user. Five real tasks
+ * were found stranded this way for ~9 days (2026-08-04 incident).
+ *
+ * On a second consecutive failure, flag it via the SAME task_blockers mechanism flag_blocker uses
+ * (setTaskBlocker) instead of retrying forever — getOpenAssignedTasks already excludes blocked tasks,
+ * so this surfaces the stall in the user's blocked report rather than looping silently.
+ */
+export async function ensureReviewFlip(
+  taskId: string,
+  userEmail: string,
+  caller: { entra_object_id?: string; entra_email?: string } | undefined,
+  agentId?: string | null,
+): Promise<{ ok: boolean; blocked: boolean; pendingConfirm?: boolean }> {
+  // Defense-in-depth for the WIP confirm-intent gate: no task may reach IN_REVIEW without the user
+  // having confirmed the agent's assumed action + Definition of Done first (confirm_task_intent),
+  // regardless of how it got into DOING — autowork's own promotion path is gated separately
+  // (autowork.server.ts), but this is the single choke point every create_artifact dispatch path
+  // shares, so it's the one place that closes the gap for ALL of them at once.
+  if (agentId) {
+    const { isStructuredWorkflowRequired } = await import("../identity/agent-workflow-config.server");
+    if (await isStructuredWorkflowRequired(userEmail, agentId)) {
+      const state = await getTaskEngagementState(taskId);
+      if (state?.confirm_status !== "confirmed") {
+        return { ok: false, blocked: false, pendingConfirm: true };
+      }
+    }
+  }
+  const { invokeJourneyTool } = await import("../journey/proxy.functions");
+  const attempt = async (): Promise<boolean> => {
+    try {
+      const r = await invokeJourneyTool({
+        toolName: "update_task",
+        args: { task_id: taskId, status: "IN_REVIEW" },
+        caller: caller ?? {},
+        context: { source: "huddle" },
+      });
+      return r.ok;
+    } catch {
+      return false;
+    }
+  };
+  for (let i = 0; i < 2; i++) {
+    if (await attempt()) {
+      await markEnteredReview(taskId, userEmail).catch(() => {});
+      const REVIEW_PING_BASE_MS = 48 * 60 * 60_000;
+      const REVIEW_PING_JITTER_MS = 2 * 60 * 60_000;
+      await ensureNextReviewPing(
+        taskId,
+        userEmail,
+        new Date(Date.now() + REVIEW_PING_BASE_MS + Math.random() * REVIEW_PING_JITTER_MS).toISOString(),
+      ).catch(() => {});
+      await clearTaskBlocker(taskId).catch(() => {});
+      return { ok: true, blocked: false };
+    }
+  }
+  await setTaskBlocker(
+    userEmail,
+    taskId,
+    "Finished work couldn't be marked ready for review after two attempts — needs a look.",
+    agentId ?? null,
+  ).catch(() => {});
+  return { ok: false, blocked: true };
 }
 
 // ---- General recurring-job scheduler (Azure Huddle PG) ---------------------------------------------

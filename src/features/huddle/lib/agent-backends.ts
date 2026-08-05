@@ -66,10 +66,21 @@ const RouterConfigSchema = z.object({
   maxInterjectors: z.number().int().min(0).max(4).default(2),
 });
 
+/**
+ * Which engine drives scrum ceremonies (stand-up etc.). "current" = today's exact path (a per-agent
+ * server round-robin turn via enqueueHuddleTurn). "current-optimized" = read a per-agent standup-update
+ * TEXT cache keyed to the board signature (grooming payoff) and speak it straight to TTS, with a
+ * one-shot parallel fan-out when the cache is cold. Defaults to "current" so nothing changes until a
+ * user opts in; switching back to "current" restores the byte-for-byte original path (no cache/fan-out).
+ */
+export const CEREMONY_ENGINES = ["current", "current-optimized"] as const;
+export type CeremonyEngine = (typeof CEREMONY_ENGINES)[number];
+
 export const BackendsConfigSchema = z.object({
   version: z.number().default(3),
   router: RouterConfigSchema,
   agents: z.record(z.string(), AgentBackendSchema),
+  ceremonyEngine: z.enum(CEREMONY_ENGINES).default("current"),
 });
 
 export type AgentBackend = z.infer<typeof AgentBackendSchema>;
@@ -121,6 +132,7 @@ export function defaultBackendsConfig(): BackendsConfig {
       maxInterjectors: 2,
     },
     agents: defaultAgents(),
+    ceremonyEngine: "current",
   };
 }
 
@@ -130,6 +142,7 @@ interface BackendsState {
   config: BackendsConfig;
   setRouter: (patch: Partial<RouterConfig>) => void;
   setAgent: (id: AgentId, patch: Partial<AgentBackend>) => void;
+  setCeremonyEngine: (engine: CeremonyEngine) => void;
   replaceConfig: (cfg: BackendsConfig) => void;
   resetToDefaults: () => void;
 }
@@ -150,6 +163,7 @@ export const useBackendsStore = create<BackendsState>()(
             },
           },
         })),
+      setCeremonyEngine: (engine) => set((s) => ({ config: { ...s.config, ceremonyEngine: engine } })),
       replaceConfig: (cfg) => set({ config: cfg }),
       resetToDefaults: () => set({ config: defaultBackendsConfig() }),
     }),
@@ -183,6 +197,9 @@ export const useBackendsStore = create<BackendsState>()(
           version: 3,
           router: { ...current.config.router, ...p.config.router },
           agents: mergedAgents as Record<AgentId, AgentBackend>,
+          // Preserve a persisted choice; a config saved before this field existed defaults to "current"
+          // (current.config.ceremonyEngine is "current" from defaultBackendsConfig).
+          ceremonyEngine: p.config.ceremonyEngine ?? current.config.ceremonyEngine,
         };
         return { ...current, config: merged };
       },

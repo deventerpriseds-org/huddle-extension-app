@@ -1,6 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import type { CeremonyRunSummary, CeremonyTranscriptRow } from "./ceremony-transcript.server";
+import type {
+  CeremonyRunSummary,
+  CeremonyToolEvent,
+  CeremonyTranscriptRow,
+} from "./ceremony-transcript.server";
 
 // Client-callable server functions for persisting + reading interactive ceremony transcripts. Every
 // call resolves the signed-in user's canonical email (the SAME resolution the task board / artifacts
@@ -69,6 +73,27 @@ export const getCeremonyTranscript = createServerFn({ method: "POST" })
       return { rows: await getCeremonyRun(email, data.runId) };
     } catch {
       return { rows: [] };
+    }
+  });
+
+// E (F13) — poll the REAL tool lifecycle for a live barge/ceremony run. The client narration driver
+// calls this concurrently while a barge answer is in flight and voices ONE honest cue per tool START
+// (in that tool's agent voice). `sinceId` is a `> id` cursor so each poll returns only new events;
+// wrong owner returns []. Lean by design — safe to poll every ~700ms during the brief barge window.
+export const getCeremonyToolEvents = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({ caller: Caller, runId: z.string().min(1), sinceId: z.string().optional() })
+      .parse(raw),
+  )
+  .handler(async ({ data }): Promise<{ events: CeremonyToolEvent[] }> => {
+    const email = await callerEmail(data.caller);
+    if (!email) return { events: [] };
+    try {
+      const { getCeremonyToolEvents: read } = await import("./ceremony-transcript.server");
+      return { events: await read(email, data.runId, data.sinceId ?? "0") };
+    } catch {
+      return { events: [] };
     }
   });
 

@@ -27,6 +27,12 @@ CREATE TABLE IF NOT EXISTS identity.agent_workflow_config (
   agent_overrides  JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Configurable caps for the approach gate / review gate / clarifying-question loops — how many
+-- bounded auto-revisions/questions happen before the agent escalates to the user instead of looping
+-- forever or silently proceeding. default_caps applies to every agent; agent_cap_overrides carries
+-- a partial {approach?,review?,question?} per agent id, same default+override shape as agent_overrides.
+ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS default_caps JSONB NOT NULL DEFAULT '{"approach":3,"review":3,"question":2}'::jsonb;
+ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS agent_cap_overrides JSONB NOT NULL DEFAULT '{}'::jsonb;
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -43,22 +49,51 @@ async function ensureBootstrapped() {
   }
 }
 
+export interface WorkflowCaps {
+  /** Max bounded auto-revisions on the pre-work approach gate before escalating to the user. */
+  approach: number;
+  /** Max bounded auto-revisions on the post-work review gate before escalating to the user. */
+  review: number;
+  /** Max clarifying questions an agent may ask on one task before it must flag_blocker or proceed. */
+  question: number;
+}
+
+const DEFAULT_CAPS: WorkflowCaps = { approach: 3, review: 3, question: 2 };
+
 export interface AgentWorkflowConfig {
   default_required: boolean;
   agent_overrides: Record<string, boolean>;
+  default_caps: WorkflowCaps;
+  agent_cap_overrides: Record<string, Partial<WorkflowCaps>>;
 }
 
-const DEFAULT_CONFIG: AgentWorkflowConfig = { default_required: false, agent_overrides: {} };
+const DEFAULT_CONFIG: AgentWorkflowConfig = {
+  default_required: false,
+  agent_overrides: {},
+  default_caps: DEFAULT_CAPS,
+  agent_cap_overrides: {},
+};
 
 /** Read the config for an email. Returns the default (all discretionary) when nothing is set. */
 export async function getAgentWorkflowConfig(email: string): Promise<AgentWorkflowConfig> {
   await ensureBootstrapped();
-  const r = await getPool().query<{ default_required: boolean; agent_overrides: Record<string, boolean> }>(
-    `SELECT default_required, agent_overrides FROM identity.agent_workflow_config WHERE lower(email) = lower($1)`,
+  const r = await getPool().query<{
+    default_required: boolean;
+    agent_overrides: Record<string, boolean>;
+    default_caps: Partial<WorkflowCaps>;
+    agent_cap_overrides: Record<string, Partial<WorkflowCaps>>;
+  }>(
+    `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides
+       FROM identity.agent_workflow_config WHERE lower(email) = lower($1)`,
     [email],
   );
   if (r.rowCount === 0) return DEFAULT_CONFIG;
-  return { default_required: r.rows[0].default_required, agent_overrides: r.rows[0].agent_overrides ?? {} };
+  return {
+    default_required: r.rows[0].default_required,
+    agent_overrides: r.rows[0].agent_overrides ?? {},
+    default_caps: { ...DEFAULT_CAPS, ...(r.rows[0].default_caps ?? {}) },
+    agent_cap_overrides: r.rows[0].agent_cap_overrides ?? {},
+  };
 }
 
 /** Whole-object upsert, same pattern as artifacts.mirror_config / setMirrorConfigFn. */
@@ -71,15 +106,39 @@ export async function setAgentWorkflowConfig(
   const next: AgentWorkflowConfig = {
     default_required: patch.default_required ?? current.default_required,
     agent_overrides: patch.agent_overrides ?? current.agent_overrides,
+    default_caps: patch.default_caps ?? current.default_caps,
+    agent_cap_overrides: patch.agent_cap_overrides ?? current.agent_cap_overrides,
   };
   await getPool().query(
-    `INSERT INTO identity.agent_workflow_config (email, default_required, agent_overrides, updated_at)
-     VALUES ($1,$2,$3, now())
+    `INSERT INTO identity.agent_workflow_config
+       (email, default_required, agent_overrides, default_caps, agent_cap_overrides, updated_at)
+     VALUES ($1,$2,$3,$4,$5, now())
      ON CONFLICT (email) DO UPDATE SET
-       default_required=EXCLUDED.default_required, agent_overrides=EXCLUDED.agent_overrides, updated_at=now()`,
-    [email, next.default_required, JSON.stringify(next.agent_overrides)],
+       default_required=EXCLUDED.default_required, agent_overrides=EXCLUDED.agent_overrides,
+       default_caps=EXCLUDED.default_caps, agent_cap_overrides=EXCLUDED.agent_cap_overrides, updated_at=now()`,
+    [
+      email,
+      next.default_required,
+      JSON.stringify(next.agent_overrides),
+      JSON.stringify(next.default_caps),
+      JSON.stringify(next.agent_cap_overrides),
+    ],
   );
   return next;
+}
+
+/**
+ * Resolve the bounded-loop caps for this agent, right now, for this email. Per-agent override wins
+ * per-field; falls back to the global default. Never throws — a config-read failure resolves to the
+ * hardcoded defaults rather than blocking the gates entirely.
+ */
+export async function getWorkflowCaps(email: string, agentId: string): Promise<WorkflowCaps> {
+  try {
+    const cfg = await getAgentWorkflowConfig(email);
+    return { ...cfg.default_caps, ...(cfg.agent_cap_overrides[agentId] ?? {}) };
+  } catch {
+    return DEFAULT_CAPS;
+  }
 }
 
 /**

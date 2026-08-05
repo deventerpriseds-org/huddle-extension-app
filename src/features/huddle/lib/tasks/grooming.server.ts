@@ -156,6 +156,18 @@ export async function runScheduledGrooming(
   // Classification + write completed — advance the watermark so an unchanged backlog is skipped next fire.
   await setGroomSignature(email, signature);
 
+  // Ceremony Phase 1 payoff (ACT-huddle-18): pre-generate + cache the standup script keyed to THIS same
+  // signature, so a current-optimized stand-up reads it straight to TTS instead of running the per-agent
+  // server round-robin. Best-effort + non-fatal: a failure here must never fail the groom, and a cache
+  // miss just means the ceremony cold-path regenerates. Runs after the mirror write so it grounds on the
+  // freshly-groomed lanes/assignments.
+  try {
+    const { refreshStandupCacheFromGroom } = await import("./ceremony-script.server");
+    await refreshStandupCacheFromGroom(email, signature);
+  } catch {
+    /* grooming payoff is best-effort — the ceremony cold-path fills the cache if this misses */
+  }
+
   const groomed = Number(parsed.groomed) || 0;
   // Nothing meaningful to report → no proactive ping (avoids "nothing changed" noise).
   if (groomed === 0) {

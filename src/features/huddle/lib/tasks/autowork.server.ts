@@ -126,7 +126,7 @@ const CONFIRM_JITTER_MAX_MS = 4 * 60 * 60_000;
 /** The directive the assigned agent runs to confirm intent + propose a Definition of Done. */
 function confirmIntentDirective(task: { id: string; title: string; assigned_agent: string | null }): string {
   return (
-    `This task was just staged for you on the board: "${task.title}". Before starting the work, ` +
+    `This task is on the board for you: "${task.title}". Before starting (or continuing) the work, ` +
     `confirm with the user what they actually want to achieve here — ground your understanding in ` +
     `their Executive Profile and anything you remember about their goals (already in your context). ` +
     `In ONE natural, brief message (not an interrogation): say what you believe they're trying to ` +
@@ -134,8 +134,16 @@ function confirmIntentDirective(task: { id: string; title: string; assigned_agen
     `confirm it, add to it, or correct it.\n` +
     `Once you understand their reply (confirmed as-is, or with their additions/corrections folded in), ` +
     `call confirm_task_intent with task_id "${task.id}" and the final definition_of_done text — this ` +
-    `locks it in and is what moves the task into active work. Do NOT call confirm_task_intent before ` +
-    `they've actually replied; this first message is only the ask. Do not create tasks or send email.`
+    `locks it in. Do NOT call confirm_task_intent before they've actually replied; this first message ` +
+    `is only the ask.\n` +
+    `Immediately after confirm_task_intent succeeds, in this SAME turn, draft your APPROACH — how you'll ` +
+    `actually get to that Definition of Done (method, sources, structure, depth) — and call ` +
+    `propose_approach with task_id "${task.id}" and that approach. This is graded automatically; the ` +
+    `user is never involved in it. If it comes back needing revision, redraft and call propose_approach ` +
+    `again with the feedback folded in. Only once it comes back approved should you actually start the ` +
+    `real work. If it comes back escalated (you've hit the revision limit), say so to the user directly ` +
+    `in your next reply and ask them to weigh in — don't keep retrying on your own. Do not create tasks ` +
+    `or send email.`
   );
 }
 
@@ -247,14 +255,18 @@ export async function runScheduledAutoWork(
   // docs/plan-wip-confirm-review-gate.md) — a pending (asked-but-unconfirmed) task occupies its UP_NEXT
   // slot but never competes for the DOING slot, so one unanswered ask can't starve the rest of the lane.
   const promotions: { task_id: string; status: string }[] = [];
-  type Candidate = { agent: string; task: BoardTaskRow };
+  // freshPromotion=false candidates are tasks ALREADY sitting in DOING (however they got there — a
+  // normal earlier promotion, or a race/stale-mirror read that skipped the gate entirely, as happened
+  // 2026-08-05: a task reached DOING and completed to IN_REVIEW without ever confirming intent). They
+  // must pass the SAME confirm-intent check as a fresh UP_NEXT->DOING promotion before they're eligible
+  // for a new research turn — closing that gap regardless of how a task lands in DOING.
+  type Candidate = { agent: string; task: BoardTaskRow; freshPromotion: boolean };
   const doingSlotCandidates: Candidate[] = [];
-  // Existing DOING tasks (already promoted, whether just now or in an earlier pass) always stay
-  // research candidates — retried every pass until an artifact exists — regardless of whether this
-  // agent is frozen or has room for a NEW promotion. Only a NEW UP_NEXT->DOING promotion is gated.
   const doingCandidates: BoardTaskRow[] = [];
   for (const [agent, bucket] of byAgent.entries()) {
-    doingCandidates.push(...bucket.doing.slice(0, DOING_CAP));
+    for (const t of bucket.doing.slice(0, DOING_CAP)) {
+      doingSlotCandidates.push({ agent, task: t, freshPromotion: false });
+    }
     const frozen = bucket.inReview.length >= REVIEW_CAP;
     if (frozen) continue;
     const room = Math.max(0, UP_NEXT_CAP - bucket.upNext.length);
@@ -262,7 +274,7 @@ export async function runScheduledAutoWork(
     for (const t of toPromote) promotions.push({ task_id: t.id, status: "UP_NEXT" });
     const upNextAfterTopUp = [...bucket.upNext, ...toPromote];
     if (bucket.doing.length < DOING_CAP && upNextAfterTopUp.length) {
-      doingSlotCandidates.push({ agent, task: upNextAfterTopUp[0] });
+      doingSlotCandidates.push({ agent, task: upNextAfterTopUp[0], freshPromotion: true });
     }
   }
 
@@ -280,13 +292,18 @@ export async function runScheduledAutoWork(
   const now = Date.now();
   for (const c of doingSlotCandidates) {
     let promotedToDoing = false;
+    const state = engagementByTaskId.get(c.task.id);
     if (!requiredByAgent.get(c.agent)) {
       promotedToDoing = true;
     } else {
-      const state = engagementByTaskId.get(c.task.id);
       const status = state?.confirm_status ?? "awaiting";
       if (status === "confirmed") {
-        promotedToDoing = true;
+        // DoD confirmed — also needs an APPROVED approach (the pre-work gate, approach-gate.server.ts)
+        // before real work starts. The assigned agent resolves this inline, in the same turn, right
+        // after confirm_task_intent — 'pending' here just means that hasn't happened yet (or the turn
+        // never reached it); 'escalated' means its cap was exhausted and the agent already raised it
+        // with the user directly. Neither is auto-promoted; only 'approved' is.
+        promotedToDoing = state?.approach_status === "approved";
       } else if (status === "awaiting") {
         if (!state?.confirm_ask_at) {
           needsAskAt.push(c.task.id);
@@ -297,8 +314,14 @@ export async function runScheduledAutoWork(
       }
       // status === "asked": already sent, waiting on the user's reply — nothing to do this pass
     }
+    // A task with an OPEN clarifying question (ask_clarifying_question) is paused — don't enqueue a
+    // new research turn while the agent is waiting on the user's answer, whether or not it's otherwise
+    // eligible. Applies regardless of requireStructuredWorkflow since the tool is generally available.
+    if (promotedToDoing && state?.clarify_status === "open") {
+      promotedToDoing = false;
+    }
     if (promotedToDoing) {
-      promotions.push({ task_id: c.task.id, status: "DOING" });
+      if (c.freshPromotion) promotions.push({ task_id: c.task.id, status: "DOING" });
       doingCandidates.push(c.task);
     }
   }
@@ -351,6 +374,19 @@ export async function runScheduledAutoWork(
   const existing = await listArtifacts(email);
   const withArtifact = new Set(existing.map((a) => a.task_id).filter(Boolean) as string[]);
   const candidates = doingCandidates.filter((t) => !withArtifact.has(t.id));
+
+  // Self-heal: a DOING task that already has an artifact should have flipped to IN_REVIEW the instant
+  // it was saved (create_artifact -> ensureReviewFlip, tasks.server.ts). If that write is still pending
+  // — e.g. the review gate sent it back for one revision and the corrective pass never came — it would
+  // otherwise sit here silently forever, since the idempotency filter above never reconsiders it. Retry
+  // the flip every pass instead; ensureReviewFlip itself flags a repeatedly-failing task via
+  // task_blockers, which drops it out of getOpenAssignedTasks so it surfaces to the user rather than
+  // looping invisibly. (This is what stranded 5 real tasks for ~9 days — 2026-08-04 incident.)
+  const stuckWithArtifact = doingCandidates.filter((t) => withArtifact.has(t.id));
+  if (stuckWithArtifact.length) {
+    const { ensureReviewFlip } = await import("./tasks.server");
+    await Promise.all(stuckWithArtifact.map((t) => ensureReviewFlip(t.id, email, caller, t.assigned_agent).catch(() => {})));
+  }
 
   // Blocked = tasks an agent flagged (a task_blockers row) — with the REAL reason it recorded. Not a guess.
   const board = await getBoardTasks(email);
