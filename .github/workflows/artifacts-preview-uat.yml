@@ -1,0 +1,50 @@
+name: Artifacts Preview UAT (mobile, live)
+
+# Opens the DEPLOYED app in a phone-sized viewport, opens the exact .md artifact the user reported as
+# "Preview not available for this format," and screenshots it to prove the server-side text-preview fix
+# actually renders the markdown content. Read-only — just views the artifact, no approve/reject, no
+# mutation. Shots are published to the orphan `uat-shots` branch (the CCR session fetches them via git;
+# the artifact zip is proxy-blocked). Same retrieval pattern as board-uat.yml / verify-uat.yml.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  artifacts-preview-uat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+      - name: Run Artifacts Preview UAT
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          SHOT_DIR: uat-shots
+        run: node e2e/artifacts-preview-uat.e2e.mjs
+      - name: Upload screenshots + results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-preview-uat-shots
+          path: uat-shots/
+          retention-days: 7
+      - name: Publish shots to uat-shots branch
+        if: always()
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "gha-uat"
+          git checkout --orphan uat-shots
+          git reset >/dev/null 2>&1 || true
+          git add -f uat-shots/*.png uat-shots/results.json
+          git commit -q -m "artifacts preview uat shots — run ${{ github.run_id }}" || { echo "no shots"; exit 0; }
+          git push -f origin uat-shots
