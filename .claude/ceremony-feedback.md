@@ -76,5 +76,7 @@ Read the FULL transcript (not a string match) across runs on main@0075166:
 - **OAI error spam** FIXED (root cause): removed response.cancel sends — ears-only session (create_response:false)
   has no response to cancel; each cancel returned an error event. Zero console errors in the verified run.
 - Minor/cosmetic: the "Yes sir" row can get an [interrupted] tag if the follow-up lands right on top of it.
-- STILL OPEN from the original transcript: **F12** (a barge needing a TOOL — "Terry, look up X" — going silent) — next.
+- **F12** (tool-barge going silent) VERIFIED FIXED: "Terry, look up the UPenn AI course link" → Terry ran the search and SPOKE the results (Coursera link etc.), no dead air (main@1f58766, ceremony-namecall-uat tool-barge stage).
+- Residual nit: Terry sometimes still tacks on "I'll follow up after the stand-up" AFTER already naming the answer (mild; he does answer). 
+- NOT yet tested: **F16** (user addresses the WRONG agent) and **F14** multi-agent 'fight' (in these runs each barge got exactly ONE responder — no fight observed — likely already handled by the one-responder pin, but not explicitly forced).
 - Perceptual feel (snappiness) is still the user's live call; functional flow proven via synthesized-speech UAT.
