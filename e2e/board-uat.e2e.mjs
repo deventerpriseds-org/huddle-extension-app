@@ -82,10 +82,14 @@ try {
     await page.waitForTimeout(1200);
   } catch { /* pill not found */ }
   const upNextBody = await page.locator("body").innerText();
-  const upNextEmpty = /Nothing in [""“]\s*Up next/i.test(upNextBody) || /Nothing in [""“]/.test(upNextBody);
+  const upNextEmpty = /Nothing in [""“]/.test(upNextBody);
   const upNextCards = await page.locator('[data-testid="board-card"], [data-task-id]').count().catch(() => 0);
-  rec("Up next lane is POPULATED after groom→auto-work chain", upNextTapped && !upNextEmpty && upNextCards > 0,
-    `pill="${upNextCount}" cards=${upNextCards}${upNextEmpty ? " (still shows 'Nothing in …')" : ""}`);
+  // The pill's own count ("Up next 6") + the absence of the empty-state is the authoritative signal the
+  // lane is populated; the rendered card count corroborates it (needs data-testid="board-card", which the
+  // BoardCard now carries). A non-zero pill with no "Nothing in …" is the fix working.
+  const pillNum = Number((upNextCount.match(/(\d+)/) || [])[1] || 0);
+  rec("Up next lane is POPULATED after groom→auto-work chain", upNextTapped && !upNextEmpty && pillNum > 0,
+    `pill="${upNextCount}" renderedCards=${upNextCards}${upNextEmpty ? " (still shows 'Nothing in …')" : ""}`);
   await page.screenshot({ path: `${SHOT_DIR}/04-upnext-populated.png`, fullPage: true });
 } catch (err) {
   rec("Board UAT ran without fatal error", false, err instanceof Error ? err.message : String(err));

@@ -606,6 +606,8 @@ function BoardCard({
 
   return (
     <div
+      data-testid="board-card"
+      data-task-id={task.id}
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
