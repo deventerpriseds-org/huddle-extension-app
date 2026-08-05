@@ -190,6 +190,11 @@ export function useCeremonyVoice(hookOpts: {
   // Live mirror of the mic level, updated EVERY analyser tick (not throttled like the state setter) so
   // the barge handler reads a fresh value without a stale render closure. Used by the self-barge gate.
   const micLevelRef = useRef(0);
+  // Decaying PEAK of the mic level over the last ~120ms. The self-bleed gate uses this instead of the
+  // instantaneous level: real speech has troughs, so a genuine barge could momentarily dip below the
+  // floor and be wrongly suppressed as our-own-audio echo (the "barge didn't cut off / wasn't immediate"
+  // complaint). A real utterance SPIKES the peak instantly; steady low-level TTS echo never does.
+  const micPeakRef = useRef(0);
 
   const supported =
     typeof window !== "undefined" &&
@@ -501,6 +506,8 @@ export function useCeremonyVoice(hookOpts: {
         const rms = Math.sqrt(sum / buf.length);
         const level = Math.min(1, rms * 4); // boost so speech reads as a clear pulse
         micLevelRef.current = level; // fresh every tick for the self-barge gate
+        // Decaying peak (~0.85/tick ≈ 120ms memory): spikes on real speech, decays through echo.
+        micPeakRef.current = Math.max(level, micPeakRef.current * 0.85);
         const t = typeof performance !== "undefined" ? performance.now() : 0;
         if (t - last > 80) {
           last = t;
@@ -559,7 +566,7 @@ export function useCeremonyVoice(hookOpts: {
             // below the bleed floor, this "speech" is our own audio echoing back, not the user — do
             // NOT freeze or park. A real utterance is loud enough to clear the floor and still barges.
             const selfBleed =
-              audioQueueRef.current.isActive() && micLevelRef.current < SELF_BARGE_BLEED_FLOOR;
+              audioQueueRef.current.isActive() && micPeakRef.current < SELF_BARGE_BLEED_FLOOR;
             if (selfBleed) {
               // Our own bleed, not a barge — leave the ceremony speaker running. NO response.cancel:
               // this session is ears-only (create_response:false) so OpenAI never generates a response;
