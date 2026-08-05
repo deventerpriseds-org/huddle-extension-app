@@ -35,6 +35,24 @@ the chain.
   session is dead this environment. Drive live grooming/board checks through GHA workflows
   (`run-grooming.yml`, `azure-pg-query.yml`, `board-uat.yml`) whose runners CAN reach the SWA.
 
+## Ceremony barge — Iris hijack + phantom "running a search" (2026-08-05, 8718277) — deployed, PENDING user live test
+The barge_route logging (added eb16af7) immediately paid off — the next live transcript (104 rows) showed:
+- **Iris hijack:** `resolveAddressedAgent` (addressedAgent.ts) prefix-matched the single letter **"i"** to
+  **"Iris"** (scoreName prefix branch: 0.6 + len penalty ≈ 1.35, under the 3.0 gate), so EVERY barge that
+  OPENED with "I" resolved to Iris and overrode the interlocutor-pin ("Iris, why are you speaking? I never
+  mentioned you"). FIX: a name token that is a common English **function word** (STOPWORDS: pronouns/
+  articles/aux/prepositions) or **< 2 chars** is NOT an address → `none` → pins to the interlocutor. Real
+  leading names still resolve; "Al"/"El"→Elle still work (not function words). `e2e/addressedAgent.test.mjs`
+  +6 regression cases, **18/18** offline (run with `bun`).
+- **Phantom search cue:** the barge narration loop reset its tool-event cursor to `"0"` EVERY barge, so
+  `getCeremonyToolEvents` replayed the whole run and re-voiced the FIRST real `tavily_web_search` cue on
+  every later barge even when nothing searched ("you keep saying you're running a search… these aren't
+  things that should be searched" / "Searching what?"). FIX: `bargeToolSinceRef` now PERSISTS across barges
+  (reset only per ceremony at runId mint), so only genuinely-new tool starts get a cue. Also added a
+  `search_memory` toolCue ("checking my notes") so a memory lookup isn't announced as a web search.
+- **Lesson:** persisting the routing decision to the transcript (barge_route) is what made these two
+  diagnosable in ONE read instead of guessing — keep that logging.
+
 ## Ceremony barge — un-named routing hole + avalanche cut-through + self-memory (2026-08-05, eb16af7) — deployed, PENDING user live test
 CORRECTION to the section below: "single-responder confirmed on live app" was OVERSTATED — it was only
 ever proven for a NAMED summons ("Hey Terry"), which is handled CLIENT-SIDE (instant ack, no server
