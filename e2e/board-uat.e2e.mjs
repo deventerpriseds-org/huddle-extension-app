@@ -68,6 +68,25 @@ try {
   // Fallback: count any element that looks like a task card by the presence of assignee/priority chips.
   rec("Task cards visible in the opened lane", cardCount > 0 || !emptyState, `cardCount=${cardCount}`);
   await page.screenshot({ path: `${SHOT_DIR}/03-board-cards.png`, fullPage: true });
+
+  // 5) THE GROOM→AUTO-WORK CHAIN: tap the "Up next" lane pill and prove it is now POPULATED (grooming
+  //    assigns/ranks, then the chained auto-work pass promotes top-ranked backlog into UP_NEXT). Before
+  //    the chain this lane was empty ("Nothing in Up next"); after it, cards render here.
+  const upNextPill = page.getByRole("button", { name: /^Up next\s*\d+/ }).first();
+  let upNextCount = "";
+  let upNextTapped = false;
+  try {
+    upNextCount = (await upNextPill.innerText()).replace(/\s+/g, " ").trim();
+    await upNextPill.click();
+    upNextTapped = true;
+    await page.waitForTimeout(1200);
+  } catch { /* pill not found */ }
+  const upNextBody = await page.locator("body").innerText();
+  const upNextEmpty = /Nothing in [""“]\s*Up next/i.test(upNextBody) || /Nothing in [""“]/.test(upNextBody);
+  const upNextCards = await page.locator('[data-testid="board-card"], [data-task-id]').count().catch(() => 0);
+  rec("Up next lane is POPULATED after groom→auto-work chain", upNextTapped && !upNextEmpty && upNextCards > 0,
+    `pill="${upNextCount}" cards=${upNextCards}${upNextEmpty ? " (still shows 'Nothing in …')" : ""}`);
+  await page.screenshot({ path: `${SHOT_DIR}/04-upnext-populated.png`, fullPage: true });
 } catch (err) {
   rec("Board UAT ran without fatal error", false, err instanceof Error ? err.message : String(err));
   try { await page.screenshot({ path: `${SHOT_DIR}/99-error.png`, fullPage: false }); } catch { /* noop */ }
