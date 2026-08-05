@@ -1893,11 +1893,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           let groomHint = "";
           if (ownsGrooming) {
             const groom = await import("./tasks/groom");
-            // Scope-aware hand-off: group → do-and-report; 1:1 → defer + confirm first.
-            groomHint =
-              "\n\n" +
-              groom.GROOM_SYSTEM_HINT +
-              (data.scope === "group" ? groom.GROOM_HANDOFF_DO_HINT : groom.GROOM_HANDOFF_CONFIRM_HINT);
+            // Hand-off hint keys on the REAL "a teammate passed this" signal (`data.internal`, set only by
+            // deliverOwnerFollowup), NOT on scope. group → do-and-report; 1:1 follow-up → defer+confirm;
+            // 1:1 DIRECT ask (the common case) → just groom. Gating on scope alone made every direct 1:1
+            // ask defer and parrot "a teammate flagged it" — the reported Terry bug.
+            const groomHandoffHint =
+              data.scope === "group"
+                ? groom.GROOM_HANDOFF_DO_HINT
+                : data.internal
+                  ? groom.GROOM_HANDOFF_CONFIRM_HINT
+                  : groom.GROOM_HANDOFF_DIRECT_HINT;
+            groomHint = "\n\n" + groom.GROOM_SYSTEM_HINT + groomHandoffHint;
           }
           const { REMINDER_SYSTEM_HINT } = await import("./tasks/reminders");
           // Cache-friendly ordering (see the "prompt-payload efficiency" backlog item): put ALL
