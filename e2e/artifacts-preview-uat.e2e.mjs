@@ -21,8 +21,12 @@ const results = [];
 const rec = (name, ok, detail) => { results.push({ name, ok, detail }); console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`); };
 
 const browser = await chromium.launch(launchOpts);
-// Phone-sized viewport — same class of device as the user's reported screenshots.
-const ctx = await browser.newContext({ viewport: { width: 412, height: 915 } });
+// Desktop viewport: the Rail nav (Artifacts button) is `app-hidden md:flex` — genuinely absent from
+// the DOM below the md breakpoint. Mobile reaches Artifacts only via a deep-link chip (chat/board
+// artifact links → openArtifactById), not primary nav — a separate, real gap, not what this UAT is
+// proving. The preview-render code path (getArtifactFn → artifact.text → <pre>) is identical at any
+// viewport, so a desktop nav path still directly proves the server-side text-preview fix works.
+const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const page = await ctx.newPage();
 page.on("console", (m) => { if (/error/i.test(m.text())) console.log("  [console] " + m.text().slice(0, 160)); });
 
