@@ -2168,7 +2168,15 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   const gate = await runReviewGate({ taskId: taskIdRaw, agentId: winner.id, email, content, claim: claimAction });
                   if (gate.proceed) {
                     const { ensureReviewFlip } = await import("./tasks/tasks.server");
-                    await ensureReviewFlip(taskIdRaw, email, data.caller, winner.id);
+                    const flip = await ensureReviewFlip(taskIdRaw, email, data.caller, winner.id);
+                    if (flip.pendingConfirm) {
+                      reviewSuffix = " · saved, but held out of review — confirm intent with the user first";
+                      review = {
+                        proceed: false,
+                        message:
+                          "Your work is saved, but this task can't move to the user's review queue yet: you never confirmed the Definition of Done with them. Send them the confirm-intent ask now (what you believe they wanted + the DoD, and ask them to confirm/correct it), then call confirm_task_intent once they reply.",
+                      };
+                    }
                   }
                   if (gate.gated) {
                     reviewSuffix = ` · ${gate.note}`;
@@ -2750,7 +2758,15 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   const gate = await runReviewGate({ taskId: taskIdRaw, agentId: winner.id, email, content, claim: claimAction });
                   if (gate.proceed) {
                     const { ensureReviewFlip } = await import("./tasks/tasks.server");
-                    await ensureReviewFlip(taskIdRaw, email, data.caller, winner.id);
+                    const flip = await ensureReviewFlip(taskIdRaw, email, data.caller, winner.id);
+                    if (flip.pendingConfirm) {
+                      reviewSuffix = " · saved, but held out of review — confirm intent with the user first";
+                      review = {
+                        proceed: false,
+                        message:
+                          "Your work is saved, but this task can't move to the user's review queue yet: you never confirmed the Definition of Done with them. Send them the confirm-intent ask now (what you believe they wanted + the DoD, and ask them to confirm/correct it), then call confirm_task_intent once they reply.",
+                      };
+                    }
                   }
                   if (gate.gated) {
                     reviewSuffix = ` · ${gate.note}`;
@@ -4027,11 +4043,16 @@ async function runWorkerTurn(record: {
           });
           artifactId = id;
           artifactName = name;
+          let pendingConfirmNote: string | undefined;
           if (a.task_id) {
             const { ensureReviewFlip } = await import("./tasks/tasks.server");
-            await ensureReviewFlip(String(a.task_id), email, payload.caller, w.personaId ?? null);
+            const flip = await ensureReviewFlip(String(a.task_id), email, payload.caller, w.personaId ?? null);
+            if (flip.pendingConfirm) {
+              pendingConfirmNote =
+                "Saved, but held out of the user's review queue — you never confirmed the Definition of Done with them. Send the confirm-intent ask now (what you believe they wanted + the DoD) and call confirm_task_intent once they reply.";
+            }
           }
-          return JSON.stringify({ ok: true, id, deepLink });
+          return JSON.stringify({ ok: true, id, deepLink, ...(pendingConfirmNote ? { note: pendingConfirmNote } : {}) });
         } catch (err) {
           return JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) });
         }

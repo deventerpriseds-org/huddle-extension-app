@@ -715,7 +715,21 @@ export async function ensureReviewFlip(
   userEmail: string,
   caller: { entra_object_id?: string; entra_email?: string } | undefined,
   agentId?: string | null,
-): Promise<{ ok: boolean; blocked: boolean }> {
+): Promise<{ ok: boolean; blocked: boolean; pendingConfirm?: boolean }> {
+  // Defense-in-depth for the WIP confirm-intent gate: no task may reach IN_REVIEW without the user
+  // having confirmed the agent's assumed action + Definition of Done first (confirm_task_intent),
+  // regardless of how it got into DOING — autowork's own promotion path is gated separately
+  // (autowork.server.ts), but this is the single choke point every create_artifact dispatch path
+  // shares, so it's the one place that closes the gap for ALL of them at once.
+  if (agentId) {
+    const { isStructuredWorkflowRequired } = await import("../identity/agent-workflow-config.server");
+    if (await isStructuredWorkflowRequired(userEmail, agentId)) {
+      const state = await getTaskEngagementState(taskId);
+      if (state?.confirm_status !== "confirmed") {
+        return { ok: false, blocked: false, pendingConfirm: true };
+      }
+    }
+  }
   const { invokeJourneyTool } = await import("../journey/proxy.functions");
   const attempt = async (): Promise<boolean> => {
     try {
