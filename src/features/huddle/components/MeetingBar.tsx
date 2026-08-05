@@ -871,9 +871,36 @@ function MeetingRoom({
     }
 
     const members = membersRef.current;
+
+    // DISMISS / filler ("never mind", "continue", "as you were") — the user retracted or waved the agents
+    // on. Do NOT spawn a turn (which invents a task from nothing, as happened live: "So, never mind" →
+    // "you uploaded files, how can I assist?"). Just resume the interrupted speaker.
+    if (/^\s*(never\s?mind|nvm|forget it|forget that|ignore that|as you were|carry on|go on|continue|nothing|scratch that)\b/i.test(text)) {
+      if (bargeGenRef.current === myGen) {
+        setPhase("Resuming…");
+        try {
+          await ceremonyVoiceRef.current.resumeFromFreeze();
+        } catch {
+          /* nothing frozen */
+        }
+        bargeHandlingRef.current = false;
+        bargeActiveRef.current = false;
+        bargeCooldownUntilRef.current = Date.now() + BARGE_COOLDOWN_MS;
+        setPhase("");
+      }
+      return;
+    }
+
+    // SINGLE RESPONDER for this barge: the resolved addressed agent, else the agent who was JUST speaking
+    // — never a multi-winner group pick. The server's ceremony-barge fast path forces exactly this agent,
+    // which kills the wrong-agent grab, the pile-on, and the narration chorus in one move.
+    const bargeTarget: AgentId | undefined =
+      addressed.kind === "agent"
+        ? (addressed.agentId as AgentId)
+        : ((ceremonyVoiceRef.current.activeSpeaker as AgentId | null) ?? members[0]);
+
     // The frozen speaker (the row actually being cut) survives bargeFreeze. Mark it interrupted so the
-    // transcript renders the cut — but this agent does NOT necessarily answer: the REAL router below
-    // decides who does, so "hey terry" reaches Terry even if Cole was mid-sentence.
+    // transcript renders the cut — but this agent does NOT necessarily answer (the bargeTarget above does).
     const interrupted = ceremonyVoiceRef.current.activeSpeaker;
     if (interrupted) {
       markLastAgentTurnInterrupted();
@@ -988,6 +1015,7 @@ function MeetingRoom({
             members,
             history: buildCeremonyHistory(transcriptRef.current, huddleIdRef.current, text),
             ceremonyBarge: true,
+            targetAgentId: bargeTarget, // server ceremony-barge fast path → this ONE agent answers
             ceremonyRunId: runIdRef.current ?? undefined, // tag tool calls to this run for debug tracking
             router: { ...cfg.router, interjections: false, soloOnCoverage: true },
             agents: cfg.agents,

@@ -700,6 +700,24 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     let routed: RouteResult;
     if (resume) {
       routed = { winners: [], interjectors: [], decision: resume.decision };
+    } else if (data.ceremonyBarge && data.targetAgentId && data.members.includes(data.targetAgentId)) {
+      // CEREMONY BARGE FAST PATH: the client already resolved WHO this barge is addressed to (or the
+      // agent who was just speaking). Route to that ONE agent — skip the multi-winner LLM router
+      // entirely. This is what makes a barge fast and single-voiced: no pile-on, no wrong-agent grab,
+      // no narration chorus. Scoped to ceremonyBarge, so the normal all-members group chat (which has
+      // no target and relies on the content router) is untouched.
+      routed = {
+        winners: [data.targetAgentId],
+        interjectors: [],
+        decision: {
+          signal: "mention",
+          winnerId: data.targetAgentId,
+          runnerUpId: null,
+          interjected: false,
+          scores: { [data.targetAgentId]: 1 },
+          reason: "ceremony barge → addressed agent (fast path, single responder)",
+        },
+      };
     } else {
     const explicitMentions = parseMentions(
       data.text,
