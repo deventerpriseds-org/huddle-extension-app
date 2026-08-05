@@ -256,6 +256,20 @@ export interface JourneyTaskPayload {
 
 export async function upsertJourneyTask(row: JourneyTaskPayload, userEmail?: string | null): Promise<void> {
   await ensureBootstrapped();
+
+  // Reassignment invalidates confirm-intent/approach state (relearned 2026-08-05): confirm_status and
+  // approach_status are earned by the AGENT who did the asking/proposing — if grooming (or anything
+  // else) hands the task to a DIFFERENT agent, that new agent must not silently inherit 'confirmed'/
+  // 'approved' status it never itself produced, or it sails straight to DOING/IN_REVIEW without ever
+  // asking the user. Compare against the currently-mirrored assigned_agent BEFORE the upsert overwrites it.
+  const incomingAgent = row.assigned_agent ?? null;
+  if (incomingAgent) {
+    const prevAgent = await getTaskAssignedAgent(row.id);
+    if (prevAgent && prevAgent !== incomingAgent) {
+      await resetEngagementOnReassignment(row.id).catch(() => {});
+    }
+  }
+
   await getPool().query(
     `INSERT INTO tasks.journey_tasks
        (id,user_id,user_email,title,description,status,priority,category,is_priority,priority_rank,
@@ -805,6 +819,28 @@ export async function confirmTaskIntent(taskId: string, userEmail: string, dod: 
      ON CONFLICT (task_id) DO UPDATE SET
        confirm_status='confirmed', confirmed_dod=EXCLUDED.confirmed_dod, confirmed_at=now(), updated_at=now()`,
     [taskId, userEmail.toLowerCase(), dod],
+  );
+}
+
+/**
+ * A task's assignee changed (e.g. a grooming re-pass) — the previous assignee's confirm-intent/approach
+ * state was earned by THEM, not the new assignee, so it must not silently carry over (the new agent
+ * would otherwise inherit 'confirmed'/'approved' status it never itself proposed to the user, and sail
+ * straight to DOING/IN_REVIEW without asking — the same failure mode as the 2026-08-05 incident, just
+ * via reassignment instead of a stale-mirror race). Resets to a clean slate so the new assignee goes
+ * through the full ask + approach process. A no-op if the task has no engagement row yet.
+ */
+export async function resetEngagementOnReassignment(taskId: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE tasks.task_engagement_state
+        SET confirm_status='awaiting', proposed_dod=NULL, confirmed_dod=NULL, confirm_ask_at=NULL,
+            confirmed_at=NULL, revision_count=0,
+            approach_status='pending', proposed_approach=NULL, approach_revision_count=0,
+            clarify_status='none', clarify_count=0, open_question=NULL, open_question_asked_at=NULL,
+            updated_at=now()
+      WHERE task_id = $1`,
+    [taskId],
   );
 }
 
