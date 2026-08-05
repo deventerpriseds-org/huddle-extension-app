@@ -1,0 +1,61 @@
+name: Ceremony name-call UAT (Hey Terry to Yes sir)
+
+# End-to-end reproduction of the user's exact experience with SYNTHESIZED speech (no human tester):
+# ElevenLabs synthesizes "Hey Terry", the harness injects it into the ceremony mic on the DEPLOYED SWA,
+# and asserts the addressed agent instantly says "Yes sir" in the transcript (the name-call ack, dd061d0).
+
+on:
+  workflow_dispatch:
+
+jobs:
+  namecall:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install ffmpeg + espeak fallback + Playwright Chromium
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg espeak-ng
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Synthesize Hey Terry with ElevenLabs (fallback espeak)
+        env:
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_DEFAULT_VOICE_ID: ${{ secrets.ELEVENLABS_DEFAULT_VOICE_ID }}
+        run: |
+          set +e
+          VOICE="${ELEVENLABS_DEFAULT_VOICE_ID:-21m00Tcm4TlvDq8ikWAM}"
+          TEXT="Hey Terry."
+          OK=0
+          if [ -n "$ELEVENLABS_API_KEY" ]; then
+            HTTP=$(curl -sS -o /tmp/el.mp3 -w "%{http_code}" \
+              -X POST "https://api.elevenlabs.io/v1/text-to-speech/${VOICE}?output_format=mp3_44100_128" \
+              -H "xi-api-key: ${ELEVENLABS_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -d "{\"text\":\"${TEXT}\",\"model_id\":\"eleven_turbo_v2_5\"}")
+            echo "ElevenLabs HTTP ${HTTP}, mp3 bytes: $(wc -c < /tmp/el.mp3 2>/dev/null || echo 0)"
+            if [ "$HTTP" = "200" ] && [ "$(wc -c < /tmp/el.mp3)" -gt 2000 ]; then OK=1; fi
+          fi
+          if [ "$OK" = "1" ]; then
+            echo "Using ElevenLabs audio."
+            ffmpeg -y -loglevel error -i /tmp/el.mp3 -af "apad=pad_dur=2" -ar 16000 -ac 1 -c:a pcm_s16le /tmp/hey-terry.wav
+          else
+            echo "Falling back to espeak-ng."
+            espeak-ng -v en -s 150 -w /tmp/el_raw.wav "$TEXT"
+            ffmpeg -y -loglevel error -i /tmp/el_raw.wav -af "apad=pad_dur=2" -ar 16000 -ac 1 -c:a pcm_s16le /tmp/hey-terry.wav
+          fi
+          echo "Final WAV: $(wc -c < /tmp/hey-terry.wav) bytes"
+
+      - name: Run ceremony name-call UAT
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          WAV_PATH: /tmp/hey-terry.wav
+        run: node e2e/ceremony-namecall-uat.e2e.mjs
