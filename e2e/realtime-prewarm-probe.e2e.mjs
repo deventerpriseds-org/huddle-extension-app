@@ -22,6 +22,11 @@ import { readFileSync } from "node:fs";
 
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
 const WAV_PATH = process.env.WAV_PATH || "/tmp/hey-terry.wav";
+// getUserMedia + navigator.mediaDevices require a SECURE CONTEXT — about:blank has none, so the page
+// must load an https origin first. Use the deployed SWA (same origin the real app uses to reach OpenAI
+// Realtime, so the cross-origin SDP POST/CORS behaves identically). We only need the secure origin; we
+// do not drive the app UI.
+const SECURE_ORIGIN = process.env.APP_URL || "https://icy-flower-0f415200f.7.azurestaticapps.net";
 const MODEL = "gpt-realtime"; // REALTIME_MODEL (src/features/huddle/lib/voice/realtime.functions.ts)
 const CHROMIUM_PATH = process.env.CHROMIUM_PATH || process.env.PLAYWRIGHT_CHROMIUM || "";
 
@@ -192,6 +197,12 @@ try {
     page.on("console", (m) => {
       if (m.type() === "error") console.log(`  [page error] ${m.text()}`);
     });
+    // Navigate to a secure origin so navigator.mediaDevices.getUserMedia is available.
+    try {
+      await page.goto(SECURE_ORIGIN, { waitUntil: "domcontentloaded", timeout: 30000 });
+    } catch (e) {
+      console.log(`  [warn] goto ${SECURE_ORIGIN} failed (${e.message}) — continuing`);
+    }
     let ephemeral;
     try {
       ephemeral = await mintEphemeral();
