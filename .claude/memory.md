@@ -1,6 +1,42 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-05
 
+## vonellis2 duplicate-profile bug — FIXED via oid-canonicalization + data merge (2026-08-05) — DEPLOYED main (deploy run 31031336742 success). NOT yet user-confirmed live (login is user-only).
+**Symptom (user):** logging in with one of two emails randomly recreates the username as **`vonellis2`**;
+adding the second email from the GUI fails often. "there shouldn't be vonellis2 user."
+**Root cause (ground-truthed live):** `src/lib/entra-verify.server.ts` extracts `oid = payload.oid || payload.sub`;
+`sub` is a per-app/per-token-type subject that DIFFERS from the stable `oid`, so the same person can present two
+ids across logins. `getOrCreateProfile` reconciled ONLY by oid → an alternate id minted a 2nd profile (username
+collision → `vonellis2`); the email was already linked to the original profile (unique per email) so the duplicate
+got NO emails → add-email from GUI also broke.
+**Two profiles found (identity.profiles, entra_object_id=TEXT):**
+- `a89e3652-…` = **vonellis** (created 07-09, the ORIGINAL) — owns BOTH emails (`dev@` manual + `von.ellis@` entra);
+  workspace_state was STALE (5,898 B, July 9).
+- `112d7852-…` = **vonellis2** (created 07-11, the DUPLICATE) — **no emails**; held the **LIVE** workspace_state
+  (~908 KB, updated today). So valuables were SPLIT: good name+emails on original, live data on duplicate.
+**Merge surface is TINY** — only 3 app tables key on `entra_object_id`: `identity.profiles`, `.profile_emails`,
+`.workspace_state`. Everything else (tasks/chat/artifacts/config/engagement) is EMAIL-scoped and both emails
+already resolve to a89e3652. So the survivor is the ORIGINAL a89e3652 (already has name+emails, is where
+canonicalOid-by-email + all email-scoped data resolve); we only had to carry the ONE valuable thing off the
+duplicate: its live workspace blob.
+**Fix (code, committed ce83e3e, merged db8ef59, deployed):** new `identity.profile_oids` alias table +
+`canonicalOid(tokenOid, email)` in `identity.server.ts` — (1) existing alias wins; (2) else reconcile by sign-in
+EMAIL (unique per profile) and RECORD the token id as an alias; (3) else fall back to token id (new user). Never
+throws (DB hiccup → returns token id, login never hard-fails). Wired into `getOrCreateProfile`,
+`profile.functions.withClaims` (username/email/display ops), and `workspace.functions` load/save.
+**Data ops (via azure-pg-query.yml, admin conn — psql runs multi-stmt as ONE txn, so a mid-error rolls back all):**
+(1) backed up both workspace_state blobs + both profiles + emails to `identity.merge_backup_20260805` /
+`_profiles_` / `_emails_` (reversibility); (2) guarded copy `UPDATE workspace_state dst←src WHERE src.updated_at >
+dst.updated_at` moved the 908 KB from 112d7852 → a89e3652; (3) pre-seeded alias `112d7852→a89e3652` in
+profile_oids so the user's NEXT login resolves deterministically without relying on the email path firing first try.
+**GOTCHA:** `workspace_state.entra_object_id` is TEXT (matches profiles) — a first attempt declaring the backup col
+`uuid` failed `uuid vs text`; the whole txn rolled back cleanly (nothing written). Use TEXT.
+**STILL PENDING — the ONLY destructive step, GATED on user live-confirm:** delete the duplicate profile
+`112d7852` (its workspace_state row THEN the profiles row; profile_oids alias for 112d7852 points at a89e3652 so it
+survives the delete — that's the desired end state). Do NOT delete until the user logs in with EACH email → lands on
+ONE `vonellis` with both emails + today's settings intact + add-email works. Reversal if needed: restore from
+merge_backup_20260805; delete the seeded alias row.
+
 ## Ceremony-barge routing UNIFIED into the router — "user calls Finn, Terry answers" fixed (2026-08-05) — DEPLOYED main (run 31030010818 success), mechanism verified offline, NOT yet user-confirmed live
 Ground-truthed from the live standup transcript (run 16:24:35, `chat.ceremony_transcript`): the barge was
 **"Great, while you're doing that, uh, Finn, are you here?"** — "Finn" is **mid-sentence**; the client

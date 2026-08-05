@@ -1,5 +1,22 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-08-05 (ACT-huddle-20 — ceremony barge/standup polish deployed; NEW open item: agents lack a task-detail/DoD/artifact read tool)
+Last updated: 2026-08-05 (ACT-huddle-21 — vonellis2 duplicate-profile fix DEPLOYED; pending user live-login confirm before deleting the duplicate)
+
+### ACT-huddle-21 (vonellis2 duplicate-profile bug — oid canonicalization + data merge)
+User: "randomly my username is recreated as vonellis2 after logging in with one of the emails … it also fails a lot
+when trying to add the second email from the gui. there shouldn't be vonellis2 user." Full detail in memory.md.
+- [DONE] Root-caused: `entra-verify.server.ts` `oid = payload.oid || payload.sub`; sub≠oid across logins →
+  `getOrCreateProfile` (oid-only reconcile) minted a 2nd profile; email already linked → duplicate got no emails.
+- [DONE] `canonicalOid(tokenOid,email)` + `identity.profile_oids` alias table; wired into getOrCreateProfile,
+  profile.functions.withClaims, workspace.functions load/save. Committed ce83e3e → merged db8ef59 → **deployed main
+  (deploy run 31031336742 success)**.
+- [DONE] Backed up both workspace_state blobs + profiles + emails → `identity.merge_backup_20260805*`.
+- [DONE] Guarded copy moved the LIVE ~908 KB workspace_state from duplicate `112d7852` → survivor `a89e3652`
+  (vonellis). Verified both rows = 907,862 B.
+- [DONE] Pre-seeded alias `112d7852→a89e3652` so the next login resolves deterministically to vonellis.
+- [PENDING — USER LIVE TEST] log in with EACH email → land on ONE `vonellis`, both emails present, today's settings
+  intact, add-email works. THEN and only then:
+- [BLOCKED on the live test — DESTRUCTIVE] delete duplicate profile `112d7852` (workspace_state row, then profiles
+  row). Reversal path: restore from merge_backup_20260805; drop the seeded alias.
 
 ### ACT-huddle-20 (ceremony barge + stand-up polish — deployed live 2026-08-05, iterated from real transcripts)
 Driven by the user's live stand-up transcripts + the persisted `barge_route` logging. All DEPLOYED on main:
