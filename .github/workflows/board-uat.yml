@@ -1,0 +1,49 @@
+name: Board UAT (mobile, live)
+
+# Opens the DEPLOYED app in a phone-sized viewport, navigates to the Board, and screenshots it to prove
+# it opens on a lane with tasks (not the empty "Nothing in Up next"). Read-only — no task mutation.
+# Shots are published to the orphan `uat-shots` branch (the CCR session fetches them via git; the artifact
+# zip is proxy-blocked). Same retrieval pattern as verify-uat.yml.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  board-uat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+      - name: Run Board UAT
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          SHOT_DIR: uat-shots
+        run: node e2e/board-uat.e2e.mjs
+      - name: Upload screenshots + results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: board-uat-shots
+          path: uat-shots/
+          retention-days: 7
+      - name: Publish shots to uat-shots branch
+        if: always()
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "gha-uat"
+          git checkout --orphan uat-shots
+          git reset >/dev/null 2>&1 || true
+          git add -f uat-shots/*.png uat-shots/results.json
+          git commit -q -m "board uat shots — run ${{ github.run_id }}" || { echo "no shots"; exit 0; }
+          git push -f origin uat-shots
