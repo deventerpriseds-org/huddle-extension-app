@@ -29,7 +29,13 @@ import {
 import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
 import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "./calendar/tools";
 import { DELEGATE_TO_SPECIALIST_TOOL, workerDirectory, getWorker, WORKER_ROLES } from "./agents/workers";
-import { FLAG_BLOCKER_TOOL, CONFIRM_TASK_INTENT_TOOL } from "./tasks/task-agent-tools";
+import {
+  FLAG_BLOCKER_TOOL,
+  CONFIRM_TASK_INTENT_TOOL,
+  PROPOSE_APPROACH_TOOL,
+  ASK_CLARIFYING_QUESTION_TOOL,
+  RESOLVE_CLARIFYING_QUESTION_TOOL,
+} from "./tasks/task-agent-tools";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
 
 // Feature flag: gates the intent-classification guard on capability/lane hand-off.
@@ -2083,6 +2089,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             DELEGATE_TO_SPECIALIST_TOOL,
             FLAG_BLOCKER_TOOL,
             CONFIRM_TASK_INTENT_TOOL,
+            PROPOSE_APPROACH_TOOL,
+            ASK_CLARIFYING_QUESTION_TOOL,
+            RESOLVE_CLARIFYING_QUESTION_TOOL,
             SCHEDULE_REMINDER_TOOL,
             PRIORITIZE_TOOL,
             GET_CALENDAR_EVENTS_TOOL, // calendar-framed alias → combined schedule (always available)
@@ -2291,6 +2300,92 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "confirm_task_intent", "confirm failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            }
+            if (c.name === "propose_approach") {
+              const a = c.arguments as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const approach = String(a.approach ?? "").trim();
+              if (!taskId || !approach) return JSON.stringify({ ok: false, error: "task_id and approach are required" });
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { getTaskTitle } = await import("./tasks/tasks.server");
+                const title = await getTaskTitle(taskId);
+                const { runApproachGate } = await import("./tasks/approach-gate.server");
+                const gate = await runApproachGate({ taskId, agentId: winner.id, email, taskTitle: title, approach, claim: claimAction });
+                recordToolUse(
+                  winner.id,
+                  "propose_approach",
+                  gate.approved ? "approach approved" : gate.escalated ? "approach escalated to user" : `sent back — ${gate.note}`,
+                  true,
+                );
+                return JSON.stringify({
+                  ok: true,
+                  approved: gate.approved,
+                  escalated: gate.escalated,
+                  note: gate.note,
+                  ...(gate.deficiencies ? { deficiencies: gate.deficiencies } : {}),
+                });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "propose_approach", "approach gate failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            }
+            if (c.name === "ask_clarifying_question") {
+              const a = c.arguments as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const question = String(a.question ?? "").trim();
+              if (!taskId || !question) return JSON.stringify({ ok: false, error: "task_id and question are required" });
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { getTaskEngagementState, openClarifyingQuestion } = await import("./tasks/tasks.server");
+                const { getWorkflowCaps } = await import("./identity/agent-workflow-config.server");
+                const state = await getTaskEngagementState(taskId);
+                if (state?.clarify_status === "open") {
+                  recordToolUse(winner.id, "ask_clarifying_question", "already has an open question — wait for the reply", false);
+                  return JSON.stringify({
+                    ok: false,
+                    error: "This task already has an open question awaiting the user's reply — wait for their answer before asking another.",
+                  });
+                }
+                const caps = await getWorkflowCaps(email, winner.id).catch(() => ({ approach: 3, review: 3, question: 2 }));
+                const currentCount = state?.clarify_count ?? 0;
+                if (currentCount >= caps.question) {
+                  recordToolUse(winner.id, "ask_clarifying_question", `cap reached (${caps.question})`, false);
+                  return JSON.stringify({
+                    ok: false,
+                    error: `You've already asked the max (${caps.question}) clarifying questions on this task. Proceed on your best judgment, or call flag_blocker if you genuinely cannot continue.`,
+                  });
+                }
+                const count = await openClarifyingQuestion(taskId, email, question);
+                recordToolUse(winner.id, "ask_clarifying_question", `asked (${count}/${caps.question}): ${question.slice(0, 80)}`, true);
+                return JSON.stringify({ ok: true, task_id: taskId, count, cap: caps.question });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "ask_clarifying_question", "ask failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            }
+            if (c.name === "resolve_clarifying_question") {
+              const a = c.arguments as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              if (!taskId) return JSON.stringify({ ok: false, error: "task_id is required" });
+              try {
+                const { closeClarifyingQuestion } = await import("./tasks/tasks.server");
+                await closeClarifyingQuestion(taskId);
+                recordToolUse(winner.id, "resolve_clarifying_question", "resumed", true);
+                return JSON.stringify({ ok: true });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "resolve_clarifying_question", "resolve failed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             }
@@ -2877,6 +2972,108 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 recordToolUse(winner.id, "confirm_task_intent", "confirm failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            },
+          });
+
+          // propose_approach — pre-work approach gate (mirrors the OpenAI path).
+          lovableTools.propose_approach = tool({
+            description: PROPOSE_APPROACH_TOOL.description,
+            inputSchema: z.object({ task_id: z.string(), approach: z.string() }),
+            execute: async (args) => {
+              const a = args as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const approach = String(a.approach ?? "").trim();
+              if (!taskId || !approach) return JSON.stringify({ ok: false, error: "task_id and approach are required" });
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { getTaskTitle } = await import("./tasks/tasks.server");
+                const title = await getTaskTitle(taskId);
+                const { runApproachGate } = await import("./tasks/approach-gate.server");
+                const gate = await runApproachGate({ taskId, agentId: winner.id, email, taskTitle: title, approach, claim: claimAction });
+                recordToolUse(
+                  winner.id,
+                  "propose_approach",
+                  gate.approved ? "approach approved" : gate.escalated ? "approach escalated to user" : `sent back — ${gate.note}`,
+                  true,
+                );
+                return JSON.stringify({
+                  ok: true,
+                  approved: gate.approved,
+                  escalated: gate.escalated,
+                  note: gate.note,
+                  ...(gate.deficiencies ? { deficiencies: gate.deficiencies } : {}),
+                });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "propose_approach", "approach gate failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            },
+          });
+
+          // ask_clarifying_question / resolve_clarifying_question — bounded mid-work Q&A (mirrors the OpenAI path).
+          lovableTools.ask_clarifying_question = tool({
+            description: ASK_CLARIFYING_QUESTION_TOOL.description,
+            inputSchema: z.object({ task_id: z.string(), question: z.string() }),
+            execute: async (args) => {
+              const a = args as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              const question = String(a.question ?? "").trim();
+              if (!taskId || !question) return JSON.stringify({ ok: false, error: "task_id and question are required" });
+              try {
+                const email =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email;
+                if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+                const { getTaskEngagementState, openClarifyingQuestion } = await import("./tasks/tasks.server");
+                const { getWorkflowCaps } = await import("./identity/agent-workflow-config.server");
+                const state = await getTaskEngagementState(taskId);
+                if (state?.clarify_status === "open") {
+                  recordToolUse(winner.id, "ask_clarifying_question", "already has an open question — wait for the reply", false);
+                  return JSON.stringify({
+                    ok: false,
+                    error: "This task already has an open question awaiting the user's reply — wait for their answer before asking another.",
+                  });
+                }
+                const caps = await getWorkflowCaps(email, winner.id).catch(() => ({ approach: 3, review: 3, question: 2 }));
+                const currentCount = state?.clarify_count ?? 0;
+                if (currentCount >= caps.question) {
+                  recordToolUse(winner.id, "ask_clarifying_question", `cap reached (${caps.question})`, false);
+                  return JSON.stringify({
+                    ok: false,
+                    error: `You've already asked the max (${caps.question}) clarifying questions on this task. Proceed on your best judgment, or call flag_blocker if you genuinely cannot continue.`,
+                  });
+                }
+                const count = await openClarifyingQuestion(taskId, email, question);
+                recordToolUse(winner.id, "ask_clarifying_question", `asked (${count}/${caps.question}): ${question.slice(0, 80)}`, true);
+                return JSON.stringify({ ok: true, task_id: taskId, count, cap: caps.question });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "ask_clarifying_question", "ask failed", false, msg);
+                return JSON.stringify({ ok: false, error: msg });
+              }
+            },
+          });
+          lovableTools.resolve_clarifying_question = tool({
+            description: RESOLVE_CLARIFYING_QUESTION_TOOL.description,
+            inputSchema: z.object({ task_id: z.string() }),
+            execute: async (args) => {
+              const a = args as Record<string, unknown>;
+              const taskId = String(a.task_id ?? "").trim();
+              if (!taskId) return JSON.stringify({ ok: false, error: "task_id is required" });
+              try {
+                const { closeClarifyingQuestion } = await import("./tasks/tasks.server");
+                await closeClarifyingQuestion(taskId);
+                recordToolUse(winner.id, "resolve_clarifying_question", "resumed", true);
+                return JSON.stringify({ ok: true });
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordToolUse(winner.id, "resolve_clarifying_question", "resolve failed", false, msg);
                 return JSON.stringify({ ok: false, error: msg });
               }
             },

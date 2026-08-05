@@ -134,8 +134,16 @@ function confirmIntentDirective(task: { id: string; title: string; assigned_agen
     `confirm it, add to it, or correct it.\n` +
     `Once you understand their reply (confirmed as-is, or with their additions/corrections folded in), ` +
     `call confirm_task_intent with task_id "${task.id}" and the final definition_of_done text — this ` +
-    `locks it in and is what moves the task into active work. Do NOT call confirm_task_intent before ` +
-    `they've actually replied; this first message is only the ask. Do not create tasks or send email.`
+    `locks it in. Do NOT call confirm_task_intent before they've actually replied; this first message ` +
+    `is only the ask.\n` +
+    `Immediately after confirm_task_intent succeeds, in this SAME turn, draft your APPROACH — how you'll ` +
+    `actually get to that Definition of Done (method, sources, structure, depth) — and call ` +
+    `propose_approach with task_id "${task.id}" and that approach. This is graded automatically; the ` +
+    `user is never involved in it. If it comes back needing revision, redraft and call propose_approach ` +
+    `again with the feedback folded in. Only once it comes back approved should you actually start the ` +
+    `real work. If it comes back escalated (you've hit the revision limit), say so to the user directly ` +
+    `in your next reply and ask them to weigh in — don't keep retrying on your own. Do not create tasks ` +
+    `or send email.`
   );
 }
 
@@ -284,13 +292,18 @@ export async function runScheduledAutoWork(
   const now = Date.now();
   for (const c of doingSlotCandidates) {
     let promotedToDoing = false;
+    const state = engagementByTaskId.get(c.task.id);
     if (!requiredByAgent.get(c.agent)) {
       promotedToDoing = true;
     } else {
-      const state = engagementByTaskId.get(c.task.id);
       const status = state?.confirm_status ?? "awaiting";
       if (status === "confirmed") {
-        promotedToDoing = true;
+        // DoD confirmed — also needs an APPROVED approach (the pre-work gate, approach-gate.server.ts)
+        // before real work starts. The assigned agent resolves this inline, in the same turn, right
+        // after confirm_task_intent — 'pending' here just means that hasn't happened yet (or the turn
+        // never reached it); 'escalated' means its cap was exhausted and the agent already raised it
+        // with the user directly. Neither is auto-promoted; only 'approved' is.
+        promotedToDoing = state?.approach_status === "approved";
       } else if (status === "awaiting") {
         if (!state?.confirm_ask_at) {
           needsAskAt.push(c.task.id);
@@ -300,6 +313,12 @@ export async function runScheduledAutoWork(
         // else: jitter hasn't elapsed yet — wait for a later pass
       }
       // status === "asked": already sent, waiting on the user's reply — nothing to do this pass
+    }
+    // A task with an OPEN clarifying question (ask_clarifying_question) is paused — don't enqueue a
+    // new research turn while the agent is waiting on the user's answer, whether or not it's otherwise
+    // eligible. Applies regardless of requireStructuredWorkflow since the tool is generally available.
+    if (promotedToDoing && state?.clarify_status === "open") {
+      promotedToDoing = false;
     }
     if (promotedToDoing) {
       if (c.freshPromotion) promotions.push({ task_id: c.task.id, status: "DOING" });
