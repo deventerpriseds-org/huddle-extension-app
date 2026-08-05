@@ -26,7 +26,7 @@ jobs:
           npm install playwright
           npx playwright install chromium --with-deps
 
-      - name: Synthesize "Hey Terry" with ElevenLabs (fallback: espeak)
+      - name: Synthesize Hey Terry with ElevenLabs (fallback espeak)
         env:
           ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
           ELEVENLABS_DEFAULT_VOICE_ID: ${{ secrets.ELEVENLABS_DEFAULT_VOICE_ID }}
