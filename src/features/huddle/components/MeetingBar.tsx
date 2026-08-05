@@ -566,6 +566,13 @@ function MeetingRoom({
   // floor (mic open, round-robin parked) this long so their real command lands as its own barge before
   // the stand-up resumes. Longer than BARGE_COOLDOWN_MS: a summons explicitly invites a follow-up.
   const NAME_CALL_HOLD_MS = 12000;
+  // Open-floor HANDOFF BEAT between round-robin speakers: the round-robin used to switch speaker→speaker
+  // instantly, so a barge meant for the person who JUST spoke landed on the next one (who was already
+  // talking) — the user's report ("I motioned to speak during the previous agent but it landed on the
+  // next agent's turn"). This short pause gives a real window to interject after each update. Because
+  // `activeSpeaker` is null during the beat, a barge here pins to the PREVIOUS speaker (getLastSpeaker),
+  // not the next — so "what do you mean you completed research?" reaches the one who said it.
+  const HANDOFF_BEAT_MS = 1600;
   // Dedupe a DOUBLE-FIRED barge: semantic_vad can emit the same utterance twice (a partial then a final),
   // which double-marked the speaker interrupted and double-dispatched the answer (the "doubled comments"
   // + part of Sam's loop). Only an EXACT-same transcript within a tight window is treated as one barge —
@@ -1621,6 +1628,18 @@ function MeetingRoom({
         // Speaker i is fully handled (completed on its own, or aborted → answered → resumed) — advance.
         spoken.n = i + 1;
         spokenCountRef.current = spoken.n;
+        // HANDOFF BEAT: an open-floor pause before the NEXT scripted speaker starts, so the round-robin
+        // doesn't switch instantly and the user has a natural window to interject about the speaker who
+        // just finished (a barge in the beat → activeSpeaker null → pins to that previous speaker). Only
+        // after a clean completion (not a barge-abort — that path already parked/resumed) and only if
+        // more speakers remain and no barge is in flight. A barge during the beat ends it immediately.
+        if (outcome !== "aborted" && i < reps.length - 1) {
+          const beatUntil = Date.now() + HANDOFF_BEAT_MS;
+          while (Date.now() < beatUntil && !bargeActiveRef.current && ceremonyAliveRef.current) {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          if (!ceremonyAliveRef.current) return;
+        }
         // Resume after a barge is handled inside runBargeSequence (freeze → answer → resume), not here —
         // emit only voices scripted speakers and parks (above) while a barge is in flight.
       }
