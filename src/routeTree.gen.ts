@@ -13,6 +13,7 @@ import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
+import { Route as ApiPublicTestPushRouteImport } from './routes/api/public/test-push'
 import { Route as ApiPublicTasksSyncRouteImport } from './routes/api/public/tasks-sync'
 import { Route as ApiPublicRunTurnRouteImport } from './routes/api/public/run-turn'
 import { Route as ApiPublicRunStandupRouteImport } from './routes/api/public/run-standup'
@@ -41,6 +42,11 @@ const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AuthenticatedRoute,
+} as any)
+const ApiPublicTestPushRoute = ApiPublicTestPushRouteImport.update({
+  id: '/api/public/test-push',
+  path: '/api/public/test-push',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPublicTasksSyncRoute = ApiPublicTasksSyncRouteImport.update({
   id: '/api/public/tasks-sync',
@@ -103,6 +109,7 @@ export interface FileRoutesByFullPath {
   '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
+  '/api/public/test-push': typeof ApiPublicTestPushRoute
 }
 export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
@@ -117,6 +124,7 @@ export interface FileRoutesByTo {
   '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
+  '/api/public/test-push': typeof ApiPublicTestPushRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -133,6 +141,7 @@ export interface FileRoutesById {
   '/api/public/run-standup': typeof ApiPublicRunStandupRoute
   '/api/public/run-turn': typeof ApiPublicRunTurnRoute
   '/api/public/tasks-sync': typeof ApiPublicTasksSyncRoute
+  '/api/public/test-push': typeof ApiPublicTestPushRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -149,6 +158,7 @@ export interface FileRouteTypes {
     | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
+    | '/api/public/test-push'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/auth'
@@ -163,6 +173,7 @@ export interface FileRouteTypes {
     | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
+    | '/api/public/test-push'
   id:
     | '__root__'
     | '/_authenticated'
@@ -178,6 +189,7 @@ export interface FileRouteTypes {
     | '/api/public/run-standup'
     | '/api/public/run-turn'
     | '/api/public/tasks-sync'
+    | '/api/public/test-push'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -193,6 +205,7 @@ export interface RootRouteChildren {
   ApiPublicRunStandupRoute: typeof ApiPublicRunStandupRoute
   ApiPublicRunTurnRoute: typeof ApiPublicRunTurnRoute
   ApiPublicTasksSyncRoute: typeof ApiPublicTasksSyncRoute
+  ApiPublicTestPushRoute: typeof ApiPublicTestPushRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -224,6 +237,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof AuthenticatedIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
+    }
+    '/api/public/test-push': {
+      id: '/api/public/test-push'
+      path: '/api/public/test-push'
+      fullPath: '/api/public/test-push'
+      preLoaderRoute: typeof ApiPublicTestPushRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/public/tasks-sync': {
       id: '/api/public/tasks-sync'
@@ -316,6 +336,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicRunStandupRoute: ApiPublicRunStandupRoute,
   ApiPublicRunTurnRoute: ApiPublicRunTurnRoute,
   ApiPublicTasksSyncRoute: ApiPublicTasksSyncRoute,
+  ApiPublicTestPushRoute: ApiPublicTestPushRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
