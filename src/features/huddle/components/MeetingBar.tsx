@@ -26,6 +26,7 @@ import { useVoiceEngineStore } from "../lib/voice/voice-engine-store";
 import { useGroupVoice } from "../hooks/useGroupVoice";
 import { useCeremonyVoice, type CeremonyVoiceTurnOutcome } from "../hooks/useCeremonyVoice";
 import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates } from "../lib/huddle.functions";
+import { resolveAddressedAgent } from "../lib/addressedAgent";
 import { getCeremonyScript } from "../lib/tasks/ceremony-script.functions";
 import { saveCeremonyTranscript, getCeremonyToolEvents } from "../lib/ceremony/ceremony-transcript.functions";
 import { useBackendsStore } from "../lib/agent-backends";
@@ -770,7 +771,47 @@ function MeetingRoom({
     // returns null) and falls through to the real brain below — the guard against the 2026-08-02
     // swallowed-command regression: a command must always reach the agent. The user's `kind:"barge"`
     // row was already written by onBargeDetected / sendMessage; here we only add the agent's ack.
-    const nameCallAgent = bareNameCall(text, membersRef.current);
+    // STT-tolerant addressed-agent resolution, scoped to PRESENT members with the current speaker as a
+    // tiebreak (so "Al"/"El" -> Elle when Elle is talking). A bare summons ("hey Sam") -> instant ack
+    // from THAT agent; a genuinely ambiguous name -> a 1-line clarify (never a wrong-agent guess).
+    const presentForAddress = membersRef.current.map((id) => ({ id, firstName: firstName(AGENT_BY_ID[id]) }));
+    const addressed = resolveAddressedAgent(text, presentForAddress, ceremonyVoiceRef.current.activeSpeaker);
+
+    if (addressed.kind === "ambiguous") {
+      // Ask ONE short clarify in the current speaker's (or host's) voice — no server turn, floor held.
+      const asker = (ceremonyVoiceRef.current.activeSpeaker as AgentId | null) ?? membersRef.current[0];
+      const names = addressed.candidates.map((id) => firstName(AGENT_BY_ID[id as AgentId])).filter(Boolean);
+      const q = names.length >= 2 ? `Sorry — did you mean ${names[0]} or ${names[1]}?` : "Sorry, who was that for?";
+      if (bargeGenRef.current === myGen && asker) {
+        setPhase("…");
+        await ceremonyVoiceRef.current.narrate(asker, q, {
+          onStart: (s) => {
+            addMeetingTurns([{ agentId: asker, text: s, kind: "answer" }]);
+            persistCeremonyTurnRef.current({ speaker: "agent", agentId: asker as string, text: s, kind: "ack", ts: Date.now() });
+          },
+        });
+      }
+      if (bargeGenRef.current === myGen) {
+        setPhase("Listening…");
+        bargeCooldownUntilRef.current = Date.now() + NAME_CALL_HOLD_MS;
+        await new Promise((r) => window.setTimeout(r, NAME_CALL_HOLD_MS));
+        if (bargeGenRef.current !== myGen) return;
+        setPhase("Resuming…");
+        try {
+          await ceremonyVoiceRef.current.resumeFromFreeze();
+        } catch {
+          /* nothing frozen */
+        }
+        bargeHandlingRef.current = false;
+        bargeActiveRef.current = false;
+        setPhase("");
+      }
+      return;
+    }
+
+    // A bare summons (a name with no request) → instant ack from the addressed agent.
+    const nameCallAgent: AgentId | null =
+      addressed.kind === "agent" && addressed.isSummons ? (addressed.agentId as AgentId) : null;
     if (nameCallAgent) {
       // Mark the speaker we cut (if any) as interrupted so the transcript shows the cut — they RESUME
       // after the exchange (below), they don't just vanish.
@@ -790,7 +831,9 @@ function MeetingRoom({
       // barge bumps bargeGenRef and this older ack bails without enqueuing audio.
       if (bargeGenRef.current === myGen) {
         setPhase(`${AGENT_BY_ID[nameCallAgent]?.name ?? "Someone"} is answering…`);
-        await ceremonyVoiceRef.current.narrate(nameCallAgent, "Yes sir", {
+        const SUMMONS_ACKS = ["Yes sir?", "I'm here, sir.", "Right here, sir."];
+        const ack = SUMMONS_ACKS[Math.floor(Math.random() * SUMMONS_ACKS.length)];
+        await ceremonyVoiceRef.current.narrate(nameCallAgent, ack, {
           onStart: (s) => {
             addMeetingTurns([{ agentId: nameCallAgent, text: s, kind: "answer" }]);
             persistCeremonyTurnRef.current({
