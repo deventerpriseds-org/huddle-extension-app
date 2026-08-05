@@ -35,10 +35,15 @@ export const GROOM_SYSTEM_HINT =
 export const GROOM_HANDOFF_DO_HINT =
   " If a teammate handed this to you in the group (they @mentioned you to groom), the user already asked in the room — go ahead and call `groom_backlog` now, then briefly report what you assigned/reprioritized and why. Do not ask permission again.";
 
-// 1:1 hand-off: you are alone with the user and a teammate flagged that they want grooming; you
-// can't see the originating request, so confirm before acting (the user's rule: 1:1 = defer + confirm).
+// 1:1 hand-off (ONLY when a teammate actually passed it to you via the owner-follow-up path): you can't
+// see the originating request, so confirm before acting (the user's rule: 1:1 = defer + confirm).
 export const GROOM_HANDOFF_CONFIRM_HINT =
-  " If you were NOT asked directly — a teammate flagged that the user wants the backlog groomed — do NOT groom yet: greet the user, say who flagged it and what they wanted (e.g. \"Tess let me know you wanted the backlog groomed\"), and ask if they'd like you to do it now. Only call `groom_backlog` once the user gives the go-ahead.";
+  " A teammate flagged that the user wants the backlog groomed and passed it to you — you can't see the original request. Do NOT groom yet: greet the user, say who flagged it and what they wanted, and ask if they'd like you to do it now. Only call `groom_backlog` once the user gives the go-ahead.";
+
+// 1:1 DIRECT ask (the user is talking to YOU in your own DM): just do it. This is the common case and
+// must NOT be treated as a hand-off — do not claim a teammate flagged it, do not ask permission.
+export const GROOM_HANDOFF_DIRECT_HINT =
+  " The user asked YOU directly here, in your own 1:1 — this is your job, so just call `groom_backlog` now and report what you assigned/reprioritized. Do NOT say a teammate flagged it and do NOT ask permission first.";
 
 type Caller = { entra_object_id?: string; entra_email?: string };
 
