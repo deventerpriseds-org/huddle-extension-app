@@ -23,6 +23,24 @@ const GREETINGS = new Set([
   "hey", "hi", "hello", "yo", "ok", "okay", "um", "uh", "er", "hmm", "so", "well", "excuse", "me", "sorry", "wait", "hold", "on",
 ]);
 
+// Common English words that are NEVER an address, even when they're the first real token. Without this,
+// a barge that OPENS with a pronoun/article ("I never mentioned…", "It's not…", "No, just continue…")
+// had its first letter prefix-matched to a name — the single letter "i" scored a match to "Iris" (0.6 +
+// length penalty ≈ 1.35, under the 3.0 gate), so EVERY barge starting with "I" hijacked to Iris. People
+// address an agent by NAME first; if the opener is a function word, it's a content barge → none (which
+// then pins to the interlocutor). This does NOT block real STT-mangled names ("Al"/"El" for Elle) —
+// those aren't function words.
+const STOPWORDS = new Set([
+  "i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them",
+  "my", "your", "his", "its", "our", "their", "mine", "yours",
+  "a", "an", "the", "this", "that", "these", "those",
+  "and", "but", "or", "nor", "if", "then", "than", "as", "because", "just", "no", "not", "never",
+  "yes", "yeah", "nah", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "done",
+  "can", "could", "will", "would", "should", "shall", "may", "might", "must",
+  "to", "of", "in", "on", "at", "for", "with", "from", "by", "about", "up", "out", "off",
+  "what", "why", "how", "when", "where", "who", "which", "let", "lets",
+]);
+
 // Words that make a barge a SUBSTANTIVE request rather than a bare summons (a question/command).
 const SUBSTANTIVE_HINT = /[?]|\b(what|why|how|when|where|who|can|could|would|will|do|does|did|is|are|should|mark|add|create|update|search|look|find|check|show|tell|give|send|schedule|park|move|set|make|change|remove|delete|start|stop|the|a|an|that|this|it|my|your|for|about|blocked?|status|task|please)\b/i;
 
@@ -87,6 +105,10 @@ export function resolveAddressedAgent(
   while (nameIdx < words.length && GREETINGS.has(words[nameIdx])) nameIdx++;
   if (nameIdx >= words.length) return { kind: "none" };
   const token = words[nameIdx];
+  // Guard against function-word false matches: a 1-char token, or a common English word, is NOT a name.
+  // (This is the "I…" -> "Iris" hijack fix.) People address by NAME first; a function-word opener means
+  // it's a content barge -> none -> pinned to the interlocutor by the caller.
+  if (token.length < 2 || STOPWORDS.has(token)) return { kind: "none" };
 
   const scored = present
     .map((m) => ({ id: m.id, s: scoreName(token, m.firstName) }))

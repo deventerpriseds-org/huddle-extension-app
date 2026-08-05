@@ -273,6 +273,7 @@ function toolCue(toolName: string): string {
   const n = (toolName || "").toLowerCase();
   const exact: Record<string, string[]> = {
     tavily_web_search: ["Running a search on that.", "Let me look that up.", "Searching that now."],
+    search_memory: ["Let me check my notes on that.", "Pulling that from memory."],
     update_task: ["Updating that on the board.", "Making that change on the board now."],
     create_huddle_task: ["Adding that to the board.", "Putting that on the board now."],
     get_calendar_events: ["Checking your calendar.", "Let me look at your calendar."],
@@ -647,6 +648,12 @@ function MeetingRoom({
     ts?: number;
   };
   const runIdRef = useRef<string | null>(null);
+  // Cursor into this run's tool-START events for the barge narration cues. It must PERSIST across barges:
+  // resetting it to "0" per barge made getCeremonyToolEvents replay the WHOLE run every time, so the first
+  // real web-search cue ("Running a search on that.") was re-voiced on EVERY later barge even when nothing
+  // was searched (the "you keep saying you're running a search / Searching what?" complaint). Reset only
+  // when a NEW ceremony starts.
+  const bargeToolSinceRef = useRef("0");
   const seqRef = useRef(0);
   const persistBufferRef = useRef<PersistTurn[]>([]);
   const flushTimerRef = useRef<number | null>(null);
@@ -970,7 +977,8 @@ function MeetingRoom({
       // never talks over the answer or the next scripted speaker.
       narrationLoop = (async () => {
         if (!narrationRunId) return;
-        let sinceId = "0";
+        // Persistent run-level cursor (NOT reset per barge) — only NEW tool starts get a cue, so an
+        // earlier barge's search is never replayed on a later barge that isn't searching.
         const spoken = new Set<string>();
         while (!narrationStop && bargeGenRef.current === myGen && bargeActiveRef.current) {
           await new Promise((r) => window.setTimeout(r, 700));
@@ -984,14 +992,14 @@ function MeetingRoom({
           }[] = [];
           try {
             const resp = await getCeremonyToolEvents({
-              data: { runId: narrationRunId, sinceId, caller: callerRef.current },
+              data: { runId: narrationRunId, sinceId: bargeToolSinceRef.current, caller: callerRef.current },
             });
             events = resp.events;
           } catch {
             events = [];
           }
           if (events.length === 0) continue;
-          sinceId = events[events.length - 1].id;
+          bargeToolSinceRef.current = events[events.length - 1].id;
           for (const ev of events) {
             // Re-check the gate before EACH cue — the floor may have moved between poll and speak.
             if (narrationStop || bargeGenRef.current !== myGen || !bargeActiveRef.current) break;
@@ -1468,6 +1476,7 @@ function MeetingRoom({
 
     // Mint a fresh run id + reset the durable-transcript cursor/buffer for this run.
     runIdRef.current = crypto.randomUUID();
+    bargeToolSinceRef.current = "0"; // fresh tool-cue cursor per ceremony
     seqRef.current = 0;
     persistBufferRef.current = [];
 
