@@ -61,6 +61,8 @@ const AGENT_IDS = new Set(AGENTS.map((a) => a.id));
 // Grooming runs inside a chat turn, so it MUST return promptly — a hung tool produces no agent
 // reply at all (the model never gets a result). Bound every network call and the whole write phase.
 const WRITE_DEADLINE_MS = 18000; // hard cap on the single batch write so the turn never hangs
+const MIRROR_SYNC_WAIT_MS = 2500; // let journey's async mirror sync land the fresh ranks before auto-work reads them
+const AUTOWORK_DEADLINE_MS = 15000; // hard cap on the chained auto-work pass so grooming never hangs on it
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -218,16 +220,48 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     }
     const _writeMs = Date.now() - _tW0;
 
+    // Chain: grooming assigns + ranks the backlog, but "Up next" is auto-work's lane, not grooming's
+    // (grooming never writes status — see git history / CLAUDE.md). So after a successful write, kick ONE
+    // auto-work pass to top each agent's UP_NEXT up to cap 3 from its freshly-ranked BACKLOG. Auto-work
+    // buckets by journey status, so any task journey already scheduled to UP_NEXT is KEPT and only counts
+    // against the cap — it tops up around journey's schedule rather than overriding it. The mirror sync is
+    // async (~1-3s), so wait a beat first, letting auto-work read the new ranks/assignments; bounded and
+    // non-fatal so a slow/failed pass never hangs or fails the grooming turn.
+    let promoted = 0;
+    let autoworkNote = "";
+    if (written > 0) {
+      try {
+        await new Promise((r) => setTimeout(r, MIRROR_SYNC_WAIT_MS));
+        const { runScheduledAutoWork } = await import("./autowork.server");
+        const aw = await withTimeout(
+          runScheduledAutoWork(caller, { force: true }),
+          AUTOWORK_DEADLINE_MS,
+          "post-groom autowork",
+        );
+        if (aw?.ok) {
+          promoted = aw.promoted ?? 0;
+          autoworkNote =
+            promoted > 0
+              ? ` Filled "Up next": ${promoted} top-ranked ${promoted === 1 ? "task" : "tasks"} promoted (capped at 3 per agent, keeping anything journey already scheduled).`
+              : " Every agent's \"Up next\" was already full or nothing qualified to promote.";
+        }
+      } catch {
+        /* auto-work chain slow/failed — grooming still succeeded; the nightly pass will top up later */
+      }
+    }
+
     return JSON.stringify({
       groomed: written,
+      promoted,
       total: assignments.length,
       _timings: { readMs: _readMs, classifyMs: _classifyMs, writeMs: _writeMs, tasks: slice.length },
       note:
-        written === 0
+        (written === 0
           ? "Planned the assignments, but the write to the task board didn't confirm — try again in a moment."
           : written < assignments.length
             ? `Wrote ${written} of ${assignments.length}; board reflects changes within a few seconds (async sync).`
-            : "Assignments + priority written back to the task board; the Huddle board reflects them within a few seconds (async sync).",
+            : "Assignments + priority written back to the task board; the Huddle board reflects them within a few seconds (async sync).") +
+        autoworkNote,
       order: ranked.map((a, i) => {
         const t = slice.find((s) => s.id === a.id);
         const agent = AGENTS.find((ag) => ag.id === a.assigned_agent);
