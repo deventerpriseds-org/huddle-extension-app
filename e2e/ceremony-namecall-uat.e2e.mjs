@@ -251,24 +251,47 @@ try {
   }
 
   const rows = await allRows(page);
-  const toolSpoke =
-    toolTested &&
-    rows.slice(toolStartIdx).some((r) => r.who === "agent" && r.text.replace(/\bsir\b/i, "").trim().length > 8);
+
+  // The clips name TERRY ("Hey Terry" / "Terry, look up …"), so the ADDRESSED agent for both the summons
+  // and the tool-barge is terry-locke. If the clip names change, change this. The whole point of the
+  // wrong-agent check (F16) is that the NAMED agent answers — never the agent who happened to be speaking.
+  const NAMED = "terry-locke";
+  const isAck = (r) => r.who === "agent" && /\bsir\b/i.test(r.text);
+  const isAnswer = (r) => r.who === "agent" && r.kind === "answer";
+  const isRealAnswer = (r) => isAnswer(r) && r.text.replace(/\bsir\b/i, "").trim().length > 12;
+
   const after = rows.slice(rowsAtInject);
   const userRows = after.filter((r) => r.who === "user");
-  const ack = after.find((r) => r.who === "agent" && /\bsir\b/i.test(r.text));
   const interruptedRow = rows.find((r) => r.interrupted);
-  const ackIdx = ack ? after.indexOf(ack) : -1;
-  const afterAck = ackIdx >= 0 ? after.slice(ackIdx + 1) : [];
-  // Did the interrupted lane owner RESUME after the ack?
-  const speakerResumed = !!speaker && afterAck.some((r) => r.who === "agent" && r.agentId === speaker);
-  // Did a substantive answer (not another "Yes sir") come after the ack (the follow-up got answered)?
-  const substantiveAnswer = afterAck.find(
-    (r) => r.who === "agent" && r.text.length > 25 && !/\bsir\b/i.test(r.text),
-  );
-  // Premature close = the ONLY thing after the ack is Terry wrapping up ("close the stand-up / advise /
-  // proceed") with no resume and no real answer.
-  const closeRow = afterAck.find((r) => r.agentId === "terry-locke" && /clos(e|ing)|advise|proceed|wrap/i.test(r.text));
+  // Ack must exist AND come from the NAMED agent (terry), NOT the barged-over lane owner. An ack from the
+  // wrong agent is the exact F16 defect and MUST fail — presence of "sir" somewhere is not enough.
+  const ack = after.find(isAck);
+  const ackWrongAgent = !!ack && ack.agentId !== NAMED;
+
+  // Split the post-barge transcript into the follow-up window (ack → tool-barge) and the tool window.
+  const ackAbs = ack ? rows.indexOf(ack) : -1;
+  const followRows = ackAbs >= 0 ? rows.slice(ackAbs + 1, toolTested ? toolStartIdx : rows.length) : [];
+  const toolRows = toolTested ? rows.slice(toolStartIdx) : [];
+
+  // SINGLE RESPONDER (no chorus): a single barge must be answered by exactly ONE agent. Count distinct
+  // agents emitting a real *answer* in each window; >1 distinct answering agent = chorus = FAIL (the live
+  // bug where Faith + Cole both piled onto one barge).
+  const followAgents = [...new Set(followRows.filter(isRealAnswer).map((r) => r.agentId))];
+  const toolAgents = [...new Set(toolRows.filter(isRealAnswer).map((r) => r.agentId))];
+  const chorus = followAgents.length > 1 || toolAgents.length > 1;
+
+  // ON-TOPIC: "What is blocked?" must yield a blocker-relevant answer; "look up the … link" must yield a
+  // link/result. A generic 25-char sentence is NOT a pass (the old bar let a hallucination through).
+  const substantiveAnswer = followRows.find(isRealAnswer);
+  const followOnTopic = followRows.some((r) => isRealAnswer(r) && /block(ed|er)?|nothing.*block/i.test(r.text));
+  // The follow-up should be answered by the SAME agent that was summoned (coherent thread), not a 3rd party.
+  const followWrongAgent = !!substantiveAnswer && !!ack && substantiveAnswer.agentId !== ack.agentId;
+  const toolSpoke = toolTested && toolRows.some(isRealAnswer);
+  const toolHasLink = toolRows.some((r) => isRealAnswer(r) && /(https?:\/\/|www\.|link\b|coursera|udemy|\.com|\.org)/i.test(r.text));
+  const toolWrongAgent = toolSpoke && !toolRows.some((r) => isRealAnswer(r) && r.agentId === NAMED);
+
+  const speakerResumed = !!speaker && followRows.concat(toolRows).some((r) => r.who === "agent" && r.agentId === speaker && r.kind !== "answer");
+  const closeRow = after.find((r) => r.agentId === NAMED && /clos(e|ing)|advise|proceed|wrap/i.test(r.text));
   const prematureClose = !!closeRow && !speakerResumed && !substantiveAnswer;
 
   console.log(`\n  ---- FULL transcript (${rows.length} rows; * = after barge) ----`);
@@ -282,14 +305,22 @@ try {
   ackSeen = {
     userBargeCount: userRows.length,
     ack,
+    ackWrongAgent,
     interruptedRow: !!interruptedRow,
     speakerResumed,
     substantiveAnswer,
+    followOnTopic,
+    followWrongAgent,
+    chorus,
+    followAgents,
+    toolAgents,
     prematureClose,
     speaker,
     testedFollowup: !!FOLLOWUP_B64,
     toolTested,
     toolSpoke,
+    toolHasLink,
+    toolWrongAgent,
   };
 } catch (e) {
   console.log(`\nERROR: ${e.message}`);
@@ -304,33 +335,36 @@ if (!ackSeen) {
   process.exit(1);
 }
 const c = ackSeen;
-console.log(`  barged while:              ${c.speaker || "(no lane owner reached)"}`);
-console.log(`  user barge turns:          ${c.userBargeCount}`);
-console.log(`  a speaker was interrupted: ${c.interruptedRow}`);
-console.log(`  Terry acked "Yes sir":     ${c.ack ? `YES (kind=${c.ack.kind})` : "NO"}`);
-console.log(`  interrupted speaker resumed: ${c.speakerResumed}`);
-console.log(`  follow-up got a real answer: ${c.substantiveAnswer ? "YES" : "no"}${c.testedFollowup ? "" : " (follow-up not tested)"}`);
-console.log(`  PREMATURE CLOSE after ack: ${c.prematureClose}`);
-console.log(`  tool-barge (F12) got a spoken response: ${c.toolTested ? (c.toolSpoke ? "YES" : "NO — SILENT") : "(tool-barge not tested)"}`);
-// Coherent = barge registered + acked + NOT a premature close + (the interrupted speaker resumed OR the
-// follow-up got a real answer) + (if a tool-barge was tested) it was NOT silent. Whole-exchange bar.
-const coherent =
-  c.userBargeCount > 0 &&
-  c.ack &&
-  !c.prematureClose &&
-  (c.speakerResumed || c.substantiveAnswer) &&
-  (!c.toolTested || c.toolSpoke);
-if (coherent) {
-  console.log(`\nPASS(coherent) — summons acked, floor held, follow-up ${c.substantiveAnswer ? "answered" : "handled"}${c.toolTested ? ", tool-barge spoke a response" : ""} — no premature close, no dead air. Read the transcript above.`);
+console.log(`  barged while:               ${c.speaker || "(no lane owner reached)"}`);
+console.log(`  user barge turns:           ${c.userBargeCount}`);
+console.log(`  a speaker was interrupted:  ${c.interruptedRow}`);
+console.log(`  ack from the NAMED agent:   ${c.ack ? (c.ackWrongAgent ? `WRONG — ${c.ack.agentId} acked, not terry-locke` : "YES (terry-locke)") : "NO ACK"}`);
+console.log(`  follow-up single responder: ${c.followAgents.length <= 1 ? `yes (${c.followAgents.join(",") || "—"})` : `NO — CHORUS ${c.followAgents.join(",")}`}`);
+console.log(`  follow-up on-topic (block): ${c.followOnTopic ? "YES" : "no"}${c.followWrongAgent ? " [WRONG AGENT answered the follow-up]" : ""}`);
+console.log(`  interrupted speaker resumed:${c.speakerResumed}`);
+console.log(`  PREMATURE CLOSE after ack:  ${c.prematureClose}`);
+console.log(`  tool-barge single responder:${c.toolAgents.length <= 1 ? `yes (${c.toolAgents.join(",") || "—"})` : `NO — CHORUS ${c.toolAgents.join(",")}`}`);
+console.log(`  tool-barge spoke + link:    ${c.toolTested ? (c.toolSpoke ? (c.toolHasLink ? "YES + link" : "spoke, NO link") : "NO — SILENT") : "(not tested)"}${c.toolWrongAgent ? " [WRONG AGENT ran the tool]" : ""}`);
+
+// STRICT coherence: presence is NOT enough. Every relationship the user cares about must hold. Any one
+// failing FAILS the run — so a PASS actually means the exchange was coherent, not just non-empty.
+const gaps = [];
+if (!c.userBargeCount) gaps.push("barge never registered as a user turn (VAD/STT or capture gap)");
+if (!c.ack) gaps.push('no ack ("…sir") at all');
+if (c.ackWrongAgent) gaps.push(`WRONG AGENT acked the summons — ${c.ack.agentId} answered "Hey Terry", not terry-locke (F16)`);
+if (c.chorus) gaps.push(`CHORUS — a single barge drew multiple responders (follow=[${c.followAgents}] tool=[${c.toolAgents}])`);
+if (c.testedFollowup && c.ack && !c.ackWrongAgent && !c.substantiveAnswer) gaps.push("follow-up got NO substantive answer");
+if (c.testedFollowup && c.substantiveAnswer && !c.followOnTopic) gaps.push('follow-up answer was OFF-TOPIC — "what is blocked?" but the reply never addressed a blocker (possible hallucination)');
+if (c.followWrongAgent) gaps.push(`follow-up answered by ${c.substantiveAnswer.agentId}, not the summoned ${c.ack?.agentId} (broken thread)`);
+if (c.prematureClose) gaps.push("PREMATURE CLOSE — wrapped the stand-up right after the ack instead of holding the floor / resuming");
+if (c.toolTested && !c.toolSpoke) gaps.push("F12 — the tool-barge got NO spoken response (dead air after a tool request)");
+if (c.toolTested && c.toolSpoke && !c.toolHasLink) gaps.push('tool-barge spoke but returned NO link — "look up the … link" must yield a usable link');
+if (c.toolWrongAgent) gaps.push("WRONG AGENT ran/answered the tool-barge — the named agent (terry-locke) should have");
+
+if (gaps.length === 0) {
+  console.log(`\nPASS(coherent) — named agent acked, ONE responder per barge, follow-up on-topic, tool-barge returned a link, no chorus, no premature close, no dead air. NOTE: synthetic mic = SMOKE/LOGIC test only; cut-off immediacy, barge latency under a real multi-agent avalanche, and voice feel are NOT proven here — those remain a live-mic user verdict.`);
   process.exit(0);
 } else {
-  const gaps = [];
-  if (!c.userBargeCount) gaps.push("barge never registered as a user turn (VAD/STT or capture gap)");
-  if (!c.ack) gaps.push('no "Yes sir" ack from Terry');
-  if (c.prematureClose) gaps.push("PREMATURE CLOSE — Terry wrapped the stand-up right after the ack instead of holding the floor / resuming");
-  if (c.ack && !c.prematureClose && !c.speakerResumed && !c.substantiveAnswer)
-    gaps.push("ack fired but nothing coherent followed (speaker did not resume and follow-up got no real answer)");
-  if (c.toolTested && !c.toolSpoke) gaps.push("F12 — the tool-barge got NO spoken response (dead air after a tool request)");
-  console.log(`\nFAIL(incoherent) — ${gaps.join("; ")}. This is a real issue to fix, not to wave through.`);
+  console.log(`\nFAIL(incoherent) — ${gaps.join("; ")}. Real issues to fix, not to wave through.`);
   process.exit(1);
 }
