@@ -665,6 +665,32 @@ function MeetingRoom({
   const persistCeremonyTurnRef = useRef(persistCeremonyTurn);
   persistCeremonyTurnRef.current = persistCeremonyTurn;
 
+  // Barge-mic timing instrumentation. One unmute→barge→stop cycle records four anchors as system
+  // `kind:"mic_timing"` rows in chat.ceremony_transcript (queryable per run), so the "how long from
+  // unmute to a heard barge to audio-stop" delay is MEASURABLE rather than guessed. `performance.now()`
+  // for the monotonic deltas; the persisted `ts` is wall-clock. tUnmute is stamped by the mute control
+  // (t_unmute); tReady by onDataChannelOpen (t_datachannel_open); tSpeech by onBargeStart
+  // (t_speech_started); t_audio_stopped by onAudioStopped. Persisting never blocks the barge path.
+  const micTimingRef = useRef<{ tUnmute: number; tReady: number; tSpeech: number }>({
+    tUnmute: 0,
+    tReady: 0,
+    tSpeech: 0,
+  });
+  const emitMicTiming = useCallback((payload: Record<string, unknown>) => {
+    try {
+      persistCeremonyTurnRef.current({
+        speaker: "system",
+        kind: "mic_timing",
+        text: JSON.stringify(payload),
+        ts: Date.now(),
+      });
+    } catch {
+      /* instrumentation must never break the ceremony */
+    }
+  }, []);
+  const emitMicTimingRef = useRef(emitMicTiming);
+  emitMicTimingRef.current = emitMicTiming;
+
   // The immediate-barge sequence (shared by typed + voice). Cut the speaker → show the user's
   // message → answer RIGHT THERE over the frozen ceremony (a separate synchronous single-agent
   // turn, NOT the server between-speakers queue) → mark the cut row → resume from the exact
@@ -960,6 +986,15 @@ function MeetingRoom({
     // Fires synchronously at freeze time (VAD speech_started) — park emit NOW, before STT resolves,
     // so no scripted speaker slips through between the freeze and the transcript arriving.
     onBargeStart: () => {
+      // Instrumentation anchor t_speech_started: how long from unmute to the first heard barge.
+      const t = typeof performance !== "undefined" ? performance.now() : 0;
+      const { tUnmute } = micTimingRef.current;
+      micTimingRef.current.tSpeech = t;
+      emitMicTimingRef.current({
+        anchor: "speech_started",
+        t_speech_started: t,
+        ms_unmute_to_first_barge: tUnmute ? Math.round(t - tUnmute) : null,
+      });
       bargeGenRef.current += 1;
       bargeActiveRef.current = true;
       setPhase("");
@@ -991,6 +1026,28 @@ function MeetingRoom({
         persistCeremonyTurnRef.current({ speaker: "user", text: transcript, kind: "barge", ts: Date.now() });
       }
       void runBargeSequenceRef.current(transcript);
+    },
+    onDataChannelOpen: () => {
+      // Instrumentation anchor t_datachannel_open: the mic is now live (VAD/STT ready).
+      const t = typeof performance !== "undefined" ? performance.now() : 0;
+      const { tUnmute } = micTimingRef.current;
+      micTimingRef.current.tReady = t;
+      emitMicTimingRef.current({
+        anchor: "datachannel_open",
+        t_unmute: tUnmute || null,
+        t_datachannel_open: t,
+        ms_unmute_to_ready: tUnmute ? Math.round(t - tUnmute) : null,
+      });
+    },
+    onAudioStopped: () => {
+      // Instrumentation anchor t_audio_stopped: barge froze the speaker + cut the audio.
+      const t = typeof performance !== "undefined" ? performance.now() : 0;
+      const { tSpeech } = micTimingRef.current;
+      emitMicTimingRef.current({
+        anchor: "audio_stopped",
+        t_audio_stopped: t,
+        ms_barge_to_stop: tSpeech ? Math.round(t - tSpeech) : null,
+      });
     },
   });
   // Stable ref so async ceremony loops (emit) always get the latest controller.
@@ -1092,12 +1149,47 @@ function MeetingRoom({
       }));
   }, [isVirtual, turns, storeMessages, meeting.activeSpeakerId]);
 
-  const micOn = isVirtual ? voiceLive && !groupVoice.muted : voice.status === "connected" && !voice.micMuted;
+  // During a running ceremony the mic reflects the CEREMONY barge listener (a separate subsystem from
+  // groupVoice), so `micOn` tracks ceremonyVoice.listening; otherwise it tracks the group / 1:1 call.
+  const micOn = isCeremony
+    ? status === "running" && ceremonyVoice.listening
+    : isVirtual
+      ? voiceLive && !groupVoice.muted
+      : voice.status === "connected" && !voice.micMuted;
   // Voice not yet live — the mic button's tap will START/join the call (getUserMedia in the gesture),
-  // not toggle mute. Group: not live; 1:1: not connected. Drives the button's "Join" affordance.
-  const needsJoin = isVirtual ? !voiceLive : voice.status !== "connected";
+  // not toggle mute. Group: not live; 1:1: not connected. Drives the button's "Join" affordance. A
+  // ceremony never shows "Join" — the mic is a plain muted/unmute toggle (the run has its own Start).
+  const needsJoin = isCeremony ? false : isVirtual ? !voiceLive : voice.status !== "connected";
 
   function onMic() {
+    // Ceremony barge mic — a SEPARATE subsystem from the group/1:1 voice call. During a running
+    // ceremony the mic control unmutes/mutes the ceremony barge listener; it does NOT touch groupVoice.
+    if (isCeremony) {
+      if (status !== "running") {
+        toast("Start the stand-up to use the mic.");
+        return;
+      }
+      if (!ceremonyVoice.supported) {
+        toast.error("Voice barge-in isn't supported on this device.");
+        return;
+      }
+      if (!ceremonyVoice.listening) {
+        // Unmute: stamp t_unmute for the timing cycle, then engage the barge mic (getUserMedia runs
+        // inside this tap's user-activation gesture). Errors surface via ceremonyVoice.error.
+        micTimingRef.current = {
+          tUnmute: typeof performance !== "undefined" ? performance.now() : 0,
+          tReady: 0,
+          tSpeech: 0,
+        };
+        void ceremonyVoiceRef.current.startListening();
+        toast("Mic live — barge in anytime");
+      } else {
+        // Mute: CAPTURE-ONLY stop — releases the mic but leaves any speaking agent's audio playing.
+        ceremonyVoiceRef.current.stopListening({ keepAudio: true });
+        toast("Microphone muted");
+      }
+      return;
+    }
     if (isVirtual) {
       if (!groupVoice.supported) {
         toast.error("Voice isn't supported on this device.");
@@ -1168,9 +1260,12 @@ function MeetingRoom({
     // repeats. Keyed per-run; a fresh ceremony starts empty.
     const emittedSentenceKeys = new Set<string>();
 
-    // Start WebRTC mic listener so the user can barge in mid-utterance.
-    // Errors here are non-fatal — ceremony continues in text-only without voice barge-in.
-    void ceremonyVoiceRef.current.startListening();
+    // Barge mic starts MUTED (off). Historically this called startListening() unconditionally, which
+    // opened getUserMedia + a realtime VAD/STT session for the WHOLE ceremony — capturing ambient noise
+    // and agent-TTS bleed the entire time. The mic is now engaged ONLY when the user unmutes it via the
+    // meeting mic control (onMic's ceremony branch → ceremonyVoice.startListening()). Reset the timing
+    // markers for a fresh run.
+    micTimingRef.current = { tUnmute: 0, tReady: 0, tSpeech: 0 };
 
     // Render + speak newly-arrived ceremony replies in order.
     // `spoken.n` tracks how many replies have been voiced (idempotent on re-poll).
@@ -1561,26 +1656,38 @@ function MeetingRoom({
                 <span>{phase}</span>
               </div>
             )}
-            {/* Live mic pulse — grows/brightens with what the mic hears, so the user can SEE it's on
-                and picking them up (they couldn't tell before, and barged blind). */}
+            {/* Mic state — gated on the ACTUAL capture state (ceremonyVoice.listening), not merely that
+                the ceremony is running. Listening: a live pulse that grows/brightens with what the mic
+                hears. Muted (the default at ceremony start): a clear "tap the mic to talk" affordance so
+                the user knows the barge mic is off until they unmute. */}
             {isCeremony && status === "running" && (
-              <div
-                className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground"
-                title="Your mic is live — this pulses with what it hears"
-              >
-                <span className="relative inline-flex size-4 items-center justify-center">
-                  <span
-                    className="inline-block rounded-full bg-emerald-500"
-                    style={{
-                      width: 7 + ceremonyVoice.micLevel * 13,
-                      height: 7 + ceremonyVoice.micLevel * 13,
-                      opacity: 0.35 + ceremonyVoice.micLevel * 0.65,
-                      transition: "width 90ms linear, height 90ms linear, opacity 90ms linear",
-                    }}
-                  />
-                </span>
-                <span>{ceremonyVoice.micLevel > 0.08 ? "mic — hearing you" : "mic — listening"}</span>
-              </div>
+              ceremonyVoice.listening ? (
+                <div
+                  className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground"
+                  title="Your mic is live — this pulses with what it hears"
+                >
+                  <span className="relative inline-flex size-4 items-center justify-center">
+                    <span
+                      className="inline-block rounded-full bg-emerald-500"
+                      style={{
+                        width: 7 + ceremonyVoice.micLevel * 13,
+                        height: 7 + ceremonyVoice.micLevel * 13,
+                        opacity: 0.35 + ceremonyVoice.micLevel * 0.65,
+                        transition: "width 90ms linear, height 90ms linear, opacity 90ms linear",
+                      }}
+                    />
+                  </span>
+                  <span>{ceremonyVoice.micLevel > 0.08 ? "mic — hearing you" : "mic — listening"}</span>
+                </div>
+              ) : (
+                <div
+                  className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground"
+                  title="Your mic is muted — tap the mic control to barge in"
+                >
+                  <MicOff size={13} className="opacity-70" />
+                  <span>{ceremonyVoice.error ? ceremonyVoice.error : "mic muted — tap the mic to talk"}</span>
+                </div>
+              )
             )}
             {isCeremony && !turns.length && status !== "running" && (
               <div className="text-center text-sm text-muted-foreground">
