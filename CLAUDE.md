@@ -404,6 +404,54 @@ from the session → workflow closes it" loop does NOT help, because the session
   Supabase MCP — the agent may strip hyphens, so match loosely). The zero-write alternative is the
   `ceremony-barge-test.mjs` harness with `agents[*].journey:{enabled:false}`.
 
+## Agent auto-work, the confirm-intent gate, and assist/produce (how the team actually operates — read before touching task automation)
+Agents do work FOR the user on a WIP-limited cadence; the confirm-intent/DoD gate is what keeps them from
+"completing" anything the user never signed off on. Several pieces here were expensive to re-derive (2026-08-05).
+
+- **The WIP flow (`autowork.server.ts`), per agent, per assigned/unblocked/non-parked task:**
+  BACKLOG→UP_NEXT (cap 3) → DOING (cap 1) → IN_REVIEW (cap 2) → DONE. **DONE is set ONLY by the user, by
+  hand.** Staging into UP_NEXT starts NO work; DOING is where an agent actually researches/produces and saves
+  an artifact — `create_artifact` → `ensureReviewFlip` (tasks.server.ts) flips DOING→IN_REVIEW.
+- **The confirm-intent + DoD gate is a SAFETY gate and MUST fail CLOSED.** Enabled per user via
+  `identity.agent_workflow_config.default_required` (+ per-agent overrides), read through
+  `isStructuredWorkflowRequired` / `isStructuredWorkflowRequiredForUser` (agent-workflow-config.server.ts).
+  When required, UP_NEXT→DOING is gated behind the user confirming the agent's **assumed action + Definition
+  of Done** (`confirm_task_intent`), then an auto-graded approach gate. Two hard rules, both learned from a
+  real leak (see memory.md 2026-08-05 — gate was ON yet 8 unconfirmed tasks reached review): (1) those
+  resolvers return **`true` on ANY config-read error** — never reintroduce the old fail-OPEN `catch { return
+  false }`; a single transient throw of the config's OWN pg pool disabled BOTH the promotion gate
+  (`autowork.server.ts` `!requiredByAgent` branch, now `?? true`) and `ensureReviewFlip`'s gate in one pass.
+  (2) `ensureReviewFlip` flips ONLY on an **affirmative** `confirm_status==='confirmed'` (never "proceed
+  unless proven required") and resolves the requirement even when `agentId` is null — never `if (agentId)`-skip
+  the gate (the `w.personaId ?? null` worker path was a real null bypass).
+- **Reach-out cadence — jittered, thrice-daily, throttled.** Auto-work wakes at
+  `SCHEDULING_DEFAULTS.autowork.hours=[9,13,17]` ET (`scheduling-config.server.ts`, user-editable in Settings).
+  Each task needing confirmation gets a ONE-TIME **15min–4h** jitter (`CONFIRM_JITTER_MIN/MAX_MS`); its ask
+  fires at the next 9/13/17 check after that instant, exactly once (`markConfirmAsked`), as a DM + phone push.
+  WIP caps (UP_NEXT≤3 / DOING≤1 / REVIEW≤2 per agent) throttle daily volume so it feels like a real team.
+  **Grooming completion ALSO arms these reach-outs** (the `promoteOnly` chain schedules `confirm_ask_at` for
+  freshly-staged items), so check-ins begin relative to the groom, not only the next cadence tick.
+- **Assist vs produce (`lib/tasks/workability.ts`).** An agent NEVER does a task *instead of* the user — it's
+  always in service of them, in one of two modes: **ASSIST** (the user does it; the agent reminds/drafts/preps
+  — "Go to church" → set an 11am reminder) or **PRODUCE** (the agent completes it and the output is what the
+  user consumes — "Research X" → a brief). `classifyTaskMode` (title-verb + category + tags) + `modeProposalHint`
+  feed `confirmIntentDirective` so the confirm ask proposes a CONCRETE assumed-action + DoD the user **confirms
+  instead of explains**. Both modes route through confirm→review; the hint tells the agent to self-correct a
+  wrong mode, so the user's confirmation is the catch for a mis-classification. Tune the router's verbs; don't
+  hardcode per-task.
+- **Grooming→auto-work chain (`groom.ts` → `runScheduledAutoWork(..., {promoteOnly:true})`).** Grooming
+  assigns/tags/ranks but never writes status — "Up next" is auto-work's lane. After a successful groom, a
+  `promoteOnly` pass tops up UP_NEXT (cap 3, keeping anything journey already scheduled) AND arms the confirm
+  reach-outs — but does NOT promote to DOING, run research, or flip to review (those stay on the gated cadence).
+- **Board card artifact links.** `getBoardTasks` LEFT-JOINs `artifacts.items` per task → `BoardTaskRow.artifacts`;
+  `BoardCard` (BoardView.tsx) renders FileText chips that call `openArtifactById` — the same viewer the chat
+  thread's artifact chip opens (HuddleView.tsx).
+- **Resetting/inspecting tasks from a CCR session.** journey `public.tasks.status` is a `task_status` **ENUM**
+  — cast `::text` in Supabase-MCP SQL (journey project ref **`wwxgajrtmslzklnyplah`**). Writing journey
+  (canonical) flows to the Huddle mirror via the sync trigger (~1–3s). The deployed SWA host is often NOT in
+  the session's egress allowlist — drive live grooming/board checks through the GHA workflows
+  (`run-grooming.yml`, `run-autowork.yml`, `azure-pg-query.yml`, `board-uat.yml`).
+
 ## Board tags already exist (Jira-style) — parking-lot is JUST a tag, no new lane
 `BoardView.tsx` already renders `task.tags` as `<Badge>` chips on each card (`BoardCard`, up to 4, with
 `/blocked|capability/` styled destructive) AND has a tag filter (`tagFilter`/`allTags`/filter chips).

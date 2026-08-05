@@ -268,6 +268,10 @@ export async function runScheduledAutoWork(
   // docs/plan-wip-confirm-review-gate.md) — a pending (asked-but-unconfirmed) task occupies its UP_NEXT
   // slot but never competes for the DOING slot, so one unanswered ask can't starve the rest of the lane.
   const promotions: { task_id: string; status: string }[] = [];
+  // Every item staged in an agent's UP_NEXT this pass (existing + freshly promoted), with its agent — used
+  // by promoteOnly (the grooming chain) to arm each one's confirm-intent reach-out so agents begin checking
+  // in for the whole plate from grooming completion.
+  const stagedForConfirm: { agent: string; task: BoardTaskRow }[] = [];
   // freshPromotion=false candidates are tasks ALREADY sitting in DOING (however they got there — a
   // normal earlier promotion, or a race/stale-mirror read that skipped the gate entirely, as happened
   // 2026-08-05: a task reached DOING and completed to IN_REVIEW without ever confirming intent). They
@@ -286,6 +290,7 @@ export async function runScheduledAutoWork(
     const toPromote = bucket.backlog.slice(0, room);
     for (const t of toPromote) promotions.push({ task_id: t.id, status: "UP_NEXT" });
     const upNextAfterTopUp = [...bucket.upNext, ...toPromote];
+    for (const t of upNextAfterTopUp) stagedForConfirm.push({ agent, task: t });
     if (bucket.doing.length < DOING_CAP && upNextAfterTopUp.length) {
       doingSlotCandidates.push({ agent, task: upNextAfterTopUp[0], freshPromotion: true });
     }
@@ -318,6 +323,39 @@ export async function runScheduledAutoWork(
         }
       } catch {
         /* top-up write failed — backlog stays as-is, retried by the next full pass */
+      }
+    }
+    // Chain the confirm-intent REACH-OUT scheduling to grooming completion: arm each freshly-staged
+    // UP_NEXT item with a jittered `confirm_ask_at` (one-time, 15min–4h out), for gated agents whose
+    // intent isn't already confirmed/asked. This SCHEDULES the reach-out relative to grooming; the
+    // auto-work cadence (9/13/17) is what FIRES each ask once its jittered instant passes, so agents
+    // begin checking in for confirmations staggered across the day from the moment the board was groomed.
+    // We schedule only — no ask is fired and no work starts here (that stays behind the gate on cadence).
+    if (stagedForConfirm.length) {
+      try {
+        const armStates = await getTaskEngagementStates(stagedForConfirm.map((f) => f.task.id));
+        const armRequired = new Map(
+          await Promise.all(
+            [...new Set(stagedForConfirm.map((f) => f.agent))].map(
+              async (a): Promise<[string, boolean]> => [a, await isStructuredWorkflowRequired(email, a)],
+            ),
+          ),
+        );
+        const armNow = Date.now();
+        const armJitter = () => CONFIRM_JITTER_MIN_MS + Math.random() * (CONFIRM_JITTER_MAX_MS - CONFIRM_JITTER_MIN_MS);
+        await Promise.all(
+          stagedForConfirm
+            .filter((f) => {
+              if (!(armRequired.get(f.agent) ?? true)) return false; // discretionary agent — no ask needed
+              const s = armStates.get(f.task.id);
+              return (s?.confirm_status ?? "awaiting") !== "confirmed" && !s?.confirm_ask_at; // not confirmed & not already armed
+            })
+            .map((f) =>
+              ensureConfirmAskAt(f.task.id, email, new Date(armNow + armJitter()).toISOString()).catch(() => {}),
+            ),
+        );
+      } catch {
+        /* arming is best-effort — the next full cadence pass still schedules any un-armed asks */
       }
     }
     await setAutoWorkSignature(email, signature);
