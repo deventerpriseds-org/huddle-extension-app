@@ -90,7 +90,13 @@ export function BoardView() {
   const [assigneeFilter, setAssigneeFilter] = useState<Set<string>>(new Set());
   const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
   const [dragId, setDragId] = useState<string | null>(null);
-  const [activeCol, setActiveCol] = useState<string>("upnext"); // mobile: which status column is shown
+  // Mobile: which status column is shown. Default to Backlog (the entry lane that almost always has
+  // content) instead of "upnext" — grooming ranks the backlog but nothing moves tasks to UP_NEXT status,
+  // so defaulting to Up next opened the board on an empty "Nothing in Up next" (looked blank). A one-time
+  // effect below auto-jumps to the first NON-EMPTY lane once tasks load, unless the user has tapped one.
+  const [activeCol, setActiveCol] = useState<string>("backlog");
+  const userPickedColRef = useRef(false);
+  const pickCol = useCallback((k: string) => { userPickedColRef.current = true; setActiveCol(k); }, []);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set()); // collapsed swimlanes
   // Quick-filters pill row: default-collapsed to ~4 rows with a Show more/less toggle. Read the
   // persisted preference synchronously (no flash), same pattern as Sidebar/ContextPanel collapse.
@@ -173,6 +179,21 @@ export function BoardView() {
 
   // Parked tasks are paused (excluded from all automation) — surface a count so they aren't invisible.
   const parkedCount = useMemo(() => tasks.filter(isParked).length, [tasks]);
+
+  // Task counts per status column (mobile lane pills). Drives the auto-jump-to-first-non-empty below.
+  const colCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const t of filtered) { const k = columnKeyFor(t.status); m[k] = (m[k] ?? 0) + 1; }
+    return m;
+  }, [filtered]);
+  // On load (once tasks arrive), if the currently-shown lane is empty and the user hasn't tapped a lane,
+  // jump to the first lane that has tasks — so the board never opens on an empty "Nothing in …" screen.
+  useEffect(() => {
+    if (userPickedColRef.current) return;
+    if ((colCounts[activeCol] ?? 0) > 0) return;
+    const firstNonEmpty = COLUMNS.find((c) => (colCounts[c.key] ?? 0) > 0);
+    if (firstNonEmpty && firstNonEmpty.key !== activeCol) setActiveCol(firstNonEmpty.key);
+  }, [colCounts, activeCol]);
 
   // Ordered swimlanes for the current grouping.
   const lanes = useMemo<Lane[]>(() => {
@@ -491,7 +512,7 @@ export function BoardView() {
                     return (
                       <button
                         key={c.key}
-                        onClick={() => setActiveCol(c.key)}
+                        onClick={() => pickCol(c.key)}
                         className={cn(
                           "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition",
                           activeCol === c.key
