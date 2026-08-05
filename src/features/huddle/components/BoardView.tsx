@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck, X, Plus, PauseCircle } from "lucide-react";
+import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck, X, Plus, PauseCircle, FileText } from "lucide-react";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import type { BoardTaskRow } from "../lib/tasks/tasks.server";
-import { readBoolPref, writeBoolPref } from "../store";
+import { readBoolPref, writeBoolPref, useHuddleStore } from "../store";
 import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
 import { Button } from "@/components/ui/button";
@@ -732,6 +732,26 @@ function BoardCard({
                     <Plus size={9} /> tag
                   </button>
                 ))}
+            </div>
+          )}
+          {task.artifacts && task.artifacts.length > 0 && (
+            // Agent's saved outputs for this task — links to the same artifact viewer the chat thread opens.
+            <div className="mt-2 flex flex-wrap gap-1">
+              {task.artifacts.map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  title={`Open ${a.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    useHuddleStore.getState().openArtifactById(a.id);
+                  }}
+                  className="inline-flex items-center gap-1 rounded-md border border-hairline bg-surface px-1.5 py-0.5 text-[10px] text-foreground hover:bg-muted"
+                >
+                  <FileText size={11} style={{ color: "var(--ai)" }} />
+                  <span className="max-w-[160px] truncate">{a.name}</span>
+                </button>
+              ))}
             </div>
           )}
           <div className="mt-2 flex items-center gap-2">
