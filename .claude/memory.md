@@ -1,5 +1,41 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-08-01
+Last updated: 2026-08-05
+
+## Ceremony barge → SINGLE responder + STT-tolerant summons + dismiss (2026-08-05) — deployed, MECHANISM confirmed on live app, perceptual verdict PENDING user
+Prior live transcript showed: a barge addressed to one agent answered by the WRONG agent (the active
+speaker), a narration/answer CHORUS (multiple agents piling onto one barge), casual "Yes?—go ahead"
+register instead of formal, and "So, never mind" HALLUCINATING a file-request turn. Root: every ceremony
+barge ran the full multi-winner group router, so the active speaker / adjacency pulled in the wrong or
+extra agents; and a dismiss still spawned a real turn.
+- **FIX (all deployed on main, ca7ad60 + earlier fbf5e87/0075166):**
+  1. **Client resolves ONE responder per barge** (`MeetingBar.runBargeSequence`): `resolveAddressedAgent`
+     (`lib/addressedAgent.ts`, pure/STT-tolerant, 12/12 offline) picks the addressed agent from PRESENT
+     members (prefix+phonetic+Levenshtein, activeSpeaker tiebreak); if none named, `bargeTarget` = the
+     agent just speaking. Passed as `targetAgentId` to `sendHuddleMessage`.
+  2. **Server ceremony-barge FAST PATH** (`huddle.functions.ts:703`): `ceremonyBarge && targetAgentId &&
+     members.includes(target)` → forces `winners:[targetAgentId]`, SKIPS the multi-winner LLM router.
+     **Scoped to `ceremonyBarge` only** — the all-members group chat (no target, content-routed) is
+     untouched (the user's explicit constraint).
+  3. **Bare summons** (name, no request) → INSTANT client ack in the addressed agent's own voice, formal
+     `SUMMONS_ACKS` ("Yes sir?" / "I'm here, sir." / "Right here, sir."), NO model turn; floor held
+     (`NAME_CALL_HOLD_MS`) for the follow-up command, else resume the cut speaker.
+  4. **Ambiguous name** → ONE-line clarify ("did you mean X or Y?") in the asker's voice, no wrong guess.
+  5. **Dismiss** ("never mind/nvm/forget it/as you were/carry on/continue/nothing/scratch that") →
+     resume only, NO turn (kills the "never mind → hallucinated file-request").
+- **CONFIRMED via ceremony-namecall-uat (run 31007112517, deployed app), read critically not by string:**
+  Elle mid-update → user "Hey Terry" → **TERRY** (not Elle) acks "Yes sir?"; "What is blocked?" → Terry
+  alone answers with REAL context (the blocker + Elle's missing-assignments note), no chorus, no canned
+  defer; "Terry, look up the UPenn AI course link" → Terry alone runs web_search and SPEAKS Coursera
+  results (F12 not silent). Single responder on all 3 barges. This is a coherent exchange, a clear
+  improvement over the prior wrong-agent/chorus/hallucination transcript.
+- **HONEST GAPS (not proven by this run):** (a) resume-after-barge showed false in the verdict but the
+  harness ended while Terry's final answer was still streaming and the user kept barging — inconclusive,
+  NOT a proven regression (floor-hold+resume verified in earlier runs); (b) the dismiss path is
+  code-verified only, not exercised by this harness; (c) ack latency ~2.4s ≈ cloud-STT transcription
+  floor (can't ack a name before hearing it), not a model round-trip. **Synthetic harness = SMOKE/LOGIC
+  test only — cut-off immediacy and voice FEEL remain the USER's live verdict (they said "I will test it
+  myself").** Do NOT write "fixed" for the perceptual side until the user confirms live.
+
 
 ## PROVEN, KNOWN-POSSIBLE: ElevenLabs cloned voices WORK with the OpenAI Realtime API — do NOT re-assert it's impossible
 **Standing fact (proven multiple times, incl. with the SWA). Any future session — and the current one —
