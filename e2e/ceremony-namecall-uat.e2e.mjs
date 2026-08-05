@@ -224,7 +224,7 @@ try {
   let ackAt = 0;
   for (let i = 0; i < 25 && !ackAt; i++) {
     const rows = await allRows(page);
-    if (rows.slice(rowsAtInject).some((r) => r.who === "agent" && /yes,?\s*sir/i.test(r.text))) ackAt = Date.now();
+    if (rows.slice(rowsAtInject).some((r) => r.who === "agent" && /\bsir\b/i.test(r.text))) ackAt = Date.now();
     else await page.waitForTimeout(400);
   }
   console.log(`  ack ${ackAt ? `seen after ${ackAt - injectedAt}ms` : "NOT seen within ~10s"}`);
@@ -253,10 +253,10 @@ try {
   const rows = await allRows(page);
   const toolSpoke =
     toolTested &&
-    rows.slice(toolStartIdx).some((r) => r.who === "agent" && r.text.replace(/yes,?\s*sir/i, "").trim().length > 8);
+    rows.slice(toolStartIdx).some((r) => r.who === "agent" && r.text.replace(/\bsir\b/i, "").trim().length > 8);
   const after = rows.slice(rowsAtInject);
   const userRows = after.filter((r) => r.who === "user");
-  const ack = after.find((r) => r.who === "agent" && /yes,?\s*sir/i.test(r.text));
+  const ack = after.find((r) => r.who === "agent" && /\bsir\b/i.test(r.text));
   const interruptedRow = rows.find((r) => r.interrupted);
   const ackIdx = ack ? after.indexOf(ack) : -1;
   const afterAck = ackIdx >= 0 ? after.slice(ackIdx + 1) : [];
@@ -264,7 +264,7 @@ try {
   const speakerResumed = !!speaker && afterAck.some((r) => r.who === "agent" && r.agentId === speaker);
   // Did a substantive answer (not another "Yes sir") come after the ack (the follow-up got answered)?
   const substantiveAnswer = afterAck.find(
-    (r) => r.who === "agent" && r.text.length > 25 && !/yes,?\s*sir/i.test(r.text),
+    (r) => r.who === "agent" && r.text.length > 25 && !/\bsir\b/i.test(r.text),
   );
   // Premature close = the ONLY thing after the ack is Terry wrapping up ("close the stand-up / advise /
   // proceed") with no resume and no real answer.
