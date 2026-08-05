@@ -28,10 +28,17 @@ export type CeremonyVoiceTurnOutcome = "completed" | "aborted";
 // A real utterance is loud enough to clear the floor and still barges. Perceptual — tune against a live
 // mic if self-barges slip through (raise it) or real barges get eaten (lower it).
 const SELF_BARGE_BLEED_FLOOR = 0.08;
+// Confirm window for a below-floor onset: if speech is still going after this (no speech_stopped), it's
+// a real sustained barge and cuts through the floor; a shorter echo blip stops first and is ignored.
+// Small enough to still feel instant, long enough to outlast a single TTS-echo transient.
+const SUSTAINED_BARGE_CONFIRM_MS = 220;
 
 export interface CeremonyVoiceController {
   status: CeremonyVoiceStatus;
   activeSpeaker: AgentId | null;
+  /** The most-recent speaker (never null once anyone has spoken this ceremony). The barge path pins an
+   *  un-named interjection to the interlocutor via this when `activeSpeaker` is momentarily null. */
+  getLastSpeaker: () => AgentId | null;
   error: string | null;
   /** Live mic input level (0..1) for a UI pulse — shows the user the mic is hearing them. */
   micLevel: number;
@@ -179,6 +186,12 @@ export function useCeremonyVoice(hookOpts: {
 }): CeremonyVoiceController {
   const [status, setStatus] = useState<CeremonyVoiceStatus>("idle");
   const [activeSpeaker, setActiveSpeaker] = useState<AgentId | null>(null);
+  // The MOST-RECENT speaker — set whenever anyone starts a turn and NEVER reset to null. `activeSpeaker`
+  // goes null between speakers (and right after a summons ack releases the floor), so an un-named barge
+  // that lands in that gap has no current speaker to pin to. `lastSpeakerRef` remembers who the user was
+  // last in dialogue with, so the barge routes to THEM instead of falling through to the topic router
+  // (the "why was Faith talking at all" bug: an un-named web-search barge won by the research owner).
+  const lastSpeakerRef = useRef<AgentId | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Reactive capture-engaged flag (see controller doc). Set at startListening and cleared on any stop.
   const [listening, setListening] = useState(false);
@@ -195,6 +208,12 @@ export function useCeremonyVoice(hookOpts: {
   // floor and be wrongly suppressed as our-own-audio echo (the "barge didn't cut off / wasn't immediate"
   // complaint). A real utterance SPIKES the peak instantly; steady low-level TTS echo never does.
   const micPeakRef = useRef(0);
+  // "Sustained speech beats the floor." A below-floor speech_started is ambiguous: TTS echo OR a real
+  // double-talk barge whose level dipped under the floor. Instead of discarding it, we hold it pending
+  // for a short confirm window — if speech is STILL going when the window elapses (no speech_stopped
+  // cancelled it), it's a real, sustained barge and we freeze; a brief echo blip stops first and is
+  // ignored. So a sustained onset always cuts through, echo still doesn't.
+  const speechPendingRef = useRef(false);
 
   const supported =
     typeof window !== "undefined" &&
@@ -272,6 +291,7 @@ export function useCeremonyVoice(hookOpts: {
       if (genRef.current !== gen) return "aborted";
       setPhase("speaking");
       setActiveSpeaker(agentId);
+      lastSpeakerRef.current = agentId; // remember the interlocutor even after the floor is released
       const sentences = splitSentences(text);
 
       // PIPELINE (kills the "one sentence at a time" dead space): synthesize sentence N+1 WHILE N is
@@ -561,27 +581,41 @@ export function useCeremonyVoice(hookOpts: {
 
         switch (msg.type) {
           case "input_audio_buffer.speech_started": {
-            // SELF-BARGE SUPPRESSION: our own ElevenLabs TTS can leak into the mic even with
-            // echoCancellation on. If the audio queue is actively playing AND the live mic level is
-            // below the bleed floor, this "speech" is our own audio echoing back, not the user — do
-            // NOT freeze or park. A real utterance is loud enough to clear the floor and still barges.
-            const selfBleed =
+            // The freeze that stops the current speaker + parks the emit loop. Fired SYNCHRONOUSLY so a
+            // barge never slips behind the wave. Runs even between speakers (nothing to freeze) so a
+            // barge is never missed. No response.cancel (ears-only session — nothing to cancel).
+            const doBarge = () => {
+              speechPendingRef.current = false;
+              if (statusRef.current === "speaking" || audioQueueRef.current.isActive()) {
+                bargeFreeze();
+              }
+              onBargeStartRef.current?.();
+            };
+            // SELF-BARGE SUPPRESSION vs SUSTAINED-CUT-THROUGH: our own ElevenLabs TTS can leak into the
+            // mic even with echoCancellation on. A below-floor onset WHILE our audio plays might be that
+            // echo — OR a real double-talk barge whose level dipped under the floor (the "you're not
+            // stopping / talking over me" case). Don't discard it: hold it PENDING for a short confirm
+            // window. If speech is still going when the window elapses (no speech_stopped cancelled it),
+            // it's a real, sustained barge → freeze. A brief echo blip stops first and is dropped. So a
+            // sustained onset ALWAYS beats the floor; steady low TTS echo still never barges.
+            const belowFloor =
               audioQueueRef.current.isActive() && micPeakRef.current < SELF_BARGE_BLEED_FLOOR;
-            if (selfBleed) {
-              // Our own bleed, not a barge — leave the ceremony speaker running. NO response.cancel:
-              // this session is ears-only (create_response:false) so OpenAI never generates a response;
-              // a cancel here has nothing to cancel and only returns an "error" event (log spam).
+            if (belowFloor) {
+              speechPendingRef.current = true;
+              window.setTimeout(() => {
+                if (speechPendingRef.current) doBarge(); // still speaking after the window → real barge
+              }, SUSTAINED_BARGE_CONFIRM_MS);
               break;
             }
-            // Barge detected: freeze the speaker (stop audio + kill the loop, keep the resume point).
-            // freezeRef.current already points to the current sentence (set before synthesis).
-            if (statusRef.current === "speaking" || audioQueueRef.current.isActive()) {
-              bargeFreeze();
-            }
-            // Fire SYNCHRONOUSLY so the caller parks its emit loop now — before STT resolves. Runs
-            // even between speakers (nothing to freeze) so a barge is never missed. No response.cancel
-            // (ears-only session — nothing to cancel; see selfBleed note above).
-            onBargeStartRef.current?.();
+            // Clearly above the floor → a real utterance, freeze immediately (no confirm delay).
+            doBarge();
+            break;
+          }
+
+          case "input_audio_buffer.speech_stopped": {
+            // The onset ended within the confirm window → it was a brief blip (TTS echo), not a sustained
+            // barge. Cancel the pending freeze. (Harmless if nothing was pending.)
+            speechPendingRef.current = false;
             break;
           }
 
@@ -852,6 +886,9 @@ export function useCeremonyVoice(hookOpts: {
   return {
     status,
     activeSpeaker,
+    // Most-recent speaker (never null once anyone has spoken) — the barge path uses this to pin an
+    // un-named barge to the interlocutor when `activeSpeaker` is momentarily null (between speakers).
+    getLastSpeaker: () => lastSpeakerRef.current,
     error,
     micLevel,
     listening,

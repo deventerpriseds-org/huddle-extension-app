@@ -485,6 +485,7 @@ function MeetingRoom({
   const setVoiceEngine = useVoiceEngineStore((s) => s.setMode);
   const patchMeeting = useHuddleStore((s) => s.patchMeeting);
   const addMeetingTurns = useHuddleStore((s) => s.addMeetingTurns);
+  const resolvePendingBarge = useHuddleStore((s) => s.resolvePendingBarge);
   const markLastAgentTurnInterrupted = useHuddleStore((s) => s.markLastAgentTurnInterrupted);
   const toggleAgent = useHuddleStore((s) => s.toggleAgent);
   const setSpeaker = useHuddleStore((s) => s.setSpeaker);
@@ -891,13 +892,18 @@ function MeetingRoom({
       return;
     }
 
-    // SINGLE RESPONDER for this barge: the resolved addressed agent, else the agent who was JUST speaking
-    // — never a multi-winner group pick. The server's ceremony-barge fast path forces exactly this agent,
-    // which kills the wrong-agent grab, the pile-on, and the narration chorus in one move.
-    const bargeTarget: AgentId | undefined =
+    // SINGLE RESPONDER for this barge — pinned to the user's INTERLOCUTOR, never a topic/capability
+    // router pick. Resolution order (AC-4): named agent → current speaker → MOST-RECENT speaker → host.
+    // The most-recent fallback is the fix for "why was Faith talking at all": an un-named barge that
+    // landed right after a summons released Terry's floor had no `activeSpeaker`, fell to the router, and
+    // the web-search OWNER (Faith) won — an agent the user never addressed. Pinning to the last speaker
+    // and always sending a valid targetAgentId makes the server fast-path force exactly the interlocutor.
+    const bargeTarget: AgentId =
       addressed.kind === "agent"
         ? (addressed.agentId as AgentId)
-        : ((ceremonyVoiceRef.current.activeSpeaker as AgentId | null) ?? members[0]);
+        : ((ceremonyVoiceRef.current.activeSpeaker as AgentId | null) ??
+          (ceremonyVoiceRef.current.getLastSpeaker() as AgentId | null) ??
+          members[0]);
 
     // The frozen speaker (the row actually being cut) survives bargeFreeze. Mark it interrupted so the
     // transcript renders the cut — but this agent does NOT necessarily answer (the bargeTarget above does).
@@ -1042,6 +1048,29 @@ function MeetingRoom({
         "winner=",
         res.decision?.winnerId ?? res.replies?.[0]?.agentId,
       );
+      // PERSIST the routing decision to the ceremony transcript so "why did agent X answer this barge"
+      // is a LOGGED FACT next time, not a guess — the exact question ("why was Faith talking at all")
+      // this run couldn't answer. Records the barge text, who the CLIENT pinned it to (bargeTarget), who
+      // the SERVER actually made winner, and the reason. If target !== winner, that's the routing bug on
+      // record. System row (kind:"barge_route"), never spoken, best-effort — must not block the answer.
+      try {
+        const winnerId = res.decision?.winnerId ?? res.replies?.[0]?.agentId ?? null;
+        persistCeremonyTurnRef.current({
+          speaker: "system",
+          kind: "barge_route",
+          text: JSON.stringify({
+            barge: text.slice(0, 160),
+            addressed: addressed.kind,
+            target: bargeTarget,
+            winner: winnerId,
+            matched: bargeTarget === winnerId,
+            reason: res.decision?.reason ?? null,
+          }),
+          ts: Date.now(),
+        });
+      } catch {
+        /* logging is best-effort; never break the barge path */
+      }
       // Voice EXACTLY ONE reply — the router's PRIMARY (replies[0]) — over the frozen speaker. Any
       // extra winners/interjectors are ignored for voicing (AC-12 wants one immediate answer, not a
       // pile-on mid-barge).
@@ -1173,13 +1202,20 @@ function MeetingRoom({
       });
       bargeGenRef.current += 1;
       bargeActiveRef.current = true;
-      setPhase("");
+      // INSTANT FEEDBACK: render the user's barge row NOW, at speech-onset, before STT resolves the
+      // words — so the transcript reflects the interrupt immediately instead of appearing only after
+      // the wave has flushed and STT returns (the "my message shows up late, after the log-jam" report).
+      // resolvePendingBarge (in onBargeDetected / the watchdog) fills in the real text or drops it.
+      const myBargeGen = bargeGenRef.current;
+      addMeetingTurns([{ user: true, kind: "barge", text: "…", pending: true }]);
+      setPhase("Go ahead —");
       // Watchdog: if STT never yields a barge message (so onBargeDetected/runBargeSequence never
-      // run), don't leave emit parked forever — resume the frozen speaker and unpark.
+      // run), don't leave emit parked forever — resume the frozen speaker, unpark, drop the pending row.
       window.setTimeout(() => {
-        if (bargeActiveRef.current && !bargeHandlingRef.current) {
+        if (bargeGenRef.current === myBargeGen && bargeActiveRef.current && !bargeHandlingRef.current) {
           bargeActiveRef.current = false;
           setPhase("");
+          resolvePendingBarge(null); // STT never resolved — remove the provisional row
           void ceremonyVoiceRef.current.resumeFromFreeze();
         }
       }, 12_000);
@@ -1198,8 +1234,14 @@ function MeetingRoom({
       const now = Date.now();
       const isExactDup = norm === lastBargeTextRef.current && now - lastBargeAtRef.current < 2500;
       if (isMeaningfulBarge(transcript) && !isExactDup) {
-        addMeetingTurns([{ text: transcript, user: true, kind: "barge" }]);
+        // Fill the provisional onset row with the real words (resolvePendingBarge appends one if none
+        // exists, e.g. the typed path), instead of adding a duplicate row.
+        resolvePendingBarge(transcript);
         persistCeremonyTurnRef.current({ speaker: "user", text: transcript, kind: "barge", ts: Date.now() });
+      } else {
+        // Filler ("Mhm.")/duplicate — the provisional onset row was not a real barge; drop it so no
+        // phantom "…" user row lingers.
+        resolvePendingBarge(null);
       }
       void runBargeSequenceRef.current(transcript);
     },
