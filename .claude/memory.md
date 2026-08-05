@@ -1,6 +1,43 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-05
 
+## Ceremony-barge routing UNIFIED into the router — "user calls Finn, Terry answers" fixed (2026-08-05) — built + tested, NOT yet deployed/user-confirmed
+Ground-truthed from the live standup transcript (run 16:24:35, `chat.ceremony_transcript`): the barge was
+**"Great, while you're doing that, uh, Finn, are you here?"** — "Finn" is **mid-sentence**; the client
+`resolveAddressedAgent` only checked the FIRST non-greeting token ("great"), returned `addressed:"none"`,
+and the SERVER fast-path (`huddle.functions.ts:703`: `ceremonyBarge && targetAgentId` ⇒ force
+`winners:[targetAgentId]`, router SKIPPED) pinned the interlocutor (Terry). Every "No, I called for Finn"
+re-pinned Terry. **Confirmed finn-reid IS routable** — a standup opens as `virtual-meeting` (store.ts:263 →
+`members = AGENTS.map(all)` = FULL roster); `roundRobinParticipants` only narrows who gets a *speaking slot*,
+not `members`. So the router CAN reach Finn; the fast-path bypass just never let it.
+- **Root cause = TWO disconnected routing brains.** The real router `routing.ts` (`routeMessageLLM`, with an
+  explicit ADDRESSED-BY-NAME rule that reads the whole message) **never ran for a barge** because the client
+  pin + `:703` bypass pre-empted it. My first attempt (a client-side sentence-scan in `addressedAgent.ts`)
+  was rejected by the user ("horrible assessment… we have a complex way to route… get caught up") — it
+  reinvented, badly, what the router already does. Correct fix = ONE track (the user's own suggestion: "add
+  the fast-track logic to the router so it's one track, an action the router takes").
+- **FIX (built, green): unified the barge quick-track INTO the router.** (1) `addressedAgent.ts` is now the
+  ONE shared name-resolver (client + server), scanning ALL tokens, PRECISION-biased: exact / name-truncation
+  (`n.startsWith(t)`, ≥3 chars) only — NO general fuzzy (that's what let "same"→Sam, "i"→Iris hijack); fuzzy
+  is scoped to the RECENT SPEAKER only (the "Al"/"El"→Elle-while-Elle-talks case). STOPWORDS drop
+  function-word/opener tokens ("great","while","i"…). `isSummons` restored to the rest-based rule (a lone
+  name is a summons even with a trailing "?"). (2) `routing.ts` new `bargeQuickRoute(input)` — deterministic,
+  NO LLM: named agent → @mention → interlocutor → null(fall to semantic route); called at the top of BOTH
+  `routeMessage` and `routeMessageLLM`. (3) `huddle.functions.ts` — DELETED the `:703` bypass; a barge now
+  flows through the same router with `ceremonyBarge`+`interlocutorId` (canLLMRoute allows a barge despite
+  targetAgentId, which is now the interlocutor HINT not a hard pin). (4) `MeetingBar.tsx` — sends
+  `targetAgentId = interlocutorId` (floor-holder); server owns the authoritative name pick; `barge_route`
+  now logs `interlocutor`/`redirected`. Named barge → **0 added latency** (deterministic); only a no-name +
+  no-interlocutor barge would reach the LLM. Anti-Faith regression guarded: un-named topic-bearing barge →
+  interlocutor, never a topic grab.
+- **VERIFIED offline (green):** `e2e/addressedAgent.test.mjs` 22/22 (headline mid-sentence "…Finn…"→Finn,
+  precision guards "same"↛Sam, STT rescue). `scripts/barge-route.test.ts` 10/10 (named→named, un-named→
+  interlocutor, anti-Faith, @mention, non-barge→null so group chat untouched, absent-name→interlocutor).
+  `scripts/router-winners.test.ts` 9/9 unchanged. `tsc --noEmit` + `npm run build` clean.
+- **NOT yet:** deployed to prod, or user-confirmed LIVE in a real standup (per the hard rule — mechanism
+  proven offline ≠ user's bug fixed). Branch `claude/setup-stop-hooks-skills-0h569y` (the deploy-race branch —
+  deploy `main` ONLY, merge main↔branch first).
+
 ## WIP confirm-gate was ENABLED but LEAKING → made fail-closed + assist/produce router + chain scoped (2026-08-05) — deployed on main, ground-truthed
 The user's `identity.agent_workflow_config.default_required` was **true** (gate ON, set 2026-08-04 23:59),
 yet 8 tasks reached IN_REVIEW with `confirm_status='awaiting'`, `confirm_ask_at=NULL` ("Go to church",
