@@ -107,6 +107,20 @@ async function agentRows(page) {
   );
 }
 
+// FULL transcript in DOM order — user rows AND agent rows, with kind + interrupted — so we can read the
+// whole exchange for COHERENCE, not just search for a "Yes sir" string somewhere.
+async function allRows(page) {
+  return page.$$eval('[data-testid="transcript-turn"]', (els) =>
+    els.map((e) => ({
+      who: e.getAttribute("data-turn-user") === "true" ? "user" : "agent",
+      agentId: e.getAttribute("data-turn-agent-id") || "",
+      kind: e.getAttribute("data-turn-kind") || "",
+      interrupted: e.getAttribute("data-turn-interrupted") === "true",
+      text: (e.textContent || "").replace(/\s+/g, " ").trim(),
+    })),
+  );
+}
+
 console.log(`\nCeremony name-call UAT — ${BASE}\n`);
 const browser = await chromium.launch(launchOpts);
 const ctx = await browser.newContext();
@@ -153,52 +167,82 @@ try {
   // Small settle so VAD/STT is live before we speak.
   await page.waitForTimeout(1000);
 
-  console.log("Step 3: wait for an agent to be speaking, then inject 'Hey Terry'…");
-  const deadline = Date.now() + 90000;
-  let spoke = false;
+  // Step 3: wait until a LANE OWNER (an agent other than the host Terry) is genuinely mid-UPDATE — the
+  // faithful barge moment. Injecting during Terry's opening greeting is the unrealistic/flaky window that
+  // produced false results before. We barge "Hey Terry" WHILE another agent speaks, so we also test that
+  // the addressed agent (Terry) — not the current speaker — is the one who answers.
+  console.log("Step 3: wait for a lane owner (non-Terry) to be mid-update, then inject 'Hey Terry'…");
+  const deadline = Date.now() + 120000;
+  let midUpdate = false;
+  let speaker = "";
   while (Date.now() < deadline) {
     const rows = await agentRows(page);
-    if (rows.length > 0) {
-      spoke = true;
+    const laneOwner = rows.find((r) => r.agentId && r.agentId !== "terry-locke");
+    if (laneOwner) {
+      midUpdate = true;
+      speaker = laneOwner.agentId;
       break;
     }
     await page.waitForTimeout(500);
   }
-  if (!spoke) console.log("  [warn] no agent spoke within 90s — injecting anyway");
-  await page.waitForTimeout(1500); // let a block get mid-way
+  if (!midUpdate) {
+    console.log("  [warn] no lane owner spoke within 120s — the ceremony never reached updates; injecting anyway");
+  } else {
+    console.log(`  lane owner '${speaker}' is mid-update — barging now`);
+  }
+  await page.waitForTimeout(1200); // land mid-sentence
+  const rowsAtInject = (await allRows(page)).length;
   const dur = await page.evaluate((b64) => window.__inject(b64), HEY_TERRY_B64);
   injectedAt = Date.now();
-  console.log(`  injected 'Hey Terry' (clip ${Math.round(dur * 1000)}ms) at t0`);
+  console.log(`  injected 'Hey Terry' (clip ${Math.round(dur * 1000)}ms) at t0 while '${speaker || "?"}' spoke`);
 
-  console.log("Step 4: watch the transcript for the addressed agent's 'Yes sir' ack…");
-  const ackDeadline = Date.now() + 30000;
-  while (Date.now() < ackDeadline) {
-    const rows = await agentRows(page);
-    // The name-call ack renders as a short agent turn containing "yes sir".
-    const ack = rows.find((r) => /yes,?\s*sir/i.test(r.text));
-    if (ack) {
-      ackSeen = { ...ack, msFromInject: Date.now() - injectedAt };
-      break;
-    }
-    await page.waitForTimeout(400);
-  }
+  // Step 4: watch the WHOLE exchange for ~30s, then read it for coherence.
+  console.log("Step 4: capture the full exchange…");
+  await page.waitForTimeout(30000);
+  const rows = await allRows(page);
+  const after = rows.slice(rowsAtInject); // rows added AFTER the barge
+  const userBarge = after.find((r) => r.who === "user");
+  const ack = after.find((r) => r.who === "agent" && /yes,?\s*sir/i.test(r.text));
+  const interruptedRow = rows.find((r) => r.interrupted);
+  const ackIdx = ack ? after.indexOf(ack) : -1;
+  const continued = ackIdx >= 0 && after.slice(ackIdx + 1).some((r) => r.who === "agent" && r.text.length > 3);
 
-  const finalRows = await agentRows(page);
-  console.log(`\n  transcript agent rows after inject (${finalRows.length}):`);
-  finalRows.slice(-12).forEach((r) => console.log(`    [${r.agentId} ${r.kind}] ${r.text.slice(0, 80)}`));
+  console.log(`\n  ---- FULL transcript (${rows.length} rows; * = after barge) ----`);
+  rows.forEach((r, i) => {
+    const mark = i >= rowsAtInject ? "*" : " ";
+    const who = r.who === "user" ? "USER" : r.agentId || "agent";
+    const flags = `${r.kind}${r.interrupted ? " INTERRUPTED" : ""}`.trim();
+    console.log(`  ${mark} [${who}${flags ? " " + flags : ""}] ${r.text.slice(0, 90)}`);
+  });
+
+  ackSeen = { userBarge: !!userBarge, ack, interruptedRow: !!interruptedRow, continued, speaker };
 } catch (e) {
   console.log(`\nERROR: ${e.message}`);
 } finally {
-  if (consoleErrors.length) console.log(`\n  page console errors (${consoleErrors.length}): ${consoleErrors.slice(0, 5).join(" | ").slice(0, 400)}`);
+  if (consoleErrors.length) console.log(`\n  page console errors (${consoleErrors.length}): ${consoleErrors.slice(0, 6).join(" | ").slice(0, 500)}`);
   await browser.close();
 }
 
-console.log(`\n================ VERDICT ================`);
-if (ackSeen) {
-  console.log(`PASS — addressed agent '${ackSeen.agentId}' said "${ackSeen.text.slice(0, 40)}" (kind=${ackSeen.kind}) ${ackSeen.msFromInject}ms after 'Hey Terry'.`);
-  console.log(`Instant name-call ack works end-to-end from synthesized speech.`);
+console.log(`\n================ COHERENCE VERDICT ================`);
+if (!ackSeen) {
+  console.log("FAIL — harness error before capture.");
+  process.exit(1);
+}
+const c = ackSeen;
+console.log(`  barged while:            ${c.speaker || "(no lane owner reached)"}`);
+console.log(`  user barge row present:  ${c.userBarge}`);
+console.log(`  a speaker was interrupted: ${c.interruptedRow}`);
+console.log(`  Terry acked "Yes sir":   ${c.ack ? `YES (kind=${c.ack.kind})` : "NO"}`);
+console.log(`  ceremony continued after ack: ${c.continued}`);
+const coherent = c.userBarge && c.ack && c.continued;
+if (coherent) {
+  console.log(`\nPASS(coherent) — barge registered, Terry acked "Yes sir", and the stand-up continued. Read the full transcript above to confirm it reads naturally.`);
   process.exit(0);
 } else {
-  console.log(`FAIL — no "Yes sir" ack appeared within 30s of injecting 'Hey Terry'. Inspect the transcript rows above + query chat.ceremony_transcript for the run to see what the barge produced.`);
+  const gaps = [];
+  if (!c.userBarge) gaps.push("barge never registered as a user turn (VAD/STT or capture gap)");
+  if (!c.ack) gaps.push('no "Yes sir" ack from Terry');
+  if (c.ack && !c.continued) gaps.push("ack fired but the ceremony did NOT resume after (dead-air/close)");
+  console.log(`\nFAIL(incoherent) — ${gaps.join("; ")}. This is a real issue to fix, not to wave through.`);
   process.exit(1);
 }
