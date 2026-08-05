@@ -61,3 +61,20 @@ responder server-side. (Double-voice via emit RULED OUT — barge non-durable, n
 `onBargeDetected` (`MeetingBar.tsx:976`) persists every STT completion before `isMeaningfulBarge`/dedup;
 `resumeFromFreeze` (`useCeremonyVoice.ts:347`) re-persists the cut sentence (no blockId:sentenceIndex
 dedup). FIX: gate onBargeDetected before persist; idempotent sentence emit on (blockId,sentenceIndex).
+
+
+## Summons exchange — VERIFIED COHERENT end-to-end (2026-08-05, ceremony-namecall-uat)
+Read the FULL transcript (not a string match) across runs on main@0075166:
+- Elle mid-update INTERRUPTED (marked) → USER "Hey Terry" → Terry "Yes sir" → USER "What is blocked?" →
+  Terry answers SPECIFICALLY ("AI certification course, pending your decision") → Elle RESUMES → NO premature close.
+- **F18** (10s ack) FIXED: name-call → instant client-side "Yes sir", no model turn.
+- **F19** (register) FIXED: literal "Yes sir".
+- **F20** (first barge dropped) FIXED: queue-on-warm (an unmute tapped during the ~2s warm was dropped) + pre-warm.
+- **F15/floor** FIXED: name-call ack now holds the floor (Listening… 12s) + resumeFromFreeze instead of marching to close.
+- **Deflection** (Terry dodged "what is blocked" with "follow up after standup") FIXED: bargeDirective — answer a
+  question you already know NOW, defer only for a tool that hasn't returned.
+- **OAI error spam** FIXED (root cause): removed response.cancel sends — ears-only session (create_response:false)
+  has no response to cancel; each cancel returned an error event. Zero console errors in the verified run.
+- Minor/cosmetic: the "Yes sir" row can get an [interrupted] tag if the follow-up lands right on top of it.
+- STILL OPEN from the original transcript: **F12** (a barge needing a TOOL — "Terry, look up X" — going silent) — next.
+- Perceptual feel (snappiness) is still the user's live call; functional flow proven via synthesized-speech UAT.
