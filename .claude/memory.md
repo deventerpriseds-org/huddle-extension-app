@@ -1,6 +1,46 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-05
 
+## WIP confirm-gate was ENABLED but LEAKING → made fail-closed + assist/produce router + chain scoped (2026-08-05) — deployed on main, ground-truthed
+The user's `identity.agent_workflow_config.default_required` was **true** (gate ON, set 2026-08-04 23:59),
+yet 8 tasks reached IN_REVIEW with `confirm_status='awaiting'`, `confirm_ask_at=NULL` ("Go to church",
+faith-hartley, LIFE — an agent "researched" a personal errand into an artifact and it auto-flipped to
+review). **Root cause (pinned, not guessed):** `isStructuredWorkflowRequired` (agent-workflow-config.server.ts)
+**failed OPEN** — `catch { return false }` — so a single transient throw of its OWN pg pool disabled BOTH
+gates in the same pass (autowork promotion gate `autowork.server.ts:296` AND `ensureReviewFlip`'s gate
+`tasks.server.ts:872`, which share that one function). The self-heal (`autowork.server.ts:388`, `Promise.all`)
+then batch-flipped already-DOING artifacted tasks to review (proof: entered_review_at clustered at
+12:48:51×3 and 13:00:10×4 = auto-work passes). `entered_review_at` is stamped ONLY by a SUCCESSFUL
+`ensureReviewFlip` → with agentId non-null + confirm='awaiting' + config=true, a successful flip is only
+possible if the required-check returned false = the fail-open. Second latent hole: `ensureReviewFlip(...,
+w.personaId ?? null)` (huddle.functions.ts:4270) skipped the gate when persona was null.
+- **FIXES (deployed):** (1) `isStructuredWorkflowRequired` **fails CLOSED** (require confirmation on any
+  error) + **logs** the error (was swallowed); added `isStructuredWorkflowRequiredForUser` for the
+  agent-unknown case. (2) `ensureReviewFlip` resolves the requirement even with a null agentId (user-level
+  fallback) and flips ONLY on an affirmative `confirm_status==='confirmed'`. (3) autowork promotion gate
+  defaults missing/errored agents to REQUIRED (`?? true`). (4) **assist/produce router** `lib/tasks/workability.ts`
+  (`classifyTaskMode`/`modeProposalHint`) — classifies each task assist (remind/draft/prep) vs produce
+  (deliverable) off title-verb/category/tags and injects a concrete assumed-action+DoD into
+  `confirmIntentDirective` so the user CONFIRMS instead of explains; both modes → confirm → review, and the
+  hint tells the agent to self-correct a wrong mode (user's confirmation is the catch). (5) grooming→auto-work
+  chain scoped to **`promoteOnly`** (UP_NEXT top-up only; no DOING/research/flip — those run on the cadence
+  behind the gate).
+- **VERIFIED:** reset 9 IN_REVIEW→BACKLOG on journey (Supabase MCP, project `wwxgajrtmslzklnyplah`, status is
+  a `task_status` ENUM — cast `::text`), redeployed, re-groomed (force, groomed 20). Journey after: **UP_NEXT
+  12, IN_REVIEW 0, DOING 0** — the gate HELD, nothing re-flipped. Router offline check: "Go to church"/emails
+  → ASSIST, rest → PRODUCE.
+- **Reach-out cadence (asked):** auto-work wakes 3×/day (`SCHEDULING_DEFAULTS.autowork.hours=[9,13,17]` ET,
+  scheduling-config.server.ts); each task needing confirm gets a ONE-TIME 15min–4h jitter
+  (`CONFIRM_JITTER_MIN/MAX_MS`), its ask fires at the next 9/13/17 check after that instant (staggered), once
+  (`markConfirmAsked`), as a DM + push. WIP caps UP_NEXT≤3/DOING≤1/REVIEW≤2 per agent throttle volume.
+
+## Board cards now show each task's saved artifacts as link chips (2026-08-05) — deployed, Playwright-proven
+`getBoardTasks` (tasks.server.ts) LEFT-JOINs `artifacts.items` per task (id/name/status, newest first;
+best-effort with a plain-query fallback) → `BoardTaskRow.artifacts`; `BoardCard` (BoardView.tsx) renders each
+as a FileText chip calling `useHuddleStore.getState().openArtifactById(a.id)` — the SAME viewer the chat
+thread's artifact chip opens (HuddleView.tsx:362-377). Proven: board-uat shows chips (cto-marketplace-plan.md,
+claude-business-research.md, claude-business-advisor-oppor…) on the cards.
+
 ## Grooming now CHAINS an auto-work pass so "Up next" fills (2026-08-05) — deployed on main, ground-truthed + Playwright-proven
 The gap: grooming (`dispatchGroomBacklog`, groom.ts) assigns/tags/ranks the backlog but **NEVER writes
 status** — so "Up next" (board lanes READY/UP_NEXT) stayed empty after a groom. Filling Up next is
