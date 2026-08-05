@@ -1544,11 +1544,16 @@ function MeetingRoom({
           setSpeakingId(agentId);
           try {
             outcome = await ceremonyVoiceRef.current.voiceTurn(agentId, r.text, {
-              // The host OPENER (first block of the first step) does NOT re-speak on barge — a barge
-              // during the open cuts it and the exchange continues; re-speaking the opener line on each
-              // barge is what repeated "…blockage in Prof Education…" 4× (seq 4/10/11/19). Lane reports
-              // (checklists) keep resume so a mid-list barge continues the list.
-              resumable: !(step === steps[0] && i === 0),
+              // EVERY scripted turn — including the host's opening summary — resumes from the exact
+              // sentence it was cut on (the user's "pause the movie, rewind 5s, continue" model). The
+              // opener was previously NON-resumable (to stop it repeating on barges), but that made the
+              // host jump to the next speaker instead of finishing — the user's report: "why did we jump
+              // to Cole instead of you finishing what you were saying before I jumped in?". Resume is now
+              // safe here: resumeFromFreeze consumes freezeRef (sets it null), so a single barge resumes
+              // ONCE from the cut sentence, not the old 4×-repeat (which came from re-speaking on every
+              // barge). If a repeat resurfaces under rapid multi-barge, tighten resume dedup — do NOT
+              // re-disable resume, which reintroduces the jump-forward the user is reporting now.
+              resumable: true,
               // Trailing transcript: add each sentence when its audio starts, tagged with its block
               // + position so a test can prove mid-block interruption and same-block resume.
               onSentenceStart: (sentence, sentenceIndex, blockTotal) => {
