@@ -36,6 +36,7 @@ Stop gate). Validated: hook exit 0 ("up to date in 6s") + local no-op; eslint ex
 Committed to branch. Takes effect for all future sessions once merged to the default branch.
 
 ### ACT-huddle-27 (runner-free Azure-PG querying — Option 1 in progress 2026-08-06)
+- [DEPLOYED 2026-08-06] deploy-pg-mcp run 31128907824 **success** (got a runner in a free-pool window; earlier cancellations were org concurrency contention, not billing). ACA app `huddle-pg-mcp` in EnterpriseDS_ResourceGRP; URL `https://huddle-pg-mcp.yellowcoast-c773a5f7.eastus.azurecontainerapps.io/sse`; bearer=JOURNEY_PROXY_TOKEN. Fixed the `az --rule-name` quirk (non-fatal firewall create). NEXT: user adds custom connector in claude.ai → verify query through it. OPEN RISKS: (a) container health/PG-connect unverified from session (azurecontainerapps.io egress-blocked); (b) claude.ai connector UI may want OAuth not a static bearer header — if so, rework caddy to accept token via URL query.
 Deep research (2 agents) → hosting a read-only Postgres MCP as a remote connector bypasses session egress
 (brokered like Supabase). User chose the dedicated-container path. Built `deploy-pg-mcp.yml`: crystaldba/
 postgres-mcp (--access-mode=restricted) + caddy bearer sidecar on ACA, `mcp_readonly` (pg_read_all_data),
