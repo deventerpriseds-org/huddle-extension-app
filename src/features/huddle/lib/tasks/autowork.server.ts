@@ -213,6 +213,10 @@ function nextFanSlotIso(now: Date, tz: string, windows: WinRange[]): string {
   if (!wins.length) return new Date(now.getTime() + 60 * 60_000).toISOString(); // no windows → 1h fallback
   const c = tzClock(now, tz);
   const nowMin = c.h * 60 + c.mi;
+  // Offset is sampled at `now` but applied to a target up to ~24h out, so across a DST transition the
+  // armed instant can skew ±1h. That's self-healing, not a bug: `fireDueConfirmAsks` re-checks
+  // insideFanWindow at fire time, so a skewed instant that lands outside a window (pre-9am, or the
+  // 18–20 dinner gap) is re-fanned into a valid slot rather than fired out-of-hours.
   const offset = tzOffsetMs(now, tz);
   const at = (dayOffset: number, minuteOfDay: number): string => {
     const asUTC = Date.UTC(c.y, c.mo - 1, c.d + dayOffset, Math.floor(minuteOfDay / 60), minuteOfDay % 60, 0);
