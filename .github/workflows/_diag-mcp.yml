@@ -1,0 +1,37 @@
+name: _diag-mcp (temporary, delete after use)
+
+on:
+  workflow_dispatch:
+
+env:
+  RG: EnterpriseDS_ResourceGRP
+  ACA_APP: huddle-pg-mcp
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        run: |
+          az login --service-principal -u "${{ secrets.AZURE_CLIENT_ID }}" \
+            -p "${{ secrets.AZURE_CLIENT_SECRET }}" --tenant "${{ secrets.AZURE_TENANT_ID }}" >/dev/null
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          az extension add --name containerapp --upgrade --only-show-errors >/dev/null 2>&1 || true
+      - name: Inspect container app
+        run: |
+          echo "=== revisions ==="
+          az containerapp revision list -g "$RG" -n "$ACA_APP" \
+            --query "[].{name:name, active:properties.active, state:properties.runningState, replicas:properties.replicas}" -o table 2>&1 | head -20 || true
+          echo "=== ingress (fqdn + targetPort) ==="
+          az containerapp show -g "$RG" -n "$ACA_APP" --query "properties.configuration.ingress.{fqdn:fqdn,port:targetPort,ext:external}" -o json 2>&1 || true
+          echo "=== container names on latest revision ==="
+          az containerapp show -g "$RG" -n "$ACA_APP" --query "properties.template.containers[].name" -o json 2>&1 || true
+          echo "=== pgmcp CONSOLE logs (startup / crash reason) ==="
+          az containerapp logs show -g "$RG" -n "$ACA_APP" --container pgmcp --tail 80 2>&1 | tail -80 || echo "(console logs unavailable)"
+          echo "=== pgmcp SYSTEM logs ==="
+          az containerapp logs show -g "$RG" -n "$ACA_APP" --container pgmcp --type system --tail 40 2>&1 | tail -40 || echo "(system logs unavailable)"
+          FQDN=$(az containerapp show -g "$RG" -n "$ACA_APP" --query properties.configuration.ingress.fqdn -o tsv)
+          echo "=== re-probe (warmed up now) ==="
+          curl -sS -m 12 -o /dev/null -w "GET /    -> HTTP %{http_code} (%{time_total}s)\n" "https://${FQDN}/" || echo "root probe: no response"
+          curl -sS -N -m 8 "https://${FQDN}/sse" 2>&1 | head -c 300 || echo "(sse: no response)"
+          echo ""
