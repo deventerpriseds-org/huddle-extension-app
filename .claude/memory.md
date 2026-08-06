@@ -65,6 +65,24 @@ User: "you have them all coming at the exact same time all at once … a batch a
   - OFFLINE-PROVEN (mirror unit test /tmp/fanwin): 3am & 9am arms → fan 9:03–17:58 (no 9am bunch); 6:30pm → evening 20:00–21:58
     (18–20 gap respected); all samples inside windows. tsc clean. LIVE proof pending deploy.
 
+## Reaching data from a CCR session: Supabase MCP WORKS (brokered); Azure is fully egress-blocked (2026-08-06, verified)
+The egress gateway on this "Trusted" env is NOT allow-all. Verified by probe (curl): general internet works
+(checkip=200), `login.microsoftonline.com`=302, but **BLOCKED (403 CONNECT / HTTP 000): `management.azure.com`,
+`*.postgres.database.azure.com`, `*.azurestaticapps.net` (BOTH huddle icy-flower AND boost purple-ground),
+`api.supabase.com`, `*.supabase.co`.** eds-skills setup.sh already documents this ("403 CONNECT even on trusted…
+NOT fixable by switching the network policy"). So NO in-session client (curl, psql, az CLI, a locally-run MCP) can
+reach Azure/Supabase hosts directly.
+- **Supabase MCP (`mcp__Supabase__*`) is BROKERED by the harness — it works despite the curl block** (proved:
+  list_projects returned journey `wwxgajrtmslzklnyplah`; execute_sql read the live board). **Use it for ALL journey
+  reads/writes — public.tasks, etc. — NO GitHub runner needed.** journey project ref = `wwxgajrtmslzklnyplah`.
+- **Azure PG (Huddle's `eds-postgresql`/`RAG_AI_Agents`: confirm_ask_at, tasks.journey_tasks mirror, rag_chunks) has
+  NO brokered path.** All Azure hosts blocked; no Azure/Postgres MCP connected; `login` works but `management` doesn't
+  so `az` CLI can auth-but-not-operate. **The GHA `azure-pg-query.yml` runner is the ONLY way to run SQL vs Azure PG**
+  (it works because the runner is OUTSIDE the session egress). Runner starvation (~15min queue→cancel) is a GitHub
+  Actions capacity/minutes issue, NOT a network-policy or DB issue.
+- **CORRECTION to an old note:** the "test-agent-serverfn harness reaches the SWA over HTTPS from the session" claim is
+  FALSE in this environment — the SWA host returns 403 CONNECT here. The harness only works where that host is allowlisted.
+
 ## Deploys are now AUTOMATIC on push to `main` (2026-08-06, user-requested — "deploy after syncing; we can always revert")
 User was frustrated that fixes kept never reaching prod (the manual `deploy-swa.yml` dispatch step kept dying on
 runner starvation — two deploys sat 15min with no runner and got auto-cancelled). Fix = re-enabled the
