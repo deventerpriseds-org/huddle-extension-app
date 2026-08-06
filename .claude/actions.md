@@ -1,5 +1,33 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-08-06 (ACT-huddle-22/23 opened — board IN_REVIEW items vanished overnight + confirm-asks still bunching at 9am)
+Last updated: 2026-08-06 (three fixes DEPLOYED live; auto-deploy enabled; E2E grooming test in progress)
+
+## LIVE STATUS BOARD (surface this every check-in)
+
+### ✅ DEPLOYED live (both deploys succeeded 2026-08-06 ~16:40 UTC)
+- **ACT-huddle-23 — confirm-ask fan-out** (2 windows: business 9–18 + evening 20–22, from config; no 9am dump;
+  straggler re-fan). Huddle commit `da648da` → main `fd731ae` → deploy-swa run 31119646652 **success**.
+  Verifier: CONFIRMED-correct. Live-proof PENDING (needs a fresh autowork/groom pass to arm a new ask).
+- **ACT-huddle-25 — Iris batch create + truthful count** (`create_huddle_tasks` reusing journey
+  `parse_and_create_tasks`; additive truthfulness/quantity clauses). Huddle `b983f3a` → deploy success.
+  Live-proof PENDING (ask Iris for N tasks → created=N).
+- **ACT-huddle-22 — nightly planner clobbered UP_NEXT** (journey `nightly-schedule-builder` reset scheduled
+  tasks to TODO; now `statusAfterSchedule` preserves UP_NEXT/DOING/IN_REVIEW). journey `d66e57a` → main
+  `47f7787` → deploy-supabase-functions run 31119753231 **success**. Merged cleanly with main's parking-lot
+  change (both survive). Live-proof PENDING.
+- **Auto-deploy on push to `main`** — Huddle `deploy-swa.yml` push trigger re-enabled (user request "deploy
+  after syncing; we can always revert"); journey already auto-deploys edge fns. CLAUDE.md rules updated.
+
+### 🔄 IN PROGRESS
+- **E2E test (user moved everything to Backlog)** — grooming triggered (run-grooming.yml). Expect: backlog →
+  groom assigns/ranks → promoteOnly tops up UP_NEXT + arms confirm-asks (NOW with fan-out) → verify (a) UP_NEXT
+  populated, (b) confirm_ask_at values land spread INSIDE 9–18/20–22, (c) scheduled UP_NEXT keeps its lane.
+
+### ⚠️ RECURRING BLOCKER
+- **GitHub runner starvation** — deploys + azure-pg-query jobs repeatedly cancelled after ~15min unqueued
+  (no runner). Retried each; all three fixes eventually deployed. Watch for it on grooming/verification runs.
+
+---
+
 
 ### ACT-huddle-24 (confirm-CAPTURE (A) — 1:1 reply records confirm-intent) — DEPLOYED, NOT live-proven
 User asked "build A". When the user replies in a `dm-<agent>` huddle that has a task at `confirm_status='asked'`
