@@ -181,6 +181,15 @@ export async function runDueScheduledJobs(): Promise<number> {
   } catch {
     /* best-effort registration — never fail the tick on it */
   }
+  // Minute-granular confirm-intent delivery: fire each armed ask at ITS jittered instant (random fan-out
+  // across the working day) instead of batching to the 3x/day auto-work pass. Arming stays on the
+  // auto-work/groom passes; markConfirmAsked is set-once so this never double-sends. Never throws.
+  try {
+    const { fireDueConfirmAsks } = await import("./autowork.server");
+    await fireDueConfirmAsks(now);
+  } catch {
+    /* best-effort — a confirm-ask delivery hiccup must never break the heartbeat */
+  }
   let claimed: ScheduledJob[] = [];
   try {
     claimed = await claimDueScheduledJobs(20);
