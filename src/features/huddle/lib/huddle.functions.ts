@@ -17,6 +17,7 @@ import {
   closerDirective,
   narrateDirective,
   bargeDirective,
+  boardDigestNamed,
   CEREMONY_WINDOW_HOURS,
   CEREMONY_HOST,
 } from "./tasks/ceremonies";
@@ -149,6 +150,11 @@ const Input = z.object({
   // persisted to chat.ceremony_transcript (kind='tool') so a reviewer can prove "the agent SAID it
   // parked but no update_task row exists" vs "row exists, tool_ok=false". Debug tracking only.
   ceremonyRunId: z.string().optional(),
+  // Short-term memory mechanism (Settings → Memory). "reconstruction" (default + only active mode) =
+  // app-managed transcript + explicit self-recall injection. "responses-chain"/"conversation" are
+  // SCAFFOLD: they carry through but the runtime logs a marker and behaves as reconstruction (no
+  // OpenAI-native state plumbing yet). Absent → reconstruction.
+  memoryMode: z.enum(["reconstruction", "responses-chain", "conversation"]).optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
@@ -949,6 +955,38 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // client only voices the primary; the standing per-agent maps above stay empty on this path.
     const turnBargeDirective =
       data.ceremonyBarge && data.scope === "group" ? bargeDirective(data.text) : "";
+    // A ceremony BARGE gets no round-robin report (ceremonyType is forced null below), so the responder
+    // otherwise has ZERO task data to answer "which task is completed?" or resolve "that consulting-app
+    // piece" — only a truncated, interruption-lossy transcript. Build the authoritative board ONCE and
+    // inject its NAME-level digest into the responder's scene so it can name the real task and act on it.
+    // Best-effort: a DB hiccup must never block the barge answer. Standup window (the live-team ceremony).
+    // Short-term memory mechanism (Settings → Memory). Only "reconstruction" is implemented (the app-
+    // managed transcript + the unconditional self-recall block injected per responder below). The other
+    // two are SCAFFOLD — they carry through the payload but behave as reconstruction; log a marker so a
+    // live run makes it obvious which mode ran (no OpenAI previous_response_id/Conversations plumbing yet).
+    const memoryMode = data.memoryMode ?? "reconstruction";
+    if (memoryMode !== "reconstruction") {
+      console.warn(
+        `[huddle-memory] memoryMode="${memoryMode}" is not yet implemented — using "reconstruction" (self-recall injection + transcript). No OpenAI-native state was used this turn.`,
+      );
+    }
+
+    let ceremonyBoardBlock = "";
+    if (turnBargeDirective) {
+      try {
+        const email = await resolveCallerEmail();
+        if (email) {
+          const { getStandupTasks } = await import("./tasks/tasks.server");
+          const bTasks = await getStandupTasks(email, CEREMONY_WINDOW_HOURS.standup);
+          const bReport = buildCeremonyReport("standup", bTasks);
+          const digest = boardDigestNamed(bReport);
+          ceremonyBoardBlock =
+            `\n\nTHE STAND-UP BOARD — the user's REAL current tasks this stand-up covers. This is your SOURCE OF TRUTH, more authoritative than the transcript. Answer "which task is done / what's blocked / what's in review" by NAMING the specific task from here. Resolve "that" / "it" / "that one" / "that piece" to the specific named task here — do NOT ask the user which task when it is listed below, and NEVER claim you can't find a task that appears here. To change a task's status (park it, move to backlog, mark done), call update_task for that task by its title.\n${digest}`;
+        }
+      } catch {
+        /* best-effort — never block the barge answer on a task-load hiccup */
+      }
+    }
     // A synchronous barge is ALWAYS a normally-routed answer to a live interjection — never a nested
     // ceremony. Skip detection so a barge whose text happens to look like a ceremony trigger can't
     // re-enter the round-robin machinery; it goes straight to routeMessageLLM + the barge directive.
@@ -1419,6 +1457,27 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // ceremony directive for this one dispatch, so the agent addresses the user instead of its lane.
       const ceremonyDirective =
         bargeDirectiveById.get(nextId) ?? ceremonyDirectiveById.get(nextId) ?? turnBargeDirective;
+      // SELF-RECALL (memoryMode "reconstruction" — the active default, UNCONDITIONAL on ceremony turns):
+      // hand the responding agent its OWN prior remarks from THIS stand-up, verbatim. Huddle has no
+      // OpenAI cross-turn native memory — an agent's short-term recall is only the reconstructed
+      // transcript, which the voice/mp3 round-trip + role-tagging can make lossy, so an agent can go
+      // blank on "what did you just say?" even 1–2 turns later. This guarantees it always sees its own
+      // words. Empty (no header, no tokens) when the agent hasn't spoken yet this ceremony.
+      let selfRecallBlock = "";
+      if (ceremonyDirective) {
+        const own = (data.history as HuddleMessage[])
+          .filter(
+            (m) =>
+              m.author.kind === "agent" &&
+              (m.author as { kind: "agent"; agentId: AgentId }).agentId === nextId,
+          )
+          .map((m) => m.text.trim())
+          .filter(Boolean);
+        if (own.length) {
+          const lines = own.slice(-6).map((tx) => `- "${tx}"`).join("\n");
+          selfRecallBlock = `\n\nYOUR OWN earlier remarks in THIS stand-up (you said these — recall them verbatim and NEVER contradict, disavow, or claim you don't remember them; if the user asks "what did you just say / which task", answer directly from this):\n${lines}`;
+        }
+      }
       // Ceremony cross-talk: a scheduled round-robin speaker sees the IMMEDIATELY-PRIOR speaker's line
       // so it can briefly react before its own update — a natural group conversation instead of
       // scripted monologues (the standing "do NOT comment on other lanes" gate is what made it feel
@@ -1479,7 +1538,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         priorInThisTurn && !ceremonyDirective
           ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
           : ""
-      }${interjectDirective}${ceremonyDirective}${ceremonyPriorReact}${handoffDirective}${laneDirective}${confirmReplyDirective}`;
+      }${interjectDirective}${ceremonyDirective}${selfRecallBlock}${ceremonyBoardBlock}${ceremonyPriorReact}${handoffDirective}${laneDirective}${confirmReplyDirective}`;
 
       const roster = buildRoster(data.members, winner.id);
       // Data-driven, scope-aware ownership hand-off (agents.ts capabilities). Empty string
@@ -1609,6 +1668,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           };
         })
         .concat([{ role: "user" as const, content: userText }]);
+
+      // DIAGNOSTIC (ceremony turns): does the reconstructed transcript actually feed this agent its own
+      // prior line as role "assistant"? This is the ground-truth for the "agents don't recall what they
+      // said" report — an own-line count of 0 here (while the agent DID speak) is the reconstruction bug.
+      if (ceremonyDirective) {
+        const ownAssistant = transcript.filter(
+          (t) => t.role === "assistant" && !t.content.startsWith("(context —"),
+        ).length;
+        const roleShape = transcript.map((t) => t.role[0]).join("");
+        console.log(
+          `[huddle-memory] ceremony turn ${winner.id}: transcript ${transcript.length} msgs, own-assistant lines=${ownAssistant}, selfRecall=${selfRecallBlock ? "injected" : "empty"}, roles=${roleShape}`,
+        );
+      }
 
       const perAgentFallbacks: string[] = [];
       const timeSensitiveRe =

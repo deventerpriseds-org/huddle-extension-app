@@ -1,5 +1,5 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-08-06 (three fixes DEPLOYED live; auto-deploy enabled; E2E grooming test in progress)
+Last updated: 2026-08-06 (three fixes live + Option-1 Postgres-MCP deploy workflow added; merged main's memory-mode/ceremony build)
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
@@ -35,6 +35,24 @@ merged a 2nd SessionStart group into `.claude/settings.json` (preserving the exi
 Stop gate). Validated: hook exit 0 ("up to date in 6s") + local no-op; eslint exit 0; `test:router` 9/9 pass.
 Committed to branch. Takes effect for all future sessions once merged to the default branch.
 
+### ACT-huddle-27 (runner-free Azure-PG querying — Option 1 in progress 2026-08-06)
+Deep research (2 agents) → hosting a read-only Postgres MCP as a remote connector bypasses session egress
+(brokered like Supabase). User chose the dedicated-container path. Built `deploy-pg-mcp.yml`: crystaldba/
+postgres-mcp (--access-mode=restricted) + caddy bearer sidecar on ACA, `mcp_readonly` (pg_read_all_data),
+bearer=JOURNEY_PROXY_TOKEN. Also: eds skill `query-supabase` (PR eds#15) documents the Supabase-MCP runner-free
+path (works TODAY). NEXT: dispatch deploy-pg-mcp → user adds the connector in claude.ai → verify → write eds skill.
+
+### ACT-huddle-25 (blocker DESYNC in standup — ground-truthed 2026-08-06, from a parallel session — note: number collides with my Iris-batch ACT-25 above)
+- [GROUND-TRUTHED] Board query 31124138911: "Start AI certification course" = BLOCKED/elle-rowan/updated_at **2026-07-27** (unchanged during the meeting). User's staleness hypothesis DISPROVEN — nothing changed mid-call. Desync = THREE readers of "any blockers?": `getStandupTasks` (KEEPS blocked → Elle-open ✓, Terry-close ✓); barge responders (NO data → confabulate ✗, seq 54/82); `getTasksForUser`/`prioritize` (EXCLUDES blocked, tasks.server.ts:417 → false "none" ✗, seq 74).
+- [DEPLOYED, NOT user-confirmed] Barge-confabulation half fixed by the now-live `ceremonyBoardBlock` (below).
+- [OPEN — needs user sign-off before build] **`prioritize`/`getTasksForUser` returns a false "no blockers".** Line 417 `NOT IN ('DONE','BLOCKED')` is correct for the SCHEDULER view but wrong when an agent uses `prioritize` to answer "any blockers?". Fix options: (a) a blocker-aware read for blocker questions, (b) route blocker/status questions to `getStandupTasks`, or (c) add a `view:"blocked"` to `prioritize` that includes BLOCKED. Systematic (every agent/lane), not a one-off. Do NOT build until user picks.
+- [OPEN] Mis-attribution: mid-sentence name-resolver false-positive routed "conflicts with Elle" TO Elle (seq 61/74). Agents blind to own mechanisms (Tess seq 84). Reasoning/mechanism-awareness = separate follow-on the user flagged ("work to do around reasoning… blind to their mechanisms").
+
+### ACT-huddle-21 (ceremony agent memory / self-recall — 2026-08-06) — DEPLOYED to main b58234d, NOT user-confirmed
+- [DEPLOYED, NOT user-confirmed] **Part A — name-level board digest for ceremony barges.** `boardDigestNamed` (ceremonies.ts) injected into ceremony-barge turns (gated on `turnBargeDirective`) so the responder gets the user's real tasks by lane+status WITH NAMES incl. blockers. Fixes barge confabulation ("no blockers" when there is one). Deploy run 31126432057 success. Offline 10/10, tsc+build clean, regressions green.
+- [OPEN — investigate first] **Self-recall root cause.** NO OpenAI cross-turn native memory; short-term = the reconstructed transcript. Add a one-log diagnostic dumping the exact transcript array a ceremony-barge responder receives → confirm own-line present-as-assistant vs missing/mis-tagged BEFORE choosing a fix.
+- [BUILT on branch, NOT deployed/user-confirmed] **Settings: Memory-mode selector (3 options, #1 default+active).** `memoryMode` config (`reconstruction`|`responses-chain`|`conversation`, default reconstruction) in agent-backends.ts (schema+default v4, `setMemoryMode`, v3→v4 merge migration preserving other settings). Settings→Memory selector (SettingsSheet.tsx). Payload carries `memoryMode` (Input schema + MeetingBar barge+round-robin dispatches). **#1 active fix = UNCONDITIONAL self-recall block**: each ceremony responder gets its OWN prior remarks verbatim injected into its scene (huddle.functions.ts, gated on ceremonyDirective → barge + round-robin, empty when none). Board digest stays unconditional. **#2/#3 = scaffold**: carry through, log a not-implemented marker, fall back to #1 (no OpenAI-native plumbing). Diagnostic log added: ceremony turn logs transcript size + own-assistant-line count + selfRecall injected/empty. KNOWN LIMIT (AC-18): scheduled round-robin dispatches `history:[]`, so self-recall is populated on BARGES (the reported bug) but empty during the round-robin itself (agent gives its update from the report there). Offline: `memory-mode.test.ts` 6/6, tsc+build clean, regressions green. NEXT: deploy + user live-confirm (per perceptual-UAT rule); read the `[huddle-memory]` diagnostic log from a real standup to confirm own-line presence.
+- [OPEN — user flagged] **Dormant improvement toggles.** Optimized-ceremony-engine / strict-router / interjections default OFF → did nothing for recent standups. Decide: flip good ones default-ON and/or make memory+grounding fixes unconditional (they're correctness, not experiments).
 
 ### ACT-huddle-24 (confirm-CAPTURE (A) — 1:1 reply records confirm-intent) — DEPLOYED, NOT live-proven
 User asked "build A". When the user replies in a `dm-<agent>` huddle that has a task at `confirm_status='asked'`

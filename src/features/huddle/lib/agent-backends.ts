@@ -76,11 +76,25 @@ const RouterConfigSchema = z.object({
 export const CEREMONY_ENGINES = ["current", "current-optimized"] as const;
 export type CeremonyEngine = (typeof CEREMONY_ENGINES)[number];
 
+/**
+ * How agents carry SHORT-TERM memory across turns (recalling what they + others just said).
+ * - "reconstruction" (default, active): the app rebuilds a per-agent transcript each turn from
+ *   history AND injects each ceremony responder's OWN prior remarks verbatim (guaranteed self-recall).
+ *   Cheapest + most predictable (capped window); no OpenAI-native state.
+ * - "responses-chain": OpenAI `previous_response_id` per agent. SCAFFOLD — not yet implemented; falls
+ *   back to reconstruction at runtime.
+ * - "conversation": OpenAI Conversations object per agent (server-side thread, forever retention).
+ *   SCAFFOLD — not yet implemented; falls back to reconstruction at runtime.
+ */
+export const MEMORY_MODES = ["reconstruction", "responses-chain", "conversation"] as const;
+export type MemoryMode = (typeof MEMORY_MODES)[number];
+
 export const BackendsConfigSchema = z.object({
-  version: z.number().default(3),
+  version: z.number().default(4),
   router: RouterConfigSchema,
   agents: z.record(z.string(), AgentBackendSchema),
   ceremonyEngine: z.enum(CEREMONY_ENGINES).default("current"),
+  memoryMode: z.enum(MEMORY_MODES).default("reconstruction"),
 });
 
 export type AgentBackend = z.infer<typeof AgentBackendSchema>;
@@ -121,7 +135,7 @@ function defaultAgents(): Record<AgentId, AgentBackend> {
 
 export function defaultBackendsConfig(): BackendsConfig {
   return {
-    version: 1,
+    version: 4,
     router: {
       backend: "openai",
       model: DEFAULT_ROUTER_MODEL.openai,
@@ -133,6 +147,7 @@ export function defaultBackendsConfig(): BackendsConfig {
     },
     agents: defaultAgents(),
     ceremonyEngine: "current",
+    memoryMode: "reconstruction",
   };
 }
 
@@ -143,6 +158,7 @@ interface BackendsState {
   setRouter: (patch: Partial<RouterConfig>) => void;
   setAgent: (id: AgentId, patch: Partial<AgentBackend>) => void;
   setCeremonyEngine: (engine: CeremonyEngine) => void;
+  setMemoryMode: (mode: MemoryMode) => void;
   replaceConfig: (cfg: BackendsConfig) => void;
   resetToDefaults: () => void;
 }
@@ -164,6 +180,7 @@ export const useBackendsStore = create<BackendsState>()(
           },
         })),
       setCeremonyEngine: (engine) => set((s) => ({ config: { ...s.config, ceremonyEngine: engine } })),
+      setMemoryMode: (mode) => set((s) => ({ config: { ...s.config, memoryMode: mode } })),
       replaceConfig: (cfg) => set({ config: cfg }),
       resetToDefaults: () => set({ config: defaultBackendsConfig() }),
     }),
@@ -194,12 +211,15 @@ export const useBackendsStore = create<BackendsState>()(
           mergedAgents[id] = combined;
         }
         const merged: BackendsConfig = {
-          version: 3,
+          version: 4,
           router: { ...current.config.router, ...p.config.router },
           agents: mergedAgents as Record<AgentId, AgentBackend>,
           // Preserve a persisted choice; a config saved before this field existed defaults to "current"
           // (current.config.ceremonyEngine is "current" from defaultBackendsConfig).
           ceremonyEngine: p.config.ceremonyEngine ?? current.config.ceremonyEngine,
+          // v3→v4: memoryMode added. Preserve a persisted choice; a pre-v4 config (undefined) defaults to
+          // "reconstruction" (the active, cheapest mode) — non-destructive, no other setting touched.
+          memoryMode: p.config.memoryMode ?? current.config.memoryMode,
         };
         return { ...current, config: merged };
       },
