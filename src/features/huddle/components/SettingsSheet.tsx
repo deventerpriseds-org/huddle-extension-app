@@ -50,6 +50,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const setRouter = useBackendsStore((s) => s.setRouter);
   const setAgent = useBackendsStore((s) => s.setAgent);
   const setCeremonyEngine = useBackendsStore((s) => s.setCeremonyEngine);
+  const setMemoryMode = useBackendsStore((s) => s.setMemoryMode);
   const replaceConfig = useBackendsStore((s) => s.replaceConfig);
   const resetToDefaults = useBackendsStore((s) => s.resetToDefaults);
   const showDemoData = useHuddleStore((s) => s.showDemoData);
@@ -410,6 +411,60 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
           {/* ---- Platforms ---- */}
           {/* ---- Memory ---- */}
           <TabsContent value="memory" className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+            <div className="rounded-lg border border-hairline p-3 space-y-2">
+              <Label className="text-sm">Short-term memory (how agents recall what was just said)</Label>
+              <p className="text-xs text-muted-foreground">
+                How each agent carries what it (and others) just said across turns. Long-term facts use RAG
+                regardless of this setting.
+              </p>
+              <div className="space-y-1.5 pt-1">
+                {(
+                  [
+                    {
+                      mode: "reconstruction" as const,
+                      title: "Reconstruction (default, active)",
+                      desc: "App-managed transcript + each ceremony agent gets its OWN prior remarks injected verbatim (guaranteed self-recall). Cheapest and most predictable. Recommended.",
+                    },
+                    {
+                      mode: "responses-chain" as const,
+                      title: "Responses + last-turn id — experimental (scaffold)",
+                      desc: "OpenAI previous_response_id per agent. Not yet implemented — falls back to Reconstruction. 30-day server retention.",
+                    },
+                    {
+                      mode: "conversation" as const,
+                      title: "Conversation object — experimental (scaffold)",
+                      desc: "OpenAI Conversations thread per agent. Not yet implemented — falls back to Reconstruction. Retained on OpenAI until deleted.",
+                    },
+                  ]
+                ).map((opt) => {
+                  const selected = (config.memoryMode ?? "reconstruction") === opt.mode;
+                  return (
+                    <button
+                      key={opt.mode}
+                      type="button"
+                      onClick={() => setMemoryMode(opt.mode)}
+                      className={`w-full text-left rounded-md border p-2.5 transition-colors ${
+                        selected
+                          ? "border-emerald-500 bg-emerald-500/10"
+                          : "border-hairline hover:bg-muted/40"
+                      }`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <span
+                          className={`mt-0.5 size-3.5 shrink-0 rounded-full border ${
+                            selected ? "border-emerald-500 bg-emerald-500" : "border-muted-foreground"
+                          }`}
+                        />
+                        <div>
+                          <div className="text-sm font-medium">{opt.title}</div>
+                          <div className="text-xs text-muted-foreground">{opt.desc}</div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <MemoryTab />
           </TabsContent>
 
