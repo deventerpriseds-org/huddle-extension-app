@@ -19,6 +19,12 @@ on:
   # we can always revert"). To pause auto-deploy, comment these two lines out again.
   push:
     branches: [main]
+    # Skip redeploy when a push touches ONLY workflows/docs (they don't change the app bundle) —
+    # keeps auto-deploy for real app changes while not wasting a runner on doc/workflow-only syncs.
+    paths-ignore:
+      - '.github/**'
+      - '.claude/**'
+      - '**/*.md'
 
 # Serialize deploys — without this, two dispatches close together (e.g. two agent sessions each
 # deploying their own branch) run concurrently and whichever finishes last wins on the shared SWA,

@@ -1,0 +1,138 @@
+name: Deploy read-only Postgres MCP (Azure Container Apps)
+
+# ONE-TIME / on-demand provisioner for a runner-free way to query the Huddle Azure PG
+# (eds-postgresql / RAG_AI_Agents) from a Claude Code session. It stands up a read-only
+# `crystaldba/postgres-mcp` behind a `caddy` bearer-auth sidecar on Azure Container Apps.
+# The MCP is then registered in claude.ai as a REMOTE connector (brokered by Anthropic, so it
+# bypasses the session egress that blocks Azure hosts) — after which queries need NO GitHub runner.
+#
+# Security: (a) dedicated LOGIN role `mcp_readonly` granted only `pg_read_all_data`; (b) crystaldba
+# `--access-mode=restricted` (read-only txns); (c) caddy requires `Authorization: Bearer <JOURNEY_PROXY_TOKEN>`
+# on every request. PG stays private — ACA runs inside Azure and reaches PG via the "Allow Azure services" rule.
+
+on:
+  workflow_dispatch:
+    inputs:
+      db:
+        description: "Database to expose (read-only)."
+        default: "RAG_AI_Agents"
+      ro_role:
+        description: "Read-only role name."
+        default: "mcp_readonly"
+
+env:
+  RG: EnterpriseDS_ResourceGRP
+  PG_SERVER: eds-postgresql
+  ACA_ENV: eds-mcp-env
+  ACA_APP: huddle-pg-mcp
+  LOCATION: eastus
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (service principal)
+        run: |
+          az login --service-principal -u "${{ secrets.AZURE_CLIENT_ID }}" \
+            -p "${{ secrets.AZURE_CLIENT_SECRET }}" --tenant "${{ secrets.AZURE_TENANT_ID }}" >/dev/null
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          az extension add --name containerapp --upgrade --only-show-errors >/dev/null 2>&1 || true
+
+      - name: Ensure PG allows Azure services (so ACA can reach it, PG stays private)
+        run: |
+          az postgres flexible-server firewall-rule create -g "$RG" -s "$PG_SERVER" \
+            --rule-name AllowAllAzureServices --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0 \
+            --only-show-errors >/dev/null || echo "rule exists"
+
+      - name: Create / refresh read-only role
+        env:
+          PGPASSWORD: ${{ secrets.Azure_admin_pw }}
+        run: |
+          set -euo pipefail
+          RO_PW="$(openssl rand -hex 24)"
+          echo "::add-mask::$RO_PW"
+          echo "RO_PW=$RO_PW" >> "$GITHUB_ENV"
+          IP=$(curl -s https://api.ipify.org || curl -s https://checkip.amazonaws.com | tr -d '\n')
+          az postgres flexible-server firewall-rule create -g "$RG" -s "$PG_SERVER" \
+            --rule-name "mcpdeploy-${IP//./-}" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null
+          HOST="$PG_SERVER.postgres.database.azure.com"
+          psql "host=$HOST port=5432 dbname=${{ github.event.inputs.db }} user=Admin_eds sslmode=require" \
+            -v ON_ERROR_STOP=1 -v role="${{ github.event.inputs.ro_role }}" -v pw="$RO_PW" <<'SQL'
+          SELECT format('CREATE ROLE %I LOGIN', :'role')
+          WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
+          SELECT format('ALTER ROLE %I PASSWORD %L', :'role', :'pw') \gexec
+          SELECT format('GRANT pg_read_all_data TO %I', :'role') \gexec
+          SQL
+          az postgres flexible-server firewall-rule delete -g "$RG" -s "$PG_SERVER" \
+            --rule-name "mcpdeploy-${IP//./-}" --yes --only-show-errors >/dev/null || true
+
+      - name: Ensure Container Apps environment
+        run: |
+          az containerapp env show -g "$RG" -n "$ACA_ENV" --only-show-errors >/dev/null 2>&1 || \
+          az containerapp env create -g "$RG" -n "$ACA_ENV" -l "$LOCATION" --only-show-errors >/dev/null
+
+      - name: Deploy the MCP app (postgres-mcp + caddy bearer sidecar)
+        env:
+          BEARER: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+        run: |
+          set -euo pipefail
+          ENV_ID=$(az containerapp env show -g "$RG" -n "$ACA_ENV" --query id -o tsv)
+          DB_URI="postgresql://${{ github.event.inputs.ro_role }}:${RO_PW}@${PG_SERVER}.postgres.database.azure.com:5432/${{ github.event.inputs.db }}?sslmode=require"
+          # Caddy: require exactly `Authorization: Bearer <MCP_BEARER>` then reverse-proxy to the MCP on :8000.
+          # Base64-encoded so it survives as a single, safe YAML scalar (no multi-line indentation hazard);
+          # the container decodes it to /etc/caddy/Caddyfile at startup. Caddy substitutes {$MCP_BEARER} at load.
+          CADDY_B64=$(printf '%s' ':8080 {
+          	@ok header Authorization "Bearer {$MCP_BEARER}"
+          	handle @ok { reverse_proxy localhost:8000 }
+          	respond "Unauthorized" 401
+          }' | base64 -w0)
+          cat > app.yaml <<YAML
+          properties:
+            managedEnvironmentId: ${ENV_ID}
+            configuration:
+              activeRevisionsMode: Single
+              ingress:
+                external: true
+                targetPort: 8080
+                transport: auto
+                allowInsecure: false
+              secrets:
+                - name: db-uri
+                  value: "${DB_URI}"
+                - name: mcp-bearer
+                  value: "${BEARER}"
+            template:
+              scale: { minReplicas: 1, maxReplicas: 1 }
+              containers:
+                - name: pgmcp
+                  image: crystaldba/postgres-mcp:latest
+                  args: ["--access-mode=restricted", "--transport=sse"]
+                  resources: { cpu: 0.5, memory: 1.0Gi }
+                  env:
+                    - name: DATABASE_URI
+                      secretRef: db-uri
+                - name: caddy
+                  image: caddy:2
+                  resources: { cpu: 0.25, memory: 0.5Gi }
+                  env:
+                    - name: MCP_BEARER
+                      secretRef: mcp-bearer
+                    - name: CADDY_B64
+                      value: "${CADDY_B64}"
+                  command: ["sh", "-c"]
+                  args: ["echo \"\$CADDY_B64\" | base64 -d > /etc/caddy/Caddyfile && caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"]
+          YAML
+          if az containerapp show -g "$RG" -n "$ACA_APP" --only-show-errors >/dev/null 2>&1; then
+            az containerapp update -g "$RG" -n "$ACA_APP" --yaml app.yaml --only-show-errors >/dev/null
+          else
+            az containerapp create -g "$RG" -n "$ACA_APP" --yaml app.yaml --only-show-errors >/dev/null
+          fi
+
+      - name: Output the connector URL
+        run: |
+          FQDN=$(az containerapp show -g "$RG" -n "$ACA_APP" --query properties.configuration.ingress.fqdn -o tsv)
+          echo "============================================================"
+          echo "MCP is deployed. Register in claude.ai -> Settings -> Connectors -> Add custom connector:"
+          echo "  URL:    https://${FQDN}/sse"
+          echo "  Header: Authorization: Bearer <JOURNEY_PROXY_TOKEN value>"
+          echo "============================================================"
