@@ -1,5 +1,30 @@
 # Project Memory — huddle-extension-app
 
+## Huddle away-message pushes stop arriving in the Huddle bridge app = STALE app:huddle FCM token (2026-08-06, PROVEN + fixed live)
+Symptom: "heads-up" away-message notifications (channel=messages/task-reminders, app=huddle) stop landing in the
+standalone Huddle Android bridge app, while journey's own reminders/alarms keep arriving. Regressed ~2 days before
+report; NO push code changed (the app:"huddle" send + journey filter both date to 2026-07-26).
+ROOT CAUSE: the `fcm:app:huddle:<token>` registration in journey `public.push_subscriptions` went STALE — the
+device's real FCM token rotated/invalidated but the row kept the dead token. **Key gotcha: FCM's HTTP v1 keeps
+returning `fcm_send_success` for a stale-but-not-yet-GC'd token** (accepts != delivers), so journey logs success and
+nothing arrives. Only after the device clears data does FCM flip that token to `fcm_send_failed`.
+HOW TO DIAGNOSE (journey Supabase, ref wwxgajrtmslzklnyplah): `activity_log` rows — `fcm_send_success`/`fcm_send_failed`
+carry `metadata->>'token_prefix'` + `channel`; `android_alarm_trace` rows carry the bridge's `FCM_RX chan=...`
+RECEIPT logs (written before display). Token topology for this user: native token `eRmxp...` = the **Journey Voice**
+bridge app (journey-native pushes, no `app` filter); `fcm:app:huddle:...` = the **Huddle** bridge app. A stale huddle
+token shows send-success but ZERO `FCM_RX`. Diagnostic tool built this session: **`/api/public/test-push`** +
+`test-push.yml` (input `app`: "huddle" vs "none"=journey-native) sends a PURE push to compare app-token vs native
+delivery — the native/app A/B is what proved it (native arrived in Journey Voice app; app:huddle did not).
+**FIX (user-side, fast): CLEAR THE HUDDLE BRIDGE APP'S DATA/CACHE (or reinstall / log out+in) → forces a fresh FCM
+token + a new `register_push_token(app:"huddle")`.** Verified live: after clearing, a NEW row `fcm:app:huddle:fhHLc...`
+appeared and a real assignment reach-out (Faith "Go to church", run-autowork confirmAsked:1) logged `fcm_send_success`
+to `fhHLc...` while the old `cmmabohkSyi...` flipped to `fcm_send_failed`. Cleaned up: DELETEd the 2 stale
+`cmmabohkSyi` push_subscription rows (one under real user a3378f93, one under the leftover journey shadow user
+4132de9e = von.ellis@, created 2026-08-01 — that shadow auth.users row still exists and should be fully cleaned).
+journey does NOT auto-delete FCM subs on `fcm_send_failed` (only web-push on failure), so stale huddle tokens must be
+pruned by hand. Consider a code follow-up: delete the huddle sub on an FCM UNREGISTERED/NOT_FOUND response.
+
+
 ## Huddle push "not received" ROOT CAUSE — data-only FCM + bridge-app render, NOT Huddle/journey send (2026-08-06)
 Symptom: agent reach-outs + a direct test push never appear on the user's phone, though the user runs the Huddle
 bridge app. GROUND-TRUTH (journey Supabase, project wwxgajrtmslzklnyplah):
