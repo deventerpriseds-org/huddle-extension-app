@@ -255,6 +255,28 @@ Finish with a SHORT, natural sign-off in your OWN words that makes it clear you'
 End with YOUR OWN update and STOP. The scrum master runs the running order and will bring in whoever is next — so do NOT call on, hand the floor to, or name who goes next: no "over to you, <name>", no "how about you, <name>?", no "you're up, <name>". Naming or picking the next speaker is never your job here, and the person you'd name may not even be in this round-robin.`;
 }
 
+/**
+ * NAME-level board digest for a ceremony FOLLOW-UP / barge turn: every lane's real tasks by status,
+ * NAMED (not just counted like `reportDigest`). This is the authoritative task data the round-robin was
+ * built from — what lets an agent answer "which task is completed?" or resolve "that consulting-app
+ * piece" during a barge. A barge sets `ceremonyType=null` and gets no report, and the transcript it
+ * does get is truncated + interruption-lossy, so without this the responder has no task grounding.
+ */
+export function boardDigestNamed(report: CeremonyReport): string {
+  const laneLines = report.lanes
+    .map((l) => {
+      const parts: string[] = [];
+      if (l.doing.length) parts.push(`doing ${fmtLines(l.doing)}`);
+      if (l.upNext.length) parts.push(`up next ${fmtLines(l.upNext)}`);
+      if (l.inReview.length) parts.push(`in review ${fmtLines(l.inReview)}`);
+      if (l.blocked.length) parts.push(`blocked ${fmtBlocked(l.blocked)}`);
+      if (l.done.length) parts.push(`done this week ${fmtLines(l.done)}`);
+      return `- ${l.category} (@${l.owner}): ${parts.length ? parts.join("; ") : "nothing active"}`;
+    })
+    .join("\n");
+  return laneLines || "- (no activity on the board)";
+}
+
 function reportDigest(report: CeremonyReport): string {
   const laneLines = report.lanes
     .map(

@@ -17,6 +17,7 @@ import {
   closerDirective,
   narrateDirective,
   bargeDirective,
+  boardDigestNamed,
   CEREMONY_WINDOW_HOURS,
   CEREMONY_HOST,
 } from "./tasks/ceremonies";
@@ -885,6 +886,27 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // client only voices the primary; the standing per-agent maps above stay empty on this path.
     const turnBargeDirective =
       data.ceremonyBarge && data.scope === "group" ? bargeDirective(data.text) : "";
+    // A ceremony BARGE gets no round-robin report (ceremonyType is forced null below), so the responder
+    // otherwise has ZERO task data to answer "which task is completed?" or resolve "that consulting-app
+    // piece" — only a truncated, interruption-lossy transcript. Build the authoritative board ONCE and
+    // inject its NAME-level digest into the responder's scene so it can name the real task and act on it.
+    // Best-effort: a DB hiccup must never block the barge answer. Standup window (the live-team ceremony).
+    let ceremonyBoardBlock = "";
+    if (turnBargeDirective) {
+      try {
+        const email = await resolveCallerEmail();
+        if (email) {
+          const { getStandupTasks } = await import("./tasks/tasks.server");
+          const bTasks = await getStandupTasks(email, CEREMONY_WINDOW_HOURS.standup);
+          const bReport = buildCeremonyReport("standup", bTasks);
+          const digest = boardDigestNamed(bReport);
+          ceremonyBoardBlock =
+            `\n\nTHE STAND-UP BOARD — the user's REAL current tasks this stand-up covers. This is your SOURCE OF TRUTH, more authoritative than the transcript. Answer "which task is done / what's blocked / what's in review" by NAMING the specific task from here. Resolve "that" / "it" / "that one" / "that piece" to the specific named task here — do NOT ask the user which task when it is listed below, and NEVER claim you can't find a task that appears here. To change a task's status (park it, move to backlog, mark done), call update_task for that task by its title.\n${digest}`;
+        }
+      } catch {
+        /* best-effort — never block the barge answer on a task-load hiccup */
+      }
+    }
     // A synchronous barge is ALWAYS a normally-routed answer to a live interjection — never a nested
     // ceremony. Skip detection so a barge whose text happens to look like a ceremony trigger can't
     // re-enter the round-robin machinery; it goes straight to routeMessageLLM + the barge directive.
@@ -1407,7 +1429,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         priorInThisTurn && !ceremonyDirective
           ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
           : ""
-      }${interjectDirective}${ceremonyDirective}${ceremonyPriorReact}${handoffDirective}${laneDirective}`;
+      }${interjectDirective}${ceremonyDirective}${ceremonyBoardBlock}${ceremonyPriorReact}${handoffDirective}${laneDirective}`;
 
       const roster = buildRoster(data.members, winner.id);
       // Data-driven, scope-aware ownership hand-off (agents.ts capabilities). Empty string

@@ -1,5 +1,11 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-08-05 (ACT-huddle-20 — ceremony barge/standup polish deployed; NEW open item: agents lack a task-detail/DoD/artifact read tool)
+Last updated: 2026-08-06 (ceremony memory investigation + Part A board-digest built on branch, NOT deployed)
+
+### ACT-huddle-21 (ceremony agent memory / self-recall — 2026-08-06)
+- [BUILT on branch, NOT deployed/user-confirmed] **Part A — name-level board digest for ceremony barges.** `boardDigestNamed` (ceremonies.ts) injected into ceremony-barge turns (gated on `turnBargeDirective`) so the responder gets the user's real tasks by lane+status WITH NAMES. Fixes "know which task is completed / put that piece in backlog". Offline 10/10, tsc+build clean, regressions green.
+- [OPEN — investigate first] **Self-recall root cause.** NO OpenAI cross-turn native memory; short-term = the reconstructed transcript. Add a one-log diagnostic dumping the exact transcript array a ceremony-barge responder receives → confirm own-line present-as-assistant vs missing/mis-tagged BEFORE choosing a fix.
+- [OPEN — user requested] **Settings: Memory-mode selector (3 options, #1 default+active):** 1=fix reconstruction (cheapest, smallest change), 2=`previous_response_id`, 3=Conversations object. Cost ~equal (~$0.23/standup, differ by pennies); #1 is right default. Build #1 working first, scaffold 2/3.
+- [OPEN — user flagged] **Dormant improvement toggles.** Optimized-ceremony-engine / strict-router / interjections default OFF → did nothing for recent standups. Decide: flip good ones default-ON and/or make memory+grounding fixes unconditional (they're correctness, not experiments).
 
 ### ACT-huddle-20 (ceremony barge + stand-up polish — deployed live 2026-08-05, iterated from real transcripts)
 Driven by the user's live stand-up transcripts + the persisted `barge_route` logging. All DEPLOYED on main:
