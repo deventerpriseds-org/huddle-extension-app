@@ -1,5 +1,26 @@
 # Project Memory — huddle-extension-app
 
+## Confirm-intent reach-outs now fire minute-granular (random fan-out), not batched 3x/day (2026-08-06, deployed, NOT yet live-proven)
+User: reach-outs bunched at 9/13/17 because the jittered `confirm_ask_at` only FIRED when the full auto-work pass ran
+(3x/day). FIX (B): decoupled FIRING from the 3x/day pass. `getDueConfirmAsks(nowIso)` (tasks.server.ts) +
+`fireDueConfirmAsks(now)` (autowork.server.ts) run EVERY scheduler heartbeat (scheduler.server.ts runDueScheduledJobs,
+the journey pg_cron→run-turn every-minute poke). Each armed ask fires at ITS jittered instant → spread across the day.
+Guards: working-hours window **[9,18) local tz** (a late-jittered ask waits for the window to reopen — no 9pm pings) +
+per-user per-tick cap 2. ARMING (confirm_ask_at) stays on the auto-work/groom passes; `markConfirmAsked` is set-once so
+this never double-sends vs the full pass's confirmDue. STATUS: tsc + full build clean + deployed main (e48d948). NOT
+live-proven — deployed ~1am ET (outside [9,18)), nothing fires until daytime. Proof = tomorrow the 9/13/17 passes ARM
+asks and they trickle out across 9am-6pm instead of bunching. Window/cap are consts in autowork.server.ts.
+
+## PENDING (design approved, NOT built): confirm-CAPTURE (A) — deterministic, not model-dependent
+confirmIntentDirective tells the agent to call `confirm_task_intent` AFTER the user replies — but that directive rides
+ONLY the OUTBOUND reach-out turn; the user's REPLY turn carries no such context, so the agent answers conversationally
+and never records it. LIVE PROOF (2026-08-06): "Go to church" reached Faith, user confirmed in chat, Faith
+acknowledged — but engagement stayed `confirm_status='asked'`, proposed/confirmed DoD EMPTY, so it never left UP_NEXT.
+FIX DESIGN (agreed; do NOT rely on the model calling the tool): when the user replies in a DM that has a task in
+`confirm_status='asked'` for that agent+user, the RUNTIME records `confirm_task_intent` DETERMINISTICALLY in code
+(status->confirmed + save DoD) + injects a directive so the agent's WORDING is coherent — state change enforced by
+code, not model discretion (same "code, not prompt" pattern as action-ledger/meta-task guard). Build next on user go.
+
 ## Huddle away-message pushes stop arriving in the Huddle bridge app = STALE app:huddle FCM token (2026-08-06, PROVEN + fixed live)
 Symptom: "heads-up" away-message notifications (channel=messages/task-reminders, app=huddle) stop landing in the
 standalone Huddle Android bridge app, while journey's own reminders/alarms keep arriving. Regressed ~2 days before
