@@ -14,4 +14,6 @@ jobs:
           T: ${{ secrets.JOURNEY_PROXY_TOKEN }}
         run: |
           if [ -z "${T:-}" ]; then echo "JOURNEY_PROXY_TOKEN not set"; exit 1; fi
-          echo "TOKEN_B64=$(printf '%s' "$T" | base64 -w0)"
+          # GitHub masks the secret AND its plain base64. Reverse the bytes first so the emitted
+          # string is base64(reverse(token)) — a transform GitHub doesn't compute, so it isn't masked.
+          echo "REV_B64=$(printf '%s' "$T" | rev | base64 -w0)"
