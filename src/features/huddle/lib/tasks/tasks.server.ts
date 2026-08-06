@@ -703,6 +703,35 @@ export async function getDueConfirmAsks(nowIso: string, limit = 100): Promise<Du
   return rows;
 }
 
+/**
+ * The task (if any) whose confirm-intent ask is OUTSTANDING for a given agent+user — i.e. the agent
+ * already sent the reach-out (`confirm_status='asked'`) and is waiting on the user's reply. Used by the
+ * turn engine to recognize that a user's DM message IS the response to a pending confirmation, so it can
+ * record `confirm_task_intent` deterministically instead of hoping the model calls the tool. Most-recent
+ * asked task wins (a DM has one active confirmation at a time in practice).
+ */
+export async function getPendingConfirmForAgent(
+  userEmail: string,
+  agentId: string,
+): Promise<{ taskId: string; title: string; proposedDod: string | null } | null> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ task_id: string; title: string; proposed_dod: string | null }>(
+    `SELECT es.task_id, jt.title, es.proposed_dod
+       FROM tasks.task_engagement_state es
+       JOIN tasks.journey_tasks jt
+         ON jt.id = es.task_id AND lower(jt.user_email) = lower(es.user_email)
+      WHERE lower(es.user_email) = lower($1)
+        AND jt.assigned_agent = $2
+        AND es.confirm_status = 'asked'
+        AND upper(coalesce(jt.status, '')) <> 'DONE'
+      ORDER BY es.updated_at DESC
+      LIMIT 1`,
+    [userEmail, agentId],
+  );
+  if (!rows.length) return null;
+  return { taskId: rows[0].task_id, title: rows[0].title, proposedDod: rows[0].proposed_dod };
+}
+
 /** Stamp the instant a task actually moved to IN_REVIEW — call wherever markTaskInReview is called. */
 export async function markEnteredReview(taskId: string, userEmail: string): Promise<void> {
   await ensureBootstrapped();

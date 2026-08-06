@@ -415,6 +415,18 @@ export interface RunHuddleTurnOpts {
 // `opts.turnId` it runs in CHUNKED mode: sub-45s chunks, each agent's reply streamed to the durable
 // store the instant its wave lands, and a budget-deferred agent re-queued (never dropped) so the
 // runner continues the turn across executions until every routed agent has replied.
+// A short, UNAMBIGUOUS confirmation reply ("yes", "sounds good", "go ahead"). Used to record a pending
+// confirm-intent deterministically without the model. Deliberately conservative: a question, a negation,
+// or anything long enough to be a real refinement returns false and is left to the model + the injected
+// directive (which asks it to call confirm_task_intent with the final, folded-in DoD).
+function isPlainConfirmation(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t || t.length > 40) return false;
+  if (t.includes("?")) return false;
+  if (/\b(no|not|don'?t|stop|wait|hold|cancel|nope|instead|change|revise|actually)\b/.test(t)) return false;
+  return /\b(yes|yep|yeah|yup|confirm(ed)?|correct|right|sounds good|looks good|go ahead|do it|that works|works for me|perfect|approved?|okay?|ok|sure|great|👍)\b/.test(t);
+}
+
 export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddleTurnOpts) {
     // Wall-clock start for the per-execution deadline (see runBounded). The whole chunk — sequential
     // primary + parallel wave(s) — must finish under the ~45s hosting request ceiling, so agents are
@@ -435,6 +447,57 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // by saveTurnChunk, NOT the mid-chunk streaming writes), so this is the execution count so far.
     const MAX_CHUNKS = 6;
     const turnStore = chunked ? await import("./tasks/turns.server") : null;
+
+    // ---- A: confirm-intent capture (WIP gate). When the user REPLIES in a 1:1 DM that has a task at
+    // confirm_status='asked' for that agent, this message IS the confirmation response. The reply turn
+    // historically carried NO confirm context, so the agent just acknowledged and the task froze in
+    // UP_NEXT. Fix, both fully guarded (a failure degrades to prior behavior, never breaks the turn):
+    //   (1) record the confirmation DETERMINISTICALLY for a clear yes/refinement (not model-dependent);
+    //   (2) hand the responding agent a directive (below, in its scene) to lock the DoD if not already
+    //       AND call propose_approach — so the task actually advances, not just records the DoD.
+    let pendingConfirm: { taskId: string; title: string; proposedDod: string | null; agentId: AgentId } | null = null;
+    try {
+      const dmAgent =
+        typeof data.huddleId === "string" && data.huddleId.startsWith("dm-")
+          ? (data.huddleId.slice(3) as AgentId)
+          : null;
+      const replyText = (data.text ?? "").trim();
+      if (dmAgent && AGENT_BY_ID[dmAgent] && replyText && !data.internal && !resume) {
+        const em =
+          (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+          data.caller?.entra_email ??
+          null;
+        if (em) {
+          const { getPendingConfirmForAgent } = await import("./tasks/tasks.server");
+          const pc = await getPendingConfirmForAgent(em, dmAgent);
+          if (pc) {
+            pendingConfirm = { ...pc, agentId: dmAgent };
+            if (isPlainConfirmation(replyText)) {
+              const dod = (pc.proposedDod ?? replyText).trim() || replyText;
+              try {
+                const { confirmTaskIntent } = await import("./tasks/tasks.server");
+                await confirmTaskIntent(pc.taskId, em, dod);
+                try {
+                  const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                  await invokeJourneyTool({
+                    toolName: "update_task",
+                    args: { task_id: pc.taskId, definition_of_done: dod },
+                    caller: data.caller ?? {},
+                    context: { source: "huddle" },
+                  });
+                } catch {
+                  /* journey mirror sync is best-effort */
+                }
+              } catch {
+                /* deterministic capture is best-effort */
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      pendingConfirm = null;
+    }
     let priorChunks = 0;
     if (chunked && turnId && turnStore) {
       try {
@@ -1401,13 +1464,21 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 - Otherwise — nothing concrete, only agreement/color, or you have no tools/data to check — reply with exactly the single word: PASS (nothing before or after it).`
         : "";
 
+      // A: if the user is replying to THIS agent's pending confirm-intent ask, direct it to lock the DoD
+      // and propose its approach — so the task advances out of Up Next. If the runtime already recorded a
+      // plain "yes" above, confirm_task_intent is idempotent; propose_approach is what actually moves it.
+      const confirmReplyDirective =
+        pendingConfirm && pendingConfirm.agentId === winner.id
+          ? `\n\nIMPORTANT — the user is replying to your earlier check-in that asked them to confirm the assumed action + Definition of Done for their task "${pendingConfirm.title}". This message is that reply. If they confirmed it (as-is or with tweaks), call confirm_task_intent NOW with task_id "${pendingConfirm.taskId}" and the FINAL definition_of_done (fold in any change they made) — actually call the tool, don't just acknowledge in prose. Then, in this SAME turn, call propose_approach for that task so it can move forward. If they declined or are still deciding, don't call the tools — just help them decide.`
+          : "";
+
       const scene = ` You are ${winner.name} in a ${
         data.scope === "group" ? "group huddle" : "1:1"
       }. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail. Do NOT repeat a reply you already gave earlier in this conversation — your own past messages are in the history above; if you genuinely have nothing new since your last update, say that briefly (e.g. "same as before — nothing new on my end") instead of restating the same line word-for-word (that "broken record" repetition is a real failure to avoid).${
         priorInThisTurn && !ceremonyDirective
           ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
           : ""
-      }${interjectDirective}${ceremonyDirective}${ceremonyPriorReact}${handoffDirective}${laneDirective}`;
+      }${interjectDirective}${ceremonyDirective}${ceremonyPriorReact}${handoffDirective}${laneDirective}${confirmReplyDirective}`;
 
       const roster = buildRoster(data.members, winner.id);
       // Data-driven, scope-aware ownership hand-off (agents.ts capabilities). Empty string
