@@ -1,4 +1,32 @@
 # Project Memory — huddle-extension-app
+
+## Huddle push "not received" ROOT CAUSE — data-only FCM + bridge-app render, NOT Huddle/journey send (2026-08-06)
+Symptom: agent reach-outs + a direct test push never appear on the user's phone, though the user runs the Huddle
+bridge app. GROUND-TRUTH (journey Supabase, project wwxgajrtmslzklnyplah):
+- Huddle side is CORRECT end-to-end: arm->fire->reply generated (real text)->send_push. Confirmed the 5PM cadence
+  DID fire (8 reach-outs done) and a direct /api/public/test-push (new diag endpoint) both sent.
+- journey `activity_log`: EVERY push (test + all 8 reach-outs) = `fcm_send_success` successCount:1 failureCount:0 to
+  token cmmabohkSyi... (the huddle bridge token, refreshed same day). So Huddle->journey->FCM ALL succeed; FCM
+  ACKs delivery to the bridge token. journey's "sent" is real per-token FCM success, not optimistic.
+- Root cause = the LAST hop: `send-push-notification/index.ts` builds a **data-only** FCM message (NO top-level
+  `notification` object) ON PURPOSE (so the Android bridge's onMessageReceived can route alarm-channel payloads to
+  a looping AlarmSoundService). Data-only messages are NOT auto-displayed by Android — the bridge app must render
+  them, and won't if it's force-stopped/battery-optimized or its handler doesn't post the `messages`/`task-reminders`
+  channel. => FCM success + nothing shown.
+Identity note (ruled out as the cause): journey `profiles.id` for dev@ (113eec07) != `auth.users.id` (a3378f93);
+push_subscriptions + tasks are keyed on the AUTH id a3378f93 (has the token + 234 tasks), and journey resolves dev@
+-> a3378f93 (tasks work), so the push targeted the RIGHT fresh token. A stale shadow auth user 4132de9e
+(von.ellis@, created 2026-08-01) still holds 1 old huddle-token row — leftover from the Aug-1 journey-side
+"vonellis2" shadow; harmless to the push but should be cleaned.
+FIX PATHS (not yet done, needs user go-ahead — journey-voice change):
+1. Robust/code: in send-push-notification, send a `notification`(+data) message for NON-alarm channels
+   (messages/task-reminders/calendar_events) so Android system-tray displays even when the app is killed; keep
+   data-only ONLY for the alarm channel (which needs the looping-sound custom handler). Targeted, safe.
+2. Device: ensure the bridge app isn't force-stopped/battery-optimized + notifications enabled (fragile — a killed
+   app still won't get data-only msgs).
+Diagnostic tool built + deployed this session: `/api/public/test-push` (Huddle) + `test-push.yml` workflow — sends a
+pure push (no agent turn) on selectable channels to isolate delivery. Reusable.
+
 Last updated: 2026-08-05
 
 ## vonellis2 duplicate-profile bug — FIXED via oid-canonicalization + data merge (2026-08-05) — DEPLOYED main (deploy run 31031336742 success). NOT yet user-confirmed live (login is user-only).
