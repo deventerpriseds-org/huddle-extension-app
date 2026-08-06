@@ -163,6 +163,7 @@ const HOUSE_STYLE =
   "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
   " Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it \"has been sent\" or \"is done\" when it has not. Email specifically: text you write in the chat is \"draft text\" — only say you \"saved a draft to your inbox\" if you called the create_email_draft tool and it returned success, and only say an email was \"sent\" if send_email returned success." +
   " Tool results are ground truth: if a tool result contains an \"error\" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn't work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message." +
+  " Be precise about QUANTITY: when you report how many of something you did — tasks created, emails sent, items scheduled, reminders set — state the EXACT number the tool result gives you (e.g. its `created` count), not the number requested. If you were asked for two and the tool created one, say you created one and that the other didn't go through (or was already there); never round up to \"both\" or \"all of them\" unless the tool's own count confirms it." +
   " Your capabilities are exactly the tools you have this turn — nothing more. If you're asked or assigned something you cannot actually do with those tools (e.g. move money, buy something, take a real-world action only the user can), do NOT pretend, vaguely promise, or invent a result — say plainly in one sentence what you can't do and why. Almost always you CAN still make real progress by researching, analyzing, or drafting — do that instead. If it's a task on the board and you genuinely cannot advance it (it needs the user's decision, a credential, or a capability you don't have), call flag_blocker(task_id, reason) with the specific reason so the user knows exactly what you need." +
   " A background lookup that comes up empty should be invisible to the user: never narrate that you searched, where you looked, or that something wasn't found — just answer directly from what you know, your live tools, and the conversation. Above all, ANSWER THE USER'S ACTUAL LAST MESSAGE: if they correct you (e.g. \"your time zone is wrong\") or ask something specific, address exactly that instead of falling back to a generic non-answer that ignores what they just said.";
 
@@ -1501,6 +1502,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       }
       const taskToolInstructions =
         "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it." +
+        " When the user asks for MORE THAN ONE task in a single message, call `create_huddle_tasks` (plural) ONCE with all of them in the `tasks` array — do NOT emit several `create_huddle_task` calls and do NOT create one and describe the rest as done. Its result reports `created` (the exact number created) plus `deferred`/`skipped`; state that exact count and mention anything skipped — e.g. \"added 2 of the 3; the third is already on your board.\" Never say \"created all of them\" / \"both\" unless the `created` count actually equals what the user asked for." +
         " NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled \"groom the backlog\" or \"assign the team\") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked." +
         " If the user states or implies a specific date (a day name, 'tomorrow', a calendar date, 'by Friday'), set the tool's `date` field — do not just leave it embedded in the title text where it can get lost." +
         " Report the outcome honestly using exactly what the tool result gives you, in `note`/`outcome` — never invent a time or claim more certainty than that. A same-day scheduled time is provisional (the nightly planner can still move it overnight) — say something like \"I've got that for around 2:30 today\" rather than a firm commitment. A task with a due date but no start_time has no exact time yet — say the due date and that the planner will place a time, don't guess one. If the outcome says today was full and it landed elsewhere, say so plainly instead of a bare \"added it.\"" +
@@ -1863,6 +1865,151 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         return { ok: true, task, boards: ["huddle"] };
       }
 
+      // Batch create — the honest multi-task path. When the user asks for SEVERAL tasks in one message
+      // ("add these three…", "gym at 9, lunch at 12, call mom at 5") a model would otherwise emit a
+      // single create_huddle_task and then narrate "created all of them" — the exact over-claim the user
+      // hit (asked for 2, one created, told "both done"). This routes the whole set through journey's
+      // purpose-built `parse_and_create_tasks` (NL multi-task parser + conflict-aware co-scheduler),
+      // creating ALL of them in one call, and returns the EXACT created count so the reply can be
+      // truthful. Per-entry it runs the same guards as the single path (exclusive-capability meta-task
+      // guard + within-turn/cross-turn dedup); anything skipped is reported, never silently dropped.
+      async function createBatchTasksFromTool(args: Record<string, unknown>) {
+        // Accept an explicit list (preferred — the model enumerates each task) or a single multi-task
+        // text blob. A blob is kept intact for journey's NL parser (it extracts times/dates); only split
+        // on hard separators so a compound single task isn't torn apart.
+        const rawList = Array.isArray(args.tasks)
+          ? (args.tasks as unknown[]).map((t) => String(t ?? "").trim()).filter(Boolean)
+          : [];
+        const blob = typeof args.text === "string" ? args.text.trim() : "";
+        let entries = rawList;
+        if (!entries.length && blob) {
+          entries = blob
+            .split(/\n|;/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+          if (!entries.length) entries = [blob];
+        }
+        if (!entries.length) {
+          const error = "create_huddle_tasks requires a non-empty `tasks` array (or `text`)";
+          recordToolUse(winner.id, "create_huddle_tasks", "batch task creation failed", false, error);
+          return { ok: false, error };
+        }
+
+        // Per-entry guards (mirror the single path): exclusive-capability meta-task guard + dedup.
+        const existing = await loadExistingOpenTitles();
+        const survivors: string[] = [];
+        const skipped: Array<{ title: string; reason: string }> = [];
+        const deferred: Array<{ title: string; handedTo?: string; reason: string }> = [];
+        for (const entry of entries) {
+          const titleOwner = capabilityOwnerFor(entry);
+          if (titleOwner) {
+            const isSelf = titleOwner.agent.id === winner.id;
+            deferred.push({
+              title: entry,
+              handedTo: isSelf ? undefined : titleOwner.agent.id,
+              reason: isSelf
+                ? `${titleOwner.cap.label} is your own job to perform, not a card`
+                : `${titleOwner.cap.label} belongs to ${titleOwner.agent.name}`,
+            });
+            continue;
+          }
+          const key = entry.trim().toLowerCase();
+          if (createdTaskTitles.has(key) || existing.has(normTitle(entry))) {
+            createdTaskTitles.add(key);
+            skipped.push({ title: entry, reason: "an open task with this title already exists" });
+            continue;
+          }
+          createdTaskTitles.add(key);
+          survivors.push(entry);
+        }
+
+        if (!survivors.length) {
+          recordToolUse(
+            winner.id,
+            "create_huddle_tasks",
+            `no new tasks created — ${deferred.length} deferred, ${skipped.length} duplicate`,
+            true,
+          );
+          return { ok: true, requested: entries.length, created: 0, deferred, skipped, tasks: [] };
+        }
+
+        // Journey batch path: ONE parse_and_create_tasks call creates every survivor, co-scheduled.
+        if (agentBackend.journey?.enabled && data.caller?.entra_email) {
+          try {
+            const { invokeJourneyTool } = await import("./journey/proxy.functions");
+            const rawDate = typeof args.date === "string" ? args.date.trim().toLowerCase() : "";
+            const target_date =
+              rawDate === "today" || rawDate === "tomorrow" || /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
+                ? rawDate
+                : undefined;
+            const r = await invokeJourneyTool({
+              toolName: "parse_and_create_tasks",
+              args: { text: survivors.join("\n"), auto_schedule: true, ...(target_date ? { target_date } : {}) },
+              caller: data.caller ?? {},
+              context: { source: "huddle", huddleId: data.huddleId, agentId: winner.id },
+            });
+            if (r.ok) {
+              let created = 0;
+              let createdTasks: unknown[] = [];
+              if (r.tasks && r.tasks.length > 0) {
+                journeyTaskUpdates.push(...r.tasks);
+                created = r.tasks.length;
+                createdTasks = r.tasks;
+              } else {
+                // journey didn't echo rows — recover the count from the result payload.
+                try {
+                  const parsed = JSON.parse(r.output) as { tasks?: unknown[]; created?: number };
+                  created = typeof parsed.created === "number" ? parsed.created : parsed.tasks?.length ?? survivors.length;
+                  createdTasks = parsed.tasks ?? [];
+                } catch {
+                  created = survivors.length;
+                }
+              }
+              recordToolUse(
+                winner.id,
+                "create_huddle_tasks",
+                `created ${created}/${survivors.length} → Huddle board + journey` +
+                  `${deferred.length ? ` · ${deferred.length} deferred` : ""}${skipped.length ? ` · ${skipped.length} duplicate` : ""}`,
+                true,
+              );
+              return { ok: true, requested: entries.length, created, tasks: createdTasks, deferred, skipped, boards: ["huddle", "journey"] };
+            }
+            const ev = recordFallback(
+              "tool",
+              `${winner.name}: batch task create failed on journey — ${r.error ?? "unknown"}`,
+              "journey batch task create failed",
+              winner.id,
+            );
+            perAgentFallbacks.push(ev.inline);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const ev = recordFallback(
+              "tool",
+              `${winner.name}: batch task create crashed — ${msg}`,
+              "journey batch task create crashed",
+              winner.id,
+            );
+            perAgentFallbacks.push(ev.inline);
+          }
+        }
+
+        // Huddle-only fallback (journey off, no caller, or journey failed): one card per survivor.
+        const cards: SuggestedTaskDraft[] = survivors.map((title) => ({
+          id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+          title: title.slice(0, 160),
+          ownerId: resolveTaskOwner(args.ownerId ?? args.owner ?? args.assignee),
+          lane: resolveTaskLane(args.lane ?? args.status),
+        }));
+        suggestedTasks.push(...cards);
+        recordToolUse(
+          winner.id,
+          "create_huddle_tasks",
+          `created ${cards.length}/${survivors.length} Huddle-only${deferred.length ? ` · ${deferred.length} deferred` : ""}`,
+          true,
+        );
+        return { ok: true, requested: entries.length, created: cards.length, tasks: cards, deferred, skipped, boards: ["huddle"] };
+      }
+
       try {
         let clean = "";
         let usedBackend: "openai" | "lovable" = agentBackend.backend;
@@ -2105,6 +2252,32 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             strict: false,
           };
 
+          const createHuddleTasksTool = {
+            type: "function" as const,
+            name: "create_huddle_tasks",
+            description:
+              "Create MULTIPLE tasks at once. Use this — NOT repeated create_huddle_task calls — whenever the user asks for more than one task in a single message (e.g. \"add these three…\", \"gym at 9, lunch at 12, call mom at 5\"). Each task is added to the Huddle board and, when journey is connected, created + co-scheduled on their journey board in one pass. The result tells you EXACTLY how many were created — report that number, never assume all of them landed.",
+            parameters: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                tasks: {
+                  type: "array",
+                  items: { type: "string" },
+                  description:
+                    "The tasks to create, one string each. Keep any time/date phrase inline in the string (e.g. \"Gym at 9am\", \"Call mom tomorrow\") — it is parsed and scheduled server-side.",
+                },
+                date: {
+                  type: "string",
+                  description:
+                    "Optional shared date for the whole batch, ONLY 'today', 'tomorrow', or an explicit YYYY-MM-DD. For any other phrasing keep it inline in each task string instead.",
+                },
+              },
+              required: ["tasks"],
+            },
+            strict: false,
+          };
+
           // Native Huddle email (Microsoft Graph). Offered when the Graph app
           // creds are configured; sends as an allow-listed tenant mailbox.
           const { emailFromOptions, graphEmailConfigured } = await import(
@@ -2177,6 +2350,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
           const mergedTools = [
             createHuddleTaskTool,
+            createHuddleTasksTool,
             CREATE_ARTIFACT_TOOL,
             DELEGATE_TO_SPECIALIST_TOOL,
             FLAG_BLOCKER_TOOL,
@@ -2219,6 +2393,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             trackCeremonyToolStart(winner.id, c.name);
             if (c.name === "create_huddle_task") {
               return JSON.stringify(await createSuggestedTaskFromTool(c.arguments));
+            }
+            if (c.name === "create_huddle_tasks") {
+              return JSON.stringify(await createBatchTasksFromTool(c.arguments));
             }
             if (c.name === "delegate_to_specialist") {
               return await dispatchDelegate(c.arguments);
@@ -2892,6 +3069,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             }),
             execute: async (args) =>
               JSON.stringify(await createSuggestedTaskFromTool(args as Record<string, unknown>)),
+          });
+
+          // create_huddle_tasks — batch multi-task create (mirrors the OpenAI path). Use for >1 task.
+          lovableTools.create_huddle_tasks = tool({
+            description:
+              "Create MULTIPLE tasks at once. Use this — NOT repeated create_huddle_task calls — whenever the user asks for more than one task in a single message. Each is added to the Huddle board and, when journey is connected, created + co-scheduled on their journey board in one pass. The result reports EXACTLY how many were created — report that number, never assume all landed.",
+            inputSchema: z.object({
+              tasks: z.array(z.string()),
+              date: z.string().optional(),
+            }),
+            execute: async (args) =>
+              JSON.stringify(await createBatchTasksFromTool(args as Record<string, unknown>)),
           });
 
           // create_artifact — save the agent's own finished work as a reviewable artifact (mirrors OpenAI path).

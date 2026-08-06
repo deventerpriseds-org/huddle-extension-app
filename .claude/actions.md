@@ -20,8 +20,21 @@ that creates several tasks from one natural-language message. User asked Iris to
 created both but only created ONE. Two asks:
 - (a) Iris (and agents) must be able to PARSE + CREATE MULTIPLE tasks from one message (batch), like journey's input.
 - (b) Iris must report TRUTHFULLY/precisely/accurately about what she can and HAS done (no claiming 2 when 1 was made).
-- [OPEN] investigate journey `parse_and_create_tasks` (execute-tool) + Huddle `create_huddle_task`/`quick_create_task`
-  (why only 1 created) → decide reuse-journey-batch vs Huddle loop; + truthfulness prompt/tool-result honesty.
+- ROOT CAUSE (why only 1 created): `KEYWORD_TOOL_FORCING` is OFF, so tool selection is model-native — there was
+  simply NO batch tool. Asked for 2, the model emitted one `create_huddle_task` (1 created) and narrated "both."
+  Truthfulness language already existed strongly in HOUSE_STYLE + taskToolInstructions; the gap was the missing
+  batch affordance + a count-accuracy clause.
+- [BUILT 2026-08-06, deploy HELD] Extend-don't-duplicate: reuse journey's `parse_and_create_tasks` (execute-tool
+  case 362; proxy forwards any toolName, no allow-list gate — verified). New Huddle tool `create_huddle_tasks`
+  (huddle.functions.ts): OpenAI schema + Lovable `tool()` + dispatch in combinedOnToolCall + `createBatchTasksFromTool`.
+  It runs the SAME per-entry guards as the single path (capability meta-task guard + within-turn/cross-turn dedup),
+  then ONE `parse_and_create_tasks` call co-creates all survivors (journey) or one card each (Huddle-only fallback),
+  and returns TRUTHFUL `{requested, created, deferred[], skipped[], tasks[]}`.
+  - (a) batch: DONE. (b) truthfulness: additive `taskToolInstructions` clause ("call create_huddle_tasks once for >1;
+    report the exact `created` count; never say both/all unless the count confirms") + additive HOUSE_STYLE QUANTITY
+    clause (state the exact tool count, not the requested count) — both ADDITIVE, no subtraction (additive-only rule);
+    QUANTITY clause is in the SHARED house-style layer (cross-agent), not baked into Iris. tsc 0 errors project-wide.
+  - [OPEN] LIVE proof (test-agent-serverfn: ask for 2, assert created=2 + reply says "2") pending deploy + user OK.
 
 ### ACT-huddle-23 (confirm-asks bunch at window-open instead of fanning across business+evening windows) — INVESTIGATING
 User (2026-08-06): "despite my request to have the asks jittered randomly throughout the day, you have them all
