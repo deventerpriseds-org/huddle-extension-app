@@ -35,6 +35,7 @@ export const Route = createFileRoute("/api/public/test-push")({
           channels?: string[];
           title?: string;
           body?: string;
+          app?: string;
           runId?: string;
         };
         try {
@@ -57,11 +58,16 @@ export const Route = createFileRoute("/api/public/test-push")({
             "@/features/huddle/lib/journey/proxy.functions"
           );
           const results: { channel: string; ok: boolean; output?: string; error?: string }[] = [];
+          // app targeting: default "huddle" (fcm:app:huddle:% token). Pass app="none"/"" to OMIT the
+          // filter → journey-native fan-out (every non-app-namespaced token, the path reminders/alarms
+          // that DO arrive already use). This is the diagnostic knob to compare huddle-token vs native.
+          const rawApp = (payload.app ?? "huddle").trim();
+          const useApp = rawApp && rawApp.toLowerCase() !== "none" ? rawApp : null;
           for (const channel of channels) {
-            const title = payload.title || `Huddle test push (${channel})`;
+            const title = payload.title || `Huddle test push (${channel}${useApp ? "" : "/native"})`;
             const body =
               payload.body ||
-              `If you see this, the "${channel}" channel reaches your device. Tag ${stamp}.`;
+              `If you see this, the "${channel}" channel${useApp ? ` via app:${useApp}` : " (native, no app filter)"} reaches your device. Tag ${stamp}.`;
             try {
               const r = await invokeJourneyTool({
                 toolName: "send_push",
@@ -69,9 +75,7 @@ export const Route = createFileRoute("/api/public/test-push")({
                   title,
                   body,
                   channel,
-                  // Target the standalone Huddle bridge app only (endpoint fcm:app:huddle:%),
-                  // matching how agent replies + reminders address the phone.
-                  app: "huddle",
+                  ...(useApp ? { app: useApp } : {}),
                   data: {
                     source: "huddle-test-push",
                     notificationId: `testpush-${channel}-${stamp}`,
