@@ -70,7 +70,16 @@ any WIP progression. FIX must stop journey's planner from clobbering Huddle's WI
 - SUSPECTS to rule in/out: an overnight autowork/groom pass demoting IN_REVIEW→TODO/UP_NEXT (would be a serious
   bug — grooming is supposed to never write status, autowork only promotes forward); mirror↔journey divergence +
   a re-sync overwriting IN_REVIEW; or a journey-side nightly planner reset. Root cause NOT yet established.
-- [OPEN] establish root cause from entered_review_at data → identify the demoting/deleting code → fix + restore.
+- [BUILT 2026-08-06, journey commit d66e57a, deploy HELD] Ground-truthed in nightly-schedule-builder: candidate
+  query (index.ts:956) pulls `is_scheduled=false` tasks with status IN (READY,UP_NEXT,TODO,BACKLOG) — so UP_NEXT is
+  a scheduling candidate — and all THREE write-sites (846 tier-A, 1353 main-commit, 1463 reshuffle-retry) hardcoded
+  `status:'TODO'` when assigning a time. So the planner time-blocks an UP_NEXT task and resets its lane to TODO → it
+  vanishes from UP_NEXT without any WIP progression. FIX: `statusAfterSchedule(prev)` preserves an already-advanced
+  WIP status (UP_NEXT/DOING/IN_REVIEW), only un-staged (READY/BACKLOG/TODO/null) → TODO. Each site already captured
+  pre_schedule_status, so the value was in hand. `is_scheduled` flips true, so no re-selection loop. sibling
+  nightly-assignment-sync `status:'TODO'` is an INSERT of NEW tasks, not an update — left alone.
+- [OPEN] LIVE proof pending deploy (deploy-supabase-functions.yml): schedule an UP_NEXT task, confirm it keeps UP_NEXT
+  + gains a time (not reset to TODO). User declined restore of already-lost items — behavior-going-forward only.
 
 ### ACT-huddle-21 (vonellis2 duplicate-profile bug — oid canonicalization + data merge)
 User: "randomly my username is recreated as vonellis2 after logging in with one of the emails … it also fails a lot
