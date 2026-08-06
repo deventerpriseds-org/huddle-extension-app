@@ -28,6 +28,13 @@ Last updated: 2026-08-06 (three fixes DEPLOYED live; auto-deploy enabled; E2E gr
 
 ---
 
+### ACT-huddle-26 (SessionStart dependency hook — /session-start-hook) — DONE 2026-08-06
+User ran /session-start-hook. Added `.claude/hooks/session-start.sh` (remote-only, sync, idempotent
+`npm install`) so tsc/eslint/router-tests/harness scripts work in web sessions without a manual install;
+merged a 2nd SessionStart group into `.claude/settings.json` (preserving the existing discipline echo +
+Stop gate). Validated: hook exit 0 ("up to date in 6s") + local no-op; eslint exit 0; `test:router` 9/9 pass.
+Committed to branch. Takes effect for all future sessions once merged to the default branch.
+
 
 ### ACT-huddle-24 (confirm-CAPTURE (A) — 1:1 reply records confirm-intent) — DEPLOYED, NOT live-proven
 User asked "build A". When the user replies in a `dm-<agent>` huddle that has a task at `confirm_status='asked'`
