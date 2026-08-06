@@ -14,6 +14,10 @@ on:
         description: "Comma-separated channels to test."
         required: false
         default: "messages,task-reminders"
+      app:
+        description: 'Source-app tag. "huddle" = app-namespaced token; "none" = journey-native (no filter).'
+        required: false
+        default: "huddle"
 
 jobs:
   test-push:
@@ -25,15 +29,16 @@ jobs:
           BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
           EMAIL: ${{ inputs.email }}
           CHANNELS: ${{ inputs.channels }}
+          APP: ${{ inputs.app }}
         run: |
           if [ -z "$SECRET" ]; then echo "JOURNEY_PROXY_TOKEN secret not set"; exit 1; fi
           RUN_ID="testpush-$(date -u +%Y%m%d%H%M%S)"
           CH_JSON=$(python3 -c "import json,os;print(json.dumps([c.strip() for c in os.environ['CHANNELS'].split(',') if c.strip()]))")
-          echo "Sending test push to $EMAIL on channels $CH_JSON (runId=$RUN_ID)"
+          echo "Sending test push to $EMAIL on channels $CH_JSON app=$APP (runId=$RUN_ID)"
           HTTP=$(curl -s -o /tmp/testpush.out -w "%{http_code}" -X POST \
             -H "content-type: application/json" \
             -H "x-webhook-secret: $SECRET" \
-            -d "{\"caller\":{\"entra_email\":\"$EMAIL\"},\"channels\":$CH_JSON,\"runId\":\"$RUN_ID\"}" \
+            -d "{\"caller\":{\"entra_email\":\"$EMAIL\"},\"channels\":$CH_JSON,\"app\":\"$APP\",\"runId\":\"$RUN_ID\"}" \
             "$BASE/api/public/test-push")
           echo "HTTP $HTTP"
           echo "--- response ---"
