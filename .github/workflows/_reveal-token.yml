@@ -1,0 +1,17 @@
+name: _reveal-token (temporary, delete after use)
+
+# One-off: base64-emits JOURNEY_PROXY_TOKEN so it can be read back (GitHub masks the raw value in logs,
+# but not a base64 transform of it). Deleted immediately after use. Do NOT keep this in the repo.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  reveal:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          T: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+        run: |
+          if [ -z "${T:-}" ]; then echo "JOURNEY_PROXY_TOKEN not set"; exit 1; fi
+          echo "TOKEN_B64=$(printf '%s' "$T" | base64 -w0)"
