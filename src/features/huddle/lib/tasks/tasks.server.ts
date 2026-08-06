@@ -655,6 +655,25 @@ export async function ensureConfirmAskAt(taskId: string, userEmail: string, askA
 }
 
 /**
+ * Force-overwrite an armed-but-unsent confirm-ask time. Unlike ensureConfirmAskAt (set-once via
+ * COALESCE), this UNCONDITIONALLY moves the instant — used ONLY to re-fan a STRAGGLER: an ask whose
+ * confirm_ask_at landed outside every fan-out window (e.g. armed the old now+jitter way, or unsent
+ * when a window closed). It relocates that ask to a random instant inside the next open window so the
+ * batch spreads across the window instead of dumping at its opening edge. Only ever called for rows
+ * still in 'awaiting' (never touches an already-'asked'/'confirmed' row) so it can't resurrect a sent
+ * ask. No-op if the row doesn't exist or has already advanced past 'awaiting'.
+ */
+export async function reArmConfirmAskAt(taskId: string, userEmail: string, askAtIso: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE tasks.task_engagement_state
+       SET confirm_ask_at = $3, updated_at = now()
+     WHERE task_id = $1 AND lower(user_email) = lower($2) AND confirm_status = 'awaiting'`,
+    [taskId, userEmail.toLowerCase(), askAtIso],
+  );
+}
+
+/**
  * Transition awaiting -> asked (the confirm-intent DM was just enqueued). Returns whether THIS call
  * made the transition, so a caller can tell "I just enqueued it" from "someone else already did."
  */

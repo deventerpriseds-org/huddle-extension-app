@@ -14,7 +14,16 @@ just acknowledged and the task froze in Up Next.
   verifier subagent auditing. NOTE: `proposed_dod` is empty on every asked row (pre-existing gap — nothing writes
   it at ask-time; A falls back to reply text; confirmTaskIntent flips status regardless).
 
-### ACT-huddle-23 (confirm-asks STILL bunch at 9am instead of random fan-out across the day) — INVESTIGATING
+### ACT-huddle-25 (Iris: multi-task batch parse/create + truthful reporting) — INVESTIGATING (NEW 2026-08-06)
+User: journey's "Add a task for today…" input (circled screenshot) runs a BATCH parser (`parse_and_create_tasks`)
+that creates several tasks from one natural-language message. User asked Iris to create TWO tasks; she SAID she
+created both but only created ONE. Two asks:
+- (a) Iris (and agents) must be able to PARSE + CREATE MULTIPLE tasks from one message (batch), like journey's input.
+- (b) Iris must report TRUTHFULLY/precisely/accurately about what she can and HAS done (no claiming 2 when 1 was made).
+- [OPEN] investigate journey `parse_and_create_tasks` (execute-tool) + Huddle `create_huddle_task`/`quick_create_task`
+  (why only 1 created) → decide reuse-journey-batch vs Huddle loop; + truthfulness prompt/tool-result honesty.
+
+### ACT-huddle-23 (confirm-asks bunch at window-open instead of fanning across business+evening windows) — INVESTIGATING
 User (2026-08-06): "despite my request to have the asks jittered randomly throughout the day, you have them all
 coming at the exact same time all at once as i just received a batch at 9am."
 - OBSERVED (journey public.tasks): at 2026-08-06 13:00:03 UTC (=9:00am ET) 11 tasks were touched in the same
@@ -23,13 +32,20 @@ coming at the exact same time all at once as i just received a batch at 9am."
   scheduler, BUT arming = `now + jitter(15min–4h)`; asks armed overnight (1am/5am ET passes) land OUTSIDE the
   `[9,18)` working-window guard (`fireDueConfirmAsks`, autowork.server.ts:218) so they all WAIT and become due at
   the 9am window boundary → collapse into a 9am pileup (cap 2/user/tick just drips 11 out over ~6 min).
-- FIX DIRECTION (not yet built): jitter should place the ask at a RANDOM instant WITHIN the next working window
-  [9,18), not wall-clock `now+jitter` then clamp — clamping is what creates the boundary pileup. Also verify the
-  old batched confirmDue path in the full autowork pass isn't ALSO firing at 9/13/17.
-- [OPEN] confirm root cause in code (arming site + window guard) → build window-relative jitter → verify live.
+- FIX DESIGN (user-specified 2026-08-06): fan asks across TWO config windows — **business 9–18 AND evening 20–22**
+  (the gap is a deliberate break) — sourced from config, not hardcoded. Nothing should be scheduled OUTSIDE those
+  windows. If an ask ever IS armed outside a window, JITTER-SCHEDULE it across the NEXT open window (spread), NOT
+  fire it all at once at the window's opening edge. Arming (autowork.server.ts 442/506 = `now+jitter`) is the bug:
+  overnight/late asks land outside [9,18) and the fire-window guard (218) holds+dumps them at 9am.
+- [OPEN] build window-relative fan-out (business+evening from config) + straggler re-jitter → verify live.
 
-### ACT-huddle-22 (board's ~12 IN_REVIEW items VANISHED overnight; board "practically empty") — INVESTIGATING (data-loss, URGENT)
-User (2026-08-06): "i awoke to all 12 of the boards in review items gone, with the board practically empty."
+### ACT-huddle-22 (~12 UP_NEXT items DISAPPEARED overnight without traversing the WIP flow) — ROOT-CAUSED
+User (2026-08-06, CLARIFIED): NOT the in-review count — "the number of **up next** that disappeared without
+traversing through the WIP." I.e. items that were in UP_NEXT are gone from UP_NEXT but never moved forward
+DOING→IN_REVIEW→DONE. Do NOT restore/undo (user declined); the concern is the BEHAVIOR going forward.
+ROOT CAUSE = same journey nightly-schedule-builder (below): re-staging OVERWRITES status to 'TODO' (lines 837/1344/1454)
+so UP_NEXT (and IN_REVIEW/DOING) tasks get knocked back to TODO overnight — they "disappear" from UP_NEXT without
+any WIP progression. FIX must stop journey's planner from clobbering Huddle's WIP status. (Earlier IN_REVIEW framing:)
 - OBSERVED (journey public.tasks, ref wwxgajrtmslzklnyplah): 0 rows at IN_REVIEW now; enum HAS IN_REVIEW/DOING so
   those are valid values sitting empty. 220 DONE — but NO DONE row was updated today/overnight (newest DONE update
   2026-08-05 05:00), so the review items were NOT marked DONE.
