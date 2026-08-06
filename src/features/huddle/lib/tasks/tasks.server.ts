@@ -655,6 +655,25 @@ export async function ensureConfirmAskAt(taskId: string, userEmail: string, askA
 }
 
 /**
+ * Force-overwrite an armed-but-unsent confirm-ask time. Unlike ensureConfirmAskAt (set-once via
+ * COALESCE), this UNCONDITIONALLY moves the instant — used ONLY to re-fan a STRAGGLER: an ask whose
+ * confirm_ask_at landed outside every fan-out window (e.g. armed the old now+jitter way, or unsent
+ * when a window closed). It relocates that ask to a random instant inside the next open window so the
+ * batch spreads across the window instead of dumping at its opening edge. Only ever called for rows
+ * still in 'awaiting' (never touches an already-'asked'/'confirmed' row) so it can't resurrect a sent
+ * ask. No-op if the row doesn't exist or has already advanced past 'awaiting'.
+ */
+export async function reArmConfirmAskAt(taskId: string, userEmail: string, askAtIso: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE tasks.task_engagement_state
+       SET confirm_ask_at = $3, updated_at = now()
+     WHERE task_id = $1 AND lower(user_email) = lower($2) AND confirm_status = 'awaiting'`,
+    [taskId, userEmail.toLowerCase(), askAtIso],
+  );
+}
+
+/**
  * Transition awaiting -> asked (the confirm-intent DM was just enqueued). Returns whether THIS call
  * made the transition, so a caller can tell "I just enqueued it" from "someone else already did."
  */
@@ -666,6 +685,70 @@ export async function markConfirmAsked(taskId: string): Promise<boolean> {
     [taskId],
   );
   return (rowCount ?? 0) > 0;
+}
+
+export interface DueConfirmAsk {
+  task_id: string;
+  user_email: string;
+  assigned_agent: string | null;
+  title: string;
+  category: string | null;
+  tags: string[] | null;
+}
+
+/**
+ * Armed-but-unsent confirm-intent asks whose jittered `confirm_ask_at` has elapsed — i.e. due to FIRE
+ * NOW. Read every heartbeat by the scheduler so each ask goes out at its own jittered instant (random
+ * fan-out across the working day) instead of batching to the 3x/day auto-work pass. Only 'awaiting' rows
+ * with a due `confirm_ask_at` on a still-open, agent-assigned task; ordered oldest-due first.
+ */
+export async function getDueConfirmAsks(nowIso: string, limit = 100): Promise<DueConfirmAsk[]> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<DueConfirmAsk>(
+    `SELECT es.task_id, es.user_email, jt.assigned_agent, jt.title, jt.category, jt.tags
+       FROM tasks.task_engagement_state es
+       JOIN tasks.journey_tasks jt
+         ON jt.id = es.task_id AND lower(jt.user_email) = lower(es.user_email)
+      WHERE es.confirm_status = 'awaiting'
+        AND es.confirm_ask_at IS NOT NULL
+        AND es.confirm_ask_at <= $1::timestamptz
+        AND jt.assigned_agent IS NOT NULL
+        AND upper(coalesce(jt.status, '')) <> 'DONE'
+        AND NOT ('parking-lot' = ANY(jt.tags))
+      ORDER BY es.confirm_ask_at ASC
+      LIMIT $2`,
+    [nowIso, limit],
+  );
+  return rows;
+}
+
+/**
+ * The task (if any) whose confirm-intent ask is OUTSTANDING for a given agent+user — i.e. the agent
+ * already sent the reach-out (`confirm_status='asked'`) and is waiting on the user's reply. Used by the
+ * turn engine to recognize that a user's DM message IS the response to a pending confirmation, so it can
+ * record `confirm_task_intent` deterministically instead of hoping the model calls the tool. Most-recent
+ * asked task wins (a DM has one active confirmation at a time in practice).
+ */
+export async function getPendingConfirmForAgent(
+  userEmail: string,
+  agentId: string,
+): Promise<{ taskId: string; title: string; proposedDod: string | null } | null> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ task_id: string; title: string; proposed_dod: string | null }>(
+    `SELECT es.task_id, jt.title, es.proposed_dod
+       FROM tasks.task_engagement_state es
+       JOIN tasks.journey_tasks jt
+         ON jt.id = es.task_id AND lower(jt.user_email) = lower(es.user_email)
+      WHERE lower(es.user_email) = lower($1)
+        AND jt.assigned_agent = $2
+        AND es.confirm_status = 'asked'
+        AND upper(coalesce(jt.status, '')) <> 'DONE'
+      ORDER BY es.updated_at DESC
+      LIMIT 1`,
+    [userEmail, agentId],
+  );
+  if (!rows.length) return null;
+  return { taskId: rows[0].task_id, title: rows[0].title, proposedDod: rows[0].proposed_dod };
 }
 
 /** Stamp the instant a task actually moved to IN_REVIEW — call wherever markTaskInReview is called. */

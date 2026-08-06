@@ -6,6 +6,104 @@ Last updated: 2026-08-06 (ceremony memory investigation + Part A board-digest bu
 - [OPEN — investigate first] **Self-recall root cause.** NO OpenAI cross-turn native memory; short-term = the reconstructed transcript. Add a one-log diagnostic dumping the exact transcript array a ceremony-barge responder receives → confirm own-line present-as-assistant vs missing/mis-tagged BEFORE choosing a fix.
 - [BUILT on branch, NOT deployed/user-confirmed] **Settings: Memory-mode selector (3 options, #1 default+active).** `memoryMode` config (`reconstruction`|`responses-chain`|`conversation`, default reconstruction) in agent-backends.ts (schema+default v4, `setMemoryMode`, v3→v4 merge migration preserving other settings). Settings→Memory selector (SettingsSheet.tsx). Payload carries `memoryMode` (Input schema + MeetingBar barge+round-robin dispatches). **#1 active fix = UNCONDITIONAL self-recall block**: each ceremony responder gets its OWN prior remarks verbatim injected into its scene (huddle.functions.ts, gated on ceremonyDirective → barge + round-robin, empty when none). Board digest stays unconditional. **#2/#3 = scaffold**: carry through, log a not-implemented marker, fall back to #1 (no OpenAI-native plumbing). Diagnostic log added: ceremony turn logs transcript size + own-assistant-line count + selfRecall injected/empty. KNOWN LIMIT (AC-18): scheduled round-robin dispatches `history:[]`, so self-recall is populated on BARGES (the reported bug) but empty during the round-robin itself (agent gives its update from the report there). Offline: `memory-mode.test.ts` 6/6, tsc+build clean, regressions green. NEXT: deploy + user live-confirm (per perceptual-UAT rule); read the `[huddle-memory]` diagnostic log from a real standup to confirm own-line presence.
 - [OPEN — user flagged] **Dormant improvement toggles.** Optimized-ceremony-engine / strict-router / interjections default OFF → did nothing for recent standups. Decide: flip good ones default-ON and/or make memory+grounding fixes unconditional (they're correctness, not experiments).
+Last updated: 2026-08-06 (ACT-huddle-22/23 opened — board IN_REVIEW items vanished overnight + confirm-asks still bunching at 9am)
+
+### ACT-huddle-24 (confirm-CAPTURE (A) — 1:1 reply records confirm-intent) — DEPLOYED, NOT live-proven
+User asked "build A". When the user replies in a `dm-<agent>` huddle that has a task at `confirm_status='asked'`
+for that agent, that reply IS the confirmation. Before A the reply turn carried no confirm context, so the agent
+just acknowledged and the task froze in Up Next.
+- [DONE] `getPendingConfirmForAgent(email,agentId)` (tasks.server.ts) + deterministic capture in `runHuddleTurn`
+  (model-independent: plain-confirmation → `confirmTaskIntent` + journey `update_task` DoD mirror) +
+  `confirmReplyDirective` injected into the responding agent's scene (calls confirm_task_intent + propose_approach).
+- [DONE] tsc clean + `npm run build` ✓ → commit a1557b0 → merged main c893c8c → **deployed (deploy run 31073307409 success)**.
+- [OPEN — NOT live-proven] end-to-end confirm→confirmed→propose_approach→UP_NEXT→DOING needs a real DM reply.
+  Live precondition CONFIRMED: "Go to church"(faith) + 5 others sit at confirm_status='asked' now. Independent
+  verifier subagent auditing. NOTE: `proposed_dod` is empty on every asked row (pre-existing gap — nothing writes
+  it at ask-time; A falls back to reply text; confirmTaskIntent flips status regardless).
+
+### ACT-huddle-25 (Iris: multi-task batch parse/create + truthful reporting) — INVESTIGATING (NEW 2026-08-06)
+User: journey's "Add a task for today…" input (circled screenshot) runs a BATCH parser (`parse_and_create_tasks`)
+that creates several tasks from one natural-language message. User asked Iris to create TWO tasks; she SAID she
+created both but only created ONE. Two asks:
+- (a) Iris (and agents) must be able to PARSE + CREATE MULTIPLE tasks from one message (batch), like journey's input.
+- (b) Iris must report TRUTHFULLY/precisely/accurately about what she can and HAS done (no claiming 2 when 1 was made).
+- ROOT CAUSE (why only 1 created): `KEYWORD_TOOL_FORCING` is OFF, so tool selection is model-native — there was
+  simply NO batch tool. Asked for 2, the model emitted one `create_huddle_task` (1 created) and narrated "both."
+  Truthfulness language already existed strongly in HOUSE_STYLE + taskToolInstructions; the gap was the missing
+  batch affordance + a count-accuracy clause.
+- [BUILT 2026-08-06, deploy HELD] Extend-don't-duplicate: reuse journey's `parse_and_create_tasks` (execute-tool
+  case 362; proxy forwards any toolName, no allow-list gate — verified). New Huddle tool `create_huddle_tasks`
+  (huddle.functions.ts): OpenAI schema + Lovable `tool()` + dispatch in combinedOnToolCall + `createBatchTasksFromTool`.
+  It runs the SAME per-entry guards as the single path (capability meta-task guard + within-turn/cross-turn dedup),
+  then ONE `parse_and_create_tasks` call co-creates all survivors (journey) or one card each (Huddle-only fallback),
+  and returns TRUTHFUL `{requested, created, deferred[], skipped[], tasks[]}`.
+  - (a) batch: DONE. (b) truthfulness: additive `taskToolInstructions` clause ("call create_huddle_tasks once for >1;
+    report the exact `created` count; never say both/all unless the count confirms") + additive HOUSE_STYLE QUANTITY
+    clause (state the exact tool count, not the requested count) — both ADDITIVE, no subtraction (additive-only rule);
+    QUANTITY clause is in the SHARED house-style layer (cross-agent), not baked into Iris. tsc 0 errors project-wide.
+  - [OPEN] LIVE proof (test-agent-serverfn: ask for 2, assert created=2 + reply says "2") pending deploy + user OK.
+
+### ACT-huddle-23 (confirm-asks bunch at window-open instead of fanning across business+evening windows) — INVESTIGATING
+User (2026-08-06): "despite my request to have the asks jittered randomly throughout the day, you have them all
+coming at the exact same time all at once as i just received a batch at 9am."
+- OBSERVED (journey public.tasks): at 2026-08-06 13:00:03 UTC (=9:00am ET) 11 tasks were touched in the same
+  ~30ms → the 9am auto-work pass. That's when the batch of asks landed.
+- HYPOTHESIS (not yet code-confirmed): B fires each ask at its jittered `confirm_ask_at` via the every-minute
+  scheduler, BUT arming = `now + jitter(15min–4h)`; asks armed overnight (1am/5am ET passes) land OUTSIDE the
+  `[9,18)` working-window guard (`fireDueConfirmAsks`, autowork.server.ts:218) so they all WAIT and become due at
+  the 9am window boundary → collapse into a 9am pileup (cap 2/user/tick just drips 11 out over ~6 min).
+- FIX DESIGN (user-specified 2026-08-06): fan asks across TWO config windows — **business 9–18 AND evening 20–22**
+  (the gap is a deliberate break) — sourced from config, not hardcoded. Nothing should be scheduled OUTSIDE those
+  windows. If an ask ever IS armed outside a window, JITTER-SCHEDULE it across the NEXT open window (spread), NOT
+  fire it all at once at the window's opening edge. Arming (autowork.server.ts 442/506 = `now+jitter`) is the bug:
+  overnight/late asks land outside [9,18) and the fire-window guard (218) holds+dumps them at 9am.
+- [OPEN] build window-relative fan-out (business+evening from config) + straggler re-jitter → verify live.
+
+### ACT-huddle-22 (~12 UP_NEXT items DISAPPEARED overnight without traversing the WIP flow) — ROOT-CAUSED
+User (2026-08-06, CLARIFIED): NOT the in-review count — "the number of **up next** that disappeared without
+traversing through the WIP." I.e. items that were in UP_NEXT are gone from UP_NEXT but never moved forward
+DOING→IN_REVIEW→DONE. Do NOT restore/undo (user declined); the concern is the BEHAVIOR going forward.
+ROOT CAUSE = same journey nightly-schedule-builder (below): re-staging OVERWRITES status to 'TODO' (lines 837/1344/1454)
+so UP_NEXT (and IN_REVIEW/DOING) tasks get knocked back to TODO overnight — they "disappear" from UP_NEXT without
+any WIP progression. FIX must stop journey's planner from clobbering Huddle's WIP status. (Earlier IN_REVIEW framing:)
+- OBSERVED (journey public.tasks, ref wwxgajrtmslzklnyplah): 0 rows at IN_REVIEW now; enum HAS IN_REVIEW/DOING so
+  those are valid values sitting empty. 220 DONE — but NO DONE row was updated today/overnight (newest DONE update
+  2026-08-05 05:00), so the review items were NOT marked DONE.
+- OBSERVED: overnight 2026-08-06 05:00 UTC (1am ET) ~8 tasks → TODO; 13:00 UTC (9am ET) ~11 tasks → UP_NEXT. No row
+  shows a transition FROM IN_REVIEW in the >=20:00 window (a demotion before 20:00, or a DELETE (invisible to
+  updated_at), is still possible).
+- IN FLIGHT: querying Huddle mirror (Azure PG tasks.journey_tasks) + `task_engagement_state.entered_review_at`
+  (stamped on IN_REVIEW entry) to identify which tasks WERE in review and their CURRENT status — the decisive read.
+- SUSPECTS to rule in/out: an overnight autowork/groom pass demoting IN_REVIEW→TODO/UP_NEXT (would be a serious
+  bug — grooming is supposed to never write status, autowork only promotes forward); mirror↔journey divergence +
+  a re-sync overwriting IN_REVIEW; or a journey-side nightly planner reset. Root cause NOT yet established.
+- [BUILT 2026-08-06, journey commit d66e57a, deploy HELD] Ground-truthed in nightly-schedule-builder: candidate
+  query (index.ts:956) pulls `is_scheduled=false` tasks with status IN (READY,UP_NEXT,TODO,BACKLOG) — so UP_NEXT is
+  a scheduling candidate — and all THREE write-sites (846 tier-A, 1353 main-commit, 1463 reshuffle-retry) hardcoded
+  `status:'TODO'` when assigning a time. So the planner time-blocks an UP_NEXT task and resets its lane to TODO → it
+  vanishes from UP_NEXT without any WIP progression. FIX: `statusAfterSchedule(prev)` preserves an already-advanced
+  WIP status (UP_NEXT/DOING/IN_REVIEW), only un-staged (READY/BACKLOG/TODO/null) → TODO. Each site already captured
+  pre_schedule_status, so the value was in hand. `is_scheduled` flips true, so no re-selection loop. sibling
+  nightly-assignment-sync `status:'TODO'` is an INSERT of NEW tasks, not an update — left alone.
+- [OPEN] LIVE proof pending deploy (deploy-supabase-functions.yml): schedule an UP_NEXT task, confirm it keeps UP_NEXT
+  + gains a time (not reset to TODO). User declined restore of already-lost items — behavior-going-forward only.
+
+### ACT-huddle-21 (vonellis2 duplicate-profile bug — oid canonicalization + data merge)
+User: "randomly my username is recreated as vonellis2 after logging in with one of the emails … it also fails a lot
+when trying to add the second email from the gui. there shouldn't be vonellis2 user." Full detail in memory.md.
+- [DONE] Root-caused: `entra-verify.server.ts` `oid = payload.oid || payload.sub`; sub≠oid across logins →
+  `getOrCreateProfile` (oid-only reconcile) minted a 2nd profile; email already linked → duplicate got no emails.
+- [DONE] `canonicalOid(tokenOid,email)` + `identity.profile_oids` alias table; wired into getOrCreateProfile,
+  profile.functions.withClaims, workspace.functions load/save. Committed ce83e3e → merged db8ef59 → **deployed main
+  (deploy run 31031336742 success)**.
+- [DONE] Backed up both workspace_state blobs + profiles + emails → `identity.merge_backup_20260805*`.
+- [DONE] Guarded copy moved the LIVE ~908 KB workspace_state from duplicate `112d7852` → survivor `a89e3652`
+  (vonellis). Verified both rows = 907,862 B.
+- [DONE] Pre-seeded alias `112d7852→a89e3652` so the next login resolves deterministically to vonellis.
+- [PENDING — USER LIVE TEST] log in with EACH email → land on ONE `vonellis`, both emails present, today's settings
+  intact, add-email works. THEN and only then:
+- [BLOCKED on the live test — DESTRUCTIVE] delete duplicate profile `112d7852` (workspace_state row, then profiles
+  row). Reversal path: restore from merge_backup_20260805; drop the seeded alias.
 
 ### ACT-huddle-20 (ceremony barge + stand-up polish — deployed live 2026-08-05, iterated from real transcripts)
 Driven by the user's live stand-up transcripts + the persisted `barge_route` logging. All DEPLOYED on main:

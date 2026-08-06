@@ -6,7 +6,12 @@ const AuthInput = z.object({ idToken: z.string().min(20) });
 async function withClaims<T>(idToken: string, fn: (claims: { oid: string; email: string | null; name: string | null }) => Promise<T>) {
   const { verifyEntraIdToken } = await import("@/lib/entra-verify.server");
   const claims = await verifyEntraIdToken(idToken);
-  return fn({ oid: claims.oid, email: claims.email, name: claims.name });
+  // Canonicalize the token id → the ONE profile this person owns, so EVERY profile op (username, emails,
+  // display name) targets the canonical profile and an oid/sub-rotated token can't act on/create a
+  // duplicate. Idempotent with getOrCreateProfile's own canonicalization.
+  const { canonicalOid } = await import("@/features/huddle/lib/identity/identity.server");
+  const oid = await canonicalOid(claims.oid, claims.email);
+  return fn({ oid, email: claims.email, name: claims.name });
 }
 
 export const getMyProfile = createServerFn({ method: "POST" })

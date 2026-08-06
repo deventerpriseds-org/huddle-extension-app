@@ -115,14 +115,11 @@ function turnPayload(
   };
 }
 
-// Confirm-intent gate jitter (docs/plan-wip-confirm-review-gate.md, Part 1): a fresh UP_NEXT candidate
-// gets a ONE-TIME random delay before its confirm-intent ask fires, so multiple agents' fresh items
-// don't all message the user in the same autowork pass. autowork itself only checks 3x/day (9/13/17
-// local, see scheduler.server.ts DEFAULT_AUTOWORK_HOURS) — that cadence is already confined to
-// reasonable hours, so no separate "working hours" calculation is needed here: whichever check first
-// lands after the jittered instant is when the ask actually fires.
-const CONFIRM_JITTER_MIN_MS = 15 * 60_000;
-const CONFIRM_JITTER_MAX_MS = 4 * 60 * 60_000;
+// Confirm-intent reach-out scheduling (docs/plan-wip-confirm-review-gate.md, Part 1): a fresh UP_NEXT
+// candidate is armed with a ONE-TIME `confirm_ask_at` placed at a random instant INSIDE a fan-out
+// window (see nextFanSlotIso below — business 9–18 + evening 20–22 by default), so multiple agents'
+// fresh items arrive spread across the day rather than all in one autowork pass or bunched at a single
+// window edge, and never outside those hours.
 
 /** The directive the assigned agent runs to confirm intent + propose a Definition of Done. */
 function confirmIntentDirective(task: {
@@ -158,6 +155,178 @@ function confirmIntentDirective(task: {
     `in your next reply and ask them to weigh in — don't keep retrying on your own. Do not create tasks ` +
     `or send email.`
   );
+}
+
+// Minute-granular confirm-ask throttle. Reach-outs are spread by ARMING each ask at a random instant
+// INSIDE a fan-out window (see nextFanSlotIso — business 9–18 + evening 20–22 by default), so they
+// arrive fanned across the day and never outside those hours. Firing is checked every heartbeat and
+// only proceeds while we're inside a window; a small per-user per-tick cap smooths any residual
+// pile-up so it still feels like a teammate, not a blast.
+const CONFIRM_FIRE_MAX_PER_USER_PER_TICK = 2;
+
+// ── Fan-out window math ─────────────────────────────────────────────────────────────────────────
+// Windows are inclusive-start/exclusive-end LOCAL hour ranges (in the user's tz). We place each ask at
+// a uniformly-random minute inside the next open window instead of `now + jitter(15m–4h)` (which could
+// land at any hour and then relied on a fire-guard to hold+dump the whole overnight batch at 9am).
+type WinRange = { start: number; end: number };
+type TzClock = { y: number; mo: number; d: number; h: number; mi: number; s: number };
+
+function tzClock(d: Date, tz: string): TzClock {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(d);
+  const o: Record<string, string> = {};
+  for (const p of parts) if (p.type !== "literal") o[p.type] = p.value;
+  let h = Number(o.hour);
+  if (h === 24) h = 0; // some engines emit "24" at midnight under hour12:false — normalize
+  return { y: Number(o.year), mo: Number(o.month), d: Number(o.day), h, mi: Number(o.minute), s: Number(o.second) };
+}
+
+/** ms to add to a wall clock read as UTC to recover the true instant, under `d`'s tz rules. */
+function tzOffsetMs(d: Date, tz: string): number {
+  const c = tzClock(d, tz);
+  const asUTC = Date.UTC(c.y, c.mo - 1, c.d, c.h, c.mi, c.s);
+  return asUTC - Math.floor(d.getTime() / 1000) * 1000;
+}
+
+/** Is `now` currently inside any fan-out window (local hours in tz)? */
+function insideFanWindow(now: Date, tz: string, windows: WinRange[]): boolean {
+  const c = tzClock(now, tz);
+  const m = c.h * 60 + c.mi;
+  return windows.some((w) => m >= w.start * 60 && m < w.end * 60);
+}
+
+/**
+ * A uniformly-random instant INSIDE the next open fan-out window, as an ISO string. If `now` is inside
+ * a window with room left, fans across the REMAINDER of that window; otherwise the next window today,
+ * or the first window tomorrow. Always returns an instant that is inside a window and > now.
+ */
+function nextFanSlotIso(now: Date, tz: string, windows: WinRange[]): string {
+  const wins = windows.filter((w) => w.end > w.start).sort((a, b) => a.start - b.start);
+  if (!wins.length) return new Date(now.getTime() + 60 * 60_000).toISOString(); // no windows → 1h fallback
+  const c = tzClock(now, tz);
+  const nowMin = c.h * 60 + c.mi;
+  // Offset is sampled at `now` but applied to a target up to ~24h out, so across a DST transition the
+  // armed instant can skew ±1h. That's self-healing, not a bug: `fireDueConfirmAsks` re-checks
+  // insideFanWindow at fire time, so a skewed instant that lands outside a window (pre-9am, or the
+  // 18–20 dinner gap) is re-fanned into a valid slot rather than fired out-of-hours.
+  const offset = tzOffsetMs(now, tz);
+  const at = (dayOffset: number, minuteOfDay: number): string => {
+    const asUTC = Date.UTC(c.y, c.mo - 1, c.d + dayOffset, Math.floor(minuteOfDay / 60), minuteOfDay % 60, 0);
+    return new Date(asUTC - offset).toISOString();
+  };
+  const randInt = (a: number, b: number) => a + Math.floor(Math.random() * Math.max(1, b - a)); // [a,b)
+  // 1) inside a window with ≥1 min of room left → fan across the remainder
+  for (const w of wins) {
+    const s = w.start * 60;
+    const e = w.end * 60;
+    if (nowMin >= s && nowMin < e - 1) return at(0, randInt(nowMin + 1, e));
+  }
+  // 2) a later window today → fan across its full span
+  for (const w of wins) {
+    if (w.start * 60 > nowMin) return at(0, randInt(w.start * 60, w.end * 60));
+  }
+  // 3) nothing left today → first window tomorrow
+  const w0 = wins[0];
+  return at(1, randInt(w0.start * 60, w0.end * 60));
+}
+
+/**
+ * Fire every confirm-intent ask whose jittered `confirm_ask_at` has elapsed, at its own instant — the
+ * random fan-out across the working day (vs the old "all bunch onto 9/13/17"). Called each scheduler
+ * heartbeat (scheduler.server.ts). ARMING (setting confirm_ask_at) stays on the auto-work/groom passes;
+ * only FIRING is decoupled here. `markConfirmAsked` is set-once (awaiting→asked), so this never
+ * double-sends against the full pass's own confirmDue path. Never throws.
+ */
+export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number> {
+  let due: import("./tasks.server").DueConfirmAsk[];
+  try {
+    const { getDueConfirmAsks } = await import("./tasks.server");
+    due = await getDueConfirmAsks(now.toISOString(), 100);
+  } catch {
+    return 0;
+  }
+  if (!due.length) return 0;
+
+  const { markConfirmAsked, reArmConfirmAskAt } = await import("./tasks.server");
+  const { enqueueTurn } = await import("./turns.server");
+  const { resolveJobCadence, resolveConfirmFanWindows, CONFIRM_FAN_WINDOWS_DEFAULT } = await import(
+    "../identity/scheduling-config.server"
+  );
+
+  const byUser = new Map<string, typeof due>();
+  for (const row of due) {
+    const arr = byUser.get(row.user_email) ?? [];
+    arr.push(row);
+    byUser.set(row.user_email, arr);
+  }
+
+  let fired = 0;
+  for (const [email, rows] of byUser) {
+    // Working-hours window in the user's own tz (from their scheduling config; ET default).
+    let tz = "America/New_York";
+    try {
+      tz = (await resolveJobCadence(email, "autowork")).tz || tz;
+    } catch {
+      /* default tz */
+    }
+    // Fan-out windows for this user (business + evening by default).
+    let windows = CONFIRM_FAN_WINDOWS_DEFAULT;
+    try {
+      windows = await resolveConfirmFanWindows(email);
+    } catch {
+      /* default windows */
+    }
+    // Only fire while we're INSIDE a window. If we're outside one, any ask that's come due is a
+    // STRAGGLER (armed the old now+jitter way, or left unsent when a window closed) — re-fan it across
+    // the NEXT open window rather than holding the whole batch to dump at the window's opening edge.
+    if (!insideFanWindow(now, tz, windows)) {
+      for (const row of rows) {
+        try {
+          await reArmConfirmAskAt(row.task_id, email, nextFanSlotIso(now, tz, windows));
+        } catch {
+          /* one bad re-arm never blocks the rest */
+        }
+      }
+      continue;
+    }
+
+    let sent = 0;
+    for (const row of rows) {
+      if (sent >= CONFIRM_FIRE_MAX_PER_USER_PER_TICK) break;
+      if (!row.assigned_agent) continue;
+      try {
+        const justAsked = await markConfirmAsked(row.task_id); // set-once awaiting→asked; wins the race
+        if (!justAsked) continue;
+        const caller: Caller = { entra_email: email };
+        const directive = confirmIntentDirective({
+          id: row.task_id,
+          title: row.title,
+          assigned_agent: row.assigned_agent,
+          category: row.category,
+          tags: row.tags,
+        });
+        await enqueueTurn(
+          `autowork-confirm-${row.task_id}`,
+          `dm-${row.assigned_agent}`,
+          email,
+          turnPayload({ assigned_agent: row.assigned_agent }, directive, tz, caller, "push"),
+        );
+        fired++;
+        sent++;
+      } catch {
+        /* one bad ask never blocks the rest */
+      }
+    }
+  }
+  return fired;
 }
 
 /** Surface grooming-flagged blocked items in the coordinator's DM (report-only). One short turn. */
@@ -341,8 +510,16 @@ export async function runScheduledAutoWork(
             ),
           ),
         );
-        const armNow = Date.now();
-        const armJitter = () => CONFIRM_JITTER_MIN_MS + Math.random() * (CONFIRM_JITTER_MAX_MS - CONFIRM_JITTER_MIN_MS);
+        const armNow = new Date();
+        const { resolveConfirmFanWindows, CONFIRM_FAN_WINDOWS_DEFAULT } = await import(
+          "../identity/scheduling-config.server"
+        );
+        let armWindows = CONFIRM_FAN_WINDOWS_DEFAULT;
+        try {
+          armWindows = await resolveConfirmFanWindows(email);
+        } catch {
+          /* default windows */
+        }
         await Promise.all(
           stagedForConfirm
             .filter((f) => {
@@ -351,7 +528,7 @@ export async function runScheduledAutoWork(
               return (s?.confirm_status ?? "awaiting") !== "confirmed" && !s?.confirm_ask_at; // not confirmed & not already armed
             })
             .map((f) =>
-              ensureConfirmAskAt(f.task.id, email, new Date(armNow + armJitter()).toISOString()).catch(() => {}),
+              ensureConfirmAskAt(f.task.id, email, nextFanSlotIso(armNow, tz, armWindows)).catch(() => {}),
             ),
         );
       } catch {
@@ -413,9 +590,20 @@ export async function runScheduledAutoWork(
   }
 
   if (needsAskAt.length) {
-    const jitterMs = () => CONFIRM_JITTER_MIN_MS + Math.random() * (CONFIRM_JITTER_MAX_MS - CONFIRM_JITTER_MIN_MS);
+    const { resolveConfirmFanWindows, CONFIRM_FAN_WINDOWS_DEFAULT } = await import(
+      "../identity/scheduling-config.server"
+    );
+    let askWindows = CONFIRM_FAN_WINDOWS_DEFAULT;
+    try {
+      askWindows = await resolveConfirmFanWindows(email);
+    } catch {
+      /* default windows */
+    }
+    const armNow = new Date(now);
     await Promise.all(
-      needsAskAt.map((taskId) => ensureConfirmAskAt(taskId, email, new Date(now + jitterMs()).toISOString()).catch(() => {})),
+      needsAskAt.map((taskId) =>
+        ensureConfirmAskAt(taskId, email, nextFanSlotIso(armNow, tz, askWindows)).catch(() => {}),
+      ),
     );
   }
 

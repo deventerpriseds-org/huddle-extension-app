@@ -1,0 +1,46 @@
+name: Send a test push (diagnostic)
+
+# Sends a PURE push through journey's send_push (no agent turn) on selectable channels, to isolate
+# which notification channel actually lands on the Huddle bridge app. Uses the shared JOURNEY_PROXY_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Caller email (journey user)."
+        required: true
+        default: "dev@enterpriseds.io"
+      channels:
+        description: "Comma-separated channels to test."
+        required: false
+        default: "messages,task-reminders"
+      app:
+        description: 'Source-app tag. "huddle" = app-namespaced token; "none" = journey-native (no filter).'
+        required: false
+        default: "huddle"
+
+jobs:
+  test-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/public/test-push
+        env:
+          SECRET: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          EMAIL: ${{ inputs.email }}
+          CHANNELS: ${{ inputs.channels }}
+          APP: ${{ inputs.app }}
+        run: |
+          if [ -z "$SECRET" ]; then echo "JOURNEY_PROXY_TOKEN secret not set"; exit 1; fi
+          RUN_ID="testpush-$(date -u +%Y%m%d%H%M%S)"
+          CH_JSON=$(python3 -c "import json,os;print(json.dumps([c.strip() for c in os.environ['CHANNELS'].split(',') if c.strip()]))")
+          echo "Sending test push to $EMAIL on channels $CH_JSON app=$APP (runId=$RUN_ID)"
+          HTTP=$(curl -s -o /tmp/testpush.out -w "%{http_code}" -X POST \
+            -H "content-type: application/json" \
+            -H "x-webhook-secret: $SECRET" \
+            -d "{\"caller\":{\"entra_email\":\"$EMAIL\"},\"channels\":$CH_JSON,\"app\":\"$APP\",\"runId\":\"$RUN_ID\"}" \
+            "$BASE/api/public/test-push")
+          echo "HTTP $HTTP"
+          echo "--- response ---"
+          cat /tmp/testpush.out; echo
+          if [ "$HTTP" != "200" ]; then echo "test-push failed"; exit 1; fi

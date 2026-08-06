@@ -12,8 +12,13 @@ name: Deploy to Azure (Static Web Apps)
 
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [main]
+  # Auto-deploy on every push to main. Because this fires ONLY on `main`, it structurally enforces the
+  # "deploy main only" rule (a feature branch can no longer be deployed by accident) AND removes the
+  # manual dispatch step that kept leaving fixes un-deployed. The concurrency block below serializes
+  # overlapping deploys. Re-enabled 2026-08-06 at the user's explicit request ("deploy after syncing;
+  # we can always revert"). To pause auto-deploy, comment these two lines out again.
+  push:
+    branches: [main]
 
 # Serialize deploys — without this, two dispatches close together (e.g. two agent sessions each
 # deploying their own branch) run concurrently and whichever finishes last wins on the shared SWA,

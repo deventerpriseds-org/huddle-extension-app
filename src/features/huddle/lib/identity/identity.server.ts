@@ -58,6 +58,18 @@ CREATE TABLE IF NOT EXISTS identity.identity_cache (
   time_zone   TEXT,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- OID aliases: an Entra id token can present a DIFFERENT id for the same person across logins — the
+-- verify path falls back oid->sub, and sub is a per-app/per-token-type subject that differs from the
+-- stable oid. Keyed on oid, each row maps a seen token-id to the ONE canonical profile it belongs to, so a
+-- rotated/alternate id resolves to the existing user instead of minting a duplicate profile (the
+-- 'vonellis2' bug, 2026-08-05). Reconciliation is by the sign-in EMAIL (unique per profile).
+CREATE TABLE IF NOT EXISTS identity.profile_oids (
+  oid             TEXT PRIMARY KEY,
+  entra_object_id TEXT NOT NULL REFERENCES identity.profiles(entra_object_id) ON DELETE CASCADE,
+  added_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS profile_oids_owner_idx ON identity.profile_oids(entra_object_id);
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -148,7 +160,11 @@ export async function getOrCreateProfile(claims: {
   name: string | null;
 }): Promise<ProfileBundle> {
   await ensureBootstrapped();
-  const existing = await fetchBundle(claims.oid);
+  // Canonicalize the token id to the ONE profile this person owns (reconciles oid/sub variance by the
+  // sign-in email), so a rotated/alternate token id resolves to the existing user instead of minting a
+  // duplicate profile. For a genuinely new user this is just claims.oid.
+  const oid = await canonicalOid(claims.oid, claims.email);
+  const existing = await fetchBundle(oid);
   if (existing) {
     // Backfill Entra sign-in email if the token has one and it's not stored.
     if (claims.email) {
@@ -160,12 +176,12 @@ export async function getOrCreateProfile(claims: {
             `INSERT INTO identity.profile_emails (entra_object_id, email, source)
              VALUES ($1, $2, 'entra')
              ON CONFLICT (lower(email)) DO NOTHING`,
-            [claims.oid, normalized],
+            [oid, normalized],
           );
         } catch {
           // If the email is claimed by another profile, ignore — surfaced elsewhere.
         }
-        const refreshed = await fetchBundle(claims.oid);
+        const refreshed = await fetchBundle(oid);
         if (refreshed) return refreshed;
       }
     }
@@ -190,21 +206,21 @@ export async function getOrCreateProfile(claims: {
       attempt += 1;
       username = `${base}${attempt + 1}`;
       if (attempt > 100) {
-        username = `${base}-${claims.oid.slice(0, 6)}`;
+        username = `${base}-${oid.slice(0, 6)}`;
         break;
       }
     }
     await client.query(
       `INSERT INTO identity.profiles (entra_object_id, username, display_name)
        VALUES ($1, $2, $3)`,
-      [claims.oid, username, claims.name],
+      [oid, username, claims.name],
     );
     if (claims.email) {
       await client.query(
         `INSERT INTO identity.profile_emails (entra_object_id, email, source)
          VALUES ($1, $2, 'entra')
          ON CONFLICT (lower(email)) DO NOTHING`,
-        [claims.oid, claims.email.trim().toLowerCase()],
+        [oid, claims.email.trim().toLowerCase()],
       );
     }
     await client.query("COMMIT");
@@ -215,7 +231,7 @@ export async function getOrCreateProfile(claims: {
     client.release();
   }
 
-  const bundle = await fetchBundle(claims.oid);
+  const bundle = await fetchBundle(oid);
   if (!bundle) throw new Error("Failed to create profile");
   return bundle;
 }
@@ -298,6 +314,49 @@ export async function resolveObjectIdByEmail(email: string | undefined | null): 
     return r.rowCount && r.rowCount > 0 ? r.rows[0].entra_object_id : null;
   } catch {
     return null; // identity DB unavailable — caller decides (fail-closed)
+  }
+}
+
+/** Read the canonical profile id an alias oid points at (null if not aliased). */
+async function getProfileOidAlias(oid: string): Promise<string | null> {
+  const r = await getPool().query<{ entra_object_id: string }>(
+    `SELECT entra_object_id FROM identity.profile_oids WHERE oid = $1`,
+    [oid],
+  );
+  return r.rowCount && r.rowCount > 0 ? r.rows[0].entra_object_id : null;
+}
+
+/** Record token-oid -> canonical profile id (idempotent; first writer wins). */
+async function recordProfileOidAlias(oid: string, canonical: string): Promise<void> {
+  await getPool().query(
+    `INSERT INTO identity.profile_oids (oid, entra_object_id) VALUES ($1, $2)
+     ON CONFLICT (oid) DO NOTHING`,
+    [oid, canonical],
+  );
+}
+
+/**
+ * Resolve the id an Entra token presents to the ONE canonical profile id it belongs to — the guard that
+ * stops a rotated/alternate token id (oid vs sub) from minting a duplicate profile. Resolution:
+ *   1. an existing alias for this token id wins;
+ *   2. else the sign-in EMAIL (unique per profile) is the strongest stable signal — if it already owns a
+ *      profile, THAT is canonical, and we record the token id as an alias so future lookups are direct;
+ *   3. else fall back to the token id itself (a genuinely new user, created by getOrCreateProfile).
+ * Never throws — on a DB hiccup it returns the token id (today's behavior), so login never hard-fails.
+ */
+export async function canonicalOid(tokenOid: string, email: string | null | undefined): Promise<string> {
+  try {
+    await ensureBootstrapped();
+    const aliased = await getProfileOidAlias(tokenOid);
+    if (aliased) return aliased;
+    const owner = await resolveObjectIdByEmail(email);
+    if (owner) {
+      if (owner !== tokenOid) await recordProfileOidAlias(tokenOid, owner);
+      return owner;
+    }
+    return tokenOid;
+  } catch {
+    return tokenOid;
   }
 }
 

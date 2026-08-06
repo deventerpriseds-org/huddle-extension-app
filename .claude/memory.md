@@ -13,6 +13,169 @@ User: "agents operate like they have no connected logic/memory/brain… they hav
 ### Settings toggles: improvements shipped OFF-by-default are DORMANT (user caught this 2026-08-06)
 Config defaults (`agent-backends.ts:122-136`): fastMode OFF, strictPrompt OFF, soloOnCoverage **ON**, interjections OFF, `ceremonyEngine:"current"` (Optimized-ceremony-engine toggle OFF). So "Optimized ceremony engine", "Strict router prompt", "Substantive interjections" did **nothing** for the user's recent standups — they're opt-in, defaulted off for reversibility. **The barge-routing unification and the Part A board digest are NOT toggle-gated** — unconditional for ceremony barges. User's point (correct): a correctness improvement shouldn't be an off-by-default toggle you have to discover. Open decision: flip the good toggles default-ON and/or make memory/grounding fixes unconditional.
 
+## Board IN_REVIEW items VANISH overnight — journey's nightly-schedule-builder demotes IN_REVIEW/DOING → TODO (2026-08-06, ROOT-CAUSED, fix NOT yet built)
+User awoke to ~12 IN_REVIEW board items gone, board "practically empty." GROUND TRUTH (not inference):
+- journey `public.tasks` (ref wwxgajrtmslzklnyplah): 0 rows IN_REVIEW now; enum HAS IN_REVIEW/DOING (valid, empty).
+  220 DONE but NEWEST DONE update is 2026-08-05 05:00 → the review items were NOT marked DONE.
+- Huddle mirror `tasks.task_engagement_state.entered_review_at` (stamped on IN_REVIEW entry) JOIN journey_tasks:
+  ~13 tasks have entered_review_at (all 2026-08-05 12:48–16:21 UTC) but CURRENT status = UP_NEXT(10)/TODO(2)/BACKLOG(1).
+  i.e. they reached IN_REVIEW yesterday and got DEMOTED back. TODO-demotions updated at 2026-08-06 **05:00 UTC (=1am ET)**;
+  the UP_NEXT ones at 13:00 UTC (=9am ET, Huddle autowork re-promoting the now-TODO tasks).
+- ROOT CAUSE (journey-voice `supabase/functions/nightly-schedule-builder/index.ts`, cron job 11 = `'0 5 * * *'` = 1am ET):
+  its candidate pools use **`.not('status','in','("DONE","BLOCKED")')`** (lines **659** assignment-tier, **944** topic-
+  `mappedTasks`, **975** re-filter) which SWEEPS UP IN_REVIEW/DOING (they're neither DONE nor BLOCKED), schedules them,
+  and OVERWRITES status to `'TODO'` (lines **837 / 1344 / 1454**; old status saved in `scheduling_context.pre_schedule_status`).
+  The week-ahead `readyUpNextTasks` pool (line **956**) already uses the SAFE whitelist `.in('status',['READY','UP_NEXT','TODO','BACKLOG'])`
+  which excludes IN_REVIEW/DOING — proof the exclusion is the intended contract, just not applied to the other 3 pools.
+- SYSTEMATIC FIX (not a one-site patch): add IN_REVIEW+DOING to the exclusion in ALL three `.not in` candidate pools →
+  `("DONE","BLOCKED","IN_REVIEW","DOING")`, so journey's planner is hands-off for Huddle's in-flight WIP lanes. Also
+  audit the stale-auto-DONE paths (554/602 → 572/613) to not DONE an IN_REVIEW task. RESTORE the wrongly-demoted rows
+  (recoverable via `scheduling_context.pre_schedule_status` + `entered_review_at`) — a LIVE data write, confirm first.
+- This ALSO amplifies the 9am confirm-ask batch (below): the 1am demotion → 9am Huddle re-promotion arms a fresh pile of asks.
+
+## Confirm-asks STILL bunch at 9am (not random fan-out) — jitter is `now+rand` then WINDOW-CLAMPED → boundary pileup (2026-08-06, ROOT-CAUSED)
+User: "you have them all coming at the exact same time all at once … a batch at 9am." Not a deploy miss — a design bug in B:
+- ARMING (`autowork.server.ts` 442/506): `ensureConfirmAskAt(now + jitter)` where jitter = 15min–4h (CONFIRM_JITTER_MIN/MAX).
+- FIRING (`fireDueConfirmAsks` 218): guarded to the working window `[9,18)` local tz.
+- BUG: asks armed overnight or after ~2pm land OUTSIDE [9,18); the window guard makes them all WAIT and become due at the
+  9am boundary → they fire together at 9am (cap 2/user/tick just drips the pile over a few minutes). Confirmed at DB level:
+  11 tasks all touched at 2026-08-06 13:00:03 UTC (9am ET).
+- FIX DIRECTION (not yet built): arm at a **uniformly-random instant WITHIN the next working window [9,18)** in the user's tz,
+  not `now+jitter` then clamp — clamping is what collapses everything onto the boundary. Keep the set-once guard.
+- **BUILT 2026-08-06 (commit da648da, branch `claude/iris-huddle-interaction-baj51c`, deploy HELD for user OK).** User
+  refined the design: fan across TWO config windows — **business 9–18 + evening 20–22** (18–20 gap = deliberate break) — and
+  if an ask ever lands outside a window, **re-jitter it across the NEXT window, not dump at the edge**. Implemented:
+  - `scheduling-config.server.ts`: `FanWindow`, `CONFIRM_FAN_WINDOWS_DEFAULT=[{9,18},{20,22}]`, `resolveConfirmFanWindows(email)`
+    (returns default today; async+email-scoped so a per-user override layers in later — "from the config", single source).
+  - `autowork.server.ts`: tz-aware `tzClock`/`tzOffsetMs`/`insideFanWindow`/`nextFanSlotIso`; BOTH arming sites (promoteOnly
+    ~522 + full-pass ~588) now `ensureConfirmAskAt(nextFanSlotIso(...))`; fire-guard fires only INSIDE a window and, when
+    OUTSIDE, re-fans due stragglers across the next window via `reArmConfirmAskAt`. Removed CONFIRM_JITTER_* + single-window
+    consts.
+  - `tasks.server.ts`: `reArmConfirmAskAt` (force-overwrite, `WHERE confirm_status='awaiting'` only — never resurrects a sent ask).
+  - OFFLINE-PROVEN (mirror unit test /tmp/fanwin): 3am & 9am arms → fan 9:03–17:58 (no 9am bunch); 6:30pm → evening 20:00–21:58
+    (18–20 gap respected); all samples inside windows. tsc clean. LIVE proof pending deploy.
+
+## Deploys are now AUTOMATIC on push to `main` (2026-08-06, user-requested — "deploy after syncing; we can always revert")
+User was frustrated that fixes kept never reaching prod (the manual `deploy-swa.yml` dispatch step kept dying on
+runner starvation — two deploys sat 15min with no runner and got auto-cancelled). Fix = re-enabled the
+`on: push: branches:[main]` trigger in `deploy-swa.yml` (was commented out). This REMOVES the manual step AND
+structurally enforces the old "deploy main only" rule (auto path fires only from main → a feature branch can't reach
+prod by accident). Updated the CLAUDE.md "Deploy funnel" hard rule to match. journey's `deploy-supabase-functions.yml`
+ALREADY auto-deploys on push to main for `supabase/functions/**` — so journey edge fns ship by merging to journey main.
+**New ship flow: get code onto `main` → deploy fires itself.** To pause: comment the `push:` trigger back out. The
+merge-to-main discipline (merge main→branch first, union of all completed work) is unchanged.
+
+## Confirm-intent reach-outs now fire minute-granular (random fan-out), not batched 3x/day (2026-08-06, deployed, NOT yet live-proven)
+User: reach-outs bunched at 9/13/17 because the jittered `confirm_ask_at` only FIRED when the full auto-work pass ran
+(3x/day). FIX (B): decoupled FIRING from the 3x/day pass. `getDueConfirmAsks(nowIso)` (tasks.server.ts) +
+`fireDueConfirmAsks(now)` (autowork.server.ts) run EVERY scheduler heartbeat (scheduler.server.ts runDueScheduledJobs,
+the journey pg_cron→run-turn every-minute poke). Each armed ask fires at ITS jittered instant → spread across the day.
+Guards: working-hours window **[9,18) local tz** (a late-jittered ask waits for the window to reopen — no 9pm pings) +
+per-user per-tick cap 2. ARMING (confirm_ask_at) stays on the auto-work/groom passes; `markConfirmAsked` is set-once so
+this never double-sends vs the full pass's confirmDue. STATUS: tsc + full build clean + deployed main (e48d948). NOT
+live-proven — deployed ~1am ET (outside [9,18)), nothing fires until daytime. Proof = tomorrow the 9/13/17 passes ARM
+asks and they trickle out across 9am-6pm instead of bunching. Window/cap are consts in autowork.server.ts.
+
+## PENDING (design approved, NOT built): confirm-CAPTURE (A) — deterministic, not model-dependent
+confirmIntentDirective tells the agent to call `confirm_task_intent` AFTER the user replies — but that directive rides
+ONLY the OUTBOUND reach-out turn; the user's REPLY turn carries no such context, so the agent answers conversationally
+and never records it. LIVE PROOF (2026-08-06): "Go to church" reached Faith, user confirmed in chat, Faith
+acknowledged — but engagement stayed `confirm_status='asked'`, proposed/confirmed DoD EMPTY, so it never left UP_NEXT.
+FIX DESIGN (agreed; do NOT rely on the model calling the tool): when the user replies in a DM that has a task in
+`confirm_status='asked'` for that agent+user, the RUNTIME records `confirm_task_intent` DETERMINISTICALLY in code
+(status->confirmed + save DoD) + injects a directive so the agent's WORDING is coherent — state change enforced by
+code, not model discretion (same "code, not prompt" pattern as action-ledger/meta-task guard). Build next on user go.
+
+## Huddle away-message pushes stop arriving in the Huddle bridge app = STALE app:huddle FCM token (2026-08-06, PROVEN + fixed live)
+Symptom: "heads-up" away-message notifications (channel=messages/task-reminders, app=huddle) stop landing in the
+standalone Huddle Android bridge app, while journey's own reminders/alarms keep arriving. Regressed ~2 days before
+report; NO push code changed (the app:"huddle" send + journey filter both date to 2026-07-26).
+ROOT CAUSE: the `fcm:app:huddle:<token>` registration in journey `public.push_subscriptions` went STALE — the
+device's real FCM token rotated/invalidated but the row kept the dead token. **Key gotcha: FCM's HTTP v1 keeps
+returning `fcm_send_success` for a stale-but-not-yet-GC'd token** (accepts != delivers), so journey logs success and
+nothing arrives. Only after the device clears data does FCM flip that token to `fcm_send_failed`.
+HOW TO DIAGNOSE (journey Supabase, ref wwxgajrtmslzklnyplah): `activity_log` rows — `fcm_send_success`/`fcm_send_failed`
+carry `metadata->>'token_prefix'` + `channel`; `android_alarm_trace` rows carry the bridge's `FCM_RX chan=...`
+RECEIPT logs (written before display). Token topology for this user: native token `eRmxp...` = the **Journey Voice**
+bridge app (journey-native pushes, no `app` filter); `fcm:app:huddle:...` = the **Huddle** bridge app. A stale huddle
+token shows send-success but ZERO `FCM_RX`. Diagnostic tool built this session: **`/api/public/test-push`** +
+`test-push.yml` (input `app`: "huddle" vs "none"=journey-native) sends a PURE push to compare app-token vs native
+delivery — the native/app A/B is what proved it (native arrived in Journey Voice app; app:huddle did not).
+**FIX (user-side, fast): CLEAR THE HUDDLE BRIDGE APP'S DATA/CACHE (or reinstall / log out+in) → forces a fresh FCM
+token + a new `register_push_token(app:"huddle")`.** Verified live: after clearing, a NEW row `fcm:app:huddle:fhHLc...`
+appeared and a real assignment reach-out (Faith "Go to church", run-autowork confirmAsked:1) logged `fcm_send_success`
+to `fhHLc...` while the old `cmmabohkSyi...` flipped to `fcm_send_failed`. Cleaned up: DELETEd the 2 stale
+`cmmabohkSyi` push_subscription rows (one under real user a3378f93, one under the leftover journey shadow user
+4132de9e = von.ellis@, created 2026-08-01 — that shadow auth.users row still exists and should be fully cleaned).
+journey does NOT auto-delete FCM subs on `fcm_send_failed` (only web-push on failure), so stale huddle tokens must be
+pruned by hand. Consider a code follow-up: delete the huddle sub on an FCM UNREGISTERED/NOT_FOUND response.
+
+
+## Huddle push "not received" ROOT CAUSE — data-only FCM + bridge-app render, NOT Huddle/journey send (2026-08-06)
+Symptom: agent reach-outs + a direct test push never appear on the user's phone, though the user runs the Huddle
+bridge app. GROUND-TRUTH (journey Supabase, project wwxgajrtmslzklnyplah):
+- Huddle side is CORRECT end-to-end: arm->fire->reply generated (real text)->send_push. Confirmed the 5PM cadence
+  DID fire (8 reach-outs done) and a direct /api/public/test-push (new diag endpoint) both sent.
+- journey `activity_log`: EVERY push (test + all 8 reach-outs) = `fcm_send_success` successCount:1 failureCount:0 to
+  token cmmabohkSyi... (the huddle bridge token, refreshed same day). So Huddle->journey->FCM ALL succeed; FCM
+  ACKs delivery to the bridge token. journey's "sent" is real per-token FCM success, not optimistic.
+- Root cause = the LAST hop: `send-push-notification/index.ts` builds a **data-only** FCM message (NO top-level
+  `notification` object) ON PURPOSE (so the Android bridge's onMessageReceived can route alarm-channel payloads to
+  a looping AlarmSoundService). Data-only messages are NOT auto-displayed by Android — the bridge app must render
+  them, and won't if it's force-stopped/battery-optimized or its handler doesn't post the `messages`/`task-reminders`
+  channel. => FCM success + nothing shown.
+Identity note (ruled out as the cause): journey `profiles.id` for dev@ (113eec07) != `auth.users.id` (a3378f93);
+push_subscriptions + tasks are keyed on the AUTH id a3378f93 (has the token + 234 tasks), and journey resolves dev@
+-> a3378f93 (tasks work), so the push targeted the RIGHT fresh token. A stale shadow auth user 4132de9e
+(von.ellis@, created 2026-08-01) still holds 1 old huddle-token row — leftover from the Aug-1 journey-side
+"vonellis2" shadow; harmless to the push but should be cleaned.
+FIX PATHS (not yet done, needs user go-ahead — journey-voice change):
+1. Robust/code: in send-push-notification, send a `notification`(+data) message for NON-alarm channels
+   (messages/task-reminders/calendar_events) so Android system-tray displays even when the app is killed; keep
+   data-only ONLY for the alarm channel (which needs the looping-sound custom handler). Targeted, safe.
+2. Device: ensure the bridge app isn't force-stopped/battery-optimized + notifications enabled (fragile — a killed
+   app still won't get data-only msgs).
+Diagnostic tool built + deployed this session: `/api/public/test-push` (Huddle) + `test-push.yml` workflow — sends a
+pure push (no agent turn) on selectable channels to isolate delivery. Reusable.
+
+Last updated: 2026-08-05
+
+## vonellis2 duplicate-profile bug — FIXED via oid-canonicalization + data merge (2026-08-05) — DEPLOYED main (deploy run 31031336742 success). NOT yet user-confirmed live (login is user-only).
+**Symptom (user):** logging in with one of two emails randomly recreates the username as **`vonellis2`**;
+adding the second email from the GUI fails often. "there shouldn't be vonellis2 user."
+**Root cause (ground-truthed live):** `src/lib/entra-verify.server.ts` extracts `oid = payload.oid || payload.sub`;
+`sub` is a per-app/per-token-type subject that DIFFERS from the stable `oid`, so the same person can present two
+ids across logins. `getOrCreateProfile` reconciled ONLY by oid → an alternate id minted a 2nd profile (username
+collision → `vonellis2`); the email was already linked to the original profile (unique per email) so the duplicate
+got NO emails → add-email from GUI also broke.
+**Two profiles found (identity.profiles, entra_object_id=TEXT):**
+- `a89e3652-…` = **vonellis** (created 07-09, the ORIGINAL) — owns BOTH emails (`dev@` manual + `von.ellis@` entra);
+  workspace_state was STALE (5,898 B, July 9).
+- `112d7852-…` = **vonellis2** (created 07-11, the DUPLICATE) — **no emails**; held the **LIVE** workspace_state
+  (~908 KB, updated today). So valuables were SPLIT: good name+emails on original, live data on duplicate.
+**Merge surface is TINY** — only 3 app tables key on `entra_object_id`: `identity.profiles`, `.profile_emails`,
+`.workspace_state`. Everything else (tasks/chat/artifacts/config/engagement) is EMAIL-scoped and both emails
+already resolve to a89e3652. So the survivor is the ORIGINAL a89e3652 (already has name+emails, is where
+canonicalOid-by-email + all email-scoped data resolve); we only had to carry the ONE valuable thing off the
+duplicate: its live workspace blob.
+**Fix (code, committed ce83e3e, merged db8ef59, deployed):** new `identity.profile_oids` alias table +
+`canonicalOid(tokenOid, email)` in `identity.server.ts` — (1) existing alias wins; (2) else reconcile by sign-in
+EMAIL (unique per profile) and RECORD the token id as an alias; (3) else fall back to token id (new user). Never
+throws (DB hiccup → returns token id, login never hard-fails). Wired into `getOrCreateProfile`,
+`profile.functions.withClaims` (username/email/display ops), and `workspace.functions` load/save.
+**Data ops (via azure-pg-query.yml, admin conn — psql runs multi-stmt as ONE txn, so a mid-error rolls back all):**
+(1) backed up both workspace_state blobs + both profiles + emails to `identity.merge_backup_20260805` /
+`_profiles_` / `_emails_` (reversibility); (2) guarded copy `UPDATE workspace_state dst←src WHERE src.updated_at >
+dst.updated_at` moved the 908 KB from 112d7852 → a89e3652; (3) pre-seeded alias `112d7852→a89e3652` in
+profile_oids so the user's NEXT login resolves deterministically without relying on the email path firing first try.
+**GOTCHA:** `workspace_state.entra_object_id` is TEXT (matches profiles) — a first attempt declaring the backup col
+`uuid` failed `uuid vs text`; the whole txn rolled back cleanly (nothing written). Use TEXT.
+**STILL PENDING — the ONLY destructive step, GATED on user live-confirm:** delete the duplicate profile
+`112d7852` (its workspace_state row THEN the profiles row; profile_oids alias for 112d7852 points at a89e3652 so it
+survives the delete — that's the desired end state). Do NOT delete until the user logs in with EACH email → lands on
+ONE `vonellis` with both emails + today's settings intact + add-email works. Reversal if needed: restore from
+merge_backup_20260805; delete the seeded alias row.
+
 ## Ceremony-barge routing UNIFIED into the router — "user calls Finn, Terry answers" fixed (2026-08-05) — DEPLOYED main (run 31030010818 success), mechanism verified offline, NOT yet user-confirmed live
 Ground-truthed from the live standup transcript (run 16:24:35, `chat.ceremony_transcript`): the barge was
 **"Great, while you're doing that, uh, Finn, are you here?"** — "Finn" is **mid-sentence**; the client

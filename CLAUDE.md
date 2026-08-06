@@ -14,12 +14,24 @@ confirmation. When in doubt, summarize what you're about to do and wait.
    did this without confirming with me." Revert was then too risky (interleaved with another live
    session), so the cost was permanent. Confirm first.)*
 
-## Deploy funnel: ALWAYS deploy `main`, never a feature branch (hard rule — races corrupted prod twice)
+## Deploy funnel: deploys are AUTOMATIC on push to `main` (never a feature branch)
 
-`deploy-swa.yml` is `workflow_dispatch`-only against whatever `ref` you pass it, and prod is simply
-"whatever branch was last dispatched" — there is no server-side check that the deployed ref is
+**As of 2026-08-06 (user's explicit request — "deploy after syncing; we can always revert"),
+`deploy-swa.yml` auto-deploys on every push to `main`** (`on: push: branches: [main]`, plus
+`workflow_dispatch` kept for manual re-runs). This both (a) removes the manual dispatch step that kept
+leaving fixes un-deployed, and (b) STRUCTURALLY enforces the old "deploy main only" rule — the auto path
+can fire only from `main`, so a feature branch can no longer reach prod by accident. **So the way to ship
+is simply: get your code onto `main` (the merge flow below) and the deploy fires itself.** Do NOT
+dispatch `deploy-swa.yml` against a feature branch (the manual path still accepts a ref — don't). To pause
+auto-deploy, comment the `push:` trigger back out in `deploy-swa.yml`.
+
+The merge-to-`main` discipline below is UNCHANGED and still matters — it's how you make sure what lands on
+`main` (and thus what auto-deploys) is the union of all completed work, not a stale slice.
+
+Historical context for why "main only" exists (the race that `push:main` now prevents structurally):
+prod was "whatever branch was last **dispatched**" — no server-side check that the deployed ref was
 newer, more complete, or even related to the previous deploy. With multiple Claude sessions working
-different feature branches in parallel, this is a real race, not a hypothetical:
+different feature branches in parallel, this was a real race:
 
 **What actually happened (2026-07-29):** session A pushed a Sidebar/ContextPanel collapse feature to
 `act5-autonomy` and deployed it — but that branch had diverged from `main` before an unrelated

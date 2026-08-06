@@ -69,6 +69,37 @@ export interface SchedulingConfig {
   overrides: Partial<Record<JobTypeKey, JobCadence>>;
 }
 
+/**
+ * A fan-out window in the user's local tz, as an inclusive-start / exclusive-end hour range.
+ * Confirm-intent asks (the auto-work reach-outs that buzz the user's phone) are scheduled at a
+ * RANDOM instant inside one of these windows so they arrive spread through the day, never bunched
+ * at a single boundary and never outside these hours.
+ */
+export interface FanWindow {
+  start: number; // local hour, inclusive (0–24)
+  end: number; // local hour, exclusive (0–24)
+}
+
+/**
+ * Shipped default fan-out windows for confirm-asks: business hours 9–18 and evening 20–22. The gap
+ * (18–20) is a deliberate break so the user isn't pinged over dinner; nothing is scheduled after 22
+ * or before 9. Sourced HERE (the one scheduling-config module), not as magic numbers buried in the
+ * autowork scheduler — same single-source-of-truth ethos as SCHEDULING_DEFAULTS above.
+ */
+export const CONFIRM_FAN_WINDOWS_DEFAULT: FanWindow[] = [
+  { start: 9, end: 18 },
+  { start: 20, end: 22 },
+];
+
+/**
+ * Resolve the EFFECTIVE confirm-ask fan-out windows for a user. Today returns the shipped default;
+ * kept async + email-scoped so a per-user override can be layered in later (mirroring
+ * resolveJobCadence) without touching any call site. Never throws.
+ */
+export async function resolveConfirmFanWindows(_email: string): Promise<FanWindow[]> {
+  return CONFIRM_FAN_WINDOWS_DEFAULT;
+}
+
 const EMPTY_CONFIG: SchedulingConfig = { overrides: {} };
 
 /** Read the raw stored overrides for an email (empty object when nothing is set). */
