@@ -29,6 +29,18 @@ User: "you have them all coming at the exact same time all at once … a batch a
   11 tasks all touched at 2026-08-06 13:00:03 UTC (9am ET).
 - FIX DIRECTION (not yet built): arm at a **uniformly-random instant WITHIN the next working window [9,18)** in the user's tz,
   not `now+jitter` then clamp — clamping is what collapses everything onto the boundary. Keep the set-once guard.
+- **BUILT 2026-08-06 (commit da648da, branch `claude/iris-huddle-interaction-baj51c`, deploy HELD for user OK).** User
+  refined the design: fan across TWO config windows — **business 9–18 + evening 20–22** (18–20 gap = deliberate break) — and
+  if an ask ever lands outside a window, **re-jitter it across the NEXT window, not dump at the edge**. Implemented:
+  - `scheduling-config.server.ts`: `FanWindow`, `CONFIRM_FAN_WINDOWS_DEFAULT=[{9,18},{20,22}]`, `resolveConfirmFanWindows(email)`
+    (returns default today; async+email-scoped so a per-user override layers in later — "from the config", single source).
+  - `autowork.server.ts`: tz-aware `tzClock`/`tzOffsetMs`/`insideFanWindow`/`nextFanSlotIso`; BOTH arming sites (promoteOnly
+    ~522 + full-pass ~588) now `ensureConfirmAskAt(nextFanSlotIso(...))`; fire-guard fires only INSIDE a window and, when
+    OUTSIDE, re-fans due stragglers across the next window via `reArmConfirmAskAt`. Removed CONFIRM_JITTER_* + single-window
+    consts.
+  - `tasks.server.ts`: `reArmConfirmAskAt` (force-overwrite, `WHERE confirm_status='awaiting'` only — never resurrects a sent ask).
+  - OFFLINE-PROVEN (mirror unit test /tmp/fanwin): 3am & 9am arms → fan 9:03–17:58 (no 9am bunch); 6:30pm → evening 20:00–21:58
+    (18–20 gap respected); all samples inside windows. tsc clean. LIVE proof pending deploy.
 
 ## Confirm-intent reach-outs now fire minute-granular (random fan-out), not batched 3x/day (2026-08-06, deployed, NOT yet live-proven)
 User: reach-outs bunched at 9/13/17 because the jittered `confirm_ask_at` only FIRED when the full auto-work pass ran
