@@ -75,21 +75,15 @@ jobs:
           az containerapp env show -g "$RG" -n "$ACA_ENV" --only-show-errors >/dev/null 2>&1 || \
           az containerapp env create -g "$RG" -n "$ACA_ENV" -l "$LOCATION" --only-show-errors >/dev/null
 
-      - name: Deploy the MCP app (postgres-mcp + caddy bearer sidecar)
-        env:
-          BEARER: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+      - name: Deploy the MCP app (postgres-mcp, no-auth — Option A)
         run: |
           set -euo pipefail
           ENV_ID=$(az containerapp env show -g "$RG" -n "$ACA_ENV" --query id -o tsv)
           DB_URI="postgresql://${{ github.event.inputs.ro_role }}:${RO_PW}@${PG_SERVER}.postgres.database.azure.com:5432/${{ github.event.inputs.db }}?sslmode=require"
-          # Caddy: require exactly `Authorization: Bearer <MCP_BEARER>` then reverse-proxy to the MCP on :8000.
-          # Base64-encoded so it survives as a single, safe YAML scalar (no multi-line indentation hazard);
-          # the container decodes it to /etc/caddy/Caddyfile at startup. Caddy substitutes {$MCP_BEARER} at load.
-          CADDY_B64=$(printf '%s' ':8080 {
-          	@ok header Authorization "Bearer {$MCP_BEARER}"
-          	handle @ok { reverse_proxy localhost:8000 }
-          	respond "Unauthorized" 401
-          }' | base64 -w0)
+          # OPTION A (no auth): ingress points straight at the read-only MCP on :8000 — no caddy/bearer,
+          # because claude.ai custom connectors speak OAuth or no-auth, not a static bearer header. Security
+          # rests on the unguessable ACA URL + the read-only `mcp_readonly` role (no writes possible).
+          # Option B (OAuth in front) is the planned hardening; this proves the pipeline end-to-end first.
           cat > app.yaml <<YAML
           properties:
             managedEnvironmentId: ${ENV_ID}
@@ -97,14 +91,12 @@ jobs:
               activeRevisionsMode: Single
               ingress:
                 external: true
-                targetPort: 8080
+                targetPort: 8000
                 transport: auto
                 allowInsecure: false
               secrets:
                 - name: db-uri
                   value: "${DB_URI}"
-                - name: mcp-bearer
-                  value: "${BEARER}"
             template:
               scale: { minReplicas: 1, maxReplicas: 1 }
               containers:
@@ -115,16 +107,6 @@ jobs:
                   env:
                     - name: DATABASE_URI
                       secretRef: db-uri
-                - name: caddy
-                  image: caddy:2
-                  resources: { cpu: 0.25, memory: 0.5Gi }
-                  env:
-                    - name: MCP_BEARER
-                      secretRef: mcp-bearer
-                    - name: CADDY_B64
-                      value: "${CADDY_B64}"
-                  command: ["sh", "-c"]
-                  args: ["echo \"\$CADDY_B64\" | base64 -d > /etc/caddy/Caddyfile && caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"]
           YAML
           if az containerapp show -g "$RG" -n "$ACA_APP" --only-show-errors >/dev/null 2>&1; then
             az containerapp update -g "$RG" -n "$ACA_APP" --yaml app.yaml --only-show-errors >/dev/null
@@ -136,7 +118,10 @@ jobs:
         run: |
           FQDN=$(az containerapp show -g "$RG" -n "$ACA_APP" --query properties.configuration.ingress.fqdn -o tsv)
           echo "============================================================"
-          echo "MCP is deployed. Register in claude.ai -> Settings -> Connectors -> Add custom connector:"
-          echo "  URL:    https://${FQDN}/sse"
-          echo "  Header: Authorization: Bearer <JOURNEY_PROXY_TOKEN value>"
+          echo "MCP is deployed (no-auth / Option A). Register in claude.ai -> Settings -> Connectors -> Add custom connector:"
+          echo "  URL:  https://${FQDN}/sse"
+          echo "  Auth: leave Advanced settings BLANK (no OAuth, no token)"
           echo "============================================================"
+          # Quick health probe from the runner (which CAN reach the ACA host, unlike the session).
+          echo "--- health probe ---"
+          curl -sS -m 15 -o /dev/null -w "GET /sse -> HTTP %{http_code}\n" "https://${FQDN}/sse" || echo "probe failed"
