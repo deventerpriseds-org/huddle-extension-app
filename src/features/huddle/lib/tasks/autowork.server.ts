@@ -160,6 +160,94 @@ function confirmIntentDirective(task: {
   );
 }
 
+// Minute-granular confirm-ask delivery window + throttle. The ASK's jittered instant (confirm_ask_at)
+// is what spreads reach-outs across the day; firing is checked every heartbeat so each ask goes out at
+// ~its own instant instead of bunching onto the 3x/day pass. A working-hours window keeps a late-jittered
+// ask (e.g. armed 5pm + 4h) from pinging at 9pm — it waits for the window to reopen. A small per-user
+// per-tick cap smooths any pile-up so it still feels like a teammate, not a blast.
+const CONFIRM_FIRE_WINDOW_START = 9; // local hour, inclusive
+const CONFIRM_FIRE_WINDOW_END = 18; // local hour, exclusive
+const CONFIRM_FIRE_MAX_PER_USER_PER_TICK = 2;
+
+/**
+ * Fire every confirm-intent ask whose jittered `confirm_ask_at` has elapsed, at its own instant — the
+ * random fan-out across the working day (vs the old "all bunch onto 9/13/17"). Called each scheduler
+ * heartbeat (scheduler.server.ts). ARMING (setting confirm_ask_at) stays on the auto-work/groom passes;
+ * only FIRING is decoupled here. `markConfirmAsked` is set-once (awaiting→asked), so this never
+ * double-sends against the full pass's own confirmDue path. Never throws.
+ */
+export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number> {
+  let due: import("./tasks.server").DueConfirmAsk[];
+  try {
+    const { getDueConfirmAsks } = await import("./tasks.server");
+    due = await getDueConfirmAsks(now.toISOString(), 100);
+  } catch {
+    return 0;
+  }
+  if (!due.length) return 0;
+
+  const { markConfirmAsked } = await import("./tasks.server");
+  const { enqueueTurn } = await import("./turns.server");
+  const { resolveJobCadence } = await import("../identity/scheduling-config.server");
+
+  const byUser = new Map<string, typeof due>();
+  for (const row of due) {
+    const arr = byUser.get(row.user_email) ?? [];
+    arr.push(row);
+    byUser.set(row.user_email, arr);
+  }
+
+  let fired = 0;
+  for (const [email, rows] of byUser) {
+    // Working-hours window in the user's own tz (from their scheduling config; ET default).
+    let tz = "America/New_York";
+    try {
+      tz = (await resolveJobCadence(email, "autowork")).tz || tz;
+    } catch {
+      /* default tz */
+    }
+    let localHour = 0;
+    try {
+      localHour =
+        Number(
+          new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "2-digit", hourCycle: "h23" }).format(now),
+        ) % 24;
+    } catch {
+      localHour = now.getUTCHours();
+    }
+    if (!(localHour >= CONFIRM_FIRE_WINDOW_START && localHour < CONFIRM_FIRE_WINDOW_END)) continue;
+
+    let sent = 0;
+    for (const row of rows) {
+      if (sent >= CONFIRM_FIRE_MAX_PER_USER_PER_TICK) break;
+      if (!row.assigned_agent) continue;
+      try {
+        const justAsked = await markConfirmAsked(row.task_id); // set-once awaiting→asked; wins the race
+        if (!justAsked) continue;
+        const caller: Caller = { entra_email: email };
+        const directive = confirmIntentDirective({
+          id: row.task_id,
+          title: row.title,
+          assigned_agent: row.assigned_agent,
+          category: row.category,
+          tags: row.tags,
+        });
+        await enqueueTurn(
+          `autowork-confirm-${row.task_id}`,
+          `dm-${row.assigned_agent}`,
+          email,
+          turnPayload({ assigned_agent: row.assigned_agent }, directive, tz, caller, "push"),
+        );
+        fired++;
+        sent++;
+      } catch {
+        /* one bad ask never blocks the rest */
+      }
+    }
+  }
+  return fired;
+}
+
 /** Surface grooming-flagged blocked items in the coordinator's DM (report-only). One short turn. */
 async function surfaceBlocked(opts: { email: string; tz: string; caller: Caller; titles: string[]; runId: string }): Promise<void> {
   const list = opts.titles.slice(0, 8).map((t) => `- ${t.slice(0, 120)}`).join("\n");

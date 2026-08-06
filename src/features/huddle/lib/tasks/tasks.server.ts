@@ -668,6 +668,41 @@ export async function markConfirmAsked(taskId: string): Promise<boolean> {
   return (rowCount ?? 0) > 0;
 }
 
+export interface DueConfirmAsk {
+  task_id: string;
+  user_email: string;
+  assigned_agent: string | null;
+  title: string;
+  category: string | null;
+  tags: string[] | null;
+}
+
+/**
+ * Armed-but-unsent confirm-intent asks whose jittered `confirm_ask_at` has elapsed — i.e. due to FIRE
+ * NOW. Read every heartbeat by the scheduler so each ask goes out at its own jittered instant (random
+ * fan-out across the working day) instead of batching to the 3x/day auto-work pass. Only 'awaiting' rows
+ * with a due `confirm_ask_at` on a still-open, agent-assigned task; ordered oldest-due first.
+ */
+export async function getDueConfirmAsks(nowIso: string, limit = 100): Promise<DueConfirmAsk[]> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<DueConfirmAsk>(
+    `SELECT es.task_id, es.user_email, jt.assigned_agent, jt.title, jt.category, jt.tags
+       FROM tasks.task_engagement_state es
+       JOIN tasks.journey_tasks jt
+         ON jt.id = es.task_id AND lower(jt.user_email) = lower(es.user_email)
+      WHERE es.confirm_status = 'awaiting'
+        AND es.confirm_ask_at IS NOT NULL
+        AND es.confirm_ask_at <= $1::timestamptz
+        AND jt.assigned_agent IS NOT NULL
+        AND upper(coalesce(jt.status, '')) <> 'DONE'
+        AND NOT ('parking-lot' = ANY(jt.tags))
+      ORDER BY es.confirm_ask_at ASC
+      LIMIT $2`,
+    [nowIso, limit],
+  );
+  return rows;
+}
+
 /** Stamp the instant a task actually moved to IN_REVIEW — call wherever markTaskInReview is called. */
 export async function markEnteredReview(taskId: string, userEmail: string): Promise<void> {
   await ensureBootstrapped();
