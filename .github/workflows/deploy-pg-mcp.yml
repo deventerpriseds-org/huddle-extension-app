@@ -53,8 +53,12 @@ jobs:
           echo "::add-mask::$RO_PW"
           echo "RO_PW=$RO_PW" >> "$GITHUB_ENV"
           IP=$(curl -s https://api.ipify.org || curl -s https://checkip.amazonaws.com | tr -d '\n')
+          # Best-effort: some az builds on the runner reject --rule-name here. Don't hard-fail — the
+          # server already has firewall rules that admit runners + Azure services (same as azure-pg-query.yml,
+          # which relies on this and connects fine). psql below still runs; if it truly can't connect, THAT fails.
           az postgres flexible-server firewall-rule create -g "$RG" -s "$PG_SERVER" \
-            --rule-name "mcpdeploy-${IP//./-}" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null
+            --rule-name "mcpdeploy-${IP//./-}" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 \
+            || echo "firewall-rule create skipped — relying on existing server rules"
           HOST="$PG_SERVER.postgres.database.azure.com"
           psql "host=$HOST port=5432 dbname=${{ github.event.inputs.db }} user=Admin_eds sslmode=require" \
             -v ON_ERROR_STOP=1 -v role="${{ github.event.inputs.ro_role }}" -v pw="$RO_PW" <<'SQL'
