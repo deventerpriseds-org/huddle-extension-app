@@ -42,6 +42,16 @@ User: "you have them all coming at the exact same time all at once … a batch a
   - OFFLINE-PROVEN (mirror unit test /tmp/fanwin): 3am & 9am arms → fan 9:03–17:58 (no 9am bunch); 6:30pm → evening 20:00–21:58
     (18–20 gap respected); all samples inside windows. tsc clean. LIVE proof pending deploy.
 
+## Deploys are now AUTOMATIC on push to `main` (2026-08-06, user-requested — "deploy after syncing; we can always revert")
+User was frustrated that fixes kept never reaching prod (the manual `deploy-swa.yml` dispatch step kept dying on
+runner starvation — two deploys sat 15min with no runner and got auto-cancelled). Fix = re-enabled the
+`on: push: branches:[main]` trigger in `deploy-swa.yml` (was commented out). This REMOVES the manual step AND
+structurally enforces the old "deploy main only" rule (auto path fires only from main → a feature branch can't reach
+prod by accident). Updated the CLAUDE.md "Deploy funnel" hard rule to match. journey's `deploy-supabase-functions.yml`
+ALREADY auto-deploys on push to main for `supabase/functions/**` — so journey edge fns ship by merging to journey main.
+**New ship flow: get code onto `main` → deploy fires itself.** To pause: comment the `push:` trigger back out. The
+merge-to-main discipline (merge main→branch first, union of all completed work) is unchanged.
+
 ## Confirm-intent reach-outs now fire minute-granular (random fan-out), not batched 3x/day (2026-08-06, deployed, NOT yet live-proven)
 User: reach-outs bunched at 9/13/17 because the jittered `confirm_ask_at` only FIRED when the full auto-work pass ran
 (3x/day). FIX (B): decoupled FIRING from the 3x/day pass. `getDueConfirmAsks(nowIso)` (tasks.server.ts) +
