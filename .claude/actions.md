@@ -1,5 +1,47 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-08-05 (ACT-huddle-21 — vonellis2 duplicate-profile fix DEPLOYED; pending user live-login confirm before deleting the duplicate)
+Last updated: 2026-08-06 (ACT-huddle-22/23 opened — board IN_REVIEW items vanished overnight + confirm-asks still bunching at 9am)
+
+### ACT-huddle-24 (confirm-CAPTURE (A) — 1:1 reply records confirm-intent) — DEPLOYED, NOT live-proven
+User asked "build A". When the user replies in a `dm-<agent>` huddle that has a task at `confirm_status='asked'`
+for that agent, that reply IS the confirmation. Before A the reply turn carried no confirm context, so the agent
+just acknowledged and the task froze in Up Next.
+- [DONE] `getPendingConfirmForAgent(email,agentId)` (tasks.server.ts) + deterministic capture in `runHuddleTurn`
+  (model-independent: plain-confirmation → `confirmTaskIntent` + journey `update_task` DoD mirror) +
+  `confirmReplyDirective` injected into the responding agent's scene (calls confirm_task_intent + propose_approach).
+- [DONE] tsc clean + `npm run build` ✓ → commit a1557b0 → merged main c893c8c → **deployed (deploy run 31073307409 success)**.
+- [OPEN — NOT live-proven] end-to-end confirm→confirmed→propose_approach→UP_NEXT→DOING needs a real DM reply.
+  Live precondition CONFIRMED: "Go to church"(faith) + 5 others sit at confirm_status='asked' now. Independent
+  verifier subagent auditing. NOTE: `proposed_dod` is empty on every asked row (pre-existing gap — nothing writes
+  it at ask-time; A falls back to reply text; confirmTaskIntent flips status regardless).
+
+### ACT-huddle-23 (confirm-asks STILL bunch at 9am instead of random fan-out across the day) — INVESTIGATING
+User (2026-08-06): "despite my request to have the asks jittered randomly throughout the day, you have them all
+coming at the exact same time all at once as i just received a batch at 9am."
+- OBSERVED (journey public.tasks): at 2026-08-06 13:00:03 UTC (=9:00am ET) 11 tasks were touched in the same
+  ~30ms → the 9am auto-work pass. That's when the batch of asks landed.
+- HYPOTHESIS (not yet code-confirmed): B fires each ask at its jittered `confirm_ask_at` via the every-minute
+  scheduler, BUT arming = `now + jitter(15min–4h)`; asks armed overnight (1am/5am ET passes) land OUTSIDE the
+  `[9,18)` working-window guard (`fireDueConfirmAsks`, autowork.server.ts:218) so they all WAIT and become due at
+  the 9am window boundary → collapse into a 9am pileup (cap 2/user/tick just drips 11 out over ~6 min).
+- FIX DIRECTION (not yet built): jitter should place the ask at a RANDOM instant WITHIN the next working window
+  [9,18), not wall-clock `now+jitter` then clamp — clamping is what creates the boundary pileup. Also verify the
+  old batched confirmDue path in the full autowork pass isn't ALSO firing at 9/13/17.
+- [OPEN] confirm root cause in code (arming site + window guard) → build window-relative jitter → verify live.
+
+### ACT-huddle-22 (board's ~12 IN_REVIEW items VANISHED overnight; board "practically empty") — INVESTIGATING (data-loss, URGENT)
+User (2026-08-06): "i awoke to all 12 of the boards in review items gone, with the board practically empty."
+- OBSERVED (journey public.tasks, ref wwxgajrtmslzklnyplah): 0 rows at IN_REVIEW now; enum HAS IN_REVIEW/DOING so
+  those are valid values sitting empty. 220 DONE — but NO DONE row was updated today/overnight (newest DONE update
+  2026-08-05 05:00), so the review items were NOT marked DONE.
+- OBSERVED: overnight 2026-08-06 05:00 UTC (1am ET) ~8 tasks → TODO; 13:00 UTC (9am ET) ~11 tasks → UP_NEXT. No row
+  shows a transition FROM IN_REVIEW in the >=20:00 window (a demotion before 20:00, or a DELETE (invisible to
+  updated_at), is still possible).
+- IN FLIGHT: querying Huddle mirror (Azure PG tasks.journey_tasks) + `task_engagement_state.entered_review_at`
+  (stamped on IN_REVIEW entry) to identify which tasks WERE in review and their CURRENT status — the decisive read.
+- SUSPECTS to rule in/out: an overnight autowork/groom pass demoting IN_REVIEW→TODO/UP_NEXT (would be a serious
+  bug — grooming is supposed to never write status, autowork only promotes forward); mirror↔journey divergence +
+  a re-sync overwriting IN_REVIEW; or a journey-side nightly planner reset. Root cause NOT yet established.
+- [OPEN] establish root cause from entered_review_at data → identify the demoting/deleting code → fix + restore.
 
 ### ACT-huddle-21 (vonellis2 duplicate-profile bug — oid canonicalization + data merge)
 User: "randomly my username is recreated as vonellis2 after logging in with one of the emails … it also fails a lot

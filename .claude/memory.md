@@ -1,5 +1,35 @@
 # Project Memory — huddle-extension-app
 
+## Board IN_REVIEW items VANISH overnight — journey's nightly-schedule-builder demotes IN_REVIEW/DOING → TODO (2026-08-06, ROOT-CAUSED, fix NOT yet built)
+User awoke to ~12 IN_REVIEW board items gone, board "practically empty." GROUND TRUTH (not inference):
+- journey `public.tasks` (ref wwxgajrtmslzklnyplah): 0 rows IN_REVIEW now; enum HAS IN_REVIEW/DOING (valid, empty).
+  220 DONE but NEWEST DONE update is 2026-08-05 05:00 → the review items were NOT marked DONE.
+- Huddle mirror `tasks.task_engagement_state.entered_review_at` (stamped on IN_REVIEW entry) JOIN journey_tasks:
+  ~13 tasks have entered_review_at (all 2026-08-05 12:48–16:21 UTC) but CURRENT status = UP_NEXT(10)/TODO(2)/BACKLOG(1).
+  i.e. they reached IN_REVIEW yesterday and got DEMOTED back. TODO-demotions updated at 2026-08-06 **05:00 UTC (=1am ET)**;
+  the UP_NEXT ones at 13:00 UTC (=9am ET, Huddle autowork re-promoting the now-TODO tasks).
+- ROOT CAUSE (journey-voice `supabase/functions/nightly-schedule-builder/index.ts`, cron job 11 = `'0 5 * * *'` = 1am ET):
+  its candidate pools use **`.not('status','in','("DONE","BLOCKED")')`** (lines **659** assignment-tier, **944** topic-
+  `mappedTasks`, **975** re-filter) which SWEEPS UP IN_REVIEW/DOING (they're neither DONE nor BLOCKED), schedules them,
+  and OVERWRITES status to `'TODO'` (lines **837 / 1344 / 1454**; old status saved in `scheduling_context.pre_schedule_status`).
+  The week-ahead `readyUpNextTasks` pool (line **956**) already uses the SAFE whitelist `.in('status',['READY','UP_NEXT','TODO','BACKLOG'])`
+  which excludes IN_REVIEW/DOING — proof the exclusion is the intended contract, just not applied to the other 3 pools.
+- SYSTEMATIC FIX (not a one-site patch): add IN_REVIEW+DOING to the exclusion in ALL three `.not in` candidate pools →
+  `("DONE","BLOCKED","IN_REVIEW","DOING")`, so journey's planner is hands-off for Huddle's in-flight WIP lanes. Also
+  audit the stale-auto-DONE paths (554/602 → 572/613) to not DONE an IN_REVIEW task. RESTORE the wrongly-demoted rows
+  (recoverable via `scheduling_context.pre_schedule_status` + `entered_review_at`) — a LIVE data write, confirm first.
+- This ALSO amplifies the 9am confirm-ask batch (below): the 1am demotion → 9am Huddle re-promotion arms a fresh pile of asks.
+
+## Confirm-asks STILL bunch at 9am (not random fan-out) — jitter is `now+rand` then WINDOW-CLAMPED → boundary pileup (2026-08-06, ROOT-CAUSED)
+User: "you have them all coming at the exact same time all at once … a batch at 9am." Not a deploy miss — a design bug in B:
+- ARMING (`autowork.server.ts` 442/506): `ensureConfirmAskAt(now + jitter)` where jitter = 15min–4h (CONFIRM_JITTER_MIN/MAX).
+- FIRING (`fireDueConfirmAsks` 218): guarded to the working window `[9,18)` local tz.
+- BUG: asks armed overnight or after ~2pm land OUTSIDE [9,18); the window guard makes them all WAIT and become due at the
+  9am boundary → they fire together at 9am (cap 2/user/tick just drips the pile over a few minutes). Confirmed at DB level:
+  11 tasks all touched at 2026-08-06 13:00:03 UTC (9am ET).
+- FIX DIRECTION (not yet built): arm at a **uniformly-random instant WITHIN the next working window [9,18)** in the user's tz,
+  not `now+jitter` then clamp — clamping is what collapses everything onto the boundary. Keep the set-once guard.
+
 ## Confirm-intent reach-outs now fire minute-granular (random fan-out), not batched 3x/day (2026-08-06, deployed, NOT yet live-proven)
 User: reach-outs bunched at 9/13/17 because the jittered `confirm_ask_at` only FIRED when the full auto-work pass ran
 (3x/day). FIX (B): decoupled FIRING from the 3x/day pass. `getDueConfirmAsks(nowIso)` (tasks.server.ts) +
