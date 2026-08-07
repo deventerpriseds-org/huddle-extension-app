@@ -35,13 +35,25 @@ merged a 2nd SessionStart group into `.claude/settings.json` (preserving the exi
 Stop gate). Validated: hook exit 0 ("up to date in 6s") + local no-op; eslint exit 0; `test:router` 9/9 pass.
 Committed to branch. Takes effect for all future sessions once merged to the default branch.
 
-### ACT-huddle-27 (runner-free Azure-PG querying — Option 1 in progress 2026-08-06)
-- [DEPLOYED 2026-08-06] deploy-pg-mcp run 31128907824 **success** (got a runner in a free-pool window; earlier cancellations were org concurrency contention, not billing). ACA app `huddle-pg-mcp` in EnterpriseDS_ResourceGRP; URL `https://huddle-pg-mcp.yellowcoast-c773a5f7.eastus.azurecontainerapps.io/sse`; bearer=JOURNEY_PROXY_TOKEN. Fixed the `az --rule-name` quirk (non-fatal firewall create). NEXT: user adds custom connector in claude.ai → verify query through it. OPEN RISKS: (a) container health/PG-connect unverified from session (azurecontainerapps.io egress-blocked); (b) claude.ai connector UI may want OAuth not a static bearer header — if so, rework caddy to accept token via URL query.
-Deep research (2 agents) → hosting a read-only Postgres MCP as a remote connector bypasses session egress
-(brokered like Supabase). User chose the dedicated-container path. Built `deploy-pg-mcp.yml`: crystaldba/
-postgres-mcp (--access-mode=restricted) + caddy bearer sidecar on ACA, `mcp_readonly` (pg_read_all_data),
-bearer=JOURNEY_PROXY_TOKEN. Also: eds skill `query-supabase` (PR eds#15) documents the Supabase-MCP runner-free
-path (works TODAY). NEXT: dispatch deploy-pg-mcp → user adds the connector in claude.ai → verify → write eds skill.
+### ACT-huddle-27 (runner-free Azure-PG querying — Option B/OAuth in progress 2026-08-07)
+- [IN PROGRESS 2026-08-07] **Pivoted A→B: claude.ai custom connectors REQUIRE OAuth + Dynamic Client
+  Registration (RFC 7591)** — the no-auth/bearer path is rejected ("Couldn't register with sign-in service").
+  So `deploy-pg-mcp.yml` now fronts crystaldba with **obot-platform/mcp-oauth-proxy** (OAuth AS+RS w/ DCR,
+  delegates login to Google via existing GOOGLE_CLIENT_ID/SECRET — no new secret). Topology: one ACA app
+  `huddle-pg-mcp`, two containers — `oauth` (obot, external :8080) → localhost:8000 → `pgmcp` (crystaldba,
+  --access-mode=restricted, internal). Connector URL `https://huddle-pg-mcp.yellowcoast-c773a5f7.eastus.azurecontainerapps.io/sse`.
+- Bugs found + fixed this pass (each GROUND-TRUTHED from container logs): (1) ACA resource combo invalid →
+  obot 0.25cpu/0.5Gi = total 0.75/1.5Gi. (2) obot crash `permission denied for schema public (SQLSTATE 42501)`
+  → PG15 DB-owner still lacks CREATE on public; added `ALTER SCHEMA public OWNER TO obot; GRANT ALL ON SCHEMA
+  public TO obot` in obot_oauth (provision step logs confirm `ALTER SCHEMA`/`GRANT` succeeded). (3) **crux
+  (2026-08-07): grant succeeded but obot never restarted** — `az containerapp update --yaml` only rotated a
+  SECRET value, which does NOT bump the revision hash in Single mode, so ACA kept the pre-grant crash-looped
+  revision `0000002` and obot never retried auto-migrate. Fix (run 31140391019): added a changing `DEPLOY_NONCE`
+  env → new revision every deploy → clean restart AFTER grant+password-reset land. Verify step now polls
+  runningState + dumps obot logs. crystaldba side is confirmed healthy ("Successfully connected... Uvicorn on 0.0.0.0:8000").
+- NEXT: confirm obot serves (PRM 200/AS 200/`/sse` 401) → user adds Google redirect URI `.../callback` +
+  adds the connector in claude.ai → verify a read query end-to-end → delete `_diag-mcp.yml` → write eds skill.
+  Also live TODAY: eds skill `query-supabase` (PR eds#15) for the Supabase-MCP runner-free path.
 
 ### ACT-huddle-25 (blocker DESYNC in standup — ground-truthed 2026-08-06, from a parallel session — note: number collides with my Iris-batch ACT-25 above)
 - [GROUND-TRUTHED] Board query 31124138911: "Start AI certification course" = BLOCKED/elle-rowan/updated_at **2026-07-27** (unchanged during the meeting). User's staleness hypothesis DISPROVEN — nothing changed mid-call. Desync = THREE readers of "any blockers?": `getStandupTasks` (KEEPS blocked → Elle-open ✓, Terry-close ✓); barge responders (NO data → confabulate ✗, seq 54/82); `getTasksForUser`/`prioritize` (EXCLUDES blocked, tasks.server.ts:417 → false "none" ✗, seq 74).
