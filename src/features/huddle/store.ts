@@ -559,6 +559,7 @@ export function useUnreadCounts(): Record<string, number> {
       if (m.author.kind !== "agent") continue;
       const hid = m.huddleId;
       if (hid === activeHuddleId) continue; // open huddle is always read
+      if (hid.startsWith("ceremony-")) continue; // ceremonies (stand-up/retro/planning/review) don't badge
       const since = lastReadAt[hid] ?? readBaselineAt;
       if (m.ts > since) counts[hid] = (counts[hid] ?? 0) + 1;
     }
