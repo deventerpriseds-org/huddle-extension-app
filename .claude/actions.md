@@ -51,9 +51,22 @@ Committed to branch. Takes effect for all future sessions once merged to the def
   revision `0000002` and obot never retried auto-migrate. Fix (run 31140391019): added a changing `DEPLOY_NONCE`
   env → new revision every deploy → clean restart AFTER grant+password-reset land. Verify step now polls
   runningState + dumps obot logs. crystaldba side is confirmed healthy ("Successfully connected... Uvicorn on 0.0.0.0:8000").
-- NEXT: confirm obot serves (PRM 200/AS 200/`/sse` 401) → user adds Google redirect URI `.../callback` +
-  adds the connector in claude.ai → verify a read query end-to-end → delete `_diag-mcp.yml` → write eds skill.
-  Also live TODAY: eds skill `query-supabase` (PR eds#15) for the Supabase-MCP runner-free path.
+- [SERVING 2026-08-07] run 31140391019: **obot revision `0000003` is fully serving OAuth** (probes PRM 200 /
+  AS 200 / `/sse` 401; obot logs clean: "Starting OAuth proxy server on 0.0.0.0:8080 / OAuth Provider:
+  accounts.google.com / MCP Server: http://localhost:8000", no migrate error; RunningAtMaxScale). The
+  DEPLOY_NONCE revision-restart fix worked. Upstream Google callback path CONFIRMED `/callback` (obot README).
+- NEXT (user steps): user adds Google redirect URI `https://huddle-pg-mcp.yellowcoast-c773a5f7.eastus.azurecontainerapps.io/callback`
+  to the GOOGLE_CLIENT_ID client → adds connector in claude.ai (URL `.../sse`, Advanced blank) → then I
+  verify a read query end-to-end → delete `_diag-mcp.yml` → write `create-azure-pg-mcp` eds skill.
+- **OPEN/DEFERRED (user: "leave it for now, come back to this"): access-control hardening.** RESEARCHED
+  (README + `pkg/providers/provider.go` UserInfo + code search): **obot has NO built-in email/domain/hd
+  allowlist** — no env var to flip. Effective gate today = "any Google login on the SHARED GOOGLE_CLIENT_ID
+  client" → safe ONLY if that client's consent screen is Internal (Workspace-only). Hardening paths when we
+  return: (1) custom obot image w/ ALLOWED_EMAILS check (Apache-2.0, ~15 lines in callback, build+push to
+  org GHCR); (2) confirm/keep Google consent = Internal; (3) dedicated Internal OAuth client for this MCP.
+- Also live TODAY: eds skill `query-supabase` (PR eds#15) for the Supabase-MCP runner-free path.
+- TOOLING NOTE: **Tavily MCP is available** in this session — prefer it over hand-guessed WebFetch URLs for
+  external/library research (e.g. obot internals).
 
 ### ACT-huddle-25 (blocker DESYNC in standup — ground-truthed 2026-08-06, from a parallel session — note: number collides with my Iris-batch ACT-25 above)
 - [GROUND-TRUTHED] Board query 31124138911: "Start AI certification course" = BLOCKED/elle-rowan/updated_at **2026-07-27** (unchanged during the meeting). User's staleness hypothesis DISPROVEN — nothing changed mid-call. Desync = THREE readers of "any blockers?": `getStandupTasks` (KEEPS blocked → Elle-open ✓, Terry-close ✓); barge responders (NO data → confabulate ✗, seq 54/82); `getTasksForUser`/`prioritize` (EXCLUDES blocked, tasks.server.ts:417 → false "none" ✗, seq 74).
