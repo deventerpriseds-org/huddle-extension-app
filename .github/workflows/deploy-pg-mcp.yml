@@ -129,16 +129,37 @@ jobs:
               -d "{\"signInAudience\":\"AzureADMyOrg\",\"web\":{\"redirectUris\":[\"${REDIRECT}\"]}}" >/dev/null
           fi
           echo "Entra appId=$APPID"
+          # A just-created app object replicates across Graph asynchronously — addPassword/servicePrincipals
+          # can 404/return empty for a few seconds. Wait until the app is retrievable before mutating it.
+          for i in $(seq 1 12); do
+            GOT=$(gapi "https://graph.microsoft.com/v1.0/applications/${OBJID}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("appId",""))' 2>/dev/null || echo "")
+            [ -n "$GOT" ] && { echo "app replicated after ${i} check(s)"; break; }
+            sleep 5
+          done
           # Ensure a service principal (enterprise app) exists in the tenant — required for AzureADMyOrg sign-in.
-          gapi -X POST "https://graph.microsoft.com/v1.0/servicePrincipals" -d "{\"appId\":\"$APPID\"}" >/dev/null 2>&1 || true
+          for i in $(seq 1 6); do
+            SPRESP=$(gapi -X POST "https://graph.microsoft.com/v1.0/servicePrincipals" -d "{\"appId\":\"$APPID\"}")
+            if echo "$SPRESP" | python3 -c 'import sys,json;d=json.load(sys.stdin);sys.exit(0 if d.get("id") or (d.get("error",{}).get("message","").lower().find("already")>=0 or "exist" in d.get("error",{}).get("message","").lower()) else 1)' 2>/dev/null; then
+              echo "service principal ensured"; break
+            fi
+            sleep 5
+          done
           # Rotate: remove prior 'obot-mcp' secrets so credentials don't accumulate, then mint a fresh one.
           for k in $(gapi "https://graph.microsoft.com/v1.0/applications/${OBJID}" \
               | python3 -c 'import sys,json;[print(c["keyId"]) for c in json.load(sys.stdin).get("passwordCredentials",[]) if c.get("displayName")=="obot-mcp"]'); do
             gapi -X POST "https://graph.microsoft.com/v1.0/applications/${OBJID}/removePassword" -d "{\"keyId\":\"$k\"}" >/dev/null || true
           done
-          SECRET=$(gapi -X POST "https://graph.microsoft.com/v1.0/applications/${OBJID}/addPassword" \
-            -d "{\"passwordCredential\":{\"displayName\":\"obot-mcp\"}}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("secretText",""))')
-          [ -z "$SECRET" ] && { echo "::error::addPassword returned no secret"; exit 1; }
+          # addPassword, with retry — replication or a transient 404 can yield an empty secretText.
+          SECRET=""
+          for i in $(seq 1 6); do
+            APRESP=$(gapi -X POST "https://graph.microsoft.com/v1.0/applications/${OBJID}/addPassword" \
+              -d "{\"passwordCredential\":{\"displayName\":\"obot-mcp\"}}")
+            SECRET=$(echo "$APRESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("secretText",""))' 2>/dev/null || echo "")
+            [ -n "$SECRET" ] && { echo "client secret minted (attempt ${i})"; break; }
+            echo "addPassword attempt ${i} returned no secret: $(echo "$APRESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("error",{}).get("message","<no error field>"))' 2>/dev/null || echo "<unparseable>")"
+            sleep 5
+          done
+          [ -z "$SECRET" ] && { echo "::error::addPassword returned no secret after retries"; exit 1; }
           echo "::add-mask::$SECRET"
           echo "ENTRA_APP_ID=$APPID" >> "$GITHUB_ENV"
           echo "ENTRA_CLIENT_SECRET=$SECRET" >> "$GITHUB_ENV"
