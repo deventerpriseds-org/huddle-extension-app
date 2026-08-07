@@ -72,6 +72,11 @@ jobs:
           SELECT format('ALTER ROLE obot PASSWORD %L', :'pw') \gexec
           SELECT 'CREATE DATABASE obot_oauth OWNER obot' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'obot_oauth') \gexec
           SQL
+          # (3) PG15+: DB owner still lacks CREATE on schema public — grant it so obot can auto-migrate.
+          psql "host=$HOST port=5432 dbname=obot_oauth user=Admin_eds sslmode=require" -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER SCHEMA public OWNER TO obot;
+          GRANT ALL ON SCHEMA public TO obot;
+          SQL
           az postgres flexible-server firewall-rule delete -g "$RG" -s "$PG_SERVER" \
             --rule-name "mcpdeploy-${IP//./-}" --yes --only-show-errors >/dev/null 2>&1 || true
 
@@ -159,7 +164,7 @@ jobs:
           echo "Google OAuth client redirect URI to authorize (add in Google Cloud Console):"
           echo "  https://${FQDN}/callback"
           echo "============================================================"
-          sleep 20  # let the new revision come up
+          sleep 45  # let the new revision come up + obot auto-migrate its schema
           echo "--- OAuth discovery + gating probes (from the runner) ---"
           curl -sS -m 20 -o /dev/null -w "PRM   /.well-known/oauth-protected-resource/sse -> HTTP %{http_code} (want 200)\n" "https://${FQDN}/.well-known/oauth-protected-resource/sse" || echo "PRM probe failed"
           curl -sS -m 20 -o /dev/null -w "AS    /.well-known/oauth-authorization-server   -> HTTP %{http_code} (want 200)\n" "https://${FQDN}/.well-known/oauth-authorization-server" || echo "AS probe failed"
