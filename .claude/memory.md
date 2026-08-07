@@ -1,5 +1,5 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-08-06
+Last updated: 2026-08-07
 
 ## Blocker DESYNC in standup = TWO readers + barge confabulation, NOT stale cache (2026-08-06, ground-truthed; grounding fix DEPLOYED, NOT user-confirmed)
 User: "terry initially said no blockers but elle reported on one and at the end terry reported it herself — something is out of sync or stale, cached meeting data vs when meeting took place." GROUND TRUTH (board query run 31124138911): "Start AI certification course" = **BLOCKED / elle-rowan / updated_at 2026-07-27** — blocked for WEEKS, unchanged during the meeting. So the user's staleness hypothesis is **disproven** — nothing changed mid-call. The desync is THREE code paths answering "any blockers?" from structurally different data:
@@ -75,11 +75,18 @@ reach Azure/Supabase hosts directly.
 - **Supabase MCP (`mcp__Supabase__*`) is BROKERED by the harness — it works despite the curl block** (proved:
   list_projects returned journey `wwxgajrtmslzklnyplah`; execute_sql read the live board). **Use it for ALL journey
   reads/writes — public.tasks, etc. — NO GitHub runner needed.** journey project ref = `wwxgajrtmslzklnyplah`.
-- **Azure PG (Huddle's `eds-postgresql`/`RAG_AI_Agents`: confirm_ask_at, tasks.journey_tasks mirror, rag_chunks) has
-  NO brokered path.** All Azure hosts blocked; no Azure/Postgres MCP connected; `login` works but `management` doesn't
-  so `az` CLI can auth-but-not-operate. **The GHA `azure-pg-query.yml` runner is the ONLY way to run SQL vs Azure PG**
-  (it works because the runner is OUTSIDE the session egress). Runner starvation (~15min queue→cancel) is a GitHub
-  Actions capacity/minutes issue, NOT a network-policy or DB issue.
+- **Azure PG (Huddle's `eds-postgresql`/`RAG_AI_Agents`) — NOW HAS A RUNNER-FREE BROKERED PATH (2026-08-07).**
+  Superseding the old "GHA runner is the ONLY way": we HOSTED a remote MCP connector and added it to claude.ai, so a
+  brokered `mcp__Azure_pg_mcp__*` reads Azure PG directly (no runner). Connector `Azure_pg_mcp`, URL
+  `https://huddle-pg-mcp.yellowcoast-c773a5f7.eastus.azurecontainerapps.io/sse`. Stack = crystaldba postgres-mcp
+  (read-only, `pg_read_all_data`) behind obot mcp-oauth-proxy on ACA app `huddle-pg-mcp`, OAuth login delegated to
+  **Entra** (app `enterpriseds-pg-mcp` appId d440a9e4-8f77-45c9-8ed0-0305d09d6403, `AzureADMyOrg` = org-only login =
+  the allowlist). Deployed by `deploy-pg-mcp.yml` (workflow_dispatch). VERIFIED live: list_schemas + execute_sql read
+  the DB. Tools: list_schemas/list_objects/get_object_details/execute_sql(read-only)/explain_query. **SQL gotcha:**
+  crystaldba restricted-mode validator rejects some compound SQL (a LEFT JOIN + `to_char(...AT TIME ZONE...)` combo was
+  refused) — keep queries plain, format/join client-side, introspect columns first. Full playbook = eds skill
+  `query-azure-pg-mcp` (PR eds#15). The `azure-pg-query.yml` GHA runner still works for arbitrary SQL/writes and as a
+  fallback; runner starvation (~15min queue→cancel) is a GitHub Actions capacity issue, not network/DB.
 - **CORRECTION to an old note:** the "test-agent-serverfn harness reaches the SWA over HTTPS from the session" claim is
   FALSE in this environment — the SWA host returns 403 CONNECT here. The harness only works where that host is allowlisted.
 
@@ -166,7 +173,7 @@ FIX PATHS (not yet done, needs user go-ahead — journey-voice change):
 Diagnostic tool built + deployed this session: `/api/public/test-push` (Huddle) + `test-push.yml` workflow — sends a
 pure push (no agent turn) on selectable channels to isolate delivery. Reusable.
 
-Last updated: 2026-08-05
+Last updated: 2026-08-07
 
 ## vonellis2 duplicate-profile bug — FIXED via oid-canonicalization + data merge (2026-08-05) — DEPLOYED main (deploy run 31031336742 success). NOT yet user-confirmed live (login is user-only).
 **Symptom (user):** logging in with one of two emails randomly recreates the username as **`vonellis2`**;
