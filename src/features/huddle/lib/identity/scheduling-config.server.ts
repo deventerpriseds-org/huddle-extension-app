@@ -100,6 +100,29 @@ export async function resolveConfirmFanWindows(_email: string): Promise<FanWindo
   return CONFIRM_FAN_WINDOWS_DEFAULT;
 }
 
+/** Randomized minimum/maximum GAP (minutes) between two consecutive confirm-ask reach-outs. */
+export interface ConfirmGap {
+  min: number; // minutes, inclusive
+  max: number; // minutes, exclusive-ish (upper bound of the random draw)
+}
+
+/**
+ * Shipped default spacing between consecutive confirm-ask reach-outs: a random 45–90 min gap. This is
+ * what keeps reach-outs from bunching — arming places each ask ≥min/≤max after the previous one (inside
+ * the fan-out windows), instead of an independent uniform slot that can land two minutes apart. Sourced
+ * HERE (single scheduling-config module), not as magic numbers in the autowork scheduler.
+ */
+export const CONFIRM_GAP_DEFAULT: ConfirmGap = { min: 45, max: 90 };
+
+/**
+ * Resolve the EFFECTIVE confirm-ask spacing (min/max minute gap) for a user. Today returns the shipped
+ * default; kept async + email-scoped so a per-user override can be layered in later (mirroring
+ * resolveConfirmFanWindows) without touching any call site. Never throws.
+ */
+export async function resolveConfirmGap(_email: string): Promise<ConfirmGap> {
+  return CONFIRM_GAP_DEFAULT;
+}
+
 const EMPTY_CONFIG: SchedulingConfig = { overrides: {} };
 
 /** Read the raw stored overrides for an email (empty object when nothing is set). */

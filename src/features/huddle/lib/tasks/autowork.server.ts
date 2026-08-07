@@ -116,10 +116,10 @@ function turnPayload(
 }
 
 // Confirm-intent reach-out scheduling (docs/plan-wip-confirm-review-gate.md, Part 1): a fresh UP_NEXT
-// candidate is armed with a ONE-TIME `confirm_ask_at` placed at a random instant INSIDE a fan-out
-// window (see nextFanSlotIso below — business 9–18 + evening 20–22 by default), so multiple agents'
-// fresh items arrive spread across the day rather than all in one autowork pass or bunched at a single
-// window edge, and never outside those hours.
+// candidate is armed with a ONE-TIME `confirm_ask_at` placed INSIDE a fan-out window (business 9–18 +
+// evening 20–22 by default) and SEQUENCED a randomized gap after the previous ask (see
+// nextSpacedFanSlotIso / armConfirmAsksSpaced below), so multiple agents' fresh items arrive spread ≥45
+// min apart across the day rather than bunched in one autowork pass, and never outside those hours.
 
 /** The directive the assigned agent runs to confirm intent + propose a Definition of Done. */
 function confirmIntentDirective(task: {
@@ -157,17 +157,18 @@ function confirmIntentDirective(task: {
   );
 }
 
-// Minute-granular confirm-ask throttle. Reach-outs are spread by ARMING each ask at a random instant
-// INSIDE a fan-out window (see nextFanSlotIso — business 9–18 + evening 20–22 by default), so they
-// arrive fanned across the day and never outside those hours. Firing is checked every heartbeat and
-// only proceeds while we're inside a window; a small per-user per-tick cap smooths any residual
-// pile-up so it still feels like a teammate, not a blast.
+// Minute-granular confirm-ask throttle. Reach-outs are spread by ARMING each ask INSIDE a fan-out window
+// (see nextSpacedFanSlotIso — business 9–18 + evening 20–22 by default), SEQUENCED a randomized 45–90 min
+// gap after the prior ask so they never bunch. Firing is checked every heartbeat and only proceeds while
+// we're inside a window; a small per-user per-tick cap smooths any residual pile-up so it still feels
+// like a teammate, not a blast.
 const CONFIRM_FIRE_MAX_PER_USER_PER_TICK = 2;
 
 // ── Fan-out window math ─────────────────────────────────────────────────────────────────────────
-// Windows are inclusive-start/exclusive-end LOCAL hour ranges (in the user's tz). We place each ask at
-// a uniformly-random minute inside the next open window instead of `now + jitter(15m–4h)` (which could
-// land at any hour and then relied on a fire-guard to hold+dump the whole overnight batch at 9am).
+// Windows are inclusive-start/exclusive-end LOCAL hour ranges (in the user's tz). We place each ask a
+// randomized 45–90 min gap after the previous one, always inside a window — instead of the old
+// `now + jitter(15m–4h)` (any hour, then a fire-guard held+dumped the overnight batch at 9am) OR an
+// independent uniform minute (no min spacing, so a groom batch could bunch reach-outs minutes apart).
 type WinRange = { start: number; end: number };
 type TzClock = { y: number; mo: number; d: number; h: number; mi: number; s: number };
 
@@ -197,45 +198,84 @@ function tzOffsetMs(d: Date, tz: string): number {
 }
 
 /** Is `now` currently inside any fan-out window (local hours in tz)? */
-function insideFanWindow(now: Date, tz: string, windows: WinRange[]): boolean {
+export function insideFanWindow(now: Date, tz: string, windows: WinRange[]): boolean {
   const c = tzClock(now, tz);
   const m = c.h * 60 + c.mi;
   return windows.some((w) => m >= w.start * 60 && m < w.end * 60);
 }
 
 /**
- * A uniformly-random instant INSIDE the next open fan-out window, as an ISO string. If `now` is inside
- * a window with room left, fans across the REMAINDER of that window; otherwise the next window today,
- * or the first window tomorrow. Always returns an instant that is inside a window and > now.
+ * The next fan-out slot placed a RANDOMIZED gap after `prev`, so consecutive reach-outs are spaced
+ * (default 45–90 min) instead of independently uniform (which bunches). Take `prev + rand[gapMin,gapMax]`;
+ * if that instant is inside a window, use it; otherwise roll forward to the next window's start (same day,
+ * then first window next day) plus a small in-window jitter so the first ask of a window isn't pinned to
+ * the exact hour. Always returns an instant that is inside a window and > prev. DST self-heal: a skewed
+ * instant is re-checked at fire time by fireDueConfirmAsks and re-fanned if it fell outside a window.
  */
-function nextFanSlotIso(now: Date, tz: string, windows: WinRange[]): string {
+export function nextSpacedFanSlotIso(prev: Date, tz: string, windows: WinRange[], gapMinMs: number, gapMaxMs: number): string {
   const wins = windows.filter((w) => w.end > w.start).sort((a, b) => a.start - b.start);
-  if (!wins.length) return new Date(now.getTime() + 60 * 60_000).toISOString(); // no windows → 1h fallback
-  const c = tzClock(now, tz);
-  const nowMin = c.h * 60 + c.mi;
-  // Offset is sampled at `now` but applied to a target up to ~24h out, so across a DST transition the
-  // armed instant can skew ±1h. That's self-healing, not a bug: `fireDueConfirmAsks` re-checks
-  // insideFanWindow at fire time, so a skewed instant that lands outside a window (pre-9am, or the
-  // 18–20 dinner gap) is re-fanned into a valid slot rather than fired out-of-hours.
-  const offset = tzOffsetMs(now, tz);
-  const at = (dayOffset: number, minuteOfDay: number): string => {
-    const asUTC = Date.UTC(c.y, c.mo - 1, c.d + dayOffset, Math.floor(minuteOfDay / 60), minuteOfDay % 60, 0);
-    return new Date(asUTC - offset).toISOString();
-  };
   const randInt = (a: number, b: number) => a + Math.floor(Math.random() * Math.max(1, b - a)); // [a,b)
-  // 1) inside a window with ≥1 min of room left → fan across the remainder
-  for (const w of wins) {
-    const s = w.start * 60;
-    const e = w.end * 60;
-    if (nowMin >= s && nowMin < e - 1) return at(0, randInt(nowMin + 1, e));
+  if (!wins.length) return new Date(prev.getTime() + Math.max(gapMinMs, 60_000)).toISOString(); // no windows → gap fallback
+  let candMs = prev.getTime() + randInt(gapMinMs, gapMaxMs);
+  for (let guard = 0; guard < 10; guard++) {
+    const cand = new Date(candMs);
+    const c = tzClock(cand, tz);
+    const m = c.h * 60 + c.mi;
+    if (wins.some((w) => m >= w.start * 60 && m < w.end * 60)) return cand.toISOString();
+    // Outside every window → snap to the next window start (later today, else first window tomorrow).
+    let target: number | null = null;
+    let dayOffset = 0;
+    for (const w of wins) {
+      if (w.start * 60 > m) {
+        target = w.start * 60;
+        break;
+      }
+    }
+    if (target === null) {
+      target = wins[0].start * 60;
+      dayOffset = 1;
+    }
+    const offset = tzOffsetMs(cand, tz);
+    const jitter = randInt(0, Math.min(gapMinMs, 30 * 60_000)); // ≤ gapMin and ≤30min → stays well inside the ≥2h window
+    candMs = Date.UTC(c.y, c.mo - 1, c.d + dayOffset, Math.floor(target / 60), target % 60, 0) - offset + jitter;
   }
-  // 2) a later window today → fan across its full span
-  for (const w of wins) {
-    if (w.start * 60 > nowMin) return at(0, randInt(w.start * 60, w.end * 60));
+  return new Date(candMs).toISOString();
+}
+
+/**
+ * Arm each un-armed task's confirm-ask, SEQUENCED so consecutive reach-outs for this user are spaced by
+ * a randomized gap (resolveConfirmGap, default 45–90 min) and land only inside the fan-out windows. The
+ * cursor is anchored on the user's latest already-pending ask (so a later pass doesn't collide with one
+ * already scheduled), falling back to `now`. Best-effort throughout: a config/lookup failure degrades to
+ * defaults / now-anchor, and a single arm write failing never blocks the rest. `ensureConfirmAskAt` is
+ * set-once, so a task that somehow already has an instant is left unchanged.
+ */
+async function armConfirmAsksSpaced(taskIds: string[], email: string, tz: string, windows: WinRange[]): Promise<void> {
+  if (!taskIds.length) return;
+  const { resolveConfirmGap, CONFIRM_GAP_DEFAULT } = await import("../identity/scheduling-config.server");
+  const { getLatestPendingConfirmAskAt, ensureConfirmAskAt } = await import("./tasks.server");
+  let gap = CONFIRM_GAP_DEFAULT;
+  try {
+    gap = await resolveConfirmGap(email);
+  } catch {
+    /* default gap */
   }
-  // 3) nothing left today → first window tomorrow
-  const w0 = wins[0];
-  return at(1, randInt(w0.start * 60, w0.end * 60));
+  const gapMinMs = Math.max(1, gap.min) * 60_000;
+  const gapMaxMs = Math.max(gap.min + 1, gap.max) * 60_000;
+  let floor: Date | null = null;
+  try {
+    floor = await getLatestPendingConfirmAskAt(email);
+  } catch {
+    /* no floor — anchor on now */
+  }
+  // Cursor = the latest instant we've placed so far. Seed from the user's last pending ask (if any is
+  // still in the future) or now, so the FIRST new ask lands a full gap after whichever is later.
+  let cursor = new Date(Math.max(Date.now(), floor ? floor.getTime() : 0));
+  for (const taskId of taskIds) {
+    const slotIso = nextSpacedFanSlotIso(cursor, tz, windows, gapMinMs, gapMaxMs);
+    cursor = new Date(slotIso);
+    await ensureConfirmAskAt(taskId, email, slotIso).catch(() => {});
+  }
 }
 
 /**
@@ -288,9 +328,30 @@ export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number
     // STRAGGLER (armed the old now+jitter way, or left unsent when a window closed) — re-fan it across
     // the NEXT open window rather than holding the whole batch to dump at the window's opening edge.
     if (!insideFanWindow(now, tz, windows)) {
+      // Re-fan stragglers into the next open window, SPACED (45–90 min, config) so a backlog of due asks
+      // doesn't dump bunched at the window's opening edge.
+      const { resolveConfirmGap, CONFIRM_GAP_DEFAULT } = await import("../identity/scheduling-config.server");
+      const { getLatestPendingConfirmAskAt } = await import("./tasks.server");
+      let gap = CONFIRM_GAP_DEFAULT;
+      try {
+        gap = await resolveConfirmGap(email);
+      } catch {
+        /* default gap */
+      }
+      const gapMinMs = Math.max(1, gap.min) * 60_000;
+      const gapMaxMs = Math.max(gap.min + 1, gap.max) * 60_000;
+      let floor: Date | null = null;
+      try {
+        floor = await getLatestPendingConfirmAskAt(email);
+      } catch {
+        /* anchor on now */
+      }
+      let cursor = new Date(Math.max(now.getTime(), floor ? floor.getTime() : 0));
       for (const row of rows) {
         try {
-          await reArmConfirmAskAt(row.task_id, email, nextFanSlotIso(now, tz, windows));
+          const slotIso = nextSpacedFanSlotIso(cursor, tz, windows, gapMinMs, gapMaxMs);
+          cursor = new Date(slotIso);
+          await reArmConfirmAskAt(row.task_id, email, slotIso);
         } catch {
           /* one bad re-arm never blocks the rest */
         }
@@ -387,7 +448,6 @@ export async function runScheduledAutoWork(
     getTaskBlockers,
     setAutoWorkSignature,
     getTaskEngagementStates,
-    ensureConfirmAskAt,
     markConfirmAsked,
   } = await import("./tasks.server");
   const { listArtifacts } = await import("../artifacts/artifacts.server");
@@ -495,10 +555,10 @@ export async function runScheduledAutoWork(
       }
     }
     // Chain the confirm-intent REACH-OUT scheduling to grooming completion: arm each freshly-staged
-    // UP_NEXT item with a jittered `confirm_ask_at` (one-time, 15min–4h out), for gated agents whose
-    // intent isn't already confirmed/asked. This SCHEDULES the reach-out relative to grooming; the
-    // auto-work cadence (9/13/17) is what FIRES each ask once its jittered instant passes, so agents
-    // begin checking in for confirmations staggered across the day from the moment the board was groomed.
+    // UP_NEXT item with a ONE-TIME `confirm_ask_at`, sequenced a randomized 45–90 min gap apart inside the
+    // fan-out windows, for gated agents whose intent isn't already confirmed/asked. This SCHEDULES the
+    // reach-out relative to grooming; the auto-work cadence (9/13/17) is what FIRES each ask once its
+    // instant passes, so agents begin checking in for confirmations spaced across the day from the groom.
     // We schedule only — no ask is fired and no work starts here (that stays behind the gate on cadence).
     if (stagedForConfirm.length) {
       try {
@@ -510,7 +570,6 @@ export async function runScheduledAutoWork(
             ),
           ),
         );
-        const armNow = new Date();
         const { resolveConfirmFanWindows, CONFIRM_FAN_WINDOWS_DEFAULT } = await import(
           "../identity/scheduling-config.server"
         );
@@ -520,17 +579,16 @@ export async function runScheduledAutoWork(
         } catch {
           /* default windows */
         }
-        await Promise.all(
-          stagedForConfirm
-            .filter((f) => {
-              if (!(armRequired.get(f.agent) ?? true)) return false; // discretionary agent — no ask needed
-              const s = armStates.get(f.task.id);
-              return (s?.confirm_status ?? "awaiting") !== "confirmed" && !s?.confirm_ask_at; // not confirmed & not already armed
-            })
-            .map((f) =>
-              ensureConfirmAskAt(f.task.id, email, nextFanSlotIso(armNow, tz, armWindows)).catch(() => {}),
-            ),
-        );
+        const armIds = stagedForConfirm
+          .filter((f) => {
+            if (!(armRequired.get(f.agent) ?? true)) return false; // discretionary agent — no ask needed
+            const s = armStates.get(f.task.id);
+            return (s?.confirm_status ?? "awaiting") !== "confirmed" && !s?.confirm_ask_at; // not confirmed & not already armed
+          })
+          .map((f) => f.task.id);
+        // Space the freshly-staged asks 45–90 min apart (config) inside the windows, instead of each
+        // picking an independent uniform slot that could bunch two reach-outs minutes apart.
+        await armConfirmAsksSpaced(armIds, email, tz, armWindows);
       } catch {
         /* arming is best-effort — the next full cadence pass still schedules any un-armed asks */
       }
@@ -599,12 +657,8 @@ export async function runScheduledAutoWork(
     } catch {
       /* default windows */
     }
-    const armNow = new Date(now);
-    await Promise.all(
-      needsAskAt.map((taskId) =>
-        ensureConfirmAskAt(taskId, email, nextFanSlotIso(armNow, tz, askWindows)).catch(() => {}),
-      ),
-    );
+    // Space these asks 45–90 min apart (config) inside the windows — same anti-bunching rule as the groom path.
+    await armConfirmAsksSpaced(needsAskAt, email, tz, askWindows);
   }
 
   let confirmAsked = 0;
