@@ -1,14 +1,16 @@
 name: Deploy read-only Postgres MCP (Azure Container Apps)
 
-# ONE-TIME / on-demand provisioner for a runner-free way to query the Huddle Azure PG
-# (eds-postgresql / RAG_AI_Agents) from a Claude Code session. It stands up a read-only
-# `crystaldba/postgres-mcp` behind a `caddy` bearer-auth sidecar on Azure Container Apps.
-# The MCP is then registered in claude.ai as a REMOTE connector (brokered by Anthropic, so it
-# bypasses the session egress that blocks Azure hosts) — after which queries need NO GitHub runner.
+# Runner-free way to query the Huddle Azure PG (eds-postgresql / RAG_AI_Agents) from a Claude Code
+# session, via a REMOTE MCP connector (brokered by Anthropic → bypasses the session egress that blocks
+# Azure hosts). OPTION B (OAuth): claude.ai custom connectors require OAuth + Dynamic Client Registration,
+# which crystaldba lacks and Entra can't provide (no DCR). So we front crystaldba with the
+# obot-platform/mcp-oauth-proxy (it IS the OAuth server Claude needs: DCR + discovery + token mint) and
+# delegate LOGIN to Google (reusing the existing GOOGLE_CLIENT_ID/SECRET org secrets — no new app/secret).
 #
-# Security: (a) dedicated LOGIN role `mcp_readonly` granted only `pg_read_all_data`; (b) crystaldba
-# `--access-mode=restricted` (read-only txns); (c) caddy requires `Authorization: Bearer <JOURNEY_PROXY_TOKEN>`
-# on every request. PG stays private — ACA runs inside Azure and reaches PG via the "Allow Azure services" rule.
+# Topology (single ACA app, two containers sharing localhost):
+#   internet --HTTPS--> obot (external ingress :8080, OAuth) --localhost:8000--> crystaldba (internal, read-only)
+# Security: crystaldba is never public; obot 401s everything until a Google-authenticated OAuth token is
+# presented; the DB role `mcp_readonly` has only pg_read_all_data; crystaldba runs --access-mode=restricted.
 
 on:
   workflow_dispatch:
@@ -42,48 +44,54 @@ jobs:
         run: |
           az postgres flexible-server firewall-rule create -g "$RG" -s "$PG_SERVER" \
             --rule-name AllowAllAzureServices --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0 \
-            --only-show-errors >/dev/null || echo "rule exists"
+            --only-show-errors >/dev/null 2>&1 || echo "allow-azure rule already present / flag rejected"
 
-      - name: Create / refresh read-only role
+      - name: Provision read-only role + obot OAuth store
         env:
           PGPASSWORD: ${{ secrets.Azure_admin_pw }}
         run: |
           set -euo pipefail
-          RO_PW="$(openssl rand -hex 24)"
-          echo "::add-mask::$RO_PW"
-          echo "RO_PW=$RO_PW" >> "$GITHUB_ENV"
+          RO_PW="$(openssl rand -hex 24)";   echo "::add-mask::$RO_PW";   echo "RO_PW=$RO_PW" >> "$GITHUB_ENV"
+          OBOT_PW="$(openssl rand -hex 24)"; echo "::add-mask::$OBOT_PW"; echo "OBOT_PW=$OBOT_PW" >> "$GITHUB_ENV"
           IP=$(curl -s https://api.ipify.org || curl -s https://checkip.amazonaws.com | tr -d '\n')
-          # Best-effort: some az builds on the runner reject --rule-name here. Don't hard-fail — the
-          # server already has firewall rules that admit runners + Azure services (same as azure-pg-query.yml,
-          # which relies on this and connects fine). psql below still runs; if it truly can't connect, THAT fails.
           az postgres flexible-server firewall-rule create -g "$RG" -s "$PG_SERVER" \
             --rule-name "mcpdeploy-${IP//./-}" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 \
             || echo "firewall-rule create skipped — relying on existing server rules"
           HOST="$PG_SERVER.postgres.database.azure.com"
+          # (1) read-only role for crystaldba, in the target DB
           psql "host=$HOST port=5432 dbname=${{ github.event.inputs.db }} user=Admin_eds sslmode=require" \
             -v ON_ERROR_STOP=1 -v role="${{ github.event.inputs.ro_role }}" -v pw="$RO_PW" <<'SQL'
-          SELECT format('CREATE ROLE %I LOGIN', :'role')
-          WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
+          SELECT format('CREATE ROLE %I LOGIN', :'role') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
           SELECT format('ALTER ROLE %I PASSWORD %L', :'role', :'pw') \gexec
           SELECT format('GRANT pg_read_all_data TO %I', :'role') \gexec
           SQL
+          # (2) obot's OWN read-write store (separate role + database), created from the 'postgres' db
+          psql "host=$HOST port=5432 dbname=postgres user=Admin_eds sslmode=require" \
+            -v ON_ERROR_STOP=1 -v pw="$OBOT_PW" <<'SQL'
+          SELECT format('CREATE ROLE obot LOGIN PASSWORD %L', :'pw') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'obot') \gexec
+          SELECT format('ALTER ROLE obot PASSWORD %L', :'pw') \gexec
+          SELECT 'CREATE DATABASE obot_oauth OWNER obot' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'obot_oauth') \gexec
+          SQL
           az postgres flexible-server firewall-rule delete -g "$RG" -s "$PG_SERVER" \
-            --rule-name "mcpdeploy-${IP//./-}" --yes --only-show-errors >/dev/null || true
+            --rule-name "mcpdeploy-${IP//./-}" --yes --only-show-errors >/dev/null 2>&1 || true
 
       - name: Ensure Container Apps environment
         run: |
           az containerapp env show -g "$RG" -n "$ACA_ENV" --only-show-errors >/dev/null 2>&1 || \
           az containerapp env create -g "$RG" -n "$ACA_ENV" -l "$LOCATION" --only-show-errors >/dev/null
 
-      - name: Deploy the MCP app (postgres-mcp, no-auth — Option A)
+      - name: Deploy obot OAuth proxy + read-only crystaldba MCP (Option B)
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          JPT: ${{ secrets.JOURNEY_PROXY_TOKEN }}
         run: |
           set -euo pipefail
           ENV_ID=$(az containerapp env show -g "$RG" -n "$ACA_ENV" --query id -o tsv)
-          DB_URI="postgresql://${{ github.event.inputs.ro_role }}:${RO_PW}@${PG_SERVER}.postgres.database.azure.com:5432/${{ github.event.inputs.db }}?sslmode=require"
-          # OPTION A (no auth): ingress points straight at the read-only MCP on :8000 — no caddy/bearer,
-          # because claude.ai custom connectors speak OAuth or no-auth, not a static bearer header. Security
-          # rests on the unguessable ACA URL + the read-only `mcp_readonly` role (no writes possible).
-          # Option B (OAuth in front) is the planned hardening; this proves the pipeline end-to-end first.
+          RO_DSN="postgresql://${{ github.event.inputs.ro_role }}:${RO_PW}@${PG_SERVER}.postgres.database.azure.com:5432/${{ github.event.inputs.db }}?sslmode=require"
+          OBOT_DSN="postgres://obot:${OBOT_PW}@${PG_SERVER}.postgres.database.azure.com:5432/obot_oauth?sslmode=require"
+          # Stable AES-256 key derived from an existing org secret → survives redeploys (no re-auth), no new secret.
+          ENC_KEY=$(printf '%s' "${JPT}::obot-mcp-enc-v1" | sha256sum | cut -d' ' -f1 | xxd -r -p | base64 -w0)
           cat > app.yaml <<YAML
           properties:
             managedEnvironmentId: ${ENV_ID}
@@ -91,12 +99,18 @@ jobs:
               activeRevisionsMode: Single
               ingress:
                 external: true
-                targetPort: 8000
+                targetPort: 8080
                 transport: auto
                 allowInsecure: false
               secrets:
-                - name: db-uri
-                  value: "${DB_URI}"
+                - name: ro-dsn
+                  value: "${RO_DSN}"
+                - name: obot-dsn
+                  value: "${OBOT_DSN}"
+                - name: google-secret
+                  value: "${GOOGLE_CLIENT_SECRET}"
+                - name: enc-key
+                  value: "${ENC_KEY}"
             template:
               scale: { minReplicas: 1, maxReplicas: 1 }
               containers:
@@ -106,7 +120,29 @@ jobs:
                   resources: { cpu: 0.5, memory: 1.0Gi }
                   env:
                     - name: DATABASE_URI
-                      secretRef: db-uri
+                      secretRef: ro-dsn
+                - name: oauth
+                  image: ghcr.io/obot-platform/mcp-oauth-proxy:latest
+                  resources: { cpu: 0.5, memory: 0.5Gi }
+                  env:
+                    - name: HOST
+                      value: "0.0.0.0"
+                    - name: PORT
+                      value: "8080"
+                    - name: OAUTH_CLIENT_ID
+                      value: "${GOOGLE_CLIENT_ID}"
+                    - name: OAUTH_CLIENT_SECRET
+                      secretRef: google-secret
+                    - name: OAUTH_AUTHORIZE_URL
+                      value: "https://accounts.google.com"
+                    - name: SCOPES_SUPPORTED
+                      value: "openid,profile,email"
+                    - name: MCP_SERVER_URL
+                      value: "http://localhost:8000"
+                    - name: ENCRYPTION_KEY
+                      secretRef: enc-key
+                    - name: DATABASE_DSN
+                      secretRef: obot-dsn
           YAML
           if az containerapp show -g "$RG" -n "$ACA_APP" --only-show-errors >/dev/null 2>&1; then
             az containerapp update -g "$RG" -n "$ACA_APP" --yaml app.yaml --only-show-errors >/dev/null
@@ -114,14 +150,17 @@ jobs:
             az containerapp create -g "$RG" -n "$ACA_APP" --yaml app.yaml --only-show-errors >/dev/null
           fi
 
-      - name: Output the connector URL
+      - name: Verify OAuth endpoints + output connector URL
         run: |
           FQDN=$(az containerapp show -g "$RG" -n "$ACA_APP" --query properties.configuration.ingress.fqdn -o tsv)
           echo "============================================================"
-          echo "MCP is deployed (no-auth / Option A). Register in claude.ai -> Settings -> Connectors -> Add custom connector:"
-          echo "  URL:  https://${FQDN}/sse"
-          echo "  Auth: leave Advanced settings BLANK (no OAuth, no token)"
+          echo "Connector URL (claude.ai -> Add custom connector, leave Advanced BLANK):"
+          echo "  https://${FQDN}/sse"
+          echo "Google OAuth client redirect URI to authorize (add in Google Cloud Console):"
+          echo "  https://${FQDN}/callback"
           echo "============================================================"
-          # Quick health probe from the runner (which CAN reach the ACA host, unlike the session).
-          echo "--- health probe ---"
-          curl -sS -m 15 -o /dev/null -w "GET /sse -> HTTP %{http_code}\n" "https://${FQDN}/sse" || echo "probe failed"
+          sleep 20  # let the new revision come up
+          echo "--- OAuth discovery + gating probes (from the runner) ---"
+          curl -sS -m 20 -o /dev/null -w "PRM   /.well-known/oauth-protected-resource/sse -> HTTP %{http_code} (want 200)\n" "https://${FQDN}/.well-known/oauth-protected-resource/sse" || echo "PRM probe failed"
+          curl -sS -m 20 -o /dev/null -w "AS    /.well-known/oauth-authorization-server   -> HTTP %{http_code} (want 200)\n" "https://${FQDN}/.well-known/oauth-authorization-server" || echo "AS probe failed"
+          curl -sS -m 20 -o /dev/null -w "GATE  /sse (unauth)                             -> HTTP %{http_code} (want 401)\n" "https://${FQDN}/sse" || echo "gate probe failed"
