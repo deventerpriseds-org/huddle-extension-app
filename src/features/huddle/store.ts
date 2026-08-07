@@ -206,9 +206,15 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
       return { contextPanelCollapsed: next };
     }),
   setContextPanelTab: (tab) => set({ contextPanelTab: tab }),
-  // Opening a huddle marks it read (unread badge clears immediately, before the debounced sync).
+  // Opening a huddle marks it read (badge clears immediately, before the debounced sync). Also mark the
+  // huddle being LEFT as read up to now, so messages watched streaming in while it was open aren't counted
+  // as unread after switching away — regardless of which append path added them.
   setActive: (id) =>
-    set((s) => ({ activeHuddleId: id, view: "huddle", lastReadAt: { ...s.lastReadAt, [id]: Date.now() } })),
+    set((s) => ({
+      activeHuddleId: id,
+      view: "huddle",
+      lastReadAt: { ...s.lastReadAt, [s.activeHuddleId]: Date.now(), [id]: Date.now() },
+    })),
   setView: (v) => set({ view: v }),
   markHuddleRead: (huddleId) =>
     set((s) => ({ lastReadAt: { ...s.lastReadAt, [huddleId]: Date.now() } })),
