@@ -637,6 +637,24 @@ export async function getTaskEngagementState(taskId: string): Promise<TaskEngage
 }
 
 /**
+ * The latest FUTURE, still-pending (`awaiting`) confirm-ask instant already scheduled for a user, or
+ * null if none. Used to ANCHOR the spacing of newly-armed asks: a new ask is placed a randomized gap
+ * AFTER this floor so a later pass never lands a reach-out next to one already on the calendar. Only
+ * 'awaiting' rows constrain placement — an already-'asked' (sent) row must not block future scheduling.
+ * Never throws for the caller to depend on (returns null on any error path via the caller's try/catch).
+ */
+export async function getLatestPendingConfirmAskAt(userEmail: string): Promise<Date | null> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ latest: string | null }>(
+    `SELECT max(confirm_ask_at) AS latest FROM tasks.task_engagement_state
+      WHERE lower(user_email) = lower($1) AND confirm_status = 'awaiting' AND confirm_ask_at > now()`,
+    [userEmail],
+  );
+  const latest = rows[0]?.latest;
+  return latest ? new Date(latest) : null;
+}
+
+/**
  * Set a task's ONE-TIME jittered confirm-ask instant, but only if it doesn't already have one — a
  * later call (e.g. next autowork pass, still before the jitter elapses) must NOT recompute a fresh
  * value, or the ask would get pushed out forever. Creates the row in 'awaiting' status if it doesn't
