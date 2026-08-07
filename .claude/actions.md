@@ -7,6 +7,25 @@ Last updated: 2026-08-06 (three fixes live + Option-1 Postgres-MCP deploy workfl
 - **ACT-huddle-23 — confirm-ask fan-out** (2 windows: business 9–18 + evening 20–22, from config; no 9am dump;
   straggler re-fan). Huddle commit `da648da` → main `fd731ae` → deploy-swa run 31119646652 **success**.
   Verifier: CONFIRMED-correct. Live-proof PENDING (needs a fresh autowork/groom pass to arm a new ask).
+- **ACT-huddle-28 — reach-out SPACING (user: "too frequent → 45–90 min randomized")** (2026-08-07). The fan-out
+  placed each ask at an INDEPENDENT uniform minute in-window → a groom batch could bunch reach-outs minutes
+  apart. Now consecutive asks are SEQUENCED a randomized 45–90 min gap apart (`CONFIRM_GAP_DEFAULT` /
+  `resolveConfirmGap` in scheduling-config; `nextSpacedFanSlotIso` + `armConfirmAsksSpaced` in autowork),
+  anchored on the user's latest pending ask, applied at both arming sites + straggler re-fan; still only inside
+  the windows with dinner-gap/overnight roll-over. Config-driven (tune bounds w/o code). Offline test
+  `scripts/confirm-spacing.test.ts` (3202 gaps all in [45,90], 798 roll-overs). Independent verifier: **PASS**
+  (all 6 items). Merged branch→main `c07a02d`; deploy-swa run 31188592881 **success**. **LIVE-PROVEN 2026-08-07:**
+  reset 24 active→BACKLOG (Supabase), cleared confirm state, groomed (`groomed:25`), read confirm_ask_at → 3 fresh
+  asks at 11:54/12:40/13:58 ET, gaps **46 & 78 min** (both ∈[45,90]), all inside 9–18. DONE, live-confirmed.
+
+### ACT-huddle-29 (unread-message badge in left agent list — Android Messages style) — BUILT 2026-08-07
+User: "unread counter by their name on the left agent list menu." Scope + Option B (cross-device) confirmed by
+user. BUILT: per-huddle `lastReadAt` map in `store.ts` (synced via `workspace_state` blob — added to
+PERSISTED_KEYS/getPersistablePayload/hydrateFromRemote, backward-compatible), `useUnreadCounts` selector (agent
+msgs ts>lastReadAt; open huddle=0; away/back-filled count; SESSION_START baseline so history doesn't flood first
+load), read-tracking in `setActive` (bumps opened AND left huddle) + `addAgentMessage` (open-huddle arrival=read);
+`Sidebar.tsx` count pill + bold row, clears on open, 99+ cap, both group + DM rows. tsc + vite build clean.
+AC agent: 20 ACs. Independent verifier: **PASS** (8/8). Deploying to main for live user test; no new backend.
 - **ACT-huddle-25 — Iris batch create + truthful count** (`create_huddle_tasks` reusing journey
   `parse_and_create_tasks`; additive truthfulness/quantity clauses). Huddle `b983f3a` → deploy success.
   Live-proof PENDING (ask Iris for N tasks → created=N).

@@ -97,6 +97,11 @@ interface HuddleState {
   decisions: RoutingDecision[];
   toolUses: ToolUseEvent[];
   journeyTasks: JourneyTask[];
+  // Per-huddle "last read" watermark (epoch ms) for the unread-message badge. Persisted in the synced
+  // workspace blob so unread state follows the user across devices. Bumped to now when a huddle is opened
+  // (setActive) or when a message arrives in the already-open huddle. Missing entry → treated as read up
+  // to SESSION_START (see useUnreadCounts) so existing history never floods as "unread" on first use.
+  lastReadAt: Record<string, number>;
   showDemoData: boolean;
   meeting: null | MeetingState;
   // Desktop panel chrome (device-local, read synchronously from localStorage so there's no
@@ -108,6 +113,7 @@ interface HuddleState {
   toggleContextPanelCollapsed: () => void;
   setContextPanelTab: (tab: ContextPanelTab) => void;
   setActive: (id: string) => void;
+  markHuddleRead: (huddleId: string) => void;
   setView: (v: View) => void;
   // Open the Artifacts view focused on a specific artifact (from a chat chip); null just clears focus.
   openArtifactById: (id: string | null) => void;
@@ -151,6 +157,7 @@ const PERSISTED_KEYS = [
   "activeHuddleId",
   "showDemoData",
   "journeyTasks",
+  "lastReadAt",
 ] as const;
 
 type PersistedKey = (typeof PERSISTED_KEYS)[number];
@@ -164,6 +171,7 @@ function seedDefaults(): PersistedWorkspace {
     memory: SEED_MEMORY,
     decisions: [],
     journeyTasks: [],
+    lastReadAt: {},
     showDemoData: true,
   };
 }
@@ -179,6 +187,7 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
   decisions: [],
   toolUses: [],
   journeyTasks: [],
+  lastReadAt: {},
   showDemoData: true,
   meeting: null,
   sidebarCollapsed: readBoolPref(SIDEBAR_COLLAPSED_KEY),
@@ -197,12 +206,28 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
       return { contextPanelCollapsed: next };
     }),
   setContextPanelTab: (tab) => set({ contextPanelTab: tab }),
-  setActive: (id) => set({ activeHuddleId: id, view: "huddle" }),
+  // Opening a huddle marks it read (badge clears immediately, before the debounced sync). Also mark the
+  // huddle being LEFT as read up to now, so messages watched streaming in while it was open aren't counted
+  // as unread after switching away — regardless of which append path added them.
+  setActive: (id) =>
+    set((s) => ({
+      activeHuddleId: id,
+      view: "huddle",
+      lastReadAt: { ...s.lastReadAt, [s.activeHuddleId]: Date.now(), [id]: Date.now() },
+    })),
   setView: (v) => set({ view: v }),
+  markHuddleRead: (huddleId) =>
+    set((s) => ({ lastReadAt: { ...s.lastReadAt, [huddleId]: Date.now() } })),
   openArtifactById: (id) =>
     set(id ? { activeArtifactId: id, view: "artifacts" } : { activeArtifactId: null }),
   addUserMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
-  addAgentMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
+  // A message arriving in the ALREADY-OPEN huddle counts as read on arrival, so it never shows unread.
+  addAgentMessage: (m) =>
+    set((s) => ({
+      messages: [...s.messages, m],
+      lastReadAt:
+        m.huddleId === s.activeHuddleId ? { ...s.lastReadAt, [m.huddleId]: Date.now() } : s.lastReadAt,
+    })),
   logDecision: (d) => set((s) => ({ decisions: [d, ...s.decisions].slice(0, 50) })),
   addToolUses: (events) =>
     set((s) => ({ toolUses: [...events, ...s.toolUses].slice(0, 100) })),
@@ -392,6 +417,7 @@ export function getPersistablePayload(): PersistedWorkspace {
     activeHuddleId: s.activeHuddleId,
     showDemoData: s.showDemoData,
     journeyTasks: s.journeyTasks,
+    lastReadAt: s.lastReadAt,
   };
 }
 
@@ -429,6 +455,8 @@ export function hydrateFromRemote(blob: Record<string, unknown> | null | undefin
     memory: Array.isArray(p.memory) ? p.memory : seed.memory,
     decisions: Array.isArray(p.decisions) ? p.decisions : seed.decisions,
     journeyTasks: Array.isArray(p.journeyTasks) ? p.journeyTasks : seed.journeyTasks,
+    // Backward-compatible: blobs written before this feature have no lastReadAt → default to {}.
+    lastReadAt: p.lastReadAt && typeof p.lastReadAt === "object" ? p.lastReadAt : seed.lastReadAt,
     showDemoData: typeof p.showDemoData === "boolean" ? p.showDemoData : seed.showDemoData,
   });
   workspaceHydrated = true;
@@ -498,3 +526,31 @@ export const useVisibleMemory = () => useFilterDemo(useHuddleStore((s) => s.memo
 export const useVisibleDecisions = () => useFilterDemo(useHuddleStore((s) => s.decisions));
 export const useVisibleHuddles = () => useFilterDemo(useHuddleStore((s) => s.huddles));
 export const useToolUses = () => useHuddleStore((s) => s.toolUses);
+
+// Unread baseline: a huddle with no persisted lastReadAt is treated as read up to app load, so existing
+// history / back-filled seed never floods as "unread" on first-ever use. Once the user opens a huddle (or
+// a prior session persisted its lastReadAt), that timestamp drives counting instead — so away-arrived
+// messages (ts > lastReadAt) still count for returning users.
+const SESSION_START = Date.now();
+
+/**
+ * Per-huddle unread AGENT-message counts for the sidebar badges: agent messages (not user/system) newer
+ * than the huddle's lastReadAt (or SESSION_START if never read). The currently-open huddle always reports
+ * 0 (its arrivals are marked read on arrival). Recomputed only when messages / lastReadAt / active change.
+ */
+export function useUnreadCounts(): Record<string, number> {
+  const messages = useHuddleStore((s) => s.messages);
+  const lastReadAt = useHuddleStore((s) => s.lastReadAt);
+  const activeHuddleId = useHuddleStore((s) => s.activeHuddleId);
+  return useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const m of messages) {
+      if (m.author.kind !== "agent") continue;
+      const hid = m.huddleId;
+      if (hid === activeHuddleId) continue; // open huddle is always read
+      const since = lastReadAt[hid] ?? SESSION_START;
+      if (m.ts > since) counts[hid] = (counts[hid] ?? 0) + 1;
+    }
+    return counts;
+  }, [messages, lastReadAt, activeHuddleId]);
+}

@@ -2,7 +2,7 @@ import { LogOut, PanelLeftClose, Plus, Users } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS } from "../data/agents";
-import { useHuddleStore, useVisibleHuddles } from "../store";
+import { useHuddleStore, useUnreadCounts, useVisibleHuddles } from "../store";
 import { AgentAvatar } from "./AgentAvatar";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -20,6 +20,7 @@ export function Sidebar() {
   const huddles = useVisibleHuddles();
   const activeId = useHuddleStore((s) => s.activeHuddleId);
   const setActive = useHuddleStore((s) => s.setActive);
+  const unreadByHuddle = useUnreadCounts();
   const { user, signOut } = useAuth();
   const queryClient = useQueryClient();
   const toggleSidebarCollapsed = useHuddleStore((s) => s.toggleSidebarCollapsed);
@@ -85,6 +86,7 @@ export function Sidebar() {
               onClick={() => setActive(h.id)}
               icon={<Users size={14} strokeWidth={1.8} className="opacity-70" />}
               label={h.name}
+              unread={unreadByHuddle[h.id] ?? 0}
             />
           ))}
         </Section>
@@ -99,6 +101,7 @@ export function Sidebar() {
                 onClick={() => setActive(h.id)}
                 icon={<AgentAvatar agent={agent} size="xs" />}
                 label={`#${agent.handle}`}
+                unread={unreadByHuddle[h.id] ?? 0}
               />
             );
           })}
@@ -167,25 +170,38 @@ function SidebarButton({
   onClick,
   icon,
   label,
+  unread = 0,
 }: {
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
+  unread?: number;
 }) {
+  // Android-Messages style: an unread, non-open row bolds its label and shows a count pill; opening it
+  // clears both (setActive bumps lastReadAt synchronously).
+  const showUnread = !active && unread > 0;
   return (
     <button
       type="button"
       onClick={onClick}
+      aria-label={showUnread ? `${label}, ${unread} unread` : label}
       className={cn(
         "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition",
         active
           ? "bg-accent text-accent-foreground font-medium"
-          : "text-foreground/80 hover:bg-muted",
+          : showUnread
+            ? "font-semibold text-foreground hover:bg-muted"
+            : "text-foreground/80 hover:bg-muted",
       )}
     >
       {icon}
       <span className="truncate">{label}</span>
+      {showUnread && (
+        <span className="ml-auto shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-semibold leading-none text-primary-foreground min-w-[1.125rem]">
+          {unread > 99 ? "99+" : unread}
+        </span>
+      )}
     </button>
   );
 }
