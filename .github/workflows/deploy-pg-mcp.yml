@@ -2,15 +2,23 @@ name: Deploy read-only Postgres MCP (Azure Container Apps)
 
 # Runner-free way to query the Huddle Azure PG (eds-postgresql / RAG_AI_Agents) from a Claude Code
 # session, via a REMOTE MCP connector (brokered by Anthropic → bypasses the session egress that blocks
-# Azure hosts). OPTION B (OAuth): claude.ai custom connectors require OAuth + Dynamic Client Registration,
-# which crystaldba lacks and Entra can't provide (no DCR). So we front crystaldba with the
-# obot-platform/mcp-oauth-proxy (it IS the OAuth server Claude needs: DCR + discovery + token mint) and
-# delegate LOGIN to Google (reusing the existing GOOGLE_CLIENT_ID/SECRET org secrets — no new app/secret).
+# Azure hosts). OPTION B (OAuth): claude.ai custom connectors require OAuth + Dynamic Client Registration.
+# crystaldba has no OAuth, so we front it with obot-platform/mcp-oauth-proxy (it IS the OAuth server Claude
+# needs: DCR + discovery + token mint) and delegate LOGIN to the EnterpriseDS central auth = **Microsoft
+# Entra** (the org's identity provider). obot is a normal confidential OIDC *client* of Entra — Entra itself
+# needs no DCR. This deploy PROVISIONS obot's own Entra app registration via Microsoft Graph (the deploy SP
+# already holds Application.ReadWrite.All), so the redirect URI is set automatically (no portal step, per the
+# enterpriseds "one app per app" rule) and a client secret is minted inline each run (no new stored org secret).
+#
+# Why Entra over Google here: EnterpriseDS redirect URIs are centrally managed via Graph for Entra apps only
+# (Google requires a manual console entry). Bonus: signInAudience=AzureADMyOrg restricts login to org accounts
+# → that IS the access allowlist, enforced at the IdP. obot's generic OIDC provider discovers Entra correctly
+# because it tries the full-path well-known (…/<tenant>/v2.0/.well-known/openid-configuration).
 #
 # Topology (single ACA app, two containers sharing localhost):
 #   internet --HTTPS--> obot (external ingress :8080, OAuth) --localhost:8000--> crystaldba (internal, read-only)
-# Security: crystaldba is never public; obot 401s everything until a Google-authenticated OAuth token is
-# presented; the DB role `mcp_readonly` has only pg_read_all_data; crystaldba runs --access-mode=restricted.
+# Security: crystaldba is never public; obot 401s everything until an Entra-authenticated (org-only) OAuth token
+# is presented; the DB role `mcp_readonly` has only pg_read_all_data; crystaldba runs --access-mode=restricted.
 
 on:
   workflow_dispatch:
@@ -85,10 +93,59 @@ jobs:
           az containerapp env show -g "$RG" -n "$ACA_ENV" --only-show-errors >/dev/null 2>&1 || \
           az containerapp env create -g "$RG" -n "$ACA_ENV" -l "$LOCATION" --only-show-errors >/dev/null
 
+      - name: Provision obot's Entra app (central auth) — redirect URI + client secret
+        env:
+          APP_NAME: enterpriseds-pg-mcp
+        run: |
+          set -euo pipefail
+          FQDN=$(az containerapp show -g "$RG" -n "$ACA_APP" --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || echo "")
+          if [ -z "$FQDN" ]; then
+            echo "::error::ACA app $ACA_APP has no FQDN yet. The app must exist once before Entra provisioning (obot's redirect URI is derived from its FQDN). Re-run after the first container deploy."
+            exit 1
+          fi
+          REDIRECT="https://${FQDN}/callback"
+          echo "obot redirect URI (auto-registered on Entra): $REDIRECT"
+          # graph.microsoft.com is reachable from GitHub Actions (blocked only from CCR). Deploy SP holds
+          # Application.ReadWrite.All (admin-consented) → can create apps, set redirect URIs, mint secrets.
+          TOKEN=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)
+          [ -z "$TOKEN" ] && { echo "::error::Failed to acquire a Graph token via the deploy SP."; exit 1; }
+          gapi(){ curl -s -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" "$@"; }
+          EXIST=$(gapi -G "https://graph.microsoft.com/v1.0/applications" \
+            --data-urlencode "\$filter=displayName eq '${APP_NAME}'" \
+            | python3 -c 'import sys,json;a=json.load(sys.stdin).get("value",[]);print((a[0]["id"]+" "+a[0]["appId"]) if a else "")')
+          # obot is a CONFIDENTIAL web client (server-side code exchange, holds a secret) → web.redirectUris,
+          # NOT spa.redirectUris. signInAudience=AzureADMyOrg → only this tenant's accounts can sign in.
+          if [ -z "$EXIST" ]; then
+            echo "Creating Entra app ${APP_NAME} (AzureADMyOrg, confidential web client)…"
+            RESP=$(gapi -X POST "https://graph.microsoft.com/v1.0/applications" \
+              -d "{\"displayName\":\"${APP_NAME}\",\"signInAudience\":\"AzureADMyOrg\",\"web\":{\"redirectUris\":[\"${REDIRECT}\"]}}")
+            OBJID=$(echo "$RESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))')
+            APPID=$(echo "$RESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("appId",""))')
+            [ -z "$APPID" ] && { echo "::error::Entra app create failed: $RESP"; exit 1; }
+          else
+            OBJID=$(echo "$EXIST" | cut -d' ' -f1); APPID=$(echo "$EXIST" | cut -d' ' -f2)
+            echo "Updating redirect URI on existing Entra app ${APP_NAME} (${APPID})…"
+            gapi -X PATCH "https://graph.microsoft.com/v1.0/applications/${OBJID}" \
+              -d "{\"signInAudience\":\"AzureADMyOrg\",\"web\":{\"redirectUris\":[\"${REDIRECT}\"]}}" >/dev/null
+          fi
+          echo "Entra appId=$APPID"
+          # Ensure a service principal (enterprise app) exists in the tenant — required for AzureADMyOrg sign-in.
+          gapi -X POST "https://graph.microsoft.com/v1.0/servicePrincipals" -d "{\"appId\":\"$APPID\"}" >/dev/null 2>&1 || true
+          # Rotate: remove prior 'obot-mcp' secrets so credentials don't accumulate, then mint a fresh one.
+          for k in $(gapi "https://graph.microsoft.com/v1.0/applications/${OBJID}" \
+              | python3 -c 'import sys,json;[print(c["keyId"]) for c in json.load(sys.stdin).get("passwordCredentials",[]) if c.get("displayName")=="obot-mcp"]'); do
+            gapi -X POST "https://graph.microsoft.com/v1.0/applications/${OBJID}/removePassword" -d "{\"keyId\":\"$k\"}" >/dev/null || true
+          done
+          SECRET=$(gapi -X POST "https://graph.microsoft.com/v1.0/applications/${OBJID}/addPassword" \
+            -d "{\"passwordCredential\":{\"displayName\":\"obot-mcp\"}}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("secretText",""))')
+          [ -z "$SECRET" ] && { echo "::error::addPassword returned no secret"; exit 1; }
+          echo "::add-mask::$SECRET"
+          echo "ENTRA_APP_ID=$APPID" >> "$GITHUB_ENV"
+          echo "ENTRA_CLIENT_SECRET=$SECRET" >> "$GITHUB_ENV"
+
       - name: Deploy obot OAuth proxy + read-only crystaldba MCP (Option B)
         env:
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          TENANT: ${{ secrets.AZURE_TENANT_ID }}
           JPT: ${{ secrets.JOURNEY_PROXY_TOKEN }}
         run: |
           set -euo pipefail
@@ -117,8 +174,8 @@ jobs:
                   value: "${RO_DSN}"
                 - name: obot-dsn
                   value: "${OBOT_DSN}"
-                - name: google-secret
-                  value: "${GOOGLE_CLIENT_SECRET}"
+                - name: oauth-client-secret
+                  value: "${ENTRA_CLIENT_SECRET}"
                 - name: enc-key
                   value: "${ENC_KEY}"
             template:
@@ -142,11 +199,11 @@ jobs:
                     - name: PORT
                       value: "8080"
                     - name: OAUTH_CLIENT_ID
-                      value: "${GOOGLE_CLIENT_ID}"
+                      value: "${ENTRA_APP_ID}"
                     - name: OAUTH_CLIENT_SECRET
-                      secretRef: google-secret
+                      secretRef: oauth-client-secret
                     - name: OAUTH_AUTHORIZE_URL
-                      value: "https://accounts.google.com"
+                      value: "https://login.microsoftonline.com/${TENANT}/v2.0"
                     - name: SCOPES_SUPPORTED
                       value: "openid,profile,email"
                     - name: MCP_SERVER_URL
@@ -168,8 +225,8 @@ jobs:
           echo "============================================================"
           echo "Connector URL (claude.ai -> Add custom connector, leave Advanced BLANK):"
           echo "  https://${FQDN}/sse"
-          echo "Google OAuth client redirect URI to authorize (add in Google Cloud Console):"
-          echo "  https://${FQDN}/callback"
+          echo "Login: Microsoft Entra (org accounts only). Redirect URI ${FQDN}/callback was auto-registered"
+          echo "on the Entra app 'enterpriseds-pg-mcp' by the provisioning step — NO manual console entry."
           echo "============================================================"
           echo "--- Wait for the new revision to reach a terminal running state ---"
           LATEST=$(az containerapp revision list -g "$RG" -n "$ACA_APP" --query "reverse(sort_by([].{n:name,t:properties.createdTime},&t))[0].n" -o tsv)
