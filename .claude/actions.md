@@ -58,12 +58,22 @@ Committed to branch. Takes effect for all future sessions once merged to the def
 - NEXT (user steps): user adds Google redirect URI `https://huddle-pg-mcp.yellowcoast-c773a5f7.eastus.azurecontainerapps.io/callback`
   to the GOOGLE_CLIENT_ID client → adds connector in claude.ai (URL `.../sse`, Advanced blank) → then I
   verify a read query end-to-end → delete `_diag-mcp.yml` → write `create-azure-pg-mcp` eds skill.
-- **OPEN/DEFERRED (user: "leave it for now, come back to this"): access-control hardening.** RESEARCHED
-  (README + `pkg/providers/provider.go` UserInfo + code search): **obot has NO built-in email/domain/hd
-  allowlist** — no env var to flip. Effective gate today = "any Google login on the SHARED GOOGLE_CLIENT_ID
-  client" → safe ONLY if that client's consent screen is Internal (Workspace-only). Hardening paths when we
-  return: (1) custom obot image w/ ALLOWED_EMAILS check (Apache-2.0, ~15 lines in callback, build+push to
-  org GHCR); (2) confirm/keep Google consent = Internal; (3) dedicated Internal OAuth client for this MCP.
+- **[PIVOTED Google→Entra 2026-08-07, SERVING] run 31142816397: obot now delegates login to Microsoft
+  Entra (the org's CENTRAL auth), not Google.** Why: EDS redirect URIs are centrally managed via Graph for
+  ENTRA apps only (`azure-entra-app.yml` pattern) — Google needs a manual console entry the org doesn't do.
+  obot supports Microsoft upstream out of the box (its generic OIDC provider tries the full-path well-known,
+  so `OAUTH_AUTHORIZE_URL=login.microsoftonline.com/<tenant>/v2.0` discovers Entra correctly). deploy-pg-mcp.yml
+  now PROVISIONS obot's own Entra app `enterpriseds-pg-mcp` (appId **d440a9e4-8f77-45c9-8ed0-0305d09d6403**)
+  via Graph (deploy SP's Application.ReadWrite.All): confidential web client, **signInAudience=AzureADMyOrg
+  → org-only login = the access allowlist (hardening SOLVED at the IdP, no custom image)**, web.redirectUris
+  auto-set to obot's /callback, SP ensured, client secret minted+rotated inline (no new stored org secret).
+  Gotcha fixed: a just-created Entra app replicates async → addPassword <1s after create returned empty; added
+  replication-wait + retry. VERIFIED: rev 0000004 RunningAtMaxScale; obot log "OAuth Provider: …microsoftonline…/v2.0",
+  no migrate error; probes PRM 200 / AS 200 / /sse 401.
+- NEXT (user): in claude.ai reconnect the `Azure_pg_mcp` connector (now bounces to MICROSOFT login, not
+  Google) → enable it in THIS chat → then I verify a read query end-to-end. Deferred fine-grained allowlist
+  is now moot for practical purposes (org-only sign-in), but a per-email ALLOWED_EMAILS custom image remains
+  an option if you ever want to narrow below the whole org.
 - Also live TODAY: eds skill `query-supabase` (PR eds#15) for the Supabase-MCP runner-free path.
 - TOOLING NOTE: **Tavily MCP is available** in this session — prefer it over hand-guessed WebFetch URLs for
   external/library research (e.g. obot internals).
