@@ -198,7 +198,7 @@ function SidebarButton({
       {icon}
       <span className="truncate">{label}</span>
       {showUnread && (
-        <span className="ml-auto shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-semibold leading-none text-primary-foreground min-w-[1.125rem]">
+        <span className="ml-auto shrink-0 rounded-full bg-amber-400 px-1.5 py-0.5 text-center text-[10px] font-semibold leading-none text-amber-950 min-w-[1.125rem] dark:bg-blue-500 dark:text-white">
           {unread > 99 ? "99+" : unread}
         </span>
       )}
