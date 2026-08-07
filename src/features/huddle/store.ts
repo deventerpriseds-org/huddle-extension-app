@@ -102,6 +102,10 @@ interface HuddleState {
   // (setActive) or when a message arrives in the already-open huddle. Missing entry → treated as read up
   // to SESSION_START (see useUnreadCounts) so existing history never floods as "unread" on first use.
   lastReadAt: Record<string, number>;
+  // Persisted unread baseline (epoch ms). Seeded once at first activation to ~24h ago, so on first use the
+  // last day of agent activity in never-opened channels shows as unread, and away-arrived messages keep
+  // counting across reloads/devices instead of being suppressed by a rolling per-load baseline.
+  readBaselineAt: number;
   showDemoData: boolean;
   meeting: null | MeetingState;
   // Desktop panel chrome (device-local, read synchronously from localStorage so there's no
@@ -158,7 +162,12 @@ const PERSISTED_KEYS = [
   "showDemoData",
   "journeyTasks",
   "lastReadAt",
+  "readBaselineAt",
 ] as const;
+
+// First-use unread window: on activation, treat agent messages from the last ~24h in un-opened channels
+// as unread (matches the durable-turn back-fill's 24h look-back, so those messages are actually loaded).
+const UNREAD_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 type PersistedKey = (typeof PERSISTED_KEYS)[number];
 export type PersistedWorkspace = Pick<HuddleState, PersistedKey>;
@@ -172,6 +181,7 @@ function seedDefaults(): PersistedWorkspace {
     decisions: [],
     journeyTasks: [],
     lastReadAt: {},
+    readBaselineAt: Date.now() - UNREAD_LOOKBACK_MS,
     showDemoData: true,
   };
 }
@@ -188,6 +198,7 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
   toolUses: [],
   journeyTasks: [],
   lastReadAt: {},
+  readBaselineAt: Date.now() - UNREAD_LOOKBACK_MS,
   showDemoData: true,
   meeting: null,
   sidebarCollapsed: readBoolPref(SIDEBAR_COLLAPSED_KEY),
@@ -418,6 +429,7 @@ export function getPersistablePayload(): PersistedWorkspace {
     showDemoData: s.showDemoData,
     journeyTasks: s.journeyTasks,
     lastReadAt: s.lastReadAt,
+    readBaselineAt: s.readBaselineAt,
   };
 }
 
@@ -457,6 +469,8 @@ export function hydrateFromRemote(blob: Record<string, unknown> | null | undefin
     journeyTasks: Array.isArray(p.journeyTasks) ? p.journeyTasks : seed.journeyTasks,
     // Backward-compatible: blobs written before this feature have no lastReadAt → default to {}.
     lastReadAt: p.lastReadAt && typeof p.lastReadAt === "object" ? p.lastReadAt : seed.lastReadAt,
+    // Seed the baseline once (first activation, ~24h ago); persisted thereafter so it doesn't drift per-load.
+    readBaselineAt: typeof p.readBaselineAt === "number" ? p.readBaselineAt : seed.readBaselineAt,
     showDemoData: typeof p.showDemoData === "boolean" ? p.showDemoData : seed.showDemoData,
   });
   workspaceHydrated = true;
@@ -527,20 +541,17 @@ export const useVisibleDecisions = () => useFilterDemo(useHuddleStore((s) => s.d
 export const useVisibleHuddles = () => useFilterDemo(useHuddleStore((s) => s.huddles));
 export const useToolUses = () => useHuddleStore((s) => s.toolUses);
 
-// Unread baseline: a huddle with no persisted lastReadAt is treated as read up to app load, so existing
-// history / back-filled seed never floods as "unread" on first-ever use. Once the user opens a huddle (or
-// a prior session persisted its lastReadAt), that timestamp drives counting instead — so away-arrived
-// messages (ts > lastReadAt) still count for returning users.
-const SESSION_START = Date.now();
-
 /**
  * Per-huddle unread AGENT-message counts for the sidebar badges: agent messages (not user/system) newer
- * than the huddle's lastReadAt (or SESSION_START if never read). The currently-open huddle always reports
- * 0 (its arrivals are marked read on arrival). Recomputed only when messages / lastReadAt / active change.
+ * than the huddle's lastReadAt, or — for a channel never opened — newer than the PERSISTED `readBaselineAt`
+ * (seeded ~24h before first activation, so recent activity in channels you haven't opened shows immediately
+ * and away-arrived messages keep counting across reloads/devices instead of being suppressed each page load).
+ * The currently-open huddle always reports 0. Recomputed when messages / lastReadAt / baseline / active change.
  */
 export function useUnreadCounts(): Record<string, number> {
   const messages = useHuddleStore((s) => s.messages);
   const lastReadAt = useHuddleStore((s) => s.lastReadAt);
+  const readBaselineAt = useHuddleStore((s) => s.readBaselineAt);
   const activeHuddleId = useHuddleStore((s) => s.activeHuddleId);
   return useMemo(() => {
     const counts: Record<string, number> = {};
@@ -548,9 +559,9 @@ export function useUnreadCounts(): Record<string, number> {
       if (m.author.kind !== "agent") continue;
       const hid = m.huddleId;
       if (hid === activeHuddleId) continue; // open huddle is always read
-      const since = lastReadAt[hid] ?? SESSION_START;
+      const since = lastReadAt[hid] ?? readBaselineAt;
       if (m.ts > since) counts[hid] = (counts[hid] ?? 0) + 1;
     }
     return counts;
-  }, [messages, lastReadAt, activeHuddleId]);
+  }, [messages, lastReadAt, readBaselineAt, activeHuddleId]);
 }
