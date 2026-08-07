@@ -123,7 +123,7 @@ jobs:
                       secretRef: ro-dsn
                 - name: oauth
                   image: ghcr.io/obot-platform/mcp-oauth-proxy:latest
-                  resources: { cpu: 0.5, memory: 0.5Gi }
+                  resources: { cpu: 0.25, memory: 0.5Gi }   # total with pgmcp = 0.75 CPU / 1.5Gi (a valid ACA combo)
                   env:
                     - name: HOST
                       value: "0.0.0.0"
