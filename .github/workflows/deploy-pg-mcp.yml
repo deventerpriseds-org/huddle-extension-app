@@ -97,6 +97,11 @@ jobs:
           OBOT_DSN="postgres://obot:${OBOT_PW}@${PG_SERVER}.postgres.database.azure.com:5432/obot_oauth?sslmode=require"
           # Stable AES-256 key derived from an existing org secret → survives redeploys (no re-auth), no new secret.
           ENC_KEY=$(printf '%s' "${JPT}::obot-mcp-enc-v1" | sha256sum | cut -d' ' -f1 | xxd -r -p | base64 -w0)
+          # Changing nonce → new revision hash EVERY deploy, so the container actually RESTARTS.
+          # (A secret-value change alone — e.g. the rotated OBOT_PW — does NOT bump the revision hash in
+          #  Single mode, so obot would keep running its pre-grant crash-looped replica and never retry
+          #  auto-migrate. This forces a clean restart AFTER the schema grant + password reset are applied.)
+          NONCE=$(date +%s)
           cat > app.yaml <<YAML
           properties:
             managedEnvironmentId: ${ENV_ID}
@@ -130,6 +135,8 @@ jobs:
                   image: ghcr.io/obot-platform/mcp-oauth-proxy:latest
                   resources: { cpu: 0.25, memory: 0.5Gi }   # total with pgmcp = 0.75 CPU / 1.5Gi (a valid ACA combo)
                   env:
+                    - name: DEPLOY_NONCE
+                      value: "${NONCE}"
                     - name: HOST
                       value: "0.0.0.0"
                     - name: PORT
@@ -164,7 +171,17 @@ jobs:
           echo "Google OAuth client redirect URI to authorize (add in Google Cloud Console):"
           echo "  https://${FQDN}/callback"
           echo "============================================================"
-          sleep 45  # let the new revision come up + obot auto-migrate its schema
+          echo "--- Wait for the new revision to reach a terminal running state ---"
+          LATEST=$(az containerapp revision list -g "$RG" -n "$ACA_APP" --query "reverse(sort_by([].{n:name,t:properties.createdTime},&t))[0].n" -o tsv)
+          echo "Newest revision: $LATEST"
+          for i in $(seq 1 20); do
+            STATE=$(az containerapp revision show -g "$RG" -n "$ACA_APP" --revision "$LATEST" --query properties.runningState -o tsv 2>/dev/null || echo "?")
+            echo "  [$i] runningState=$STATE"
+            case "$STATE" in Healthy|Running|Failed|Degraded) break;; esac
+            sleep 10
+          done
+          echo "--- obot container logs (auto-migrate outcome) ---"
+          az containerapp logs show -g "$RG" -n "$ACA_APP" --container oauth --revision "$LATEST" --tail 40 2>&1 | tail -40 || echo "(oauth logs unavailable)"
           echo "--- OAuth discovery + gating probes (from the runner) ---"
           curl -sS -m 20 -o /dev/null -w "PRM   /.well-known/oauth-protected-resource/sse -> HTTP %{http_code} (want 200)\n" "https://${FQDN}/.well-known/oauth-protected-resource/sse" || echo "PRM probe failed"
           curl -sS -m 20 -o /dev/null -w "AS    /.well-known/oauth-authorization-server   -> HTTP %{http_code} (want 200)\n" "https://${FQDN}/.well-known/oauth-authorization-server" || echo "AS probe failed"
