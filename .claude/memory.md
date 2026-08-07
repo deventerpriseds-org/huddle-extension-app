@@ -1,7 +1,8 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-07
 
-## Confirm-ask reach-outs now SPACED 45–90 min apart (config), not independent uniform slots (2026-08-07, deployed main c07a02d, verifier PASS, live-proof pending)
+## Confirm-ask reach-outs now SPACED 45–90 min apart (config), not independent uniform slots (2026-08-07, deployed main c07a02d, verifier PASS, LIVE-PROVEN)
+LIVE PROOF (2026-08-07): reset 24 active tasks→BACKLOG, groomed → 3 fresh confirm_ask_at armed at 11:54/12:40/13:58 ET, gaps **46 & 78 min** (both ∈[45,90]), all inside the 9–18 window. Behaves exactly as asked.
 User: "they come too frequent → 45–90 minute randomized range." The fan-out (business 9–18 / evening 20–22) was placing each ask at an INDEPENDENT uniform minute in-window, so a groom batch could bunch reach-outs minutes apart. Fix: consecutive asks per user are SEQUENCED a randomized 45–90 min gap apart, anchored on `max(now, latest-pending)` so later passes don't collide. New `CONFIRM_GAP_DEFAULT`{min:45,max:90}/`resolveConfirmGap` (scheduling-config, config-driven), `nextSpacedFanSlotIso`+`armConfirmAsksSpaced` (autowork.server.ts), applied at BOTH arming sites + the straggler re-fan; still only inside windows with dinner-gap/overnight roll-over. Old independent-uniform `nextFanSlotIso` removed. Offline `scripts/confirm-spacing.test.ts` (3202 gaps all∈[45,90], 798 roll-overs) + independent verifier PASS. Live-proof = board reset→groom→read confirm_ask_at spacing (pending).
 
 ## Blocker DESYNC in standup = TWO readers + barge confabulation, NOT stale cache (2026-08-06, ground-truthed; grounding fix DEPLOYED, NOT user-confirmed)
