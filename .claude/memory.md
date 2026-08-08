@@ -1414,3 +1414,23 @@ Per-turn model/effort is now chosen from an LLM-scored difficulty (1-4), not a f
 - **TRACKED (user flagged):** Sol-high vs a strong-but-cheaper reasoning model (o3 ~$2/$8, gpt-5.4
   ~$2.50/$15) before locking Sol as the deep default; Settings-editable model-policy editor UI;
   thinking-dots UI surfacing (minimal breadcrumb ships via reasoning summaries) + manual-override picker.
+
+## 2026-08-08 — Turn deadline / "deferred" drops: real cause + 1:1 streaming plan
+- **Ground truth (corrected an earlier imprecise claim):** the real client is NOT on the plain sync
+  path — `HuddleView.submit()` calls `enqueueHuddleTurn` (durable turnId) and handles `status:"partial"`
+  + polls `getTurnUpdates`, so replies already STREAM at whole-reply granularity via the durable
+  `chat.pending_turns.replies` column. The plain `sendHuddleMessage` server fn (sync, no turnId) is what
+  the test HARNESS hits — different path; model logic identical so difficulty verification still valid.
+- **Why replies still get "deferred":** one Azure request has a ~45s ceiling; `runHuddleTurn` self-slices
+  (`CHUNK_BUDGET_MS=30s`/`TURN_DEADLINE_MS=36s`) and `runBounded` races each agent. A NOT-yet-started
+  agent is carried to the next chunk (never dropped); a STARTED-but-slow agent is cut ("response timed
+  out — deferred") because an in-flight OpenAI call can't be paused/resumed across executions. Sol-high
+  (slow) trips this most — that's the interaction with the new difficulty→Sol escalation.
+- **Rejected fix:** "one agent per execution" — breaks ceremonies (shared sequential live standup +
+  barge-in between speakers; per-agent executions add cold-start/round-trip and fight barge handling).
+- **Chosen (user-endorsed) fix, scoped to 1:1:** token-stream the lone 1:1 agent → partial-persist via
+  the EXISTING `updateTurnReplies` + poll (SWA buffers the HTTP BODY, so never stream the response —
+  ride the durable column). Client `applyTurnStream` must UPDATE a reply in place (today it appends by
+  index and skips existing ids — `addAgent` doesn't dedupe). Two Settings toggles: 1:1 default ON,
+  groups/ceremonies default OFF. Full execution budget for the single 1:1 agent. Guarded + toggle-off
+  rollback. Plan: `docs/plan-1on1-reply-streaming.md`. NOT built — awaiting go.

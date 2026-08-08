@@ -1856,3 +1856,21 @@ MODEL (luna-high ≈ terra-med at ~1/9 cost, measured round-3 A/B). Sol never au
 - [TRACKED] Thinking-dots UI surfacing of the chosen tier (a minimal breadcrumb ships via reasoning
   summaries for escalated tiers; the real "dots" chip is follow-up) + a manual override UI control
   (payload field `modelEscalate` is wired; needs the picker in the composer).
+
+### ACT-huddle-19 — 1:1 reply streaming (token-level), Settings-gated (2026-08-08, PLAN written, not built)
+User-endorsed fix for the "deferred / didn't respond in time" drops on slow (Sol-high) 1:1 replies.
+Rejected "one agent per execution" — it would break the ceremony model (shared sequential live standup
+call + barge-in between speakers). Scoped to 1:1 instead; groups/ceremonies unchanged.
+- [DONE] Ground-truth trace: the real client already uses the durable/streaming path (enqueueHuddleTurn
+  + partial + poll), streaming at WHOLE-REPLY granularity. Drops come from `runBounded` cutting a
+  started-but-slow single agent (in-flight OpenAI call isn't resumable). SWA buffers the HTTP body, so
+  streaming must ride the existing durable `replies` column + poll, NOT a streamed response.
+- [DONE] Plan written: `docs/plan-1on1-reply-streaming.md` — two Settings toggles (1:1 default ON,
+  groups/ceremonies default OFF); server streams the lone 1:1 agent's tokens → `updateTurnReplies`
+  partial-persist (throttled ~1s); client `applyTurnStream` updates a reply in place instead of
+  skip-if-exists; full execution budget for the single 1:1 agent; guarded fallback; toggle-off rollback.
+  No DB schema change (the `replies` JSONB column already streams). Composes with the group plan
+  (`plan-incremental-turn-streaming.md`).
+- [OPEN — awaiting go] Build it (Settings toggles → server streaming → client in-place render →
+  verify-1on1-streaming.mjs + ceremony regression). Confirm-before-building per repo rule; user said
+  write the plan first.
