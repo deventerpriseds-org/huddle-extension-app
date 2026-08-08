@@ -61,7 +61,8 @@ export async function callOpenAIRouter<T>(input: OpenAIRouterInput): Promise<T> 
 
   const text =
     json.output_text ??
-    json.output?.flatMap((o) => o.content ?? []).find((c) => c?.type === "output_text" || c?.text)?.text ??
+    json.output?.flatMap((o) => o.content ?? []).find((c) => c?.type === "output_text" || c?.text)
+      ?.text ??
     "";
 
   if (!text) throw new Error("OpenAI Responses returned empty output");
@@ -90,6 +91,11 @@ export interface OpenAIPersonaInput {
   /** Stable key (per agent) that routes requests to the same cached prompt prefix — improves
    *  OpenAI automatic prompt-cache hit rate for the large stable instruction/tool prefix. */
   promptCacheKey?: string;
+  /** memoryMode "conversation" (1:1 only): an OpenAI Conversations object id (`conv_...`). When set,
+   *  continuity is carried by that server-side thread — the caller sends ONLY the new user message as
+   *  `transcript`, not the full reconstructed window — and `previous_response_id` is not used (the
+   *  conversation manages state across turns AND across this turn's tool hops). */
+  conversation?: string;
 }
 
 interface ResponsesReply {
@@ -156,9 +162,7 @@ export interface OpenAIPersonaResult {
   reasoning: string[];
 }
 
-export async function callOpenAIResponses(
-  input: OpenAIPersonaInput,
-): Promise<OpenAIPersonaResult> {
+export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<OpenAIPersonaResult> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY not configured");
 
@@ -184,7 +188,14 @@ export async function callOpenAIResponses(
       // Only force tool_choice on the FIRST hop; subsequent hops let the model
       // produce a normal text answer using the tool output.
       ...(hasTools && input.toolChoice && hop === 0 ? { tool_choice: input.toolChoice } : {}),
-      ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
+      // Conversation-object mode owns cross-turn AND cross-hop state, so it replaces
+      // previous_response_id (mixing the two requires the id to be inside the conversation). When no
+      // conversation is set, thread the tool-hop loop with previous_response_id as before.
+      ...(input.conversation
+        ? { conversation: input.conversation }
+        : previousResponseId
+          ? { previous_response_id: previousResponseId }
+          : {}),
     };
 
     const res = await fetch(OPENAI_URL, {

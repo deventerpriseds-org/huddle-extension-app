@@ -83,8 +83,11 @@ export type CeremonyEngine = (typeof CEREMONY_ENGINES)[number];
  *   Cheapest + most predictable (capped window); no OpenAI-native state.
  * - "responses-chain": OpenAI `previous_response_id` per agent. SCAFFOLD — not yet implemented; falls
  *   back to reconstruction at runtime.
- * - "conversation": OpenAI Conversations object per agent (server-side thread, forever retention).
- *   SCAFFOLD — not yet implemented; falls back to reconstruction at runtime.
+ * - "conversation": OpenAI Conversations object per (agent, 1:1 huddle) — server-side thread that
+ *   carries short-term continuity natively (no resent transcript window). IMPLEMENTED for 1:1 DMs
+ *   (see conversation-store.server.ts + the persona call in huddle.functions.ts); GROUP huddles keep
+ *   reconstruction (a shared object would blur multi-agent identity). RAG still layers on top. Any
+ *   DB/OpenAI miss falls back to reconstruction for that turn.
  */
 export const MEMORY_MODES = ["reconstruction", "responses-chain", "conversation"] as const;
 export type MemoryMode = (typeof MEMORY_MODES)[number];
@@ -179,7 +182,8 @@ export const useBackendsStore = create<BackendsState>()(
             },
           },
         })),
-      setCeremonyEngine: (engine) => set((s) => ({ config: { ...s.config, ceremonyEngine: engine } })),
+      setCeremonyEngine: (engine) =>
+        set((s) => ({ config: { ...s.config, ceremonyEngine: engine } })),
       setMemoryMode: (mode) => set((s) => ({ config: { ...s.config, memoryMode: mode } })),
       replaceConfig: (cfg) => set({ config: cfg }),
       resetToDefaults: () => set({ config: defaultBackendsConfig() }),

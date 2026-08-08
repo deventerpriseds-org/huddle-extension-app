@@ -432,8 +432,8 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                     },
                     {
                       mode: "conversation" as const,
-                      title: "Conversation object — experimental (scaffold)",
-                      desc: "OpenAI Conversations thread per agent. Not yet implemented — falls back to Reconstruction. Retained on OpenAI until deleted.",
+                      title: "Conversation object — 1:1 DMs (experimental)",
+                      desc: "OpenAI Conversations thread per agent for 1:1 DMs — native server-side continuity (no resent transcript window), so an agent recalls what you said moments ago. Group huddles keep Reconstruction; RAG memory still applies everywhere. Falls back to Reconstruction on any error. Retained on OpenAI until deleted.",
                     },
                   ]
                 ).map((opt) => {
