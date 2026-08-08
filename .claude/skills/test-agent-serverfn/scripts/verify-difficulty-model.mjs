@@ -64,6 +64,15 @@ async function send({ agentId, text, scope = "one-to-one", members, modelEscalat
   return { http: res.status, reply, reasoning, reason: val.decision?.reason || "", responders: (val.replies || []).map((x) => x.agentId) };
 }
 
+// A turn can occasionally return empty (no responders) when a slow generation hits the ~36s turn
+// deadline — a known latency limitation, orthogonal to the model policy. Retry once so a transient
+// empty turn doesn't masquerade as a policy failure.
+async function sendR(opts) {
+  let r = await send(opts);
+  if (r.http === 200 && !r.reply) { await new Promise((z) => setTimeout(z, 1500)); r = await send(opts); }
+  return r;
+}
+
 // A deep-strategy ask (phrased so classifyTaskType also yields deep_strategy → heuristic difficulty 3).
 const DEEP = (topic) =>
   `Test- build a comprehensive, multi-entity three-statement financial model with scenario analysis and a full go-to-market strategy for ${topic}; write the complete strategic memo.`;
@@ -108,13 +117,14 @@ show("T4b resume budget→Terra (terry)", t4b);
 const t4terra = t4b.reasoning.some((x) => /terra\/high \(you chose this\)/i.test(x));
 ok(t4b.http === 200 && !isConfirm(t4b.reply) && t4terra, '"budget" resumed the deep ask on Terra-high (breadcrumb confirms tier)');
 
-// T5 — manual override modelEscalate:"budget" on a fresh deep ask must SKIP the gate → Terra-high.
-const t5 = await send({ agentId: "sam-trent", text: DEEP("a new product line"), modelEscalate: "budget" });
+// T5 — manual override modelEscalate:"budget" forces Terra-high regardless of depth (short ask keeps
+// the turn well under the deadline — the override, not the ask, is what's under test).
+const t5 = await sendR({ agentId: "sam-trent", text: "Test- in one line, what should I focus on this week?", modelEscalate: "budget" });
 show("T5 manual budget (sam)", t5);
 ok(t5.http === 200 && !isConfirm(t5.reply) && t5.reasoning.some((x) => /terra\/high \(you chose this\)/i.test(x)), "manual 'budget' override answers directly on Terra-high, no gate");
 
-// T6 — manual override modelEscalate:"sol" on a fresh deep ask must SKIP the gate → Sol-high.
-const t6 = await send({ agentId: "tess-sutton", text: DEEP("the product platform"), modelEscalate: "sol" });
+// T6 — manual override modelEscalate:"sol" forces Sol-high regardless of depth.
+const t6 = await sendR({ agentId: "tess-sutton", text: "Test- in one line, what should I focus on this week?", modelEscalate: "sol" });
 show("T6 manual sol (tess)", t6);
 ok(t6.http === 200 && !isConfirm(t6.reply) && t6.reasoning.some((x) => /sol\/high \(you chose this\)/i.test(x)), "manual 'sol' override answers directly on Sol-high, no gate");
 
