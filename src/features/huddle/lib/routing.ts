@@ -393,6 +393,48 @@ export interface RouterInvocation {
   lovableModel?: Parameters<typeof generateText>[0]["model"];
 }
 
+/**
+ * Lightweight, dedicated DIFFICULTY scorer (1-4) for turns that do NOT go through routeMessageLLM —
+ * chiefly 1:1 DMs, which route deterministically (the responder is fixed) and so never get the router's
+ * `difficulty`. Deep asks happen in DMs too, so the difficulty-driven model tier + Sol confirm-gate need
+ * this signal there. This is an LLM call (dynamic, no keyword list — the same principle as the router),
+ * kept tiny (one integer out) and cheap (runs on the router's model). Returns null on any failure so the
+ * caller can fall back to a heuristic. Mirrors the router's LLM-primary / keyword-fallback split.
+ */
+export async function scoreDifficultyLLM(
+  text: string,
+  invocation: { backend: "openai" | "lovable"; model: string; fastMode?: boolean },
+): Promise<number | null> {
+  try {
+    if (invocation.backend !== "openai") return null; // 1:1 difficulty only needed on the OpenAI path
+    const { callOpenAIRouter } = await import("./openai-responses.server");
+    const raw = await callOpenAIRouter<{ difficulty: number }>({
+      model: invocation.model,
+      system:
+        "You rate how much reasoning rigor the BEST answer to a user's message needs — independent of who answers or how long the reply is.",
+      prompt:
+        "Rate difficulty 1-4 for the message below. 1 = routine (ack, quick fact, single simple action). " +
+        "2 = standard (a normal substantive reply, a short draft, a simple plan). 3 = deep (multi-constraint " +
+        "strategy, financial/analytical modeling, real research → a rigorous written deliverable). 4 = " +
+        'exceptional rigor (rare). Return only {"difficulty": N}.\n\nMessage:\n"""' +
+        (text || "").slice(0, 1500) +
+        '"""',
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { difficulty: { type: "integer", enum: [1, 2, 3, 4] } },
+        required: ["difficulty"],
+      },
+      schemaName: "difficulty_score",
+      fastMode: invocation.fastMode,
+    });
+    const d = Math.round(raw?.difficulty ?? 0);
+    return d >= 1 && d <= 4 ? d : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function routeMessageLLM(
   input: RouteInput,
   invocation: RouterInvocation,

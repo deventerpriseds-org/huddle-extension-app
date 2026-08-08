@@ -7,6 +7,7 @@ import {
   parseMentions,
   routeMessage,
   routeMessageLLM,
+  scoreDifficultyLLM,
   laneOwnerFor,
   type RouterInvocation,
   type RouteResult,
@@ -20,6 +21,7 @@ import {
 import { buildRoster } from "./roster";
 import {
   resolveByDifficulty,
+  classifyTaskType,
   DEFAULT_MODEL_POLICY,
   type Effort,
 } from "./model-policy";
@@ -924,6 +926,36 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       });
     }
   } // end !resume routing
+
+  // Difficulty backfill: routeMessageLLM only runs for GROUP turns, so 1:1 DMs (and any group turn that
+  // fell to keyword routing) carry no `difficulty`. Deep asks happen in DMs too, so score it here with a
+  // cheap dedicated LLM call — this is what powers the difficulty-driven model tier + the Sol confirm
+  // gate in 1:1. LLM-primary (dynamic, no keyword list), heuristic fallback only when there's no key.
+  // Guarded: any failure leaves difficulty unset (treated as 2 = standard downstream).
+  if (!resume && routed.difficulty == null && !data.internal && !data.ceremonyBarge) {
+    try {
+      if (routerCfg.backend === "openai" && openaiKey) {
+        const d = await scoreDifficultyLLM(data.text, {
+          backend: "openai",
+          model: routerCfg.model,
+          fastMode: routerCfg.fastMode,
+        });
+        if (d != null) routed.difficulty = d;
+      }
+    } catch {
+      /* leave unset — downstream treats undefined as 2 */
+    }
+    if (routed.difficulty == null) {
+      // Heuristic fallback (never the sole authority — only when the LLM scorer is unavailable).
+      const tt = classifyTaskType(data.text);
+      routed.difficulty =
+        tt === "deep_strategy" || tt === "research"
+          ? 3
+          : tt === "ack" || tt === "read" || tt === "crud" || tt === "recall"
+            ? 1
+            : 2;
+    }
+  }
 
   // Persist a TERMINAL result in chunked mode. Every exit — the two early returns below and the
   // normal drained-queue path — routes through here so the durable store always ends 'done'. In the
