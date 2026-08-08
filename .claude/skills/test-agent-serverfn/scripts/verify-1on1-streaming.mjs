@@ -46,15 +46,19 @@ async function callFn(id, payload) {
 }
 
 const router = { backend: "openai", model: "gpt-5.6-luna", fastMode: false, strictPrompt: false, soloOnCoverage: true, interjections: false, maxInterjectors: 0 };
-const DEEP = "Test- build a comprehensive, multi-entity three-statement financial model with scenario analysis and a full go-to-market strategy for a Series A across three subsidiaries; write the complete strategic memo.";
+// A LONG-output ask on the slow Sol tier maximizes the streaming window. modelEscalate:"sol" bypasses
+// the deep confirm-gate (which would otherwise short-circuit a deep ask into a one-shot "go/budget"
+// prompt with nothing to stream) AND forces the slow high-effort model, so tokens stream over seconds.
+const LONG = "Test- write a detailed ~500-word strategic memo on launching a three-market SaaS product: sections for market, GTM, pricing, risks, and a 90-day plan. Use full prose paragraphs.";
 
 function payloadFor(agentId, turnId, streamOn) {
   return {
-    turnId, text: DEEP, huddleId: `dm-${agentId}`, scope: "one-to-one", members: [agentId],
+    turnId, text: LONG, huddleId: `dm-${agentId}`, scope: "one-to-one", members: [agentId],
     history: [], targetAgentId: agentId, router,
     agents: { [agentId]: { backend: "openai", rag: { store: "azure", chunks: false, triples: false, fileSearch: false, sharing: "shared" }, journey: { enabled: false }, webSearch: false } },
     timeZone: "America/New_York", caller: { entra_email: EMAIL },
     foreground: false,
+    modelEscalate: "sol", // bypass the confirm-gate + force slow Sol so there is real streaming to observe
     streamReplies: { oneOnOne: streamOn, group: false },
   };
 }
@@ -84,7 +88,7 @@ async function runAndTrack(agentId, turnId, streamOn) {
           break;
         }
       }
-      await sleep(600);
+      await sleep(400);
     }
   })();
   const enq = await callFn(FN_ENQUEUE, payloadFor(agentId, turnId, streamOn));
@@ -102,7 +106,7 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { console.log(`${c ? "✅ PASS" : "❌ FAIL"} — ${m}`); c ? pass++ : fail++; };
 
 // T1 — streaming ON: watch the reply grow.
-const t1 = await runAndTrack("finn-reid", `u-${EMAIL.length}-strm1-${DEEP.length}`, true);
+const t1 = await runAndTrack("finn-reid", `u-${EMAIL.length}-strm1-${LONG.length}`, true);
 const distinct1 = [...new Set(t1.lengths)];
 const grew = distinct1.length >= 2 && distinct1[distinct1.length - 1] >= distinct1[0];
 console.log(`\n[T1 streaming ON] lengths=${JSON.stringify(t1.lengths)} distinct=${JSON.stringify(distinct1)}\n  fallbacks=${JSON.stringify(t1.enqFallbacks)}\n  final(${t1.finalReply.length}): ${t1.finalReply.slice(0, 240)}`);
@@ -110,7 +114,7 @@ ok(grew, "1:1 reply text GREW across polls (≥2 increasing partial lengths → 
 ok(!!t1.finalReply && !DEFER_RX.test(t1.finalReply) && !t1.sawDefer, "1:1 deep reply finished complete with NO deferred/timed-out note");
 
 // T2 — streaming OFF: still returns a complete reply (toggle-off regression).
-const t2 = await runAndTrack("terry-locke", `u-${EMAIL.length}-strm0-${DEEP.length}`, false);
+const t2 = await runAndTrack("terry-locke", `u-${EMAIL.length}-strm0-${LONG.length}`, false);
 console.log(`\n[T2 streaming OFF] lengths=${JSON.stringify(t2.lengths)}\n  fallbacks=${JSON.stringify(t2.enqFallbacks)}\n  final(${t2.finalReply.length}): ${t2.finalReply.slice(0, 240)}`);
 ok(!!t2.finalReply && !DEFER_RX.test(t2.finalReply) && !t2.sawDefer, "1:1 with streaming OFF still returns a complete reply, no deferral (toggle-off safe)");
 
