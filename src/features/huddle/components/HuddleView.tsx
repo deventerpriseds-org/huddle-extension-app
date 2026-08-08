@@ -1,10 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Send, Sparkles, Video, Phone, ChevronDown, Mic, Square, Loader2, AudioLines, Plus, Users, Bell, BellRing, FileText } from "lucide-react";
+import {
+  Send,
+  Sparkles,
+  Video,
+  Phone,
+  ChevronDown,
+  Mic,
+  Square,
+  Loader2,
+  AudioLines,
+  Plus,
+  Users,
+  Bell,
+  BellRing,
+  FileText,
+} from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
 import type { Huddle, HuddleMessage } from "../data/seed";
-import { enqueueHuddleTurn, getTurnUpdates, getReminderDeliveries, listCeremonyRuns } from "../lib/huddle.functions";
+import {
+  enqueueHuddleTurn,
+  getTurnUpdates,
+  getReminderDeliveries,
+  listCeremonyRuns,
+} from "../lib/huddle.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind } from "../store";
@@ -76,15 +96,19 @@ function HuddleHeader({
     try {
       const { runs } = await listCeremonyRuns({ data: { caller, limit: 1 } });
       const run = runs?.[0] as
-        | { ceremony_type?: string; transcript?: { agentId: string; text: string }[] }
-        | undefined;
+        { ceremony_type?: string; transcript?: { agentId: string; text: string }[] } | undefined;
       if (!run) {
         toast.info("No past ceremonies yet.");
         return;
       }
-      startMeeting("virtual-meeting", { ceremonyType: (run.ceremony_type ?? "standup") as CeremonyKind });
+      startMeeting("virtual-meeting", {
+        ceremonyType: (run.ceremony_type ?? "standup") as CeremonyKind,
+      });
       patchMeeting({
-        transcript: (run.transcript ?? []).map((t) => ({ agentId: t.agentId as AgentId, text: t.text })),
+        transcript: (run.transcript ?? []).map((t) => ({
+          agentId: t.agentId as AgentId,
+          text: t.text,
+        })),
         ceremonyStatus: "done",
       });
     } catch {
@@ -173,7 +197,9 @@ function HuddleHeader({
               onClick={() => startMeeting("virtual-meeting", { members: huddle.members })}
             >
               <Users size={14} className="mr-1.5" />
-              {huddle.kind === "group" ? "Meet with this channel" : `Meet with ${AGENT_BY_ID[huddle.members[0]].name}`}
+              {huddle.kind === "group"
+                ? "Meet with this channel"
+                : `Meet with ${AGENT_BY_ID[huddle.members[0]].name}`}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => reviewLastCeremony()}>
               Review last auto-run…
@@ -504,7 +530,9 @@ function Composer({ huddle }: { huddle: Huddle }) {
   async function toggleNotifications() {
     const ok = await push.enablePush();
     toast[ok ? "success" : "message"](
-      ok ? "Notifications on — we'll ping you when a reply lands while you're away." : "Notifications not enabled.",
+      ok
+        ? "Notifications on — we'll ping you when a reply lands while you're away."
+        : "Notifications not enabled.",
     );
   }
 
@@ -516,7 +544,8 @@ function Composer({ huddle }: { huddle: Huddle }) {
   type TurnResult = Awaited<ReturnType<typeof enqueueHuddleTurn>>["result"];
   function applyTurnStream(
     turnId: string,
-    replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[] | undefined,
+    replies:
+      { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[] | undefined,
     result: TurnResult,
     final: boolean,
   ) {
@@ -545,12 +574,22 @@ function Composer({ huddle }: { huddle: Huddle }) {
     const userText = state.messages.find((m) => m.id === turnId)?.text ?? "";
     const r = result as {
       decision?: {
-        signal?: unknown; scores?: unknown; winnerId?: AgentId; runnerUpId?: AgentId;
-        interjected?: boolean; reason?: string;
+        signal?: unknown;
+        scores?: unknown;
+        winnerId?: AgentId;
+        runnerUpId?: AgentId;
+        interjected?: boolean;
+        reason?: string;
       };
       fallbacks?: { inline: string; reason?: string; severity?: "warn" | "critical" }[];
       prompts?: unknown[];
-      toolUses?: { agentId: AgentId; tool: string; summary: string; ok: boolean; detail?: string }[];
+      toolUses?: {
+        agentId: AgentId;
+        tool: string;
+        summary: string;
+        ok: boolean;
+        detail?: string;
+      }[];
       reasoning?: string[];
       journeyTaskUpdates?: Parameters<typeof upsertJourneyTasks>[0];
       suggestedTasks?: Parameters<typeof addSuggestedTasks>[0];
@@ -595,12 +634,17 @@ function Composer({ huddle }: { huddle: Huddle }) {
         userText,
         prompts: (r.prompts ?? []) as never,
         toolUses: (r.toolUses ?? []).map((t) => ({
-          agentId: t.agentId, tool: t.tool, status: t.summary, ok: t.ok, detail: t.detail,
+          agentId: t.agentId,
+          tool: t.tool,
+          status: t.summary,
+          ok: t.ok,
+          detail: t.detail,
         })),
         reasoning: r.reasoning,
       });
     }
-    if (r.journeyTaskUpdates && r.journeyTaskUpdates.length > 0) upsertJourneyTasks(r.journeyTaskUpdates);
+    if (r.journeyTaskUpdates && r.journeyTaskUpdates.length > 0)
+      upsertJourneyTasks(r.journeyTaskUpdates);
     if (r.suggestedTasks && r.suggestedTasks.length > 0) addSuggestedTasks(r.suggestedTasks);
     if (r.toolUses && r.toolUses.length > 0) addToolUses(r.toolUses as never);
   }
@@ -665,6 +709,10 @@ function Composer({ huddle }: { huddle: Huddle }) {
           }
         : undefined,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      // Away-gate the reply push: this is an interactive send from the open huddle, so if the tab is
+      // visible the user is right here and will see the reply in-app — no phone notification needed.
+      // When the tab is hidden (backgrounded), let the push fire so an away user still gets pinged.
+      foreground: typeof document !== "undefined" && document.visibilityState === "visible",
     };
 
     try {
@@ -676,7 +724,9 @@ function Composer({ huddle }: { huddle: Huddle }) {
       const outcome = await resilientEnqueue({
         enqueue: () => enqueueHuddleTurn({ data: payload }),
         probe: async () => {
-          const { turns } = await getTurnUpdates({ data: { huddleId: huddle.id, sinceMs: now - 5_000 } });
+          const { turns } = await getTurnUpdates({
+            data: { huddleId: huddle.id, sinceMs: now - 5_000 },
+          });
           return turns.some((t) => t.id === turnId);
         },
       });
@@ -761,10 +811,18 @@ function Composer({ huddle }: { huddle: Huddle }) {
   useEffect(() => {
     let stopped = false;
     let cursor = 0;
-    const render = (r: { id: string; agentId: string | null; text: string; kind?: string; firedMs: number }) => {
+    const render = (r: {
+      id: string;
+      agentId: string | null;
+      text: string;
+      kind?: string;
+      firedMs: number;
+    }) => {
       const mid = `rem-${r.id}`;
       if (useHuddleStore.getState().messages.some((m) => m.id === mid)) return;
-      const agentId = (r.agentId && AGENT_BY_ID[r.agentId as AgentId] ? r.agentId : huddle.members[0]) as AgentId;
+      const agentId = (
+        r.agentId && AGENT_BY_ID[r.agentId as AgentId] ? r.agentId : huddle.members[0]
+      ) as AgentId;
       addAgent({
         id: mid,
         huddleId: huddle.id,
@@ -776,7 +834,9 @@ function Composer({ huddle }: { huddle: Huddle }) {
     const poll = async () => {
       if (stopped) return;
       try {
-        const { reminders } = await getReminderDeliveries({ data: { huddleId: huddle.id, sinceMs: cursor } });
+        const { reminders } = await getReminderDeliveries({
+          data: { huddleId: huddle.id, sinceMs: cursor },
+        });
         for (const r of reminders) {
           cursor = Math.max(cursor, r.firedMs || 0);
           render(r);
@@ -903,7 +963,9 @@ function Composer({ huddle }: { huddle: Huddle }) {
             )}
             style={
               dictation.recording
-                ? { boxShadow: `0 0 0 ${Math.round(2 + dictation.level * 8)}px color-mix(in oklch, var(--destructive) 22%, transparent)` }
+                ? {
+                    boxShadow: `0 0 0 ${Math.round(2 + dictation.level * 8)}px color-mix(in oklch, var(--destructive) 22%, transparent)`,
+                  }
                 : undefined
             }
             aria-label={dictation.recording ? "Stop dictation" : "Dictate"}

@@ -139,6 +139,12 @@ const Input = z.object({
   members: z.array(z.enum(AgentIds)).min(1),
   history: z.array(HistoryMessage).max(40),
   targetAgentId: z.enum(AgentIds).optional(),
+  // Away-gate for the reply PUSH: true when the client is foregrounded AND actively viewing THIS
+  // huddle at send time — i.e. the user is right here and will see the reply in-app, so a phone
+  // notification would be redundant noise. Absent/false on cron-backstop and agent-initiated turns
+  // (user away) → push fires normally. Only gates the "X replied" messages push; reminders/alarms are
+  // always delivered regardless.
+  foreground: z.boolean().optional(),
   router: RouterConfigInput.optional(),
   agents: z.record(z.enum(AgentIds), AgentBackendInput).optional(),
   // Optional caller identity so journey-voice can resolve a Supabase user.
@@ -1741,9 +1747,21 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // Per-agent transcript: the current agent's own prior turns are role=assistant
     // (unprefixed); other agents' turns are surfaced as role=user context so the
     // model doesn't imitate a `[Name] ...` prefix pattern.
+    // De-noise the window BEFORE the -14 cap: drop system lines AND reminder/alarm fire-echoes
+    // (agent messages like "⏰ Alarm: …", id "rem-…") so those don't consume the limited context
+    // slots and push the real dialogue out of view — the reminder-heavy-thread dilution that made
+    // agents look like they'd forgotten. Non-destructive: only affects what the model reads per turn;
+    // the full history stays intact in the store, the UI, and chat.pending_turns.
     const transcript = data.history
-      .slice(-14)
       .filter((m) => m.author.kind !== "system")
+      .filter(
+        (m) =>
+          !(
+            m.author.kind === "agent" &&
+            (m.id.startsWith("rem-") || m.text.trimStart().startsWith("⏰"))
+          ),
+      )
+      .slice(-14)
       .map((m) => {
         if (m.author.kind === "user") return { role: "user" as const, content: m.text };
         const a = AGENT_BY_ID[(m.author as { kind: "agent"; agentId: AgentId }).agentId];
@@ -5234,7 +5252,12 @@ async function executeClaimedTurn(record: {
     // "batch". A real blocker the agent surfaces is tagged "push". The channel choice lives with the
     // side that KNOWS the intent (the enqueuer), not a fragile keyword classifier here.
     const notifyLevel = String((record.payload as { notify?: string })?.notify ?? "push");
-    const wantsPush = notifyLevel !== "batch" && notifyLevel !== "silent";
+    // Away-gate: if the user was foregrounded and viewing THIS huddle when they sent the turn, they'll
+    // see the reply in-app via the live poll — a phone push would just duplicate it. Suppress the reply
+    // push in that case. Cron-backstop / agent-initiated turns don't set foreground → push still fires
+    // when the user is actually away. (Reminders/alarms are a separate path and always deliver.)
+    const foreground = (record.payload as { foreground?: boolean })?.foreground === true;
+    const wantsPush = notifyLevel !== "batch" && notifyLevel !== "silent" && !foreground;
     const lead = result.replies?.[0];
     if (lead && wantsPush) {
       const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
