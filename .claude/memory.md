@@ -1384,3 +1384,33 @@ preserves control tags (bebc385); (2) `scoring.ts:rankTasks` filters `parking-lo
   explicit `-luna/-terra/-sol`. Tunable in Settings → Agents.
 - **TOOL REMINDER:** for a 403'd page (e.g. OpenAI docs) reach for the **tavily-search.yml** workflow
   (org TAVILY_API_KEY) FIRST — I keep forgetting it and built a probe workflow instead.
+
+## 2026-08-08 — Difficulty-driven model policy + Sol confirm-gate (LIVE-VERIFIED 7/7)
+Per-turn model/effort is now chosen from an LLM-scored difficulty (1-4), not a fixed per-agent model.
+- **Ladder:** 1→Luna-low, 2→Luna-high, 3-4→Sol-high; per-agent `ceiling` (model-policy.ts) caps it
+  (e.g. cam/flex→terra, ezra→luna). Escalate THINKING before MODEL (luna-high ≈ terra-med at ~1/9 cost,
+  round-3 A/B). `resolveByDifficulty` wired at the persona site in runHuddleTurn; `reasoningEffort`
+  threaded to callOpenAIResponses (5.6/gpt-5/o-series honor `reasoning.effort`).
+- **1:1 gap fixed (critical):** the LLM router (which emits `difficulty`) ONLY runs for GROUP turns —
+  `canLLMRoute` requires scope==group. So DMs had no difficulty and the gate would have been dead code.
+  Added `scoreDifficultyLLM` (routing.ts, tiny dedicated LLM call) + a backfill in runHuddleTurn for any
+  turn missing difficulty (heuristic `classifyTaskType` only when no API key). Dynamic, no keyword list.
+- **Sol confirm-gate (1:1):** a fresh deep ask is HELD; agent asks Sol-high vs Terra-high budget
+  (inescapable). Pending in `chat.deep_confirm` (reuses AZURE_PG_URL, NO new secret). Reply
+  "go"→Sol / "budget"→Terra / "cancel"→drop resumes the ORIGINAL ask (data.text swapped, winners pinned).
+  Group + any un-gated deep path fall back to Terra — NEVER auto-Sol. Manual `modelEscalate`
+  (sol|budget|ladder) always wins + clears the gate. Everything guarded → falls back to the static
+  agent-backend model on any error; a turn never breaks.
+- **Deploy 16a85dc (main, live).** LIVE UAT `verify-difficulty-model.mjs` (agent-serverfn-uat run
+  31272177467): **7/7 PASS** — T3a `decision.reason="1:1 [deep-confirm: difficulty 4 → sol/high (confirm)]"`,
+  T3b "go"→`sol/high` + full memo, T4b "budget"→`terra/high`, T5/T6 manual overrides, T7 group no-gate.
+- **KNOWN INTERACTION (not a bug):** the deep-Sol RESUME turn runs a slow generation that can hit the
+  36s sync turn-deadline → empty turn (dropped 1 test in each of the first two runs; passed on the run
+  with retry). This is the pre-existing single-request ~45s hosting-ceiling limit (backlog #3), made more
+  visible by Sol's longer thinking. The real fix is switching normal turns onto the durable/streaming
+  path (persist-each-reply + continue in background + poll — already built as a mechanism, `chat.pending_turns`
+  + saveTurnChunk + resume; the plain `sendHuddleMessage` entry still runs the SYNC path). User asked about
+  this directly ("why can't responses just drop in when ready") — proposed switching to it as the next piece.
+- **TRACKED (user flagged):** Sol-high vs a strong-but-cheaper reasoning model (o3 ~$2/$8, gpt-5.4
+  ~$2.50/$15) before locking Sol as the deep default; Settings-editable model-policy editor UI;
+  thinking-dots UI surfacing (minimal breadcrumb ships via reasoning summaries) + manual-override picker.
