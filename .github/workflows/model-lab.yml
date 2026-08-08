@@ -16,6 +16,7 @@ on:
           - scripts/lab/model-ab.mjs
           - scripts/lab/difficulty-classify.mjs
           - scripts/lab/model-ab2.mjs
+          - scripts/lab/model-ab3.mjs
 
 jobs:
   lab:
