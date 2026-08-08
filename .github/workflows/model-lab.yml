@@ -1,0 +1,32 @@
+name: Model lab (classifier accuracy + tier A/B)
+
+# Runs a lab script (classifier-accuracy or model-ab) against scripts/asks-catalog.json using the real
+# OpenAI models. Diagnostic only — nothing here touches the deployed app. Uses the OPENAI_API_KEY secret.
+
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: "Lab script to run"
+        required: true
+        default: "scripts/lab/classifier-accuracy.mjs"
+        type: choice
+        options:
+          - scripts/lab/classifier-accuracy.mjs
+          - scripts/lab/model-ab.mjs
+
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run ${{ inputs.script }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then echo "OPENAI_API_KEY secret not set"; exit 1; fi
+          node "${{ inputs.script }}"
