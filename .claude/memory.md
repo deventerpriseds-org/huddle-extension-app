@@ -1361,3 +1361,26 @@ AND `prioritize` surfaces them. Fixes (committed, NOT deployed): (1) grooming ex
 preserves control tags (bebc385); (2) `scoring.ts:rankTasks` filters `parking-lot` single-sourced so the
 `prioritize` tool + every view drop parked tasks. Open: park action could also clear stale
 `assigned_agent`/`priority_rank`/`is_scheduled`; deploy pending user go-ahead.
+
+## 2026-08-08 — Memory/continuity fix + GPT-5.6 migration (live-verified)
+- **The "false alarm" was NOT a lie — it was a delivery/perception gap.** Ground truth: Iris+Terry alarms
+  existed in `chat.reminders` (kind='alarm', due 21:00 ET, status='fired') and journey `send_push`
+  (calendar_events, app:huddle) returned ok for all 3 channels. The agents told the truth; whether the
+  full-screen alarm rendered on the phone is bridge-side. LESSON (ground-truth): I first checked journey
+  `public.scheduled_notifications` (WRONG table) and nearly concluded "they lied" — Huddle reminders live
+  in Azure PG `chat.reminders`. Check the right source.
+- **#1 invisible retrieval (active, all agents):** `dispatchTool` empty search_memory/lookup_facts now
+  returns neutral guidance (EMPTY_RESULT_GUIDANCE) instead of {results:[]}, and RAG_SYSTEM_HINT's
+  contradictory "say plainly you don't have it" clause was replaced with silent-retrieval guidance.
+  Iris/Sam (NO file_search) were narrating empty *search_memory*, not file_search — file_search left ON.
+- **#2 memoryMode "conversation" (default as of v5):** 1:1 DMs carry native OpenAI Conversations-object
+  continuity (`lib/rag/conversation-store.server.ts` + `conversation` param on callOpenAIResponses); group
+  keeps reconstruction; RAG layers on top; any DB/OpenAI miss falls back per-turn. LIVE-PROVEN: seeded a
+  fact then recalled it in a 2nd turn with EMPTY history.
+- **#3 away-gate + de-noise:** reply push suppressed when `foreground:true` (tab visible + in the huddle);
+  transcript window drops reminder-echoes/system lines before the -14 cap.
+- **GPT-5.6 migration (live):** agents were on **gpt-4o** at runtime. Now Terra (iris/terry/sam) + Luna
+  (rest); ids CONFIRMED callable via /v1/models (`openai-models.yml`). GOTCHA: bare `gpt-5.6` → Sol; use
+  explicit `-luna/-terra/-sol`. Tunable in Settings → Agents.
+- **TOOL REMINDER:** for a 403'd page (e.g. OpenAI docs) reach for the **tavily-search.yml** workflow
+  (org TAVILY_API_KEY) FIRST — I keep forgetting it and built a probe workflow instead.

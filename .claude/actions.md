@@ -1821,3 +1821,11 @@ leak is not only the tag-strip — grooming assigns/ranks parked tasks, AND the 
 - [OPEN — consider] the PARK action could also clear stale `assigned_agent`/`priority_rank`/`is_scheduled` so
   a parked task visibly leaves the active lane (today it keeps them; rankTasks now hides it regardless).
 - [OPEN] deploy decision (main + deploy-swa) — not yet deployed; pending user go-ahead.
+
+### ACT-huddle-14 UPDATE (2026-08-08): GPT-5.6 migration DONE (live)
+Migrated agents off gpt-4o to GPT-5.6 (per-agent, tunable in Settings → Agents): Terra for
+iris-chase/terry-locke/sam-trent, Luna for the rest. Model ids confirmed callable on the account via
+`/v1/models` (openai-models.yml). Live-verified both tiers return real replies (agent-serverfn-uat run
+31260780490: 4/4 PASS). Shipped alongside the memory-continuity batch (#1 invisible retrieval, #2
+conversation-object mode default-on, #3 away-gate push + de-noise). **Status: closed** — a broader
+per-agent quality A/B (Luna vs Terra on more agents) remains available as a tuning follow-on, not a blocker.
