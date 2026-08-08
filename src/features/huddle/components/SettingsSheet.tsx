@@ -422,8 +422,8 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                   [
                     {
                       mode: "reconstruction" as const,
-                      title: "Reconstruction (default, active)",
-                      desc: "App-managed transcript + each ceremony agent gets its OWN prior remarks injected verbatim (guaranteed self-recall). Cheapest and most predictable. Recommended.",
+                      title: "Reconstruction (fallback; used for group huddles)",
+                      desc: "App-managed transcript + each ceremony agent gets its OWN prior remarks injected verbatim (guaranteed self-recall). Cheapest and most predictable. Group huddles always use this; it's also the automatic fallback if the conversation object can't be reached.",
                     },
                     {
                       mode: "responses-chain" as const,
@@ -432,8 +432,8 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                     },
                     {
                       mode: "conversation" as const,
-                      title: "Conversation object — 1:1 DMs (experimental)",
-                      desc: "OpenAI Conversations thread per agent for 1:1 DMs — native server-side continuity (no resent transcript window), so an agent recalls what you said moments ago. Group huddles keep Reconstruction; RAG memory still applies everywhere. Falls back to Reconstruction on any error. Retained on OpenAI until deleted.",
+                      title: "Conversation object — 1:1 DMs (default, active)",
+                      desc: "DEFAULT. OpenAI Conversations thread per agent for 1:1 DMs — native server-side continuity (no resent transcript window), so an agent recalls what you said moments ago. Group huddles still use Reconstruction (one shared thread would blur the multiple agents); RAG long-term memory applies everywhere. Falls back to Reconstruction on any error. Retained on OpenAI until deleted.",
                     },
                   ]
                 ).map((opt) => {
