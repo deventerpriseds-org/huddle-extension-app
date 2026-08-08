@@ -14,11 +14,13 @@ on:
         options:
           - scripts/lab/classifier-accuracy.mjs
           - scripts/lab/model-ab.mjs
+          - scripts/lab/difficulty-classify.mjs
+          - scripts/lab/model-ab2.mjs
 
 jobs:
   lab:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
