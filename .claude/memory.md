@@ -1434,3 +1434,26 @@ Per-turn model/effort is now chosen from an LLM-scored difficulty (1-4), not a f
   index and skips existing ids — `addAgent` doesn't dedupe). Two Settings toggles: 1:1 default ON,
   groups/ceremonies default OFF. Full execution budget for the single 1:1 agent. Guarded + toggle-off
   rollback. Plan: `docs/plan-1on1-reply-streaming.md`. NOT built — awaiting go.
+
+## 2026-08-08 — 1:1 reply streaming BUILT + live-verified (3/3)
+Shipped the plan in `docs/plan-1on1-reply-streaming.md` (deployed e6b91d3, then test-fix on branch).
+- **Server:** `callOpenAIResponses` gained opt-in `stream`+`onDelta` (`readResponsesStream` parses the
+  Responses SSE — `response.output_text.delta` → cumulative text; `response.completed` → terminal object
+  so the existing tool-loop/extractors are untouched; stream error → non-stream retry that hop).
+  Server→OpenAI streaming is unaffected by SWA's HTTP-body buffering.
+- **Turn:** the lone 1:1 agent runs with `stream:true` + an onDelta that throttle-persists (~1s) the
+  growing reply via the EXISTING `updateTurnReplies` (same fn `streamChunk` uses) → same
+  `chat.pending_turns.replies` column the client already polls. Gated: `chunked && scope one-to-one &&
+  streamReplies.oneOnOne` (default on). Lone 1:1 agent gets a **40s** budget (vs shared 30/36s) so a slow
+  Sol reply finishes instead of being cut; if it still overruns, the streamed partial is already saved.
+- **Client:** `upsertAgentMessage` (store) + `applyTurnStream` now UPSERT a reply in place (append→update)
+  so a growing reply updates rather than duplicating/freezing.
+- **Config:** `streamReplies {oneOnOne:true, group:false}` in backends config (v6 + v5→v6 migration,
+  mirroring memoryMode); two toggles in Settings → Memory.
+- **Ceremonies/groups untouched by construction:** both run `scope:"group"` → they never enter the 1:1
+  gate or the 40s budget. Verified `ceremonies.server.ts` uses scope "group".
+- **VERIFY GOTCHA:** a deep 1:1 ask hits the Sol confirm-gate (one-shot go/budget prompt) → nothing to
+  stream. To exercise streaming, `verify-1on1-streaming.mjs` uses `modelEscalate:"sol"` (bypasses the gate
+  + forces the slow model) + a long-output ask, enqueues on the DURABLE path (streaming needs turnId/
+  chunked — the sync `sendHuddleMessage` won't stream), and polls `getTurnUpdates` concurrently to watch
+  the reply length grow. Run 31278335325: 3/3 (T1 [4→107] grew, no deferral; T2 toggle-off complete).

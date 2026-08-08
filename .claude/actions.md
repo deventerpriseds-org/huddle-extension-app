@@ -1871,6 +1871,9 @@ call + barge-in between speakers). Scoped to 1:1 instead; groups/ceremonies unch
   skip-if-exists; full execution budget for the single 1:1 agent; guarded fallback; toggle-off rollback.
   No DB schema change (the `replies` JSONB column already streams). Composes with the group plan
   (`plan-incremental-turn-streaming.md`).
-- [OPEN — awaiting go] Build it (Settings toggles → server streaming → client in-place render →
-  verify-1on1-streaming.mjs + ceremony regression). Confirm-before-building per repo rule; user said
-  write the plan first.
+- [DONE — built + live-verified, deployed e6b91d3] Server SSE stream+onDelta (openai-responses.server.ts),
+  1:1 partial-persist via updateTurnReplies + 40s lone-agent budget (huddle.functions.ts), upsert-in-place
+  render (store.ts + HuddleView.tsx), streamReplies config v6 + two Settings toggles (agent-backends.ts +
+  SettingsSheet.tsx). LIVE UAT verify-1on1-streaming.mjs (run 31278335325): 3/3 — T1 reply text GREW across
+  polls [4→107] no deferral; T2 toggle-off returns complete reply. Ceremonies/groups run scope:'group' →
+  bypass the 1:1 gate + budget (unchanged by construction). 20 ACs from an independent AC writer.
