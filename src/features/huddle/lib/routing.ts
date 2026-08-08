@@ -86,6 +86,9 @@ export interface RouteResult {
    * self-censors (passes) if it turns out it has nothing concrete.
    */
   interjectors?: AgentId[];
+  /** LLM-router difficulty (1-4) for the latest message; drives per-turn model/effort. Absent on the
+   *  keyword fallback (treat as 2 = standard downstream). */
+  difficulty?: number;
 }
 
 /**
@@ -470,6 +473,14 @@ Example — user: "plan tomorrow's workout and also budget my gym membership" �
 You can't see their data — nominate on the ANGLE; each nominee checks and PASSES silently if it has nothing concrete. The calendar/tasks/contacts agent is a good nominee ONLY when the message touches the user's OWN schedule/commitments (a real meeting, appointment, or personal deadline) — NOT for a generic duration like "how long will the build take." Nothing urgent is the COMMON case → return interjectors = [].`
     : "";
 
+  // Difficulty (1-4): how much reasoning/rigor the BEST answer needs. Drives per-turn reasoning effort
+  // (escalating effort on the cheap model is the proven cost-effective lever). Semantic, not keyword.
+  const difficultyHint = `\n\nAlso return "difficulty" (integer 1-4) = how much reasoning/rigor the best answer to the LATEST message needs, independent of who answers:
+1 = routine: a quick read, status lookup, acknowledgement, or a single create/update op.
+2 = standard: planning, prioritization, judgment, or a short draft.
+3 = structured-rigor: a substantive deliverable or analysis that must be correct and well-structured (financial model, full essay, product/GTM strategy, deep multi-step analysis).
+4 = exceptional: rare, exceptionally complex multi-constraint synthesis where small errors are very costly.`;
+
   const prompt = `Roster (available agents in this huddle):
 ${roster}
 
@@ -479,7 +490,7 @@ ${transcript || "(no prior messages)"}
 Latest user message:
 ${text}
 
-${supportingHint}${interjectHint}${explicitRequestHint}`;
+${supportingHint}${interjectHint}${explicitRequestHint}${difficultyHint}`;
 
   const zodSchema = z.object({
     primary: z.enum(memberIds),
@@ -487,6 +498,7 @@ ${supportingHint}${interjectHint}${explicitRequestHint}`;
     explicitlyRequested: z.array(z.enum(memberIds)).optional().default([]),
     interjectors: z.array(z.enum(memberIds)).optional().default([]),
     reason: z.string(),
+    difficulty: z.number().int().min(1).max(4).optional().default(2),
   });
 
   try {
@@ -496,6 +508,7 @@ ${supportingHint}${interjectHint}${explicitRequestHint}`;
       explicitlyRequested?: AgentId[];
       interjectors?: AgentId[];
       reason: string;
+      difficulty?: number;
     };
 
     if (invocation.backend === "openai") {
@@ -519,8 +532,9 @@ ${supportingHint}${interjectHint}${explicitRequestHint}`;
             items: { type: "string", enum: memberIds },
           },
           reason: { type: "string" },
+          difficulty: { type: "integer", enum: [1, 2, 3, 4] },
         },
-        required: ["primary", "supporting", "explicitlyRequested", "interjectors", "reason"],
+        required: ["primary", "supporting", "explicitlyRequested", "interjectors", "reason", "difficulty"],
       } as Record<string, unknown>;
 
       const raw = await callOpenAIRouter<{
@@ -529,6 +543,7 @@ ${supportingHint}${interjectHint}${explicitRequestHint}`;
         explicitlyRequested: string[];
         interjectors: string[];
         reason: string;
+        difficulty: number;
       }>({
         model: invocation.model,
         system,
@@ -591,6 +606,7 @@ ${supportingHint}${interjectHint}${explicitRequestHint}`;
     return {
       winners,
       interjectors,
+      difficulty: output.difficulty ?? 2,
       decision: {
         signal: "topic",
         scores,

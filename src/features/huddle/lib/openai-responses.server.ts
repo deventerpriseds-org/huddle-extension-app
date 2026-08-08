@@ -96,6 +96,10 @@ export interface OpenAIPersonaInput {
    *  `transcript`, not the full reconstructed window — and `previous_response_id` is not used (the
    *  conversation manages state across turns AND across this turn's tool hops). */
   conversation?: string;
+  /** Difficulty-driven reasoning effort for reasoning-capable models (5.6/gpt-5/o-series). Escalating
+   *  effort on the cheap model is the proven cost-effective lever (Luna+high ≈ Terra+med at ~1/9 cost).
+   *  Ignored by non-reasoning models. */
+  reasoningEffort?: "low" | "medium" | "high" | "max";
 }
 
 interface ResponsesReply {
@@ -185,7 +189,9 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
       instructions: input.instructions,
       input: runningInput,
       ...(priority ? { service_tier: "priority" } : {}),
-      ...(wantReasoning ? { reasoning: { summary: "auto" } } : {}),
+      ...(wantReasoning
+        ? { reasoning: { ...(input.reasoningEffort ? { effort: input.reasoningEffort } : {}), summary: "auto" } }
+        : {}),
       ...(hasTools ? { tools: input.tools } : {}),
       ...(input.promptCacheKey ? { prompt_cache_key: input.promptCacheKey } : {}),
       // Only force tool_choice on the FIRST hop; subsequent hops let the model

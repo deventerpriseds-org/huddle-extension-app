@@ -19,6 +19,11 @@ import {
 } from "./fallbacks";
 import { buildRoster } from "./roster";
 import {
+  resolveByDifficulty,
+  DEFAULT_MODEL_POLICY,
+  type Effort,
+} from "./model-policy";
+import {
   agentOwnsCapability,
   exclusiveCapabilities,
   capabilityOwnerFor,
@@ -187,6 +192,11 @@ const Input = z.object({
   // SCAFFOLD: they carry through but the runtime logs a marker and behaves as reconstruction (no
   // OpenAI-native state plumbing yet). Absent → reconstruction.
   memoryMode: z.enum(["reconstruction", "responses-chain", "conversation"]).optional(),
+  // Manual model/thinking override for THIS turn (the "change the model/thinking myself" fallback, like
+  // most AI UIs). "sol" = force Sol-high, "budget" = force the Terra-high budget tier, or a ladder label
+  // (e.g. "luna-high", "sol-max"). Always wins over the difficulty-driven auto-pick AND clears the Sol
+  // deep-confirm gate. Absent → fully automatic (difficulty scorer drives the tier).
+  modelEscalate: z.string().max(24).optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
@@ -1151,6 +1161,93 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         "tool",
         `ceremony ${ceremonyType} failed to load tasks — ${err instanceof Error ? err.message : String(err)}`,
         "ceremony data load failed",
+      );
+    }
+  }
+
+  // ---- Sol deep-confirm gate + manual escalation (1:1 only) ---------------------------------------
+  // Deep research is rare and Sol is the priciest tier, so it is NEVER auto-spent silently. A fresh 1:1
+  // ask the router scores as deep (difficulty ≥3) is HELD: the agent asks the user — inescapably — to
+  // confirm the default (Sol-high, best quality) or take the Terra-high budget (cheaper, usually close).
+  // The pending ask is stored cross-turn; the user's next reply (go / budget / cancel) resumes the
+  // ORIGINAL ask on the chosen tier. A manual override (data.modelEscalate) and group turns skip the
+  // gate. Best-effort: any store error just proceeds normally (no gate) so a turn never breaks.
+  // `deepManual` is read again at the persona site to pick the model/effort.
+  let deepManual: string | undefined = data.modelEscalate?.trim() || undefined;
+  if (!resume && !data.internal && !data.ceremonyBarge && data.scope === "one-to-one") {
+    try {
+      const email = await resolveCallerEmail();
+      const {
+        getPendingDeepConfirm,
+        setPendingDeepConfirm,
+        clearPendingDeepConfirm,
+        classifyConfirmReply,
+      } = await import("./tasks/deep-confirm.server");
+
+      const pending = await getPendingDeepConfirm(email, data.huddleId);
+      if (pending) {
+        const verdict = classifyConfirmReply(data.text);
+        if (verdict === "sol" || verdict === "budget") {
+          // Resume the original deep ask on the chosen tier (resolveByDifficulty honors `manual`, no re-gate).
+          deepManual = verdict;
+          data.text = pending.askText;
+          if (pending.agentId && data.members.includes(pending.agentId as AgentId)) {
+            routed.winners = [pending.agentId as AgentId];
+            routed.interjectors = [];
+          }
+          await clearPendingDeepConfirm(email, data.huddleId);
+        } else if (verdict === "cancel") {
+          await clearPendingDeepConfirm(email, data.huddleId);
+          return finalize({
+            decision: routed.decision,
+            replies: [
+              {
+                agentId: (pending.agentId as AgentId) ?? routed.winners[0] ?? data.members[0],
+                text: "No problem — I'll hold off on the deep dive. Say the word whenever you want me to pick it back up.",
+              },
+            ] as Reply[],
+            fallbacks,
+            prompts,
+            journeyTaskUpdates,
+            suggestedTasks,
+            toolUses,
+            reasoning: reasoningSummaries,
+          });
+        }
+        // verdict "unrelated" → leave the pending (2h expiry) and fall through to normal routing.
+      }
+
+      // Fresh deep ask (no manual override): if the primary winner would auto-spend Sol, hold + confirm.
+      if (!deepManual && routed.winners.length > 0) {
+        const primary = routed.winners[0];
+        const res = resolveByDifficulty(routed.difficulty ?? 2, primary, DEFAULT_MODEL_POLICY, {});
+        if (res.needsConfirm) {
+          await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
+          return finalize({
+            decision: {
+              ...routed.decision,
+              reason: `${routed.decision.reason} [deep-confirm: ${res.reason}]`.slice(0, 220),
+            },
+            replies: [
+              {
+                agentId: primary,
+                text:
+                  "This looks like deep, high-rigor work. My default for that is our strongest reasoning model (Sol, high effort) — best quality, but it costs more. " +
+                  'Want me to go with Sol, or use the budget option (Terra, high effort) — cheaper and usually very close? Reply "go" for Sol or "budget" for the cheaper one.',
+              },
+            ] as Reply[],
+            fallbacks,
+            prompts,
+            journeyTaskUpdates,
+            suggestedTasks,
+            toolUses,
+            reasoning: reasoningSummaries,
+          });
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `[huddle-model] deep-confirm gate error: ${err instanceof Error ? err.message : String(err)}; proceeding without gate.`,
       );
     }
   }
@@ -3330,6 +3427,45 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 
         usedModel = agentBackend.model?.trim() || snapshot?.model || "gpt-4o";
 
+        // Difficulty-driven model/effort (the validated cost lever). The LLM router scores each turn 1-4;
+        // routine→Luna-low, standard→Luna-high, deep→Sol-high. Escalating THINKING on the cheap model
+        // (luna-high ≈ terra-med at ~1/9 cost, measured) beats jumping the model, so most turns run Luna
+        // with more effort and only genuinely deep asks reach Sol. Sol auto-spend is gated upstream (a
+        // fresh 1:1 deep ask is confirm-gated), so if we still see needsConfirm here (a group deep ask,
+        // or an un-gated path) we do NOT silently spend Sol — we drop to the Terra-high budget. A manual
+        // override (deepManual) always wins and clears the gate. Guarded: any failure keeps the static
+        // agent-backend model so a bad resolve never breaks the turn.
+        let personaReasoningEffort: Effort | undefined;
+        try {
+          const resolved = resolveByDifficulty(
+            routed.difficulty ?? 2,
+            winner.id,
+            DEFAULT_MODEL_POLICY,
+            { manual: deepManual },
+          );
+          let chosenModel = resolved.model;
+          let chosenEffort = resolved.effort;
+          if (resolved.needsConfirm && !deepManual) {
+            chosenModel = resolved.budgetModel; // never auto-spend Sol without confirm/override
+            chosenEffort = "high";
+          }
+          if (chosenModel) {
+            usedModel = chosenModel;
+            personaReasoningEffort = chosenEffort;
+            // Minimal tier surfacing (first cut of the "thinking dots"): only note ESCALATED tiers so
+            // routine Luna turns stay silent. Rides the existing reasoning-summary channel to the UI.
+            if (chosenModel.includes("sol") || deepManual) {
+              reasoningSummaries.push(
+                `${winner.name}: reasoning tier ${chosenModel.replace("gpt-5.6-", "")}/${chosenEffort}${deepManual ? " (you chose this)" : ""}`,
+              );
+            }
+          }
+        } catch (err) {
+          console.warn(
+            `[huddle-model] difficulty resolve failed for ${winner.id}: ${err instanceof Error ? err.message : String(err)}; keeping ${usedModel}.`,
+          );
+        }
+
         const toolChoice = forceReminder
           ? { type: "function", name: "schedule_reminder" }
           : forceTaskCreation
@@ -3399,6 +3535,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // Route this agent's requests to its own cached prefix (stable snapshot/tools/roster).
           promptCacheKey: `huddle-${winner.id}`,
           ...(conversationId ? { conversation: conversationId } : {}),
+          ...(personaReasoningEffort ? { reasoningEffort: personaReasoningEffort } : {}),
         });
         clean = persona.text.trim();
         if (persona.reasoning.length > 0) {

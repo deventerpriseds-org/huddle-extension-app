@@ -131,6 +131,60 @@ function capToCeiling(choice: TierChoice, ceiling?: "luna" | "terra" | "sol"): T
   return { model: capped, effort };
 }
 
+// ---- Difficulty-driven resolution (the wired path) ----
+// Difficulty 1-4 → rung. Deep (3-4) defaults to Sol-high but flags needsConfirm so the runtime can gate
+// the spend (inescapable confirm offering the Terra-high budget). Manual override skips the gate.
+export interface DifficultyResolved {
+  model: string;
+  effort: Effort;
+  needsConfirm: boolean; // true when this would auto-spend on the top (Sol) rung
+  budgetModel: string; // the cheaper alternative offered at the confirm
+  reason: string;
+}
+const DIFF_RUNG: Record<number, { model: string; effort: Effort; deep?: boolean }> = {
+  1: { model: "gpt-5.6-luna", effort: "low" },
+  2: { model: "gpt-5.6-luna", effort: "high" },
+  3: { model: "gpt-5.6-sol", effort: "high", deep: true },
+  4: { model: "gpt-5.6-sol", effort: "high", deep: true },
+};
+const CEIL_MODEL: Record<string, string> = { luna: "gpt-5.6-luna", terra: "gpt-5.6-terra", sol: "gpt-5.6-sol" };
+
+/**
+ * Resolve difficulty → {model, effort} for an agent, honoring the per-agent ceiling. Deep asks default
+ * to Sol-high with needsConfirm=true (runtime gates the spend, offering Terra-high budget). A manual
+ * choice ("sol" | "budget" | ladder label) wins and clears the gate.
+ */
+export function resolveByDifficulty(
+  difficulty: number,
+  agentId: AgentId,
+  policy: ModelPolicy = DEFAULT_MODEL_POLICY,
+  opts: { manual?: string } = {},
+): DifficultyResolved {
+  const budgetModel = "gpt-5.6-terra";
+  // Manual override always wins, no gate.
+  if (opts.manual) {
+    if (opts.manual === "budget") return { model: budgetModel, effort: "high", needsConfirm: false, budgetModel, reason: "manual: budget (Terra-high)" };
+    if (opts.manual === "sol") return { model: "gpt-5.6-sol", effort: "high", needsConfirm: false, budgetModel, reason: "manual: Sol-high" };
+    const rung = LADDER.find((l) => l.label === opts.manual);
+    if (rung) return { model: rung.model, effort: rung.effort, needsConfirm: false, budgetModel, reason: `manual: ${rung.label}` };
+  }
+  const d = Math.min(4, Math.max(1, Math.round(difficulty || 2)));
+  const base = DIFF_RUNG[d];
+  const ceiling = policy.ceiling?.[agentId]; // "luna" | "terra" | "sol"
+  // Cap the model to the agent's ceiling. If the deep default (Sol) is capped away, no confirm needed.
+  const ceilRank = ceiling ? CEIL_RANK[ceiling] : 3;
+  let model = base.model;
+  let effort = base.effort;
+  let deep = !!base.deep;
+  if (modelRank(model) > ceilRank) {
+    model = CEIL_MODEL[ceiling!];
+    if (effort === "low") effort = "high"; // cheap-think compensation when capped down
+    deep = false; // capped below Sol → nothing to confirm
+  }
+  const needsConfirm = deep && model === "gpt-5.6-sol";
+  return { model, effort, needsConfirm, budgetModel, reason: `difficulty ${d} → ${model}/${effort}${needsConfirm ? " (confirm)" : ""}` };
+}
+
 export interface ResolveOpts {
   /** taskType from the LLM router (smart path) — overrides the heuristic when present. */
   llmTaskType?: TaskType;
