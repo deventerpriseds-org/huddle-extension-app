@@ -1,0 +1,69 @@
+{
+  "_comment": "SINGLE source-of-truth test matrix for model-policy. Consumed by the offline map test, the live classifier-accuracy run, and the Luna/Terra/Sol A/B. EDIT ME as you experience results. Fields: id, ask, agent, expectType (task type the classifier should emit), tier (human expected: routine|judgment|deep), ab (include in the live model A/B).",
+  "asks": [
+    { "id": "gen-ack", "ask": "thanks, that's perfect", "agent": "iris-chase", "expectType": "ack", "tier": "routine", "ab": false },
+    { "id": "gen-short", "ask": "jot a quick note: pick up flowers on the way home", "agent": "iris-chase", "expectType": "short_draft", "tier": "routine", "ab": false },
+
+    { "id": "iris-read", "ask": "what's on my calendar today?", "agent": "iris-chase", "expectType": "read", "tier": "routine", "ab": false },
+    { "id": "iris-crud", "ask": "add a task to call the vet", "agent": "iris-chase", "expectType": "crud", "tier": "routine", "ab": false },
+    { "id": "iris-recall", "ask": "what did we decide about the venue last week?", "agent": "iris-chase", "expectType": "recall", "tier": "routine", "ab": false },
+    { "id": "iris-plan", "ask": "plan out my day around the board deadlines", "agent": "iris-chase", "expectType": "plan", "tier": "judgment", "ab": false },
+    { "id": "iris-decide", "ask": "prioritize these five tasks for me", "agent": "iris-chase", "expectType": "decide", "tier": "judgment", "ab": true },
+    { "id": "iris-deep", "ask": "map a full week plan balancing the launch, my EMBA, and family", "agent": "iris-chase", "expectType": "deep_strategy", "tier": "deep", "ab": true },
+
+    { "id": "terry-read", "ask": "give me the standup readout", "agent": "terry-locke", "expectType": "read", "tier": "routine", "ab": false },
+    { "id": "terry-decide", "ask": "groom the backlog and set up next", "agent": "terry-locke", "expectType": "decide", "tier": "judgment", "ab": true },
+    { "id": "terry-deep", "ask": "plan the whole sprint across the board and rebalance owners", "agent": "terry-locke", "expectType": "deep_strategy", "tier": "deep", "ab": true },
+
+    { "id": "finn-read", "ask": "what's my checking balance?", "agent": "finn-reid", "expectType": "read", "tier": "routine", "ab": false },
+    { "id": "finn-analyze1", "ask": "analyze last month's dining spend and where to trim", "agent": "finn-reid", "expectType": "analyze", "tier": "judgment", "ab": true },
+    { "id": "finn-analyze2", "ask": "compare refinancing my loan at 6.2% vs 5.8% over 5 years", "agent": "finn-reid", "expectType": "analyze", "tier": "judgment", "ab": false },
+    { "id": "finn-deep", "ask": "build a three-statement financial model for the raise", "agent": "finn-reid", "expectType": "deep_strategy", "tier": "deep", "ab": true },
+
+    { "id": "faith-crud", "ask": "set a reminder for the kids' dentist Thursday 4pm", "agent": "faith-hartley", "expectType": "crud", "tier": "routine", "ab": false },
+    { "id": "faith-read", "ask": "what family events are on this weekend?", "agent": "faith-hartley", "expectType": "read", "tier": "routine", "ab": false },
+    { "id": "faith-decide", "ask": "resolve the dentist vs board-call clash Thursday", "agent": "faith-hartley", "expectType": "decide", "tier": "judgment", "ab": true },
+
+    { "id": "elle-read", "ask": "when is my next assignment due?", "agent": "elle-rowan", "expectType": "read", "tier": "routine", "ab": false },
+    { "id": "elle-produce", "ask": "draft my EMBA essay #2", "agent": "elle-rowan", "expectType": "produce", "tier": "judgment", "ab": true },
+    { "id": "elle-deep", "ask": "write my make-or-break admissions essay for the reach school", "agent": "elle-rowan", "expectType": "produce", "tier": "deep", "ab": true },
+
+    { "id": "flex-read", "ask": "suggest a quick push workout", "agent": "flex-grimes", "expectType": "read", "tier": "routine", "ab": false },
+    { "id": "flex-plan", "ask": "build me a 12-week periodized training plan", "agent": "flex-grimes", "expectType": "plan", "tier": "judgment", "ab": true },
+
+    { "id": "ezra-crud1", "ask": "add pharmacy pickup to my errands", "agent": "ezra-miles", "expectType": "crud", "tier": "routine", "ab": false },
+    { "id": "ezra-crud2", "ask": "remind me to grab the dry cleaning at 5", "agent": "ezra-miles", "expectType": "crud", "tier": "routine", "ab": false },
+    { "id": "ezra-ceiling", "ask": "batch-optimize today's errand run by location", "agent": "ezra-miles", "expectType": "plan", "tier": "routine", "ab": true },
+
+    { "id": "sam-short", "ask": "riff on a name for the new product", "agent": "sam-trent", "expectType": "short_draft", "tier": "routine", "ab": false },
+    { "id": "sam-produce", "ask": "draft the seed pitch narrative", "agent": "sam-trent", "expectType": "produce", "tier": "judgment", "ab": true },
+    { "id": "sam-deep", "ask": "lay out a full go-to-market for launch", "agent": "sam-trent", "expectType": "deep_strategy", "tier": "deep", "ab": true },
+    { "id": "sam-research", "ask": "research the top 5 competitors and write me a brief", "agent": "sam-trent", "expectType": "research", "tier": "judgment", "ab": true },
+    { "id": "sam-override", "ask": "should we raise now or bootstrap another quarter?", "agent": "sam-trent", "expectType": "decide", "tier": "deep", "ab": true },
+
+    { "id": "cole-read", "ask": "is now a good time to ask for a promotion?", "agent": "cole-blake", "expectType": "decide", "tier": "judgment", "ab": false },
+    { "id": "cole-produce", "ask": "polish my resume for the VP role", "agent": "cole-blake", "expectType": "produce", "tier": "judgment", "ab": true },
+
+    { "id": "chef-read", "ask": "give me a dinner recipe for tonight", "agent": "charleston-lewis", "expectType": "read", "tier": "routine", "ab": false },
+    { "id": "chef-plan", "ask": "make a full week meal plan hitting my macros on budget", "agent": "charleston-lewis", "expectType": "plan", "tier": "judgment", "ab": true },
+
+    { "id": "eli-crud1", "ask": "reschedule my dentist to Thursday", "agent": "eli-vaughn", "expectType": "crud", "tier": "routine", "ab": false },
+    { "id": "eli-crud2", "ask": "tidy up my board — move stale cards to backlog", "agent": "eli-vaughn", "expectType": "crud", "tier": "routine", "ab": false },
+
+    { "id": "liam-decide", "ask": "help me think through taking the DBA now vs in a year", "agent": "liam-kingsley", "expectType": "decide", "tier": "judgment", "ab": true },
+    { "id": "liam-deep", "ask": "map my next 5-year plan across career, family, and health", "agent": "liam-kingsley", "expectType": "deep_strategy", "tier": "deep", "ab": true },
+
+    { "id": "cam-crud", "ask": "quick slack reply saying I'm running 5 late", "agent": "cam-post", "expectType": "crud", "tier": "routine", "ab": false },
+    { "id": "cam-produce1", "ask": "draft a reply to the investor email", "agent": "cam-post", "expectType": "produce", "tier": "judgment", "ab": true },
+    { "id": "cam-produce2", "ask": "write the launch announcement for LinkedIn", "agent": "cam-post", "expectType": "produce", "tier": "judgment", "ab": true },
+
+    { "id": "troy-read", "ask": "what time is my flight Tuesday?", "agent": "troy-lennox", "expectType": "read", "tier": "routine", "ab": false },
+    { "id": "troy-plan", "ask": "plan a 3-city Europe trip minimizing layovers and cost", "agent": "troy-lennox", "expectType": "plan", "tier": "judgment", "ab": true },
+    { "id": "troy-deep", "ask": "replan the whole international trip around the moved keynote and my budget cap", "agent": "troy-lennox", "expectType": "deep_strategy", "tier": "deep", "ab": true },
+
+    { "id": "tess-read", "ask": "what's the status of the Nexus release?", "agent": "tess-sutton", "expectType": "read", "tier": "routine", "ab": false },
+    { "id": "tess-decide", "ask": "what feature should we build next?", "agent": "tess-sutton", "expectType": "decide", "tier": "judgment", "ab": true },
+    { "id": "tess-plan", "ask": "map out the Q3 product roadmap", "agent": "tess-sutton", "expectType": "plan", "tier": "judgment", "ab": false },
+    { "id": "tess-deep", "ask": "define the full product strategy for the new line", "agent": "tess-sutton", "expectType": "deep_strategy", "tier": "deep", "ab": true }
+  ]
+}
