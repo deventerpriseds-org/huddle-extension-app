@@ -100,6 +100,13 @@ export interface OpenAIPersonaInput {
    *  effort on the cheap model is the proven cost-effective lever (Luna+high ≈ Terra+med at ~1/9 cost).
    *  Ignored by non-reasoning models. */
   reasoningEffort?: "low" | "medium" | "high" | "max";
+  /** 1:1 reply streaming: when true, each hop's request uses the Responses streaming API and `onDelta`
+   *  is called with the cumulative answer text as tokens arrive, so the caller can persist the growing
+   *  reply (durable row + client poll). Server→OpenAI streaming is unaffected by SWA response buffering
+   *  (that only buffers the SWA→client HTTP body). Falls back to a normal call on any stream error. */
+  stream?: boolean;
+  /** Called with the cumulative output text as it streams (only when `stream` is true). */
+  onDelta?: (textSoFar: string) => void;
 }
 
 interface ResponsesReply {
@@ -133,6 +140,54 @@ function extractReasoning(json: ResponsesReply): string[] {
 function isReasoningModel(model: string): boolean {
   const m = model.replace(/^openai\//, "");
   return /^o\d/.test(m) || m.startsWith("gpt-5");
+}
+
+/**
+ * Read a Responses streaming (SSE) body: fire `onText` with the cumulative answer text as
+ * `response.output_text.delta` events arrive, and return the terminal `response` object from
+ * `response.completed` (same shape the non-streaming call returns, so the existing extractors work).
+ * Server→OpenAI only — unrelated to SWA's client-response buffering. Throws on a stream error or if the
+ * stream ends without a completed response, so the caller can fall back to a normal call.
+ */
+async function readResponsesStream(
+  res: Response,
+  onText: (fullSoFar: string) => void,
+): Promise<ResponsesReply & { id?: string }> {
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("responses stream: no body reader");
+  const decoder = new TextDecoder();
+  let buf = "";
+  let full = "";
+  let finalResponse: (ResponsesReply & { id?: string }) | null = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      let evt: { type?: string; delta?: string; response?: ResponsesReply & { id?: string } };
+      try {
+        evt = JSON.parse(payload);
+      } catch {
+        continue;
+      }
+      if (evt.type === "response.output_text.delta" && typeof evt.delta === "string") {
+        full += evt.delta;
+        onText(full);
+      } else if (evt.type === "response.completed" && evt.response) {
+        finalResponse = evt.response;
+      } else if (evt.type === "response.failed" || evt.type === "error") {
+        throw new Error(`responses stream ${evt.type}`);
+      }
+    }
+  }
+  if (!finalResponse) throw new Error("responses stream ended without response.completed");
+  return finalResponse;
 }
 
 function extractToolCalls(json: ResponsesReply): Array<{
@@ -207,13 +262,14 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
           : {}),
     };
 
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+    };
     const res = await fetch(OPENAI_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify(body),
+      headers,
+      body: JSON.stringify(input.stream ? { ...body, stream: true } : body),
     });
 
     if (!res.ok) {
@@ -221,7 +277,23 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
       throw new Error(`OpenAI Responses ${res.status}: ${errText.slice(0, 300)}`);
     }
 
-    const json = (await res.json()) as ResponsesReply & { id?: string };
+    let json: ResponsesReply & { id?: string };
+    if (input.stream) {
+      try {
+        json = await readResponsesStream(res, (full) => input.onDelta?.(full));
+      } catch {
+        // Streaming parse failed mid-flight — retry this hop non-streamed so the reply is never lost.
+        // (A partial already persisted by the caller is harmlessly replaced by the final text.)
+        const res2 = await fetch(OPENAI_URL, { method: "POST", headers, body: JSON.stringify(body) });
+        if (!res2.ok) {
+          const t = await res2.text().catch(() => "");
+          throw new Error(`OpenAI Responses ${res2.status}: ${t.slice(0, 300)}`);
+        }
+        json = (await res2.json()) as ResponsesReply & { id?: string };
+      }
+    } else {
+      json = (await res.json()) as ResponsesReply & { id?: string };
+    }
     previousResponseId = json.id;
     if (wantReasoning) reasoning.push(...extractReasoning(json));
 

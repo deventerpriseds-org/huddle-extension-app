@@ -123,6 +123,7 @@ interface HuddleState {
   openArtifactById: (id: string | null) => void;
   addUserMessage: (m: HuddleMessage) => void;
   addAgentMessage: (m: HuddleMessage) => void;
+  upsertAgentMessage: (m: HuddleMessage) => void;
   logDecision: (d: RoutingDecision) => void;
   addToolUses: (events: ToolUseEvent[]) => void;
   moveTask: (id: string, lane: TaskLane) => void;
@@ -239,6 +240,24 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
       lastReadAt:
         m.huddleId === s.activeHuddleId ? { ...s.lastReadAt, [m.huddleId]: Date.now() } : s.lastReadAt,
     })),
+  // In-place upsert for a streaming reply: if a message with this id exists, replace its text/artifacts
+  // (the reply is still growing); otherwise append it like addAgentMessage. Used by applyTurnStream so a
+  // 1:1 streamed reply updates in place instead of duplicating or freezing at the first partial.
+  upsertAgentMessage: (m) =>
+    set((s) => {
+      const i = s.messages.findIndex((x) => x.id === m.id);
+      if (i === -1)
+        return {
+          messages: [...s.messages, m],
+          lastReadAt:
+            m.huddleId === s.activeHuddleId
+              ? { ...s.lastReadAt, [m.huddleId]: Date.now() }
+              : s.lastReadAt,
+        };
+      const next = s.messages.slice();
+      next[i] = { ...next[i], text: m.text, artifacts: m.artifacts ?? next[i].artifacts };
+      return { messages: next };
+    }),
   logDecision: (d) => set((s) => ({ decisions: [d, ...s.decisions].slice(0, 50) })),
   addToolUses: (events) =>
     set((s) => ({ toolUses: [...events, ...s.toolUses].slice(0, 100) })),

@@ -93,7 +93,7 @@ export const MEMORY_MODES = ["reconstruction", "responses-chain", "conversation"
 export type MemoryMode = (typeof MEMORY_MODES)[number];
 
 export const BackendsConfigSchema = z.object({
-  version: z.number().default(5),
+  version: z.number().default(6),
   router: RouterConfigSchema,
   agents: z.record(z.string(), AgentBackendSchema),
   ceremonyEngine: z.enum(CEREMONY_ENGINES).default("current"),
@@ -101,6 +101,13 @@ export const BackendsConfigSchema = z.object({
   // reconstruction; any DB/OpenAI miss falls back to reconstruction per-turn (so this is safe as a
   // default). Flip back to "reconstruction" in Settings → Memory to disable entirely.
   memoryMode: z.enum(MEMORY_MODES).default("conversation"),
+  // Reply streaming: a 1:1 reply's tokens persist to the durable row as they form (shown via the client
+  // poll), so a slow high-effort answer streams in instead of being cut at the turn deadline. Groups &
+  // ceremonies stay OFF by default (the shared sequential live-call model is unchanged). Editable in
+  // Settings → Memory.
+  streamReplies: z
+    .object({ oneOnOne: z.boolean(), group: z.boolean() })
+    .default({ oneOnOne: true, group: false }),
 });
 
 export type AgentBackend = z.infer<typeof AgentBackendSchema>;
@@ -155,7 +162,7 @@ function defaultAgents(): Record<AgentId, AgentBackend> {
 
 export function defaultBackendsConfig(): BackendsConfig {
   return {
-    version: 5,
+    version: 6,
     router: {
       backend: "openai",
       model: DEFAULT_ROUTER_MODEL.openai,
@@ -168,6 +175,7 @@ export function defaultBackendsConfig(): BackendsConfig {
     agents: defaultAgents(),
     ceremonyEngine: "current",
     memoryMode: "conversation",
+    streamReplies: { oneOnOne: true, group: false },
   };
 }
 
@@ -179,6 +187,7 @@ interface BackendsState {
   setAgent: (id: AgentId, patch: Partial<AgentBackend>) => void;
   setCeremonyEngine: (engine: CeremonyEngine) => void;
   setMemoryMode: (mode: MemoryMode) => void;
+  setStreamReplies: (patch: Partial<{ oneOnOne: boolean; group: boolean }>) => void;
   replaceConfig: (cfg: BackendsConfig) => void;
   resetToDefaults: () => void;
 }
@@ -202,6 +211,16 @@ export const useBackendsStore = create<BackendsState>()(
       setCeremonyEngine: (engine) =>
         set((s) => ({ config: { ...s.config, ceremonyEngine: engine } })),
       setMemoryMode: (mode) => set((s) => ({ config: { ...s.config, memoryMode: mode } })),
+      setStreamReplies: (patch) =>
+        set((s) => ({
+          config: {
+            ...s.config,
+            streamReplies: {
+              oneOnOne: patch.oneOnOne ?? s.config.streamReplies?.oneOnOne ?? true,
+              group: patch.group ?? s.config.streamReplies?.group ?? false,
+            },
+          },
+        })),
       replaceConfig: (cfg) => set({ config: cfg }),
       resetToDefaults: () => set({ config: defaultBackendsConfig() }),
     }),
@@ -232,7 +251,7 @@ export const useBackendsStore = create<BackendsState>()(
           mergedAgents[id] = combined;
         }
         const merged: BackendsConfig = {
-          version: 5,
+          version: 6,
           router: { ...current.config.router, ...p.config.router },
           agents: mergedAgents as Record<AgentId, AgentBackend>,
           // Preserve a persisted choice; a config saved before this field existed defaults to "current"
@@ -247,6 +266,9 @@ export const useBackendsStore = create<BackendsState>()(
             persistedVersion < 5
               ? "conversation"
               : (p.config.memoryMode ?? current.config.memoryMode),
+          // v5→v6: seed the reply-streaming toggles (1:1 on, group off). Preserve a persisted choice
+          // thereafter. Safe: streaming falls back to a normal call per-turn on any error.
+          streamReplies: p.config.streamReplies ?? current.config.streamReplies,
         };
         return { ...current, config: merged };
       },

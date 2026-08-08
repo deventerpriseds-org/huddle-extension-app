@@ -199,6 +199,11 @@ const Input = z.object({
   // (e.g. "luna-high", "sol-max"). Always wins over the difficulty-driven auto-pick AND clears the Sol
   // deep-confirm gate. Absent → fully automatic (difficulty scorer drives the tier).
   modelEscalate: z.string().max(24).optional(),
+  // Reply streaming toggles (Settings). 1:1 (one responding agent) streams the reply's tokens into the
+  // durable row as they form, so a slow high-effort answer shows up incrementally via the client poll
+  // instead of being cut at the turn deadline. Groups/ceremonies default OFF (the shared sequential
+  // live-call model is unchanged). Absent → 1:1 on, group off.
+  streamReplies: z.object({ oneOnOne: z.boolean(), group: z.boolean() }).partial().optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
@@ -3555,6 +3560,34 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
         }
 
+        // 1:1 reply streaming (Settings-gated): persist the growing answer to the durable row as it
+        // streams so the client poll renders it forming, instead of waiting for the whole reply (and a
+        // slow high-effort reply isn't cut at the deadline). Only the lone 1:1 agent, only in
+        // chunked/durable mode, only when the toggle is on (default on). Throttled ~1s. Guarded — a
+        // stream error inside callOpenAIResponses falls back to a normal call. Groups/ceremonies never
+        // stream here (gate requires scope one-to-one).
+        const streamOneOnOne =
+          chunked &&
+          !!turnId &&
+          !!turnStore &&
+          data.scope === "one-to-one" &&
+          (data.streamReplies?.oneOnOne ?? true);
+        let lastStreamWrite = 0;
+        const onDelta = streamOneOnOne
+          ? (full: string) => {
+              const nowMs = Date.now();
+              if (nowMs - lastStreamWrite < 900) return; // throttle to ~1s writes
+              lastStreamWrite = nowMs;
+              void turnStore!
+                .updateTurnReplies(
+                  turnId!,
+                  [...replies, { agentId: winner.id, text: full }],
+                  buildResumeState(),
+                )
+                .catch(() => {});
+            }
+          : undefined;
+
         const persona = await callOpenAIResponses({
           model: usedModel,
           instructions,
@@ -3568,6 +3601,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           promptCacheKey: `huddle-${winner.id}`,
           ...(conversationId ? { conversation: conversationId } : {}),
           ...(personaReasoningEffort ? { reasoningEffort: personaReasoningEffort } : {}),
+          ...(streamOneOnOne ? { stream: true, onDelta } : {}),
         });
         clean = persona.text.trim();
         if (persona.reasoning.length > 0) {
@@ -4772,7 +4806,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     userTextOverride?: string,
   ): Promise<AgentTurnResult> => {
     const floor = chunked ? 8_000 : 2_000;
-    const remaining = Math.max(floor, deadlineMs - (Date.now() - turnStartMs));
+    // A 1:1 has a single responding agent — there is no wave to protect from a straggler, so give it
+    // (nearly) the whole hosting request instead of the shared chunk/turn slice. This is what lets a
+    // slow high-effort (Sol) 1:1 reply finish instead of being cut; if it STILL overruns, the streamed
+    // partial is already persisted and the durable turn continues in a fresh execution.
+    const budgetMs = data.scope === "one-to-one" ? 40_000 : deadlineMs;
+    const remaining = Math.max(floor, budgetMs - (Date.now() - turnStartMs));
     return Promise.race([
       runAgentTurn(id, prior, userTextOverride),
       new Promise<AgentTurnResult>((resolve) =>

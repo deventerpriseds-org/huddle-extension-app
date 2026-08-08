@@ -51,6 +51,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const setAgent = useBackendsStore((s) => s.setAgent);
   const setCeremonyEngine = useBackendsStore((s) => s.setCeremonyEngine);
   const setMemoryMode = useBackendsStore((s) => s.setMemoryMode);
+  const setStreamReplies = useBackendsStore((s) => s.setStreamReplies);
   const replaceConfig = useBackendsStore((s) => s.replaceConfig);
   const resetToDefaults = useBackendsStore((s) => s.resetToDefaults);
   const showDemoData = useHuddleStore((s) => s.showDemoData);
@@ -465,6 +466,43 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                 })}
               </div>
             </div>
+
+            {/* Reply streaming */}
+            <div className="rounded-lg border border-hairline p-3 space-y-3">
+              <div>
+                <Label className="text-sm">Reply streaming</Label>
+                <p className="text-xs text-muted-foreground">
+                  Show a reply as it types instead of all at once. Helps a slow, high-effort answer appear
+                  progressively — and finish — instead of timing out.
+                </p>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">1:1 chats</div>
+                  <div className="text-xs text-muted-foreground">
+                    Stream the agent's reply in a direct message. Recommended.
+                  </div>
+                </div>
+                <Switch
+                  checked={config.streamReplies?.oneOnOne ?? true}
+                  onCheckedChange={(v) => setStreamReplies({ oneOnOne: v })}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">Group chats &amp; standups</div>
+                  <div className="text-xs text-muted-foreground">
+                    Off by default — group and standup replies arrive complete, keeping the live
+                    turn-taking and barge-in behavior unchanged.
+                  </div>
+                </div>
+                <Switch
+                  checked={config.streamReplies?.group ?? false}
+                  onCheckedChange={(v) => setStreamReplies({ group: v })}
+                />
+              </div>
+            </div>
+
             <MemoryTab />
           </TabsContent>
 

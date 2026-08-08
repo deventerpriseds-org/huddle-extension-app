@@ -452,6 +452,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
   const [sending, setSending] = useState(false);
   const addUser = useHuddleStore((s) => s.addUserMessage);
   const addAgent = useHuddleStore((s) => s.addAgentMessage);
+  const upsertAgent = useHuddleStore((s) => s.upsertAgentMessage);
   const logDecision = useHuddleStore((s) => s.logDecision);
   const addToolUses = useHuddleStore((s) => s.addToolUses);
   const addSuggestedTasks = useHuddleStore((s) => s.addSuggestedTasks);
@@ -550,19 +551,21 @@ function Composer({ huddle }: { huddle: Huddle }) {
     final: boolean,
   ) {
     const state = useHuddleStore.getState();
-    // Append only reply indices not already rendered (addAgentMessage does not dedupe).
-    const existing = new Set(
-      state.messages.filter((m) => m.id.startsWith(`a-${turnId}-`)).map((m) => m.id),
-    );
+    // Upsert each reply by index: a NEW reply is appended; an existing one is updated IN PLACE (its text
+    // is still growing while a 1:1 reply streams). Whole-reply (group) turns arrive complete → first
+    // upsert == final, so this is a no-op change for them. A completed reply is never re-appended.
+    const byId = new Map(state.messages.map((m) => [m.id, m]));
     (replies ?? []).forEach((reply, i) => {
       const mid = `a-${turnId}-${i}`;
-      if (existing.has(mid)) return;
-      addAgent({
+      const prev = byId.get(mid);
+      // Skip a redundant write once the text has stopped changing (avoids needless re-renders on poll).
+      if (prev && prev.text === reply.text) return;
+      upsertAgent({
         id: mid,
         huddleId: huddle.id,
         author: { kind: "agent", agentId: reply.agentId },
         text: reply.text,
-        ts: Date.now() + i,
+        ts: prev?.ts ?? Date.now() + i,
         replyTo: turnId,
         artifacts: reply.artifacts,
       });
@@ -713,6 +716,9 @@ function Composer({ huddle }: { huddle: Huddle }) {
       // visible the user is right here and will see the reply in-app — no phone notification needed.
       // When the tab is hidden (backgrounded), let the push fire so an away user still gets pinged.
       foreground: typeof document !== "undefined" && document.visibilityState === "visible",
+      // Reply streaming toggles (Settings → Memory). 1:1 streams the reply as it forms; groups/ceremonies
+      // default off. Server default (absent) is the same (1:1 on, group off).
+      streamReplies: backendsCfg.streamReplies,
     };
 
     try {
