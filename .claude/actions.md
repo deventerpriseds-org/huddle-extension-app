@@ -1829,3 +1829,30 @@ iris-chase/terry-locke/sam-trent, Luna for the rest. Model ids confirmed callabl
 31260780490: 4/4 PASS). Shipped alongside the memory-continuity batch (#1 invisible retrieval, #2
 conversation-object mode default-on, #3 away-gate push + de-noise). **Status: closed** — a broader
 per-agent quality A/B (Luna vs Terra on more agents) remains available as a tuning follow-on, not a blocker.
+
+### ACT-huddle-18 — Difficulty-driven model policy + Sol confirm-gate (2026-08-08, live-verified)
+The per-turn model/effort is now chosen from an LLM-scored difficulty (1-4), not a fixed per-agent model.
+Ladder: 1→Luna-low, 2→Luna-high, 3-4→Sol-high (per-agent ceiling caps it). Escalate THINKING before
+MODEL (luna-high ≈ terra-med at ~1/9 cost, measured round-3 A/B). Sol never auto-spends silently.
+- [DONE — deployed 16a85dc] `resolveByDifficulty` (model-policy.ts) wired at the persona site in
+  runHuddleTurn; `reasoningEffort` threaded to callOpenAIResponses; router emits `difficulty`
+  (routing.ts); **1:1 difficulty scored by a dedicated `scoreDifficultyLLM`** (the LLM router only runs
+  for group turns, so DMs had no difficulty — the gate would have been dead code without this).
+- [DONE — deployed] Sol confirm-gate (1:1): a fresh deep ask is HELD and the agent asks Sol-high vs the
+  Terra-high budget (inescapable); pending stored in `chat.deep_confirm` (reuses AZURE_PG_URL, no new
+  secret); reply "go"→Sol / "budget"→Terra / "cancel"→drop resumes the ORIGINAL ask. Group deep + any
+  un-gated path fall back to Terra (never auto-Sol). Manual `modelEscalate` (sol|budget|ladder) wins.
+- [DONE — evidence] Live UAT `verify-difficulty-model.mjs` via agent-serverfn-uat (run 31271391806):
+  6/7 PASS incl. T2 `decision.reason="1:1 [deep-confirm: difficulty 4 → gpt-5.6-sol/high (confirm)]"`,
+  T3 "go"→`reasoning tier sol/high (you chose this)`, T4 "budget"→`terra/high`. The one fail (T6 manual
+  sol) was an EMPTY turn (~36s deadline drop on a slow Sol deep memo), not a policy miss — test hardened
+  (short-ask override + retry-on-empty) and re-run.
+- [TRACKED — user flagged] **Sol-high vs a strong-but-cheaper reasoning model** (e.g. o3 ~$2/$8, gpt-5.4
+  ~$2.50/$15) — user: "I actually think you missed sol high vs something older but strong/similar and
+  more cost effective." Build a round-4 A/B (add those arms to asks-catalog deep cases) before locking
+  Sol as the deep default; if a cheaper model ties Sol on deep, swap DIFF_RUNG[3-4].model.
+- [TRACKED] Settings-editable model-policy editor UI (DEFAULT_MODEL_POLICY is already the seed object;
+  needs the Settings surface so the user can retune general/ceiling/override per experience).
+- [TRACKED] Thinking-dots UI surfacing of the chosen tier (a minimal breadcrumb ships via reasoning
+  summaries for escalated tiers; the real "dots" chip is follow-up) + a manual override UI control
+  (payload field `modelEscalate` is wired; needs the picker in the composer).
