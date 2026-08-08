@@ -90,32 +90,36 @@ const t1 = await send({ agentId: "eli-vaughn", text: "Test- thanks, that's all f
 show("T1 routine 1:1 (eli)", t1);
 ok(t1.http === 200 && !!t1.reply && !isConfirm(t1.reply), "routine 1:1 replies normally, no confirm gate");
 
-// T2 — fresh DEEP 1:1 on a Sol-ceiling agent must HOLD and ask to confirm (Sol vs budget).
-const t2 = await send({ agentId: "finn-reid", text: DEEP("a Series A raise across three subsidiaries") });
-show("T2 deep 1:1 hold (finn)", t2);
-if (t2.http === 200 && isConfirm(t2.reply) && /deep-confirm/i.test(t2.reason)) {
-  ok(true, "deep 1:1 held with the inescapable Sol-vs-budget confirm (decision.reason shows deep-confirm)");
-} else if (t2.http === 200 && isConfirm(t2.reply)) {
-  ok(true, "deep 1:1 held with confirm reply (reason lacked the suffix but the gate fired)");
-} else {
-  ok(false, "deep 1:1 did NOT produce the confirm gate");
+// (T2's standalone hold assertion is folded into T3a below — same finn arm/hold — to avoid a
+// redundant Sol-ceiling hold turn.)
+
+// Arm a fresh deep-confirm then send the confirm reply, returning BOTH turns. The RESUME turn runs a
+// slow Sol/Terra deep generation that can hit the ~36s turn-deadline and return empty (a known latency
+// limitation, orthogonal to the policy — the resume consumes the pending, so a plain retry of the reply
+// alone would find no pending). So on an empty resume we RE-ARM (send the deep ask again) and re-reply.
+async function armAndReply(agent, topic, reply) {
+  const hold = await send({ agentId: agent, text: DEEP(topic) });
+  let resume = await send({ agentId: agent, text: reply });
+  if (resume.http === 200 && !resume.reply) {
+    await new Promise((z) => setTimeout(z, 1500));
+    await send({ agentId: agent, text: DEEP(topic) });
+    resume = await send({ agentId: agent, text: reply });
+  }
+  return { hold, resume };
 }
 
-// T3 — reply "go" resumes the ORIGINAL ask on Sol (breadcrumb sol/high, NOT the confirm text again).
-const t3 = await send({ agentId: "finn-reid", text: "go" });
-show("T3 resume go→Sol (finn)", t3);
-const t3sol = t3.reasoning.some((x) => /sol\/high \(you chose this\)/i.test(x));
-if (t3.http === 200 && !isConfirm(t3.reply) && t3sol) ok(true, '"go" resumed the deep ask on Sol-high (breadcrumb confirms tier)');
-else if (t3.http === 200 && !isConfirm(t3.reply) && !!t3.reply) ok(!t2 || isConfirm(t2.reply) ? true : false, '"go" produced a substantive answer (Sol breadcrumb absent — check reasoning surfacing)');
-else ok(false, '"go" did not resume the deep ask');
+// T3 — deep 1:1 HOLD, then "go" resumes the ORIGINAL ask on Sol (breadcrumb sol/high).
+const t3 = await armAndReply("finn-reid", "a Series A raise across three subsidiaries", "go");
+show("T3a deep 1:1 hold (finn)", t3.hold);
+show("T3b resume go→Sol (finn)", t3.resume);
+ok(t3.hold.http === 200 && isConfirm(t3.hold.reply) && /deep-confirm/i.test(t3.hold.reason), "deep 1:1 held with the inescapable Sol-vs-budget confirm (decision.reason shows deep-confirm)");
+ok(t3.resume.http === 200 && !isConfirm(t3.resume.reply) && t3.resume.reasoning.some((x) => /sol\/high \(you chose this\)/i.test(x)), '"go" resumed the deep ask on Sol-high (breadcrumb confirms tier)');
 
-// T4 — fresh deep on a second agent, then "budget" resumes on Terra-high.
-const t4a = await send({ agentId: "terry-locke", text: DEEP("a three-market international launch") });
-show("T4a deep 1:1 hold (terry)", t4a);
-const t4b = await send({ agentId: "terry-locke", text: "budget" });
-show("T4b resume budget→Terra (terry)", t4b);
-const t4terra = t4b.reasoning.some((x) => /terra\/high \(you chose this\)/i.test(x));
-ok(t4b.http === 200 && !isConfirm(t4b.reply) && t4terra, '"budget" resumed the deep ask on Terra-high (breadcrumb confirms tier)');
+// T4 — deep 1:1 on a second agent, then "budget" resumes on Terra-high.
+const t4 = await armAndReply("terry-locke", "a three-market international launch", "budget");
+show("T4a deep 1:1 hold (terry)", t4.hold);
+show("T4b resume budget→Terra (terry)", t4.resume);
+ok(t4.resume.http === 200 && !isConfirm(t4.resume.reply) && t4.resume.reasoning.some((x) => /terra\/high \(you chose this\)/i.test(x)), '"budget" resumed the deep ask on Terra-high (breadcrumb confirms tier)');
 
 // T5 — manual override modelEscalate:"budget" forces Terra-high regardless of depth (short ask keeps
 // the turn well under the deadline — the override, not the ask, is what's under test).
