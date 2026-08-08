@@ -60,15 +60,23 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
 }
 
+// Returned to the model (never to the user) when a memory/fact lookup comes back empty. Retrieval is a
+// SILENT background aid: an empty result must be invisible, NOT narrated as "I couldn't find that."
+// Structural (not just prompt) so it holds even when the model ignores the prose house-style.
+const EMPTY_RESULT_GUIDANCE =
+  "No additional stored memory matched this lookup — this is normal and expected, NOT a problem to report. " +
+  "Answer the user directly from the conversation so far and your general knowledge. Do NOT tell the user " +
+  "you searched, that memory/files/attachments were checked, or that nothing was found; never say things " +
+  "like 'I couldn't find', 'no details in the files', or 'nothing matched'. Just respond naturally. If you " +
+  "genuinely lack a specific fact they asked for, ask one brief clarifying question or offer to note it — " +
+  "without narrating the search.";
+
 /**
  * Map author agent ids to display names, excluding the calling agent
  * (their own memory needs no attribution). Returns null when the result
  * has no other-agent authors — the model should speak as itself.
  */
-function attributionSuffix(
-  authorIds: string[] | undefined,
-  callerId: string,
-): string | null {
+function attributionSuffix(authorIds: string[] | undefined, callerId: string): string | null {
   if (!authorIds || authorIds.length === 0) return null;
   const others = authorIds.filter((id) => id !== callerId);
   if (others.length === 0) return null;
@@ -87,9 +95,13 @@ export async function dispatchTool(
 ): Promise<string> {
   if (call.name === "search_memory") {
     const q = String(call.arguments.query ?? "").trim();
-    if (!q) return JSON.stringify({ results: [] });
+    if (!q) return JSON.stringify({ results: [], guidance: EMPTY_RESULT_GUIDANCE });
     const k = typeof call.arguments.k === "number" ? call.arguments.k : 6;
     const rows = await store.searchChunks({ query: q, k, agentId, mode });
+    // Invisible retrieval: an empty semantic search is NORMAL, not an answer. Return neutral guidance
+    // so the model answers from the live conversation instead of narrating a miss ("I couldn't find
+    // that in the files/memory") — the exact behavior that made agents look brain-dead one turn later.
+    if (rows.length === 0) return JSON.stringify({ results: [], guidance: EMPTY_RESULT_GUIDANCE });
     return JSON.stringify({
       results: rows.map((r) => {
         const from = attributionSuffix(r.authorAgentIds, agentId);
@@ -111,6 +123,7 @@ export async function dispatchTool(
       agentId,
       mode,
     });
+    if (rows.length === 0) return JSON.stringify({ results: [], guidance: EMPTY_RESULT_GUIDANCE });
     return JSON.stringify({
       results: rows.map((r) => {
         const from = attributionSuffix(r.authorAgentIds, agentId);
@@ -128,4 +141,4 @@ export async function dispatchTool(
 }
 
 export const RAG_SYSTEM_HINT =
-  "You have memory tools. Use `lookup_facts` for direct factual questions about people or things (allergies, ownership, deadlines, preferences). Use `search_memory` for topical or open-ended recall. Call both when useful. Treat [FACT] results as ground truth and [CONTEXT] results as supporting information.\n\nAttribution matters: when a result's prefix reads `[FACT from <name(s)>]` or `[CONTEXT from <name(s)>]`, that memory came from another agent's conversation with the user — you were not there. Say so naturally: \"According to Finn…\", \"Tess mentioned that…\", \"I checked with Ezra and he said…\", \"I believe you talked to Finn about this — he said…\". Never present another agent's memory as your own recollection. When a result has no `from` attribution, it's ambient memory or your own conversation; speak as yourself without citing anyone.\n\nThe user's memory, tasks, and backlog live in these tools, not in an attachment or document store. Never ask the user to upload, re-upload, or attach anything, and never frame a miss as something not being found in an attachment. If a memory tool returns nothing or errors, just say plainly that you don't have it / couldn't reach it right now and ask a clarifying question or offer to note it — do not invent an uploads/documents explanation.";
+  "You have memory tools. Use `lookup_facts` for direct factual questions about people or things (allergies, ownership, deadlines, preferences). Use `search_memory` for topical or open-ended recall. Call both when useful. Treat [FACT] results as ground truth and [CONTEXT] results as supporting information.\n\nAttribution matters: when a result's prefix reads `[FACT from <name(s)>]` or `[CONTEXT from <name(s)>]`, that memory came from another agent's conversation with the user — you were not there. Say so naturally: \"According to Finn…\", \"Tess mentioned that…\", \"I checked with Ezra and he said…\", \"I believe you talked to Finn about this — he said…\". Never present another agent's memory as your own recollection. When a result has no `from` attribution, it's ambient memory or your own conversation; speak as yourself without citing anyone.\n\nThe user's memory, tasks, and backlog live in these tools, not in an attachment or document store. Never ask the user to upload, re-upload, or attach anything, and never frame a miss as something not being found in an attachment or files. Memory retrieval is a SILENT background aid: when a memory or file search returns nothing, that is normal — do NOT tell the user you searched, where you looked, or that nothing was found, and never say things like 'I couldn't find', 'no details in the current files', or 'nothing matched'. Answer directly from the live conversation (your and the user's messages in this thread ARE your primary context) and your general knowledge; if you genuinely lack a specific fact they asked for, ask one brief natural clarifying question or offer to note it — without narrating the search.";
