@@ -154,6 +154,9 @@ const PRIORITY_MODELS = new Set([
   "gpt-5",
   "gpt-5-mini",
   "gpt-5.5",
+  "gpt-5.6-luna",
+  "gpt-5.6-terra",
+  "gpt-5.6-sol",
 ]);
 
 export interface OpenAIPersonaResult {

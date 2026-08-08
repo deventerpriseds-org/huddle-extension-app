@@ -114,6 +114,14 @@ export type BackendsConfig = z.infer<typeof BackendsConfigSchema>;
 
 export const ASSISTANT_IDS = assistantIds as Partial<Record<AgentId, string>>;
 
+// GPT-5.6 migration (off gpt-4o). Terra (balanced, higher quality) for the highest-judgment / most
+// user-facing agents; Luna (fast, cheap, strong tool-calling) for everyone else. Per-agent so it's
+// tunable in Settings → Agents; overridable per user. Any agent not listed defaults to Luna.
+const TERRA_AGENTS = new Set<AgentId>(["iris-chase", "terry-locke", "sam-trent"]);
+function defaultModelFor(id: AgentId): string {
+  return TERRA_AGENTS.has(id) ? "gpt-5.6-terra" : "gpt-5.6-luna";
+}
+
 function defaultAgents(): Record<AgentId, AgentBackend> {
   const out = {} as Record<AgentId, AgentBackend>;
   const defaultRag: RagConfig = {
@@ -129,11 +137,17 @@ function defaultAgents(): Record<AgentId, AgentBackend> {
       ? {
           backend: "openai",
           assistantId: id,
+          model: defaultModelFor(a.id),
           rag: { ...defaultRag },
           journey: { enabled: true },
           webSearch: true,
         }
-      : { backend: "lovable", rag: { ...defaultRag }, journey: { enabled: true }, webSearch: true };
+      : {
+          backend: "lovable",
+          rag: { ...defaultRag },
+          journey: { enabled: true },
+          webSearch: true,
+        };
   }
 
   return out;

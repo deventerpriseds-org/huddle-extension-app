@@ -16,7 +16,27 @@ export interface CatalogModel {
 
 export const ROUTER_MODELS: Record<RouterBackend, CatalogModel[]> = {
   openai: [
-    { id: "gpt-5.5", label: "GPT-5.5 (default)", group: "GPT-5.5", supportsPriority: true },
+    // GPT-5.6 family (GA 2026-07-09). NOTE: the bare alias "gpt-5.6" routes to Sol — always use the
+    // explicit -luna/-terra/-sol id. Luna = cheap/fast/strong tool-calling; Terra = balanced quality.
+    {
+      id: "gpt-5.6-luna",
+      label: "GPT-5.6 Luna (fast, cheap)",
+      group: "GPT-5.6",
+      supportsPriority: true,
+    },
+    {
+      id: "gpt-5.6-terra",
+      label: "GPT-5.6 Terra (balanced)",
+      group: "GPT-5.6",
+      supportsPriority: true,
+    },
+    {
+      id: "gpt-5.6-sol",
+      label: "GPT-5.6 Sol (flagship)",
+      group: "GPT-5.6",
+      supportsPriority: true,
+    },
+    { id: "gpt-5.5", label: "GPT-5.5", group: "GPT-5.5", supportsPriority: true },
     { id: "gpt-5.4", label: "GPT-5.4", group: "GPT-5.4", supportsPriority: true },
     { id: "gpt-5.4-mini", label: "GPT-5.4 mini", group: "GPT-5.4", supportsPriority: true },
     { id: "gpt-5.4-nano", label: "GPT-5.4 nano", group: "GPT-5.4", supportsPriority: false },
@@ -26,16 +46,66 @@ export const ROUTER_MODELS: Record<RouterBackend, CatalogModel[]> = {
     { id: "gpt-5-nano", label: "GPT-5 nano", group: "GPT-5", supportsPriority: false },
   ],
   lovable: [
-    { id: "openai/gpt-5.5", label: "OpenAI GPT-5.5 (default)", group: "OpenAI via Lovable", supportsPriority: true },
-    { id: "openai/gpt-5.4", label: "OpenAI GPT-5.4", group: "OpenAI via Lovable", supportsPriority: true },
-    { id: "openai/gpt-5.4-mini", label: "OpenAI GPT-5.4 mini", group: "OpenAI via Lovable", supportsPriority: true },
-    { id: "openai/gpt-5-mini", label: "OpenAI GPT-5 mini", group: "OpenAI via Lovable", supportsPriority: true },
-    { id: "openai/gpt-5-nano", label: "OpenAI GPT-5 nano", group: "OpenAI via Lovable", supportsPriority: false },
-    { id: "google/gemini-3.5-flash", label: "Gemini 3.5 Flash", group: "Google via Lovable", supportsPriority: false },
-    { id: "google/gemini-3-flash-preview", label: "Gemini 3 Flash (preview)", group: "Google via Lovable", supportsPriority: false },
-    { id: "google/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro (preview)", group: "Google via Lovable", supportsPriority: false },
-    { id: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro", group: "Google via Lovable", supportsPriority: false },
-    { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash", group: "Google via Lovable", supportsPriority: false },
+    {
+      id: "openai/gpt-5.5",
+      label: "OpenAI GPT-5.5 (default)",
+      group: "OpenAI via Lovable",
+      supportsPriority: true,
+    },
+    {
+      id: "openai/gpt-5.4",
+      label: "OpenAI GPT-5.4",
+      group: "OpenAI via Lovable",
+      supportsPriority: true,
+    },
+    {
+      id: "openai/gpt-5.4-mini",
+      label: "OpenAI GPT-5.4 mini",
+      group: "OpenAI via Lovable",
+      supportsPriority: true,
+    },
+    {
+      id: "openai/gpt-5-mini",
+      label: "OpenAI GPT-5 mini",
+      group: "OpenAI via Lovable",
+      supportsPriority: true,
+    },
+    {
+      id: "openai/gpt-5-nano",
+      label: "OpenAI GPT-5 nano",
+      group: "OpenAI via Lovable",
+      supportsPriority: false,
+    },
+    {
+      id: "google/gemini-3.5-flash",
+      label: "Gemini 3.5 Flash",
+      group: "Google via Lovable",
+      supportsPriority: false,
+    },
+    {
+      id: "google/gemini-3-flash-preview",
+      label: "Gemini 3 Flash (preview)",
+      group: "Google via Lovable",
+      supportsPriority: false,
+    },
+    {
+      id: "google/gemini-3.1-pro-preview",
+      label: "Gemini 3.1 Pro (preview)",
+      group: "Google via Lovable",
+      supportsPriority: false,
+    },
+    {
+      id: "google/gemini-2.5-pro",
+      label: "Gemini 2.5 Pro",
+      group: "Google via Lovable",
+      supportsPriority: false,
+    },
+    {
+      id: "google/gemini-2.5-flash",
+      label: "Gemini 2.5 Flash",
+      group: "Google via Lovable",
+      supportsPriority: false,
+    },
   ],
 };
 
