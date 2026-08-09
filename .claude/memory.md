@@ -1457,3 +1457,22 @@ Shipped the plan in `docs/plan-1on1-reply-streaming.md` (deployed e6b91d3, then 
   + forces the slow model) + a long-output ask, enqueues on the DURABLE path (streaming needs turnId/
   chunked — the sync `sendHuddleMessage` won't stream), and polls `getTurnUpdates` concurrently to watch
   the reply length grow. Run 31278335325: 3/3 (T1 [4→107] grew, no deferral; T2 toggle-off complete).
+
+## 2026-08-09 — "Test push every 2 min" was a stuck DIAGNOSTIC replay, not a server loop
+User got "Huddle test push (task-reminders)" every ~2 min. GROUND TRUTH (checked, all quiet): Huddle
+`chat.reminders` empty 6h; `chat.pending_turns` empty 45m; journey `scheduled_notifications` all future/
+undelivered; `notification_trace` empty 40m; CCR triggers all one-shot & fired. Source of the TEXT =
+the `test-push.yml` → `/api/public/test-push` diagnostic (sends a bare send_push). It's dispatch-only,
+run **only 4 times ever, last 27h before** the complaint → the server was NOT re-sending. The 2-min
+cadence = a **device/bridge REPLAY** of one stale push (FCM redelivery / SW re-alert), invisible to the
+server tables (a direct send_push doesn't write scheduled_notifications). NOT related to the model/
+streaming work. Device fix = clear the PWA notifications / unregister SW.
+- **Hardening shipped (user-approved):** opt-in `ttl` + `collapse_key` on journey `send-push-notification`
+  (`sendFcmNotification` sets FCM `android.ttl`/`collapse_key`; handler passes web-push `TTL` — ONLY when
+  `data.ttl`/`data.collapseKey` provided, so reminders/alarms/messages are byte-identical → the critical
+  reminder path is untouched). journey deployed (run 31294979738). Huddle `test-push.ts` now uses a STABLE
+  per-channel identity `huddle-test-push-<channel>` (collapses, never stacks) + `ttl:120`; run stamp kept
+  in body text only. execute-tool `sendPushNow` already spreads `args.data` → fields reach the edge fn.
+- **Did NOT re-fire a test push to "verify"** — that would buzz the user again; change is code-verified +
+  traced end-to-end (test-push route → execute-tool spread → edge-fn opt-in apply). Default path proven
+  unchanged by reading (no ttl/collapse ⇒ same `android:{priority:'high'}`, web-push no options).
