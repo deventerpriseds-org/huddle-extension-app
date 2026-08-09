@@ -68,6 +68,11 @@ export const Route = createFileRoute("/api/public/test-push")({
             const body =
               payload.body ||
               `If you see this, the "${channel}" channel${useApp ? ` via app:${useApp}` : " (native, no app filter)"} reaches your device. Tag ${stamp}.`;
+            // STABLE per-channel identity: a new test push COLLAPSES onto the previous one (never stacks)
+            // and replaces a stale one, and a short TTL means FCM/web-push won't retry/redeliver a stale
+            // diagnostic beyond 2 min — so a leftover test push can't linger or re-alert on a loop. The
+            // unique run stamp stays only in the visible body text (above) for run-to-run diagnostics.
+            const collapseId = `huddle-test-push-${channel}`;
             try {
               const r = await invokeJourneyTool({
                 toolName: "send_push",
@@ -78,9 +83,12 @@ export const Route = createFileRoute("/api/public/test-push")({
                   ...(useApp ? { app: useApp } : {}),
                   data: {
                     source: "huddle-test-push",
-                    notificationId: `testpush-${channel}-${stamp}`,
-                    tag: `testpush-${channel}-${stamp}`,
+                    notificationId: collapseId,
+                    tag: collapseId,
+                    collapseKey: collapseId,
+                    ttl: 120,
                     channelTested: channel,
+                    runId: stamp,
                   },
                 },
                 caller: { entra_email: userEmail },
