@@ -21,6 +21,7 @@ import {
 import { buildRoster } from "./roster";
 import {
   resolveByDifficulty,
+  resolveModel,
   classifyTaskType,
   DEFAULT_MODEL_POLICY,
   type Effort,
@@ -682,7 +683,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
 
   const routerCfg = data.router ?? {
     backend: "openai" as const,
-    model: "gpt-5.5",
+    model: "gpt-5.6-luna",
     fastMode: false,
   };
   const agentsCfg = data.agents ?? {};
@@ -3462,7 +3463,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           return JSON.stringify({ error: `Unknown tool: ${c.name}` });
         };
 
-        usedModel = agentBackend.model?.trim() || snapshot?.model || "gpt-4o";
+        // Base model before the difficulty resolver overrides it below. config.model (per-agent 5.6
+        // default) wins; the snapshot's model is an informational fallback; the final literal is a 5.6
+        // floor, never the legacy gpt-4o.
+        usedModel = agentBackend.model?.trim() || snapshot?.model || "gpt-5.6-luna";
 
         // Difficulty-driven model/effort (the validated cost lever). The LLM router scores each turn 1-4;
         // routine→Luna-low, standard→Luna-high, deep→Sol-high. Escalating THINKING on the cheap model
@@ -5313,10 +5317,20 @@ async function runWorkerTurn(record: {
       return JSON.stringify({ error: `unknown tool: ${c.name}` });
     };
 
-    const model = payload.agents?.[w.personaId ?? ""]?.model ?? "gpt-4o-mini";
+    // Model selection funnels through the SAME resolver as interactive turns — no parallel brain, no
+    // stale hardcoded model. Auto-work has the task OBJECTIVE (not a router difficulty score), so use the
+    // task-type resolver: classify the objective → tier, capped by the agent's ceiling. Seeded from the
+    // per-agent config default (5.6) and falling back to Luna if the persona is unknown. (Previously this
+    // was `?? "gpt-4o-mini"` — a divergent path that never migrated to 5.6 and misreported the migration.)
+    const workerPersona = (w.personaId ?? "") as AgentId;
+    const workerResolved = AGENT_BY_ID[workerPersona]
+      ? resolveModel(w.objective, workerPersona, DEFAULT_MODEL_POLICY)
+      : null;
+    const model = workerResolved?.model || payload.agents?.[workerPersona]?.model || "gpt-5.6-luna";
     const { callOpenAIResponses } = await import("./openai-responses.server");
     const res = await callOpenAIResponses({
       model,
+      ...(workerResolved?.effort ? { reasoningEffort: workerResolved.effort } : {}),
       instructions,
       transcript: [{ role: "user", content: w.objective }],
       tools: [TAVILY_WEB_SEARCH_TOOL, CREATE_ARTIFACT_TOOL],
