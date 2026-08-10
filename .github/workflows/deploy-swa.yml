@@ -82,8 +82,31 @@ jobs:
         with:
           bun-version: latest
 
+      # Cache the installed dependency tree so an unchanged-deps deploy skips the (slow + registry-flaky)
+      # install entirely. Keyed on package.json + bunfig.toml (the install deletes bun.lock and resolves
+      # fresh, so there's no lockfile to key on). On a HIT, node_modules is restored and the install step
+      # below is skipped — which ALSO sidesteps the npm-registry-refusal retries (no network install runs).
+      # A package.json/bunfig change busts the key and the install runs normally, repopulating the cache.
+      - name: Cache dependencies
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-nm-${{ hashFiles('package.json', 'bunfig.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-nm-
+
       - name: Install dependencies (public npm)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        # Hard backstop above the per-attempt `timeout`s below: the step can never sit longer than this,
+        # so a wedged runner fails the deploy in minutes (visible, re-runnable) instead of hanging ~an hour.
+        timeout-minutes: 25
         run: |
+          # This runs only on a cache MISS. A restore-keys partial hit may have left a stale node_modules;
+          # wipe it so the fresh resolve is clean (the cached ~/.bun/install/cache still avoids re-downloads).
+          rm -rf node_modules
           rm -f bun.lock
           sed -i 's/^minimumReleaseAge = .*/minimumReleaseAge = 0/' bunfig.toml
           # The npm registry occasionally refuses connections mid-install on the runner
@@ -95,24 +118,32 @@ jobs:
           # Strategy: try bun a few times (fast path when the registry is healthy), then fall back to
           # npm, whose per-tarball exponential-backoff retry on a different network stack rides through
           # refusals bun can't. Either installer produces a standard node_modules the build can use.
+          #
+          # CRITICAL: every attempt is wrapped in `timeout` (SIGTERM at the cap, SIGKILL 30s later). The
+          # retry loops only fire on FAILURE — but the observed failure mode is a HANG, not an error: a
+          # socket opens to the registry and never returns data, so an un-timed `bun install`/`npm install`
+          # blocks the whole step for 25–50 min (the job-level 6h timeout is the only backstop). The
+          # timeout converts a stalled attempt into a retriable failure, so it falls through to the next
+          # attempt / to npm on a different network stack instead of sitting idle. Worst-case the step is
+          # bounded to ~20 min and then fails LOUDLY, instead of hanging silently for the better part of an hour.
           for attempt in 1 2 3; do
-            if bun install --registry https://registry.npmjs.org --network-concurrency 4; then
+            if timeout -k 30 240 bun install --registry https://registry.npmjs.org --network-concurrency 4; then
               echo "bun install succeeded on attempt $attempt"; exit 0
             fi
-            echo "bun install failed (attempt $attempt) — retrying after 20s"
+            echo "bun install failed/timed out (attempt $attempt) — retrying after 20s"
             sleep 20
           done
           echo "bun exhausted — falling back to npm install with per-request retries"
           rm -rf node_modules
           for attempt in 1 2 3; do
-            if npm install --no-audit --no-fund --registry https://registry.npmjs.org \
+            if timeout -k 30 420 npm install --no-audit --no-fund --registry https://registry.npmjs.org \
                  --fetch-retries 10 --fetch-retry-mintimeout 15000 --fetch-retry-maxtimeout 120000 --maxsockets 3; then
               echo "npm install succeeded on attempt $attempt"; exit 0
             fi
-            echo "npm install failed (attempt $attempt) — retrying after 30s"
+            echo "npm install failed/timed out (attempt $attempt) — retrying after 30s"
             sleep 30
           done
-          echo "::error::both bun and npm install failed — npm registry still refusing this runner"; exit 1
+          echo "::error::both bun and npm install failed/timed out — npm registry still refusing this runner"; exit 1
 
       - uses: azure/login@v2
         with:

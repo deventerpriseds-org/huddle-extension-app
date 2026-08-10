@@ -1,9 +1,11 @@
-// PROTOTYPE — task-type → model/effort policy (NOT yet wired into the turn path or Settings).
+// Task-type/difficulty → model/effort policy. WIRED into the turn path (huddle.functions.ts resolves
+// every interactive turn AND the auto-worker through resolveByDifficulty/resolveModel) and into config
+// (agent-backends `modelPolicy`, seeded from DEFAULT_MODEL_POLICY, threaded via the turn payload).
 //
 // Single source of "how hard is this ask, and what brain does it deserve". Mirrors lib/capabilities.ts
-// (one module owns a cross-cutting decision, read everywhere). The POLICY is DATA (DEFAULT_MODEL_POLICY),
-// meant to move into the Settings-editable backends config so the user can retune per experience —
-// nothing here is a hardcoded literal the user can't change.
+// (one module owns a cross-cutting decision, read everywhere). The POLICY is DATA (DEFAULT_MODEL_POLICY
+// is only the SEED for the config) — the per-agent ceiling is set from the Settings Model dropdown via
+// withAgentCeilings, so nothing here is a hardcoded literal the user can't change.
 //
 // Two-layer classification, matching the existing router pattern:
 //   • deterministic keyword layer (this file) = fast path + fallback,
@@ -118,9 +120,37 @@ export function classifyTaskType(text: string): TaskType {
 
 const CEIL_RANK: Record<string, number> = { luna: 1, terra: 2, sol: 3 };
 function modelRank(model: string): number {
-  if (model.includes("sol")) return 3;
+  // o3 sits at the TOP rung (Sol level): it beat Sol-high on deep asks at ~1/6.6 the cost
+  // (docs/model-ab-findings.md), so a sol-ceiling agent may use it while terra/luna ceilings cap it DOWN
+  // to their 5.6 tier. Exact match so "o3-mini" (a cheaper, weaker model) never inherits the top rank.
+  if (model === "o3" || model.includes("sol")) return 3;
   if (model.includes("terra")) return 2;
   return 1;
+}
+
+/** The 5.6 tier a model id belongs to, or undefined for a non-5.6 model (which imposes no ceiling). */
+export function tierOf(model: string | undefined | null): "luna" | "terra" | "sol" | undefined {
+  if (!model || !/gpt-5\.6-(luna|terra|sol)/.test(model)) return undefined;
+  return model.includes("sol") ? "sol" : model.includes("terra") ? "terra" : "luna";
+}
+
+/**
+ * Overlay per-agent ceilings derived from each agent's Settings-chosen model onto a policy — so the
+ * per-agent Model dropdown IS the agent's ceiling (the resolver never exceeds the tier the user picked;
+ * difficulty only moves it DOWN from there). This makes the one visible per-agent control the single
+ * source of an agent's cap — no separate hidden ceiling. A non-5.6 pick imposes no derived ceiling, so
+ * the policy's own ceiling still applies. Returns a new policy; never mutates the input.
+ */
+export function withAgentCeilings(
+  policy: ModelPolicy,
+  agentModels: Partial<Record<AgentId, string | undefined>>,
+): ModelPolicy {
+  const ceiling = { ...(policy.ceiling ?? {}) } as Partial<Record<AgentId, "luna" | "terra" | "sol">>;
+  for (const [aid, model] of Object.entries(agentModels)) {
+    const t = tierOf(model);
+    if (t) ceiling[aid as AgentId] = t;
+  }
+  return { ...policy, ceiling };
 }
 function capToCeiling(choice: TierChoice, ceiling?: "luna" | "terra" | "sol"): TierChoice {
   if (!ceiling) return choice;
@@ -132,8 +162,10 @@ function capToCeiling(choice: TierChoice, ceiling?: "luna" | "terra" | "sol"): T
 }
 
 // ---- Difficulty-driven resolution (the wired path) ----
-// Difficulty 1-4 → rung. Deep (3-4) defaults to Sol-high but flags needsConfirm so the runtime can gate
-// the spend (inescapable confirm offering the Terra-high budget). Manual override skips the gate.
+// Difficulty 1-4 → rung. Deep (3-4) routes to o3-high: per docs/model-ab-findings.md (2026-08-10) it beat
+// Sol-high on deep asks (80.5 vs 63.0) at ~1/6.6 the cost, so it needs NO spend gate — needsConfirm keys on
+// Sol, which o3 isn't, so the confirm-gate is naturally dormant. Capped to the agent's ceiling (o3 ranks at
+// Sol level, so terra/luna ceilings drop it to their 5.6 tier). A manual "sol" override still reaches Sol-high.
 export interface DifficultyResolved {
   model: string;
   effort: Effort;
@@ -144,8 +176,8 @@ export interface DifficultyResolved {
 const DIFF_RUNG: Record<number, { model: string; effort: Effort; deep?: boolean }> = {
   1: { model: "gpt-5.6-luna", effort: "low" },
   2: { model: "gpt-5.6-luna", effort: "high" },
-  3: { model: "gpt-5.6-sol", effort: "high", deep: true },
-  4: { model: "gpt-5.6-sol", effort: "high", deep: true },
+  3: { model: "o3", effort: "high", deep: true },
+  4: { model: "o3", effort: "high", deep: true },
 };
 const CEIL_MODEL: Record<string, string> = { luna: "gpt-5.6-luna", terra: "gpt-5.6-terra", sol: "gpt-5.6-sol" };
 

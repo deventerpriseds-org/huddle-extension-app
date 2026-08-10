@@ -749,6 +749,8 @@ function Composer({ huddle }: { huddle: Huddle }) {
       // Conversations-object continuity the setting selects — the server defaults to "reconstruction"
       // when this is ABSENT, so omitting it silently no-ops "conversation" mode for typed DMs.
       memoryMode: backendsCfg.memoryMode,
+      // Model policy (difficulty/task-type → tier + per-agent ceilings) from Settings. Absent → default.
+      modelPolicy: backendsCfg.modelPolicy,
     };
 
     try {

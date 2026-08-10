@@ -21,6 +21,9 @@ import {
 import { buildRoster } from "./roster";
 import {
   resolveByDifficulty,
+  resolveModel,
+  withAgentCeilings,
+  type ModelPolicy,
   classifyTaskType,
   DEFAULT_MODEL_POLICY,
   type Effort,
@@ -204,9 +207,24 @@ const Input = z.object({
   // instead of being cut at the turn deadline. Groups/ceremonies default OFF (the shared sequential
   // live-call model is unchanged). Absent → 1:1 on, group off.
   streamReplies: z.object({ oneOnOne: z.boolean(), group: z.boolean() }).partial().optional(),
+  // The user's model policy (difficulty/task-type → tier + per-agent ceilings), from the Settings config.
+  // Absent → DEFAULT_MODEL_POLICY. Trusted local config, so validated loosely.
+  modelPolicy: z.custom<ModelPolicy>().optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
+
+/** The user's model policy for this turn (Settings config, default seeded) with per-agent ceilings
+ *  overlaid from each agent's Settings-chosen model — the single place the resolver's policy is built,
+ *  so interactive turns and the auto-worker agree. */
+function effectiveModelPolicy(
+  agents: Record<string, { model?: string } | undefined> | undefined,
+  modelPolicy: ModelPolicy | undefined,
+): ModelPolicy {
+  const models: Partial<Record<AgentId, string | undefined>> = {};
+  for (const [id, ab] of Object.entries(agents ?? {})) models[id as AgentId] = ab?.model;
+  return withAgentCeilings(modelPolicy ?? DEFAULT_MODEL_POLICY, models);
+}
 
 // Shared house-style layer — appended to EVERY agent's instructions regardless of
 // whether the domain content came from the platform snapshot, a client override,
@@ -682,7 +700,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
 
   const routerCfg = data.router ?? {
     backend: "openai" as const,
-    model: "gpt-5.5",
+    model: "gpt-5.6-luna",
     fastMode: false,
   };
   const agentsCfg = data.agents ?? {};
@@ -1257,7 +1275,12 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // Fresh deep ask (no manual override): if the primary winner would auto-spend Sol, hold + confirm.
       if (!deepManual && routed.winners.length > 0) {
         const primary = routed.winners[0];
-        const res = resolveByDifficulty(routed.difficulty ?? 2, primary, DEFAULT_MODEL_POLICY, {});
+        const res = resolveByDifficulty(
+          routed.difficulty ?? 2,
+          primary,
+          effectiveModelPolicy(data.agents, data.modelPolicy),
+          {},
+        );
         if (res.needsConfirm) {
           await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
           return finalize({
@@ -3462,7 +3485,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           return JSON.stringify({ error: `Unknown tool: ${c.name}` });
         };
 
-        usedModel = agentBackend.model?.trim() || snapshot?.model || "gpt-4o";
+        // Base model before the difficulty resolver overrides it below. config.model (per-agent 5.6
+        // default) wins; the snapshot's model is an informational fallback; the final literal is a 5.6
+        // floor, never the legacy gpt-4o.
+        usedModel = agentBackend.model?.trim() || snapshot?.model || "gpt-5.6-luna";
 
         // Difficulty-driven model/effort (the validated cost lever). The LLM router scores each turn 1-4;
         // routine→Luna-low, standard→Luna-high, deep→Sol-high. Escalating THINKING on the cheap model
@@ -3477,7 +3503,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           const resolved = resolveByDifficulty(
             routed.difficulty ?? 2,
             winner.id,
-            DEFAULT_MODEL_POLICY,
+            effectiveModelPolicy(data.agents, data.modelPolicy),
             { manual: deepManual },
           );
           let chosenModel = resolved.model;
@@ -3489,9 +3515,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           if (chosenModel) {
             usedModel = chosenModel;
             personaReasoningEffort = chosenEffort;
-            // Minimal tier surfacing (first cut of the "thinking dots"): only note ESCALATED tiers so
-            // routine Luna turns stay silent. Rides the existing reasoning-summary channel to the UI.
-            if (chosenModel.includes("sol") || deepManual) {
+            // Minimal tier surfacing (first cut of the "thinking dots"): only note ESCALATED tiers (o3 =
+            // the deep rung, or Sol via manual) so routine Luna turns stay silent. Rides the existing
+            // reasoning-summary channel to the UI.
+            if (chosenModel === "o3" || chosenModel.includes("sol") || deepManual) {
               reasoningSummaries.push(
                 `${winner.name}: reasoning tier ${chosenModel.replace("gpt-5.6-", "")}/${chosenEffort}${deepManual ? " (you chose this)" : ""}`,
               );
@@ -5313,10 +5340,22 @@ async function runWorkerTurn(record: {
       return JSON.stringify({ error: `unknown tool: ${c.name}` });
     };
 
-    const model = payload.agents?.[w.personaId ?? ""]?.model ?? "gpt-4o-mini";
+    // Model selection funnels through the SAME resolver as interactive turns — no parallel brain, no
+    // stale hardcoded model. Auto-work has the task OBJECTIVE (not a router difficulty score), so use the
+    // task-type resolver: classify the objective → tier, capped by the agent's ceiling. Seeded from the
+    // per-agent config default (5.6) and falling back to Luna if the persona is unknown. (Previously this
+    // was `?? "gpt-4o-mini"` — a divergent path that never migrated to 5.6 and misreported the migration.)
+    const workerPersona = (w.personaId ?? "") as AgentId;
+    // Auto-work runs server-side without the user's Settings policy object, but it DOES carry per-agent
+    // models — so overlay ceilings from those onto the default policy (base = DEFAULT_MODEL_POLICY).
+    const workerResolved = AGENT_BY_ID[workerPersona]
+      ? resolveModel(w.objective, workerPersona, effectiveModelPolicy(payload.agents, undefined))
+      : null;
+    const model = workerResolved?.model || payload.agents?.[workerPersona]?.model || "gpt-5.6-luna";
     const { callOpenAIResponses } = await import("./openai-responses.server");
     const res = await callOpenAIResponses({
       model,
+      ...(workerResolved?.effort ? { reasoningEffort: workerResolved.effort } : {}),
       instructions,
       transcript: [{ role: "user", content: w.objective }],
       tools: [TAVILY_WEB_SEARCH_TOOL, CREATE_ARTIFACT_TOOL],

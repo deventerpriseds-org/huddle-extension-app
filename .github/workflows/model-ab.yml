@@ -1,0 +1,20 @@
+name: Model A/B (o3-mini vs o3 vs terra-high vs sol-high)
+
+# Direct-OpenAI cost/quality A/B on deep prompts. Runs the comparison harness with the org OPENAI_API_KEY
+# (the CCR session can't reach OpenAI). No app build, no deploy — just API calls + a blind quality judge.
+on:
+  workflow_dispatch:
+
+jobs:
+  ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run model A/B
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node .claude/skills/test-agent-serverfn/scripts/model-ab.mjs
