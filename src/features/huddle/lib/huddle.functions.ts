@@ -5622,6 +5622,12 @@ type TurnUpdateDTO = {
   error: string | null;
   updated_ms: number;
   seq: number;
+  // The user's OWN message for this turn (from the persisted payload). The durable store is the
+  // recovery source of truth for a turn, but historically only agent `replies` were surfaced — so a
+  // reload/reconnect/cross-device load re-materialized the agents' replies while the user's own prompt
+  // (which lives only in the debounced workspace blob) went missing, leaving orphaned agent messages.
+  // Surfacing it here lets the client re-add the user message from the same durable turn.
+  userText: string | null;
   replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
   result: HuddleTurnResult | null;
 };
@@ -5644,6 +5650,7 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
         error: t.error,
         updated_ms: t.updated_ms,
         seq: t.seq,
+        userText: ((t.payload as { text?: string } | null)?.text ?? null) as string | null,
         replies: (t.replies ?? []) as {
           agentId: AgentId;
           text: string;
@@ -5695,6 +5702,10 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
       id: string;
       huddleId: string;
       updated_ms: number;
+      // The user's own message for this turn — see TurnUpdateDTO.userText. Lets the cross-huddle
+      // back-fill re-add the user's prompt (not just the agents' replies) when the workspace blob is
+      // stale/missing, so an away-arrived turn shows the full exchange, not orphaned agent messages.
+      userText: string | null;
       replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
     };
     const empty: BackfillTurn[] = [];
@@ -5713,6 +5724,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
       id: t.id,
       huddleId: t.huddle_id,
       updated_ms: t.updated_ms,
+      userText: ((t.payload as { text?: string } | null)?.text ?? null) as string | null,
       // A 'done' turn's authoritative replies live in `result.replies`; fall back to the streamed column.
       replies: ((t.result as { replies?: unknown } | null)?.replies ?? t.replies ?? []) as {
         agentId: AgentId;

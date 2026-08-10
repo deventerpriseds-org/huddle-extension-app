@@ -61,13 +61,29 @@ export function HuddleApp() {
     const doPoll = async () => {
       const { turns } = await getAllTurnUpdates({ data: { caller, sinceMs: cursor } });
       const add = useHuddleStore.getState().addAgentMessage;
+      const upsert = useHuddleStore.getState().upsertAgentMessage;
       for (const t of turns as {
         id: string;
         huddleId: string;
         updated_ms: number;
+        userText: string | null;
         replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
       }[]) {
         cursor = Math.max(cursor, t.updated_ms || 0);
+        // Re-add the user's own message for this turn (keyed by turnId, collapsing with the interactive
+        // one), so a back-filled away/cross-device exchange shows the user's prompt — not just the
+        // agents' replies orphaned without it. See TurnUpdateDTO.userText / applyTurnStream.
+        const ut = (t.userText ?? "").trim();
+        if (ut && !useHuddleStore.getState().messages.some((m) => m.id === t.id)) {
+          const um = /^u-(\d+)$/.exec(t.id);
+          upsert({
+            id: t.id,
+            huddleId: t.huddleId,
+            author: { kind: "user" },
+            text: ut,
+            ts: um ? Number(um[1]) : t.updated_ms || Date.now(),
+          });
+        }
         (t.replies ?? []).forEach((reply, i) => {
           if (!reply?.agentId || !AGENT_BY_ID[reply.agentId]) return;
           const mid = `a-${t.id}-${i}`;

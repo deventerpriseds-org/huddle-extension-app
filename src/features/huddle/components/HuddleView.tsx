@@ -549,8 +549,29 @@ function Composer({ huddle }: { huddle: Huddle }) {
       { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[] | undefined,
     result: TurnResult,
     final: boolean,
+    userText?: string | null,
   ) {
     const state = useHuddleStore.getState();
+    // Re-add the user's OWN message for this turn from the durable store. The turn (chat.pending_turns)
+    // is the recovery source of truth, but the user's prompt otherwise lives only in the debounced
+    // (800ms) workspace blob — so a reload/reconnect/cross-device load before that flush re-materialized
+    // the agents' replies (fetched here) while the user's message vanished, leaving orphaned agent
+    // messages ("only Terry's comments remain"). Upsert by turnId (the same id submit() uses) so it
+    // collapses with the locally-added one — never a duplicate — and preserves its mentions/ts on update.
+    const ut = (userText ?? "").trim();
+    if (ut) {
+      const existing = state.messages.find((m) => m.id === turnId);
+      if (!existing || existing.text !== ut) {
+        const m = /^u-(\d+)$/.exec(turnId);
+        upsertAgent({
+          id: turnId,
+          huddleId: huddle.id,
+          author: { kind: "user" },
+          text: ut,
+          ts: existing?.ts ?? (m ? Number(m[1]) : Date.now()),
+        });
+      }
+    }
     // Upsert each reply by index: a NEW reply is appended; an existing one is updated IN PLACE (its text
     // is still growing while a 1:1 reply streams). Whole-reply (group) turns arrive complete → first
     // upsert == final, so this is a no-op change for them. A completed reply is never re-appended.
@@ -574,7 +595,8 @@ function Composer({ huddle }: { huddle: Huddle }) {
     // One-time metadata — only when the turn is fully done, only once.
     if (!final || !result || finalizedTurns.current.has(turnId)) return;
     finalizedTurns.current.add(turnId);
-    const userText = state.messages.find((m) => m.id === turnId)?.text ?? "";
+    const turnUserText =
+      (userText ?? "").trim() || (state.messages.find((m) => m.id === turnId)?.text ?? "");
     const r = result as {
       decision?: {
         signal?: unknown;
@@ -634,7 +656,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
         turnId,
         ts: Date.now(),
         huddleId: huddle.id,
-        userText,
+        userText: turnUserText,
         prompts: (r.prompts ?? []) as never,
         toolUses: (r.toolUses ?? []).map((t) => ({
           agentId: t.agentId,
@@ -780,7 +802,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
         for (const t of turns) {
           cursor = Math.max(cursor, t.updated_ms);
           if (t.status === "done") {
-            applyTurnStream(t.id, t.replies, t.result as TurnResult, true);
+            applyTurnStream(t.id, t.replies, t.result as TurnResult, true, t.userText);
             clearPendingFor(t.id);
           } else if (t.status === "error") {
             toast.error((t.error as string) || "That turn hit an error.");
@@ -788,7 +810,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
           } else {
             // 'partial' | 'running' — stream the replies produced so far and KEEP the typing indicator
             // up (do NOT clear pending) until the turn reaches 'done'/'error'.
-            applyTurnStream(t.id, t.replies, null, false);
+            applyTurnStream(t.id, t.replies, null, false, t.userText);
           }
         }
       } catch {
