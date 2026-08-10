@@ -25,8 +25,9 @@ const KNOWN_USER_MSGS = [
 
 export const checks = [
   async function terryThreadRender({ page, check, screenshot }) {
-    // Open Terry Locke's 1:1 from the sidebar "Agent channels" section.
-    const terryBtn = page.locator("aside button", { hasText: "Terry Locke" }).first();
+    // Open Terry Locke's 1:1 from the sidebar "Agent channels" section (channels are labeled
+    // `#terry-locke`, not "Terry Locke").
+    const terryBtn = page.locator("aside button", { hasText: "terry-locke" }).first();
     const gotTerry = await terryBtn
       .waitFor({ state: "visible", timeout: 12000 })
       .then(() => true)
