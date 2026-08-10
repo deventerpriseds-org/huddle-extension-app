@@ -745,6 +745,10 @@ function Composer({ huddle }: { huddle: Huddle }) {
       // Reply streaming toggles (Settings → Memory). 1:1 streams the reply as it forms; groups/ceremonies
       // default off. Server default (absent) is the same (1:1 on, group off).
       streamReplies: backendsCfg.streamReplies,
+      // Short-term memory mechanism (Settings → Memory). Forward it so a typed 1:1 gets the OpenAI
+      // Conversations-object continuity the setting selects — the server defaults to "reconstruction"
+      // when this is ABSENT, so omitting it silently no-ops "conversation" mode for typed DMs.
+      memoryMode: backendsCfg.memoryMode,
     };
 
     try {
