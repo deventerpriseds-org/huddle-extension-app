@@ -1,0 +1,66 @@
+name: QA confirm-intent reply (live, real app)
+
+# Closes the confirm-intent loop: drives ONE reply into dm-<agent> through the DEPLOYED app via
+# Playwright (run-uat.mjs + qa-confirm-reply.mjs), so the app's own difficulty router / model /
+# snapshots / RAG / tools engage. Used AFTER a confirm-ask reach-out has been fired (status 'asked')
+# for a Test- task assigned to <agent>. The reply text drives the branch:
+#   - immediate/delayed confirm: "Yes, that works. Go ahead."  (server isPlainConfirmation -> confirm_task_intent)
+#   - blocker:                    a message stating a real blocker (agent should flag_blocker)
+# Ground truth (confirm_status / toolUses / task status) is asserted separately via azure-pg-query.yml.
+# Screenshots + results are force-pushed to the throwaway uat-shots branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: "1:1 agent id the confirm-ask was fired for (e.g. flex-grimes)"
+        required: true
+        default: "flex-grimes"
+      reply:
+        description: "The reply to type (short plain confirm, a delayed confirm, or a blocker statement)"
+        required: true
+        default: "Yes, that works. Go ahead."
+
+permissions:
+  contents: write
+
+jobs:
+  qa-confirm-reply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install repo deps (seroval, @tanstack for the server-fn read)
+        run: npm ci
+      - name: Build (fresh server-fn ids for getTurnUpdates)
+        continue-on-error: true
+        run: npm run build
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+      - name: Run confirm-intent reply driver
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          CHECKS_FILE: ${{ github.workspace }}/.claude/skills/test-agent-serverfn/scripts/qa-confirm-reply.mjs
+          SHOT_DIR: uat-shots
+          UAT_VIEWPORT_W: '1200'
+          UAT_VIEWPORT_H: '800'
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          QA_AGENT: ${{ inputs.agent }}
+          QA_REPLY: ${{ inputs.reply }}
+        run: node .claude/skills/test-agent-serverfn/scripts/run-uat.mjs
+      - name: Publish results + shots to uat-shots branch
+        if: always()
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "gha-uat"
+          git checkout --orphan uat-shots
+          git reset >/dev/null 2>&1 || true
+          git add -f uat-shots/*.png uat-shots/progress.json
+          git commit -q -m "qa-confirm-reply shots — run ${{ github.run_id }}" || { echo "no shots"; exit 0; }
+          git push -f origin uat-shots
