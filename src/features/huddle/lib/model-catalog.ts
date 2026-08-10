@@ -16,6 +16,11 @@ export interface CatalogModel {
 
 export const ROUTER_MODELS: Record<RouterBackend, CatalogModel[]> = {
   openai: [
+    // Reasoning (o-series). o3 is the DEFAULT per-agent ceiling for every agent (it beat Sol-high on deep
+    // asks at ~1/6.6 the cost — docs/model-ab-findings.md) and the deep rung of the difficulty ladder.
+    // Priority tier NOT supported (o3 is absent from PRIORITY_MODELS in openai-responses.server.ts).
+    { id: "o3", label: "o3 (reasoning — default cap)", group: "Reasoning (o-series)", supportsPriority: false },
+    { id: "o3-mini", label: "o3-mini (cheap reasoning)", group: "Reasoning (o-series)", supportsPriority: false },
     // GPT-5.6 family (GA 2026-07-09). NOTE: the bare alias "gpt-5.6" routes to Sol — always use the
     // explicit -luna/-terra/-sol id. Luna = cheap/fast/strong tool-calling; Terra = balanced quality.
     {
