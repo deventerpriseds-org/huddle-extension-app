@@ -84,26 +84,41 @@ export const checks = [
       return;
     }
 
-    const bodyText = () => page.evaluate(() => document.body.innerText);
+    // Scope to the CHAT THREAD — the overflow-y-auto that holds the message bubbles (user bubbles carry
+    // .rounded-br-sm; agent rows are .flex.gap-3 with a .font-semibold name). The first run diffed
+    // document.body and captured the right-side BOARD panel instead of Finn's reply — this fixes that.
+    const lastAgentReply = () => page.evaluate(() => {
+      const cs = Array.from(document.querySelectorAll("div.overflow-y-auto"));
+      const t = cs.find((c) => c.querySelector(".rounded-br-sm")) || cs.sort((a, b) => b.innerText.length - a.innerText.length)[0] || null;
+      if (!t) return "";
+      const rows = Array.from(t.querySelectorAll(":scope > div"));
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const r = rows[i];
+        if (r.querySelector(".rounded-br-sm")) continue; // user bubble — skip
+        const name = r.querySelector(".font-semibold");
+        if (name) return r.innerText.replace(name.innerText, "").replace(/^\s*agent\s*/i, "").replace(/\s+/g, " ").trim();
+      }
+      return "";
+    });
 
-    // Send one message + wait for the streamed reply to stabilize; auto-answer a Sol deep-confirm gate.
-    async function sendAndWait(text, { maxMs = 75000 } = {}) {
-      const before = (await bodyText()).length;
+    // Send + wait until a NEW agent reply (different from the one before we sent) appears and stops
+    // changing for ~5s. Auto-answers a Sol deep-confirm gate upstream.
+    async function sendAndWait(text, { maxMs = 85000 } = {}) {
+      const prev = await lastAgentReply();
       await composer.fill(`${text} [[${MARK}]]`);
       await composer.press("Enter");
-      let last = before, stableAt = null, grew = false, typing = false;
+      let cur = prev, stableAt = null, changed = false;
       const start = Date.now();
       while (Date.now() - start < maxMs) {
         await page.waitForTimeout(1800);
-        const bt = await bodyText();
-        if (/is typing|thinking|●●●|\bthinking\b/i.test(bt)) typing = true;
-        if (bt.length > last + 4) { grew = true; last = bt.length; stableAt = null; }
-        else if (grew && stableAt === null) stableAt = Date.now();
-        if (grew && stableAt && Date.now() - stableAt > 5000) break;
+        const now = await lastAgentReply();
+        if (now && now !== prev) {
+          if (now !== cur) { cur = now; stableAt = null; changed = true; }
+          else if (stableAt === null) stableAt = Date.now();
+        }
+        if (changed && stableAt && Date.now() - stableAt > 5000) break;
       }
-      const full = await bodyText();
-      const added = full.slice(before).replace(/\s+/g, " ").trim();
-      return { added, grew, typing, elapsed: Math.round((Date.now() - start) / 1000) };
+      return { added: changed ? cur : "", grew: changed, elapsed: Math.round((Date.now() - start) / 1000) };
     }
 
     const results = [];
