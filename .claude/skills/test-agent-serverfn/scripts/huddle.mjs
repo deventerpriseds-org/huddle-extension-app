@@ -154,7 +154,7 @@ async function cmdRead(ids, args) {
   console.log(`\n=== ${huddleId} — ${turns.length} turn(s) in last ${sinceMin}m ===`);
   for (const t of turns) {
     const reps = t.replies || t.result?.replies || [];
-    console.log(`[${t.status}] you: ${String(t.payload?.text ?? "").slice(0, 120)}`);
+    console.log(`[${t.status}] you: ${String(t.userText ?? t.payload?.text ?? "").slice(0, 120)}`);
     for (const r of reps) console.log(`   ${r.agentId}: ${String(r.text).replace(/\n/g, " ").slice(0, 260)}`);
   }
   if (v?.httpError) console.log(`HTTP ${v.httpError} raw=${v.raw}`);

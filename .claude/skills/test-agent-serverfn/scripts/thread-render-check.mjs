@@ -35,13 +35,30 @@ export const checks = [
     check("Terry Locke 1:1 channel reachable in sidebar", gotTerry);
     if (!gotTerry) return;
     await terryBtn.click();
-    // Let hydrate + the durable back-fill/poll settle so any stale directive would have a chance to show.
-    await page.waitForTimeout(3500);
+    // Poll up to 25s for the cross-huddle back-fill (getAllTurnUpdates, 24h window) to recover the
+    // user's own messages — it runs on an interval after hydrate, so a short wait can miss it.
+    const userSel = "div.bg-primary.text-primary-foreground";
+    let rawUser = [];
+    for (let i = 0; i < 25; i++) {
+      rawUser = await page.locator(userSel).allInnerTexts();
+      if (rawUser.length > 0) break;
+      await page.waitForTimeout(1000);
+    }
     await screenshot("terry-thread");
-
-    // User bubbles = the right-aligned primary-colored bubbles (MessageRow user branch in HuddleView).
-    const rawUser = await page.locator("div.bg-primary.text-primary-foreground").allInnerTexts();
     const userText = rawUser.map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean);
+
+    // Diagnostic dump: every message-ish text block in the thread, so a failure tells us WHAT loaded.
+    const allBlocks = await page
+      .locator("main div.rounded-2xl, main div.rounded-lg, div.bg-primary")
+      .allInnerTexts()
+      .catch(() => []);
+    check(
+      "DIAG: thread content",
+      true,
+      `userBubbles=${userText.length} | allBlocks=${allBlocks.length} | firstBlocks=${JSON.stringify(
+        allBlocks.slice(0, 8).map((t) => t.replace(/\s+/g, " ").trim().slice(0, 50)),
+      )}`,
+    );
 
     // (b) No agent directive leaked into a "You" bubble.
     const leaked = userText.filter((t) =>
