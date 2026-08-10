@@ -1776,7 +1776,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // plain "yes" above, confirm_task_intent is idempotent; propose_approach is what actually moves it.
     const confirmReplyDirective =
       pendingConfirm && pendingConfirm.agentId === winner.id
-        ? `\n\nIMPORTANT — the user is replying to your earlier check-in that asked them to confirm the assumed action + Definition of Done for their task "${pendingConfirm.title}". This message is that reply. If they confirmed it (as-is or with tweaks), call confirm_task_intent NOW with task_id "${pendingConfirm.taskId}" and the FINAL definition_of_done (fold in any change they made) — actually call the tool, don't just acknowledge in prose. Then, in this SAME turn, call propose_approach for that task so it can move forward. If they declined or are still deciding, don't call the tools — just help them decide.`
+        ? `\n\nIMPORTANT — the user is replying to your earlier check-in that asked them to confirm the assumed action + Definition of Done for their task "${pendingConfirm.title}". This message is that reply. If they confirmed it (as-is or with tweaks), call confirm_task_intent NOW with task_id "${pendingConfirm.taskId}" and the FINAL definition_of_done (fold in any change they made) — actually call the tool, don't just acknowledge in prose. Then, in this SAME turn, call propose_approach for that task so it can move forward. If the reply instead shows the task genuinely CANNOT proceed (it needs a decision, a credential, or access the team lacks), call flag_blocker with that EXACT task_id "${pendingConfirm.taskId}" — use that id verbatim, NEVER the task's title or an invented id — and a specific reason. If they declined or are still deciding, don't call the tools — just help them decide.`
         : "";
 
     const scene = ` You are ${winner.name} in a ${
@@ -2895,14 +2895,14 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
-              // Record the specific reason Huddle-native (holds the "why"; journey has no reason field).
-              const { setTaskBlocker } = await import("./tasks/tasks.server");
-              await setTaskBlocker(email, taskId, reason, winner.id);
-              // Set the journey task status=BLOCKED so journey ↔ Huddle stay in sync (it syncs back to
-              // the mirror). CHECK the result — a silent failure here means the two apps disagree.
-              // Set the journey task status=BLOCKED so journey ↔ Huddle stay in sync (it syncs back to
-              // the mirror in ~1s–1min; the reverse — an unblock on journey — clears the reason row via
-              // upsertJourneyTask). Check the result so a silent board-write failure is surfaced.
+              // Set the journey task status=BLOCKED FIRST — it validates the task_id against the canonical
+              // board (service-role update) and syncs back to the mirror. ONLY if the board actually
+              // changed do we record the reason Huddle-native. Ordering matters: agents sometimes pass a
+              // non-uuid task_id (a title or a slug) that matches no journey row; recording the reason
+              // first left an ORPHAN blocker row AND let the agent report "blocked" while journey/mirror
+              // stayed unchanged — a false positive the user sees as blocked-but-not-blocked. Gate both
+              // writes on the board write so they can't disagree. (Unblock: a non-BLOCKED status syncing
+              // back in clears the reason row.)
               let boardStatusSet = false;
               let boardError = "";
               try {
@@ -2919,19 +2919,31 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               } catch (e) {
                 boardError = (e instanceof Error ? e.message : String(e)).slice(0, 160);
               }
-              recordToolUse(
-                winner.id,
-                "flag_blocker",
-                boardStatusSet
-                  ? `blocked: ${reason.slice(0, 50)}`
-                  : `blocked, board status not set: ${boardError}`,
-                true,
-                boardError || undefined,
-              );
+              if (!boardStatusSet) {
+                // Board write failed (usually a stale/incorrect task_id). Do NOT record a reason row and
+                // do NOT let the agent claim it's blocked — surface the failure so it reports honestly.
+                recordToolUse(
+                  winner.id,
+                  "flag_blocker",
+                  `could not block — board not updated: ${boardError}`,
+                  false,
+                  boardError || undefined,
+                );
+                return JSON.stringify({
+                  ok: false,
+                  task_id: taskId,
+                  board_status_set: false,
+                  error: `Could not mark the task blocked (${boardError}). Do NOT tell the user it is blocked — say you could not flag it and confirm the exact task with them.`,
+                });
+              }
+              // Board is BLOCKED — record the specific reason Huddle-native (journey has no reason field).
+              const { setTaskBlocker } = await import("./tasks/tasks.server");
+              await setTaskBlocker(email, taskId, reason, winner.id);
+              recordToolUse(winner.id, "flag_blocker", `blocked: ${reason.slice(0, 50)}`, true);
               return JSON.stringify({
                 ok: true,
                 task_id: taskId,
-                board_status_set: boardStatusSet,
+                board_status_set: true,
               });
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
@@ -3856,13 +3868,40 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               const email =
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
-              const { invokeJourneyTool } = await import("./journey/proxy.functions");
-              await invokeJourneyTool({
-                toolName: "update_task",
-                args: { task_id: taskId, status: "BLOCKED" },
-                caller: data.caller ?? {},
-                context: { source: "huddle" },
-              });
+              // Journey status=BLOCKED FIRST, and gate the reason-record on it (mirrors the OpenAI path):
+              // a bad/stale task_id must not leave an orphan blocker row or let the agent claim a phantom
+              // block. This path previously ignored the journey result entirely.
+              let boardStatusSet = false;
+              let boardError = "";
+              try {
+                const { invokeJourneyTool } = await import("./journey/proxy.functions");
+                const r = await invokeJourneyTool({
+                  toolName: "update_task",
+                  args: { task_id: taskId, status: "BLOCKED" },
+                  caller: data.caller ?? {},
+                  context: { source: "huddle" },
+                });
+                boardStatusSet = !!r.ok;
+                if (!r.ok)
+                  boardError = String(r.error ?? r.output ?? "update_task_failed").slice(0, 160);
+              } catch (e) {
+                boardError = (e instanceof Error ? e.message : String(e)).slice(0, 160);
+              }
+              if (!boardStatusSet) {
+                recordToolUse(
+                  winner.id,
+                  "flag_blocker",
+                  `could not block — board not updated: ${boardError}`,
+                  false,
+                  boardError || undefined,
+                );
+                return JSON.stringify({
+                  ok: false,
+                  task_id: taskId,
+                  board_status_set: false,
+                  error: `Could not mark the task blocked (${boardError}). Do NOT tell the user it is blocked — say you could not flag it and confirm the exact task with them.`,
+                });
+              }
               if (email) {
                 const { setTaskBlocker } = await import("./tasks/tasks.server");
                 await setTaskBlocker(email, taskId, reason, winner.id);
