@@ -82,8 +82,28 @@ jobs:
         with:
           bun-version: latest
 
+      # Cache the installed dependency tree so an unchanged-deps deploy skips the (slow + registry-flaky)
+      # install entirely. Keyed on package.json + bunfig.toml (the install deletes bun.lock and resolves
+      # fresh, so there's no lockfile to key on). On a HIT, node_modules is restored and the install step
+      # below is skipped — which ALSO sidesteps the npm-registry-refusal retries (no network install runs).
+      # A package.json/bunfig change busts the key and the install runs normally, repopulating the cache.
+      - name: Cache dependencies
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-nm-${{ hashFiles('package.json', 'bunfig.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-nm-
+
       - name: Install dependencies (public npm)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: |
+          # This runs only on a cache MISS. A restore-keys partial hit may have left a stale node_modules;
+          # wipe it so the fresh resolve is clean (the cached ~/.bun/install/cache still avoids re-downloads).
+          rm -rf node_modules
           rm -f bun.lock
           sed -i 's/^minimumReleaseAge = .*/minimumReleaseAge = 0/' bunfig.toml
           # The npm registry occasionally refuses connections mid-install on the runner
