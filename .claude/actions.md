@@ -10,10 +10,24 @@ no-repeat, AC/DoD/reach-out), novel-writer-style consistency. **User directive:*
 stubs/placeholders, and run a BASELINE first to track post-fix improvements.
 **Done so far:** deep research + 3 code maps + gap analysis → plan `docs/plan-long-memory-conversationalist.md`
 (committed to `claude/setup-skill-config-iat9za`).
-**Open / next:** (1) build the 20-turn harness (single-thread driver + huddle-switch + ground-truth board/DB
-assertions); (2) run BASELINE vs current prod, capture scores; (3) implement A1→A6 for real, verify each with
-the verifier subagent, deploy, re-run harness, track deltas. NOTHING marked done/fixed until real + verified +
-deployed + confirmed. Evidence link: (PR pending).
+**BASELINE RUN (2026-08-10, run 31390074850, VALID — router ran clean, gpt-4o-mini):**
+PASS today: pointer(T3 RESOLVED), count(T4 CORRECT=2), abstention(T12 ABSTAINED — no invented budget),
+tool_honesty(T13 HONEST — said couldn't read Outlook, get_external_calendar_events ok:false), faithfulness
+(T14 FAITHFUL — didn't claim email sent), commitment_recall(T18 HONEST — "No, it did not go out").
+FAIL today (the real memory gap): status_recall(T11 BLANKED) + consistency_sweep(T20 DRIFT) — the recital
+date (stated ONCE at T2, never repeated) was LOST once it scrolled past the ~14-msg window; T20 summary even
+said "recital date was not stated." Repeated facts (vendors, re-mentioned T3/4/9/10) survived → T9/T10 RESOLVED.
+So the confirmed defect is single-mention facts dropping out of the window — exactly what A1+A2 target. HONESTY
+was GOOD in this run (contradicts "always fabricates" — refines the problem to memory-drop, not fabrication).
+HYGIENE VERIFIED (run 31390745264, azure-pg-query): rag_chunks_baseline=0, recital_text=0, vendor_text=0,
+pending_turns=0, vendor_tasks=0 — the readonly-shared design left NOTHING behind. 
+HARNESS CAVEATS to fix before post-fix re-run: (a) T9/T10/T19 tagged expected-FAIL but the vendor referent was
+re-mentioned so stayed in-window — not a true out-of-window probe; only the recital (T11/T20) truly tests it.
+Add a single-mention-only long-range probe. (b) T19 graded PARTIAL though the reply was correct (judge downgraded
+a correct answer) — tighten grade logic to let ground-truth RESOLVED stand. (c) ran on gpt-4o-mini; confirm prod
+agent model. (d) no-repeat judged REPEATED at only 23% overlap — harsh; treat as soft signal.
+**Open / next:** implement A1 (persist agent replies) + A2 (per-huddle running ledger) — the recital-type fix —
+then re-run this baseline to show T11/T20 flip. Evidence: PR #27 (merged to main), run 31390074850.
 
 
 ### ✅ DEPLOYED live (both deploys succeeded 2026-08-06 ~16:40 UTC)
