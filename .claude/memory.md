@@ -1476,3 +1476,39 @@ streaming work. Device fix = clear the PWA notifications / unregister SW.
 - **Did NOT re-fire a test push to "verify"** — that would buzz the user again; change is code-verified +
   traced end-to-end (test-push route → execute-tool spread → edge-fn opt-in apply). Default path proven
   unchanged by reading (no ttl/collapse ⇒ same `android:{priority:'high'}`, web-push no options).
+
+## 2026-08-10 — "chat messages disappearing" + "instructions labeled as me" + Series-A bad info (all root-caused)
+Three linked issues from a Terry-Locke 1:1 screenshot; **two of the three were caused by ME**, one by my own regression.
+- **Disappearing user messages (real defect, fixed `e483c59`).** The durable turn store (`chat.pending_turns`)
+  is the recovery source for a turn, but `getTurnUpdates`/`getAllTurnUpdates` DTOs surfaced ONLY agent `replies`
+  and dropped `payload` (the user's text). So on any rebuild-from-server (load/focus/reconnect) agent replies
+  self-healed and the user's own messages did not → "only Terry's comments remain". Fix: surface `userText`
+  in both DTOs + upsert it client-side (applyTurnStream + HuddleApp back-fill), keyed by turnId (collapses
+  with the interactive msg). **Honest calibration:** proven = the asymmetry (DB shows user msgs stored +
+  code drops them on recovery); NOT proven = the exact trigger of the user's specific incident. User msgs
+  were NEVER "non-functional" — local-add-on-send + workspace-blob reload always showed them; this only bit
+  when the blob copy diverged. I over-claimed at first and corrected it.
+- **REGRESSION I caused, then fixed (`bce5e07`).** `e483c59` surfaced `payload.text` for EVERY turn — but
+  agent-INITIATED turns (autowork/standup/groom/followup) store their INTERNAL DIRECTIVE in `payload.text`
+  (e.g. autowork "This is a REPORT-ONLY turn: do not call any tool"). So those directives rendered as "You"
+  bubbles. Fix: gate userText surfacing to genuine user turns only — **`/^u-\d+$/`** (submit() ids every user
+  turn `u-<ms>`; agent-initiated use semantic prefixes). Applied server-side (both DTOs) + client (defense).
+  Note: `internal:true` exists on the blocked directive payload but NOT on `turnPayload` turns, so the
+  **id-shape is the reliable discriminator**, not the internal flag.
+- **"Series A financing" bad info = MY TEST POLLUTION cascade (cleaned).** Ground-truth chain: `surfaceBlocked`
+  (autowork.server.ts) builds its list from `blockedTitles` = `${title} — ${blocker.reason}`; the reason lives
+  in `tasks.task_blockers` (Huddle Azure PG, keyed by journey task id). The Michigan task `870a7fa9-…` had a
+  blocker row flagged by **finn-reid 08-08 18:19**, reason = "The confirmed deliverable is a three-subsidiary
+  Series A financial model and go-to-market memo, but the existing task is titled 'Set up call with University
+  of Michigan financial aid team.'" i.e. my `verify-1on1-streaming` Series-A text made Finn conflate my DM with
+  the real task, flag it BLOCKED, and set journey status=BLOCKED. Journey canonical title/description were CLEAN
+  (the corruption was only the blocker reason). **Cleanup (verified):** set journey `public.tasks` `870a7fa9`
+  BLOCKED→BACKLOG (Supabase MCP) → sync trigger auto-deleted the stale blocker (`DELETE 0` on my explicit
+  follow-up; `blockers_with_series_a=0`). Also purged 1 stray `Test-` rag_chunk (Zephyr, finn thread; `DELETE 1`,
+  0 remaining). NOTE: I earlier wrongly said the Series-A intrusion came from a rag_chunk — it did NOT; it was a
+  task_blockers row. Corrected.
+- **Hardening for me:** test harnesses with `journey:{enabled:false}` STILL let an agent doing autowork act on
+  the injected DM content (flag real tasks BLOCKED). `journey:{enabled:false}` only blocks board/task WRITES
+  from that turn — it does NOT stop a later autowork pass from reacting to the polluted transcript/DM. Use
+  `Test-` prefixes AND avoid injecting realistic task-shaped asks into REAL agent DMs; prefer throwaway huddle
+  ids. All three fixes deployed to prod on `main` (e483c59, bce5e07); user to confirm live.
