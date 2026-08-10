@@ -27,6 +27,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install repo deps (seroval, @tanstack for the server-fn read)
+        run: npm ci
+      - name: Build (fresh server-fn ids for getTurnUpdates)
+        continue-on-error: true
+        run: npm run build
       - name: Install Playwright + Chromium
         run: |
           npm install playwright
