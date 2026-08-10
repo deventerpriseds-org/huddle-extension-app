@@ -386,22 +386,44 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                     )}
                   </div>
 
-                  {cfg.backend === "openai" && (
-                    <div>
-                      <Label className="text-xs">Model</Label>
-                      <Input
-                        className="h-8"
-                        placeholder="gpt-4o"
-                        value={cfg.model ?? ""}
-                        onChange={(e) =>
-                          setAgent(a.id, { model: e.target.value.trim() || undefined })
-                        }
-                      />
-                      <p className="text-xs text-muted-foreground pt-1">
-                        Blank falls back to the assistant snapshot's model, then gpt-4o.
-                      </p>
-                    </div>
-                  )}
+                  {cfg.backend === "openai" &&
+                    (() => {
+                      const models = ROUTER_MODELS.openai;
+                      const groups = models.reduce<Record<string, typeof models>>((m, x) => {
+                        (m[x.group] ??= []).push(x);
+                        return m;
+                      }, {});
+                      return (
+                        <div>
+                          <Label className="text-xs">Model</Label>
+                          <Select
+                            value={cfg.model ?? ""}
+                            onValueChange={(v) => setAgent(a.id, { model: v })}
+                          >
+                            <SelectTrigger className="h-8">
+                              <SelectValue placeholder="Pick a model" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {Object.entries(groups).map(([group, ms]) => (
+                                <SelectGroup key={group}>
+                                  <SelectLabel>{group}</SelectLabel>
+                                  {ms.map((m) => (
+                                    <SelectItem key={m.id} value={m.id}>
+                                      {m.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground pt-1">
+                            This agent's base model. The runtime may raise or lower it per turn via the
+                            difficulty/task-type resolver, capped by the agent's ceiling in the model
+                            policy (model-policy.ts).
+                          </p>
+                        </div>
+                      );
+                    })()}
 
                   <AgentContextEditor agentId={a.id} />
                 </div>
