@@ -1,0 +1,43 @@
+name: Baseline 20-turn conversationalist (graded, live)
+
+# ONE sustained 20-turn conversation against the deployed SWA, graded for worker-grade conversation
+# capabilities (pointer words, running counts, status recall, topic-switch-return, no-repeat,
+# tool-honesty, faithfulness, abstention, cross-huddle recall, consistency sweep). This is the BASELINE
+# for docs/plan-long-memory-conversationalist.md — re-run the SAME frozen scenario after each A1..A6 fix
+# to compute the per-capability delta.
+#
+# GitHub runners are NOT behind the CCR proxy, so they can reach *.azurestaticapps.net (the sandbox
+# cannot). journey is disabled on every agent → NO real board writes. Any turn with `LLM fallback`
+# (quota/429) marks the run ROUTER_FALLBACK_INVALID and no scores are emitted. Read the
+# STRUCTURED_RESULTS_JSON block in the job logs.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  baseline-20turn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Build so server-fn content-hash ids auto-resolve FRESH from .output (a stale committed id would
+      # 404/405 the whole run). Non-fatal: on a build hiccup the harness falls back to fn-ids.json.
+      - name: Build (resolve fresh server-fn ids)
+        continue-on-error: true
+        run: npm run build
+
+      - name: Run baseline 20-turn harness
+        env:
+          HUDDLE_BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          HUDDLE_CALLER: von.ellis@enterpriseds.io
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+        run: node e2e/baseline-20turn.mjs
