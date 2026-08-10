@@ -1,6 +1,33 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-10
 
+## Model policy — deep-ask A/B + a real ceiling regression I introduced in Slice 2a (2026-08-10)
+**A/B findings (full writeup: `docs/model-ab-findings.md`).** Deep asks only, blind `gpt-5.6-sol` judge,
+harness `model-ab.mjs` via `model-ab.yml` (org OPENAI_API_KEY). Corrected run 31404223576:
+**o3 (high) = 80.5 quality @ $0.022/turn — dominates.** sol-high (our current `DIFF_RUNG[3-4]`) = 63.0 @
+**$0.146** (6.6× o3, lower quality); terra-high = 59.8 @ $0.069; o3-mini = 58.5 @ $0.019 (cheap floor).
+GPT-5.6 list prices CONFIRMED via Tavily 2026-08-10 (5 sources vs OpenAI's page, post July-30 cut):
+Sol $5/$30, Terra $2/$12, Luna $0.20/$1.20 per 1M — now wired into the harness PRICE map (no more TBD).
+First run (31402368819) DISCARDED: judge effort:high + max_output_tokens:500 starved the JSON verdict →
+2/4 prompts unscored + a sol-high=0 artifact; 5.6 answers truncated at 4000. Fixed to effort:medium/2500
++retry, answers 6000 (commit 858ba8f). **Implication (NOT applied, awaiting sign-off):** swap the deep
+rung `gpt-5.6-sol`→`o3`.
+
+**Ceiling bug I introduced in Slice 2a — REAL, found while answering "why does another session see
+iris/terry on terra, finn on luna?"** Runtime model IS start-Luna-escalate-by-difficulty for EVERY agent
+(`resolveByDifficulty`, `huddle.functions.ts:3503`, overwrites `usedModel`; DIFF_RUNG same for all:
+d1→luna-low, d2→luna-high, d3-4→sol-high but confirm-gated→terra budget). The "iris→terra/finn→luna" the
+other session cited is the per-agent static `model` field (`defaultModelFor`, `agent-backends.ts:135`,
+TERRA_AGENTS={iris,terry,sam}→terra else luna) — NOT the per-turn model; it's the ceiling+crash-fallback.
+**The regression:** `withAgentCeilings` (my Slice 2a) overlays each agent's SEEDED per-agent model as its
+ceiling, which NULLIFIES `DEFAULT_MODEL_POLICY.ceiling` (finn/iris/terry/sam/tess/liam/elle/troy→sol). Net
+default: finn + 11 others CAPPED AT LUNA (can't reach Terra/Sol at all), only iris/terry/sam reach Terra,
+**Sol unreachable by anyone**. Opposite of "escalate as needed." **Proposed fix (awaiting sign-off):**
+seed `defaultModelFor` from `DEFAULT_MODEL_POLICY.ceiling` so withAgentCeilings reproduces (not overrides)
+the policy; relabel the Settings per-agent control "Max model (ceiling)" + helper "starts on Luna,
+escalates up to this cap"; update snapshot `modelNote`. Confusion source = one field doing double duty
+(reads as "starting model", actually the ceiling).
+
 ## Long-memory worker-grade conversationalist — RESEARCH + GAP ANALYSIS DONE, full A1–A6 build authorized (2026-08-10)
 User: agents are incoherent/untrustworthy — forget what they said two turns ago, fabricate instead of
 surfacing issues, unaware of backend tools/preconditions, can't narrate why something failed, drift over

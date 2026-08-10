@@ -17,12 +17,15 @@ const CONFIGS = [
   { key: "sol-high", model: "gpt-5.6-sol", effort: "high" },
 ];
 
-// Best-known list prices ($/1M tokens). 5.6 tiers flagged TBD — compare by TOKENS there. Edit to taste.
+// List prices ($/1M tokens). GPT-5.6 tiers confirmed via Tavily 2026-08-10 (5 sources — techjacks,
+// aipricing.guru, benchlm, spheron, apidog — verified against OpenAI's own page, post the July-30-2026
+// cut): Sol $5/$30, Terra $2/$12, Luna $0.20/$1.20 per 1M in/out. o3/o3-mini are best-known list prices.
 const PRICE = {
   "o3-mini": { in: 1.1, out: 4.4 },
   o3: { in: 2.0, out: 8.0 },
-  "gpt-5.6-terra": null, // price TBD
-  "gpt-5.6-sol": null, // price TBD
+  "gpt-5.6-luna": { in: 0.2, out: 1.2 },
+  "gpt-5.6-terra": { in: 2.0, out: 12.0 },
+  "gpt-5.6-sol": { in: 5.0, out: 30.0 },
 };
 
 // Representative DEEP asks (strategy / financial modeling / research memo) — the style Sol-high exists for.
@@ -149,4 +152,4 @@ for (const c of CONFIGS) {
 const solQ = avg(agg["sol-high"].q);
 console.log(`\nReference = sol-high (avgQuality ${Number.isFinite(solQ) ? solQ.toFixed(1) : "n/a"}). ` +
   `A cheaper config "matches" if its avgQuality is within ~3 pts of sol-high at meaningfully lower tokens/$.`);
-console.log("NOTE: 5.6 tier $ = TBD (list price not encoded) — compare those by tokens; o3/o3-mini use best-known list prices.");
+console.log("NOTE: all $/turn now use confirmed list prices (5.6 via Tavily 2026-08-10: Sol 5/30, Terra 2/12, Luna 0.2/1.2).");
