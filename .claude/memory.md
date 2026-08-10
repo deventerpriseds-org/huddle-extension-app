@@ -1620,9 +1620,12 @@ Validated interactively via journey Supabase + azure-pg-query + run-autowork/run
 2. GATE ON by default — no `identity.agent_workflow_config` row → `default_required=true` (fail-closed).
 3. `run-autowork` alone does NOT promote a raw BACKLOG task (`promoted:0, remaining:0`) — must be GROOMED first
    (`run-grooming` → `groomed:22`).
-4. **BLOCKER: even after grooming the task stayed BACKLOG — Finn's UP_NEXT is already at WIP cap (3) from the real
-   board**, so the pipeline correctly won't stage/reach-out beyond WIP. Happy-path reach-out needs a free-WIP agent
-   OR seed `tasks.task_engagement_state confirm_status='asked'` directly to jump to asked-state + test the close-loop.
+4. **SEQUENCING (corrected — my earlier "WIP cap" claim was WRONG):** a raw BACKLOG task promotes only via
+   **groom THEN auto-work**. I mis-ordered (auto-work BEFORE groom → `remaining:0`, then groomed but never re-ran
+   auto-work), so nothing promoted. Finn actually had room (UP_NEXT=1; caps are UP_NEXT≤3). Verified per-agent WIP:
+   cole 2 · eli 1 · elle 3(full) · faith 2 · finn 1 · sam 4 · tess 3. Correct drive = seed → run-grooming →
+   run-autowork (promote+arm) → backdate `confirm_ask_at` → run-autowork (fire). (Lesson: this IS the pipeline-
+   understanding the test targets — I got the order wrong first, instructive.)
 5. Cleanup VERIFIED 0 (journey delete cascades to mirror via trigger; also cleared engagement/blockers/pending_turns).
    Side-effect noted: `run-grooming force=true` re-ranked 22 real tasks (idempotent-ish, no data loss).
 NEXT: encode the full BACKLOG→reach-out→confirm/blocker flow (WIP handling + Playwright reply + cleanup + structured
