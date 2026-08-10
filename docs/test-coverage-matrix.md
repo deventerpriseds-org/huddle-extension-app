@@ -59,7 +59,7 @@ Surfaces: **1:1** (dm-<agent>), **Group** (all-members, multi-agent), **X-huddle
 | Process response — **delayed** (a couple turns later) still closes | 🔨 | same rig, add 2 filler turns before confirm |
 | Process response — **blocker** → BLOCKED + honest why | 🔨 | F1 flag_blocker + F3 — reply w/ real blocker |
 | Assist vs produce mode proposal | ⬜ | (produce mode observed in the confirm-ask DoD) |
-| ⚠ **BUG: confirm_task_intent journey DoD write fails** | ⚠️ | "Cannot coerce the result to a single JSON object" → journey `public.tasks.definition_of_done` stays NULL though Huddle engagement has it. Intent→plumbing gap. FIX NEEDED. |
+| confirm_task_intent journey DoD write | ✅ | **FIXED + verified live.** journey `execute-tool` `updateTask`/`batchUpdateTasks` now map `definition_of_done` (+ empty-update guard). Root cause: field was never mapped → empty update → coerce error. Independent verifier (8/8) confirmed journey `public.tasks.definition_of_done` NON-NULL after a confirm; toolUse now "DoD confirmed". journey-voice PR #24 merged→main, deployed. |
 
 ### Multi-agent (Group)
 | Capability | Status | Notes |

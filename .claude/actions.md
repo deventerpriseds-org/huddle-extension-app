@@ -26,9 +26,10 @@ seed BACKLOG→run-grooming→UP_NEXT+armed→backdate confirm_ask_at→run-auto
 honest (judge=HONEST). Cleanup verified 0/0/0/0/0. New reusable workflow+harness: `qa-confirm-reply.yml` +
 `qa-confirm-reply.mjs` (on main). Evidence: runs 31425430106 (groom), 31425702731 (autowork confirmAsked:1),
 31426689932 (reply), azure-pg-query 31426896151/31427... (ground truth + cleanup).
-**⚠ BUG:** `confirm_task_intent` journey DoD write fails ("Cannot coerce the result to a single JSON object") →
-journey `public.tasks.definition_of_done` NULL though Huddle engagement has it. Fix pending.
-**Next:** delayed-confirm + blocker paths (same rig) → DoD-mirror bug fix → group/x-huddle/tool-chains/long-drift.
+**✅ BUG FIXED + verified live:** journey `execute-tool` `updateTask`/`batchUpdateTasks` now map `definition_of_done`
+(root cause: never mapped → empty update → coerce error). journey-voice PR #24 merged→main + deployed. Independent
+verifier 8/8: journey `public.tasks.definition_of_done` NON-NULL after confirm; toolUse "DoD confirmed".
+**Next:** delayed-confirm + blocker paths (same rig) → group/x-huddle/tool-chains/long-drift.
 
 
 ### ✅ DEPLOYED live (both deploys succeeded 2026-08-06 ~16:40 UTC)

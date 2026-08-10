@@ -19,9 +19,13 @@ user's REAL live board (30+ real tasks) — always `Test-` prefix + verified cle
 run, confirm no real task is confirm-due (`awaiting`+past `confirm_ask_at`) and none is promotable
 (`confirmed`+`approved`+UP_NEXT) so the pass touches ZERO real tasks (both were 0 on 2026-08-10).
 
-**⚠ BUG surfaced (fix pending):** `confirm_task_intent`'s write-back of the confirmed DoD to journey fails
-("Cannot coerce the result to a single JSON object") → journey `public.tasks.definition_of_done` stays NULL
-though Huddle's `tasks.task_engagement_state.confirmed_dod` has it. Real intent→plumbing gap.
+**✅ BUG FIXED + verified live (2026-08-10):** `confirm_task_intent`'s DoD write to journey failed ("Cannot
+coerce the result to a single JSON object"). Root cause: journey `execute-tool` `updateTask` never mapped
+`definition_of_done` → empty `updateData` → `.update({})…single()` = 0 rows. Fix (journey-voice, execute-tool
+`updateTask`+`batchUpdateTasks`): map `definition_of_done` (""→clear) + empty-update guard. PR #24 merged→main,
+deployed (project wwxgajrtmslzklnyplah). Independent verifier 8/8: journey `public.tasks.definition_of_done`
+now NON-NULL after a confirm & equals confirmed_dod; toolUse now "DoD confirmed". args pass through un-filtered
+(no schema gate); mirror column already existed. NOT a test artifact (no owner filter — failed for all users).
 
 **The three canonical artifacts (read these, don't rebuild):**
 - `docs/test-coverage-matrix.md` — the LIVING checklist. Nothing we promised to test may be dropped.
