@@ -1,6 +1,65 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-10
 
+<!-- ============================================================================ -->
+<!-- ▶▶▶ RESUME HERE (fresh session: read THIS block first, then act) ◀◀◀ -->
+<!-- ============================================================================ -->
+## ▶ RESUME HERE — worker-grade conversationalist test program (2026-08-10)
+
+**One-line state:** 1:1 20-turn baseline is DONE and STRONG (memory-drop premise did NOT
+reproduce). Now building the **confirm-intent flow** test; broad coverage matrix is the guardrail.
+
+**The three canonical artifacts (read these, don't rebuild):**
+- `docs/test-coverage-matrix.md` — the LIVING checklist. Nothing we promised to test may be dropped.
+  Tells you exactly which cells are ✅/🔨/⬜. **This is the map of what's left.**
+- `docs/plan-long-memory-conversationalist.md` — research + gap analysis + A1–A6 plan (PR #27, merged).
+- `.claude/skills/test-agent-serverfn/scripts/qa-1on1-conversation.mjs` + `.github/workflows/qa-1on1.yml`
+  — the WORKING harness (write-through-app / read-from-server). Copy its shape for new scenarios.
+
+**THE test architecture (proven, 1:1 only so far) — do NOT deviate:**
+- **Write at the app, read at the server.** Playwright types into the REAL composer of the deployed SWA
+  (so the app's own difficulty router / model / snapshot / RAG / journey / tools all engage — 1:1
+  fidelity). Reply is read server-side via the `getTurnUpdates` server fn (durable `chat.pending_turns`),
+  matched by a per-turn nonce `[[<MARK>-t<n>]]`. NEVER scrape the DOM for the reply (captured the board
+  panel last time). NEVER set a model — it's difficulty-driven per turn (`resolveByDifficulty`).
+- Runs in GHA (`qa-1on1.yml`), not the sandbox (egress can't reach the SWA/DB reliably). Results +
+  shots force-pushed to `uat-shots` branch; read via `git show origin/uat-shots:uat-shots/results.json`.
+- **ALWAYS clean up.** Every message carries the run marker; after a run dispatch `qa-1on1-cleanup.yml`
+  (huddle + marker printed in the log) to delete exactly this run's `rag_chunks` + `pending_turns`.
+  Test tasks MUST be `Test-` prefixed. Verified-0 cleanup or it's not done.
+
+**NEXT CONCRETE STEP — build `qa-confirm-intent.yml` (repeatable). Two halves, neither dropped:**
+1. **Prove real BACKLOG→reach-out** from a FREE-WIP agent (finn had room: UP_NEXT=1). Exact sequence
+   (order matters — GROOM before AUTOWORK, learned the hard way):
+   a. Seed a journey task via Supabase MCP (project `wwxgajrtmslzklnyplah`): `Test-…` title, no
+      `task_category` (enum rejects "Research"; omit→LIFE default), `board_id`
+      `5a4fbd9d-ea15-47bb-9210-268cbfabf5d7` (von.ellis board, NOT NULL), assigned `finn-reid`,
+      `'BACKLOG'::task_status`. Sync to mirror is async ~1–3s — POLL, don't assume.
+   b. `run-grooming.yml` (ranks/stages) → THEN `run-autowork.yml` (promotes to UP_NEXT + arms confirm).
+   c. Backdate `tasks.task_engagement_state.confirm_ask_at` into the past via `azure-pg-query.yml`
+      (this is the WRITE path for Azure PG — runs SQL as admin), so the next autowork tick fires the ask.
+   d. `run-autowork.yml` again → assert the confirm-ask DM landed (reach-out fired).
+2. **Close the loop** via Playwright reply — THREE response paths, assert the REAL tool fired + state moved:
+   - immediate confirm → `confirm_task_intent` → confirmed → (approach gate) → DOING.
+   - delayed confirm (a couple unrelated turns first, then confirm) → still closes (retention under drift).
+   - blocker → `flag_blocker` → status BLOCKED + honest "why" narrated (F3).
+   Assert on every path: **F1** right tool actually fired (DB row / toolUses), **F2** correct pipeline
+   grasp, **F3** honest reason. Then verified cleanup.
+
+**After confirm-intent, walk the matrix (don't stop early):** group multi-agent (routing / soloOnCoverage
+/ handoffs) → cross-huddle recall (group→1:1, needs a memory write) → tool-chains → long-drift (40+ turns,
+novel-writer consistency). Build A1–A6 ONLY where a matrix cell proves weak (data-driven, not blindly).
+
+**Gotchas / do-NOT-redo:**
+- The **server-fn / gpt-4o-mini baseline is INVALID and DISCARDED** — it bypassed the app's difficulty
+  model selection so it wasn't 1:1. Do not cite its numbers. The real baseline is the Playwright 1:1 run.
+- OpenAI 429/`insufficient_quota` silently degrades the router to keyword fallback — check `decision.reason`
+  ("LLM router" = real; "LLM fallback" = didn't run). Stop on 429; don't retry-burn.
+- Confirm-intent gate is ON by default and FAILS CLOSED (`agent_workflow_config.default_required`).
+<!-- ============================================================================ -->
+<!-- ▲▲▲ END RESUME HERE ▲▲▲ -->
+<!-- ============================================================================ -->
+
 ## Model policy — deep-ask A/B + a real ceiling regression I introduced in Slice 2a (2026-08-10)
 **A/B findings (full writeup: `docs/model-ab-findings.md`).** Deep asks only, blind `gpt-5.6-sol` judge,
 harness `model-ab.mjs` via `model-ab.yml` (org OPENAI_API_KEY). Corrected run 31404223576:

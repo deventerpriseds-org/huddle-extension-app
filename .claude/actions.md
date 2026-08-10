@@ -3,31 +3,26 @@ Last updated: 2026-08-06 (three fixes live + Option-1 Postgres-MCP deploy workfl
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
-### 🔨 ACT-huddle-27: Long-memory worker-grade conversationalist (A1–A6 + 20-turn harness)
+### 🔨 ACT-huddle-27: Long-memory worker-grade conversationalist (A1–A6 + full test matrix)
 **Requested:** 2026-08-10 — agents forget across turns, fabricate, unaware of tools/preconditions, drift.
 Want a real 20-turn worker conversation (pointer words, "how many / is it finished", topic-switch-return,
 no-repeat, AC/DoD/reach-out), novel-writer-style consistency. **User directive:** build FULL A1–A6 with NO
-stubs/placeholders, and run a BASELINE first to track post-fix improvements.
-**Done so far:** deep research + 3 code maps + gap analysis → plan `docs/plan-long-memory-conversationalist.md`
-(committed to `claude/setup-skill-config-iat9za`).
-**BASELINE RUN (2026-08-10, run 31390074850, VALID — router ran clean, gpt-4o-mini):**
-PASS today: pointer(T3 RESOLVED), count(T4 CORRECT=2), abstention(T12 ABSTAINED — no invented budget),
-tool_honesty(T13 HONEST — said couldn't read Outlook, get_external_calendar_events ok:false), faithfulness
-(T14 FAITHFUL — didn't claim email sent), commitment_recall(T18 HONEST — "No, it did not go out").
-FAIL today (the real memory gap): status_recall(T11 BLANKED) + consistency_sweep(T20 DRIFT) — the recital
-date (stated ONCE at T2, never repeated) was LOST once it scrolled past the ~14-msg window; T20 summary even
-said "recital date was not stated." Repeated facts (vendors, re-mentioned T3/4/9/10) survived → T9/T10 RESOLVED.
-So the confirmed defect is single-mention facts dropping out of the window — exactly what A1+A2 target. HONESTY
-was GOOD in this run (contradicts "always fabricates" — refines the problem to memory-drop, not fabrication).
-HYGIENE VERIFIED (run 31390745264, azure-pg-query): rag_chunks_baseline=0, recital_text=0, vendor_text=0,
-pending_turns=0, vendor_tasks=0 — the readonly-shared design left NOTHING behind. 
-HARNESS CAVEATS to fix before post-fix re-run: (a) T9/T10/T19 tagged expected-FAIL but the vendor referent was
-re-mentioned so stayed in-window — not a true out-of-window probe; only the recital (T11/T20) truly tests it.
-Add a single-mention-only long-range probe. (b) T19 graded PARTIAL though the reply was correct (judge downgraded
-a correct answer) — tighten grade logic to let ground-truth RESOLVED stand. (c) ran on gpt-4o-mini; confirm prod
-agent model. (d) no-repeat judged REPEATED at only 23% overlap — harsh; treat as soft signal.
-**Open / next:** implement A1 (persist agent replies) + A2 (per-huddle running ledger) — the recital-type fix —
-then re-run this baseline to show T11/T20 flip. Evidence: PR #27 (merged to main), run 31390074850.
+stubs/placeholders; run a BASELINE first; keep it **1:1 faithful** (drive the app so its difficulty router /
+model / snapshot / RAG / tools all engage). **See `memory.md` ▶ RESUME HERE for the live pickup.**
+**Done:** deep research + gap analysis → `docs/plan-long-memory-conversationalist.md` (PR #27, merged) ·
+coverage guardrail `docs/test-coverage-matrix.md` · **working 1:1 harness** `qa-1on1-conversation.mjs` +
+`qa-1on1.yml` (write-through-app / read-from-server) + `qa-1on1-cleanup.yml`.
+**⚠ FIRST baseline (run 31390074850, gpt-4o-mini via server-fn) is INVALID / DISCARDED** — it bypassed the
+app's difficulty-driven model selection so it was NOT 1:1. Its "single-mention memory-drop → A1/A2" conclusion
+does NOT hold on the real agent. Do not cite its numbers.
+**VALID 1:1 baseline (real Finn, gpt-5.6, RAG, run 31413285202): DONE, STRONG.** pointer / count / status-recall
+(incl. "the 14th") / topic-return / long-range (T1→T19) / abstention / tool-honesty / faithfulness / commitment /
+no-repeat / consistency ALL PASS. **The memory-drop premise did NOT reproduce in 1:1** → A1/A2/A6 are NOT the
+1:1 problem; re-target to the broad matrix and build A1–A6 data-driven only where a cell proves weak.
+**Now building:** `qa-confirm-intent.yml` — BACKLOG→reach-out (free-WIP agent; GROOM before AUTOWORK) + close-the-
+loop (immediate / delayed / blocker), asserting F1 real tool fired · F2 pipeline grasp · F3 honest why. Corrected
+sequencing + exact steps live in `memory.md` ▶ RESUME HERE.
+**Then:** group multi-agent → cross-huddle recall → tool-chains → long-drift (40+). Nothing dropped (matrix tracks it).
 
 
 ### ✅ DEPLOYED live (both deploys succeeded 2026-08-06 ~16:40 UTC)
