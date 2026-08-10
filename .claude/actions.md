@@ -1860,10 +1860,10 @@ MODEL (luna-high ≈ terra-med at ~1/9 cost, measured round-3 A/B). Sol never au
   T3 "go"→`reasoning tier sol/high (you chose this)`, T4 "budget"→`terra/high`. The one fail (T6 manual
   sol) was an EMPTY turn (~36s deadline drop on a slow Sol deep memo), not a policy miss — test hardened
   (short-ask override + retry-on-empty) and re-run.
-- [TRACKED — user flagged] **Sol-high vs a strong-but-cheaper reasoning model** (e.g. o3 ~$2/$8, gpt-5.4
-  ~$2.50/$15) — user: "I actually think you missed sol high vs something older but strong/similar and
-  more cost effective." Build a round-4 A/B (add those arms to asks-catalog deep cases) before locking
-  Sol as the deep default; if a cheaper model ties Sol on deep, swap DIFF_RUNG[3-4].model.
+- [DONE — 2026-08-10, shipped a72bf9d, see ACT-huddle-20] **Sol-high vs a cheaper reasoning model A/B.**
+  Ran o3-mini/o3/terra-high/sol-high on 4 deep prompts, blind judge. o3 WON (80.5 vs sol 63.0) at ~1/6.6
+  the cost → swapped `DIFF_RUNG[3-4]` gpt-5.6-sol→o3. Findings: `docs/model-ab-findings.md`. Not a tie — o3
+  beat Sol outright, so the swap is a strict upgrade (quality AND cost).
 - [TRACKED] Settings-editable model-policy editor UI (DEFAULT_MODEL_POLICY is already the seed object;
   needs the Settings surface so the user can retune general/ceiling/override per experience).
 - [TRACKED] Thinking-dots UI surfacing of the chosen tier (a minimal breadcrumb ships via reasoning
@@ -1890,3 +1890,38 @@ call + barge-in between speakers). Scoped to 1:1 instead; groups/ceremonies unch
   SettingsSheet.tsx). LIVE UAT verify-1on1-streaming.mjs (run 31278335325): 3/3 — T1 reply text GREW across
   polls [4→107] no deferral; T2 toggle-off returns complete reply. Ceremonies/groups run scope:'group' →
   bypass the 1:1 gate + budget (unchanged by construction). 20 ACs from an independent AC writer.
+
+### ACT-huddle-20 — Model-selection convergence + ceiling fix + o3 deep rung (2026-08-10, shipped/deployed)
+User: "we broke my rule to extend what is already there and not hardcode parallel things diverging... the
+autoworker models also need to switch and be available in settings... the snapshot should have been updated
+to work with the model/tier updates instead of becoming stale and misleading." Then "you do it", "slice 2",
+"both then deploy it before ab testing", "those three plus terra high". Then "either the docs aren't clear
+or we're misaligned — I thought everyone starts on Luna and escalates to Terra, not Iris/Terry starting
+from Terra." Root-caused a real regression I introduced in Slice 2a. All work funnels through the ONE
+resolver system (`model-policy.ts` + `withAgentCeilings`) — extended, not duplicated.
+- [DONE — Slice 1, ba30f57] Auto-worker converged onto `resolveModel` (was `?? "gpt-4o-mini"`); stray
+  literals fixed (interactive base `gpt-4o`→5.6-luna, router default 5.5→5.6-luna); snapshot `model`
+  corrected + `modelNote` added (informational-only, runtime-overridden).
+- [DONE — Slice 2a 9ae7f51 / 2b a2192d8] Per-agent Model dropdown in Settings acts as the CEILING
+  (`withAgentCeilings` overlays it); model policy moved into config (agent-backends `modelPolicy`, threaded
+  via turn payload from HuddleView/MeetingBar/useVoiceCallRealtime); deploy dependency caching added.
+- [DONE — A/B 858ba8f/cb347de] Deep-ask cost/quality A/B (`model-ab.mjs` + `model-ab.yml`): o3=80.5 @
+  $0.022 dominates sol-high=63.0 @ $0.146 (6.6×), terra-high 59.8 @ $0.069, o3-mini 58.5 @ $0.019. First
+  run discarded (judge token-starved: effort:high+500 max → 2/4 unscored; answers truncated) → fixed
+  (judge effort:medium/2500+retry, answers 6000). GPT-5.6 prices CONFIRMED via Tavily (Sol 5/30, Terra
+  2/12, Luna 0.2/1.2, post July-30 cut) + wired into the harness PRICE map. Writeup: `docs/model-ab-findings.md`.
+- [DONE — ceiling FIX + o3 rung, shipped/deployed a72bf9d, deploy 31408114376 green] The Slice-2a
+  regression: `withAgentCeilings` reads each agent's SEEDED per-agent model as its ceiling, but
+  `defaultModelFor` seeded it LOW (terra for iris/terry/sam, luna for rest) → nullified
+  DEFAULT_MODEL_POLICY.ceiling, pinning finn+11 at Luna, Sol unreachable by anyone. Fix: derive
+  `defaultModelFor` from `DEFAULT_MODEL_POLICY.ceiling`; v6→v7 migration re-seeds existing configs only
+  where they still hold the old auto-seed (user picks preserved); Settings relabeled "Max model (ceiling)"
+  + helper; snapshot model/modelNote = ceiling (metadata only, instructions untouched). Deep rung
+  `DIFF_RUNG[3-4]` gpt-5.6-sol→o3 (modelRank treats o3 at Sol level so terra/luna ceilings still cap down;
+  needsConfirm keys on Sol so o3 has NO confirm gate; manual "sol" still reaches Sol). VERIFIED: tsc+vite
+  build clean; offline resolver proof all-PASS (start=Luna for all; sol-ceiling→o3 on deep; terra/luna
+  capped; no gate; old seed reproduces the Luna cap); o3 call-compatible (reasoning model, no temp/top_p,
+  priority gated out). NOT yet user-confirmed live — awaiting a browser re-test of deep-ask escalation.
+- [TRACKED] The disappearing-messages / identity-unification / conversation-object-1:1 / deploy-caching
+  work earlier this session is captured in memory.md (2026-08-10 entries); actions.md coverage of those is
+  a follow-up if the user wants per-item ACT entries.
