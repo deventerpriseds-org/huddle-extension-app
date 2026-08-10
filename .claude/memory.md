@@ -15,6 +15,18 @@ rung `gpt-5.6-sol`→`o3` (DIFF_RUNG[3-4]); o3 needs no confirm gate (needsConfi
 treats o3 at Sol level so terra/luna ceilings cap it down; manual "sol" still reaches Sol. NOT yet
 user-confirmed live.
 
+**UPDATE (c42dc18, merged 2c8d884, deploy 31414175110): user then said "give all agents the same cap of
+o3 initially and I will reduce that as needed myself in settings."** So the DEFAULT per-agent ceiling is
+now o3 FOR ALL (not the curated sol/terra/luna). `defaultModelFor`→"o3" for every agent; v7→v8 one-time
+migration flips all persisted per-agent models to o3 (fires once). o3 is now a first-class ceiling tier
+ABOVE Sol (rank 4, exact-match so o3-mini stays rank 1): tierOf('o3')='o3', CEIL_RANK.o3=4, CEIL_MODEL.o3=
+'o3', ModelPolicy.ceiling type gains 'o3'. Fixed an undefined-ceiling case (no cap → allow top rung, never
+resolve to undefined model). Added o3 + o3-mini to ROUTER_MODELS (Settings dropdown). DEFAULT_MODEL_POLICY.
+ceiling kept as reference/fallback (curated caps) with a note it's overridden by the o3 seed. Snapshot
+model→o3 all 15 + modelNote (metadata only). Verified: tsc+build clean, offline proof all-PASS (o3 cap for
+all, start=Luna, deep→o3 no gate, lowering an agent to terra/sol/luna caps correctly, empty-ceiling→o3).
+NOT yet user-confirmed live.
+
 **Ceiling bug I introduced in Slice 2a — REAL, found while answering "why does another session see
 iris/terry on terra, finn on luna?"** Runtime model IS start-Luna-escalate-by-difficulty for EVERY agent
 (`resolveByDifficulty`, `huddle.functions.ts:3503`, overwrites `usedModel`; DIFF_RUNG same for all:
