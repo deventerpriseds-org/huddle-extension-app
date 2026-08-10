@@ -72,16 +72,18 @@ export function HuddleApp() {
         cursor = Math.max(cursor, t.updated_ms || 0);
         // Re-add the user's own message for this turn (keyed by turnId, collapsing with the interactive
         // one), so a back-filled away/cross-device exchange shows the user's prompt — not just the
-        // agents' replies orphaned without it. See TurnUpdateDTO.userText / applyTurnStream.
-        const ut = (t.userText ?? "").trim();
+        // agents' replies orphaned without it. Guarded to genuine user turns (`u-<ms>`): an
+        // agent-initiated turn stores its internal directive in payload.text, which must NOT render as
+        // "You". See TurnUpdateDTO.userText / applyTurnStream.
+        const um = /^u-(\d+)$/.exec(t.id);
+        const ut = um ? (t.userText ?? "").trim() : "";
         if (ut && !useHuddleStore.getState().messages.some((m) => m.id === t.id)) {
-          const um = /^u-(\d+)$/.exec(t.id);
           upsert({
             id: t.id,
             huddleId: t.huddleId,
             author: { kind: "user" },
             text: ut,
-            ts: um ? Number(um[1]) : t.updated_ms || Date.now(),
+            ts: Number(um![1]),
           });
         }
         (t.replies ?? []).forEach((reply, i) => {

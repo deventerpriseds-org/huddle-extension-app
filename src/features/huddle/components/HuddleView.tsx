@@ -558,17 +558,21 @@ function Composer({ huddle }: { huddle: Huddle }) {
     // the agents' replies (fetched here) while the user's message vanished, leaving orphaned agent
     // messages ("only Terry's comments remain"). Upsert by turnId (the same id submit() uses) so it
     // collapses with the locally-added one — never a duplicate — and preserves its mentions/ts on update.
-    const ut = (userText ?? "").trim();
+    // Guard: only genuine user turns (`u-<ms>`, submit()'s format) carry a user message here. An
+    // agent-INITIATED turn (autowork/standup/groom/followup) stores its internal directive in the same
+    // payload field — surfacing it would render the directive as a "You" bubble. The server already nulls
+    // userText for those; this is defense-in-depth in case a stale server build still sends it.
+    const um = /^u-(\d+)$/.exec(turnId);
+    const ut = um ? (userText ?? "").trim() : "";
     if (ut) {
       const existing = state.messages.find((m) => m.id === turnId);
       if (!existing || existing.text !== ut) {
-        const m = /^u-(\d+)$/.exec(turnId);
         upsertAgent({
           id: turnId,
           huddleId: huddle.id,
           author: { kind: "user" },
           text: ut,
-          ts: existing?.ts ?? (m ? Number(m[1]) : Date.now()),
+          ts: existing?.ts ?? Number(um![1]),
         });
       }
     }

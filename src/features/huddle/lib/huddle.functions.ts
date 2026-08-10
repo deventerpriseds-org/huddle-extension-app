@@ -5650,7 +5650,12 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
         error: t.error,
         updated_ms: t.updated_ms,
         seq: t.seq,
-        userText: ((t.payload as { text?: string } | null)?.text ?? null) as string | null,
+        // ONLY for genuine user turns. submit() ids every user turn `u-<ms>`; every agent-INITIATED
+        // turn (autowork/standup/groom/followup) uses a semantic prefix and stores its INTERNAL
+        // DIRECTIVE in payload.text — surfacing that would render the directive as a "You" message.
+        userText: (/^u-\d+$/.test(t.id) ? ((t.payload as { text?: string } | null)?.text ?? null) : null) as
+          | string
+          | null,
         replies: (t.replies ?? []) as {
           agentId: AgentId;
           text: string;
@@ -5724,7 +5729,11 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
       id: t.id,
       huddleId: t.huddle_id,
       updated_ms: t.updated_ms,
-      userText: ((t.payload as { text?: string } | null)?.text ?? null) as string | null,
+      // Only genuine user turns (`u-<ms>`); agent-initiated turns store an internal directive in
+      // payload.text — see TurnUpdateDTO.userText. Never surface a directive as a "You" message.
+      userText: (/^u-\d+$/.test(t.id) ? ((t.payload as { text?: string } | null)?.text ?? null) : null) as
+        | string
+        | null,
       // A 'done' turn's authoritative replies live in `result.replies`; fall back to the streamed column.
       replies: ((t.result as { replies?: unknown } | null)?.replies ?? t.replies ?? []) as {
         agentId: AgentId;
