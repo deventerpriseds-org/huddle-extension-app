@@ -23,7 +23,15 @@ huddle-switch + ground-truth board/DB assertions. **User directive (2026-08-10):
 placeholders/"save for later", and run a BASELINE against the current system first to track post-fix deltas.**
 Discrepancy found: `get_calendar_events` is an ALIAS to prioritize, not Graph; real Graph read is
 `get_external_calendar_events` (`:3131-3146` / `:3279-3295`) — even the docs are out of sync.
-Status: plan doc committed to `claude/setup-skill-config-iat9za`; baseline harness build is the next step.
+Status: plan doc committed to `claude/setup-skill-config-iat9za`; baseline harness built (`e2e/baseline-20turn.mjs`
++ `baseline-20turn.yml`), merging to main to run.
+**MEMORY HYGIENE (user reminder 2026-08-10 — "test items can't be left behind clouding memory/task status"):**
+the baseline harness leaves NOTHING behind — `journey:{enabled:false}` (no board/task writes) + every agent
+`sharing:"readonly-shared"` so the rag write gate `(!resume && !isCeremonyTrigger && (anyShared||privateAgents>0))`
+is FALSE → NO rag_chunks/rag_triples written (ground-truthed at huddle.functions.ts:743-754; anyShared defaults
+"shared" so the DEFAULT would have polluted — this was the trap) + a dedicated test huddle id (`baseline-20turn`,
+not real `all-members`/`dm-*`) so durable turns don't muddy real threads. Cross-huddle recall needs a memory write
+to bridge, so it's DEFERRED to the journey-on Part 2 harness (which will have real cleanup), NOT in this zero-write baseline.
 
 ## Confirm-ask reach-outs now SPACED 45–90 min apart (config), not independent uniform slots (2026-08-07, deployed main c07a02d, verifier PASS, LIVE-PROVEN)
 LIVE PROOF (2026-08-07): reset 24 active tasks→BACKLOG, groomed → 3 fresh confirm_ask_at armed at 11:54/12:40/13:58 ET, gaps **46 & 78 min** (both ∈[45,90]), all inside the 9–18 window. Behaves exactly as asked.
