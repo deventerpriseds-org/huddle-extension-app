@@ -57,6 +57,26 @@ button appear and then vanish again with no code change in between — pure depl
    needing to coordinate with whichever other session is also running — no chat/locking needed, git
    history already serializes it as long as everyone actually merges into `main` before deploying.
 
+## Fetch-first before ANY "is it deployed/done/built/live?" answer (hard rule — stale-branch answers cause massive rework)
+
+A question that asks to CONFIRM state — "is it deployed / done / built / live / merged / shipped / does X
+exist / did we do Y" — is a **`git fetch origin` trigger, BEFORE the first answer**, not after being
+challenged. Answer from **`origin/main` (or the deployed SHA / the live system), NEVER from the local
+working tree.** With multiple parallel sessions AND container restores that silently rewind the local
+checkout, the local tree is stale by default — a status answer sourced from it is invalid.
+- **Concretely:** `git fetch origin && git log --oneline -1 origin/main`; for "is it deployed?" also read
+  the latest `deploy-swa.yml` run's `head_sha`/`conclusion` (the deployed SHA is the truth, not `HEAD`).
+  For "does feature X exist?" grep **`git show origin/main:<file>`**, not the local file.
+- **Say you fetched** ("as of origin/main <sha>…") so the answer is auditable.
+- **Then re-sync** if local is behind (`git reset --hard origin/main`, saving genuine local work first) so
+  the next edit isn't built on a stale base.
+  *(2026-08-10: asked "confirm the conversation-objects in 1:1 were deployed," the agent answered "no, it's
+  an un-built scaffold — new work" from its STALE local branch. In fact another session had already built
+  the OpenAI Conversations-object runtime (`rag/conversation-store.server.ts`, `chat.agent_conversations`),
+  made `memoryMode:"conversation"` the DEFAULT, and shipped it; the only remaining bit was a one-line client
+  plumbing fix. The wrong answer directly contradicted the other session and would have triggered rebuilding
+  already-shipped work. A `git fetch` before answering would have caught it in one command.)*
+
 ## Agent prompts are ADDITIVE-ONLY (hard rule)
 
 The agents' instruction content is a canonical asset. Do **not** replace, thin, shorten,
