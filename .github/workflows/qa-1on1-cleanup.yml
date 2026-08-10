@@ -1,0 +1,113 @@
+name: QA 1on1 cleanup (delete a test run's memory + durable turns)
+
+# Deletes EXACTLY the rows a 1:1 Playwright QA run wrote — no more. Keyed on a unique run MARKER that
+# every test user-message carries, scoped to the test's dm-<agent> huddle. Removes the memory chunks
+# (public.rag_chunks) AND the durable turns (chat.pending_turns) so nothing is left clouding memory or
+# the real DM thread, then re-queries to PROVE zero remain. Same firewall+psql pattern as
+# azure-pg-query.yml (SP login → open runner IP → psql → close). Dispatch-only.
+on:
+  workflow_dispatch:
+    inputs:
+      huddle:
+        description: "The dm huddle id the run used, e.g. dm-finn-reid"
+        required: true
+      marker:
+        description: "Unique run marker carried in every test message, e.g. qa-7f3a9c"
+        required: true
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
+             "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}",
+             "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+             "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
+
+      - name: Resolve connection string (mirrors azure-pg-query)
+        env:
+          FULL_URL: ${{ secrets.AZURE_PG_URL }}
+          PG_PW_1: ${{ secrets.AZURE_ADMIN_PW }}
+          PG_PW_2: ${{ secrets.AZURE_PG_PASSWORD }}
+          PG_PW_3: ${{ secrets.AZURE_POSTGRES_PASSWORD }}
+          PG_PW_4: ${{ secrets.AZURE_PG_ADMIN_PASSWORD }}
+          PG_PW_5: ${{ secrets.PG_ADMIN_PASSWORD }}
+          PG_PW_6: ${{ secrets.POSTGRES_PASSWORD }}
+          PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER || 'eds-postgresql' }}
+          PG_DB_OVERRIDE: ${{ secrets.AZURE_PG_DB || 'RAG_AI_Agents' }}
+        run: |
+          set -euo pipefail
+          if [ -n "${FULL_URL}" ]; then
+            echo "::add-mask::${FULL_URL}"
+            echo "AZURE_PG_URL_RESOLVED=${FULL_URL}" >> "$GITHUB_ENV"
+            HOST=$(python3 -c 'import sys,urllib.parse as u;print(u.urlparse(sys.argv[1]).hostname or "")' "$FULL_URL")
+            SRV=$(echo "$HOST" | cut -d. -f1)
+            RG=$(az postgres flexible-server list -o json | python3 -c 'import sys,json;xs=json.load(sys.stdin);s=sys.argv[1];print(next((x["resourceGroup"] for x in xs if x.get("name")==s), ""))' "$SRV")
+            echo "PG_RG=$RG" >> "$GITHUB_ENV"; echo "PG_SRV=$SRV" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          SERVERS=$(az postgres flexible-server list -o json)
+          read -r SRV RG HOST ADMIN < <(python3 - "$SERVERS" "${PG_SERVER_OVERRIDE:-}" <<'PY'
+          import sys, json
+          servers = json.loads(sys.argv[1] or "[]"); override = sys.argv[2]
+          if not servers: sys.stderr.write("No Azure PostgreSQL flexible server found.\n"); sys.exit(3)
+          s = next((x for x in servers if x.get("name") == override), servers[0]) if override else servers[0]
+          print(s["name"], s["resourceGroup"], s["fullyQualifiedDomainName"], s.get("administratorLogin", "pgadmin"))
+          PY
+          )
+          DB="${PG_DB_OVERRIDE:-RAG_AI_Agents}"
+          PW=""
+          for c in "$PG_PW_1" "$PG_PW_2" "$PG_PW_3" "$PG_PW_4" "$PG_PW_5" "$PG_PW_6"; do [ -n "$c" ] && { PW="$c"; break; }; done
+          [ -z "$PW" ] && { echo "::error::No Postgres admin-password secret set."; exit 1; }
+          echo "::add-mask::$PW"
+          EADMIN=$(python3 -c 'import sys,urllib.parse as u; print(u.quote(sys.argv[1], safe=""))' "$ADMIN")
+          EPW=$(python3 -c 'import sys,urllib.parse as u; print(u.quote(sys.argv[1], safe=""))' "$PW")
+          URL="postgresql://${EADMIN}:${EPW}@${HOST}:5432/${DB}?sslmode=require"
+          echo "::add-mask::$URL"
+          echo "AZURE_PG_URL_RESOLVED=${URL}" >> "$GITHUB_ENV"
+          echo "PG_RG=$RG" >> "$GITHUB_ENV"; echo "PG_SRV=$SRV" >> "$GITHUB_ENV"
+
+      - name: Allow this runner through the DB firewall
+        run: |
+          set -euo pipefail
+          IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+          RULE="qaclean-${IP//./-}"
+          echo "FW_RULE=$RULE" >> "$GITHUB_ENV"
+          az postgres flexible-server firewall-rule create -g "$PG_RG" -s "$PG_SRV" \
+            --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 \
+            && echo "Opened firewall rule $RULE for $IP." || echo "firewall-rule create skipped (existing rules)."
+          sleep 8
+
+      - name: Delete this run's rows + verify zero
+        env:
+          HUD: ${{ github.event.inputs.huddle }}
+          MARK: ${{ github.event.inputs.marker }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          SRC="huddle:${HUD}"
+          echo "Deleting rows for huddle=${HUD} marker=${MARK}"
+          # Guard: refuse to run with an empty/too-broad marker (never mass-delete).
+          if [ -z "${MARK}" ] || [ "${#MARK}" -lt 4 ]; then echo "::error::marker too short — refusing"; exit 1; fi
+          echo "----- BEFORE -----"
+          psql "$AZURE_PG_URL_RESOLVED" -v ON_ERROR_STOP=1 --pset pager=off \
+            -c "SELECT 'rag_chunks' t, count(*) FROM public.rag_chunks WHERE source='${SRC}' AND text LIKE '%${MARK}%'
+                UNION ALL SELECT 'pending_turns', count(*) FROM chat.pending_turns WHERE huddle_id='${HUD}' AND payload->>'text' LIKE '%${MARK}%';"
+          echo "----- DELETE -----"
+          psql "$AZURE_PG_URL_RESOLVED" -v ON_ERROR_STOP=1 --pset pager=off \
+            -c "DELETE FROM public.rag_chunks WHERE source='${SRC}' AND text LIKE '%${MARK}%';" \
+            -c "DELETE FROM chat.pending_turns WHERE huddle_id='${HUD}' AND payload->>'text' LIKE '%${MARK}%';"
+          echo "----- AFTER (must be 0/0) -----"
+          psql "$AZURE_PG_URL_RESOLVED" -v ON_ERROR_STOP=1 --pset pager=off \
+            -c "SELECT 'rag_chunks_left' t, count(*) FROM public.rag_chunks WHERE source='${SRC}' AND text LIKE '%${MARK}%'
+                UNION ALL SELECT 'pending_turns_left', count(*) FROM chat.pending_turns WHERE huddle_id='${HUD}' AND payload->>'text' LIKE '%${MARK}%';"
+
+      - name: Remove the runner firewall rule
+        if: always() && env.FW_RULE != ''
+        run: |
+          az postgres flexible-server firewall-rule delete -g "$PG_RG" -s "$PG_SRV" \
+            --rule-name "$FW_RULE" --yes --only-show-errors >/dev/null 2>&1 && echo "Removed $FW_RULE." || echo "Cleanup skipped."
