@@ -127,6 +127,10 @@ export function useVoiceCallRealtime(): VoiceCallRealtimeController {
             }
           : undefined,
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        // Forward the short-term memory mechanism (Settings → Memory) so a 1:1 VOICE turn gets the same
+        // OpenAI Conversations-object continuity as text — the server defaults to "reconstruction" when
+        // absent, which would silently no-op "conversation" mode here too.
+        memoryMode: backendsCfg.memoryMode,
       };
 
       // Mirrors HuddleView.tsx's applyTurnStream: `replies` is always the FULL cumulative list for
