@@ -34,7 +34,9 @@ const PROMPTS = [
 ];
 
 async function callModel(cfg, prompt) {
-  const body = { model: cfg.model, input: prompt, reasoning: { effort: cfg.effort }, max_output_tokens: 4000 };
+  // 6000 so the verbose 5.6 tiers (terra/sol) finish instead of truncating at the ceiling — a cut-off
+  // answer reads as "less complete" to the judge and unfairly penalizes exactly the configs under test.
+  const body = { model: cfg.model, input: prompt, reasoning: { effort: cfg.effort }, max_output_tokens: 6000 };
   const t0 = Date.now();
   const r = await fetch(API, { method: "POST", headers: H, body: JSON.stringify(body) });
   const ms = Date.now() - t0;
@@ -70,21 +72,28 @@ async function judge(prompt, answers /* [{key,text}] */) {
     `You are a demanding executive reviewer. For the QUESTION below, score each ANSWER 0-100 on rigor, ` +
     `completeness, structure, and actionability (a top consultant's bar). Return STRICT JSON only: ` +
     `{"A":n,"B":n,"C":n,"D":n} with no prose.\n\nQUESTION:\n${prompt}\n\n${block}`;
-  const r = await fetch(API, {
-    method: "POST",
-    headers: H,
-    body: JSON.stringify({ model: "gpt-5.6-sol", input: jprompt, reasoning: { effort: "high" }, max_output_tokens: 500 }),
-  });
-  const txt = await r.text();
-  let scoreByLabel = {};
-  try {
-    const j = JSON.parse(txt);
-    let out = j.output_text;
-    if (!out && Array.isArray(j.output))
-      out = j.output.flatMap((o) => (o.content ?? []).filter((c) => c.type === "output_text").map((c) => c.text)).join("");
-    const m = out.match(/\{[^}]*\}/);
-    if (m) scoreByLabel = JSON.parse(m[0]);
-  } catch { /* leave empty */ }
+  // The JSON verdict is tiny, but a reasoning judge spends most of its output budget on reasoning tokens
+  // BEFORE emitting any text. effort:"high" + max_output_tokens:500 starved the emit → empty output →
+  // unparseable → "?" scores (killed 2/4 prompts last run). effort:"medium" + a 2500 ceiling leaves room
+  // for the JSON after reasoning; one retry covers a stray truncation.
+  async function askJudge() {
+    const r = await fetch(API, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ model: "gpt-5.6-sol", input: jprompt, reasoning: { effort: "medium" }, max_output_tokens: 2500 }),
+    });
+    const txt = await r.text();
+    try {
+      const j = JSON.parse(txt);
+      let out = j.output_text;
+      if (!out && Array.isArray(j.output))
+        out = j.output.flatMap((o) => (o.content ?? []).filter((c) => c.type === "output_text").map((c) => c.text)).join("");
+      const m = (out ?? "").match(/\{[^}]*\}/);
+      if (m) return JSON.parse(m[0]);
+    } catch { /* fall through to retry */ }
+    return null;
+  }
+  let scoreByLabel = (await askJudge()) ?? (await askJudge()) ?? {};
   const byKey = {};
   for (const a of labeled) byKey[a.key] = Number(scoreByLabel[a.label] ?? NaN);
   return byKey;
