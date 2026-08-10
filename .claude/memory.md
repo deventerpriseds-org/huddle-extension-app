@@ -1,5 +1,29 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-08-07
+Last updated: 2026-08-10
+
+## Long-memory worker-grade conversationalist — RESEARCH + GAP ANALYSIS DONE, full A1–A6 build authorized (2026-08-10)
+User: agents are incoherent/untrustworthy — forget what they said two turns ago, fabricate instead of
+surfacing issues, unaware of backend tools/preconditions, can't narrate why something failed, drift over
+a long conversation. Wants a real 20-turn worker conversation (pointer words "what was in that / how many
+/ is it finished", topic-switch-then-return, no-repeat, AC/DoD/reach-out) set up like a novel-writing agent
+(consistent, drift = catastrophic). Three code maps + literature review → plan `docs/plan-long-memory-conversationalist.md`.
+**Ground-truth root cause (architectural, not prompt):** cross-conversation memory embeds ONLY the user's
+messages — agent replies are NEVER persisted (`huddle.functions.ts:761`, both writeChunk sites `:773/:785`
+use `data.text`) — so an agent's own words survive ONLY inside the hard 14-msg per-huddle window (`:1889-1898`);
+scroll past it in a multi-agent 20-turn convo and it's unrecoverable (auto-retrieval never wrote agent text;
+bare pointer query won't clear the cosine≥0.3 floor `:1839`). No dialogue-state/referent object, no running
+summary, no consolidation (writeChunk = bare INSERT `rag/azure-pg.server.ts:412`, pure-cosine rank `:466`).
+Honesty is prompt-only (`HOUSE_STYLE:219-221`) with NO claim-vs-result reconciliation; calendar 403 has no
+`needsConsent` (only OneDrive mirror does). Harness (`conversational-quality.mjs`) is 8 separate ≤4-turn
+chats, journey-disabled, never asserts board/DB; confirm-intent/DoD/reach-out untested.
+**Plan:** A1 persist agent replies · A2 per-huddle running ledger (story-bible) injected at `:1875`/`:2525`
+· A3 consolidation+recency/importance rank+reflection triples · A4 claim-vs-result guard · A5 capability+
+precondition registry (needsConsent) · A6 abstention. B: extend the harness into ONE 20-turn thread with
+huddle-switch + ground-truth board/DB assertions. **User directive (2026-08-10): build FULL A1–A6, no stubs/
+placeholders/"save for later", and run a BASELINE against the current system first to track post-fix deltas.**
+Discrepancy found: `get_calendar_events` is an ALIAS to prioritize, not Graph; real Graph read is
+`get_external_calendar_events` (`:3131-3146` / `:3279-3295`) — even the docs are out of sync.
+Status: plan doc committed to `claude/setup-skill-config-iat9za`; baseline harness build is the next step.
 
 ## Confirm-ask reach-outs now SPACED 45–90 min apart (config), not independent uniform slots (2026-08-07, deployed main c07a02d, verifier PASS, LIVE-PROVEN)
 LIVE PROOF (2026-08-07): reset 24 active tasks→BACKLOG, groomed → 3 fresh confirm_ask_at armed at 11:54/12:40/13:58 ET, gaps **46 & 78 min** (both ∈[45,90]), all inside the 9–18 window. Behaves exactly as asked.

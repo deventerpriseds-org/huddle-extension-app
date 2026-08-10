@@ -3,6 +3,19 @@ Last updated: 2026-08-06 (three fixes live + Option-1 Postgres-MCP deploy workfl
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
+### 🔨 ACT-huddle-27: Long-memory worker-grade conversationalist (A1–A6 + 20-turn harness)
+**Requested:** 2026-08-10 — agents forget across turns, fabricate, unaware of tools/preconditions, drift.
+Want a real 20-turn worker conversation (pointer words, "how many / is it finished", topic-switch-return,
+no-repeat, AC/DoD/reach-out), novel-writer-style consistency. **User directive:** build FULL A1–A6 with NO
+stubs/placeholders, and run a BASELINE first to track post-fix improvements.
+**Done so far:** deep research + 3 code maps + gap analysis → plan `docs/plan-long-memory-conversationalist.md`
+(committed to `claude/setup-skill-config-iat9za`).
+**Open / next:** (1) build the 20-turn harness (single-thread driver + huddle-switch + ground-truth board/DB
+assertions); (2) run BASELINE vs current prod, capture scores; (3) implement A1→A6 for real, verify each with
+the verifier subagent, deploy, re-run harness, track deltas. NOTHING marked done/fixed until real + verified +
+deployed + confirmed. Evidence link: (PR pending).
+
+
 ### ✅ DEPLOYED live (both deploys succeeded 2026-08-06 ~16:40 UTC)
 - **ACT-huddle-23 — confirm-ask fan-out** (2 windows: business 9–18 + evening 20–22, from config; no 9am dump;
   straggler re-fan). Huddle commit `da648da` → main `fd731ae` → deploy-swa run 31119646652 **success**.
