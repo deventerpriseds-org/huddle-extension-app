@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { z } from "zod";
 import { AGENTS, type AgentId } from "../data/agents";
 import { DEFAULT_ROUTER_MODEL, type RouterBackend } from "./model-catalog";
+import { DEFAULT_MODEL_POLICY, type ModelPolicy } from "./model-policy";
 import assistantIds from "../data/assistant-ids.json";
 
 // ------- Schema (used to validate uploaded config JSON) -------
@@ -108,6 +109,11 @@ export const BackendsConfigSchema = z.object({
   streamReplies: z
     .object({ oneOnOne: z.boolean(), group: z.boolean() })
     .default({ oneOnOne: true, group: false }),
+  // Difficulty/task-type → model tier policy + per-agent ceilings. DATA (not a code constant), seeded
+  // from DEFAULT_MODEL_POLICY, so the ladder + ceilings are user-tunable. The per-agent Model dropdown
+  // also feeds a derived ceiling on top at runtime (withAgentCeilings). Threaded to the resolver via the
+  // turn payload. Permissive schema: it's trusted local config changed only through typed actions.
+  modelPolicy: z.custom<ModelPolicy>().default(() => DEFAULT_MODEL_POLICY),
 });
 
 export type AgentBackend = z.infer<typeof AgentBackendSchema>;
@@ -176,6 +182,7 @@ export function defaultBackendsConfig(): BackendsConfig {
     ceremonyEngine: "current",
     memoryMode: "conversation",
     streamReplies: { oneOnOne: true, group: false },
+    modelPolicy: DEFAULT_MODEL_POLICY,
   };
 }
 
@@ -188,6 +195,7 @@ interface BackendsState {
   setCeremonyEngine: (engine: CeremonyEngine) => void;
   setMemoryMode: (mode: MemoryMode) => void;
   setStreamReplies: (patch: Partial<{ oneOnOne: boolean; group: boolean }>) => void;
+  setModelPolicy: (policy: ModelPolicy) => void;
   replaceConfig: (cfg: BackendsConfig) => void;
   resetToDefaults: () => void;
 }
@@ -221,6 +229,8 @@ export const useBackendsStore = create<BackendsState>()(
             },
           },
         })),
+      setModelPolicy: (policy: ModelPolicy) =>
+        set((s) => ({ config: { ...s.config, modelPolicy: policy } })),
       replaceConfig: (cfg) => set({ config: cfg }),
       resetToDefaults: () => set({ config: defaultBackendsConfig() }),
     }),
@@ -269,6 +279,9 @@ export const useBackendsStore = create<BackendsState>()(
           // v5→v6: seed the reply-streaming toggles (1:1 on, group off). Preserve a persisted choice
           // thereafter. Safe: streaming falls back to a normal call per-turn on any error.
           streamReplies: p.config.streamReplies ?? current.config.streamReplies,
+          // Additive: a config saved before this field existed seeds DEFAULT_MODEL_POLICY (via
+          // current.config.modelPolicy); a persisted choice is preserved thereafter.
+          modelPolicy: p.config.modelPolicy ?? current.config.modelPolicy,
         };
         return { ...current, config: merged };
       },

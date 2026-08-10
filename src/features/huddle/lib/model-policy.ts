@@ -1,9 +1,11 @@
-// PROTOTYPE — task-type → model/effort policy (NOT yet wired into the turn path or Settings).
+// Task-type/difficulty → model/effort policy. WIRED into the turn path (huddle.functions.ts resolves
+// every interactive turn AND the auto-worker through resolveByDifficulty/resolveModel) and into config
+// (agent-backends `modelPolicy`, seeded from DEFAULT_MODEL_POLICY, threaded via the turn payload).
 //
 // Single source of "how hard is this ask, and what brain does it deserve". Mirrors lib/capabilities.ts
-// (one module owns a cross-cutting decision, read everywhere). The POLICY is DATA (DEFAULT_MODEL_POLICY),
-// meant to move into the Settings-editable backends config so the user can retune per experience —
-// nothing here is a hardcoded literal the user can't change.
+// (one module owns a cross-cutting decision, read everywhere). The POLICY is DATA (DEFAULT_MODEL_POLICY
+// is only the SEED for the config) — the per-agent ceiling is set from the Settings Model dropdown via
+// withAgentCeilings, so nothing here is a hardcoded literal the user can't change.
 //
 // Two-layer classification, matching the existing router pattern:
 //   • deterministic keyword layer (this file) = fast path + fallback,
@@ -121,6 +123,31 @@ function modelRank(model: string): number {
   if (model.includes("sol")) return 3;
   if (model.includes("terra")) return 2;
   return 1;
+}
+
+/** The 5.6 tier a model id belongs to, or undefined for a non-5.6 model (which imposes no ceiling). */
+export function tierOf(model: string | undefined | null): "luna" | "terra" | "sol" | undefined {
+  if (!model || !/gpt-5\.6-(luna|terra|sol)/.test(model)) return undefined;
+  return model.includes("sol") ? "sol" : model.includes("terra") ? "terra" : "luna";
+}
+
+/**
+ * Overlay per-agent ceilings derived from each agent's Settings-chosen model onto a policy — so the
+ * per-agent Model dropdown IS the agent's ceiling (the resolver never exceeds the tier the user picked;
+ * difficulty only moves it DOWN from there). This makes the one visible per-agent control the single
+ * source of an agent's cap — no separate hidden ceiling. A non-5.6 pick imposes no derived ceiling, so
+ * the policy's own ceiling still applies. Returns a new policy; never mutates the input.
+ */
+export function withAgentCeilings(
+  policy: ModelPolicy,
+  agentModels: Partial<Record<AgentId, string | undefined>>,
+): ModelPolicy {
+  const ceiling = { ...(policy.ceiling ?? {}) } as Partial<Record<AgentId, "luna" | "terra" | "sol">>;
+  for (const [aid, model] of Object.entries(agentModels)) {
+    const t = tierOf(model);
+    if (t) ceiling[aid as AgentId] = t;
+  }
+  return { ...policy, ceiling };
 }
 function capToCeiling(choice: TierChoice, ceiling?: "luna" | "terra" | "sol"): TierChoice {
   if (!ceiling) return choice;

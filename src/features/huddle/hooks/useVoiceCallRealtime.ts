@@ -131,6 +131,7 @@ export function useVoiceCallRealtime(): VoiceCallRealtimeController {
         // OpenAI Conversations-object continuity as text — the server defaults to "reconstruction" when
         // absent, which would silently no-op "conversation" mode here too.
         memoryMode: backendsCfg.memoryMode,
+        modelPolicy: backendsCfg.modelPolicy,
       };
 
       // Mirrors HuddleView.tsx's applyTurnStream: `replies` is always the FULL cumulative list for

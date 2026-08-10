@@ -1045,6 +1045,7 @@ function MeetingRoom({
             ceremonyRunId: runIdRef.current ?? undefined, // tag tool calls to this run for debug tracking
             router: { ...cfg.router, interjections: false, soloOnCoverage: true },
             memoryMode: cfg.memoryMode, // short-term memory mechanism (Settings → Memory)
+            modelPolicy: cfg.modelPolicy,
             agents: cfg.agents,
             caller: callerRef.current,
             timeZone: tzRef.current,
@@ -1708,6 +1709,7 @@ function MeetingRoom({
           history: [],
           router: { ...cfg.router, ceremonyMode: "round-robin" as const },
           memoryMode: cfg.memoryMode, // short-term memory mechanism (Settings → Memory)
+            modelPolicy: cfg.modelPolicy,
           agents: cfg.agents,
           caller,
           timeZone: tz,
