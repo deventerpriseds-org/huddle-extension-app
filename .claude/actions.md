@@ -1931,6 +1931,7 @@ resolver system (`model-policy.ts` + `withAgentCeilings`) — extended, not dupl
   build clean; offline resolver proof all-PASS (start=Luna for all; sol-ceiling→o3 on deep; terra/luna
   capped; no gate; old seed reproduces the Luna cap); o3 call-compatible (reasoning model, no temp/top_p,
   priority gated out). NOT yet user-confirmed live — awaiting a browser re-test of deep-ask escalation.
+- [DONE — o3-cap-for-all, shipped c42dc18, merged 2c8d884, deploy 31414175110] User: "give all agents the same cap of o3 initially and I will reduce that as needed myself in settings." Default per-agent ceiling is now o3 for EVERY agent (was curated sol/terra/luna). agent-backends defaultModelFor->'o3'; v7->v8 one-time migration flips all persisted models to o3. o3 is a first-class ceiling tier above Sol (rank 4, exact so o3-mini stays rank 1); tierOf/CEIL_RANK/CEIL_MODEL/modelRank + ceiling type extended; fixed undefined-ceiling->undefined-model bug. o3+o3-mini added to ROUTER_MODELS dropdown. Snapshot model->o3 all 15 (metadata only). tsc+build clean; offline proof all-PASS (cap=o3 for all, start=Luna, deep->o3 no gate, lowering to terra/sol/luna caps correctly). NOT yet user-confirmed live.
 - [TRACKED] The disappearing-messages / identity-unification / conversation-object-1:1 / deploy-caching
   work earlier this session is captured in memory.md (2026-08-10 entries); actions.md coverage of those is
   a follow-up if the user wants per-item ACT entries.
