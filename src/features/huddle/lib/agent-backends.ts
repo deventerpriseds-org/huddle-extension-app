@@ -94,7 +94,7 @@ export const MEMORY_MODES = ["reconstruction", "responses-chain", "conversation"
 export type MemoryMode = (typeof MEMORY_MODES)[number];
 
 export const BackendsConfigSchema = z.object({
-  version: z.number().default(6),
+  version: z.number().default(7),
   router: RouterConfigSchema,
   agents: z.record(z.string(), AgentBackendSchema),
   ceremonyEngine: z.enum(CEREMONY_ENGINES).default("current"),
@@ -127,12 +127,25 @@ export type BackendsConfig = z.infer<typeof BackendsConfigSchema>;
 
 export const ASSISTANT_IDS = assistantIds as Partial<Record<AgentId, string>>;
 
-// GPT-5.6 migration (off gpt-4o). Terra (balanced, higher quality) for the highest-judgment / most
-// user-facing agents; Luna (fast, cheap, strong tool-calling) for everyone else. Per-agent so it's
-// tunable in Settings → Agents; overridable per user. Any agent not listed defaults to Luna.
-const TERRA_AGENTS = new Set<AgentId>(["iris-chase", "terry-locke", "sam-trent"]);
+// The per-agent Model setting is the agent's CEILING (the most capable tier it may auto-escalate to;
+// `withAgentCeilings` reads it as the cap, and every turn STARTS on Luna and climbs by difficulty toward
+// it — see model-policy.ts). So the default MUST be each agent's policy ceiling, NOT a low "starting"
+// model — seeding it low silently caps escalation (the Slice-2a regression: a luna seed pinned an agent
+// at Luna and made Sol unreachable). Derive it from the single source of truth, DEFAULT_MODEL_POLICY.ceiling.
+const CEIL_TO_MODEL: Record<"luna" | "terra" | "sol", string> = {
+  luna: "gpt-5.6-luna",
+  terra: "gpt-5.6-terra",
+  sol: "gpt-5.6-sol",
+};
 function defaultModelFor(id: AgentId): string {
-  return TERRA_AGENTS.has(id) ? "gpt-5.6-terra" : "gpt-5.6-luna";
+  return CEIL_TO_MODEL[DEFAULT_MODEL_POLICY.ceiling?.[id] ?? "terra"];
+}
+// The PRE-fix seed (v6 and earlier): Terra for iris/terry/sam, Luna for everyone else. Used ONLY by the
+// v6→v7 migration to recognize an auto-seeded value and re-seed it to the correct ceiling, while leaving
+// any value the user actually chose in Settings untouched.
+const OLD_TERRA_AGENTS = new Set<AgentId>(["iris-chase", "terry-locke", "sam-trent"]);
+function oldDefaultModelFor(id: AgentId): string {
+  return OLD_TERRA_AGENTS.has(id) ? "gpt-5.6-terra" : "gpt-5.6-luna";
 }
 
 function defaultAgents(): Record<AgentId, AgentBackend> {
@@ -168,7 +181,7 @@ function defaultAgents(): Record<AgentId, AgentBackend> {
 
 export function defaultBackendsConfig(): BackendsConfig {
   return {
-    version: 6,
+    version: 7,
     router: {
       backend: "openai",
       model: DEFAULT_ROUTER_MODEL.openai,
@@ -258,10 +271,18 @@ export const useBackendsStore = create<BackendsState>()(
           if (persistedVersion < 3) {
             combined.journey = { enabled: true };
           }
+          // v6 → v7 migration: the per-agent Model is now the CEILING and must default to each agent's
+          // policy ceiling. The old auto-seed (Terra for iris/terry/sam, Luna for everyone else) capped
+          // escalation — Luna-seeded agents were pinned at Luna and Sol was unreachable. Re-seed to the
+          // correct ceiling ONLY when the persisted value still equals the old auto-seed (i.e. the user
+          // never changed it); a value the user actually chose in Settings is preserved.
+          if (persistedVersion < 7 && combined.model === oldDefaultModelFor(id as AgentId)) {
+            combined.model = defaultModelFor(id as AgentId);
+          }
           mergedAgents[id] = combined;
         }
         const merged: BackendsConfig = {
-          version: 6,
+          version: 7,
           router: { ...current.config.router, ...p.config.router },
           agents: mergedAgents as Record<AgentId, AgentBackend>,
           // Preserve a persisted choice; a config saved before this field existed defaults to "current"

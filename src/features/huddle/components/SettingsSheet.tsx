@@ -395,13 +395,13 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                       }, {});
                       return (
                         <div>
-                          <Label className="text-xs">Model</Label>
+                          <Label className="text-xs">Max model (ceiling)</Label>
                           <Select
                             value={cfg.model ?? ""}
                             onValueChange={(v) => setAgent(a.id, { model: v })}
                           >
                             <SelectTrigger className="h-8">
-                              <SelectValue placeholder="Pick a model" />
+                              <SelectValue placeholder="Pick a ceiling" />
                             </SelectTrigger>
                             <SelectContent>
                               {Object.entries(groups).map(([group, ms]) => (
@@ -417,9 +417,9 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                             </SelectContent>
                           </Select>
                           <p className="text-xs text-muted-foreground pt-1">
-                            This agent's base model. The runtime may raise or lower it per turn via the
-                            difficulty/task-type resolver, capped by the agent's ceiling in the model
-                            policy (model-policy.ts).
+                            The most capable tier this agent may reach. Every turn STARTS on Luna and
+                            climbs by difficulty only up to this cap — so this raises or lowers the
+                            ceiling, it is not a fixed per-turn model. Deep asks route to o3.
                           </p>
                         </div>
                       );

@@ -3515,9 +3515,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           if (chosenModel) {
             usedModel = chosenModel;
             personaReasoningEffort = chosenEffort;
-            // Minimal tier surfacing (first cut of the "thinking dots"): only note ESCALATED tiers so
-            // routine Luna turns stay silent. Rides the existing reasoning-summary channel to the UI.
-            if (chosenModel.includes("sol") || deepManual) {
+            // Minimal tier surfacing (first cut of the "thinking dots"): only note ESCALATED tiers (o3 =
+            // the deep rung, or Sol via manual) so routine Luna turns stay silent. Rides the existing
+            // reasoning-summary channel to the UI.
+            if (chosenModel === "o3" || chosenModel.includes("sol") || deepManual) {
               reasoningSummaries.push(
                 `${winner.name}: reasoning tier ${chosenModel.replace("gpt-5.6-", "")}/${chosenEffort}${deepManual ? " (you chose this)" : ""}`,
               );

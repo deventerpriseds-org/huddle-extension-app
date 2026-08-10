@@ -120,7 +120,10 @@ export function classifyTaskType(text: string): TaskType {
 
 const CEIL_RANK: Record<string, number> = { luna: 1, terra: 2, sol: 3 };
 function modelRank(model: string): number {
-  if (model.includes("sol")) return 3;
+  // o3 sits at the TOP rung (Sol level): it beat Sol-high on deep asks at ~1/6.6 the cost
+  // (docs/model-ab-findings.md), so a sol-ceiling agent may use it while terra/luna ceilings cap it DOWN
+  // to their 5.6 tier. Exact match so "o3-mini" (a cheaper, weaker model) never inherits the top rank.
+  if (model === "o3" || model.includes("sol")) return 3;
   if (model.includes("terra")) return 2;
   return 1;
 }
@@ -159,8 +162,10 @@ function capToCeiling(choice: TierChoice, ceiling?: "luna" | "terra" | "sol"): T
 }
 
 // ---- Difficulty-driven resolution (the wired path) ----
-// Difficulty 1-4 → rung. Deep (3-4) defaults to Sol-high but flags needsConfirm so the runtime can gate
-// the spend (inescapable confirm offering the Terra-high budget). Manual override skips the gate.
+// Difficulty 1-4 → rung. Deep (3-4) routes to o3-high: per docs/model-ab-findings.md (2026-08-10) it beat
+// Sol-high on deep asks (80.5 vs 63.0) at ~1/6.6 the cost, so it needs NO spend gate — needsConfirm keys on
+// Sol, which o3 isn't, so the confirm-gate is naturally dormant. Capped to the agent's ceiling (o3 ranks at
+// Sol level, so terra/luna ceilings drop it to their 5.6 tier). A manual "sol" override still reaches Sol-high.
 export interface DifficultyResolved {
   model: string;
   effort: Effort;
@@ -171,8 +176,8 @@ export interface DifficultyResolved {
 const DIFF_RUNG: Record<number, { model: string; effort: Effort; deep?: boolean }> = {
   1: { model: "gpt-5.6-luna", effort: "low" },
   2: { model: "gpt-5.6-luna", effort: "high" },
-  3: { model: "gpt-5.6-sol", effort: "high", deep: true },
-  4: { model: "gpt-5.6-sol", effort: "high", deep: true },
+  3: { model: "o3", effort: "high", deep: true },
+  4: { model: "o3", effort: "high", deep: true },
 };
 const CEIL_MODEL: Record<string, string> = { luna: "gpt-5.6-luna", terra: "gpt-5.6-terra", sol: "gpt-5.6-sol" };
 
