@@ -52,8 +52,10 @@ export type TaskType =
 export interface ModelPolicy {
   /** General map: task type → the brain it deserves. EDITABLE in Settings. */
   general: Record<TaskType, TierChoice>;
-  /** Per-agent ceiling — the MOST capable rung an agent may reach (caps auto-escalation cost). */
-  ceiling?: Partial<Record<AgentId, "luna" | "terra" | "sol">>;
+  /** Per-agent ceiling — the MOST capable rung an agent may reach (caps auto-escalation cost). "o3" is
+   *  the top rung (the deep default; above Sol). Default seed = "o3" for every agent (agent-backends
+   *  `defaultModelFor`); the user tunes each agent DOWN in Settings. */
+  ceiling?: Partial<Record<AgentId, "luna" | "terra" | "sol" | "o3">>;
   /** Per-agent per-task overrides (rare; e.g. Cam's `produce` → sol for public messaging). */
   override?: Partial<Record<AgentId, Partial<Record<TaskType, TierChoice>>>>;
 }
@@ -73,7 +75,11 @@ export const DEFAULT_MODEL_POLICY: ModelPolicy = {
     deep_strategy: { model: "gpt-5.6-sol", effort: "high" },
     research: { model: "gpt-5.6-terra", effort: "high" },
   },
-  // Agents whose hardest work justifies Sol; everyone else caps at Terra (see the reviewed table).
+  // REFERENCE ceilings (the agents' "natural" per-agent caps) + the FALLBACK when an agent has no
+  // per-agent model set. NOTE: the LIVE default cap is **o3 for every agent** — agent-backends
+  // `defaultModelFor` seeds each agent's per-agent model to o3, and `withAgentCeilings` overlays that as
+  // the active ceiling (so these values are overridden by default). Kept as the reference for a user who
+  // wants to restore per-agent ceilings instead of the flat o3 cap.
   ceiling: {
     "iris-chase": "sol",
     "terry-locke": "sol",
@@ -118,18 +124,22 @@ export function classifyTaskType(text: string): TaskType {
   return t.length <= 40 ? "read" : "short_draft";
 }
 
-const CEIL_RANK: Record<string, number> = { luna: 1, terra: 2, sol: 3 };
+const CEIL_RANK: Record<string, number> = { luna: 1, terra: 2, sol: 3, o3: 4 };
 function modelRank(model: string): number {
-  // o3 sits at the TOP rung (Sol level): it beat Sol-high on deep asks at ~1/6.6 the cost
-  // (docs/model-ab-findings.md), so a sol-ceiling agent may use it while terra/luna ceilings cap it DOWN
-  // to their 5.6 tier. Exact match so "o3-mini" (a cheaper, weaker model) never inherits the top rank.
-  if (model === "o3" || model.includes("sol")) return 3;
+  // o3 is the TOP rung (above Sol): it beat Sol-high on deep asks at ~1/6.6 the cost
+  // (docs/model-ab-findings.md) and is the default per-agent ceiling. Ranked above Sol so that lowering
+  // an agent's ceiling to Sol/Terra/Luna in Settings actually caps o3 DOWN to that 5.6 tier. Exact match
+  // so "o3-mini" (a cheaper, weaker model) never inherits the top rank (falls through to 1).
+  if (model === "o3") return 4;
+  if (model.includes("sol")) return 3;
   if (model.includes("terra")) return 2;
   return 1;
 }
 
-/** The 5.6 tier a model id belongs to, or undefined for a non-5.6 model (which imposes no ceiling). */
-export function tierOf(model: string | undefined | null): "luna" | "terra" | "sol" | undefined {
+/** The ceiling tier a model id maps to (o3 = top rung; the 5.6 tiers below it), or undefined for anything
+ *  else (which imposes no derived ceiling). "o3" (exact) is the default cap; "o3-mini" is NOT a ceiling. */
+export function tierOf(model: string | undefined | null): "luna" | "terra" | "sol" | "o3" | undefined {
+  if (model === "o3") return "o3";
   if (!model || !/gpt-5\.6-(luna|terra|sol)/.test(model)) return undefined;
   return model.includes("sol") ? "sol" : model.includes("terra") ? "terra" : "luna";
 }
@@ -145,17 +155,17 @@ export function withAgentCeilings(
   policy: ModelPolicy,
   agentModels: Partial<Record<AgentId, string | undefined>>,
 ): ModelPolicy {
-  const ceiling = { ...(policy.ceiling ?? {}) } as Partial<Record<AgentId, "luna" | "terra" | "sol">>;
+  const ceiling = { ...(policy.ceiling ?? {}) } as Partial<Record<AgentId, "luna" | "terra" | "sol" | "o3">>;
   for (const [aid, model] of Object.entries(agentModels)) {
     const t = tierOf(model);
     if (t) ceiling[aid as AgentId] = t;
   }
   return { ...policy, ceiling };
 }
-function capToCeiling(choice: TierChoice, ceiling?: "luna" | "terra" | "sol"): TierChoice {
+function capToCeiling(choice: TierChoice, ceiling?: "luna" | "terra" | "sol" | "o3"): TierChoice {
   if (!ceiling) return choice;
   if (modelRank(choice.model) <= CEIL_RANK[ceiling]) return choice;
-  const capped = ceiling === "luna" ? "gpt-5.6-luna" : ceiling === "terra" ? "gpt-5.6-terra" : "gpt-5.6-sol";
+  const capped = CEIL_MODEL[ceiling]; // "o3" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna"
   // When we cap the MODEL down, bump EFFORT up one notch (cheap-think compensation).
   const effort: Effort = choice.effort === "low" ? "high" : choice.effort;
   return { model: capped, effort };
@@ -164,8 +174,9 @@ function capToCeiling(choice: TierChoice, ceiling?: "luna" | "terra" | "sol"): T
 // ---- Difficulty-driven resolution (the wired path) ----
 // Difficulty 1-4 → rung. Deep (3-4) routes to o3-high: per docs/model-ab-findings.md (2026-08-10) it beat
 // Sol-high on deep asks (80.5 vs 63.0) at ~1/6.6 the cost, so it needs NO spend gate — needsConfirm keys on
-// Sol, which o3 isn't, so the confirm-gate is naturally dormant. Capped to the agent's ceiling (o3 ranks at
-// Sol level, so terra/luna ceilings drop it to their 5.6 tier). A manual "sol" override still reaches Sol-high.
+// Sol, which o3 isn't, so the confirm-gate is naturally dormant. o3 is also the DEFAULT per-agent ceiling
+// (top rung, above Sol), so by default deep asks reach o3; lowering an agent's ceiling in Settings caps it
+// DOWN to that 5.6 tier (sol/terra/luna). A manual "sol" override still reaches Sol-high.
 export interface DifficultyResolved {
   model: string;
   effort: Effort;
@@ -179,7 +190,7 @@ const DIFF_RUNG: Record<number, { model: string; effort: Effort; deep?: boolean 
   3: { model: "o3", effort: "high", deep: true },
   4: { model: "o3", effort: "high", deep: true },
 };
-const CEIL_MODEL: Record<string, string> = { luna: "gpt-5.6-luna", terra: "gpt-5.6-terra", sol: "gpt-5.6-sol" };
+const CEIL_MODEL: Record<string, string> = { luna: "gpt-5.6-luna", terra: "gpt-5.6-terra", sol: "gpt-5.6-sol", o3: "o3" };
 
 /**
  * Resolve difficulty → {model, effort} for an agent, honoring the per-agent ceiling. Deep asks default
@@ -202,16 +213,16 @@ export function resolveByDifficulty(
   }
   const d = Math.min(4, Math.max(1, Math.round(difficulty || 2)));
   const base = DIFF_RUNG[d];
-  const ceiling = policy.ceiling?.[agentId]; // "luna" | "terra" | "sol"
-  // Cap the model to the agent's ceiling. If the deep default (Sol) is capped away, no confirm needed.
-  const ceilRank = ceiling ? CEIL_RANK[ceiling] : 3;
+  const ceiling = policy.ceiling?.[agentId]; // "luna" | "terra" | "sol" | "o3"
+  // Cap the model to the agent's ceiling. No ceiling set → allow the top rung (o3), never cap to undefined.
+  const ceilRank = ceiling ? CEIL_RANK[ceiling] : CEIL_RANK.o3;
   let model = base.model;
   let effort = base.effort;
   let deep = !!base.deep;
-  if (modelRank(model) > ceilRank) {
-    model = CEIL_MODEL[ceiling!];
+  if (ceiling && modelRank(model) > ceilRank) {
+    model = CEIL_MODEL[ceiling];
     if (effort === "low") effort = "high"; // cheap-think compensation when capped down
-    deep = false; // capped below Sol → nothing to confirm
+    deep = false; // capped below the deep rung → nothing to confirm
   }
   const needsConfirm = deep && model === "gpt-5.6-sol";
   return { model, effort, needsConfirm, budgetModel, reason: `difficulty ${d} → ${model}/${effort}${needsConfirm ? " (confirm)" : ""}` };

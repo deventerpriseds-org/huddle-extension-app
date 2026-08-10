@@ -419,7 +419,8 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                           <p className="text-xs text-muted-foreground pt-1">
                             The most capable tier this agent may reach. Every turn STARTS on Luna and
                             climbs by difficulty only up to this cap — so this raises or lowers the
-                            ceiling, it is not a fixed per-turn model. Deep asks route to o3.
+                            ceiling, it is not a fixed per-turn model. Default is <strong>o3</strong> for
+                            every agent (deep asks route to o3); lower it here per agent as you see fit.
                           </p>
                         </div>
                       );
