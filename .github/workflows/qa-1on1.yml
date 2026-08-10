@@ -1,0 +1,54 @@
+name: QA 1on1 conversation (live, real app)
+
+# Drives a 20-turn 1:1 conversation through the DEPLOYED app via Playwright (run-uat.mjs +
+# qa-1on1-conversation.mjs), so the app's own difficulty router / model / snapshots / RAG / journey /
+# tools all run — nothing is set by the test. Grades worker-conversation capabilities from ground truth.
+# Publishes results.json + screenshots to the throwaway `uat-shots` branch (the session reads them via
+# git). Every message carries a run marker; run qa-1on1-cleanup.yml afterward (huddle + marker printed
+# in the log) to delete exactly this run's memory + durable turns.
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: "1:1 agent id (default finn-reid)"
+        required: false
+        default: "finn-reid"
+
+permissions:
+  contents: write
+
+jobs:
+  qa-1on1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+      - name: Run 1:1 conversation harness
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          CHECKS_FILE: ${{ github.workspace }}/.claude/skills/test-agent-serverfn/scripts/qa-1on1-conversation.mjs
+          SHOT_DIR: uat-shots
+          UAT_VIEWPORT_W: '1200'
+          UAT_VIEWPORT_H: '800'
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          QA_AGENT: ${{ inputs.agent }}
+        run: node .claude/skills/test-agent-serverfn/scripts/run-uat.mjs
+      - name: Publish results + shots to uat-shots branch
+        if: always()
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "gha-uat"
+          git checkout --orphan uat-shots
+          git reset >/dev/null 2>&1 || true
+          git add -f uat-shots/*.png uat-shots/results.json
+          git commit -q -m "qa-1on1 shots — run ${{ github.run_id }}" || { echo "no shots"; exit 0; }
+          git push -f origin uat-shots
