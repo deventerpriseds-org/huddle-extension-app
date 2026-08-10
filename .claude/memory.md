@@ -1609,3 +1609,21 @@ Three linked issues from a Terry-Locke 1:1 screenshot; **two of the three were c
   from that turn — it does NOT stop a later autowork pass from reacting to the polluted transcript/DM. Use
   `Test-` prefixes AND avoid injecting realistic task-shaped asks into REAL agent DMs; prefer throwaway huddle
   ids. All three fixes deployed to prod on `main` (e483c59, bce5e07); user to confirm live.
+
+## CONFIRM-INTENT / REACH-OUT pipeline — mechanics validated + WIP blocker (2026-08-10)
+First broad-matrix test (user: "backlog → reach out for confirmation → process the response, immediate or a couple
+turns later, to close a confirmation or blocker"; focus: tool usage, pipeline understanding, honest "why I can't").
+Validated interactively via journey Supabase + azure-pg-query + run-autowork/run-grooming:
+1. SEED: journey `public.tasks` needs NOT-NULL `board_id` (von.ellis board `5a4fbd9d…` "Personal Tasks") + a valid
+   `task_category` enum (omit → defaults LIFE); `assigned_agent='finn-reid'`, status `'BACKLOG'::task_status`. Syncs
+   to Huddle mirror `tasks.journey_tasks` in ~seconds. Journey user_id von.ellis = 4132de9e-….
+2. GATE ON by default — no `identity.agent_workflow_config` row → `default_required=true` (fail-closed).
+3. `run-autowork` alone does NOT promote a raw BACKLOG task (`promoted:0, remaining:0`) — must be GROOMED first
+   (`run-grooming` → `groomed:22`).
+4. **BLOCKER: even after grooming the task stayed BACKLOG — Finn's UP_NEXT is already at WIP cap (3) from the real
+   board**, so the pipeline correctly won't stage/reach-out beyond WIP. Happy-path reach-out needs a free-WIP agent
+   OR seed `tasks.task_engagement_state confirm_status='asked'` directly to jump to asked-state + test the close-loop.
+5. Cleanup VERIFIED 0 (journey delete cascades to mirror via trigger; also cleared engagement/blockers/pending_turns).
+   Side-effect noted: `run-grooming force=true` re-ranked 22 real tasks (idempotent-ish, no data loss).
+NEXT: encode the full BACKLOG→reach-out→confirm/blocker flow (WIP handling + Playwright reply + cleanup + structured
+output) as a repeatable `qa-confirm-intent.yml`.
