@@ -467,6 +467,12 @@ export function hydrateFromRemote(blob: Record<string, unknown> | null | undefin
         if (m.author.kind === "agent") {
           return !!AGENT_BY_ID[m.author.agentId as AgentId];
         }
+        // Self-heal: a brief regression rendered agent-INITIATED turn directives (ids like
+        // `autowork-…`/`standup-…`/`groom-…`/`followup-…`/`review-…`) as the USER's own message and the
+        // debounced workspace sync persisted them into the blob. A genuine user message is only ever
+        // `u-…`/`uv-…` (typed/voice) or a seeded demo id — never an agent-turn id. Drop any user-authored
+        // message carrying an agent-turn id so the corrupt "You" bubbles clear on the next hydrate.
+        if (m.author.kind === "user" && /^(autowork|standup|groom|followup|review)-/.test(m.id)) return false;
         return true;
       })
     : seed.messages;

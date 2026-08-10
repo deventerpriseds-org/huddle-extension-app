@@ -8,6 +8,11 @@ name: Verify UAT (live, real browser)
 
 on:
   workflow_dispatch:
+    inputs:
+      checks_file:
+        description: "Path to the checks module to run (default: full huddle-checks suite)"
+        required: false
+        default: ".claude/skills/test-agent-serverfn/scripts/huddle-checks.mjs"
 
 permissions:
   contents: write
@@ -32,7 +37,7 @@ jobs:
         env:
           APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
           UAT_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
-          CHECKS_FILE: ${{ github.workspace }}/.claude/skills/test-agent-serverfn/scripts/huddle-checks.mjs
+          CHECKS_FILE: ${{ github.workspace }}/${{ inputs.checks_file }}
           SHOT_DIR: uat-shots
           UAT_VIEWPORT_W: '1000'
           UAT_VIEWPORT_H: '680'
