@@ -37,9 +37,20 @@ single-mention facts dropping out of the ~14-msg window — the recital date (st
 caused DRIFT at T20 ("recital date was not stated"), while re-mentioned vendors survived. HONESTY was GOOD
 (tool_honesty/faithfulness/abstention/commitment all PASS — it did NOT fabricate; said it couldn't read Outlook /
 couldn't send email / no budget set). So the measurable problem here is memory-drop, not fabrication — refines the
-user's complaint. HYGIENE VERIFIED zero (run 31390745264: all baseline chunk/turn/task counts = 0; readonly-shared
-worked). Harness fixes noted in actions.md before post-fix re-run (add a true single-mention out-of-window probe;
-T19 grade logic downgraded a correct answer; confirm prod agent model). NEXT: implement A1+A2, re-run, show T11/T20 flip.
+user's complaint. HYGIENE VERIFIED zero (run 31390745264: all baseline chunk/turn/task counts = 0; readonly-shared worked).
+**BASELINE INVALIDATED (2026-08-10) — the server-fn harness is NOT 1:1 and its numbers are discarded.** The
+turn payload lets the CALLER set model/rag/journey/webSearch; I sent gpt-4o-mini + rag-off + journey-off, so it
+measured a degraded config, not the real agents. Ground-truth of the REAL config: (1) per-agent model is NOT
+static — `resolveByDifficulty(routed.difficulty ?? 2, ...)` (huddle.functions.ts:3477, model-catalog) picks the
+tier PER TURN from a difficulty score: gpt-5.6 **luna** (cheap/fast/strong tools) / **terra** (balanced) / **sol**
+(deep; difficulty ≥3 triggers the Sol deep-confirm gate that asks the user go/terra/cancel). `defaultModelFor`
+(agent-backends.ts: TERRA={iris,terry,sam}→terra, else luna) is only the BASE the difficulty router moves off of,
+AND it's overridable in Settings → Agents (persisted client-side localStorage "huddle-backends"). (2) real rag/
+journey/webSearch default ON. So a hand-built server-fn payload can NEVER be 1:1. **THE ONLY 1:1 TEST = drive the
+deployed app via Playwright** (user directive): type into the real 1:1 composer, and the app's own difficulty
+router + model/effort + snapshots + RAG + journey + tools + streaming all run — I set NOTHING. A fresh Playwright
+browser uses default config (rag/journey ON = real) and difficulty picks the model, so it matches real usage
+(absent manual per-agent overrides). NEXT: build the 1:1 Playwright harness (below), NOT more server-fn runs.
 
 ## Confirm-ask reach-outs now SPACED 45–90 min apart (config), not independent uniform slots (2026-08-07, deployed main c07a02d, verifier PASS, LIVE-PROVEN)
 LIVE PROOF (2026-08-07): reset 24 active tasks→BACKLOG, groomed → 3 fresh confirm_ask_at armed at 11:54/12:40/13:58 ET, gaps **46 & 78 min** (both ∈[45,90]), all inside the 9–18 window. Behaves exactly as asked.
