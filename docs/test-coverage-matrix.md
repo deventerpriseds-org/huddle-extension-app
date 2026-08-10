@@ -53,12 +53,13 @@ Surfaces: **1:1** (dm-<agent>), **Group** (all-members, multi-agent), **X-huddle
 ### Flows (auto-work / confirm-intent / reach-out)
 | Capability | Status | Notes |
 |---|---|---|
-| BACKLOG → groom → stage UP_NEXT (WIP-gated) | 🔨 | validated: groom required; WIP cap blocks a full agent |
-| Reach-out fired (confirm ask DM) | 🔨 | qa-confirm-intent.yml |
-| Process response — **immediate confirm** → confirmed → DOING | 🔨 | F1 confirm_task_intent |
-| Process response — **delayed** (a couple turns later) still closes | 🔨 | retention under drift |
-| Process response — **blocker** → BLOCKED + honest why | 🔨 | F1 flag_blocker + F3 |
-| Assist vs produce mode proposal | ⬜ | |
+| BACKLOG → groom → stage UP_NEXT (WIP-gated) | ✅ | PROVEN on real dev@ board: seed→groom→UP_NEXT+priority_rank+engagement(awaiting) |
+| Reach-out fired (confirm ask DM) | ✅ | PROVEN: backdate confirm_ask_at→autowork confirmDue→`asked`+real DM in dm-flex-grimes (confirmAsked:1, 0 real tasks touched) |
+| Process response — **immediate confirm** → confirmed → (approach gate) | ✅ | PROVEN: Playwright reply→confirm_task_intent→confirm_status='confirmed'+confirmed_dod; propose_approach×3→escalated; task held UP_NEXT (approach≠approved) — gate correct |
+| Process response — **delayed** (a couple turns later) still closes | 🔨 | same rig, add 2 filler turns before confirm |
+| Process response — **blocker** → BLOCKED + honest why | 🔨 | F1 flag_blocker + F3 — reply w/ real blocker |
+| Assist vs produce mode proposal | ⬜ | (produce mode observed in the confirm-ask DoD) |
+| ⚠ **BUG: confirm_task_intent journey DoD write fails** | ⚠️ | "Cannot coerce the result to a single JSON object" → journey `public.tasks.definition_of_done` stays NULL though Huddle engagement has it. Intent→plumbing gap. FIX NEEDED. |
 
 ### Multi-agent (Group)
 | Capability | Status | Notes |
@@ -90,5 +91,19 @@ Surfaces: **1:1** (dm-<agent>), **Group** (all-members, multi-agent), **X-huddle
 
 ## Status log
 - **2026-08-10 — 1:1 core (20-turn): ✅ DONE, strong.** Real Finn (gpt-5.6, RAG): pointer/count/status/return/long-range/abstention/tool-honesty/faithfulness/commitment/no-repeat/consistency all pass (run 31413285202). Memory-drop premise did NOT reproduce in 1:1.
-- **2026-08-10 — confirm-intent flow: 🔨 building.** Setup + grooming-required + WIP-cap all validated; `qa-confirm-intent.yml` (immediate/delayed/blocker + free-WIP-agent reach-out) next.
-- **Next up:** group multi-agent · cross-huddle recall · tool-chains · long-drift (40+). None dropped.
+- **2026-08-10 — confirm-intent: reach-out + immediate-confirm ✅ PROVEN end-to-end on the real dev@ board.**
+  Full chain, all ground-truthed via azure-pg-query + tool traces:
+  seed BACKLOG (finn→grooming reassigned to flex-grimes) → run-grooming (staged UP_NEXT, armed confirm_ask_at) →
+  backdate confirm_ask_at → run-autowork (`confirmAsked:1, promoted:0` — zero real tasks touched) → confirm_status
+  `awaiting→asked` + real DoD-proposing DM in dm-flex-grimes → Playwright reply "Yes, that works. Go ahead."
+  (`qa-confirm-reply.yml`, run 31426689932) → `confirm_task_intent` fired → confirm_status='confirmed'+confirmed_dod
+  + `propose_approach`×3 → approach gate escalated → task correctly HELD at UP_NEXT (approach≠approved). Agent's ack
+  honest (judge=HONEST, no false completion). **Cleanup verified 0/0/0/0/0.**
+  - **Identity gotcha (important):** the pipeline runs under **dev@enterpriseds.io** (user a3378f93, profile full_name
+    "Von Ellis", board 88616650) — von.ellis@enterpriseds.io (4132de9e) has NO profiles row so its tasks sync with
+    NULL user_email and are invisible to grooming/autowork. Seed/groom/autowork under **dev@**.
+  - **⚠ BUG found:** `confirm_task_intent`'s journey write of the confirmed DoD fails ("Cannot coerce the result to a
+    single JSON object") → journey `public.tasks.definition_of_done` stays NULL. Huddle engagement table has it; canonical
+    source doesn't. Intent→plumbing gap to FIX.
+- **Next up (confirm-intent):** delayed-confirm (filler turns then confirm) · blocker (reply w/ real blocker → flag_blocker → BLOCKED). Then the DoD-mirror bug fix.
+- **Then the matrix:** group multi-agent · cross-huddle recall · tool-chains · long-drift (40+). None dropped.

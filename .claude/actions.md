@@ -19,10 +19,16 @@ does NOT hold on the real agent. Do not cite its numbers.
 (incl. "the 14th") / topic-return / long-range (T1→T19) / abstention / tool-honesty / faithfulness / commitment /
 no-repeat / consistency ALL PASS. **The memory-drop premise did NOT reproduce in 1:1** → A1/A2/A6 are NOT the
 1:1 problem; re-target to the broad matrix and build A1–A6 data-driven only where a cell proves weak.
-**Now building:** `qa-confirm-intent.yml` — BACKLOG→reach-out (free-WIP agent; GROOM before AUTOWORK) + close-the-
-loop (immediate / delayed / blocker), asserting F1 real tool fired · F2 pipeline grasp · F3 honest why. Corrected
-sequencing + exact steps live in `memory.md` ▶ RESUME HERE.
-**Then:** group multi-agent → cross-huddle recall → tool-chains → long-drift (40+). Nothing dropped (matrix tracks it).
+**PROVEN 2026-08-10 (real dev@ board, ground-truthed):** reach-out + immediate-confirm close-the-loop end-to-end.
+seed BACKLOG→run-grooming→UP_NEXT+armed→backdate confirm_ask_at→run-autowork(`confirmAsked:1`,0 real touched)→
+`asked`+real DoD-DM in dm-flex-grimes→`qa-confirm-reply.yml` Playwright reply (run 31426689932)→`confirm_task_intent`
+→confirm_status='confirmed'+confirmed_dod, `propose_approach`×3→escalated→task HELD UP_NEXT (gate correct), ack
+honest (judge=HONEST). Cleanup verified 0/0/0/0/0. New reusable workflow+harness: `qa-confirm-reply.yml` +
+`qa-confirm-reply.mjs` (on main). Evidence: runs 31425430106 (groom), 31425702731 (autowork confirmAsked:1),
+31426689932 (reply), azure-pg-query 31426896151/31427... (ground truth + cleanup).
+**⚠ BUG:** `confirm_task_intent` journey DoD write fails ("Cannot coerce the result to a single JSON object") →
+journey `public.tasks.definition_of_done` NULL though Huddle engagement has it. Fix pending.
+**Next:** delayed-confirm + blocker paths (same rig) → DoD-mirror bug fix → group/x-huddle/tool-chains/long-drift.
 
 
 ### ✅ DEPLOYED live (both deploys succeeded 2026-08-06 ~16:40 UTC)

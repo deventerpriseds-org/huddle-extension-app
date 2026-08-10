@@ -6,8 +6,22 @@ Last updated: 2026-08-10
 <!-- ============================================================================ -->
 ## ▶ RESUME HERE — worker-grade conversationalist test program (2026-08-10)
 
-**One-line state:** 1:1 20-turn baseline is DONE and STRONG (memory-drop premise did NOT
-reproduce). Now building the **confirm-intent flow** test; broad coverage matrix is the guardrail.
+**One-line state:** 1:1 20-turn baseline DONE/strong. Confirm-intent **reach-out + immediate-confirm
+close-the-loop PROVEN end-to-end on the real dev@ board** (ground-truthed, cleaned up 0/0/0/0/0). Next:
+delayed + blocker paths, then the DoD-mirror bug, then the broad matrix. Guardrail = the coverage matrix.
+
+**⚠ CRITICAL IDENTITY FACT (cost an hour to learn):** the confirm-intent pipeline runs under
+**`dev@enterpriseds.io`** (auth user `a3378f93-d655-4913-b2fa-ca5b1d8020f1`, profile full_name "Von Ellis",
+board **`88616650-cfdb-4311-8fb4-4af722581187`**). **NOT von.ellis@enterpriseds.io** — that auth account
+(`4132de9e`) has NO `profiles` row, so its tasks sync to the mirror with **NULL user_email** and are
+invisible to grooming/autowork (which filter by email). Seed/groom/autowork under **dev@**. dev@ is the
+user's REAL live board (30+ real tasks) — always `Test-` prefix + verified cleanup; before any autowork
+run, confirm no real task is confirm-due (`awaiting`+past `confirm_ask_at`) and none is promotable
+(`confirmed`+`approved`+UP_NEXT) so the pass touches ZERO real tasks (both were 0 on 2026-08-10).
+
+**⚠ BUG surfaced (fix pending):** `confirm_task_intent`'s write-back of the confirmed DoD to journey fails
+("Cannot coerce the result to a single JSON object") → journey `public.tasks.definition_of_done` stays NULL
+though Huddle's `tasks.task_engagement_state.confirmed_dod` has it. Real intent→plumbing gap.
 
 **The three canonical artifacts (read these, don't rebuild):**
 - `docs/test-coverage-matrix.md` — the LIVING checklist. Nothing we promised to test may be dropped.
@@ -28,23 +42,28 @@ reproduce). Now building the **confirm-intent flow** test; broad coverage matrix
   (huddle + marker printed in the log) to delete exactly this run's `rag_chunks` + `pending_turns`.
   Test tasks MUST be `Test-` prefixed. Verified-0 cleanup or it's not done.
 
-**NEXT CONCRETE STEP — build `qa-confirm-intent.yml` (repeatable). Two halves, neither dropped:**
-1. **Prove real BACKLOG→reach-out** from a FREE-WIP agent (finn had room: UP_NEXT=1). Exact sequence
-   (order matters — GROOM before AUTOWORK, learned the hard way):
-   a. Seed a journey task via Supabase MCP (project `wwxgajrtmslzklnyplah`): `Test-…` title, no
-      `task_category` (enum rejects "Research"; omit→LIFE default), `board_id`
-      `5a4fbd9d-ea15-47bb-9210-268cbfabf5d7` (von.ellis board, NOT NULL), assigned `finn-reid`,
-      `'BACKLOG'::task_status`. Sync to mirror is async ~1–3s — POLL, don't assume.
-   b. `run-grooming.yml` (ranks/stages) → THEN `run-autowork.yml` (promotes to UP_NEXT + arms confirm).
-   c. Backdate `tasks.task_engagement_state.confirm_ask_at` into the past via `azure-pg-query.yml`
-      (this is the WRITE path for Azure PG — runs SQL as admin), so the next autowork tick fires the ask.
-   d. `run-autowork.yml` again → assert the confirm-ask DM landed (reach-out fired).
-2. **Close the loop** via Playwright reply — THREE response paths, assert the REAL tool fired + state moved:
-   - immediate confirm → `confirm_task_intent` → confirmed → (approach gate) → DOING.
-   - delayed confirm (a couple unrelated turns first, then confirm) → still closes (retention under drift).
-   - blocker → `flag_blocker` → status BLOCKED + honest "why" narrated (F3).
-   Assert on every path: **F1** right tool actually fired (DB row / toolUses), **F2** correct pipeline
-   grasp, **F3** honest reason. Then verified cleanup.
+**PROVEN sequence (immediate-confirm) — repeat this for delayed/blocker (all workflows exist):**
+1. Seed journey task via Supabase MCP (project `wwxgajrtmslzklnyplah`): `Test-…` title, omit `task_category`
+   (enum rejects "Research"; →LIFE), `user_id` **`a3378f93-d655-4913-b2fa-ca5b1d8020f1`** (dev@), `board_id`
+   **`88616650-cfdb-4311-8fb4-4af722581187`**, `'BACKLOG'::task_status`. (Pre-assign is optional — GROOMING
+   REASSIGNS by domain fit, e.g. it moved a "competitor pricing" task finn→flex-grimes. Read the RESULTING
+   `assigned_agent` from the mirror; the reach-out lands in `dm-<that agent>`.) Sync is async ~1–3s — poll.
+2. `run-grooming.yml` (email=**dev@enterpriseds.io**) → stages UP_NEXT + `priority_rank` + engagement row
+   (`confirm_status='awaiting'`, future `confirm_ask_at`). (Autowork alone did not need re-running to stage.)
+3. Backdate MY task's `confirm_ask_at` to past via `azure-pg-query.yml` (WRITE path; WHERE task_id=mine ONLY).
+4. `run-autowork.yml` (email=dev@) → `confirmAsked:1` → `confirm_status='asked'` + real DoD-proposing DM in
+   `dm-<agent>`. The full-pass `confirmDue` path fires regardless of wall-clock (NOT the window-gated heartbeat).
+5. **Close the loop** = `qa-confirm-reply.yml` (dispatch on **main**; agent + reply inputs). It Playwright-types
+   ONE reply into `dm-<agent>`. Reply must be BARE + short (≤40c, no ?/negation) so server `isPlainConfirmation`
+   fires `confirm_task_intent`. Verify via azure-pg-query: `confirm_status='confirmed'`+`confirmed_dod`,
+   `approach_status` (approved→DOING | escalated→held UP_NEXT, both honest), and `chat.pending_turns.result->'toolUses'`
+   ok=true for the tools. **Then cleanup** (delete journey task via Supabase; azure-pg delete mirror+engagement+
+   task_blockers+pending_turns(id like %taskid% or the reply turn id)+rag_chunks; verify all 0).
+   - **DELAYED path:** send 2 unrelated `qa-confirm-reply` replies first (assert `confirm_status` stays `asked`,
+     one engagement row, no dup DM), then the confirm.
+   - **BLOCKER path:** reply stating a real blocker → expect `flag_blocker` toolUse + `tasks.task_blockers` row +
+     journey status BLOCKED + honest "why". (Blocker likely needs the DOING/research turn, not the confirm turn —
+     verify where flag_blocker fires; may need approach approved→DOING→research first.)
 
 **After confirm-intent, walk the matrix (don't stop early):** group multi-agent (routing / soloOnCoverage
 / handoffs) → cross-huddle recall (group→1:1, needs a memory write) → tool-chains → long-drift (40+ turns,
