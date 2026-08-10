@@ -10,8 +10,10 @@ GPT-5.6 list prices CONFIRMED via Tavily 2026-08-10 (5 sources vs OpenAI's page,
 Sol $5/$30, Terra $2/$12, Luna $0.20/$1.20 per 1M — now wired into the harness PRICE map (no more TBD).
 First run (31402368819) DISCARDED: judge effort:high + max_output_tokens:500 starved the JSON verdict →
 2/4 prompts unscored + a sol-high=0 artifact; 5.6 answers truncated at 4000. Fixed to effort:medium/2500
-+retry, answers 6000 (commit 858ba8f). **Implication (NOT applied, awaiting sign-off):** swap the deep
-rung `gpt-5.6-sol`→`o3`.
++retry, answers 6000 (commit 858ba8f). **SHIPPED + DEPLOYED (a72bf9d, deploy 31408114376 green):** deep
+rung `gpt-5.6-sol`→`o3` (DIFF_RUNG[3-4]); o3 needs no confirm gate (needsConfirm keys on Sol), modelRank
+treats o3 at Sol level so terra/luna ceilings cap it down; manual "sol" still reaches Sol. NOT yet
+user-confirmed live.
 
 **Ceiling bug I introduced in Slice 2a — REAL, found while answering "why does another session see
 iris/terry on terra, finn on luna?"** Runtime model IS start-Luna-escalate-by-difficulty for EVERY agent
@@ -22,11 +24,14 @@ TERRA_AGENTS={iris,terry,sam}→terra else luna) — NOT the per-turn model; it'
 **The regression:** `withAgentCeilings` (my Slice 2a) overlays each agent's SEEDED per-agent model as its
 ceiling, which NULLIFIES `DEFAULT_MODEL_POLICY.ceiling` (finn/iris/terry/sam/tess/liam/elle/troy→sol). Net
 default: finn + 11 others CAPPED AT LUNA (can't reach Terra/Sol at all), only iris/terry/sam reach Terra,
-**Sol unreachable by anyone**. Opposite of "escalate as needed." **Proposed fix (awaiting sign-off):**
-seed `defaultModelFor` from `DEFAULT_MODEL_POLICY.ceiling` so withAgentCeilings reproduces (not overrides)
-the policy; relabel the Settings per-agent control "Max model (ceiling)" + helper "starts on Luna,
-escalates up to this cap"; update snapshot `modelNote`. Confusion source = one field doing double duty
-(reads as "starting model", actually the ceiling).
+**Sol unreachable by anyone**. Opposite of "escalate as needed." **FIX SHIPPED + DEPLOYED (a72bf9d):**
+`defaultModelFor` now derives from `DEFAULT_MODEL_POLICY.ceiling` so withAgentCeilings reproduces (not
+overrides) the policy; v6→v7 migration re-seeds existing configs where they still hold the old auto-seed
+(user picks preserved); Settings control relabeled "Max model (ceiling)" + helper; snapshot model/modelNote
+set to each agent's ceiling (metadata only, instructions untouched). Confusion source = one field doing
+double duty (reads as "starting model", actually the ceiling). Offline resolver proof: start=Luna for all,
+sol-ceiling agents reach o3 on deep asks, terra/luna ceilings capped, no confirm gate; old seed reproduces
+the Luna cap. tsc+build clean. NOT yet user-confirmed live (mechanism proven, awaiting a browser re-test).
 
 ## Long-memory worker-grade conversationalist — RESEARCH + GAP ANALYSIS DONE, full A1–A6 build authorized (2026-08-10)
 User: agents are incoherent/untrustworthy — forget what they said two turns ago, fabricate instead of
