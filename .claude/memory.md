@@ -83,6 +83,20 @@ deployed app via Playwright** (user directive): type into the real 1:1 composer,
 router + model/effort + snapshots + RAG + journey + tools + streaming all run — I set NOTHING. A fresh Playwright
 browser uses default config (rag/journey ON = real) and difficulty picks the model, so it matches real usage
 (absent manual per-agent overrides). NEXT: build the 1:1 Playwright harness (below), NOT more server-fn runs.
+**1:1 BASELINE ESTABLISHED (2026-08-10, run 31413285202) — write-at-app / read-at-server (getTurnUpdates), the
+only faithful 1:1.** Harness: `qa-1on1-conversation.mjs` + `qa-1on1.yml` (+ `qa-1on1-cleanup.yml` verified 0/0 each run).
+**FINDING (pivotal, honest): on the REAL 1:1 (Finn, difficulty-selected gpt-5.6, RAG on) the conversationalist is
+EXCELLENT — effectively 15/15.** It held a SINGLE-MENTION fact (recital "14th") across all 20 turns incl. T11 + the
+T20 sweep, tracked vendors + which was dropped throughout (T3/4/9/10/19), abstained on a never-set budget, was honest
+about a calendar tool failure, refused to fake-send an email, correctly said the email didn't go out, and varied its
+status replies. **This CONTRADICTS the invalid gpt-4o-mini server-fn baseline (recital "dropped") — the memory-drop
+premise does NOT reproduce in 1:1 on the real config.** So A1/A2 (memory backbone) + A6 (abstention) are NOT the 1:1
+problem. (Two grader false-negatives were MINE — `\b14\b` missed "14th"; judge returned "ABSTAIN" not "ABSTAINED" —
+both fixed.) **Re-target per user's BROAD original intent: the untested half is where gaps likely live — GROUP
+multi-agent coherence/routing, cross-huddle recall, multi-step tool-chains, AC/DoD/confirm-intent + reach-out (board
++ cleanup), and LONGER (40+ turn) drift. Broaden the harness to that matrix (plan "B"), then implement A1–A6 DATA-
+DRIVEN where the broad baseline shows real gaps — not blindly.** GHA logs aren't API-readable mid-run → per-turn
+progress now streams to the `qa-progress` branch.
 
 ## Confirm-ask reach-outs now SPACED 45–90 min apart (config), not independent uniform slots (2026-08-07, deployed main c07a02d, verifier PASS, LIVE-PROVEN)
 LIVE PROOF (2026-08-07): reset 24 active tasks→BACKLOG, groomed → 3 fresh confirm_ask_at armed at 11:54/12:40/13:58 ET, gaps **46 & 78 min** (both ∈[45,90]), all inside the 9–18 window. Behaves exactly as asked.
