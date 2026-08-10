@@ -15,7 +15,7 @@ export const checks = [
     const agentMsgSel = "div.flex.gap-3"; // MessageRow agent branch container
     const before = await page.locator(agentMsgSel).count();
 
-    const box = page.locator("main textarea").last();
+    const box = page.locator('textarea[placeholder^="Message"]').last();
     const haveBox = await box.count();
     check("DM compose box present", haveBox > 0);
     if (!haveBox) return;
