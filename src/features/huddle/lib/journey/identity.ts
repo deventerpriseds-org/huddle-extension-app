@@ -70,10 +70,25 @@ export async function resolveUserId(caller: Caller): Promise<string | null> {
   return resolveObjectIdByEmail(caller?.entra_email);
 }
 
-/** The email to scope mirror reads by — the canonical journey email, or the raw login as a fallback. */
+/**
+ * The email to scope every email-keyed store by. Resolution, most-authoritative first:
+ *   1. journey whoami / durable identity_cache (via resolveJourneyIdentity) → canonical email;
+ *   2. LOCAL canonical resolve from profile_emails+identity_cache — so a whoami blip on an un-cached
+ *      alias still lands on the SAME canonical email instead of scoping the user under a second one
+ *      (the dev@ vs von.ellis@ split that fragmented history);
+ *   3. the raw login as last resort.
+ * ALWAYS lower-cased/trimmed so a capitalization variant (e.g. Von.Ellis@…) can never open a 3rd bucket.
+ */
 export async function resolveTaskEmail(caller: Caller): Promise<string | undefined> {
   const { email } = await resolveJourneyIdentity(caller);
-  return email ?? caller?.entra_email;
+  const login = caller?.entra_email?.trim();
+  let resolved = email ?? undefined;
+  if (!resolved && login) {
+    const { resolveCanonicalEmailByLogin } = await import("../identity/identity.server");
+    resolved = (await resolveCanonicalEmailByLogin(login)) ?? undefined;
+  }
+  resolved = resolved ?? login;
+  return resolved ? resolved.trim().toLowerCase() : undefined;
 }
 
 /**

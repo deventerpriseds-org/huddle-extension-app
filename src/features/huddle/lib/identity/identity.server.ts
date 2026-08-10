@@ -317,6 +317,35 @@ export async function resolveObjectIdByEmail(email: string | undefined | null): 
   }
 }
 
+/**
+ * Resolve a login/alias email to the user's CANONICAL email WITHOUT a whoami round-trip — using only
+ * local identity tables. This is what keeps a transient journey/whoami blip from scoping the same user
+ * under a second email (the dev@ vs von.ellis@ split that fragmented history): the answer is derivable
+ * locally because every alias links to ONE profile (`profile_emails`) and at least one alias has a
+ * cached canonical resolution (`identity_cache.email`). Returns the most-recently-known canonical email
+ * for ANY alias of the same profile, or null (fail-closed — caller decides). Case-insensitive.
+ */
+export async function resolveCanonicalEmailByLogin(login: string | undefined | null): Promise<string | null> {
+  const e = (login ?? "").trim();
+  if (!e) return null;
+  try {
+    await ensureBootstrapped();
+    const r = await getPool().query<{ email: string }>(
+      `SELECT ic.email
+         FROM identity.profile_emails self
+         JOIN identity.profile_emails sib ON sib.entra_object_id = self.entra_object_id
+         JOIN identity.identity_cache ic ON lower(ic.login_email) = lower(sib.email)
+        WHERE lower(self.email) = lower($1) AND ic.email IS NOT NULL
+        ORDER BY ic.updated_at DESC
+        LIMIT 1`,
+      [e],
+    );
+    return r.rowCount && r.rowCount > 0 ? r.rows[0].email.trim().toLowerCase() : null;
+  } catch {
+    return null; // identity DB unavailable — fail-closed
+  }
+}
+
 /** Read the canonical profile id an alias oid points at (null if not aliased). */
 async function getProfileOidAlias(oid: string): Promise<string | null> {
   const r = await getPool().query<{ entra_object_id: string }>(
