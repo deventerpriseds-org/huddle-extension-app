@@ -2099,3 +2099,13 @@ green); view live (1,581 rows). classifyConfirmReply 21/21 offline.
 - AC-2: user confirms the auto-growing/above-keyboard composer renders live in the webapp.
 - AC-3: (bridge) user confirms it appears in the bridge app once the webapp is updated; if not, investigate bridge WebView cache separately.
 **Status:** ROOT-CAUSED — merging the branch to main.
+
+### ACT-huddle-37: Voice-call content isn't remembered later (voice→memory gap)
+**Requested:** 2026-08-11 — user: "why is it struggling to remember things from two messages ago again? did something get reversed?" Screenshot: budget built in the VOICE call; later TEXT ask "email me that budget" → Finn "I don't have the Alabama-trip budget details in this chat."
+**Root cause (GROUND-TRUTHED):** text memory is intact on origin/main (writeChunk scope=global + auto-retrieval present). But the VOICE path only READS memory (realtime-tools.server.ts:76 searchChunks) and NEVER writes it — no writeChunk, no pending_turns, no enqueueTurn. So voice turns never become memory. #32 persists voice to ceremony_transcript (reviewable) but that is NOT read by text turns or auto-retrieval → no cross-modality recall. After a reload the ephemeral zustand thread is gone too, so data.history lacks the voice turns.
+**Expected outcome:** something said/produced in a 1:1 voice call is recallable in a later text (or voice) turn — "email me that budget" works.
+**Acceptance criteria:**
+- AC-1: Given a voice-call turn (user ask + agent substantive reply), when it completes, then its text is written to RAG memory (rag_chunks, scope='global') like the text path — so auto-retrieval can surface it.
+- AC-2: Given a later TEXT turn in the same or another huddle, when the user references the voice content, then auto-retrieval surfaces it and the agent recalls it (no "I don't have that in this chat").
+- AC-3: Memory-pollution guard — do NOT write system/directive lines; only genuine user + agent content. Mirror the text path's guard.
+**Status:** ROOT-CAUSED — proposed fix: write voice turns to rag_chunks (memory-sensitive; confirm approach before editing the memory write path).
