@@ -71,6 +71,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   const streamRef = useRef<MediaStream | null>(null);
   const agentIdRef = useRef<AgentId | null>(null);
   const genRef = useRef(0);
+  const lastVoiceErrGenRef = useRef(-1); // one voice-failure toast per reply (gen), not per sentence
   const connectingRef = useRef(false);
   const micMutedRef = useRef(false);
   micMutedRef.current = micMuted;
@@ -157,11 +158,25 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
     const s = text.trim();
     if (!s) return;
     const epoch = bargeEpochRef.current;
+    // Surface a GENUINE synth failure (a thrown error OR ok:false, e.g. "ELEVENLABS_API_KEY is not
+    // configured.") to the user — ONCE per reply so a multi-sentence failure doesn't spam. Stays silent
+    // for an aborted turn (gen/epoch moved: barge or a newer exchange superseded this one). Before this,
+    // both failure branches were dropped silently → the reply text rendered but no audio played and the
+    // user saw no reason why (the reported "chat shows, no audio" bug on the default realtime-speak engine).
+    const surface = (reason: string) => {
+      if (genRef.current !== gen || bargeEpochRef.current !== epoch) return; // aborted — not a real failure
+      if (lastVoiceErrGenRef.current === gen) return; // already told the user about this reply
+      lastVoiceErrGenRef.current = gen;
+      toast.error(`🔇 Couldn't play voice: ${reason}`);
+    };
     try {
       const spoken = await synthesizeSpeech({ data: { text: s, agentId } });
-      if (genRef.current !== gen || bargeEpochRef.current !== epoch) return;
-      if (spoken.ok && spoken.audioBase64) enqueueAudio(spoken.audioBase64);
-    } catch { /* skip on TTS error */ }
+      if (genRef.current !== gen || bargeEpochRef.current !== epoch) return; // superseded — discard
+      if (spoken.ok && spoken.audioBase64) { enqueueAudio(spoken.audioBase64); return; }
+      surface(spoken.ok ? "no audio was returned" : spoken.error);
+    } catch (err) {
+      surface(err instanceof Error ? err.message : String(err));
+    }
   }, [enqueueAudio]);
 
   // STREAMING SYNTH (Fix A): drain COMPLETE sentences from the pending buffer and synth each the moment

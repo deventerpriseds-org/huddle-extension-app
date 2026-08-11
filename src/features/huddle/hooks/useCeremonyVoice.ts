@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import type { AgentId } from "../data/agents";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import { getRealtimeSession, REALTIME_MODEL } from "../lib/voice/realtime.functions";
@@ -300,16 +301,30 @@ export function useCeremonyVoice(hookOpts: {
       // current one's playback, so the next clip is ready the instant the current finishes → gapless.
       // synthOne never throws (returns "" on error, which is skipped). A discarded prefetch after a
       // barge is harmless (a wasted synth call).
+      let synthErrSurfaced = false; // one voice-failure toast per reply, not per sentence
       const synthOne = async (s: string): Promise<string> => {
-        // COST GUARD: never spend an ElevenLabs call when no one can hear it — the tab is hidden or the
-        // user has switched away. Checked at synth time (per sentence), so voicing resumes on its own the
-        // moment they return, with no visibilitychange listener to leak. Returns "" → treated as no-audio
-        // (transcript still rendered below). Also covers barge answers, which route through _voiceTurn.
-        if (typeof document !== "undefined" && document.visibilityState !== "visible") return "";
+        // COST GUARD: never spend an ElevenLabs call when no one can hear it — the tab is genuinely
+        // backgrounded. Keyed on `=== "hidden"` (NOT the broader `!== "visible"`, which also matches the
+        // transient "prerender"/"unknown" states and was falsely skipping synthesis). Returns "" → treated
+        // as no-audio (transcript still rendered below). Voicing resumes on its own the moment they return.
+        // NOTE: the DEFAULT 1:1 engine is realtime-speak (no guard) — this baseline path keeps the guard so
+        // a backgrounded ceremony doesn't burn synth no one hears.
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") return "";
+        // A GENUINE failure (thrown OR ok:false, e.g. an unconfigured EL key) must NOT look like the silent
+        // cost-skip: surface it once per reply so the user sees WHY audio didn't play. Quiet for an aborted
+        // turn (genRef moved) so a barge never raises a spurious "voice failed".
+        const surface = (reason: string) => {
+          if (genRef.current !== gen || synthErrSurfaced) return;
+          synthErrSurfaced = true;
+          toast.error(`🔇 Couldn't play voice: ${reason}`);
+        };
         try {
           const r = await synthesizeSpeech({ data: { text: s, agentId } });
-          return r.ok ? r.audioBase64 : "";
-        } catch {
+          if (r.ok && r.audioBase64) return r.audioBase64;
+          surface(r.ok ? "no audio was returned" : r.error);
+          return "";
+        } catch (err) {
+          surface(err instanceof Error ? err.message : String(err));
           return "";
         }
       };
