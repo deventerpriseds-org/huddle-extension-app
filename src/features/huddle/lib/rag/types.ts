@@ -48,6 +48,9 @@ export interface WriteTripleInput {
   confidence?: number;
   sourceChunkId?: string;
   authorAgentIds?: string[];
+  /** "researched" mode only: mark prior triples with the same (scope, subject, predicate) superseded
+   *  before inserting this one, so retrieval returns the LATEST value. Legacy modes never set this. */
+  supersede?: boolean;
 }
 
 export interface SearchChunksInput {
@@ -68,6 +71,9 @@ export interface LookupTriplesInput {
   scope?: RagScope;
   agentId?: string;
   mode?: SharingMode;
+  /** "researched" mode only: exclude triples that have been superseded by a newer same-key fact, so
+   *  only the latest value is returned. Legacy modes leave this false → all triples visible (unchanged). */
+  excludeSuperseded?: boolean;
 }
 
 export interface RagStore {

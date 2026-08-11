@@ -196,7 +196,7 @@ const Input = z.object({
   // app-managed transcript + explicit self-recall injection. "responses-chain"/"conversation" are
   // SCAFFOLD: they carry through but the runtime logs a marker and behaves as reconstruction (no
   // OpenAI-native state plumbing yet). Absent → reconstruction.
-  memoryMode: z.enum(["reconstruction", "responses-chain", "conversation"]).optional(),
+  memoryMode: z.enum(["reconstruction", "responses-chain", "conversation", "researched"]).optional(),
   // Manual model/thinking override for THIS turn (the "change the model/thinking myself" fallback, like
   // most AI UIs). "sol" = force Sol-high, "budget" = force the Terra-high budget tier, or a ladder label
   // (e.g. "luna-high", "sol-max"). Always wins over the difficulty-driven auto-pick AND clears the Sol
@@ -908,7 +908,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           writes.push({ chunk, scope: "agent", agentId, authors });
         }
 
-        if (writes.length > 0 && shouldExtractTriples(data.text)) {
+        // "researched" mode captures the user's durable facts more aggressively (the narrow heuristic
+        // misses "budget is $10k" / "drop Cobalt") and marks them supersede:true so a changed fact hides
+        // the stale one. Legacy modes keep the heuristic gate + plain (non-superseding) writes, unchanged.
+        const researchedMem = data.memoryMode === "researched";
+        if (writes.length > 0 && (researchedMem || shouldExtractTriples(data.text))) {
           const triples = await extractTriples(data.text);
           if (triples.length > 0) {
             for (const w of writes) {
@@ -922,6 +926,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
                   confidence: t.confidence,
                   sourceChunkId: w.chunk.id,
                   authorAgentIds: w.authors,
+                  supersede: researchedMem,
                 })),
               );
             }
@@ -2083,6 +2088,29 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         }
       } catch {
         /* memory retrieval is best-effort — never block or fail the reply */
+      }
+    }
+
+    // "researched" mode: auto-inject the LATEST canonical facts (non-superseded triples) so a value the
+    // user changed (budget $8k→$10k, a dropped vendor, a moved date) is ALWAYS present and current — even
+    // cross-huddle, where the short transcript window can't carry it and a stale chunk would otherwise win
+    // retrieval. This is the piece that fixes the cross-huddle STALE result. Best-effort; never blocks.
+    if (data.memoryMode === "researched" && ragCfg && ragCfg.store === "azure" && openaiKey) {
+      try {
+        const { azurePgStore } = await import("./rag/azure-pg.server");
+        const facts = await azurePgStore.lookupTriples({
+          query: data.text,
+          mode: ragCfg.sharing ?? "shared",
+          excludeSuperseded: true,
+          k: 8,
+        });
+        if (facts.length) {
+          memoryBlock +=
+            "\n\nLatest known facts (these supersede anything older — treat as the current truth):\n" +
+            facts.map((f) => `- ${f.subject} ${f.predicate} ${f.object}`).join("\n");
+        }
+      } catch {
+        /* best-effort — never block the reply */
       }
     }
 
@@ -3777,7 +3805,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         let conversationId: string | undefined;
         let conversationEmail: string | null = null;
         let personaTranscript = transcript;
-        if (memoryMode === "conversation" && data.scope === "one-to-one") {
+        // "researched" is a SUPERSET of "conversation": 1:1 DMs behave identically (native thread),
+        // while group/ceremony turns additionally persist agent replies + tool-confirmed triples and
+        // rank retrieval by recency/supersession (see the post-turn memory write below).
+        if (
+          (memoryMode === "conversation" || memoryMode === "researched") &&
+          data.scope === "one-to-one"
+        ) {
           try {
             const email = await resolveCallerEmail();
             const { getOrCreateConversationId } = await import("./rag/conversation-store.server");
@@ -5172,6 +5206,81 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     reasoning: reasoningSummaries,
   });
 
+  // "researched" mode, GROUP/ceremony only (1:1 is carried by the conversation object): after the turn,
+  // persist (A1) a distilled record of each agent's reply as a shared episodic chunk attributed to that
+  // agent — so what an agent SAID survives beyond the ~14-message window and is retrievable cross-huddle —
+  // and (tool-confirmed triples) extract canonical facts ONLY from an agent's successful tool outcomes
+  // (never free-form text, so a hallucination can't become a fact-of-record), superseding older values.
+  // Fire-and-forget: the reply has already returned; a failure here never affects the turn.
+  let researchedMemPersisted = false;
+  function persistResearchedMemory() {
+    if (researchedMemPersisted) return;
+    researchedMemPersisted = true;
+    if (data.memoryMode !== "researched" || data.scope === "one-to-one" || !openaiKey) return;
+    const anyShared = data.members.some((id) => {
+      const c = agentsCfg[id]?.rag;
+      return c?.store === "azure" && c.chunks && (c.sharing ?? "shared") === "shared";
+    });
+    if (!anyShared) return; // respect privacy: only persist when the room shares memory
+    const finalReplies = [...replies];
+    const finalTools = [...toolUses];
+    (async () => {
+      try {
+        const { azurePgStore } = await import("./rag/azure-pg.server");
+        const { embed } = await import("./rag/embed.server");
+        const { extractTriples } = await import("./rag/triples.server");
+        const src = `huddle:${data.huddleId}`;
+        // A1 — distilled agent-reply chunks
+        for (const r of finalReplies) {
+          const gist = String(r.text || "").replace(/\s+/g, " ").trim().slice(0, 400);
+          if (gist.length < 12) continue;
+          const name = AGENT_BY_ID[r.agentId]?.name ?? r.agentId;
+          const text = `${name} said: ${gist}`;
+          let vec: number[] | null = null;
+          try {
+            vec = await embed(text);
+          } catch {
+            vec = null;
+          }
+          if (!vec) continue;
+          await azurePgStore.writeChunk({
+            scope: "global",
+            text,
+            source: src,
+            embedding: vec,
+            authorAgentIds: [r.agentId],
+          });
+        }
+        // Tool-confirmed triples — canonical facts an agent actually established (ok:true only)
+        for (const t of finalTools) {
+          if (!t.ok || !t.summary) continue;
+          const name = AGENT_BY_ID[t.agentId]?.name ?? t.agentId;
+          let facts: { subject: string; predicate: string; object: string; confidence: number }[] = [];
+          try {
+            facts = await extractTriples(`${name} ${t.tool}: ${t.summary}`);
+          } catch {
+            facts = [];
+          }
+          if (facts.length) {
+            await azurePgStore.writeTriples(
+              facts.map((f) => ({
+                scope: "global" as const,
+                subject: f.subject,
+                predicate: f.predicate,
+                object: f.object,
+                confidence: f.confidence,
+                authorAgentIds: [t.agentId],
+                supersede: true,
+              })),
+            );
+          }
+        }
+      } catch (e) {
+        console.error("[researched-mem] persist failed", e instanceof Error ? e.message : e);
+      }
+    })();
+  }
+
   // Mid-chunk STREAM: push the replies produced so far to the durable store the instant a wave (or
   // a ceremony agent) lands, so the client's poll renders each reply as it arrives instead of the
   // whole chunk at once. Keeps status 'running' and does NOT bump the chunk counter (see
@@ -5341,9 +5450,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     } catch (e) {
       console.error("[turn-chunk] done save failed", e instanceof Error ? e.message : e);
     }
+    persistResearchedMemory();
     return { ...finalResult(), partial: false };
   }
 
+  persistResearchedMemory();
   return finalResult();
 }
 

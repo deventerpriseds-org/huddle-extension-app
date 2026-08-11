@@ -13,6 +13,21 @@ parallel one. Each item names its exact plug-in point.
 - **GROUP** = reconstruction (~14-msg window + shared RAG), no conversation object → same gaps as
   cross-huddle once a fact leaves the window. (Faithful group baseline re-running now via the durable path.)
 
+## Memory ontology (agreed 2026-08-11 — who writes to each store)
+Three stores, deliberate split so agent chatter can never masquerade as the user's fact-of-record:
+- **Triples (`rag_triples`) = canonical facts, superseding.** Written from **(a) the user's messages**
+  AND **(b) an agent reply's TOOL-CONFIRMED outcomes only** (`ToolUseEvent.ok===true` — booked/scheduled/
+  created/sent/updated; extract from `summary`, attribute `author_agent_ids=[agentId]`). NEVER free-form
+  agent text. Supersession (A3) lives here (same subject+predicate → newest wins).
+- **Chunks (`rag_chunks`) = episodic memory, user + agents.** A1 persists the agent's distilled reply
+  here (attributed). Recency ranking (A3) applies here.
+- **Native OpenAI conversation object = 1:1 thread only, unchanged.** Keyed `(user,huddle,agent)` — a
+  linear per-agent-per-room thread, so it CANNOT bridge huddles/agents (group has none); shared RAG is
+  the only cross-huddle bridge, which is why fixing RAG is the only lever that moves cross-huddle.
+
+All of the above is gated behind the **`researched`** memory mode (new default). Selecting `conversation`
+or `reconstruction` makes every addition inert.
+
 ## The build (A1–A3)
 
 ### A1 — Persist a distilled agent-reply record (episodic). *Highest leverage, smallest change.*

@@ -115,8 +115,12 @@ CREATE TABLE IF NOT EXISTS rag_triples (
 );
 
 ALTER TABLE rag_triples ADD COLUMN IF NOT EXISTS author_agent_ids TEXT[] DEFAULT '{}';
+-- "researched" memory mode: supersession marker so a changed fact hides the stale prior value.
+ALTER TABLE rag_triples ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS rag_triples_subject_idx ON rag_triples (subject);
+CREATE INDEX IF NOT EXISTS rag_triples_live_key_idx
+  ON rag_triples (scope, lower(subject), lower(predicate)) WHERE superseded_at IS NULL;
 CREATE INDEX IF NOT EXISTS rag_triples_fts_idx
   ON rag_triples USING gin (to_tsvector('english', subject || ' ' || predicate || ' ' || object));
 CREATE INDEX IF NOT EXISTS rag_triples_authors_idx
@@ -429,6 +433,21 @@ export const azurePgStore: RagStore = {
     if (inputs.length === 0) return { ids: [] };
     const ids: string[] = [];
     for (const t of inputs) {
+      // "researched" mode: supersede any prior LIVE fact with the same (scope, subject, predicate) so
+      // retrieval returns only this latest value. Fail-safe: a supersession error never blocks the
+      // insert (e.g. if the superseded_at column isn't present yet in some environment).
+      if (t.supersede) {
+        try {
+          await q(
+            `UPDATE rag_triples SET superseded_at = now()
+             WHERE scope = $1 AND lower(subject) = lower($2) AND lower(predicate) = lower($3)
+               AND superseded_at IS NULL`,
+            [t.scope, t.subject, t.predicate],
+          );
+        } catch (err) {
+          console.warn("[rag] triple supersession skipped:", err);
+        }
+      }
       const { rows } = await q<{ id: string }>(
         `INSERT INTO rag_triples (scope, agent_id, subject, predicate, object, confidence, source_chunk_id, author_agent_ids)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -511,6 +530,11 @@ export const azurePgStore: RagStore = {
     if (input.query) {
       params.push(input.query);
       where += ` AND to_tsvector('english', subject || ' ' || predicate || ' ' || object) @@ plainto_tsquery('english', $${params.length})`;
+    }
+    // "researched" mode: hide facts a newer same-key fact has superseded (legacy modes leave this off →
+    // all triples visible, unchanged). Guarded expression so it's inert if the column doesn't exist yet.
+    if (input.excludeSuperseded) {
+      where += ` AND superseded_at IS NULL`;
     }
     params.push(k);
     const { rows } = await q(

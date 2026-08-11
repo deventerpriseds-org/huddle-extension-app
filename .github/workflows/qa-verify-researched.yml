@@ -1,0 +1,30 @@
+name: QA verify researched memory (A3 supersession + cross-huddle, live)
+
+# Verifies the "researched" memory mode against the DEPLOYED app: state a fact to one agent, change it,
+# then ask a DIFFERENT agent (empty history) — supersession + latest-facts injection should return the
+# LATEST value cross-huddle, not the stale one. Builds first for fresh server-fn ids. journey disabled
+# (no board writes); run marker printed for cleanup.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  verify-researched:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install deps
+        run: npm ci
+      - name: Build (fresh server-fn ids)
+        continue-on-error: true
+        run: npm run build
+      - name: Run researched-memory verification
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          HUDDLE_BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          HUDDLE_CALLER: von.ellis@enterpriseds.io
+        run: node .claude/skills/test-agent-serverfn/scripts/verify-researched-memory.mjs
