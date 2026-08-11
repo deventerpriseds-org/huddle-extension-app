@@ -471,6 +471,23 @@ function Composer({ huddle }: { huddle: Huddle }) {
   // applied — so a turn that streams in across several polls applies those exactly once, at 'done'.
   const finalizedTurns = useRef<Set<string>>(new Set());
 
+  // Auto-grow the composer like SMS/Teams/Slack: one row when empty, growing up to 5 rows as the
+  // user types, then scrolling internally. Keyed on `text` so it also fits content set
+  // programmatically (dictation appends via setText), not just keystrokes.
+  const COMPOSER_MAX_ROWS = 5;
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const cs = getComputedStyle(el);
+    const line = parseFloat(cs.lineHeight) || 20;
+    const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    const maxH = line * COMPOSER_MAX_ROWS + padY;
+    const next = Math.min(el.scrollHeight, maxH);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > maxH + 1 ? "auto" : "hidden";
+  }, [text]);
+
   const targetAgentId: AgentId | undefined =
     huddle.kind === "one-to-one" ? huddle.members[0] : undefined;
   const scope = huddle.kind;
@@ -931,8 +948,11 @@ function Composer({ huddle }: { huddle: Huddle }) {
 
   return (
     <div className="border-t border-hairline bg-surface px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-3">
-      <div className="mx-auto flex max-w-3xl items-end gap-2">
-        <div className="flex-1 rounded-2xl border border-hairline bg-background px-3 py-2 focus-within:ring-2 focus-within:ring-ring">
+      <div className="mx-auto max-w-3xl">
+        {/* Full-width composer card (SMS/Teams/Slack-style): meta row, auto-growing textarea,
+            then a docked action row so the input keeps the full width and the actions never
+            crowd it. */}
+        <div className="rounded-2xl border border-border bg-background px-3 pt-2 pb-1.5 transition focus-within:border-ring focus-within:ring-2 focus-within:ring-ring">
           <div className="mb-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <span className="rounded bg-muted px-1.5 py-0.5 font-medium">
               {huddle.kind === "group" ? "@all" : `@${AGENT_BY_ID[huddle.members[0]].handle}`}
@@ -955,77 +975,79 @@ function Composer({ huddle }: { huddle: Huddle }) {
             }}
             rows={1}
             placeholder="Message the huddle…"
-            className="w-full resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            className="block max-h-[7rem] w-full resize-none overflow-y-hidden break-words bg-transparent py-0 text-sm leading-5 outline-none placeholder:text-muted-foreground"
             autoFocus
           />
+          <div className="mt-1.5 flex items-center gap-1.5">
+            {push.supported && push.permission !== "granted" && (
+              <button
+                type="button"
+                onClick={toggleNotifications}
+                disabled={push.busy}
+                className="inline-flex size-9 items-center justify-center rounded-full border border-hairline bg-surface text-muted-foreground transition hover:bg-muted disabled:opacity-50"
+                aria-label="Enable notifications for replies while you're away"
+                title="Notify me when a reply lands while I'm away"
+              >
+                {push.busy ? <Loader2 size={16} className="animate-spin" /> : <Bell size={16} />}
+              </button>
+            )}
+            {push.supported && push.permission === "granted" && (
+              <span
+                className="inline-flex size-9 items-center justify-center rounded-full border border-hairline bg-surface text-primary"
+                aria-label="Notifications on"
+                title="Notifications on — we'll ping you when a reply lands while you're away"
+              >
+                <BellRing size={16} />
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={startVoice}
+              className="inline-flex size-9 items-center justify-center rounded-full border border-hairline bg-surface text-muted-foreground transition hover:bg-muted"
+              aria-label="Start voice conversation"
+            >
+              <AudioLines size={16} />
+            </button>
+            {dictation.supported && (
+              <button
+                type="button"
+                onClick={handleDictate}
+                disabled={dictation.transcribing}
+                className={cn(
+                  "inline-flex size-9 items-center justify-center rounded-full border border-hairline transition disabled:opacity-50",
+                  dictation.recording
+                    ? "bg-destructive text-destructive-foreground"
+                    : "bg-surface text-muted-foreground hover:bg-muted",
+                )}
+                style={
+                  dictation.recording
+                    ? {
+                        boxShadow: `0 0 0 ${Math.round(2 + dictation.level * 8)}px color-mix(in oklch, var(--destructive) 22%, transparent)`,
+                      }
+                    : undefined
+                }
+                aria-label={dictation.recording ? "Stop dictation" : "Dictate"}
+              >
+                {dictation.transcribing ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : dictation.recording ? (
+                  <Square size={13} />
+                ) : (
+                  <Mic size={16} />
+                )}
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={sending || !text.trim()}
+              onClick={submit}
+              className="ml-auto inline-flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-soft transition hover:opacity-90 disabled:opacity-40"
+              aria-label="Send"
+            >
+              <Send size={16} strokeWidth={2} />
+            </button>
+          </div>
         </div>
-        {push.supported && push.permission !== "granted" && (
-          <button
-            type="button"
-            onClick={toggleNotifications}
-            disabled={push.busy}
-            className="inline-flex size-10 items-center justify-center rounded-full border border-hairline bg-background text-muted-foreground transition hover:bg-muted disabled:opacity-50"
-            aria-label="Enable notifications for replies while you're away"
-            title="Notify me when a reply lands while I'm away"
-          >
-            {push.busy ? <Loader2 size={16} className="animate-spin" /> : <Bell size={16} />}
-          </button>
-        )}
-        {push.supported && push.permission === "granted" && (
-          <span
-            className="inline-flex size-10 items-center justify-center rounded-full border border-hairline bg-background text-primary"
-            aria-label="Notifications on"
-            title="Notifications on — we'll ping you when a reply lands while you're away"
-          >
-            <BellRing size={16} />
-          </span>
-        )}
-        <button
-          type="button"
-          onClick={startVoice}
-          className="inline-flex size-10 items-center justify-center rounded-full border border-hairline bg-background text-muted-foreground transition hover:bg-muted"
-          aria-label="Start voice conversation"
-        >
-          <AudioLines size={16} />
-        </button>
-        {dictation.supported && (
-          <button
-            type="button"
-            onClick={handleDictate}
-            disabled={dictation.transcribing}
-            className={cn(
-              "inline-flex size-10 items-center justify-center rounded-full border border-hairline transition disabled:opacity-50",
-              dictation.recording
-                ? "bg-destructive text-destructive-foreground"
-                : "bg-background text-muted-foreground hover:bg-muted",
-            )}
-            style={
-              dictation.recording
-                ? {
-                    boxShadow: `0 0 0 ${Math.round(2 + dictation.level * 8)}px color-mix(in oklch, var(--destructive) 22%, transparent)`,
-                  }
-                : undefined
-            }
-            aria-label={dictation.recording ? "Stop dictation" : "Dictate"}
-          >
-            {dictation.transcribing ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : dictation.recording ? (
-              <Square size={13} />
-            ) : (
-              <Mic size={16} />
-            )}
-          </button>
-        )}
-        <button
-          type="button"
-          disabled={sending || !text.trim()}
-          onClick={submit}
-          className="inline-flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-soft transition hover:opacity-90 disabled:opacity-40"
-          aria-label="Send"
-        >
-          <Send size={16} strokeWidth={2} />
-        </button>
       </div>
     </div>
   );

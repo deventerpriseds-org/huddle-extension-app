@@ -1,6 +1,30 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-11
 
+## Mobile chat composer — auto-grow + keyboard-overlap (implemented, verifying; NOT user-confirmed live, 2026-08-11)
+User report (Android/Gboard screenshot, 1:1 huddle): the composer doesn't behave like SMS/Teams/Slack —
+the text box is narrow, single-row (no growth), and the on-screen keyboard COVERS it. Approved a light-mode
+prototype (Current/Improved toggle) then chose **5 rows** + "don't drop any existing functionality or chat
+typing buttons." Fix = 3 edits on branch `claude/huddle-ui-issues-fdh3wr`:
+- **`src/routes/__root.tsx`** viewport meta → added `viewport-fit=cover, interactive-widget=resizes-content`.
+  This is the ROOT-CAUSE keyboard fix: the app shell is `h-dvh` (`HuddleApp.tsx`), and without
+  `interactive-widget=resizes-content` the Android keyboard resizes only the visual viewport (default
+  `resizes-visual`), so `dvh`/the flex column don't shrink and the composer sits behind the keyboard.
+- **`HuddleView.tsx` `Composer`** — added an auto-grow `useEffect` keyed on `text` (so it also fits
+  programmatic `setText` from dictation): 1 row → cap `COMPOSER_MAX_ROWS=5` → `overflowY:auto`.
+- **`HuddleView.tsx` JSX** — restructured to ONE full-width rounded card (meta row + textarea + docked
+  action row) instead of textarea-flanked-by-buttons. ALL FOUR controls preserved inside the docked row
+  (notification bell, voice/AudioLines, dictation/Mic, send) — nothing dropped. Buttons `size-9`.
+- **Scope note:** the MeetingBar ceremony composer (`"Message the room…"`) is a SEPARATE component and was
+  intentionally NOT touched. `npm run build` GREEN.
+- **Verify gotcha (relearned):** the full React dev server can't bind in a CCR sandbox — TanStack Start/nitro
+  (via `@lovable.dev/vite-tanstack-config`) forces listen host IPv6 `::` on 8080 and the container returns
+  EAFNOSUPPORT (no IPv6); patching the wrapper's `host` didn't help (the `::` comes from nitro/listhen below
+  it). So live-app Playwright in-sandbox is a dead end (matches repo rule: live Playwright runs in GHA). Used
+  an independent `verifier` + Playwright DOM harness (real built CSS `.output/public/assets/styles-*.css` +
+  exact final markup/logic) served on IPv4 `python3 -m http.server`. **Keyboard-overlap is MECHANISM-ONLY
+  until the user re-tests on their phone post-deploy.**
+
 ## Iris "400 No tool output found for function call" — poisoned conversation object (FIXED + DEPLOYED d422a82, 2026-08-11)
 Live break: Iris 1:1 returned `OpenAI Responses 400: No tool output found for function call call_…` on
 EVERY turn (even "Hello?"). Root cause: in conversation-object memory mode (1:1 default), OpenAI stores

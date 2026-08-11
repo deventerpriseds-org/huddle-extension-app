@@ -3,6 +3,22 @@ Last updated: 2026-08-06 (three fixes live + Option-1 Postgres-MCP deploy workfl
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
+### 🔨 ACT-huddle-UI-compose: Mobile chat composer — auto-grow + keyboard-overlap fix
+**Requested:** 2026-08-11 (screenshot: Android Gboard covering the 1:1 composer; box doesn't grow).
+Want SMS/Teams/Slack behavior: wider full-width input that grows to ~3–5 rows then scrolls, and the
+composer must stay ABOVE the on-screen keyboard. User picked **5 rows** and "don't drop any existing
+functionality or chat typing buttons." Flow: light-mode prototype → user preview/approve → implement → Playwright.
+**Prototype:** delivered + approved (artifact 63ecb693, Current/Improved toggle).
+**Implemented (branch `claude/huddle-ui-issues-fdh3wr`, NOT yet committed/merged/deployed):**
+(1) `__root.tsx` viewport meta += `viewport-fit=cover, interactive-widget=resizes-content` (root-cause keyboard fix);
+(2) `HuddleView.tsx` Composer — auto-grow effect keyed on `text` (1→5 rows then internal scroll; fires on
+dictation setText too); (3) restructured to full-width card with all 4 controls (bell/voice/dictate/send) docked
+inside — none dropped. `npm run build` GREEN, no TS errors in changed files.
+**Verification:** independent `verifier` subagent running a Playwright DOM harness (real built CSS + exact final
+markup/logic) — full app dev server can't bind in-sandbox (TanStack/nitro forces IPv6 `::8080`, EAFNOSUPPORT).
+Keyboard-overlap is **mechanism-only** until the USER re-tests live on their phone. Status: **implemented, mechanism
+verification in progress, NOT user-confirmed live.**
+
 ### 🔨 ACT-huddle-27: Long-memory worker-grade conversationalist (A1–A6 + full test matrix)
 **Requested:** 2026-08-10 — agents forget across turns, fabricate, unaware of tools/preconditions, drift.
 Want a real 20-turn worker conversation (pointer words, "how many / is it finished", topic-switch-return,
