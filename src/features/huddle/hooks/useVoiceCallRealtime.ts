@@ -265,6 +265,9 @@ export function useVoiceCallRealtime(): VoiceCallRealtimeController {
     async (agentId: AgentId, text: string, opts?: { speak?: boolean }): Promise<void> => {
       const trimmed = text.trim();
       if (!trimmed) return;
+      // This send is a USER GESTURE — unlock mobile audio autoplay so the agent's spoken reply can play.
+      // Without this, mobile blocks the async .play() (reply renders as text, no audio, no error).
+      if (opts?.speak ?? true) void ceremony.unlockAudio();
       exchangeGenRef.current += 1;
       const gen = exchangeGenRef.current;
       const speak = opts?.speak ?? true;
@@ -307,6 +310,8 @@ export function useVoiceCallRealtime(): VoiceCallRealtimeController {
   const connect = useCallback(
     async (agentId: AgentId): Promise<StartVoiceResult> => {
       agentIdRef.current = agentId;
+      // Joining the call is a user gesture — unlock mobile audio autoplay up front so replies can play.
+      void ceremony.unlockAudio();
       exchangeGenRef.current += 1; // invalidate any exchange from a previous call
       setError(null);
       setCaptions([]);

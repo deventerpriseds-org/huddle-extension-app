@@ -71,6 +71,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   const streamRef = useRef<MediaStream | null>(null);
   const agentIdRef = useRef<AgentId | null>(null);
   const genRef = useRef(0);
+  const lastVoiceErrGenRef = useRef(-1); // one voice-failure toast per reply (gen), not per sentence
   const connectingRef = useRef(false);
   const micMutedRef = useRef(false);
   micMutedRef.current = micMuted;
@@ -92,6 +93,8 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   const audioQueueRef = useRef<string[]>([]);
   const audioPlayingRef = useRef(false);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUnlockedRef = useRef(false);
+  const lastPlayErrAtRef = useRef(0); // throttle the playback-error toast (one per 4s, not per clip)
   // Barge epoch — bumped on every user barge. A synth started before a barge is DISCARDED when it
   // resolves after the barge (fixes the "ghost audio" that played the interrupted reply over the user).
   const bargeEpochRef = useRef(0);
@@ -122,6 +125,31 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
     }
   }, []);
 
+  // Mobile autoplay unlock — MUST run inside a user gesture (join / send / mic tap). Plays a silent,
+  // UNMUTED (volume 0) primer so later programmatic .play() of TTS clips is permitted for the session.
+  // A MUTED play would NOT unlock unmuted audio (muted autoplay is always allowed → grants nothing).
+  // Idempotent + never throws. Best-effort: iOS Safari can still gate unmuted playback per-element.
+  const unlockAudio = useCallback(() => {
+    if (audioUnlockedRef.current || typeof Audio === "undefined") return;
+    try {
+      const primer = new Audio(
+        "data:audio/wav;base64,UklGRjIAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQ4AAAAAAAAAAAAAAAAAAAAAAAA=",
+      );
+      primer.volume = 0;
+      void primer
+        .play()
+        .then(() => {
+          primer.pause();
+          audioUnlockedRef.current = true;
+        })
+        .catch(() => {
+          /* still locked — the real clip's play() rejection surfaces "tap to enable audio" */
+        });
+    } catch {
+      /* noop */
+    }
+  }, []);
+
   const drainAudio = useCallback(() => {
     if (audioPlayingRef.current) return;
     const next = audioQueueRef.current.shift();
@@ -142,7 +170,23 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
     };
     el.onended = step;
     el.onerror = step;
-    el.play().catch(step);
+    // A rejected play() was previously swallowed (step silently) — on mobile the async play() is blocked
+    // by autoplay policy, so every reply clip was skipped: text rendered, no audio, NO error (the reported
+    // default-engine 1:1 bug). Surface it (throttled; NotAllowedError → "tap to enable"), THEN continue.
+    el.play().catch((err: unknown) => {
+      const now = Date.now();
+      if (now - lastPlayErrAtRef.current > 4000) {
+        lastPlayErrAtRef.current = now;
+        const name = err instanceof Error ? err.name : "";
+        const blocked = name === "NotAllowedError" || name === "NotSupportedError";
+        toast.error(
+          blocked
+            ? "🔇 Sound is blocked — tap anywhere in the call to enable audio, then try again."
+            : `🔇 Couldn't play voice: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      step();
+    });
   }, [setModeBoth]);
 
   const enqueueAudio = useCallback((b64: string) => {
@@ -157,11 +201,25 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
     const s = text.trim();
     if (!s) return;
     const epoch = bargeEpochRef.current;
+    // Surface a GENUINE synth failure (a thrown error OR ok:false, e.g. "ELEVENLABS_API_KEY is not
+    // configured.") to the user — ONCE per reply so a multi-sentence failure doesn't spam. Stays silent
+    // for an aborted turn (gen/epoch moved: barge or a newer exchange superseded this one). Before this,
+    // both failure branches were dropped silently → the reply text rendered but no audio played and the
+    // user saw no reason why (the reported "chat shows, no audio" bug on the default realtime-speak engine).
+    const surface = (reason: string) => {
+      if (genRef.current !== gen || bargeEpochRef.current !== epoch) return; // aborted — not a real failure
+      if (lastVoiceErrGenRef.current === gen) return; // already told the user about this reply
+      lastVoiceErrGenRef.current = gen;
+      toast.error(`🔇 Couldn't play voice: ${reason}`);
+    };
     try {
       const spoken = await synthesizeSpeech({ data: { text: s, agentId } });
-      if (genRef.current !== gen || bargeEpochRef.current !== epoch) return;
-      if (spoken.ok && spoken.audioBase64) enqueueAudio(spoken.audioBase64);
-    } catch { /* skip on TTS error */ }
+      if (genRef.current !== gen || bargeEpochRef.current !== epoch) return; // superseded — discard
+      if (spoken.ok && spoken.audioBase64) { enqueueAudio(spoken.audioBase64); return; }
+      surface(spoken.ok ? "no audio was returned" : spoken.error);
+    } catch (err) {
+      surface(err instanceof Error ? err.message : String(err));
+    }
   }, [enqueueAudio]);
 
   // STREAMING SYNTH (Fix A): drain COMPLETE sentences from the pending buffer and synth each the moment
@@ -249,6 +307,8 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
       const ok = (): StartVoiceResult => ({ ok: true, signedUrl: "", elAgentId: agentId, hasVoice: true, created: false });
       if (!supported) { failWith("Voice isn't supported on this device."); return ok(); }
       if (connectingRef.current || status === "connected") return ok();
+      // Joining is a user gesture — unlock mobile audio autoplay so agent TTS clips can play.
+      unlockAudio();
       connectingRef.current = true;
       agentIdRef.current = agentId;
       genRef.current += 1;
@@ -460,12 +520,13 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   );
 
   const toggleMic = useCallback(() => {
+    unlockAudio(); // mic tap is a user gesture — unlock audio autoplay
     setMicMuted((m) => {
       const next = !m;
       streamRef.current?.getAudioTracks().forEach((t) => (t.enabled = !next));
       return next;
     });
-  }, []);
+  }, [unlockAudio]);
 
   // Typed entry: inject a user text turn (parity with the composer / UAT impersonation).
   const sendText = useCallback(
@@ -473,6 +534,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
       const trimmed = text.trim();
       const dc = dcRef.current;
       if (!trimmed || !dc || dc.readyState !== "open") return;
+      unlockAudio(); // send is a user gesture — unlock audio autoplay so the reply can be spoken
       if (agentIdRef.current && AGENT_BY_ID[agentIdRef.current]) persist("user", agentIdRef.current, trimmed);
       dc.send(JSON.stringify({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: trimmed }] } }));
       dc.send(JSON.stringify({ type: "response.create" }));

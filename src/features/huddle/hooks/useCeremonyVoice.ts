@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import type { AgentId } from "../data/agents";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import { getRealtimeSession, REALTIME_MODEL } from "../lib/voice/realtime.functions";
@@ -55,6 +56,9 @@ export interface CeremonyVoiceController {
    *  best-effort (on failure it tears the half-open transport down and unmute falls back to a full
    *  cold startListening). Scoped to the ceremony path — the 1:1 realtime voice never calls it. */
   warmSession: () => Promise<void>;
+  /** Unlock mobile audio autoplay — call from a user gesture (mic tap / send / meeting join) so agent
+   *  TTS clips are allowed to play. No-op after the first successful unlock. */
+  unlockAudio: () => Promise<void>;
   startListening: () => Promise<void>;
   /** Stop the barge mic. Default (full stop) also cuts any live agent playback + resume point — used on
    *  ceremony end / unmount / error. `{ keepAudio: true }` is a CAPTURE-ONLY stop (mic mute): it tears
@@ -106,15 +110,44 @@ export interface CeremonyVoiceController {
   stopNarration: () => void;
 }
 
+// A ~0-sample silent WAV. Played inside a user gesture (unlock()) to grant this page session the
+// right to autoplay HTMLAudioElements — mobile browsers otherwise reject a programmatic .play() that
+// isn't tied to a gesture (NotAllowedError → "Could not start / autoplay blocked"), which silently
+// killed every TTS clip in a 1:1 call (text rendered, no audio, no error). See useCeremonyVoice below.
+const SILENT_WAV =
+  "data:audio/wav;base64,UklGRjIAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQ4AAAAAAAAAAAAAAAAAAAAAAAA=";
+
 // ── AudioQueue ────────────────────────────────────────────────────────────────
 class AudioQueue {
   private queue: Array<{ base64: string; onStart?: () => void }> = [];
   private current: HTMLAudioElement | null = null;
   private playing = false;
+  private unlocked = false;
+  /** Set by the hook so a swallowed playback rejection (e.g. mobile autoplay block) reaches the UI
+   *  instead of failing silently — the reported "1:1 shows chat, plays no audio, no error" bug. */
+  onPlayError?: (err: unknown) => void;
 
   add(base64: string, onStart?: () => void) {
     this.queue.push({ base64, onStart });
     if (!this.playing) this.drain();
+  }
+
+  /** Mobile autoplay unlock — MUST be called from within a user gesture (mic tap / send / join). Plays
+   *  a silent clip so subsequent programmatic .play() is permitted for the session. Idempotent + safe. */
+  async unlock() {
+    if (this.unlocked || typeof Audio === "undefined") return;
+    try {
+      const primer = new Audio(SILENT_WAV);
+      // NOT muted: a muted play is always allowed without a gesture, so it would NOT unlock UNMUTED
+      // autoplay. volume 0 keeps the (already silent) primer inaudible while still counting as a
+      // real unmuted, gesture-initiated play — which is what grants the session unmuted autoplay.
+      primer.volume = 0;
+      await primer.play();
+      primer.pause();
+      this.unlocked = true;
+    } catch {
+      /* still locked — the real clip's .play() rejection will surface via onPlayError so the user can tap */
+    }
   }
 
   private drain() {
@@ -134,7 +167,12 @@ class AudioQueue {
     };
     el.onended = next;
     el.onerror = next;
-    el.play().catch(next);
+    // A rejected play() was previously swallowed (advance silently). Surface it (once, via the hook) so
+    // an autoplay block is visible + actionable, THEN continue draining so the transcript stays in sync.
+    el.play().catch((err) => {
+      this.onPlayError?.(err);
+      next();
+    });
   }
 
   clearAndStop() {
@@ -246,6 +284,8 @@ export function useCeremonyVoice(hookOpts: {
   const startListeningRef = useRef<(() => Promise<void>) | null>(null);
 
   const audioQueueRef = useRef<AudioQueue>(new AudioQueue());
+  // Throttle the audio-playback-error toast (a per-clip failure could otherwise fire many times).
+  const lastPlayErrAtRef = useRef(0);
   // Saved when barge fires so resumeFromFreeze can restart from the same sentence.
   const freezeRef = useRef<FreezePos | null>(null);
 
@@ -300,16 +340,30 @@ export function useCeremonyVoice(hookOpts: {
       // current one's playback, so the next clip is ready the instant the current finishes → gapless.
       // synthOne never throws (returns "" on error, which is skipped). A discarded prefetch after a
       // barge is harmless (a wasted synth call).
+      let synthErrSurfaced = false; // one voice-failure toast per reply, not per sentence
       const synthOne = async (s: string): Promise<string> => {
-        // COST GUARD: never spend an ElevenLabs call when no one can hear it — the tab is hidden or the
-        // user has switched away. Checked at synth time (per sentence), so voicing resumes on its own the
-        // moment they return, with no visibilitychange listener to leak. Returns "" → treated as no-audio
-        // (transcript still rendered below). Also covers barge answers, which route through _voiceTurn.
-        if (typeof document !== "undefined" && document.visibilityState !== "visible") return "";
+        // COST GUARD: never spend an ElevenLabs call when no one can hear it — the tab is genuinely
+        // backgrounded. Keyed on `=== "hidden"` (NOT the broader `!== "visible"`, which also matches the
+        // transient "prerender"/"unknown" states and was falsely skipping synthesis). Returns "" → treated
+        // as no-audio (transcript still rendered below). Voicing resumes on its own the moment they return.
+        // NOTE: the DEFAULT 1:1 engine is realtime-speak (no guard) — this baseline path keeps the guard so
+        // a backgrounded ceremony doesn't burn synth no one hears.
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") return "";
+        // A GENUINE failure (thrown OR ok:false, e.g. an unconfigured EL key) must NOT look like the silent
+        // cost-skip: surface it once per reply so the user sees WHY audio didn't play. Quiet for an aborted
+        // turn (genRef moved) so a barge never raises a spurious "voice failed".
+        const surface = (reason: string) => {
+          if (genRef.current !== gen || synthErrSurfaced) return;
+          synthErrSurfaced = true;
+          toast.error(`🔇 Couldn't play voice: ${reason}`);
+        };
         try {
           const r = await synthesizeSpeech({ data: { text: s, agentId } });
-          return r.ok ? r.audioBase64 : "";
-        } catch {
+          if (r.ok && r.audioBase64) return r.audioBase64;
+          surface(r.ok ? "no audio was returned" : r.error);
+          return "";
+        } catch (err) {
+          surface(err instanceof Error ? err.message : String(err));
           return "";
         }
       };
@@ -883,7 +937,27 @@ export function useCeremonyVoice(hookOpts: {
     startListeningRef.current = startListening;
   }, [startListening]);
 
+  // Surface a swallowed playback rejection (was `.catch(next)` → silent) so an autoplay block is visible
+  // and actionable instead of the reply rendering as text with no audio and no reason (the reported 1:1
+  // bug). Throttled to once / 4s. A NotAllowedError means mobile blocked autoplay — tell the user to tap.
+  useEffect(() => {
+    audioQueueRef.current.onPlayError = (err: unknown) => {
+      const now = Date.now();
+      if (now - lastPlayErrAtRef.current < 4000) return;
+      lastPlayErrAtRef.current = now;
+      const name = err instanceof Error ? err.name : "";
+      const blocked = name === "NotAllowedError" || name === "NotSupportedError";
+      toast.error(
+        blocked
+          ? "🔇 Sound is blocked — tap anywhere in the call to enable audio, then try again."
+          : `🔇 Couldn't play voice: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    };
+  }, []);
+
   return {
+    // Unlock mobile autoplay from a user gesture (mic tap / send / join) — see AudioQueue.unlock.
+    unlockAudio: () => audioQueueRef.current.unlock(),
     status,
     activeSpeaker,
     // Most-recent speaker (never null once anyone has spoken) — the barge path uses this to pin an
