@@ -70,6 +70,22 @@ self-heal (d422a82) cleanly. Files: agent-backends.ts, huddle.functions.ts (writ
 ~2024 latest-facts, persistResearchedMemory ~5137, conv gate ~3735), azure-pg.server.ts (superseded_at +
 writeTriples supersede + lookupTriples excludeSuperseded), rag/types.ts, triples.server.ts, SettingsSheet.
 
+**✅ A2 SHIPPED + VERIFIED LIVE (2026-08-11, main 921fe4b, build ✅).** User-scoped facts-and-collections
+ledger fixes the list-mutation case triples can't. NEW `rag/ledger-store.server.ts` (chat.user_ledger,
+self-bootstrapping; get/applyLedgerOps(pure)/renderLedger + LLM op-deriver gpt-5.5 strict-schema reuse-keys
++ upsert; all best-effort→no-op). huddle.functions.ts: fire-and-forget `updateLedgerFromTurn` per user msg
+(~1113, researched, ALL scopes so it bridges huddles, off critical path); inject `renderLedger(getLedger)`
+into memoryBlock (~2144) as authoritative current state. Gated researched; reversible. **VERIFY (deployed,
+cross-agent Finn→Troy empty-history): vendors → ✅ "Acme, Brightline, Delta" (Cobalt out, Delta in — the
+delta-edited LIST that FAILED pre-A2 now flips cross-huddle); date → ✅ 21st; budget → Troy DEFERRED to Finn
+(finance capability-handoff, NOT a memory miss — same ledger fed the correct vendors/date; prior run Troy
+answered $10k directly).** So A1+A2+A3 all live+proven: scalar supersession (A3), list mutation (A2),
+episodic agent replies + tool-confirmed triples (A1). Cleanup 0/0/0 (14 triples+9 chunks+1 conv+1 ledger).
+Model cost note: A2 adds one cheap gpt-5.5 op-derive per researched turn (fire-and-forget, no user latency).
+NOT-yet-done tuning: ledger key-normalization robustness; supersession subject/predicate matching for
+scalars is exact-match (works when restated consistently). Harness: verify-researched-memory.mjs +
+qa-verify-researched.yml.
+
 **Earlier RUN (31458699060, 0 fallbacks, 44/44): 1:1 held 18/18 — incl. ALL 4 supersession probes returning
 LATEST** (budget $10k not 8k, recital 21 not 14, team 13 not 12, Cobalt dropped + Delta added) + consistency
 sweep CONSISTENT + self-correction CORRECTED. **KEY CORRECTION to my A1-A3 answer:** the deployed 1:1 uses
