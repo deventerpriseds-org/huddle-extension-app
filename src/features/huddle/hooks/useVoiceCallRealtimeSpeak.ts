@@ -11,6 +11,7 @@ import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import type { VoiceCallController, VoiceStatus, VoiceCaption } from "./useVoiceCall";
 import type { StartVoiceResult } from "../lib/voice/voice.functions";
 import { saveCeremonyTranscript } from "../lib/ceremony/ceremony-transcript.functions";
+import { rememberVoiceTurn } from "../lib/voice/voice-memory.functions";
 
 // Approach A — EL-VOICE HYBRID ("Realtime speaks, ElevenLabs voices it"). PROVEN, do not re-derive:
 // OpenAI Realtime can't emit an EL cloned voice, so we use Realtime purely as the fast STREAMING BRAIN.
@@ -317,6 +318,9 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
           turns: [{ seq: callSeqRef.current++, speaker: role, agentId, text, kind: "voice", ts }],
         },
       }).catch(() => {});
+      // Also write the turn into shared RAG memory so voice content is RECALLABLE in later text/voice
+      // turns (ACT-huddle-37) — the transcript store above is only for review, not retrieval.
+      void rememberVoiceTurn({ data: { caller: callerFor(), agentId, role, text } }).catch(() => {});
     },
     [addUserMessage, addAgentMessage, callerFor],
   );

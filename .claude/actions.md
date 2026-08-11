@@ -2108,4 +2108,4 @@ green); view live (1,581 rows). classifyConfirmReply 21/21 offline.
 - AC-1: Given a voice-call turn (user ask + agent substantive reply), when it completes, then its text is written to RAG memory (rag_chunks, scope='global') like the text path — so auto-retrieval can surface it.
 - AC-2: Given a later TEXT turn in the same or another huddle, when the user references the voice content, then auto-retrieval surfaces it and the agent recalls it (no "I don't have that in this chat").
 - AC-3: Memory-pollution guard — do NOT write system/directive lines; only genuine user + agent content. Mirror the text path's guard.
-**Status:** ROOT-CAUSED — proposed fix: write voice turns to rag_chunks (memory-sensitive; confirm approach before editing the memory write path).
+**Status:** BUILT + deploying. New rememberVoiceTurn server fn (embed + writeChunk scope=global, mirrors text path) called fire-and-forget from the voice hook persist() for both user+agent turns; <3-char guard; agent turns tagged '(on a voice call)'. tsc+build clean. Live-confirm pending.
