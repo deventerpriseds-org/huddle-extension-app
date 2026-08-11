@@ -1091,6 +1091,29 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     return resolvedCallerEmail;
   };
 
+  // A2 ledger (researched mode, ALL scopes so it bridges huddles): keep the user's tracked facts & LISTS
+  // current from THIS user message — the piece that makes a delta-edited list ("drop Cobalt, add Delta")
+  // resolve to the complete latest set, which triples can't. Fire-and-forget: the reply is unaffected and
+  // any failure is swallowed. Skipped on ceremony triggers / resumed chunks / internal back-channel turns.
+  if (
+    data.memoryMode === "researched" &&
+    !isCeremonyTrigger &&
+    !resume &&
+    !data.internal &&
+    !!data.text?.trim()
+  ) {
+    (async () => {
+      try {
+        const email = await resolveCallerEmail();
+        if (!email) return;
+        const { updateLedgerFromTurn } = await import("./rag/ledger-store.server");
+        await updateLedgerFromTurn({ userEmail: email, userText: data.text });
+      } catch (e) {
+        console.error("[ledger] update failed", e instanceof Error ? e.message : e);
+      }
+    })();
+  }
+
   // Ceremony tool-call tracking. When the client passes a ceremonyRunId (a live stand-up/barge turn),
   // persist every tool invocation to chat.ceremony_transcript (kind='tool') so "said it vs did it" is
   // provable after the run — the exact gap behind "the agent said it parked but it didn't stick".
@@ -2038,6 +2061,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           memoryBlock +=
             "\n\nLatest known facts (these supersede anything older — treat as the current truth):\n" +
             facts.map((f) => `- ${f.subject} ${f.predicate} ${f.object}`).join("\n");
+        }
+      } catch {
+        /* best-effort — never block the reply */
+      }
+      // A2 ledger: inject the user's tracked facts & LISTS (authoritative current state) — user-scoped,
+      // so a list edited in the group is current here in a 1:1. This is what fixes the cross-huddle
+      // list-mutation case (vendors) that triple supersession alone can't. Best-effort.
+      try {
+        const email = await resolveCallerEmail();
+        if (email) {
+          const { getLedger, renderLedger } = await import("./rag/ledger-store.server");
+          memoryBlock += renderLedger(await getLedger(email));
         }
       } catch {
         /* best-effort — never block the reply */
