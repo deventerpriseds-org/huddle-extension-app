@@ -31,7 +31,11 @@ const OPENAI_KEY = process.env.OPENAI_API_KEY || "";
 const plugins = defaultSerovalPlugins;
 
 const GROUP = "all-members";
-const GROUP_MEMBERS = ["finn-reid", "iris-chase"];
+// SINGLE responder in group scope: the memory path (reconstruction + shared RAG) is identical to a
+// multi-agent group, but one responder completes in enqueue's first inline chunk — a multi-agent group
+// defers agents to later chunks that no runner kicks headlessly, so they return EMPTY (backlog #3). This
+// isolates the MEMORY mechanism (scope=group → NO conversation object) without the chunk-streaming issue.
+const GROUP_MEMBERS = ["finn-reid"];
 const XHUDDLE_AGENT = "troy-lennox"; // unrelated lane → recall can ONLY come from shared RAG, not his own thread
 
 // ---- server-fn transport ---------------------------------------------------------------------
@@ -91,8 +95,10 @@ function agentsCfg(ids) {
 // reconstruction; "one-to-one" with empty history → RAG-only bridge.
 let TID = 0;
 async function turn({ huddleId, scope, members, text, history, memoryMode, durable, n }) {
+  const nonce = `${MARK}-t${n}`; // per-turn unique so the getTurnUpdates poll matches THIS turn (a
+  // constant marker matched the first turn every time — the T1/T2 duplicate-reply bug).
   const base = {
-    text: `${text} [[${MARK}]]`, huddleId, scope, members,
+    text: `${text} [[${nonce}]]`, huddleId, scope, members,
     history: (history || []).slice(-14),
     router, agents: agentsCfg(members), timeZone: "America/New_York",
     caller: { entra_email: CALLER },
@@ -112,7 +118,7 @@ async function turn({ huddleId, scope, members, text, history, memoryMode, durab
         await new Promise((r) => setTimeout(r, 2500));
         const g = (await callFn(IDS.getTurnUpdates, { huddleId, sinceMs: since })).val;
         const turns = Array.isArray(g) ? g : g?.turns || g?.updates || [];
-        const t = turns.find((x) => String(x.userText ?? x.payload?.text ?? "").includes(MARK));
+        const t = turns.find((x) => String(x.userText ?? x.payload?.text ?? "").includes(nonce));
         const reps = t?.replies || t?.result?.replies || [];
         reason = reason || t?.decision?.reason || t?.result?.decision?.reason || "";
         const joined = reps.map((r) => String(r.text || "")).join(" ");
