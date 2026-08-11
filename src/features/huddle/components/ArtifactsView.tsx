@@ -60,6 +60,36 @@ function ago(iso: string): string {
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
 }
+/** A human date-group header for an artifact's timestamp: Today / Yesterday / weekday (this week) /
+ *  full date (older). Used to group the artifacts list by day (ACT-huddle-41). */
+function dateGroupLabel(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return d.toLocaleDateString(undefined, { weekday: "long" });
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: d.getFullYear() === now.getFullYear() ? undefined : "numeric",
+  });
+}
+/** Group artifacts into ordered date buckets, newest bucket + newest item first. */
+function groupByDate<T extends { updated_at: string }>(items: T[]): { label: string; items: T[] }[] {
+  const sorted = [...items].sort(
+    (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+  );
+  const out: { label: string; items: T[] }[] = [];
+  for (const it of sorted) {
+    const label = dateGroupLabel(it.updated_at);
+    const last = out[out.length - 1];
+    if (last && last.label === label) last.items.push(it);
+    else out.push({ label, items: [it] });
+  }
+  return out;
+}
 
 type FullArtifact = ArtifactRow & { url?: string | null; text?: string | null };
 
@@ -307,39 +337,47 @@ export function ArtifactsView() {
               <div className="text-xs">Agents drop research, drafts, and reports here as they work — or add a note to try it.</div>
             </div>
           ) : (
-            items.map((it) => {
-              const k = fileKind(it.name, it.mime);
-              const g = it.agent_id ? AGENT_BY_ID[it.agent_id as AgentId] : undefined;
-              const sm = STATUS_META[it.status];
-              return (
-                <button
-                  key={it.id}
-                  onClick={() => void openArtifact(it.id)}
-                  className={cn("flex w-full items-center gap-3 border-b px-4 py-3 text-left hover:bg-muted/50",
-                    selId === it.id && "bg-primary/5 shadow-[inset_3px_0_0_var(--primary)]")}
-                >
-                  <div className="grid size-9 shrink-0 place-items-center rounded-md text-[9px] font-bold text-white" style={{ background: k.color }}>
-                    {k.tag}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">{it.name}</div>
-                    <div className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-muted-foreground">
-                      <span className="font-mono">{it.folder}</span>
-                      {it.task_id && <>· <span className="truncate">from a task</span></>}
-                    </div>
-                  </div>
-                  {g && (
-                    <div className="app-hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
-                      <AgentAvatar agent={g} size="xs" clickable={false} /> <span className="app-hidden lg:inline">{g.name}</span>
-                    </div>
-                  )}
-                  <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium", sm.cls)}>{sm.label}</span>
-                  <div className="app-hidden shrink-0 text-right text-xs text-muted-foreground tabular-nums sm:block">
-                    {ago(it.updated_at)}<div className="opacity-70">{fmtSize(it.size_bytes)}</div>
-                  </div>
-                </button>
-              );
-            })
+            groupByDate(items).map((group) => (
+              <div key={group.label}>
+                {/* Date-group header — sticky so the current day stays visible while scrolling (ACT-huddle-41). */}
+                <div className="sticky top-0 z-10 border-b bg-background/95 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur">
+                  {group.label}
+                </div>
+                {group.items.map((it) => {
+                  const k = fileKind(it.name, it.mime);
+                  const g = it.agent_id ? AGENT_BY_ID[it.agent_id as AgentId] : undefined;
+                  const sm = STATUS_META[it.status];
+                  return (
+                    <button
+                      key={it.id}
+                      onClick={() => void openArtifact(it.id)}
+                      className={cn("flex w-full items-center gap-3 border-b px-4 py-3 text-left hover:bg-muted/50",
+                        selId === it.id && "bg-primary/5 shadow-[inset_3px_0_0_var(--primary)]")}
+                    >
+                      <div className="grid size-9 shrink-0 place-items-center rounded-md text-[9px] font-bold text-white" style={{ background: k.color }}>
+                        {k.tag}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium">{it.name}</div>
+                        <div className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+                          <span className="font-mono">{it.folder}</span>
+                          {it.task_id && <>· <span className="truncate">from a task</span></>}
+                        </div>
+                      </div>
+                      {g && (
+                        <div className="app-hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
+                          <AgentAvatar agent={g} size="xs" clickable={false} /> <span className="app-hidden lg:inline">{g.name}</span>
+                        </div>
+                      )}
+                      <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium", sm.cls)}>{sm.label}</span>
+                      <div className="app-hidden shrink-0 text-right text-xs text-muted-foreground tabular-nums sm:block">
+                        {ago(it.updated_at)}<div className="opacity-70">{fmtSize(it.size_bytes)}</div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ))
           )}
         </div>
       </section>
