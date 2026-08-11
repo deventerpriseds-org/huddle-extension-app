@@ -8,13 +8,21 @@ each model response — INCLUDING tool/function calls — into the conversation 
 OUTPUT never got submitted (hit maxHops, the 1:1 deadline, or aborted mid-hop), a dangling function_call
 is left in the thread and every later turn 400s loading it. **My o3 change exposed it:** o3 is slow +
 now Iris's tier for substantive asks + the deep rung, so slow tool-calling turns hit the deadline mid-hop
-→ poison → permanent break until the conversation is reset. Fix (two parts): (A) SELF-HEAL — on that 400
-signature, `clearConversationId` (delete `chat.agent_conversations` row → re-mints fresh next turn) and
-retry the SAME turn with full reconstructed transcript + NO conversation (huddle.functions.ts persona
-call). (B) PREVENT — withhold tools on the FINAL tool hop so the model must answer with text, never
-leaving a dangling call (openai-responses.server.ts). tsc+build clean, deploy 31501691566 green. If it
-recurs, reconsider running o3 under the tight 1:1 streaming deadline (or lengthen it) — self-heal makes
-it non-fatal regardless.
+→ poison → permanent break until the conversation is reset. **CORRECTED ATTRIBUTION (ground-truthed from
+`chat.pending_turns.result->prompts[].model`): o3 was NOT involved — every poisoning turn ran
+`gpt-5.6-luna`.** The break is MODEL-AGNOSTIC: the 13:22 turn used TOOLS (the parse/schedule tool) and a
+tool call was left unanswered in the conversation object → poison → all turns after 13:24 empty then 400.
+The difficulty classifier worked correctly (Luna for these standard asks); this was never a
+model-selection problem. Fix (two parts): (A) SELF-HEAL — on that 400 signature, `clearConversationId`
+(delete `chat.agent_conversations` row → re-mints fresh next turn) and retry the SAME turn with full
+reconstructed transcript + NO conversation (huddle.functions.ts persona call). (B) PREVENT — withhold
+tools on the FINAL tool hop so the model must answer with text, never leaving a dangling call
+(openai-responses.server.ts). tsc+build clean, deploy 31501691566 green. SEPARATE latent issue (did NOT
+cause this): the o3 deep-rung swap removed the deep-confirm gate (needsConfirm keys on Sol, o3≠Sol), so
+genuinely-deep 1:1 asks now run o3 SYNCHRONOUSLY with no hold — long o3 tasks can't complete in one ~45s
+request. Fix direction is NOT abort (defeats o3's purpose) — route long deep work to the async produce
+pipeline or restore a hold/ack. Also: NO central model-usage tracking exists (model is buried in
+result->prompts[].model per turn, not queryable centrally) — add a rollup view.
 
 
 <!-- ============================================================================ -->
