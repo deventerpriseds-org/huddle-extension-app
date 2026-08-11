@@ -6,9 +6,15 @@ Last updated: 2026-08-10
 <!-- ============================================================================ -->
 ## ▶ RESUME HERE — worker-grade conversationalist test program (2026-08-10)
 
-**One-line state:** 1:1 20-turn baseline DONE/strong. Confirm-intent **reach-out + immediate-confirm
-close-the-loop PROVEN end-to-end on the real dev@ board** (ground-truthed, cleaned up 0/0/0/0/0). Next:
-delayed + blocker paths, then the DoD-mirror bug, then the broad matrix. Guardrail = the coverage matrix.
+**One-line state:** 1:1 20-turn baseline DONE/strong. Confirm-intent flow PROVEN (reach-out, immediate +
+delayed confirm). **3 bugs/features found→fixed→verified-live this session:** (a) DoD-mirror write
+(journey execute-tool mapped `definition_of_done`; PR#24/#25); (b) flag_blocker false-positive (non-uuid
+task_id → orphan row + phantom "blocked"; gated on journey write; huddle 83c0097); (c) chat-driven
+owner-actioned UNBLOCK + killed the confirm-hijack false-"unblocked" (huddle d34088a, verifier PASS 4/4).
+Terry stays the blocker surfacer (unchanged). Next: broad matrix (group / x-huddle / tool-chains / long-drift).
+Outstanding non-blocking: 3 pre-existing orphan `task_blockers` rows (present to user, don't auto-delete);
+title→id resolution gap in get_tasks for BACKLOG items (agent can't find a task by title); saturated-board
+arming only covers each agent's top-of-UP_NEXT. Guardrail = `docs/test-coverage-matrix.md`.
 
 **⚠ CRITICAL IDENTITY FACT (cost an hour to learn):** the confirm-intent pipeline runs under
 **`dev@enterpriseds.io`** (auth user `a3378f93-d655-4913-b2fa-ca5b1d8020f1`, profile full_name "Von Ellis",
