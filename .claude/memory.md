@@ -1,5 +1,12 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-08-10
+Last updated: 2026-08-11
+
+<!-- 2026-08-11 (env-bootstrap + doc): ran eds setup.sh (9 CLIs, 16 skills, verifier agent, Stop-gate v4);
+     registered /workspace/eds-claude-skills. Doc-only: added the layered "how a day is filled" target
+     model (Layer 0 window/capacity → Layer 5 spillover) to §5 of docs/SCHEDULING_REDESIGN_HANDOFF.md
+     (additive, no code, no deploy). Scheduling redesign is still DESIGN-ONLY / not started — §5 decisions
+     to re-confirm + plan sign-off required before building. See ACT-huddle-28. -->
+
 
 <!-- ============================================================================ -->
 <!-- ▶▶▶ RESUME HERE (fresh session: read THIS block first, then act) ◀◀◀ -->

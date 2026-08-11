@@ -271,6 +271,21 @@ Driven by the user's live stand-up transcripts + the persisted `barge_route` log
 
 ## Open
 
+### ACT-huddle-28: Scheduling redesign — fold the layered "how a day is filled" target model into the handoff (doc-only)
+**Requested:** 2026-08-11 — user forwarded `SCHEDULING_REDESIGN_HANDOFF.md` ("where we left off") plus a
+refined layered articulation of the target model (Layer 0 window/capacity → Layer 5 spillover/rebuild),
+with the prior session's offer: "drop this in as the target-model section of the handoff sheet … one doc
+commit, no deploy."
+**Done (doc-only, additive):** added subsection "### The target model — how a day should be filled
+(layered, authoritative)" to §5 of `docs/SCHEDULING_REDESIGN_HANDOFF.md`, right after the existing
+"target composite model" bullets — preserving all prior content. It restates the vision as an ordered
+fill algorithm and cross-links each layer to the existing open items (10am now-clamp = §3/#1; flexible
+nudge = §5; appointment-prep = #4; capacity guard = Huddle backlog). **No code touched, no deploy.**
+The redesign itself remains design-only / not started — §5 decisions still to be re-confirmed + plan
+signed off before building.
+**Evidence:** commit on `claude/huddle-journey-integration-xokgv1` (see PR); env bootstrap this session
+(setup.sh: 9 CLIs, 16 skills, verifier agent, v4 Stop gate).
+
 ### ACT-huddle-26: Barge responds to what the user SAID (no canned deferral) — Playwright-proven, 4 types
 **Requested:** 2026-08-02 — user: "if it just hears me on the mic it just gives a canned I'll dig into
 that response… take what you hardcoded for a quick reply and make that instructions so the agent is
