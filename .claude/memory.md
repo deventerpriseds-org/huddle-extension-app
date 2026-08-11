@@ -1,6 +1,17 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-11
 
+<!-- 2026-08-11 (SCHEDULING redesign — recency + work-today intake, DESIGN-ONLY, ACT-huddle-29):
+     User's 2 focuses: (1) recency not bubbling — recently-added needs-today items missing from today's
+     schedule; (2) "work on these today" signal must fill WINDOWS FIRST then overflow-as-FLEXIBLE, displacing
+     LOWER-priority ORIGINALS (not pushing the signaled items out); stated priority must still have bearing.
+     GROUND TRUTH (journey public.tasks, owner 4132de9e, config={} → DEFAULT windows): sort
+     is_priority→priority_rank→score buries is_priority=false fresh due-today items (Amex/MIT/packing) under
+     old priority ventures → crammed to 19-21h / pushed to 08-12; recency is only 3rd tiebreak. = handoff §4a.
+     Also: Iris used a board-create tool that spread the batch across the week instead of the parse/day-plan
+     path (AT-3 convention fix). Wrote acceptance targets AT-1..AT-4 into handoff §5b; built offline simulator
+     sched_model.mjs (scratchpad) reading the REAL board → 2 expected schedules (Scenario A today-signal /
+     Scenario B no-signal, priority retained) shown to user. AWAITING user "logic looks right" before ANY build. -->
 <!-- 2026-08-11 (env-bootstrap + doc): ran eds setup.sh (9 CLIs, 16 skills, verifier agent, Stop-gate v4);
      registered /workspace/eds-claude-skills. Doc-only: added the layered "how a day is filled" target
      model (Layer 0 window/capacity → Layer 5 spillover) to §5 of docs/SCHEDULING_REDESIGN_HANDOFF.md

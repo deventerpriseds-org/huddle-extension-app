@@ -79,6 +79,50 @@ _User's articulation, 2026-08-11. This is the ideal the switchable composite mod
 - **Layer 4 — Assignments keep their honored window.** An `assignment_id` keeps its category time-window — **even without a due date** it has a designated window it's meant to be worked in, honored and not overrun by a merely-recent task — capped per day (`MAX_ASSIGNMENTS_PER_DAY=2`), with **dated** assignments allowed to jump by deadline (Tier A/B). (Agent "assist vs produce" is a *grooming* concept for the agents, **not** a factor in the user's schedule.)
 - **Layer 5 — Spillover & rebuild.** When a day fills, remaining flexible tasks spill to the next day across the rolling 7-day horizon by the **same composite score** — but a **deadline item is never pushed past its due date** (escalate / warn instead). Re-planning currently **rebuilds the whole horizon** each run (clear + re-place future tasks to prevent overlap accumulation) rather than only moving unplaced items; **whether to keep full-rebuild or add stability for pinned items is a deliberate open choice** to make.
 
+### §5b. Acceptance targets — what "right" looks like (user-stated 2026-08-11, ground-truthed against the live board)
+_These are the binary outcomes the switchable composite model must produce. Validation method: the finishing
+session must first show **expected schedule outputs computed from the real board**, and the user confirms the
+logic "seriously produces what I'd expect" BEFORE any build. An offline simulator that reads the real journey
+rows exists at (session scratchpad) `sched_model.mjs` — port/keep it as the reproducible inner-loop harness._
+
+**Live root-cause evidence (journey `public.tasks`, owner `4132de9e…`, whose `user_scheduling_prefs.config` is
+`{}` → DEFAULT windows/categories):** the items added the morning of 08-11 for *that day* (Make Amex payment,
+Complete MIT assignments, Push packets, the Alabama-trip batch, son's hair) are `is_priority=false, rank=null`,
+so the `is_priority → priority_rank → score` sort buries them under months-old `is_priority=true` VENTURES
+tasks. Result: 09:00–17:00 held by old rank-1..10 ventures; today's due-today items crammed into 19:00–21:00
+(several **stacked at 20:00**) or pushed to 08-12. Recency lives inside `score` (the **3rd** tiebreak) so it
+never reorders two priority-lane tasks. **This is the mechanism behind both complaints below.**
+
+- **AT-1 — Recency bubbles (without losing priority).** A recently-added item that needs doing today must
+  appear in *today's* schedule ahead of undated/older lower-relevance items. Recency becomes a real composite
+  term, not a 3rd-tiebreak-only signal. **Stated priority must still have bearing** — it orders the leftovers,
+  breaks ties, and a high-priority item with its own imminent/overdue deadline still competes (proven in the
+  no-signal expected output: "Reply to DBA email" + "Set up U-Michigan call" still claim daytime slots among
+  the fresh items).
+- **AT-2 — "Work on these today" intake = windows-first, then overflow-as-flexible, displacing lower-priority
+  originals.** When the user signals a set to do *today*: (1) place each in its **category window first**;
+  (2) if that window is full, treat the item as **flexible** (9–22) so it still lands **today**; (3) landing it
+  **displaces the LOWEST-priority pre-existing board item** to a later day — the signaled item is NOT the one
+  pushed out. Overflow of the signaled set spills to the next day **only for items whose due date allows it**;
+  a due-**today** item that can't fit triggers an **overcommit warning**, never a silent push past its due date.
+  Stated priority orders both the signaled set and *which originals get bumped*.
+- **AT-3 — Tool/convention fix so intake routes to the PARSE path, not board-spread.** Iris fulfilled "add these
+  for today" with a board-create/update tool that scheduled them **spread across the week** instead of the
+  day-parse path (`ai-task-parser` / day-plan intake) that packs within today's windows. This will recur often,
+  so the convention must **steer a "for today" intake to the parse/day-plan tool** (naming + tool description +
+  routing), not a per-task board writer. Pin exact tool names before building (candidates: journey
+  `ai-task-parser` vs `execute-tool` create/update; Huddle `create_huddle_task`/`quick_create_task`).
+- **AT-4 — Honest capacity.** A day that physically can't hold the signaled set surfaces the overcommitment
+  (which due-today items don't fit) instead of overlapping them (the live board stacked ~8 items at 20:00).
+
+**Expected outputs generated 2026-08-11 (real board, Tue, empty-config → DEFAULT windows), for user validation:**
+- _Scenario A (today-signal ON):_ 09:00–21:00 fills with the 08-11 batch ordered by composite — Amex payment &
+  Alabama funding first (due-today + finance + fresh), then the due-today+fresh items, both MIT items in
+  after_work (PROF_ED cap 2). The two due-*later* packing items (08-12/08-14) overflow to tomorrow; the old
+  rank-1 "Plan business architecture" doesn't make the day. No due-today overcommit (13 due-today/near ≈ 13 slots).
+- _Scenario B (no signal, pure composite):_ high-priority overdue+comms originals (DBA reply, U-Michigan call)
+  interleave with the fresh due-today items — priority retained, recency surfaced.
+
 ## 6. Open items for the finishing session (in priority order)
 1. **Pin the 10am deviation** (§3) — trace `nightly-schedule-builder` today-start/now-clamp; fix or document.
 2. **Implement the switchable composite model** (§5) — config flag + retuned weights; behind switch, revert the April-17 rank-first tiebreak to composite-score ordering (server `:1091` + client `schedulingCandidates.ts:189` + Huddle `scoring.ts:134`). Keep Tier-A/B assignment deadline-jump.

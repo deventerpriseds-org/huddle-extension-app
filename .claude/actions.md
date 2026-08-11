@@ -271,7 +271,30 @@ Driven by the user's live stand-up transcripts + the persisted `barge_route` log
 
 ## Open
 
-### ACT-huddle-28: Scheduling redesign — fold the layered "how a day is filled" target model into the handoff (doc-only)
+### ACT-huddle-29: Scheduling redesign — recency-bubbling + "work-today" windows-first intake (target defined, expected outputs shown, DESIGN-ONLY)
+**Requested:** 2026-08-11 — two focused problems + a validation method. (P1) Today's schedule omitted items
+recently added as needing-today; **recency is not bubbling**. (P2) Iris fulfilled "add ~10 tasks for today"
+with a **board-create tool that spread them across the week** instead of the **parse/day-plan** path; the
+"work on these today" signal must **schedule within appropriate windows first, then treat overage as FLEXIBLE
+so it displaces LOWER-priority ORIGINAL board items** rather than pushing the signaled items to another day.
+Stated priority must **still have bearing**. User wants to **see expected schedule outputs from the real board
+first** and will say when the logic "seriously produces what I'd expect" before any build.
+**Ground-truthed live (journey `public.tasks`, owner `4132de9e…`):** config `{}` → DEFAULT windows; sort
+`is_priority→priority_rank→score` buries `is_priority=false` fresh due-today items (Amex/MIT/packing) under
+months-old priority ventures → they got crammed to 19:00–21:00 (stacked at 20:00) or pushed to 08-12. Recency
+(inside `score`) is only the 3rd tiebreak → never reorders. **Root cause = the sort, exactly as handoff §4a.**
+**Done this session (design/analysis only, NO app code, NO deploy):** (a) acceptance targets AT-1..AT-4 written
+into handoff **§5b**; (b) offline simulator `sched_model.mjs` (scratchpad) reads the REAL board → 2 expected
+schedules shown to user — Scenario A (today-signal: today fills with the 08-11 batch by composite; 2 due-later
+packing items overflow to tomorrow; both MIT in after_work; old rank-1 ventures doesn't make the day) and
+Scenario B (no-signal: DBA-reply + U-Michigan-call priority originals still claim daytime slots among fresh
+items → priority retained).
+**Open:** pin exact tool names for the parse-vs-board convention (AT-3); user validation of expected outputs is
+the gate before ANY build; then switchable composite model per §6 item #2.
+**Status:** DESIGN-ONLY / awaiting user's "logic looks right." **Evidence:** handoff §5b + §5 layered model on
+`claude/huddle-journey-integration-xokgv1` (PR #28); simulator runs shown in-session.
+
+### ACT-huddle-28b: Scheduling redesign — fold the layered "how a day is filled" target model into the handoff (doc-only)
 **Requested:** 2026-08-11 — user forwarded `SCHEDULING_REDESIGN_HANDOFF.md` ("where we left off") plus a
 refined layered articulation of the target model (Layer 0 window/capacity → Layer 5 spillover/rebuild),
 with the prior session's offer: "drop this in as the target-model section of the handoff sheet … one doc
