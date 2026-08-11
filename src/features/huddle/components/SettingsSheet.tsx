@@ -456,8 +456,13 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                     },
                     {
                       mode: "conversation" as const,
-                      title: "Conversation object — 1:1 DMs (default, active)",
-                      desc: "DEFAULT. OpenAI Conversations thread per agent for 1:1 DMs — native server-side continuity (no resent transcript window), so an agent recalls what you said moments ago. Group huddles still use Reconstruction (one shared thread would blur the multiple agents); RAG long-term memory applies everywhere. Falls back to Reconstruction on any error. Retained on OpenAI until deleted.",
+                      title: "Conversation object — 1:1 DMs",
+                      desc: "OpenAI Conversations thread per agent for 1:1 DMs — native server-side continuity (no resent transcript window), so an agent recalls what you said moments ago. Group huddles use Reconstruction (one shared thread would blur the multiple agents); RAG long-term memory applies everywhere. Falls back to Reconstruction on any error. Retained on OpenAI until deleted.",
+                    },
+                    {
+                      mode: "researched" as const,
+                      title: "Researched memory improvements — group & standups (default)",
+                      desc: "DEFAULT. Everything Conversation mode does for 1:1s, PLUS in group huddles & standups the agents remember what they (and teammates) actually said, record durable facts — your statements always, and an agent's outcome only when it truly did something (booked, scheduled, sent) — and track facts that CHANGE (a dropped vendor, a raised budget) so recall returns the LATEST value, even from other chats. Every addition falls back to plain Reconstruction on any error. Switch to Conversation object or Reconstruction to turn it off.",
                     },
                   ]
                 ).map((opt) => {

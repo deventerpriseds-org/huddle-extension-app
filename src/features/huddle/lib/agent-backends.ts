@@ -90,18 +90,20 @@ export type CeremonyEngine = (typeof CEREMONY_ENGINES)[number];
  *   reconstruction (a shared object would blur multi-agent identity). RAG still layers on top. Any
  *   DB/OpenAI miss falls back to reconstruction for that turn.
  */
-export const MEMORY_MODES = ["reconstruction", "responses-chain", "conversation"] as const;
+export const MEMORY_MODES = ["reconstruction", "responses-chain", "conversation", "researched"] as const;
 export type MemoryMode = (typeof MEMORY_MODES)[number];
 
 export const BackendsConfigSchema = z.object({
-  version: z.number().default(8),
+  version: z.number().default(9),
   router: RouterConfigSchema,
   agents: z.record(z.string(), AgentBackendSchema),
   ceremonyEngine: z.enum(CEREMONY_ENGINES).default("current"),
-  // Default is "conversation": 1:1 DMs carry native OpenAI-thread continuity; group falls back to
-  // reconstruction; any DB/OpenAI miss falls back to reconstruction per-turn (so this is safe as a
-  // default). Flip back to "reconstruction" in Settings → Memory to disable entirely.
-  memoryMode: z.enum(MEMORY_MODES).default("conversation"),
+  // Default is "researched" (the "Researched memory improvements" option): a SAFE SUPERSET of
+  // "conversation" — 1:1 DMs still carry native OpenAI-thread continuity, and group/ceremony turns add
+  // persisted agent replies (A1) + supersession/recency retrieval (A3) on top of reconstruction. Every
+  // addition falls back to plain reconstruction per-turn on any error, so it's safe as a default. Flip
+  // back to "conversation" (or "reconstruction") in Settings → Memory to make the new path fully inert.
+  memoryMode: z.enum(MEMORY_MODES).default("researched"),
   // Reply streaming: a 1:1 reply's tokens persist to the durable row as they form (shown via the client
   // poll), so a slow high-effort answer streams in instead of being cut at the turn deadline. Groups &
   // ceremonies stay OFF by default (the shared sequential live-call model is unchanged). Editable in
@@ -183,7 +185,7 @@ export function defaultBackendsConfig(): BackendsConfig {
     },
     agents: defaultAgents(),
     ceremonyEngine: "current",
-    memoryMode: "conversation",
+    memoryMode: "researched",
     streamReplies: { oneOnOne: true, group: false },
     modelPolicy: DEFAULT_MODEL_POLICY,
   };
@@ -271,21 +273,25 @@ export const useBackendsStore = create<BackendsState>()(
           mergedAgents[id] = combined;
         }
         const merged: BackendsConfig = {
-          version: 8,
+          version: 9,
           router: { ...current.config.router, ...p.config.router },
           agents: mergedAgents as Record<AgentId, AgentBackend>,
           // Preserve a persisted choice; a config saved before this field existed defaults to "current"
           // (current.config.ceremonyEngine is "current" from defaultBackendsConfig).
           ceremonyEngine: p.config.ceremonyEngine ?? current.config.ceremonyEngine,
-          // v4→v5: turn on "conversation" memory (native 1:1 continuity). This ONE-TIME migration flips
-          // an existing persisted choice to "conversation" so the improvement reaches current users
-          // without a manual toggle; thereafter the user's Settings → Memory choice is preserved.
-          // Safe: conversation falls back to reconstruction per-turn on any miss, and group always uses
-          // reconstruction regardless.
-          memoryMode:
-            persistedVersion < 5
-              ? "conversation"
-              : (p.config.memoryMode ?? current.config.memoryMode),
+          // v4→v5: turn on "conversation" memory (native 1:1 continuity). v8→v9: flip that default on to
+          // "researched" (the "Researched memory improvements" superset — 1:1 unchanged, group/ceremony
+          // gains persisted agent replies + supersession/recency). Both are ONE-TIME flips of the DEFAULT
+          // so the improvement reaches current users without a manual toggle; a DELIBERATE
+          // reconstruction/responses-chain choice is preserved. Safe: researched falls back to plain
+          // reconstruction per-turn on any error, and group always uses reconstruction as its base.
+          memoryMode: (() => {
+            const prior =
+              persistedVersion < 5
+                ? "conversation"
+                : (p.config.memoryMode ?? current.config.memoryMode);
+            return persistedVersion < 9 && prior === "conversation" ? "researched" : prior;
+          })(),
           // v5→v6: seed the reply-streaming toggles (1:1 on, group off). Preserve a persisted choice
           // thereafter. Safe: streaming falls back to a normal call per-turn on any error.
           streamReplies: p.config.streamReplies ?? current.config.streamReplies,

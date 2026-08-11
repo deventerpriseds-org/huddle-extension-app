@@ -196,7 +196,7 @@ const Input = z.object({
   // app-managed transcript + explicit self-recall injection. "responses-chain"/"conversation" are
   // SCAFFOLD: they carry through but the runtime logs a marker and behaves as reconstruction (no
   // OpenAI-native state plumbing yet). Absent → reconstruction.
-  memoryMode: z.enum(["reconstruction", "responses-chain", "conversation"]).optional(),
+  memoryMode: z.enum(["reconstruction", "responses-chain", "conversation", "researched"]).optional(),
   // Manual model/thinking override for THIS turn (the "change the model/thinking myself" fallback, like
   // most AI UIs). "sol" = force Sol-high, "budget" = force the Terra-high budget tier, or a ladder label
   // (e.g. "luna-high", "sol-max"). Always wins over the difficulty-driven auto-pick AND clears the Sol
@@ -3699,7 +3699,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // safe: any miss (no email, DB/OpenAI error) falls back to the full transcript this turn.
         let conversationId: string | undefined;
         let personaTranscript = transcript;
-        if (memoryMode === "conversation" && data.scope === "one-to-one") {
+        // "researched" is a SUPERSET of "conversation": 1:1 DMs behave identically (native thread),
+        // while group/ceremony turns additionally persist agent replies + tool-confirmed triples and
+        // rank retrieval by recency/supersession (see the post-turn memory write below).
+        if (
+          (memoryMode === "conversation" || memoryMode === "researched") &&
+          data.scope === "one-to-one"
+        ) {
           try {
             const email = await resolveCallerEmail();
             const { getOrCreateConversationId } = await import("./rag/conversation-store.server");
