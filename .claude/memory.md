@@ -1,5 +1,21 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-08-10
+Last updated: 2026-08-11
+
+## Iris "400 No tool output found for function call" — poisoned conversation object (FIXED + DEPLOYED d422a82, 2026-08-11)
+Live break: Iris 1:1 returned `OpenAI Responses 400: No tool output found for function call call_…` on
+EVERY turn (even "Hello?"). Root cause: in conversation-object memory mode (1:1 default), OpenAI stores
+each model response — INCLUDING tool/function calls — into the conversation thread. If a turn's tool
+OUTPUT never got submitted (hit maxHops, the 1:1 deadline, or aborted mid-hop), a dangling function_call
+is left in the thread and every later turn 400s loading it. **My o3 change exposed it:** o3 is slow +
+now Iris's tier for substantive asks + the deep rung, so slow tool-calling turns hit the deadline mid-hop
+→ poison → permanent break until the conversation is reset. Fix (two parts): (A) SELF-HEAL — on that 400
+signature, `clearConversationId` (delete `chat.agent_conversations` row → re-mints fresh next turn) and
+retry the SAME turn with full reconstructed transcript + NO conversation (huddle.functions.ts persona
+call). (B) PREVENT — withhold tools on the FINAL tool hop so the model must answer with text, never
+leaving a dangling call (openai-responses.server.ts). tsc+build clean, deploy 31501691566 green. If it
+recurs, reconsider running o3 under the tight 1:1 streaming deadline (or lengthen it) — self-heal makes
+it non-fatal regardless.
+
 
 <!-- ============================================================================ -->
 <!-- ▶▶▶ RESUME HERE (fresh session: read THIS block first, then act) ◀◀◀ -->
