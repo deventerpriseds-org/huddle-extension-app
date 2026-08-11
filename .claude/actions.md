@@ -30,6 +30,13 @@ honest (judge=HONEST). Cleanup verified 0/0/0/0/0. New reusable workflow+harness
 (root cause: never mapped → empty update → coerce error). journey-voice PR #24 merged→main + deployed. Independent
 verifier 8/8: journey `public.tasks.definition_of_done` NON-NULL after confirm; toolUse "DoD confirmed".
 **Next:** delayed-confirm + blocker paths (same rig) → group/x-huddle/tool-chains/long-drift.
+**▶ 2026-08-11 — item (3) long-drift IN PROGRESS.** Ground-truthed current memory vs research: A1 (agent
+replies never auto-persisted — only user msg at `huddle.functions.ts:868/880`), A2 (no per-huddle ledger),
+A3 (pure-cosine retrieval, INSERT-only, no supersession) — all UNBUILT. Built `qa-longdrift-conversation.mjs`
+(44-turn: seed→bury→**mutate/supersede**→late-recall) + `qa-longdrift.yml`. Sharpest probe = supersession
+(budget 8k→10k, recital 14→21, drop Cobalt/add Delta, team 12→13). Baseline = drift is DATA, doesn't red the
+run (gates on mechanism+router-validity only). ACs by independent subagent. **RUN PENDING** — dispatch
+qa-longdrift.yml, watch qa-progress branch, then verify board clean + cleanup by marker.
 
 
 ### ✅ DEPLOYED live (both deploys succeeded 2026-08-06 ~16:40 UTC)

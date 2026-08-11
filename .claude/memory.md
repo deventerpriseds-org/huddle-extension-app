@@ -12,6 +12,22 @@ delayed confirm). **3 bugs/features found→fixed→verified-live this session:*
 task_id → orphan row + phantom "blocked"; gated on journey write; huddle 83c0097); (c) chat-driven
 owner-actioned UNBLOCK + killed the confirm-hijack false-"unblocked" (huddle d34088a, verifier PASS 4/4).
 Terry stays the blocker surfacer (unchanged). Next: broad matrix (group / x-huddle / tool-chains / long-drift).
+
+**▶ IN PROGRESS (2026-08-11) — item (3) long-drift / novel-writer consistency (40+ turns).** Answered the
+user's memory question first (ground-truthed vs research A1-A3): **A1** — the ONLY auto memory write in a
+turn is `huddle.functions.ts:868/880` writing `data.text` (the USER msg); agent replies are NEVER
+auto-persisted (`saveMemoryItem` is called only from the Settings "save memory" button). The code comment
+at `:843` ("agent replies are still persisted normally on their own turns") is INACCURATE — no path does it.
+**A2** — no per-huddle running ledger exists (only the transcript window + RAG). **A3** — `searchChunks`
+orders by pure cosine (`azure-pg.server.ts`), writes are bare INSERT (no supersession); only a lane-boost
+re-rank in `runHuddleTurn`. So A1/A2/A3 all UNBUILT; only A4 (claim-vs-result honesty) applied in spirit
+this session. Built `qa-longdrift-conversation.mjs` (44-turn) + `qa-longdrift.yml`: seed 6 single-mention
+facts → 9+8 distractors (bury past ~14-msg window) → MUTATE (drop Cobalt/add Delta, recital 14→21, budget
+8k→10k, team 12→13) → late-recall LATEST value. Sharpest probe = **supersession** (RAG keeps both stale+new
+chunk, no recency term → predict STALE returns). Baseline design: drift is DATA (does NOT red the run);
+check() gates only mechanism+router-validity (AC14). ACs by independent subagent. **RUN PENDING** (dispatch
+qa-longdrift.yml). Board-clean check owed post-run (cleanup deletes rag_chunks+pending_turns by marker, NOT
+journey tasks — phrasings kept note-style to avoid task/reminder creation; verify tasks.journey_tasks clean).
 Outstanding non-blocking: 3 pre-existing orphan `task_blockers` rows (present to user, don't auto-delete);
 title→id resolution gap in get_tasks for BACKLOG items (agent can't find a task by title); saturated-board
 arming only covers each agent's top-of-UP_NEXT. Guardrail = `docs/test-coverage-matrix.md`.

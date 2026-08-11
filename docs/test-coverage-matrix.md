@@ -30,7 +30,9 @@ Surfaces: **1:1** (dm-<agent>), **Group** (all-members, multi-agent), **X-huddle
 | No-repeat / no broken-record | ✅ | ⬜ | — | ⬜ | |
 | **Cross-huddle recall** (group→1:1) | — | — | ⬜ | — | needs a memory write; not in zero-write 1:1 |
 | Consistency sweep (no drift at end) | ✅ | ⬜ | — | ⬜ | |
-| **Novel-writer consistency over long runs** (drift = catastrophic) | ⬜ | ⬜ | — | ⬜ | 40+ turn drift, indirect reference |
+| **Novel-writer consistency over long runs** (drift = catastrophic) | ✅ | ⬜ | 🔄 | ⬜ | 44-turn `qa-longdrift` harness built (seed→bury→**mutate/supersede**→late-recall). RUN PENDING. |
+| **Supersession** (user changes a fact mid-thread; latest vs stale) | — | — | 🔄 | — | sharp A3 test: budget 8k→10k, recital 14→21, drop Cobalt+add Delta, team 12→13. RUN PENDING. |
+| **Self-correction under false premise** (push-back, not capitulate) | — | — | 🔄 | — | T41 false "recital=28th" vs true 21st; judge 3-way. RUN PENDING. |
 
 ### Honesty & trust
 | Capability | 1:1 | Group | Long | Notes |

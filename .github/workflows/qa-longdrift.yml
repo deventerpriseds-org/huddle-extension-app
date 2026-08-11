@@ -1,0 +1,63 @@
+name: QA long-drift conversation (44-turn, live, real app)
+
+# Drives a sustained 44-turn 1:1 through the DEPLOYED app via Playwright (run-uat.mjs +
+# qa-longdrift-conversation.mjs) to MEASURE long-conversation memory drift / novel-writer consistency.
+# The user seeds single-mention facts, buries them under distractors (past the ~14-msg window), then
+# MUTATES them (drop/add/correct/raise/increment) and probes the LATEST value late in the thread — the
+# sharp supersession test the 20-turn qa-1on1 harness can't make. Grades from ground truth (+judge only
+# for honesty/self-correction). This is a BASELINE: measured drift is DATA, so the run stays green on
+# drift and reds only on a mechanism/validity failure (empty replies, router fallback). Publishes
+# results.json + screenshots to the throwaway `uat-shots` branch (and live progress to `qa-progress`).
+# Every message carries a run marker; run qa-1on1-cleanup.yml afterward (huddle + marker printed in the
+# log) to delete exactly this run's memory + durable turns. Board is verified clean separately.
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: "1:1 agent id (default finn-reid)"
+        required: false
+        default: "finn-reid"
+
+permissions:
+  contents: write
+
+jobs:
+  qa-longdrift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install repo deps (seroval, @tanstack for the server-fn read)
+        run: npm ci
+      - name: Build (fresh server-fn ids for getTurnUpdates)
+        continue-on-error: true
+        run: npm run build
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+      - name: Run 44-turn long-drift harness
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          CHECKS_FILE: ${{ github.workspace }}/.claude/skills/test-agent-serverfn/scripts/qa-longdrift-conversation.mjs
+          SHOT_DIR: uat-shots
+          UAT_VIEWPORT_W: '1200'
+          UAT_VIEWPORT_H: '800'
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          QA_AGENT: ${{ inputs.agent }}
+        run: node .claude/skills/test-agent-serverfn/scripts/run-uat.mjs
+      - name: Publish results + shots to uat-shots branch
+        if: always()
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "gha-uat"
+          git checkout --orphan uat-shots
+          git reset >/dev/null 2>&1 || true
+          git add -f uat-shots/*.png uat-shots/results.json
+          git commit -q -m "qa-longdrift shots — run ${{ github.run_id }}" || { echo "no shots"; exit 0; }
+          git push -f origin uat-shots
