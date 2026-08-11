@@ -279,7 +279,7 @@ with a **board-create tool that spread them across the week** instead of the **p
 so it displaces LOWER-priority ORIGINAL board items** rather than pushing the signaled items to another day.
 Stated priority must **still have bearing**. User wants to **see expected schedule outputs from the real board
 first** and will say when the logic "seriously produces what I'd expect" before any build.
-**Ground-truthed live (journey `public.tasks`, owner `4132de9e…`):** config `{}` → DEFAULT windows; sort
+**Ground-truthed live (journey `public.tasks`, real owner `a3378f93…`, NOT stale shadow `4132de9e`; RICH custom config):** sort
 `is_priority→priority_rank→score` buries `is_priority=false` fresh due-today items (Amex/MIT/packing) under
 months-old priority ventures → they got crammed to 19:00–21:00 (stacked at 20:00) or pushed to 08-12. Recency
 (inside `score`) is only the 3rd tiebreak → never reorders. **Root cause = the sort, exactly as handoff §4a.**

@@ -91,13 +91,20 @@ session must first show **expected schedule outputs computed from the real board
 logic "seriously produces what I'd expect" BEFORE any build. An offline simulator that reads the real journey
 rows exists at (session scratchpad) `sched_model.mjs` — port/keep it as the reproducible inner-loop harness._
 
-**Live root-cause evidence (journey `public.tasks`, owner `4132de9e…`, whose `user_scheduling_prefs.config` is
-`{}` → DEFAULT windows/categories):** the items added the morning of 08-11 for *that day* (Make Amex payment,
-Complete MIT assignments, Push packets, the Alabama-trip batch, son's hair) are `is_priority=false, rank=null`,
-so the `is_priority → priority_rank → score` sort buries them under months-old `is_priority=true` VENTURES
-tasks. Result: 09:00–17:00 held by old rank-1..10 ventures; today's due-today items crammed into 19:00–21:00
-(several **stacked at 20:00**) or pushed to 08-12. Recency lives inside `score` (the **3rd** tiebreak) so it
-never reorders two priority-lane tasks. **This is the mechanism behind both complaints below.**
+**Live root-cause evidence (journey `public.tasks`, real owner `a3378f93…` — NOT the stale shadow `4132de9e`).
+Owner has a RICH custom `user_scheduling_prefs.config`, so the ROOT CAUSE IS TWO-PART:**
+1. **The sort.** The items added the morning of 08-11 for *that day* (Make Amex payment, Complete MIT
+   assignments, Push packets, the Alabama-trip batch, son's hair) are `is_priority=false, rank=null`, so the
+   `is_priority → priority_rank → score` sort buries them under months-old `is_priority=true` VENTURES tasks.
+   Recency lives inside `score` (the **3rd** tiebreak) so it never reorders two priority-lane tasks.
+2. **The LIFE window.** In this owner's config **LIFE → `[morning, after_work, evening, weekends]`** (no
+   `business_hours`) and `after_work` is **17–19**. So the (mostly LIFE) Alabama-trip batch physically
+   cannot use 9–17 on a weekday — it's confined to 6–9 + 17–22. With the daytime held by VENTURES
+   (`[business_hours,evening,weekends]`) + CAREER/PROF_ED, the fresh LIFE items **stacked 9-deep at 20:00**
+   (verified on the live board) and spilled to 08-12.
+**So the fix needs BOTH: the composite sort (recency bubbles) AND the flexibility nudge (same-day-signaled
+LIFE items relax to `flexible` so they can use daytime, displacing lower-priority originals).** This is the
+mechanism behind both complaints below.
 
 - **AT-1 — Recency bubbles (without losing priority).** A recently-added item that needs doing today must
   appear in *today's* schedule ahead of undated/older lower-relevance items. Recency becomes a real composite
@@ -121,13 +128,19 @@ never reorders two priority-lane tasks. **This is the mechanism behind both comp
 - **AT-4 — Honest capacity.** A day that physically can't hold the signaled set surfaces the overcommitment
   (which due-today items don't fit) instead of overlapping them (the live board stacked ~8 items at 20:00).
 
-**Expected outputs generated 2026-08-11 (real board, Tue, empty-config → DEFAULT windows), for user validation:**
-- _Scenario A (today-signal ON):_ 09:00–21:00 fills with the 08-11 batch ordered by composite — Amex payment &
-  Alabama funding first (due-today + finance + fresh), then the due-today+fresh items, both MIT items in
-  after_work (PROF_ED cap 2). The two due-*later* packing items (08-12/08-14) overflow to tomorrow; the old
-  rank-1 "Plan business architecture" doesn't make the day. No due-today overcommit (13 due-today/near ≈ 13 slots).
-- _Scenario B (no signal, pure composite):_ high-priority overdue+comms originals (DBA reply, U-Michigan call)
-  interleave with the fresh due-today items — priority retained, recency surfaced.
+**Expected outputs generated 2026-08-11 (real board, owner `a3378f93` custom config, 7-day horizon) — three full
+multi-day schedules via offline sim `sched_v2.mjs`, shown to user for validation:**
+- _V1 ORIGINAL (actual live board):_ 08-11 daytime held by old priority VENTURES (rk1–4); the fresh due-today
+  LIFE batch **stacked 9-deep at 20:00** (overlap, impossible); rest spilled 08-12..08-15.
+- _V2 composite, WITHOUT today's batch:_ 08-11 leads with U-Michigan call (VENTURES, overdue+comms, sc 12.29) +
+  Reply-to-DBA (CAREER, sc 11.76) + Email-professor (LIFE, sc 9.38), then overdue ventures by score → **priority
+  + deadline drive, recency modest, priority RETAINED.**
+- _V3 composite, WITH today's batch (windows-first → overflow-flex → displace):_ 08-11 fills with the signaled
+  batch — Amex + funding (sc 15) first, LIFE items in 6–9/17–22 natively, and 4 that overflow LIFE's window
+  relax to `flexible` and take **midday** slots (⚑flex), displacing lower-priority originals to 08-12+. A very
+  high-score original (U-Mich call sc 12.29) still grabs a leftover today slot. Originals re-placed 08-12..08-15
+  by composite (lowest-priority/most-stale — e.g. rank-1-but-undated-and-30×-pushed "Plan business architecture"
+  — pushed furthest, surfacing the priority-weight knob).
 
 ## 6. Open items for the finishing session (in priority order)
 1. **Pin the 10am deviation** (§3) — trace `nightly-schedule-builder` today-start/now-clamp; fix or document.

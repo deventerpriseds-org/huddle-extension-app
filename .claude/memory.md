@@ -5,7 +5,8 @@ Last updated: 2026-08-11
      User's 2 focuses: (1) recency not bubbling — recently-added needs-today items missing from today's
      schedule; (2) "work on these today" signal must fill WINDOWS FIRST then overflow-as-FLEXIBLE, displacing
      LOWER-priority ORIGINALS (not pushing the signaled items out); stated priority must still have bearing.
-     GROUND TRUTH (journey public.tasks, owner 4132de9e, config={} → DEFAULT windows): sort
+     GROUND TRUTH (journey public.tasks, REAL owner a3378f93 — NOT stale shadow 4132de9e; RICH custom config where
+     LIFE=[morning,after_work(17-19),evening,weekends] excludes business hours): TWO-part cause — (a) sort
      is_priority→priority_rank→score buries is_priority=false fresh due-today items (Amex/MIT/packing) under
      old priority ventures → crammed to 19-21h / pushed to 08-12; recency is only 3rd tiebreak. = handoff §4a.
      Also: Iris used a board-create tool that spread the batch across the week instead of the parse/day-plan
