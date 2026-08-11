@@ -1989,7 +1989,7 @@ no-prompt STT.
 - AC-3: Regression guard — `noise_reduction` remains OMITTED on the 1:1 (Fast-A sensitivity unchanged; not
   re-added by this fix).
 - AC-4 (live): user confirms in their real environment that phantom words no longer appear.
-**Status:** in-progress — one-line prompt removal + comment staged locally (uncommitted), tsc clean. NOT committed/deployed/live-confirmed.
+**Status:** DEPLOYED live (main 5e13df6, deploy-swa green 2026-08-11). Commit 5faf1c7. Awaiting user live re-test (AC-4).
 **Branch:** claude/iris-huddle-interaction-baj51c
 
 ### ACT-huddle-31: 1:1 voice transcript is delayed / dropped all-at-once / frozen until nudged
@@ -2027,7 +2027,7 @@ by an operator/session (like the ceremony path's `chat.ceremony_transcript`).
   (role, text, ts) is retrievable.
 - AC-3: Extend-don't-duplicate: the chosen store reuses/mirrors `ceremony-transcript.server.ts` conventions, not
   a new parallel schema, unless justified.
-**Status:** open — diagnosed.
+**Status:** built (reuses chat.ceremony_transcript via saveCeremonyTranscript; hook persist() fire-and-forget; listCeremonyRuns excludes dm-%). tsc+build clean. Deploying; live-confirm pending.
 
 ### ACT-huddle-33: Agent voice reply truncated / cut off mid-answer
 **Requested:** 2026-08-11 — voice transcript shows Finn: "It seems I got cut off. Let me finish that for you:"

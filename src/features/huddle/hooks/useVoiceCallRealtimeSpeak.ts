@@ -10,6 +10,7 @@ import { SUMMON_BUZZ_URL, SUMMON_OPEN_DELAY_MS, SUMMON_GREETING_MAX_WAIT_MS, pic
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import type { VoiceCallController, VoiceStatus, VoiceCaption } from "./useVoiceCall";
 import type { StartVoiceResult } from "../lib/voice/voice.functions";
+import { saveCeremonyTranscript } from "../lib/ceremony/ceremony-transcript.functions";
 
 // Approach A — EL-VOICE HYBRID ("Realtime speaks, ElevenLabs voices it"). PROVEN, do not re-derive:
 // OpenAI Realtime can't emit an EL cloned voice, so we use Realtime purely as the fast STREAMING BRAIN.
@@ -71,6 +72,10 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   const streamRef = useRef<MediaStream | null>(null);
   const agentIdRef = useRef<AgentId | null>(null);
   const genRef = useRef(0);
+  // Durable-transcript session id + monotone sequence for THIS voice call. Voice-call turns are otherwise
+  // client-only (zustand) — persisted here so a 1:1 call is reviewable server-side after reload (ACT-huddle-32).
+  const callIdRef = useRef<string>("");
+  const callSeqRef = useRef(0);
   const lastVoiceErrGenRef = useRef(-1); // one voice-failure toast per reply (gen), not per sentence
   const connectingRef = useRef(false);
   const micMutedRef = useRef(false);
@@ -293,13 +298,27 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
     (role: "user" | "agent", agentId: AgentId, text: string) => {
       const huddleId = `dm-${agentId}`;
       const id = `${role === "user" ? "uv" : "av"}-${agentId}-${Date.now()}-${Math.round(text.length)}`;
+      const ts = Date.now();
       if (role === "user") {
-        addUserMessage({ id, huddleId, author: { kind: "user" }, text, ts: Date.now() });
+        addUserMessage({ id, huddleId, author: { kind: "user" }, text, ts });
       } else {
-        addAgentMessage({ id, huddleId, author: { kind: "agent", agentId }, text, ts: Date.now() });
+        addAgentMessage({ id, huddleId, author: { kind: "agent", agentId }, text, ts });
       }
+      // Durable persist (ACT-huddle-32): reuse the ceremony transcript store (chat.ceremony_transcript)
+      // keyed by this call's runId + huddle dm-<agent>, so the 1:1 voice conversation is reviewable
+      // server-side after reload — voice turns were previously client-only. Fire-and-forget; never blocks
+      // or breaks the live call (the server fn already swallows its own errors and returns {ok:false}).
+      const runId = callIdRef.current || `voicecall-${agentId}-${ts}`;
+      void saveCeremonyTranscript({
+        data: {
+          caller: callerFor(),
+          runId,
+          huddleId,
+          turns: [{ seq: callSeqRef.current++, speaker: role, agentId, text, kind: "voice", ts }],
+        },
+      }).catch(() => {});
     },
-    [addUserMessage, addAgentMessage],
+    [addUserMessage, addAgentMessage, callerFor],
   );
 
   const connect = useCallback(
@@ -311,6 +330,8 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
       unlockAudio();
       connectingRef.current = true;
       agentIdRef.current = agentId;
+      callIdRef.current = `voicecall-${agentId}-${Date.now()}`;
+      callSeqRef.current = 0;
       genRef.current += 1;
       const gen = genRef.current;
       setError(null);

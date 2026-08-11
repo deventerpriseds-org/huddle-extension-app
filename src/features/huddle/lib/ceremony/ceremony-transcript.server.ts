@@ -326,12 +326,16 @@ export async function listCeremonyRuns(email: string, limit = 20): Promise<Cerem
   try {
     await ensureBootstrapped();
     const r = await getPool().query<CeremonyRunSummary>(
+      // Exclude 1:1 voice-call transcripts (huddle_id 'dm-<agent>') — the ceremony_transcript table is
+      // reused as the durable store for 1:1 voice calls (ACT-huddle-32), but those are NOT ceremony runs
+      // and must not appear in the ceremony run list.
       `SELECT run_id,
               MAX(huddle_id)          AS huddle_id,
               MIN(ts)                 AS started_at,
               COUNT(*)::int           AS turn_count
        FROM chat.ceremony_transcript
        WHERE user_email = $1
+         AND huddle_id NOT LIKE 'dm-%'
        GROUP BY run_id
        ORDER BY MIN(created_at) DESC
        LIMIT $2`,
