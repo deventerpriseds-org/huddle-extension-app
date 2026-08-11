@@ -138,7 +138,10 @@ class AudioQueue {
     if (this.unlocked || typeof Audio === "undefined") return;
     try {
       const primer = new Audio(SILENT_WAV);
-      primer.muted = true;
+      // NOT muted: a muted play is always allowed without a gesture, so it would NOT unlock UNMUTED
+      // autoplay. volume 0 keeps the (already silent) primer inaudible while still counting as a
+      // real unmuted, gesture-initiated play — which is what grants the session unmuted autoplay.
+      primer.volume = 0;
       await primer.play();
       primer.pause();
       this.unlocked = true;
