@@ -1831,3 +1831,14 @@ I want that is more chat friendly."
   the .sql (model mix, per-agent tier, difficulty->model calibration, "any sync o3 in 1:1" = should be ~none now).
 Verified: tsc+vite build clean; `classifyConfirmReply` 21/21 offline; `produceTitleFrom` output sane. NOT yet
 user-confirmed live — awaiting a browser re-test (fresh deep 1:1 ask -> confirm prompt -> produce/quick both paths).
+
+## Finn 1:1 conversation issues registered (2026-08-11) — see actions.md ACT-huddle-30..35
+User's live you↔Finn voice+text convo surfaced multiple issues; captured as ACT-huddle-30..35 with ACs.
+KEY (ground-truthed): **1:1 voice transcripts are NOT persisted server-side** — `useVoiceCallRealtimeSpeak.ts`
+`persist()` writes ONLY client zustand (addUserMessage/addAgentMessage), never a durable table. So they're
+absent from `chat.pending_turns` AND `chat.ceremony_transcript` → an operator/session is BLIND to them (only
+screenshots). Do NOT again conclude "no recent convo" from pending_turns for a VOICE 1:1 (ACT-huddle-32).
+**Phantom STT words = REGRESSION** (ACT-huddle-30): `realtime.functions.ts` inline 1:1 STT re-added a biasing
+`prompt:"tasks, schedule, calendar, reschedule, today, tomorrow, priorities"` (via revert a9dcdd3) that the
+shared `realtime-audio.ts` deliberately dropped (echoed verbatim on silence). The sensitivity that drove that
+revert was `noise_reduction:near_field`, NOT the prompt — so drop the prompt, keep noise_reduction omitted.

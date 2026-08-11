@@ -1958,3 +1958,111 @@ resolver system (`model-policy.ts` + `withAgentCeilings`) — extended, not dupl
   `chat.model_usage` view (docs/model-usage-view.sql) makes model usage queryable. tsc+build clean; classify 21/21
   offline. Files: huddle.functions.ts, tasks/deep-confirm.server.ts, fallbacks.ts, docs/model-usage-view.sql.
   NOT yet user-confirmed live. View DDL to be run via azure-pg-query.yml post-deploy.
+
+---
+
+## 🐛 FINN 1:1 CONVERSATION ISSUES — full analysis (2026-08-11) [surface every check-in]
+Source: the user's live you↔Finn 1:1 today — a voice call ("Ad-hoc group call", ElevenLabs voice · Zoom
+bridge, ~11:50–12:27) + the text thread (~12:52). Screenshots provided by the user (the voice transcript
+is NOT persisted server-side, so screenshots are currently the only record — see ACT-huddle-32). These are
+the issues found, each tracked with ACs. Managing tangents: this block is the union of open Finn-convo work;
+do not drop an item because a newer one arrived.
+
+### ACT-huddle-30: Phantom STT words injected as user speech in 1:1 voice — REGRESSION
+**Requested:** 2026-08-11 — user: transcript "imagined me saying phantom statements like Tasks, schedule,
+calendar, reschedule, today, tomorrow, priorities which I never said."
+**Root cause (GROUND-TRUTHED):** `lib/voice/realtime.functions.ts` passed the STT model a biasing
+`prompt:"tasks, schedule, calendar, reschedule, today, tomorrow, priorities"`. Whisper-family transcribers
+(gpt-4o-mini-transcribe) echo the prompt VERBATIM on near-silence → phantom user turns. The shared config
+`lib/voice/realtime-audio.ts` (used by the ceremony) deliberately has NO prompt and documents exactly this;
+commit a9dcdd3 ("revert 1:1 Fast (A) STT config") re-introduced the inline prompt on the 1:1 = the regression.
+The sensitivity that drove that revert was `noise_reduction:near_field`, NOT the prompt — so the prompt can be
+dropped with no sensitivity change.
+**Expected outcome:** the 1:1 voice transcript never contains words the user didn't say; matches the ceremony's
+no-prompt STT.
+**Acceptance criteria:**
+- AC-1: Given a 1:1 voice call with silent/near-silent gaps, when the user pauses, then NO transcript line
+  containing the biasing vocabulary ("tasks, schedule, calendar, reschedule, today, tomorrow, priorities")
+  appears unless the user actually spoke it.
+- AC-2: Given the 1:1 mint (`realtime.functions.ts`), when the session is created, then the transcription config
+  contains NO `prompt` field (parity with `realtime-audio.ts`).
+- AC-3: Regression guard — `noise_reduction` remains OMITTED on the 1:1 (Fast-A sensitivity unchanged; not
+  re-added by this fix).
+- AC-4 (live): user confirms in their real environment that phantom words no longer appear.
+**Status:** in-progress — one-line prompt removal + comment staged locally (uncommitted), tsc clean. NOT committed/deployed/live-confirmed.
+**Branch:** claude/iris-huddle-interaction-baj51c
+
+### ACT-huddle-31: 1:1 voice transcript is delayed / dropped all-at-once / frozen until nudged
+**Requested:** 2026-08-11 — user: "the transcript had a delay and also didn't transcribe my words as I spoke,
+rather it dropped it all at once"; had to send "..." to unfreeze Finn's response.
+**Diagnosis (code-read, needs confirm):** `hooks/useVoiceCallRealtimeSpeak.ts` handles only
+`conversation.item.input_audio_transcription.completed` (line ~382) — there is NO `.delta` handler, so the
+user's words can only render in one batch at end-of-utterance, never streaming. Combined with `semantic_vad`
+end-of-turn commit latency (eagerness medium), the caption AND the agent response both wait on that late
+"completed" event → "frozen until I nudge it."
+**Expected outcome:** user's speech appears incrementally as they talk; agent replies promptly without needing
+a manual nudge.
+**Acceptance criteria:**
+- AC-1: Given a spoken utterance, when the user is mid-sentence, then partial transcription renders incrementally
+  (if the STT model emits `input_audio_transcription.delta`), not only on completion.
+- AC-2: Given end of a spoken turn, when VAD commits, then the agent's reply begins without requiring extra user
+  input to "unfreeze" it; measure time-from-silence-to-first-reply-token.
+- AC-3: Investigate & document whether gpt-4o-mini-transcribe emits `.delta` in this Realtime session; if not,
+  identify the correct streaming mechanism (or a perceived-latency mitigation).
+**Status:** open — diagnosed, not yet fixed.
+
+### ACT-huddle-32: 1:1 voice-call transcript is NOT persisted server-side (observability + durability gap)
+**Requested:** 2026-08-11 — user: "you have no visibility into our 1:1 voice chat transcripts" (proven — I
+could not find it in the DB).
+**Root cause:** `useVoiceCallRealtimeSpeak.ts` `persist()` only calls `addUserMessage`/`addAgentMessage`
+(client zustand) — it never POSTs to a durable table. So 1:1 voice turns exist only in the browser; they are
+absent from `chat.pending_turns` AND `chat.ceremony_transcript`. This is WHY the DB query found nothing recent.
+**Expected outcome:** 1:1 voice-call turns are persisted server-side so they survive reload and are reviewable
+by an operator/session (like the ceremony path's `chat.ceremony_transcript`).
+**Acceptance criteria:**
+- AC-1: Given a completed 1:1 voice turn (user or agent), when it is rendered, then a durable row is written
+  server-side (extend `chat.pending_turns` or a voice transcript table — do NOT create a parallel store without
+  reconciling with the ceremony transcript pattern first).
+- AC-2: Given a persisted voice conversation, when queried by huddle_id `dm-<agent>`, then the full turn sequence
+  (role, text, ts) is retrievable.
+- AC-3: Extend-don't-duplicate: the chosen store reuses/mirrors `ceremony-transcript.server.ts` conventions, not
+  a new parallel schema, unless justified.
+**Status:** open — diagnosed.
+
+### ACT-huddle-33: Agent voice reply truncated / cut off mid-answer
+**Requested:** 2026-08-11 — voice transcript shows Finn: "It seems I got cut off. Let me finish that for you:"
+then re-emits the full Trip Budget Breakdown.
+**Hypothesis (unconfirmed):** a phantom `speech_started` (from the phantom-word STT / noise) fired a false BARGE
+that interrupted Finn mid-reply (`interrupt_response:true`), or the per-sentence EL synth/response was cut. Likely
+COUPLED to ACT-huddle-30 (phantom STT) — fixing the prompt may reduce false barges. Needs live re-test to isolate.
+**Expected outcome:** the agent completes its spoken answer without spurious self-interruption; no "I got cut off"
+recovery unless the USER actually barged.
+**Acceptance criteria:**
+- AC-1: Given the agent is speaking and the user is silent, when there is background noise/silence, then no false
+  barge interrupts the reply.
+- AC-2: Given ACT-huddle-30 is fixed, re-test whether the cut-off recurs; if it persists, isolate the barge/synth
+  cause (bargeEpoch / interrupt_response / EL synth cancel).
+**Status:** open — hypothesis, coupled to ACT-huddle-30; re-test after the prompt fix ships.
+
+### ACT-huddle-34: Wrong tool selected (Slack message instead of email) + over-claimed delivery
+**Requested:** 2026-08-11 — text thread: user asked for the budget breakdown by EMAIL; Finn sent a Slack message
+("you just used the wrong tool. If you wanna send me an email, try again"), and earlier implied delivery the user
+didn't receive ("If you're not seeing it, we can double-check").
+**Diagnosis (needs investigation):** tool-selection in the response engine picked the wrong delivery tool
+(send Slack vs send_email/create_email_draft), and the agent narrated a successful send it couldn't confirm.
+**Expected outcome:** when the user asks to be emailed, the agent uses the email tool; the agent does not claim a
+delivery it cannot confirm.
+**Acceptance criteria:**
+- AC-1: Given "send me an email with X", when the agent acts, then it calls the email tool (not a Slack/message
+  tool).
+- AC-2: Given a delivery tool result, when the agent reports back, then it states the ACTUAL tool outcome (sent via
+  <channel> / draft created / failed) — no unverifiable "I've sent it."
+- AC-3: Investigate whether the phantom scheduling words (ACT-huddle-30) skewed routing toward the wrong tool.
+**Status:** open — to investigate (voice + text engine tool routing).
+
+### ACT-huddle-35: Deep-1:1 produce-vs-quick gate + central model-usage tracking — DEPLOYED, needs live smoke
+**Requested:** 2026-08-11 (prior task) — "build without stopping, deploy when done."
+**Done/evidence:** produce-vs-quick gate + `chat.model_usage` view shipped to `main` (4569a5b, deploy 31501691566
+green); view live (1,581 rows). classifyConfirmReply 21/21 offline.
+**Remaining:** run `qa-produce-quick.mjs` live smoke via agent-serverfn-uat.yml (deep 1:1 → HOLD; "quick" resume; cancel).
+**Status:** in-progress — deployed, live smoke pending + user live-confirm.

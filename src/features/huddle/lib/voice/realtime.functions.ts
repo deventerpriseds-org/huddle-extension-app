@@ -89,17 +89,20 @@ export const getRealtimeSession = createServerFn({ method: "POST" })
           output_modalities: ["text"],
           audio: {
             input: {
-              // REVERTED to the 1:1's known-good STT config after the shared-config change made the 1:1
-              // FAR more sensitive in the user's real environment (2026-08-01). The headless harness
-              // (fake silent device, no real speech/ambient noise) could not catch it — do NOT re-apply
-              // noise_reduction/prompt-drop to the 1:1 without a LIVE user confirmation this time.
-              // Aligned to journey's proven web-voice STT: mini transcribe, English pinned, and a
-              // domain-vocab prompt to bias STT toward the terms users actually say. noise_reduction
-              // intentionally omitted (= none), same as journey.
+              // 1:1's known-good STT config: mini transcribe, English pinned. `noise_reduction` is
+              // intentionally OMITTED (= none) — re-adding it (via the shared realtimeAudioInput) made
+              // the 1:1 FAR more sensitive in the user's real environment (2026-08-01), so that is the
+              // ONE knob kept divergent from the ceremony and must NOT be re-applied without a LIVE
+              // user confirmation.
+              // NO `prompt`: a Whisper-style STT prompt is echoed back VERBATIM on near-silence — the
+              // ceremony's phantom-barge incident WAS the whole prompt string, so it's dropped from the
+              // shared config for exactly this reason (see realtime-audio.ts). The 1:1 had regressed a
+              // domain-vocab prompt back in via the 2026-08-01 revert, which surfaced live as phantom
+              // user turns ("tasks, schedule, calendar, reschedule, today, tomorrow, priorities" the
+              // user never spoke). Dropped here to match the ceremony; noise_reduction stays omitted.
               transcription: {
                 model: "gpt-4o-mini-transcribe",
                 language: "en",
-                prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities",
               },
               turn_detection: {
                 type: "semantic_vad",
