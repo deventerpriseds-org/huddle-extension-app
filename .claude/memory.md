@@ -1780,3 +1780,35 @@ Validated interactively via journey Supabase + azure-pg-query + run-autowork/run
    Side-effect noted: `run-grooming force=true` re-ranked 22 real tasks (idempotent-ish, no data loss).
 NEXT: encode the full BACKLOG→reach-out→confirm/blocker flow (WIP handling + Playwright reply + cleanup + structured
 output) as a repeatable `qa-confirm-intent.yml`.
+
+## Deep-1:1 PRODUCE-vs-QUICK confirm gate + central model tracking (2026-08-11)
+Repurposed the (now-dead) Sol deep-confirm gate and added queryable model-usage tracking. Ships together.
+**Why the old gate was dead:** it keyed on `resolveByDifficulty(...).needsConfirm`, true only when the resolved
+model is `gpt-5.6-sol`. Since the deep rung became `o3` (and every agent's ceiling is o3), needsConfirm is now
+always false → the Sol/budget confirm never fired, and deep 1:1 asks ran o3 SYNCHRONOUSLY inline (wrong shape for a
+chat; the class of thing that poisoned Iris). User's design: don't cost-confirm (Sol isn't cheaper than o3) —
+confirm the OUTCOME SHAPE: "confirm that I agree it's a produce task or if there is a different less complex outcome
+I want that is more chat friendly."
+**Plan A — produce-vs-quick (huddle.functions.ts ~1300 gate, deep-confirm.server.ts):**
+- Fresh 1:1 ask with `routed.difficulty >= 3` (no manual override) now HOLDS and asks: **produce** (async task →
+  artifact) or a **quick take here**? (`setPendingDeepConfirm` stores the original ask, cross-turn.) Trigger is
+  difficulty>=3 DIRECTLY — NOT needsConfirm (which is dead).
+- Reply resume (`classifyConfirmReply` now returns `produce|quick|cancel|unrelated`):
+  * produce -> `produceTitleFrom(ask)` (strips "can you/please/I need you to..." lead-ins -> task-shaped title) ->
+    `quick_create_task` via journey proxy (dual-writes board+mirror, non-fatal) -> fire-and-forget
+    `runScheduledAutoWork(caller,{force:true})` -> ack reply. NO inline deep spend.
+  * quick -> `deepManual="terra-med"` + `routed.difficulty=2`, resume the ORIGINAL ask inline on a chat-friendly
+    tier (Terra-med, deliberately NOT o3). Manual wins in resolveByDifficulty, no re-gate.
+  * cancel -> drop with a friendly ack.
+- Loop-safe: quick sets deepManual (fresh-gate guarded by `!deepManual`); produce/cancel return. Internal/group/
+  ceremony/resume turns never gate.
+**Plan B — central model tracking:**
+- `PromptDebug` (fallbacks.ts) gained optional `difficulty?:number|null` + `effort?:string|null`; per-agent
+  `prompts.push` now records `usedDifficulty` (routed.difficulty) + `usedEffort` (resolver effort). So
+  `chat.pending_turns.result->prompts[]` carries WHY a tier was chosen, not just the model.
+- `chat.model_usage` VIEW (`docs/model-usage-view.sql`) flattens `result->'prompts'` -> one row per (turn,agent):
+  ts, user_email, huddle_id, scope (dm-*->one-to-one else group), agent_id, model, backend, difficulty, effort,
+  from_snapshot, turn_status. Run once via azure-pg-query.yml (admin conn, CREATE OR REPLACE). Sample queries in
+  the .sql (model mix, per-agent tier, difficulty->model calibration, "any sync o3 in 1:1" = should be ~none now).
+Verified: tsc+vite build clean; `classifyConfirmReply` 21/21 offline; `produceTitleFrom` output sane. NOT yet
+user-confirmed live — awaiting a browser re-test (fresh deep 1:1 ask -> confirm prompt -> produce/quick both paths).

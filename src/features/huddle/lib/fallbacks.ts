@@ -65,4 +65,8 @@ export interface PromptDebug {
   fromSnapshot: boolean;
   /** Optional resolved tool list. */
   toolTypes: string[];
+  /** Router-scored difficulty (1-4) for this turn, if the difficulty resolver ran. Central tracking. */
+  difficulty?: number | null;
+  /** Reasoning effort the resolver chose (low/medium/high), if any. Central tracking. */
+  effort?: string | null;
 }

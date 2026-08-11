@@ -1949,3 +1949,12 @@ resolver system (`model-policy.ts` + `withAgentCeilings`) — extended, not dupl
 - [TRACKED] The disappearing-messages / identity-unification / conversation-object-1:1 / deploy-caching
   work earlier this session is captured in memory.md (2026-08-10 entries); actions.md coverage of those is
   a follow-up if the user wants per-item ACT entries.
+- [DONE — Plan A produce-vs-quick gate + Plan B model tracking, built+deployed this session] User:
+  "build without stopping, deploy when done" (design: "confirm that I agree it's a produce task or if there is a
+  different less complex outcome I want that is more chat friendly"; "sol is not cheaper than o3"). (A) Deep 1:1
+  asks (difficulty>=3) no longer run o3 inline — they HOLD and ask produce-vs-quick; produce->board task +
+  async autowork kick, quick->resume inline on Terra-med, cancel->drop. `classifyConfirmReply`->produce|quick|
+  cancel|unrelated; new `produceTitleFrom` title-shaper. (B) PromptDebug + prompts.push carry difficulty+effort;
+  `chat.model_usage` view (docs/model-usage-view.sql) makes model usage queryable. tsc+build clean; classify 21/21
+  offline. Files: huddle.functions.ts, tasks/deep-confirm.server.ts, fallbacks.ts, docs/model-usage-view.sql.
+  NOT yet user-confirmed live. View DDL to be run via azure-pg-query.yml post-deploy.
