@@ -55,7 +55,10 @@ const VOICE_HOUSE_STYLE =
   "my plate/day/calendar', ALWAYS call `schedule_and_priorities` (use view 'scheduled' for today's " +
   "schedule) — that is the user's combined nightly schedule (tasks + external calendar already merged), " +
   "the source of truth. Use `get_external_calendar_events` ONLY if the user explicitly says 'external calendar' " +
-  "or 'Outlook calendar' (rare). Don't narrate that you're using a tool.";
+  "or 'Outlook calendar' (rare). Don't narrate that you're using a tool." +
+  " To EMAIL something to the user or anyone, CALL `send_email` (or `create_email_draft` to prepare one " +
+  "without sending) — never a message, push, or chat tool for an email request. Only say an email was " +
+  "actually sent if `send_email` returned success; if you only drafted it, say exactly that.";
 
 /** Same-brain instructions for the realtime session: snapshot + auto-retrieved memory + voice style. */
 export async function assembleRealtimeInstructions(
@@ -113,6 +116,59 @@ export async function buildRealtimeToolset(
   if (opts.webSearch !== false) raw.push(TAVILY_WEB_SEARCH_TOOL);
   if (agentOwnsCapability(agent, "backlog-grooming")) raw.push(GROOM_BACKLOG_TOOL);
 
+  // Native email (Outlook/Graph) — mirror the TEXT engine. The voice agent was MISSING these, so a spoken
+  // "email me X" fell through to a journey messaging/push tool and the user got a message instead of an
+  // email (ACT-huddle-34). Same gate + schemas + dispatch (executeRealtimeTool) as the text path.
+  try {
+    const { graphEmailConfigured, emailFromOptions } = await import("../email/graph-email.server");
+    if (graphEmailConfigured()) {
+      const fromOpts = emailFromOptions();
+      raw.push(
+        {
+          type: "function",
+          name: "send_email",
+          description:
+            `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
+            `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
+            `Requires a recipient (to), a subject, and a body. Use this whenever the user asks to email someone.`,
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              to: { type: "string", description: "Recipient email address. Comma-separate multiple recipients." },
+              subject: { type: "string", description: "Email subject line." },
+              body: { type: "string", description: "Email body (plain text)." },
+              from: { type: "string", description: `Optional sender mailbox. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.` },
+              cc: { type: "string", description: "Optional CC address(es), comma-separated." },
+            },
+            required: ["to", "subject", "body"],
+          },
+        },
+        {
+          type: "function",
+          name: "create_email_draft",
+          description:
+            `Save a REAL draft email to the ${fromOpts[0]} mailbox's Drafts folder (does NOT send it). ` +
+            `Use this when the user asks you to draft, prepare, or write up an email for later. A subject and body are required; recipients (to) are optional for a draft.`,
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              subject: { type: "string", description: "Email subject line." },
+              body: { type: "string", description: "Email body (plain text)." },
+              to: { type: "string", description: "Optional recipient address(es), comma-separated." },
+              from: { type: "string", description: `Optional mailbox to draft in. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.` },
+              cc: { type: "string", description: "Optional CC address(es), comma-separated." },
+            },
+            required: ["subject", "body"],
+          },
+        },
+      );
+    }
+  } catch {
+    // Email is optional — voice still works without it.
+  }
+
   // NOTE: file_search (snapshot knowledge bases) is deliberately OMITTED — the Realtime GA
   // client_secrets endpoint only accepts tool types 'function' and 'mcp' and 400s on 'file_search',
   // which would break the whole speaking-session mint. KBs stay a text-path capability.
@@ -149,6 +205,8 @@ export async function executeRealtimeTool(
     "schedule_reminder",
     "groom_backlog",
     "tavily_web_search",
+    "send_email",
+    "create_email_draft",
   ]);
   try {
     if (name === "get_external_calendar_events") {
@@ -186,6 +244,28 @@ export async function executeRealtimeTool(
     }
     if (name === "tavily_web_search") {
       const r = await tavilySearch(args as unknown as TavilySearchArgs);
+      return done(JSON.stringify(r));
+    }
+    if (name === "send_email") {
+      const { sendGraphEmail } = await import("../email/graph-email.server");
+      const r = await sendGraphEmail({
+        to: String(args.to ?? ""),
+        subject: String(args.subject ?? ""),
+        body: String(args.body ?? ""),
+        from: args.from ? String(args.from) : undefined,
+        cc: args.cc ? String(args.cc) : undefined,
+      });
+      return done(JSON.stringify(r));
+    }
+    if (name === "create_email_draft") {
+      const { createGraphDraft } = await import("../email/graph-email.server");
+      const r = await createGraphDraft({
+        to: String(args.to ?? ""),
+        subject: String(args.subject ?? ""),
+        body: String(args.body ?? ""),
+        from: args.from ? String(args.from) : undefined,
+        cc: args.cc ? String(args.cc) : undefined,
+      });
       return done(JSON.stringify(r));
     }
     // Anything not native → route to the journey catalog directly (no per-call catalog fetch → lower

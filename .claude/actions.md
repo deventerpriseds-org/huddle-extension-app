@@ -2058,7 +2058,7 @@ delivery it cannot confirm.
 - AC-2: Given a delivery tool result, when the agent reports back, then it states the ACTUAL tool outcome (sent via
   <channel> / draft created / failed) — no unverifiable "I've sent it."
 - AC-3: Investigate whether the phantom scheduling words (ACT-huddle-30) skewed routing toward the wrong tool.
-**Status:** open — to investigate (voice + text engine tool routing).
+**Status:** ROOT-CAUSED + built. Voice toolset (buildRealtimeToolset) lacked send_email/create_email_draft (native Graph, present only in the TEXT engine) → spoken 'email me X' fell through to a journey messaging/push tool. Wired both native email tools + dispatch into the voice path + house-style 'use send_email, never a message tool; only claim sent on success'. tsc+build clean. Deploying; live-confirm pending.
 
 ### ACT-huddle-35: Deep-1:1 produce-vs-quick gate + central model-usage tracking — DEPLOYED, needs live smoke
 **Requested:** 2026-08-11 (prior task) — "build without stopping, deploy when done."
