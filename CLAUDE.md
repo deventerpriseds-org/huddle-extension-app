@@ -188,6 +188,16 @@ tests that don't need to exercise real task creation at all.
 (only after explicit user confirmation) remove stray/test tasks from the board — never bulk-delete
 on inference alone.
 
+**Standing user instruction (2026-08-11): "add the test precursor always and always remove when done —
+no need to ask."** For EVERY harness/verification run: (1) tag it so its artifacts are cleanly removable —
+a `Test-` title on any task/reminder a UI-driven harness could create, AND a unique run MARKER carried in
+every message (for RAG/turn cleanup). Prefer `journey:{enabled:false}` (server-fn harnesses) so NO board
+write is even possible. (2) ALWAYS auto-clean the run's artifacts when done — board rows (journey
+`public.tasks` via Supabase MCP), memory (`public.rag_chunks`) and durable turns (`chat.pending_turns`) by
+marker — WITHOUT asking first; the user has pre-authorized cleanup of provable test artifacts. Verify 0
+remaining and report it. (A UI-driven run can't set `journey:{enabled:false}`, so there a `Test-` prefix on
+any task-creating line is mandatory — a non-prefixed "draft X for me" wrote a real board task on 2026-08-11.)
+
 ## Chat memory & context architecture (relearned the hard way — read before touching "memory")
 How an agent gets context is TWO separate layers. Confusing them leads to wrong diagnoses.
 

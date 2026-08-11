@@ -1,0 +1,50 @@
+name: QA long-drift GROUP + cross-huddle (42-turn, live, real app)
+
+# The A1-A3 "before" baseline on the surfaces conversation-mode does NOT cover: GROUP (reconstruction:
+# ~14-msg window + shared RAG) and CROSS-HUDDLE (a fact stated in the group reaching a different agent's
+# 1:1 only via RAG). Drives the deployed sendHuddleMessage server fn directly with journey:{enabled:false}
+# (ZERO board writes possible). Builds first so fn ids are fresh. Grades supersession (latest vs stale)
+# and cross-huddle recall from ground truth. Baseline: measured drift is DATA — the workflow greens on a
+# valid run and only reds on a mechanism/router-fallback failure. Publishes results to uat-shots + live
+# progress to qa-progress. Clean rag_chunks/pending_turns by the printed marker afterward (both huddles).
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  qa-longdrift-group:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install deps
+        run: npm ci
+      - name: Build (fresh server-fn ids)
+        continue-on-error: true
+        run: npm run build
+      - name: Run 42-turn group + cross-huddle harness
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          HUDDLE_BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          HUDDLE_CALLER: von.ellis@enterpriseds.io
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SHOT_DIR: uat-shots
+        run: node .claude/skills/test-agent-serverfn/scripts/qa-longdrift-group.mjs
+      - name: Publish results to uat-shots branch
+        if: always()
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "gha-uat"
+          mkdir -p uat-shots
+          [ -f uat-shots/progress.json ] && cp uat-shots/progress.json uat-shots/results.json || echo '{}' > uat-shots/results.json
+          git checkout --orphan uat-shots-g
+          git reset >/dev/null 2>&1 || true
+          git add -f uat-shots/results.json
+          git commit -q -m "qa-longdrift-group results — run ${{ github.run_id }}" || { echo "no results"; exit 0; }
+          git push -f origin uat-shots-g:uat-shots
