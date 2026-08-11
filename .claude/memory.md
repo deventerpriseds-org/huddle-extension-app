@@ -51,7 +51,26 @@ facts → 9+8 distractors (bury past ~14-msg window) → MUTATE (drop Cobalt/add
 chunk, no recency term → predict STALE returns). Baseline design: drift is DATA (does NOT red the run);
 check() gates only mechanism+router-validity (AC14). ACs by independent subagent.
 
-**✅ RUN DONE (31458699060, 0 fallbacks, 44/44): 1:1 held 18/18 — incl. ALL 4 supersession probes returning
+**✅ SHIPPED + VERIFIED LIVE (2026-08-11) — "Researched memory improvements" mode (A1+A3), DEFAULT ON.**
+New Settings→Memory option `researched` (agent-backends.ts MEMORY_MODES + default + v8→v9 migration;
+SettingsSheet 4th radio; payload enum). Safe SUPERSET: 1:1 = conversation object (unchanged); group/
+ceremony += A1 (persist agent reply as attributed chunk + tool-confirmed `ok:true` outcomes → agent
+triples) + A3 (rag_triples.superseded_at supersession on write + excludeSuperseded on read + auto-inject
+"Latest known facts" into memoryBlock). ALL gated on `researched` (legacy modes byte-for-byte unchanged);
+every add fails per-turn to reconstruction. Ontology (user's design): triples=canonical facts (user msgs
++ agent tool-confirmed ONLY, never free-form → blocks fabrication-as-fact); chunks=episodic (user+agents);
+native=1:1 only. Live DB ALTER added superseded_at. Deployed main 2be8cf2 (build ✅). **VERIFY (run
+31843848796-ish, deployed app, cross-agent via different-agent empty-history DM):** budget→**$10k LATEST
+✅** (was STALE before), date→21st correct (grader over-strict on mention of old 14th), vendors→**Cobalt
+STALE ❌** = real limit: scalar-fact RESTATE supersedes cleanly, but a LIST edited by DELTAS (drop/add)
+doesn't make a superseding same-key triple → **that's A2 (mutable-collection ledger) territory, NEXT
+increment.** No regression (vendors were stale before too). Cleanup 0/0 (13 triples+9 chunks+1 conv obj).
+Reversible: pick Conversation/Reconstruction in Settings → path inert. Merged another session's 1:1
+self-heal (d422a82) cleanly. Files: agent-backends.ts, huddle.functions.ts (write path ~894, memoryBlock
+~2024 latest-facts, persistResearchedMemory ~5137, conv gate ~3735), azure-pg.server.ts (superseded_at +
+writeTriples supersede + lookupTriples excludeSuperseded), rag/types.ts, triples.server.ts, SettingsSheet.
+
+**Earlier RUN (31458699060, 0 fallbacks, 44/44): 1:1 held 18/18 — incl. ALL 4 supersession probes returning
 LATEST** (budget $10k not 8k, recital 21 not 14, team 13 not 12, Cobalt dropped + Delta added) + consistency
 sweep CONSISTENT + self-correction CORRECTED. **KEY CORRECTION to my A1-A3 answer:** the deployed 1:1 uses
 `memoryMode:"conversation"` (default) → an OpenAI **Conversations object** per (user,dm,agent) that retains the
