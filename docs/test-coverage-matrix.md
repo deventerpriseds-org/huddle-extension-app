@@ -45,6 +45,22 @@ only, no supersession). → Build the long-drift/supersession baseline on GROUP 
 Harness bug to fix first: T6 "draft the offsite agenda" wrote a REAL board task ("Draft team offsite agenda") —
 UI-driven runs can't set `journey:{enabled:false}`, so any task/reminder-imperative MUST be `Test-` prefixed.
 
+**⚠ CROSS-HUDDLE result (run 31463140639, VALID — 1:1-scope probes, empty history → RAG-only bridge): 0/3.**
+vendors→**STALE** ("Acme, Brightline, Cobalt" — dropped Cobalt still listed, added Delta missing = A3 no
+supersession); budget→**missed** ("don't have it in context" = A1 agent-derived state not persisted);
+date→**FABRICATED** ("November 3rd" + a name never given = A6). Contrast 1:1 conversation-mode 18/18. This
+is strong, valid evidence the gap is real where conversation-mode doesn't reach.
+
+**⚠ GROUP sustained long-drift number NOT yet captured — architectural harness limit (root-caused over 3
+runs + log).** Headless server-fn can't drive GROUP turns: they're durable/chunked and need a background
+runner (browser client + cron `/api/public/run-turn`) to process chunks; `enqueueHuddleTurn` returns
+http=200 with NO inline result and nothing kicks the chunks headlessly → every group turn `reply=""`
+(router=UNKNOWN). Sync `sendHuddleMessage` group turns also return empty (36s defer). Single-member group
++ per-turn nonce did NOT help — it's the runner-kick, not member count. **The faithful GROUP number needs
+the Playwright UI path** (the UI kicks the runner + polls, as qa-longdrift 1:1 proved) — capture it during
+the A1-A3 PROOF phase where it's needed anyway. For now the cross-huddle result + architecture (group uses
+the SAME reconstruction+RAG, no supersession, replies-not-persisted) is the "before" evidence.
+
 ### Honesty & trust
 | Capability | 1:1 | Group | Long | Notes |
 |---|---|---|---|---|
