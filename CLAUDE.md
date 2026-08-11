@@ -354,8 +354,12 @@ agent lists or verb-regexes to steer who responds — they won't keep up as agen
 - **The responder set** = `routed.winners` + `interjectors`, assembled into `queue` at
   `huddle.functions.ts:590`. The mention-chain re-queue (`parseMentions`, huddle.functions.ts:~1984)
   is only a SECONDARY mid-reply path for agent-discovered handoffs.
-- **THE BUG that makes "only one agent answers a multi-lane ask" (measured, not theorized).**
-  `soloOnCoverage` (routing.ts:381-388) drops **every** supporting agent whenever the primary scores
+- **THE BUG that made "only one agent answers a multi-lane ask" — FIXED (2026-08-11, verified offline
+  `test:router` 9/9).** `assembleWinners` (routing.ts:320-368) now drops ONLY adjacency (LLM-added)
+  supporting agents under solo and KEEPS any the router marked `explicitlyRequested`; mention-handoffs
+  keep named+@mentioned agents too. So "Sam, pull in Finn + Tess" now returns Sam→Finn→Tess. The
+  historical description below is kept for context — the fix direction it proposed is what shipped.
+  `soloOnCoverage` (routing.ts:351-354) drops **every** supporting agent whenever the primary scores
   ≥0.15 on the topic — including collaborators the USER explicitly asked to pull in. Live proof
   (same message "Sam, sketch GTM; pull in Finn + Tess; Tess loop Cole", via `test-agent-serverfn`):
   - `soloOnCoverage=true` → responders **Sam → Iris** only; router reason even says "Finn can validate

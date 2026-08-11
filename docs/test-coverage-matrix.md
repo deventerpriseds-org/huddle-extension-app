@@ -70,11 +70,12 @@ Surfaces: **1:1** (dm-<agent>), **Group** (all-members, multi-agent), **X-huddle
 ### Multi-agent (Group)
 | Capability | Status | Notes |
 |---|---|---|
-| Routing / who-answers (right agents) | ⬜ | |
-| soloOnCoverage — don't drop user-requested collaborators | ⬜ | documented bug |
-| Handoffs (@mention + prose) | ⬜ | |
+| Routing / who-answers (right agents) | ⬜ | needs a live group baseline |
+| soloOnCoverage — don't drop user-requested collaborators | ✅ | **ALREADY FIXED (CLAUDE.md note was stale).** `assembleWinners` (routing.ts:365) drops adjacency only, keeps `explicitlyRequested`. Offline `test:router` 9/9 incl. "multi-lane (sam+named finn+tess survive solo)". |
+| Handoffs (@mention + prose) | 🔨 | @mention handoffs pass offline (mention turns 5/5); prose handoff still relies on parseMentions/@handle |
 | No cross-talk / echo dedup | ⬜ | |
-| Ownership-aware handoff (capability owners) | ⬜ | |
+| Ownership-aware handoff (capability owners) | ⬜ | (capability-ownership-test.mjs exists) |
+| Agent resolves NAMED task → id before id-taking tools | ✅ | **FIXED (huddle 4198a42).** taskToolInstructions now: get_tasks{query} title-lookup first, exact id verbatim, never title-as-id, never "can't find" without trying. Closes the flag_blocker non-uuid-id class at source. |
 
 ### Voice / ceremony (separate track)
 | Capability | Status | Notes |
