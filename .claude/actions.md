@@ -2109,3 +2109,13 @@ green); view live (1,581 rows). classifyConfirmReply 21/21 offline.
 - AC-2: Given a later TEXT turn in the same or another huddle, when the user references the voice content, then auto-retrieval surfaces it and the agent recalls it (no "I don't have that in this chat").
 - AC-3: Memory-pollution guard — do NOT write system/directive lines; only genuine user + agent content. Mirror the text path's guard.
 **Status:** BUILT + deploying. New rememberVoiceTurn server fn (embed + writeChunk scope=global, mirrors text path) called fire-and-forget from the voice hook persist() for both user+agent turns; <3-char guard; agent turns tagged '(on a voice call)'. tsc+build clean. Live-confirm pending.
+
+### ACT-huddle-38: Fold voice-call turns into the 1:1 OpenAI Conversations object (the ACTUAL 1:1 memory)
+**Requested:** 2026-08-11 — user: "we added conversation object to 1:1... it absolutely has memory" (correcting my framing). The 1:1 TEXT turn carries continuity via memoryMode="conversation" → getOrCreateConversationId (chat.agent_conversations → conv_...), passed as `conversation:` to callOpenAIResponses (OpenAI auto-stores input+reply). The VOICE call uses an EPHEMERAL Realtime session that never touches that conv object → voice content ("that budget") is absent from "this chat" for the next typed turn.
+**Root cause (GROUND-TRUTHED, deep dive):** text 1:1 = conv_... object (native); voice = Realtime session (separate). No writer bridges voice→conv. (ACT-37's RAG write was a complementary cross-huddle layer, NOT the 1:1 mechanism.)
+**Fix:** new appendConversationItems(convId, items) in conversation-store.server.ts; rememberVoiceTurn now resolves the caller email EXACTLY as the text turn (resolveTaskEmail ?? entra_email — the conv key must match), gets the SAME conv via getOrCreateConversationId(dm-<agent>), and appends each voice turn (user→user, agent→assistant) as a message item. Plain message items only (no dangling function_call → no poison). RAG write kept as the secondary cross-huddle layer.
+**Acceptance criteria:**
+- AC-1: After a 1:1 VOICE turn, the (email, dm-<agent>, agentId) Conversations object contains a matching message item.
+- AC-2: A later TYPED 1:1 message to the same agent recalls the voice content (no "I don't have that in this chat").
+- AC-3: Conv key (email) matches the text turn's resolution exactly, else it writes to a different conv.
+**Status:** BUILT + deploying (tsc+build clean). Live-confirm pending (needs a fresh voice turn + a following typed turn).

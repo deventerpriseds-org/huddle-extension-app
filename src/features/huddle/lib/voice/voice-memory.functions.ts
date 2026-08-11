@@ -27,16 +27,50 @@ export const rememberVoiceTurn = createServerFn({ method: "POST" })
       })
       .parse(raw),
   )
-  .handler(async ({ data }): Promise<{ ok: boolean }> => {
+  .handler(async ({ data }): Promise<{ ok: boolean; conversation: boolean; rag: boolean }> => {
     const text = (data.text ?? "").trim();
-    if (text.length < 3) return { ok: false };
-    if (!data.caller?.entra_email) return { ok: false };
+    const result = { ok: false, conversation: false, rag: false };
+    if (text.length < 3) return result;
+    if (!data.caller?.entra_email) return result;
+
+    // Resolve the caller's canonical email EXACTLY as the text turn does (resolveTaskEmail ?? entra_email)
+    // — the Conversations object is keyed by (email, huddleId, agentId), so a mismatch would write to a
+    // DIFFERENT conv than the text turn reads and the memory wouldn't carry.
+    let email: string | null = null;
+    try {
+      const { resolveTaskEmail } = await import("../journey/identity");
+      email = (await resolveTaskEmail(data.caller ?? {})) ?? data.caller?.entra_email ?? null;
+    } catch {
+      email = data.caller?.entra_email ?? null;
+    }
+
+    // PRIMARY (1:1-native): fold the turn into the SAME OpenAI Conversations object the 1:1 TEXT turn
+    // uses, so the next typed message in dm-<agent> natively "remembers" what was said on the call.
+    try {
+      const { getOrCreateConversationId, appendConversationItems } = await import(
+        "../rag/conversation-store.server"
+      );
+      const convId = await getOrCreateConversationId({
+        userEmail: email,
+        huddleId: `dm-${data.agentId}`,
+        agentId: data.agentId,
+        seed: [],
+      });
+      if (convId) {
+        result.conversation = await appendConversationItems(convId, [
+          { role: data.role === "agent" ? "assistant" : "user", content: text },
+        ]);
+      }
+    } catch {
+      /* best-effort */
+    }
+
+    // SECONDARY (cross-huddle): also write to shared RAG memory so auto-retrieval can surface voice
+    // content from OTHER huddles/agents (the conversation object is per 1:1 only).
     try {
       const { azurePgStore } = await import("../rag/azure-pg.server");
       const { embed } = await import("../rag/embed.server");
       const vec = await embed(text);
-      // Prefix so a reader/agent can tell this fact came from a spoken call, and attribute authorship to
-      // the agent on the call (1:1 has exactly one). scope 'global' = findable from any huddle, same as text.
       const tagged = data.role === "user" ? text : `${data.agentId} (on a voice call): ${text}`;
       await azurePgStore.writeChunk({
         scope: "global",
@@ -45,8 +79,11 @@ export const rememberVoiceTurn = createServerFn({ method: "POST" })
         embedding: vec,
         authorAgentIds: [data.agentId],
       });
-      return { ok: true };
+      result.rag = true;
     } catch {
-      return { ok: false };
+      /* best-effort */
     }
+
+    result.ok = result.conversation || result.rag;
+    return result;
   });

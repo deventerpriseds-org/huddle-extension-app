@@ -125,6 +125,36 @@ export async function getOrCreateConversationId(args: {
 }
 
 /**
+ * Append message items to an existing OpenAI Conversations object. Used to fold 1:1 VOICE-call turns
+ * into the SAME conversation thread the 1:1 TEXT turn reads (memoryMode "conversation") — so something
+ * said or produced on a call is natively in "this chat" for the next typed turn (ACT-huddle-38). The
+ * voice path uses an ephemeral Realtime session that never touches this persistent object, so without
+ * this the budget built on a call is invisible to a later "email me that budget" typed message.
+ * Best-effort: returns false on any failure (never throws) — memory is additive, never blocks a call.
+ */
+export async function appendConversationItems(
+  convId: string,
+  items: ConversationSeedItem[],
+): Promise<boolean> {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key || !convId || !convId.startsWith("conv_")) return false;
+  const clean = items
+    .filter((m) => m && typeof m.content === "string" && m.content.trim())
+    .map((m) => ({ type: "message", role: m.role, content: m.content }));
+  if (!clean.length) return false;
+  try {
+    const res = await fetch(`https://api.openai.com/v1/conversations/${convId}/items`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ items: clean }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Drop the stored conversation id for (user, 1:1 huddle, agent) so the NEXT turn mints a fresh
  * Conversations object. Used to self-heal a POISONED conversation: if a tool/function call was stored
  * in the OpenAI conversation thread but its output never got submitted (turn hit maxHops, the deadline,
