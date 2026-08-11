@@ -531,6 +531,26 @@ function looksLikeUnblock(text: string): boolean {
   );
 }
 
+/** Derive a board-task title from a freeform deep ask. Strips leading "can you / please / I need you
+ *  to …" politeness/question framing so the card reads like a task, keeps the first sentence, caps
+ *  length, and capitalizes. Best-effort text munging — never throws. Used by the produce-vs-quick gate. */
+function produceTitleFrom(ask: string): string {
+  let t = (ask || "").trim().replace(/\s+/g, " ");
+  // First sentence / line only (a deep ask can be a paragraph; the title is the headline).
+  const firstBreak = t.search(/[.!?\n]/);
+  if (firstBreak > 24) t = t.slice(0, firstBreak);
+  // Strip common lead-ins so "Can you research X" → "research X".
+  t = t.replace(
+    /^(hey\s+\w+,?\s*)?(can|could|would|will|please|pls|i(?:'| a)?\s*(?:need|want|'?d like)\s+(?:you\s+)?to|help me|let'?s|i'?d like you to)\b[\s,]*/i,
+    "",
+  );
+  t = t.replace(/^(you\s+to|you|to)\s+/i, "");
+  t = t.trim().replace(/[?.!]+$/, "");
+  if (!t) t = (ask || "").trim();
+  if (t.length > 120) t = t.slice(0, 117).trimEnd() + "…";
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
 export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddleTurnOpts) {
   // Wall-clock start for the per-execution deadline (see runBounded). The whole chunk — sequential
   // primary + parallel wave(s) — must finish under the ~45s hosting request ceiling, so agents are
@@ -1325,14 +1345,19 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     }
   }
 
-  // ---- Sol deep-confirm gate + manual escalation (1:1 only) ---------------------------------------
-  // Deep research is rare and Sol is the priciest tier, so it is NEVER auto-spent silently. A fresh 1:1
-  // ask the router scores as deep (difficulty ≥3) is HELD: the agent asks the user — inescapably — to
-  // confirm the default (Sol-high, best quality) or take the Terra-high budget (cheaper, usually close).
-  // The pending ask is stored cross-turn; the user's next reply (go / budget / cancel) resumes the
-  // ORIGINAL ask on the chosen tier. A manual override (data.modelEscalate) and group turns skip the
-  // gate. Best-effort: any store error just proceeds normally (no gate) so a turn never breaks.
-  // `deepManual` is read again at the persona site to pick the model/effort.
+  // ---- Deep-1:1 PRODUCE-vs-QUICK confirm gate + manual escalation (1:1 only) ----------------------
+  // A fresh 1:1 ask the router scores DEEP (difficulty ≥3) is rarely something to answer as a long,
+  // high-effort SYNCHRONOUS chat wall — it's usually a PRODUCE request (research/draft/plan) whose real
+  // home is the async WIP pipeline (a board task the team works up → an artifact you review). So instead
+  // of silently spending the deep reasoning model (o3) inline, the runtime HOLDS and asks the user which
+  // shape they want: produce it async, or just a quick take right here? The pending ask is stored
+  // cross-turn; the reply resumes on the chosen shape:
+  //   • produce → create a real board task + kick the async auto-work pipeline; ack (no inline deep spend)
+  //   • quick   → resume the ORIGINAL ask INLINE on a chat-friendly tier (Terra-med), never the o3 rung
+  //   • cancel  → drop it
+  // A manual override (data.modelEscalate) skips the gate; group turns, internal turns, ceremonies, and
+  // resumes never gate. Best-effort: any store error just proceeds normally (no gate) so a turn never
+  // breaks. `deepManual` is read again at the persona site to pick the model/effort.
   let deepManual: string | undefined = data.modelEscalate?.trim() || undefined;
   if (!resume && !data.internal && !data.ceremonyBarge && data.scope === "one-to-one") {
     try {
@@ -1347,15 +1372,68 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       const pending = await getPendingDeepConfirm(email, data.huddleId);
       if (pending) {
         const verdict = classifyConfirmReply(data.text);
-        if (verdict === "sol" || verdict === "budget") {
-          // Resume the original deep ask on the chosen tier (resolveByDifficulty honors `manual`, no re-gate).
-          deepManual = verdict;
+        if (verdict === "quick") {
+          // Resume the original ask inline on a chat-friendly tier — deliberately NOT the deep o3 rung.
+          // Manual override wins in resolveByDifficulty (no re-gate); force difficulty to standard so
+          // central tracking records the turn as the chat-shaped turn it actually is.
+          deepManual = "terra-med";
           data.text = pending.askText;
+          routed.difficulty = 2;
           if (pending.agentId && data.members.includes(pending.agentId as AgentId)) {
             routed.winners = [pending.agentId as AgentId];
             routed.interjectors = [];
           }
           await clearPendingDeepConfirm(email, data.huddleId);
+        } else if (verdict === "produce") {
+          await clearPendingDeepConfirm(email, data.huddleId);
+          const agentId = (pending.agentId as AgentId) ?? routed.winners[0] ?? data.members[0];
+          const title = produceTitleFrom(pending.askText);
+          // Create the produce task on the board (dual-write to journey). Non-fatal.
+          let created = false;
+          try {
+            if (data.caller?.entra_email) {
+              const { invokeJourneyTool } = await import("./journey/proxy.functions");
+              const r = await invokeJourneyTool({
+                toolName: "quick_create_task",
+                args: { title },
+                caller: data.caller ?? {},
+                context: { source: "huddle", huddleId: data.huddleId, agentId },
+              });
+              created = !!r.ok;
+              if (r.ok && r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+            }
+          } catch (e) {
+            console.warn(
+              `[huddle-model] produce-confirm task create failed: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+          // Kick the async WIP pipeline (fire-and-forget; the gated 9/13/17 cadence also picks it up).
+          try {
+            const { runScheduledAutoWork } = await import("./tasks/autowork.server");
+            void runScheduledAutoWork(data.caller, { force: true }).catch(() => {});
+          } catch {
+            /* best-effort */
+          }
+          return finalize({
+            decision: {
+              ...routed.decision,
+              reason: `${routed.decision.reason} [deep-confirm: produce]`.slice(0, 220),
+            },
+            replies: [
+              {
+                agentId,
+                text: created
+                  ? `Done — I've put “${title}” on the board as a produce task and kicked it to the team to work up async. You'll get the draft to review. Want me to steer it any particular way?`
+                  : `I'll take “${title}” on as a produce task and work it up async — you'll get the draft to review. (Heads up: I couldn't confirm the board write just now, so give it a quick check.)`,
+              },
+            ] as Reply[],
+            fallbacks,
+            prompts,
+            journeyTaskUpdates,
+            suggestedTasks,
+            toolUses,
+            reasoning: reasoningSummaries,
+          });
         } else if (verdict === "cancel") {
           await clearPendingDeepConfirm(email, data.huddleId);
           return finalize({
@@ -1363,7 +1441,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             replies: [
               {
                 agentId: (pending.agentId as AgentId) ?? routed.winners[0] ?? data.members[0],
-                text: "No problem — I'll hold off on the deep dive. Say the word whenever you want me to pick it back up.",
+                text: "No problem — I'll hold off. Say the word whenever you want me to pick it back up.",
               },
             ] as Reply[],
             fallbacks,
@@ -1377,38 +1455,30 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         // verdict "unrelated" → leave the pending (2h expiry) and fall through to normal routing.
       }
 
-      // Fresh deep ask (no manual override): if the primary winner would auto-spend Sol, hold + confirm.
-      if (!deepManual && routed.winners.length > 0) {
+      // Fresh deep ask (no manual override): HOLD and ask produce-vs-quick instead of spending o3 inline.
+      if (!deepManual && routed.winners.length > 0 && (routed.difficulty ?? 2) >= 3) {
         const primary = routed.winners[0];
-        const res = resolveByDifficulty(
-          routed.difficulty ?? 2,
-          primary,
-          effectiveModelPolicy(data.agents, data.modelPolicy),
-          {},
-        );
-        if (res.needsConfirm) {
-          await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
-          return finalize({
-            decision: {
-              ...routed.decision,
-              reason: `${routed.decision.reason} [deep-confirm: ${res.reason}]`.slice(0, 220),
+        await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
+        return finalize({
+          decision: {
+            ...routed.decision,
+            reason: `${routed.decision.reason} [deep-confirm: produce-vs-quick]`.slice(0, 220),
+          },
+          replies: [
+            {
+              agentId: primary,
+              text:
+                "That's a meaty one. Want me to **produce** it — take it on as a task, do the deep work async, and hand you a draft to review — " +
+                'or would a **quick take right here** do for now? Reply "produce", "quick", or "cancel".',
             },
-            replies: [
-              {
-                agentId: primary,
-                text:
-                  "This looks like deep, high-rigor work. My default for that is our strongest reasoning model (Sol, high effort) — best quality, but it costs more. " +
-                  'Want me to go with Sol, or use the budget option (Terra, high effort) — cheaper and usually very close? Reply "go" for Sol or "budget" for the cheaper one.',
-              },
-            ] as Reply[],
-            fallbacks,
-            prompts,
-            journeyTaskUpdates,
-            suggestedTasks,
-            toolUses,
-            reasoning: reasoningSummaries,
-          });
-        }
+          ] as Reply[],
+          fallbacks,
+          prompts,
+          journeyTaskUpdates,
+          suggestedTasks,
+          toolUses,
+          reasoning: reasoningSummaries,
+        });
       }
     } catch (err) {
       console.warn(
@@ -2587,6 +2657,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       let usedInstructions = "";
       let fromSnapshot = false;
       let toolTypes: string[] = [];
+      // Central model-usage tracking: the difficulty the router scored this turn and the reasoning
+      // effort the resolver picked, persisted per prompt so `chat.model_usage` can attribute every
+      // model spend to its difficulty/effort (see the view DDL + the tracking notes in memory.md).
+      let usedDifficulty: number | null = null;
+      let usedEffort: string | null = null;
 
       // Route to whichever backend is actually configured. Agents default to
       // the Lovable gateway until they get their own OpenAI assistant, but that
@@ -3715,9 +3790,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             chosenModel = resolved.budgetModel; // never auto-spend Sol without confirm/override
             chosenEffort = "high";
           }
+          usedDifficulty = routed.difficulty ?? 2;
           if (chosenModel) {
             usedModel = chosenModel;
             personaReasoningEffort = chosenEffort;
+            usedEffort = chosenEffort ?? null;
             // Minimal tier surfacing (first cut of the "thinking dots"): only note ESCALATED tiers (o3 =
             // the deep rung, or Sol via manual) so routine Luna turns stay silent. Rides the existing
             // reasoning-summary channel to the UI.
@@ -4882,6 +4959,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         instructions: usedInstructions,
         fromSnapshot,
         toolTypes,
+        difficulty: usedDifficulty,
+        effort: usedEffort,
       });
 
       // PASS/self-censor + echo suppression + the reply push + mention-chain are

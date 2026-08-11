@@ -1,7 +1,10 @@
-// Cross-turn pending state for the inescapable Sol confirm-gate. When a DEEP ask would auto-spend on
-// Sol-high, the runtime does NOT run it — it asks the user to confirm (default Sol-high) or switch to
-// the Terra-high budget, and stores the original ask here. The user's next reply (go / budget / cancel)
-// resumes the deferred deep turn on the chosen model. One pending row per (user, huddle); best-effort
+// Cross-turn pending state for the deep-1:1 PRODUCE-vs-QUICK confirm gate. A fresh 1:1 ask the router
+// scores DEEP (difficulty ≥3) is rarely something you want answered as a long, high-effort synchronous
+// wall of text in a chat — it's usually a PRODUCE task (research/draft/plan → an async artifact the WIP
+// pipeline works and you review). So instead of silently running the deep model inline, the runtime
+// HOLDS and asks: produce it async, or just a quick take here? The user's next reply resumes on the
+// chosen shape — produce → a real produce task + async kick; quick → resume the ORIGINAL ask inline on a
+// chat-friendly tier. The original ask is stored here. One pending row per (user, huddle); best-effort
 // (any DB error → null, so the turn simply proceeds normally). No new secret; reuses AZURE_PG_URL.
 import { Pool } from "pg";
 
@@ -63,11 +66,25 @@ export async function clearPendingDeepConfirm(email: string | null, huddleId: st
   try { await ensure(); await getPool().query(`DELETE FROM chat.deep_confirm WHERE user_email=$1 AND huddle_id=$2`, [email, huddleId]); } catch { /* best-effort */ }
 }
 
-/** Classify a short user reply to a pending deep-confirm. Deterministic (no LLM). */
-export function classifyConfirmReply(text: string): "sol" | "budget" | "cancel" | "unrelated" {
+/**
+ * Classify a short user reply to a pending deep-1:1 produce-vs-quick confirm. Deterministic (no LLM).
+ * - "produce"  → yes, make it a real produce task the team works async → artifact
+ * - "quick"    → no, just give me a quick take here (resume inline on a chat-friendly tier)
+ * - "cancel"   → drop it entirely
+ * - "unrelated"→ the reply isn't answering the confirm; leave the pending and route normally
+ */
+export function classifyConfirmReply(text: string): "produce" | "quick" | "cancel" | "unrelated" {
   const t = (text || "").trim().toLowerCase();
-  if (/^(budget|terra|cheap(er)?|the budget( one)?|use terra)\b/.test(t)) return "budget";
-  if (/^(go|yes|ok|okay|proceed|sol|go deep|deep|do it|confirm|yep|yeah|best|use sol|sure)\b/.test(t)) return "sol";
-  if (/^(no|cancel|never ?mind|stop|skip|forget it)\b/.test(t)) return "cancel";
+  // Cancel first (an explicit "no, forget it" shouldn't be caught by the produce "yes" family).
+  if (/^(no,?\s*(thanks|nvm|never ?mind|forget it|drop it)|cancel|never ?mind|stop|skip|forget it|drop it)\b/.test(t))
+    return "cancel";
+  // Quick / chat-friendly take.
+  if (/\b(quick|just (a )?(quick|short|brief)|chat|here|inline|short|brief|tl;?dr|just answer|off the cuff|summar)/.test(t))
+    return "quick";
+  // Produce it async → artifact.
+  if (/^(produce|yes|yep|yeah|go|go ahead|do it|make it|build it|research it|draft it|full|work it|proceed|sure|please do|create the task|task it)\b/.test(t))
+    return "produce";
+  if (/\b(produce|make it a task|as a task|work on it|async|artifact|full (write|work) ?up|deep dive|do the (research|work))/.test(t))
+    return "produce";
   return "unrelated";
 }
