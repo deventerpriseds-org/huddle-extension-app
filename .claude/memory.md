@@ -24,6 +24,11 @@ typing buttons." Fix = 3 edits on branch `claude/huddle-ui-issues-fdh3wr`:
   an independent `verifier` + Playwright DOM harness (real built CSS `.output/public/assets/styles-*.css` +
   exact final markup/logic) served on IPv4 `python3 -m http.server`. **Keyboard-overlap is MECHANISM-ONLY
   until the user re-tests on their phone post-deploy.**
+- **Verifier verdict (2026-08-11): 14/14 testable ACs PASS, 0 FAIL.** Empty=1 row (20px); grows 20px/line to
+  a 100px 5-row cap then `overflowY:auto` internal scroll; full-width ratio 1.000 mobile / card ≤768px desktop
+  (max-w-3xl); Enter submits, Shift+Enter newline, empty Enter no-op; 200-char no-space no page hscroll;
+  dictation programmatic-set grows; all 4 buttons 36px docked bottom-aligned, none dropped. AC9–11 (keyboard)
+  mechanism-only. Screens: /tmp/harness/shot-mobile-{1row,capped,keyboard}.png.
 
 ## Iris "400 No tool output found for function call" — poisoned conversation object (FIXED + DEPLOYED d422a82, 2026-08-11)
 Live break: Iris 1:1 returned `OpenAI Responses 400: No tool output found for function call call_…` on

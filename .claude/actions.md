@@ -14,10 +14,17 @@ functionality or chat typing buttons." Flow: light-mode prototype → user previ
 (2) `HuddleView.tsx` Composer — auto-grow effect keyed on `text` (1→5 rows then internal scroll; fires on
 dictation setText too); (3) restructured to full-width card with all 4 controls (bell/voice/dictate/send) docked
 inside — none dropped. `npm run build` GREEN, no TS errors in changed files.
-**Verification:** independent `verifier` subagent running a Playwright DOM harness (real built CSS + exact final
-markup/logic) — full app dev server can't bind in-sandbox (TanStack/nitro forces IPv6 `::8080`, EAFNOSUPPORT).
-Keyboard-overlap is **mechanism-only** until the USER re-tests live on their phone. Status: **implemented, mechanism
-verification in progress, NOT user-confirmed live.**
+**Verification:** independent `verifier` subagent ran a Playwright DOM harness (real compiled Tailwind CSS
+`.output/public/assets/styles-*.css` + exact final markup/logic transcribed from source) — full app dev server
+can't bind in-sandbox (TanStack/nitro forces IPv6 `::8080`, EAFNOSUPPORT; branch undeployed). **Verdict: 14/14
+testable ACs PASS, 0 FAIL** (empty=1 row; grows 20px/line to 100px 5-row cap then overflowY:auto internal scroll;
+full-width ratio 1.000 mobile / ≤768px desktop; Enter submits, Shift+Enter newline, empty Enter no-op; 200-char
+no-space no page hscroll; dictation programmatic-set grows; all 4 buttons 36px, docked, bottom-aligned, none
+dropped). Screenshots: /tmp/harness/shot-mobile-{1row,capped,keyboard}.png (sent to user).
+**AC9–11 (keyboard overlap + `interactive-widget=resizes-content`) = MECHANISM-ONLY** — layout math keeps the
+composer within a reduced viewport; real on-device soft-keyboard resize is user-confirmable only.
+Status: **implemented + mechanism-verified; NOT yet committed/merged/deployed; NOT user-confirmed live.**
+Next: commit+push branch, open PR (ready-for-review); user re-tests on phone after it deploys before "fixed".
 
 ### 🔨 ACT-huddle-27: Long-memory worker-grade conversationalist (A1–A6 + full test matrix)
 **Requested:** 2026-08-10 — agents forget across turns, fabricate, unaware of tools/preconditions, drift.
