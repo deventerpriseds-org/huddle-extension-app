@@ -123,3 +123,30 @@ export async function getOrCreateConversationId(args: {
     return null;
   }
 }
+
+/**
+ * Drop the stored conversation id for (user, 1:1 huddle, agent) so the NEXT turn mints a fresh
+ * Conversations object. Used to self-heal a POISONED conversation: if a tool/function call was stored
+ * in the OpenAI conversation thread but its output never got submitted (turn hit maxHops, the deadline,
+ * or aborted mid-hop), every later turn 400s with "No tool output found for function call …". Clearing
+ * the row makes the agent recover on its next message. Best-effort; failure is non-fatal (the caller
+ * still falls back to reconstruction for the current turn).
+ */
+export async function clearConversationId(args: {
+  userEmail: string | null;
+  huddleId: string;
+  agentId: string;
+}): Promise<void> {
+  const email = args.userEmail?.trim();
+  if (!email) return;
+  try {
+    await ensureBootstrapped();
+    await getPool().query(
+      `DELETE FROM chat.agent_conversations
+        WHERE user_email = $1 AND huddle_id = $2 AND agent_id = $3`,
+      [email, args.huddleId, args.agentId],
+    );
+  } catch {
+    /* best-effort */
+  }
+}
