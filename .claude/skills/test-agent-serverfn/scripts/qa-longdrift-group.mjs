@@ -48,7 +48,8 @@ function resolveIds() {
   }
   const p = path.join(HERE, "fn-ids.json");
   if (fs.existsSync(p)) { const j = JSON.parse(fs.readFileSync(p, "utf8")); for (const k in j) if (!out[k]) out[k] = j[k]; }
-  if (!out.sendHuddleMessage) throw new Error("could not resolve sendHuddleMessage fn id (need a build)");
+  if (!out.sendHuddleMessage || !out.enqueueHuddleTurn || !out.getTurnUpdates)
+    throw new Error(`missing fn ids (need a build): send=${!!out.sendHuddleMessage} enqueue=${!!out.enqueueHuddleTurn} getTurn=${!!out.getTurnUpdates}`);
   return out;
 }
 const CONST = [null, undefined, true, false, -0, Infinity, -Infinity, NaN];
@@ -84,31 +85,50 @@ function agentsCfg(ids) {
   for (const id of ids) a[id] = { backend: "openai", model: "gpt-5.6-luna", rag: { store: "azure", chunks: true, triples: true, fileSearch: false, sharing: "shared" }, journey: { enabled: false }, webSearch: false };
   return a;
 }
-// scope "group" (all-members) → reconstruction path; "one-to-one" with empty history → RAG-only bridge.
-async function turn({ huddleId, scope, members, text, history, memoryMode }) {
-  const payload = {
+// GROUP turns MUST use the DURABLE path (enqueueHuddleTurn + turnId): a SYNC group turn can defer/drop
+// agents under the 36s deadline and return EMPTY (backlog #3), which is exactly what the real client
+// avoids by enqueuing. 1:1 (cross-huddle) turns are sync and return inline. scope "group" →
+// reconstruction; "one-to-one" with empty history → RAG-only bridge.
+let TID = 0;
+async function turn({ huddleId, scope, members, text, history, memoryMode, durable, n }) {
+  const base = {
     text: `${text} [[${MARK}]]`, huddleId, scope, members,
     history: (history || []).slice(-14),
     router, agents: agentsCfg(members), timeZone: "America/New_York",
     caller: { entra_email: CALLER },
     ...(memoryMode ? { memoryMode } : {}),
   };
-  let { http, val } = await callFn(IDS.sendHuddleMessage, payload);
-  let replies = (val?.replies || val?.result?.replies || []);
-  // durable/chunked group turns may return no inline replies — poll getTurnUpdates briefly
-  if ((!replies || !replies.length) && IDS.getTurnUpdates) {
-    const since = Date.now() - 8000;
-    for (let i = 0; i < 12; i++) {
-      await new Promise((r) => setTimeout(r, 2500));
-      const g = (await callFn(IDS.getTurnUpdates, { huddleId, sinceMs: since })).val;
-      const turns = Array.isArray(g) ? g : g?.turns || g?.updates || [];
-      const t = turns.find((x) => String(x.userText ?? x.payload?.text ?? "").includes(MARK));
-      const reps = t?.replies || t?.result?.replies || [];
-      if (reps.length) { replies = reps; break; }
+  let http, val, replies = [], reason = "";
+  if (durable) {
+    const turnId = `u-${Date.now()}${String(n).padStart(3, "0")}${TID++}`;
+    ({ http, val } = await callFn(IDS.enqueueHuddleTurn, { ...base, turnId }));
+    replies = val?.result?.replies || [];
+    reason = val?.result?.decision?.reason || "";
+    // if partial/empty, poll getTurnUpdates until the reply set is stable (later chunks stream in)
+    if ((val?.status === "partial" || !replies.length) && IDS.getTurnUpdates) {
+      const since = Date.now() - 10000;
+      let last = "", stableAt = null;
+      for (let i = 0; i < 16; i++) {
+        await new Promise((r) => setTimeout(r, 2500));
+        const g = (await callFn(IDS.getTurnUpdates, { huddleId, sinceMs: since })).val;
+        const turns = Array.isArray(g) ? g : g?.turns || g?.updates || [];
+        const t = turns.find((x) => String(x.userText ?? x.payload?.text ?? "").includes(MARK));
+        const reps = t?.replies || t?.result?.replies || [];
+        reason = reason || t?.decision?.reason || t?.result?.decision?.reason || "";
+        const joined = reps.map((r) => String(r.text || "")).join(" ");
+        if (joined) {
+          if (joined !== last) { last = joined; replies = reps; stableAt = null; }
+          else if (stableAt === null) stableAt = Date.now();
+          if (stableAt && Date.now() - stableAt > 4000) break;
+        }
+      }
     }
+  } else {
+    ({ http, val } = await callFn(IDS.sendHuddleMessage, base));
+    replies = val?.replies || val?.result?.replies || [];
+    reason = val?.decision?.reason || val?.result?.decision?.reason || "";
   }
   const reply = (replies || []).map((r) => String(r.text || "")).join(" | ").replace(/\s+/g, " ").trim();
-  const reason = val?.decision?.reason || val?.result?.decision?.reason || "";
   const fallbacks = (replies || []).flatMap((r) => r.fallbackNotes || []);
   return { http, reply, reason, router: /fallback/i.test(reason) || fallbacks.length ? "FALLBACK" : (reason ? "REAL" : "UNKNOWN") };
 }
@@ -198,9 +218,9 @@ for (const s of SCEN) {
   const isX = s.sfc === "xhuddle";
   let r;
   if (isX) {
-    r = await turn({ huddleId: `dm-${XHUDDLE_AGENT}`, scope: "one-to-one", members: [XHUDDLE_AGENT], text: s.text, history: [], memoryMode: "reconstruction" });
+    r = await turn({ huddleId: `dm-${XHUDDLE_AGENT}`, scope: "one-to-one", members: [XHUDDLE_AGENT], text: s.text, history: [], memoryMode: "reconstruction", durable: false, n: s.n });
   } else {
-    r = await turn({ huddleId: GROUP, scope: "group", members: GROUP_MEMBERS, text: s.text, history: groupHist, memoryMode: "reconstruction" });
+    r = await turn({ huddleId: GROUP, scope: "group", members: GROUP_MEMBERS, text: s.text, history: groupHist, memoryMode: "reconstruction", durable: true, n: s.n });
     groupHist.push({ role: "user", content: s.text });
     if (r.reply) groupHist.push({ role: "assistant", content: r.reply });
   }
