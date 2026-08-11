@@ -50,34 +50,40 @@ So a **manual `priority_rank` dominates** for all non-assignment tasks; the comp
 - **Nudge exists:** flexible-override ("send LIFE so batch treats as flexible", `nightly-schedule-builder/index.ts:816`) + keyword override. User wants: **if a category window would block something they asked to be done *that day*, nudge to treat it as flexible.** Wire the same-day-request → flexible-override nudge; confirm the trigger.
 - **Appointment-prep auto-decide by event type** (user: doctor → no prep; client/coworker/venture-partner/presenting → yes). New: event-type classification on `external_calendar_events`.
 
-### The target composite model (user's vision, formalized)
-- **Tier 0 anchors (placement, not score):** external appointments/events (busy-slots), user-stated fixed times, **assignment/category time-windows** (honored even w/o due date; recency must not overrun them).
-- **Big boosts (priority must NOT outrank these):** deadline/urgency (continuous, sooner=more, +5/+3), finance/money, external comms.
-- **Modest boost:** recency (surfaces fresh work among peers; can't jump a deadline/appointment/finance/comms item).
-- **Differentiator for the remainder:** `is_priority`+`priority_rank` as a **small** weight — decisive only among items lacking the big boosts, or to break within-category ties / "which to pull from backlog first."
-- **Mechanically:** this is a **pure composite-score sort** (like pre-April) with retuned weights — keep priority's weight small so it only ranks the leftovers. Behind the switch, this replaces the April-17 `priority_rank`-first tiebreak.
-- **Open decision #1 (user default accepted):** among the big boosts, roughly-equal large weights; deadline edges ahead only when truly imminent.
+### The target model — how a day should be filled (final, user-confirmed)
 
-### The target model — how a day should be filled (layered, authoritative)
-_User's articulation, 2026-08-11. This is the ideal the switchable composite model must produce. It restates and expands the formalization above as an ordered fill algorithm; the bullets above remain the mechanical summary._
+**Core principle:** a day is built around FIXED anchors, then FLEXIBLE work fills the gaps — and every task is placed *within its allowed time-window*, which is a hard constraint that scoring works inside, not around.
 
-**Core principle:** a day is built around **FIXED anchors** first, then **FLEXIBLE work fills the gaps** — and every task is placed **within its allowed time-window**, which is a **hard constraint scoring works inside, not around**.
+**Layer 0 — The window & capacity (per user config)**
+Usable time is a set of named windows from the user's config, not one block: morning (6–9, unused), business hours (9–17), after-work (17–22), evening (19–22), flexible (9–22), weekends (10–20). Each has its own capacity.
+Day start rule: for a future day, start at the window start (9:00). For today, start at max(window start, now + small buffer) rounded to the next slot. A 10am start today is only correct if it's already past ~9am when the plan runs; the user's config says 9am, so a 10am start built earlier is a bug (now-clamp / rounding / timezone) to fix.
+Window flexibility nudge: if a task's category window would block something the user asked to be done *that day*, nudge to treat it as flexible rather than silently push it out.
+Capacity guard: a day holds only so many focused hours. Fill valid slots, but never past a deadline's available time — surface overcommitment instead of scheduling into nonexistent time.
 
-- **Layer 0 — Window & capacity (per user config).** Usable time is a set of *named windows*, not one block: `morning` (6–9, unused), `business_hours` (9–17), `after_work` (17–22), `evening` (19–22), `flexible` (9–22), `weekends` (10–20) — each with its own capacity.
-  - **Day-start rule:** for a *future* day, start at the window start (9:00). For *today*, start at `max(window start, now + small buffer)` rounded to the next slot. A 10am start today is only correct if it's already past ~9am when the plan runs; config says 9am, so a 10am start built earlier is a **bug** (now-clamp / rounding / timezone) to fix. **(This is §3's open item #1 — same defect.)**
-  - **Window-flexibility nudge:** if a task's category window would block something the user asked to be done *that day*, nudge to treat it as `flexible` rather than silently push it out. (Wire the same-day-request → flexible-override, §5.)
-  - **Capacity guard:** a day holds only so many focused hours. Fill valid slots, but **never past a deadline's available time** — surface overcommitment instead of scheduling into nonexistent time. (Backlog item, Huddle CLAUDE.md §"Scoring upgrades".)
-- **Layer 1 — Place FIXED items first (immovable anchors).** Real appointments / calendar events with a set time (meetings, calls, church) stay **busy-slots, never moved** — the day is built around them. User-pinned tasks and tasks with a hard start/due-time are anchors too. **Appointment-prep is auto-decided by event type:** a doctor's appointment needs none; a client / coworker / venture-partner meeting or a presentation pulls a prep block in near it. (§5, open item #4 — event-type classification on `external_calendar_events`.)
-- **Layer 2 — Rank FLEXIBLE tasks by a composite score** (not raw manual rank alone; switchable back to priority-rank-dominates via config). Placement order blends, roughly in this weight order:
-  1. **Deadline urgency (`due_date`)** — the strongest lever. Overdue > due-today > due-this-week > undated, on a **continuous** curve (sooner = more; `+5`-for-sooner is correct). A deadline can **outrank** a manually high `priority_rank`.
-  2. **Finance / money-sensitive & external communications** (to *others*, not to self) — top boosts that priority must not outrank.
-  3. **Recency** — a modest, **decaying** freshness boost so newly-created relevant tasks surface, but **never** enough to jump a deadline / appointment / finance / comms item.
-  4. **Effort / duration** (WSJF "short job first") — quick wins fill small gaps.
-  5. **Explicit priority** (`is_priority` / `priority_rank`) — a **small differentiator, not a dominator**: it decides only the leftovers (items with no big-category boost) and within-category ties / which to pull from backlog first.
-  - (Scoring only orders tasks **within their allowed windows** — a high score can't place an evening-only education task in the morning.)
-- **Layer 3 — Duration-aware slotting (bin-pack the gaps).** Each task carries `estimate_minutes`; slot size follows it, fitting tasks into per-window capacity between the fixed anchors, with validation + overlap rejection. Honoring min/max focus blocks and breaks is a refinement on top.
-- **Layer 4 — Assignments keep their honored window.** An `assignment_id` keeps its category time-window — **even without a due date** it has a designated window it's meant to be worked in, honored and not overrun by a merely-recent task — capped per day (`MAX_ASSIGNMENTS_PER_DAY=2`), with **dated** assignments allowed to jump by deadline (Tier A/B). (Agent "assist vs produce" is a *grooming* concept for the agents, **not** a factor in the user's schedule.)
-- **Layer 5 — Spillover & rebuild.** When a day fills, remaining flexible tasks spill to the next day across the rolling 7-day horizon by the **same composite score** — but a **deadline item is never pushed past its due date** (escalate / warn instead). Re-planning currently **rebuilds the whole horizon** each run (clear + re-place future tasks to prevent overlap accumulation) rather than only moving unplaced items; **whether to keep full-rebuild or add stability for pinned items is a deliberate open choice** to make.
+**Layer 1 — Place FIXED items first (immovable anchors)**
+Real appointments / calendar events with a set time (meetings, calls, church) stay busy-slots and are never moved — the day is built around them. User-pinned tasks and tasks with a hard start-time or due-time are anchors too.
+Appointment-prep is auto-decided by event type: a doctor's appointment needs none; a client / coworker / venture-partner meeting or a presentation gets a prep block pulled in near it.
+
+**Layer 2 — Rank FLEXIBLE tasks by a composite score (not raw manual rank alone)**
+Ordering is by a composite total again, switchable back to today's priority-rank-dominates behavior via config. Placement order blends, in roughly this weight order:
+Deadline urgency (due_date) — the strongest lever. Overdue > due-today > due-this-week > undated, on a continuous curve (sooner = more; the +5-for-sooner value is correct). A deadline can outrank a manually high priority_rank.
+Finance / money-sensitive and external communications (to others, not to self) — top boosts that priority must not outrank.
+Recency — a modest, decaying freshness boost so newly-created relevant tasks surface, but never enough to jump a deadline / appointment / finance / comms item.
+Effort / duration (WSJF "short job first") — quick wins fill small gaps.
+Explicit priority (is_priority / priority_rank) — a *small* differentiator, not a dominator: it decides only the leftovers (items with no big-category boost) and within-category ties / which to pull from the backlog first.
+(Scoring only orders tasks *within* their allowed windows — a high score can't place an evening-only education task in the morning.)
+
+**Layer 3 — Duration-aware slotting (bin-pack the gaps)**
+Each task carries an estimated duration (estimate_minutes), and slot size follows it — already used to fit tasks into per-window capacity between the fixed anchors, with validation and overlap rejection. Honoring min/max focus blocks and breaks is a refinement on top.
+
+**Layer 4 — Assignments have their own honored window**
+An assignment (assignment_id) keeps its category time-window — even without a due date it has a designated window it's meant to be worked in, honored and not overrun by a merely-recent task — capped per day, with dated assignments allowed to jump by deadline. (Agent "assist vs produce" is a grooming concept for the agents, not a factor in the user's schedule.) The user's day is filled with what the *user* must attend or do.
+
+**Layer 5 — Spillover & rebuild**
+When a day fills, remaining flexible tasks spill to the next day across a rolling 7-day horizon by the same composite score — but a deadline item is never pushed past its due date (escalate / warn instead).
+Re-planning currently *rebuilds* the whole horizon each run (clearing and re-placing future tasks to prevent overlap accumulation) rather than only moving unplaced items; whether to keep full-rebuild or add stability for pinned items is a deliberate choice to make.
+
+**Mechanically (for the implementer):** Layer 2 is a pure composite-score sort (like pre-April) with retuned weights — keep priority's weight small so it only ranks the leftovers; behind the switch this replaces the April-17 `priority_rank`-first tiebreak. Layers 3–4 largely exist today. The category-window system is the hard placement constraint scoring operates within. Open default #1 (accepted): among the big boosts, roughly-equal large weights; deadline edges ahead only when truly imminent.
 
 ### §5b. Acceptance targets — what "right" looks like (user-stated 2026-08-11, ground-truthed against the live board)
 _These are the binary outcomes the switchable composite model must produce. Validation method: the finishing

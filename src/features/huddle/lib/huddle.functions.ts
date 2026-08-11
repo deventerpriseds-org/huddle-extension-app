@@ -3698,6 +3698,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // identities). RAG (auto-retrieval + search_memory) still layers on top either way. Fails
         // safe: any miss (no email, DB/OpenAI error) falls back to the full transcript this turn.
         let conversationId: string | undefined;
+        let conversationEmail: string | null = null;
         let personaTranscript = transcript;
         if (memoryMode === "conversation" && data.scope === "one-to-one") {
           try {
@@ -3711,6 +3712,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             });
             if (convId) {
               conversationId = convId;
+              conversationEmail = email;
               personaTranscript = [{ role: "user" as const, content: userText }];
               console.log(
                 `[huddle-memory] memoryMode="conversation" active for ${winner.id} in ${data.huddleId}`,
@@ -3755,21 +3757,45 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             }
           : undefined;
 
-        const persona = await callOpenAIResponses({
+        const personaArgs = {
           model: usedModel,
           instructions,
-          transcript: personaTranscript,
           fastMode: routerCfg.fastMode,
           tools: mergedTools.length > 0 ? mergedTools : undefined,
-          onToolCall: (c) => runToolSafely(c.name, () => combinedOnToolCall(c)),
+          onToolCall: (c: { name: string; arguments: Record<string, unknown> }) =>
+            runToolSafely(c.name, () => combinedOnToolCall(c)),
           toolChoice,
           maxToolHops: 5,
           // Route this agent's requests to its own cached prefix (stable snapshot/tools/roster).
           promptCacheKey: `huddle-${winner.id}`,
-          ...(conversationId ? { conversation: conversationId } : {}),
           ...(personaReasoningEffort ? { reasoningEffort: personaReasoningEffort } : {}),
           ...(streamOneOnOne ? { stream: true, onDelta } : {}),
-        });
+        };
+        let persona: { text: string; reasoning: string[] };
+        try {
+          persona = await callOpenAIResponses({
+            ...personaArgs,
+            transcript: personaTranscript,
+            ...(conversationId ? { conversation: conversationId } : {}),
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // Self-heal a POISONED conversation object: a tool/function call was stored in the OpenAI
+          // conversation thread but its output never got submitted (turn hit maxHops / the deadline /
+          // aborted mid-hop), so every later turn 400s "No tool output found for function call …".
+          // Drop the conversation (re-mints fresh next turn) and retry THIS turn with the full
+          // reconstructed transcript and NO conversation object, so the user still gets a reply now.
+          if (conversationId && /No tool output found for function call/i.test(msg)) {
+            const { clearConversationId } = await import("./rag/conversation-store.server");
+            await clearConversationId({ userEmail: conversationEmail, huddleId: data.huddleId, agentId: winner.id });
+            console.warn(
+              `[huddle-memory] poisoned conversation for ${winner.id} in ${data.huddleId} — cleared; retrying with reconstruction.`,
+            );
+            persona = await callOpenAIResponses({ ...personaArgs, transcript });
+          } else {
+            throw err;
+          }
+        }
         clean = persona.text.trim();
         if (persona.reasoning.length > 0) {
           reasoningSummaries.push(...persona.reasoning.map((r) => `${winner.name}: ${r}`));

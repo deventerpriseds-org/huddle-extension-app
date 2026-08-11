@@ -238,7 +238,12 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
   let previousResponseId: string | undefined;
 
   for (let hop = 0; hop <= maxHops; hop++) {
-    const hasTools = !!(input.tools && input.tools.length > 0);
+    // On the FINAL hop, withhold tools so the model MUST answer with text. This prevents a tool call
+    // we'd never get to answer (we'd bail right after) — which, in conversation-object mode, would be
+    // stored in the thread as a dangling function_call and 400 every subsequent turn ("No tool output
+    // found for function call …"). Forcing text on the last hop closes the loop cleanly.
+    const isFinalHop = hop === maxHops;
+    const hasTools = !isFinalHop && !!(input.tools && input.tools.length > 0);
     const body: Record<string, unknown> = {
       model: input.model,
       instructions: input.instructions,
