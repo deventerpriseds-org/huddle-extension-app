@@ -2119,3 +2119,14 @@ green); view live (1,581 rows). classifyConfirmReply 21/21 offline.
 - AC-2: A later TYPED 1:1 message to the same agent recalls the voice content (no "I don't have that in this chat").
 - AC-3: Conv key (email) matches the text turn's resolution exactly, else it writes to a different conv.
 **Status:** BUILT + deploying (tsc+build clean). Live-confirm pending (needs a fresh voice turn + a following typed turn).
+
+### ACT-huddle-39: Email "sent" (Graph 202) but not delivered — sender mailbox suspect
+**Requested:** 2026-08-11 — user: "it said it emailed it to me but I haven't received anything."
+**Ground truth (DB, dm-finn-reid 21:16):** send_email DID fire, ok:true — "sent from dev@enterpriseds.io → von.ellis@enterpriseds.io". sendGraphEmail returns ok ONLY on HTTP 202 (Graph accepted), saveToSentItems:true. So NOT an over-claim and NOT the wrong tool (#34 works). Non-receipt = delivery/sender issue.
+**Root cause (leading hypothesis, NOT yet ground-truthed):** default sender `dev@enterpriseds.io` (emailFromOptions()[0], overridable via HUDDLE_EMAIL_FROM). Graph 202s a sendMail even if that mailbox is unlicensed/non-deliverable → "sent" but nothing lands. OR recipient-side Junk/Focused-Other filtering.
+**Expected outcome:** an emailed artifact actually arrives in the user's inbox.
+**Acceptance criteria:**
+- AC-1: Confirm whether the 21:16 message is in dev@enterpriseds.io Sent Items (proves Graph queued) and whether it delivered to von.ellis@enterpriseds.io (inbox/junk).
+- AC-2: If dev@enterpriseds.io is the culprit, set HUDDLE_EMAIL_FROM (SWA app setting) to a known-deliverable licensed mailbox; re-test.
+- AC-3: send_email reporting stays honest (already: ok only on 202).
+**Status:** ROOT-CAUSED to "Graph accepted, delivery failing"; sender-mailbox fix is a config/app-setting change (needs the user to confirm a deliverable sender or check junk/Sent Items). NOT a code bug.
