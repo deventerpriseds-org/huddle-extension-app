@@ -2148,4 +2148,4 @@ green); view live (1,581 rows). classifyConfirmReply 21/21 offline.
 - AC-1: A slide-in/overlay artifacts panel is openable (parity with the transcript/chat panel pattern).
 - AC-2: Artifacts are grouped under date headers, newest first.
 - AC-3: Reuses ArtifactsView's item rendering + open/review actions (extend, don't duplicate the list).
-**Status:** OPEN — UI build; scoping next (after ACT-40 ships).
+**Status:** BUILT + deploying. Pt1: ArtifactsView list grouped by date (sticky headers, e4b5818). Pt2: new 'Files' tab in the existing right-side ContextPanel slide-in (Queue/Activity/Memory/Files) — compact date-grouped list; click reuses openArtifactById (opens full viewer). tsc+build clean. Live-confirm pending (UI render).

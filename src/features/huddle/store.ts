@@ -19,7 +19,7 @@ import {
 import type { JourneyTask } from "./lib/journey/types";
 
 type View = "huddle" | "board" | "artifacts";
-export type ContextPanelTab = "queue" | "activity" | "memory";
+export type ContextPanelTab = "queue" | "activity" | "memory" | "artifacts";
 
 // Pure client-device UI layout prefs (panel collapse, active side-panel tab) — deliberately NOT part
 // of PERSISTED_KEYS/getPersistablePayload: these are not workspace data, don't sync across devices,
