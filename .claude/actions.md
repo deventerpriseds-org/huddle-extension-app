@@ -2066,3 +2066,13 @@ delivery it cannot confirm.
 green); view live (1,581 rows). classifyConfirmReply 21/21 offline.
 **Remaining:** run `qa-produce-quick.mjs` live smoke via agent-serverfn-uat.yml (deep 1:1 → HOLD; "quick" resume; cancel).
 **Status:** in-progress — deployed, live smoke pending + user live-confirm.
+
+### ACT-huddle-36: Composer "stays above keyboard" fix not live (stranded on a branch)
+**Requested:** 2026-08-11 — user: "why am I not seeing the webapp changes in the bridge app for huddle? the chat message box isn't fixed like we did recently" → then "actually I don't see it in the webapp either."
+**Root cause (GROUND-TRUTHED):** commit b09bccd ("fix(huddle): full-width auto-growing composer that stays above the keyboard", 160-line HuddleView redesign + __root.tsx) is on branch `origin/claude/huddle-ui-issues-fdh3wr` (+ its verifier-verdict doc 7c9c678) but was NEVER merged to main → never deployed. So it's absent from BOTH webapp and bridge. NOT a bridge-cache issue. (Also clarified: #30 phantom-STT is server-side, so bridge staleness wouldn't affect it; the phantom bubbles in the screenshot are old persisted turns.)
+**Expected outcome:** the composer redesign is live on the webapp (and therefore the bridge, which loads the webapp).
+**Acceptance criteria:**
+- AC-1: b09bccd's HuddleView + __root.tsx changes are merged into origin/main (hand-resolved, keeping main's 20-commit divergence intact) and deploy-swa is green on the merge SHA.
+- AC-2: user confirms the auto-growing/above-keyboard composer renders live in the webapp.
+- AC-3: (bridge) user confirms it appears in the bridge app once the webapp is updated; if not, investigate bridge WebView cache separately.
+**Status:** ROOT-CAUSED — merging the branch to main.
