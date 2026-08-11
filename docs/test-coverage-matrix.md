@@ -71,7 +71,7 @@ Surfaces: **1:1** (dm-<agent>), **Group** (all-members, multi-agent), **X-huddle
 | Capability | Status | Notes |
 |---|---|---|
 | Routing / who-answers (right agents) | ⬜ | needs a live group baseline |
-| soloOnCoverage — don't drop user-requested collaborators | ✅ | **ALREADY FIXED (CLAUDE.md note was stale).** `assembleWinners` (routing.ts:365) drops adjacency only, keeps `explicitlyRequested`. Offline `test:router` 9/9 incl. "multi-lane (sam+named finn+tess survive solo)". |
+| soloOnCoverage — don't drop user-requested collaborators | ✅ | **ALREADY FIXED (CLAUDE.md note was stale).** Behavior changed 2026-07-20 (`5b11bba` "multi-lane router suppression #1"): solo drops adjacency only, keeps `explicitlyRequested`; refactored into `assembleWinners` 2026-07-22 (`20564e3`). Default ON (agent-backends.ts:59). Offline `test:router` 9/9. **DEPRIORITIZED future tuning (user, not urgent):** today "necessary"=user-named; the router's OWN judgment that a supporting agent adds value (nominated `supporting`, not `explicitlyRequested`) is overridden under solo. Consider letting router-necessity count (keep high-value adds, still drop low-value adjacency). Revisit when other items done. |
 | Handoffs (@mention + prose) | 🔨 | @mention handoffs pass offline (mention turns 5/5); prose handoff still relies on parseMentions/@handle |
 | No cross-talk / echo dedup | ⬜ | |
 | Ownership-aware handoff (capability owners) | ⬜ | (capability-ownership-test.mjs exists) |
