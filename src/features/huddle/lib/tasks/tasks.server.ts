@@ -761,12 +761,35 @@ export async function getPendingConfirmForAgent(
         AND jt.assigned_agent = $2
         AND es.confirm_status = 'asked'
         AND upper(coalesce(jt.status, '')) <> 'DONE'
+        AND NOT EXISTS (SELECT 1 FROM tasks.task_blockers b WHERE b.task_id = jt.id)
       ORDER BY es.updated_at DESC
       LIMIT 1`,
     [userEmail, agentId],
   );
   if (!rows.length) return null;
   return { taskId: rows[0].task_id, title: rows[0].title, proposedDod: rows[0].proposed_dod };
+}
+
+/**
+ * Blocked tasks for a user, with the ASSIGNED agent + the recorded reason. Powers the chat-driven
+ * unblock: the owning agent flips its own task out of Blocked, and a reply to the coordinator routes
+ * to each owner. (A blocker row's `agent_id` is who FLAGGED it; `assigned_agent` is who OWNS the task.)
+ */
+export async function getBlockedTasks(
+  userEmail: string,
+): Promise<Array<{ taskId: string; title: string; assignedAgent: string | null; reason: string }>> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ task_id: string; title: string; assigned_agent: string | null; reason: string }>(
+    `SELECT b.task_id, jt.title, jt.assigned_agent, b.reason
+       FROM tasks.task_blockers b
+       JOIN tasks.journey_tasks jt
+         ON jt.id = b.task_id AND lower(jt.user_email) = lower(b.user_email)
+      WHERE lower(b.user_email) = lower($1)
+        AND upper(coalesce(jt.status, '')) <> 'DONE'
+      ORDER BY b.flagged_at DESC`,
+    [userEmail],
+  );
+  return rows.map((r) => ({ taskId: r.task_id, title: r.title, assignedAgent: r.assigned_agent, reason: r.reason }));
 }
 
 /** Stamp the instant a task actually moved to IN_REVIEW — call wherever markTaskInReview is called. */

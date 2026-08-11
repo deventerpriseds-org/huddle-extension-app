@@ -519,6 +519,18 @@ function isPlainConfirmation(text: string): boolean {
   );
 }
 
+/** Conservative "the blocker is cleared" matcher — used to route an unblock reply from a non-owner
+ *  (e.g. the coordinator who surfaced the blocker) to the OWNING agent. Broader than a plain confirm
+ *  because a real unblock is usually a sentence ("you're cleared, go ahead"). Negations short-circuit. */
+function looksLikeUnblock(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return false;
+  if (/\b(no|not|don'?t|stop|wait|hold|cancel|nope|keep it blocked|still blocked|leave it)\b/.test(t)) return false;
+  return /\b(unblock|un-block|cleared|clear it|resolved|proceed|go ahead|green ?light|good to go|all set|move it forward|out of blocked|got you access|you'?re cleared|you can (go|proceed|start))\b/.test(
+    t,
+  );
+}
+
 export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddleTurnOpts) {
   // Wall-clock start for the per-execution deadline (see runBounded). The whole chunk — sequential
   // primary + parallel wave(s) — must finish under the ~45s hosting request ceiling, so agents are
@@ -594,6 +606,71 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     }
   } catch {
     pendingConfirm = null;
+  }
+
+  // ---- B: chat-driven UNBLOCK. A blocked task can only be moved out of Blocked by its OWNING agent.
+  //   (1) In the OWNER's own DM: hand the owner a directive to flip it via update_task — and NEVER claim
+  //       it's unblocked unless that call actually succeeds (the core anti-false-positive).
+  //   (2) In a NON-owner's DM (e.g. Terry, who surfaced the blocker): a clearance reply is ROUTED to each
+  //       owner (real durable turn in dm-<owner>). One blocked task → route it; an explicit "all" → route
+  //       each; an ambiguous "unblock it" with several blocked → ASK which, never guess/flip.
+  // Fully guarded; any failure degrades to a no-op. (Blocked tasks are excluded from the confirm path in
+  // block A, so an unblock reply can't be mis-handled as a confirmation.)
+  let unblockReplyDirective = "";
+  try {
+    const dmAgent =
+      typeof data.huddleId === "string" && data.huddleId.startsWith("dm-")
+        ? (data.huddleId.slice(3) as AgentId)
+        : null;
+    const replyText = (data.text ?? "").trim();
+    if (dmAgent && AGENT_BY_ID[dmAgent] && replyText && !data.internal && !resume) {
+      const em =
+        (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+        data.caller?.entra_email ??
+        null;
+      if (em) {
+        const { getBlockedTasks } = await import("./tasks/tasks.server");
+        const blocked = (await getBlockedTasks(em)).filter((t) => t.assignedAgent);
+        if (blocked.length) {
+          const mine = blocked.filter((t) => t.assignedAgent === dmAgent);
+          const others = blocked.filter((t) => t.assignedAgent !== dmAgent);
+          if (mine.length) {
+            const list = mine
+              .map((t) => `"${t.title}" (task_id ${t.taskId}; blocked because: ${t.reason})`)
+              .join("; ");
+            unblockReplyDirective =
+              `\n\nIMPORTANT — you currently have BLOCKED task(s): ${list}. If the user's message clears a ` +
+              `blocker (says it's resolved / go ahead / you're cleared / proceed), call update_task with the ` +
+              `matching task_id (use it VERBATIM) and status "UP_NEXT" to move it out of Blocked — ACTUALLY ` +
+              `call the tool. Tell the user it's unblocked ONLY if that call SUCCEEDS; never claim it ` +
+              `otherwise. If they are NOT clearing it, don't change the status — just help.`;
+          }
+          if (others.length && looksLikeUnblock(replyText)) {
+            const wantsAll = /\b(all|everything|both|each|every one|them all)\b/.test(replyText.toLowerCase());
+            const toRoute = wantsAll ? others : others.length === 1 ? others : [];
+            if (toRoute.length) {
+              for (const t of toRoute) {
+                void routeUnblockToOwner(t.assignedAgent as AgentId, t, replyText);
+              }
+              const names = [...new Set(toRoute.map((t) => AGENT_BY_ID[t.assignedAgent as AgentId]?.name ?? "the owner"))].join(", ");
+              unblockReplyDirective +=
+                `\n\nThe user is clearing a blocker on a teammate's task — you can't change another agent's ` +
+                `task. Tell them briefly you've passed it to ${names} to move it out of Blocked. Do NOT call ` +
+                `update_task yourself and do NOT claim anything is unblocked.`;
+            } else {
+              const listed = others
+                .map((t) => `"${t.title}" (${AGENT_BY_ID[t.assignedAgent as AgentId]?.name ?? "unassigned"})`)
+                .join(", ");
+              unblockReplyDirective +=
+                `\n\nThe user wants to clear a blocker but more than one task is blocked: ${listed}. Ask them ` +
+                `WHICH one to unblock — do not change any task's status yet and do not claim anything is unblocked.`;
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    unblockReplyDirective = "";
   }
   let priorChunks = 0;
   if (chunked && turnId && turnStore) {
@@ -1481,6 +1558,54 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     }
   }
 
+  // Chat-driven UNBLOCK routing: the user cleared a blocker while talking to a NON-owner (e.g. Terry,
+  // who surfaced it) — only the OWNING agent can move its task out of Blocked. Enqueue a REAL durable
+  // turn in the owner's own DM. Unlike deliverOwnerFollowup (which defers and re-asks for confirmation),
+  // the user ALREADY authorized this, so the instruction — carried in the turn TEXT because the turn is
+  // internal:true (a scene directive would be `!data.internal`-gated and never reach it) — tells the
+  // owner to call update_task NOW, with the EXACT task_id. Task-scoped id so distinct tasks never collapse.
+  async function routeUnblockToOwner(
+    ownerId: AgentId,
+    task: { taskId: string; title: string; reason: string },
+    userSay: string,
+  ): Promise<void> {
+    try {
+      const owner = AGENT_BY_ID[ownerId];
+      if (!owner) return;
+      const email = data.caller?.entra_email ?? null;
+      const say = userSay.replace(/\s+/g, " ").trim().slice(0, 160);
+      const ownerHuddle = `dm-${ownerId}`;
+      const directive =
+        `You are ${owner.name}. Your task "${task.title}" (task_id ${task.taskId}) is BLOCKED — reason: ` +
+        `"${task.reason}". The user just cleared it: "${say}". If that resolves the blocker, call ` +
+        `update_task NOW with task_id "${task.taskId}" (use that id VERBATIM — never the title) and ` +
+        `status "UP_NEXT" to move it out of Blocked, then tell the user in ONE short line that it's ` +
+        `unblocked and back in play — but ONLY if the update_task call SUCCEEDED. If it did not, say you ` +
+        `could not clear it and ask them to confirm. If their message does NOT actually clear the blocker, ` +
+        `don't change the status — just reply briefly.`;
+      const id = `unblock-${task.taskId}`; // task-scoped — two distinct tasks never dedup to one turn
+      const payload = {
+        text: directive,
+        huddleId: ownerHuddle,
+        scope: "one-to-one",
+        members: [ownerId],
+        targetAgentId: ownerId,
+        history: [],
+        router: data.router,
+        agents: data.agents,
+        timeZone: data.timeZone,
+        caller: data.caller,
+        notify: "push",
+        internal: true, // never spawns another follow-up
+      };
+      const { enqueueTurn } = await import("./tasks/turns.server");
+      const fresh = await enqueueTurn(id, ownerHuddle, email, payload);
+      if (fresh) void kickNextChunk(id);
+    } catch {
+      /* best-effort — never fail the user's turn on it */
+    }
+  }
+
   // Decision rights: a turn-scoped ledger of mutating actions already performed this turn, keyed by
   // (tool + normalized args). The FIRST responding agent to perform an action "owns" it; a second
   // winner's identical call is a no-op. Generalizes the task dedup to reminders, emails, and journey
@@ -1785,7 +1910,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       priorInThisTurn && !ceremonyDirective
         ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
         : ""
-    }${interjectDirective}${ceremonyDirective}${selfRecallBlock}${ceremonyBoardBlock}${ceremonyPriorReact}${handoffDirective}${laneDirective}${confirmReplyDirective}`;
+    }${interjectDirective}${ceremonyDirective}${selfRecallBlock}${ceremonyBoardBlock}${ceremonyPriorReact}${handoffDirective}${laneDirective}${confirmReplyDirective}${
+      data.huddleId === `dm-${winner.id}` ? unblockReplyDirective : ""
+    }`;
 
     const roster = buildRoster(data.members, winner.id);
     // Data-driven, scope-aware ownership hand-off (agents.ts capabilities). Empty string
