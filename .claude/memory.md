@@ -25,9 +25,19 @@ this session. Built `qa-longdrift-conversation.mjs` (44-turn) + `qa-longdrift.ym
 facts → 9+8 distractors (bury past ~14-msg window) → MUTATE (drop Cobalt/add Delta, recital 14→21, budget
 8k→10k, team 12→13) → late-recall LATEST value. Sharpest probe = **supersession** (RAG keeps both stale+new
 chunk, no recency term → predict STALE returns). Baseline design: drift is DATA (does NOT red the run);
-check() gates only mechanism+router-validity (AC14). ACs by independent subagent. **RUN PENDING** (dispatch
-qa-longdrift.yml). Board-clean check owed post-run (cleanup deletes rag_chunks+pending_turns by marker, NOT
-journey tasks — phrasings kept note-style to avoid task/reminder creation; verify tasks.journey_tasks clean).
+check() gates only mechanism+router-validity (AC14). ACs by independent subagent.
+
+**✅ RUN DONE (31458699060, 0 fallbacks, 44/44): 1:1 held 18/18 — incl. ALL 4 supersession probes returning
+LATEST** (budget $10k not 8k, recital 21 not 14, team 13 not 12, Cobalt dropped + Delta added) + consistency
+sweep CONSISTENT + self-correction CORRECTED. **KEY CORRECTION to my A1-A3 answer:** the deployed 1:1 uses
+`memoryMode:"conversation"` (default) → an OpenAI **Conversations object** per (user,dm,agent) that retains the
+FULL thread incl. agent replies (PROVEN: row `conv_6a79fd31…` for dev@/dm-finn-reid). So **A1 is already
+effectively met for 1:1** — my "replies never persisted" gap is true only of the RAG store, which is what
+GROUP (reconstruction) and CROSS-HUDDLE (RAG-only bridge, user-msgs, no supersession) rely on. → **A1-A3's real
+target is GROUP + X-HUDDLE, not 1:1** (matches the earlier actions.md finding that 1:1 drift didn't reproduce).
+Next "before" baseline = GROUP+X-HUDDLE long-drift. Memory rows cleaned (DELETE 44+44, 0/0). **Stray board task
+"Draft team offsite agenda" (04:33, dev@) created by T6 — harness Test--prefix bug; presented to user, awaiting OK
+to delete.** Harness fix owed: any task/reminder imperative in a UI-driven harness MUST be `Test-` prefixed.
 Outstanding non-blocking: 3 pre-existing orphan `task_blockers` rows (present to user, don't auto-delete);
 title→id resolution gap in get_tasks for BACKLOG items (agent can't find a task by title); saturated-board
 arming only covers each agent's top-of-UP_NEXT. Guardrail = `docs/test-coverage-matrix.md`.

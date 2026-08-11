@@ -30,9 +30,20 @@ Surfaces: **1:1** (dm-<agent>), **Group** (all-members, multi-agent), **X-huddle
 | No-repeat / no broken-record | ✅ | ⬜ | — | ⬜ | |
 | **Cross-huddle recall** (group→1:1) | — | — | ⬜ | — | needs a memory write; not in zero-write 1:1 |
 | Consistency sweep (no drift at end) | ✅ | ⬜ | — | ⬜ | |
-| **Novel-writer consistency over long runs** (drift = catastrophic) | ✅ | ⬜ | 🔄 | ⬜ | 44-turn `qa-longdrift` harness built (seed→bury→**mutate/supersede**→late-recall). RUN PENDING. |
-| **Supersession** (user changes a fact mid-thread; latest vs stale) | — | — | 🔄 | — | sharp A3 test: budget 8k→10k, recital 14→21, drop Cobalt+add Delta, team 12→13. RUN PENDING. |
-| **Self-correction under false premise** (push-back, not capitulate) | — | — | 🔄 | — | T41 false "recital=28th" vs true 21st; judge 3-way. RUN PENDING. |
+| **Novel-writer consistency over long runs** (drift = catastrophic) | ✅ | ⬜ | ✅(1:1) | ⬜ | 44-turn `qa-longdrift` run 31458699060: **18/18 probes held, 0 fallbacks**. 1:1 holds via conversation-mode. Group/x-huddle = the real target (reconstruction, no conv object). |
+| **Supersession** (user changes a fact mid-thread; latest vs stale) | — | — | ✅(1:1) | — | ALL 4 returned LATEST: budget $10k(not 8k), recital 21(not 14), team 13(not 12), Cobalt dropped+Delta added. 1:1 conv-object tracks latest. Group/x-huddle UNTESTED. |
+| **Self-correction under false premise** (push-back, not capitulate) | — | — | ✅(1:1) | — | T41 false "recital=28th" → CORRECTED (gave 21st). judge=CORRECTED. |
+
+**⚠ GROUND-TRUTH (2026-08-11): 1:1 long-drift is NOT the A1-A3 target — conversation-mode already solves it.**
+The deployed 1:1 path sends `memoryMode:"conversation"` (default, `agent-backends.ts:104` + `HuddleView.tsx:751`)
+→ mints/reuses an OpenAI **Conversations object** per (user,dm,agent) (`conversation-store.server.ts`, wired
+`huddle.functions.ts:3702-3769`), which retains the FULL thread incl. agent replies server-side. PROVEN: row
+`conv_6a79fd31…` for (dev@,dm-finn-reid,finn-reid). So A1 ("persist replies") is already effectively met FOR 1:1.
+The RAG-path A1-A3 gaps bite where there is NO conversation object: **GROUP** (deliberately reconstruction:
+14-window+RAG) and **CROSS-HUDDLE** (conv objects are per-huddle; only RAG bridges, and RAG stores user-msgs
+only, no supersession). → Build the long-drift/supersession baseline on GROUP + X-HUDDLE; that's the real "before".
+Harness bug to fix first: T6 "draft the offsite agenda" wrote a REAL board task ("Draft team offsite agenda") —
+UI-driven runs can't set `journey:{enabled:false}`, so any task/reminder-imperative MUST be `Test-` prefixed.
 
 ### Honesty & trust
 | Capability | 1:1 | Group | Long | Notes |
