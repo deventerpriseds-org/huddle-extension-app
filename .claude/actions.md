@@ -2129,4 +2129,23 @@ green); view live (1,581 rows). classifyConfirmReply 21/21 offline.
 - AC-1: Confirm whether the 21:16 message is in dev@enterpriseds.io Sent Items (proves Graph queued) and whether it delivered to von.ellis@enterpriseds.io (inbox/junk).
 - AC-2: If dev@enterpriseds.io is the culprit, set HUDDLE_EMAIL_FROM (SWA app setting) to a known-deliverable licensed mailbox; re-test.
 - AC-3: send_email reporting stays honest (already: ok only on 202).
-**Status:** ROOT-CAUSED to "Graph accepted, delivery failing"; sender-mailbox fix is a config/app-setting change (needs the user to confirm a deliverable sender or check junk/Sent Items). NOT a code bug.
+**Status:** RESOLVED — user found the email in an inbox FOLDER. It delivered; it was client-side filtering/rules, not the sender mailbox. send_email + honest reporting confirmed working end-to-end. No code change needed.
+
+### ACT-huddle-40: Voice agent can't PRODUCE artifacts (says "generate that MD file" but nothing saves)
+**Requested:** 2026-08-11 — user: "why can't it produce the artifact files like these?" (voice transcript: Finn "Now, let me generate that MD file for you" → no artifact). Text/task path produces many MD artifacts fine.
+**Root cause (GROUND-TRUTHED):** realtime-tools.server.ts line 16 note — create_huddle_task/create_artifact were deliberately OMITTED from the voice v1 toolset. So the voice agent narrates producing a file but has no create_artifact tool → nothing saves. Same class as the email gap (#34).
+**Fix (DEPLOYED):** wired native create_artifact into the voice toolset (schema + NATIVE + one-hop dispatch via the same createArtifact() the text path uses; taskId=null since voice isn't task-scoped, so the task-review-flip is skipped) + house-style "CALL create_artifact, don't just say you'll generate a file; only claim saved on success."
+**Acceptance criteria:**
+- AC-1: On a voice call, "make me a doc/budget/memo" → create_artifact fires and the file appears in the Artifacts panel (status review).
+- AC-2: The agent doesn't claim a saved file unless create_artifact returned success.
+**Status:** BUILT + deploying (tsc+build clean). Live-confirm pending.
+
+### ACT-huddle-41: Artifacts as a slide-in/overlay panel grouped by date (UI)
+**Requested:** 2026-08-11 — user: "the artifacts he creates should be available grouped by date on a slide-in or overlay panel similar to the transcript/chat panel."
+**Current state:** ArtifactsView.tsx exists (rail/list view; renders icon, name, folder, `ago(updated_at)`, status). NOT grouped by date; not presented as the meeting-style slide-in/overlay panel.
+**Expected outcome:** an artifacts panel that slides in/overlays (like the meeting Transcript/Chat panel), with artifacts grouped by date (Today / Yesterday / older date headers).
+**Acceptance criteria:**
+- AC-1: A slide-in/overlay artifacts panel is openable (parity with the transcript/chat panel pattern).
+- AC-2: Artifacts are grouped under date headers, newest first.
+- AC-3: Reuses ArtifactsView's item rendering + open/review actions (extend, don't duplicate the list).
+**Status:** OPEN — UI build; scoping next (after ACT-40 ships).

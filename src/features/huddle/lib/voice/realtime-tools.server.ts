@@ -58,7 +58,10 @@ const VOICE_HOUSE_STYLE =
   "or 'Outlook calendar' (rare). Don't narrate that you're using a tool." +
   " To EMAIL something to the user or anyone, CALL `send_email` (or `create_email_draft` to prepare one " +
   "without sending) — never a message, push, or chat tool for an email request. Only say an email was " +
-  "actually sent if `send_email` returned success; if you only drafted it, say exactly that.";
+  "actually sent if `send_email` returned success; if you only drafted it, say exactly that." +
+  " To PRODUCE a document, memo, plan, budget, brief, or file for the user, CALL `create_artifact` with the " +
+  "FULL content — do NOT just say you'll 'generate an MD file' or 'put it in a document'; actually call the " +
+  "tool so it becomes a reviewable file. Only say you saved a document if `create_artifact` returned success.";
 
 /** Same-brain instructions for the realtime session: snapshot + auto-retrieved memory + voice style. */
 export async function assembleRealtimeInstructions(
@@ -115,6 +118,30 @@ export async function buildRealtimeToolset(
 
   if (opts.webSearch !== false) raw.push(TAVILY_WEB_SEARCH_TOOL);
   if (agentOwnsCapability(agent, "backlog-grooming")) raw.push(GROOM_BACKLOG_TOOL);
+
+  // Native artifact production — the voice agent was MISSING create_artifact (text-engine only), so on a
+  // call it would SAY "let me generate that MD file" and produce nothing (ACT-huddle-40). Task-scoped
+  // review flips stay a text concern; a voice-produced artifact saves with taskId=null (still reviewable
+  // in the Artifacts panel). Same one-hop executor + createArtifact() the text path uses.
+  raw.push({
+    type: "function",
+    name: "create_artifact",
+    description:
+      "Save a document (markdown/plain text) as a reviewable artifact the user can open, review, and " +
+      "approve — a memo, plan, budget, brief, notes, or any file you produce for them. Call this WHENEVER " +
+      "you produce a document; do not merely say you'll generate a file. Returns the saved artifact.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        name: { type: "string", description: "File name, e.g. 'alabama-trip-budget.md'." },
+        content: { type: "string", description: "The FULL document content (markdown/plain text)." },
+        folder: { type: "string", description: "Optional folder/category, e.g. Finance, Research, Ventures. Default Research." },
+        mime: { type: "string", description: "Optional MIME type. Default text/markdown." },
+      },
+      required: ["name", "content"],
+    },
+  });
 
   // Native email (Outlook/Graph) — mirror the TEXT engine. The voice agent was MISSING these, so a spoken
   // "email me X" fell through to a journey messaging/push tool and the user got a message instead of an
@@ -207,6 +234,7 @@ export async function executeRealtimeTool(
     "tavily_web_search",
     "send_email",
     "create_email_draft",
+    "create_artifact",
   ]);
   try {
     if (name === "get_external_calendar_events") {
@@ -267,6 +295,27 @@ export async function executeRealtimeTool(
         cc: args.cc ? String(args.cc) : undefined,
       });
       return done(JSON.stringify(r));
+    }
+    if (name === "create_artifact") {
+      const artName = String(args.name ?? "").trim();
+      const content = String(args.content ?? "");
+      if (!artName || !content) return done(JSON.stringify({ ok: false, error: "name and content are required" }));
+      const { resolveTaskEmail } = await import("../journey/identity");
+      const email = (await resolveTaskEmail(ctx.caller ?? {})) ?? ctx.caller?.entra_email;
+      if (!email) return done(JSON.stringify({ ok: false, error: "sign-in required" }));
+      const { createArtifact } = await import("../artifacts/artifacts.server");
+      // Voice artifacts aren't task-scoped (taskId=null) — they save straight to the Artifacts panel;
+      // the task-scoped review-flip in the text path is intentionally skipped here.
+      const { id, deepLink } = await createArtifact({
+        userEmail: email,
+        agentId: ctx.agentId,
+        taskId: null,
+        folder: String(args.folder ?? "Research"),
+        name: artName,
+        mime: String(args.mime ?? "text/markdown"),
+        bytes: Buffer.from(content, "utf8"),
+      });
+      return done(JSON.stringify({ ok: true, id, deepLink }));
     }
     // Anything not native → route to the journey catalog directly (no per-call catalog fetch → lower
     // latency). An unknown/unsupported name comes back as a journey error, surfaced to the model.
