@@ -339,6 +339,43 @@ export function ArtifactsView() {
           </div>
         </div>
 
+        {/* Mobile-only filter bar — the desktop folders/status aside is app-hidden on mobile, so mobile
+            had NO way to filter by lane or status (ACT-huddle-44). Bring both as horizontally-scrollable
+            chip rows. Hidden on md+ (the left aside owns it there). */}
+        <div className="flex flex-col gap-2 border-b px-3 py-2 md:app-hidden">
+          <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5">
+            <button
+              onClick={() => setFolder("")}
+              className={cn("shrink-0 rounded-full border px-3 py-1 text-xs",
+                folder === "" ? "border-primary bg-primary/10 font-medium text-primary" : "border-border text-muted-foreground")}
+            >
+              All folders
+            </button>
+            {LANES.map((f) => (
+              <button
+                key={f}
+                onClick={() => setFolder(f)}
+                className={cn("shrink-0 rounded-full border px-3 py-1 text-xs",
+                  folder === f ? "border-primary bg-primary/10 font-medium text-primary" : "border-border text-muted-foreground")}
+              >
+                {f}{folderCount(f) ? ` ${folderCount(f)}` : ""}
+              </button>
+            ))}
+          </div>
+          <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5">
+            {STATUS_FILTERS.map((s) => (
+              <button
+                key={s.k || "all"}
+                onClick={() => setStatus(s.k)}
+                className={cn("shrink-0 rounded-full border px-3 py-1 text-xs",
+                  status === s.k ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground")}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="min-h-0 flex-1 overflow-y-auto">
           {loading ? (
             <div className="flex h-40 items-center justify-center text-muted-foreground"><Loader2 className="animate-spin" size={18} /></div>
