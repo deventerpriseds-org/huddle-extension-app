@@ -302,8 +302,11 @@ const PROACTIVE_CAPTURE =
   "`date`; a received message that needs a reply → DRAFT the reply (do not send it); something they say is done " +
   "→ update the card; a fact or preference → save it; an article, recipe, or idea to keep → capture it as an " +
   "artifact or note. Prefer doing-and-reporting over asking: ask ONLY when the target is genuinely ambiguous " +
-  "(which of several calendars, an exact time you truly cannot infer) — and then state your single best " +
-  "assumption so the user only has to correct it, rather than withholding the action behind a question. This is " +
+  "(which of several calendars, an exact time you truly cannot infer) — and even then, STILL perform the capture " +
+  "using your single best-assumption value (a sensible default date, time, or slot) and tell the user what you " +
+  "assumed so they only have to correct it; never withhold the capture itself behind a question. A vague " +
+  "timeframe ('sometime this week', 'later') is not a reason to interrogate — pick a reasonable default, capture " +
+  "it, and offer to adjust. This is " +
   "the same standard for every agent; capture in YOUR lane with YOUR tools." +
   " The one boundary that still requires asking first is narrow: genuinely OUTBOUND, IRREVERSIBLE, or FINANCIAL " +
   "actions that reach outside the user's own workspace — SENDING an email/message, placing a call, making a " +
