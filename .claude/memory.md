@@ -1887,3 +1887,24 @@ screenshots). Do NOT again conclude "no recent convo" from pending_turns for a V
 `prompt:"tasks, schedule, calendar, reschedule, today, tomorrow, priorities"` (via revert a9dcdd3) that the
 shared `realtime-audio.ts` deliberately dropped (echoed verbatim on silence). The sensitivity that drove that
 revert was `noise_reduction:near_field`, NOT the prompt — so drop the prompt, keep noise_reduction omitted.
+
+## Chat file/image attachments shipped (2026-08-12) — ACT-huddle-44/45/46, all DEPLOYED to main
+Final slice of the you↔Finn feedback + nav bug. All on `main` (auto-deploys); mechanism-verified (tsc+build), NOT yet user-confirmed live.
+- **ACT-45 file/image upload → agent (ab5841a).** Paperclip in the chat composer. `uploadChatAttachmentFn`
+  (artifacts/attachments.functions.ts) base64-uploads to the EXISTING artifact blob store (folder "Uploads",
+  status "approved", agent_id=addressed agent → shows in that agent's Files via ACT-43), 8MB + mime allowlist.
+  `createArtifact` EXTENDED with optional initial `status` (uploads bypass the 'review' default) — no parallel
+  store. Turn payload carries attachment IDS ONLY (bytes never travel → durable row stays small). Server resolves
+  id→fresh SAS once/turn (memoized `resolveAttachmentContent`, shared across responders, fail-safe): **images →
+  OpenAI Responses `input_image` content parts (VISION)**; text (.ics/.txt/.csv/.md/json) → inlined; other binaries
+  → acknowledged by name. Widened `OpenAIPersonaInput.transcript` content to `string | content-parts`; Lovable
+  `generateText` path FLATTENS images to a text note (its multimodal part shape differs). **No-attachment turns are
+  byte-for-byte unchanged.** Non-obvious: Responses `input_image` takes `image_url` as a plain STRING (unlike Chat
+  Completions' `{image_url:{url}}`). Follow-ons: PDF/docx real parse (input_file), image thumbnail on the bubble.
+- **ACT-44 mobile Artifacts filtering (3a44eab).** ArtifactsView was already responsive (list→tap→full-screen
+  preview→back). Real gap: the folders/status `aside` is `app-hidden md:flex` → mobile couldn't filter. Added a
+  `md:app-hidden` filter bar (two scrollable chip rows: folders w/ counts + status) driving the same state. Same
+  component, no parallel mobile view.
+- **ACT-46 persistent mobile view toggle (aaf2b8a).** The Huddle/Board/Files toggle lived only in HuddleView's
+  header → unmounts when view!=huddle. Desktop is fine (left Rail is `md:flex` and has the switcher); MOBILE Rail is
+  hidden → Board/Files stranded the user. Added the segmented toggle to HuddleApp's always-mounted mobile top bar.
