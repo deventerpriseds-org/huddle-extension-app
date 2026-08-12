@@ -152,7 +152,7 @@ function HuddleHeader({
 
       <div className="ml-auto flex items-center gap-2">
         <div className="inline-flex rounded-lg border border-hairline bg-surface p-0.5">
-          {(["huddle", "board"] as const).map((v) => (
+          {(["huddle", "board", "artifacts"] as const).map((v) => (
             <button
               key={v}
               type="button"
@@ -164,7 +164,7 @@ function HuddleHeader({
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              {v === "huddle" ? "Huddle" : "Board"}
+              {v === "huddle" ? "Huddle" : v === "board" ? "Board" : "Files"}
             </button>
           ))}
         </div>
