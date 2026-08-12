@@ -24,6 +24,10 @@ export interface HuddleMessage {
   // Artifacts this agent reply produced — rendered as clickable "Open <name>" chips that open the doc
   // by id in the Artifacts view (fresh SAS minted on open, so the link never expires).
   artifacts?: { id: string; name: string }[];
+  // Files the USER attached to THIS message (screenshots, invites, appointments…), uploaded to the
+  // artifact blob store first (folder "Uploads", scoped to the addressed agent). Images are shown to
+  // the agent via vision; text files are inlined; each renders as a chip on the user's bubble. ACT-45.
+  attachments?: { id: string; name: string; mime: string }[];
 }
 
 export type HuddleScope = "one-to-one" | "group";

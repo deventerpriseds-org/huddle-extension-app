@@ -14,6 +14,9 @@ import {
   Bell,
   BellRing,
   FileText,
+  Paperclip,
+  X,
+  ImageIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -25,6 +28,7 @@ import {
   getReminderDeliveries,
   listCeremonyRuns,
 } from "../lib/huddle.functions";
+import { uploadChatAttachmentFn } from "../lib/artifacts/attachments.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind } from "../store";
@@ -325,8 +329,29 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
   if (m.author.kind === "user") {
     return (
       <div className="flex items-end justify-end gap-2">
-        <div className="max-w-[70%] rounded-2xl rounded-br-sm bg-primary px-4 py-2 text-sm text-primary-foreground shadow-soft">
-          {m.text}
+        <div className="flex max-w-[70%] flex-col items-end gap-1.5">
+          {/* Files the user attached to this message (ACT-45) — chips above the bubble. */}
+          {m.attachments && m.attachments.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-1.5">
+              {m.attachments.map((a) => (
+                <span
+                  key={a.id}
+                  className="inline-flex max-w-[12rem] items-center gap-1.5 rounded-lg border border-hairline bg-surface px-2 py-1 text-xs text-foreground"
+                  title={a.name}
+                >
+                  {a.mime.startsWith("image/") ? (
+                    <ImageIcon size={13} className="shrink-0 text-muted-foreground" />
+                  ) : (
+                    <FileText size={13} className="shrink-0 text-muted-foreground" />
+                  )}
+                  <span className="truncate">{a.name}</span>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="rounded-2xl rounded-br-sm bg-primary px-4 py-2 text-sm text-primary-foreground shadow-soft">
+            {m.text}
+          </div>
         </div>
         <UserAvatar size="sm" />
       </div>
@@ -447,9 +472,16 @@ function CheckInCard({ m }: { m: HuddleMessage }) {
   );
 }
 
+// A chat attachment the user has staged in the composer (already uploaded to the blob store; only the
+// id travels with the turn). ACT-45.
+type PendingAttachment = { id: string; name: string; mime: string; size: number };
+
 function Composer({ huddle }: { huddle: Huddle }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const addUser = useHuddleStore((s) => s.addUserMessage);
   const addAgent = useHuddleStore((s) => s.addAgentMessage);
   const upsertAgent = useHuddleStore((s) => s.upsertAgentMessage);
@@ -701,30 +733,97 @@ function Composer({ huddle }: { huddle: Huddle }) {
     if (!p || p.turnId === turnId) clearPending();
   }
 
+  // Read a File as base64 (no data: prefix) for the upload server-fn.
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const res = reader.result;
+        if (typeof res !== "string") return reject(new Error("read failed"));
+        resolve(res.slice(res.indexOf(",") + 1)); // strip "data:<mime>;base64,"
+      };
+      reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Upload each picked file to the blob store (scoped to the addressed agent in a 1:1) and stage it as a
+  // chip; the turn then carries only the returned ids. ACT-45.
+  async function onPickFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const room = 6 - attachments.length;
+    const picked = Array.from(files).slice(0, Math.max(0, room));
+    if (picked.length === 0) {
+      toast.error("You can attach up to 6 files per message.");
+      return;
+    }
+    setUploading(true);
+    try {
+      for (const file of picked) {
+        try {
+          const dataBase64 = await fileToBase64(file);
+          const res = await uploadChatAttachmentFn({
+            data: {
+              caller: user
+                ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+                : undefined,
+              agentId: targetAgentId, // 1:1 → the addressed agent; group → undefined
+              name: file.name,
+              mime: file.type || "application/octet-stream",
+              dataBase64,
+            },
+          });
+          if (res.ok && res.id) {
+            setAttachments((xs) => [
+              ...xs,
+              { id: res.id!, name: res.name ?? file.name, mime: res.mime ?? file.type, size: res.size ?? file.size },
+            ]);
+          } else {
+            toast.error(res.error ?? `Couldn't attach ${file.name}`);
+          }
+        } catch {
+          toast.error(`Couldn't attach ${file.name}`);
+        }
+      }
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
   async function submit() {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
+    if ((!trimmed && attachments.length === 0) || sending || uploading) return;
     const now = Date.now();
     // turnId doubles as the user message id AND the durable idempotency key.
     const turnId = `u-${now}`;
     const mentions = parseMentions(trimmed, presentAgents);
+    // An attachment with no caption still needs a non-empty message (Input.text is min(1)); give the
+    // agent a light nudge to look at what was shared.
+    const sendText = trimmed || "Please take a look at the attached file(s).";
+    const sentAttachments = attachments.map((a) => ({ id: a.id, name: a.name, mime: a.mime }));
     const userMsg: HuddleMessage = {
       id: turnId,
       huddleId: huddle.id,
       author: { kind: "user" },
-      text: trimmed,
+      text: sendText,
       ts: now,
       mentions,
+      ...(sentAttachments.length ? { attachments: sentAttachments } : {}),
     };
     addUser(userMsg);
     setText("");
+    setAttachments([]);
     setSending(true);
     setPending({ huddleId: huddle.id, agentId: targetAgentId, startedAt: now, turnId });
 
     const backendsCfg = useBackendsStore.getState().config;
     const payload = {
       turnId,
-      text: trimmed,
+      text: sendText,
+      // Files the user attached to this message — resolved server-side (images → vision, text → inlined)
+      // so the addressed agent can actually use them. Only ids travel, not bytes. ACT-45.
+      ...(sentAttachments.length ? { attachments: sentAttachments } : {}),
       huddleId: huddle.id,
       scope,
       members: huddle.members,
@@ -980,7 +1079,61 @@ function Composer({ huddle }: { huddle: Huddle }) {
             className="block max-h-[7rem] w-full resize-none overflow-y-hidden break-words bg-transparent py-0 text-sm leading-5 outline-none placeholder:text-muted-foreground"
             autoFocus
           />
+
+          {/* Staged attachments (ACT-45) — chips with a remove button, shown between the input and the
+              action row. A spinner chip while an upload is in flight. */}
+          {(attachments.length > 0 || uploading) && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {attachments.map((a) => (
+                <span
+                  key={a.id}
+                  className="inline-flex max-w-[14rem] items-center gap-1.5 rounded-lg border border-hairline bg-muted/60 py-1 pl-2 pr-1 text-xs"
+                  title={a.name}
+                >
+                  {a.mime.startsWith("image/") ? (
+                    <ImageIcon size={13} className="shrink-0 text-muted-foreground" />
+                  ) : (
+                    <FileText size={13} className="shrink-0 text-muted-foreground" />
+                  )}
+                  <span className="truncate">{a.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setAttachments((xs) => xs.filter((x) => x.id !== a.id))}
+                    className="grid size-5 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+                    aria-label={`Remove ${a.name}`}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+              {uploading && (
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-hairline bg-muted/60 px-2 py-1 text-xs text-muted-foreground">
+                  <Loader2 size={13} className="animate-spin" /> Uploading…
+                </span>
+              )}
+            </div>
+          )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept="image/*,.pdf,.ics,.csv,.txt,.md,.json,.docx,.xlsx,.pptx"
+            className="hidden"
+            onChange={(e) => void onPickFiles(e.target.files)}
+          />
+
           <div className="mt-1.5 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading || attachments.length >= 6}
+              className="inline-flex size-9 items-center justify-center rounded-full border border-hairline bg-surface text-muted-foreground transition hover:bg-muted disabled:opacity-50"
+              aria-label="Attach a file"
+              title="Attach an image, invite, or document"
+            >
+              <Paperclip size={16} />
+            </button>
             {push.supported && push.permission !== "granted" && (
               <button
                 type="button"
@@ -1041,7 +1194,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
             )}
             <button
               type="button"
-              disabled={sending || !text.trim()}
+              disabled={sending || uploading || (!text.trim() && attachments.length === 0)}
               onClick={submit}
               className="ml-auto inline-flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-soft transition hover:opacity-90 disabled:opacity-40"
               aria-label="Send"

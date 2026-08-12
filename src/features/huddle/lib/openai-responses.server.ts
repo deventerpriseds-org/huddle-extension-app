@@ -78,7 +78,14 @@ export interface OpenAIPersonaInput {
   model: string;
   /** Full system prompt for this turn (persona + scene + RAG hint). */
   instructions: string;
-  transcript: Array<{ role: "user" | "assistant"; content: string }>;
+  // Content is normally a plain string. When the user attached an image, the CURRENT user message's
+  // content is instead the Responses content-parts array form — [{type:"input_text",text},
+  // {type:"input_image",image_url}] — so the model can SEE it (ACT-45). Passed straight through as
+  // `input`; the Responses API accepts either shape.
+  transcript: Array<{
+    role: "user" | "assistant";
+    content: string | Array<{ type: "input_text" | "input_image"; text?: string; image_url?: string }>;
+  }>;
   fastMode?: boolean;
   /** OpenAI Responses tools (function/file_search). Not code_interpreter. */
   tools?: unknown[];

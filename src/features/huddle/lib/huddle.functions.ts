@@ -210,6 +210,14 @@ const Input = z.object({
   // The user's model policy (difficulty/task-type → tier + per-agent ceilings), from the Settings config.
   // Absent → DEFAULT_MODEL_POLICY. Trusted local config, so validated loosely.
   modelPolicy: z.custom<ModelPolicy>().optional(),
+  // Files the user attached to THIS message (uploaded to the blob store first via uploadChatAttachmentFn,
+  // so only the ids travel here — not the bytes). The server resolves each id to a fresh read SAS
+  // (images → OpenAI vision content parts) or decoded text (inlined), so the addressed agent can actually
+  // use a screenshot / invite / appointment the user shared. ACT-45.
+  attachments: z
+    .array(z.object({ id: z.string().min(1), name: z.string(), mime: z.string() }))
+    .max(6)
+    .optional(),
 });
 
 const MAX_REPLIES_PER_TURN = 4;
@@ -1109,6 +1117,47 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     resolvedCallerEmail =
       (await resolveTaskEmail(data.caller ?? {})) ?? data.caller?.entra_email ?? null;
     return resolvedCallerEmail;
+  };
+
+  // ACT-45: resolve this turn's chat attachments (ids only in the payload) into model-visible content —
+  // ONCE per turn, memoized, and shared across every responding agent. Images become Responses
+  // `input_image` parts (a fresh 15-min read SAS the model fetches); text files (.ics/.txt/.csv/.md/json)
+  // are inlined; other binaries (pdf/office) are acknowledged by name (a full parse is a follow-on).
+  // Fully fail-safe: any miss (no email, wrong owner, storage/DB error) yields empty → the turn falls
+  // back to plain text, exactly as before.
+  type AttachImagePart = { type: "input_image"; image_url: string };
+  let attachmentContentPromise:
+    | Promise<{ imageParts: AttachImagePart[]; inlineText: string }>
+    | null = null;
+  const resolveAttachmentContent = (): Promise<{ imageParts: AttachImagePart[]; inlineText: string }> => {
+    if (attachmentContentPromise) return attachmentContentPromise;
+    attachmentContentPromise = (async () => {
+      const empty = { imageParts: [] as AttachImagePart[], inlineText: "" };
+      const atts = data.attachments ?? [];
+      if (atts.length === 0) return empty;
+      try {
+        const email = await resolveCallerEmail();
+        if (!email) return empty;
+        const { getArtifact } = await import("./artifacts/artifacts.server");
+        const imageParts: AttachImagePart[] = [];
+        let inlineText = "";
+        for (const a of atts) {
+          const row = await getArtifact(email, a.id); // email-scoped → wrong owner = null (no leak)
+          if (!row) continue;
+          if (row.mime.startsWith("image/") && row.url) {
+            imageParts.push({ type: "input_image", image_url: row.url });
+          } else if (row.text && row.text.trim()) {
+            inlineText += `\n\n[Attached file — ${row.name}]\n${row.text}`;
+          } else {
+            inlineText += `\n\n[The user attached a file "${row.name}" (${row.mime}). Its contents aren't readable inline yet — acknowledge it and ask for the key details if you need them.]`;
+          }
+        }
+        return { imageParts, inlineText };
+      } catch {
+        return empty;
+      }
+    })();
+    return attachmentContentPromise;
   };
 
   // A2 ledger (researched mode, ALL scopes so it bridges huddles): keep the user's tracked facts & LISTS
@@ -2170,7 +2219,23 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // slots and push the real dialogue out of view — the reminder-heavy-thread dilution that made
     // agents look like they'd forgotten. Non-destructive: only affects what the model reads per turn;
     // the full history stays intact in the store, the UI, and chat.pending_turns.
-    const transcript = data.history
+    // ACT-45: the CURRENT user message may carry attachments. Images are appended as Responses
+    // `input_image` content parts (content becomes the parts-array form); text-file contents are inlined
+    // into the message text. A barge (userTextOverride) never carries attachments. When there are none
+    // the content stays a plain string, so the normal turn path is byte-for-byte unchanged.
+    const { imageParts, inlineText } = userTextOverride
+      ? { imageParts: [], inlineText: "" }
+      : await resolveAttachmentContent();
+    const currentUserText = userText + inlineText;
+    type TranscriptContent =
+      | string
+      | Array<{ type: "input_text" | "input_image"; text?: string; image_url?: string }>;
+    const currentUserContent: TranscriptContent =
+      imageParts.length > 0
+        ? [{ type: "input_text" as const, text: currentUserText }, ...imageParts]
+        : currentUserText;
+
+    const historyTranscript: Array<{ role: "user" | "assistant"; content: TranscriptContent }> = data.history
       .filter((m) => m.author.kind !== "system")
       .filter(
         (m) =>
@@ -2190,15 +2255,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           role: "user" as const,
           content: `(context — ${a?.name ?? "another agent"} said): ${m.text}`,
         };
-      })
-      .concat([{ role: "user" as const, content: userText }]);
+      });
+    const transcript: Array<{ role: "user" | "assistant"; content: TranscriptContent }> = [
+      ...historyTranscript,
+      { role: "user" as const, content: currentUserContent },
+    ];
 
     // DIAGNOSTIC (ceremony turns): does the reconstructed transcript actually feed this agent its own
     // prior line as role "assistant"? This is the ground-truth for the "agents don't recall what they
     // said" report — an own-line count of 0 here (while the agent DID speak) is the reconstruction bug.
     if (ceremonyDirective) {
       const ownAssistant = transcript.filter(
-        (t) => t.role === "assistant" && !t.content.startsWith("(context —"),
+        (t) => t.role === "assistant" && !(typeof t.content === "string" && t.content.startsWith("(context —")),
       ).length;
       const roleShape = transcript.map((t) => t.role[0]).join("");
       console.log(
@@ -3854,12 +3922,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               userEmail: email,
               huddleId: data.huddleId,
               agentId: winner.id,
-              seed: transcript.slice(0, -1), // prior turns; the new user msg is sent as input below
+              // Prior turns only (the new user msg is sent as input below). Prior items always have
+              // string content — attachments only ever ride on the current/last message — so this map
+              // just satisfies the string-content seed type (ACT-45).
+              seed: transcript.slice(0, -1).map((t) => ({
+                role: t.role,
+                content: typeof t.content === "string" ? t.content : "",
+              })),
             });
             if (convId) {
               conversationId = convId;
               conversationEmail = email;
-              personaTranscript = [{ role: "user" as const, content: userText }];
+              // Send only the new user message (the conversation object owns prior state) — but keep any
+              // image/inline-file content so an attachment reaches the agent in conversation mode too. ACT-45.
+              personaTranscript = [{ role: "user" as const, content: currentUserContent }];
               console.log(
                 `[huddle-memory] memoryMode="conversation" active for ${winner.id} in ${data.huddleId}`,
               );
@@ -4917,7 +4993,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const { text } = await generateText({
           model,
           system: usedInstructions,
-          messages: transcript,
+          // The Lovable/AI-SDK path takes string content only (its multi-modal part shape differs from the
+          // OpenAI Responses `input_image` form used above). Attachment vision is an OpenAI-backend feature,
+          // so flatten any image parts to a text note here; inline-file text is already in the string. ACT-45.
+          messages: transcript.map((t) => ({
+            role: t.role,
+            content:
+              typeof t.content === "string"
+                ? t.content
+                : t.content
+                    .map((p) => (p.type === "input_text" ? (p.text ?? "") : "[the user attached an image]"))
+                    .join("\n"),
+          })),
           tools: toolNames.length > 0 ? lovableTools : undefined,
           // Force the chosen tool on the FIRST step only, then release to
           // "auto". A forced toolChoice persists across every step otherwise,

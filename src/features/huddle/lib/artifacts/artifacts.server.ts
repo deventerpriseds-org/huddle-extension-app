@@ -103,6 +103,10 @@ export interface CreateArtifactInput {
   name: string;
   mime: string;
   bytes: Buffer | Uint8Array;
+  // Optional initial review status. Agent-produced deliverables use the column default 'review'
+  // (needs the user's sign-off); a USER-uploaded chat attachment passes 'approved' so it never shows
+  // up in the review queue — it's an input, not a deliverable to review (ACT-45).
+  status?: ArtifactStatus;
 }
 
 /**
@@ -117,8 +121,8 @@ export async function createArtifact(input: CreateArtifactInput): Promise<{ id: 
   // Blob first: if the upload fails we never leave a metadata row pointing at nothing.
   await putArtifactBlob(blobPath, data, input.mime);
   await getPool().query(
-    `INSERT INTO artifacts.items (id,user_email,agent_id,task_id,folder,name,mime,size_bytes,blob_path)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    `INSERT INTO artifacts.items (id,user_email,agent_id,task_id,folder,name,mime,size_bytes,blob_path,status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,'review'))`,
     [
       id,
       input.userEmail.toLowerCase(),
@@ -129,6 +133,7 @@ export async function createArtifact(input: CreateArtifactInput): Promise<{ id: 
       input.mime,
       data.length,
       blobPath,
+      input.status ?? null,
     ],
   );
   return { id, deepLink: `/artifacts/${id}` };
