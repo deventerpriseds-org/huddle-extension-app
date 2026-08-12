@@ -1,7 +1,18 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-12
 
-## Proactive-capture shared directive — agents ACT on relayed info, not just acknowledge (DEPLOYED 2026-08-12; live-verify in progress, NOT user-confirmed)
+## Proactive-capture shared directive — agents ACT on relayed info, not just acknowledge (DEPLOYED 2026-08-12; HARNESS-VERIFIED 4/4, awaiting user live re-test)
+**Verification (independent `verifier`, live SWA, journey:{enabled:false}, board-safe — 0 rag_chunks rows):**
+First run main 97c0526 = 4/5 (PASS: capture-without-ask fires create_huddle_task w/ date; forwarded-msg drafts
+not sends; outbound "email X" proposes+asks not sends; routine capture not gated. FAIL: vague reminder "call
+mom sometime this week" interrogated for exact time). Root cause: REMINDER_SYSTEM_HINT had no vague-timeframe
+rule + schedule_reminder needs a concrete time. Fix (commit 6179955, additive): REMINDER_SYSTEM_HINT + the
+PROACTIVE_CAPTURE best-assumption clause now say pick a sensible default slot, schedule, and report+offer-adjust.
+Re-run main 6179955 = 4/4 PASS (P5 "call mom" → schedule_reminder "alarm tomorrow 6pm"; P5b "water plants this
+weekend" → "Saturday 9am"; P1 dentist + P4 Q3-report regressions still fire create_huddle_task w/ date). No
+429/quota fallback on any probe. Minor polish left (not a failure): reminder replies state the assumed time but
+don't always explicitly invite adjustment. STILL PENDING: user live re-test in their own app before "done".
+
 User feedback: agents were passive — they'd acknowledge a relayed appointment / forwarded email / accepted
 invite instead of capturing it. Root diagnosis presented: the shared OPERATING_CONTRACT nudged "escalate
 (ask) before anything external/irreversible/financial" and treated routine capture as if it were that; the
