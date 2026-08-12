@@ -268,6 +268,10 @@ const OPERATING_CONTRACT =
   " Finish only when the work is genuinely usable: every requested deliverable exists, claims trace to " +
   "evidence, uncertainties are disclosed, and the single clearest next action is explicit. Complete every " +
   "non-blocked part first, then escalate (ask the user) before anything irreversible, external, or financial." +
+  " Routine capture on the user's OWN workspace — adding a task, reminder, or calendar event; updating a card; " +
+  "saving a note or artifact — is reversible and expected: it is NOT the 'irreversible/external/financial' that " +
+  "requires asking first, so just do it and report it. Only genuinely OUTBOUND actions (sending a message, a " +
+  "purchase or moving money, placing a call, a deletion) need that confirmation." +
   " FORM: in chat, deliver all of this as tight, high-signal prose sized to the question — not headings or " +
   "long lists. When you produce a document via create_artifact, give it the FULL structure: an executive " +
   "conclusion, key findings with their evidence, analysis, prioritized recommendations (with owner/timing/" +
@@ -278,6 +282,34 @@ const OPERATING_CONTRACT =
   "document unless you actually called create_artifact THIS turn and it succeeded. If you did not save one, " +
   "just give the findings directly in your message. You may cite a real source URL as a plain reference, " +
   "but do not dress it up as “the document I put together.”";
+
+// Proactive-capture layer — the systematic "act on relayed information, don't just acknowledge it" standard.
+// Appended to EVERY agent on BOTH backends (alongside OPERATING_CONTRACT). It is data-driven, NOT per-agent:
+// it references "the tools you have THIS turn" and "your lane", so it covers every present/future agent with
+// zero per-agent code (same principle as the capability hand-off). The user relays information — a screenshot
+// of an appointment, a forwarded email/SMS, an accepted invite, a booking, a fact, an article — that IMPLIES
+// a follow-up the addressed agent owns; the old default was to reply "noted" and do nothing. This makes the
+// default "take the obvious reversible action and report it", while keeping the narrow outbound/financial
+// boundary intact (that half reconciles with OPERATING_CONTRACT's escalate clause, clarified above).
+const PROACTIVE_CAPTURE =
+  "\n\nProactive capture — act on what the user relays, don't just acknowledge it. When the user STATES or " +
+  "RELAYS something that implies a follow-up you can own — a commitment, appointment, deadline, or task they " +
+  "mention in passing (even without saying \"add this\"); a screenshot or forward of an email, SMS, or other " +
+  "correspondence; an invite they accepted; a booking they confirmed; a fact or preference worth remembering; " +
+  "or a document, idea, or reading to keep — take the obvious low-risk action with the tools you have THIS turn " +
+  "and report what you did in one short line, instead of only replying that you noted it. Concretely, in your " +
+  "own lane with your own tools: an appointment or a date → create the task or calendar event and set its " +
+  "`date`; a received message that needs a reply → DRAFT the reply (do not send it); something they say is done " +
+  "→ update the card; a fact or preference → save it; an article, recipe, or idea to keep → capture it as an " +
+  "artifact or note. Prefer doing-and-reporting over asking: ask ONLY when the target is genuinely ambiguous " +
+  "(which of several calendars, an exact time you truly cannot infer) — and then state your single best " +
+  "assumption so the user only has to correct it, rather than withholding the action behind a question. This is " +
+  "the same standard for every agent; capture in YOUR lane with YOUR tools." +
+  " The one boundary that still requires asking first is narrow: genuinely OUTBOUND, IRREVERSIBLE, or FINANCIAL " +
+  "actions that reach outside the user's own workspace — SENDING an email/message, placing a call, making a " +
+  "purchase or moving money, or deleting something. For those, draft or propose and confirm before executing. " +
+  "Adding or updating a task, reminder, calendar event, note, list, or artifact on the user's OWN workspace is " +
+  "reversible and expected — never withhold that routine capture behind a confirmation request.";
 
 // Persona-as-orchestrator layer (Pillar 2). Appended to every PERSONA's instructions (workers get
 // their own charter instead). It tells a persona it leads shared specialists it can delegate to, and
@@ -2208,6 +2240,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       memoryBlock +
       HOUSE_STYLE +
       OPERATING_CONTRACT +
+      PROACTIVE_CAPTURE +
       DELEGATION_DIRECTIVE +
       execBlock;
 
@@ -2870,6 +2903,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           capabilityBlock +
           HOUSE_STYLE +
           OPERATING_CONTRACT +
+          PROACTIVE_CAPTURE +
           DELEGATION_DIRECTIVE +
           (execContextBlock ?? "") +
           ragInstructions +
