@@ -3,6 +3,20 @@ Last updated: 2026-08-06 (three fixes live + Option-1 Postgres-MCP deploy workfl
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
+### 🔨 ACT-huddle-47: Proactive-capture shared directive (agents ACT on relayed info)
+**Requested:** 2026-08-12. User built (dictated) the full per-agent "information-handover → implied action"
+taxonomy; chose (AskUserQuestion, free-form) **"all 3, test the directive before testing if the tier is
+needed."** This pass = the DIRECTIVE only; everyday model-tier bump DEFERRED pending directive results.
+**Implemented + DEPLOYED (commit 97c0526 → main → deploy success):** new shared `PROACTIVE_CAPTURE` const in
+`huddle.functions.ts`, appended in both composition sites (`stableInstructions` + `appSystem`); clarified the
+OPERATING_CONTRACT escalate line so own-workspace capture isn't gated. Additive-only (34 ins / 0 del), tsc green,
+independent AC subagent checklist mapped (structural ACs 1-5 pass).
+**Verification:** independent `verifier` subagent running live test-agent-serverfn probes (journey:{enabled:false},
+board-safe) for behavioral ACs 6-11 — IN PROGRESS, not yet user-confirmed live. Do NOT mark done until verifier
+verdict + user live re-test.
+**Follow-ons (separate scoped builds, not started):** inbox watcher, Flex supplement reorder, long-run strategy
+store, family board, recipe catalog w/ thumbnails, travel-packet builder.
+
 ### 🔨 ACT-huddle-UI-compose: Mobile chat composer — auto-grow + keyboard-overlap fix
 **Requested:** 2026-08-11 (screenshot: Android Gboard covering the 1:1 composer; box doesn't grow).
 Want SMS/Teams/Slack behavior: wider full-width input that grows to ~3–5 rows then scrolls, and the

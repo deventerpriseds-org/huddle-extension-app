@@ -1,5 +1,43 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-08-11
+Last updated: 2026-08-12
+
+## Proactive-capture shared directive — agents ACT on relayed info, not just acknowledge (DEPLOYED 2026-08-12; live-verify in progress, NOT user-confirmed)
+User feedback: agents were passive — they'd acknowledge a relayed appointment / forwarded email / accepted
+invite instead of capturing it. Root diagnosis presented: the shared OPERATING_CONTRACT nudged "escalate
+(ask) before anything external/irreversible/financial" and treated routine capture as if it were that; the
+agents' own snapshot prompts were unchanged. User chose (via AskUserQuestion, picked free-form): **"all 3,
+test the directive before testing if the tier is needed."** So this pass = the DIRECTIVE only; the everyday
+model-tier change (gpt-5.6-luna → higher rung) is DEFERRED until we see whether the directive alone restores
+proactivity. o3 ceilings stay untouched (user set them deliberately).
+
+**The change (commit 97c0526, branch `claude/iris-huddle-interaction-baj51c` → main → deployed):**
+- New shared const `PROACTIVE_CAPTURE` in `huddle.functions.ts`, appended in BOTH composition sites
+  (`stableInstructions` — live OpenAI Responses path — AND `appSystem` fallback), right after
+  OPERATING_CONTRACT. Data-driven/agent-wide (references "the tools you have THIS turn" / "your lane"),
+  NO per-agent strings — covers the whole roster + future agents (systematic-capability rule).
+- Behavior: when the user STATES/RELAYS something implying an owned follow-up (appointment/deadline in
+  passing, forwarded email/SMS, accepted invite, confirmed booking, a fact/preference, an article/idea) →
+  take the obvious REVERSIBLE action with own tools and REPORT it (create task/calendar w/ `date`, DRAFT a
+  reply, update a card, save a note/artifact). Ask ONLY when target genuinely ambiguous, stating a best
+  assumption. Narrow ask-first boundary kept for genuinely OUTBOUND/IRREVERSIBLE/FINANCIAL (send, purchase,
+  call, delete).
+- Also CLARIFIED the OPERATING_CONTRACT escalate sentence (additive — original words preserved): routine
+  capture on the user's OWN workspace is reversible/expected, NOT the "irreversible/external/financial"
+  that requires asking first. Additive-only diff: 34 insertions, 0 deletions. `tsc --noEmit` green.
+- sendHuddleMessage fn-id UNCHANGED (`a056…c662`) despite the edit — TanStack keys it to the export, so
+  the test-agent-serverfn harness default id still works.
+
+**Context — the full "information-handover → implied action" taxonomy (user dictated, per-agent):** every
+agent is a flavor of five moves — send-and-track, draft-in-my-voice, catalog-and-recall, coalesce-toward-a-
+no-drift-long-run, compute/analyze. DO-NOW-and-report for own-workspace captures; DRAFT/confirm-first only
+for outbound (Cam send, Flex supplement order). SIX net-new capabilities surfaced for SEPARATE scoped builds
+(NOT this pass): (1) inbox/correspondence watcher → urgent reply-tasks (extend the mail-and-appointments
+mail-watcher, don't duplicate); (2) supplement auto-reorder from a pre-approved allowlist (Flex, confirm-
+first, Plaid or alt); (3) durable long-run strategy store + roadmap w/ drift-detection (Liam/Cole/Sam);
+(4) family board separate from user's board (Faith); (5) recipe catalog w/ photo thumbnails (Charleston,
+extend artifact store); (6) travel-packet builder (Troy — distance→mode inference + rooms/cost + reserve-vs-
+do checklist). Persisting the full spec doc is pending explicit user OK.
+
 
 ## Mobile chat composer — auto-grow + keyboard-overlap (implemented, verifying; NOT user-confirmed live, 2026-08-11)
 User report (Android/Gboard screenshot, 1:1 huddle): the composer doesn't behave like SMS/Teams/Slack —
