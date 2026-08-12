@@ -3,7 +3,7 @@ import { FileText, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
-import { useHuddleStore } from "../store";
+import { useHuddleStore, useVisibleHuddles } from "../store";
 import { listArtifactsFn } from "../lib/artifacts/artifacts.functions";
 import type { ArtifactRow } from "../lib/artifacts/artifacts.server";
 
@@ -49,6 +49,14 @@ export function ArtifactsMiniList({ onOpen }: { onOpen?: () => void } = {}) {
     [user],
   );
   const openArtifactById = useHuddleStore((s) => s.openArtifactById);
+  // Scope to the agents participating in the CURRENT channel (1:1 → just that agent; group → its members).
+  // The 'all-members' group has every agent, so nothing is filtered out there.
+  const activeId = useHuddleStore((s) => s.activeHuddleId);
+  const huddles = useVisibleHuddles();
+  const channelAgentIds = useMemo(() => {
+    const h = huddles.find((x) => x.id === activeId);
+    return h ? new Set<string>(h.members as string[]) : null;
+  }, [huddles, activeId]);
   const [items, setItems] = useState<ArtifactRow[]>([]);
   const [loading, setLoading] = useState(true);
   const refetch = useCallback(async () => {
@@ -67,7 +75,10 @@ export function ArtifactsMiniList({ onOpen }: { onOpen?: () => void } = {}) {
   }, [refetch]);
 
   const groups = useMemo(() => {
-    const sorted = [...items].sort(
+    const scoped = channelAgentIds
+      ? items.filter((it) => it.agent_id && channelAgentIds.has(it.agent_id))
+      : items;
+    const sorted = [...scoped].sort(
       (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
     );
     const out: { label: string; items: ArtifactRow[] }[] = [];
@@ -87,12 +98,12 @@ export function ArtifactsMiniList({ onOpen }: { onOpen?: () => void } = {}) {
       </div>
     );
   }
-  if (items.length === 0) {
+  if (groups.length === 0) {
     return (
       <div className="flex h-full min-h-32 flex-col items-center justify-center gap-1.5 p-6 text-center text-muted-foreground">
         <FileText size={22} className="opacity-40" />
-        <div className="text-sm">No files yet.</div>
-        <div className="text-xs">Documents agents produce show up here.</div>
+        <div className="text-sm">No files here yet.</div>
+        <div className="text-xs">Documents this channel's agents produce show up here.</div>
       </div>
     );
   }

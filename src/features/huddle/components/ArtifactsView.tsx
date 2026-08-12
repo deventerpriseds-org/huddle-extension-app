@@ -10,7 +10,7 @@ import {
   listArtifactsFn, getArtifactFn, reviewArtifactFn, createArtifactFn, mirrorArtifactFn, deleteArtifactFn,
 } from "../lib/artifacts/artifacts.functions";
 import type { ArtifactRow } from "../lib/artifacts/artifacts.server";
-import { useHuddleStore } from "../store";
+import { useHuddleStore, useVisibleHuddles } from "../store";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -168,6 +168,18 @@ export function ArtifactsView() {
   // navigation isn't re-hijacked.
   const activeArtifactId = useHuddleStore((s) => s.activeArtifactId);
   const clearActiveArtifact = useHuddleStore((s) => s.openArtifactById);
+  // Scope the list to the agents in the channel the user opened this from (1:1 → that agent; group → its
+  // members; the 'all-members' group shows everyone). ACT-huddle-43.
+  const activeHuddleId = useHuddleStore((s) => s.activeHuddleId);
+  const allHuddles = useVisibleHuddles();
+  const channelAgentIds = useMemo(() => {
+    const h = allHuddles.find((x) => x.id === activeHuddleId);
+    return h ? new Set<string>(h.members as string[]) : null;
+  }, [allHuddles, activeHuddleId]);
+  const scopedItems = useMemo(
+    () => (channelAgentIds ? items.filter((it) => it.agent_id && channelAgentIds.has(it.agent_id)) : items),
+    [items, channelAgentIds],
+  );
   useEffect(() => {
     if (!activeArtifactId) return;
     void openArtifact(activeArtifactId);
@@ -330,14 +342,14 @@ export function ArtifactsView() {
         <div className="min-h-0 flex-1 overflow-y-auto">
           {loading ? (
             <div className="flex h-40 items-center justify-center text-muted-foreground"><Loader2 className="animate-spin" size={18} /></div>
-          ) : items.length === 0 ? (
+          ) : scopedItems.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center text-muted-foreground">
               <FolderOpen size={28} className="opacity-40" />
               <div className="text-sm">No artifacts here yet.</div>
               <div className="text-xs">Agents drop research, drafts, and reports here as they work — or add a note to try it.</div>
             </div>
           ) : (
-            groupByDate(items).map((group) => (
+            groupByDate(scopedItems).map((group) => (
               <div key={group.label}>
                 {/* Date-group header — sticky so the current day stays visible while scrolling (ACT-huddle-41). */}
                 <div className="sticky top-0 z-10 border-b bg-background/95 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur">

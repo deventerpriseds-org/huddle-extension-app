@@ -968,13 +968,15 @@ function Composer({ huddle }: { huddle: Huddle }) {
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              // Enter inserts a NEW LINE (mobile-friendly); send with the button (or Cmd/Ctrl+Enter on
+              // desktop). Previously Enter sent, which fought multi-line messages on a phone keyboard.
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 submit();
               }
             }}
             rows={1}
-            placeholder="Message the huddle…"
+            placeholder="Message the huddle…  (Enter = new line)"
             className="block max-h-[7rem] w-full resize-none overflow-y-hidden break-words bg-transparent py-0 text-sm leading-5 outline-none placeholder:text-muted-foreground"
             autoFocus
           />

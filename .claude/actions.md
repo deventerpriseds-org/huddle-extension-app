@@ -2149,3 +2149,26 @@ green); view live (1,581 rows). classifyConfirmReply 21/21 offline.
 - AC-2: Artifacts are grouped under date headers, newest first.
 - AC-3: Reuses ArtifactsView's item rendering + open/review actions (extend, don't duplicate the list).
 **Status:** BUILT + deployed across mobile-visible surfaces. Pt1: ArtifactsView grouped by date (e4b5818). Pt2 (desktop-only): ContextPanel 'Files' tab — but that panel is md:flex (HIDDEN on mobile), so it didn't help the phone user. Pt3 (967dd7d): shared ArtifactsMiniList + a 'Files' tab in the VOICE call meeting panel (next to Transcript/Chat) — mobile-visible, the 'tab in the voice' ask. Pt4: 'Files' added to the 1:1 chat header Huddle/Board toggle (mobile-visible) → date-grouped Artifacts view. Live-confirm pending (UI render on the phone).
+
+### ACT-huddle-42: Chat Enter = new line, not send (DONE)
+**Requested:** 2026-08-11 — "the enter button in the chat should be for a new line not to send."
+**Fix (deployed):** composer onKeyDown — Enter now inserts a newline; send is the button (or Cmd/Ctrl+Enter on desktop). Placeholder hints "(Enter = new line)". HuddleView.tsx.
+**Status:** BUILT + deploying.
+
+### ACT-huddle-43: Scope artifacts to the channel's participating agents (DONE)
+**Requested:** 2026-08-11 — "I wanted things filtered to the participating agents in the channel. 1:1 for example."
+**Fix (deployed):** ArtifactsMiniList (voice Files tab + ContextPanel) and ArtifactsView (Files toggle) now filter to the ACTIVE huddle's member agents (1:1 → that agent; group → its members; 'all-members' → everyone). Client-side filter on agent_id.
+**Status:** BUILT + deploying.
+
+### ACT-huddle-44: Better mobile port of the desktop Artifacts view (OPEN)
+**Requested:** 2026-08-11 — "the files pointer needs a better mobile port of what's in desktop." The desktop ArtifactsView has a Folders sidebar + Status filter chips + preview pane; on mobile several are app-hidden and the layout is cramped.
+**Expected outcome:** the mobile Artifacts view surfaces folders + status filters + preview usefully (not a stripped list).
+**Acceptance criteria:** AC-1 mobile shows folder + status filtering (collapsible), AC-2 preview/review works full-screen on mobile, AC-3 reuses ArtifactsView (no parallel mobile component).
+**Status:** OPEN — UI, scoping.
+
+### ACT-huddle-45: File ATTACHMENT/upload in chat (upload invites/appointments/screenshots to an agent)
+**Requested:** 2026-08-11 — "I don't see a file attachment button in the chat. I need to be able to upload invites and appointments to iris including screenshots and the same to cam and others for instance to draft responses."
+**Expected outcome:** a paperclip/attach button in the chat composer to upload a file (image screenshot, .ics invite, PDF/doc); the attachment reaches the addressed agent's turn so it can act on it (e.g., Iris reads an invite screenshot → drafts a reply; Cam drafts a response).
+**Design forks (need a first-slice decision):** (a) IMAGES/screenshots → pass as an image to the model (vision) — highest value, simplest first slice; (b) .ics / calendar invites → parse to text; (c) PDF/doc → extract text. Storage: reuse Azure Blob (artifacts container) + a message attachment ref; the turn payload carries the attachment so runHuddleTurn/vision can read it.
+**Acceptance criteria:** AC-1 composer has an attach button + file picker; AC-2 an uploaded image is visible in the sent message; AC-3 the addressed agent's turn receives the attachment and can reference it (draft a response); AC-4 stored per-user (email-scoped) like artifacts.
+**Status:** OPEN — real feature; first slice = image/screenshot → agent vision. Plan proposed; confirm scope of first slice before building the upload+turn-plumbing.
