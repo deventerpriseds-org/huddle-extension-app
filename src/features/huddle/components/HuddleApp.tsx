@@ -23,6 +23,7 @@ export function HuddleApp() {
   useWorkspaceSync();
   const { isAuthenticated, user } = useAuth();
   const view = useHuddleStore((s) => s.view);
+  const setView = useHuddleStore((s) => s.setView);
   const huddles = useVisibleHuddles();
   const activeId = useHuddleStore((s) => s.activeHuddleId);
   const sidebarCollapsed = useHuddleStore((s) => s.sidebarCollapsed);
@@ -208,6 +209,30 @@ export function HuddleApp() {
             >
               <PanelRight size={18} />
             </button>
+          </div>
+        </div>
+
+        {/* Mobile view switcher — persistent (the desktop Rail is app-hidden on mobile, and the
+            Huddle/Board/Files toggle inside HuddleView's header unmounts the moment you leave the
+            huddle view, which stranded users on Board/Files with no way back). Kept always-mounted
+            here so it works from every view. */}
+        <div className="flex items-center justify-center border-b border-hairline bg-surface px-3 py-1.5 md:app-hidden">
+          <div className="inline-flex rounded-lg border border-hairline bg-background p-0.5">
+            {(["huddle", "board", "artifacts"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setView(v)}
+                className={
+                  "rounded-md px-4 py-1 text-xs font-medium transition " +
+                  (view === v
+                    ? "bg-muted text-foreground"
+                    : "text-muted-foreground hover:text-foreground")
+                }
+              >
+                {v === "huddle" ? "Huddle" : v === "board" ? "Board" : "Files"}
+              </button>
+            ))}
           </div>
         </div>
 
