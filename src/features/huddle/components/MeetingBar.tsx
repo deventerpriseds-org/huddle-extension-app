@@ -4,6 +4,7 @@ import {
   Captions,
   CaptionsOff,
   ChevronRight,
+  FileText,
   Loader2,
   LogOut,
   MessageSquare,
@@ -29,6 +30,7 @@ import { sendHuddleMessage, enqueueHuddleTurn, getTurnUpdates } from "../lib/hud
 import { resolveAddressedAgent } from "../lib/addressedAgent";
 import { getCeremonyScript } from "../lib/tasks/ceremony-script.functions";
 import { saveCeremonyTranscript, getCeremonyToolEvents } from "../lib/ceremony/ceremony-transcript.functions";
+import { ArtifactsMiniList } from "./ArtifactsMiniList";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
 import { AgentAvatar } from "./AgentAvatar";
@@ -468,7 +470,7 @@ function CollapsedPill({
 
 // ---------------------------------------------------------------------------
 
-type Panel = "transcript" | "people";
+type Panel = "transcript" | "people" | "files";
 
 function MeetingRoom({
   meeting,
@@ -2051,6 +2053,12 @@ function MeetingRoom({
                 setChatTab("chat");
               }}
             />
+            <RoomControl
+              label="Files"
+              icon={<FileText size={18} />}
+              active={panel === "files"}
+              onClick={() => setPanel("files")}
+            />
             <Button variant="destructive" className="ml-1 gap-1.5" onClick={onLeave}>
               <LogOut size={16} /> Leave
             </Button>
@@ -2061,6 +2069,11 @@ function MeetingRoom({
         <aside className="flex min-h-0 flex-1 flex-col border-t border-hairline md:w-[360px] md:flex-none md:border-l md:border-t-0">
           {panel === "people" ? (
             <PeoplePanel meeting={meeting} onToggle={toggleAgent} spotlightId={spotlightId} onSpotlight={setSpeaker} />
+          ) : panel === "files" ? (
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <div className="shrink-0 border-b border-hairline px-4 py-2.5 text-sm font-medium">Files</div>
+              <ArtifactsMiniList />
+            </div>
           ) : (
             <TranscriptPanel
               turns={roomTurns}
