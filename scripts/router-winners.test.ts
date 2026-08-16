@@ -5,7 +5,7 @@
 // This is the cheap layer that proves the mention/handoff/multi-lane routing WITHOUT running full
 // multi-agent turns (which would fire N agent-reply LLM calls per test and burn quota).
 
-import { assembleWinners } from "../src/features/huddle/lib/routing";
+import { assembleWinners, countLaneLabels } from "../src/features/huddle/lib/routing";
 
 const A = {
   iris: "iris-chase", tess: "tess-sutton", sam: "sam-trent", terry: "terry-locke",
@@ -120,6 +120,32 @@ eq("two lanes same owner → once",
                   text: "budget question", soloOnCoverage: true });
   check("adjacency dropped, cap not raised on normal turn",
     r.soloApplied ? r.winners.length === 1 : r.winners.length <= 3, `[${r.winners.join(", ")}]`);
+}
+
+console.log("=== MULTI-LANE DETECTION + FAN-OUT (not forced solo) ===");
+const LIST = `Here are some things I need to tackle
+
+Career - apply to a job, update LinkedIn
+Education - import a course, add a program
+Finance - make payments, transfer funds
+Errands - take the car in Tuesday`;
+// 15. countLaneLabels detects the 4 enumerated lanes.
+check("countLaneLabels(4-lane list) === 4", countLaneLabels(LIST) === 4, `got ${countLaneLabels(LIST)}`);
+// 16. A single-topic message is NOT a labeled list.
+check("countLaneLabels(single topic) < 2",
+  countLaneLabels("what workouts do I usually go for?") < 2, `got ${countLaneLabels("what workouts do I usually go for?")}`);
+// 17. Multi-lane list → solo OFF (caller passes soloOnCoverage:false) → every lane owner the router
+//     picked is kept (fan-out), even with explicitlyRequested empty, thanks to the raised cap.
+eq("multi-lane list fans out (solo off, cap raised by laneCount)",
+  run({ primary: A.cole, supporting: [A.finn, A.tess, A.faith], explicitlyRequested: [],
+        soloOnCoverage: false, explicitLaneCount: 4, text: LIST }).winners,
+  [A.cole, A.finn, A.tess, A.faith]);
+// 18. Single-topic (NOT a list) → solo ON, laneCount 0 → adjacency dropped, stays solo (no pile-on).
+{
+  const r = run({ primary: A.finn, supporting: [A.sam, A.tess], explicitlyRequested: [],
+                  soloOnCoverage: true, explicitLaneCount: 0, text: "am I over budget on dining this month?" });
+  check("single-topic stays solo (no pile-on)",
+    r.soloApplied ? r.winners.length === 1 : true, `soloApplied=${r.soloApplied} winners=[${r.winners.join(", ")}]`);
 }
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);

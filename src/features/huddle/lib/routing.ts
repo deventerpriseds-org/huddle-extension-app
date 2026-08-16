@@ -310,6 +310,9 @@ export interface WinnerAssemblyInput {
   memberIds: AgentId[];
   text: string;
   soloOnCoverage: boolean;
+  /** Number of explicitly-labeled lanes the user enumerated (from countLaneLabels). Raises the winner
+   * cap so every lane owner the router picked is kept on a genuine multi-lane list. 0 on normal turns. */
+  explicitLaneCount?: number;
 }
 export interface WinnerAssemblyResult {
   winners: AgentId[];
@@ -357,7 +360,10 @@ export function assembleWinners(input: WinnerAssemblyInput): WinnerAssemblyResul
     // user enumerated several lanes and the router marked each lane's owner explicitlyRequested — raise
     // the cap so every enumerated lane owner is kept (primary + N explicit owners), bounded at 6 for
     // latency. explicitlyRequested is ~0-1 on ordinary turns, so this never widens a normal turn.
-    const cap = Math.min(6, Math.max(3, explicitlyRequested.size + 1));
+    const cap = Math.min(
+      6,
+      Math.max(3, Math.max(explicitlyRequested.size, input.explicitLaneCount ?? 0) + 1),
+    );
     for (const id of supporting) {
       if (
         !memberIds.includes(id) ||
@@ -373,6 +379,25 @@ export function assembleWinners(input: WinnerAssemblyInput): WinnerAssemblyResul
     }
   }
   return { winners, soloApplied, explicitKept, mentionedWinners };
+}
+
+/**
+ * DETERMINISTIC multi-lane-list detector. Counts how many distinct labeled lanes the user enumerated —
+ * lines shaped like a short label followed by a dash/colon then content ("Career - …", "Finance: …").
+ * This is a purely structural signal (no keyword→agent guessing, which is unreliable because the user's
+ * labels — "Finance", "Education" — don't match the owners' domain words), used to decide a message is a
+ * genuine multi-lane brain-dump. When it is, the caller turns soloOnCoverage OFF for that turn so the
+ * specialists the LLM router picked fan out (instead of being collapsed to the primary), and raises the
+ * winner cap to fit every lane. A single-topic message returns <2 and is unaffected — soloOnCoverage
+ * still kills adjacency pile-ons there. Pure + exported so it is unit-tested offline.
+ */
+export function countLaneLabels(text: string): number {
+  let n = 0;
+  for (const line of (text || "").split(/\r?\n/)) {
+    // 1-3 words (letters, spaces, &, /) at line start, then - – — or :, then real content.
+    if (/^\s*[A-Za-z][A-Za-z&/]*(?:\s+[A-Za-z&/]+){0,2}\s*[-–—:]\s+\S/.test(line)) n++;
+  }
+  return n;
 }
 
 /**
@@ -630,6 +655,12 @@ ${supportingHint}${interjectHint}${explicitRequestHint}${difficultyHint}`;
       };
     }
 
+    // Deterministic multi-lane-list detection: an enumerated brain-dump ("Career - …, Finance - …") is a
+    // genuine multi-lane request, so soloOnCoverage must NOT collapse it to the primary. Turn solo OFF for
+    // that turn (the specialists the LLM picked fan out) and pass the lane count so the cap fits them all.
+    // A single-topic message scores <2 and is untouched — solo still kills adjacency pile-ons there.
+    const laneCount = countLaneLabels(text);
+    const isMultiLaneList = laneCount >= 2;
     // Deterministic winner assembly (pure, unit-tested offline — see routing.winners.test.ts).
     const { winners, soloApplied, explicitKept, mentionedWinners } = assembleWinners({
       primary,
@@ -638,7 +669,8 @@ ${supportingHint}${interjectHint}${explicitRequestHint}${difficultyHint}`;
       mentions,
       memberIds,
       text,
-      soloOnCoverage: !!invocation.soloOnCoverage,
+      soloOnCoverage: !!invocation.soloOnCoverage && !isMultiLaneList,
+      explicitLaneCount: laneCount,
     });
     const scores = Object.fromEntries(
       winners.map((id, i) => [id, Number((1 - i * 0.2).toFixed(2))]),
