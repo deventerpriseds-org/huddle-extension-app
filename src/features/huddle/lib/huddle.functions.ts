@@ -2086,13 +2086,30 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         ? `\n\nIMPORTANT — the user is replying to your earlier check-in that asked them to confirm the assumed action + Definition of Done for their task "${pendingConfirm.title}". This message is that reply. If they confirmed it (as-is or with tweaks), call confirm_task_intent NOW with task_id "${pendingConfirm.taskId}" and the FINAL definition_of_done (fold in any change they made) — actually call the tool, don't just acknowledge in prose. Then, in this SAME turn, call propose_approach for that task so it can move forward. If the reply instead shows the task genuinely CANNOT proceed (it needs a decision, a credential, or access the team lacks), call flag_blocker with that EXACT task_id "${pendingConfirm.taskId}" — use that id verbatim, NEVER the task's title or an invented id — and a specific reason. If they declined or are still deciding, don't call the tools — just help them decide.`
         : "";
 
+    // Single capture-owner (group): exactly ONE agent — the lead/primary — captures the user's task
+    // items, so nothing is DROPPED (the lead captures the whole list) and nothing is DUPLICATED (only
+    // the lead files). Every other responder still contributes its lane expertise but files no cards for
+    // the user's listed items. Keyed on the persisted primary (routed.decision.winnerId survives a
+    // resumed/streamed turn, where routed.winners is intentionally emptied). 1:1 is unchanged. This
+    // replaces the earlier "each agent files only its own lane" partition, which could DROP an item when
+    // a lane's owner wasn't routed (e.g. a timed errand pulled to the calendar agent, then skipped).
+    const leadId =
+      routed.winners[0] ?? (routed.decision?.winnerId as AgentId | undefined) ?? undefined;
+    let captureDirective = "";
+    if (data.scope === "group" && !data.internal && leadId) {
+      captureDirective =
+        winner.id === leadId
+          ? `\n\nTASK CAPTURE — you are the LEAD this turn. If the user's message lists things to tackle (a multi-item to-do / brain-dump, across one or more lanes), YOU capture EVERY item, across ALL lanes, with create_huddle_tasks in ONE call — never leave an item for a teammate to file and never assume someone else will. Capturing all of them so nothing is dropped is your job this turn; teammates add expertise, but you own the board capture.`
+          : `\n\nTASK CAPTURE — you are NOT the lead this turn; the lead agent is capturing the user's to-do items onto the board. Contribute your lane's expertise, analysis, or a draft, but do NOT create task cards for the items the user listed — filing them again would duplicate the board. (Only if you have a genuinely NEW action item the user did not mention, and it is squarely in your lane, may you create that single one.)`;
+    }
+
     const scene = ` You are ${winner.name} in a ${
       data.scope === "group" ? "group huddle" : "1:1"
     }. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail. Do NOT repeat a reply you already gave earlier in this conversation — your own past messages are in the history above; if you genuinely have nothing new since your last update, say that briefly (e.g. "same as before — nothing new on my end") instead of restating the same line word-for-word (that "broken record" repetition is a real failure to avoid).${
       priorInThisTurn && !ceremonyDirective
         ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
         : ""
-    }${interjectDirective}${ceremonyDirective}${selfRecallBlock}${ceremonyBoardBlock}${ceremonyPriorReact}${handoffDirective}${laneDirective}${confirmReplyDirective}${
+    }${interjectDirective}${ceremonyDirective}${selfRecallBlock}${ceremonyBoardBlock}${ceremonyPriorReact}${handoffDirective}${laneDirective}${captureDirective}${confirmReplyDirective}${
       data.huddleId === `dm-${winner.id}` ? unblockReplyDirective : ""
     }`;
 
@@ -2122,7 +2139,6 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     const taskToolInstructions =
       "\n\nYou have a `create_huddle_task` tool. When the user asks to add, create, log, track, assign, capture, or put a task/action item on the board, call `create_huddle_task` before answering. It creates a suggested board card for user approval; do not merely say you will add it." +
       ' When the user asks for MORE THAN ONE task in a single message, call `create_huddle_tasks` (plural) ONCE with all of them in the `tasks` array — do NOT emit several `create_huddle_task` calls and do NOT create one and describe the rest as done. Its result reports `created` (the exact number created) plus `deferred`/`skipped`; state that exact count and mention anything skipped — e.g. "added 2 of the 3; the third is already on your board." Never say "created all of them" / "both" unless the `created` count actually equals what the user asked for.' +
-      ' LANE-PARTITIONED CAPTURE (group turns): when you are one of SEVERAL agents responding to a message that spans multiple areas/lanes (a multi-item brain-dump), create tasks ONLY for the items in YOUR OWN lane/domain — your teammates are each capturing the items in theirs, so do NOT file the entire list or you will create duplicate cards. The one exception: if you are the lead/primary and an item clearly belongs to NO other responding specialist, capture it so nothing is dropped. (In a 1:1 or when you are the only responder, capture everything relevant as usual.)' +
       ' NEVER use it to create a task that merely restates an action you were asked to PERFORM (e.g. a card titled "groom the backlog" or "assign the team") — that is not a to-do, it is the thing you were asked to do: perform it, or hand it to the agent who can. Only create tasks for genuine future work the user wants tracked.' +
       " If the user states or implies a specific date (a day name, 'tomorrow', a calendar date, 'by Friday'), set the tool's `date` field — do not just leave it embedded in the title text where it can get lost." +
       ' Report the outcome honestly using exactly what the tool result gives you, in `note`/`outcome` — never invent a time or claim more certainty than that. A same-day scheduled time is provisional (the nightly planner can still move it overnight) — say something like "I\'ve got that for around 2:30 today" rather than a firm commitment. A task with a due date but no start_time has no exact time yet — say the due date and that the planner will place a time, don\'t guess one. If the outcome says today was full and it landed elsewhere, say so plainly instead of a bare "added it."' +
