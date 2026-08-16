@@ -86,5 +86,41 @@ eq("solo OFF keeps adjacency",
   check("mention cap <=4", w.length <= 4, `[${w.join(", ")}]`);
 }
 
+console.log("=== MULTI-LANE LISTS (brain-dump) ===");
+// 10. 4-lane labeled list → primary + 3 explicitly-requested lane owners all survive solo (cap raised to 4).
+eq("4-lane list keeps all 4 owners",
+  run({ primary: A.cole, supporting: [A.finn, A.tess, A.faith], explicitlyRequested: [A.finn, A.tess, A.faith],
+        text: "Career - apply to X. Education - add program. Finance - pay bills. Errands - car repair.", soloOnCoverage: true }).winners,
+  [A.cole, A.finn, A.tess, A.faith]);
+
+// 11. 5-lane list → cap raised to 5 (primary + 4 explicit), not truncated at the old cap of 3.
+{
+  const w = run({ primary: A.cole, supporting: [A.finn, A.tess, A.faith, A.sam],
+                  explicitlyRequested: [A.finn, A.tess, A.faith, A.sam], text: "five lanes each with items", soloOnCoverage: true }).winners;
+  check("5-lane list keeps 5",
+    w.length === 5 && [A.cole, A.finn, A.tess, A.faith, A.sam].every((x) => w.includes(x)), `[${w.join(", ")}]`);
+}
+
+// 12. Casual two-domain question (NOT an enumerated list): explicitlyRequested empty → stays solo.
+{
+  const r = run({ primary: A.finn, supporting: [A.sam], explicitlyRequested: [],
+                  text: "should I focus on finance or fitness first?", soloOnCoverage: true });
+  check("casual two-domain stays solo", r.soloApplied ? r.winners.length === 1 : true,
+    `soloApplied=${r.soloApplied} winners=[${r.winners.join(", ")}]`);
+}
+
+// 13. Two enumerated lanes map to the SAME owner → owner appears exactly once.
+eq("two lanes same owner → once",
+  run({ primary: A.finn, supporting: [A.finn], explicitlyRequested: [A.finn], text: "Finance - pay. Budget - plan." }).winners,
+  [A.finn]);
+
+// 14. Normal turn, many adjacency (none explicitly requested) → dropped under solo, cap NOT raised.
+{
+  const r = run({ primary: A.finn, supporting: [A.sam, A.tess, A.iris, A.cole], explicitlyRequested: [],
+                  text: "budget question", soloOnCoverage: true });
+  check("adjacency dropped, cap not raised on normal turn",
+    r.soloApplied ? r.winners.length === 1 : r.winners.length <= 3, `[${r.winners.join(", ")}]`);
+}
+
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);
 process.exit(fail === 0 ? 0 : 1);

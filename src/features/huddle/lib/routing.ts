@@ -353,12 +353,17 @@ export function assembleWinners(input: WinnerAssemblyInput): WinnerAssemblyResul
       const primaryScore = primaryAgent ? scoreAgentAgainst(text, primaryAgent) : 0;
       if (primaryScore >= 0.15) soloApplied = true;
     }
+    // Winner cap. Default 3 (kills adjacency pile-ons). For an explicit MULTI-LANE list — where the
+    // user enumerated several lanes and the router marked each lane's owner explicitlyRequested — raise
+    // the cap so every enumerated lane owner is kept (primary + N explicit owners), bounded at 6 for
+    // latency. explicitlyRequested is ~0-1 on ordinary turns, so this never widens a normal turn.
+    const cap = Math.min(6, Math.max(3, explicitlyRequested.size + 1));
     for (const id of supporting) {
       if (
         !memberIds.includes(id) ||
         id === primary ||
         winners.includes(id) ||
-        winners.length >= 3
+        winners.length >= cap
       ) {
         continue;
       }
@@ -487,14 +492,16 @@ export async function routeMessageLLM(
 ADDRESSED BY NAME: if the user addresses an agent by name (e.g. "Cole, how long…", "Finn — …"), that agent IS the primary. Do NOT hand the lead to a different agent because the topic superficially fits another lane.
 DELEGATION (overrides ADDRESSED BY NAME): if the user tells the addressed agent to have / ask / get / assign ANOTHER named agent to do something ("Finn, have Iris create the task", "Sam, ask Cole to estimate it"), the DELEGATE — the agent who should actually perform the action (Iris / Cole) — is the primary, because they must be the one to do it (create the task, run the tool). Add the addressed agent as supporting only if they also contribute.
 CAPABILITY OWNERSHIP: some jobs are exclusive to one agent, shown as [owns: …] on their roster line (e.g. [owns: backlog grooming, triage & sprint/board assignment]). A request for an exclusively-owned job belongs to its owner. If the user did NOT address a specific agent, route the owner as primary. If they DID address a different agent (e.g. "Tess, groom the backlog"), keep that agent as primary — they will hand off to the owner themselves; do not silently swap them out.
-TIME IS NOT ALWAYS THE CALENDAR: how long a piece of WORK will take (a build estimate, a task's effort) belongs to the lane that owns that work — NOT the schedule/itinerary agent. The schedule agent is ONLY for the user's OWN calendar (their meetings, appointments, personal deadlines). Do not pull in the calendar agent just because a duration or the word "time" appears.`;
+TIME IS NOT ALWAYS THE CALENDAR: how long a piece of WORK will take (a build estimate, a task's effort) belongs to the lane that owns that work — NOT the schedule/itinerary agent. The schedule agent is ONLY for the user's OWN calendar (their meetings, appointments, personal deadlines). Do not pull in the calendar agent just because a duration or the word "time" appears.
+MULTI-LANE LIST / BRAIN-DUMP: when the user's latest message ENUMERATES several distinct task areas at once — a list with lane labels ("Career - …", "Finance - …", "Errands - …") or clearly separate domains each carrying their own item(s) — do NOT funnel it all to one agent. Pick the owner of the most prominent lane as primary, and return the owner of EACH other enumerated lane in BOTH supporting AND explicitlyRequested (the user asked for that lane by listing it). Map each lane to its owner via the roster domains. Each owner captures only its own lane's items. This applies ONLY to an actual multi-area enumeration — a single-topic message that merely touches an adjacent domain still gets ONE primary.`;
 
   const strictSystem = `You are the router for a multi-agent huddle. Pick exactly ONE primary agent for the user's latest message. Return supporting = [] UNLESS the message explicitly asks for a second, non-overlapping specialty (e.g. "and also budget it" or "then draft the email"). Adjacency is not enough — a workout question does NOT need a life-strategist just because habits are related. When in doubt, return supporting = []. Never invent agent ids — only choose from the roster.
 ADDRESSED BY NAME: if the user addresses an agent by name ("Cole, how long…"), that agent IS the primary — never hand the lead to another agent because the topic superficially fits their lane. DELEGATION (overrides that): if the user tells the addressed agent to have/ask/get ANOTHER named agent do something ("Finn, have Iris create the task"), the DELEGATE who must perform the action (Iris) is the primary. TIME IS NOT ALWAYS THE CALENDAR: how long WORK takes (a build/effort estimate) belongs to the lane that owns the work, not the schedule agent; the schedule agent is only for the user's OWN calendar.
 
 Example — user: "what workouts do i usually go for?" → primary: flex-grimes, supporting: [], reason: single-lane fitness question.
 Example — user: "Finn, have Iris create the venue task" → primary: iris-chase, supporting: [], reason: delegation — Iris is the one who must create it.
-Example — user: "plan tomorrow's workout and also budget my gym membership" → primary: flex-grimes, supporting: [finn-reid], reason: two distinct lanes explicitly named.`;
+Example — user: "plan tomorrow's workout and also budget my gym membership" → primary: flex-grimes, supporting: [finn-reid], reason: two distinct lanes explicitly named.
+EXCEPTION — MULTI-LANE LIST: if the message ENUMERATES several distinct task areas at once (a labeled list "Career - …, Finance - …, Errands - …" or clearly separate domains each with their own items), this is the ONE case where multiple primaries are correct: return the owner of EACH enumerated lane in supporting AND explicitlyRequested (map each lane to its owner via the roster domains). A single-topic message that merely touches an adjacent domain is NOT this case — stay solo.`;
 
   const system = invocation.strictPrompt ? strictSystem : baseSystem;
 
@@ -506,7 +513,7 @@ Example — user: "plan tomorrow's workout and also budget my gym membership" �
   // Distinguish user-REQUESTED collaborators from adjacency the model volunteered. Only the
   // latter should ever be dropped by the caller's solo-on-coverage guard, so the router reports
   // which supporting agents the user actually asked for. Roster-driven (ids only) → auto-scales.
-  const explicitRequestHint = `\n\nAlso return "explicitlyRequested": the subset of your supporting agents that the user NAMED (e.g. "pull in Finn and Tess", "loop in Cole") or whose distinct deliverable the user explicitly asked for (e.g. "and also draft the email"). Do NOT include an agent you merely judged helpful — only ones the user actually asked for. Return [] if none.`;
+  const explicitRequestHint = `\n\nAlso return "explicitlyRequested": the subset of your supporting agents that the user NAMED (e.g. "pull in Finn and Tess", "loop in Cole"), whose distinct deliverable the user explicitly asked for (e.g. "and also draft the email"), OR who own a lane the user explicitly enumerated in a multi-area list/brain-dump. Do NOT include an agent you merely judged helpful — only ones the user actually asked for. Return [] if none.`;
 
   const interjectHint = wantInterject
     ? `\n\nAlso list "interjectors": agents (other than the primary/supporting) who might hold something URGENT the primary will MISS. Nominate ONLY for one of these two reasons — never for topical relevance, a second opinion, or to add color:

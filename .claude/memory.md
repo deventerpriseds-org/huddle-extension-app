@@ -1,5 +1,11 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-08-12
+Last updated: 2026-08-14
+
+## STANDING RULE (user, 2026-08-14): always pre-mortem — anticipate what could go wrong AS PART OF THE PLAN
+For every plan, before building, include an explicit "what could go wrong" section (failure modes + how each is
+handled/guarded/tested). The user passes multi-item LISTS to the group channel often (not 1:1), so anticipate
+list/brain-dump failure modes especially (fan-out, duplicates, ambiguous items, wrong owner, latency). Don't wait
+to be asked — bake the pre-mortem into every plan by default.
 
 ## Proactive-capture shared directive — agents ACT on relayed info, not just acknowledge (DEPLOYED 2026-08-12; HARNESS-VERIFIED 4/4, awaiting user live re-test)
 **Verification (independent `verifier`, live SWA, journey:{enabled:false}, board-safe — 0 rag_chunks rows):**
