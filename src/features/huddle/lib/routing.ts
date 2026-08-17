@@ -401,6 +401,37 @@ export function countLaneLabels(text: string): number {
 }
 
 /**
+ * Resolve each enumerated lane of a multi-lane list to its OWNER, so the RIGHT specialists are guaranteed
+ * to respond instead of being left to the LLM's inconsistent selection. For every labeled lane line, score
+ * the whole line against each present agent with `scoreAgentAgainst` (the SAME roster-driven scorer the
+ * router already uses — no hardcoded label→agent map, no parallel system) and take the best match above a
+ * floor. Returns the distinct owner ids in lane order. Roster-driven and auto-scaling: a new agent with a
+ * matching domain/theme is picked automatically, and mapping a new label word is done by enriching that
+ * agent's `themes` in agents.ts. Returns [] when the message is not a multi-lane list (<2 labeled lanes).
+ * Pure + exported for offline unit testing against the real roster.
+ */
+export function detectLaneOwners(text: string, present: readonly Agent[]): AgentId[] {
+  const lines = (text || "")
+    .split(/\r?\n/)
+    .filter((l) => /^\s*[A-Za-z][A-Za-z&/]*(?:\s+[A-Za-z&/]+){0,2}\s*[-–—:]\s+\S/.test(l));
+  if (lines.length < 2) return [];
+  const owners: AgentId[] = [];
+  for (const line of lines) {
+    let bestId: AgentId | null = null;
+    let best = 0;
+    for (const a of present) {
+      const s = scoreAgentAgainst(line, a);
+      if (s > best) {
+        best = s;
+        bestId = a.id;
+      }
+    }
+    if (bestId && best > 0 && !owners.includes(bestId)) owners.push(bestId);
+  }
+  return owners;
+}
+
+/**
  * LLM-based router. Picks a primary agent + optional supporting agents based
  * on the user's message and recent history. Falls back to the keyword
  * routeMessage() on any failure so we never block a reply.
@@ -661,16 +692,27 @@ ${supportingHint}${interjectHint}${explicitRequestHint}${difficultyHint}`;
     // A single-topic message scores <2 and is untouched — solo still kills adjacency pile-ons there.
     const laneCount = countLaneLabels(text);
     const isMultiLaneList = laneCount >= 2;
+    // Resolve each labeled lane to its OWNER and FORCE those owners into the responder set, so the exact
+    // right specialists respond every time (not left to the LLM's inconsistent supporting selection —
+    // which dropped the education/errands owners and substituted the scheduler). Lane owners go FIRST so
+    // the winner cap can never truncate them. Roster-driven (scoreAgentAgainst), no parallel system.
+    const laneOwners = isMultiLaneList
+      ? detectLaneOwners(text, present).filter((id) => id !== primary)
+      : [];
+    const supportingUnion = Array.from(new Set([...laneOwners, ...supporting]));
+    const explicitUnion = Array.from(
+      new Set([...laneOwners, ...(output.explicitlyRequested ?? [])]),
+    );
     // Deterministic winner assembly (pure, unit-tested offline — see routing.winners.test.ts).
     const { winners, soloApplied, explicitKept, mentionedWinners } = assembleWinners({
       primary,
-      supporting,
-      explicitlyRequested: output.explicitlyRequested ?? [],
+      supporting: supportingUnion,
+      explicitlyRequested: explicitUnion,
       mentions,
       memberIds,
       text,
       soloOnCoverage: !!invocation.soloOnCoverage && !isMultiLaneList,
-      explicitLaneCount: laneCount,
+      explicitLaneCount: Math.max(laneCount, laneOwners.length),
     });
     const scores = Object.fromEntries(
       winners.map((id, i) => [id, Number((1 - i * 0.2).toFixed(2))]),

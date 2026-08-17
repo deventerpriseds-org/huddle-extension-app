@@ -5,7 +5,8 @@
 // This is the cheap layer that proves the mention/handoff/multi-lane routing WITHOUT running full
 // multi-agent turns (which would fire N agent-reply LLM calls per test and burn quota).
 
-import { assembleWinners, countLaneLabels } from "../src/features/huddle/lib/routing";
+import { assembleWinners, countLaneLabels, detectLaneOwners } from "../src/features/huddle/lib/routing";
+import { AGENTS } from "../src/features/huddle/data/agents";
 
 const A = {
   iris: "iris-chase", tess: "tess-sutton", sam: "sam-trent", terry: "terry-locke",
@@ -147,6 +148,27 @@ eq("multi-lane list fans out (solo off, cap raised by laneCount)",
   check("single-topic stays solo (no pile-on)",
     r.soloApplied ? r.winners.length === 1 : true, `soloApplied=${r.soloApplied} winners=[${r.winners.join(", ")}]`);
 }
+
+console.log("=== LANE→OWNER RESOLUTION (real roster) ===");
+const USER_LIST = `Here are some things I need to tackle
+
+Career - Apply to Trinnex position, update LinkedIn profile, confirm MIT CTO courses
+Education - import AI course, add DBA program, add schedule from image or file
+Finance - make payments to klarna, transfer HSA funds, transfer bill and Amex funds
+Errands - cancel or take my wife's suv for repair 8am Tuesday morning`;
+{
+  const owners = detectLaneOwners(USER_LIST, AGENTS);
+  // The four EXACT lane owners must all resolve — this is the fix: education→elle & errands→ezra
+  // were the ones the LLM dropped; they must now be forced in deterministically.
+  const need = ["cole-blake", "finn-reid", "elle-rowan", "ezra-miles"];
+  const got = need.filter((id) => owners.includes(id));
+  check("4 exact lane owners resolve (cole/finn/elle/ezra)",
+    got.length === 4, `resolved [${owners.join(", ")}]`);
+}
+// A single-topic message resolves NO forced owners (not a list).
+check("single-topic → no forced lane owners",
+  detectLaneOwners("what workouts do I usually go for?", AGENTS).length === 0,
+  `got [${detectLaneOwners("what workouts do I usually go for?", AGENTS).join(", ")}]`);
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);
 process.exit(fail === 0 ? 0 : 1);
