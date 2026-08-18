@@ -7,6 +7,21 @@ handled/guarded/tested). The user passes multi-item LISTS to the group channel o
 list/brain-dump failure modes especially (fan-out, duplicates, ambiguous items, wrong owner, latency). Don't wait
 to be asked — bake the pre-mortem into every plan by default.
 
+## Ceremony barge-mic "flashed on tap but never toggled" — unbounded warm-connect wedged connectingRef (2026-08-18, IMPLEMENTED, mechanism-verified, NOT yet user-confirmed live)
+User: in a running stand-up the mic button flashed on click but never engaged (no error). Root cause
+(ground-truthed in `hooks/useCeremonyVoice.ts`): the ceremony pre-warms the barge WebRTC transport at
+start via `warmSession()`, which sets `connectingRef.current=true` then does UN-TIMED awaits
+(`getRealtimeSession()`, `negotiate()` SDP fetch) + waits for data-channel-open. `connectingRef` only
+clears on warm-ready or a THROW. If the connect HANGS (no throw — flaky network / the OpenAI 500/key
+window), `connectingRef` stays true forever, and every tap hits `startListening`'s guard
+`if (connectingRef.current){ pendingUnmuteRef=true; return; }` → queued + never flushed → dead mic, no
+error. FIX (extends the existing lifecycle): a `WARM_CONNECT_TIMEOUT_MS` (7s) timer in `warmSession`,
+connGen-guarded, that on expiry tears down the half-open transport (identical to the existing catch) and
+flushes any queued `pendingUnmuteRef` into a fresh COLD `startListening()`. Timer cleared in all 3 exit
+paths (warm-ready, catch, connGen-mismatch early-return). tsc clean. Independent AC subagent + `verifier`
+subagent (mechanism only — live perceptual is USER's verdict per the perceptual-UAT rule). Deploy: merge
+to main (auto-deploy). Status stays "NOT user-confirmed" until the user barges live in a real stand-up.
+
 ## Proactive-capture shared directive — agents ACT on relayed info, not just acknowledge (DEPLOYED 2026-08-12; HARNESS-VERIFIED 4/4, awaiting user live re-test)
 **Verification (independent `verifier`, live SWA, journey:{enabled:false}, board-safe — 0 rag_chunks rows):**
 First run main 97c0526 = 4/5 (PASS: capture-without-ask fires create_huddle_task w/ date; forwarded-msg drafts

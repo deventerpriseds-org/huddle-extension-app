@@ -730,10 +730,33 @@ export function useCeremonyVoice(hookOpts: {
     setError(null);
     connGenRef.current += 1;
     const connGen = connGenRef.current;
+    // Bound the warm connect (mic self-heal): getRealtimeSession()/negotiate()/the data channel can
+    // HANG without throwing on a flaky network, wedging connectingRef=true forever — which silently
+    // swallows every barge-mic tap (startListening queues it as pendingUnmute and it is never flushed:
+    // "mic flashes on tap but never toggles, no error"). If warm-ready has not fired in time, tear the
+    // half-open transport down (identical to the catch below) and flush any queued unmute into a fresh
+    // COLD startListening, so a tap can never leave the barge mic permanently dead.
+    const WARM_CONNECT_TIMEOUT_MS = 7000;
+    let warmTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      warmTimer = null;
+      if (connGenRef.current !== connGen || warmReadyRef.current || !connectingRef.current) return;
+      connectingRef.current = false;
+      warmReadyRef.current = false;
+      audioSenderRef.current = null;
+      try { dcRef.current?.close(); } catch { /* noop */ }
+      dcRef.current = null;
+      try { pcRef.current?.close(); } catch { /* noop */ }
+      pcRef.current = null;
+      if (pendingUnmuteRef.current) {
+        pendingUnmuteRef.current = false;
+        void startListeningRef.current?.();
+      }
+    }, WARM_CONNECT_TIMEOUT_MS);
     try {
       const session = await getRealtimeSession({ data: {} });
       if (!session.ok) throw new Error(session.error);
       if (connGenRef.current !== connGen) {
+        if (warmTimer) { clearTimeout(warmTimer); warmTimer = null; }
         connectingRef.current = false;
         return;
       }
@@ -757,6 +780,7 @@ export function useCeremonyVoice(hookOpts: {
         // yet). Do NOT set listening/status — that only happens on unmute. This flag lets startListening
         // take the near-instant replaceTrack fast path. No onDataChannelOpen anchor here: that anchor
         // means "mic ready after unmute", which the fast path fires once the mic is actually engaged.
+        if (warmTimer) { clearTimeout(warmTimer); warmTimer = null; }
         warmReadyRef.current = true;
         connectingRef.current = false;
         // Honor an unmute the user tapped during the warm connect (queued, not dropped).
@@ -767,6 +791,7 @@ export function useCeremonyVoice(hookOpts: {
       });
       await negotiate(pc, ephemeralKey);
     } catch (err) {
+      if (warmTimer) { clearTimeout(warmTimer); warmTimer = null; }
       connectingRef.current = false;
       // A tap during a warm that then FAILED must still engage the mic — fall through to a cold connect.
       if (pendingUnmuteRef.current) {

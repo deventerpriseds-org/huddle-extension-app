@@ -308,6 +308,13 @@ Driven by the user's live stand-up transcripts + the persisted `barge_route` log
 
 ## Open
 
+### ACT-huddle-48: Ceremony barge-mic "flashed on tap but never toggled" — unbounded warm-connect
+- **Status:** IMPLEMENTED + mechanism-verified (independent `verifier` PASS 6/6, tsc clean) — deploying to main; NOT yet user-confirmed live (perceptual — user must barge in a real stand-up).
+- **Root cause:** `warmSession` pre-warm did un-timed awaits; a hung connect wedged `connectingRef=true`, so `startListening` queued every tap as `pendingUnmuteRef` and never flushed it → dead mic, no error.
+- **Fix:** `WARM_CONNECT_TIMEOUT_MS` (7s) in `hooks/useCeremonyVoice.ts`, connGen-guarded, tears down (== catch path) + flushes queued unmute → cold `startListening`. Timer cleared in all 3 exit paths.
+- **Evidence:** AC subagent + verifier subagent; commit below; deploy run to follow.
+
+
 ### ACT-huddle-26: Barge responds to what the user SAID (no canned deferral) — Playwright-proven, 4 types
 **Requested:** 2026-08-02 — user: "if it just hears me on the mic it just gives a canned I'll dig into
 that response… take what you hardcoded for a quick reply and make that instructions so the agent is
