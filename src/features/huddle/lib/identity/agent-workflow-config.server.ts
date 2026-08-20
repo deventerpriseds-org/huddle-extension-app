@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS identity.agent_workflow_config (
 -- a partial {approach?,review?,question?} per agent id, same default+override shape as agent_overrides.
 ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS default_caps JSONB NOT NULL DEFAULT '{"approach":3,"review":3,"question":2}'::jsonb;
 ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS agent_cap_overrides JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- Identity unification: key on the stable user_id (entra_object_id) with email retained as a fallback +
+-- display. Resolved in-store from the passed email via resolveScopeByEmail, so both of a user's emails
+-- converge to one config row regardless of which email a caller presents.
+ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS agent_workflow_config_userid_idx ON identity.agent_workflow_config(user_id);
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -80,18 +85,28 @@ const DEFAULT_CONFIG: AgentWorkflowConfig = {
   agent_cap_overrides: {},
 };
 
-/** Read the config for an email. Returns the default (all discretionary) when nothing is set. */
+/** Read the config for an email. Returns the default (all discretionary) when nothing is set.
+ *  Dual-read: prefers the row keyed on the resolved user_id, falling back to any email alias for an
+ *  un-migrated (user_id NULL) row — so both of a user's emails resolve to the SAME config. */
 export async function getAgentWorkflowConfig(email: string): Promise<AgentWorkflowConfig> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("./identity.server");
+  const { userId, emails } = await resolveScopeByEmail(email);
   const r = await getPool().query<{
     default_required: boolean;
     agent_overrides: Record<string, boolean>;
     default_caps: Partial<WorkflowCaps>;
     agent_cap_overrides: Record<string, Partial<WorkflowCaps>>;
   }>(
-    `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides
-       FROM identity.agent_workflow_config WHERE lower(email) = lower($1)`,
-    [email],
+    userId
+      ? `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides
+           FROM identity.agent_workflow_config
+          WHERE user_id = $1 OR (user_id IS NULL AND lower(email) = ANY($2))
+          ORDER BY (user_id IS NOT NULL) DESC, updated_at DESC
+          LIMIT 1`
+      : `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides
+           FROM identity.agent_workflow_config WHERE lower(email) = lower($1) LIMIT 1`,
+    userId ? [userId, emails] : [email],
   );
   if (r.rowCount === 0) return DEFAULT_CONFIG;
   return {
@@ -108,6 +123,8 @@ export async function setAgentWorkflowConfig(
   patch: Partial<AgentWorkflowConfig>,
 ): Promise<AgentWorkflowConfig> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("./identity.server");
+  const { userId } = await resolveScopeByEmail(email);
   const current = await getAgentWorkflowConfig(email);
   const next: AgentWorkflowConfig = {
     default_required: patch.default_required ?? current.default_required,
@@ -115,19 +132,23 @@ export async function setAgentWorkflowConfig(
     default_caps: patch.default_caps ?? current.default_caps,
     agent_cap_overrides: patch.agent_cap_overrides ?? current.agent_cap_overrides,
   };
+  // Dual-write: user_id (primary going forward) + email (retained for display/fallback). Upsert stays on
+  // the email PK (the canonical email is stable per user); user_id is set/refreshed when resolvable.
   await getPool().query(
     `INSERT INTO identity.agent_workflow_config
-       (email, default_required, agent_overrides, default_caps, agent_cap_overrides, updated_at)
-     VALUES ($1,$2,$3,$4,$5, now())
+       (email, default_required, agent_overrides, default_caps, agent_cap_overrides, user_id, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6, now())
      ON CONFLICT (email) DO UPDATE SET
        default_required=EXCLUDED.default_required, agent_overrides=EXCLUDED.agent_overrides,
-       default_caps=EXCLUDED.default_caps, agent_cap_overrides=EXCLUDED.agent_cap_overrides, updated_at=now()`,
+       default_caps=EXCLUDED.default_caps, agent_cap_overrides=EXCLUDED.agent_cap_overrides,
+       user_id=COALESCE(EXCLUDED.user_id, identity.agent_workflow_config.user_id), updated_at=now()`,
     [
       email,
       next.default_required,
       JSON.stringify(next.agent_overrides),
       JSON.stringify(next.default_caps),
       JSON.stringify(next.agent_cap_overrides),
+      userId,
     ],
   );
   return next;

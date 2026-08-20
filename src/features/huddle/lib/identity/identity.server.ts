@@ -340,6 +340,35 @@ export async function getEmailsForObjectId(oid: string | undefined | null): Prom
 }
 
 /**
+ * The unified read/write SCOPE for an email — the store-layer counterpart of journey/identity's
+ * resolveUserScope, but keyed off the email a store already holds (no `caller` needed). Returns the stable
+ * `userId` (entra_object_id via profile_emails — the SAME id for either of a user's emails) plus every email
+ * alias linked to that profile, with the passed email always included as a floor. This lets a store key on
+ * `user_id` while keeping its existing `email`/`user_email` function signatures: it resolves the id INSIDE
+ * the store from whatever email the caller passed, so a raw-login email and the canonical email converge to
+ * one identity. `userId` is null (degrade to email-only) when the email isn't linked to any profile.
+ * Cached briefly per-email (identity links change rarely) to keep hot read/write paths cheap.
+ */
+const _scopeCache = new Map<string, { scope: { userId: string | null; emails: string[] }; exp: number }>();
+const SCOPE_TTL_MS = 60_000;
+export async function resolveScopeByEmail(
+  email: string | null | undefined,
+): Promise<{ userId: string | null; emails: string[] }> {
+  const e = (email ?? "").trim().toLowerCase();
+  if (!e) return { userId: null, emails: [] };
+  const now = Date.now();
+  const hit = _scopeCache.get(e);
+  if (hit && hit.exp > now) return hit.scope;
+  const userId = await resolveObjectIdByEmail(e);
+  const emails = userId ? await getEmailsForObjectId(userId) : [];
+  if (!emails.includes(e)) emails.push(e);
+  const scope = { userId, emails };
+  // Only cache a positive resolution; a null userId may just be a not-yet-linked alias we want to re-check.
+  if (userId) _scopeCache.set(e, { scope, exp: now + SCOPE_TTL_MS });
+  return scope;
+}
+
+/**
  * Resolve a login/alias email to the user's CANONICAL email WITHOUT a whoami round-trip — using only
  * local identity tables. This is what keeps a transient journey/whoami blip from scoping the same user
  * under a second email (the dev@ vs von.ellis@ split that fragmented history): the answer is derivable
