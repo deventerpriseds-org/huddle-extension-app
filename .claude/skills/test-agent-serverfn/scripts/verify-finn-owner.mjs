@@ -60,7 +60,12 @@ async function send(text) {
   return { http: res.status, val };
 }
 
-const text = `Finn, I need you to build me a spreadsheet so I can determine what costs totals are and what sources I will make deductions from to cover those costs [[${MARK}]]`;
+// Unique leading token so the follow-up idempotency id (slug = first 40 chars of the ask) is UNIQUE
+// per run — otherwise a re-run collapses onto a pre-existing identical id and masks a fresh mis-route.
+const TOKEN = process.env.QA_TOKEN || "UNQ84983";
+const text = `${TOKEN} Finn build me a spreadsheet so I can determine cost totals and what sources I will make deductions from to cover those costs`;
+const mkslug = (ask) => ask.replace(/\s+/g, " ").trim().slice(0, 240).toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
+console.log(`EXPECTED_MISROUTE_ID_IF_BROKEN=followup-dm-finn-reid-tess-sutton-${mkslug(text)}`);
 
 console.log(`SEND_UTC=${new Date().toISOString()}`);
 console.log(`QA_MARK=${MARK}`);
