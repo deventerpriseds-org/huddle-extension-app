@@ -7,7 +7,15 @@ handled/guarded/tested). The user passes multi-item LISTS to the group channel o
 list/brain-dump failure modes especially (fan-out, duplicates, ambiguous items, wrong owner, latency). Don't wait
 to be asked — bake the pre-mortem into every plan by default.
 
-## Bug #2 — phantom hand-off "heads-up push fired but no message in the owner's chat" = follow-up turn keyed under the WRONG email (2026-08-20, ROOT-CAUSED from DB ground truth, FIX IMPLEMENTED, tsc clean)
+## Bug #2 — phantom hand-off "heads-up push fired but no message in the owner's chat" = follow-up turn keyed under the WRONG email (2026-08-20, FIXED + VERIFIED LIVE 7/7 on efa8e45; pending_turns reunified)
+VERIFIED LIVE: a legit cross-lane deferral (Finn→Terry grooming) created a follow-up in dm-terry-locke keyed
+under canonical `dev@enterpriseds.io` (not the raw login) — matches the back-fill reader. BACKFILL DONE:
+the 11 stranded `von.ellis@` follow-up/unblock rows re-keyed to `dev@enterpriseds.io` (UPDATE 11, updated_at
+preserved so they don't re-deliver as "new"); `chat.pending_turns` now = 708 rows, ONE identity, 0 stray.
+FOLLOW-UP (awaiting user sign-off): the id-based unification (`docs/plan-user-id-unification.md`, refreshed
+2026-08-20 with current state + pre-mortem) — key remaining email-scoped stores (identity config, tasks
+state, artifacts, push_subs) on `entra_object_id` via `resolveUserId`, so identity never depends on email
+convergence. Not started; 3 open decisions in the doc.
 The recurring "I got a heads-up that X passed a task to Y, but it's not in Y's chat" is a SEPARATE bug from
 the mis-route (below). PROVEN from the primary source (`chat.pending_turns` rows): the follow-up turn is
 stored under the RAW sign-in `entra_email` (`Von.Ellis@EnterpriseDS.io`), but the client's cross-huddle

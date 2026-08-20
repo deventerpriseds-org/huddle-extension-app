@@ -14,6 +14,33 @@ The same person is scoped under **two emails**, so email-keyed state splits and 
 Root: `resolveTaskEmail(caller)` scopes by **email** and **falls back to the raw login email when
 `whoami` transiently fails** (`journey/identity.ts` → `resolveJourneyIdentity` catch → `return {}`).
 
+## Current state (2026-08-20) — what's already been done, and what remains
+- **`resolveJourneyIdentity` now serves a DURABLE last-known-good** on a `whoami` blip (returns the cached
+  identity, not `{}`), so the raw-login fallback is far rarer than the 2026-08-05 description implies. The
+  *class* of bug (email-keyed split) still exists, just with a smaller live window.
+- **Two follow-up write-sites were still bypassing canonicalization** (`deliverOwnerFollowup`,
+  `routeUnblockToOwner` wrote the raw `entra_email`) → hand-off turns stranded under `von.ellis@`, invisible
+  to the `dev@` back-fill (the "phantom heads-up, no message in chat" bug). **FIXED** (commit efa8e45): both
+  now resolve `resolveTaskEmail`. Verified live (new hand-off row keyed `dev@`).
+- **`chat.pending_turns` fully reunified**: the 11 stranded `von.ellis@` hand-off rows were re-keyed to
+  `dev@enterpriseds.io` (backfill 2026-08-20, `UPDATE 11`, `updated_at` preserved). Table now = **708 rows,
+  one identity, 0 stray**. (The "34 stray" from 2026-08-05 had aged down to these 11.)
+- **Still email-keyed and still split-prone under a whoami blip** (the reason to do this plan):
+  `identity.*` config tables (`agent_workflow_config`, `scheduling_config`, `user_context`), `tasks.*`
+  engagement/blocker/state tables, `artifacts.items`/`mirror_config`, `chat.push_subscriptions`. These are
+  the stores Phase 1 migrates to `user_id`.
+
+## Pre-mortem — failure modes for THIS change + the guard for each (standing rule)
+| # | Failure mode | Guard |
+|---|---|---|
+| 1 | `profile_emails` is INCOMPLETE → an alias resolves to `null` under fail-closed → a real user reads 0 rows (blank UI). | Phase-0 backfill scans EVERY distinct `user_email` across all stores and links it before any store switches to `user_id`; keep dual-read (email fallback) through the whole soak so a missing link degrades to today's behavior, not a blank. |
+| 2 | Fail-closed `resolveUserId` returns `null` on a genuinely new/unlinked login → a write is dropped or mis-scoped. | Writes fall back to email-keying when `user_id` is null (dual-write), never drop; a null resolve is logged so the missing `profile_emails` link is caught, not silent. |
+| 3 | Chat-merge double-counts or duplicates turns when the 11 (now 0) / future strays fold into one history. | Merge is id-keyed and idempotent (turn id is the PK); re-running the merge is a no-op. Preserve `updated_at` so merged old turns don't re-deliver as "new" (learned in the 2026-08-20 backfill). |
+| 4 | Dual-read window returns a row twice (once by `user_id`, once by email) during transition. | Read prefers `user_id`; the email fallback is used ONLY when `user_id IS NULL` on the row — never OR'd, so no double-return. |
+| 5 | Journey mirror (`tasks.journey_tasks`, journey-owned, email-keyed) can't be re-keyed from Huddle. | Not re-keyed. Huddle reads it by translating `user_id → all linked emails → WHERE user_email = ANY(emails)`. No journey-repo change in phase 1. |
+| 6 | A destructive `NOT NULL`/drop lands before the backfill is proven complete → unrecoverable mis-scope. | Every step additive (new nullable column + dual-read). NO drops / NOT-NULL until a long soak + explicit sign-off. Rollback = stop reading `user_id`; `user_email` retained throughout. |
+| 7 | The migration itself (a bulk backfill) partially applies. | Run each store's backfill in a transaction with a pre-image SELECT + `RETURNING` (the pattern used for the 2026-08-20 pending_turns backfill); verify counts before COMMIT.
+
 ## The canonical key already exists (no new system)
 - `identity.profiles` — **`entra_object_id` PK**, username, display_name.
 - `identity.profile_emails` — `email → entra_object_id` (source `entra|manual`, UNIQUE on `lower(email)`).
