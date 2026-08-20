@@ -59,6 +59,11 @@ ALTER TABLE chat.pending_turns ADD COLUMN IF NOT EXISTS chunks   INT  NOT NULL D
 -- between speakers (never mid-speaker), answers it, then resumes the round-robin — so a stand-up
 -- pauses politely for a question instead of talking over it. FIFO array of {id,text}.
 ALTER TABLE chat.pending_turns ADD COLUMN IF NOT EXISTS barge    JSONB NOT NULL DEFAULT '[]'::jsonb;
+-- Identity unification: key on the stable user_id (entra_object_id) with user_email retained as a
+-- fallback + display. Resolved in-store from the passed email via resolveScopeByEmail, so both of a
+-- user's emails converge to one identity regardless of which email a caller presents.
+ALTER TABLE chat.pending_turns ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS pending_turns_userid_idx ON chat.pending_turns(user_id);
 
 -- Web Push subscriptions so a reply that lands while the user is fully away (screen off, app closed)
 -- can buzz the phone. Keyed by endpoint (unique per browser/device).
@@ -71,6 +76,8 @@ CREATE TABLE IF NOT EXISTS chat.push_subscriptions (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS push_subscriptions_user_idx ON chat.push_subscriptions (lower(user_email));
+ALTER TABLE chat.push_subscriptions ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS push_subscriptions_userid_idx ON chat.push_subscriptions(user_id);
 
 -- User reminders ("remind me in 30 min to ..."). A per-minute drain fires due ones: it delivers the
 -- reminder into the Huddle conversation (the client polls getReminderDeliveries) and pushes the phone.
@@ -87,6 +94,8 @@ CREATE TABLE IF NOT EXISTS chat.reminders (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE chat.reminders ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'reminder';
+ALTER TABLE chat.reminders ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS reminders_userid_idx  ON chat.reminders(user_id);
 CREATE INDEX IF NOT EXISTS reminders_due_idx    ON chat.reminders (status, due_at);
 CREATE INDEX IF NOT EXISTS reminders_huddle_idx ON chat.reminders (huddle_id, fired_at DESC);
 `;
@@ -159,12 +168,14 @@ export async function enqueueTurn(
   payload: unknown,
 ): Promise<boolean> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   const res = await getPool().query(
-    `INSERT INTO chat.pending_turns (id, huddle_id, user_email, payload, status)
-     VALUES ($1, $2, $3, $4::jsonb, 'queued')
+    `INSERT INTO chat.pending_turns (id, huddle_id, user_email, payload, status, user_id)
+     VALUES ($1, $2, $3, $4::jsonb, 'queued', $5)
      ON CONFLICT (id) DO NOTHING
      RETURNING id`,
-    [id, huddleId, userEmail, JSON.stringify(payload)],
+    [id, huddleId, userEmail, JSON.stringify(payload), userId],
   );
   return (res.rowCount ?? 0) > 0;
 }
@@ -356,14 +367,24 @@ export async function getTurn(id: string): Promise<TurnRecord | null> {
  *  cursor advances monotonically; LIMIT bounds a long-away catch-up (re-poll drains the rest). */
 export async function getUserTurnsSince(userEmail: string, sinceMs: number): Promise<TurnRecord[]> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
+  const since = Math.max(0, sinceMs);
   const res = await getPool().query(
-    `SELECT ${ROW_COLS} FROM chat.pending_turns
-      WHERE lower(user_email) = lower($1)
-        AND status = 'done'
-        AND updated_at > to_timestamp($2 / 1000.0)
-      ORDER BY updated_at ASC
-      LIMIT 100`,
-    [userEmail, Math.max(0, sinceMs)],
+    userId
+      ? `SELECT ${ROW_COLS} FROM chat.pending_turns
+          WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2)))
+            AND status = 'done'
+            AND updated_at > to_timestamp($3 / 1000.0)
+          ORDER BY updated_at ASC
+          LIMIT 100`
+      : `SELECT ${ROW_COLS} FROM chat.pending_turns
+          WHERE lower(user_email) = lower($1)
+            AND status = 'done'
+            AND updated_at > to_timestamp($2 / 1000.0)
+          ORDER BY updated_at ASC
+          LIMIT 100`,
+    userId ? [userId, emails, since] : [userEmail, since],
   );
   return res.rows.map(mapRow);
 }
@@ -408,20 +429,28 @@ export async function savePushSubscription(
   sub: PushSubscriptionRecord,
 ): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO chat.push_subscriptions (endpoint, user_email, p256dh, auth)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO chat.push_subscriptions (endpoint, user_email, p256dh, auth, user_id)
+     VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (endpoint) DO UPDATE SET
-       user_email = EXCLUDED.user_email, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, updated_at = now()`,
-    [sub.endpoint, userEmail, sub.p256dh, sub.auth],
+       user_email = EXCLUDED.user_email, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth,
+       user_id = COALESCE(EXCLUDED.user_id, chat.push_subscriptions.user_id), updated_at = now()`,
+    [sub.endpoint, userEmail, sub.p256dh, sub.auth, userId],
   );
 }
 
 export async function getPushSubscriptions(userEmail: string): Promise<PushSubscriptionRecord[]> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const res = await getPool().query(
-    `SELECT endpoint, p256dh, auth FROM chat.push_subscriptions WHERE lower(user_email) = lower($1)`,
-    [userEmail],
+    userId
+      ? `SELECT endpoint, p256dh, auth FROM chat.push_subscriptions
+          WHERE user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2))`
+      : `SELECT endpoint, p256dh, auth FROM chat.push_subscriptions WHERE lower(user_email) = lower($1)`,
+    userId ? [userId, emails] : [userEmail],
   );
   return res.rows.map((r) => ({ endpoint: r.endpoint, p256dh: r.p256dh, auth: r.auth }));
 }
@@ -468,10 +497,12 @@ export async function createReminder(args: {
   dueAtMs: number;
 }): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(args.userEmail);
   await getPool().query(
-    `INSERT INTO chat.reminders (id, user_email, huddle_id, agent_id, text, kind, due_at, status)
-     VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7 / 1000.0), 'pending')`,
-    [args.id, args.userEmail, args.huddleId, args.agentId, args.text.slice(0, 500), args.kind, args.dueAtMs],
+    `INSERT INTO chat.reminders (id, user_email, huddle_id, agent_id, text, kind, due_at, status, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7 / 1000.0), 'pending', $8)`,
+    [args.id, args.userEmail, args.huddleId, args.agentId, args.text.slice(0, 500), args.kind, args.dueAtMs, userId],
   );
 }
 

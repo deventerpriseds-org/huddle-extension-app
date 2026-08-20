@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS identity.scheduling_config (
   overrides  JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Identity unification: key on the stable user_id (entra_object_id) with email retained as a fallback +
+-- display. Resolved in-store from the passed email via resolveScopeByEmail, so both of a user's emails
+-- converge to one config row regardless of which email a caller presents.
+ALTER TABLE identity.scheduling_config ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS scheduling_config_userid_idx ON identity.scheduling_config(user_id);
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -128,9 +133,16 @@ const EMPTY_CONFIG: SchedulingConfig = { overrides: {} };
 /** Read the raw stored overrides for an email (empty object when nothing is set). */
 export async function getSchedulingConfig(email: string): Promise<SchedulingConfig> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("./identity.server");
+  const { userId, emails } = await resolveScopeByEmail(email);
   const r = await getPool().query<{ overrides: Partial<Record<JobTypeKey, JobCadence>> }>(
-    `SELECT overrides FROM identity.scheduling_config WHERE lower(email) = lower($1)`,
-    [email],
+    userId
+      ? `SELECT overrides FROM identity.scheduling_config
+          WHERE user_id = $1 OR (user_id IS NULL AND lower(email) = ANY($2))
+          ORDER BY (user_id IS NOT NULL) DESC, updated_at DESC
+          LIMIT 1`
+      : `SELECT overrides FROM identity.scheduling_config WHERE lower(email) = lower($1) LIMIT 1`,
+    userId ? [userId, emails] : [email],
   );
   if (r.rowCount === 0) return EMPTY_CONFIG;
   return { overrides: r.rows[0].overrides ?? {} };
@@ -142,11 +154,16 @@ export async function setSchedulingConfig(
   overrides: Partial<Record<JobTypeKey, JobCadence>>,
 ): Promise<SchedulingConfig> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("./identity.server");
+  const { userId } = await resolveScopeByEmail(email);
   await getPool().query(
-    `INSERT INTO identity.scheduling_config (email, overrides, updated_at)
-     VALUES ($1,$2::jsonb, now())
-     ON CONFLICT (email) DO UPDATE SET overrides = EXCLUDED.overrides, updated_at = now()`,
-    [email, JSON.stringify(overrides)],
+    `INSERT INTO identity.scheduling_config (email, overrides, user_id, updated_at)
+     VALUES ($1,$2::jsonb,$3, now())
+     ON CONFLICT (email) DO UPDATE SET
+       overrides = EXCLUDED.overrides,
+       user_id = COALESCE(EXCLUDED.user_id, identity.scheduling_config.user_id),
+       updated_at = now()`,
+    [email, JSON.stringify(overrides), userId],
   );
   return { overrides };
 }

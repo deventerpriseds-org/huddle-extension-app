@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS identity.user_context (
   notes          TEXT,
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Identity unification: key on the stable user_id (entra_object_id) with email retained as a fallback +
+-- display. Resolved in-store from the passed email via resolveScopeByEmail, so both of a user's emails
+-- converge to one context row regardless of which email a caller presents.
+ALTER TABLE identity.user_context ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS user_context_userid_idx ON identity.user_context(user_id);
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -72,10 +77,18 @@ function clean(v: unknown): string | null {
 /** Read the executive profile for an email. Returns null when nothing is set (→ zero prompt overhead). */
 export async function getUserContext(email: string): Promise<UserContext | null> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("./identity.server");
+  const { userId, emails } = await resolveScopeByEmail(email);
   const r = await getPool().query<UserContext>(
-    `SELECT goals, ventures, positioning, audience, income_targets, notes
-       FROM identity.user_context WHERE lower(email) = lower($1)`,
-    [email],
+    userId
+      ? `SELECT goals, ventures, positioning, audience, income_targets, notes
+           FROM identity.user_context
+          WHERE user_id = $1 OR (user_id IS NULL AND lower(email) = ANY($2))
+          ORDER BY (user_id IS NOT NULL) DESC, updated_at DESC
+          LIMIT 1`
+      : `SELECT goals, ventures, positioning, audience, income_targets, notes
+           FROM identity.user_context WHERE lower(email) = lower($1) LIMIT 1`,
+    userId ? [userId, emails] : [email],
   );
   if (r.rowCount === 0) return null;
   const row = r.rows[0];
@@ -86,6 +99,8 @@ export async function getUserContext(email: string): Promise<UserContext | null>
 /** Whole-object upsert of the executive profile for an email. */
 export async function setUserContext(email: string, patch: Partial<UserContext>): Promise<UserContext> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("./identity.server");
+  const { userId } = await resolveScopeByEmail(email);
   const next: UserContext = {
     goals: clean(patch.goals),
     ventures: clean(patch.ventures),
@@ -95,13 +110,14 @@ export async function setUserContext(email: string, patch: Partial<UserContext>)
     notes: clean(patch.notes),
   };
   await getPool().query(
-    `INSERT INTO identity.user_context (email, goals, ventures, positioning, audience, income_targets, notes, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+    `INSERT INTO identity.user_context (email, goals, ventures, positioning, audience, income_targets, notes, user_id, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
      ON CONFLICT (email) DO UPDATE SET
        goals=EXCLUDED.goals, ventures=EXCLUDED.ventures, positioning=EXCLUDED.positioning,
        audience=EXCLUDED.audience, income_targets=EXCLUDED.income_targets, notes=EXCLUDED.notes,
+       user_id=COALESCE(EXCLUDED.user_id, identity.user_context.user_id),
        updated_at=now()`,
-    [email, next.goals, next.ventures, next.positioning, next.audience, next.income_targets, next.notes],
+    [email, next.goals, next.ventures, next.positioning, next.audience, next.income_targets, next.notes, userId],
   );
   return next;
 }
