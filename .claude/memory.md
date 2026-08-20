@@ -2020,3 +2020,60 @@ Final slice of the you↔Finn feedback + nav bug. All on `main` (auto-deploys); 
 - **ACT-46 persistent mobile view toggle (aaf2b8a).** The Huddle/Board/Files toggle lived only in HuddleView's
   header → unmounts when view!=huddle. Desktop is fine (left Rail is `md:flex` and has the switcher); MOBILE Rail is
   hidden → Board/Files stranded the user. Added the segmented toggle to HuddleApp's always-mounted mobile top bar.
+
+## 2026-08-20 — Identity unified on `user_id`; the "phantom hand-off" root cause (GROUND-TRUTHED)
+
+### The bug the user kept hitting: a hand-off push fires, but no message in the agent's chat
+**Symptom (reported 3×):** "I got a heads-up that Finn passed something to Tess, but it's not in her
+chat history." TWO INDEPENDENT bugs wore the same face — fixing only the first is why it recurred.
+
+1. **Wrong owner (mis-route).** 1:1 hand-off ownership was decided by keyword `laneOwnerFor`, so a
+   finance ask to Finn got handed to Tess. Replaced with a semantic `resolveOwnerLLM` over the WHOLE
+   roster. **v1 of that fix was a NO-OP** — `null` meant BOTH "keep here" AND "failure" (caller fell
+   back to keyword on either), and the candidate enum was `data.members`, which in a 1:1 is only the
+   addressed agent. tsc was green the whole time; the verifier caught it.
+   **Rule earned: a sentinel that means two different things is a bug smell — make success ≠ failure.**
+2. **The message never rendered** (the ACTUAL recurring symptom). `deliverOwnerFollowup` /
+   `routeUnblockToOwner` stored the durable follow-up turn under the RAW `caller.entra_email`, while
+   the cross-huddle back-fill reader (`getAllTurnUpdates` → `getUserTurnsSince`,
+   `lower(user_email)=lower($1)`) queries under the CANONICAL `resolveTaskEmail`.
+   **Ground truth from `chat.pending_turns`:** follow-ups sat under `Von.Ellis@EnterpriseDS.io`; all
+   205 real `u-<ms>` turns sat under `dev@enterpriseds.io`. Never matched → never rendered. The PUSH
+   still fired (it resolves its target separately) — hence "notification with no message."
+   **Do NOT diagnose this class from code alone — query the two email keys and compare.**
+
+### The deeper fix: `user_id` (entra_object_id) is the primary identifier, not email
+Bug 2 was one symptom of a class: the same human under two emails fragmenting every email-keyed store.
+Executed the pre-existing `docs/plan-user-id-unification.md` (Phases 0+1) — extended, invented nothing.
+
+- **Phase 0** — `resolveUserId` canonicalizes an incoming `entra_object_id` through `canonicalOid`
+  (never trusts a raw token oid verbatim); `getEmailsForObjectId` already existed as the dual-read helper.
+- **Phase 1** — every Huddle-owned store dual-reads/dual-writes `user_id`:
+  `chat.{pending_turns,push_subscriptions,reminders,ceremony_transcript,deep_confirm}`,
+  `identity.{agent_workflow_config,scheduling_config,user_context}`,
+  `artifacts.{items,mirror_config}`, and the `tasks.*` Huddle-native state tables.
+- **The trick that kept the diff small:** each store resolves the id **IN-STORE** from the email the
+  caller already passes (`resolveScopeByEmail(email) → {userId, emails[]}`). **Zero signature and zero
+  call-site changes** across ~40 sites. Reads: `WHERE user_id=$1 OR (user_id IS NULL AND
+  lower(<emailcol>)=ANY($2))`. Writes: dual-write + `COALESCE(EXCLUDED.user_id, t.user_id)`.
+- **`tasks.journey_tasks` is NOT re-keyed** — its `user_id` column is **journey's** id space
+  (`a3378f93-…`), a DIFFERENT id from Huddle's profile id (`a89e3652-…`). Huddle reads the mirror by
+  translating its user's id → that user's email SET (`lower(user_email) = ANY(emails)`). Writing
+  Huddle's id into that column would corrupt the mirror. **Easy to get wrong — don't.**
+- **Backfill (one-time, done):** `UPDATE … SET user_id = pe.entra_object_id FROM
+  identity.profile_emails pe WHERE user_id IS NULL AND lower(<emailcol>)=lower(pe.email)`.
+  Census after: pending_turns 708, ceremony_transcript 2038, artifacts.items 109,
+  task_engagement_state 42, agent_workflow_config 1 — **all under the single `a89e3652-…`, zero
+  split**; journey_tasks correctly untouched at 217 under `a3378f93-…`.
+
+**Net:** both emails converge on one identity structurally, not by hoping `whoami` resolves. Additive
+and reversible (email columns retained; dual-read still honors un-migrated rows).
+
+### Method notes worth keeping
+- The decisive evidence for BOTH bugs was **the DB rows, not the code** — comparing which email each
+  row type was keyed under settled in ONE query what code-reading had guessed at wrongly.
+- A **behavior/routing fix is not done at tsc-green.** v1 typechecked perfectly and did nothing.
+  Independent live verification is the gate (`.claude/accuracy-log.md` #3).
+- **The container rewound the working tree mid-session again** (2026-08-20): an uncommitted memory.md
+  append vanished and `git status` came back clean at the last pushed commit. Pushed code was safe.
+  Reinforces: commit + push docs IMMEDIATELY, and re-check `git log origin/<branch>` after any gap.

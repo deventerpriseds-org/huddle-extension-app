@@ -309,9 +309,26 @@ Driven by the user's live stand-up transcripts + the persisted `barge_route` log
 ## Open
 
 ### ACT-huddle-49: Semantic 1:1 owner-resolution — replace keyword laneOwnerFor in the follow-up path
-- **Status:** IMPLEMENTED (tsc clean), deploying + verifier pending; live proof = harness 1:1 keeps Finn's finance ask with Finn. (this session, user-approved). Root cause: the LLM router is group-only (`canLLMRoute` requires scope==='group', huddle.functions.ts:1028), so a 1:1 owner hand-off is decided by keyword `laneOwnerFor` — which mis-routed a FINANCE spreadsheet from Finn → Tess ("build a spreadsheet" keyword-matched Tess's build lane).
+- **Status:** FIXED + DEPLOYED + verifier-confirmed (PASS 7/7). **Awaiting user live-confirm** (repo rule: the user seeing it is the verdict). (this session, user-approved). Root cause: the LLM router is group-only (`canLLMRoute` requires scope==='group', huddle.functions.ts:1028), so a 1:1 owner hand-off is decided by keyword `laneOwnerFor` — which mis-routed a FINANCE spreadsheet from Finn → Tess ("build a spreadsheet" keyword-matched Tess's build lane).
 - **Fix:** replace the keyword decision in the 1:1 owner-follow-up (huddle.functions.ts:5277) with a cheap LLM owner-classification, mirroring the existing 1:1 difficulty-backfill LLM call (scoreDifficultyLLM, ~1104). capabilityOwnerFor (exclusive) stays an authoritative pre-check; laneOwnerFor stays as the no-key/failure fallback.
 - **Verify:** offline `test:router` + a couple of real 1:1 turns; independent verifier.
+- **TWO bugs wore this one face — fixing only the first is why it recurred.**
+  - **Bug 1 (mis-route)** — as described above. **v1 of the fix SHIPPED AS A NO-OP** and the user hit the
+    same phantom again: `resolveOwnerLLM` returned `null` for BOTH "keep with the addressed agent" AND
+    "failure", so the caller fell back to keyword `laneOwnerFor` on either; and the candidate enum was
+    `data.members`, which in a 1:1 is just the addressed agent — so the classifier could never pick anyone
+    else. tsc was green throughout; the independent verifier caught it. Corrected in **62e689c** (roster =
+    whole AGENTS; addressed-id = "keep"; `null` = failure only; caller `resolved ?? laneOwnerFor`).
+  - **Bug 2 (the render gap — the ACTUAL recurring symptom)** — `deliverOwnerFollowup` /
+    `routeUnblockToOwner` keyed the durable follow-up turn under the RAW `caller.entra_email`, while the
+    cross-huddle back-fill reader (`getAllTurnUpdates` → `getUserTurnsSince`, `lower(user_email)=lower($1)`)
+    queries under the CANONICAL `resolveTaskEmail`. They never matched, so the message never rendered —
+    while the push, which resolves its target separately, still fired. **GROUND TRUTH** (`chat.pending_turns`):
+    follow-ups sat under `Von.Ellis@EnterpriseDS.io`; all 205 real `u-<ms>` turns sat under
+    `dev@enterpriseds.io`. Fixed in **efa8e45**; the underlying identity split is ACT-huddle-53.
+- **Live evidence (verifier, 7/7):** a real Finn→Terry grooming hand-off produced
+  `followup-dm-finn-reid-terry-locke-…` in `dm-terry-locke` keyed `dev@enterpriseds.io`, status=done, no
+  quota/429 fallback; Finn deferred by name correctly. Test artifacts cleaned, 0 remaining.
 
 ### ACT-huddle-50: "Venue awareness" doesn't auto-trigger when agents add tasks — INVESTIGATE
 - **Status:** OPEN (user-reported). "venue" is NOT a named feature in code (greps matched "reVENUE"). Need to determine from Elle's transcript what the user means by venue/location awareness and why it isn't firing when an agent creates a task involving a place.
@@ -2225,3 +2242,32 @@ green); view live (1,581 rows). classifyConfirmReply 21/21 offline.
 **Fix (deployed, aaf2b8a):** added a persistent segmented Huddle/Board/Files toggle to HuddleApp's always-mounted mobile top bar (`md:app-hidden`), driving `setView`. Available from every view on mobile; desktop unchanged (Rail already covers it).
 **Acceptance criteria:** AC-1 from Board or Files on mobile, the user can switch back to Huddle (and between all three); AC-2 desktop nav unchanged; AC-3 no duplicate/parallel nav state (reuses store `view`/`setView`).
 **Status:** BUILT + DEPLOYED (tsc+build clean, ff'd to main aaf2b8a). Live-confirm pending (phone).
+
+### ACT-huddle-53: Identity unification on `user_id` — the two-email split, fixed structurally
+**Requested:** 2026-08-20 — "did your fix ensure messages for the same userid (vonellis) is treated as the
+same including message threads no matter which of it's two emails are used?", then "do both follow ups"
+(= (1) backfill the stranded rows, (2) do the id-based unification).
+**Problem:** the same human is `von.ellis@enterpriseds.io` (entra login) and `dev@enterpriseds.io`
+(canonical journey profile), so every email-keyed store could split across the two. This caused the
+recurring phantom hand-off (ACT-huddle-49 Bug 2) and, historically, the WIP-gate leak and the "chat
+history disappeared then came back" flicker.
+**Approach:** executed the EXISTING `docs/plan-user-id-unification.md` (Phase 0 + Phase 1) — extended, did
+not duplicate. Each store resolves the id IN-STORE from the email callers already pass
+(`resolveScopeByEmail → {userId, emails[]}`), so **no store signature and no call site changed** (~40 sites
+untouched). Reads dual-read (`user_id=$1 OR (user_id IS NULL AND lower(<emailcol>)=ANY($2))`); writes
+dual-write `user_id` + email with `COALESCE(EXCLUDED.user_id, t.user_id)`.
+**Acceptance criteria:** AC-1 both emails resolve to ONE `user_id`; AC-2 every Huddle-owned store keyed on
+it; AC-3 `tasks.journey_tasks` NOT re-keyed (that column is **journey's** id space) — read via email-set
+translation; AC-4 un-migrated rows still readable (dual-read); AC-5 additive/reversible; AC-6 tsc clean;
+AC-7 a live write presenting the NON-canonical email lands under the same `user_id`.
+**Integration trace:** ONE core funnel = the resolver pair in `journey/identity.ts` + `identity.server.ts`.
+Upstream producers = every `resolveTaskEmail` call site (unchanged); downstream consumers = the store
+modules (migrated) + the pre-existing `identity.profile_emails` mapping (extended, no parallel system).
+Webhook-only mirror writes deliberately untouched.
+**Commits:** 8033258 (Phase 0 resolver hardening), 0857a4f + aabc9d1 + 7c16db6 (Phase 1 stores) — all on `main`.
+**Backfill (done, verified):** census after — pending_turns 708 / ceremony_transcript 2038 /
+artifacts.items 109 / task_engagement_state 42 / agent_workflow_config 1, **all under one
+`a89e3652-…`, zero split**; `journey_tasks` correctly unchanged at 217 under journey's `a3378f93-…`.
+**Status:** BUILT + DEPLOYED + BACKFILLED; independent live verification of AC-7 in flight.
+**Not done (deliberate):** Phase 2 — dropping email columns / `user_id NOT NULL` (needs a soak);
+`public.rag_chunks` memory (no email column — evaluated, out of scope).
