@@ -13,6 +13,7 @@ import { FallbackBanner } from "./FallbackBanner";
 import { isWorkspaceHydrated, setDeepLinkTarget, useHuddleStore, useVisibleHuddles } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
+import { breadcrumbToolsFor, type ToolUseEvent } from "../data/seed";
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
 import { useAuth } from "@/hooks/useAuth";
 import { getAllTurnUpdates } from "../lib/huddle.functions";
@@ -69,6 +70,7 @@ export function HuddleApp() {
         updated_ms: number;
         userText: string | null;
         replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
+        toolUses?: ToolUseEvent[];
       }[]) {
         cursor = Math.max(cursor, t.updated_ms || 0);
         // Re-add the user's own message for this turn (keyed by turnId, collapsing with the interactive
@@ -100,6 +102,7 @@ export function HuddleApp() {
             ts: (t.updated_ms || Date.now()) + i,
             replyTo: t.id,
             artifacts: reply.artifacts,
+            toolUses: t.toolUses ? breadcrumbToolsFor(reply.agentId, t.toolUses) : undefined,
           });
         });
       }

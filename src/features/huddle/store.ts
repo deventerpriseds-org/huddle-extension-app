@@ -255,7 +255,14 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
               : s.lastReadAt,
         };
       const next = s.messages.slice();
-      next[i] = { ...next[i], text: m.text, artifacts: m.artifacts ?? next[i].artifacts };
+      // Preserve toolUses across a streaming in-place update (a later partial reply doesn't re-supply
+      // them) — same as artifacts; a fresh value replaces, undefined keeps the attached breadcrumbs.
+      next[i] = {
+        ...next[i],
+        text: m.text,
+        artifacts: m.artifacts ?? next[i].artifacts,
+        toolUses: m.toolUses ?? next[i].toolUses,
+      };
       return { messages: next };
     }),
   logDecision: (d) => set((s) => ({ decisions: [d, ...s.decisions].slice(0, 50) })),

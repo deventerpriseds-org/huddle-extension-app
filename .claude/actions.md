@@ -323,7 +323,8 @@ Driven by the user's live stand-up transcripts + the persisted `barge_route` log
 - **Next:** pull the turn's reply + toolUses (in flight); report did-vs-said with evidence.
 
 ### ACT-huddle-52: Tool-use breadcrumbs in the UI — let the user SEE which tools an agent ran (no guessing)
-- **Status:** OPEN (user feature request). The data already exists server-side: `chat.pending_turns.result.toolUses` (populated by `recordToolUse`). Feature = surface a compact per-message "tools used" breadcrumb/trail in the chat UI so the user never has to guess whether an agent actually did what it said.
+- **Status:** IMPLEMENTED (tsc clean), deploying + verifier pending. Client-only: `result.toolUses` already reaches the client; added `breadcrumbToolsFor` selector (seed.ts, excludes `tool_catalog`), attached per-agent toolUses to messages in applyTurnStream (HuddleView) + the away backfill (HuddleApp + getAllTurnUpdates DTO), preserved across the streaming upsert (store.ts), and render a compact ✓/✗ chip row under each agent message (HuddleView).
+- **Status (orig):** OPEN (user feature request). The data already exists server-side: `chat.pending_turns.result.toolUses` (populated by `recordToolUse`). Feature = surface a compact per-message "tools used" breadcrumb/trail in the chat UI so the user never has to guess whether an agent actually did what it said.
 - **Next:** scope where toolUses reaches the client (turn DTO) and a minimal chat-message affordance to render it.
 
 ### ACT-huddle-48: Ceremony barge-mic "flashed on tap but never toggled" — unbounded warm-connect

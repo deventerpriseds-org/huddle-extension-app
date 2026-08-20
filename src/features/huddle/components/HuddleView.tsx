@@ -17,11 +17,13 @@ import {
   Paperclip,
   X,
   ImageIcon,
+  Check,
+  Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
-import type { Huddle, HuddleMessage } from "../data/seed";
+import { breadcrumbToolsFor, type Huddle, type HuddleMessage, type ToolUseEvent } from "../data/seed";
 import {
   enqueueHuddleTurn,
   getTurnUpdates,
@@ -426,6 +428,27 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
             ))}
           </div>
         )}
+        {m.toolUses && m.toolUses.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1" aria-label="Tools this agent used">
+            <Wrench size={10} className="opacity-40" aria-hidden />
+            {m.toolUses.map((t) => (
+              <span
+                key={t.id}
+                title={`${t.ok ? "Ran" : "Failed"}: ${t.tool}${t.detail ? ` — ${t.detail}` : ""}`}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] leading-none",
+                  t.ok
+                    ? "border-hairline bg-surface text-muted-foreground"
+                    : "border-destructive/30 bg-destructive/10 text-destructive",
+                )}
+              >
+                {t.ok ? <Check size={9} aria-hidden /> : <X size={9} aria-hidden />}
+                <span className="max-w-[160px] truncate">{t.tool}</span>
+                <span className="sr-only">{t.ok ? " ran" : " failed"}</span>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -629,11 +652,17 @@ function Composer({ huddle }: { huddle: Huddle }) {
     // is still growing while a 1:1 reply streams). Whole-reply (group) turns arrive complete → first
     // upsert == final, so this is a no-op change for them. A completed reply is never re-appended.
     const byId = new Map(state.messages.map((m) => [m.id, m]));
+    // Tool-use breadcrumbs: the turn's real tool calls, per agent. `result.toolUses` is populated once
+    // the turn is done (undefined while a reply is still streaming) — so it attaches on the final write.
+    const turnToolUses = (result as { toolUses?: ToolUseEvent[] } | null)?.toolUses;
     (replies ?? []).forEach((reply, i) => {
       const mid = `a-${turnId}-${i}`;
       const prev = byId.get(mid);
-      // Skip a redundant write once the text has stopped changing (avoids needless re-renders on poll).
-      if (prev && prev.text === reply.text) return;
+      const crumbs = turnToolUses ? breadcrumbToolsFor(reply.agentId, turnToolUses) : undefined;
+      // Skip a redundant write only when the text has stopped changing AND breadcrumbs are already
+      // settled (still streaming → crumbs undefined; or already attached). Otherwise fall through so the
+      // final poll (which carries result.toolUses) actually lands the breadcrumb.
+      if (prev && prev.text === reply.text && (crumbs === undefined || prev.toolUses !== undefined)) return;
       upsertAgent({
         id: mid,
         huddleId: huddle.id,
@@ -642,6 +671,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
         ts: prev?.ts ?? Date.now() + i,
         replyTo: turnId,
         artifacts: reply.artifacts,
+        toolUses: crumbs,
       });
     });
 

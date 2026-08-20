@@ -6336,6 +6336,8 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
       // stale/missing, so an away-arrived turn shows the full exchange, not orphaned agent messages.
       userText: string | null;
       replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
+      // Tool-use breadcrumbs for away/cross-device turns — the client filters per agent + drops tool_catalog.
+      toolUses?: import("../data/seed").ToolUseEvent[];
     };
     const empty: BackfillTurn[] = [];
     if (!data.caller?.entra_email) return { turns: empty };
@@ -6364,6 +6366,9 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         text: string;
         artifacts?: { id: string; name: string }[];
       }[],
+      toolUses: ((t.result as { toolUses?: unknown } | null)?.toolUses ?? undefined) as
+        | import("../data/seed").ToolUseEvent[]
+        | undefined,
     }));
     return { turns };
   });

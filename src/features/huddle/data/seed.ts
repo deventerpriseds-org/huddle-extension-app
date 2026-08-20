@@ -28,6 +28,10 @@ export interface HuddleMessage {
   // artifact blob store first (folder "Uploads", scoped to the addressed agent). Images are shown to
   // the agent via vision; text files are inlined; each renders as a chip on the user's bubble. ACT-45.
   attachments?: { id: string; name: string; mime: string }[];
+  // Tool-use breadcrumbs: the REAL tools THIS agent ran on the turn that produced this message (the
+  // turn's toolUses filtered to this agentId, excluding the "tool_catalog" offered-list entry). Lets the
+  // user see whether the agent DID what it said vs. only claimed it. Absent on older/away turns → no chip.
+  toolUses?: ToolUseEvent[];
 }
 
 export type HuddleScope = "one-to-one" | "group";
@@ -94,6 +98,17 @@ export interface ToolUseEvent {
   summary: string;
   ok: boolean;
   detail?: string;
+}
+
+/** Pure selector for chat tool-use breadcrumbs: the REAL tools a given agent ran on a turn — the turn's
+ *  toolUses filtered to this agentId, EXCLUDING the "tool_catalog" offered-list pseudo-entry (which is not
+ *  an actual tool call). Returns [] when there are none, so callers render nothing. */
+export function breadcrumbToolsFor(
+  agentId: AgentId,
+  toolUses: ToolUseEvent[] | undefined,
+): ToolUseEvent[] {
+  if (!toolUses?.length) return [];
+  return toolUses.filter((t) => t.agentId === agentId && t.tool !== "tool_catalog");
 }
 
 export type SuggestedTaskDraft = Omit<Task, "id" | "createdAt" | "origin" | "suggested"> & {
