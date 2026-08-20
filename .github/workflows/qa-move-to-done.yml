@@ -1,0 +1,54 @@
+name: QA move task to Done (live, real app)
+
+# Closes the LAST leg of the WIP pipeline (BACKLOG->UP_NEXT->DOING->IN_REVIEW->DONE) that no backend
+# code can drive — DONE is set ONLY by a real user action in the board UI (autowork.server.ts is
+# explicit that no automation ever writes it). Drives the actual "Move or reassign" -> "Move to…" ->
+# "Done" control on the specific card via Playwright (run-uat.mjs + qa-move-to-done.mjs), capturing the
+# updateBoardTask server-fn network call as evidence. Ground truth (task status == 'DONE') is asserted
+# separately by the caller against journey's public.tasks / the Azure PG mirror.
+# Screenshots + results are force-pushed to the throwaway uat-shots branch (same retrieval pattern as
+# verify-uat.yml / qa-confirm-reply.yml).
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: "journey task uuid (public.tasks.id) to move to Done"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  qa-move-to-done:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright + Chromium
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+      - name: Run move-to-Done driver
+        env:
+          APP_URL: https://icy-flower-0f415200f.7.azurestaticapps.net
+          UAT_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
+          CHECKS_FILE: ${{ github.workspace }}/.claude/skills/test-agent-serverfn/scripts/qa-move-to-done.mjs
+          SHOT_DIR: uat-shots
+          UAT_VIEWPORT_W: '1200'
+          UAT_VIEWPORT_H: '800'
+          QA_TASK_ID: ${{ inputs.task_id }}
+        run: node .claude/skills/test-agent-serverfn/scripts/run-uat.mjs
+      - name: Publish results + shots to uat-shots branch
+        if: always()
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "gha-uat"
+          git checkout --orphan uat-shots
+          git reset >/dev/null 2>&1 || true
+          git add -f uat-shots/*.png uat-shots/results.json
+          git commit -q -m "qa-move-to-done shots — run ${{ github.run_id }}" || { echo "no shots"; exit 0; }
+          git push -f origin uat-shots
