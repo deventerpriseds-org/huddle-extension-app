@@ -64,10 +64,56 @@ export async function resolveJourneyIdentity(
  * added but not yet consumed; Phase 1 switches stores to key on this.)
  */
 export async function resolveUserId(caller: Caller): Promise<string | null> {
+  const { canonicalOid, resolveObjectIdByEmail } = await import("../identity/identity.server");
   const oid = caller?.entra_object_id?.trim();
-  if (oid) return oid;
-  const { resolveObjectIdByEmail } = await import("../identity/identity.server");
-  return resolveObjectIdByEmail(caller?.entra_email);
+  const email = caller?.entra_email?.trim();
+  // Canonicalize an incoming TOKEN oid to the ONE profile it belongs to (profile_oids alias, else by the
+  // sign-in email) — WITHOUT this, the same person keys under a rotated/alternate token id (e.g. sub vs oid,
+  // `112d…`) in one call and the email-resolved profile id (`a89e…`) in another, re-opening the split this
+  // whole effort closes. Falls through to the email→profile mapping when no oid is presented (server/cadence
+  // paths). `canonicalOid` itself falls back to the raw token id only when neither alias nor email resolves.
+  if (oid) {
+    try {
+      const canon = await canonicalOid(oid, email ?? null);
+      if (canon) return canon;
+    } catch {
+      /* fall through to email resolution */
+    }
+  }
+  return resolveObjectIdByEmail(email);
+}
+
+/**
+ * The unified user SCOPE for dual-read/dual-write of Huddle-owned, email-scoped stores. Returns the stable
+ * canonical `userId` (entra_object_id, resolved whoami-independently by `resolveUserId`) plus EVERY email
+ * alias linked to that profile. The contract for consumers:
+ *   - WRITE: set both `user_id = userId` and `user_email = <canonical email>` (dual-write) so a row is
+ *     matchable by id going forward AND by email during the transition / from the journey mirror.
+ *   - READ: `WHERE user_id = $userId OR (user_id IS NULL AND lower(user_email) = ANY($emails))` (dual-read)
+ *     — an un-migrated row (null user_id) still resolves by any of the user's aliases; never OR the two in a
+ *     way that double-returns a migrated row (guard the email arm on `user_id IS NULL`).
+ *   - `emails` also translates reads of the journey-owned, email-keyed mirror: `user_email = ANY($emails)`.
+ * `emails` is always floored with the caller's canonical + raw login, so an as-yet-unlinked alias still
+ * matches its own rows. When no profile is found, `userId` is null and callers degrade to email-only
+ * (today's behavior) — never blank.
+ */
+export async function resolveUserScope(
+  caller: Caller,
+): Promise<{ userId: string | null; emails: string[] }> {
+  const userId = await resolveUserId(caller);
+  const login = caller?.entra_email?.trim().toLowerCase();
+  const canonical = (await resolveTaskEmail(caller))?.trim().toLowerCase();
+  const emails: string[] = [];
+  if (userId) {
+    try {
+      const { getEmailsForObjectId } = await import("../identity/identity.server");
+      for (const e of await getEmailsForObjectId(userId)) if (!emails.includes(e)) emails.push(e);
+    } catch {
+      /* fall through to the floor below */
+    }
+  }
+  for (const e of [canonical, login]) if (e && !emails.includes(e)) emails.push(e);
+  return { userId, emails };
 }
 
 /**

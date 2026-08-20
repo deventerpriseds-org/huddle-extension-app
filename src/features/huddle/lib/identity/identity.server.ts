@@ -318,6 +318,28 @@ export async function resolveObjectIdByEmail(email: string | undefined | null): 
 }
 
 /**
+ * All emails (lower-cased) linked to a profile's `entra_object_id`, oldest-first. This is the alias set for
+ * a unified user: it drives dual-read of Huddle email-scoped stores (`lower(user_email) = ANY(emails)`) and
+ * the translation used to read the journey-owned, email-keyed mirror (`user_email = ANY(emails)`). Empty on
+ * miss or DB error (fail-closed — callers floor the set with the caller's own login/canonical email).
+ */
+export async function getEmailsForObjectId(oid: string | undefined | null): Promise<string[]> {
+  const id = (oid ?? "").trim();
+  if (!id) return [];
+  try {
+    await ensureBootstrapped();
+    const r = await getPool().query<{ email: string }>(
+      `SELECT lower(email) AS email FROM identity.profile_emails
+        WHERE entra_object_id = $1 ORDER BY added_at ASC`,
+      [id],
+    );
+    return r.rows.map((x) => x.email);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Resolve a login/alias email to the user's CANONICAL email WITHOUT a whoami round-trip — using only
  * local identity tables. This is what keeps a transient journey/whoami blip from scoping the same user
  * under a second email (the dev@ vs von.ellis@ split that fragmented history): the answer is derivable
