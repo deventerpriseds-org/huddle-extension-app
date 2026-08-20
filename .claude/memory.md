@@ -7,7 +7,24 @@ handled/guarded/tested). The user passes multi-item LISTS to the group channel o
 list/brain-dump failure modes especially (fan-out, duplicates, ambiguous items, wrong owner, latency). Don't wait
 to be asked — bake the pre-mortem into every plan by default.
 
-## 1:1 owner hand-off used KEYWORD scoring (laneOwnerFor), NOT the LLM router — mis-routed Finn's finance task to Tess (2026-08-19, FIX IMPLEMENTED, tsc clean, deploying)
+## Bug #2 — phantom hand-off "heads-up push fired but no message in the owner's chat" = follow-up turn keyed under the WRONG email (2026-08-20, ROOT-CAUSED from DB ground truth, FIX IMPLEMENTED, tsc clean)
+The recurring "I got a heads-up that X passed a task to Y, but it's not in Y's chat" is a SEPARATE bug from
+the mis-route (below). PROVEN from the primary source (`chat.pending_turns` rows): the follow-up turn is
+stored under the RAW sign-in `entra_email` (`Von.Ellis@EnterpriseDS.io`), but the client's cross-huddle
+back-fill (`getAllTurnUpdates` → `getUserTurnsSince`) queries under the CANONICAL `resolveTaskEmail`
+(`dev@enterpriseds.io`; all 205 `u-%` interactive turns are under that). `getUserTurnsSince` filters
+`lower(user_email)=lower($1)`, so `von.ellis…` ≠ `dev@…` → the finished follow-up is UNMATCHABLE by the
+renderer and never appears, even though its push (which resolves the target email on a different path)
+fired. Only two enqueue sites had this: `deliverOwnerFollowup` and `routeUnblockToOwner` (both did
+`const email = data.caller?.entra_email ?? null`). Every OTHER path already resolves canonical
+(`enqueueHuddleTurn` L6178, worker L1954, integration reads `record.user_email`). FIX: both sites now
+resolve `resolveTaskEmail(data.caller)` (with entra_email fallback), mirroring the interactive path — so
+the row is keyed under the same identity the back-fill reads. tsc clean. Historical stranded rows left
+as-is (not worth a migration). Verify: trigger a legitimate cross-lane deferral (e.g. ask Finn in his DM
+to groom the backlog → Terry owns it → follow-up in dm-terry-locke), confirm the new row's `user_email`
+= `dev@enterpriseds.io` AND `getAllTurnUpdates(caller)` returns it.
+
+## 1:1 owner hand-off used KEYWORD scoring (laneOwnerFor), NOT the LLM router — mis-routed Finn's finance task to Tess (2026-08-19, FIXED + VERIFIED LIVE 7/7 on 62e689c; v1 was a no-op, v2 confirmed)
 NOT a revert — the LLM router (`routeMessageLLM`) is intact but is GROUP-ONLY by design (`canLLMRoute`
 requires `scope==='group'` && no 1:1 target, huddle.functions.ts:1028). In a 1:1 the responder is fixed,
 so the LLM router never runs; the only "hand this to a different owner?" logic is the deterministic

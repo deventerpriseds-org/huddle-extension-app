@@ -1703,7 +1703,18 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       if (!owner) return; // caller already guards ownerId !== the deferring agent
       const cleanAsk = ask.replace(/\s+/g, " ").trim().slice(0, 240);
       const ownerHuddle = `dm-${ownerId}`;
-      const email = data.caller?.entra_email ?? null;
+      // Store under the CANONICAL journey email — the same value the client's cross-huddle back-fill
+      // (getAllTurnUpdates → getUserTurnsSince) queries with. The raw sign-in `entra_email` can differ
+      // from the resolved email (e.g. Von.Ellis@EnterpriseDS.io → dev@enterpriseds.io); keying the row
+      // under the raw login left the finished follow-up unmatchable by the back-fill, so its push fired
+      // but the message never rendered in the owner's DM. Mirrors enqueueHuddleTurn's resolution.
+      let email: string | null = null;
+      try {
+        const { resolveTaskEmail } = await import("./journey/identity");
+        email = (await resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
+      } catch {
+        email = data.caller?.entra_email ?? null;
+      }
       // The context package handed to the owner. Careful language: the owner was TAPPED/PASSED by
       // the addressed agent and is replying in ITS OWN 1:1 with the user — it did NOT join the other
       // agent's conversation. (Delivered as the turn's user-text; the client renders only the reply.)
@@ -1756,7 +1767,15 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     try {
       const owner = AGENT_BY_ID[ownerId];
       if (!owner) return;
-      const email = data.caller?.entra_email ?? null;
+      // Canonical journey email (see deliverOwnerFollowup) so the finished unblock turn is matchable by
+      // the client's cross-huddle back-fill — the raw login can resolve to a different address.
+      let email: string | null = null;
+      try {
+        const { resolveTaskEmail } = await import("./journey/identity");
+        email = (await resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
+      } catch {
+        email = data.caller?.entra_email ?? null;
+      }
       const say = userSay.replace(/\s+/g, " ").trim().slice(0, 160);
       const ownerHuddle = `dm-${ownerId}`;
       const directive =
