@@ -496,6 +496,62 @@ export async function scoreDifficultyLLM(
   }
 }
 
+/**
+ * 1:1 OWNER resolver (LLM) — SEMANTIC replacement for the keyword `laneOwnerFor` in the 1:1 owner
+ * follow-up. The LLM router (routeMessageLLM) is group-only, so a DM's "should this be handed to a
+ * teammate who owns it?" decision used to be made by keyword/stem scoring, which mis-routed a FINANCE
+ * spreadsheet to the product lane on the word "build a spreadsheet". This decides it dynamically over the
+ * roster (names + domains/themes), the same LLM-primary / keyword-fallback split as the router. It DEFAULTS
+ * hard to keeping the ask with the agent the user addressed — the user chose them — and only hands off when
+ * the ask plainly belongs to another lane. Returns the owner AgentId to hand to, or null to KEEP it with the
+ * addressed agent (and null on any failure/no-key, so the caller falls back to `laneOwnerFor`). Never throws.
+ */
+export async function resolveOwnerLLM(
+  text: string,
+  addressedId: AgentId,
+  memberIds: AgentId[],
+  invocation: { backend: "openai" | "lovable"; model: string; fastMode?: boolean },
+): Promise<AgentId | null> {
+  try {
+    if (invocation.backend !== "openai") return null; // mirror scoreDifficultyLLM: OpenAI path only
+    const roster = AGENTS.filter((a) => memberIds.includes(a.id));
+    const addressed = roster.find((a) => a.id === addressedId);
+    if (!roster.length || !addressed) return null;
+    const lines = roster
+      .map((a) => `- ${a.id} (${a.name}, ${a.role}): ${[...a.domains, ...a.themes].slice(0, 14).join(", ")}`)
+      .join("\n");
+    const { callOpenAIRouter } = await import("./openai-responses.server");
+    const raw = await callOpenAIRouter<{ owner: string }>({
+      model: invocation.model,
+      system:
+        "You decide which teammate should OWN a user's request. The user sent it to a specific agent in a " +
+        "1:1, so DEFAULT STRONGLY to keeping it with the agent they addressed — only hand it to a different " +
+        "teammate when the request clearly belongs to that teammate's lane and is outside the addressed " +
+        "agent's. Judge by intent and lane, never by surface words (e.g. a finance analysis that happens to " +
+        "want a spreadsheet still belongs to the finance lane, not whoever 'builds' things).",
+      prompt:
+        `The user is in a 1:1 with ${addressed.name} (id "${addressed.id}", ${addressed.role}). Team roster:\n${lines}\n\n` +
+        `User's request:\n"""${(text || "").slice(0, 1200)}"""\n\n` +
+        `Return {"owner": "<agent id>"}: the id of the teammate who should own this. Use "${addressed.id}" to KEEP ` +
+        `it with the agent they addressed (the default). Only pick a different id when the request plainly belongs ` +
+        `to that agent's lane and is outside ${addressed.name}'s. Exactly one id from the roster.`,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { owner: { type: "string", enum: roster.map((a) => a.id) } },
+        required: ["owner"],
+      },
+      schemaName: "owner_resolution",
+      fastMode: invocation.fastMode,
+    });
+    const owner = raw?.owner;
+    if (!owner || owner === addressedId) return null; // keep with the addressed agent
+    return roster.some((a) => a.id === owner) ? (owner as AgentId) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function routeMessageLLM(
   input: RouteInput,
   invocation: RouterInvocation,

@@ -7,6 +7,23 @@ handled/guarded/tested). The user passes multi-item LISTS to the group channel o
 list/brain-dump failure modes especially (fan-out, duplicates, ambiguous items, wrong owner, latency). Don't wait
 to be asked — bake the pre-mortem into every plan by default.
 
+## 1:1 owner hand-off used KEYWORD scoring (laneOwnerFor), NOT the LLM router — mis-routed Finn's finance task to Tess (2026-08-19, FIX IMPLEMENTED, tsc clean, deploying)
+NOT a revert — the LLM router (`routeMessageLLM`) is intact but is GROUP-ONLY by design (`canLLMRoute`
+requires `scope==='group'` && no 1:1 target, huddle.functions.ts:1028). In a 1:1 the responder is fixed,
+so the LLM router never runs; the only "hand this to a different owner?" logic is the deterministic
+`capabilityOwnerFor ?? laneOwnerFor` (keyword/stem over domains/themes, born keyword in d7d7bac Jul 24).
+It mis-scored: user asked FINN (finance) in his DM to "build me a spreadsheet [of costs/deductions]" — a
+finance task — but `laneOwnerFor` keyword-matched "build a spreadsheet" to TESS (product/build) and passed
+it away from Finn. FIX (extend the brain to 1:1, don't keep the keyword heuristic): new `resolveOwnerLLM`
+(routing.ts, modeled on `scoreDifficultyLLM`) — a cheap dedicated LLM owner-classifier over the roster
+(names+domains/themes) that DEFAULTS to keeping the ask with the addressed agent. Wired into the 1:1
+owner-follow-up (huddle.functions.ts:5278): `capabilityOwnerFor` (exclusive) stays authoritative+sync;
+else fire-and-forget LLM classify (matches existing `void deliverOwnerFollowup` pattern); `laneOwnerFor`
+stays the no-key/failure fallback (never worse than before). All existing gates preserved (1:1 only,
+!internal, intent==='perform', once-per-owner). AC subagent + verifier; live proof = harness 1:1 turn
+must KEEP Finn's finance ask with Finn. Bug-2 (follow-up reply didn't render in Tess's chat) is a
+separate durable-render gap — still open.
+
 ## Ceremony barge-mic "flashed on tap but never toggled" — unbounded warm-connect wedged connectingRef (2026-08-18, IMPLEMENTED, mechanism-verified, NOT yet user-confirmed live)
 User: in a running stand-up the mic button flashed on click but never engaged (no error). Root cause
 (ground-truthed in `hooks/useCeremonyVoice.ts`): the ceremony pre-warms the barge WebRTC transport at

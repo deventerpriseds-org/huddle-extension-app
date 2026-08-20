@@ -308,6 +308,24 @@ Driven by the user's live stand-up transcripts + the persisted `barge_route` log
 
 ## Open
 
+### ACT-huddle-49: Semantic 1:1 owner-resolution — replace keyword laneOwnerFor in the follow-up path
+- **Status:** IMPLEMENTED (tsc clean), deploying + verifier pending; live proof = harness 1:1 keeps Finn's finance ask with Finn. (this session, user-approved). Root cause: the LLM router is group-only (`canLLMRoute` requires scope==='group', huddle.functions.ts:1028), so a 1:1 owner hand-off is decided by keyword `laneOwnerFor` — which mis-routed a FINANCE spreadsheet from Finn → Tess ("build a spreadsheet" keyword-matched Tess's build lane).
+- **Fix:** replace the keyword decision in the 1:1 owner-follow-up (huddle.functions.ts:5277) with a cheap LLM owner-classification, mirroring the existing 1:1 difficulty-backfill LLM call (scoreDifficultyLLM, ~1104). capabilityOwnerFor (exclusive) stays an authoritative pre-check; laneOwnerFor stays as the no-key/failure fallback.
+- **Verify:** offline `test:router` + a couple of real 1:1 turns; independent verifier.
+
+### ACT-huddle-50: "Venue awareness" doesn't auto-trigger when agents add tasks — INVESTIGATE
+- **Status:** OPEN (user-reported). "venue" is NOT a named feature in code (greps matched "reVENUE"). Need to determine from Elle's transcript what the user means by venue/location awareness and why it isn't firing when an agent creates a task involving a place.
+- **Clarified (user, 2026-08-20):** it's **journey's task-PLANNING logic** that decides whether a business would be CLOSED / the TYPICAL time for an activity, and places the task accordingly. Confirmed live: Elle admitted "I captured the card but failed to run the venue-aware scheduling step against the church commitment, so it had no time" — so an agent-created task ("shoe shopping Sunday after church") lands with NO time; the business-hours/typical-time placement doesn't fire on agent task-add. GAP = agent create path (create_huddle_task / parse_and_create_tasks) doesn't invoke journey's business-hours/typical-time placement at create; it only happens (if at all) on the nightly planner.
+- **Next:** research journey's planner (nightly-schedule-builder / smart-calendar-scheduler / ai-task-parser) for the business-open/closed + typical-activity-time logic; find why it doesn't apply on agent task-add and make it auto-trigger (deterministic, not model-elected — Elle "forgetting" to run it is the tell).
+
+### ACT-huddle-51: Verify Finn ACTUALLY performed his last claimed action (did-he vs said-he)
+- **Status:** OPEN (user-reported over-claim concern). Cross-check Finn's last dm-finn-reid reply against `result.toolUses` for that turn — if he claimed an action (built/sent/created something) but toolUses shows no matching tool call, that's an over-claim.
+- **Next:** pull the turn's reply + toolUses (in flight); report did-vs-said with evidence.
+
+### ACT-huddle-52: Tool-use breadcrumbs in the UI — let the user SEE which tools an agent ran (no guessing)
+- **Status:** OPEN (user feature request). The data already exists server-side: `chat.pending_turns.result.toolUses` (populated by `recordToolUse`). Feature = surface a compact per-message "tools used" breadcrumb/trail in the chat UI so the user never has to guess whether an agent actually did what it said.
+- **Next:** scope where toolUses reaches the client (turn DTO) and a minimal chat-message affordance to render it.
+
 ### ACT-huddle-48: Ceremony barge-mic "flashed on tap but never toggled" — unbounded warm-connect
 - **Status:** IMPLEMENTED + mechanism-verified (independent `verifier` PASS 6/6, tsc clean) — deploying to main; NOT yet user-confirmed live (perceptual — user must barge in a real stand-up).
 - **Root cause:** `warmSession` pre-warm did un-timed awaits; a hung connect wedged `connectingRef=true`, so `startListening` queued every tap as `pendingUnmuteRef` and never flushed it → dead mic, no error.

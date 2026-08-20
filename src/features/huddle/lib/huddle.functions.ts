@@ -9,6 +9,7 @@ import {
   routeMessageLLM,
   scoreDifficultyLLM,
   laneOwnerFor,
+  resolveOwnerLLM,
   type RouterInvocation,
   type RouteResult,
 } from "./routing";
@@ -5275,11 +5276,35 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       ? classifyTurnIntent(data.text)
       : "perform";
     if (data.scope !== "group" && !data.internal && followupTurnIntent === "perform") {
-      const ownerId =
-        capabilityOwnerFor(data.text)?.agent.id ?? laneOwnerFor(data.text, nextId)?.id ?? null;
-      if (ownerId && ownerId !== nextId && !followupDelivered.has(ownerId)) {
-        followupDelivered.add(ownerId);
-        void deliverOwnerFollowup(ownerId, winner.name, data.text);
+      // Owner resolution is SEMANTIC in a 1:1 (the LLM router is group-only). capabilityOwnerFor
+      // (exclusive powers) is authoritative + synchronous — deliver it immediately, exactly as before.
+      const capOwnerId = capabilityOwnerFor(data.text)?.agent.id ?? null;
+      const deliverIfOwner = (ownerId: AgentId | null) => {
+        if (ownerId && ownerId !== nextId && !followupDelivered.has(ownerId)) {
+          followupDelivered.add(ownerId);
+          void deliverOwnerFollowup(ownerId, winner.name, data.text);
+        }
+      };
+      if (capOwnerId) {
+        deliverIfOwner(capOwnerId);
+      } else {
+        // No exclusive owner → resolve the LANE owner. The LLM router doesn't run in a 1:1, so classify
+        // SEMANTICALLY (a cheap dedicated LLM call, mirroring scoreDifficultyLLM) — replacing the keyword
+        // laneOwnerFor that mis-routed a finance spreadsheet to the product lane on "build a spreadsheet".
+        // Fire-and-forget (same as the existing deliverOwnerFollowup pattern here) so it never delays the
+        // user's reply; falls back to the keyword laneOwnerFor on no-key/failure so it's never worse.
+        void (async () => {
+          let ownerId: AgentId | null = null;
+          if (routerCfg.backend === "openai" && openaiKey) {
+            ownerId = await resolveOwnerLLM(data.text, nextId, data.members, {
+              backend: "openai",
+              model: routerCfg.model,
+              fastMode: routerCfg.fastMode,
+            });
+          }
+          if (!ownerId) ownerId = laneOwnerFor(data.text, nextId)?.id ?? null;
+          deliverIfOwner(ownerId);
+        })();
       }
     }
   };
