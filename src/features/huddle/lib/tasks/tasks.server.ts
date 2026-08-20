@@ -207,6 +207,31 @@ CREATE TABLE IF NOT EXISTS tasks.router_config (
   capability_prompt TEXT,
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Identity unification (mirror agent-workflow-config.server.ts): key the Huddle-NATIVE state tables on
+-- the stable user_id (entra_object_id), with user_email retained as fallback + display. Resolved in-store
+-- from the passed email via resolveScopeByEmail, so both of a user's emails converge on one row. Purely
+-- additive (nullable column + index). NOTE: tasks.journey_tasks is DELIBERATELY EXCLUDED — its user_id is
+-- JOURNEY's id space (a different id space), not ours; its reads instead translate the email filter to the
+-- caller's whole email SET (= ANY(emails)) and its writes stay webhook-only/untouched.
+ALTER TABLE tasks.ceremony_runs         ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS ceremony_runs_userid_idx         ON tasks.ceremony_runs(user_id);
+ALTER TABLE tasks.groom_state           ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS groom_state_userid_idx           ON tasks.groom_state(user_id);
+ALTER TABLE tasks.standup_cache         ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS standup_cache_userid_idx         ON tasks.standup_cache(user_id);
+ALTER TABLE tasks.autowork_state        ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS autowork_state_userid_idx        ON tasks.autowork_state(user_id);
+ALTER TABLE tasks.standup_state         ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS standup_state_userid_idx         ON tasks.standup_state(user_id);
+ALTER TABLE tasks.task_blockers         ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS task_blockers_userid_idx         ON tasks.task_blockers(user_id);
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS task_engagement_state_userid_idx ON tasks.task_engagement_state(user_id);
+ALTER TABLE tasks.scheduled_jobs        ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS scheduled_jobs_userid_idx        ON tasks.scheduled_jobs(user_id);
+ALTER TABLE tasks.router_config         ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS router_config_userid_idx         ON tasks.router_config(user_id);
 `;
 
 // NOTE: the hand-written "capability prompt" was removed. Capability is DATA — the tools each agent is
@@ -388,10 +413,14 @@ export interface StandupTask {
 export async function getStandupTasks(userEmail: string, windowHours = 36): Promise<StandupTask[]> {
   await ensureBootstrapped();
   const hrs = Number.isFinite(windowHours) && windowHours > 0 ? Math.min(windowHours, 24 * 14) : 36;
+  // Mirror read: translate the caller email to its whole alias SET (journey_tasks.user_id is JOURNEY's
+  // id space, so we never filter it by our resolved user_id — we widen the email predicate instead).
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<StandupTask>(
     `SELECT id,title,status,priority,category,is_priority,due_date,pushed_count,completed_at,updated_at,created_at,assigned_agent,tags
        FROM tasks.journey_tasks
-      WHERE lower(user_email) = $1
+      WHERE lower(user_email) = ANY($1)
         AND (completed_at IS NULL OR completed_at >= now() - ($2 * interval '1 hour'))
         -- PARKING LOT (ACT-6.2): a task the user deliberately set aside must NEVER surface in a
         -- ceremony update. Filter it at the SOURCE so EVERY consumer (the round-robin in
@@ -399,7 +428,7 @@ export async function getStandupTasks(userEmail: string, windowHours = 36): Prom
         -- buildCeremonyReport does not filter it, and rankTasks/grooming only filter their own paths.
         AND NOT ('parking-lot' = ANY(tags))
       LIMIT 1000`,
-    [userEmail.toLowerCase(), hrs],
+    [emails, hrs],
   );
   return rows;
 }
@@ -407,9 +436,11 @@ export async function getStandupTasks(userEmail: string, windowHours = 36): Prom
 /** Open tasks for a user (by email), optionally filtered to one category, for the scorer. */
 export async function getTasksForUser(userEmail: string, category?: string): Promise<ScorableTask[]> {
   await ensureBootstrapped();
-  const params: unknown[] = [userEmail.toLowerCase()];
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
+  const params: unknown[] = [emails];
   let sql = `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,pushed_count,created_at,completed_at,assigned_agent,tags,is_scheduled,start_time
-             FROM tasks.journey_tasks WHERE lower(user_email) = $1`;
+             FROM tasks.journey_tasks WHERE lower(user_email) = ANY($1)`;
   if (category) {
     params.push(category.toUpperCase());
     sql += ` AND upper(category) = $2`;
@@ -422,11 +453,14 @@ export async function getTasksForUser(userEmail: string, category?: string): Pro
 /** Record an agent-discovered blocker (ACT-5): the specific real reason a task can't be advanced. */
 export async function setTaskBlocker(userEmail: string, taskId: string, reason: string, agentId?: string | null): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.task_blockers (task_id, user_email, reason, agent_id, flagged_at)
-     VALUES ($1,$2,$3,$4,now())
-     ON CONFLICT (task_id) DO UPDATE SET reason=EXCLUDED.reason, agent_id=EXCLUDED.agent_id, flagged_at=now()`,
-    [taskId, userEmail.toLowerCase(), reason.slice(0, 400), agentId ?? null],
+    `INSERT INTO tasks.task_blockers (task_id, user_email, reason, agent_id, flagged_at, user_id)
+     VALUES ($1,$2,$3,$4,now(),$5)
+     ON CONFLICT (task_id) DO UPDATE SET reason=EXCLUDED.reason, agent_id=EXCLUDED.agent_id, flagged_at=now(),
+       user_id=COALESCE(EXCLUDED.user_id, tasks.task_blockers.user_id)`,
+    [taskId, userEmail.toLowerCase(), reason.slice(0, 400), agentId ?? null, userId],
   );
 }
 
@@ -439,9 +473,14 @@ export async function clearTaskBlocker(taskId: string): Promise<void> {
 /** All active blockers for a user as task_id → {reason, agentId}, for the standup/surfacing. */
 export async function getTaskBlockers(userEmail: string): Promise<Map<string, { reason: string; agentId: string | null }>> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<{ task_id: string; reason: string; agent_id: string | null }>(
-    `SELECT task_id, reason, agent_id FROM tasks.task_blockers WHERE lower(user_email) = $1`,
-    [userEmail.toLowerCase()],
+    userId
+      ? `SELECT task_id, reason, agent_id FROM tasks.task_blockers
+          WHERE user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2))`
+      : `SELECT task_id, reason, agent_id FROM tasks.task_blockers WHERE lower(user_email) = $1`,
+    userId ? [userId, emails] : [userEmail.toLowerCase()],
   );
   return new Map(rows.map((r) => [r.task_id, { reason: r.reason, agentId: r.agent_id }]));
 }
@@ -449,9 +488,15 @@ export async function getTaskBlockers(userEmail: string): Promise<Map<string, { 
 /** The last-groomed backlog signature for a user (null if never groomed), for the auto-groom change gate. */
 export async function getGroomSignature(userEmail: string): Promise<string | null> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<{ signature: string | null }>(
-    `SELECT signature FROM tasks.groom_state WHERE lower(user_email) = $1`,
-    [userEmail.toLowerCase()],
+    userId
+      ? `SELECT signature FROM tasks.groom_state
+          WHERE user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2))
+          ORDER BY (user_id IS NOT NULL) DESC, last_groomed_at DESC LIMIT 1`
+      : `SELECT signature FROM tasks.groom_state WHERE lower(user_email) = $1 LIMIT 1`,
+    userId ? [userId, emails] : [userEmail.toLowerCase()],
   );
   return rows[0]?.signature ?? null;
 }
@@ -459,11 +504,14 @@ export async function getGroomSignature(userEmail: string): Promise<string | nul
 /** Record the backlog signature we just groomed at, so an unchanged backlog is skipped next cadence fire. */
 export async function setGroomSignature(userEmail: string, signature: string): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.groom_state (user_email, signature, last_groomed_at)
-     VALUES ($1,$2,now())
-     ON CONFLICT (user_email) DO UPDATE SET signature=EXCLUDED.signature, last_groomed_at=now()`,
-    [userEmail.toLowerCase(), signature],
+    `INSERT INTO tasks.groom_state (user_email, signature, last_groomed_at, user_id)
+     VALUES ($1,$2,now(),$3)
+     ON CONFLICT (user_email) DO UPDATE SET signature=EXCLUDED.signature, last_groomed_at=now(),
+       user_id=COALESCE(EXCLUDED.user_id, tasks.groom_state.user_id)`,
+    [userEmail.toLowerCase(), signature, userId],
   );
 }
 
@@ -485,11 +533,18 @@ export async function getStandupCache(
   signature: string,
 ): Promise<StandupCacheEntry[]> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<StandupCacheEntry>(
-    `SELECT slot, agent_id, update_text FROM tasks.standup_cache
-      WHERE lower(user_email) = $1 AND ceremony_type = $2 AND signature = $3
-      ORDER BY updated_at`,
-    [userEmail.toLowerCase(), ceremonyType, signature],
+    userId
+      ? `SELECT slot, agent_id, update_text FROM tasks.standup_cache
+          WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2)))
+            AND ceremony_type = $3 AND signature = $4
+          ORDER BY updated_at`
+      : `SELECT slot, agent_id, update_text FROM tasks.standup_cache
+          WHERE lower(user_email) = $1 AND ceremony_type = $2 AND signature = $3
+          ORDER BY updated_at`,
+    userId ? [userId, emails, ceremonyType, signature] : [userEmail.toLowerCase(), ceremonyType, signature],
   );
   return rows;
 }
@@ -508,15 +563,18 @@ export async function setStandupCache(
 ): Promise<void> {
   if (!entries.length) return;
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   const email = userEmail.toLowerCase();
   for (const e of entries) {
     await getPool().query(
-      `INSERT INTO tasks.standup_cache (user_email, ceremony_type, slot, agent_id, signature, update_text)
-       VALUES ($1,$2,$3,$4,$5,$6)
+      `INSERT INTO tasks.standup_cache (user_email, ceremony_type, slot, agent_id, signature, update_text, user_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (user_email, ceremony_type, slot) DO UPDATE
          SET agent_id = EXCLUDED.agent_id, signature = EXCLUDED.signature,
-             update_text = EXCLUDED.update_text, updated_at = now()`,
-      [email, ceremonyType, e.slot, e.agentId, signature, e.text],
+             update_text = EXCLUDED.update_text, updated_at = now(),
+             user_id = COALESCE(EXCLUDED.user_id, tasks.standup_cache.user_id)`,
+      [email, ceremonyType, e.slot, e.agentId, signature, e.text, userId],
     );
   }
   // Drop any slot that belongs to a superseded signature (e.g. a participant who dropped out).
@@ -532,9 +590,15 @@ export async function setStandupCache(
 /** The last auto-work signature for a user (null if never run), for the ACT-5 change gate. */
 export async function getAutoWorkSignature(userEmail: string): Promise<string | null> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<{ signature: string | null }>(
-    `SELECT signature FROM tasks.autowork_state WHERE lower(user_email) = $1`,
-    [userEmail.toLowerCase()],
+    userId
+      ? `SELECT signature FROM tasks.autowork_state
+          WHERE user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2))
+          ORDER BY (user_id IS NOT NULL) DESC, last_worked_at DESC LIMIT 1`
+      : `SELECT signature FROM tasks.autowork_state WHERE lower(user_email) = $1 LIMIT 1`,
+    userId ? [userId, emails] : [userEmail.toLowerCase()],
   );
   return rows[0]?.signature ?? null;
 }
@@ -542,20 +606,29 @@ export async function getAutoWorkSignature(userEmail: string): Promise<string | 
 /** Record the auto-work signature just processed, so an unchanged backlog is skipped next fire. */
 export async function setAutoWorkSignature(userEmail: string, signature: string): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.autowork_state (user_email, signature, last_worked_at)
-     VALUES ($1,$2,now())
-     ON CONFLICT (user_email) DO UPDATE SET signature=EXCLUDED.signature, last_worked_at=now()`,
-    [userEmail.toLowerCase(), signature],
+    `INSERT INTO tasks.autowork_state (user_email, signature, last_worked_at, user_id)
+     VALUES ($1,$2,now(),$3)
+     ON CONFLICT (user_email) DO UPDATE SET signature=EXCLUDED.signature, last_worked_at=now(),
+       user_id=COALESCE(EXCLUDED.user_id, tasks.autowork_state.user_id)`,
+    [userEmail.toLowerCase(), signature, userId],
   );
 }
 
 /** The previous standup run's instant (null if never run), for the "moved to review since" bucket. */
 export async function getLastStandupAt(userEmail: string): Promise<string | null> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<{ last_standup_at: string }>(
-    `SELECT last_standup_at FROM tasks.standup_state WHERE lower(user_email) = $1`,
-    [userEmail.toLowerCase()],
+    userId
+      ? `SELECT last_standup_at FROM tasks.standup_state
+          WHERE user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2))
+          ORDER BY (user_id IS NOT NULL) DESC, last_standup_at DESC LIMIT 1`
+      : `SELECT last_standup_at FROM tasks.standup_state WHERE lower(user_email) = $1 LIMIT 1`,
+    userId ? [userId, emails] : [userEmail.toLowerCase()],
   );
   return rows[0]?.last_standup_at ?? null;
 }
@@ -563,11 +636,14 @@ export async function getLastStandupAt(userEmail: string): Promise<string | null
 /** Record this standup run's instant, so the NEXT run's "moved to review" bucket starts from here. */
 export async function setLastStandupAt(userEmail: string): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.standup_state (user_email, last_standup_at)
-     VALUES ($1, now())
-     ON CONFLICT (user_email) DO UPDATE SET last_standup_at = now()`,
-    [userEmail.toLowerCase()],
+    `INSERT INTO tasks.standup_state (user_email, last_standup_at, user_id)
+     VALUES ($1, now(), $2)
+     ON CONFLICT (user_email) DO UPDATE SET last_standup_at = now(),
+       user_id = COALESCE(EXCLUDED.user_id, tasks.standup_state.user_id)`,
+    [userEmail.toLowerCase(), userId],
   );
 }
 
@@ -579,17 +655,19 @@ export async function setLastStandupAt(userEmail: string): Promise<void> {
  */
 export async function getOpenAssignedTasks(userEmail: string, limit = 200): Promise<BoardTaskRow[]> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<BoardTaskRow>(
     `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done
        FROM tasks.journey_tasks t
-      WHERE lower(user_email) = $1
+      WHERE lower(user_email) = ANY($1)
         AND completed_at IS NULL
         AND (status IS NULL OR status NOT IN ('DONE','BLOCKED'))
         AND assigned_agent IS NOT NULL
         AND NOT EXISTS (SELECT 1 FROM tasks.task_blockers b WHERE b.task_id = t.id)
       ORDER BY priority_rank NULLS LAST, updated_at DESC
       LIMIT $2`,
-    [userEmail.toLowerCase(), limit],
+    [emails, limit],
   );
   return rows;
 }
@@ -645,10 +723,16 @@ export async function getTaskEngagementState(taskId: string): Promise<TaskEngage
  */
 export async function getLatestPendingConfirmAskAt(userEmail: string): Promise<Date | null> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<{ latest: string | null }>(
-    `SELECT max(confirm_ask_at) AS latest FROM tasks.task_engagement_state
-      WHERE lower(user_email) = lower($1) AND confirm_status = 'awaiting' AND confirm_ask_at > now()`,
-    [userEmail],
+    userId
+      ? `SELECT max(confirm_ask_at) AS latest FROM tasks.task_engagement_state
+          WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2)))
+            AND confirm_status = 'awaiting' AND confirm_ask_at > now()`
+      : `SELECT max(confirm_ask_at) AS latest FROM tasks.task_engagement_state
+          WHERE lower(user_email) = lower($1) AND confirm_status = 'awaiting' AND confirm_ask_at > now()`,
+    userId ? [userId, emails] : [userEmail],
   );
   const latest = rows[0]?.latest;
   return latest ? new Date(latest) : null;
@@ -662,13 +746,16 @@ export async function getLatestPendingConfirmAskAt(userEmail: string): Promise<D
  */
 export async function ensureConfirmAskAt(taskId: string, userEmail: string, askAtIso: string): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, confirm_status, confirm_ask_at)
-     VALUES ($1,$2,'awaiting',$3)
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, confirm_status, confirm_ask_at, user_id)
+     VALUES ($1,$2,'awaiting',$3,$4)
      ON CONFLICT (task_id) DO UPDATE SET
        confirm_ask_at = COALESCE(tasks.task_engagement_state.confirm_ask_at, EXCLUDED.confirm_ask_at),
+       user_id = COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id),
        updated_at = now()`,
-    [taskId, userEmail.toLowerCase(), askAtIso],
+    [taskId, userEmail.toLowerCase(), askAtIso, userId],
   );
 }
 
@@ -752,19 +839,35 @@ export async function getPendingConfirmForAgent(
   agentId: string,
 ): Promise<{ taskId: string; title: string; proposedDod: string | null } | null> {
   await ensureBootstrapped();
+  // Dual-read the engagement state's owner: prefer the row keyed on the resolved user_id, falling back to
+  // any email alias for an un-migrated (user_id NULL) row. Join + all other predicates stay intact.
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<{ task_id: string; title: string; proposed_dod: string | null }>(
-    `SELECT es.task_id, jt.title, es.proposed_dod
-       FROM tasks.task_engagement_state es
-       JOIN tasks.journey_tasks jt
-         ON jt.id = es.task_id AND lower(jt.user_email) = lower(es.user_email)
-      WHERE lower(es.user_email) = lower($1)
-        AND jt.assigned_agent = $2
-        AND es.confirm_status = 'asked'
-        AND upper(coalesce(jt.status, '')) <> 'DONE'
-        AND NOT EXISTS (SELECT 1 FROM tasks.task_blockers b WHERE b.task_id = jt.id)
-      ORDER BY es.updated_at DESC
-      LIMIT 1`,
-    [userEmail, agentId],
+    userId
+      ? `SELECT es.task_id, jt.title, es.proposed_dod
+           FROM tasks.task_engagement_state es
+           JOIN tasks.journey_tasks jt
+             ON jt.id = es.task_id AND lower(jt.user_email) = lower(es.user_email)
+          WHERE (es.user_id = $1 OR (es.user_id IS NULL AND lower(es.user_email) = ANY($2)))
+            AND jt.assigned_agent = $3
+            AND es.confirm_status = 'asked'
+            AND upper(coalesce(jt.status, '')) <> 'DONE'
+            AND NOT EXISTS (SELECT 1 FROM tasks.task_blockers b WHERE b.task_id = jt.id)
+          ORDER BY es.updated_at DESC
+          LIMIT 1`
+      : `SELECT es.task_id, jt.title, es.proposed_dod
+           FROM tasks.task_engagement_state es
+           JOIN tasks.journey_tasks jt
+             ON jt.id = es.task_id AND lower(jt.user_email) = lower(es.user_email)
+          WHERE lower(es.user_email) = lower($1)
+            AND jt.assigned_agent = $2
+            AND es.confirm_status = 'asked'
+            AND upper(coalesce(jt.status, '')) <> 'DONE'
+            AND NOT EXISTS (SELECT 1 FROM tasks.task_blockers b WHERE b.task_id = jt.id)
+          ORDER BY es.updated_at DESC
+          LIMIT 1`,
+    userId ? [userId, emails, agentId] : [userEmail, agentId],
   );
   if (!rows.length) return null;
   return { taskId: rows[0].task_id, title: rows[0].title, proposedDod: rows[0].proposed_dod };
@@ -779,15 +882,19 @@ export async function getBlockedTasks(
   userEmail: string,
 ): Promise<Array<{ taskId: string; title: string; assignedAgent: string | null; reason: string }>> {
   await ensureBootstrapped();
+  // Join read (task_blockers + mirror): widen the caller-email filter to the whole alias SET; the join and
+  // all other predicates stay intact.
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<{ task_id: string; title: string; assigned_agent: string | null; reason: string }>(
     `SELECT b.task_id, jt.title, jt.assigned_agent, b.reason
        FROM tasks.task_blockers b
        JOIN tasks.journey_tasks jt
          ON jt.id = b.task_id AND lower(jt.user_email) = lower(b.user_email)
-      WHERE lower(b.user_email) = lower($1)
+      WHERE lower(b.user_email) = ANY($1)
         AND upper(coalesce(jt.status, '')) <> 'DONE'
       ORDER BY b.flagged_at DESC`,
-    [userEmail],
+    [emails],
   );
   return rows.map((r) => ({ taskId: r.task_id, title: r.title, assignedAgent: r.assigned_agent, reason: r.reason }));
 }
@@ -795,20 +902,28 @@ export async function getBlockedTasks(
 /** Stamp the instant a task actually moved to IN_REVIEW — call wherever markTaskInReview is called. */
 export async function markEnteredReview(taskId: string, userEmail: string): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, entered_review_at)
-     VALUES ($1,$2,now())
-     ON CONFLICT (task_id) DO UPDATE SET entered_review_at = now(), updated_at = now()`,
-    [taskId, userEmail.toLowerCase()],
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, entered_review_at, user_id)
+     VALUES ($1,$2,now(),$3)
+     ON CONFLICT (task_id) DO UPDATE SET entered_review_at = now(),
+       user_id = COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at = now()`,
+    [taskId, userEmail.toLowerCase(), userId],
   );
 }
 
 /** Task ids that entered IN_REVIEW at or after `sinceIso`, for the standup's "moved to review" bucket. */
 export async function getTaskEngagementStatesSince(userEmail: string, sinceIso: string): Promise<Set<string>> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<{ task_id: string }>(
-    `SELECT task_id FROM tasks.task_engagement_state WHERE lower(user_email) = $1 AND entered_review_at >= $2`,
-    [userEmail.toLowerCase(), sinceIso],
+    userId
+      ? `SELECT task_id FROM tasks.task_engagement_state
+          WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2))) AND entered_review_at >= $3`
+      : `SELECT task_id FROM tasks.task_engagement_state WHERE lower(user_email) = $1 AND entered_review_at >= $2`,
+    userId ? [userId, emails, sinceIso] : [userEmail.toLowerCase(), sinceIso],
   );
   return new Set(rows.map((r) => r.task_id));
 }
@@ -820,13 +935,16 @@ export async function getTaskEngagementStatesSince(userEmail: string, sinceIso: 
  */
 export async function ensureNextReviewPing(taskId: string, userEmail: string, whenIso: string): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, next_review_ping_at)
-     VALUES ($1,$2,$3)
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, next_review_ping_at, user_id)
+     VALUES ($1,$2,$3,$4)
      ON CONFLICT (task_id) DO UPDATE SET
        next_review_ping_at = COALESCE(tasks.task_engagement_state.next_review_ping_at, EXCLUDED.next_review_ping_at),
+       user_id = COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id),
        updated_at = now()`,
-    [taskId, userEmail.toLowerCase(), whenIso],
+    [taskId, userEmail.toLowerCase(), whenIso, userId],
   );
 }
 
@@ -848,13 +966,16 @@ export async function rescheduleNextReviewPing(taskId: string, whenIso: string):
  */
 export async function incrementRevisionCount(taskId: string, userEmail: string): Promise<number> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<{ revision_count: number }>(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, revision_count)
-     VALUES ($1,$2,1)
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, revision_count, user_id)
+     VALUES ($1,$2,1,$3)
      ON CONFLICT (task_id) DO UPDATE SET
-       revision_count = tasks.task_engagement_state.revision_count + 1, updated_at = now()
+       revision_count = tasks.task_engagement_state.revision_count + 1,
+       user_id = COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at = now()
      RETURNING revision_count`,
-    [taskId, userEmail.toLowerCase()],
+    [taskId, userEmail.toLowerCase(), userId],
   );
   return rows[0]?.revision_count ?? 1;
 }
@@ -867,13 +988,16 @@ export async function incrementRevisionCount(taskId: string, userEmail: string):
 /** Bump the approach gate's corrective-pass counter and return the new count. */
 export async function incrementApproachRevisionCount(taskId: string, userEmail: string): Promise<number> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<{ approach_revision_count: number }>(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_revision_count)
-     VALUES ($1,$2,1)
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_revision_count, user_id)
+     VALUES ($1,$2,1,$3)
      ON CONFLICT (task_id) DO UPDATE SET
-       approach_revision_count = tasks.task_engagement_state.approach_revision_count + 1, updated_at = now()
+       approach_revision_count = tasks.task_engagement_state.approach_revision_count + 1,
+       user_id = COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at = now()
      RETURNING approach_revision_count`,
-    [taskId, userEmail.toLowerCase()],
+    [taskId, userEmail.toLowerCase(), userId],
   );
   return rows[0]?.approach_revision_count ?? 1;
 }
@@ -881,23 +1005,29 @@ export async function incrementApproachRevisionCount(taskId: string, userEmail: 
 /** The approach gate passed — lock in the approach and make the task eligible for real DOING work. */
 export async function approveApproach(taskId: string, userEmail: string, approach: string): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_status, proposed_approach)
-     VALUES ($1,$2,'approved',$3)
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_status, proposed_approach, user_id)
+     VALUES ($1,$2,'approved',$3,$4)
      ON CONFLICT (task_id) DO UPDATE SET
-       approach_status='approved', proposed_approach=EXCLUDED.proposed_approach, updated_at=now()`,
-    [taskId, userEmail.toLowerCase(), approach],
+       approach_status='approved', proposed_approach=EXCLUDED.proposed_approach,
+       user_id=COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at=now()`,
+    [taskId, userEmail.toLowerCase(), approach, userId],
   );
 }
 
 /** The approach gate's cap was exhausted without a pass — escalate to the user instead of looping. */
 export async function escalateApproach(taskId: string, userEmail: string): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_status)
-     VALUES ($1,$2,'escalated')
-     ON CONFLICT (task_id) DO UPDATE SET approach_status='escalated', updated_at=now()`,
-    [taskId, userEmail.toLowerCase()],
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_status, user_id)
+     VALUES ($1,$2,'escalated',$3)
+     ON CONFLICT (task_id) DO UPDATE SET approach_status='escalated',
+       user_id=COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at=now()`,
+    [taskId, userEmail.toLowerCase(), userId],
   );
 }
 
@@ -910,15 +1040,18 @@ export async function escalateApproach(taskId: string, userEmail: string): Promi
  */
 export async function openClarifyingQuestion(taskId: string, userEmail: string, question: string): Promise<number> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<{ clarify_count: number }>(
     `INSERT INTO tasks.task_engagement_state
-       (task_id, user_email, clarify_status, clarify_count, open_question, open_question_asked_at)
-     VALUES ($1,$2,'open',1,$3,now())
+       (task_id, user_email, clarify_status, clarify_count, open_question, open_question_asked_at, user_id)
+     VALUES ($1,$2,'open',1,$3,now(),$4)
      ON CONFLICT (task_id) DO UPDATE SET
        clarify_status='open', clarify_count = tasks.task_engagement_state.clarify_count + 1,
-       open_question=EXCLUDED.open_question, open_question_asked_at=now(), updated_at=now()
+       open_question=EXCLUDED.open_question, open_question_asked_at=now(),
+       user_id=COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at=now()
      RETURNING clarify_count`,
-    [taskId, userEmail.toLowerCase(), question],
+    [taskId, userEmail.toLowerCase(), question, userId],
   );
   return rows[0]?.clarify_count ?? 1;
 }
@@ -937,12 +1070,15 @@ export async function closeClarifyingQuestion(taskId: string): Promise<void> {
 /** Lock in the confirmed Definition of Done (the confirm_task_intent tool handler calls this). */
 export async function confirmTaskIntent(taskId: string, userEmail: string, dod: string): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, confirm_status, confirmed_dod, confirmed_at)
-     VALUES ($1,$2,'confirmed',$3,now())
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, confirm_status, confirmed_dod, confirmed_at, user_id)
+     VALUES ($1,$2,'confirmed',$3,now(),$4)
      ON CONFLICT (task_id) DO UPDATE SET
-       confirm_status='confirmed', confirmed_dod=EXCLUDED.confirmed_dod, confirmed_at=now(), updated_at=now()`,
-    [taskId, userEmail.toLowerCase(), dod],
+       confirm_status='confirmed', confirmed_dod=EXCLUDED.confirmed_dod, confirmed_at=now(),
+       user_id=COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at=now()`,
+    [taskId, userEmail.toLowerCase(), dod, userId],
   );
 }
 
@@ -1084,14 +1220,17 @@ export async function upsertScheduledJob(job: {
   meta?: Record<string, unknown>;
 }): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(job.targetEmail);
   await getPool().query(
-    `INSERT INTO tasks.scheduled_jobs (id, job_type, target_email, cadence, next_run_at, meta)
-     VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb)
+    `INSERT INTO tasks.scheduled_jobs (id, job_type, target_email, cadence, next_run_at, meta, user_id)
+     VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7)
      ON CONFLICT (id) DO UPDATE SET
        job_type = EXCLUDED.job_type,
        target_email = EXCLUDED.target_email,
        cadence = EXCLUDED.cadence,
        meta = EXCLUDED.meta,
+       user_id = COALESCE(EXCLUDED.user_id, tasks.scheduled_jobs.user_id),
        updated_at = now()`,
     [
       job.id,
@@ -1100,6 +1239,7 @@ export async function upsertScheduledJob(job: {
       JSON.stringify(job.cadence),
       job.nextRunAt,
       JSON.stringify(job.meta ?? {}),
+      userId,
     ],
   );
 }
@@ -1185,31 +1325,36 @@ export async function getMirrorStats(): Promise<{ total: number; byEmail: { emai
  * (fresh DB before any artifact was ever saved), it falls back to the plain task query. */
 export async function getBoardTasks(userEmail: string): Promise<BoardTaskRow[]> {
   await ensureBootstrapped();
-  const email = userEmail.toLowerCase();
+  // Mirror + email-scoped artifacts read: widen to the caller's whole alias SET (journey_tasks.user_id is
+  // JOURNEY's id space, so we filter on the email set, not our resolved user_id). The artifacts subquery is
+  // itself email-scoped, so it takes the same SET — a task's artifacts saved under any of the user's emails
+  // still attach.
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
   const withArtifacts = `
     SELECT t.id,t.title,t.status,t.priority,t.category,t.is_priority,t.priority_rank,t.due_date,
            t.completed_at,t.assigned_agent,t.tags,t.definition_of_done,
            COALESCE((
              SELECT json_agg(json_build_object('id',a.id,'name',a.name,'status',a.status) ORDER BY a.created_at DESC)
                FROM artifacts.items a
-              WHERE a.task_id = t.id AND lower(a.user_email) = $1
+              WHERE a.task_id = t.id AND lower(a.user_email) = ANY($1)
            ), '[]'::json) AS artifacts
       FROM tasks.journey_tasks t
-     WHERE lower(t.user_email) = $1
+     WHERE lower(t.user_email) = ANY($1)
      ORDER BY t.updated_at DESC
      LIMIT 500`;
   const plain = `
     SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done
       FROM tasks.journey_tasks
-     WHERE lower(user_email) = $1
+     WHERE lower(user_email) = ANY($1)
      ORDER BY updated_at DESC
      LIMIT 500`;
   try {
-    const { rows } = await getPool().query<BoardTaskRow>(withArtifacts, [email]);
+    const { rows } = await getPool().query<BoardTaskRow>(withArtifacts, [emails]);
     return rows;
   } catch {
     // artifacts.items not bootstrapped yet (or transient) — the board still works without the links.
-    const { rows } = await getPool().query<BoardTaskRow>(plain, [email]);
+    const { rows } = await getPool().query<BoardTaskRow>(plain, [emails]);
     return rows;
   }
 }
@@ -1228,13 +1373,16 @@ export interface CeremonyRunRecord {
 /** Persist a ceremony run (transcript + summary) so it's reviewable later. */
 export async function recordCeremonyRun(r: CeremonyRunRecord): Promise<void> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(r.user_email);
   await getPool().query(
-    `INSERT INTO tasks.ceremony_runs (id,user_email,ceremony_type,mode,status,summary,transcript,auto_run)
-     VALUES ($1,$2,$3,$4,COALESCE($5,'completed'),$6,$7,COALESCE($8,false))
-     ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, summary=EXCLUDED.summary, transcript=EXCLUDED.transcript`,
+    `INSERT INTO tasks.ceremony_runs (id,user_email,ceremony_type,mode,status,summary,transcript,auto_run,user_id)
+     VALUES ($1,$2,$3,$4,COALESCE($5,'completed'),$6,$7,COALESCE($8,false),$9)
+     ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, summary=EXCLUDED.summary, transcript=EXCLUDED.transcript,
+       user_id=COALESCE(EXCLUDED.user_id, tasks.ceremony_runs.user_id)`,
     [
       r.id, r.user_email, r.ceremony_type, r.mode ?? null, r.status ?? null,
-      r.summary ?? null, JSON.stringify(r.transcript ?? []), r.auto_run ?? null,
+      r.summary ?? null, JSON.stringify(r.transcript ?? []), r.auto_run ?? null, userId,
     ],
   );
 }
@@ -1253,10 +1401,17 @@ export interface CeremonyRunRow {
 /** Recent ceremony runs for a user (newest first), for the review thread / virtual-meeting view. */
 export async function getCeremonyRuns(userEmail: string, limit = 20): Promise<CeremonyRunRow[]> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<CeremonyRunRow>(
-    `SELECT id,ceremony_type,mode,status,summary,transcript,auto_run,created_at
-       FROM tasks.ceremony_runs WHERE lower(user_email)=$1 ORDER BY created_at DESC LIMIT $2`,
-    [userEmail.toLowerCase(), limit],
+    userId
+      ? `SELECT id,ceremony_type,mode,status,summary,transcript,auto_run,created_at
+           FROM tasks.ceremony_runs
+          WHERE user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2))
+          ORDER BY created_at DESC LIMIT $3`
+      : `SELECT id,ceremony_type,mode,status,summary,transcript,auto_run,created_at
+           FROM tasks.ceremony_runs WHERE lower(user_email)=$1 ORDER BY created_at DESC LIMIT $2`,
+    userId ? [userId, emails, limit] : [userEmail.toLowerCase(), limit],
   );
   return rows;
 }

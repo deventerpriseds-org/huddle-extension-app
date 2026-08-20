@@ -25,7 +25,12 @@ CREATE TABLE IF NOT EXISTS chat.deep_confirm (
   ask_text   TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (user_email, huddle_id)
-);`;
+);
+-- Identity unification: key on the stable user_id (entra_object_id) with user_email retained as a
+-- fallback + display. Resolved in-store from the passed email via resolveScopeByEmail, so both of a
+-- user's emails converge to one pending row regardless of which email a caller presents.
+ALTER TABLE chat.deep_confirm ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS deep_confirm_userid_idx ON chat.deep_confirm(user_id);`;
 let booted: Promise<void> | null = null;
 async function ensure() {
   if (booted) return booted;
@@ -39,10 +44,12 @@ export async function setPendingDeepConfirm(email: string | null, huddleId: stri
   if (!email) return;
   try {
     await ensure();
+    const { resolveScopeByEmail } = await import("../identity/identity.server");
+    const { userId } = await resolveScopeByEmail(email);
     await getPool().query(
-      `INSERT INTO chat.deep_confirm (user_email, huddle_id, agent_id, ask_text) VALUES ($1,$2,$3,$4)
-       ON CONFLICT (user_email, huddle_id) DO UPDATE SET agent_id=$3, ask_text=$4, created_at=now()`,
-      [email, huddleId, agentId, askText],
+      `INSERT INTO chat.deep_confirm (user_email, huddle_id, agent_id, ask_text, user_id) VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (user_email, huddle_id) DO UPDATE SET agent_id=$3, ask_text=$4, user_id=COALESCE(EXCLUDED.user_id, chat.deep_confirm.user_id), created_at=now()`,
+      [email, huddleId, agentId, askText, userId],
     );
   } catch { /* best-effort */ }
 }
@@ -50,9 +57,14 @@ export async function getPendingDeepConfirm(email: string | null, huddleId: stri
   if (!email) return null;
   try {
     await ensure();
+    const { resolveScopeByEmail } = await import("../identity/identity.server");
+    const { userId, emails } = await resolveScopeByEmail(email);
     const r = await getPool().query<{ ask_text: string; agent_id: string | null; created_at: Date }>(
-      `SELECT ask_text, agent_id, created_at FROM chat.deep_confirm WHERE user_email=$1 AND huddle_id=$2`,
-      [email, huddleId],
+      userId
+        ? `SELECT ask_text, agent_id, created_at FROM chat.deep_confirm
+           WHERE (user_id=$1 OR (user_id IS NULL AND lower(user_email)=ANY($2))) AND huddle_id=$3 LIMIT 1`
+        : `SELECT ask_text, agent_id, created_at FROM chat.deep_confirm WHERE user_email=$1 AND huddle_id=$2 LIMIT 1`,
+      userId ? [userId, emails, huddleId] : [email, huddleId],
     );
     const row = r.rows[0];
     if (!row) return null;
@@ -63,7 +75,17 @@ export async function getPendingDeepConfirm(email: string | null, huddleId: stri
 }
 export async function clearPendingDeepConfirm(email: string | null, huddleId: string): Promise<void> {
   if (!email) return;
-  try { await ensure(); await getPool().query(`DELETE FROM chat.deep_confirm WHERE user_email=$1 AND huddle_id=$2`, [email, huddleId]); } catch { /* best-effort */ }
+  try {
+    await ensure();
+    const { resolveScopeByEmail } = await import("../identity/identity.server");
+    const { userId, emails } = await resolveScopeByEmail(email);
+    await getPool().query(
+      userId
+        ? `DELETE FROM chat.deep_confirm WHERE (user_id=$1 OR (user_id IS NULL AND lower(user_email)=ANY($2))) AND huddle_id=$3`
+        : `DELETE FROM chat.deep_confirm WHERE user_email=$1 AND huddle_id=$2`,
+      userId ? [userId, emails, huddleId] : [email, huddleId],
+    );
+  } catch { /* best-effort */ }
 }
 
 /**

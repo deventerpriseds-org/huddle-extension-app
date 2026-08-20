@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS artifacts.items (
 CREATE INDEX IF NOT EXISTS artifact_items_user_idx   ON artifacts.items (lower(user_email), created_at DESC);
 CREATE INDEX IF NOT EXISTS artifact_items_status_idx ON artifacts.items (lower(user_email), status);
 CREATE INDEX IF NOT EXISTS artifact_items_folder_idx ON artifacts.items (lower(user_email), folder);
+-- Identity unification: key on the stable user_id (entra_object_id) with user_email retained as a
+-- fallback + display. Resolved in-store from the passed email via resolveScopeByEmail, so both of a
+-- user's emails converge to one set of rows regardless of which email a caller presents.
+ALTER TABLE artifacts.items ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS artifact_items_userid_idx ON artifacts.items(user_id);
 
 -- Per-user artifact-mirroring preferences (one-way Azure → cloud drives). Defaults ON so approving an
 -- artifact mirrors it to OneDrive out of the box; each destination + the on-approve trigger are toggles.
@@ -59,6 +64,8 @@ CREATE TABLE IF NOT EXISTS artifacts.mirror_config (
   gdrive_enabled    BOOLEAN NOT NULL DEFAULT true,
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE artifacts.mirror_config ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS artifact_mirror_config_userid_idx ON artifacts.mirror_config(user_id);
 `;
 
 let _ready: Promise<void> | null = null;
@@ -115,14 +122,16 @@ export interface CreateArtifactInput {
  */
 export async function createArtifact(input: CreateArtifactInput): Promise<{ id: string; deepLink: string }> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(input.userEmail);
   const id = `art-${randomUUID()}`;
   const data = Buffer.isBuffer(input.bytes) ? input.bytes : Buffer.from(input.bytes);
   const blobPath = `${slug(input.userEmail)}/${slug(input.folder)}/${id}-${slug(input.name)}`;
   // Blob first: if the upload fails we never leave a metadata row pointing at nothing.
   await putArtifactBlob(blobPath, data, input.mime);
   await getPool().query(
-    `INSERT INTO artifacts.items (id,user_email,agent_id,task_id,folder,name,mime,size_bytes,blob_path,status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,'review'))`,
+    `INSERT INTO artifacts.items (id,user_email,agent_id,task_id,folder,name,mime,size_bytes,blob_path,status,user_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,'review'),$11)`,
     [
       id,
       input.userEmail.toLowerCase(),
@@ -134,6 +143,7 @@ export async function createArtifact(input: CreateArtifactInput): Promise<{ id: 
       data.length,
       blobPath,
       input.status ?? null,
+      userId,
     ],
   );
   return { id, deepLink: `/artifacts/${id}` };
@@ -149,8 +159,17 @@ export interface ArtifactFilters {
 /** All of a user's artifacts (newest first), narrowed by any combination of filters. Scoped by email. */
 export async function listArtifacts(userEmail: string, f: ArtifactFilters = {}): Promise<ArtifactRow[]> {
   await ensureBootstrapped();
-  const params: unknown[] = [userEmail.toLowerCase()];
-  let sql = `SELECT ${SELECT_COLS} FROM artifacts.items WHERE lower(user_email) = $1`;
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
+  // Dual-read: prefer rows keyed on the resolved user_id, falling back to any email alias for an
+  // un-migrated (user_id NULL) row — so both of a user's emails resolve to the SAME artifacts. The
+  // `user_id IS NULL` guard keeps a migrated row from also matching the email branch (no double-return).
+  const params: unknown[] = userId ? [userId, emails] : [userEmail.toLowerCase()];
+  let sql = `SELECT ${SELECT_COLS} FROM artifacts.items WHERE ${
+    userId
+      ? "(user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2)))"
+      : "lower(user_email) = $1"
+  }`;
   if (f.folder) { params.push(f.folder); sql += ` AND folder = $${params.length}`; }
   if (f.status) { params.push(f.status); sql += ` AND status = $${params.length}`; }
   if (f.agentId) { params.push(f.agentId); sql += ` AND agent_id = $${params.length}`; }
@@ -172,9 +191,15 @@ export async function getArtifact(
   id: string,
 ): Promise<(ArtifactRow & { url: string | null; blob_size: number | null; text: string | null }) | null> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<ArtifactRow>(
-    `SELECT ${SELECT_COLS} FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
-    [id, userEmail.toLowerCase()],
+    userId
+      ? `SELECT ${SELECT_COLS} FROM artifacts.items
+          WHERE id = $1 AND (user_id = $2 OR (user_id IS NULL AND lower(user_email) = ANY($3)))
+          ORDER BY (user_id IS NOT NULL) DESC LIMIT 1`
+      : `SELECT ${SELECT_COLS} FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
+    userId ? [id, userId, emails] : [id, userEmail.toLowerCase()],
   );
   const row = rows[0];
   if (!row) return null;
@@ -210,17 +235,24 @@ export async function setArtifactStatus(
   reviewer: string,
 ): Promise<ArtifactRow | null> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const isReview = status === "approved" || status === "changes";
+  // Dual-read predicate (matches a row by user_id OR, for an un-migrated row, by any email alias) so the
+  // status change resolves the same row regardless of which email the caller presents. `emails` always
+  // contains the passed email, so this is correct even when userId is null. The row self-migrates onto
+  // user_id via COALESCE($2, user_id) on any status change once the id is resolvable.
   const { rows } = await getPool().query<ArtifactRow>(
     `UPDATE artifacts.items
-        SET status = $3,
-            review_note = COALESCE($4, review_note),
-            reviewed_by = CASE WHEN $5 THEN $6 ELSE reviewed_by END,
-            reviewed_at = CASE WHEN $5 THEN now() ELSE reviewed_at END,
+        SET status = $4,
+            review_note = COALESCE($5, review_note),
+            reviewed_by = CASE WHEN $6 THEN $7 ELSE reviewed_by END,
+            reviewed_at = CASE WHEN $6 THEN now() ELSE reviewed_at END,
+            user_id = COALESCE($2, user_id),
             updated_at = now()
-      WHERE id = $1 AND lower(user_email) = $2
+      WHERE id = $1 AND (user_id = $2 OR (user_id IS NULL AND lower(user_email) = ANY($3)))
       RETURNING ${SELECT_COLS}`,
-    [id, userEmail.toLowerCase(), status, note, isReview, reviewer.toLowerCase()],
+    [id, userId, emails, status, note, isReview, reviewer.toLowerCase()],
   );
   return rows[0] ?? null;
 }
@@ -232,9 +264,17 @@ export async function setArtifactStatus(
  */
 export async function deleteArtifact(userEmail: string, id: string): Promise<{ deleted: number; error?: string }> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
+  // Dual-read ownership predicate (user_id OR any email alias for an un-migrated row). `emails` always
+  // contains the passed email so it's correct when userId is null too. The DELETE below reuses the SAME
+  // predicate so a row matched via user_id (created under a different alias) is actually removed rather
+  // than leaving an orphaned row after its blob was already deleted.
   const { rows } = await getPool().query<{ blob_path: string }>(
-    `SELECT blob_path FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
-    [id, userEmail.toLowerCase()],
+    `SELECT blob_path FROM artifacts.items
+       WHERE id = $1 AND (user_id = $2 OR (user_id IS NULL AND lower(user_email) = ANY($3)))
+       ORDER BY (user_id IS NOT NULL) DESC LIMIT 1`,
+    [id, userId, emails],
   );
   const row = rows[0];
   if (!row) return { deleted: 0 }; // wrong owner or missing — no cross-user delete
@@ -243,8 +283,9 @@ export async function deleteArtifact(userEmail: string, id: string): Promise<{ d
   const blobOk = await deleteArtifactBlob(row.blob_path);
   if (!blobOk) return { deleted: 0, error: "Couldn't remove the stored file — the artifact was kept so you can retry." };
   const res = await getPool().query(
-    `DELETE FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
-    [id, userEmail.toLowerCase()],
+    `DELETE FROM artifacts.items
+       WHERE id = $1 AND (user_id = $2 OR (user_id IS NULL AND lower(user_email) = ANY($3)))`,
+    [id, userId, emails],
   );
   return { deleted: res.rowCount ?? 0 };
 }
@@ -252,9 +293,15 @@ export async function deleteArtifact(userEmail: string, id: string): Promise<{ d
 /** Distinct folders a user has artifacts in (for the tree), with counts. */
 export async function listArtifactFolders(userEmail: string): Promise<{ folder: string; n: number }[]> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<{ folder: string; n: number }>(
-    `SELECT folder, count(*)::int AS n FROM artifacts.items WHERE lower(user_email) = $1 GROUP BY folder ORDER BY folder`,
-    [userEmail.toLowerCase()],
+    userId
+      ? `SELECT folder, count(*)::int AS n FROM artifacts.items
+          WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2)))
+          GROUP BY folder ORDER BY folder`
+      : `SELECT folder, count(*)::int AS n FROM artifacts.items WHERE lower(user_email) = $1 GROUP BY folder ORDER BY folder`,
+    userId ? [userId, emails] : [userEmail.toLowerCase()],
   );
   return rows;
 }
@@ -271,9 +318,15 @@ const MIRROR_DEFAULTS: MirrorConfig = { mirror_on_approve: true, onedrive_enable
 /** A user's mirror preferences, defaulting all-on when they've never set them. */
 export async function getMirrorConfig(userEmail: string): Promise<MirrorConfig> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<MirrorConfig>(
-    `SELECT mirror_on_approve, onedrive_enabled, gdrive_enabled FROM artifacts.mirror_config WHERE lower(user_email) = $1`,
-    [userEmail.toLowerCase()],
+    userId
+      ? `SELECT mirror_on_approve, onedrive_enabled, gdrive_enabled FROM artifacts.mirror_config
+          WHERE user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2))
+          ORDER BY (user_id IS NOT NULL) DESC, updated_at DESC LIMIT 1`
+      : `SELECT mirror_on_approve, onedrive_enabled, gdrive_enabled FROM artifacts.mirror_config WHERE lower(user_email) = $1 LIMIT 1`,
+    userId ? [userId, emails] : [userEmail.toLowerCase()],
   );
   return rows[0] ?? { ...MIRROR_DEFAULTS };
 }
@@ -281,15 +334,20 @@ export async function getMirrorConfig(userEmail: string): Promise<MirrorConfig> 
 /** Persist the WHOLE config (no partial-update surprises). Idempotent upsert keyed by email. */
 export async function setMirrorConfig(userEmail: string, cfg: MirrorConfig): Promise<MirrorConfig> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
+  // Upsert stays on the user_email PK (stable per user); user_id is set/refreshed when resolvable and
+  // never nulled out once present (COALESCE keeps the existing value on a userId-less write).
   await getPool().query(
-    `INSERT INTO artifacts.mirror_config (user_email, mirror_on_approve, onedrive_enabled, gdrive_enabled, updated_at)
-     VALUES ($1,$2,$3,$4,now())
+    `INSERT INTO artifacts.mirror_config (user_email, mirror_on_approve, onedrive_enabled, gdrive_enabled, user_id, updated_at)
+     VALUES ($1,$2,$3,$4,$5,now())
      ON CONFLICT (user_email) DO UPDATE SET
        mirror_on_approve = EXCLUDED.mirror_on_approve,
        onedrive_enabled  = EXCLUDED.onedrive_enabled,
        gdrive_enabled    = EXCLUDED.gdrive_enabled,
+       user_id = COALESCE(EXCLUDED.user_id, artifacts.mirror_config.user_id),
        updated_at = now()`,
-    [userEmail.toLowerCase(), cfg.mirror_on_approve, cfg.onedrive_enabled, cfg.gdrive_enabled],
+    [userEmail.toLowerCase(), cfg.mirror_on_approve, cfg.onedrive_enabled, cfg.gdrive_enabled, userId],
   );
   return cfg;
 }
@@ -302,9 +360,15 @@ export interface MirrorResult { ok: boolean; onedrive_url?: string | null; error
  */
 export async function mirrorArtifactToOneDrive(userEmail: string, id: string): Promise<MirrorResult> {
   await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<ArtifactRow>(
-    `SELECT ${SELECT_COLS} FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
-    [id, userEmail.toLowerCase()],
+    userId
+      ? `SELECT ${SELECT_COLS} FROM artifacts.items
+          WHERE id = $1 AND (user_id = $2 OR (user_id IS NULL AND lower(user_email) = ANY($3)))
+          ORDER BY (user_id IS NOT NULL) DESC LIMIT 1`
+      : `SELECT ${SELECT_COLS} FROM artifacts.items WHERE id = $1 AND lower(user_email) = $2`,
+    userId ? [id, userId, emails] : [id, userEmail.toLowerCase()],
   );
   const row = rows[0];
   if (!row) return { ok: false, error: "Not found." };

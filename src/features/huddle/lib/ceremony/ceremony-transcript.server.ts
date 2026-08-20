@@ -56,6 +56,11 @@ ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS tool_name  TEXT;
 ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS tool_args  JSONB;
 ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS tool_ok    BOOLEAN;
 ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS tool_error TEXT;
+-- Identity unification: key on the stable user_id (entra_object_id) with user_email retained as a
+-- fallback + display. Resolved in-store from the passed email via resolveScopeByEmail, so both of a
+-- user's emails converge to one transcript regardless of which email a caller presents.
+ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS ceremony_transcript_userid_idx ON chat.ceremony_transcript(user_id);
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -125,19 +130,23 @@ export async function appendCeremonyTurns(
   if (!email || !runId || !huddleId || turns.length === 0) return { ok: true, inserted: 0 };
   try {
     await ensureBootstrapped();
-    // Parameterized multi-row INSERT. 13 columns per row.
-    const cols = 13;
+    // Resolve the stable user_id ONCE for the whole batch (dual-write: user_id primary + user_email fallback).
+    const { resolveScopeByEmail } = await import("../identity/identity.server");
+    const { userId } = await resolveScopeByEmail(email);
+    // Parameterized multi-row INSERT. 14 columns per row.
+    const cols = 14;
     const values: unknown[] = [];
     const tuples: string[] = [];
     turns.forEach((t, i) => {
       const b = i * cols;
       tuples.push(
-        `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9},$${b + 10},$${b + 11},$${b + 12},$${b + 13})`,
+        `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9},$${b + 10},$${b + 11},$${b + 12},$${b + 13},$${b + 14})`,
       );
       values.push(
         runId,
         huddleId,
         email,
+        userId,
         t.seq,
         t.speaker,
         t.agentId ?? null,
@@ -152,7 +161,7 @@ export async function appendCeremonyTurns(
     });
     await getPool().query(
       `INSERT INTO chat.ceremony_transcript
-         (run_id, huddle_id, user_email, seq, speaker, agent_id, text, kind, interrupted, block_id, sentence_index, block_total, ts)
+         (run_id, huddle_id, user_email, user_id, seq, speaker, agent_id, text, kind, interrupted, block_id, sentence_index, block_total, ts)
        VALUES ${tuples.join(",")}`,
       values,
     );
@@ -187,11 +196,13 @@ export async function appendCeremonyToolCall(
   if (!email || !runId || !huddleId || !call?.toolName) return { ok: false };
   try {
     await ensureBootstrapped();
+    const { resolveScopeByEmail } = await import("../identity/identity.server");
+    const { userId } = await resolveScopeByEmail(email);
     await getPool().query(
       `INSERT INTO chat.ceremony_transcript
-         (run_id, huddle_id, user_email, seq, speaker, agent_id, text, kind, ts,
+         (run_id, huddle_id, user_email, user_id, seq, speaker, agent_id, text, kind, ts,
           tool_name, tool_args, tool_ok, tool_error)
-       SELECT $1, $2, $3,
+       SELECT $1, $2, $3, $11,
               COALESCE((SELECT MAX(seq) FROM chat.ceremony_transcript WHERE run_id = $1 AND user_email = $3), 0) + 1,
               'agent', $4, $5, 'tool', $6, $7, $8, $9, $10`,
       [
@@ -205,6 +216,7 @@ export async function appendCeremonyToolCall(
         call.args != null ? JSON.stringify(call.args) : null,
         call.ok,
         call.error ?? null,
+        userId,
       ],
     );
     return { ok: true };
@@ -229,10 +241,12 @@ export async function appendCeremonyToolStart(
   if (!email || !runId || !huddleId || !call?.toolName) return { ok: false };
   try {
     await ensureBootstrapped();
+    const { resolveScopeByEmail } = await import("../identity/identity.server");
+    const { userId } = await resolveScopeByEmail(email);
     await getPool().query(
       `INSERT INTO chat.ceremony_transcript
-         (run_id, huddle_id, user_email, seq, speaker, agent_id, text, kind, ts, tool_name)
-       SELECT $1, $2, $3,
+         (run_id, huddle_id, user_email, user_id, seq, speaker, agent_id, text, kind, ts, tool_name)
+       SELECT $1, $2, $3, $8,
               COALESCE((SELECT MAX(seq) FROM chat.ceremony_transcript WHERE run_id = $1 AND user_email = $3), 0) + 1,
               'agent', $4, $5, 'tool_start', $6, $7`,
       [
@@ -243,6 +257,7 @@ export async function appendCeremonyToolStart(
         `${call.toolName} started`,
         call.ts != null ? new Date(call.ts).toISOString() : null,
         call.toolName,
+        userId,
       ],
     );
     return { ok: true };
@@ -271,6 +286,8 @@ export async function getCeremonyToolEvents(
   if (!email || !runId) return [];
   try {
     await ensureBootstrapped();
+    const { resolveScopeByEmail } = await import("../identity/identity.server");
+    const { userId, emails } = await resolveScopeByEmail(email);
     const r = await getPool().query<{
       id: string;
       agent_id: string | null;
@@ -278,12 +295,19 @@ export async function getCeremonyToolEvents(
       kind: string | null;
       tool_ok: boolean | null;
     }>(
-      `SELECT id, agent_id, tool_name, kind, tool_ok
-       FROM chat.ceremony_transcript
-       WHERE user_email = $1 AND run_id = $2 AND kind IN ('tool_start','tool') AND id > $3
-       ORDER BY id ASC
-       LIMIT 50`,
-      [email, runId, sinceId || "0"],
+      userId
+        ? `SELECT id, agent_id, tool_name, kind, tool_ok
+           FROM chat.ceremony_transcript
+           WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2)))
+             AND run_id = $3 AND kind IN ('tool_start','tool') AND id > $4
+           ORDER BY id ASC
+           LIMIT 50`
+        : `SELECT id, agent_id, tool_name, kind, tool_ok
+           FROM chat.ceremony_transcript
+           WHERE user_email = $1 AND run_id = $2 AND kind IN ('tool_start','tool') AND id > $3
+           ORDER BY id ASC
+           LIMIT 50`,
+      userId ? [userId, emails, runId, sinceId || "0"] : [email, runId, sinceId || "0"],
     );
     return r.rows
       .filter((row) => !!row.tool_name)
@@ -305,13 +329,21 @@ export async function getCeremonyRun(email: string, runId: string): Promise<Cere
   if (!email || !runId) return [];
   try {
     await ensureBootstrapped();
+    const { resolveScopeByEmail } = await import("../identity/identity.server");
+    const { userId, emails } = await resolveScopeByEmail(email);
     const r = await getPool().query<CeremonyTranscriptRow>(
-      `SELECT id, run_id, huddle_id, user_email, seq, speaker, agent_id, text, kind,
-              interrupted, block_id, sentence_index, block_total, ts, created_at
-       FROM chat.ceremony_transcript
-       WHERE user_email = $1 AND run_id = $2
-       ORDER BY seq ASC, id ASC`,
-      [email, runId],
+      userId
+        ? `SELECT id, run_id, huddle_id, user_email, seq, speaker, agent_id, text, kind,
+                  interrupted, block_id, sentence_index, block_total, ts, created_at
+           FROM chat.ceremony_transcript
+           WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2))) AND run_id = $3
+           ORDER BY seq ASC, id ASC`
+        : `SELECT id, run_id, huddle_id, user_email, seq, speaker, agent_id, text, kind,
+                  interrupted, block_id, sentence_index, block_total, ts, created_at
+           FROM chat.ceremony_transcript
+           WHERE user_email = $1 AND run_id = $2
+           ORDER BY seq ASC, id ASC`,
+      userId ? [userId, emails, runId] : [email, runId],
     );
     return r.rows;
   } catch (err) {
@@ -325,21 +357,34 @@ export async function listCeremonyRuns(email: string, limit = 20): Promise<Cerem
   if (!email) return [];
   try {
     await ensureBootstrapped();
+    const { resolveScopeByEmail } = await import("../identity/identity.server");
+    const { userId, emails } = await resolveScopeByEmail(email);
     const r = await getPool().query<CeremonyRunSummary>(
       // Exclude 1:1 voice-call transcripts (huddle_id 'dm-<agent>') — the ceremony_transcript table is
       // reused as the durable store for 1:1 voice calls (ACT-huddle-32), but those are NOT ceremony runs
       // and must not appear in the ceremony run list.
-      `SELECT run_id,
-              MAX(huddle_id)          AS huddle_id,
-              MIN(ts)                 AS started_at,
-              COUNT(*)::int           AS turn_count
-       FROM chat.ceremony_transcript
-       WHERE user_email = $1
-         AND huddle_id NOT LIKE 'dm-%'
-       GROUP BY run_id
-       ORDER BY MIN(created_at) DESC
-       LIMIT $2`,
-      [email, limit],
+      userId
+        ? `SELECT run_id,
+                  MAX(huddle_id)          AS huddle_id,
+                  MIN(ts)                 AS started_at,
+                  COUNT(*)::int           AS turn_count
+           FROM chat.ceremony_transcript
+           WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2)))
+             AND huddle_id NOT LIKE 'dm-%'
+           GROUP BY run_id
+           ORDER BY MIN(created_at) DESC
+           LIMIT $3`
+        : `SELECT run_id,
+                  MAX(huddle_id)          AS huddle_id,
+                  MIN(ts)                 AS started_at,
+                  COUNT(*)::int           AS turn_count
+           FROM chat.ceremony_transcript
+           WHERE user_email = $1
+             AND huddle_id NOT LIKE 'dm-%'
+           GROUP BY run_id
+           ORDER BY MIN(created_at) DESC
+           LIMIT $2`,
+      userId ? [userId, emails, limit] : [email, limit],
     );
     return r.rows;
   } catch (err) {
