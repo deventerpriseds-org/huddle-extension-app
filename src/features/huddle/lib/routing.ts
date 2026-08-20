@@ -509,14 +509,16 @@ export async function scoreDifficultyLLM(
 export async function resolveOwnerLLM(
   text: string,
   addressedId: AgentId,
-  memberIds: AgentId[],
   invocation: { backend: "openai" | "lovable"; model: string; fastMode?: boolean },
 ): Promise<AgentId | null> {
   try {
-    if (invocation.backend !== "openai") return null; // mirror scoreDifficultyLLM: OpenAI path only
-    const roster = AGENTS.filter((a) => memberIds.includes(a.id));
-    const addressed = roster.find((a) => a.id === addressedId);
-    if (!roster.length || !addressed) return null;
+    if (invocation.backend !== "openai") return null; // failure → caller falls back to laneOwnerFor
+    const addressed = AGENTS.find((a) => a.id === addressedId);
+    if (!addressed) return null;
+    // Candidate pool = the WHOLE team. Ownership is team-wide: the true owner (e.g. Finn for finance) need
+    // NOT be "present" in this 1:1, so restricting to data.members (often just the addressed agent) is wrong
+    // — that was the bug that made this a no-op and let the keyword scorer decide.
+    const roster = AGENTS;
     const lines = roster
       .map((a) => `- ${a.id} (${a.name}, ${a.role}): ${[...a.domains, ...a.themes].slice(0, 14).join(", ")}`)
       .join("\n");
@@ -545,8 +547,10 @@ export async function resolveOwnerLLM(
       fastMode: invocation.fastMode,
     });
     const owner = raw?.owner;
-    if (!owner || owner === addressedId) return null; // keep with the addressed agent
-    return roster.some((a) => a.id === owner) ? (owner as AgentId) : null;
+    if (!owner) return null; // malformed → treat as failure → caller falls back to laneOwnerFor
+    // A valid decision is AUTHORITATIVE and must NOT be overridden by the keyword scorer: returning the
+    // ADDRESSED id means "keep it here" (the common case). Only a genuine failure returns null above.
+    return roster.some((a) => a.id === owner) ? (owner as AgentId) : addressedId;
   } catch {
     return null;
   }

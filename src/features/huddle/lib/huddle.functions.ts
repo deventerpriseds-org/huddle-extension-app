@@ -5294,15 +5294,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // Fire-and-forget (same as the existing deliverOwnerFollowup pattern here) so it never delays the
         // user's reply; falls back to the keyword laneOwnerFor on no-key/failure so it's never worse.
         void (async () => {
-          let ownerId: AgentId | null = null;
-          if (routerCfg.backend === "openai" && openaiKey) {
-            ownerId = await resolveOwnerLLM(data.text, nextId, data.members, {
-              backend: "openai",
-              model: routerCfg.model,
-              fastMode: routerCfg.fastMode,
-            });
-          }
-          if (!ownerId) ownerId = laneOwnerFor(data.text, nextId)?.id ?? null;
+          // The semantic resolver is AUTHORITATIVE when it succeeds: it returns a real owner id — which
+          // may be the ADDRESSED agent, meaning "keep it here" — and returns null ONLY on failure/no-key.
+          // So fall back to the keyword laneOwnerFor ONLY on that null; never override a real decision
+          // (the earlier bug: null meant BOTH "keep" and "failed", so laneOwnerFor re-introduced the mis-route).
+          const resolved =
+            routerCfg.backend === "openai" && openaiKey
+              ? await resolveOwnerLLM(data.text, nextId, {
+                  backend: "openai",
+                  model: routerCfg.model,
+                  fastMode: routerCfg.fastMode,
+                })
+              : null;
+          const ownerId = resolved ?? (laneOwnerFor(data.text, nextId)?.id ?? null);
           deliverIfOwner(ownerId);
         })();
       }
