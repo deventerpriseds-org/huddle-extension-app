@@ -113,7 +113,12 @@ export const checks = [
     // acknowledgment as the newest turn after we sent, with a non-empty reply that isn't our own text.
     const sinceMs = Date.now() - 4000;
     await composer.fill(REPLY);
-    await composer.press("Enter");
+    // Enter now inserts a NEW LINE in this composer (HuddleView.tsx: "Previously Enter sent, which
+    // fought multi-line messages on a phone keyboard" — deliberate UX change, send moved to the button
+    // / Cmd-or-Ctrl+Enter). A bare .press("Enter") silently leaves the text sitting unsent in the box —
+    // ground-truthed live: chat.pending_turns showed zero new rows anywhere after a plain Enter, and the
+    // after-reply screenshot still showed the typed text in the composer. Use the real send control.
+    await page.getByRole("button", { name: "Send" }).first().click();
     const start = Date.now(), maxMs = 90000;
     let reply = "", stableAt = null, turnStatus = "";
     while (Date.now() - start < maxMs) {
