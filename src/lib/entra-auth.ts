@@ -282,6 +282,13 @@ function checkUatBypass(): boolean {
   return uatBypassActive;
 }
 
+/** True under either bypass (E2E dev-only or production UAT). Neither ever produces a real OAuth
+ *  token, so a caller in this state should treat "no token" as an EXPECTED, permanent condition —
+ *  not a transient failure to keep retrying — when deciding whether to wait on token-gated work. */
+export function isAuthBypassActive(): boolean {
+  return E2E_BYPASS || checkUatBypass();
+}
+
 export function initMsal(): Promise<void> {
   if (E2E_BYPASS) return Promise.resolve();
   if (checkUatBypass()) return Promise.resolve();
