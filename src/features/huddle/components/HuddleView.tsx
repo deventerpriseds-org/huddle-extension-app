@@ -737,7 +737,13 @@ function Composer({ huddle }: { huddle: Huddle }) {
   function applyTurnStream(
     turnId: string,
     replies:
-      { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[] | undefined,
+      | {
+          agentId: AgentId;
+          text: string;
+          artifacts?: { id: string; name: string }[];
+          confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+        }[]
+      | undefined,
     result: TurnResult,
     final: boolean,
     userText?: string | null,
@@ -791,6 +797,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
         replyTo: turnId,
         artifacts: reply.artifacts,
         toolUses: crumbs,
+        confirmAsk: reply.confirmAsk,
       });
     });
 

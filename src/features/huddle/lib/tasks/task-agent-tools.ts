@@ -77,7 +77,8 @@ export const PROPOSE_TASK_INTENT_TOOL = {
       task_title: { type: "string", description: "The task's title, exactly as given to you." },
       definition_of_done: {
         type: "string",
-        description: "The concrete, testable Definition of Done you just proposed to the user in this same message.",
+        description:
+          "The concrete, testable Definition of Done you just proposed to the user in this same message.",
       },
     },
     required: ["task_id", "task_title", "definition_of_done"],
