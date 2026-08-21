@@ -2532,6 +2532,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // know the caller, also create it in journey. On success the journey task
       // is mirrored onto the Huddle board (journeyTaskUpdates) so exactly one
       // card shows; if journey is off or fails, fall back to a Huddle-only card.
+      // Set ONLY when a journey write was attempted and failed. The Huddle-only path below is
+      // shared by three cases (journey disabled, no caller, journey failed); a card is honest for
+      // the first two but a GHOST for the third — journey is canonical, so no journey row means no
+      // mirror row and nothing on the real board, however confident the reply sounds.
+      let journeyFailed: string | null = null;
       if (agentBackend.journey?.enabled && data.caller?.entra_email) {
         try {
           const { invokeJourneyTool } = await import("./journey/proxy.functions");
@@ -2596,24 +2601,47 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
           const ev = recordFallback(
             "tool",
-            `${winner.name}: task saved to the Huddle board but journey create failed — ${r.error ?? "unknown"}`,
+            `${winner.name}: could NOT save “${task.title}” to your board — journey create failed — ${r.error ?? "unknown"}`,
             "journey task create failed",
             winner.id,
           );
           perAgentFallbacks.push(ev.inline);
+          journeyFailed = r.error ?? "unknown error";
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           const ev = recordFallback(
             "tool",
-            `${winner.name}: task saved to the Huddle board but journey create crashed — ${msg}`,
+            `${winner.name}: could NOT save “${task.title}” to your board — journey create crashed — ${msg}`,
             "journey task create crashed",
             winner.id,
           );
           perAgentFallbacks.push(ev.inline);
+          journeyFailed = msg;
         }
       }
 
-      // Huddle-only path (journey disabled, no caller, or journey create failed).
+      // Journey was attempted and FAILED: report it honestly. Do NOT render a board card — journey
+      // is the canonical store, so a card here would show a task that exists nowhere but the screen
+      // (no journey row -> no mirror row). ok:false so the model reports the failure instead of the
+      // flat "added it" the user saw, and the breadcrumb shows a cross rather than a tick.
+      if (journeyFailed) {
+        recordToolUse(
+          winner.id,
+          "create_huddle_task",
+          `FAILED to save “${task.title}” to the board — ${journeyFailed}`,
+          false,
+        );
+        return {
+          ok: false,
+          error: `Could not save “${task.title}” to the board: ${journeyFailed}`,
+          note: "Tell the user plainly that it was NOT saved and offer to retry — do not claim it was added.",
+          task,
+          boards: [],
+        };
+      }
+
+      // Huddle-only path (journey deliberately disabled, or no caller identity). A card is correct
+      // here: no journey write was attempted, so nothing is being misrepresented.
       suggestedTasks.push(task);
       recordToolUse(
         winner.id,

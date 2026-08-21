@@ -2271,3 +2271,26 @@ artifacts.items 109 / task_engagement_state 42 / agent_workflow_config 1, **all 
 **Status:** BUILT + DEPLOYED + BACKFILLED; independent live verification of AC-7 in flight.
 **Not done (deliberate):** Phase 2 — dropping email columns / `user_id NOT NULL` (needs a soak);
 `public.rag_chunks` memory (no email column — evaluated, out of scope).
+
+### ACT-huddle-54: Agents reported tasks "added to your board" when the journey write FAILED (ghost cards)
+**Reported:** 2026-08-20 (user screenshot) — a card reading "(fallback: journey task create failed)" with a
+tick-marked `create_huddle_task` breadcrumb, and Ezra replying "Added ... to your board for today."
+**Root cause:** `createSuggestedTaskFromTool` collapsed THREE cases into one Huddle-only return —
+journey disabled, no caller, and journey create FAILED — all returning `ok:true` with a board card and a
+successful breadcrumb. journey `public.tasks` is canonical, so a failed write means no journey row → no
+mirror row → the task exists nowhere but the screen, while the agent says it was added.
+**Fix:** track `journeyFailed` on the two failure branches and split it out: return `ok:false` with the
+reason + a directive to say plainly it was NOT saved, render NO card, and record the breadcrumb as failed.
+The journey-disabled / no-caller cases are UNCHANGED (a card is honest there — no write was attempted),
+so `journey:{enabled:false}` harnesses keep working.
+**Integration trace:** funnels through the ONE task-creation tool path in `runHuddleTurn`. Upstream
+producers = the OpenAI dispatch (huddle.functions.ts:3183) and Lovable dispatch (:4169), plus the forced
+`toolChoice: create_huddle_task` path — all unchanged. Downstream consumers = `suggestedTasks` →
+`addSuggestedTasks` (HuddleView:756) board cards, `recordToolUse` breadcrumbs, and the journey→mirror sync.
+Extends the existing dual-write path; no new system.
+**Also established (invalidated a planned fix):** `quick_create_task` is a THIN WRAPPER that already
+delegates to `parseAndCreateTasks` with `auto_schedule` defaulting to true, which does call
+`batch-calendar-scheduler`. So the single-task path is NOT missing the scheduler — the planned "route
+single creates through the parse tool" change would have been a no-op. Why a same-day task still came back
+with no start_time (ACT-huddle-50) needs live edge-function evidence, not another code guess.
+**Status:** IMPLEMENTED (tsc clean), deploying; verifier pending. NOT user-confirmed live.
