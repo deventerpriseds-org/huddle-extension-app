@@ -2294,3 +2294,20 @@ delegates to `parseAndCreateTasks` with `auto_schedule` defaulting to true, whic
 single creates through the parse tool" change would have been a no-op. Why a same-day task still came back
 with no start_time (ACT-huddle-50) needs live edge-function evidence, not another code guess.
 **Status:** IMPLEMENTED (tsc clean), deploying; verifier pending. NOT user-confirmed live.
+
+### ACT-huddle-55: sync-setup-script — session re-synced to eds-claude-skills v6 → v8
+**Requested:** 2026-08-21 — "run the sync-setup-script skill."
+**Found:** this session's `/root/.claude/launcher-settings.json` had NO `_eds`-tagged
+`PostToolUse`/`UserPromptSubmit` hooks at all (likely a container reset since I'd installed
+v6 earlier this session) — confirming the sync was actually needed, not routine.
+**Action:** cloned `eds-claude-skills` main fresh, ran `setup.sh`. Picked up v7 + v8, landed
+by OTHER sessions since my v6 push: a second guard system, `eds-agent-guard.sh`
+(orphaned-subagent reporter — detects a background subagent that died silently, most often
+because the USER interrupted the session, not a container reclaim) plus its adoption doc
+`ADOPT-AGENT-GUARD.md`. New behavioral rule surfaced at sync time: every subagent brief must
+name a file and say "write to it as you go," since a killed subagent loses anything not
+persisted incrementally.
+**Verified:** all four hook events (SessionStart/Stop/PostToolUse/UserPromptSubmit) report
+`_eds_version: 8`, matching `setup.sh`'s `CURRENT_VERSION`. Both guard scripts present +
+executable.
+**Status:** DONE, verified live in this session.
