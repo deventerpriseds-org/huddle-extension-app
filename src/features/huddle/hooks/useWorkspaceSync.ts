@@ -3,7 +3,7 @@
 // - On store change: debounce 800ms → save remote.
 // - On sign-out: reset store to seed defaults.
 import { useEffect, useRef } from "react";
-import { getToken } from "@/lib/entra-auth";
+import { getToken, isAuthBypassActive } from "@/lib/entra-auth";
 import { useAuth } from "@/hooks/useAuth";
 import {
   loadWorkspace,
@@ -41,7 +41,23 @@ export function useWorkspaceSync() {
     (async () => {
       try {
         const idToken = await getToken();
-        if (!idToken || cancelled) return;
+        if (cancelled) return;
+        if (!idToken) {
+          // Neither bypass (E2E dev-only, production UAT) ever produces a real OAuth token, so there
+          // is no remote workspace blob this session could ever fetch — that's an EXPECTED, permanent
+          // state for a bypass session, not a transient failure worth silently giving up on. Hydrate
+          // to seed defaults exactly like the "nothing remote, nothing local" branch below, so
+          // isWorkspaceHydrated() flips true and the global durable-turn back-fill (HuddleApp.tsx,
+          // getAllTurnUpdates) can actually recover real history instead of waiting forever on a
+          // hydration that can never happen. A genuine (non-bypass) token failure keeps the old
+          // behavior — silently returns and retries on the next mount — since that path should NOT be
+          // treated as "nothing to hydrate."
+          if (isAuthBypassActive()) {
+            hydrateFromRemote(null);
+            hydratedRef.current = oid;
+          }
+          return;
+        }
         const remote = await loadWorkspace({ data: { idToken } });
         if (cancelled) return;
         if (remote) {
