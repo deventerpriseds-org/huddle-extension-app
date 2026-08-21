@@ -55,6 +55,35 @@ export const CONFIRM_TASK_INTENT_TOOL = {
   },
 } as const;
 
+// propose_task_intent: records your PROPOSED Definition of Done the moment you send the confirm-intent
+// ask — in the SAME turn/message, BEFORE the user has replied. This is distinct from confirm_task_intent
+// (which locks in the FINAL, user-confirmed DoD afterward): propose_task_intent only stores what you
+// proposed, deterministically and structurally, so the user's client can offer a "Confirm" button that
+// acts on your exact proposed text without needing to re-parse a free-text reply. Does NOT confirm
+// anything and does NOT unblock the task — confirm_task_intent still does that, only after the user
+// actually responds.
+export const PROPOSE_TASK_INTENT_TOOL = {
+  type: "function",
+  name: "propose_task_intent",
+  description:
+    "Call this in the SAME message/turn you send your confirm-intent ask to the user — right after " +
+    "stating what you believe they want and proposing a Definition of Done, BEFORE they've replied. " +
+    "This just records your proposed DoD so the user can act on it with one tap; it does not confirm " +
+    "or lock in anything (confirm_task_intent does that, later, after they respond).",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string", description: "The id of the task you're proposing intent for." },
+      task_title: { type: "string", description: "The task's title, exactly as given to you." },
+      definition_of_done: {
+        type: "string",
+        description: "The concrete, testable Definition of Done you just proposed to the user in this same message.",
+      },
+    },
+    required: ["task_id", "task_title", "definition_of_done"],
+  },
+} as const;
+
 // propose_approach: the pre-work half of the hardened workflow gate (approach-gate.server.ts). Called
 // ONCE, immediately after confirm_task_intent, in the same reply — the assigned agent drafts HOW it
 // plans to reach the confirmed Definition of Done, and a sub-agent grades it pass/revise before any

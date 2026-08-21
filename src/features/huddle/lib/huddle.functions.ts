@@ -67,6 +67,7 @@ import {
 import {
   FLAG_BLOCKER_TOOL,
   CONFIRM_TASK_INTENT_TOOL,
+  PROPOSE_TASK_INTENT_TOOL,
   PROPOSE_APPROACH_TOOL,
   ASK_CLARIFYING_QUESTION_TOOL,
   RESOLVE_CLARIFYING_QUESTION_TOOL,
@@ -523,6 +524,7 @@ type TurnResumeState = {
     text: string;
     fallbackNotes?: string[];
     artifacts?: { id: string; name: string }[];
+    confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
   }[];
   journeyTaskUpdates: import("./journey/types").JourneyTask[];
   suggestedTasks: SuggestedTaskDraft[];
@@ -797,6 +799,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // "Open <name>" chip that opens the doc by id (fresh SAS on open). Derived from the agent's
     // toolUses at merge time — see the reply-push site.
     artifacts?: { id: string; name: string }[];
+    // A confirm-intent ask this reply IS, carrying the proposed DoD for the button row below the
+    // message. Derived the same way as artifacts — from this agent's own propose_task_intent
+    // toolUse this turn — NOT injected from another turn/agent.
+    confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
   };
 
   // Journey-voice mirror: any task rows that journey returns from a tool call
@@ -3143,6 +3149,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           DELEGATE_TO_SPECIALIST_TOOL,
           FLAG_BLOCKER_TOOL,
           CONFIRM_TASK_INTENT_TOOL,
+          PROPOSE_TASK_INTENT_TOOL,
           PROPOSE_APPROACH_TOOL,
           ASK_CLARIFYING_QUESTION_TOOL,
           RESOLVE_CLARIFYING_QUESTION_TOOL,
@@ -3357,6 +3364,41 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
+              return JSON.stringify({ ok: false, error: msg });
+            }
+          }
+          if (c.name === "propose_task_intent") {
+            const a = c.arguments as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const taskTitle = String(a.task_title ?? "").trim();
+            const dod = String(a.definition_of_done ?? "").trim();
+            if (!taskId || !dod)
+              return JSON.stringify({
+                ok: false,
+                error: "task_id and definition_of_done are required",
+              });
+            try {
+              const email =
+                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                data.caller?.entra_email;
+              if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+              const { proposeTaskDod } = await import("./tasks/tasks.server");
+              await proposeTaskDod(taskId, email, dod);
+              // Encoded as JSON in `detail` (a plain string field) so the reply-assembly step below can
+              // recover structured {taskId, taskTitle, proposedDod} the same way replyArtifacts recovers
+              // an artifact id from create_artifact's detail — this is what drives the confirm-ask
+              // button row on THIS specific message.
+              recordToolUse(
+                winner.id,
+                "propose_task_intent",
+                `Proposed DoD for "${taskTitle || taskId}"`,
+                true,
+                JSON.stringify({ taskId, taskTitle, proposedDod: dod }),
+              );
+              return JSON.stringify({ ok: true, task_id: taskId });
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "propose_task_intent", "propose failed", false, msg);
               return JSON.stringify({ ok: false, error: msg });
             }
           }
@@ -4367,6 +4409,48 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           },
         });
 
+        // propose_task_intent — record the PROPOSED DoD at ask-time, before the user replies (mirrors
+        // the OpenAI path). Distinct from confirm_task_intent below; never touches confirm_status.
+        lovableTools.propose_task_intent = tool({
+          description: PROPOSE_TASK_INTENT_TOOL.description,
+          inputSchema: z.object({
+            task_id: z.string(),
+            task_title: z.string(),
+            definition_of_done: z.string(),
+          }),
+          execute: async (args) => {
+            const a = args as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const taskTitle = String(a.task_title ?? "").trim();
+            const dod = String(a.definition_of_done ?? "").trim();
+            if (!taskId || !dod)
+              return JSON.stringify({
+                ok: false,
+                error: "task_id and definition_of_done are required",
+              });
+            try {
+              const email =
+                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                data.caller?.entra_email;
+              if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+              const { proposeTaskDod } = await import("./tasks/tasks.server");
+              await proposeTaskDod(taskId, email, dod);
+              recordToolUse(
+                winner.id,
+                "propose_task_intent",
+                `Proposed DoD for "${taskTitle || taskId}"`,
+                true,
+                JSON.stringify({ taskId, taskTitle, proposedDod: dod }),
+              );
+              return JSON.stringify({ ok: true, task_id: taskId });
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "propose_task_intent", "propose failed", false, msg);
+              return JSON.stringify({ ok: false, error: msg });
+            }
+          },
+        });
+
         // confirm_task_intent — lock in the confirmed DoD (mirrors the OpenAI path).
         lovableTools.confirm_task_intent = tool({
           description: CONFIRM_TASK_INTENT_TOOL.description,
@@ -5249,11 +5333,40 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // Also backstop file_search's own narration tendency (house-style bans it in prose; the model still
     // does it — see stripFileMentionNarration above).
     const safeText = stripFileMentionNarration(stripAgentReplyLinks(finalText));
+    // A confirm-intent ask this reply IS, if the agent called propose_task_intent this same turn — mirrors
+    // replyArtifacts's derivation exactly (detail carries the structured payload as JSON rather than a
+    // path, since there's no natural id/path shape here). Deliberately NOT the attachArtifacts/
+    // targetAgentId injection mechanism: unlike a delegation-produced artifact chip (attached to a
+    // DIFFERENT agent's reply than the one that made it), a confirm-ask always belongs to the SAME agent's
+    // OWN turn that sent it, so deriving from this agent's own toolUses is the correct-scoped mechanism.
+    let replyConfirmAsk: { taskId: string; taskTitle: string; proposedDod: string } | undefined;
+    const confirmAskToolUse = r.toolUses.find(
+      (t) => t.tool === "propose_task_intent" && t.ok && typeof t.detail === "string",
+    );
+    if (confirmAskToolUse) {
+      try {
+        const parsed = JSON.parse(confirmAskToolUse.detail as string) as {
+          taskId?: unknown;
+          taskTitle?: unknown;
+          proposedDod?: unknown;
+        };
+        if (typeof parsed.taskId === "string" && typeof parsed.proposedDod === "string") {
+          replyConfirmAsk = {
+            taskId: parsed.taskId,
+            taskTitle: typeof parsed.taskTitle === "string" ? parsed.taskTitle : "",
+            proposedDod: parsed.proposedDod,
+          };
+        }
+      } catch {
+        /* malformed detail -> no confirmAsk chip this reply; never breaks the turn */
+      }
+    }
     replies.push({
       agentId: nextId,
       text: safeText,
       fallbackNotes: outcome.perAgentFallbacks.length > 0 ? outcome.perAgentFallbacks : undefined,
       artifacts: replyArtifacts.length ? replyArtifacts : undefined,
+      confirmAsk: replyConfirmAsk,
     });
     spoken.add(nextId);
 
@@ -6275,7 +6388,12 @@ type TurnUpdateDTO = {
   // (which lives only in the debounced workspace blob) went missing, leaving orphaned agent messages.
   // Surfacing it here lets the client re-add the user message from the same durable turn.
   userText: string | null;
-  replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
+  replies: {
+    agentId: AgentId;
+    text: string;
+    artifacts?: { id: string; name: string }[];
+    confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+  }[];
   result: HuddleTurnResult | null;
 };
 export const getTurnUpdates = createServerFn({ method: "POST" })
@@ -6307,6 +6425,7 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
           agentId: AgentId;
           text: string;
           artifacts?: { id: string; name: string }[];
+          confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
         }[],
         result: (t.result ?? null) as HuddleTurnResult | null,
       }));
@@ -6358,7 +6477,12 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
       // back-fill re-add the user's prompt (not just the agents' replies) when the workspace blob is
       // stale/missing, so an away-arrived turn shows the full exchange, not orphaned agent messages.
       userText: string | null;
-      replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
+      replies: {
+        agentId: AgentId;
+        text: string;
+        artifacts?: { id: string; name: string }[];
+        confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+      }[];
       // Tool-use breadcrumbs for away/cross-device turns — the client filters per agent + drops tool_catalog.
       toolUses?: import("../data/seed").ToolUseEvent[];
     };
@@ -6388,6 +6512,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         agentId: AgentId;
         text: string;
         artifacts?: { id: string; name: string }[];
+        confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
       }[],
       toolUses: ((t.result as { toolUses?: unknown } | null)?.toolUses ?? undefined) as
         | import("../data/seed").ToolUseEvent[]

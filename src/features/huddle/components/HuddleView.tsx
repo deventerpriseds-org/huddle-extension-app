@@ -39,6 +39,11 @@ import { useDictation } from "../hooks/useDictation";
 import { usePush } from "../hooks/usePush";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useAuth } from "@/hooks/useAuth";
+import {
+  confirmTaskFromButtonFn,
+  backlogTaskFromButtonFn,
+  parkTaskFromButtonFn,
+} from "../lib/tasks/confirm-ask.functions";
 
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
 import {
@@ -327,6 +332,108 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
   );
 }
 
+function ConfirmAskRow({ m }: { m: HuddleMessage }) {
+  const { user } = useAuth();
+  const [busy, setBusy] = useState<"confirm" | "backlog" | "archive" | null>(null);
+  const ask = m.confirmAsk;
+  if (!ask) return null;
+  if (ask.resolved) {
+    return (
+      <div className="mt-2 inline-flex items-center gap-1 rounded-md border border-hairline bg-surface px-2 py-1 text-xs text-muted-foreground">
+        <Check size={12} /> Handled
+      </div>
+    );
+  }
+  const caller = user
+    ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+    : undefined;
+  async function run(
+    action: "confirm" | "backlog" | "archive",
+    fn: () => Promise<{ ok: boolean; error?: string; alreadyDone?: boolean }>,
+    doneLabel: string,
+  ) {
+    setBusy(action);
+    try {
+      const res = await fn();
+      if (res.ok) {
+        useHuddleStore.getState().resolveConfirmAsk(m.id);
+        // res.error here means a non-fatal partial failure (e.g. the journey mirror write failed)
+        if (res.error) toast(doneLabel, { description: res.error });
+        else if (!res.alreadyDone) toast.success(doneLabel);
+      } else {
+        toast.error(res.error ?? "Couldn't complete that action.");
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      <button
+        type="button"
+        disabled={busy !== null}
+        onClick={() =>
+          run(
+            "confirm",
+            () => confirmTaskFromButtonFn({ data: { caller, taskId: ask.taskId } }),
+            "Confirmed",
+          )
+        }
+        className="inline-flex items-center gap-1 rounded-md border border-hairline bg-surface px-2 py-1 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+      >
+        {busy === "confirm" ? (
+          <Loader2 size={12} className="animate-spin" />
+        ) : (
+          <Check size={12} style={{ color: "var(--ai)" }} />
+        )}
+        Confirm
+      </button>
+      <button
+        type="button"
+        disabled={busy !== null}
+        onClick={() =>
+          useHuddleStore
+            .getState()
+            .setDraftPrefill(`I have edits for the task regarding "${ask.taskTitle}": `)
+        }
+        className="inline-flex items-center gap-1 rounded-md border border-hairline bg-surface px-2 py-1 text-xs text-foreground hover:bg-muted disabled:opacity-50"
+      >
+        Revise
+      </button>
+      <button
+        type="button"
+        disabled={busy !== null}
+        onClick={() =>
+          run(
+            "backlog",
+            () => backlogTaskFromButtonFn({ data: { caller, taskId: ask.taskId } }),
+            "Moved to Backlog",
+          )
+        }
+        className="inline-flex items-center gap-1 rounded-md border border-hairline bg-surface px-2 py-1 text-xs text-foreground hover:bg-muted disabled:opacity-50"
+      >
+        {busy === "backlog" && <Loader2 size={12} className="animate-spin" />}
+        Backlog
+      </button>
+      <button
+        type="button"
+        disabled={busy !== null}
+        onClick={() =>
+          run(
+            "archive",
+            () => parkTaskFromButtonFn({ data: { caller, taskId: ask.taskId } }),
+            "Parked",
+          )
+        }
+        className="inline-flex items-center gap-1 rounded-md border border-hairline bg-surface px-2 py-1 text-xs text-foreground hover:bg-muted disabled:opacity-50"
+      >
+        {busy === "archive" && <Loader2 size={12} className="animate-spin" />}
+        Archive
+      </button>
+    </div>
+  );
+}
+
 function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
   if (m.author.kind === "user") {
     return (
@@ -449,6 +556,7 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
             ))}
           </div>
         )}
+        {m.confirmAsk && <ConfirmAskRow m={m} />}
       </div>
     </div>
   );
@@ -525,6 +633,17 @@ function Composer({ huddle }: { huddle: Huddle }) {
   // Turns whose one-time metadata (decision, fallbacks, tool uses, task cards) has already been
   // applied — so a turn that streams in across several polls applies those exactly once, at 'done'.
   const finalizedTurns = useRef<Set<string>>(new Set());
+
+  // Consume-once: a confirm-ask message's Revise button sets this (store bridge — MessageRow is a
+  // sibling component, can't reach this local `text` state directly), we apply it here and clear it.
+  const draftPrefill = useHuddleStore((s) => s.draftPrefill);
+  const setDraftPrefill = useHuddleStore((s) => s.setDraftPrefill);
+  useEffect(() => {
+    if (draftPrefill === null) return;
+    setText(draftPrefill);
+    setDraftPrefill(null);
+    inputRef.current?.focus();
+  }, [draftPrefill, setDraftPrefill]);
 
   // Auto-grow the composer like SMS/Teams/Slack: one row when empty, growing up to 5 rows as the
   // user types, then scrolling internally. Keyed on `text` so it also fits content set
