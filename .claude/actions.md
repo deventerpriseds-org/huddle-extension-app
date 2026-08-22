@@ -2311,3 +2311,38 @@ persisted incrementally.
 `_eds_version: 8`, matching `setup.sh`'s `CURRENT_VERSION`. Both guard scripts present +
 executable.
 **Status:** DONE, verified live in this session.
+
+### ACT-huddle-56: Turn finalizes with ZERO replies despite real work — timed-out agents never retried
+**Requested:** 2026-08-22 (user screenshot) — "I received a heads up that a task was created but never
+received a chat" — a group huddle turn showed no agent reply for "My wife's car repair is for the first
+Tuesday in September," yet a push notification arrived.
+**Root cause (GROUND-TRUTHED from `chat.pending_turns`):** turn `u-1787335282852` ran 2 chunks over 60s,
+`replies_len=0`, `result.replies=[]` — both invited agents (Iris Chase, Eli Vaughn) individually timed out
+under `runBounded`'s per-agent deadline. Confirmed via journey `public.tasks`: `"Wife's car repair"` was
+created 36s into the SAME turn, correctly scheduled `2026-09-01 21:00 UTC` — a real tool call succeeded,
+the turn just never got a reply out.
+The chunk-continuation system (`chat.pending_turns` chunks/progress/seq, `saveTurnChunk`,
+`kickNextChunk`, `MAX_CHUNKS=6`) already existed and already avoids marking a timed-out agent "spoken"
+(comment: "produced nothing (no reply, not spoken)") specifically so it could be retried. But
+`shiftEligible()` removes the agent from `queue` via `shift()` to build the wave BEFORE the outcome is
+known, and nothing ever re-added it on timeout — the retry hook the code's own comments describe was
+unreachable. If every agent in a wave times out, the turn finalizes DONE with nothing.
+**Answered the user's question directly:** the 36s/30s deadlines are NOT streaming leftovers — Azure
+kills an HTTP request outright past its hosting ceiling with no chance to save partial work. Chunking
+was built to work WITH that constraint (voluntarily stop before the platform does, hand off to a
+continuation), not eliminate it. 1:1 streaming shipped and was live-verified (2026-08-08); group-turn
+retry-on-timeout had this one gap.
+**Fix (653d39b, tsc clean, on main):**
+1. Tag the `runBounded` timeout outcome `{kind:"skip", timedOut:true}`, distinct from a completed call's
+   natural `{kind:"skip"}` (genuinely nothing to say — NOT retried, retrying would just repeat it).
+2. `mergeAgentResult`: on a timed-out skip in chunked mode, `queue.push(nextId)` so the existing
+   `hasMore` check retries it with fresh budget in the next chunk (existing `MAX_CHUNKS=6` cap and
+   deadline-elapsed check already bound this — no new loop risk).
+3. Residual safety net `ensureNotSilentOnRealWork()`: even after retries, MAX_CHUNKS could still exhaust
+   with zero replies. If a real (non-catalog) tool call succeeded this turn, synthesize one line
+   attributed to the agent that ran it, called only at the two TERMINAL finalization points (never the
+   partial/continuing return, where a real reply may still land next chunk).
+**Integration trace:** both changes are inside the ONE turn engine (`runHuddleTurn` /
+`mergeAgentResult` / `runBounded`) every message funnels through — no new system, no signature or
+call-site changes; only what `replies`/`queue` contain before existing finalization runs.
+**Status:** IMPLEMENTED + DEPLOYED (tsc clean). Verifier pending. NOT yet user-confirmed live.
