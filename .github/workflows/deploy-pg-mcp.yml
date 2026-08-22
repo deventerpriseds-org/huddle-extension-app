@@ -18,7 +18,16 @@ name: Deploy read-only Postgres MCP (Azure Container Apps)
 # Topology (single ACA app, two containers sharing localhost):
 #   internet --HTTPS--> obot (external ingress :8080, OAuth) --localhost:8000--> crystaldba (internal, read-only)
 # Security: crystaldba is never public; obot 401s everything until an Entra-authenticated (org-only) OAuth token
-# is presented; the DB role `mcp_readonly` has only pg_read_all_data; crystaldba runs --access-mode=restricted.
+# is presented; the read-only DB role has only pg_read_all_data (server-wide read across every database on
+# eds-postgresql — one role already covers all of them); crystaldba runs --access-mode=restricted.
+#
+# crystaldba itself is single-database-per-instance (one DATABASE_URI at startup, no runtime db-switching —
+# a deliberate crystaldba/postgres-mcp design choice, confirmed against its own docs). So "every database on
+# this server" means one ACA app + one Entra app registration PER target database, not one instance that
+# covers them all. `app_name`/`entra_app_name` are parameterized for exactly this — give each new target
+# database its OWN unique app_name/entra_app_name (defaults below are the original Huddle instance; DO NOT
+# dispatch with the defaults for a second database, it will silently repoint/overwrite the Huddle instance's
+# ACA app and steal its Entra app's one redirect URI, breaking Huddle's connector).
 
 on:
   workflow_dispatch:
@@ -29,12 +38,18 @@ on:
       ro_role:
         description: "Read-only role name."
         default: "mcp_readonly"
+      app_name:
+        description: "Azure Container App name — MUST be unique per target database. Reusing an existing app's name overwrites that instance (its DATABASE_URI gets repointed) instead of adding a new one."
+        default: "huddle-pg-mcp"
+      entra_app_name:
+        description: "Entra app registration display name — MUST be unique per instance. Two instances sharing one Entra app would fight over its single redirect URI (each provisioning run replaces it), breaking OAuth login for whichever isn't the one just deployed."
+        default: "enterpriseds-pg-mcp"
 
 env:
   RG: EnterpriseDS_ResourceGRP
   PG_SERVER: eds-postgresql
   ACA_ENV: eds-mcp-env
-  ACA_APP: huddle-pg-mcp
+  ACA_APP: ${{ github.event.inputs.app_name }}
   LOCATION: eastus
 
 jobs:
@@ -95,7 +110,7 @@ jobs:
 
       - name: Provision obot's Entra app (central auth) — redirect URI + client secret
         env:
-          APP_NAME: enterpriseds-pg-mcp
+          APP_NAME: ${{ github.event.inputs.entra_app_name }}
         run: |
           set -euo pipefail
           FQDN=$(az containerapp show -g "$RG" -n "$ACA_APP" --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || echo "")
@@ -247,7 +262,7 @@ jobs:
           echo "Connector URL (claude.ai -> Add custom connector, leave Advanced BLANK):"
           echo "  https://${FQDN}/sse"
           echo "Login: Microsoft Entra (org accounts only). Redirect URI ${FQDN}/callback was auto-registered"
-          echo "on the Entra app 'enterpriseds-pg-mcp' by the provisioning step — NO manual console entry."
+          echo "on the Entra app '${{ github.event.inputs.entra_app_name }}' by the provisioning step — NO manual console entry."
           echo "============================================================"
           echo "--- Wait for the new revision to reach a terminal running state ---"
           LATEST=$(az containerapp revision list -g "$RG" -n "$ACA_APP" --query "reverse(sort_by([].{n:name,t:properties.createdTime},&t))[0].n" -o tsv)
