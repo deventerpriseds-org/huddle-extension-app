@@ -1863,7 +1863,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     reasoning: string[];
     prompts: PromptDebug[];
     outcome:
-      | { kind: "skip" }
+      // `timedOut` distinguishes a runBounded deadline race (retry with fresh budget next chunk)
+      // from a completed call that genuinely produced no text (retrying would just repeat it).
+      | { kind: "skip"; timedOut?: boolean }
       | { kind: "hardReply"; reply: Reply }
       | { kind: "reply"; clean: string; isInterjector: boolean; perAgentFallbacks: string[] };
   };
@@ -2538,6 +2540,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // know the caller, also create it in journey. On success the journey task
       // is mirrored onto the Huddle board (journeyTaskUpdates) so exactly one
       // card shows; if journey is off or fails, fall back to a Huddle-only card.
+      // Set ONLY when a journey write was attempted and failed. The Huddle-only path below is
+      // shared by three cases (journey disabled, no caller, journey failed); a card is honest for
+      // the first two but a GHOST for the third — journey is canonical, so no journey row means no
+      // mirror row and nothing on the real board, however confident the reply sounds.
+      let journeyFailed: string | null = null;
       if (agentBackend.journey?.enabled && data.caller?.entra_email) {
         try {
           const { invokeJourneyTool } = await import("./journey/proxy.functions");
@@ -2602,24 +2609,47 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
           const ev = recordFallback(
             "tool",
-            `${winner.name}: task saved to the Huddle board but journey create failed — ${r.error ?? "unknown"}`,
+            `${winner.name}: could NOT save “${task.title}” to your board — journey create failed — ${r.error ?? "unknown"}`,
             "journey task create failed",
             winner.id,
           );
           perAgentFallbacks.push(ev.inline);
+          journeyFailed = r.error ?? "unknown error";
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           const ev = recordFallback(
             "tool",
-            `${winner.name}: task saved to the Huddle board but journey create crashed — ${msg}`,
+            `${winner.name}: could NOT save “${task.title}” to your board — journey create crashed — ${msg}`,
             "journey task create crashed",
             winner.id,
           );
           perAgentFallbacks.push(ev.inline);
+          journeyFailed = msg;
         }
       }
 
-      // Huddle-only path (journey disabled, no caller, or journey create failed).
+      // Journey was attempted and FAILED: report it honestly. Do NOT render a board card — journey
+      // is the canonical store, so a card here would show a task that exists nowhere but the screen
+      // (no journey row -> no mirror row). ok:false so the model reports the failure instead of the
+      // flat "added it" the user saw, and the breadcrumb shows a cross rather than a tick.
+      if (journeyFailed) {
+        recordToolUse(
+          winner.id,
+          "create_huddle_task",
+          `FAILED to save “${task.title}” to the board — ${journeyFailed}`,
+          false,
+        );
+        return {
+          ok: false,
+          error: `Could not save “${task.title}” to the board: ${journeyFailed}`,
+          note: "Tell the user plainly that it was NOT saved and offer to retry — do not claim it was added.",
+          task,
+          boards: [],
+        };
+      }
+
+      // Huddle-only path (journey deliberately disabled, or no caller identity). A card is correct
+      // here: no journey write was attempted, so nothing is being misrepresented.
       suggestedTasks.push(task);
       recordToolUse(
         winner.id,
@@ -5260,7 +5290,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     prompts.push(...r.prompts);
 
     const outcome = r.outcome;
-    if (outcome.kind === "skip") return; // produced nothing (no reply, not spoken)
+    if (outcome.kind === "skip") {
+      // A runBounded deadline race: shiftEligible() already removed this agent from `queue` to
+      // build the wave, and it's deliberately never marked `spoken` (see below) — but with
+      // nothing re-adding it, it simply vanished from the turn's bookkeeping instead of being
+      // retried. If EVERY invited agent times out in the same wave, the turn finalizes DONE with
+      // zero replies even though real work (a tool call) may have already succeeded — exactly the
+      // "heads-up notification but nothing in chat" symptom. In CHUNKED mode, re-queue it for a
+      // later chunk with a fresh budget. A genuinely empty completion (not a timeout) is NOT
+      // re-queued — the model already finished and chose to say nothing; retrying would just
+      // repeat that, wasting a chunk.
+      if (outcome.timedOut && chunked) queue.push(nextId);
+      return; // produced nothing (no reply, not spoken)
+    }
     if (outcome.kind === "hardReply") {
       // Config/model-failure fallbacks: always emitted, no echo/PASS, no mentions.
       replies.push(outcome.reply);
@@ -5504,7 +5546,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             suggestedTasks: [],
             reasoning: [],
             prompts: [],
-            outcome: { kind: "skip" },
+            outcome: { kind: "skip", timedOut: true },
           });
         }, remaining),
       ),
@@ -5543,6 +5585,24 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     toolUses,
     reasoning: reasoningSummaries,
   });
+
+  // Residual safety net for a turn finalizing with ZERO replies. The re-queue above (see the skip
+  // branch in mergeAgentResult) should catch the common case, but a turn can still exhaust
+  // MAX_CHUNKS with every agent timing out repeatedly. If a tool call already succeeded this turn
+  // (e.g. a task was created — the push notification for it already fired), don't let the turn go
+  // out in total silence: that is exactly the "heads-up but nothing in chat" symptom the user hit.
+  // Attributed to whichever agent actually ran the tool, not a synthetic system voice.
+  const ensureNotSilentOnRealWork = () => {
+    if (replies.length > 0) return;
+    const didWork = toolUses.find((t) => t.ok && t.tool !== "tool_catalog");
+    if (!didWork) return;
+    replies.push({
+      agentId: didWork.agentId,
+      text:
+        `${didWork.summary} — I ran out of time to reply in full, but that went through. ` +
+        `Let me know if you want more detail.`,
+    });
+  };
 
   // "researched" mode, GROUP/ceremony only (1:1 is carried by the conversation object): after the turn,
   // persist (A1) a distilled record of each agent's reply as a shared episodic chunk attributed to that
@@ -5783,6 +5843,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       }
       return { ...finalResult(), partial: true };
     }
+    ensureNotSilentOnRealWork();
     try {
       await turnStore.saveTurnChunk(turnId, replies, null, true, finalResult());
     } catch (e) {
@@ -5792,6 +5853,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     return { ...finalResult(), partial: false };
   }
 
+  ensureNotSilentOnRealWork();
   persistResearchedMemory();
   return finalResult();
 }

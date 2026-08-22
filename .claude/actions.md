@@ -2271,3 +2271,79 @@ artifacts.items 109 / task_engagement_state 42 / agent_workflow_config 1, **all 
 **Status:** BUILT + DEPLOYED + BACKFILLED; independent live verification of AC-7 in flight.
 **Not done (deliberate):** Phase 2 — dropping email columns / `user_id NOT NULL` (needs a soak);
 `public.rag_chunks` memory (no email column — evaluated, out of scope).
+
+### ACT-huddle-54: Agents reported tasks "added to your board" when the journey write FAILED (ghost cards)
+**Reported:** 2026-08-20 (user screenshot) — a card reading "(fallback: journey task create failed)" with a
+tick-marked `create_huddle_task` breadcrumb, and Ezra replying "Added ... to your board for today."
+**Root cause:** `createSuggestedTaskFromTool` collapsed THREE cases into one Huddle-only return —
+journey disabled, no caller, and journey create FAILED — all returning `ok:true` with a board card and a
+successful breadcrumb. journey `public.tasks` is canonical, so a failed write means no journey row → no
+mirror row → the task exists nowhere but the screen, while the agent says it was added.
+**Fix:** track `journeyFailed` on the two failure branches and split it out: return `ok:false` with the
+reason + a directive to say plainly it was NOT saved, render NO card, and record the breadcrumb as failed.
+The journey-disabled / no-caller cases are UNCHANGED (a card is honest there — no write was attempted),
+so `journey:{enabled:false}` harnesses keep working.
+**Integration trace:** funnels through the ONE task-creation tool path in `runHuddleTurn`. Upstream
+producers = the OpenAI dispatch (huddle.functions.ts:3183) and Lovable dispatch (:4169), plus the forced
+`toolChoice: create_huddle_task` path — all unchanged. Downstream consumers = `suggestedTasks` →
+`addSuggestedTasks` (HuddleView:756) board cards, `recordToolUse` breadcrumbs, and the journey→mirror sync.
+Extends the existing dual-write path; no new system.
+**Also established (invalidated a planned fix):** `quick_create_task` is a THIN WRAPPER that already
+delegates to `parseAndCreateTasks` with `auto_schedule` defaulting to true, which does call
+`batch-calendar-scheduler`. So the single-task path is NOT missing the scheduler — the planned "route
+single creates through the parse tool" change would have been a no-op. Why a same-day task still came back
+with no start_time (ACT-huddle-50) needs live edge-function evidence, not another code guess.
+**Status:** IMPLEMENTED (tsc clean), deploying; verifier pending. NOT user-confirmed live.
+
+### ACT-huddle-55: sync-setup-script — session re-synced to eds-claude-skills v6 → v8
+**Requested:** 2026-08-21 — "run the sync-setup-script skill."
+**Found:** this session's `/root/.claude/launcher-settings.json` had NO `_eds`-tagged
+`PostToolUse`/`UserPromptSubmit` hooks at all (likely a container reset since I'd installed
+v6 earlier this session) — confirming the sync was actually needed, not routine.
+**Action:** cloned `eds-claude-skills` main fresh, ran `setup.sh`. Picked up v7 + v8, landed
+by OTHER sessions since my v6 push: a second guard system, `eds-agent-guard.sh`
+(orphaned-subagent reporter — detects a background subagent that died silently, most often
+because the USER interrupted the session, not a container reclaim) plus its adoption doc
+`ADOPT-AGENT-GUARD.md`. New behavioral rule surfaced at sync time: every subagent brief must
+name a file and say "write to it as you go," since a killed subagent loses anything not
+persisted incrementally.
+**Verified:** all four hook events (SessionStart/Stop/PostToolUse/UserPromptSubmit) report
+`_eds_version: 8`, matching `setup.sh`'s `CURRENT_VERSION`. Both guard scripts present +
+executable.
+**Status:** DONE, verified live in this session.
+
+### ACT-huddle-56: Turn finalizes with ZERO replies despite real work — timed-out agents never retried
+**Requested:** 2026-08-22 (user screenshot) — "I received a heads up that a task was created but never
+received a chat" — a group huddle turn showed no agent reply for "My wife's car repair is for the first
+Tuesday in September," yet a push notification arrived.
+**Root cause (GROUND-TRUTHED from `chat.pending_turns`):** turn `u-1787335282852` ran 2 chunks over 60s,
+`replies_len=0`, `result.replies=[]` — both invited agents (Iris Chase, Eli Vaughn) individually timed out
+under `runBounded`'s per-agent deadline. Confirmed via journey `public.tasks`: `"Wife's car repair"` was
+created 36s into the SAME turn, correctly scheduled `2026-09-01 21:00 UTC` — a real tool call succeeded,
+the turn just never got a reply out.
+The chunk-continuation system (`chat.pending_turns` chunks/progress/seq, `saveTurnChunk`,
+`kickNextChunk`, `MAX_CHUNKS=6`) already existed and already avoids marking a timed-out agent "spoken"
+(comment: "produced nothing (no reply, not spoken)") specifically so it could be retried. But
+`shiftEligible()` removes the agent from `queue` via `shift()` to build the wave BEFORE the outcome is
+known, and nothing ever re-added it on timeout — the retry hook the code's own comments describe was
+unreachable. If every agent in a wave times out, the turn finalizes DONE with nothing.
+**Answered the user's question directly:** the 36s/30s deadlines are NOT streaming leftovers — Azure
+kills an HTTP request outright past its hosting ceiling with no chance to save partial work. Chunking
+was built to work WITH that constraint (voluntarily stop before the platform does, hand off to a
+continuation), not eliminate it. 1:1 streaming shipped and was live-verified (2026-08-08); group-turn
+retry-on-timeout had this one gap.
+**Fix (653d39b, tsc clean, on main):**
+1. Tag the `runBounded` timeout outcome `{kind:"skip", timedOut:true}`, distinct from a completed call's
+   natural `{kind:"skip"}` (genuinely nothing to say — NOT retried, retrying would just repeat it).
+2. `mergeAgentResult`: on a timed-out skip in chunked mode, `queue.push(nextId)` so the existing
+   `hasMore` check retries it with fresh budget in the next chunk (existing `MAX_CHUNKS=6` cap and
+   deadline-elapsed check already bound this — no new loop risk).
+3. Residual safety net `ensureNotSilentOnRealWork()`: even after retries, MAX_CHUNKS could still exhaust
+   with zero replies. If a real (non-catalog) tool call succeeded this turn, synthesize one line
+   attributed to the agent that ran it, called only at the two TERMINAL finalization points (never the
+   partial/continuing return, where a real reply may still land next chunk).
+**Integration trace:** both changes are inside the ONE turn engine (`runHuddleTurn` /
+`mergeAgentResult` / `runBounded`) every message funnels through — no new system, no signature or
+call-site changes; only what `replies`/`queue` contain before existing finalization runs.
+**Status:** IMPLEMENTED + DEPLOYED (tsc clean) — verifier CONFIRMED all 3 changes exactly as built, live-deployed (653d39b/375fcd9, deploy green), 0 regressions in background traffic. **Also applies to 1:1, not just group** — `chunked=!!turnId` is scope-independent; the real HuddleView 1:1 path also sets turnId, and the verifier found a real pre-fix 1:1 occurrence of this exact bug (dm-finn-reid, 2026-08-18, chunks=1 replies_len=0, ~40s).
+**LIVE-CONFIRMED (2026-08-22, user's own test + screenshot):** turn `u-1787360469488` (01:01:09-01:02:31 UTC, post-deploy) — Sam Trent timed out TWICE (visible in the fallback banner, 9:01:39 PM + 9:02:09 PM, 30s apart matching the chunk budget), got retried a third time, and replied. Turn ran 3 chunks, finished `status=done` with 3 real replies (tess-sutton, terry-locke, sam-trent) — the pre-fix code would have dropped Sam after his second timeout with no third try. Sam's reply also honestly reported a partial failure (1 of 2 tasks created) rather than over-claiming.
