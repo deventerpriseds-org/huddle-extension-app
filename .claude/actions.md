@@ -2345,4 +2345,4 @@ retry-on-timeout had this one gap.
 **Integration trace:** both changes are inside the ONE turn engine (`runHuddleTurn` /
 `mergeAgentResult` / `runBounded`) every message funnels through — no new system, no signature or
 call-site changes; only what `replies`/`queue` contain before existing finalization runs.
-**Status:** IMPLEMENTED + DEPLOYED (tsc clean). Verifier pending. NOT yet user-confirmed live.
+**Status:** IMPLEMENTED + DEPLOYED (tsc clean) — verifier CONFIRMED all 3 changes exactly as built, live-deployed (653d39b/375fcd9, deploy green), 0 regressions in background traffic. **Also applies to 1:1, not just group** — `chunked=!!turnId` is scope-independent; the real HuddleView 1:1 path also sets turnId, and the verifier found a real pre-fix 1:1 occurrence of this exact bug (dm-finn-reid, 2026-08-18, chunks=1 replies_len=0, ~40s). NOT yet observed firing on a real timeout live (no group/timeout traffic since deploy) — follow-up: re-check `chat.pending_turns` for any post-deploy `chunks>=2 AND replies_len=0` row.
