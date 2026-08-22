@@ -1857,7 +1857,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     reasoning: string[];
     prompts: PromptDebug[];
     outcome:
-      | { kind: "skip" }
+      // `timedOut` distinguishes a runBounded deadline race (retry with fresh budget next chunk)
+      // from a completed call that genuinely produced no text (retrying would just repeat it).
+      | { kind: "skip"; timedOut?: boolean }
       | { kind: "hardReply"; reply: Reply }
       | { kind: "reply"; clean: string; isInterjector: boolean; perAgentFallbacks: string[] };
   };
@@ -5204,7 +5206,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     prompts.push(...r.prompts);
 
     const outcome = r.outcome;
-    if (outcome.kind === "skip") return; // produced nothing (no reply, not spoken)
+    if (outcome.kind === "skip") {
+      // A runBounded deadline race: shiftEligible() already removed this agent from `queue` to
+      // build the wave, and it's deliberately never marked `spoken` (see below) — but with
+      // nothing re-adding it, it simply vanished from the turn's bookkeeping instead of being
+      // retried. If EVERY invited agent times out in the same wave, the turn finalizes DONE with
+      // zero replies even though real work (a tool call) may have already succeeded — exactly the
+      // "heads-up notification but nothing in chat" symptom. In CHUNKED mode, re-queue it for a
+      // later chunk with a fresh budget. A genuinely empty completion (not a timeout) is NOT
+      // re-queued — the model already finished and chose to say nothing; retrying would just
+      // repeat that, wasting a chunk.
+      if (outcome.timedOut && chunked) queue.push(nextId);
+      return; // produced nothing (no reply, not spoken)
+    }
     if (outcome.kind === "hardReply") {
       // Config/model-failure fallbacks: always emitted, no echo/PASS, no mentions.
       replies.push(outcome.reply);
@@ -5419,7 +5433,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             suggestedTasks: [],
             reasoning: [],
             prompts: [],
-            outcome: { kind: "skip" },
+            outcome: { kind: "skip", timedOut: true },
           });
         }, remaining),
       ),
@@ -5458,6 +5472,24 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     toolUses,
     reasoning: reasoningSummaries,
   });
+
+  // Residual safety net for a turn finalizing with ZERO replies. The re-queue above (see the skip
+  // branch in mergeAgentResult) should catch the common case, but a turn can still exhaust
+  // MAX_CHUNKS with every agent timing out repeatedly. If a tool call already succeeded this turn
+  // (e.g. a task was created — the push notification for it already fired), don't let the turn go
+  // out in total silence: that is exactly the "heads-up but nothing in chat" symptom the user hit.
+  // Attributed to whichever agent actually ran the tool, not a synthetic system voice.
+  const ensureNotSilentOnRealWork = () => {
+    if (replies.length > 0) return;
+    const didWork = toolUses.find((t) => t.ok && t.tool !== "tool_catalog");
+    if (!didWork) return;
+    replies.push({
+      agentId: didWork.agentId,
+      text:
+        `${didWork.summary} — I ran out of time to reply in full, but that went through. ` +
+        `Let me know if you want more detail.`,
+    });
+  };
 
   // "researched" mode, GROUP/ceremony only (1:1 is carried by the conversation object): after the turn,
   // persist (A1) a distilled record of each agent's reply as a shared episodic chunk attributed to that
@@ -5698,6 +5730,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       }
       return { ...finalResult(), partial: true };
     }
+    ensureNotSilentOnRealWork();
     try {
       await turnStore.saveTurnChunk(turnId, replies, null, true, finalResult());
     } catch (e) {
@@ -5707,6 +5740,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     return { ...finalResult(), partial: false };
   }
 
+  ensureNotSilentOnRealWork();
   persistResearchedMemory();
   return finalResult();
 }
