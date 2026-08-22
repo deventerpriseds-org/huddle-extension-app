@@ -185,12 +185,20 @@ jobs:
             gapi -X POST "https://graph.microsoft.com/v1.0/applications/${OBJID}/removePassword" -d "{\"keyId\":\"$k\"}" >/dev/null || true
           done
           # addPassword, with retry — replication or a transient 404 can yield an empty secretText.
+          # explicit endDateTime (not left to the Graph default) so the expiry is stated here rather than
+          # relied on implicitly, and so it can be surfaced in the deploy output below. This is obot's OWN
+          # credential for authenticating to Entra (the upstream IdP) — separate from whatever session/
+          # refresh-token lifetime obot issues to claude.ai itself (mcp-oauth-proxy doesn't document a
+          # config for that; unaffected by this). If this secret expires, obot can no longer log in to
+          # Entra at all and the connector breaks until redeployed (which mints a fresh one) — 2 years out
+          # keeps that far off without relying on Graph's own default silently doing the same thing.
+          SECRET_END=$(date -u -d '+2 years' +%Y-%m-%dT%H:%M:%SZ)
           SECRET=""
           for i in $(seq 1 6); do
             APRESP=$(gapi -X POST "https://graph.microsoft.com/v1.0/applications/${OBJID}/addPassword" \
-              -d "{\"passwordCredential\":{\"displayName\":\"obot-mcp\"}}")
+              -d "{\"passwordCredential\":{\"displayName\":\"obot-mcp\",\"endDateTime\":\"${SECRET_END}\"}}")
             SECRET=$(echo "$APRESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("secretText",""))' 2>/dev/null || echo "")
-            [ -n "$SECRET" ] && { echo "client secret minted (attempt ${i})"; break; }
+            [ -n "$SECRET" ] && { echo "client secret minted (attempt ${i}), expires ${SECRET_END}"; break; }
             echo "addPassword attempt ${i} returned no secret: $(echo "$APRESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("error",{}).get("message","<no error field>"))' 2>/dev/null || echo "<unparseable>")"
             sleep 5
           done
@@ -198,6 +206,7 @@ jobs:
           echo "::add-mask::$SECRET"
           echo "ENTRA_APP_ID=$APPID" >> "$GITHUB_ENV"
           echo "ENTRA_CLIENT_SECRET=$SECRET" >> "$GITHUB_ENV"
+          echo "ENTRA_SECRET_EXPIRES=$SECRET_END" >> "$GITHUB_ENV"
 
       - name: Deploy obot OAuth proxy + read-only crystaldba MCP (Option B)
         env:
@@ -283,6 +292,8 @@ jobs:
           echo "  https://${FQDN}/sse"
           echo "Login: Microsoft Entra (org accounts only). Redirect URI ${FQDN}/callback was auto-registered"
           echo "on the Entra app '${{ github.event.inputs.entra_app_name }}' by the provisioning step — NO manual console entry."
+          echo "obot's Entra client secret expires: ${ENTRA_SECRET_EXPIRES} — re-run this workflow before then to rotate it"
+          echo "(login itself doesn't otherwise expire on its own; this is the one credential that will eventually need a redeploy)."
           echo "============================================================"
           echo "--- Wait for the new revision to reach a terminal running state ---"
           LATEST=$(az containerapp revision list -g "$RG" -n "$ACA_APP" --query "reverse(sort_by([].{n:name,t:properties.createdTime},&t))[0].n" -o tsv)
