@@ -108,6 +108,26 @@ jobs:
           az containerapp env show -g "$RG" -n "$ACA_ENV" --only-show-errors >/dev/null 2>&1 || \
           az containerapp env create -g "$RG" -n "$ACA_ENV" -l "$LOCATION" --only-show-errors >/dev/null
 
+      - name: Bootstrap a brand-new ACA app shell (first deploy of this app_name only)
+        # The Entra-provisioning step below needs $ACA_APP's FQDN to register obot's OAuth redirect URI,
+        # but a brand-new app_name has no FQDN until the app exists — chicken-and-egg on a first-ever
+        # deploy of a given instance (the original huddle-pg-mcp never hit this because it already existed
+        # before the Entra-provisioning step was added). Create a throwaway placeholder with external
+        # ingress (just so ACA mints an FQDN); the real containers + config land moments later via the
+        # "Deploy obot OAuth proxy + read-only crystaldba MCP" step's `containerapp update`, so this
+        # placeholder is never actually reachable from the internet as itself. No-op if the app already
+        # exists (every subsequent redeploy of an existing instance).
+        run: |
+          if ! az containerapp show -g "$RG" -n "$ACA_APP" --only-show-errors >/dev/null 2>&1; then
+            echo "ACA app $ACA_APP doesn't exist yet — creating a placeholder shell for its FQDN."
+            ENV_ID=$(az containerapp env show -g "$RG" -n "$ACA_ENV" --query id -o tsv)
+            az containerapp create -g "$RG" -n "$ACA_APP" \
+              --environment "$ENV_ID" \
+              --image mcr.microsoft.com/k8se/quickstart:latest \
+              --ingress external --target-port 80 \
+              --only-show-errors >/dev/null
+          fi
+
       - name: Provision obot's Entra app (central auth) — redirect URI + client secret
         env:
           APP_NAME: ${{ github.event.inputs.entra_app_name }}
