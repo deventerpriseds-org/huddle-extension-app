@@ -103,4 +103,18 @@ and a confirm-ask reach-out is an agent-INITIATED autowork message, not somethin
 mid live-voice-call. Logging as non-blocking / deferred-cleanup (see below), not a missed site under
 this feature's scope.
 
-## Step 3 — tsc --noEmit (pending)
+## Step 3 — tsc --noEmit — DONE
+
+Ran (as the resumed verifier, independent invocation):
+```
+$ npx tsc --noEmit -p tsconfig.json
+(no output)
+$ echo $?
+0
+```
+Timed re-run to confirm it wasn't a stale/no-op cache hit: `real 0m18.257s`, `EXIT=0`. A genuine
+~18s full compile with zero diagnostics.
+
+STEP 3 VERDICT: typecheck clean, exit code 0, no errors/warnings emitted.
+
+## Step 4 — eslint scoped to this feature's touched files
