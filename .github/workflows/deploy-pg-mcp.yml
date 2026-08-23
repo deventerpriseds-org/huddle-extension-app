@@ -1,4 +1,4 @@
-name: Deploy read-only Postgres MCP (Azure Container Apps)
+name: Deploy Postgres MCP (Azure Container Apps)
 
 # Runner-free way to query the Huddle Azure PG (eds-postgresql / RAG_AI_Agents) from a Claude Code
 # session, via a REMOTE MCP connector (brokered by Anthropic → bypasses the session egress that blocks
@@ -16,10 +16,20 @@ name: Deploy read-only Postgres MCP (Azure Container Apps)
 # because it tries the full-path well-known (…/<tenant>/v2.0/.well-known/openid-configuration).
 #
 # Topology (single ACA app, two containers sharing localhost):
-#   internet --HTTPS--> obot (external ingress :8080, OAuth) --localhost:8000--> crystaldba (internal, read-only)
-# Security: crystaldba is never public; obot 401s everything until an Entra-authenticated (org-only) OAuth token
-# is presented; the read-only DB role has only pg_read_all_data (server-wide read across every database on
-# eds-postgresql — one role already covers all of them); crystaldba runs --access-mode=restricted.
+#   internet --HTTPS--> obot (external ingress :8080, OAuth) --localhost:8000--> crystaldba (internal)
+# Security: crystaldba is never public; obot 401s everything until an Entra-authenticated (org-only) OAuth
+# token is presented.
+#
+# Access mode (per-instance, set by `access_mode`): crystaldba's own `--access-mode` flag AND the DB role's
+# grants move together — read-only instances get `restricted` (crystaldba wraps every query in a read-only
+# transaction, rejects COMMIT/ROLLBACK tricks) + `GRANT pg_read_all_data`; a write instance gets
+# `unrestricted` (crystaldba's own doc: "full read/write access to modify data and schema") +
+# `GRANT pg_read_all_data` and `GRANT pg_write_all_data` (server-wide INSERT/UPDATE/DELETE — NOT DDL; schema
+# changes still go through migrations/db-query.yml, not this connector). Changing only one of the two (the
+# flag or the grant) is not enough by itself — restricted mode blocks writes regardless of role grants, and
+# a role with no write grant can't write regardless of the flag. **Never flip an existing read-only
+# instance's access_mode in place** — deploy a NEW app_name/entra_app_name/ro_role for a write-capable
+# instance instead, so the existing read-only connector's blast radius never silently changes.
 #
 # crystaldba itself is single-database-per-instance (one DATABASE_URI at startup, no runtime db-switching —
 # a deliberate crystaldba/postgres-mcp design choice, confirmed against its own docs). So "every database on
@@ -33,17 +43,20 @@ on:
   workflow_dispatch:
     inputs:
       db:
-        description: "Database to expose (read-only)."
+        description: "Database to expose."
         default: "RAG_AI_Agents"
       ro_role:
-        description: "Read-only role name."
+        description: "DB role name (despite the name, used for both read-only and write instances — give a write instance its own distinct name, e.g. mcp_readwrite)."
         default: "mcp_readonly"
       app_name:
-        description: "Azure Container App name — MUST be unique per target database. Reusing an existing app's name overwrites that instance (its DATABASE_URI gets repointed) instead of adding a new one."
+        description: "Azure Container App name — MUST be unique per target database/access-mode combo. Reusing an existing app's name overwrites that instance (its DATABASE_URI gets repointed) instead of adding a new one."
         default: "huddle-pg-mcp"
       entra_app_name:
         description: "Entra app registration display name — MUST be unique per instance. Two instances sharing one Entra app would fight over its single redirect URI (each provisioning run replaces it), breaking OAuth login for whichever isn't the one just deployed."
         default: "enterpriseds-pg-mcp"
+      access_mode:
+        description: "restricted = read-only (safe default, production). unrestricted = adds DML write access (INSERT/UPDATE/DELETE, no DDL) for this role — only use with a dedicated app_name/entra_app_name/ro_role you're standing up specifically as a write instance."
+        default: "restricted"
 
 env:
   RG: EnterpriseDS_ResourceGRP
@@ -81,12 +94,17 @@ jobs:
             --rule-name "mcpdeploy-${IP//./-}" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 \
             || echo "firewall-rule create skipped — relying on existing server rules"
           HOST="$PG_SERVER.postgres.database.azure.com"
-          # (1) read-only role for crystaldba, in the target DB
+          # (1) crystaldba's DB role, in the target DB. pg_read_all_data always granted; pg_write_all_data
+          # only when access_mode=unrestricted (and explicitly revoked otherwise, so re-running an existing
+          # role with access_mode=restricted actually removes write access rather than leaving it stale).
           psql "host=$HOST port=5432 dbname=${{ github.event.inputs.db }} user=Admin_eds sslmode=require" \
-            -v ON_ERROR_STOP=1 -v role="${{ github.event.inputs.ro_role }}" -v pw="$RO_PW" <<'SQL'
+            -v ON_ERROR_STOP=1 -v role="${{ github.event.inputs.ro_role }}" -v pw="$RO_PW" \
+            -v access_mode="${{ github.event.inputs.access_mode }}" <<'SQL'
           SELECT format('CREATE ROLE %I LOGIN', :'role') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
           SELECT format('ALTER ROLE %I PASSWORD %L', :'role', :'pw') \gexec
           SELECT format('GRANT pg_read_all_data TO %I', :'role') \gexec
+          SELECT format('GRANT pg_write_all_data TO %I', :'role') WHERE :'access_mode' = 'unrestricted' \gexec
+          SELECT format('REVOKE pg_write_all_data FROM %I', :'role') WHERE :'access_mode' <> 'unrestricted' \gexec
           SQL
           # (2) obot's OWN read-write store (separate role + database), created from the 'postgres' db
           psql "host=$HOST port=5432 dbname=postgres user=Admin_eds sslmode=require" \
@@ -224,6 +242,7 @@ jobs:
           #  Single mode, so obot would keep running its pre-grant crash-looped replica and never retry
           #  auto-migrate. This forces a clean restart AFTER the schema grant + password reset are applied.)
           NONCE=$(date +%s)
+          ACCESS_MODE="${{ github.event.inputs.access_mode }}"
           cat > app.yaml <<YAML
           properties:
             managedEnvironmentId: ${ENV_ID}
@@ -248,7 +267,7 @@ jobs:
               containers:
                 - name: pgmcp
                   image: crystaldba/postgres-mcp:latest
-                  args: ["--access-mode=restricted", "--transport=sse"]
+                  args: ["--access-mode=${ACCESS_MODE}", "--transport=sse"]
                   resources: { cpu: 0.5, memory: 1.0Gi }
                   env:
                     - name: DATABASE_URI
@@ -290,6 +309,11 @@ jobs:
           echo "============================================================"
           echo "Connector URL (claude.ai -> Add custom connector, leave Advanced BLANK):"
           echo "  https://${FQDN}/sse"
+          if [ "${{ github.event.inputs.access_mode }}" = "unrestricted" ]; then
+            echo "ACCESS MODE: unrestricted — this instance can WRITE (INSERT/UPDATE/DELETE, no DDL) to '${{ github.event.inputs.db }}' as role '${{ github.event.inputs.ro_role }}'."
+          else
+            echo "ACCESS MODE: restricted (read-only) against '${{ github.event.inputs.db }}' as role '${{ github.event.inputs.ro_role }}'."
+          fi
           echo "Login: Microsoft Entra (org accounts only). Redirect URI ${FQDN}/callback was auto-registered"
           echo "on the Entra app '${{ github.event.inputs.entra_app_name }}' by the provisioning step — NO manual console entry."
           echo "obot's Entra client secret expires: ${ENTRA_SECRET_EXPIRES} — re-run this workflow before then to rotate it"
