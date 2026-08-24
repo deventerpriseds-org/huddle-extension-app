@@ -2417,7 +2417,14 @@ funnels through, both model backends. Upstream: `runAgentTurn`'s two call sites 
 new optional trailing param). Downstream: the OpenAI conversation-object poisoning this can cause on a
 genuine mid-hop abort was ALREADY self-healed by existing code (huddle.functions.ts ~4152-4166) — this
 fix completes an already-anticipated mechanism rather than introducing a new failure mode.
-**Status:** IMPLEMENTED (tsc clean, mechanically proven locally). Verifier pending — the underlying
-scenario (a real 30-40s model timeout mid-tool-loop) can't be forced deterministically live, so
-verification will combine a live regression pass (normal replies unaffected) with code-level proof.
-NOT yet user-confirmed live (needs a real recurrence of a multi-chunk turn to fully close).
+**Status:** IMPLEMENTED + DEPLOYED — verifier CONFIRMED 10/10. All code changes exact as built
+(tsc clean); a local mechanical proof directly exercising the real, unmodified
+`callOpenAIResponses` confirmed BOTH halves of the cancellation claim: a pre-aborted signal blocks
+the fetch entirely (0 network calls), and an abort fired mid-flight cancels an ALREADY-IN-PROGRESS
+request (settles in ~200ms via AbortError, not a 5s hang). Live regression on the deployed app
+confirmed normal (non-timeout) replies are unaffected — a group turn (12.7s) and a 1:1 tool-call ask
+(4.9s, task created + toolUses recorded) both completed normally with zero abort/timeout fallbacks.
+**Honest scope limit (verifier's own words):** the exact original trigger — a real ~30-40s live
+OpenAI timeout mid-tool-loop — cannot be forced deterministically from this environment, so that
+specific scenario is mechanism-verified, not live-timeout-confirmed. Stays open until a real slow-
+agent occurrence is observed live and its toolUses/replies checked against the DB.
