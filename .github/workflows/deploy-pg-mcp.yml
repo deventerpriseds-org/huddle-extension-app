@@ -38,6 +38,16 @@ name: Deploy Postgres MCP (Azure Container Apps)
 # database its OWN unique app_name/entra_app_name (defaults below are the original Huddle instance; DO NOT
 # dispatch with the defaults for a second database, it will silently repoint/overwrite the Huddle instance's
 # ACA app and steal its Entra app's one redirect URI, breaking Huddle's connector).
+#
+# obot's OWN OAuth-token-store role+database are ALSO per-instance (derived from app_name: role
+# `obot_<app_name with - -> _>`, db `obot_oauth_<same>`) — NOT a single shared `obot`/`obot_oauth` like the
+# original single-instance version had. That was a real outage (2026-08-24): the provisioning step
+# unconditionally rotates its obot role's password on every deploy, so with a shared role, deploying ANY
+# instance silently invalidated every OTHER already-deployed instance's stored DB password — no error at
+# deploy time (existing open connections keep working), but the next restart of any other instance (scale
+# event, host maintenance, or its own redeploy) hit `password authentication failed for user "obot"` and
+# went down with no warning. Isolating the role+db per app_name means deploying one instance can never
+# again affect another's credentials.
 
 on:
   workflow_dispatch:
@@ -85,10 +95,16 @@ jobs:
       - name: Provision read-only role + obot OAuth store
         env:
           PGPASSWORD: ${{ secrets.Azure_admin_pw }}
+          APP_NAME_RAW: ${{ github.event.inputs.app_name }}
         run: |
           set -euo pipefail
           RO_PW="$(openssl rand -hex 24)";   echo "::add-mask::$RO_PW";   echo "RO_PW=$RO_PW" >> "$GITHUB_ENV"
           OBOT_PW="$(openssl rand -hex 24)"; echo "::add-mask::$OBOT_PW"; echo "OBOT_PW=$OBOT_PW" >> "$GITHUB_ENV"
+          # Per-instance obot OAuth-store identity, derived from app_name (hyphens -> underscores for a
+          # valid Postgres identifier) — see the top-of-file comment on why this must never be shared.
+          INSTANCE_KEY="${APP_NAME_RAW//-/_}"
+          OBOT_ROLE="obot_${INSTANCE_KEY}"; echo "OBOT_ROLE=$OBOT_ROLE" >> "$GITHUB_ENV"
+          OBOT_DB="obot_oauth_${INSTANCE_KEY}"; echo "OBOT_DB=$OBOT_DB" >> "$GITHUB_ENV"
           IP=$(curl -s https://api.ipify.org || curl -s https://checkip.amazonaws.com | tr -d '\n')
           az postgres flexible-server firewall-rule create -g "$RG" -s "$PG_SERVER" \
             --rule-name "mcpdeploy-${IP//./-}" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 \
@@ -106,17 +122,19 @@ jobs:
           SELECT format('GRANT pg_write_all_data TO %I', :'role') WHERE :'access_mode' = 'unrestricted' \gexec
           SELECT format('REVOKE pg_write_all_data FROM %I', :'role') WHERE :'access_mode' <> 'unrestricted' \gexec
           SQL
-          # (2) obot's OWN read-write store (separate role + database), created from the 'postgres' db
+          # (2) obot's OWN read-write store — a role + database DEDICATED to this instance (never shared
+          # across instances, see the top-of-file comment), created from the 'postgres' db.
           psql "host=$HOST port=5432 dbname=postgres user=Admin_eds sslmode=require" \
-            -v ON_ERROR_STOP=1 -v pw="$OBOT_PW" <<'SQL'
-          SELECT format('CREATE ROLE obot LOGIN PASSWORD %L', :'pw') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'obot') \gexec
-          SELECT format('ALTER ROLE obot PASSWORD %L', :'pw') \gexec
-          SELECT 'CREATE DATABASE obot_oauth OWNER obot' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'obot_oauth') \gexec
+            -v ON_ERROR_STOP=1 -v obot_role="$OBOT_ROLE" -v obot_db="$OBOT_DB" -v pw="$OBOT_PW" <<'SQL'
+          SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'obot_role', :'pw') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'obot_role') \gexec
+          SELECT format('ALTER ROLE %I PASSWORD %L', :'obot_role', :'pw') \gexec
+          SELECT format('CREATE DATABASE %I OWNER %I', :'obot_db', :'obot_role') WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'obot_db') \gexec
           SQL
           # (3) PG15+: DB owner still lacks CREATE on schema public — grant it so obot can auto-migrate.
-          psql "host=$HOST port=5432 dbname=obot_oauth user=Admin_eds sslmode=require" -v ON_ERROR_STOP=1 <<'SQL'
-          ALTER SCHEMA public OWNER TO obot;
-          GRANT ALL ON SCHEMA public TO obot;
+          psql "host=$HOST port=5432 dbname=$OBOT_DB user=Admin_eds sslmode=require" \
+            -v ON_ERROR_STOP=1 -v obot_role="$OBOT_ROLE" <<'SQL'
+          SELECT format('ALTER SCHEMA public OWNER TO %I', :'obot_role') \gexec
+          SELECT format('GRANT ALL ON SCHEMA public TO %I', :'obot_role') \gexec
           SQL
           az postgres flexible-server firewall-rule delete -g "$RG" -s "$PG_SERVER" \
             --rule-name "mcpdeploy-${IP//./-}" --yes --only-show-errors >/dev/null 2>&1 || true
@@ -234,7 +252,7 @@ jobs:
           set -euo pipefail
           ENV_ID=$(az containerapp env show -g "$RG" -n "$ACA_ENV" --query id -o tsv)
           RO_DSN="postgresql://${{ github.event.inputs.ro_role }}:${RO_PW}@${PG_SERVER}.postgres.database.azure.com:5432/${{ github.event.inputs.db }}?sslmode=require"
-          OBOT_DSN="postgres://obot:${OBOT_PW}@${PG_SERVER}.postgres.database.azure.com:5432/obot_oauth?sslmode=require"
+          OBOT_DSN="postgres://${OBOT_ROLE}:${OBOT_PW}@${PG_SERVER}.postgres.database.azure.com:5432/${OBOT_DB}?sslmode=require"
           # Stable AES-256 key derived from an existing org secret → survives redeploys (no re-auth), no new secret.
           ENC_KEY=$(printf '%s' "${JPT}::obot-mcp-enc-v1" | sha256sum | cut -d' ' -f1 | xxd -r -p | base64 -w0)
           # Changing nonce → new revision hash EVERY deploy, so the container actually RESTARTS.
