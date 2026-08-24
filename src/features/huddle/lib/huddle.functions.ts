@@ -1876,6 +1876,12 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // ceremony trigger ("let's run the daily stand-up"). Override the user message (and the
     // force-tool regexes) with the barge text so the reply addresses what the user actually asked.
     userTextOverride?: string,
+    // Tied to runBounded's own per-agent deadline (below). Without this, a timed-out attempt is only
+    // stopped being WAITED ON, not actually stopped — the model/tool-call loop keeps running in the
+    // background and can still fire real, un-tracked tool calls after the turn has already finalized
+    // without it, which a later retry then discovers and misreports as pre-existing. Threaded into
+    // both model backends so neither can zombie.
+    signal?: AbortSignal,
   ): Promise<AgentTurnResult> => {
     const winner = AGENT_BY_ID[nextId]!;
     const agentBackend = agentsCfg[nextId] ?? { backend: "lovable" as const };
@@ -4139,6 +4145,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           promptCacheKey: `huddle-${winner.id}`,
           ...(personaReasoningEffort ? { reasoningEffort: personaReasoningEffort } : {}),
           ...(streamOneOnOne ? { stream: true, onDelta } : {}),
+          signal,
         };
         let persona: { text: string; reasoning: string[] };
         try {
@@ -5204,6 +5211,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 stepNumber === 0 ? { toolChoice: lovableToolChoice } : { toolChoice: "auto" }
             : undefined,
           stopWhen: stepCountIs(50),
+          abortSignal: signal,
         });
         clean = text.trim();
       }
@@ -5525,10 +5533,24 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // partial is already persisted and the durable turn continues in a fresh execution.
     const budgetMs = data.scope === "one-to-one" ? 40_000 : deadlineMs;
     const remaining = Math.max(floor, budgetMs - (Date.now() - turnStartMs));
+    // Tied to the timeout below: when the deadline fires we don't just stop WAITING on the agent's
+    // call, we actually tell it to stop. Without this, an "abandoned" attempt keeps running in the
+    // background (a zombie) with no cancellation, can still fire real tool calls no one is tracking,
+    // and a later retry then finds its own predecessor's mutations and reports them as pre-existing —
+    // ground-truthed live: Finn told the user "0 new tasks were created; all four already have board
+    // cards" when 3 of the 4 had in fact just been created by his own earlier, timed-out attempt in
+    // this exact turn, 40s before that reply.
+    const controller = new AbortController();
+    const attempt = runAgentTurn(id, prior, userTextOverride, controller.signal);
+    // The abort() below makes this settle (usually reject with an AbortError) after the race has
+    // already resolved via the timeout branch. Nobody awaits `attempt` past that point — swallow it
+    // here so an aborted/failed zombie doesn't surface as an unhandled promise rejection.
+    attempt.catch(() => {});
     return Promise.race([
-      runAgentTurn(id, prior, userTextOverride),
+      attempt,
       new Promise<AgentTurnResult>((resolve) =>
         setTimeout(() => {
+          controller.abort();
           const nm = AGENT_BY_ID[id]?.name ?? id;
           resolve({
             fallbacks: [

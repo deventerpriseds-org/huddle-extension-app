@@ -114,6 +114,13 @@ export interface OpenAIPersonaInput {
   stream?: boolean;
   /** Called with the cumulative output text as it streams (only when `stream` is true). */
   onDelta?: (textSoFar: string) => void;
+  /** Tied to the caller's per-agent runBounded deadline. Without this, a timed-out attempt is only
+   *  stopped being WAITED ON — the underlying model/tool-call loop keeps running in the background
+   *  (a "zombie") with no cancellation, so it can still fire real, un-tracked tool calls (task
+   *  creates, etc.) after the turn has already finalized without it. A later retry then discovers
+   *  the zombie's own mutations and reports them as pre-existing, since it has no memory of having
+   *  just made them. Aborts in-flight fetches and stops starting new hops/tool calls. */
+  signal?: AbortSignal;
 }
 
 interface ResponsesReply {
@@ -245,6 +252,11 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
   let previousResponseId: string | undefined;
 
   for (let hop = 0; hop <= maxHops; hop++) {
+    // The caller's deadline already fired and stopped waiting on us — do not start another hop (a
+    // fresh model call, or more tool execution). Whatever text/reasoning we've accumulated so far is
+    // returned below; the caller has already moved on and discarded it, but this stops the loop from
+    // continuing to mutate real state with no one tracking it.
+    if (input.signal?.aborted) break;
     // On the FINAL hop, withhold tools so the model MUST answer with text. This prevents a tool call
     // we'd never get to answer (we'd bail right after) — which, in conversation-object mode, would be
     // stored in the thread as a dangling function_call and 400 every subsequent turn ("No tool output
@@ -282,6 +294,7 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
       method: "POST",
       headers,
       body: JSON.stringify(input.stream ? { ...body, stream: true } : body),
+      signal: input.signal,
     });
 
     if (!res.ok) {
@@ -296,7 +309,12 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
       } catch {
         // Streaming parse failed mid-flight — retry this hop non-streamed so the reply is never lost.
         // (A partial already persisted by the caller is harmlessly replaced by the final text.)
-        const res2 = await fetch(OPENAI_URL, { method: "POST", headers, body: JSON.stringify(body) });
+        const res2 = await fetch(OPENAI_URL, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          signal: input.signal,
+        });
         if (!res2.ok) {
           const t = await res2.text().catch(() => "");
           throw new Error(`OpenAI Responses ${res2.status}: ${t.slice(0, 300)}`);
@@ -316,6 +334,10 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
 
     const nextInput: unknown[] = [];
     for (const tc of toolCalls) {
+      // The model can return SEVERAL tool calls in one hop; don't start any more of them once the
+      // deadline has fired mid-batch (a call already in flight via onToolCall below still finishes —
+      // this only stops the NEXT one from starting).
+      if (input.signal?.aborted) break;
       let args: Record<string, unknown> = {};
       try {
         args = JSON.parse(tc.arguments) as Record<string, unknown>;

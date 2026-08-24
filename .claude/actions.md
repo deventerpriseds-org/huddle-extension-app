@@ -2374,3 +2374,50 @@ the user still on this conversation" at COMPLETION time, not baking a visibility
 time — a real notification-semantics change, which this repo's own rule requires confirming before
 building/deploying.
 **Status:** Fix 1 DEPLOYED (tsc clean). NOT yet user-confirmed live. Fix 2 awaiting go-ahead.
+
+### ACT-huddle-58: Timed-out agent attempts become "zombies" — invisible mutations, self-contradicting narration
+**Requested:** 2026-08-24 — "Did Finn just fabricate items existing in the journey backlog?" (asked
+after seeing Finn claim "all four already have board cards, so 0 new tasks were created"). "Absolutely
+trace and fix."
+**Ground truth, precisely sequenced:** turn `u-1787592252168` (dm-finn-reid). At **17:24:51 UTC**,
+Black Card / Macy's / PayPal are all created in journey `public.tasks` (3 rows, ~150ms apart — one
+batch create). At **17:25:33-47** — 40+ SECONDS LATER, in what the turn's own `toolUses` shows as a
+FRESH `get_tasks` + `create_huddle_task` attempt — Finn discovers these three rows already exist,
+correctly skips creating duplicates ("already created this turn — skipped duplicate"), and tells the
+user **"0 new tasks were created; all four already have board cards."** False: 3 of 4 did not exist
+before this exact turn — Finn's OWN earlier attempt created them, ~40s before he described them as
+pre-existing. Only Klarna genuinely pre-existed (created Aug 18).
+**Root cause:** `runBounded`'s per-agent deadline (`Promise.race`) only ever stopped WAITING on a
+timed-out `runAgentTurn` call — it never told the underlying model/tool-call loop to actually stop.
+The abandoned attempt keeps running server-side ("zombie") with no cancellation, so it can still fire
+real, mutating tool calls (task creates) with zero tracking (never added to `toolUses`, `replies`, or
+persisted — the turn had already finalized and saved its snapshot before the zombie's late writes
+land). ACT-56's retry fix (re-queue a timed-out agent into the next chunk) then runs a FRESH attempt
+with no memory of the zombie's actions, which naturally discovers the zombie's own mutations via
+`get_tasks` and reports them as pre-existing. This exact "aborted mid-hop" scenario was ALREADY
+anticipated in the code (huddle.functions.ts's poisoned-conversation self-heal comment references it)
+but no abort signal had ever actually been wired up — and CLAUDE.md's own backlog item #2 already named
+this gap ("Wrap each agent's callOpenAIResponses/generateText in an AbortController").
+**Fix (tsc clean; locally proven — a pre-aborted signal stops the loop before any fetch fires, 0 network
+calls made):**
+- `openai-responses.server.ts`: `OpenAIPersonaInput` gains `signal?: AbortSignal`. Threaded into both
+  `fetch` calls (aborts an in-flight request too, not just future ones); checked at the top of the
+  hop loop (stops starting a new model call) AND before each tool call within a hop (stops firing
+  the NEXT tool call if the model returned several and the deadline hits mid-batch).
+- `huddle.functions.ts`: `runAgentTurn` gains a `signal` parameter, threaded into `personaArgs`
+  (covers both `callOpenAIResponses` call sites via spread, including the poisoned-conversation
+  retry) and into the Lovable-path `generateText` call (`abortSignal`, natively supported by the
+  Vercel AI SDK).
+- `runBounded`: creates a real `AbortController`, passes its signal into `runAgentTurn`, and the
+  timeout's `setTimeout` callback now calls `controller.abort()` (previously only resolved the race).
+  The abandoned promise is `.catch(()=>{})`'d so an aborted zombie's eventual rejection doesn't surface
+  as an unhandled rejection.
+**Integration trace:** the ONE per-agent execution boundary (`runBounded`) every agent invocation
+funnels through, both model backends. Upstream: `runAgentTurn`'s two call sites are unchanged (only a
+new optional trailing param). Downstream: the OpenAI conversation-object poisoning this can cause on a
+genuine mid-hop abort was ALREADY self-healed by existing code (huddle.functions.ts ~4152-4166) — this
+fix completes an already-anticipated mechanism rather than introducing a new failure mode.
+**Status:** IMPLEMENTED (tsc clean, mechanically proven locally). Verifier pending — the underlying
+scenario (a real 30-40s model timeout mid-tool-loop) can't be forced deterministically live, so
+verification will combine a live regression pass (normal replies unaffected) with code-level proof.
+NOT yet user-confirmed live (needs a real recurrence of a multi-chunk turn to fully close).
