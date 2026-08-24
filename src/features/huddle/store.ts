@@ -90,6 +90,10 @@ interface HuddleState {
   // Artifact to focus when the Artifacts view opens (set by clicking an "Open <name>" chip in chat).
   // ArtifactsView reads it, opens that artifact, then clears it. Not persisted (transient UI intent).
   activeArtifactId: string | null;
+  // Starter text for the compose box, set by a confirm-ask message's Revise button (MessageRow can't
+  // reach Composer's local state directly — they're sibling components). Composer applies it, focuses
+  // the input, then clears it back to null — same consume-once shape as activeArtifactId.
+  draftPrefill: string | null;
   huddles: Huddle[];
   messages: HuddleMessage[];
   tasks: Task[];
@@ -121,9 +125,11 @@ interface HuddleState {
   setView: (v: View) => void;
   // Open the Artifacts view focused on a specific artifact (from a chat chip); null just clears focus.
   openArtifactById: (id: string | null) => void;
+  setDraftPrefill: (text: string | null) => void;
   addUserMessage: (m: HuddleMessage) => void;
   addAgentMessage: (m: HuddleMessage) => void;
   upsertAgentMessage: (m: HuddleMessage) => void;
+  resolveConfirmAsk: (messageId: string) => void;
   logDecision: (d: RoutingDecision) => void;
   addToolUses: (events: ToolUseEvent[]) => void;
   moveTask: (id: string, lane: TaskLane) => void;
@@ -191,6 +197,7 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
   activeHuddleId: "daily",
   view: "huddle",
   activeArtifactId: null,
+  draftPrefill: null,
   huddles: HUDDLES,
   messages: SEED_MESSAGES,
   tasks: SEED_TASKS,
@@ -232,6 +239,7 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
     set((s) => ({ lastReadAt: { ...s.lastReadAt, [huddleId]: Date.now() } })),
   openArtifactById: (id) =>
     set(id ? { activeArtifactId: id, view: "artifacts" } : { activeArtifactId: null }),
+  setDraftPrefill: (text) => set({ draftPrefill: text }),
   addUserMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
   // A message arriving in the ALREADY-OPEN huddle counts as read on arrival, so it never shows unread.
   addAgentMessage: (m) =>
@@ -262,9 +270,22 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
         text: m.text,
         artifacts: m.artifacts ?? next[i].artifacts,
         toolUses: m.toolUses ?? next[i].toolUses,
+        confirmAsk: m.confirmAsk ?? next[i].confirmAsk,
       };
       return { messages: next };
     }),
+  // Marks one message's confirm-ask row resolved after a Confirm/Backlog/Archive button action succeeds,
+  // so the client swaps the live buttons for a resolved badge without re-fetching. Scoped by messageId
+  // (not taskId) so acting on an old reach-out never touches a DIFFERENT message that happens to carry
+  // the same task (e.g. a later re-ask after reassignment).
+  resolveConfirmAsk: (messageId) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.id === messageId && m.confirmAsk
+          ? { ...m, confirmAsk: { ...m.confirmAsk, resolved: true } }
+          : m,
+      ),
+    })),
   logDecision: (d) => set((s) => ({ decisions: [d, ...s.decisions].slice(0, 50) })),
   addToolUses: (events) =>
     set((s) => ({ toolUses: [...events, ...s.toolUses].slice(0, 100) })),

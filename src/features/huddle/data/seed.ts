@@ -32,6 +32,12 @@ export interface HuddleMessage {
   // turn's toolUses filtered to this agentId, excluding the "tool_catalog" offered-list entry). Lets the
   // user see whether the agent DID what it said vs. only claimed it. Absent on older/away turns → no chip.
   toolUses?: ToolUseEvent[];
+  // Present when THIS message is a confirm-intent reach-out (the agent called propose_task_intent this
+  // same turn) — renders the Confirm/Revise/Backlog/Archive button row, bound to THIS task, so acting on
+  // an old reach-out after scrolling past unrelated conversation still targets the right task. `resolved`
+  // is set client-side once a button action succeeds, swapping the live buttons for a resolved badge.
+  // Absent on messages from before this feature shipped, or on any non-confirm-ask message → no row.
+  confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string; resolved?: boolean };
 }
 
 export type HuddleScope = "one-to-one" | "group";

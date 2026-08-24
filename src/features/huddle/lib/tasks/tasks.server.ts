@@ -1082,6 +1082,62 @@ export async function confirmTaskIntent(taskId: string, userEmail: string, dod: 
   );
 }
 
+/** Record the agent's PROPOSED Definition of Done the moment it sends the confirm-intent ask — before
+ * the user has replied. Distinct from confirmTaskIntent: this never touches confirm_status/confirmed_dod,
+ * it only stores what was proposed so a later deterministic action (the Confirm button) has a durable,
+ * server-side source of truth to read instead of trusting whatever text a client echoes back. */
+export async function proposeTaskDod(
+  taskId: string,
+  userEmail: string,
+  dod: string,
+): Promise<void> {
+  await ensureBootstrapped();
+  // user_email is NOT NULL with no default (schema above) — omitting it here would risk the insert
+  // branch of ON CONFLICT DO UPDATE failing even when a row already exists, so this mirrors
+  // confirmTaskIntent's full column list rather than a minimal proposed_dod-only insert.
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
+  await getPool().query(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, proposed_dod, user_id)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (task_id) DO UPDATE SET
+       proposed_dod=EXCLUDED.proposed_dod,
+       user_id=COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at=now()`,
+    [taskId, userEmail.toLowerCase(), dod, userId],
+  );
+}
+
+/** A single mirrored task, scoped to the caller's own email set, with its engagement state — for the
+ * confirm-ask buttons (Confirm/Backlog/Archive). Returns null if the task doesn't exist OR doesn't
+ * belong to this user — the two cases are deliberately indistinguishable to the caller, so a forged/
+ * guessed taskId for someone else's task can never be used to probe for its existence. */
+export interface OwnedTaskForConfirmAsk {
+  id: string;
+  title: string;
+  status: string | null;
+  tags: string[] | null;
+  confirm_status: "awaiting" | "asked" | "confirmed";
+  proposed_dod: string | null;
+}
+export async function getOwnedTaskForConfirmAsk(
+  taskId: string,
+  userEmail: string,
+): Promise<OwnedTaskForConfirmAsk | null> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
+  const { rows } = await getPool().query<OwnedTaskForConfirmAsk>(
+    `SELECT t.id, t.title, t.status, t.tags,
+            COALESCE(es.confirm_status, 'awaiting') AS confirm_status,
+            es.proposed_dod
+       FROM tasks.journey_tasks t
+       LEFT JOIN tasks.task_engagement_state es ON es.task_id = t.id
+      WHERE t.id = $1 AND lower(t.user_email) = ANY($2)`,
+    [taskId, emails],
+  );
+  return rows[0] ?? null;
+}
+
 /**
  * A task's assignee changed (e.g. a grooming re-pass) — the previous assignee's confirm-intent/approach
  * state was earned by THEM, not the new assignee, so it must not silently carry over (the new agent

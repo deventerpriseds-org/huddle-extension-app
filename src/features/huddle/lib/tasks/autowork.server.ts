@@ -138,10 +138,15 @@ function confirmIntentDirective(task: {
     `This task is on the board for you: "${task.title}". Before starting (or continuing) the work, ` +
     `confirm with the user what they actually want to achieve here — ground your understanding in ` +
     `their Executive Profile and anything you remember about their goals (already in your context). ` +
-    `In ONE natural, brief message (not an interrogation): say what you believe they're trying to ` +
-    `accomplish with this task, propose a concrete, testable Definition of Done, and ask them to ` +
-    `confirm it, add to it, or correct it.\n` +
+    `In ONE natural, brief message (not an interrogation): open with a brief, natural greeting that ` +
+    `frames what this is about (e.g. "Hi — before I get going on this, wanted to check something:"), ` +
+    `then say what you believe they're trying to accomplish with this task, propose a concrete, ` +
+    `testable Definition of Done, and ask them to confirm it, add to it, or correct it.\n` +
     `${modeProposalHint(mode)}\n` +
+    `In this SAME message/turn, also call propose_task_intent with task_id "${task.id}", task_title ` +
+    `"${task.title}", and the definition_of_done you just proposed — this records what you proposed ` +
+    `immediately, before they've replied, so the user can act on it with one tap. This is separate from ` +
+    `confirm_task_intent below and does not confirm or lock in anything by itself.\n` +
     `Once you understand their reply (confirmed as-is, or with their additions/corrections folded in), ` +
     `call confirm_task_intent with task_id "${task.id}" and the final definition_of_done text — this ` +
     `locks it in. Do NOT call confirm_task_intent before they've actually replied; this first message ` +

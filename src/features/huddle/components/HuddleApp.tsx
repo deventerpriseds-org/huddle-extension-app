@@ -70,7 +70,12 @@ export function HuddleApp() {
         huddleId: string;
         updated_ms: number;
         userText: string | null;
-        replies: { agentId: AgentId; text: string; artifacts?: { id: string; name: string }[] }[];
+        replies: {
+          agentId: AgentId;
+          text: string;
+          artifacts?: { id: string; name: string }[];
+          confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+        }[];
         toolUses?: ToolUseEvent[];
       }[]) {
         cursor = Math.max(cursor, t.updated_ms || 0);
@@ -103,6 +108,7 @@ export function HuddleApp() {
             ts: (t.updated_ms || Date.now()) + i,
             replyTo: t.id,
             artifacts: reply.artifacts,
+            confirmAsk: reply.confirmAsk,
             toolUses: t.toolUses ? breadcrumbToolsFor(reply.agentId, t.toolUses) : undefined,
           });
         });

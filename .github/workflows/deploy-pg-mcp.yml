@@ -1,4 +1,4 @@
-name: Deploy read-only Postgres MCP (Azure Container Apps)
+name: Deploy Postgres MCP (Azure Container Apps)
 
 # Runner-free way to query the Huddle Azure PG (eds-postgresql / RAG_AI_Agents) from a Claude Code
 # session, via a REMOTE MCP connector (brokered by Anthropic → bypasses the session egress that blocks
@@ -16,25 +16,63 @@ name: Deploy read-only Postgres MCP (Azure Container Apps)
 # because it tries the full-path well-known (…/<tenant>/v2.0/.well-known/openid-configuration).
 #
 # Topology (single ACA app, two containers sharing localhost):
-#   internet --HTTPS--> obot (external ingress :8080, OAuth) --localhost:8000--> crystaldba (internal, read-only)
-# Security: crystaldba is never public; obot 401s everything until an Entra-authenticated (org-only) OAuth token
-# is presented; the DB role `mcp_readonly` has only pg_read_all_data; crystaldba runs --access-mode=restricted.
+#   internet --HTTPS--> obot (external ingress :8080, OAuth) --localhost:8000--> crystaldba (internal)
+# Security: crystaldba is never public; obot 401s everything until an Entra-authenticated (org-only) OAuth
+# token is presented.
+#
+# Access mode (per-instance, set by `access_mode`): crystaldba's own `--access-mode` flag AND the DB role's
+# grants move together — read-only instances get `restricted` (crystaldba wraps every query in a read-only
+# transaction, rejects COMMIT/ROLLBACK tricks) + `GRANT pg_read_all_data`; a write instance gets
+# `unrestricted` (crystaldba's own doc: "full read/write access to modify data and schema") +
+# `GRANT pg_read_all_data` and `GRANT pg_write_all_data` (server-wide INSERT/UPDATE/DELETE — NOT DDL; schema
+# changes still go through migrations/db-query.yml, not this connector). Changing only one of the two (the
+# flag or the grant) is not enough by itself — restricted mode blocks writes regardless of role grants, and
+# a role with no write grant can't write regardless of the flag. **Never flip an existing read-only
+# instance's access_mode in place** — deploy a NEW app_name/entra_app_name/ro_role for a write-capable
+# instance instead, so the existing read-only connector's blast radius never silently changes.
+#
+# crystaldba itself is single-database-per-instance (one DATABASE_URI at startup, no runtime db-switching —
+# a deliberate crystaldba/postgres-mcp design choice, confirmed against its own docs). So "every database on
+# this server" means one ACA app + one Entra app registration PER target database, not one instance that
+# covers them all. `app_name`/`entra_app_name` are parameterized for exactly this — give each new target
+# database its OWN unique app_name/entra_app_name (defaults below are the original Huddle instance; DO NOT
+# dispatch with the defaults for a second database, it will silently repoint/overwrite the Huddle instance's
+# ACA app and steal its Entra app's one redirect URI, breaking Huddle's connector).
+#
+# obot's OWN OAuth-token-store role+database are ALSO per-instance (derived from app_name: role
+# `obot_<app_name with - -> _>`, db `obot_oauth_<same>`) — NOT a single shared `obot`/`obot_oauth` like the
+# original single-instance version had. That was a real outage (2026-08-24): the provisioning step
+# unconditionally rotates its obot role's password on every deploy, so with a shared role, deploying ANY
+# instance silently invalidated every OTHER already-deployed instance's stored DB password — no error at
+# deploy time (existing open connections keep working), but the next restart of any other instance (scale
+# event, host maintenance, or its own redeploy) hit `password authentication failed for user "obot"` and
+# went down with no warning. Isolating the role+db per app_name means deploying one instance can never
+# again affect another's credentials.
 
 on:
   workflow_dispatch:
     inputs:
       db:
-        description: "Database to expose (read-only)."
+        description: "Database to expose."
         default: "RAG_AI_Agents"
       ro_role:
-        description: "Read-only role name."
+        description: "DB role name (despite the name, used for both read-only and write instances — give a write instance its own distinct name, e.g. mcp_readwrite)."
         default: "mcp_readonly"
+      app_name:
+        description: "Azure Container App name — MUST be unique per target database/access-mode combo. Reusing an existing app's name overwrites that instance (its DATABASE_URI gets repointed) instead of adding a new one."
+        default: "huddle-pg-mcp"
+      entra_app_name:
+        description: "Entra app registration display name — MUST be unique per instance. Two instances sharing one Entra app would fight over its single redirect URI (each provisioning run replaces it), breaking OAuth login for whichever isn't the one just deployed."
+        default: "enterpriseds-pg-mcp"
+      access_mode:
+        description: "restricted = read-only (safe default, production). unrestricted = adds DML write access (INSERT/UPDATE/DELETE, no DDL) for this role — only use with a dedicated app_name/entra_app_name/ro_role you're standing up specifically as a write instance."
+        default: "restricted"
 
 env:
   RG: EnterpriseDS_ResourceGRP
   PG_SERVER: eds-postgresql
   ACA_ENV: eds-mcp-env
-  ACA_APP: huddle-pg-mcp
+  ACA_APP: ${{ github.event.inputs.app_name }}
   LOCATION: eastus
 
 jobs:
@@ -57,33 +95,46 @@ jobs:
       - name: Provision read-only role + obot OAuth store
         env:
           PGPASSWORD: ${{ secrets.Azure_admin_pw }}
+          APP_NAME_RAW: ${{ github.event.inputs.app_name }}
         run: |
           set -euo pipefail
           RO_PW="$(openssl rand -hex 24)";   echo "::add-mask::$RO_PW";   echo "RO_PW=$RO_PW" >> "$GITHUB_ENV"
           OBOT_PW="$(openssl rand -hex 24)"; echo "::add-mask::$OBOT_PW"; echo "OBOT_PW=$OBOT_PW" >> "$GITHUB_ENV"
+          # Per-instance obot OAuth-store identity, derived from app_name (hyphens -> underscores for a
+          # valid Postgres identifier) — see the top-of-file comment on why this must never be shared.
+          INSTANCE_KEY="${APP_NAME_RAW//-/_}"
+          OBOT_ROLE="obot_${INSTANCE_KEY}"; echo "OBOT_ROLE=$OBOT_ROLE" >> "$GITHUB_ENV"
+          OBOT_DB="obot_oauth_${INSTANCE_KEY}"; echo "OBOT_DB=$OBOT_DB" >> "$GITHUB_ENV"
           IP=$(curl -s https://api.ipify.org || curl -s https://checkip.amazonaws.com | tr -d '\n')
           az postgres flexible-server firewall-rule create -g "$RG" -s "$PG_SERVER" \
             --rule-name "mcpdeploy-${IP//./-}" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 \
             || echo "firewall-rule create skipped — relying on existing server rules"
           HOST="$PG_SERVER.postgres.database.azure.com"
-          # (1) read-only role for crystaldba, in the target DB
+          # (1) crystaldba's DB role, in the target DB. pg_read_all_data always granted; pg_write_all_data
+          # only when access_mode=unrestricted (and explicitly revoked otherwise, so re-running an existing
+          # role with access_mode=restricted actually removes write access rather than leaving it stale).
           psql "host=$HOST port=5432 dbname=${{ github.event.inputs.db }} user=Admin_eds sslmode=require" \
-            -v ON_ERROR_STOP=1 -v role="${{ github.event.inputs.ro_role }}" -v pw="$RO_PW" <<'SQL'
+            -v ON_ERROR_STOP=1 -v role="${{ github.event.inputs.ro_role }}" -v pw="$RO_PW" \
+            -v access_mode="${{ github.event.inputs.access_mode }}" <<'SQL'
           SELECT format('CREATE ROLE %I LOGIN', :'role') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
           SELECT format('ALTER ROLE %I PASSWORD %L', :'role', :'pw') \gexec
           SELECT format('GRANT pg_read_all_data TO %I', :'role') \gexec
+          SELECT format('GRANT pg_write_all_data TO %I', :'role') WHERE :'access_mode' = 'unrestricted' \gexec
+          SELECT format('REVOKE pg_write_all_data FROM %I', :'role') WHERE :'access_mode' <> 'unrestricted' \gexec
           SQL
-          # (2) obot's OWN read-write store (separate role + database), created from the 'postgres' db
+          # (2) obot's OWN read-write store — a role + database DEDICATED to this instance (never shared
+          # across instances, see the top-of-file comment), created from the 'postgres' db.
           psql "host=$HOST port=5432 dbname=postgres user=Admin_eds sslmode=require" \
-            -v ON_ERROR_STOP=1 -v pw="$OBOT_PW" <<'SQL'
-          SELECT format('CREATE ROLE obot LOGIN PASSWORD %L', :'pw') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'obot') \gexec
-          SELECT format('ALTER ROLE obot PASSWORD %L', :'pw') \gexec
-          SELECT 'CREATE DATABASE obot_oauth OWNER obot' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'obot_oauth') \gexec
+            -v ON_ERROR_STOP=1 -v obot_role="$OBOT_ROLE" -v obot_db="$OBOT_DB" -v pw="$OBOT_PW" <<'SQL'
+          SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'obot_role', :'pw') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'obot_role') \gexec
+          SELECT format('ALTER ROLE %I PASSWORD %L', :'obot_role', :'pw') \gexec
+          SELECT format('CREATE DATABASE %I OWNER %I', :'obot_db', :'obot_role') WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'obot_db') \gexec
           SQL
           # (3) PG15+: DB owner still lacks CREATE on schema public — grant it so obot can auto-migrate.
-          psql "host=$HOST port=5432 dbname=obot_oauth user=Admin_eds sslmode=require" -v ON_ERROR_STOP=1 <<'SQL'
-          ALTER SCHEMA public OWNER TO obot;
-          GRANT ALL ON SCHEMA public TO obot;
+          psql "host=$HOST port=5432 dbname=$OBOT_DB user=Admin_eds sslmode=require" \
+            -v ON_ERROR_STOP=1 -v obot_role="$OBOT_ROLE" <<'SQL'
+          SELECT format('ALTER SCHEMA public OWNER TO %I', :'obot_role') \gexec
+          SELECT format('GRANT ALL ON SCHEMA public TO %I', :'obot_role') \gexec
           SQL
           az postgres flexible-server firewall-rule delete -g "$RG" -s "$PG_SERVER" \
             --rule-name "mcpdeploy-${IP//./-}" --yes --only-show-errors >/dev/null 2>&1 || true
@@ -93,9 +144,29 @@ jobs:
           az containerapp env show -g "$RG" -n "$ACA_ENV" --only-show-errors >/dev/null 2>&1 || \
           az containerapp env create -g "$RG" -n "$ACA_ENV" -l "$LOCATION" --only-show-errors >/dev/null
 
+      - name: Bootstrap a brand-new ACA app shell (first deploy of this app_name only)
+        # The Entra-provisioning step below needs $ACA_APP's FQDN to register obot's OAuth redirect URI,
+        # but a brand-new app_name has no FQDN until the app exists — chicken-and-egg on a first-ever
+        # deploy of a given instance (the original huddle-pg-mcp never hit this because it already existed
+        # before the Entra-provisioning step was added). Create a throwaway placeholder with external
+        # ingress (just so ACA mints an FQDN); the real containers + config land moments later via the
+        # "Deploy obot OAuth proxy + read-only crystaldba MCP" step's `containerapp update`, so this
+        # placeholder is never actually reachable from the internet as itself. No-op if the app already
+        # exists (every subsequent redeploy of an existing instance).
+        run: |
+          if ! az containerapp show -g "$RG" -n "$ACA_APP" --only-show-errors >/dev/null 2>&1; then
+            echo "ACA app $ACA_APP doesn't exist yet — creating a placeholder shell for its FQDN."
+            ENV_ID=$(az containerapp env show -g "$RG" -n "$ACA_ENV" --query id -o tsv)
+            az containerapp create -g "$RG" -n "$ACA_APP" \
+              --environment "$ENV_ID" \
+              --image mcr.microsoft.com/k8se/quickstart:latest \
+              --ingress external --target-port 80 \
+              --only-show-errors >/dev/null
+          fi
+
       - name: Provision obot's Entra app (central auth) — redirect URI + client secret
         env:
-          APP_NAME: enterpriseds-pg-mcp
+          APP_NAME: ${{ github.event.inputs.entra_app_name }}
         run: |
           set -euo pipefail
           FQDN=$(az containerapp show -g "$RG" -n "$ACA_APP" --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || echo "")
@@ -150,12 +221,20 @@ jobs:
             gapi -X POST "https://graph.microsoft.com/v1.0/applications/${OBJID}/removePassword" -d "{\"keyId\":\"$k\"}" >/dev/null || true
           done
           # addPassword, with retry — replication or a transient 404 can yield an empty secretText.
+          # explicit endDateTime (not left to the Graph default) so the expiry is stated here rather than
+          # relied on implicitly, and so it can be surfaced in the deploy output below. This is obot's OWN
+          # credential for authenticating to Entra (the upstream IdP) — separate from whatever session/
+          # refresh-token lifetime obot issues to claude.ai itself (mcp-oauth-proxy doesn't document a
+          # config for that; unaffected by this). If this secret expires, obot can no longer log in to
+          # Entra at all and the connector breaks until redeployed (which mints a fresh one) — 2 years out
+          # keeps that far off without relying on Graph's own default silently doing the same thing.
+          SECRET_END=$(date -u -d '+2 years' +%Y-%m-%dT%H:%M:%SZ)
           SECRET=""
           for i in $(seq 1 6); do
             APRESP=$(gapi -X POST "https://graph.microsoft.com/v1.0/applications/${OBJID}/addPassword" \
-              -d "{\"passwordCredential\":{\"displayName\":\"obot-mcp\"}}")
+              -d "{\"passwordCredential\":{\"displayName\":\"obot-mcp\",\"endDateTime\":\"${SECRET_END}\"}}")
             SECRET=$(echo "$APRESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("secretText",""))' 2>/dev/null || echo "")
-            [ -n "$SECRET" ] && { echo "client secret minted (attempt ${i})"; break; }
+            [ -n "$SECRET" ] && { echo "client secret minted (attempt ${i}), expires ${SECRET_END}"; break; }
             echo "addPassword attempt ${i} returned no secret: $(echo "$APRESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("error",{}).get("message","<no error field>"))' 2>/dev/null || echo "<unparseable>")"
             sleep 5
           done
@@ -163,6 +242,7 @@ jobs:
           echo "::add-mask::$SECRET"
           echo "ENTRA_APP_ID=$APPID" >> "$GITHUB_ENV"
           echo "ENTRA_CLIENT_SECRET=$SECRET" >> "$GITHUB_ENV"
+          echo "ENTRA_SECRET_EXPIRES=$SECRET_END" >> "$GITHUB_ENV"
 
       - name: Deploy obot OAuth proxy + read-only crystaldba MCP (Option B)
         env:
@@ -172,7 +252,7 @@ jobs:
           set -euo pipefail
           ENV_ID=$(az containerapp env show -g "$RG" -n "$ACA_ENV" --query id -o tsv)
           RO_DSN="postgresql://${{ github.event.inputs.ro_role }}:${RO_PW}@${PG_SERVER}.postgres.database.azure.com:5432/${{ github.event.inputs.db }}?sslmode=require"
-          OBOT_DSN="postgres://obot:${OBOT_PW}@${PG_SERVER}.postgres.database.azure.com:5432/obot_oauth?sslmode=require"
+          OBOT_DSN="postgres://${OBOT_ROLE}:${OBOT_PW}@${PG_SERVER}.postgres.database.azure.com:5432/${OBOT_DB}?sslmode=require"
           # Stable AES-256 key derived from an existing org secret → survives redeploys (no re-auth), no new secret.
           ENC_KEY=$(printf '%s' "${JPT}::obot-mcp-enc-v1" | sha256sum | cut -d' ' -f1 | xxd -r -p | base64 -w0)
           # Changing nonce → new revision hash EVERY deploy, so the container actually RESTARTS.
@@ -180,6 +260,7 @@ jobs:
           #  Single mode, so obot would keep running its pre-grant crash-looped replica and never retry
           #  auto-migrate. This forces a clean restart AFTER the schema grant + password reset are applied.)
           NONCE=$(date +%s)
+          ACCESS_MODE="${{ github.event.inputs.access_mode }}"
           cat > app.yaml <<YAML
           properties:
             managedEnvironmentId: ${ENV_ID}
@@ -204,7 +285,7 @@ jobs:
               containers:
                 - name: pgmcp
                   image: crystaldba/postgres-mcp:latest
-                  args: ["--access-mode=restricted", "--transport=sse"]
+                  args: ["--access-mode=${ACCESS_MODE}", "--transport=sse"]
                   resources: { cpu: 0.5, memory: 1.0Gi }
                   env:
                     - name: DATABASE_URI
@@ -246,8 +327,15 @@ jobs:
           echo "============================================================"
           echo "Connector URL (claude.ai -> Add custom connector, leave Advanced BLANK):"
           echo "  https://${FQDN}/sse"
+          if [ "${{ github.event.inputs.access_mode }}" = "unrestricted" ]; then
+            echo "ACCESS MODE: unrestricted — this instance can WRITE (INSERT/UPDATE/DELETE, no DDL) to '${{ github.event.inputs.db }}' as role '${{ github.event.inputs.ro_role }}'."
+          else
+            echo "ACCESS MODE: restricted (read-only) against '${{ github.event.inputs.db }}' as role '${{ github.event.inputs.ro_role }}'."
+          fi
           echo "Login: Microsoft Entra (org accounts only). Redirect URI ${FQDN}/callback was auto-registered"
-          echo "on the Entra app 'enterpriseds-pg-mcp' by the provisioning step — NO manual console entry."
+          echo "on the Entra app '${{ github.event.inputs.entra_app_name }}' by the provisioning step — NO manual console entry."
+          echo "obot's Entra client secret expires: ${ENTRA_SECRET_EXPIRES} — re-run this workflow before then to rotate it"
+          echo "(login itself doesn't otherwise expire on its own; this is the one credential that will eventually need a redeploy)."
           echo "============================================================"
           echo "--- Wait for the new revision to reach a terminal running state ---"
           LATEST=$(az containerapp revision list -g "$RG" -n "$ACA_APP" --query "reverse(sort_by([].{n:name,t:properties.createdTime},&t))[0].n" -o tsv)
