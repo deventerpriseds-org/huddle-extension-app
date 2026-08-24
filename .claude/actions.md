@@ -2347,3 +2347,30 @@ retry-on-timeout had this one gap.
 call-site changes; only what `replies`/`queue` contain before existing finalization runs.
 **Status:** IMPLEMENTED + DEPLOYED (tsc clean) — verifier CONFIRMED all 3 changes exactly as built, live-deployed (653d39b/375fcd9, deploy green), 0 regressions in background traffic. **Also applies to 1:1, not just group** — `chunked=!!turnId` is scope-independent; the real HuddleView 1:1 path also sets turnId, and the verifier found a real pre-fix 1:1 occurrence of this exact bug (dm-finn-reid, 2026-08-18, chunks=1 replies_len=0, ~40s).
 **LIVE-CONFIRMED (2026-08-22, user's own test + screenshot):** turn `u-1787360469488` (01:01:09-01:02:31 UTC, post-deploy) — Sam Trent timed out TWICE (visible in the fallback banner, 9:01:39 PM + 9:02:09 PM, 30s apart matching the chunk budget), got retried a third time, and replied. Turn ran 3 chunks, finished `status=done` with 3 real replies (tess-sutton, terry-locke, sam-trent) — the pre-fix code would have dropped Sam after his second timeout with no third try. Sam's reply also honestly reported a partial failure (1 of 2 tasks created) rather than over-claiming.
+
+### ACT-huddle-57: "Thinking..." disappears when switching 1:1s — looks like no answer, no away push either
+**Requested:** 2026-08-24 — "If I switch to a different 1:1 or change screen focus while an agent is
+thinking, the thinking message goes away... it only picks up where we left off when I come back. I
+don't see an away chat notification of a response while away."
+**Ground truth:** `u-1787592252168` (dm-finn-reid) ran 3 chunks over **104.6s** — real, everyday-length
+work, easily long enough to switch conversations mid-turn. Server-side chunking is unaffected by client
+attention (already proven in ACT-56) — this is a CLIENT rendering/notification gap, not lost work.
+**Root cause — TWO separate mechanisms, both real:**
+1. **Spinner-clearing poll is single-huddle-scoped.** `HuddleView.tsx`'s own poll (the only thing that
+   calls `clearPendingFor`) only runs while `pending.huddleId === huddle.id` — leave that huddle and it
+   tears down entirely. A SEPARATE app-wide poll (`HuddleApp.tsx`, every 30s, huddle-independent)
+   already delivers the finished reply into the right huddle regardless of which one is on screen — but
+   never touched the pending/spinner state, so it either goes stale or only resolves the instant you
+   return, looking exactly like "nothing happened while away."
+2. **Away-push suppression is keyed on tab visibility, not which conversation is open.**
+   `foreground: document.visibilityState==="visible"` (HuddleView.tsx, baked in at SEND time) is true
+   even when you've switched to a DIFFERENT 1:1 in the same open tab — so the server is told "they're
+   right here" and never pushes, even though you've moved on. This is why no away notification fires.
+**Fix (1 only, small/safe — 529a438, merged with a concurrent confirm-ask-buttons branch, tsc clean on
+the full merged tree):** the app-wide backfill poll now also clears `pending` when it renders the turn
+the indicator is waiting on. Extends the existing poll, no new mechanism.
+**NOT fixed (2 — flagged, held for go-ahead):** fixing push suppression properly means evaluating "is
+the user still on this conversation" at COMPLETION time, not baking a visibility snapshot in at send
+time — a real notification-semantics change, which this repo's own rule requires confirming before
+building/deploying.
+**Status:** Fix 1 DEPLOYED (tsc clean). NOT yet user-confirmed live. Fix 2 awaiting go-ahead.
