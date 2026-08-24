@@ -17,6 +17,7 @@ import { breadcrumbToolsFor, type ToolUseEvent } from "../data/seed";
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
 import { useAuth } from "@/hooks/useAuth";
 import { getAllTurnUpdates } from "../lib/huddle.functions";
+import { useAgentPanelStore } from "../lib/agent-panel-store";
 
 
 
@@ -105,6 +106,14 @@ export function HuddleApp() {
             toolUses: t.toolUses ? breadcrumbToolsFor(reply.agentId, t.toolUses) : undefined,
           });
         });
+        // The per-huddle "thinking…" indicator (HuddleView's own poll) only runs while that exact
+        // huddle is the one on screen — switch away mid-turn and nothing clears it until you come
+        // back. This backfill runs regardless of which huddle is active, so if the turn it just
+        // rendered is the one the indicator is waiting on, clear it here too — otherwise a reply
+        // that finished while you were elsewhere either leaves the spinner stale or only resolves
+        // the moment you happen to return, making it look like nothing happened in between.
+        const pend = useAgentPanelStore.getState().pending;
+        if (pend && pend.turnId === t.id) useAgentPanelStore.getState().clearPending();
       }
       try {
         window.localStorage.setItem(CURSOR_KEY, String(cursor));
