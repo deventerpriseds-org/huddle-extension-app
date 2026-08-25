@@ -32,7 +32,7 @@ function agentName(id: string | null): string {
 function buildBrief(
   produced: { name: string; agentId: string | null; folder: string }[],
   movedToReview: { title: string; agent: string | null }[],
-  blocked: { title: string; reason?: string }[],
+  blocked: { title: string; reason?: string; agent?: string | null }[],
   priorities: { title: string; agent: string | null }[],
 ): string {
   const lines: string[] = [];
@@ -51,7 +51,13 @@ function buildBrief(
   if (blocked.length) {
     lines.push("", `Blocked pending YOUR input (${blocked.length}) — the team can't proceed without you:`);
     for (const b of blocked.slice(0, 6)) {
-      lines.push(`- "${b.title.slice(0, 100)}"${b.reason ? ` — ${b.reason.slice(0, 160)}` : ""}`);
+      // Owner clause appended AFTER each component is bounded, so a long title+reason can never slice
+      // the name off. `agentName` degrades to an ownerless line for a null/unknown id.
+      const who = b.agent ? agentName(b.agent) : "";
+      lines.push(
+        `- "${b.title.slice(0, 100)}"${b.reason ? ` — ${b.reason.slice(0, 160)}` : ""}` +
+          (who ? ` — ${who} needs you on this` : ""),
+      );
     }
   }
   if (priorities.length) {
@@ -128,9 +134,13 @@ export async function runScheduledStandup(
   const blockers = await getTaskBlockers(email);
   const notDone = board.filter((t) => !t.completed_at && (t.status ?? "").toUpperCase() !== "DONE");
   // Blocked = tasks an agent flagged (a task_blockers row), shown with the REAL reason it recorded.
+  // Carry the assignee, exactly as `priorities` and `movedToReview` below already do. This list used to
+  // drop it, so the standup could name who owned every OTHER category of item but went silent on the one
+  // where the user most needs a person to go talk to. `agent` is the ASSIGNEE (who cannot proceed), not
+  // the blocker row's flagger — same choice as autowork's surfaceBlocked; see the comment there.
   const blocked = notDone
     .filter((t) => blockers.has(t.id))
-    .map((t) => ({ title: t.title, reason: blockers.get(t.id)?.reason }));
+    .map((t) => ({ title: t.title, reason: blockers.get(t.id)?.reason, agent: t.assigned_agent }));
   const priorities = notDone
     .filter((t) => !blockers.has(t.id))
     .sort((a, b) => (a.priority_rank ?? 9999) - (b.priority_rank ?? 9999))

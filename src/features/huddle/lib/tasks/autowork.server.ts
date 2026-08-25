@@ -395,13 +395,57 @@ export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number
   return fired;
 }
 
+/**
+ * One blocked item, carried STRUCTURED rather than pre-flattened to a string.
+ *
+ * Why structured: the previous shape was `titles: string[]` built as `` `${title} — ${reason}` `` and then
+ * `slice(0, 120)`-ed here. Appending an owner to that composed string puts the name exactly where the slice
+ * cuts, so a long title+reason would silently drop the very thing this fix adds. Keeping the parts separate
+ * lets each be truncated on its own budget and the owner rendered last-but-unclipped.
+ */
+interface BlockedItem {
+  title: string;
+  reason?: string;
+  /** Display name, already resolved from roster data — never an id, never a slug. */
+  ownerName?: string;
+}
+
+/**
+ * Render ONE blocked item as a directive line. Exported and pure so the edge cases that actually bite
+ * here — a missing/unknown owner, and truncation eating the appended name — are unit-testable without
+ * standing up a board, a DB, or an LLM.
+ */
+export function renderBlockedLine(it: BlockedItem): string {
+  const title = it.title.slice(0, 90);
+  const reason = it.reason ? ` — ${it.reason.slice(0, 90)}` : "";
+  // Ownerless items must still read as a grammatical sentence — never "undefined needs you" and never
+  // the raw id. `ownerName` is already undefined for a null assignee AND for an unknown/stale id, so
+  // this single branch covers both without a second guard.
+  const who = it.ownerName ? ` — ${it.ownerName} needs you on this` : "";
+  // The owner clause is appended AFTER title/reason are each bounded, so however long they are the name
+  // is never the thing that gets sliced off.
+  return `- ${title}${reason}${who}`;
+}
+
 /** Surface grooming-flagged blocked items in the coordinator's DM (report-only). One short turn. */
-async function surfaceBlocked(opts: { email: string; tz: string; caller: Caller; titles: string[]; runId: string }): Promise<void> {
-  const list = opts.titles.slice(0, 8).map((t) => `- ${t.slice(0, 120)}`).join("\n");
+async function surfaceBlocked(opts: { email: string; tz: string; caller: Caller; items: BlockedItem[]; runId: string }): Promise<void> {
+  const list = opts.items.slice(0, 8).map(renderBlockedLine).join("\n");
   const directive =
     `Some of the user's assigned tasks are blocked pending THEIR input — the team can't proceed without a ` +
     `decision or missing capability. Warmly and briefly let the user know these are waiting on them and ask ` +
-    `them to weigh in:\n${list}\n\nThis is a REPORT-ONLY turn: do not call any tool, and keep it short.`;
+    `them to weigh in:\n${list}\n\n` +
+    // The teammate's name is the point of this message: the user's complaint was that they were told a
+    // task was blocked but not WHO to go work with. Two deliberate choices in the wording below:
+    //  (1) no example agent name — an example would be a hardcoded display name in a prompt, and the
+    //      model tends to echo whichever name it is shown;
+    //  (2) the rejected label-style forms are described, never quoted — naming them verbatim primes the
+    //      model to reproduce the exact phrasing we are trying to avoid.
+    `Where a teammate is named on an item above, work their name into the sentence the way a person would ` +
+    `speak it — that teammate needs the user on that item — so they know who to go work with. Keep it ` +
+    `conversational prose; do not restate it as a metadata label or an attribution tag. Where no teammate ` +
+    `is named, simply say that item is waiting on their input: do not guess at a name, and do not refer to ` +
+    `"the team" as though it were a person.\n\n` +
+    `This is a REPORT-ONLY turn: do not call any tool, and keep it short.`;
   const payload = {
     text: directive,
     huddleId: `dm-${COORDINATOR}`,
@@ -724,11 +768,22 @@ export async function runScheduledAutoWork(
   // Blocked = tasks an agent flagged (a task_blockers row) — with the REAL reason it recorded. Not a guess.
   const board = await getBoardTasks(email);
   const blockers = await getTaskBlockers(email);
-  const blockedTitles = board
+  const blockedItems: BlockedItem[] = board
     .filter((t) => !t.completed_at && blockers.has(t.id))
     .map((t) => {
       const b = blockers.get(t.id);
-      return b ? `${t.title} — ${b.reason}` : t.title;
+      // WHICH person do we name? Deliberately the ASSIGNEE (`t.assigned_agent`), NOT the blocker row's
+      // own `agentId` (the agent that FLAGGED it). The sentence we generate is "X needs you on this" —
+      // that is true of whoever cannot proceed with the task, i.e. its owner. The flagger may be a
+      // different agent who merely noticed the block, and naming them would send the user to the wrong
+      // teammate with full confidence. No fallback to the flagger for the same reason: an ownerless item
+      // renders ownerless (see the `who` branch in surfaceBlocked) rather than confidently wrong.
+      // `AGENT_BY_ID[...]?.name` is undefined for BOTH a null assignee and an unknown/stale id, so a
+      // slug can never leak into the sentence as if it were a human name.
+      const ownerName = t.assigned_agent
+        ? AGENT_BY_ID[t.assigned_agent as AgentId]?.name
+        : undefined;
+      return { title: t.title, reason: b?.reason, ownerName };
     });
 
   const batch = candidates.slice(0, AUTOWORK_MAX);
@@ -744,9 +799,9 @@ export async function runScheduledAutoWork(
     }
   }
 
-  if (blockedTitles.length) {
+  if (blockedItems.length) {
     try {
-      await surfaceBlocked({ email, tz, caller, titles: blockedTitles, runId });
+      await surfaceBlocked({ email, tz, caller, items: blockedItems, runId });
     } catch {
       /* non-fatal */
     }
@@ -754,5 +809,5 @@ export async function runScheduledAutoWork(
 
   await setAutoWorkSignature(email, signature);
   const remaining = Math.max(0, candidates.length - enqueued);
-  return { ok: true, skipped: false, enqueued, promoted, blocked: blockedTitles.length, remaining, confirmAsked, runId };
+  return { ok: true, skipped: false, enqueued, promoted, blocked: blockedItems.length, remaining, confirmAsked, runId };
 }
