@@ -5,6 +5,10 @@
 // actually scrollable and whether the composer moves when the page (not the transcript) scrolls.
 export const checks = [
   async function scrollOverflowDiagnosis({ page, check, screenshot }) {
+    // Match the user's actual browser window proportions (a wide desktop window, ~1728x1117 going by
+    // the annotated screenshot they sent) rather than the harness default 1000x680 — a responsive
+    // breakpoint (sm:/md:) could matter.
+    await page.setViewportSize({ width: 1728, height: 1117 });
     await page.waitForTimeout(1000);
     await screenshot("initial-load");
 
@@ -70,6 +74,21 @@ export const checks = [
       true,
       JSON.stringify(metrics.overflowingElements),
     );
+
+    // Directly force the DOCUMENT (not any inner div) to scroll down, and screenshot what's actually
+    // painted in the extra area — my earlier wheel-up test scrolled from position 0, a no-op. This
+    // proves whether window.scrollY genuinely moves and shows what's visually there.
+    const scrollYBeforeForce = await page.evaluate(() => window.scrollY);
+    await page.evaluate(() => window.scrollTo(0, 999999));
+    await page.waitForTimeout(300);
+    const scrollYAfterForce = await page.evaluate(() => window.scrollY);
+    await screenshot("forced-window-scrolldown");
+    check(
+      "Diagnostic: window.scrollTo actually moves the document",
+      true,
+      `before=${scrollYBeforeForce} after=${scrollYAfterForce}`,
+    );
+    await page.evaluate(() => window.scrollTo(0, 0)); // restore before the rest of the checks
 
     // Behavioral check: note the composer's position, scroll the WINDOW (not any inner div) by a
     // large amount, then see if the composer moved. If it moved, the whole page — not just the
