@@ -16,19 +16,21 @@ const FN = process.env.HUDDLE_FN || "a05698ead723b29fa9081c375c1940d87eac6e9ae3e
 const CALLER = process.env.HUDDLE_CALLER || "von.ellis@enterpriseds.io";
 const MARKER = "CHECKLIST-UAT";
 const plugins = defaultSerovalPlugins;
-const AGENT = "iris-chase";
+const OWNER = "faith-hartley";   // owns the family/kids lane
+const GENERAL = "iris-chase";    // day/priorities lane
 
-const agents = {
-  [AGENT]: {
+const agentCfg = () => ({
     backend: "openai",
     rag: { store: "azure", chunks: false, triples: false, fileSearch: false, sharing: "shared" },
     journey: { enabled: false },
-    webSearch: false,
-  },
-};
+  webSearch: false,
+});
 const router = { backend: "openai", model: "gpt-4o-mini", fastMode: false, strictPrompt: false, soloOnCoverage: true, interjections: false, maxInterjectors: 0 };
 
-const CONST = { 1: undefined, 2: null, 3: NaN, 4: Infinity, 5: -Infinity, 6: -0 };
+// CORRECTED index map. The version in the older harnesses predates any boolean-returning field and
+// mis-indexes constant nodes -- it decodes `true` as `null`, which silently marked EVERY successful
+// tool call as "(ERR)" in the first run of this script. Real indices (CLAUDE.md, via toJSONAsync):
+const CONST = { 0: null, 1: undefined, 2: true, 3: false, 4: -0, 5: Infinity, 6: -Infinity, 7: NaN };
 function decodeSeroval(root) {
   const reg = new Map();
   function walk(n) {
@@ -46,10 +48,10 @@ function decodeSeroval(root) {
   return walk(root);
 }
 
-async function send(text) {
+async function send(text, who) {
   const payload = {
-    text, huddleId: `dm-${AGENT}`, scope: "one-to-one", members: [AGENT],
-    history: [], router, agents, timeZone: "America/New_York",
+    text, huddleId: `dm-${who}`, scope: "one-to-one", members: [who],
+    history: [], router, agents: { [who]: agentCfg() }, timeZone: "America/New_York",
     caller: { entra_email: CALLER },
   };
   const body = JSON.stringify(await toJSONAsync({ data: payload }, { plugins }));
@@ -68,16 +70,17 @@ async function send(text) {
 // phrasings must land on opposite sides. The "list"/"track" cases are the adversarial ones -- they
 // contain checklist-adjacent words while asking for prose.
 const CASES = [
-  { expectWidget: false, label: "PROSE: plain task question",        text: `${MARKER} what are the tasks related to my kids?` },
-  { expectWidget: false, label: "PROSE: says 'list' but means prose", text: `${MARKER} list the tasks I have for the kids` },
-  { expectWidget: false, label: "PROSE: what's on my plate",          text: `${MARKER} what's on my plate right now?` },
-  { expectWidget: true,  label: "WIDGET: explicit checklist ask",     text: `${MARKER} give me a checklist of the tasks I need to track for my kids` },
-  { expectWidget: true,  label: "WIDGET: 'make a checklist'",         text: `${MARKER} make a checklist for my kids stuff` },
+  { who: OWNER,   expectWidget: false, label: "PROSE: plain task question",        text: `${MARKER} what are the tasks related to my kids?` },
+  { who: OWNER,   expectWidget: false, label: "PROSE: says 'list' but means prose", text: `${MARKER} list the tasks I have for the kids` },
+  { who: GENERAL, expectWidget: false, label: "PROSE: what's on my plate",          text: `${MARKER} what's on my plate right now?` },
+  { who: OWNER,   expectWidget: true,  label: "WIDGET: explicit checklist ask",     text: `${MARKER} give me a checklist of the tasks I need to track for my kids` },
+  { who: OWNER,   expectWidget: true,  label: "WIDGET: 'make a checklist'",         text: `${MARKER} make a checklist for my kids stuff` },
+  { who: GENERAL, expectWidget: true,  label: "WIDGET: checklist of priorities",    text: `${MARKER} turn my top priorities into a checklist I can tick off` },
 ];
 
 let pass = 0, fail = 0;
 for (const c of CASES) {
-  const r = await send(c.text);
+  const r = await send(c.text, c.who);
   const val = r.val || {};
   const tools = (val.toolUses || []).map((t) => `${t.tool}${t.ok ? "" : "(ERR)"}`);
   const reply = val.replies?.[0] || {};
@@ -89,10 +92,12 @@ for (const c of CASES) {
   const got = toolFired || payloadPresent;
   const ok = got === c.expectWidget;
   ok ? pass++ : fail++;
-  console.log(`${ok ? "PASS" : "FAIL"}  ${c.label}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${c.label}  [@${c.who}]`);
   console.log(`      msg: ${c.text}`);
   console.log(`      http=${r.http} tools=[${tools.join(", ")}] toolFired=${toolFired} payloadRows=${reply.checklist?.rows?.length ?? 0}`);
   if (reply.checklist) console.log(`      checklist.title=${JSON.stringify(reply.checklist.title)} more=${reply.checklist.more ?? 0}`);
+  const cd = (val.toolUses || []).find((t) => t.tool === "build_checklist");
+  if (cd) console.log(`      build_checklist ok=${cd.ok} detail=${String(cd.detail ?? "").slice(0, 300)}`);
   console.log(`      reply: ${(reply.text || "").slice(0, 220).replace(/\n/g, " ")}`);
   console.log(`      routing: ${val.decision?.reason ?? "(none)"}`);
   console.log("");
