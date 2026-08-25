@@ -8,6 +8,7 @@
 // Rides the ACT-4/ACT-5 scheduler as a `standup-digest` job; reuses the durable-turn → send_push path.
 
 import { AGENT_BY_ID, type AgentId } from "../../data/agents";
+import { blockedOwnerName } from "./autowork.server";
 
 type Caller = { entra_object_id?: string; entra_email?: string };
 
@@ -55,11 +56,11 @@ export function buildBrief(
       // Owner clause appended AFTER each component is bounded, so a long title+reason can never slice
       // the name off.
       //
-      // Resolved through AGENT_BY_ID directly, NOT agentName(): that helper ends `|| id`, which is
-      // right for the other lists (a bare id still reads as a label there) but wrong here, where the
-      // string is rendered as a PERSON — "sam-trent-old needs you on this" tells the user to go talk
-      // to a slug. A stale or unknown id must degrade to an ownerless line instead.
-      const who = (b.agent && AGENT_BY_ID[b.agent as AgentId]?.name) || "";
+      // Resolved through the SHARED blockedOwnerName(), NOT agentName(): that helper ends `|| id`,
+      // which is right for the other lists (a bare id still reads as a label there) but wrong here,
+      // where the string is rendered as a PERSON — "sam-trent-old needs you on this" tells the user to
+      // go talk to a slug. Sharing the resolver with autowork keeps the two surfaces from drifting.
+      const who = blockedOwnerName(b.agent) || "";
       lines.push(
         `- "${b.title.slice(0, 100)}"${b.reason ? ` — ${b.reason.slice(0, 160)}` : ""}` +
           (who ? ` — ${who} needs you on this` : ""),

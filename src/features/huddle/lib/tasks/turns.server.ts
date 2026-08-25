@@ -115,6 +115,11 @@ CREATE TABLE IF NOT EXISTS chat.user_presence (
 );
 ALTER TABLE chat.user_presence ADD COLUMN IF NOT EXISTS watching_huddle TEXT;
 ALTER TABLE chat.user_presence ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ NOT NULL DEFAULT now();
+-- An earlier shape of this table (never merged to main, but possibly bootstrapped by a preview build)
+-- had a last_interaction_ms BIGINT NOT NULL column. Nothing writes it now, so on any database with it
+-- every INSERT would fail the not-null constraint — silently, because presence writes are swallowed
+-- by design — leaving presence permanently dead and every reply push firing. Drop it if present.
+ALTER TABLE chat.user_presence DROP COLUMN IF EXISTS last_interaction_ms;
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -573,8 +578,8 @@ export async function getFiredRemindersSince(huddleId: string, sinceMs: number):
  * turn finishes. The window must stay comfortably BELOW the shortest realistic turn; widening it back
  * toward turn length is precisely the regression this comment exists to prevent.
  */
-export const PRESENCE_BEAT_MS = 7_500;
-export const PRESENCE_FRESH_MS = 15_000;
+export const PRESENCE_BEAT_MS = 5_000;
+export const PRESENCE_FRESH_MS = 12_000;
 
 /**
  * Record that the user is watching `huddleId` RIGHT NOW. Called from the existing all-huddle poll —

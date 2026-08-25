@@ -6577,6 +6577,9 @@ const AllTurnUpdatesInput = z.object({
   // that judgement, the server just stamps its own clock on arrival. Absent = "not watching", which
   // is the safe reading. Carried on the poll that already runs, so presence costs no extra request.
   watchingHuddleId: z.string().optional(),
+  // Explicit "I just left" (tab hidden / window blurred). Deterministic, so it beats waiting for the
+  // freshness window to expire — the next reply pushes immediately instead of depending on timing.
+  presenceLeft: z.boolean().optional(),
 });
 export const getAllTurnUpdates = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => AllTurnUpdatesInput.parse(raw))
@@ -6610,7 +6613,9 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
     if (!email) return { turns: empty };
     const { getUserTurnsSince, recordUserPresence } = await import("./tasks/turns.server");
     // Best-effort, non-blocking: a failed presence write only means a redundant push later.
-    if (data.watchingHuddleId) void recordUserPresence(email, data.watchingHuddleId);
+    // `presenceLeft` wins over any huddle id — leaving is an assertion, watching is only a claim.
+    if (data.presenceLeft) void recordUserPresence(email, null);
+    else if (data.watchingHuddleId) void recordUserPresence(email, data.watchingHuddleId);
     const rows = await getUserTurnsSince(email, data.sinceMs ?? 0);
     const turns: BackfillTurn[] = rows.map((t) => ({
       id: t.id,

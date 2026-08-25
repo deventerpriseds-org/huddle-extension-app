@@ -411,6 +411,22 @@ interface BlockedItem {
 }
 
 /**
+ * Resolve an assignee id to the display name used in "<X> needs you on this" — the SINGLE source for
+ * that decision, shared by autowork and the standup digest so the two surfaces cannot drift.
+ *
+ * Returns undefined for a null, unknown, or stale id, which callers render as an ownerless line. It
+ * deliberately does NOT fall back to the id: this string is rendered as a PERSON, and a slug reads as
+ * a confidently-wrong instruction to go talk to "sam-trent-old". (`agentName()` in standup.server.ts
+ * does fall back, correctly, because there the id is a label rather than a sentence subject.)
+ *
+ * Exported so a test can mutate it and see BOTH surfaces fail — previously each call site inlined its
+ * own copy of this expression and only one of them was covered.
+ */
+export function blockedOwnerName(agentId: string | null | undefined): string | undefined {
+  return agentId ? AGENT_BY_ID[agentId as AgentId]?.name : undefined;
+}
+
+/**
  * Render ONE blocked item as a directive line. Exported and pure so the edge cases that actually bite
  * here — a missing/unknown owner, and truncation eating the appended name — are unit-testable without
  * standing up a board, a DB, or an LLM.
@@ -778,12 +794,9 @@ export async function runScheduledAutoWork(
       // different agent who merely noticed the block, and naming them would send the user to the wrong
       // teammate with full confidence. No fallback to the flagger for the same reason: an ownerless item
       // renders ownerless (see the `who` branch in surfaceBlocked) rather than confidently wrong.
-      // `AGENT_BY_ID[...]?.name` is undefined for BOTH a null assignee and an unknown/stale id, so a
-      // slug can never leak into the sentence as if it were a human name.
-      const ownerName = t.assigned_agent
-        ? AGENT_BY_ID[t.assigned_agent as AgentId]?.name
-        : undefined;
-      return { title: t.title, reason: b?.reason, ownerName };
+      // blockedOwnerName() is undefined for BOTH a null assignee and an unknown/stale id, so a slug
+      // can never leak into the sentence as if it were a human name.
+      return { title: t.title, reason: b?.reason, ownerName: blockedOwnerName(t.assigned_agent) };
     });
 
   const batch = candidates.slice(0, AUTOWORK_MAX);
