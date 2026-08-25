@@ -19,11 +19,15 @@ import {
   ImageIcon,
   Check,
   Wrench,
+  Play,
+  Pause,
+  CircleStop,
+  ListChecks,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
-import { breadcrumbToolsFor, type Huddle, type HuddleMessage, type ToolUseEvent } from "../data/seed";
+import { breadcrumbToolsFor, type ChecklistPayload, type Huddle, type HuddleMessage, type ToolUseEvent } from "../data/seed";
 import {
   enqueueHuddleTurn,
   getTurnUpdates,
@@ -31,6 +35,7 @@ import {
   listCeremonyRuns,
 } from "../lib/huddle.functions";
 import { uploadChatAttachmentFn } from "../lib/artifacts/attachments.functions";
+import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind } from "../store";
@@ -344,6 +349,258 @@ const CONFIRM_ASK_BTN =
   "inline-flex items-center gap-1 rounded-md border border-foreground/65 bg-muted px-2.5 py-1 text-xs " +
   "text-foreground transition hover:border-foreground/85 hover:bg-secondary disabled:opacity-50";
 
+// ── In-chat checklist ────────────────────────────────────────────────────────────────────────────
+// Layout is checkbox-left / status-pill-right, chosen over four inline icon buttons because the chat
+// column is narrow (four buttons cost ~130px of chrome per row and leave nothing for the title), and
+// over BoardView's bare kebab because a kebab HIDES the current status — at-a-glance state is the
+// whole point of a checklist. The pill costs the same width as a kebab and shows the status as its icon.
+//
+// Every action reuses updateBoardTask — the same server fn BoardView's applyMove calls — so there is
+// no second writer into journey. Parking lot is a TAG (BoardView.tsx:689), not a status.
+const PARKING_LOT_TAG = "parking-lot";
+
+/** Status → pill icon. Deliberately total: an unmapped status still renders (see UNKNOWN below). */
+const STATUS_ICON: Record<string, typeof Play> = {
+  DOING: Play,
+  BACKLOG: Pause,
+  TODO: Pause,
+  PLANNING: Pause,
+  READY: Pause,
+  UP_NEXT: Pause,
+  IN_REVIEW: Check,
+  BLOCKED: CircleStop,
+  DONE: Check,
+};
+
+const STATUS_LABEL: Record<string, string> = {
+  DOING: "Doing",
+  BACKLOG: "Backlog",
+  TODO: "Backlog",
+  PLANNING: "Backlog",
+  READY: "Up next",
+  UP_NEXT: "Up next",
+  IN_REVIEW: "In review",
+  BLOCKED: "Blocked",
+  DONE: "Done",
+};
+
+function rowIsParked(tags: string[]) {
+  return tags.includes(PARKING_LOT_TAG);
+}
+
+function ChecklistCard({ m }: { m: HuddleMessage }) {
+  const { user } = useAuth();
+  const payload = m.checklist;
+  const rowState = useHuddleStore((s) => s.checklistState);
+  const seedChecklistRows = useHuddleStore((s) => s.seedChecklistRows);
+  const caller = useMemo(
+    () =>
+      user
+        ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+        : undefined,
+    [user],
+  );
+
+  // Two-stage. (1) Seed from the snapshot so the widget paints instantly; seedChecklistRows never
+  // overwrites a row the user already acted on, so a re-delivered message cannot revert a tick.
+  useEffect(() => {
+    if (payload?.rows?.length) seedChecklistRows(payload.rows);
+  }, [payload, seedChecklistRows]);
+
+  // (2) Then reconcile against server truth. `messages` is persisted but `checklistState` is NOT, so
+  // after a reload the widget would otherwise show the status the row had when the message was
+  // WRITTEN — hours stale, and indistinguishable from current. One read per mounted checklist.
+  const ids = useMemo(() => (payload?.rows ?? []).map((r) => r.taskId).join(","), [payload]);
+  useEffect(() => {
+    if (!ids || !caller?.entra_email) return;
+    let cancelled = false;
+    const wanted = new Set(ids.split(","));
+    void getBoardTasks({ data: { caller } })
+      .then((res) => {
+        if (cancelled) return;
+        const fresh = res.tasks
+          .filter((t) => wanted.has(t.id))
+          .map((t) => ({ taskId: t.id, status: (t.status ?? "BACKLOG").toUpperCase(), tags: t.tags ?? [] }));
+        if (fresh.length) useHuddleStore.getState().refreshChecklistRows(fresh);
+      })
+      // A failed refresh is not an error the user needs: the snapshot is still a truthful record of
+      // what the agent saw. Degrade to it silently rather than throwing a toast at an idle screen.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [ids, caller]);
+
+  if (!payload || !payload.rows?.length) return null;
+
+  return (
+    <div className="mt-2 overflow-hidden rounded-xl border border-hairline bg-surface shadow-soft">
+      <div className="flex items-center gap-1.5 border-b border-hairline px-3 py-2">
+        <ListChecks size={13} style={{ color: "var(--ai)" }} className="shrink-0" />
+        <span className="min-w-0 truncate text-xs font-semibold text-foreground">{payload.title}</span>
+      </div>
+      <ul className="divide-y divide-hairline">
+        {payload.rows.map((row) => (
+          <ChecklistItem key={row.taskId} row={row} live={rowState[row.taskId]} caller={caller} />
+        ))}
+      </ul>
+      {payload.more ? (
+        // Never truncate silently — a capped list that looks complete is worse than a visible cap.
+        <button
+          type="button"
+          onClick={() => useHuddleStore.getState().setView("board")}
+          className="w-full px-3 py-2 text-left text-[11px] text-muted-foreground hover:bg-muted"
+        >
+          +{payload.more} more — open the board
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ChecklistItem({
+  row,
+  live,
+  caller,
+}: {
+  row: { taskId: string; title: string; status: string; tags: string[] };
+  live?: { status: string; tags: string[]; prevStatus?: string; busy?: boolean };
+  caller?: { entra_object_id?: string; entra_email?: string };
+}) {
+  // The overlay IS the display value. Falling back to the snapshot only covers the first paint before
+  // the seed effect runs; after that `live` always wins, which is what makes a stale snapshot harmless.
+  // Signed-out: every control is inert. updateBoardTask rejects a callerless write anyway, but a
+  // control that looks live and silently fails is worse than one that is visibly disabled.
+  const signedOut = !caller?.entra_email;
+  const status = live?.status ?? row.status;
+  const tags = live?.tags ?? row.tags;
+  const busy = live?.busy ?? false;
+  const done = status === "DONE";
+  const parked = rowIsParked(tags);
+  const Icon = parked ? CircleStop : (STATUS_ICON[status] ?? Pause);
+  const label = parked ? "Parking lot" : (STATUS_LABEL[status] ?? status);
+
+  async function apply(
+    patch: { status?: string; addTags?: string[]; removeTags?: string[] },
+    nextPrev?: string,
+    optimisticTags?: string[],
+  ) {
+    const store = useHuddleStore.getState();
+    const before = store.checklistState[row.taskId] ?? { status: row.status, tags: row.tags };
+    if (before.busy) return; // one in-flight write per row; a double-tap must not race itself
+    store.setChecklistRow(row.taskId, {
+      ...(patch.status !== undefined ? { status: patch.status } : {}),
+      ...(optimisticTags !== undefined ? { tags: optimisticTags } : {}),
+      busy: true,
+      ...(nextPrev !== undefined ? { prevStatus: nextPrev } : {}),
+    });
+    try {
+      const r = await updateBoardTask({ data: { caller, taskId: row.taskId, ...patch } });
+      if (!r.ok) {
+        // Roll the row back to exactly what it was, including prevStatus — a failed write must leave
+        // no trace, or the next un-tick would restore a status that never took effect.
+        store.rollbackChecklistRow(row.taskId, before);
+        toast.error(r.error || "Couldn't update that task.");
+        return;
+      }
+      store.setChecklistRow(row.taskId, { busy: false });
+    } catch (err) {
+      store.rollbackChecklistRow(row.taskId, before);
+      toast.error(err instanceof Error ? err.message : "Couldn't update that task.");
+    }
+  }
+
+  function toggleDone() {
+    if (done) {
+      // Un-tick restores where the row WAS, not a blanket BACKLOG — a mis-tap on a DOING task should
+      // not silently demote it out of the active lane. BACKLOG is only the fallback when we never saw
+      // a prior status (e.g. the row arrived already DONE).
+      apply({ status: live?.prevStatus ?? "BACKLOG" }, undefined);
+    } else {
+      apply({ status: "DONE" }, status);
+    }
+  }
+
+  function setStatus(next: string) {
+    // Moving to a real status clears parking-lot; parking-lot is a tag and would otherwise keep the
+    // row excluded from auto-work while appearing active. removeTags (not a full set) so a checklist
+    // that has been sitting in the thread for hours cannot delete tags added since it rendered.
+    apply(
+      { status: next, removeTags: [PARKING_LOT_TAG] },
+      status,
+      tags.filter((t) => t !== PARKING_LOT_TAG),
+    );
+  }
+
+  function togglePark() {
+    if (parked) apply({ removeTags: [PARKING_LOT_TAG] }, status, tags.filter((t) => t !== PARKING_LOT_TAG));
+    else apply({ status: "BACKLOG", addTags: [PARKING_LOT_TAG] }, status, [...tags, PARKING_LOT_TAG]);
+  }
+
+  return (
+    <li className="flex items-center gap-2 px-3 py-2">
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={done}
+        aria-label={done ? `Mark "${row.title}" not done` : `Mark "${row.title}" done`}
+        disabled={busy || signedOut}
+        onClick={toggleDone}
+        // The visible box stays 16px, but the BUTTON is padded to a 44px touch target (-my-3 keeps
+        // the row height unchanged). A 16px tap target fails on a phone, which is where a chat
+        // checklist is most used.
+        className="-my-3 -ml-3 flex size-11 shrink-0 items-center justify-center disabled:opacity-50"
+      >
+        <span
+          className={cn(
+            "flex size-4 items-center justify-center rounded border transition",
+            done
+              ? "border-transparent bg-primary text-primary-foreground"
+              : "border-foreground/40 hover:border-foreground/70",
+          )}
+        >
+          {done && <Check size={11} strokeWidth={3} />}
+        </span>
+      </button>
+
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate text-[13px] leading-snug",
+          done ? "text-muted-foreground line-through" : "text-foreground",
+        )}
+        title={row.title}
+      >
+        {row.title}
+      </span>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild disabled={busy || signedOut}>
+          <button
+            type="button"
+            aria-label={`Status: ${label}. Change status of "${row.title}"`}
+            // min-h-11 gives the 44px touch target; -my-2.5 keeps the row visually compact.
+            className="-my-2.5 inline-flex min-h-11 shrink-0 items-center gap-0.5 rounded-md border border-hairline bg-muted px-2 py-1 text-[10px] text-muted-foreground transition hover:bg-secondary disabled:opacity-50"
+          >
+            {busy ? <Loader2 size={11} className="animate-spin" /> : <Icon size={11} />}
+            <ChevronDown size={9} className="opacity-60" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-40">
+          <DropdownMenuItem disabled={status === "DOING" && !parked} onClick={() => setStatus("DOING")}>
+            <Play size={12} className="mr-2" /> Doing
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={status === "BACKLOG" && !parked} onClick={() => setStatus("BACKLOG")}>
+            <Pause size={12} className="mr-2" /> Backlog
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={togglePark}>
+            <CircleStop size={12} className="mr-2" /> {parked ? "Un-park" : "Parking lot"}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </li>
+  );
+}
+
 function ConfirmAskRow({ m }: { m: HuddleMessage }) {
   const { user } = useAuth();
   const [busy, setBusy] = useState<"confirm" | "backlog" | "archive" | null>(null);
@@ -568,6 +825,7 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
             ))}
           </div>
         )}
+        {m.checklist && <ChecklistCard m={m} />}
         {m.confirmAsk && <ConfirmAskRow m={m} />}
       </div>
     </div>
@@ -754,6 +1012,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
           text: string;
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+          checklist?: ChecklistPayload;
         }[]
       | undefined,
     result: TurnResult,
@@ -810,6 +1069,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
         artifacts: reply.artifacts,
         toolUses: crumbs,
         confirmAsk: reply.confirmAsk,
+        checklist: reply.checklist,
       });
     });
 

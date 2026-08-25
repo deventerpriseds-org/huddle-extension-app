@@ -50,6 +50,210 @@ one new table, no new sender and no parallel push path (standing rule: piggyback
 **NOT yet merged to `main`, so NOT yet deployed, and NOT user-confirmed live.** Independent verifier
 running (writes to `.claude/VERIFY-notification-fixes.md`). ACs: `.claude/AC-notification-fixes.md`.
 Bug 2's real proof is the user going away mid-turn and getting the buzz — a sandbox cannot produce that.
+### ✅ ACT-63: setup.sh applied live AGAIN — gate absent for the 3rd time; now v14 (2026-08-25)
+**Ask:** "run the eds skills repo setup sh if the ccr didn't... then get ready to add a widget
+ability to the chat stream".
+
+**It hadn't.** Start state was a COMPLETELY empty eds payload — emptier than ACT-62's: no
+`/home/user/.claude/settings.json`, no `/root/.eds-claude-skills`, no `/workspace/eds-claude-skills`,
+no `eds-*.sh` guards, and no eds skills in `/root/.claude/skills/`. Ran `bash setup.sh` from the
+in-sync clone (`038a63a` == `origin/main`).
+
+**Verified by reading the files back, not from the script's own success text:** `_eds_version` **14**
+on all four events (SessionStart, Stop ×2 [agent + command], PostToolUse, UserPromptSubmit — 6 hook
+entries); 16 skills + the `verifier` agent; all 3 guards on disk; `launcher-settings.json` carries
+allowlist + `autoMode.allow` only with **0** `_eds` hooks (v7 double-fire regression absent).
+
+**The pattern is now three-for-three and should stop being treated as a surprise.** ACT-62 recorded
+this on 2026-08-25 (v12), and the central repo's ACT-11 close condition ("a NEW session starts with
+the hooks already present, no manual install") has now been TESTED AND FAILED twice. Recorded as
+disconfirming evidence in `eds-claude-skills` PR #22. **Standing implication:** check `_eds_version`
+at the start of every session and run `setup.sh` live if absent — do not assume the environment
+delivered it.
+
+**Two gaps found in the gate itself (flagged, NOT fixed — shared enforcement config needs sign-off):**
+1. **The `PostToolUse` autosave does not cover Bash-based editing.** Its matcher is
+   `Write|Edit|NotebookEdit`. When a session edits via Bash (`sed`/heredoc/python) — which auto mode
+   actively instructs — every edit bypasses `eds-git-guard.sh autosave` and nothing is mirrored to
+   `refs/heads/eds-wip/*`. The guard written specifically to survive container rewind has a hole
+   exactly where the harness steers the agent. Fix direction: widen the matcher to include `Bash`, or
+   move the autosave to a trigger that cannot be routed around.
+2. **`register_repo_root` rejects the path the SessionStart hook tells you to use.** The hook clones
+   to `/workspace/eds-claude-skills` and prints "register that path"; the call errors with
+   `does not match the managed session's clone target "/home/user/eds-claude-skills"`. In a managed
+   multi-repo session the harness has already cloned every in-scope repo under `/home/user/`, so the
+   `/workspace` copy is redundant and unregisterable. Both `setup.sh` and the central `CLAUDE.md`
+   still document `/workspace` as required.
+
+**Widget work:** survey only, no code. See ACT-64.
+
+### ⏸ ACT-66: eds setup.sh / hook gaps — PARKED by owner until the checklist widget ships (2026-08-25)
+Owner: "lets come back to any improvments after we deploy the checklist wchat widget." All four are
+proven, none are fixed. Resume as a single `v16` pass after the widget deploys.
+1. **SessionStart's memory dump has NEVER worked in a multi-repo session.** The hook reads
+   `.claude/memory.md`/`actions.md`/`accuracy-log.md` as paths RELATIVE to cwd `/home/user`, but every
+   one lives in `/home/user/<repo>/.claude/`. It printed "(no actions.md yet)" and "(no accuracy-log.md
+   yet)" TWICE this session while 2765 + 2241 + 47 lines sat two directories down. **The accuracy log
+   exists to stop repeated wrong answers and has never once loaded.** Highest leverage of the four.
+   Same ambiguity affects the Stop gate, which demands "`.claude/memory.md` updated" without naming a repo.
+   Fix direction: sweep each `--add-dir`'d repo instead of assuming cwd; print which repo each came from.
+2. **`register_repo_root` is told the wrong path** — the hook prints `/workspace/eds-claude-skills`;
+   managed sessions reject it and require `/home/user/<repo>`. Bootstrap fails on the hook's own instruction.
+3. **The PostToolUse autosave misses Bash-based edits.** Matcher is `Write|Edit|NotebookEdit`, but auto
+   mode actively instructs editing via `sed`/heredoc/python — those bypass `eds-git-guard.sh autosave`
+   entirely and never reach `refs/heads/eds-wip/*`. The rewind guard has a hole exactly where the
+   harness steers the agent. Until fixed: commit and push promptly, do not rely on the autosave.
+4. **The phase-tag checker still fails open.** v15 fixed WHAT it measures, not WHETHER it runs: the Stop
+   command is still bare `python3 eds-phase-tag.py` with no argv, and 3 of 5 code paths return "pass" on
+   any unknown input. Fix direction: resolve the transcript from the project dir when stdin is empty, and
+   make an unresolvable transcript warn loudly instead of vanishing.
+**Owner-only, not mine to fix:** the CCR environment "Setup script" field still is not delivering the
+payload — 3 consecutive sessions started empty (ACT-63). Everything above is moot in a session that
+starts with no hooks at all.
+
+### 🔵 ACT-65: In-chat CHECKLIST widget — the actual ask (NEW 2026-08-25, supersedes ACT-64's scope)
+**Ask (verbatim):** "the new widget I need is an in chat checklist any of the agents can create with a
+stable layout and function. if I ask what are the tasks I asked for related to my kids, no checklist
+needed. but if I ask for a checklist ... it should return in the checklist format with boxes to check
+that update status and quick options to push to the backlog or park. (doing now status- the play icon,
+backlog status - the pause icon, parking lot status -the stop icon, delete action the x icon"
+
+**Scope correction.** ACT-64 was a general widget-registry abstraction — my framing, not the user's
+ask. The user's actual need is ONE widget: an in-chat checklist. Build that. ACT-64's 64 ACs and the
+registry plan stay on file as a *later* option if a second widget ever justifies it; they are NOT a
+prerequisite. ("it seems like a lot of hand waiving" — the correction was earned.)
+
+**Design decided by the user:** checkbox left; ONE status *pill* on the right whose icon shows the
+current status; tapping it opens a dropdown (▶ Doing / ⏸ Backlog / ⏹ Parking lot / ✕ Delete). Chosen
+over four inline icon buttons because the chat column is narrow, and over a bare `MoreVertical` kebab
+(the BoardView pattern) because a kebab hides current status — and at-a-glance state is the point of
+a checklist. Cost accepted: changing status is 2 taps; checking off stays 1.
+
+**SCOPE NARROWED by the user mid-build (2026-08-25): "you dont have to worry about the delete button
+for now."** The ✕ delete control is OUT. The dropdown ships with THREE items (▶ / ⏸ / ⏹).
+
+**Consequence — there are now ZERO new mutations.** Every control maps onto the EXISTING
+`updateBoardTask` path. The whole feature is a renderable field, a renderer, an agent tool to emit it,
+and correct reuse of a mutation that already works. Nothing destructive, nothing irreversible, no DB
+change. This also removes the only piece that reached outside the Huddle repo.
+
+**Control → mutation map. ALL FOUR reuse existing code:**
+| Control | Mutation | New? |
+|---|---|---|
+| ☑ checkbox | `{status:"DONE"}` | no |
+| ▶ play | `{status:"DOING"}` | no |
+| ⏸ pause | `{status:"BACKLOG"}` | no |
+| ⏹ stop | `{tags:[...tags,'parking-lot'], status:'BACKLOG'}` | no — **already at `BoardView.tsx:689`** |
+| ~~✕ delete~~ | — | **DEFERRED, not in this build** |
+
+All routed through the EXISTING `updateBoardTask({caller,taskId,...patch})` used by `BoardView`'s
+`applyMove` — which already does optimistic update, rollback to `prev` on failure, and
+`waitForMirrorSync` for the ~1-3s pg_net lag. No new write path, no second writer into journey.
+
+**DEFERRED FINDING — banked for whenever delete IS built. Not needed for this build.** Recorded here
+so the next session does not re-derive it, and does not build the table the user was about to ask for.
+The user proposed "a delete table in journey where tasks are moved to / archived". **That archive
+ALREADY EXISTS — when delete ships, do not build a second tasks-shaped table.**
+- `public.task_events` + trigger `log_task_changes`: on DELETE it inserts
+  `(task_id,'DELETE',old_values=to_jsonb(OLD),user_id)`. Its own comment: *"a deleted task can be
+  reconstructed in full."* **Verified: 55 DELETE rows, every one carrying complete `old_values`**
+  (all from 2026-08-21 16:04, the test-task cleanup batch — so it has been exercised in bulk).
+  The audit INSERT is wrapped in a defensive EXCEPTION block: an audit failure never aborts the delete.
+- `huddle_task_sync_trigger` fires on INSERT/UPDATE/**DELETE** → the Huddle mirror clears itself.
+- Confirmed ABSENT: any archive/trash/deleted table, any soft-delete column on `public.tasks`, any
+  `ARCHIVED`/`CANCELLED` enum value. The `task_status` enum is ALSO already polluted with CATEGORIES
+  (CAREER, LIFE, VENTURES, PROF_EDUCATION) beside real statuses — an argument against a 14th value.
+- **What a restore would lose:** `task_topic_mappings` has **CASCADE on both FKs**, and mappings are
+  not captured in `old_values`. Topic links do not come back.
+- **So the real gap is not the archive — it is that nothing can READ it back.** No restore fn/UI
+  exists. That is a far smaller build than a new table and avoids a second table drifting from canonical.
+
+**Integration/architecture trace.** Core system: journey `public.tasks` → `notify_huddle_task_sync` →
+Huddle mirror `tasks.journey_tasks`. Upstream producers: agent tools (`create_huddle_task`,
+`update_task`), BoardView `updateBoardTask`. Downstream consumers: `prioritize`, `getBoardTasks`,
+`autowork` candidate selection, journey's nightly planner, `task_events`, `task_topic_index` counts.
+**Verdict: EXTEND.** With delete deferred, genuinely new = the `checklist` renderable on
+`HuddleMessage`, its renderer component, and an agent tool to emit it. That is the entire new surface.
+
+**Status: DEPLOYED + LIVE-PROVEN (not user-confirmed).** `main` @ `00b52c9`, deploy-swa success.
+
+**Live UAT (`checklist-intent.mjs` via `agent-serverfn-uat.yml`, real deployed app) — 5/6:**
+prose for "what are the tasks related to my kids?" and "what's on my plate"; WIDGET for
+"give me a checklist of the tasks I need to track for my kids" (1 row), "make a checklist for my
+kids stuff" (1 row), and "turn my top priorities into a checklist" (**10 rows**). One miss:
+"list the tasks I have for the kids" rendered a widget where prose was expected — NON-DETERMINISTIC
+(it passed as prose in the two earlier runs), a defensible model read, and an open product call for
+the owner. NOT prompt-tweaked, deliberately: blind micro-iteration on a non-deterministic path is
+the documented trap that burned six rounds on a quota fallback.
+
+**THE BUG ONLY THE LIVE RUN COULD FIND — `schedule_and_priorities` never returned task ids.**
+`dispatchPrioritize`'s result mapping had keys rank/title/category/status/is_scheduled/due_date/
+start_time/score/why and **no `id`**, while `build_checklist`'s schema tells the model to pass ids
+"from a schedule_and_priorities call in this same turn". Structural, not a timing/lag issue — there
+was no code path, fast or slow, that returned one. The agent diagnosed it itself in the transcript:
+*"the task data didn't include the IDs needed to render tickable checklist items."* Fixed in
+`00b52c9`; that case went 0 rows → 10 rows. **Unexplained thread:** the kids case DID build from a
+real id (`efce3e3b…`, `dropped=0`) on the pre-fix build with RAG chunks/triples/file-search off, so
+an id reached the model by a route I have not identified. Flagged, not invented.
+
+**Two HARNESS bugs found first, both mine, both documented gotchas I re-committed:** the seroval
+`CONST` map (copied from an older script; mis-indexes constants so `true` decoded as `null` and every
+successful tool printed `(ERR)`), and a case aimed at the wrong agent (kids phrasings in Iris's 1:1
+correctly trigger the capability hand-off to Faith Hartley, so it measured routing not intent).
+Also tightened the assertion: `toolFired || payloadPresent` passed a tool that fired and rendered
+NOTHING — a green tick over a broken feature. Widget cases now require the payload.
+
+**Independent static verification found 7 defects, all fixed** (`583f444`): the Lovable backend was
+TOLD to call `build_checklist` but never OFFERED it; no `claimAction` so two responders could each
+render a widget; the whole payload leaked into the tool-chip tooltip; stale status after reload;
+16px/30×22 tap targets vs 44px; controls actuatable while signed out; logging only on the success path.
+
+**Deliberately NOT fixed:** `updateBoardTask` does not re-check ownership, it trusts the `taskId`.
+Pre-existing and shared with BoardView; ids only reach a client inside their own owner's turn payload,
+but this feature puts task ids into model-authored chat payloads, widening the surface. An auth change,
+not a widget change — raised for the owner rather than folded in.
+
+**Remaining for the owner:** click it live (per the standing rule, a synthetic run is a smoke test,
+not the verdict) and settle the "list the tasks I have for X" question. Two prior AC agents were killed (one user interrupt, one container restart); both
+times the "write to the file as you go" brief was the only reason anything survived.
+
+### 🔵 ACT-64: General widget extension path — chat thread first, bridge second (NEW 2026-08-25)
+**Ask (verbatim):** "we need a general widget extension path for quick stable repeatable widget
+building... now what comes to mind is for the chat thread and external to the app using the bridge
+like journey does".
+**Status:** ACs being written by an independent subagent → `.claude/ac-chat-widget-path.md`.
+NO CODE WRITTEN. Not started pending AC sign-off.
+
+**Survey finding — there are already TWO widget systems, with the SAME structural problem.**
+- *Chat thread:* five in-stream renderables, each an optional field on `HuddleMessage` (`data/seed.ts`)
+  dispatched by `if` in `HuddleView.tsx`: `checkIn`, `artifacts`, `attachments`, `toolUses`,
+  `confirmAsk`. Only `confirmAsk` is interactive+stateful (has a `resolved` transition).
+- *Bridge (`android-bridge-template`):* a mature home-screen widget system — 4 providers
+  (`BridgeWidget`, `BridgeInputWidget`, `ScheduleWidget`, `PrioritiesWidget`), plus
+  `WidgetActionService`, `WidgetUpdateWorker`, `WidgetFeedbackManager`, `WidgetHaptics`,
+  `WidgetRelayBarBinder`, 3 activities (`QuickChat`/`TopChat`/`QuickTask`), ~20 layout/XML files.
+
+**Why it isn't "quick, stable, repeatable" today — cost of ONE new widget:**
+| Chat thread | Android bridge |
+|---|---|
+| new optional field on `HuddleMessage` | new `ACTION_*` constant |
+| **13 edit sites across 5 files** (`huddle.functions.ts` ×6, `HuddleView` ×3, `HuddleApp` ×2, `store.ts` ×1, `seed.ts` ×1) | **4 parallel edit sites** — three `when (action)` blocks (`WidgetActionService.kt:34/43/55`) + the companion constant list |
+| a new `if (m.x) <XRow/>` in the renderer | new provider class + manifest `<receiver>` + `widget_*_info.xml` + layouts |
+
+**Decisions taken (user, 2026-08-25):**
+- Build order: **chat thread first**, migrating `confirmAsk` onto the new path as the proving case;
+  Android bridge is phase 2.
+- Subagents: **spawn them** — the AC-writing and `verifier` subagents are explicitly requested for
+  this work, overriding the standing "don't spawn agents unless asked" instruction.
+
+**Assumption stated, not confirmed:** phase 1 covers APP-DEFINED widget types; agent-authored/dynamic
+widget payloads are a designed-in extension point, deliberately out of phase-1 scope to keep the
+trust-boundary question off the critical path.
+
+**Open architectural fork — must be answered explicitly, not by accident:** Android widgets read
+**Supabase directly** (`util/SupabaseTaskClient.kt` → journey's DB); chat-stream widgets are fed by
+Huddle's turn payload (**Azure PG**). A shared widget contract either bridges those two feeds or
+deliberately keeps them separate. Not decided.
 
 ### ✅ ACT-62: eds-claude-skills `setup.sh` applied live — gate was ABSENT, now v12 (2026-08-25)
 **Ask:** apply the latest central `setup.sh` to this session (`sync-setup-script` skill).

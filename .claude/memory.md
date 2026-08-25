@@ -1,7 +1,65 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-25
 
-## The eds Stop-gate is NOT automatically present in a session — verify BOTH paths, and re-sync after a reclaim (2026-08-25, ACT-62)
+## Hardening — the phase-tag gate was GREEN while 67% of output was non-compliant (2026-08-25)
+**Owner caught it, not the guard, not me.** Measured over this session's transcript: **58 assistant
+text blocks, 19 tagged, 39 UNTAGGED (67%).** The owner's report ("your not qualifying your turns")
+was correct and my impression that I was complying was wrong — I had tagged the opening line of
+recent turns and generalised from that.
+
+**Root cause is a mismatch between what the guard measures and what the requirement is.**
+`eds-phase-tag.py::assistant_texts()` collects only the **FIRST** text block of each assistant
+message (`break` after the first hit), then `verdict()` passes if **ANY** of the last 3 carry a tag.
+But a turn with several tool calls emits MANY text blocks, and only the opening one ever got tagged.
+Mid-turn narration — "Both repos in sync…", "Now updating the tracker…", "While it works…" — is
+therefore invisible to the checker by construction. The guard reported PASS every single time.
+
+**This is the second failure mode found in the same 130-line script today** (the first: it fails open
+in 3 of 5 code paths and the installed Stop command passes no argv, so it silently exits 0 whenever
+it cannot locate its own input). Both were found only by running the script directly against a real
+transcript — never by trusting that an installed guard means an enforced rule.
+
+**GUARDRAIL — two parts, and the prose half is the weak half:**
+1. *Behavioural (me):* tag EVERY text block, not just a turn's opener — or stop emitting untagged
+   mid-turn narration. This is exactly the kind of prose rule the org playbook says has diminishing
+   returns, so it is not the real fix.
+2. *Structural (the actual fix, NOT yet applied — needs owner sign-off, it is shared enforcement
+   config in `setup.sh` + a `CURRENT_VERSION` bump):* make `assistant_texts()` collect ALL text
+   blocks rather than the first per message, and tighten the pass rule from "any of the last 3" to
+   the recent window ALL carrying a tag. Combined with passing the transcript path as argv so it
+   cannot fail open, that turns a decorative check into an enforcing one.
+
+**The transferable lesson, which is bigger than phase tags:** a guard being INSTALLED is not evidence
+a rule is ENFORCED. Both defects here were invisible from the config (`_eds_version: 14`, six hooks,
+all present and correct) and obvious within one command of running the checker against real input.
+Before trusting any gate, run it against a case that SHOULD fail and confirm it actually fails.
+
+## The eds Stop-gate is NOT automatically present in a session — verify BOTH paths, and re-sync after a reclaim (2026-08-25, ACT-62; RECURRED ACT-63)
+
+> **RECURRENCE, same day (ACT-63) — this is now 3-for-3, treat it as the norm, not a surprise.** A later
+> session started with an even emptier state than below: no `/home/user/.claude/settings.json`, no
+> `/root/.eds-claude-skills`, no `/workspace/eds-claude-skills`, no guards, no eds skills. Re-ran
+> `setup.sh` → **v14** on all four events (6 hook entries), 16 skills, `verifier` agent, 3 guards,
+> and `launcher-settings.json` clean of `_eds` hooks. The central repo's ACT-11 close condition ("a NEW
+> session starts with the hooks already present, no manual install") has now been tested and FAILED
+> twice; recorded as disconfirming evidence in `eds-claude-skills` PR #22. **Check `_eds_version` at the
+> start of EVERY session; run `setup.sh` live if absent. Do not assume the environment delivered it.**
+>
+> **Two holes in the gate itself, found ACT-63 (flagged, NOT fixed — shared enforcement config):**
+> 1. **The `PostToolUse` autosave does not cover Bash-based editing.** Matcher is
+>    `Write|Edit|NotebookEdit`. Auto mode actively instructs editing via Bash (`sed`/heredoc/python), and
+>    every such edit bypasses `eds-git-guard.sh autosave` — nothing reaches `refs/heads/eds-wip/*`. The
+>    guard built to survive container rewind has a hole exactly where the harness steers the agent.
+>    Fix direction: widen the matcher to include `Bash`, or move autosave to a trigger that can't be
+>    routed around. **Until fixed: commit and push promptly; do not rely on the autosave.**
+> 2. **`register_repo_root` rejects the path the SessionStart hook prints.** The hook clones to
+>    `/workspace/eds-claude-skills` and says to register it; the call errors —
+>    `does not match the managed session's clone target "/home/user/eds-claude-skills"`. In a managed
+>    multi-repo session the harness has ALREADY cloned every in-scope repo under `/home/user/`, so the
+>    `/workspace` copy is redundant and unregisterable. Both `setup.sh` and the central `CLAUDE.md`
+>    still document `/workspace` as required. **Bootstrap against `/home/user/<repo>`, or omit
+>    `directory` entirely.**
+
 Applied the central `eds-claude-skills` `setup.sh` live (`sync-setup-script`). Before → after:
 **no `_eds` hooks installed anywhere → 5 hooks at `_eds_version=12`** in
 `/home/user/.claude/settings.json`, matching `CURRENT_VERSION = 12` at clone `c96d2c6`.
