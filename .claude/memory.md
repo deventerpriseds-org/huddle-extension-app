@@ -1,6 +1,42 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-25
 
+## The eds Stop-gate is NOT automatically present in a session — verify BOTH paths, and re-sync after a reclaim (2026-08-25, ACT-62)
+Applied the central `eds-claude-skills` `setup.sh` live (`sync-setup-script`). Before → after:
+**no `_eds` hooks installed anywhere → 5 hooks at `_eds_version=12`** in
+`/home/user/.claude/settings.json`, matching `CURRENT_VERSION = 12` at clone `c96d2c6`.
+
+**Where the hook config actually lives — this is the fact that keeps getting read wrong:**
+- **v8 and earlier → `/root/.claude/launcher-settings.json`. That file is REGENERATED from a stock
+  template by the CCR launcher on every `claude` start**, so hooks merged there are silently wiped.
+  Finding it "clean" proves nothing about whether setup.sh ran.
+- **v9 and later → `/home/user/.claude/settings.json`** (project-root settings; CCR's project root
+  is `/home/user`). A **repo-level** `.claude/settings.json` is NOT loaded in a multi-repo CCR
+  session — huddle-extension-app's own one has been probe-tested and never fires.
+- So **check both** before concluding anything about the gate's presence. Today both were empty:
+  the launcher file was regenerated at session start (mtime 12:16) while every other setup.sh
+  artifact still carried the Aug 21 15:51 build-time mtime — that mtime split is the tell.
+
+**Durability limit (owner correction, committed today in `6709cb0`):** `/home/user/.claude/
+settings.json` *"gets wiped when the container is reclaimed."* Never hand-write a hook there and
+consider it done — the durable path is `setup.sh` (build-time, captured in the environment cache),
+bump `CURRENT_VERSION`, then run it live too. **Practical rule: re-run `sync-setup-script` after any
+container reclaim, and at session start if the gate matters.**
+**Still open, user-only:** the CCR "Setup script" field is an out-of-band copy; if it is pre-v12
+every future build re-installs an older gate.
+
+### Hardening — what this changes about how work gets reported here (v11, now enforced)
+Feasibility is a **gate**, not an intention: any *"blocked / absent / not built / there is no X"*
+claim must be backed by a **producer AND consumer sweep**, and a single-file grep, a single-name
+grep, or a quoted code comment explicitly **does not count** — because a control defined in an
+imported component has none of its strings in the file that mounts it, and a comment describing a
+limitation is a claim about the code rather than the code. Anything reported as OPEN must first be
+reconciled against `.claude/actions.md` / `.claude/DEFERRED.md`. This lands squarely on two rows we
+currently carry as blocking — ACT-61's *"no `POST /v1/files` anywhere in the repo"* and ACT-60's
+*"nothing is outside a clipped ancestor"* — both need a recorded sweep before being restated.
+v10/v12 additionally require every turn to open with a phase tag (`Fact Finding:`, `Implementing:`,
+`Blocked - needs you:` …), enforced on the Stop hook so it also covers turns not started by a human.
+
 ## Knowledge intake — the memory store was never the gap, INTAKE was (ACT-61, DEPLOYED 3a173a6, not user-confirmed)
 Asked for "a way to load agents up with things to remember — memory exported from another AI platform, or
 things I find on the web." The instinct is to build a knowledge system. **Don't — one already exists and

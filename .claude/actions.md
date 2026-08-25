@@ -1,7 +1,45 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-08-25 (ACT-59 confirm-ask button contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
+Last updated: 2026-08-25 (ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
 
 ## LIVE STATUS BOARD (surface this every check-in)
+
+### ✅ ACT-62: eds-claude-skills `setup.sh` applied live — gate was ABSENT, now v12 (2026-08-25)
+**Ask:** apply the latest central `setup.sh` to this session (`sync-setup-script` skill).
+**Evidence:** fresh clone at `c96d2c6`; `/home/user/.claude/settings.json` read back showing **5
+`_eds` hooks all at `_eds_version=12`**, matching `CURRENT_VERSION = 12` in the cloned script.
+Full write-up: **`.claude/session-handoff-2026-08-25.md`** (repo root `.claude/`).
+
+**Finding that matters beyond this sync — the gate was installed NOWHERE when the session started.**
+Ground-truthed at BOTH candidate paths, not one:
+- `/root/.claude/launcher-settings.json` (the v8-and-earlier target) — zero `_eds` entries; the CCR
+  launcher **regenerates this file from a stock template on every `claude` start**, so anything
+  merged there is wiped. mtime was today 12:16 while every other setup.sh artifact was Aug 21 15:51.
+- `/home/user/.claude/settings.json` (the v9+ target) — **did not exist at all.**
+
+**Per-session action, not a one-off.** `setup.sh` runs at container BUILD; its hook registration does
+not survive into the session via the launcher file, and per an owner correction committed today
+(`6709cb0`) `/home/user/.claude/settings.json` **"gets wiped when the container is reclaimed."** So
+re-run `sync-setup-script` after any reclaim. The skill's own docs do not yet say this.
+**Open, user-only:** the CCR environment "Setup script" field is an out-of-band copy — if it is
+pre-v12, every future build re-installs an older gate. Only the user can update it
+(claude.ai/code → environment → edit).
+
+**New enforcement now live (v9 → v12):**
+- **v10/v12 — phase tag on EVERY turn** (Stop-gate Step 0, before any other check): each reply must
+  open with `Fact Finding:` / `Ready for AC:` / `Writing AC:` / `Ready to Implement:` /
+  `Implementing:` / `Ready to Verify:` / `Verifying:` / `Ready to Merge:` / `Merged:` / `Deploying:`
+  / `Deployed:` / `Blocked - needs you:`. v12 moved it to the Stop hook because the
+  UserPromptSubmit reminder fires only on a *human* prompt — turns woken by hook feedback or an
+  agent-completion notification never got it.
+- **v11 — feasibility BEFORE implementation is now a GATE** (CODE changes only): per dependency, the
+  transcript must show the **producer** and **consumer** located by real grep/read + a verdict of
+  EXISTS / ABSENT / EXISTS-BUT-CONSTRAINED. It **blocks the inverse failure too** — any "blocked /
+  absent / not built / there is no X" claim needs a producer AND consumer sweep; a single-file or
+  single-name grep, or a quoted code comment, does **not** count. Anything reported as OPEN must
+  first be reconciled against `.claude/actions.md` + `.claude/DEFERRED.md`.
+  ⚠️ **Directly applies to two rows below:** ACT-61's deferred half rests on *"there is still no
+  `POST /v1/files` anywhere in the repo"* and ACT-60 on *"nothing is outside a clipped ancestor"* —
+  both now need a recorded producer+consumer sweep before being restated as blocking.
 
 ### ✅ ACT-61: Knowledge INTAKE — BUILT + DEPLOYED 2026-08-25 (`3a173a6`, deploy run 32806512819 success)
 **User go-ahead: "go extend the existing panel."** Shipped exactly that — extended the existing
