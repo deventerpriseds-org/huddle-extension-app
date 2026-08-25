@@ -1213,6 +1213,25 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+**ACT-63 — the away-gate asks the wrong question at the wrong TIME (2026-08-25).** Read this before
+touching notification delivery. The reply push gate lived on `payload.foreground`, a **send-time**
+snapshot of "was this huddle on screen when they hit send". A turn runs 19-24s, so send-and-walk-away
+produced a silent in-app reply and no buzz. The user's own report is what pinned the diagnosis: they
+still got **reach-outs** but not **replies** — agent-initiated turns (blockers, standups, follow-ups)
+never set `foreground`, so they were never gated at all. Only `enqueueHuddleTurn` sets it, of 13
+`enqueueTurn` call sites. Regression dates to `fee00cc` (2026-08-08).
+Now: `foreground` (send-time) **AND** `isUserPresent()` (delivery-time) must both hold to suppress.
+- `chat.user_presence` is one row per user, **app-wide, not per-huddle**, holding the **client's own**
+  last-interaction stamp. Never store the ping's arrival time — a backgrounded tab keeps firing
+  throttled timers, so arrival-time would read every abandoned tab as present and rebuild the bug.
+- `isUserPresent` **FAILS OPEN** (any doubt → false → push). This is the deliberate OPPOSITE of the
+  confirm-intent gate's fail-CLOSED rule sitting right next to it in the same area of the codebase.
+  Do not "make it consistent" — a duplicate buzz is an annoyance, a swallowed reply is the outage.
+- Liveness rides the existing all-huddle backfill poll; the poll relaxes 10s → 30s when untouched, so
+  an idle tab ages out of the 30s window by itself. No new endpoint, no new sender.
+Status: pushed to `claude/iris-huddle-interaction-baj51c` (`1f7a035` Bug 1, `ca4d459` Bug 2), tsc +
+build clean. NOT merged, NOT deployed, NOT user-confirmed live.
+
 **CURRENT TASKS (2026-07-31):**
 - **ACT-huddle-4 — Voice overhaul (OpenAI Realtime WebRTC):** IMPLEMENTATION COMPLETE, VERIFIER 19/19 PASS, mid-merge into main.
   NOTE: a concurrent session also closed "ACT-huddle-4" for a server-side kickNextChunk retry fix (`94cfc02` on main).
