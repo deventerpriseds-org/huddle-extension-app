@@ -1,9 +1,9 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-08-25 (ACT-63 two notification bugs fixed + pushed, awaiting verifier + merge; ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
+Last updated: 2026-08-25 (ACT-63 two notification bugs DEPLOYED 6dccf41, awaiting user live-confirm; ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
-### 🔨 ACT-63: Two notification bugs — blocker messages had no name; away replies never buzzed (2026-08-25)
+### ✅ ACT-63: Two notification bugs — blocker messages had no name; away replies never buzzed (2026-08-25)
 **Ask (user, verbatim):** *"Terry messaged me about a blocker but didn't mention who was blocked so I
 could work with them. also I went away after sending a message and her response didn't come as a
 notification while I was away. check the transcript."* Plus a phrasing steer — *"not blocked - owned
@@ -46,10 +46,16 @@ Downstream consumer: the single `invokeJourneyTool({toolName:"send_push"})` call
 `notify:"batch"`/`"silent"` suppression unchanged. EXTENDS the existing gate and the existing poll;
 one new table, no new sender and no parallel push path (standing rule: piggyback journey's `send_push`).
 
-**Status:** IMPLEMENTED + PUSHED to `claude/iris-huddle-interaction-baj51c` — tsc clean, build clean.
-**NOT yet merged to `main`, so NOT yet deployed, and NOT user-confirmed live.** Independent verifier
-running (writes to `.claude/VERIFY-notification-fixes.md`). ACs: `.claude/AC-notification-fixes.md`.
-Bug 2's real proof is the user going away mid-turn and getting the buzz — a sandbox cannot produce that.
+**Status: DEPLOYED** — `6dccf41` on `main`, deploy run 32900461818 conclusion `success` (2026-08-25).
+Two independent verifier rounds; BOTH disproved the fix before it was right (see memory.md). Final:
+5s beat / 12s freshness / 10s attention + pointermove + an explicit leave-beacon on tab-hide and blur.
+Offline gates: `npm run test:blocked` 21/21, `npm run test:presence` 18/18, `test:router` 20/20 — all
+mutation-proven to fail against the defects they cover.
+**NOT user-confirmed live.** Bug 2's real proof is the user sending a message, walking away, and
+getting the buzz; no sandbox can produce that. Honest residual documented in code: a focused desktop
+window gives no reliable "left the room" signal, so that path waits out ~22s and a fast turn can beat
+it — phone/app-switch (the reported case) is deterministic via the beacon.
+Reports: `.claude/VERIFY-notification-fixes.md`, `.claude/VERIFY-rework.md`. ACs: `.claude/AC-notification-fixes.md`.
 ### ✅ ACT-63: setup.sh applied live AGAIN — gate absent for the 3rd time; now v14 (2026-08-25)
 **Ask:** "run the eds skills repo setup sh if the ccr didn't... then get ready to add a widget
 ability to the chat stream".
