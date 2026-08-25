@@ -445,14 +445,14 @@ function ChecklistCard({ m }: { m: HuddleMessage }) {
         ))}
       </ul>
       {payload.more ? (
-        // Never truncate silently — a capped list that looks complete is worse than a visible cap.
-        <button
-          type="button"
-          onClick={() => useHuddleStore.getState().setView("board")}
-          className="w-full px-3 py-2 text-left text-[11px] text-muted-foreground hover:bg-muted"
-        >
-          +{payload.more} more — open the board
-        </button>
+        // LEGACY ONLY. New checklists are never truncated, so `more` is absent on anything rendered
+        // after that change. Older messages in the store still carry it, and silently dropping the
+        // count would misrepresent what the agent actually found -- so state it plainly. No link to
+        // the board: that surface lacks these controls, which is what made the old affordance worse
+        // than useless. Asking again re-runs the query and renders the full list.
+        <div className="px-3 py-2 text-[11px] text-muted-foreground">
+          +{payload.more} more not shown — ask again for the full list
+        </div>
       ) : null}
     </div>
   );

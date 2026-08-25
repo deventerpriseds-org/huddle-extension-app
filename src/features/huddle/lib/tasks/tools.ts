@@ -28,15 +28,21 @@ export const PRIORITIZE_TOOL = {
         description:
           "Optional domain to scope to, e.g. LIFE, VENTURES, CAREER, EDUCATION, PERSONAL, PROF_EDUCATION. Omit to span everything. Composes with any view (e.g. view='priorities', category='CAREER').",
       },
-      limit: { type: "number", description: "Max items to return (default 10)." },
+      limit: {
+        type: "number",
+        description:
+          "Max items to return (default 10, maximum 200). Pass a HIGH value (e.g. 200) whenever the user wants the COMPLETE set rather than a summary -- in particular before build_checklist, which should list everything that matches, not a sample.",
+      },
     },
     required: [],
   },
   strict: false,
 } as const;
 
-/** Max rows rendered inline. Beyond this the widget shows "+N more" rather than swallowing the thread. */
-export const CHECKLIST_MAX_ROWS = 10;
+// NO ROW CAP, deliberately. An earlier version sliced to 10 and showed a "+N more -- open the board"
+// link. That was wrong twice over: it hid part of the answer the user asked for, and the escape hatch
+// sent them to a surface that does NOT have the checklist's controls, so the hidden items were harder
+// to act on than the visible ones. The checklist renders everything the query resolved, however long.
 
 // The in-chat CHECKLIST widget. Deliberately a SEPARATE tool from schedule_and_priorities rather than a
 // flag on it, because the two answer different asks: "what are the tasks about my kids" wants prose, and
@@ -61,7 +67,7 @@ export const CHECKLIST_TOOL = {
         type: "array",
         items: { type: "string" },
         description:
-          "The journey task ids to include, in the order they should appear. Get these from a schedule_and_priorities call in this same turn. Ids that do not belong to this user are dropped.",
+          "EVERY matching journey task id, in the order they should appear -- do not sample or trim, the widget renders them all. Get these from a schedule_and_priorities call in this same turn, made with a high `limit` so nothing is missing. Ids that do not belong to this user are dropped.",
       },
     },
     required: ["title", "task_ids"],
@@ -70,7 +76,7 @@ export const CHECKLIST_TOOL = {
 } as const;
 
 export const CHECKLIST_SYSTEM_HINT =
-  "When the user EXPLICITLY asks for a checklist (\"give me a checklist of…\", \"make a checklist for…\", \"what do I need to track for X as a checklist\"), call `schedule_and_priorities` to find the relevant tasks and then `build_checklist` with those task ids — the app renders it as real tick-boxes wired to their board. An ordinary question about tasks (\"what are the tasks related to my kids\", \"what's on my plate\") is NOT a checklist request: answer it in prose. When you do render a checklist, keep your own message SHORT — one line of context at most — because the checklist itself is the answer; do not also list the tasks in text.";
+  "When the user EXPLICITLY asks for a checklist (\"give me a checklist of…\", \"make a checklist for…\", \"what do I need to track for X as a checklist\"), call `schedule_and_priorities` with a HIGH `limit` (e.g. 200) so you get the COMPLETE set rather than the default first 10, then `build_checklist` with EVERY matching task id — the app renders it as real tick-boxes wired to their board. An ordinary question about tasks (\"what are the tasks related to my kids\", \"what's on my plate\") is NOT a checklist request: answer it in prose. When you do render a checklist, keep your own message SHORT — one line of context at most — because the checklist itself is the answer; do not also list the tasks in text.";
 
 /**
  * Execute a `build_checklist` call. Returns a JSON string for the model AND the structured payload the
@@ -113,7 +119,7 @@ export async function dispatchBuildChecklist(
         message: "None of those task ids are on this user's board. Re-read their tasks and try again.",
       });
     }
-    const shown = found.slice(0, CHECKLIST_MAX_ROWS);
+    const shown = found;
     // Log the DECISION, not just the outcome. Intent gating is a model tool-choice, so without a
     // recorded reason a wrong call is indistinguishable from the tool never having been offered --
     // the same blindness that had six rounds of router prompt-tweaks chasing a quota fallback until
@@ -129,7 +135,6 @@ export async function dispatchBuildChecklist(
         status: (t.status ?? "BACKLOG").toUpperCase(),
         tags: t.tags ?? [],
       })),
-      ...(found.length > shown.length ? { more: found.length - shown.length } : {}),
     };
     // `checklist` is the key the reply-assembly looks for; `rendered` tells the model the widget is
     // already on screen so it does not also list every task in prose underneath it.
@@ -168,7 +173,12 @@ export async function dispatchPrioritize(
     });
   }
   const category = typeof args.category === "string" && args.category.trim() ? args.category.trim() : undefined;
-  const limit = typeof args.limit === "number" && args.limit > 0 ? Math.min(args.limit, 25) : 10;
+  // DEFAULT stays 10 -- a prose answer to "what's on my plate" should not recite fifty rows. The hard
+  // CEILING is what moved: it was 25, which silently truncated any caller that genuinely wants the
+  // whole set. The checklist is exactly that caller, and a cap it cannot opt out of made "give me a
+  // checklist of X" quietly incomplete with nothing on screen saying so. Raising the ceiling changes
+  // nothing for callers that omit `limit`.
+  const limit = typeof args.limit === "number" && args.limit > 0 ? Math.min(args.limit, 200) : 10;
   const VIEWS = new Set(["priorities", "backlog", "up_next", "scheduled", "overdue"]);
   const view = typeof args.view === "string" && VIEWS.has(args.view) ? args.view : "priorities";
 
