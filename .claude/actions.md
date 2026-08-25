@@ -3,6 +3,81 @@ Last updated: 2026-08-25 (ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask 
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
+### ✅ ACT-63: setup.sh applied live AGAIN — gate absent for the 3rd time; now v14 (2026-08-25)
+**Ask:** "run the eds skills repo setup sh if the ccr didn't... then get ready to add a widget
+ability to the chat stream".
+
+**It hadn't.** Start state was a COMPLETELY empty eds payload — emptier than ACT-62's: no
+`/home/user/.claude/settings.json`, no `/root/.eds-claude-skills`, no `/workspace/eds-claude-skills`,
+no `eds-*.sh` guards, and no eds skills in `/root/.claude/skills/`. Ran `bash setup.sh` from the
+in-sync clone (`038a63a` == `origin/main`).
+
+**Verified by reading the files back, not from the script's own success text:** `_eds_version` **14**
+on all four events (SessionStart, Stop ×2 [agent + command], PostToolUse, UserPromptSubmit — 6 hook
+entries); 16 skills + the `verifier` agent; all 3 guards on disk; `launcher-settings.json` carries
+allowlist + `autoMode.allow` only with **0** `_eds` hooks (v7 double-fire regression absent).
+
+**The pattern is now three-for-three and should stop being treated as a surprise.** ACT-62 recorded
+this on 2026-08-25 (v12), and the central repo's ACT-11 close condition ("a NEW session starts with
+the hooks already present, no manual install") has now been TESTED AND FAILED twice. Recorded as
+disconfirming evidence in `eds-claude-skills` PR #22. **Standing implication:** check `_eds_version`
+at the start of every session and run `setup.sh` live if absent — do not assume the environment
+delivered it.
+
+**Two gaps found in the gate itself (flagged, NOT fixed — shared enforcement config needs sign-off):**
+1. **The `PostToolUse` autosave does not cover Bash-based editing.** Its matcher is
+   `Write|Edit|NotebookEdit`. When a session edits via Bash (`sed`/heredoc/python) — which auto mode
+   actively instructs — every edit bypasses `eds-git-guard.sh autosave` and nothing is mirrored to
+   `refs/heads/eds-wip/*`. The guard written specifically to survive container rewind has a hole
+   exactly where the harness steers the agent. Fix direction: widen the matcher to include `Bash`, or
+   move the autosave to a trigger that cannot be routed around.
+2. **`register_repo_root` rejects the path the SessionStart hook tells you to use.** The hook clones
+   to `/workspace/eds-claude-skills` and prints "register that path"; the call errors with
+   `does not match the managed session's clone target "/home/user/eds-claude-skills"`. In a managed
+   multi-repo session the harness has already cloned every in-scope repo under `/home/user/`, so the
+   `/workspace` copy is redundant and unregisterable. Both `setup.sh` and the central `CLAUDE.md`
+   still document `/workspace` as required.
+
+**Widget work:** survey only, no code. See ACT-64.
+
+### 🔵 ACT-64: General widget extension path — chat thread first, bridge second (NEW 2026-08-25)
+**Ask (verbatim):** "we need a general widget extension path for quick stable repeatable widget
+building... now what comes to mind is for the chat thread and external to the app using the bridge
+like journey does".
+**Status:** ACs being written by an independent subagent → `.claude/ac-chat-widget-path.md`.
+NO CODE WRITTEN. Not started pending AC sign-off.
+
+**Survey finding — there are already TWO widget systems, with the SAME structural problem.**
+- *Chat thread:* five in-stream renderables, each an optional field on `HuddleMessage` (`data/seed.ts`)
+  dispatched by `if` in `HuddleView.tsx`: `checkIn`, `artifacts`, `attachments`, `toolUses`,
+  `confirmAsk`. Only `confirmAsk` is interactive+stateful (has a `resolved` transition).
+- *Bridge (`android-bridge-template`):* a mature home-screen widget system — 4 providers
+  (`BridgeWidget`, `BridgeInputWidget`, `ScheduleWidget`, `PrioritiesWidget`), plus
+  `WidgetActionService`, `WidgetUpdateWorker`, `WidgetFeedbackManager`, `WidgetHaptics`,
+  `WidgetRelayBarBinder`, 3 activities (`QuickChat`/`TopChat`/`QuickTask`), ~20 layout/XML files.
+
+**Why it isn't "quick, stable, repeatable" today — cost of ONE new widget:**
+| Chat thread | Android bridge |
+|---|---|
+| new optional field on `HuddleMessage` | new `ACTION_*` constant |
+| threaded through ~15 sites in 5 files (`huddle.functions.ts` ×6, `HuddleView` ×3, `HuddleApp` ×2, `store.ts` ×2, `seed.ts`) | a branch in **four parallel `when` blocks** in `WidgetActionService` |
+| a new `if (m.x) <XRow/>` in the renderer | new provider class + manifest `<receiver>` + `widget_*_info.xml` + layouts |
+
+**Decisions taken (user, 2026-08-25):**
+- Build order: **chat thread first**, migrating `confirmAsk` onto the new path as the proving case;
+  Android bridge is phase 2.
+- Subagents: **spawn them** — the AC-writing and `verifier` subagents are explicitly requested for
+  this work, overriding the standing "don't spawn agents unless asked" instruction.
+
+**Assumption stated, not confirmed:** phase 1 covers APP-DEFINED widget types; agent-authored/dynamic
+widget payloads are a designed-in extension point, deliberately out of phase-1 scope to keep the
+trust-boundary question off the critical path.
+
+**Open architectural fork — must be answered explicitly, not by accident:** Android widgets read
+**Supabase directly** (`util/SupabaseTaskClient.kt` → journey's DB); chat-stream widgets are fed by
+Huddle's turn payload (**Azure PG**). A shared widget contract either bridges those two feeds or
+deliberately keeps them separate. Not decided.
+
 ### ✅ ACT-62: eds-claude-skills `setup.sh` applied live — gate was ABSENT, now v12 (2026-08-25)
 **Ask:** apply the latest central `setup.sh` to this session (`sync-setup-script` skill).
 **Evidence:** fresh clone at `c96d2c6`; `/home/user/.claude/settings.json` read back showing **5

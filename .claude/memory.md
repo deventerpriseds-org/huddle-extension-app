@@ -1,7 +1,32 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-25
 
-## The eds Stop-gate is NOT automatically present in a session — verify BOTH paths, and re-sync after a reclaim (2026-08-25, ACT-62)
+## The eds Stop-gate is NOT automatically present in a session — verify BOTH paths, and re-sync after a reclaim (2026-08-25, ACT-62; RECURRED ACT-63)
+
+> **RECURRENCE, same day (ACT-63) — this is now 3-for-3, treat it as the norm, not a surprise.** A later
+> session started with an even emptier state than below: no `/home/user/.claude/settings.json`, no
+> `/root/.eds-claude-skills`, no `/workspace/eds-claude-skills`, no guards, no eds skills. Re-ran
+> `setup.sh` → **v14** on all four events (6 hook entries), 16 skills, `verifier` agent, 3 guards,
+> and `launcher-settings.json` clean of `_eds` hooks. The central repo's ACT-11 close condition ("a NEW
+> session starts with the hooks already present, no manual install") has now been tested and FAILED
+> twice; recorded as disconfirming evidence in `eds-claude-skills` PR #22. **Check `_eds_version` at the
+> start of EVERY session; run `setup.sh` live if absent. Do not assume the environment delivered it.**
+>
+> **Two holes in the gate itself, found ACT-63 (flagged, NOT fixed — shared enforcement config):**
+> 1. **The `PostToolUse` autosave does not cover Bash-based editing.** Matcher is
+>    `Write|Edit|NotebookEdit`. Auto mode actively instructs editing via Bash (`sed`/heredoc/python), and
+>    every such edit bypasses `eds-git-guard.sh autosave` — nothing reaches `refs/heads/eds-wip/*`. The
+>    guard built to survive container rewind has a hole exactly where the harness steers the agent.
+>    Fix direction: widen the matcher to include `Bash`, or move autosave to a trigger that can't be
+>    routed around. **Until fixed: commit and push promptly; do not rely on the autosave.**
+> 2. **`register_repo_root` rejects the path the SessionStart hook prints.** The hook clones to
+>    `/workspace/eds-claude-skills` and says to register it; the call errors —
+>    `does not match the managed session's clone target "/home/user/eds-claude-skills"`. In a managed
+>    multi-repo session the harness has ALREADY cloned every in-scope repo under `/home/user/`, so the
+>    `/workspace` copy is redundant and unregisterable. Both `setup.sh` and the central `CLAUDE.md`
+>    still document `/workspace` as required. **Bootstrap against `/home/user/<repo>`, or omit
+>    `directory` entirely.**
+
 Applied the central `eds-claude-skills` `setup.sh` live (`sync-setup-script`). Before → after:
 **no `_eds` hooks installed anywhere → 5 hooks at `_eds_version=12`** in
 `/home/user/.claude/settings.json`, matching `CURRENT_VERSION = 12` at clone `c96d2c6`.
