@@ -3,6 +3,49 @@ Last updated: 2026-08-25 (ACT-59 confirm-ask button contrast DEPLOYED; ACT-60 ch
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
+### 📋 ACT-61: Knowledge INTAKE — let the user load agents with knowledge (paste >4k, files, URLs, bulk) — SCOPED, NOT STARTED
+**User's ask (2026-08-25):** "give me a way to load them up with things to remember, or added from my other
+AI platform memory I can drop in, or from things I find on the web I want them to have as knowledge to work
+from." **Not started — needs user go-ahead before any build** (they are pausing until credits reset Wed).
+
+**Ground-truthed: the store/retrieval half ALREADY EXISTS and works. Only INTAKE is missing.**
+What is live today (verified by reading the code, not assumed):
+- `saveMemoryItem` (`lib/rag.functions.ts:42`) writes a `rag_chunks` chunk + optional triple extraction.
+- UI: **Agent Settings drawer → textarea → Save** (`AgentSettingsDrawer.tsx:87` `handleSaveContext`).
+  Supports **scope `agent` | `global`** — i.e. one agent, or every agent — and `extractFacts`.
+- Auto-retrieval already reads that store every turn, so anything saved is reachable with no deploy.
+- **`file_search` IS wired into the agent runtime** (`huddle.functions.ts:3206, 4222`) and per-agent
+  **vector stores ARE provisioned** (`openai-provisioning.functions.ts`, `scripts/create-missing-assistants.ts:102`
+  binds `tool_resources.file_search.vector_store_ids`).
+
+**The actual gaps (each verified by an EXHAUSTIVE sweep of `src/`, `scripts/`, `.github/workflows/` — not a
+single-file grep, per the accuracy-log guard):**
+1. **4,000-character cap per save** — `z.string().min(1).max(4000)` in `saveMemoryItem`'s validator. A memory
+   export from another AI platform exceeds this in one paste. **Needs chunking on the way in.**
+2. **No file upload on the memory panel.** The ONLY `FormData` in `src/` is
+   `voice/transcribe.functions.ts:33` (Whisper audio). No `.md`/`.txt`/`.json` intake.
+3. **No URL / web-page ingestion.** Nothing fetches a page into memory.
+4. **No bulk import** — one textarea paste at a time.
+5. **The vector stores are provisioned EMPTY.** There is **no `POST /v1/files` call anywhere in the repo** —
+   so `file_search` is wired and bound but has nothing to search. **This is the natural home for documents
+   and it is an unfinished half, not a missing design.**
+
+**Shape of the work (proposal, not approved):** extend the EXISTING memory panel + `saveMemoryItem` — do NOT
+build a parallel store (extend-don't-duplicate). (a) chunk >4k input server-side instead of rejecting;
+(b) accept a file (`.md`/`.txt`/`.json`) and a paste-bulk mode, same scope selector; (c) for documents, add
+the missing `/v1/files` upload → attach to the agent's existing vector store, so `file_search` finally has
+content; (d) optional URL fetch later. Scope/agent-targeting/retrieval all already work — do not rebuild them.
+
+**Relationship to the `claude/huddle-ai-knowledge-library-lxia7z` branch — RESOLVED, it is NOT this.**
+That branch is a **developer-authored** `KnowledgePack` layer (`discipline`, `frameworks[]`, `vocabulary[]`,
+`benchmarks[]`, `decisionPatterns[]`, `antiPatterns[]`) compiled into the instruction prompt. Adding anything
+requires **writing a TypeScript file and deploying** — so it gives the user NO drop-in path and does not
+satisfy this ask. It is also NOT a duplicate of memory: it is static professional competence (how an agent
+reasons in its discipline) vs. the user's evolving facts. **Do not merge it for this purpose.**
+**Do NOT delete the branch either** — its own header states the packs are "intended to double as source for
+per-agent OpenAI vector-store files later — author once, use both ways." If ACT-61(c) gets built, those 15
+packs are ready-made seed content for the empty stores. Revisit it THEN, as content, not as a merge.
+
 ### ⏸️ ACT-60: Chat pane has ~388px of phantom scrollable height (viewport-height dependent) — PARKED
 **Parked 2026-08-25 at the user's request** ("park the scroll issue… I have to focus on other items until
 my credits restart on Wednesday"). Diagnosis is DONE and reproducible; no fix attempted, no code changed.
