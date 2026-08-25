@@ -128,8 +128,46 @@ Huddle mirror `tasks.journey_tasks`. Upstream producers: agent tools (`create_hu
 **Verdict: EXTEND.** With delete deferred, genuinely new = the `checklist` renderable on
 `HuddleMessage`, its renderer component, and an agent tool to emit it. That is the entire new surface.
 
-**Status:** ACs being written by an independent subagent → `.claude/ac-checklist-widget.md`.
-NO CODE WRITTEN. Two prior AC agents were killed (one user interrupt, one container restart); both
+**Status: DEPLOYED + LIVE-PROVEN (not user-confirmed).** `main` @ `00b52c9`, deploy-swa success.
+
+**Live UAT (`checklist-intent.mjs` via `agent-serverfn-uat.yml`, real deployed app) — 5/6:**
+prose for "what are the tasks related to my kids?" and "what's on my plate"; WIDGET for
+"give me a checklist of the tasks I need to track for my kids" (1 row), "make a checklist for my
+kids stuff" (1 row), and "turn my top priorities into a checklist" (**10 rows**). One miss:
+"list the tasks I have for the kids" rendered a widget where prose was expected — NON-DETERMINISTIC
+(it passed as prose in the two earlier runs), a defensible model read, and an open product call for
+the owner. NOT prompt-tweaked, deliberately: blind micro-iteration on a non-deterministic path is
+the documented trap that burned six rounds on a quota fallback.
+
+**THE BUG ONLY THE LIVE RUN COULD FIND — `schedule_and_priorities` never returned task ids.**
+`dispatchPrioritize`'s result mapping had keys rank/title/category/status/is_scheduled/due_date/
+start_time/score/why and **no `id`**, while `build_checklist`'s schema tells the model to pass ids
+"from a schedule_and_priorities call in this same turn". Structural, not a timing/lag issue — there
+was no code path, fast or slow, that returned one. The agent diagnosed it itself in the transcript:
+*"the task data didn't include the IDs needed to render tickable checklist items."* Fixed in
+`00b52c9`; that case went 0 rows → 10 rows. **Unexplained thread:** the kids case DID build from a
+real id (`efce3e3b…`, `dropped=0`) on the pre-fix build with RAG chunks/triples/file-search off, so
+an id reached the model by a route I have not identified. Flagged, not invented.
+
+**Two HARNESS bugs found first, both mine, both documented gotchas I re-committed:** the seroval
+`CONST` map (copied from an older script; mis-indexes constants so `true` decoded as `null` and every
+successful tool printed `(ERR)`), and a case aimed at the wrong agent (kids phrasings in Iris's 1:1
+correctly trigger the capability hand-off to Faith Hartley, so it measured routing not intent).
+Also tightened the assertion: `toolFired || payloadPresent` passed a tool that fired and rendered
+NOTHING — a green tick over a broken feature. Widget cases now require the payload.
+
+**Independent static verification found 7 defects, all fixed** (`583f444`): the Lovable backend was
+TOLD to call `build_checklist` but never OFFERED it; no `claimAction` so two responders could each
+render a widget; the whole payload leaked into the tool-chip tooltip; stale status after reload;
+16px/30×22 tap targets vs 44px; controls actuatable while signed out; logging only on the success path.
+
+**Deliberately NOT fixed:** `updateBoardTask` does not re-check ownership, it trusts the `taskId`.
+Pre-existing and shared with BoardView; ids only reach a client inside their own owner's turn payload,
+but this feature puts task ids into model-authored chat payloads, widening the surface. An auth change,
+not a widget change — raised for the owner rather than folded in.
+
+**Remaining for the owner:** click it live (per the standing rule, a synthetic run is a smoke test,
+not the verdict) and settle the "list the tasks I have for X" question. Two prior AC agents were killed (one user interrupt, one container restart); both
 times the "write to the file as you go" brief was the only reason anything survived.
 
 ### 🔵 ACT-64: General widget extension path — chat thread first, bridge second (NEW 2026-08-25)
