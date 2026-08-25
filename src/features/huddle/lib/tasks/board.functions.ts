@@ -44,6 +44,11 @@ export const updateBoardTask = createServerFn({ method: "POST" })
         // Full desired tag set (journey update_task REPLACES tags with this array). The card UI sends
         // the whole array — existing + added, or existing minus removed — so this stays a plain set-op.
         tags: z.array(z.string()).optional(),
+        // Tag ARITHMETIC, resolved server-side against the row's CURRENT tags. Prefer these over
+        // `tags` from any long-lived UI (the chat checklist): a message can sit in the thread for
+        // hours, and computing a full set from its snapshot would delete every tag added since.
+        addTags: z.array(z.string()).optional(),
+        removeTags: z.array(z.string()).optional(),
       })
       .parse(raw),
   )
@@ -54,6 +59,16 @@ export const updateBoardTask = createServerFn({ method: "POST" })
     if (data.assigned_agent !== undefined) args.assigned_agent = data.assigned_agent;
     if (data.category !== undefined) args.category = data.category;
     if (data.tags !== undefined) args.tags = data.tags;
+    if (data.addTags?.length || data.removeTags?.length) {
+      // Read-then-write. Racy against a simultaneous edit elsewhere, but strictly better than the
+      // alternative it replaces (a stale client snapshot), and the window is milliseconds not hours.
+      const { getTaskTags } = await import("./tasks.server");
+      const current = await getTaskTags(data.taskId);
+      const remove = new Set(data.removeTags ?? []);
+      const next = current.filter((t) => !remove.has(t));
+      for (const t of data.addTags ?? []) if (!next.includes(t)) next.push(t);
+      args.tags = next;
+    }
     try {
       const { invokeJourneyTool } = await import("../journey/proxy.functions");
       const r = await invokeJourneyTool({

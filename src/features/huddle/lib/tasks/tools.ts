@@ -110,6 +110,13 @@ export async function dispatchBuildChecklist(
       });
     }
     const shown = found.slice(0, CHECKLIST_MAX_ROWS);
+    // Log the DECISION, not just the outcome. Intent gating is a model tool-choice, so without a
+    // recorded reason a wrong call is indistinguishable from the tool never having been offered --
+    // the same blindness that had six rounds of router prompt-tweaks chasing a quota fallback until
+    // decision.reason was surfaced. `requested` vs `matched` is what shows a hallucinated id.
+    console.info(
+      `[checklist] rendered title=${JSON.stringify(title)} requested=${ids.length} matched=${found.length} shown=${shown.length}`,
+    );
     const payload = {
       title,
       rows: shown.map((t) => ({

@@ -451,12 +451,17 @@ function ChecklistItem({
   const Icon = parked ? CircleStop : (STATUS_ICON[status] ?? Pause);
   const label = parked ? "Parking lot" : (STATUS_LABEL[status] ?? status);
 
-  async function apply(patch: { status?: string; tags?: string[] }, nextPrev?: string) {
+  async function apply(
+    patch: { status?: string; addTags?: string[]; removeTags?: string[] },
+    nextPrev?: string,
+    optimisticTags?: string[],
+  ) {
     const store = useHuddleStore.getState();
     const before = store.checklistState[row.taskId] ?? { status: row.status, tags: row.tags };
     if (before.busy) return; // one in-flight write per row; a double-tap must not race itself
     store.setChecklistRow(row.taskId, {
-      ...patch,
+      ...(patch.status !== undefined ? { status: patch.status } : {}),
+      ...(optimisticTags !== undefined ? { tags: optimisticTags } : {}),
       busy: true,
       ...(nextPrev !== undefined ? { prevStatus: nextPrev } : {}),
     });
@@ -489,14 +494,18 @@ function ChecklistItem({
 
   function setStatus(next: string) {
     // Moving to a real status clears parking-lot; parking-lot is a tag and would otherwise keep the
-    // row excluded from auto-work while appearing active.
-    apply({ status: next, tags: tags.filter((t) => t !== PARKING_LOT_TAG) }, status);
+    // row excluded from auto-work while appearing active. removeTags (not a full set) so a checklist
+    // that has been sitting in the thread for hours cannot delete tags added since it rendered.
+    apply(
+      { status: next, removeTags: [PARKING_LOT_TAG] },
+      status,
+      tags.filter((t) => t !== PARKING_LOT_TAG),
+    );
   }
 
   function togglePark() {
-    if (parked) apply({ tags: tags.filter((t) => t !== PARKING_LOT_TAG) }, status);
-    // Preserve every existing tag — send the whole desired set, since update_task REPLACES tags.
-    else apply({ status: "BACKLOG", tags: [...tags, PARKING_LOT_TAG] }, status);
+    if (parked) apply({ removeTags: [PARKING_LOT_TAG] }, status, tags.filter((t) => t !== PARKING_LOT_TAG));
+    else apply({ status: "BACKLOG", addTags: [PARKING_LOT_TAG] }, status, [...tags, PARKING_LOT_TAG]);
   }
 
   return (

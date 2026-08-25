@@ -377,6 +377,18 @@ export async function getTaskAssignedAgent(id: string): Promise<string | null> {
 }
 
 /** A task's title, for the approach gate's grading prompt. Fails open (empty string) on any error. */
+/** Current tag set for ONE task, read fresh. Used for add/remove tag arithmetic: journey's
+ *  update_task REPLACES the array, so computing the new set from a CLIENT-held snapshot silently
+ *  drops every tag added since that snapshot was taken. Read-then-write server-side instead. */
+export async function getTaskTags(id: string): Promise<string[]> {
+  const pool = getPool();
+  const r = await pool.query<{ tags: string[] | null }>(
+    `SELECT tags FROM tasks.journey_tasks WHERE id = $1`,
+    [id],
+  );
+  return r.rows[0]?.tags ?? [];
+}
+
 export async function getTaskTitle(id: string): Promise<string> {
   if (!id) return "";
   try {
