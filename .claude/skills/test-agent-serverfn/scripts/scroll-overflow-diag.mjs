@@ -8,21 +8,20 @@ export const checks = [
     await page.waitForTimeout(1000);
     await screenshot("initial-load");
 
-    // Land on the group huddle (guaranteed longest transcript, so the Transcript div actually has
-    // scrollable content to test against) by clicking under "Group huddles" in the sidebar.
-    const groupSection = page.locator("div", { has: page.locator("span", { hasText: "Group huddles" }) });
-    const firstGroup = groupSection.locator("button").first();
-    const gotDm = await firstGroup.waitFor({ state: "visible", timeout: 6000 }).then(() => true).catch(() => false);
+    // Land specifically on the dm-iris-chase 1:1 (the exact huddle in the user's report) by clicking
+    // the "#iris-chase" sidebar entry.
+    const irisBtn = page.locator("button", { hasText: "iris-chase" }).first();
+    const gotDm = await irisBtn.waitFor({ state: "visible", timeout: 6000 }).then(() => true).catch(() => false);
     if (gotDm) {
-      await firstGroup.click();
-      await page.waitForTimeout(800);
+      await irisBtn.click();
+      await page.waitForTimeout(1000);
     }
     const composerVisible = await page
       .locator('textarea[placeholder="Message the huddle…"]')
       .first()
       .isVisible()
       .catch(() => false);
-    check("Landed on a huddle with the composer visible", composerVisible, `gotDm=${gotDm}`);
+    check("Landed on dm-iris-chase with the composer visible", composerVisible, `gotDm=${gotDm}`);
     await screenshot("on-huddle");
 
     const metrics = await page.evaluate(() => {
@@ -79,24 +78,52 @@ export const checks = [
     const composerBefore = await composerLocator.boundingBox().catch(() => null);
     const headerBefore = await page.locator("header").first().boundingBox().catch(() => null);
 
+    // Confirm-ask buttons present anywhere in this thread right now (ground-truth check for the
+    // second report — "Iris reached out to confirm but no buttons were in the thread").
+    const confirmButtonsCount = await page.locator("button", { hasText: "Confirm" }).count();
+    check(
+      "Diagnostic: Confirm/Revise/Backlog/Archive buttons found in this thread right now",
+      true,
+      `count=${confirmButtonsCount}`,
+    );
+
     // Scroll with the mouse positioned over the transcript (message list), like a real user
     // scrolling up through chat history — not at the default (0,0) which may sit over the sidebar.
+    // Repeat several times (matching the user's screenshot, which shows the scrollbar thumb having
+    // travelled a long way up) and re-measure document height after EACH step, since the bug may
+    // only appear after scrolling, not on first load.
     if (composerBefore) {
-      await page.mouse.move(composerBefore.x + composerBefore.width / 2, 200);
+      await page.mouse.move(composerBefore.x + composerBefore.width / 2, 300);
     }
-    await page.mouse.wheel(0, -2000); // scroll UP through history, matching the user's report
-    await page.waitForTimeout(500);
+    const stepMetrics = [];
+    for (let i = 0; i < 6; i++) {
+      await page.mouse.wheel(0, -1500);
+      await page.waitForTimeout(300);
+      const m = await page.evaluate(() => ({
+        docScrollHeight: document.documentElement.scrollHeight,
+        docClientHeight: document.documentElement.clientHeight,
+        windowScrollY: window.scrollY,
+      }));
+      stepMetrics.push(m);
+    }
+    console.log("SCROLL STEP METRICS:", JSON.stringify(stepMetrics, null, 2));
+    const anyDocGrew = stepMetrics.some((m) => m.docScrollHeight > m.docClientHeight + 2);
+    check(
+      "Document does NOT become independently scrollable after repeated scroll-up",
+      !anyDocGrew,
+      JSON.stringify(stepMetrics),
+    );
+
     const composerAfter = await composerLocator.boundingBox().catch(() => null);
     const headerAfter = await page.locator("header").first().boundingBox().catch(() => null);
-    const windowScrollYAfter = await page.evaluate(() => window.scrollY);
-    await screenshot("after-wheel-scroll-up");
+    await screenshot("after-repeated-scroll-up");
 
     check(
       "Composer stays pinned at the bottom when scrolling up through chat history",
       !!composerBefore &&
         !!composerAfter &&
         Math.abs(composerBefore.y - composerAfter.y) < 5,
-      `before.y=${composerBefore?.y} after.y=${composerAfter?.y} window.scrollY=${windowScrollYAfter}`,
+      `before.y=${composerBefore?.y} after.y=${composerAfter?.y}`,
     );
     check(
       "Header stays pinned at the top when scrolling up through chat history",
