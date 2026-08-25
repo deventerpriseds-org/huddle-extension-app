@@ -3,7 +3,32 @@ Last updated: 2026-08-25 (ACT-59 confirm-ask button contrast DEPLOYED; ACT-60 ch
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
-### 📋 ACT-61: Knowledge INTAKE — let the user load agents with knowledge (paste >4k, files, URLs, bulk) — SCOPED, NOT STARTED
+### ✅ ACT-61: Knowledge INTAKE — BUILT + DEPLOYED 2026-08-25 (`3a173a6`, deploy run 32806512819 success)
+**User go-ahead: "go extend the existing panel."** Shipped exactly that — extended the existing
+Add-context-to-memory panel; NO parallel store (same `saveMemoryItem`, same `rag_chunks`, same
+agent|global scope, same auto-retrieval). **NOT yet user-confirmed live.**
+**What shipped:**
+- **`lib/rag/chunk.ts` (new, pure)** — `chunkText()`: paragraph → sentence → hard-split with overlap.
+  **Shared by client AND server** so pre-segmentation and server chunking pick identical boundaries.
+- **`saveMemoryItem`** — the 4,000-char validator that REJECTED real imports is now
+  `MAX_CHARS_PER_REQUEST` (20k) and the text is chunked + embedded + written with concurrency 6.
+  20k/request is a **latency** bound (each chunk = an embedding round-trip, ~45s hosting ceiling),
+  not a storage one; the client loops for anything bigger.
+- **Fact extraction capped at the first 3 chunks/request** (`MAX_FACT_CHUNKS`) — it is an LLM call per
+  chunk and would otherwise blow the ceiling on a document. Response returns `factChunks` and the
+  toast says "N facts from the first 3 of M chunks" so it never overstates coverage.
+- **Panel** — "Load file" (`.md/.txt/.json/.csv`, read in-browser into the same textarea so what you
+  save is what you see), live chars + chunk-count preview, batch progress, JSON pretty-printed before
+  chunking, partial-failure message naming how many chunks already committed.
+**Verification:** chunker unit-tested **10/10 offline** (bun) incl. no-content-loss across boundaries
+and no-boundary blobs; tsc clean; **stashed-baseline rebuild proved the `azure-pg` public-asset chunk
+is PRE-EXISTING**, not introduced by importing the constant into the client.
+**Still deferred (NOT built):** URL / web-page ingestion; uploading documents into the per-agent
+OpenAI vector stores — **those are still provisioned EMPTY, there is still no `POST /v1/files`
+anywhere in the repo**, so `file_search` remains wired-but-unfed. That is the next increment.
+**Original scoping notes retained below.**
+
+### 📋 ACT-61 (original scoping — kept for context)
 **User's ask (2026-08-25):** "give me a way to load them up with things to remember, or added from my other
 AI platform memory I can drop in, or from things I find on the web I want them to have as knowledge to work
 from." **Not started — needs user go-ahead before any build** (they are pausing until credits reset Wed).

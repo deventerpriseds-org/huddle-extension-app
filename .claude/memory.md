@@ -1,6 +1,37 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-25
 
+## Knowledge intake — the memory store was never the gap, INTAKE was (ACT-61, DEPLOYED 3a173a6, not user-confirmed)
+Asked for "a way to load agents up with things to remember — memory exported from another AI platform, or
+things I find on the web." The instinct is to build a knowledge system. **Don't — one already exists and
+works.** `saveMemoryItem` → `rag_chunks` → auto-retrieval, with **agent|global scope**, is live and reachable
+from the **Agent Settings drawer**. Everything that was missing sat at the front door:
+- **A 4,000-char validator REJECTED any real import.** Now `MAX_CHARS_PER_REQUEST` (20k/request) + server-side
+  chunking. **20k is a LATENCY bound, not storage** — every chunk is an embedding round-trip and this app has
+  a ~45s hosting ceiling, so a bigger doc must be MULTIPLE requests (the client loops). Never just raise it.
+- **`chunkText` (`lib/rag/chunk.ts`) is deliberately PURE and shared by client + server** so the client's
+  per-request pre-segmentation lands on the SAME paragraph/sentence boundaries the server would pick.
+- **Triple extraction is an LLM call PER CHUNK** — capped at the first 3 (`MAX_FACT_CHUNKS`) or a document
+  import blows the ceiling. The response returns `factChunks` so the UI states real coverage.
+**The remaining half, unchanged and still true:** per-agent OpenAI **vector stores are provisioned and BOUND,
+`file_search` IS wired into the runtime — but there is NO `POST /v1/files` anywhere in the repo**, so the
+stores are empty and file_search has nothing to search. Documents belong there; that is the next increment.
+**The `claude/huddle-ai-knowledge-library-lxia7z` branch is NOT this and never was** — it is a
+developer-authored `KnowledgePack` layer (frameworks/vocabulary/benchmarks) needing a TS file + deploy per
+addition, so it gives the user no drop-in path. Don't merge it for intake; don't delete it either — its own
+header says the packs are intended as seed content for those empty vector stores.
+
+### Two verification habits this earned
+1. **A "server-only" import into a client component must be proven, not assumed.** Importing a plain constant
+   from a `createServerFn` module looked like it might drag `azure-pg`/`pg` into the browser bundle. Proved it
+   did NOT by **`git stash`-ing the change, rebuilding the baseline, and diffing the emitted assets** — the
+   `azure-pg.server-*.js` public chunk and its `_authenticated` reference are PRE-EXISTING. One stash+build
+   beats an argument about how the bundler ought to behave.
+2. **Unit-test a text chunker on the pathological inputs, not the pretty one.** The tests that mattered were
+   *no content lost across boundaries* and *a 10k-char run with no paragraph/sentence boundary at all*
+   (minified JSON, URL lists) — a chunker that only handles tidy prose silently drops data. 10/10 via
+   `bun /tmp/chunk.test.mjs` before any deploy.
+
 ## Design-token trap: `bg-surface` + `border-hairline` is INVISIBLE in light mode — never use it for controls (2026-08-25, FIXED + DEPLOYED 4731461, awaiting user live re-test)
 The confirm-ask action row (Confirm/Revise/Backlog/Archive) was unreadable — user: "they are there it was
 just easy to miss with the white on white." **Not a rendering bug; the tokens genuinely are near-identical:**
