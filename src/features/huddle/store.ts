@@ -150,6 +150,8 @@ interface HuddleState {
   resolveConfirmAsk: (messageId: string) => void;
   /** Seed live state for rows not yet tracked. Never overwrites a row the user has already acted on. */
   seedChecklistRows: (rows: { taskId: string; status: string; tags: string[] }[]) => void;
+  /** Overwrite rows with fresh SERVER truth (mount refresh). Skips rows with a write in flight. */
+  refreshChecklistRows: (rows: { taskId: string; status: string; tags: string[] }[]) => void;
   /** Optimistically apply a row change; returns nothing — call rollbackChecklistRow on failure. */
   setChecklistRow: (taskId: string, patch: Partial<ChecklistRowState>) => void;
   rollbackChecklistRow: (taskId: string, prev: ChecklistRowState) => void;
@@ -319,6 +321,17 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
         changed = true;
       }
       return changed ? { checklistState: next } : {};
+    }),
+  refreshChecklistRows: (rows) =>
+    set((s) => {
+      const next = { ...s.checklistState };
+      for (const r of rows) {
+        // A row mid-write is the ONE case server truth must not win: the write has not landed yet,
+        // so the server would hand back the pre-click value and visibly undo the user's tap.
+        if (next[r.taskId]?.busy) continue;
+        next[r.taskId] = { ...next[r.taskId], status: r.status, tags: r.tags };
+      }
+      return { checklistState: next };
     }),
   setChecklistRow: (taskId, patch) =>
     set((s) => {

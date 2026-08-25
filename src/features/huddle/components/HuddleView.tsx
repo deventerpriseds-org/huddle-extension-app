@@ -35,7 +35,7 @@ import {
   listCeremonyRuns,
 } from "../lib/huddle.functions";
 import { uploadChatAttachmentFn } from "../lib/artifacts/attachments.functions";
-import { updateBoardTask } from "../lib/tasks/board.functions";
+import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind } from "../store";
@@ -393,19 +393,45 @@ function ChecklistCard({ m }: { m: HuddleMessage }) {
   const payload = m.checklist;
   const rowState = useHuddleStore((s) => s.checklistState);
   const seedChecklistRows = useHuddleStore((s) => s.seedChecklistRows);
+  const caller = useMemo(
+    () =>
+      user
+        ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+        : undefined,
+    [user],
+  );
 
-  // Seed live state from the snapshot once per row. seedChecklistRows never overwrites a row the user
-  // has already acted on, so a re-delivered message (streamed partial, or the durable back-fill after a
-  // reload) cannot revert a tick. This is the whole reason live state is keyed by taskId, not by message.
+  // Two-stage. (1) Seed from the snapshot so the widget paints instantly; seedChecklistRows never
+  // overwrites a row the user already acted on, so a re-delivered message cannot revert a tick.
   useEffect(() => {
     if (payload?.rows?.length) seedChecklistRows(payload.rows);
   }, [payload, seedChecklistRows]);
 
-  if (!payload || !payload.rows?.length) return null;
+  // (2) Then reconcile against server truth. `messages` is persisted but `checklistState` is NOT, so
+  // after a reload the widget would otherwise show the status the row had when the message was
+  // WRITTEN — hours stale, and indistinguishable from current. One read per mounted checklist.
+  const ids = useMemo(() => (payload?.rows ?? []).map((r) => r.taskId).join(","), [payload]);
+  useEffect(() => {
+    if (!ids || !caller?.entra_email) return;
+    let cancelled = false;
+    const wanted = new Set(ids.split(","));
+    void getBoardTasks({ data: { caller } })
+      .then((res) => {
+        if (cancelled) return;
+        const fresh = res.tasks
+          .filter((t) => wanted.has(t.id))
+          .map((t) => ({ taskId: t.id, status: (t.status ?? "BACKLOG").toUpperCase(), tags: t.tags ?? [] }));
+        if (fresh.length) useHuddleStore.getState().refreshChecklistRows(fresh);
+      })
+      // A failed refresh is not an error the user needs: the snapshot is still a truthful record of
+      // what the agent saw. Degrade to it silently rather than throwing a toast at an idle screen.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [ids, caller]);
 
-  const caller = user
-    ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
-    : undefined;
+  if (!payload || !payload.rows?.length) return null;
 
   return (
     <div className="mt-2 overflow-hidden rounded-xl border border-hairline bg-surface shadow-soft">
@@ -443,6 +469,9 @@ function ChecklistItem({
 }) {
   // The overlay IS the display value. Falling back to the snapshot only covers the first paint before
   // the seed effect runs; after that `live` always wins, which is what makes a stale snapshot harmless.
+  // Signed-out: every control is inert. updateBoardTask rejects a callerless write anyway, but a
+  // control that looks live and silently fails is worse than one that is visibly disabled.
+  const signedOut = !caller?.entra_email;
   const status = live?.status ?? row.status;
   const tags = live?.tags ?? row.tags;
   const busy = live?.busy ?? false;
@@ -515,14 +544,23 @@ function ChecklistItem({
         role="checkbox"
         aria-checked={done}
         aria-label={done ? `Mark "${row.title}" not done` : `Mark "${row.title}" done`}
-        disabled={busy}
+        disabled={busy || signedOut}
         onClick={toggleDone}
-        className={cn(
-          "flex size-4 shrink-0 items-center justify-center rounded border transition disabled:opacity-50",
-          done ? "border-transparent bg-primary text-primary-foreground" : "border-foreground/40 hover:border-foreground/70",
-        )}
+        // The visible box stays 16px, but the BUTTON is padded to a 44px touch target (-my-3 keeps
+        // the row height unchanged). A 16px tap target fails on a phone, which is where a chat
+        // checklist is most used.
+        className="-my-3 -ml-3 flex size-11 shrink-0 items-center justify-center disabled:opacity-50"
       >
-        {done && <Check size={11} strokeWidth={3} />}
+        <span
+          className={cn(
+            "flex size-4 items-center justify-center rounded border transition",
+            done
+              ? "border-transparent bg-primary text-primary-foreground"
+              : "border-foreground/40 hover:border-foreground/70",
+          )}
+        >
+          {done && <Check size={11} strokeWidth={3} />}
+        </span>
       </button>
 
       <span
@@ -536,11 +574,12 @@ function ChecklistItem({
       </span>
 
       <DropdownMenu>
-        <DropdownMenuTrigger asChild disabled={busy}>
+        <DropdownMenuTrigger asChild disabled={busy || signedOut}>
           <button
             type="button"
             aria-label={`Status: ${label}. Change status of "${row.title}"`}
-            className="inline-flex shrink-0 items-center gap-0.5 rounded-md border border-hairline bg-muted px-1.5 py-1 text-[10px] text-muted-foreground transition hover:bg-secondary disabled:opacity-50"
+            // min-h-11 gives the 44px touch target; -my-2.5 keeps the row visually compact.
+            className="-my-2.5 inline-flex min-h-11 shrink-0 items-center gap-0.5 rounded-md border border-hairline bg-muted px-2 py-1 text-[10px] text-muted-foreground transition hover:bg-secondary disabled:opacity-50"
           >
             {busy ? <Loader2 size={11} className="animate-spin" /> : <Icon size={11} />}
             <ChevronDown size={9} className="opacity-60" />

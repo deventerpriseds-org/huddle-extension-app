@@ -139,7 +139,12 @@ export function breadcrumbToolsFor(
   toolUses: ToolUseEvent[] | undefined,
 ): ToolUseEvent[] {
   if (!toolUses?.length) return [];
-  return toolUses.filter((t) => t.agentId === agentId && t.tool !== "tool_catalog");
+  // `build_checklist` is excluded for the same reason as `tool_catalog`: its `detail` carries the
+  // ENTIRE widget payload (needed by the reply-assembly to rebuild the checklist without a second
+  // read), and the breadcrumb renders `detail` into the chip's title tooltip -- so leaving it in
+  // dumps the raw JSON on hover. The widget is already visible on screen; a chip adds nothing.
+  const HIDDEN_FROM_BREADCRUMBS = new Set(["tool_catalog", "build_checklist"]);
+  return toolUses.filter((t) => t.agentId === agentId && !HIDDEN_FROM_BREADCRUMBS.has(t.tool));
 }
 
 export type SuggestedTaskDraft = Omit<Task, "id" | "createdAt" | "origin" | "suggested"> & {

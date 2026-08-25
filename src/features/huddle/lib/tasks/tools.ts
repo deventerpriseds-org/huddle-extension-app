@@ -91,6 +91,7 @@ export async function dispatchBuildChecklist(
   const rawIds = Array.isArray(args.task_ids) ? args.task_ids : [];
   const ids = rawIds.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
   if (!ids.length) {
+    console.info(`[checklist] SKIPPED title=${JSON.stringify(title)} reason=no_task_ids`);
     return JSON.stringify({
       error: "no_task_ids",
       message: "No task ids were supplied. Call schedule_and_priorities first, then pass its task ids.",
@@ -104,6 +105,9 @@ export async function dispatchBuildChecklist(
     const byId = new Map(mine.map((t) => [t.id, t]));
     const found = ids.map((id) => byId.get(id)).filter((t): t is NonNullable<typeof t> => Boolean(t));
     if (!found.length) {
+      console.info(
+        `[checklist] SKIPPED title=${JSON.stringify(title)} reason=no_matching_tasks requested=${ids.length}`,
+      );
       return JSON.stringify({
         error: "no_matching_tasks",
         message: "None of those task ids are on this user's board. Re-read their tasks and try again.",
@@ -136,6 +140,7 @@ export async function dispatchBuildChecklist(
       message: `Checklist rendered with ${payload.rows.length} item(s). Do not repeat the items in your reply.`,
     });
   } catch (err) {
+    console.info(`[checklist] SKIPPED title=${JSON.stringify(title)} reason=exception`);
     return JSON.stringify({
       error: "checklist_failed",
       message: err instanceof Error ? err.message : String(err),
