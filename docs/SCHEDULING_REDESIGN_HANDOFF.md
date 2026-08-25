@@ -1,4 +1,13 @@
 # Scheduling Redesign — Fresh-Start Handoff Sheet
+
+> **STATUS (added 2026-08-25 when this was merged to `main`): POINT-IN-TIME SNAPSHOT — DESIGN ONLY, NEVER BUILT.**
+> Nothing in this document was implemented. It is retained because it is the only written analysis of
+> how scheduling actually works, and there is **no newer or more accurate version** — not because it is
+> current. Everything below was true of the code on **2026-08-11**; `file:line` references and live DB
+> readings are from that date and **will have drifted**. Treat every claim as a lead to re-verify against
+> the code and DB, not as fact. §5's design decisions explicitly require re-confirmation before any build.
+> The calendar authority is the **journey-voice** repo, not this one.
+
 _Authored 2026-08-11. Hand this to a new session to finish the work. Everything below was ground-truthed by direct code reads + live DB queries; file:line refs are exact as of this date._
 
 ## 0. Mission
@@ -84,6 +93,63 @@ When a day fills, remaining flexible tasks spill to the next day across a rollin
 Re-planning currently *rebuilds* the whole horizon each run (clearing and re-placing future tasks to prevent overlap accumulation) rather than only moving unplaced items; whether to keep full-rebuild or add stability for pinned items is a deliberate choice to make.
 
 **Mechanically (for the implementer):** Layer 2 is a pure composite-score sort (like pre-April) with retuned weights — keep priority's weight small so it only ranks the leftovers; behind the switch this replaces the April-17 `priority_rank`-first tiebreak. Layers 3–4 largely exist today. The category-window system is the hard placement constraint scoring operates within. Open default #1 (accepted): among the big boosts, roughly-equal large weights; deadline edges ahead only when truly imminent.
+
+### §5b. Acceptance targets — what "right" looks like (user-stated 2026-08-11, ground-truthed against the live board)
+_These are the binary outcomes the switchable composite model must produce. Validation method: the finishing
+session must first show **expected schedule outputs computed from the real board**, and the user confirms the
+logic "seriously produces what I'd expect" BEFORE any build. An offline simulator that reads the real journey
+rows exists at (session scratchpad) `sched_model.mjs` — port/keep it as the reproducible inner-loop harness._
+
+**Live root-cause evidence (journey `public.tasks`, real owner `a3378f93…` — NOT the stale shadow `4132de9e`).
+Owner has a RICH custom `user_scheduling_prefs.config`, so the ROOT CAUSE IS TWO-PART:**
+1. **The sort.** The items added the morning of 08-11 for *that day* (Make Amex payment, Complete MIT
+   assignments, Push packets, the Alabama-trip batch, son's hair) are `is_priority=false, rank=null`, so the
+   `is_priority → priority_rank → score` sort buries them under months-old `is_priority=true` VENTURES tasks.
+   Recency lives inside `score` (the **3rd** tiebreak) so it never reorders two priority-lane tasks.
+2. **The LIFE window.** In this owner's config **LIFE → `[morning, after_work, evening, weekends]`** (no
+   `business_hours`) and `after_work` is **17–19**. So the (mostly LIFE) Alabama-trip batch physically
+   cannot use 9–17 on a weekday — it's confined to 6–9 + 17–22. With the daytime held by VENTURES
+   (`[business_hours,evening,weekends]`) + CAREER/PROF_ED, the fresh LIFE items **stacked 9-deep at 20:00**
+   (verified on the live board) and spilled to 08-12.
+**So the fix needs BOTH: the composite sort (recency bubbles) AND the flexibility nudge (same-day-signaled
+LIFE items relax to `flexible` so they can use daytime, displacing lower-priority originals).** This is the
+mechanism behind both complaints below.
+
+- **AT-1 — Recency bubbles (without losing priority).** A recently-added item that needs doing today must
+  appear in *today's* schedule ahead of undated/older lower-relevance items. Recency becomes a real composite
+  term, not a 3rd-tiebreak-only signal. **Stated priority must still have bearing** — it orders the leftovers,
+  breaks ties, and a high-priority item with its own imminent/overdue deadline still competes (proven in the
+  no-signal expected output: "Reply to DBA email" + "Set up U-Michigan call" still claim daytime slots among
+  the fresh items).
+- **AT-2 — "Work on these today" intake = windows-first, then overflow-as-flexible, displacing lower-priority
+  originals.** When the user signals a set to do *today*: (1) place each in its **category window first**;
+  (2) if that window is full, treat the item as **flexible** (9–22) so it still lands **today**; (3) landing it
+  **displaces the LOWEST-priority pre-existing board item** to a later day — the signaled item is NOT the one
+  pushed out. Overflow of the signaled set spills to the next day **only for items whose due date allows it**;
+  a due-**today** item that can't fit triggers an **overcommit warning**, never a silent push past its due date.
+  Stated priority orders both the signaled set and *which originals get bumped*.
+- **AT-3 — Tool/convention fix so intake routes to the PARSE path, not board-spread.** Iris fulfilled "add these
+  for today" with a board-create/update tool that scheduled them **spread across the week** instead of the
+  day-parse path (`ai-task-parser` / day-plan intake) that packs within today's windows. This will recur often,
+  so the convention must **steer a "for today" intake to the parse/day-plan tool** (naming + tool description +
+  routing), not a per-task board writer. Pin exact tool names before building (candidates: journey
+  `ai-task-parser` vs `execute-tool` create/update; Huddle `create_huddle_task`/`quick_create_task`).
+- **AT-4 — Honest capacity.** A day that physically can't hold the signaled set surfaces the overcommitment
+  (which due-today items don't fit) instead of overlapping them (the live board stacked ~8 items at 20:00).
+
+**Expected outputs generated 2026-08-11 (real board, owner `a3378f93` custom config, 7-day horizon) — three full
+multi-day schedules via offline sim `sched_v2.mjs`, shown to user for validation:**
+- _V1 ORIGINAL (actual live board):_ 08-11 daytime held by old priority VENTURES (rk1–4); the fresh due-today
+  LIFE batch **stacked 9-deep at 20:00** (overlap, impossible); rest spilled 08-12..08-15.
+- _V2 composite, WITHOUT today's batch:_ 08-11 leads with U-Michigan call (VENTURES, overdue+comms, sc 12.29) +
+  Reply-to-DBA (CAREER, sc 11.76) + Email-professor (LIFE, sc 9.38), then overdue ventures by score → **priority
+  + deadline drive, recency modest, priority RETAINED.**
+- _V3 composite, WITH today's batch (windows-first → overflow-flex → displace):_ 08-11 fills with the signaled
+  batch — Amex + funding (sc 15) first, LIFE items in 6–9/17–22 natively, and 4 that overflow LIFE's window
+  relax to `flexible` and take **midday** slots (⚑flex), displacing lower-priority originals to 08-12+. A very
+  high-score original (U-Mich call sc 12.29) still grabs a leftover today slot. Originals re-placed 08-12..08-15
+  by composite (lowest-priority/most-stale — e.g. rank-1-but-undated-and-30×-pushed "Plan business architecture"
+  — pushed furthest, surfacing the priority-weight knob).
 
 ## 6. Open items for the finishing session (in priority order)
 1. **Pin the 10am deviation** (§3) — trace `nightly-schedule-builder` today-start/now-clamp; fix or document.

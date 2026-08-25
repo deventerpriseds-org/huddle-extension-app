@@ -162,6 +162,23 @@ typing buttons." Fix = 3 edits on branch `claude/huddle-ui-issues-fdh3wr`:
   dictation programmatic-set grows; all 4 buttons 36px docked bottom-aligned, none dropped. AC9–11 (keyboard)
   mechanism-only. Screens: /tmp/harness/shot-mobile-{1row,capped,keyboard}.png.
 
+<!-- 2026-08-11 (SCHEDULING redesign — recency + work-today intake, DESIGN-ONLY, ACT-huddle-29):
+     User's 2 focuses: (1) recency not bubbling — recently-added needs-today items missing from today's
+     schedule; (2) "work on these today" signal must fill WINDOWS FIRST then overflow-as-FLEXIBLE, displacing
+     LOWER-priority ORIGINALS (not pushing the signaled items out); stated priority must still have bearing.
+     GROUND TRUTH (journey public.tasks, REAL owner a3378f93 — NOT stale shadow 4132de9e; RICH custom config where
+     LIFE=[morning,after_work(17-19),evening,weekends] excludes business hours): TWO-part cause — (a) sort
+     is_priority→priority_rank→score buries is_priority=false fresh due-today items (Amex/MIT/packing) under
+     old priority ventures → crammed to 19-21h / pushed to 08-12; recency is only 3rd tiebreak. = handoff §4a.
+     Also: Iris used a board-create tool that spread the batch across the week instead of the parse/day-plan
+     path (AT-3 convention fix). Wrote acceptance targets AT-1..AT-4 into handoff §5b; built offline simulator
+     sched_model.mjs (scratchpad) reading the REAL board → 2 expected schedules (Scenario A today-signal /
+     Scenario B no-signal, priority retained) shown to user. AWAITING user "logic looks right" before ANY build. -->
+<!-- 2026-08-11 (env-bootstrap + doc): ran eds setup.sh (9 CLIs, 16 skills, verifier agent, Stop-gate v4);
+     registered /workspace/eds-claude-skills. Doc-only: added the layered "how a day is filled" target
+     model (Layer 0 window/capacity → Layer 5 spillover) to §5 of docs/SCHEDULING_REDESIGN_HANDOFF.md
+     (additive, no code, no deploy). Scheduling redesign is still DESIGN-ONLY / not started — §5 decisions
+     to re-confirm + plan sign-off required before building. See ACT-huddle-28. -->
 ## Iris "400 No tool output found for function call" — poisoned conversation object (FIXED + DEPLOYED d422a82, 2026-08-11)
 Live break: Iris 1:1 returned `OpenAI Responses 400: No tool output found for function call call_…` on
 EVERY turn (even "Hello?"). Root cause: in conversation-object memory mode (1:1 default), OpenAI stores
