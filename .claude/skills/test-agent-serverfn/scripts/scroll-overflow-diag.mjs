@@ -118,6 +118,33 @@ export const checks = [
     const headerAfter = await page.locator("header").first().boundingBox().catch(() => null);
     await screenshot("after-repeated-scroll-up");
 
+    // Full-page screenshot to reveal whatever sits in the extra below-the-fold document height, and a
+    // walk of every element whose bottom edge extends past the viewport, to name the exact culprit.
+    await page.screenshot({ path: `${process.env.SHOT_DIR || "uat-shots"}/99-fullpage.png`, fullPage: true });
+    const offenders = await page.evaluate(() => {
+      const vh = window.innerHeight;
+      const all = Array.from(document.body.querySelectorAll("*"));
+      const out = [];
+      for (const el of all) {
+        const r = el.getBoundingClientRect();
+        if (r.bottom > vh + 5 && r.height > 0) {
+          out.push({
+            tag: el.tagName,
+            id: el.id || undefined,
+            cls: (el.className || "").toString().slice(0, 100),
+            top: Math.round(r.top),
+            bottom: Math.round(r.bottom),
+            height: Math.round(r.height),
+          });
+        }
+      }
+      // Sort by bottom descending — the elements poking out furthest are likely closest to the root cause.
+      out.sort((a, b) => b.bottom - a.bottom);
+      return out.slice(0, 25);
+    });
+    console.log("ELEMENTS EXTENDING PAST THE VIEWPORT:", JSON.stringify(offenders, null, 2));
+    check("Diagnostic: elements extending past the viewport bottom", true, JSON.stringify(offenders.slice(0, 10)));
+
     check(
       "Composer stays pinned at the bottom when scrolling up through chat history",
       !!composerBefore &&
