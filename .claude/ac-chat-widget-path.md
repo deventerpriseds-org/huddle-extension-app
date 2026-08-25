@@ -1,4 +1,4 @@
-# Acceptance Criteria — General Widget Extension Path (Phase 1: chat thread)
+# Acceptance Criteria — General Widget Extension Path (Phase 1: chat thread + Phase 2: bridge/Android)
 
 Written by an INDEPENDENT AC agent (cold read of the code, no access to the implementer's plan).
 Derived from: `seed.ts` (HuddleMessage), `HuddleView.tsx`, `HuddleApp.tsx`, `store.ts`,
@@ -272,3 +272,318 @@ definition and the adapter returns 0 hits.
 AC-26. Given the shim, when a message carries BOTH the legacy flat field and a registry widget of the
 same type (a mixed-build race), then exactly one widget renders — not two. Binary check: construct
 that message, assert exactly 1 widget node of that type in the DOM.
+
+---
+
+## D. Edge cases
+
+AC-27. **(unknown / unregistered type)** Given a message carrying a widget whose `type` is not in the
+client registry, when it renders, then the message's TEXT still renders in full, the unknown widget
+is silently skipped (no placeholder, no error boundary trip), and exactly one structured warning is
+logged naming the unrecognized type. Binary check: render a message with
+`widgets:[{type:"not-a-real-type", payload:{}}]`; assert the text node is present, 0 widget nodes,
+0 uncaught exceptions, and exactly 1 console warning containing the string `not-a-real-type`.
+
+AC-28. **(malformed payload)** Given a widget whose `type` IS registered but whose payload fails that
+type's validator, when it renders, then the widget is skipped and the message text still renders —
+i.e. the O6 degradation contract ("bad payload → no widget, never an error, never breaks the turn")
+is preserved at the CLIENT boundary too, not only the server one. Binary check: register a validator,
+feed a payload that fails it, assert 0 widget nodes and the text intact.
+
+AC-29. **(missing payload)** Given a widget entry with `type` present and `payload` `undefined`/
+`null`, when it renders, then it behaves identically to AC-28 (skipped, text intact). Binary check:
+both `{type:"x"}` and `{type:"x",payload:null}` produce 0 widget nodes and 0 exceptions.
+
+AC-30. **(two widgets, one message)** Given a message carrying two widgets of DIFFERENT types, when
+it renders, then both render, in the registry-defined deterministic order (not object-key order, not
+array-arrival order unless that is the declared rule), and each is independently interactive. Binary
+check: assert 2 widget nodes in the declared order; act on the second and assert the first is
+untouched.
+
+AC-31. **(two widgets, SAME type, one message)** Given a message carrying two widgets of the same
+type, when it renders, then both render and their client state is independent (resolving one does not
+resolve the other). Binary check: resolve widget index 0, assert index 1 still shows its controls.
+This is the AC-15 keying requirement observed at the render layer.
+
+AC-32. **(widget on a user-authored message)** Given a widget attached to a message with
+`author.kind === "user"`, when it renders, then it renders **only** if its registry entry declares
+user authorship as permitted (per AC-2); otherwise it is skipped like an unregistered type. Binary
+check: attach an agent-only widget to a user message → 0 widget nodes + 1 warning; attach the
+attachments-shaped widget → 1 node, positioned before the user bubble, right-aligned (O2).
+
+AC-33. **(widget on a system message)** Given a widget attached to `author.kind === "system"` whose
+registry entry declares the *instead-of-text* placement (the `checkIn` case, `HuddleView.tsx:481-482`
+early return), when it renders, then the card renders and the plain text row does NOT. Binary check:
+assert the card node present and 0 nodes matching the standard system-text-row selector.
+
+AC-34. **(empty container)** Given `widgets: []`, when it renders, then it is indistinguishable from
+`widgets: undefined` — no wrapper element, no extra margin. Binary check: DOM diff between the two
+fixtures is empty.
+
+AC-35. **(payload with unexpected extra fields)** Given a widget payload carrying fields the
+validator does not know about, when it renders, then it renders normally (forward-compatible: unknown
+fields are ignored, not rejected). Binary check: add `{...validPayload, futureField:123}` → 1 widget
+node, identical DOM to the valid payload. This is what lets a newer server ship a richer payload to
+an older client without breaking it.
+
+AC-36. **(very large / hostile payload)** Given a widget payload containing an unusually long string
+or a deeply nested object, when it renders, then the thread layout does not break (no horizontal page
+scroll) and no unescaped markup is injected. Binary check: a payload with a 10k-char string and a
+`<img src=x onerror=…>` string renders as inert text, with the widget's own container scrolling if
+needed, and `document.body.scrollWidth <= window.innerWidth`.
+
+---
+
+## E. Error states
+
+AC-37. **(server emits a type the client lacks — forward compat)** Given the server emits a widget
+type that a deployed older client does not have registered, when that client renders the reply, then
+the reply text renders in full and the app remains interactive. Binary check: identical to AC-27 but
+driven end-to-end through a real turn, asserting no error boundary is tripped anywhere up the tree.
+
+AC-38. **(the O6 parse throws)** Given a tool-use `detail` that is not valid JSON, when the server
+builds the reply, then the reply is emitted with NO widget, with its text intact, and the turn
+completes with the same status it would have had otherwise. Binary check: force a non-JSON `detail`,
+assert the turn's status is unchanged and `replies[i]` has no widget entry and non-empty `text`.
+
+AC-39. **(the O6 shape guard fails — the silent second path, see C2)** Given a `detail` that parses
+to valid JSON but whose required field is missing or non-string (e.g. `{"taskTitle":"x"}` with no
+`taskId`), when the server builds the reply, then it degrades to no-widget exactly like AC-38 — AND
+it emits a distinguishable server-side log line, because this path currently produces no signal at
+all. Binary check: feed that exact payload; assert no widget on the reply AND one log entry naming
+the widget type and the failed field. (The log is a NEW requirement, deliberately: a silent
+type-guard failure is indistinguishable from "the agent never called the tool," which makes this
+class of bug undiagnosable.)
+
+AC-40. **(no error may escape to the turn)** Given ANY widget-derivation failure on the server —
+throw, guard failure, unregistered type, validator crash — when the turn runs, then the turn never
+fails and no other agent's reply in the same turn is affected. Binary check: in a multi-agent turn,
+force a widget failure on agent 1's reply; assert agents 2..N still produce their replies and the
+turn status is `done`.
+
+AC-41. **(renderer crash containment)** Given a registered widget whose renderer throws at render
+time, when the thread renders, then only that widget is lost — the message text, the other widgets on
+that message, and every other message still render. Binary check: register a throwing renderer, load
+a thread of 5 messages, assert 5 message nodes still present and 0 blank screens.
+
+AC-42. **(server action failure surfaces, not swallows)** Given a widget control whose server call
+returns `{ok:false, error}`, when the user clicks it, then an error toast shows the server's message,
+the widget does NOT resolve, and the controls become re-enabled. Binary check: stub `{ok:false,
+error:"boom"}`; assert toast text contains "boom", widget still shows its controls, and buttons are
+enabled again.
+
+AC-43. **(partial-failure semantics preserved)** Given `{ok:true, error:"mirror write failed"}`, when
+the user clicks, then the widget resolves AND a non-error toast carries the error as its description
+— matching current `ConfirmAskRow` behavior exactly. Binary check: assert resolved state AND the
+toast variant is not the error variant.
+
+---
+
+## F. Regression guard
+
+AC-44. Given the four non-migrated renderable fields (`checkIn`, `artifacts`, `attachments`,
+`toolUses`), when the registry ships, then each still renders in its exact pre-change position with
+its exact pre-change markup. Binary check: a rendered-DOM snapshot per field, captured on the
+pre-change build and diffed against the post-change build — zero diff.
+
+AC-45. **(placement regression, the O2 trap)** Given `attachments` on a user message and `checkIn` on
+a system message, when the registry ships, then `attachments` still renders ABOVE the user bubble
+right-aligned and `checkIn` still renders INSTEAD of the system text row. Binary check: explicit
+positional assertions (sibling order + alignment class + absence of the system text row), not just
+"the node exists" — a registry that defaults everything to "under the agent bubble" passes a
+node-exists check and fails this one.
+
+AC-46. Given `artifacts` chips, when clicked after the change, then `openArtifactById` is still
+invoked with the same id and the Artifacts view still opens. Binary check: click assertion on the
+spy + the resulting view state.
+
+AC-47. Given `toolUses` breadcrumbs, when a turn completes, then the breadcrumb attach-on-final-poll
+behavior (`turnToolUses` populated only when `result.toolUses` exists, and the redundant-write guard
+letting the final poll through) is unchanged. Binary check: run a turn with tools; assert breadcrumbs
+appear on the final poll exactly as before, and that the guard at `HuddleView.tsx:~800` still permits
+the breadcrumb-landing write.
+
+AC-48. Given the store, when the registry ships, then `upsertAgentMessage`'s existing preservation
+semantics for `artifacts` and `toolUses` (`m.x ?? next[i].x`) are unchanged. Binary check: existing
+merge tests pass untouched.
+
+AC-49. Given the turn pipeline, when the registry ships, then a turn carrying NO widgets produces a
+response payload byte-identical (modulo timestamps/ids) to the pre-change build. Binary check: capture
+a no-widget turn response before and after; diff after normalizing volatile fields — zero diff.
+
+AC-50. Given the type system, when the registry ships, then `npm run build` / `tsc` completes with
+zero new errors and zero new `any`/`@ts-expect-error` in the touched files. Binary check: build output
++ `grep -c "@ts-expect-error\|: any" ` on the diff is 0.
+
+---
+
+## G. Phase 2 — external via the bridge
+
+**Additional ground truth read for this section (2026-08-25).** `SupabaseTaskClient.kt` talks
+**directly to Supabase REST** (`$supabaseUrl/rest/v1/...`) using the USER's own
+`supabase_access_token` / `supabase_anon_key` / `supabase_user_id` out of `EncryptedPrefs` — i.e. the
+bridge is an authenticated first-party Supabase client against **journey's** DB. Huddle's chat widgets
+are fed by Huddle's turn payload out of **Azure PG**. These two feeds share no transport, no auth, and
+no schema. Additionally, each Android widget is its own `<receiver>` in `AndroidManifest.xml` (four
+registered), so an Android widget type costs a receiver + a provider-info XML + a layout on top of
+the four `WidgetActionService` sites in C3.
+
+AC-51. **(the O7 fork must be ANSWERED, not inherited)** Given the widget contract, when phase 2 is
+designed, then the document/code states EXPLICITLY which of three models the bridge uses, with the
+reason recorded: (a) Android reads Huddle's Azure PG via a new Huddle-side read endpoint; (b) Huddle
+writes widget state into journey's Supabase so Android keeps its existing `SupabaseTaskClient` feed;
+(c) the widget contract is transport-agnostic and each surface binds its own feed. Binary check: a
+named decision exists in the repo (CLAUDE.md or a plan doc) naming one of a/b/c and the rejected
+alternatives. **An implementation that ships without this stated is a FAIL of this AC even if it
+works** — this is exactly the "decided by accident" failure the AC exists to prevent.
+
+AC-52. Given the chosen model from AC-51, when an Android widget renders a widget type that also
+exists in the chat thread, then both surfaces read the SAME widget `type` id and the SAME payload
+field names. Binary check: a shared contract artifact (JSON schema, or a generated Kotlin data class
+from the same source as the TS type) exists, and the Kotlin type's field names match the TS type's
+field-for-field — verified by a test that fails when they drift.
+
+AC-53. **(the standing "reuse journey's push" rule)** Given a widget needs to reach the phone, when
+phase 2 ships, then it rides the EXISTING `send_push` → journey → FCM/Android-bridge path and adds
+**no new sender**. Binary check: `grep` of the phase-2 diff shows zero new push/notification
+transports; the widget delivery call site is `invokeJourneyTool({toolName:"send_push", ...})` or the
+existing widget-refresh broadcast.
+
+AC-54. **(kills the C3 duplication — the real target)** Given a NEW widget action is added to the
+bridge, when the diff is reviewed, then it is declared **once** in a single action-descriptor
+structure (constant + mutation + toast + refresh-target together), not spread across the three
+`when (action)` blocks plus the companion-object constant list. Binary check: `git diff --stat` for a
+new-action commit shows exactly one changed region in `WidgetActionService.kt`; and
+`grep -c "when (action)" WidgetActionService.kt` after refactor is **≤1**.
+
+AC-55. Given the refactor in AC-54, when the existing seven actions (`TASK_DONE`, `TASK_PAUSE`,
+`TASK_START`, `TASK_TODAY`, `TASK_PRIORITY`, `TOPIC_UP`, `TOPIC_DOWN`) are exercised, then each still
+performs the same mutation, shows the same toast (including the four that show one and the three that
+show none), and refreshes the same widget class (`ScheduleWidget` vs `PrioritiesWidget`) as before.
+Binary check: a parameterized Kotlin unit test, one case per action, asserting the mutation call,
+the toast string (or null), and the refresh target — run against the pre-refactor behavior as the
+expected values.
+
+AC-56. Given a widget action fires while the device is offline or the Supabase token has expired,
+when the user taps it, then the widget does not silently no-op: it surfaces a visible outcome (toast
+or widget state) and does not leave the widget showing a stale/incorrect state. Binary check: with
+network disabled, tap the action and assert a user-visible failure indication.
+
+AC-57. Given an unknown/unregistered widget action arrives at `WidgetActionService`, when it is
+handled, then the service stops cleanly (`stopSelf`) with no crash and no toast. Binary check: send
+an intent with a bogus action string; assert no `ANR`/crash in logcat and the service stops.
+
+AC-58. Given the "Extend, don't duplicate" rule, when phase 2 ships, then it EXTENDS the phase-1
+registry (same type ids, same payload contract) rather than defining a second, Android-only widget
+taxonomy. Binary check: no Kotlin-side widget-type enum exists that is not generated from, or
+one-to-one with, the phase-1 registry — reviewed against the AC-52 contract artifact.
+
+AC-59. Given a widget type that is registered in phase 1 but has no Android renderer, when the bridge
+encounters it, then the Android side skips it gracefully (the widget list renders its other entries)
+— the same degradation contract as AC-27, on the other surface. Binary check: feed the bridge a
+payload containing an unknown type alongside a known one; assert the known one renders.
+
+---
+
+## H. Extension-point guard (agent-authored payloads later)
+
+Agent-authored / dynamic widget payloads are explicitly OUT of scope. These ACs only ensure the
+contract does not PRECLUDE them.
+
+AC-60. Given the widget envelope, when it is defined, then `type` is a plain **string** (not a
+closed TypeScript string-literal union baked into the wire type) and `payload` is `unknown` at the
+transport boundary, narrowed only by the registry's validator. Binary check: a widget with
+`type:"agent-authored-thing"` can be constructed and transported end to end without a TypeScript
+error and without a schema rejection at any transport hop — it is dropped only at the client render
+step by AC-27's unknown-type path. A closed union at the wire type fails this AC.
+
+AC-61. Given the registry, when a widget type is registered, then registration happens through a
+**function call at runtime** (`register(def)`) rather than by editing a hardcoded object literal that
+the bundler must see at build time. Binary check: a type registered from a test file — not from the
+registry index — is rendered by the same dispatch, proving registration is not build-time-only.
+
+AC-62. Given the server emit path, when a widget is emitted, then the emit code does not enumerate a
+closed list of permitted types — it validates against the registry, which is data. Binary check:
+`grep` of the server emit path shows no hardcoded array/switch of type ids.
+
+AC-63. Given the validator contract, when a future agent-authored payload is introduced, then the
+existing contract can express "validate this against a schema supplied with the widget" without
+changing the envelope shape. Binary check: write (do not ship) a throwaway registry entry whose
+validator is schema-driven rather than hand-coded, register it at runtime per AC-61, and render it —
+zero changes required to the envelope type, the transport, the store merge, or the render dispatch.
+
+AC-64. Given the config-centric rule and the future dynamic case, when widget types are gated, then
+the gate is a config-readable allowlist/denylist of type ids rather than a code branch — so an
+agent-authored type could later be enabled or disabled without a deploy. Binary check: flipping the
+config value changes whether that type renders, with no code edit.
+
+---
+
+## Highest-risk areas
+
+**R1 — the store merge clobbering widget client state (O4, AC-12/AC-13/AC-14/AC-15). Highest risk.**
+The current code is already latently broken here and is masked only by an unrelated early-return
+guard (`prev.text === reply.text && …`). The obvious, natural registry implementation —
+`widgets: m.widgets ?? next[i].widgets` — reproduces the exact bug at container granularity, which is
+STRICTLY WORSE than today: one incoming widget would wipe the client state of every widget on the
+message, not just one field of one widget. AC-13 is deliberately constructed to bypass the masking
+guard, because an implementation that passes AC-12 alone has proven nothing. Expect this to be the
+AC that actually fails first.
+
+**R2 — the two divergent mapping sites (O5, AC-16/AC-17/AC-18/AC-19).** They differ in three ways at
+once: `upsertAgent` vs `addAgentMessage` ("does not dedupe"), the presence/absence of the redundant-
+write guard, and the presence/absence of `AGENT_BY_ID` validation. A registry that unifies rendering
+but leaves both mapping sites hand-copying fields keeps the highest-cost part of the problem (the
+"edit both files" tax that motivated the whole feature) and leaves the un-deduped back-fill path
+under-tested — historically the path that produces duplicated or orphaned messages. AC-17 is the one
+most likely to be skipped, because reproducing the back-fill path requires deliberately NOT having
+the huddle on screen.
+
+**R3 — the O2 placement collapse (AC-6/AC-32/AC-33/AC-45).** The three existing render sites are in
+three different author branches with three different semantics, one of which (`checkIn`) **returns
+early and replaces the text row entirely**. Any registry whose mental model is "widgets render under
+the agent bubble" will pass every node-exists test while silently moving `attachments` and breaking
+`checkIn`. This is a quiet, visual regression that unit tests do not catch — hence the positional
+assertions in AC-45 rather than presence assertions. Second-order risk: the migration is proven on
+`confirmAsk` only (the one type that happens to fit the default placement), so the defect ships
+undetected until someone opens a stand-up thread.
+
+---
+
+## Open questions for the owner
+
+**Q1 (blocks AC-51 — the phase-2 fork).** Which data feed backs external widgets? The two surfaces
+today share nothing: Android is an authenticated Supabase REST client against **journey's** DB using
+the user's own token in `EncryptedPrefs`; chat widgets come off Huddle's turn payload from **Azure
+PG**. Options are (a) new Huddle read endpoint for Android, (b) Huddle writes widget state into
+journey's Supabase so the existing `SupabaseTaskClient` keeps working, (c) transport-agnostic contract
+with per-surface binding. (b) reuses the most existing machinery and matches the standing
+"piggyback journey" rule, but makes Huddle a second writer into journey — which the task-sync section
+of CLAUDE.md explicitly warns against ("one-way fan-out, do not add a second writer"). A human must
+decide; the source does not settle it.
+
+**Q2 (affects AC-20).** Should widget client state (`resolved`) become **durable** as part of this
+work, or stay client-only? Today it is client-only and its behavior across a reload is not documented
+anywhere I could find — so AC-20 is written as "must not change," which is the safe framing but
+leaves an existing ambiguity in place. If it is currently lost on reload, that is arguably a bug the
+user may want fixed in the same pass. Phase 2 forces this question anyway: an Android widget cannot
+read a state that lives only in a browser tab's zustand store.
+
+**Q3 (affects AC-1's number).** Is **2 files / 2 sites** the right target, or should the registry go
+further and make a widget a single self-contained file with zero registry-index edit (filesystem or
+glob-based auto-registration)? Auto-registration would make it **1 file / 1 site**, but conflicts with
+AC-61's runtime-registration requirement being explicit and with tree-shaking. I picked 2 as the
+provable, conventional target; the owner may want 1.
+
+**Q4 (affects AC-39).** AC-39 requires a NEW server-side log line on the silent type-guard failure
+path (C2) that does not exist today. That is a small behavior addition, not pure parity. Confirm it is
+wanted — the argument for it is that a silent guard failure is currently indistinguishable from "the
+agent never called the tool," which makes the whole class undiagnosable; the argument against is that
+it is scope creep on a migration meant to be behavior-preserving.
+
+**Q5 (affects AC-30).** When two widgets appear on one message, what determines render order —
+array order as emitted by the server, or a declared per-type priority in the registry? No precedent
+exists in the code: today the order is fixed by hardcoded JSX sequence (`artifacts` → `toolUses` →
+`confirmAsk`, `HuddleView.tsx:534/550/571`), which is a per-type priority, not array order. That
+implies registry-declared priority is the faithful migration — but it needs confirming, and it means
+the registry entry needs a fifth required field beyond AC-2's four.
