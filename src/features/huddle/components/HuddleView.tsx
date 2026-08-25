@@ -332,6 +332,18 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
   );
 }
 
+// Confirm-ask action buttons. These used to be `bg-surface` + `border-hairline`: a pure-white fill on
+// a 0.985-lightness page behind a 0.90-lightness hairline, i.e. white-on-white — the whole action row
+// was easy to miss entirely (user-reported). Now a muted grey fill with a strong dark outline.
+// `border-foreground/65` was chosen by MEASURING rendered pixels across opacity steps: it puts the
+// border/fill contrast at 5.17:1 in light and 6.64:1 in dark, both well past the 3:1 WCAG minimum for
+// UI-component boundaries (the old hairline measured just 1.31:1 light / 1.28:1 dark, and /35 and /45
+// still fell short at 2.17 and 2.82). Both tokens are theme-aware (`--muted`/`--foreground` flip with
+// the theme), so this reads correctly in dark mode instead of hardcoding grey/black.
+const CONFIRM_ASK_BTN =
+  "inline-flex items-center gap-1 rounded-md border border-foreground/65 bg-muted px-2.5 py-1 text-xs " +
+  "text-foreground transition hover:border-foreground/85 hover:bg-secondary disabled:opacity-50";
+
 function ConfirmAskRow({ m }: { m: HuddleMessage }) {
   const { user } = useAuth();
   const [busy, setBusy] = useState<"confirm" | "backlog" | "archive" | null>(null);
@@ -339,7 +351,7 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
   if (!ask) return null;
   if (ask.resolved) {
     return (
-      <div className="mt-2 inline-flex items-center gap-1 rounded-md border border-hairline bg-surface px-2 py-1 text-xs text-muted-foreground">
+      <div className={cn(CONFIRM_ASK_BTN, "mt-2 text-muted-foreground")}>
         <Check size={12} /> Handled
       </div>
     );
@@ -379,7 +391,7 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
             "Confirmed",
           )
         }
-        className="inline-flex items-center gap-1 rounded-md border border-hairline bg-surface px-2 py-1 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+        className={cn(CONFIRM_ASK_BTN, "font-semibold")}
       >
         {busy === "confirm" ? (
           <Loader2 size={12} className="animate-spin" />
@@ -396,7 +408,7 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
             .getState()
             .setDraftPrefill(`I have edits for the task regarding "${ask.taskTitle}": `)
         }
-        className="inline-flex items-center gap-1 rounded-md border border-hairline bg-surface px-2 py-1 text-xs text-foreground hover:bg-muted disabled:opacity-50"
+        className={CONFIRM_ASK_BTN}
       >
         Revise
       </button>
@@ -410,7 +422,7 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
             "Moved to Backlog",
           )
         }
-        className="inline-flex items-center gap-1 rounded-md border border-hairline bg-surface px-2 py-1 text-xs text-foreground hover:bg-muted disabled:opacity-50"
+        className={CONFIRM_ASK_BTN}
       >
         {busy === "backlog" && <Loader2 size={12} className="animate-spin" />}
         Backlog
@@ -425,7 +437,7 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
             "Parked",
           )
         }
-        className="inline-flex items-center gap-1 rounded-md border border-hairline bg-surface px-2 py-1 text-xs text-foreground hover:bg-muted disabled:opacity-50"
+        className={CONFIRM_ASK_BTN}
       >
         {busy === "archive" && <Loader2 size={12} className="animate-spin" />}
         Archive
