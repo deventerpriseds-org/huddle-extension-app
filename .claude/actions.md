@@ -51,8 +51,12 @@ Two independent verifier rounds; BOTH disproved the fix before it was right (see
 5s beat / 12s freshness / 10s attention + pointermove + an explicit leave-beacon on tab-hide and blur.
 Offline gates: `npm run test:blocked` 21/21, `npm run test:presence` 18/18, `test:router` 20/20 — all
 mutation-proven to fail against the defects they cover.
-**NOT user-confirmed live.** Bug 2's real proof is the user sending a message, walking away, and
-getting the buzz; no sandbox can produce that. Honest residual documented in code: a focused desktop
+**USER-CONFIRMED LIVE 2026-08-25** — the user's own words: *"i said hey Finn and backgrounded the app,
+and recieved an away message notification as expected with his repsonse."* That exercises the
+deterministic half end to end: backgrounding fires `visibilitychange -> hidden` -> the leave-beacon
+clears `chat.user_presence` -> `isUserPresent` matches no row -> the reply push fires. Bug 2 is FIXED.
+Bug 1 (blocker naming) is deployed and offline-proven but NOT yet observed live — it needs a real
+blocked task to surface in a standup/autowork message before it can be called confirmed. Honest residual documented in code: a focused desktop
 window gives no reliable "left the room" signal, so that path waits out ~22s and a fast turn can beat
 it — phone/app-switch (the reported case) is deterministic via the beacon.
 Reports: `.claude/VERIFY-notification-fixes.md`, `.claude/VERIFY-rework.md`. ACs: `.claude/AC-notification-fixes.md`.

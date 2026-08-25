@@ -1287,8 +1287,12 @@ Now: `foreground` (send-time) **AND** `isUserPresent()` (delivery-time) must bot
   Do not "make it consistent" — a duplicate buzz is an annoyance, a swallowed reply is the outage.
 - Liveness rides the existing all-huddle backfill poll; the poll relaxes 10s → 30s when untouched, so
   an idle tab ages out of the 30s window by itself. No new endpoint, no new sender.
-**Status: DEPLOYED** — `6dccf41` on `main`, deploy run 32900461818 `success` (2026-08-25). NOT yet
-user-confirmed live; the real proof is the user sending a message, walking away, and getting the buzz.
+**Status: DEPLOYED + USER-CONFIRMED LIVE (Bug 2)** — `6dccf41` on `main`, deploy run 32900461818
+`success`, and on 2026-08-25 the user reported: *"i said hey Finn and backgrounded the app, and
+recieved an away message notification as expected with his repsonse."* That is the deterministic path
+working end to end (backgrounding -> visibilitychange:hidden -> leave-beacon clears the presence row ->
+push fires), and it is the FIRST time the reported bug has been observed fixed in the user's own
+environment. Bug 1 is deployed and offline-proven but still awaits a real blocked task to be seen live.
 
 **Two verifier rounds, and BOTH disproved the fix — read this before trusting a timing gate again.**
 - Round 1 killed the first attempt: `PRESENCE_FRESH_MS` was 30s with a comment claiming it was
