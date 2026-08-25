@@ -122,28 +122,65 @@ export const checks = [
     // walk of every element whose bottom edge extends past the viewport, to name the exact culprit.
     await page.screenshot({ path: `${process.env.SHOT_DIR || "uat-shots"}/99-fullpage.png`, fullPage: true });
     const offenders = await page.evaluate(() => {
+      // A properly clipped scroll region (overflow: auto/hidden/scroll) means a descendant's
+      // bounding rect can legitimately extend past the viewport WITHOUT contributing to
+      // document.documentElement.scrollHeight — that's the whole point of overflow:auto. So only
+      // flag an element if NO ancestor between it and <body> establishes such a clip; those are the
+      // only elements that can actually inflate the document's scroll height.
+      function hasClippingAncestor(el) {
+        let node = el.parentElement;
+        while (node && node !== document.body) {
+          const oy = getComputedStyle(node).overflowY;
+          if (oy === "auto" || oy === "scroll" || oy === "hidden") return true;
+          node = node.parentElement;
+        }
+        return false;
+      }
       const vh = window.innerHeight;
       const all = Array.from(document.body.querySelectorAll("*"));
       const out = [];
       for (const el of all) {
         const r = el.getBoundingClientRect();
-        if (r.bottom > vh + 5 && r.height > 0) {
+        if (r.bottom > vh + 5 && r.height > 0 && !hasClippingAncestor(el)) {
+          const cs = getComputedStyle(el);
           out.push({
             tag: el.tagName,
             id: el.id || undefined,
-            cls: (el.className || "").toString().slice(0, 100),
+            cls: (el.className || "").toString().slice(0, 150),
             top: Math.round(r.top),
             bottom: Math.round(r.bottom),
             height: Math.round(r.height),
+            position: cs.position,
+            display: cs.display,
           });
         }
       }
-      // Sort by bottom descending — the elements poking out furthest are likely closest to the root cause.
       out.sort((a, b) => b.bottom - a.bottom);
-      return out.slice(0, 25);
+      // Also dump direct children of <body> unconditionally — the outermost-level view of what's there.
+      const bodyChildren = Array.from(document.body.children).map((el) => {
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        return {
+          tag: el.tagName,
+          id: el.id || undefined,
+          cls: (el.className || "").toString().slice(0, 150),
+          top: Math.round(r.top),
+          bottom: Math.round(r.bottom),
+          height: Math.round(r.height),
+          position: cs.position,
+          display: cs.display,
+        };
+      });
+      return { unclippedOffenders: out.slice(0, 15), bodyChildren };
     });
-    console.log("ELEMENTS EXTENDING PAST THE VIEWPORT:", JSON.stringify(offenders, null, 2));
-    check("Diagnostic: elements extending past the viewport bottom", true, JSON.stringify(offenders.slice(0, 10)));
+    console.log("UNCLIPPED ELEMENTS EXTENDING PAST THE VIEWPORT:", JSON.stringify(offenders.unclippedOffenders, null, 2));
+    console.log("BODY DIRECT CHILDREN:", JSON.stringify(offenders.bodyChildren, null, 2));
+    check(
+      "Diagnostic: unclipped elements extending past the viewport (the real contributors)",
+      true,
+      JSON.stringify(offenders.unclippedOffenders),
+    );
+    check("Diagnostic: document.body direct children", true, JSON.stringify(offenders.bodyChildren));
 
     check(
       "Composer stays pinned at the bottom when scrolling up through chat history",
