@@ -61,8 +61,21 @@ export function HuddleApp() {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
+    // Liveness for the server's reply away-gate. We stamp REAL interactions only — never the tick
+    // itself — because a backgrounded tab keeps running throttled timers, and a heartbeat that
+    // counted its own beats would report an abandoned tab as present forever. Seeded at 0 so a
+    // session that never gets touched is never mistaken for an attentive one.
+    let lastInteractionMs = 0;
+    const markInteraction = () => {
+      lastInteractionMs = Date.now();
+    };
+    const INTERACTION_EVENTS = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
+    for (const ev of INTERACTION_EVENTS) {
+      window.addEventListener(ev, markInteraction, { passive: true, capture: true });
+    }
+
     const doPoll = async () => {
-      const { turns } = await getAllTurnUpdates({ data: { caller, sinceMs: cursor } });
+      const { turns } = await getAllTurnUpdates({ data: { caller, sinceMs: cursor, lastInteractionMs } });
       const add = useHuddleStore.getState().addAgentMessage;
       const upsert = useHuddleStore.getState().upsertAgentMessage;
       for (const t of turns as {
@@ -136,14 +149,27 @@ export function HuddleApp() {
       });
     };
     // Poll fast until hydrated, then settle to 30s; also on focus/return so an away message appears.
+    // While the user is ACTIVELY interacting we poll at 10s instead — not to see messages sooner, but
+    // because this poll is what carries liveness, and the server's freshness window is 30s. On a 30s
+    // cadence the stamp could be ~30s old the moment it lands, so someone sitting right there would
+    // read as away and get a redundant buzz. 10s keeps a genuinely-present user comfortably inside the
+    // window; once they stop touching anything the cadence relaxes and the stamp ages out on its own,
+    // which is precisely the "they left" signal we want.
+    const ACTIVE_POLL_MS = 10_000;
+    const IDLE_POLL_MS = 30_000;
     const tick = () => {
       if (stopped) return;
       const hydrated = isWorkspaceHydrated();
       if (hydrated) safePoll();
-      timer = setTimeout(tick, hydrated ? 30_000 : 1_500);
+      const active = Date.now() - lastInteractionMs < IDLE_POLL_MS;
+      timer = setTimeout(tick, hydrated ? (active ? ACTIVE_POLL_MS : IDLE_POLL_MS) : 1_500);
     };
     const onVisible = () => {
-      if (document.visibilityState === "visible") safePoll();
+      if (document.visibilityState === "visible") {
+        // Returning to the tab IS an interaction — it is the moment the user is provably looking.
+        markInteraction();
+        safePoll();
+      }
     };
     tick();
     document.addEventListener("visibilitychange", onVisible);
@@ -153,6 +179,9 @@ export function HuddleApp() {
       if (timer) clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("pageshow", onVisible);
+      for (const ev of INTERACTION_EVENTS) {
+        window.removeEventListener(ev, markInteraction, { capture: true });
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, user?.username, user?.homeAccountId, user?.localAccountId]);

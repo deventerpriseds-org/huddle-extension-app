@@ -6304,12 +6304,26 @@ async function executeClaimedTurn(record: {
     // "batch". A real blocker the agent surfaces is tagged "push". The channel choice lives with the
     // side that KNOWS the intent (the enqueuer), not a fragile keyword classifier here.
     const notifyLevel = String((record.payload as { notify?: string })?.notify ?? "push");
-    // Away-gate: if the user was foregrounded and viewing THIS huddle when they sent the turn, they'll
-    // see the reply in-app via the live poll — a phone push would just duplicate it. Suppress the reply
-    // push in that case. Cron-backstop / agent-initiated turns don't set foreground → push still fires
-    // when the user is actually away. (Reminders/alarms are a separate path and always deliver.)
+    // Away-gate — TWO conditions, and the second one is the fix for a real outage.
+    //
+    // `foreground` is a SEND-TIME snapshot: it says the user had this huddle on screen when they hit
+    // send. That was the whole gate, and it was wrong, because a turn here runs 19-24s — plenty of time
+    // to hit send and walk away. The reply then landed in-app with no push, so the user came back to a
+    // message they were never told about. Agent-initiated turns (blocker surfaces, standups, reach-outs)
+    // never set `foreground`, which is exactly why THOSE kept buzzing while replies went silent — the
+    // asymmetry the user reported.
+    //
+    // So `foreground` is now only the first half: it still scopes this suppression to turns the user
+    // themself started while watching. The second half asks the question at DELIVERY time — are they
+    // still here? — and only then is the push redundant. `isUserPresent` fails open (any doubt → false
+    // → push), so the failure mode is a duplicate buzz, never another swallowed reply.
     const foreground = (record.payload as { foreground?: boolean })?.foreground === true;
-    const wantsPush = notifyLevel !== "batch" && notifyLevel !== "silent" && !foreground;
+    let stillHere = false;
+    if (foreground && record.user_email) {
+      const { isUserPresent } = await import("./tasks/turns.server");
+      stillHere = await isUserPresent(record.user_email);
+    }
+    const wantsPush = notifyLevel !== "batch" && notifyLevel !== "silent" && !(foreground && stillHere);
     const lead = result.replies?.[0];
     if (lead && wantsPush) {
       const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
@@ -6549,6 +6563,11 @@ const AllTurnUpdatesInput = z.object({
     .object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() })
     .optional(),
   sinceMs: z.number().optional(),
+  // Liveness piggyback (see the away-gate in executeClaimedTurn). The client's OWN timestamp of its
+  // last real interaction — NOT "now". A backgrounded tab still fires throttled timers, so recording
+  // arrival time would read every open-but-abandoned tab as "the user is here" and re-break the very
+  // thing this fixes. Carried on the poll that already runs, so presence costs no extra request.
+  lastInteractionMs: z.number().optional(),
 });
 export const getAllTurnUpdates = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => AllTurnUpdatesInput.parse(raw))
@@ -6580,7 +6599,11 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
       email = data.caller.entra_email ?? null;
     }
     if (!email) return { turns: empty };
-    const { getUserTurnsSince } = await import("./tasks/turns.server");
+    const { getUserTurnsSince, recordUserPresence } = await import("./tasks/turns.server");
+    // Best-effort, non-blocking: a failed presence write only means a redundant push later.
+    if (typeof data.lastInteractionMs === "number" && data.lastInteractionMs > 0) {
+      void recordUserPresence(email, data.lastInteractionMs);
+    }
     const rows = await getUserTurnsSince(email, data.sinceMs ?? 0);
     const turns: BackfillTurn[] = rows.map((t) => ({
       id: t.id,

@@ -98,6 +98,18 @@ ALTER TABLE chat.reminders ADD COLUMN IF NOT EXISTS user_id TEXT;
 CREATE INDEX IF NOT EXISTS reminders_userid_idx  ON chat.reminders(user_id);
 CREATE INDEX IF NOT EXISTS reminders_due_idx    ON chat.reminders (status, due_at);
 CREATE INDEX IF NOT EXISTS reminders_huddle_idx ON chat.reminders (huddle_id, fired_at DESC);
+
+-- Liveness for the reply-push away-gate. ONE row per user, app-wide (deliberately not per-huddle).
+-- last_interaction_ms is the client's OWN timestamp of the last real interaction (pointer/key/scroll/
+-- tab-focus) — NOT the time the ping arrived. That distinction is the whole point: a backgrounded tab
+-- keeps firing throttled timers, so "a request arrived" would read as "the user is here" and reinstate
+-- the very bug this fixes. Storing the client's interaction time means an idle-but-open tab goes stale
+-- on its own.
+CREATE TABLE IF NOT EXISTS chat.user_presence (
+  user_email          TEXT PRIMARY KEY,
+  last_interaction_ms BIGINT NOT NULL,
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -540,4 +552,66 @@ export async function getFiredRemindersSince(huddleId: string, sinceMs: number):
     [huddleId, Math.max(0, sinceMs)],
   );
   return res.rows.map(mapReminder);
+}
+
+/**
+ * How recently the user must have TOUCHED the app for a reply push to be suppressed as redundant.
+ * Turns here routinely run 19-24s, so this is deliberately shorter than a turn: hit send, look away,
+ * and by the time the reply lands you are correctly treated as away.
+ */
+export const PRESENCE_FRESH_MS = 30_000;
+
+/**
+ * Record the client's own last-interaction timestamp. Called from the existing all-huddle poll — this
+ * adds no new endpoint and no new polling.
+ *
+ * Non-throwing BY DESIGN: presence is a nice-to-have that only ever SUPPRESSES a notification. If this
+ * write fails the row goes stale, `isUserPresent` returns false, and the push fires. Failing loud here
+ * would risk breaking the poll that also back-fills messages, to protect a de-noising optimisation.
+ */
+export async function recordUserPresence(userEmail: string, lastInteractionMs: number): Promise<void> {
+  try {
+    await ensureBootstrapped();
+    await getPool().query(
+      `INSERT INTO chat.user_presence (user_email, last_interaction_ms, updated_at)
+            VALUES ($1, $2, now())
+       ON CONFLICT (user_email) DO UPDATE
+            SET last_interaction_ms = GREATEST(chat.user_presence.last_interaction_ms, EXCLUDED.last_interaction_ms),
+                updated_at = now()`,
+      [userEmail, Math.max(0, Math.floor(lastInteractionMs))],
+    );
+  } catch {
+    /* presence is best-effort — see the fail-open note above */
+  }
+}
+
+/**
+ * Was the user interacting with the app within PRESENCE_FRESH_MS?
+ *
+ * FAILS OPEN (returns false = "treat as away" = push). Every uncertain path — no row, unreadable row,
+ * DB error, clock skew making the stamp look futuristic — resolves to "notify them". A redundant buzz
+ * is a minor annoyance; a silently swallowed reply is the bug this exists to fix, and it is the one
+ * the user actually lost a message to. Do NOT invert this to fail-closed to reduce noise: that is the
+ * opposite of the confirm-intent gate's fail-CLOSED rule next door, and copying that precedent here
+ * would silently restore the outage.
+ */
+export async function isUserPresent(userEmail: string): Promise<boolean> {
+  try {
+    await ensureBootstrapped();
+    const res = await getPool().query<{ last_interaction_ms: string }>(
+      `SELECT last_interaction_ms FROM chat.user_presence WHERE user_email = $1`,
+      [userEmail],
+    );
+    const raw = res.rows[0]?.last_interaction_ms;
+    if (raw === undefined || raw === null) return false;
+    const last = Number(raw);
+    if (!Number.isFinite(last) || last <= 0) return false;
+    const age = Date.now() - last;
+    // A negative age means the client's clock is ahead of ours. Treat it as away rather than trusting
+    // a future timestamp, which would otherwise suppress pushes indefinitely.
+    if (age < 0) return false;
+    return age < PRESENCE_FRESH_MS;
+  } catch {
+    return false;
+  }
 }
