@@ -89,7 +89,10 @@ for (const c of CASES) {
   // payload never arrives is exactly the silent-drop failure the DTO work was about.
   const toolFired = tools.some((t) => t.startsWith("build_checklist"));
   const payloadPresent = Boolean(reply.checklist?.rows?.length);
-  const got = toolFired || payloadPresent;
+  // For a WIDGET case the payload is what counts, not the tool call. The looser `toolFired ||
+  // payloadPresent` let a real bug pass: build_checklist fired, returned no_task_ids, and rendered
+  // nothing -- a green tick over a broken feature. A PROSE case fails on either signal appearing.
+  const got = c.expectWidget ? payloadPresent : toolFired || payloadPresent;
   const ok = got === c.expectWidget;
   ok ? pass++ : fail++;
   console.log(`${ok ? "PASS" : "FAIL"}  ${c.label}  [@${c.who}]`);

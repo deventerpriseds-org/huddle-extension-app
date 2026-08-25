@@ -202,6 +202,13 @@ export async function dispatchPrioritize(
       timezone: tz,
       ranked: ranked.map((r, i) => ({
         rank: i + 1,
+        // The task's real id. REQUIRED, and its absence was a live bug: build_checklist's schema tells
+        // the model to pass ids "from a schedule_and_priorities call in this same turn", but this
+        // mapping omitted `id`, so the model had none to pass and every checklist built from the
+        // priorities lane returned no_task_ids. Measured live: the agent said outright that "the task
+        // data didn't include the IDs needed to render tickable checklist items" -- it was right.
+        // Any tool that acts on a task by id depends on this being here.
+        id: r.id,
         title: r.title,
         category: r.category,
         status: r.status,
