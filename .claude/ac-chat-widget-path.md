@@ -4,7 +4,14 @@ Written by an INDEPENDENT AC agent (cold read of the code, no access to the impl
 Derived from: `seed.ts` (HuddleMessage), `HuddleView.tsx`, `HuddleApp.tsx`, `store.ts`,
 `huddle.functions.ts`, and the bridge repo `android-bridge-template`.
 
-Status: IN PROGRESS — appended incrementally.
+Status: **COMPLETE — AC-1..AC-64, both phases, written up front as one batch for a single
+verification pass at the end (per the owner's "no micro-loops" direction).** Section 0 was written by
+the first AC agent; Section 0b onward by a second, independent AC agent after that agent was killed
+mid-run. Section 0's observations were spot-checked against source, not re-derived — see Section 0b.
+
+Sections: 0/0b ground truth · A registry (phase 1) · B `confirmAsk` migration parity ·
+C backwards compatibility · D edge cases · E error states · F regression guard · G phase 2 bridge ·
+H extension-point guard · Highest-risk areas · Open questions for the owner.
 
 ---
 

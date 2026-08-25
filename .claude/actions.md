@@ -60,7 +60,7 @@ NO CODE WRITTEN. Not started pending AC sign-off.
 | Chat thread | Android bridge |
 |---|---|
 | new optional field on `HuddleMessage` | new `ACTION_*` constant |
-| threaded through ~15 sites in 5 files (`huddle.functions.ts` ×6, `HuddleView` ×3, `HuddleApp` ×2, `store.ts` ×2, `seed.ts`) | a branch in **four parallel `when` blocks** in `WidgetActionService` |
+| **13 edit sites across 5 files** (`huddle.functions.ts` ×6, `HuddleView` ×3, `HuddleApp` ×2, `store.ts` ×1, `seed.ts` ×1) | **4 parallel edit sites** — three `when (action)` blocks (`WidgetActionService.kt:34/43/55`) + the companion constant list |
 | a new `if (m.x) <XRow/>` in the renderer | new provider class + manifest `<receiver>` + `widget_*_info.xml` + layouts |
 
 **Decisions taken (user, 2026-08-25):**
