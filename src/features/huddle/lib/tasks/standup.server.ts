@@ -29,7 +29,8 @@ function agentName(id: string | null): string {
   return (id && AGENT_BY_ID[id as AgentId]?.name) || id || "the team";
 }
 
-function buildBrief(
+/** Exported for `scripts/blocked-line.test.mjs` — pure, so the id→name resolution is testable offline. */
+export function buildBrief(
   produced: { name: string; agentId: string | null; folder: string }[],
   movedToReview: { title: string; agent: string | null }[],
   blocked: { title: string; reason?: string; agent?: string | null }[],
@@ -52,8 +53,13 @@ function buildBrief(
     lines.push("", `Blocked pending YOUR input (${blocked.length}) — the team can't proceed without you:`);
     for (const b of blocked.slice(0, 6)) {
       // Owner clause appended AFTER each component is bounded, so a long title+reason can never slice
-      // the name off. `agentName` degrades to an ownerless line for a null/unknown id.
-      const who = b.agent ? agentName(b.agent) : "";
+      // the name off.
+      //
+      // Resolved through AGENT_BY_ID directly, NOT agentName(): that helper ends `|| id`, which is
+      // right for the other lists (a bare id still reads as a label there) but wrong here, where the
+      // string is rendered as a PERSON — "sam-trent-old needs you on this" tells the user to go talk
+      // to a slug. A stale or unknown id must degrade to an ownerless line instead.
+      const who = (b.agent && AGENT_BY_ID[b.agent as AgentId]?.name) || "";
       lines.push(
         `- "${b.title.slice(0, 100)}"${b.reason ? ` — ${b.reason.slice(0, 160)}` : ""}` +
           (who ? ` — ${who} needs you on this` : ""),

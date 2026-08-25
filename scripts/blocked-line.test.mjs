@@ -1,4 +1,6 @@
 import { renderBlockedLine } from "../src/features/huddle/lib/tasks/autowork.server.ts";
+import { buildBrief } from "../src/features/huddle/lib/tasks/standup.server.ts";
+import { AGENT_BY_ID } from "../src/features/huddle/data/agents.ts";
 let p=0,f=0; const t=(n,c,d="")=>{c?(p++,console.log("✅ "+n)):(f++,console.log("❌ "+n+" — "+d));};
 
 // AC-1.1 owner named
@@ -32,5 +34,29 @@ t("AC-1.6 mixed: unassigned stays ownerless", !/needs you on this/.test(lines[2]
 
 // AC-1.7 rejected phrasing
 t("AC-1.7 no label-style phrasing", !/owned by|assigned to|owner:/i.test(lines.join("\n")+a+b+d), "found");
+
+// --- AC-1.4 for real: exercise the id->name RESOLVER on BOTH surfaces, not a pre-resolved name.
+// The first version of this test passed `ownerName: undefined` straight in, so it never touched the
+// resolution step -- which is exactly where standup regressed (agentName() ends `|| id`, rendering a
+// stale slug as a person). A test that cannot fail on the real defect is not covering it.
+const REAL_ID = Object.keys(AGENT_BY_ID)[0];
+const REAL_NAME = AGENT_BY_ID[REAL_ID].name;
+
+const sReal = buildBrief([], [], [{title:"Alpha", reason:"needs you", agent:REAL_ID}], []);
+t("AC-1.4 standup: real id resolves to display name", sReal.includes(`${REAL_NAME} needs you on this`), sReal);
+const sStale = buildBrief([], [], [{title:"Alpha", reason:"needs you", agent:"sam-trent-old"}], []);
+t("AC-1.4 standup: stale id NOT rendered as a person", !sStale.includes("sam-trent-old needs you"), sStale);
+t("AC-1.4 standup: stale id degrades to ownerless", !/needs you on this/.test(sStale), sStale);
+t("AC-1.4 standup: stale id line keeps title+reason", sStale.includes("Alpha") && sStale.includes("needs you"), sStale);
+const sNull = buildBrief([], [], [{title:"Alpha", agent:null}], []);
+t("AC-1.4 standup: null assignee ownerless, no undefined", !/undefined|null/.test(sNull) && !/needs you on this/.test(sNull), sNull);
+
+// Same resolver contract on the autowork surface, via its documented call-site expression.
+const resolve = (id) => AGENT_BY_ID[id]?.name;
+t("AC-1.4 autowork: stale id resolves to undefined", resolve("sam-trent-old") === undefined, String(resolve("sam-trent-old")));
+const aStale = renderBlockedLine({title:"Alpha", reason:"r", ownerName:resolve("sam-trent-old")});
+t("AC-1.4 autowork: stale id degrades to ownerless", !/needs you on this/.test(aStale), aStale);
+const aReal = renderBlockedLine({title:"Alpha", reason:"r", ownerName:resolve(REAL_ID)});
+t("AC-1.4 autowork: real id resolves to display name", aReal.includes(`${REAL_NAME} needs you on this`), aReal);
 
 console.log(`\n${p}/${p+f} passed`); process.exit(f?1:0);

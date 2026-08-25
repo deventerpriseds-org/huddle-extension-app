@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, Menu, PanelRight, Settings } from "lucide-react";
 import { BoardView } from "./BoardView";
 import { ArtifactsView } from "./ArtifactsView";
@@ -19,7 +19,11 @@ import { useAuth } from "@/hooks/useAuth";
 import { getAllTurnUpdates } from "../lib/huddle.functions";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 
-
+/** Presence heartbeat while the user is watching. MUST stay below the server's PRESENCE_FRESH_MS
+ *  (`lib/tasks/turns.server.ts`), which is sized as this beat plus one beat of slack. Mirrored rather
+ *  than imported because that module is server-only — changing one without the other silently either
+ *  buzzes a present user or, worse, silences an absent one. */
+const PRESENCE_BEAT_MS = 7_500;
 
 export function HuddleApp() {
   useWorkspaceSync();
@@ -31,6 +35,12 @@ export function HuddleApp() {
   const sidebarCollapsed = useHuddleStore((s) => s.sidebarCollapsed);
   const contextPanelCollapsed = useHuddleStore((s) => s.contextPanelCollapsed);
   const toggleContextPanelCollapsed = useHuddleStore((s) => s.toggleContextPanelCollapsed);
+
+  // The backfill/heartbeat effect below intentionally does NOT depend on activeId — re-running it on
+  // every channel switch would restart the poll and reset its cursor. A ref hands it the current
+  // huddle without re-subscribing.
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
 
   // GLOBAL durable-turn back-fill — the comms invariant: a message lands in the channel, THEN a
   // notification relays it if you're away. Autonomous replies (grooming summary, blocker surface,
@@ -61,10 +71,18 @@ export function HuddleApp() {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
-    // Liveness for the server's reply away-gate. We stamp REAL interactions only — never the tick
-    // itself — because a backgrounded tab keeps running throttled timers, and a heartbeat that
-    // counted its own beats would report an abandoned tab as present forever. Seeded at 0 so a
-    // session that never gets touched is never mistaken for an attentive one.
+    // Liveness for the server's reply away-gate: we tell the server which huddle the user is watching,
+    // and it stamps its own clock. Three conditions must ALL hold, and each rules out a different way
+    // of looking present while being gone:
+    //   visible  — the tab is not backgrounded. This is the one that matters on a phone: switch apps
+    //              or lock the screen and the heartbeat stops mid-turn, which is the whole fix.
+    //   focused  — on desktop a covered window stays "visible", so without this, working in another
+    //              app beside an open Huddle window would silence every reply.
+    //   touched  — a tab left open on a desk overnight is visible and focused and nobody is there;
+    //              a real interaction within ATTENTION_MS is what separates present from abandoned.
+    // Deliberately generous (5 min): this is not "actively typing", it is "still at the machine".
+    // Reading and thinking without touching anything is normal, and must not trigger a phone buzz.
+    const ATTENTION_MS = 5 * 60_000;
     let lastInteractionMs = 0;
     const markInteraction = () => {
       lastInteractionMs = Date.now();
@@ -73,9 +91,16 @@ export function HuddleApp() {
     for (const ev of INTERACTION_EVENTS) {
       window.addEventListener(ev, markInteraction, { passive: true, capture: true });
     }
+    const isWatching = () =>
+      typeof document !== "undefined" &&
+      document.visibilityState === "visible" &&
+      document.hasFocus() &&
+      Date.now() - lastInteractionMs < ATTENTION_MS;
 
     const doPoll = async () => {
-      const { turns } = await getAllTurnUpdates({ data: { caller, sinceMs: cursor, lastInteractionMs } });
+      // Absent when not watching — the server reads that as "away", which is the safe direction.
+      const watchingHuddleId = isWatching() ? (activeIdRef.current ?? undefined) : undefined;
+      const { turns } = await getAllTurnUpdates({ data: { caller, sinceMs: cursor, watchingHuddleId } });
       const add = useHuddleStore.getState().addAgentMessage;
       const upsert = useHuddleStore.getState().upsertAgentMessage;
       for (const t of turns as {
@@ -149,20 +174,17 @@ export function HuddleApp() {
       });
     };
     // Poll fast until hydrated, then settle to 30s; also on focus/return so an away message appears.
-    // While the user is ACTIVELY interacting we poll at 10s instead — not to see messages sooner, but
-    // because this poll is what carries liveness, and the server's freshness window is 30s. On a 30s
-    // cadence the stamp could be ~30s old the moment it lands, so someone sitting right there would
-    // read as away and get a redundant buzz. 10s keeps a genuinely-present user comfortably inside the
-    // window; once they stop touching anything the cadence relaxes and the stamp ages out on its own,
-    // which is precisely the "they left" signal we want.
-    const ACTIVE_POLL_MS = 10_000;
+    // While the user is watching we beat at PRESENCE_BEAT_MS instead — not to see messages sooner, but
+    // because this poll is what carries liveness and the server's freshness window is sized off this
+    // beat. The moment they stop watching the beat stops entirely (isWatching() gates the payload AND
+    // the cadence), so the row ages out a few seconds later — well inside a 19-24s turn, which is
+    // exactly the send-then-walk-away case that has to buzz.
     const IDLE_POLL_MS = 30_000;
     const tick = () => {
       if (stopped) return;
       const hydrated = isWorkspaceHydrated();
       if (hydrated) safePoll();
-      const active = Date.now() - lastInteractionMs < IDLE_POLL_MS;
-      timer = setTimeout(tick, hydrated ? (active ? ACTIVE_POLL_MS : IDLE_POLL_MS) : 1_500);
+      timer = setTimeout(tick, hydrated ? (isWatching() ? PRESENCE_BEAT_MS : IDLE_POLL_MS) : 1_500);
     };
     const onVisible = () => {
       if (document.visibilityState === "visible") {

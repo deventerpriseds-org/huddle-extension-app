@@ -6315,13 +6315,22 @@ async function executeClaimedTurn(record: {
     //
     // So `foreground` is now only the first half: it still scopes this suppression to turns the user
     // themself started while watching. The second half asks the question at DELIVERY time — are they
-    // still here? — and only then is the push redundant. `isUserPresent` fails open (any doubt → false
-    // → push), so the failure mode is a duplicate buzz, never another swallowed reply.
+    // still watching THIS huddle? — and only then is the push redundant. `isUserPresent` fails open
+    // (any doubt → false → push), so the failure mode is a duplicate buzz, never a swallowed reply.
+    //
+    // Wrapped in its own try/catch deliberately: this whole block sits inside the handler whose catch
+    // calls failTurn, and a throw HERE would discard a reply that has already been generated and
+    // persisted — trading the notification bug for a much worse one. Any failure means "push".
     const foreground = (record.payload as { foreground?: boolean })?.foreground === true;
+    const turnHuddleId = String((record.payload as { huddleId?: string })?.huddleId ?? "");
     let stillHere = false;
-    if (foreground && record.user_email) {
-      const { isUserPresent } = await import("./tasks/turns.server");
-      stillHere = await isUserPresent(record.user_email);
+    if (foreground && record.user_email && turnHuddleId) {
+      try {
+        const { isUserPresent } = await import("./tasks/turns.server");
+        stillHere = await isUserPresent(record.user_email, turnHuddleId);
+      } catch {
+        stillHere = false;
+      }
     }
     const wantsPush = notifyLevel !== "batch" && notifyLevel !== "silent" && !(foreground && stillHere);
     const lead = result.replies?.[0];
@@ -6563,11 +6572,11 @@ const AllTurnUpdatesInput = z.object({
     .object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() })
     .optional(),
   sinceMs: z.number().optional(),
-  // Liveness piggyback (see the away-gate in executeClaimedTurn). The client's OWN timestamp of its
-  // last real interaction — NOT "now". A backgrounded tab still fires throttled timers, so recording
-  // arrival time would read every open-but-abandoned tab as "the user is here" and re-break the very
-  // thing this fixes. Carried on the poll that already runs, so presence costs no extra request.
-  lastInteractionMs: z.number().optional(),
+  // Liveness piggyback (see the away-gate in executeClaimedTurn): the huddle the user is watching
+  // RIGHT NOW. Sent only while the tab is visible, focused and recently touched — the client owns
+  // that judgement, the server just stamps its own clock on arrival. Absent = "not watching", which
+  // is the safe reading. Carried on the poll that already runs, so presence costs no extra request.
+  watchingHuddleId: z.string().optional(),
 });
 export const getAllTurnUpdates = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => AllTurnUpdatesInput.parse(raw))
@@ -6601,9 +6610,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
     if (!email) return { turns: empty };
     const { getUserTurnsSince, recordUserPresence } = await import("./tasks/turns.server");
     // Best-effort, non-blocking: a failed presence write only means a redundant push later.
-    if (typeof data.lastInteractionMs === "number" && data.lastInteractionMs > 0) {
-      void recordUserPresence(email, data.lastInteractionMs);
-    }
+    if (data.watchingHuddleId) void recordUserPresence(email, data.watchingHuddleId);
     const rows = await getUserTurnsSince(email, data.sinceMs ?? 0);
     const turns: BackfillTurn[] = rows.map((t) => ({
       id: t.id,

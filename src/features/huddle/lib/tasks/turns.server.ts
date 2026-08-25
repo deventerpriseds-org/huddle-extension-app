@@ -99,17 +99,22 @@ CREATE INDEX IF NOT EXISTS reminders_userid_idx  ON chat.reminders(user_id);
 CREATE INDEX IF NOT EXISTS reminders_due_idx    ON chat.reminders (status, due_at);
 CREATE INDEX IF NOT EXISTS reminders_huddle_idx ON chat.reminders (huddle_id, fired_at DESC);
 
--- Liveness for the reply-push away-gate. ONE row per user, app-wide (deliberately not per-huddle).
--- last_interaction_ms is the client's OWN timestamp of the last real interaction (pointer/key/scroll/
--- tab-focus) — NOT the time the ping arrived. That distinction is the whole point: a backgrounded tab
--- keeps firing throttled timers, so "a request arrived" would read as "the user is here" and reinstate
--- the very bug this fixes. Storing the client's interaction time means an idle-but-open tab goes stale
--- on its own.
+-- Liveness for the reply-push away-gate: "is the user watching THIS huddle right now?"
+--
+-- seen_at is stamped by the SERVER (now()), never by the client — so no clock skew, no future
+-- timestamp that could pin presence on. That is only safe because the CLIENT decides whether to send
+-- the heartbeat at all: it beats solely while the tab is visible AND focused AND recently touched.
+-- A backgrounded tab keeps firing throttled timers, so an ungated ping would read every abandoned tab
+-- as present — the gate lives on the sending side, which is what makes a server stamp honest here.
+--
+-- watching_huddle scopes it: activity in one DM must not silence a reply landing in another channel.
 CREATE TABLE IF NOT EXISTS chat.user_presence (
-  user_email          TEXT PRIMARY KEY,
-  last_interaction_ms BIGINT NOT NULL,
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  user_email      TEXT PRIMARY KEY,
+  watching_huddle TEXT,
+  seen_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE chat.user_presence ADD COLUMN IF NOT EXISTS watching_huddle TEXT;
+ALTER TABLE chat.user_presence ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ NOT NULL DEFAULT now();
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -555,30 +560,43 @@ export async function getFiredRemindersSince(huddleId: string, sinceMs: number):
 }
 
 /**
- * How recently the user must have TOUCHED the app for a reply push to be suppressed as redundant.
- * Turns here routinely run 19-24s, so this is deliberately shorter than a turn: hit send, look away,
- * and by the time the reply lands you are correctly treated as away.
+ * Heartbeat cadence, and the staleness window it implies.
+ *
+ * The window is sized off the HEARTBEAT, not off how long a turn takes — getting that backwards is
+ * exactly how the first attempt at this failed review. It was set to 30s "so it's shorter than a
+ * turn", but turns run 19-24s, so a user who sent a message and immediately walked away still read as
+ * present when their reply landed at ~20s: the headline bug, unfixed, behind a fix that looked right.
+ *
+ * Sized off the heartbeat it is unambiguous. A watching client re-stamps every PRESENCE_BEAT_MS, so
+ * its row is never older than one beat plus request latency; one beat of slack covers that. A client
+ * that stops watching stops stamping, and crosses the window a few seconds later — well before any
+ * turn finishes. The window must stay comfortably BELOW the shortest realistic turn; widening it back
+ * toward turn length is precisely the regression this comment exists to prevent.
  */
-export const PRESENCE_FRESH_MS = 30_000;
+export const PRESENCE_BEAT_MS = 7_500;
+export const PRESENCE_FRESH_MS = 15_000;
 
 /**
- * Record the client's own last-interaction timestamp. Called from the existing all-huddle poll — this
- * adds no new endpoint and no new polling.
+ * Record that the user is watching `huddleId` RIGHT NOW. Called from the existing all-huddle poll —
+ * no new endpoint, no new polling.
  *
- * Non-throwing BY DESIGN: presence is a nice-to-have that only ever SUPPRESSES a notification. If this
- * write fails the row goes stale, `isUserPresent` returns false, and the push fires. Failing loud here
- * would risk breaking the poll that also back-fills messages, to protect a de-noising optimisation.
+ * The caller (the browser) is responsible for only calling this while genuinely watching; the server
+ * stamps its own clock. See the table comment for why that split is the safe one.
+ *
+ * Non-throwing BY DESIGN: presence only ever SUPPRESSES a notification. If this write fails the row
+ * goes stale, `isUserPresent` returns false, and the push fires. Failing loud here would risk breaking
+ * the poll that also back-fills messages, to protect a de-noising optimisation.
  */
-export async function recordUserPresence(userEmail: string, lastInteractionMs: number): Promise<void> {
+export async function recordUserPresence(userEmail: string, huddleId: string | null): Promise<void> {
   try {
     await ensureBootstrapped();
     await getPool().query(
-      `INSERT INTO chat.user_presence (user_email, last_interaction_ms, updated_at)
+      `INSERT INTO chat.user_presence (user_email, watching_huddle, seen_at)
             VALUES ($1, $2, now())
        ON CONFLICT (user_email) DO UPDATE
-            SET last_interaction_ms = GREATEST(chat.user_presence.last_interaction_ms, EXCLUDED.last_interaction_ms),
-                updated_at = now()`,
-      [userEmail, Math.max(0, Math.floor(lastInteractionMs))],
+            SET watching_huddle = EXCLUDED.watching_huddle,
+                seen_at = now()`,
+      [userEmail, huddleId || null],
     );
   } catch {
     /* presence is best-effort — see the fail-open note above */
@@ -586,30 +604,33 @@ export async function recordUserPresence(userEmail: string, lastInteractionMs: n
 }
 
 /**
- * Was the user interacting with the app within PRESENCE_FRESH_MS?
+ * Is the user watching `huddleId` right now (heartbeat within PRESENCE_FRESH_MS)?
  *
- * FAILS OPEN (returns false = "treat as away" = push). Every uncertain path — no row, unreadable row,
- * DB error, clock skew making the stamp look futuristic — resolves to "notify them". A redundant buzz
- * is a minor annoyance; a silently swallowed reply is the bug this exists to fix, and it is the one
- * the user actually lost a message to. Do NOT invert this to fail-closed to reduce noise: that is the
- * opposite of the confirm-intent gate's fail-CLOSED rule next door, and copying that precedent here
- * would silently restore the outage.
+ * Scoped to the huddle on purpose: sitting in one DM must not silence a reply arriving in another
+ * channel — they would not see that one in-app, which is the entire justification for suppressing.
+ *
+ * FAILS OPEN (returns false = "treat as away" = push). Every uncertain path — no row, unreadable age,
+ * a different huddle, a DB error — resolves to "notify them". A redundant buzz is a minor annoyance; a
+ * silently swallowed reply is the bug this exists to fix, and the one the user actually lost a message
+ * to. Do NOT invert this to fail-closed to reduce noise: that is the opposite of the confirm-intent
+ * gate's fail-CLOSED rule next door, and copying that precedent here would restore the outage.
+ *
+ * Age is computed in SQL so both sides of the comparison come from the same clock.
  */
-export async function isUserPresent(userEmail: string): Promise<boolean> {
+export async function isUserPresent(userEmail: string, huddleId: string): Promise<boolean> {
+  if (!userEmail || !huddleId) return false;
   try {
     await ensureBootstrapped();
-    const res = await getPool().query<{ last_interaction_ms: string }>(
-      `SELECT last_interaction_ms FROM chat.user_presence WHERE user_email = $1`,
-      [userEmail],
+    const res = await getPool().query<{ age_ms: string }>(
+      `SELECT EXTRACT(EPOCH FROM (now() - seen_at)) * 1000 AS age_ms
+         FROM chat.user_presence
+        WHERE user_email = $1 AND watching_huddle = $2`,
+      [userEmail, huddleId],
     );
-    const raw = res.rows[0]?.last_interaction_ms;
+    const raw = res.rows[0]?.age_ms;
     if (raw === undefined || raw === null) return false;
-    const last = Number(raw);
-    if (!Number.isFinite(last) || last <= 0) return false;
-    const age = Date.now() - last;
-    // A negative age means the client's clock is ahead of ours. Treat it as away rather than trusting
-    // a future timestamp, which would otherwise suppress pushes indefinitely.
-    if (age < 0) return false;
+    const age = Number(raw);
+    if (!Number.isFinite(age) || age < 0) return false;
     return age < PRESENCE_FRESH_MS;
   } catch {
     return false;
