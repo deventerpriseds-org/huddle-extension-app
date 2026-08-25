@@ -1,5 +1,25 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-08-14
+Last updated: 2026-08-25
+
+## Design-token trap: `bg-surface` + `border-hairline` is INVISIBLE in light mode — never use it for controls (2026-08-25, FIXED + DEPLOYED 4731461, awaiting user live re-test)
+The confirm-ask action row (Confirm/Revise/Backlog/Archive) was unreadable — user: "they are there it was
+just easy to miss with the white on white." **Not a rendering bug; the tokens genuinely are near-identical:**
+`--surface: oklch(1 0 0)` (pure white) sitting on `--background: oklch(0.985 …)` behind
+`--hairline: oklch(0.90 …)` = a measured **1.31:1** border-vs-fill contrast in light mode (1.28:1 dark).
+**Rule going forward:** `bg-surface`+`border-hairline` is fine for large passive panels, but for any
+INTERACTIVE control it fails — use `bg-muted` + `border-foreground/65` (the new `CONFIRM_ASK_BTN` constant
+in `HuddleView.tsx` is the reference implementation; it also covers the resolved "Handled" badge).
+**Two methodology lessons worth keeping:**
+1. **Measure rendered PIXELS, not CSS strings.** Parsing `getComputedStyle` colors gives `oklch()`/`oklab()`
+   strings — naive "first 3 numbers" parsing produces silently garbage contrast ratios (it did here, twice).
+   Screenshot the element with the REAL compiled CSS and sample pixels instead.
+2. **Tailwind only compiles utilities that literally appear in scanned source.** Testing `border-foreground/50`
+   in a throwaway HTML file measured the `*{border-color:var(--color-border)}` FALLBACK, not the intended
+   color — the numbers looked fine and were meaningless. To A/B opacity levels, use inline
+   `color-mix(in oklab, var(--foreground) N%, transparent)` styles, which bypass Tailwind generation entirely.
+**Calibration data (measured, light/dark border-vs-fill):** old hairline 1.31/1.28 · /35 2.17/2.92 ·
+/45 2.82/3.94 · **/65 5.17/6.64**. WCAG's UI-component-boundary minimum is **3:1**, so /35 and /45 both FAIL
+in light mode — a "looks better than before" styling change can still be below standard. Verify against 3:1.
 
 ## STANDING RULE (user, 2026-08-14): always pre-mortem — anticipate what could go wrong AS PART OF THE PLAN
 For every plan, before building, include an explicit "what could go wrong" section (failure modes + how each is

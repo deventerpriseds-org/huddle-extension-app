@@ -1,7 +1,56 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-08-06 (three fixes live + Option-1 Postgres-MCP deploy workflow added; merged main's memory-mode/ceremony build)
+Last updated: 2026-08-25 (ACT-59 confirm-ask button contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
 
 ## LIVE STATUS BOARD (surface this every check-in)
+
+### ⏸️ ACT-60: Chat pane has ~388px of phantom scrollable height (viewport-height dependent) — PARKED
+**Parked 2026-08-25 at the user's request** ("park the scroll issue… I have to focus on other items until
+my credits restart on Wednesday"). Diagnosis is DONE and reproducible; no fix attempted, no code changed.
+**Symptom (user-reported + screenshot):** the whole chat — composer included — can be scrolled up, as if an
+outer page-level scrollbar exists on top of the transcript's own. The screenshot shows a second scrollbar on
+the far right and a large empty area below the composer.
+**Measured live** (Playwright vs the deployed SWA, `dm-iris-chase`, `verify-uat.yml` +
+`.claude/skills/test-agent-serverfn/scripts/scroll-overflow-diag.mjs` — committed, re-runnable):
+- **680px-tall viewport → `documentElement.scrollHeight` 1068 vs `clientHeight` 680 = 388px of real
+  overflow** (reproduced across 2 runs, stable over 6 repeated scroll steps).
+- **1117px-tall viewport → `scrollHeight === clientHeight === innerHeight` exactly. No overflow at all.**
+**What was RULED OUT (so the next session doesn't re-derive it):**
+- NOT a stray element: every element in the DOM was walked; **zero** elements sit outside a clipped
+  (`overflow:auto/hidden`) ancestor while extending past the viewport. `document.body`'s direct children are
+  just `<script>` (0px), the app root (exactly viewport height), and an empty `<section>` (0px).
+- NOT app JS: nothing in `src/` writes `documentElement`/`body` height or reads viewport size dynamically.
+- NOT html/body CSS: `styles.css` sets no height/overflow on html or body.
+- The transcript's own `flex-1 overflow-y-auto` scroller is behaving correctly and is NOT the cause.
+**Leading hypothesis (INFERENCE — not proven):** a viewport-height-dependent quirk in how `h-dvh` resolves
+on the app root (`HuddleApp.tsx:190`, `flex h-dvh w-full overflow-hidden`), plausibly interacting with
+`interactive-widget=resizes-content` in the viewport meta (`src/routes/__root.tsx:83`, added by commit
+b09bccd for the mobile-composer keyboard fix). **Untested** — proving it needs an A/B of that meta value.
+**Cheapest next step:** ask the user their real window height when the bug shows (or have them make the
+window taller and see if it vanishes) — that alone confirms/kills the height-dependence before any code
+change. Then A/B the viewport meta.
+**Do NOT** start by hunting for a runaway element — that has already been done exhaustively and found nothing.
+
+### ✅ ACT-59: Confirm-ask buttons illegible ("white on white") — FIXED + DEPLOYED 2026-08-25
+**Reported by the user** from a live screenshot: Iris's confirm-intent reach-out rendered its
+Confirm/Revise/Backlog/Archive row nearly invisibly — "they are there it was just easy to miss with the
+white on white." User proposed "a gray with black outline."
+**Root cause (ground-truthed in `styles.css`, not guessed):** the row used `bg-surface` + `border-hairline`.
+In light mode `--surface: oklch(1 0 0)` (pure white) on `--background: oklch(0.985 …)` behind
+`--hairline: oklch(0.90 …)` — a **1.31:1** border-vs-fill contrast. Effectively invisible.
+**Fix (commit 4731461, `HuddleView.tsx`):** one shared `CONFIRM_ASK_BTN` constant now drives all four
+buttons AND the resolved "Handled" badge — `bg-muted` + `border-foreground/65`, hover `/85`.
+**`/65` was chosen by MEASURING rendered pixels, not by eye** (rendered the real compiled CSS in Chromium
+and sampled the border/fill pixels across opacity steps):
+| border-vs-fill | light | dark |
+|---|---|---|
+| old hairline | 1.31 | 1.28 |
+| /35 | 2.17 | 2.92 |
+| /45 | 2.82 | 3.94 |
+| **/65 (shipped)** | **5.17** | **6.64** |
+WCAG's minimum for UI-component boundaries is **3:1** — the first attempt (`/35`) looked better but still
+FAILED that bar in light mode, which is why it went to `/65`. Tokens are theme-aware so dark mode improved too.
+**Status:** merged to `main` (ff), `deploy-swa.yml` run 32802502078 **success** on head_sha `4731461`.
+**NOT yet user-confirmed live** — per the standing rule, awaiting the user's own re-test in their browser.
 
 ### 🔨 ACT-huddle-47: Proactive-capture shared directive (agents ACT on relayed info)
 **Requested:** 2026-08-12. User built (dictated) the full per-agent "information-handover → implied action"
