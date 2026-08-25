@@ -1271,6 +1271,43 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+**ACT-63 — the away-gate asks the wrong question at the wrong TIME (2026-08-25).** Read this before
+touching notification delivery. The reply push gate lived on `payload.foreground`, a **send-time**
+snapshot of "was this huddle on screen when they hit send". A turn runs 19-24s, so send-and-walk-away
+produced a silent in-app reply and no buzz. The user's own report is what pinned the diagnosis: they
+still got **reach-outs** but not **replies** — agent-initiated turns (blockers, standups, follow-ups)
+never set `foreground`, so they were never gated at all. Only `enqueueHuddleTurn` sets it, of 13
+`enqueueTurn` call sites. Regression dates to `fee00cc` (2026-08-08).
+Now: `foreground` (send-time) **AND** `isUserPresent()` (delivery-time) must both hold to suppress.
+- `chat.user_presence` is one row per user, **app-wide, not per-huddle**, holding the **client's own**
+  last-interaction stamp. Never store the ping's arrival time — a backgrounded tab keeps firing
+  throttled timers, so arrival-time would read every abandoned tab as present and rebuild the bug.
+- `isUserPresent` **FAILS OPEN** (any doubt → false → push). This is the deliberate OPPOSITE of the
+  confirm-intent gate's fail-CLOSED rule sitting right next to it in the same area of the codebase.
+  Do not "make it consistent" — a duplicate buzz is an annoyance, a swallowed reply is the outage.
+- Liveness rides the existing all-huddle backfill poll; the poll relaxes 10s → 30s when untouched, so
+  an idle tab ages out of the 30s window by itself. No new endpoint, no new sender.
+**Status: DEPLOYED** — `6dccf41` on `main`, deploy run 32900461818 `success` (2026-08-25). NOT yet
+user-confirmed live; the real proof is the user sending a message, walking away, and getting the buzz.
+
+**Two verifier rounds, and BOTH disproved the fix — read this before trusting a timing gate again.**
+- Round 1 killed the first attempt: `PRESENCE_FRESH_MS` was 30s with a comment claiming it was
+  "deliberately shorter than a turn", while turns measure 19-24s. Send → walk away → 20s reply still
+  read as present. The headline bug, unfixed, behind a fix that read as correct.
+- Round 2 killed the rework: `ATTENTION_MS` was **5 minutes**, and sending a message is itself a
+  keydown — so a desktop walk-away stayed "present" for five minutes. Same outage, third time.
+- The pattern in both: **a window sized by guessing at turn length instead of by the mechanism that
+  refreshes it.** The window must be tied to the HEARTBEAT (beat + slack), and attention must be
+  SHORTER than a turn or it cannot separate "still here" from "gone" at all.
+Final shape: 5s beat / 12s freshness / 10s attention, `pointermove` tracked (without it a user READING
+emits no events, so any short window buzzes them), plus an explicit **leave-beacon** on
+visibilitychange→hidden and blur — the only deterministic signal, and the one covering the reported
+phone/app-switch case. Honest residual, in the code: a focused desktop window offers no reliable
+"left the room" signal, so that path still waits out ~22s and a fast turn can beat it.
+Guards now in place: `npm run test:presence` imports the real constants AND parses the real client
+behaviour out of HuddleApp.tsx (the first version hardcoded both, which is exactly why it printed
+ALL PASS against broken code); proven to fail against each of the four defects it covers.
+
 **CURRENT TASKS (2026-07-31):**
 - **ACT-huddle-4 — Voice overhaul (OpenAI Realtime WebRTC):** IMPLEMENTATION COMPLETE, VERIFIER 19/19 PASS, mid-merge into main.
   NOTE: a concurrent session also closed "ACT-huddle-4" for a server-side kickNextChunk retry fix (`94cfc02` on main).
@@ -1456,6 +1493,37 @@ user to test in the deployed app. NOT calling fixed until user confirms AC-12 li
 **Also: main's `94cfc02` (ACT-huddle-4 server-side kickNextChunk retry) and this session's WebRTC client-side pipeline are COMPLEMENTARY, not conflicting. Both belong in main.**
 
 ## Hardening (append)
+
+### 2026-08-25 — parked approved, verified work instead of shipping it (ACT-63)
+**Mistake:** the user reported two bugs, approved both fixes explicitly ("approved in both"), and the
+session then fixed them, ran two verifier rounds, and left the work unmerged for several turns while
+reporting "not deployed yet — I'll merge once you…". User: *"did you merge and apply your updates to
+make it live? please stop waiting for me to develop and deploy."*
+**Root cause — an instruction, not carelessness.** CLAUDE.md's confirm rule read "mandatory before
+anything that **deploys or changes live behavior**". That reads as "re-ask before shipping", which
+converts every approved fix into a fresh permission request, and a verifier finding a defect appears
+to re-open the question. The rule was written for the opposite failure (2026-08-01, unrequested
+build-and-ship) and over-generalised onto shipping.
+**Guardrail:** the rule is split into two explicitly-separate halves — gate the SCOPE (what to build),
+never the shipping (of what was already decided) — in BOTH this repo's CLAUDE.md and the org-wide
+block in `eds-claude-skills/CLAUDE.md`, which every session inherits. Shipping is now defined as part
+of doing the work: implement → verify → merge → confirm the deploy → report.
+
+### 2026-08-25 — a backtick inside BOOTSTRAP_SQL broke the build TWICE
+**Mistake:** quoting a column name with backticks inside a SQL **comment** terminates the surrounding
+template literal. The parse error points at the SQL text, not at the quoting, so it reads as a SQL
+problem. Cost a build cycle on each occurrence.
+**Guardrail:** `npm run test:presence` asserts `BOOTSTRAP_SQL` still parses as one literal and still
+contains its table — a deterministic check instead of remembering.
+
+### 2026-08-25 — a test that cannot disagree with the code is not a test
+**Mistake:** wrote a timing "test" that hardcoded the constants it was checking and modelled the
+client's behaviour rather than reading it. It printed ALL PASS against code that still swallowed the
+reported bug, and stayed green when the defective constant was restored.
+**Guardrail:** the suite now IMPORTS server constants and PARSES the client's real mechanisms out of
+the source, and every claim is mutation-tested — restore the defect, confirm the suite fails, restore
+the fix, confirm it passes. Applied to the blocked-line suite too, which had the same flaw (it passed
+a pre-resolved name in, so it never exercised the resolver that had actually regressed).
 - [2026-07-26] **MISTAKE: encoded "what the team can do" as a hand-written CAPABILITY PROMPT (prose) and
   had grooming GUESS "blocked" off a task title against it.** It drifted (under-claimed research/draft →
   researchable tasks marked blocked), was user-editable so a stale stored copy silently overrode the code,

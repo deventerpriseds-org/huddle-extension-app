@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, Menu, PanelRight, Settings } from "lucide-react";
 import { BoardView } from "./BoardView";
 import { ArtifactsView } from "./ArtifactsView";
@@ -19,7 +19,11 @@ import { useAuth } from "@/hooks/useAuth";
 import { getAllTurnUpdates } from "../lib/huddle.functions";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 
-
+/** Presence heartbeat while the user is watching. MUST stay below the server's PRESENCE_FRESH_MS
+ *  (`lib/tasks/turns.server.ts`), which is sized as this beat plus one beat of slack. Mirrored rather
+ *  than imported because that module is server-only — changing one without the other silently either
+ *  buzzes a present user or, worse, silences an absent one. */
+const PRESENCE_BEAT_MS = 5_000;
 
 export function HuddleApp() {
   useWorkspaceSync();
@@ -31,6 +35,15 @@ export function HuddleApp() {
   const sidebarCollapsed = useHuddleStore((s) => s.sidebarCollapsed);
   const contextPanelCollapsed = useHuddleStore((s) => s.contextPanelCollapsed);
   const toggleContextPanelCollapsed = useHuddleStore((s) => s.toggleContextPanelCollapsed);
+
+  // The backfill/heartbeat effect below intentionally does NOT depend on activeId — re-running it on
+  // every channel switch would restart the poll and reset its cursor. A ref hands it the current
+  // huddle without re-subscribing. Written in an effect, not during render: a render-phase ref write
+  // is not safe under concurrent rendering (a discarded render would still have mutated it).
+  const activeIdRef = useRef(activeId);
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
 
   // GLOBAL durable-turn back-fill — the comms invariant: a message lands in the channel, THEN a
   // notification relays it if you're away. Autonomous replies (grooming summary, blocker surface,
@@ -61,8 +74,65 @@ export function HuddleApp() {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
-    const doPoll = async () => {
-      const { turns } = await getAllTurnUpdates({ data: { caller, sinceMs: cursor } });
+    // Liveness for the server's reply away-gate: we tell the server which huddle the user is watching,
+    // and it stamps its own clock. Three conditions must ALL hold, and each rules out a different way
+    // of looking present while being gone:
+    //   visible  — the tab is not backgrounded.
+    //   focused  — on desktop a covered window stays "visible", so without this, working in another
+    //              app beside an open Huddle window would silence every reply.
+    //   attentive — a tab left open on a desk is visible and focused with nobody in front of it.
+    //
+    // ATTENTION_MS was 5 MINUTES, and that quietly re-created the original outage. Sending a message
+    // is itself a keydown, so "walked away right after sending" stayed inside the window for five
+    // minutes: the heartbeat kept beating to an empty chair and the reply push was swallowed exactly
+    // as before. The window has to be SHORTER than a turn or it cannot separate those two cases at all.
+    //
+    // 10s only works because pointermove is tracked too. Without it a user READING a reply emits no
+    // events whatsoever, so any short window would buzz them; with it, the ordinary micro-movement of
+    // someone at their desk keeps attention alive, while an empty chair produces nothing.
+    //
+    // Honest residual: on a focused desktop window the browser gives no reliable "user left the room"
+    // signal, so a walk-away is only caught once ATTENTION_MS + PRESENCE_FRESH_MS have elapsed (~22s).
+    // A fast turn can still finish inside that. That is why the explicit leave-beacon below matters —
+    // it is the deterministic path, and it covers the case actually reported (phone/app-switch).
+    const ATTENTION_MS = 10_000;
+    let lastInteractionMs = 0;
+    const markInteraction = () => {
+      const was = isWatching();
+      lastInteractionMs = Date.now();
+      // Re-arm the cadence. tick() picks its delay from isWatching() AT SCHEDULE TIME, so coming back
+      // after an idle stretch would otherwise sit out a 30s timer booked while you were away — no beat
+      // lands during the turn and a present user gets buzzed. Only re-arms on the false->true edge, so
+      // ordinary typing does not restart the timer on every keystroke.
+      if (!was && !stopped) armTick(0);
+    };
+    // pointermove is the difference between "reading" and "gone" — see ATTENTION_MS above. It only
+    // writes a timestamp (no work, no render), so the event rate is irrelevant.
+    const INTERACTION_EVENTS = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"] as const;
+    for (const ev of INTERACTION_EVENTS) {
+      window.addEventListener(ev, markInteraction, { passive: true, capture: true });
+    }
+    const isWatching = () => {
+      try {
+        return (
+          typeof document !== "undefined" &&
+          document.visibilityState === "visible" &&
+          document.hasFocus() &&
+          Date.now() - lastInteractionMs < ATTENTION_MS
+        );
+      } catch {
+        // Never let this throw: it is evaluated inside the tick that drives the cross-huddle back-fill,
+        // so an exception here would kill message recovery entirely, not just presence.
+        return false;
+      }
+    };
+
+    const doPoll = async (opts: { left?: boolean } = {}) => {
+      // Absent when not watching — the server reads that as "away", which is the safe direction.
+      const watchingHuddleId = opts.left || !isWatching() ? undefined : (activeIdRef.current ?? undefined);
+      const { turns } = await getAllTurnUpdates({
+        data: { caller, sinceMs: cursor, watchingHuddleId, presenceLeft: opts.left || undefined },
+      });
       const add = useHuddleStore.getState().addAgentMessage;
       const upsert = useHuddleStore.getState().upsertAgentMessage;
       for (const t of turns as {
@@ -141,23 +211,62 @@ export function HuddleApp() {
       });
     };
     // Poll fast until hydrated, then settle to 30s; also on focus/return so an away message appears.
+    // While the user is watching we beat at PRESENCE_BEAT_MS instead — not to see messages sooner, but
+    // because this poll is what carries liveness and the server's freshness window is sized off this
+    // beat. The moment they stop watching the beat stops entirely (isWatching() gates the payload AND
+    // the cadence), so the row ages out a few seconds later — well inside a 19-24s turn, which is
+    // exactly the send-then-walk-away case that has to buzz.
+    const IDLE_POLL_MS = 30_000;
+    // Single owner of the timer, so re-arming from an interaction can never leave two running.
+    const armTick = (delay: number) => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(tick, delay);
+    };
     const tick = () => {
       if (stopped) return;
       const hydrated = isWorkspaceHydrated();
       if (hydrated) safePoll();
-      timer = setTimeout(tick, hydrated ? 30_000 : 1_500);
+      armTick(hydrated ? (isWatching() ? PRESENCE_BEAT_MS : IDLE_POLL_MS) : 1_500);
     };
-    const onVisible = () => {
-      if (document.visibilityState === "visible") safePoll();
+    // Leaving is DETERMINISTIC — say so explicitly instead of waiting for a timeout to infer it.
+    // This is the strongest part of the gate and it covers the case actually reported: send a message,
+    // switch apps or lock the phone, walk off. Backgrounding fires visibilitychange, and blur covers
+    // the desktop alt-tab that leaves the tab "visible". One request clears the row, so the very next
+    // reply pushes with no dependence on beat/freshness timing at all.
+    // Fire-and-forget: if it never lands, ATTENTION_MS + PRESENCE_FRESH_MS still expire it. Worst case
+    // is the old timing behaviour, never a worse one.
+    const announceLeft = () => {
+      if (stopped || !isWorkspaceHydrated()) return;
+      void doPoll({ left: true }).catch(() => {
+        /* best-effort — the freshness window is the backstop */
+      });
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        // Returning to the tab IS an interaction — it is the moment the user is provably looking.
+        markInteraction();
+        safePoll();
+      } else {
+        announceLeft();
+      }
+    };
+    const onShow = () => {
+      markInteraction();
+      safePoll();
     };
     tick();
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("pageshow", onVisible);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pageshow", onShow);
+    window.addEventListener("blur", announceLeft);
     return () => {
       stopped = true;
       if (timer) clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("pageshow", onVisible);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pageshow", onShow);
+      window.removeEventListener("blur", announceLeft);
+      for (const ev of INTERACTION_EVENTS) {
+        window.removeEventListener(ev, markInteraction, { capture: true });
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, user?.username, user?.homeAccountId, user?.localAccountId]);

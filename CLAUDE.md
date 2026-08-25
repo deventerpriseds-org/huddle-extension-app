@@ -1,18 +1,38 @@
 # Huddle — working rules
 
-## Confirm the plan before building or deploying (hard rule — the user is firm on this)
-A small/specific ask is NOT license to expand it into a large build. When the user asks for one thing
-(e.g. "use the quality harness", "look at X"), do NOT turn it into a multi-feature build-and-ship
-without first stating the plan + scope and getting an **explicit go-ahead**. Mandatory before: anything
-that **deploys or changes live behavior**, multi-file/multi-feature building, or anything hard to
-reverse. Bias-to-action covers only reversible, non-destructive steps (reading, a read-only query) —
-not building and deploying changes the user didn't ask for. "I said I'd start and then did" is not
-confirmation. When in doubt, summarize what you're about to do and wait.
+## Confirm the SCOPE, never the shipping (hard rule — both halves matter)
+
+**The gate is on scope, not on deployment.** Two different failures, and conflating them caused the
+second one:
+
+**DO NOT expand scope without a go-ahead.** A small/specific ask is not license to build something
+larger. When the user asks for one thing ("use the quality harness", "look at X"), do not turn it
+into a multi-feature build-and-ship. State the plan + scope and get an **explicit go-ahead** first.
+"I said I'd start and then did" is not confirmation.
    *(2026-08-01: asked to USE the conversational-quality harness, the agent instead built AND deployed
    to prod — across many turns, unconfirmed — a mic-deaf fix, transcript persistence, forcer removal, a
    task-ownership guard, and a ceremony cross-talk change. "I don't know why you just pushed ahead and
    did this without confirming with me." Revert was then too risky (interleaved with another live
-   session), so the cost was permanent. Confirm first.)*
+   session), so the cost was permanent.)*
+
+**DO ship work that was already asked for, without asking again.** Once the user has requested or
+approved a change, carrying it to production is part of DOING it, not a separate decision needing its
+own permission. Implement → verify → merge to `main` → confirm the deploy succeeded → report. Do NOT
+park finished, verified work on a feature branch waiting for a "go ahead and deploy" that the user
+believes they already gave. Re-asking is not caution; it is the work not being done.
+   *(2026-08-25, ACT-63: two notification bugs the user explicitly reported AND explicitly approved
+   ("approved in both") were fixed, verified across two verifier rounds, and then left sitting unmerged
+   across several turns while the session reported "not deployed yet, I'll merge once you…". The user:
+   "did you merge and apply your updates to make it live? please stop waiting for me to develop and
+   deploy." The earlier version of THIS rule — which read "mandatory before anything that deploys or
+   changes live behavior" — is what produced that stall, by treating shipping approved work as an
+   unapproved act.)*
+
+**The distinction in one line:** ask before deciding WHAT to build; do not ask before shipping what
+was already decided. A verifier finding a defect means fix it and ship the fix — it does not convert
+approved work back into unapproved work. The genuine stop-and-ask cases remain: destructive or
+irreversible actions, changes that go outward to third parties, and real forks in intent where two
+readings would produce materially different work.
 
 ## Deploy funnel: deploys are AUTOMATIC on push to `main` (never a feature branch)
 

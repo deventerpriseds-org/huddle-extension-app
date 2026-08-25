@@ -1,8 +1,61 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-08-25 (ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
+Last updated: 2026-08-25 (ACT-63 two notification bugs DEPLOYED 6dccf41, awaiting user live-confirm; ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
+### ✅ ACT-63: Two notification bugs — blocker messages had no name; away replies never buzzed (2026-08-25)
+**Ask (user, verbatim):** *"Terry messaged me about a blocker but didn't mention who was blocked so I
+could work with them. also I went away after sending a message and her response didn't come as a
+notification while I was away. check the transcript."* Plus a phrasing steer — *"not blocked - owned
+by, but rather blocked who needs you, would be more natural"* — and a correctness challenge:
+*"#2 was working before and I still receive messages like reach outs from the members just not replies
+that were in progress when I went away."* Both fixes **approved** by the user before implementation.
+
+**Bug 1 — blocked-task messages named no one.** Every OTHER category the team surfaces (priorities,
+moved-to-review) carried the assignee; the blocked list dropped it, so the one item where the user most
+needs a person to go talk to went anonymous. Fixed in BOTH surfaces that render it:
+`renderBlockedLine()` (`lib/tasks/autowork.server.ts`) and `buildBrief()` (`lib/tasks/standup.server.ts`)
+now append `— <Name> needs you on this`, resolved to a display NAME from roster data (never an id).
+The clause is appended AFTER each component is length-bounded, so a long title can never slice the name
+off; a null/unknown assignee degrades to an ownerless line. Offline test: `scripts/blocked-line.test.mjs`
+(13/13). Commit `1f7a035`.
+
+**Bug 2 — the away-gate asked the wrong question at the wrong time.** The gate read
+`payload.foreground`, a **SEND-TIME** snapshot of "was this huddle on screen when they hit send". Turns
+run 19-24s, so hitting send and walking away meant the reply landed in-app with no push. This is
+precisely why the user still got reach-outs but not replies: agent-initiated turns (blockers, standups,
+reach-outs) never set `foreground` at all, so they were never gated. Regression dates to `fee00cc`
+(2026-08-08). `foreground` is now only the first half of the gate — it still scopes suppression to
+turns the user themself started while watching — and the second half asks at **DELIVERY** time whether
+they are still there. Commit `ca4d459`:
+- `chat.user_presence` — one row per user, **app-wide** (deliberately not per-huddle). Stores the
+  **client's own** last-interaction timestamp, never the ping's arrival time: a backgrounded tab keeps
+  firing throttled timers, so recording arrival would read every abandoned tab as present.
+- `isUserPresent()` **FAILS OPEN** — no row / bad row / DB error / clock skew → `false` → push. The
+  failure mode is a duplicate buzz, never another swallowed reply. Deliberately the OPPOSITE of the
+  confirm-intent gate's fail-CLOSED rule next door; copying that precedent here would restore the outage.
+- Liveness rides the **existing** all-huddle backfill poll (`getAllTurnUpdates` + one optional field) —
+  no new endpoint, no new request. Client stamps real interactions only (pointerdown/keydown/wheel/
+  touchstart/tab-visible) and the poll relaxes 10s → 30s once they stop, so an idle tab ages out of the
+  30s freshness window on its own.
+
+**Integration trace:** the ONE delivery boundary every finished turn funnels through
+(`executeClaimedTurn`'s push block). Upstream producers: 13 `enqueueTurn` call sites, only
+`enqueueHuddleTurn` sets `foreground` — confirmed, so agent-initiated turns are untouched by design.
+Downstream consumer: the single `invokeJourneyTool({toolName:"send_push"})` call, unchanged.
+`notify:"batch"`/`"silent"` suppression unchanged. EXTENDS the existing gate and the existing poll;
+one new table, no new sender and no parallel push path (standing rule: piggyback journey's `send_push`).
+
+**Status: DEPLOYED** — `6dccf41` on `main`, deploy run 32900461818 conclusion `success` (2026-08-25).
+Two independent verifier rounds; BOTH disproved the fix before it was right (see memory.md). Final:
+5s beat / 12s freshness / 10s attention + pointermove + an explicit leave-beacon on tab-hide and blur.
+Offline gates: `npm run test:blocked` 21/21, `npm run test:presence` 18/18, `test:router` 20/20 — all
+mutation-proven to fail against the defects they cover.
+**NOT user-confirmed live.** Bug 2's real proof is the user sending a message, walking away, and
+getting the buzz; no sandbox can produce that. Honest residual documented in code: a focused desktop
+window gives no reliable "left the room" signal, so that path waits out ~22s and a fast turn can beat
+it — phone/app-switch (the reported case) is deterministic via the beacon.
+Reports: `.claude/VERIFY-notification-fixes.md`, `.claude/VERIFY-rework.md`. ACs: `.claude/AC-notification-fixes.md`.
 ### ✅ ACT-63: setup.sh applied live AGAIN — gate absent for the 3rd time; now v14 (2026-08-25)
 **Ask:** "run the eds skills repo setup sh if the ccr didn't... then get ready to add a widget
 ability to the chat stream".

@@ -6408,12 +6408,35 @@ async function executeClaimedTurn(record: {
     // "batch". A real blocker the agent surfaces is tagged "push". The channel choice lives with the
     // side that KNOWS the intent (the enqueuer), not a fragile keyword classifier here.
     const notifyLevel = String((record.payload as { notify?: string })?.notify ?? "push");
-    // Away-gate: if the user was foregrounded and viewing THIS huddle when they sent the turn, they'll
-    // see the reply in-app via the live poll — a phone push would just duplicate it. Suppress the reply
-    // push in that case. Cron-backstop / agent-initiated turns don't set foreground → push still fires
-    // when the user is actually away. (Reminders/alarms are a separate path and always deliver.)
+    // Away-gate — TWO conditions, and the second one is the fix for a real outage.
+    //
+    // `foreground` is a SEND-TIME snapshot: it says the user had this huddle on screen when they hit
+    // send. That was the whole gate, and it was wrong, because a turn here runs 19-24s — plenty of time
+    // to hit send and walk away. The reply then landed in-app with no push, so the user came back to a
+    // message they were never told about. Agent-initiated turns (blocker surfaces, standups, reach-outs)
+    // never set `foreground`, which is exactly why THOSE kept buzzing while replies went silent — the
+    // asymmetry the user reported.
+    //
+    // So `foreground` is now only the first half: it still scopes this suppression to turns the user
+    // themself started while watching. The second half asks the question at DELIVERY time — are they
+    // still watching THIS huddle? — and only then is the push redundant. `isUserPresent` fails open
+    // (any doubt → false → push), so the failure mode is a duplicate buzz, never a swallowed reply.
+    //
+    // Wrapped in its own try/catch deliberately: this whole block sits inside the handler whose catch
+    // calls failTurn, and a throw HERE would discard a reply that has already been generated and
+    // persisted — trading the notification bug for a much worse one. Any failure means "push".
     const foreground = (record.payload as { foreground?: boolean })?.foreground === true;
-    const wantsPush = notifyLevel !== "batch" && notifyLevel !== "silent" && !foreground;
+    const turnHuddleId = String((record.payload as { huddleId?: string })?.huddleId ?? "");
+    let stillHere = false;
+    if (foreground && record.user_email && turnHuddleId) {
+      try {
+        const { isUserPresent } = await import("./tasks/turns.server");
+        stillHere = await isUserPresent(record.user_email, turnHuddleId);
+      } catch {
+        stillHere = false;
+      }
+    }
+    const wantsPush = notifyLevel !== "batch" && notifyLevel !== "silent" && !(foreground && stillHere);
     const lead = result.replies?.[0];
     if (lead && wantsPush) {
       const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
@@ -6655,6 +6678,14 @@ const AllTurnUpdatesInput = z.object({
     .object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() })
     .optional(),
   sinceMs: z.number().optional(),
+  // Liveness piggyback (see the away-gate in executeClaimedTurn): the huddle the user is watching
+  // RIGHT NOW. Sent only while the tab is visible, focused and recently touched — the client owns
+  // that judgement, the server just stamps its own clock on arrival. Absent = "not watching", which
+  // is the safe reading. Carried on the poll that already runs, so presence costs no extra request.
+  watchingHuddleId: z.string().optional(),
+  // Explicit "I just left" (tab hidden / window blurred). Deterministic, so it beats waiting for the
+  // freshness window to expire — the next reply pushes immediately instead of depending on timing.
+  presenceLeft: z.boolean().optional(),
 });
 export const getAllTurnUpdates = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => AllTurnUpdatesInput.parse(raw))
@@ -6687,7 +6718,11 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
       email = data.caller.entra_email ?? null;
     }
     if (!email) return { turns: empty };
-    const { getUserTurnsSince } = await import("./tasks/turns.server");
+    const { getUserTurnsSince, recordUserPresence } = await import("./tasks/turns.server");
+    // Best-effort, non-blocking: a failed presence write only means a redundant push later.
+    // `presenceLeft` wins over any huddle id — leaving is an assertion, watching is only a claim.
+    if (data.presenceLeft) void recordUserPresence(email, null);
+    else if (data.watchingHuddleId) void recordUserPresence(email, data.watchingHuddleId);
     const rows = await getUserTurnsSince(email, data.sinceMs ?? 0);
     const turns: BackfillTurn[] = rows.map((t) => ({
       id: t.id,
