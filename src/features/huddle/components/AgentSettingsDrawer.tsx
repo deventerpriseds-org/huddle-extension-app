@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   X,
   RefreshCw,
@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   PlusCircle,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -15,7 +16,13 @@ import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useBackendsStore, ASSISTANT_IDS } from "../lib/agent-backends";
 import { getAgentDebug, refetchAgentSnapshot } from "../lib/agent-inspect.functions";
 import { AgentVoiceField } from "./AgentVoiceField";
-import { saveMemoryItem, listMemoryItems, deleteMemoryItem } from "../lib/rag.functions";
+import {
+  saveMemoryItem,
+  listMemoryItems,
+  deleteMemoryItem,
+  MAX_CHARS_PER_REQUEST,
+} from "../lib/rag.functions";
+import { chunkText } from "../lib/rag/chunk";
 import { provisionAgentVectorStores } from "../lib/openai-provisioning.functions";
 import { AgentAvatar } from "./AgentAvatar";
 import { MemoryDbPanel } from "./MemoryDbPanel";
@@ -29,6 +36,38 @@ type MemoryChunk = {
   source: string | null;
   createdAt: string;
 };
+
+/** Pretty-print a JSON export so chunking can split it on real line boundaries instead of one
+ *  minified run that would only ever hard-split. Falls back to the raw text if it isn't JSON. */
+function prettyIfJson(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * Group the text into per-REQUEST segments, each at or under the server's MAX_CHARS_PER_REQUEST.
+ * Uses the shared `chunkText` so segment edges fall on the same paragraph/sentence boundaries the
+ * server would pick — a fact never gets cut differently depending on which side did the splitting.
+ */
+function buildRequestSegments(text: string): string[] {
+  if (text.length <= MAX_CHARS_PER_REQUEST) return [text];
+  const pieces = chunkText(text);
+  const segments: string[] = [];
+  let current = "";
+  for (const piece of pieces) {
+    if (current && current.length + 2 + piece.length > MAX_CHARS_PER_REQUEST) {
+      segments.push(current);
+      current = piece;
+    } else {
+      current = current ? `${current}\n\n${piece}` : piece;
+    }
+  }
+  if (current) segments.push(current);
+  return segments;
+}
 
 export function AgentSettingsDrawer() {
   const openId = useAgentPanelStore((s) => s.openAgentId);
@@ -46,6 +85,10 @@ export function AgentSettingsDrawer() {
   const [ctxScope, setCtxScope] = useState<"agent" | "global">("agent");
   const [extractFacts, setExtractFacts] = useState(true);
   const [savingCtx, setSavingCtx] = useState(false);
+  // Import progress for a large paste/file: "batch 3 of 11". Null when idle (ACT-61).
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
+  const [loadedFileName, setLoadedFileName] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [memoryItems, setMemoryItems] = useState<MemoryChunk[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -84,28 +127,80 @@ export function AgentSettingsDrawer() {
     refreshMemoryList(openId);
   }, [openId]);
 
+  /**
+   * Load a text file into the box (ACT-61). Read entirely in the browser and dropped into the same
+   * textarea, so what gets saved is always exactly what is on screen — no hidden second path, and
+   * the user can edit or trim before committing. Binary formats (pdf/docx) are deliberately NOT
+   * accepted here: they need real extraction, and silently storing mojibake would be worse than
+   * refusing.
+   */
+  async function handleFilePick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // let the same file be re-picked after an edit
+    if (!file) return;
+    try {
+      const raw = await file.text();
+      const text = file.name.endsWith(".json") ? prettyIfJson(raw) : raw;
+      setCtxText((prev) => (prev.trim() ? `${prev.trim()}\n\n${text}` : text));
+      setLoadedFileName(file.name);
+      toast.success(`Loaded ${file.name} (${text.length.toLocaleString()} chars) — review, then save`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not read that file");
+    }
+  }
+
   async function handleSaveContext() {
     if (!openId) return;
     const text = ctxText.trim();
     if (!text) return;
     setSavingCtx(true);
+    // Pre-segment with the SAME chunker the server uses, then send one request per segment. The
+    // server caps a single request at MAX_CHARS_PER_REQUEST to stay under the ~45s hosting ceiling,
+    // so a large import has to be several requests — batching here also gives real progress instead
+    // of one long opaque spinner.
+    const segments = buildRequestSegments(text);
+    setImportProgress(segments.length > 1 ? { done: 0, total: segments.length } : null);
+    let chunks = 0;
+    let facts = 0;
+    let factChunks = 0;
     try {
-      const r = await saveMemoryItem({
-        data: {
-          text,
-          scope: ctxScope,
-          agentId: ctxScope === "agent" ? openId : undefined,
-          source: agent ? `settings:${agent.name}` : "settings",
-          extractFacts,
-        },
-      });
-      toast.success(`Saved memory (chunk ${r.chunkId.slice(0, 8)}…, ${r.tripleCount} facts)`);
+      for (let i = 0; i < segments.length; i++) {
+        const r = await saveMemoryItem({
+          data: {
+            text: segments[i],
+            scope: ctxScope,
+            agentId: ctxScope === "agent" ? openId : undefined,
+            source: loadedFileName
+              ? `settings:file:${loadedFileName}`
+              : agent
+                ? `settings:${agent.name}`
+                : "settings",
+            extractFacts,
+          },
+        });
+        chunks += r.chunkCount;
+        facts += r.tripleCount;
+        factChunks += r.factChunks;
+        if (segments.length > 1) setImportProgress({ done: i + 1, total: segments.length });
+      }
+      // Report what ACTUALLY happened, including the fact-extraction cap, so a big import never
+      // implies every chunk was mined for facts when only the leading ones were.
+      const factNote = !extractFacts
+        ? "facts off"
+        : chunks > factChunks
+          ? `${facts} facts from the first ${factChunks} of ${chunks} chunks`
+          : `${facts} facts`;
+      toast.success(`Saved to memory — ${chunks} chunk${chunks === 1 ? "" : "s"}, ${factNote}`);
       setCtxText("");
+      setLoadedFileName(null);
       await refreshMemoryList(openId);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Save failed");
+      // Partial success is real here: earlier segments are already committed and retrievable.
+      const detail = chunks > 0 ? ` (${chunks} chunk${chunks === 1 ? "" : "s"} already saved)` : "";
+      toast.error((err instanceof Error ? err.message : "Save failed") + detail);
     } finally {
       setSavingCtx(false);
+      setImportProgress(null);
     }
   }
 
@@ -426,9 +521,34 @@ export function AgentSettingsDrawer() {
                       onChange={(e) => setCtxText(e.target.value)}
                       disabled={savingCtx}
                       rows={3}
-                      placeholder={`Fact, note, or reference for ${agent.name}. Saved as an embedded chunk; facts auto-extracted.`}
+                      placeholder={`Fact, note, or reference for ${agent.name} — or paste a whole memory export / article and it will be split into chunks automatically.`}
                       className="w-full resize-y rounded-md border border-hairline bg-surface px-2 py-1.5 text-[12px] font-mono outline-none focus:border-primary"
                     />
+                    {/* Size + chunk preview so a large import is never a surprise (ACT-61). */}
+                    {ctxText.trim().length > 0 && (
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[10px] text-muted-foreground">
+                        <span>{ctxText.trim().length.toLocaleString()} chars</span>
+                        <span aria-hidden>·</span>
+                        <span>
+                          {chunkText(ctxText.trim()).length} chunk
+                          {chunkText(ctxText.trim()).length === 1 ? "" : "s"}
+                        </span>
+                        {loadedFileName && (
+                          <>
+                            <span aria-hidden>·</span>
+                            <span className="truncate">from {loadedFileName}</span>
+                          </>
+                        )}
+                        {importProgress && (
+                          <>
+                            <span aria-hidden>·</span>
+                            <span className="text-foreground">
+                              importing batch {importProgress.done} of {importProgress.total}…
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    )}
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
                       <div className="flex items-center gap-1 rounded-md border border-hairline bg-surface p-0.5">
                         <button
@@ -454,6 +574,24 @@ export function AgentSettingsDrawer() {
                         />
                         extract facts (triples)
                       </label>
+                      {/* Load a text file (memory export, notes, saved article) into the box. */}
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".md,.markdown,.txt,.json,.csv,text/plain,text/markdown,application/json,text/csv"
+                        className="app-hidden"
+                        onChange={handleFilePick}
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={savingCtx}
+                        onClick={() => fileInputRef.current?.click()}
+                        title="Load a .md / .txt / .json / .csv file into the box"
+                      >
+                        <Upload size={12} />
+                        <span className="ml-1.5">Load file</span>
+                      </Button>
                       <Button
                         size="sm"
                         className="ml-auto"
@@ -465,7 +603,11 @@ export function AgentSettingsDrawer() {
                         ) : (
                           <PlusCircle size={12} />
                         )}
-                        <span className="ml-1.5">Save to memory</span>
+                        <span className="ml-1.5">
+                          {importProgress
+                            ? `Importing ${importProgress.done}/${importProgress.total}…`
+                            : "Save to memory"}
+                        </span>
                       </Button>
                     </div>
                   </div>
