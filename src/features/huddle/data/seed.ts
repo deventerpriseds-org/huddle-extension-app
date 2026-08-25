@@ -38,6 +38,31 @@ export interface HuddleMessage {
   // is set client-side once a button action succeeds, swapping the live buttons for a resolved badge.
   // Absent on messages from before this feature shipped, or on any non-confirm-ask message → no row.
   confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string; resolved?: boolean };
+  // An in-chat CHECKLIST an agent produced (the `build_checklist` tool). Rendered as a stable list of
+  // tick-boxes with a per-row status pill. This is a SNAPSHOT of server truth at the moment the reply
+  // was written — deliberately NOT the live state. Live per-row state lives in the store's
+  // `checklistState`, keyed by taskId OUTSIDE the message, because a message can be re-delivered by
+  // either mapping site at any time and would otherwise revert rows the user just changed. The
+  // renderer overlays `checklistState[taskId]` on top of these rows, so a stale snapshot is harmless.
+  // Absent on every message that isn't a checklist → no widget.
+  checklist?: ChecklistPayload;
+}
+
+export interface ChecklistRow {
+  taskId: string;
+  title: string;
+  /** journey task_status at snapshot time (BACKLOG/TODO/PLANNING/READY/UP_NEXT/DOING/IN_REVIEW/BLOCKED/DONE). */
+  status: string;
+  /** Full tag set at snapshot time. Parking-lot is a TAG, not a status — see BoardView's toggle. */
+  tags: string[];
+}
+
+export interface ChecklistPayload {
+  /** Short heading the agent chose, e.g. "Kids — things to track". */
+  title: string;
+  rows: ChecklistRow[];
+  /** Rows beyond the render cap, summarised as "+N more" rather than dropped silently. */
+  more?: number;
 }
 
 export type HuddleScope = "one-to-one" | "group";

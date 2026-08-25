@@ -1,6 +1,39 @@
 # Project Memory — huddle-extension-app
 Last updated: 2026-08-25
 
+## Hardening — the phase-tag gate was GREEN while 67% of output was non-compliant (2026-08-25)
+**Owner caught it, not the guard, not me.** Measured over this session's transcript: **58 assistant
+text blocks, 19 tagged, 39 UNTAGGED (67%).** The owner's report ("your not qualifying your turns")
+was correct and my impression that I was complying was wrong — I had tagged the opening line of
+recent turns and generalised from that.
+
+**Root cause is a mismatch between what the guard measures and what the requirement is.**
+`eds-phase-tag.py::assistant_texts()` collects only the **FIRST** text block of each assistant
+message (`break` after the first hit), then `verdict()` passes if **ANY** of the last 3 carry a tag.
+But a turn with several tool calls emits MANY text blocks, and only the opening one ever got tagged.
+Mid-turn narration — "Both repos in sync…", "Now updating the tracker…", "While it works…" — is
+therefore invisible to the checker by construction. The guard reported PASS every single time.
+
+**This is the second failure mode found in the same 130-line script today** (the first: it fails open
+in 3 of 5 code paths and the installed Stop command passes no argv, so it silently exits 0 whenever
+it cannot locate its own input). Both were found only by running the script directly against a real
+transcript — never by trusting that an installed guard means an enforced rule.
+
+**GUARDRAIL — two parts, and the prose half is the weak half:**
+1. *Behavioural (me):* tag EVERY text block, not just a turn's opener — or stop emitting untagged
+   mid-turn narration. This is exactly the kind of prose rule the org playbook says has diminishing
+   returns, so it is not the real fix.
+2. *Structural (the actual fix, NOT yet applied — needs owner sign-off, it is shared enforcement
+   config in `setup.sh` + a `CURRENT_VERSION` bump):* make `assistant_texts()` collect ALL text
+   blocks rather than the first per message, and tighten the pass rule from "any of the last 3" to
+   the recent window ALL carrying a tag. Combined with passing the transcript path as argv so it
+   cannot fail open, that turns a decorative check into an enforcing one.
+
+**The transferable lesson, which is bigger than phase tags:** a guard being INSTALLED is not evidence
+a rule is ENFORCED. Both defects here were invisible from the config (`_eds_version: 14`, six hooks,
+all present and correct) and obvious within one command of running the checker against real input.
+Before trusting any gate, run it against a case that SHOULD fail and confirm it actually fails.
+
 ## The eds Stop-gate is NOT automatically present in a session — verify BOTH paths, and re-sync after a reclaim (2026-08-25, ACT-62; RECURRED ACT-63)
 
 > **RECURRENCE, same day (ACT-63) — this is now 3-for-3, treat it as the norm, not a surprise.** A later

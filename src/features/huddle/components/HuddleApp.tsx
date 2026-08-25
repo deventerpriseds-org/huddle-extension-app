@@ -13,7 +13,7 @@ import { FallbackBanner } from "./FallbackBanner";
 import { isWorkspaceHydrated, setDeepLinkTarget, useHuddleStore, useVisibleHuddles } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
-import { breadcrumbToolsFor, type ToolUseEvent } from "../data/seed";
+import { breadcrumbToolsFor, type ChecklistPayload, type ToolUseEvent } from "../data/seed";
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
 import { useAuth } from "@/hooks/useAuth";
 import { getAllTurnUpdates } from "../lib/huddle.functions";
@@ -75,6 +75,10 @@ export function HuddleApp() {
           text: string;
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+          // MUST be declared here too. This DTO is re-declared inline at BOTH mapping sites, and an
+          // undeclared field is dropped silently -- no error, no crash -- so a checklist would decay
+          // into plain text after a reload with nothing to attribute it to.
+          checklist?: ChecklistPayload;
         }[];
         toolUses?: ToolUseEvent[];
       }[]) {
@@ -109,6 +113,7 @@ export function HuddleApp() {
             replyTo: t.id,
             artifacts: reply.artifacts,
             confirmAsk: reply.confirmAsk,
+            checklist: reply.checklist,
             toolUses: t.toolUses ? breadcrumbToolsFor(reply.agentId, t.toolUses) : undefined,
           });
         });

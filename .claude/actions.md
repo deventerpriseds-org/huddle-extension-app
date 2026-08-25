@@ -40,6 +40,98 @@ delivered it.
 
 **Widget work:** survey only, no code. See ACT-64.
 
+### ⏸ ACT-66: eds setup.sh / hook gaps — PARKED by owner until the checklist widget ships (2026-08-25)
+Owner: "lets come back to any improvments after we deploy the checklist wchat widget." All four are
+proven, none are fixed. Resume as a single `v16` pass after the widget deploys.
+1. **SessionStart's memory dump has NEVER worked in a multi-repo session.** The hook reads
+   `.claude/memory.md`/`actions.md`/`accuracy-log.md` as paths RELATIVE to cwd `/home/user`, but every
+   one lives in `/home/user/<repo>/.claude/`. It printed "(no actions.md yet)" and "(no accuracy-log.md
+   yet)" TWICE this session while 2765 + 2241 + 47 lines sat two directories down. **The accuracy log
+   exists to stop repeated wrong answers and has never once loaded.** Highest leverage of the four.
+   Same ambiguity affects the Stop gate, which demands "`.claude/memory.md` updated" without naming a repo.
+   Fix direction: sweep each `--add-dir`'d repo instead of assuming cwd; print which repo each came from.
+2. **`register_repo_root` is told the wrong path** — the hook prints `/workspace/eds-claude-skills`;
+   managed sessions reject it and require `/home/user/<repo>`. Bootstrap fails on the hook's own instruction.
+3. **The PostToolUse autosave misses Bash-based edits.** Matcher is `Write|Edit|NotebookEdit`, but auto
+   mode actively instructs editing via `sed`/heredoc/python — those bypass `eds-git-guard.sh autosave`
+   entirely and never reach `refs/heads/eds-wip/*`. The rewind guard has a hole exactly where the
+   harness steers the agent. Until fixed: commit and push promptly, do not rely on the autosave.
+4. **The phase-tag checker still fails open.** v15 fixed WHAT it measures, not WHETHER it runs: the Stop
+   command is still bare `python3 eds-phase-tag.py` with no argv, and 3 of 5 code paths return "pass" on
+   any unknown input. Fix direction: resolve the transcript from the project dir when stdin is empty, and
+   make an unresolvable transcript warn loudly instead of vanishing.
+**Owner-only, not mine to fix:** the CCR environment "Setup script" field still is not delivering the
+payload — 3 consecutive sessions started empty (ACT-63). Everything above is moot in a session that
+starts with no hooks at all.
+
+### 🔵 ACT-65: In-chat CHECKLIST widget — the actual ask (NEW 2026-08-25, supersedes ACT-64's scope)
+**Ask (verbatim):** "the new widget I need is an in chat checklist any of the agents can create with a
+stable layout and function. if I ask what are the tasks I asked for related to my kids, no checklist
+needed. but if I ask for a checklist ... it should return in the checklist format with boxes to check
+that update status and quick options to push to the backlog or park. (doing now status- the play icon,
+backlog status - the pause icon, parking lot status -the stop icon, delete action the x icon"
+
+**Scope correction.** ACT-64 was a general widget-registry abstraction — my framing, not the user's
+ask. The user's actual need is ONE widget: an in-chat checklist. Build that. ACT-64's 64 ACs and the
+registry plan stay on file as a *later* option if a second widget ever justifies it; they are NOT a
+prerequisite. ("it seems like a lot of hand waiving" — the correction was earned.)
+
+**Design decided by the user:** checkbox left; ONE status *pill* on the right whose icon shows the
+current status; tapping it opens a dropdown (▶ Doing / ⏸ Backlog / ⏹ Parking lot / ✕ Delete). Chosen
+over four inline icon buttons because the chat column is narrow, and over a bare `MoreVertical` kebab
+(the BoardView pattern) because a kebab hides current status — and at-a-glance state is the point of
+a checklist. Cost accepted: changing status is 2 taps; checking off stays 1.
+
+**SCOPE NARROWED by the user mid-build (2026-08-25): "you dont have to worry about the delete button
+for now."** The ✕ delete control is OUT. The dropdown ships with THREE items (▶ / ⏸ / ⏹).
+
+**Consequence — there are now ZERO new mutations.** Every control maps onto the EXISTING
+`updateBoardTask` path. The whole feature is a renderable field, a renderer, an agent tool to emit it,
+and correct reuse of a mutation that already works. Nothing destructive, nothing irreversible, no DB
+change. This also removes the only piece that reached outside the Huddle repo.
+
+**Control → mutation map. ALL FOUR reuse existing code:**
+| Control | Mutation | New? |
+|---|---|---|
+| ☑ checkbox | `{status:"DONE"}` | no |
+| ▶ play | `{status:"DOING"}` | no |
+| ⏸ pause | `{status:"BACKLOG"}` | no |
+| ⏹ stop | `{tags:[...tags,'parking-lot'], status:'BACKLOG'}` | no — **already at `BoardView.tsx:689`** |
+| ~~✕ delete~~ | — | **DEFERRED, not in this build** |
+
+All routed through the EXISTING `updateBoardTask({caller,taskId,...patch})` used by `BoardView`'s
+`applyMove` — which already does optimistic update, rollback to `prev` on failure, and
+`waitForMirrorSync` for the ~1-3s pg_net lag. No new write path, no second writer into journey.
+
+**DEFERRED FINDING — banked for whenever delete IS built. Not needed for this build.** Recorded here
+so the next session does not re-derive it, and does not build the table the user was about to ask for.
+The user proposed "a delete table in journey where tasks are moved to / archived". **That archive
+ALREADY EXISTS — when delete ships, do not build a second tasks-shaped table.**
+- `public.task_events` + trigger `log_task_changes`: on DELETE it inserts
+  `(task_id,'DELETE',old_values=to_jsonb(OLD),user_id)`. Its own comment: *"a deleted task can be
+  reconstructed in full."* **Verified: 55 DELETE rows, every one carrying complete `old_values`**
+  (all from 2026-08-21 16:04, the test-task cleanup batch — so it has been exercised in bulk).
+  The audit INSERT is wrapped in a defensive EXCEPTION block: an audit failure never aborts the delete.
+- `huddle_task_sync_trigger` fires on INSERT/UPDATE/**DELETE** → the Huddle mirror clears itself.
+- Confirmed ABSENT: any archive/trash/deleted table, any soft-delete column on `public.tasks`, any
+  `ARCHIVED`/`CANCELLED` enum value. The `task_status` enum is ALSO already polluted with CATEGORIES
+  (CAREER, LIFE, VENTURES, PROF_EDUCATION) beside real statuses — an argument against a 14th value.
+- **What a restore would lose:** `task_topic_mappings` has **CASCADE on both FKs**, and mappings are
+  not captured in `old_values`. Topic links do not come back.
+- **So the real gap is not the archive — it is that nothing can READ it back.** No restore fn/UI
+  exists. That is a far smaller build than a new table and avoids a second table drifting from canonical.
+
+**Integration/architecture trace.** Core system: journey `public.tasks` → `notify_huddle_task_sync` →
+Huddle mirror `tasks.journey_tasks`. Upstream producers: agent tools (`create_huddle_task`,
+`update_task`), BoardView `updateBoardTask`. Downstream consumers: `prioritize`, `getBoardTasks`,
+`autowork` candidate selection, journey's nightly planner, `task_events`, `task_topic_index` counts.
+**Verdict: EXTEND.** With delete deferred, genuinely new = the `checklist` renderable on
+`HuddleMessage`, its renderer component, and an agent tool to emit it. That is the entire new surface.
+
+**Status:** ACs being written by an independent subagent → `.claude/ac-checklist-widget.md`.
+NO CODE WRITTEN. Two prior AC agents were killed (one user interrupt, one container restart); both
+times the "write to the file as you go" brief was the only reason anything survived.
+
 ### 🔵 ACT-64: General widget extension path — chat thread first, bridge second (NEW 2026-08-25)
 **Ask (verbatim):** "we need a general widget extension path for quick stable repeatable widget
 building... now what comes to mind is for the chat thread and external to the app using the bridge

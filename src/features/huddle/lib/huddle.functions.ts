@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
-import type { HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
+import type { ChecklistPayload, HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
 import {
   parseMentions,
   routeMessage,
@@ -525,6 +525,7 @@ type TurnResumeState = {
     fallbackNotes?: string[];
     artifacts?: { id: string; name: string }[];
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+    checklist?: ChecklistPayload;
   }[];
   journeyTaskUpdates: import("./journey/types").JourneyTask[];
   suggestedTasks: SuggestedTaskDraft[];
@@ -803,6 +804,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // message. Derived the same way as artifacts — from this agent's own propose_task_intent
     // toolUse this turn — NOT injected from another turn/agent.
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+    checklist?: ChecklistPayload;
   };
 
   // Journey-voice mirror: any task rows that journey returns from a tool call
@@ -2945,7 +2947,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const effectiveInstructions = overrideInstructions || snapshotInstructions;
         fromSnapshot = !overrideInstructions && !!snapshotInstructions;
         const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
-        const { PRIORITIZE_SYSTEM_HINT } = await import("./tasks/tools");
+        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT } = await import("./tasks/tools");
         // Grooming is now gated on the data-driven capability (agents.ts), with the legacy
         // id/special check kept as a non-destructive fallback so nothing regresses.
         const ownsGrooming =
@@ -2993,6 +2995,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           webInstructions +
           "\n\n" +
           PRIORITIZE_SYSTEM_HINT +
+          "\n\n" +
+          CHECKLIST_SYSTEM_HINT +
           groomHint +
           "\n\n" +
           REMINDER_SYSTEM_HINT;
@@ -3174,7 +3178,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           emailTools.push(GET_EXTERNAL_CALENDAR_EVENTS_TOOL);
         }
 
-        const { PRIORITIZE_TOOL } = await import("./tasks/tools");
+        const { PRIORITIZE_TOOL, CHECKLIST_TOOL } = await import("./tasks/tools");
         // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
         const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
         const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
@@ -3191,6 +3195,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           RESOLVE_CLARIFYING_QUESTION_TOOL,
           SCHEDULE_REMINDER_TOOL,
           PRIORITIZE_TOOL,
+          CHECKLIST_TOOL,
           GET_CALENDAR_EVENTS_TOOL, // calendar-framed alias → combined schedule (always available)
           ...groomTools,
           ...emailTools,
@@ -3648,6 +3653,26 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               ok ? "reminder scheduled" : "reminder · failed",
               ok,
             );
+            return out;
+          }
+          if (c.name === "build_checklist") {
+            const { dispatchBuildChecklist } = await import("./tasks/tools");
+            const ident = await (
+              await import("./journey/identity")
+            ).resolveJourneyIdentity(data.caller, data.timeZone);
+            const out = await dispatchBuildChecklist(ident.email ?? data.caller?.entra_email, c.arguments);
+            let ok = true;
+            let detail = "";
+            try {
+              const parsed = JSON.parse(out) as { error?: string; checklist?: { rows?: unknown[] } };
+              ok = !parsed.error;
+              // The FULL payload rides in `detail`, which is how the reply-assembly below recovers it
+              // without a second lookup -- the same channel confirm-ask already uses for its own payload.
+              detail = ok ? out : (parsed.error ?? "");
+            } catch {
+              ok = false;
+            }
+            recordToolUse(winner.id, "build_checklist", ok ? "checklist rendered" : "checklist -- failed", ok, detail);
             return out;
           }
           if (c.name === "schedule_and_priorities" || c.name === "get_calendar_events") {
@@ -5124,13 +5149,15 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         }
 
         {
-          const { PRIORITIZE_SYSTEM_HINT } = await import("./tasks/tools");
+          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT } = await import("./tasks/tools");
           usedInstructions =
             appSystem +
             ragInstructions +
             webInstructions +
             "\n\n" +
             PRIORITIZE_SYSTEM_HINT +
+            "\n\n" +
+            CHECKLIST_SYSTEM_HINT +
             groundingBlock(!!agentBackend.webSearch);
         }
 
@@ -5411,12 +5438,47 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         /* malformed detail -> no confirmAsk chip this reply; never breaks the turn */
       }
     }
+    // Same derivation as confirmAsk above: the build_checklist dispatcher put its whole JSON result in
+    // `detail`, so the widget payload comes back without a second DB read. A malformed or shape-invalid
+    // detail degrades to "no checklist this reply" and NEVER breaks the turn -- but unlike confirmAsk's
+    // silent shape guard, a well-formed-JSON-but-wrong-shape payload is LOGGED, because otherwise that
+    // case is indistinguishable from the agent never having called the tool at all.
+    let replyChecklist: ChecklistPayload | undefined;
+    const checklistToolUse = r.toolUses.find(
+      (t) => t.tool === "build_checklist" && t.ok && typeof t.detail === "string",
+    );
+    if (checklistToolUse) {
+      try {
+        const parsed = JSON.parse(checklistToolUse.detail as string) as { checklist?: unknown };
+        const c = parsed.checklist as ChecklistPayload | undefined;
+        if (c && typeof c.title === "string" && Array.isArray(c.rows) && c.rows.length) {
+          replyChecklist = {
+            title: c.title,
+            rows: c.rows
+              .filter((row) => row && typeof row.taskId === "string" && typeof row.title === "string")
+              .map((row) => ({
+                taskId: row.taskId,
+                title: row.title,
+                status: typeof row.status === "string" ? row.status : "BACKLOG",
+                tags: Array.isArray(row.tags) ? row.tags.filter((t): t is string => typeof t === "string") : [],
+              })),
+            ...(typeof c.more === "number" && c.more > 0 ? { more: c.more } : {}),
+          };
+          if (!replyChecklist.rows.length) replyChecklist = undefined;
+        } else {
+          console.warn("[checklist] build_checklist returned an unexpected shape; no widget rendered");
+        }
+      } catch {
+        console.warn("[checklist] build_checklist detail was not valid JSON; no widget rendered");
+      }
+    }
     replies.push({
       agentId: nextId,
       text: safeText,
       fallbackNotes: outcome.perAgentFallbacks.length > 0 ? outcome.perAgentFallbacks : undefined,
       artifacts: replyArtifacts.length ? replyArtifacts : undefined,
       confirmAsk: replyConfirmAsk,
+      checklist: replyChecklist,
     });
     spoken.add(nextId);
 
@@ -6477,6 +6539,7 @@ type TurnUpdateDTO = {
     text: string;
     artifacts?: { id: string; name: string }[];
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+    checklist?: ChecklistPayload;
   }[];
   result: HuddleTurnResult | null;
 };
@@ -6510,6 +6573,7 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
           text: string;
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+          checklist?: ChecklistPayload;
         }[],
         result: (t.result ?? null) as HuddleTurnResult | null,
       }));
@@ -6566,6 +6630,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         text: string;
         artifacts?: { id: string; name: string }[];
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+        checklist?: ChecklistPayload;
       }[];
       // Tool-use breadcrumbs for away/cross-device turns — the client filters per agent + drops tool_catalog.
       toolUses?: import("../data/seed").ToolUseEvent[];
@@ -6597,6 +6662,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         text: string;
         artifacts?: { id: string; name: string }[];
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+        checklist?: ChecklistPayload;
       }[],
       toolUses: ((t.result as { toolUses?: unknown } | null)?.toolUses ?? undefined) as
         | import("../data/seed").ToolUseEvent[]

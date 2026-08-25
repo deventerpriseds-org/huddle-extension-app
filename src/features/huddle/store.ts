@@ -47,6 +47,16 @@ export function writeBoolPref(key: string, value: boolean) {
   }
 }
 
+/** Live state for ONE checklist row. `prevStatus` is what un-ticking restores (owner's choice:
+ *  revert to where the row was, not a blanket fall back to BACKLOG — a mis-tap on a DOING task
+ *  should not silently demote it out of the active lane). `busy` drives the per-row spinner. */
+export interface ChecklistRowState {
+  status: string;
+  tags: string[];
+  prevStatus?: string;
+  busy?: boolean;
+}
+
 export type MeetingKind = "morning" | "midday" | "afternoon" | "adhoc" | "virtual-meeting";
 export type CeremonyKind = "standup" | "retro" | "planning" | "review" | "review_retro";
 export interface CeremonyTurn {
@@ -111,6 +121,14 @@ interface HuddleState {
   // counting across reloads/devices instead of being suppressed by a rolling per-load baseline.
   readBaselineAt: number;
   showDemoData: boolean;
+  // LIVE per-row checklist state, keyed by journey taskId — deliberately NOT stored on the message.
+  // A checklist message carries a SNAPSHOT of server truth; either mapping site can re-deliver that
+  // message at any time (a streamed partial, or the durable back-fill poll after a reload), and a
+  // present-but-stale snapshot would silently revert rows the user just ticked. Keying live state by
+  // taskId outside the message makes that class of bug impossible rather than merely unlikely: the
+  // renderer overlays this map on the snapshot, so re-delivery cannot lose a user action. It also
+  // means the SAME task appearing in two checklists stays consistent in both.
+  checklistState: Record<string, ChecklistRowState>;
   meeting: null | MeetingState;
   // Desktop panel chrome (device-local, read synchronously from localStorage so there's no
   // collapsed-then-flash-expanded flicker on first paint — see readBoolPref above).
@@ -130,6 +148,11 @@ interface HuddleState {
   addAgentMessage: (m: HuddleMessage) => void;
   upsertAgentMessage: (m: HuddleMessage) => void;
   resolveConfirmAsk: (messageId: string) => void;
+  /** Seed live state for rows not yet tracked. Never overwrites a row the user has already acted on. */
+  seedChecklistRows: (rows: { taskId: string; status: string; tags: string[] }[]) => void;
+  /** Optimistically apply a row change; returns nothing — call rollbackChecklistRow on failure. */
+  setChecklistRow: (taskId: string, patch: Partial<ChecklistRowState>) => void;
+  rollbackChecklistRow: (taskId: string, prev: ChecklistRowState) => void;
   logDecision: (d: RoutingDecision) => void;
   addToolUses: (events: ToolUseEvent[]) => void;
   moveTask: (id: string, lane: TaskLane) => void;
@@ -208,6 +231,10 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
   lastReadAt: {},
   readBaselineAt: Date.now() - UNREAD_LOOKBACK_MS,
   showDemoData: true,
+  // Deliberately NOT in PERSISTED_KEYS/seedDefaults: this is a live overlay on server truth, not
+  // workspace data. Persisting it would resurrect a stale status after the board moved on, and it
+  // re-seeds from each checklist's snapshot on render anyway.
+  checklistState: {},
   meeting: null,
   sidebarCollapsed: readBoolPref(SIDEBAR_COLLAPSED_KEY),
   contextPanelCollapsed: readBoolPref(CONTEXT_PANEL_COLLAPSED_KEY),
@@ -271,9 +298,36 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
         artifacts: m.artifacts ?? next[i].artifacts,
         toolUses: m.toolUses ?? next[i].toolUses,
         confirmAsk: m.confirmAsk ?? next[i].confirmAsk,
+        // Same `??` shape as the others, and for the same reason: a later partial doesn't re-supply it.
+        // NOTE this is only safe because the checklist message body is a SNAPSHOT — all mutable per-row
+        // state lives in `checklistState` keyed by taskId. If live state were stored here instead, `??`
+        // would NOT protect it: `??` guards against the incoming field being ABSENT, while the real
+        // exposure is a PRESENT-but-stale server copy overwriting rows the user just changed.
+        checklist: m.checklist ?? next[i].checklist,
       };
       return { messages: next };
     }),
+  seedChecklistRows: (rows) =>
+    set((s) => {
+      let changed = false;
+      const next = { ...s.checklistState };
+      for (const r of rows) {
+        // Only seed rows we have never tracked. An existing entry is either a user action or an
+        // in-flight write, and a re-rendered snapshot must never stomp either.
+        if (next[r.taskId]) continue;
+        next[r.taskId] = { status: r.status, tags: r.tags };
+        changed = true;
+      }
+      return changed ? { checklistState: next } : {};
+    }),
+  setChecklistRow: (taskId, patch) =>
+    set((s) => {
+      const cur = s.checklistState[taskId];
+      if (!cur) return {};
+      return { checklistState: { ...s.checklistState, [taskId]: { ...cur, ...patch } } };
+    }),
+  rollbackChecklistRow: (taskId, prev) =>
+    set((s) => ({ checklistState: { ...s.checklistState, [taskId]: prev } })),
   // Marks one message's confirm-ask row resolved after a Confirm/Backlog/Archive button action succeeds,
   // so the client swaps the live buttons for a resolved badge without re-fetching. Scoped by messageId
   // (not taskId) so acting on an old reach-out never touches a DIFFERENT message that happens to carry
