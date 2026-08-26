@@ -3,6 +3,20 @@ Last updated: 2026-08-25
 
 ## Hardening — the phase-tag gate was GREEN while 67% of output was non-compliant (2026-08-25)
 
+- [2026-08-26] **Memory dedup cleanup — 137 duplicate `rag_chunks` removed (owner-authorised, one transaction).**
+  Before: 716 rows / 579 distinct / **137 exact duplicates** (`"let's run the daily stand-up"` ×36, `"Hey, Sam."` ×11).
+  After: **579 / 579 / 0**, `orphan_refs 0`, triples still 500 with `null_source` unchanged at 29.
+  **The downstream check is what made it safe and it nearly wasn't done.** `rag_triples_source_chunk_id_fkey`
+  is **`ON DELETE SET NULL`** — a naive delete would have silently nulled provenance on **19 facts about the
+  user**. They were re-pointed at the surviving twin FIRST (`UPDATE 19`), which is why `null_source` stayed at
+  exactly its prior 29. Kept the **OLDEST** row of each identical text, so original timestamps survive and every
+  deleted row's content is still present in a retained row — no information lost, though the rows themselves are
+  gone (no undo). Ran as one `BEGIN…COMMIT` with `ON_ERROR_STOP=1` and the verification SELECTs inside the same
+  transaction. **NOTE: `azure-pg-query.yml` is described as "read-only" in CLAUDE.md but is NOT enforced —
+  it is plain `psql` and will happily run DDL/DML.** Treat that description as convention, not a guard.
+  **STILL ABSENT: write-time dedup.** `writeChunk` remains a bare `INSERT ... VALUES` with no `ON CONFLICT` and
+  no unique constraint, so duplicates WILL accumulate again. This cleanup is a one-off, not a fix.
+
 ## THREE memory layers with DIFFERENT rules — and the standing order to trace both directions (2026-08-26, owner)
 **Owner's correction, verbatim:** *"we have conversations, chunks, and triples. triples are supposed to be
 only about me, chunks are I believe safe for both sides of 1:1. look upstream and downstream to avoid the
