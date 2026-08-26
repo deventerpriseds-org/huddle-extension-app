@@ -34,7 +34,26 @@ returned id into `writeTriples({sourceChunkId})`; `:5819`, `voice-memory.functio
 `rag.functions.ts:101` discard or pass it through. **None require a NEW id**, so returning the existing
 row keeps triple provenance pointing at a real chunk.
 
-**Status:** typecheck clean; index created live; NOT yet deployed or independently verified.
+**Independent cold AC pass found 3 real defects in the first commit — all fixed in `c0ff987`:**
+1. **The 42P10 fallback was DEAD CODE.** `q()` rethrows every driver error as `RagStoreUnavailableError`,
+   which had no `code` field, so `err.code !== "42P10"` was always true. The "degrade instead of dropping
+   the chunk" guarantee did not exist — and since all three call sites are fire-and-forget, on an
+   index-less environment that is a **silent 100% memory-write outage**. Fixed structurally: the error
+   class now lifts SQLSTATE off its `cause`, so every caller can branch on pg codes.
+2. **`author_agent_ids` was dropped on a repeat**, and the recorded reason was wrong — Postgres forbids
+   sub-SELECTs in `ON CONFLICT DO UPDATE`, not array concat. Now merged with a `<@` no-growth guard;
+   `attributionSuffix()` de-dupes names on read.
+3. **The bootstrap index was unguarded** beneath a `CREATE EXTENSION` that is wrapped precisely because
+   one failing statement aborts the batch — a duplicate-holding DB would never get `rag_triples`.
+
+**Evidence (live, transaction rolled back, nothing persisted — run `32921748779`):** 5 write statements →
+3 rows. Exact repeat and subset repeat both returned the first row's id `3142c5b9-9fbc-4130-a92f-e2849f449c75`;
+`scope='agent'` and a one-char text variant each got their own row; `author_agent_ids` ended
+`{finn-reid,iris-chase}`. `store_total` 579 before and after.
+**AC-11a** (run `32921842761`): 36 reply chunks, 4 at the truncation boundary, **0** first-400 collisions.
+
+**Status:** typecheck clean; index live (`32920664371`); `4c066ce` deployed; `c0ff987` deploying;
+independent verifier running. **NOT yet user-confirmed live.**
 
 ### ✅ ACT-63: Two notification bugs — blocker messages had no name; away replies never buzzed (2026-08-25)
 **Ask (user, verbatim):** *"Terry messaged me about a blocker but didn't mention who was blocked so I

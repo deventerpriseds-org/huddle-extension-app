@@ -39,6 +39,41 @@ Last updated: 2026-08-25
   **Fail-safe:** a `42P10` (no matching unique index) falls back to the historical plain INSERT. Memory writes are
   fire-and-forget, so a throw there is a SILENT loss of the user's words — an environment whose bootstrap predates
   the index must degrade to old behaviour, never drop the chunk.
+- [2026-08-26] **Truncated agent-reply over-collapse (AC-11a): measured, exposure is ZERO, and the risk is
+  misattributed anyway.** Reply chunks are `` `${name} said: ${gist}` `` with `gist = …slice(0, 400)`
+  (`huddle.functions.ts:5808`), so two long replies from one agent sharing their first 400 chars now
+  collapse to one row. Measured (run `32921842761`): **36** reply chunks, **4** at the truncation
+  boundary, **0** first-400 collisions. The framing matters more than the count: when two replies
+  truncate to the same STORED string, the distinct tail was already thrown away by the slice BEFORE the
+  write — dedup then collapses two byte-identical strings and destroys nothing retrievable. **The loss,
+  if it ever happens, belongs to the 400-char truncation, not to the dedup key.** If reply volume grows,
+  the fix is at the truncation (store more, or key on a hash of the untruncated reply), never on the index.
+
+- [2026-08-26] **Hardening — the safety net I wrote and shipped could never fire (`c0ff987` fixes it).**
+  An independent cold AC pass caught it, not me, and the lesson generalises past this bug:
+  **an error-handling branch you never executed is not a safety net, it is a comment that compiles.**
+  Concretely: `writeChunk`'s 42P10 fallback tested `err.code`, but EVERY query in that file goes through
+  `q()`, which rethrows all driver errors as `RagStoreUnavailableError` — a class carrying only
+  `message`/`name`/`cause`, **no `code`**. The comparison was therefore always true, it always rethrew,
+  and the "degrade instead of dropping the chunk" guarantee I put in the commit message did not exist.
+  Blast radius had it mattered: all three production call sites are fire-and-forget, so on any
+  environment lacking the index it is a **silent 100% memory-write outage** — the worst possible shape,
+  since memory failing quietly is indistinguishable from "the agent just didn't remember".
+  **The guard, and why it is structural rather than a patch:** `RagStoreUnavailableError` now lifts the
+  SQLSTATE off its `cause` in the constructor, so EVERY caller can branch on pg error codes — not just
+  this one line. A wrapper that discards the error code turns every recoverable, specific failure into
+  an indistinguishable generic one; that is the class of bug, and the field is the fix for the class.
+  **Two more from the same cold read, both real:** (a) `author_agent_ids` was silently DROPPED on a
+  repeat write, and my stated reason ("merging would need a subquery") was **wrong** — Postgres forbids
+  sub-SELECTs in `ON CONFLICT DO UPDATE`, not array concatenation; the cost was the repeat author's
+  `+0.06` lane boost and their name in the `[CONTEXT from …]` attribution, i.e. the memory quietly stops
+  looking like theirs. (b) The new `CREATE UNIQUE INDEX` in `BOOTSTRAP_SQL` was **unguarded**, sitting
+  directly beneath a `CREATE EXTENSION` wrapped in `DO $$ EXCEPTION $$` *precisely because one failing
+  statement aborts the whole batch* — on a DB still holding duplicates, bootstrap would abort there and
+  `rag_triples` would never be created. The pattern to copy was six lines above and I did not copy it.
+  **Standing takeaway:** when adding a statement to an existing batch/pipeline, read what the
+  neighbouring statements defend against — the guards around them encode failures already paid for.
+
   **ORDERING HAZARD I created and should not repeat:** the index went live BEFORE the code deployed, so for the
   minutes in between an exact-repeat write raised `23505` into a fire-and-forget `catch` — the duplicate correctly
   didn't land, but that turn's triple extraction was skipped with it. **Deploy the `ON CONFLICT` code FIRST, add

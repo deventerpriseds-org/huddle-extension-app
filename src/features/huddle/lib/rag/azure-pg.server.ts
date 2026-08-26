@@ -72,6 +72,20 @@ async function q<T extends Record<string, unknown> = Record<string, unknown>>(
   }
 }
 
+/**
+ * The rag_chunks write-time dedup key, as ONE string interpolated into BOTH the CREATE UNIQUE INDEX
+ * below and writeChunk's ON CONFLICT target.
+ *
+ * They must match expression-for-expression -- Postgres infers which index to use from the expression
+ * list -- and they used to be two independent literals ~350 lines apart, kept in sync by a comment
+ * saying "these must not drift". Nothing MADE that true, and drift now degrades silently: a mismatch
+ * raises 42P10, which writeChunk deliberately catches and falls back to a duplicate-producing plain
+ * INSERT behind a console.warn, on a path whose three production callers are all fire-and-forget. The
+ * app would keep working while memory quietly re-accumulated duplicates, with no user-visible signal.
+ * One constant makes the drift impossible instead of merely discouraged.
+ */
+const CHUNK_DEDUP_KEY = `scope, coalesce(agent_id, ''), coalesce(source, ''), md5(text), length(text)`;
+
 export const BOOTSTRAP_SQL = `
 -- Azure's azure.extensions allow-list can reject CREATE EXTENSION even for an extension that is
 -- ALREADY installed and working (e.g. after the allow-list was reset/tightened post-install). That
@@ -129,14 +143,15 @@ CREATE INDEX IF NOT EXISTS rag_chunks_authors_idx
 --     collapse can never silently rewrite where something was said.
 -- Guarded like the CREATE EXTENSION above, and for the same reason: ONE failing statement aborts the
 -- whole bootstrap batch, and everything below this line -- including CREATE TABLE rag_triples -- would
--- never run. A database still holding duplicates (any environment that missed the one-off cleanup)
--- would fail here, so the index is best-effort: log and continue, leaving that DB on the pre-dedup
--- behaviour writeChunk already falls back to, instead of losing the triples table.
+-- never run. The catch is WHEN OTHERS, matching that block: duplicates (23505) are the EXPECTED failure
+-- on a DB that missed the one-off cleanup, but insufficient privilege (42501), disk full (53100) and
+-- index-row-size (54000 -- the very class md5() was chosen to dodge) would each lose the triples table
+-- just as thoroughly. The index is best-effort either way: log and continue, leaving that DB on the
+-- pre-dedup behaviour writeChunk already falls back to.
 DO $$ BEGIN
-  CREATE UNIQUE INDEX IF NOT EXISTS rag_chunks_dedup_idx
-    ON rag_chunks (scope, coalesce(agent_id, ''), coalesce(source, ''), md5(text), length(text));
-EXCEPTION WHEN unique_violation THEN
-  RAISE WARNING 'rag_chunks_dedup_idx not created: duplicate rows present. De-duplicate, then re-run bootstrap.';
+  CREATE UNIQUE INDEX IF NOT EXISTS rag_chunks_dedup_idx ON rag_chunks (${CHUNK_DEDUP_KEY});
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'rag_chunks_dedup_idx not created (SQLSTATE %): %. Memory still works, without write-time dedup.', SQLSTATE, SQLERRM;
 END $$;
 
 CREATE TABLE IF NOT EXISTS rag_triples (
@@ -461,9 +476,15 @@ export const azurePgStore: RagStore = {
     const cols = `(scope, agent_id, text, source, embedding, metadata, author_agent_ids)`;
     const vals = `VALUES ($1, $2, $3, $4, $5::vector, $6, $7)`;
 
-    // An exact repeat is a no-op that hands back the row already holding this text. The conflict
-    // target mirrors rag_chunks_dedup_idx expression-for-expression (Postgres infers the index from
-    // the expression list, so the two must not drift apart).
+    // An exact repeat is a no-op that hands back the row already holding this text. The conflict target
+    // is CHUNK_DEDUP_KEY, the same constant the index is built from, so it cannot drift out of sync.
+    //
+    // FIRST WRITER WINS on `metadata` and `embedding` -- neither is in the DO UPDATE. Today that is
+    // unobservable: no caller passes metadata (all five take the `?? {}` default; zero live rows carry
+    // any), and a repeat re-embeds the same text. It becomes a data-loss bug the day someone starts
+    // passing real metadata, or the embedding model changes and a re-write silently keeps the stale
+    // vector. Documented here rather than "fixed" blind, because updating either has its own cost --
+    // clobbering an earlier writer's metadata is not obviously better than ignoring a later one's.
     //
     // DO UPDATE, not DO NOTHING: DO NOTHING suppresses the RETURNING row on a conflict, so rows[0]
     // would be undefined on exactly the path this exists to handle. Assigning text to itself is the
@@ -482,7 +503,7 @@ export const azurePgStore: RagStore = {
     // Partial overlap can still repeat an id, so attributionSuffix() de-duplicates names on read; the
     // lane boost uses .includes() and is duplicate-insensitive already.
     const onConflict =
-      `ON CONFLICT (scope, coalesce(agent_id, ''), coalesce(source, ''), md5(text), length(text))
+      `ON CONFLICT (${CHUNK_DEDUP_KEY})
        DO UPDATE SET text = EXCLUDED.text,
                      author_agent_ids = CASE
                        WHEN EXCLUDED.author_agent_ids <@ rag_chunks.author_agent_ids
