@@ -80,9 +80,15 @@ function attributionSuffix(authorIds: string[] | undefined, callerId: string): s
   if (!authorIds || authorIds.length === 0) return null;
   const others = authorIds.filter((id) => id !== callerId);
   if (others.length === 0) return null;
-  const names = others
-    .map((id) => AGENT_BY_ID[id as AgentId]?.name)
-    .filter((n): n is string => Boolean(n));
+  // De-duplicated: writeChunk merges author_agent_ids on a repeat write, and a partially-overlapping
+  // author set can leave the same id twice. Without this, attribution reads "Finn, Finn".
+  const names = [
+    ...new Set(
+      others
+        .map((id) => AGENT_BY_ID[id as AgentId]?.name)
+        .filter((n): n is string => Boolean(n)),
+    ),
+  ];
   if (names.length === 0) return null;
   return names.join(", ");
 }

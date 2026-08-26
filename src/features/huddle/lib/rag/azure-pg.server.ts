@@ -21,10 +21,21 @@ import type {
 
 export class RagStoreUnavailableError extends Error {
   cause: unknown;
+  /**
+   * The underlying Postgres SQLSTATE (e.g. "42P10", "23505"), lifted off the driver error.
+   *
+   * `q()` wraps EVERY pg error in this class, so without this field a caller could not branch on
+   * what actually went wrong -- a store-unavailable and a specific, recoverable constraint error
+   * were indistinguishable. That is not hypothetical: writeChunk's 42P10 fallback was written
+   * against `err.code` and was DEAD CODE, because the wrapper never carried one.
+   */
+  code?: string;
   constructor(message: string, cause?: unknown) {
     super(message);
     this.name = "RagStoreUnavailableError";
     this.cause = cause;
+    const c = (cause as { code?: unknown } | undefined)?.code;
+    if (typeof c === "string") this.code = c;
   }
 }
 
@@ -116,8 +127,17 @@ CREATE INDEX IF NOT EXISTS rag_chunks_authors_idx
 --   * source IS in the key. Measured: zero texts span more than one source, so including it collapses
 --     nothing extra -- but the Settings memory drawer DISPLAYS source per row, so keeping it means a
 --     collapse can never silently rewrite where something was said.
-CREATE UNIQUE INDEX IF NOT EXISTS rag_chunks_dedup_idx
-  ON rag_chunks (scope, coalesce(agent_id, ''), coalesce(source, ''), md5(text), length(text));
+-- Guarded like the CREATE EXTENSION above, and for the same reason: ONE failing statement aborts the
+-- whole bootstrap batch, and everything below this line -- including CREATE TABLE rag_triples -- would
+-- never run. A database still holding duplicates (any environment that missed the one-off cleanup)
+-- would fail here, so the index is best-effort: log and continue, leaving that DB on the pre-dedup
+-- behaviour writeChunk already falls back to, instead of losing the triples table.
+DO $$ BEGIN
+  CREATE UNIQUE INDEX IF NOT EXISTS rag_chunks_dedup_idx
+    ON rag_chunks (scope, coalesce(agent_id, ''), coalesce(source, ''), md5(text), length(text));
+EXCEPTION WHEN unique_violation THEN
+  RAISE WARNING 'rag_chunks_dedup_idx not created: duplicate rows present. De-duplicate, then re-run bootstrap.';
+END $$;
 
 CREATE TABLE IF NOT EXISTS rag_triples (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -447,16 +467,28 @@ export const azurePgStore: RagStore = {
     //
     // DO UPDATE, not DO NOTHING: DO NOTHING suppresses the RETURNING row on a conflict, so rows[0]
     // would be undefined on exactly the path this exists to handle. Assigning text to itself is the
-    // cheapest touch that still returns the row. Two things are deliberately NOT updated:
-    //   * created_at -- the surviving row keeps its ORIGINAL timestamp. Nothing in retrieval ranks on
-    //     it (searchChunks orders purely by vector distance); the Settings drawer displays it, where
-    //     "when this was first said" is the honest reading, and it matches the one-off cleanup that
-    //     preceded this, which kept the oldest row of each duplicate.
-    //   * author_agent_ids -- first write wins. Merging would need a subquery, which Postgres forbids
-    //     inside ON CONFLICT DO UPDATE. A repeat by a different author keeps the first author's row.
+    // cheapest touch that still returns the row.
+    //
+    // created_at is deliberately NOT updated -- the surviving row keeps its ORIGINAL timestamp. Nothing
+    // in retrieval ranks on it (searchChunks orders purely by vector distance); the Settings drawer
+    // displays it, where "when this was first said" is the honest reading, and it matches the one-off
+    // cleanup that preceded this, which kept the oldest row of each duplicate.
+    //
+    // author_agent_ids IS merged. Dropping the repeat's authors would silently cost them the +0.06
+    // author lane boost in auto-retrieval and their name in the [CONTEXT from ...] attribution -- the
+    // same memory would stop looking like theirs. Array concat needs no subquery (only sub-SELECTs are
+    // forbidden in ON CONFLICT DO UPDATE); the `<@` guard means the common case -- an identical repeat
+    // by the same authors -- writes the array back unchanged instead of growing it without bound.
+    // Partial overlap can still repeat an id, so attributionSuffix() de-duplicates names on read; the
+    // lane boost uses .includes() and is duplicate-insensitive already.
     const onConflict =
       `ON CONFLICT (scope, coalesce(agent_id, ''), coalesce(source, ''), md5(text), length(text))
-       DO UPDATE SET text = EXCLUDED.text`;
+       DO UPDATE SET text = EXCLUDED.text,
+                     author_agent_ids = CASE
+                       WHEN EXCLUDED.author_agent_ids <@ rag_chunks.author_agent_ids
+                         THEN rag_chunks.author_agent_ids
+                       ELSE rag_chunks.author_agent_ids || EXCLUDED.author_agent_ids
+                     END`;
 
     try {
       const { rows } = await q<{ id: string }>(
@@ -470,7 +502,17 @@ export const azurePgStore: RagStore = {
       // throw here is a SILENT loss of the user's words. Degrade to the historical plain INSERT
       // (duplicates, which is merely the old behaviour) rather than drop the chunk. Any other error
       // is a real failure and still propagates.
-      if ((err as { code?: string })?.code !== "42P10") throw err;
+      //
+      // Read the code off BOTH shapes. q() wraps every driver error in RagStoreUnavailableError, which
+      // now lifts `code` off the cause -- but the raw-pg shape is kept as a fallback so this survives a
+      // future caller that reaches the pool directly. Testing only the bare `err.code` is what made the
+      // first version of this fallback unreachable dead code: the wrapper carried no code at all, the
+      // comparison was always true, and the "degrade instead of dropping the chunk" guarantee described
+      // right above did not exist. It was never exercised because the live DB has the index.
+      const pgCode =
+        (err as { code?: string })?.code ??
+        (err as { cause?: { code?: string } })?.cause?.code;
+      if (pgCode !== "42P10") throw err;
       console.warn(
         "[rag] rag_chunks_dedup_idx missing -- inserting without dedup. Run the memory bootstrap.",
       );

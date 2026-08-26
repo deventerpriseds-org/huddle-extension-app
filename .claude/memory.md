@@ -14,8 +14,35 @@ Last updated: 2026-08-25
   gone (no undo). Ran as one `BEGIN…COMMIT` with `ON_ERROR_STOP=1` and the verification SELECTs inside the same
   transaction. **NOTE: `azure-pg-query.yml` is described as "read-only" in CLAUDE.md but is NOT enforced —
   it is plain `psql` and will happily run DDL/DML.** Treat that description as convention, not a guard.
-  **STILL ABSENT: write-time dedup.** `writeChunk` remains a bare `INSERT ... VALUES` with no `ON CONFLICT` and
-  no unique constraint, so duplicates WILL accumulate again. This cleanup is a one-off, not a fix.
+  ~~**STILL ABSENT: write-time dedup.**~~ **CLOSED same day — see the entry below.**
+
+- [2026-08-26] **Write-time dedup SHIPPED (`4c066ce`) — `rag_chunks_dedup_idx` + `ON CONFLICT` in `writeChunk`.**
+  The cleanup above deleted rows; this stops them coming back. Unique expression index on
+  `(scope, coalesce(agent_id,''), coalesce(source,''), md5(text), length(text))`, in `BOOTSTRAP_SQL` **and**
+  applied live (run `32920664371`, confirmed by `pg_indexes`). `writeChunk` → `ON CONFLICT … DO UPDATE SET
+  text = EXCLUDED.text RETURNING id`.
+  **Three design elements that came from MEASURING the live store, and would each have been wrong if guessed**
+  (run `32920484607`) — this is the "ground-truth before answering" rule paying for itself in a schema change:
+  - `max(octet_length(text)) = 2732` vs the **~2704-byte btree tuple cap** → a raw-`text` unique key would have
+    thrown on insert for exactly the LONGEST, most content-rich memories. **`md5(text)` is mandatory.**
+    `length(text)` is in the key too so an md5 collision can't silently swallow a distinct memory.
+  - `agent_id` is NULL on every `scope='global'` row and **NULLs compare DISTINCT in a unique index** → a
+    natural-looking `UNIQUE(scope, agent_id, text, source)` would have caught **ZERO** of the duplicates
+    (they are all global-scope). `coalesce()` in an expression index is what makes it work, on any PG version.
+  - `source` in the key costs nothing (**0** texts span >1 source) and preserves the provenance the Settings
+    memory drawer renders per row (`AgentSettingsDrawer.tsx:657-658`). Conservative for free — took the free option.
+  **`DO UPDATE`, not `DO NOTHING`:** `DO NOTHING` suppresses the `RETURNING` row on a conflict, so `rows[0].id`
+  would be `undefined` on precisely the path the feature exists to handle. Assigning `text` to itself is the
+  cheapest touch that still returns the row. `created_at` and `author_agent_ids` are deliberately NOT updated —
+  the surviving row keeps its ORIGINAL timestamp (matching the cleanup, which kept the oldest twin), and nothing
+  in retrieval ranks on `created_at` (`searchChunks` orders purely by vector distance; only the drawer displays it).
+  **Fail-safe:** a `42P10` (no matching unique index) falls back to the historical plain INSERT. Memory writes are
+  fire-and-forget, so a throw there is a SILENT loss of the user's words — an environment whose bootstrap predates
+  the index must degrade to old behaviour, never drop the chunk.
+  **ORDERING HAZARD I created and should not repeat:** the index went live BEFORE the code deployed, so for the
+  minutes in between an exact-repeat write raised `23505` into a fire-and-forget `catch` — the duplicate correctly
+  didn't land, but that turn's triple extraction was skipped with it. **Deploy the `ON CONFLICT` code FIRST, add
+  the index second** (the 42P10 fallback exists exactly so that order is safe; the reverse order has no guard).
 
 ## THREE memory layers with DIFFERENT rules — and the standing order to trace both directions (2026-08-26, owner)
 **Owner's correction, verbatim:** *"we have conversations, chunks, and triples. triples are supposed to be
