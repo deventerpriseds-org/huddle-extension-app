@@ -3,6 +3,50 @@ Last updated: 2026-08-25 (ACT-63 two notification bugs DEPLOYED 6dccf41, awaitin
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
+### 🔎 ACT-64: WIP confirm-asks go silent — 34 open tasks stuck, and the 4 buttons often don't render (2026-08-26)
+**Ask (user):** *"terry just mentioned giving finn an assignment to research somehting but i never recieved a
+conformation reach out so the wip doesnt seem to be autofiring efficiently. check the transcripts"* — then,
+crucially: *"we worked on several things that mmay not have been deployed. one was for them to ask multiple
+times if they dont get a response from me. the other was to add 4 confirmation related buttons to always pop
+up in stream but i see several reach outs without those buttons."*
+
+**FINDING 1 — the 4 buttons ARE deployed; they are gated on model compliance.**
+`ConfirmAskRow` (HuddleView.tsx) renders **Confirm / Revise / Backlog / Archive** on `origin/main`;
+`origin/claude/confirm-ask-buttons` is fully merged (`git merge-base --is-ancestor` = true). They render only
+when the reply carries `confirmAsk`, and that is derived from ONE thing: the agent having called
+`propose_task_intent` in that turn (`huddle.functions.ts:5462`). `confirmIntentDirective`
+(autowork.server.ts:125) only ASKS the model in prose to "also call propose_task_intent". So a reach-out the
+model writes as plain prose lands with **no buttons** — exactly what the user sees. Not a deploy gap.
+This is the repo's own standing rule violated: *"Meta-task guard (code, not prompt) — a small model sometimes
+ignores the prose rule."* The server already knows task id + title when it enqueues the turn, so it can attach
+`confirmAsk` deterministically; the tool call should only SUPPLY the proposed DoD, not gate the buttons.
+
+**FINDING 2 — the re-ask was SPECCED and never built.** Swept every branch's tree (not a single-file grep):
+no `reAsk`/`re_ask`/ask-count/`confirm_status='asked'`-revisit anywhere. `reArmConfirmAskAt` only matches
+`WHERE confirm_status='awaiting'`, so it reschedules an ask that has not fired yet and can never touch one
+already `asked`. `autowork.server.ts:701` states it outright:
+`// status === "asked": already sent, waiting on the user's reply — nothing to do this pass`
+`markConfirmAsked` is a one-way `awaiting→asked`. The only exit is the user replying.
+The requirement EXISTS in `docs/plan-wip-confirm-review-gate.md` #6: *"A task whose confirm_ask_at fired long
+ago with no reply must not be silently stuck: it's surfaced as awaiting-the-user (standup or Terry's report)."*
+`runScheduledStandup` builds `blocked` from `task_blockers` rows ONLY — it has no notion of a stuck ask. So #6
+was written and never implemented.
+
+**IMPACT (live DB, true counts — no LIMIT):** **34 OPEN (non-DONE) tasks sitting in `confirm_status='asked'`**,
+oldest asked 21 days ago. Nothing promotes UP_NEXT→DOING without a confirmation, so the lane is jammed and the
+user cannot see why. Asks themselves ARE firing (08-22/24/25) — the cadence is healthy; only the recovery is missing.
+
+**Corrections logged (both mine, both from reading a proxy instead of the source):**
+- I asserted "Terry narrated an assignment without filing a task" from the ABSENCE of a task row, without
+  reading the transcript. Terry's actual standup: *"Finn Reid completed three Huddle screenshot uploads since
+  yesterday, and they're waiting for your review."* He reported COMPLETED work, not an assignment. The open
+  question that raises — how three artifacts reached review without a confirm-ask — is NOT yet investigated.
+- I said "no confirm-ask has fired since Aug 21." Wrong: an artifact of my query's `LIMIT 25` truncating the sort.
+
+**Status: DIAGNOSED, nothing built. Awaiting the user's call on scope** (deterministic `confirmAsk` attach;
+re-ask with backoff vs. standup roll-up of stuck asks vs. both).
+
+
 ### 🔄 ACT-67: Write-time dedup for `rag_chunks` — the half of "do we have proper dedup in memory?" the cleanup didn't fix (2026-08-26)
 **Ask (user, verbatim):** *"do we have proper dedup in memory?"* → answered **no**, then *"you should
 clear the 137 duplicates"* (done, ACT-66 note in memory.md). Clearing rows was the cleanup; the write
