@@ -919,7 +919,18 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
 
   // Skip on a resumed chunk — the user message was already persisted to memory on the first chunk;
   // re-writing it every continuation would duplicate the global chunk.
-  if (!resume && !isCeremonyTrigger && (anyShared || privateAgents.length > 0) && openaiKey) {
+  //
+  // `!data.internal` MATTERS AND WAS MISSING. Auto-work's confirm-intent directives arrive as ordinary
+  // turns carrying `internal: true` (autowork.server.ts:114/478) and were being chunked as if the USER
+  // had said them. Measured on the live store: 60 rows averaging 2,090 chars, all opening "This task is
+  // on the board for you: ... Before starting (or continuing) the work, confirm with the user ...",
+  // near-identical and saturated with the same finance vocabulary a real finance question uses. They
+  // competed with genuine user statements for a handful of retrieval slots. This is not a new rule --
+  // `!data.internal` already gates 11 other sites in this file, including the triple ledger 290 lines
+  // below whose comment already reads "internal back-channel turns". The write path simply never got it.
+  // Triple extraction lives inside this block too and is deliberately gated with it: a directive the app
+  // wrote to itself must not become a canonical fact about the user either.
+  if (!resume && !isCeremonyTrigger && !data.internal && (anyShared || privateAgents.length > 0) && openaiKey) {
     (async () => {
       try {
         const { azurePgStore } = await import("./rag/azure-pg.server");
@@ -2206,13 +2217,25 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
         }
         if (memoryQueryVec) {
+          // How many CANDIDATES the DB returns, and how many survive into the prompt. Split on purpose:
+          // fetching wide is cheap (one ANN query) while injecting wide is not -- every extra chunk rides
+          // in EVERY agent's prompt on EVERY turn, which is the cost/tail-latency item at the top of this
+          // repo's own optimization backlog. So: widen the funnel, keep the outlet modest.
+          const MEMORY_CANDIDATE_K = 20;
+          const MEMORY_INJECT_N = 8;
           const { azurePgStore } = await import("./rag/azure-pg.server");
           const hits = await azurePgStore.searchChunks({
             query: data.text,
             queryVec: memoryQueryVec,
             agentId: winner.id,
             mode: ragCfg.sharing ?? "shared",
-            k: 6,
+            // 20, not 6. THIS was the binding constraint, not the `.slice()` below: the SQL LIMIT is
+            // this k, so the database returned at most SIX rows and the relevance floor, the lane
+            // re-rank and any dedup could only ever reorder those six. A chunk the ANN ranked 7th was
+            // unreachable no matter how relevant. Raising the slice alone would have been an inert fix.
+            // 20 is the current server-side clamp ceiling (azure-pg.server.ts) -- deliberately AT it
+            // rather than above, so nothing is silently truncated.
+            k: MEMORY_CANDIDATE_K,
           });
           // Exclude the current message and anything already in this huddle's recent transcript,
           // so we surface only context the model wouldn't otherwise have (older / other-huddle).
@@ -2237,10 +2260,27 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             const authorHit = h.authorAgentIds?.includes(winner.id) ? 0.06 : 0;
             return termHit + authorHit;
           };
+          // Near-duplicate collapse. `alreadyVisible` only matches WHOLE strings, so it cannot catch
+          // two chunks that differ by a task title inside otherwise identical boilerplate. Without this,
+          // a family of near-identical rows can occupy every injected slot with the same sentence --
+          // which is exactly the shape of the 60 auto-work directives already in the store. Legacy rows
+          // stay in the store (deleting user history is destructive and not ours to decide); they are
+          // collapsed at READ time instead, so this also repairs the 713 rows already written.
+          const seenPrefix = new Set<string>();
           const fresh = (hits ?? [])
             .filter((h) => (h.score ?? 0) >= MEMORY_MIN_SCORE && !alreadyVisible.has(h.text.trim()))
             .sort((a, b) => (b.score ?? 0) + laneBoost(b) - ((a.score ?? 0) + laneBoost(a)))
-            .slice(0, 4);
+            .filter((h) => {
+              const key = h.text.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 80);
+              if (seenPrefix.has(key)) return false;
+              seenPrefix.add(key);
+              return true;
+            })
+            .slice(0, MEMORY_INJECT_N);
+          console.info(
+            `[memory] agent=${winner.id} candidates=${(hits ?? []).length} afterFloor+dedup=${fresh.length} ` +
+              `injected=${Math.min(fresh.length, MEMORY_INJECT_N)} topScore=${(hits?.[0]?.score ?? 0).toFixed(3)}`,
+          );
           if (fresh.length) {
             memoryBlock =
               "\n\nRelevant memory from earlier conversations (use only if it helps answer; do not repeat it verbatim or announce that you looked it up):\n" +

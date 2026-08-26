@@ -470,7 +470,12 @@ export const azurePgStore: RagStore = {
 
   async searchChunks(input: SearchChunksInput): Promise<ChunkRow[]> {
     const vec = input.queryVec ?? (await embed(input.query));
-    const k = Math.min(Math.max(input.k ?? 6, 1), 20);
+    // Clamp stays, but no longer SILENT. A caller asking for more than the ceiling used to be trimmed
+    // with no signal, so a retrieval that quietly returned fewer rows than requested was indentical to
+    // one that found fewer -- and "the agent didn't remember" is the only symptom either produces.
+    const kRequested = input.k ?? 6;
+    const k = Math.min(Math.max(kRequested, 1), 20);
+    if (kRequested > 20) console.warn(`[rag] searchChunks k=${kRequested} clamped to ${k}`);
     const clause = scopeClause(input.mode, input.scope, input.agentId);
     const params: unknown[] = [toPgVector(vec)];
     const where = clause.sql.replace("$AGENT", `$${params.length + 1}`);
