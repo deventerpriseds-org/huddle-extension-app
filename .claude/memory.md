@@ -71,6 +71,31 @@ Last updated: 2026-08-25
   field, different load-bearing status — copying the chunks decision across would have made a fact the user
   keeps re-asserting rank as the stalest thing in the store.
 
+- [2026-08-26] **Hardening — a correct-looking READ narrowing promoted a latent WRITE bug into a real one
+  (`5002158`).** The verifier demonstrated it: the supersede `UPDATE` keyed on `(scope, subject,
+  predicate)` while the dedup index keys on `(scope, coalesce(agent_id,''), …)`. Under `scope='agent'`
+  that mismatch let ONE agent's write supersede a DIFFERENT agent's fact, and `huddle.functions.ts` calls
+  `writeTriples` once per `privateAgents` member. Pre-existing — but **adding `excludeSuperseded` to
+  `lookup_facts` amplified it**: previously the wrongly-superseded row was still returned, so the owning
+  agent could still see its fact; after that change it became permanently invisible.
+  **Two generalisable rules, both earned here:**
+  1. **Any predicate that decides WHICH ROWS A WRITE MAY TOUCH must use the SAME key as the index that
+     defines "the same row".** When they disagree, the disagreement is silent.
+  2. **A change that hides rows needs a check of what else decides which rows get hidden.** Narrowing a
+     read is where latent write bugs stop being latent.
+  **Blast radius measured before claiming anything (run `32998817997`, marker-matched):
+  `agent_scoped_triples = 0`** — the store holds NO `scope='agent'` triples, and
+  `superseded_agent_rows_with_a_live_twin_under_a_different_agent = 0`. So the bug never fired on real
+  data; it was latent on an empty path. Fixed anyway, since private-mode writes would have hit it.
+  **Also open, low priority:** superseded duplicates still accrue (**7 groups / 18 excess rows**) and,
+  after `1cbb976`, **nothing in `src/` reads them** — both `lookupTriples` call sites now exclude them.
+  Dead weight, not a correctness issue.
+  **C3 stands UNPROVEN by design and I am not going to dress it up:** the cleanup's merge (max-confidence
+  / authors into each survivor) cannot be re-verified, because the 35 sibling rows it merged from are
+  gone. The `ROLLBACK` rehearsal showing 24/24 is the strongest evidence that exists and it is NOT proof
+  of the committed run. **Lesson for the next destructive migration: capture the pre-state into a table
+  inside the same transaction, so the claim stays falsifiable afterwards.**
+
 - [2026-08-26] **APPLIED to production (run `32997278076`, COMMIT).** `rag_triples` **500 → 465 total,
   435 → 400 live**; `DELETE 35`; `live_dup_groups_remaining 0`; `rag_triples_dedup_idx` created. Both
   dedup indexes now exist (`rag_chunks_dedup_idx` + `rag_triples_dedup_idx`), and `rag_chunks` verified
