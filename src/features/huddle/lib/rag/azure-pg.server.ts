@@ -637,11 +637,23 @@ export const azurePgStore: RagStore = {
             // chains instead (measured: 8 supersede-chain groups, 20 excess rows, 36% of all excess).
             // Now an unchanged re-assertion leaves the live row alone and falls through to the ON
             // CONFLICT below, which collapses it.
+            // `coalesce(agent_id,'') = coalesce($5,'')` -- WITHOUT it this UPDATE keyed on
+            // (scope, subject, predicate) only, while the dedup index keys on
+            // (scope, coalesce(agent_id,''), ...). Under scope='agent' that mismatch meant one agent's
+            // write SUPERSEDED A DIFFERENT AGENT'S FACT, and huddle.functions.ts calls writeTriples once
+            // per privateAgents member, so private mode walked straight into it. Demonstrated, not
+            // theorised: agent-alpha's live fact was superseded by agent-beta's unrelated write.
+            // It was masked for as long as lookup_facts still returned superseded rows -- adding
+            // excludeSuperseded there made the wrongly-superseded fact permanently invisible instead,
+            // which is what turned a latent bug into a load-bearing one. Any predicate that decides
+            // which rows a write may touch has to use the SAME key as the index, or the two disagree
+            // about what "the same fact" means.
             `UPDATE rag_triples SET superseded_at = now()
              WHERE scope = $1 AND lower(subject) = lower($2) AND lower(predicate) = lower($3)
+               AND coalesce(agent_id, '') = coalesce($5, '')
                AND lower(object) <> lower($4)
                AND superseded_at IS NULL`,
-            [t.scope, t.subject, t.predicate, t.object],
+            [t.scope, t.subject, t.predicate, t.object, t.agentId ?? null],
           );
         } catch (err) {
           console.warn("[rag] triple supersession skipped:", err);
