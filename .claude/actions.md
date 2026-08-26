@@ -1,5 +1,5 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-08-25 (ACT-63 two notification bugs DEPLOYED 6dccf41, awaiting user live-confirm; ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
+Last updated: 2026-08-26 (ACT-64 confirm-ask/assist scope revised, no code yet; ACT-63 notification bugs DEPLOYED 6dccf41, Bug 2 user-confirmed live; ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
@@ -70,8 +70,36 @@ board. Mechanism, proven from source + DB:
   spacing, and the existing 9/13/17 `CONFIRM_FAN_WINDOWS`.
 - **Fix C** — exclude the user's own uploads from the standup's "produced" list.
 
-**Status: ACs IN PROGRESS** (independent subagent → `.claude/AC-confirm-ask-fixes.md`, feasibility table first).
-Nothing implemented yet. No code touched.
+**REVISED SCOPE (user, 2026-08-26) — supersedes the "re-ask backfill + roll-up" plan above. FOUR items:**
+1. **Assist tasks must propose an agent-EXECUTED slice, never a plan for the user.** User: *"they keep getting
+   assigned tasks they can't achieve, like go to the bank… instead of it being treated as a support vs do task
+   as we designed it gives me a plan to do it. id expect most tickets to be research tickets or the plan they
+   are communicating being a portion they can actually do to help me… remind me, find store hours, research,
+   plan, outline, draft etc."* **`classifyTaskMode` is CORRECT** ("Go to the bank" → `ASSIST_VERBS` on `go` →
+   assist); the defect is `modeProposalHint`'s assist branch in `lib/tasks/workability.ts` — it says what NOT
+   to do and never says the deliverable must be something the AGENT performs, so the model returns a to-do plan.
+2. **Re-ask every 24 HOURS** (not "a few days").
+3. **Reset by RE-GROOMING, not a re-ask backfill** — stuck tasks → BACKLOG, confirm state cleared, re-groom.
+   Bulk LIVE-BOARD mutation: capture prior state + show scope to the user BEFORE executing.
+4. Standup stops crediting the user's own uploads to agents (unchanged).
+
+**SEQUENCING (decided): the assist rewrite lands BEFORE the board reset** — re-grooming under the current
+instruction would regenerate the same "here's your plan" tickets the user is objecting to.
+
+**AC pass — INTERRUPTED mid-write, 262 lines survived** → `.claude/AC-confirm-ask-fixes.md` (commit `e953b5a`).
+Feasibility table + both blockers + all of Fix A survived; Fix B/C ACs were never written. It survived ONLY
+because the brief mandated incremental file writes — keep that on every spawn.
+**Two blockers that still bind under the revised scope:**
+- **A-blocker:** `confirmTaskFromButtonFn` rejects an empty `proposed_dod` ("No proposed plan found… may be
+  stale"), and only `propose_task_intent` writes that field — so forcing the buttons to render without making
+  the DoD deterministic gives a Confirm that FAILS on exactly the reach-outs being rescued.
+- **B-blocker:** `fireDueConfirmAsks` enqueues `autowork-confirm-${task_id}` (no run id), `enqueueTurn` is
+  `ON CONFLICT DO NOTHING`, and the call site ignores the returned boolean — a re-ask there **inserts nothing
+  and reports success**. Any 24h re-ask must fix the id AND honour the boolean.
+
+**Status: NO CODE TOUCHED YET.** Tracking evidence: AC doc `e953b5a`; memory.md `45cda2a`; this entry.
+Next: (1) `workability.ts` assist rewrite → (2) 24h re-ask + enqueue-id fix → (3) standup upload filter →
+(4) present board-reset scope to the user.
 
 
 ### 🔄 ACT-67: Write-time dedup for `rag_chunks` — the half of "do we have proper dedup in memory?" the cleanup didn't fix (2026-08-26)
