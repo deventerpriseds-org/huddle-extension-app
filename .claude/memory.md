@@ -2,6 +2,41 @@
 Last updated: 2026-08-25
 
 ## Hardening — the phase-tag gate was GREEN while 67% of output was non-compliant (2026-08-25)
+
+## THREE memory layers with DIFFERENT rules — and the standing order to trace both directions (2026-08-26, owner)
+**Owner's correction, verbatim:** *"we have conversations, chunks, and triples. triples are supposed to be
+only about me, chunks are I believe safe for both sides of 1:1. look upstream and downstream to avoid the
+short-sightedness that has had you committing half solutions."*
+
+**The layer contract — do not conflate these again:**
+| layer | holds | scope rule |
+|---|---|---|
+| **conversations** (OpenAI conversation object) | the live thread | per-conversation continuity only; does NOT carry a week-old detail |
+| **chunks** (`public.rag_chunks`) | conversational content | **BOTH SIDES of a 1:1 are safe** — user AND agent |
+| **triples** (`public.rag_triples`) | canonical facts | **ONLY about the USER.** An agent's own statements must NOT become triples |
+
+**What being short-sighted cost, measured this session — three half-fixes in a row on ONE bug:**
+1. Blamed `.slice(0, 4)` for poor recall. WRONG — `k: 6` into `searchChunks` becomes the SQL LIMIT, so the
+   DB only ever returned 6 and the slice merely trimmed 6→4. **Raising the slice alone would have shipped a
+   visible, plausible, completely INERT fix.** Caught by an independent cold read, not by me.
+2. Called the read-time 80-char-prefix collapse "dedup". It is not. `writeChunk` is a bare
+   `INSERT ... VALUES` — **no ON CONFLICT, no unique constraint, no DISTINCT anywhere.** Measured: **716 rows,
+   579 distinct, 137 exact duplicates (19%)**; `"let's run the daily stand-up"` appears **36 times**.
+3. Fixed retrieval WIDTH without checking whether the content was ever WRITTEN. Measured: **every 1:1 has
+   ZERO agent-reply chunks** (dm-finn-reid 0/71, dm-iris-chase 0/130, dm-sam-trent 0/27, …), because the
+   reply-write is gated on `memoryMode === "researched"` AND `data.scope !== "one-to-one"`. Only
+   ceremony-standup (20/265) and all-members (14/44) have any. **So the agent's half of every 1:1 was never
+   stored — retrieval width could not possibly recover it.** The original symptom (Finn couldn't recall the
+   bill-to-account mapping worked out last week) was never a retrieval failure at all.
+
+**STANDING ORDER — before ANY fix in a multi-layer system, trace BOTH directions and say so in writing:**
+- **UPSTREAM:** is the data even WRITTEN? Which gate decides? Check every write site, not the first one found.
+- **DOWNSTREAM:** every consumer of what you changed, and whether each still reconciles.
+- **Then** state extend-vs-new. A fix that changes a READ when the WRITE never happened is a guaranteed no-op
+  that still looks shipped — the most expensive shape of wrong, because it consumes the user's trust twice:
+  once when it doesn't work, again when they have to catch it.
+- **Name the thing accurately.** Calling a narrow read-time collapse "dedup" hid the absent write-time
+  constraint. Precise naming is part of the fix, not decoration.
 **Owner caught it, not the guard, not me.** Measured over this session's transcript: **58 assistant
 text blocks, 19 tagged, 39 UNTAGGED (67%).** The owner's report ("your not qualifying your turns")
 was correct and my impression that I was complying was wrong — I had tagged the opening line of

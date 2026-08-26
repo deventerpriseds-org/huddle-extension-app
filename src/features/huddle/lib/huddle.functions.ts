@@ -5780,7 +5780,15 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   function persistResearchedMemory() {
     if (researchedMemPersisted) return;
     researchedMemPersisted = true;
-    if (data.memoryMode !== "researched" || data.scope === "one-to-one" || !openaiKey) return;
+    // SCOPE EXCLUSION REMOVED (2026-08-26). This used to bail on `data.scope === "one-to-one"`, on the
+    // reasoning that a 1:1 is "carried by the conversation object". Measured on the live store, that left
+    // EVERY 1:1 with zero agent-reply chunks -- dm-finn-reid 0/71, dm-iris-chase 0/130, dm-sam-trent 0/27
+    // -- while only ceremony-standup (20/265) and all-members (14/44) had any. So only the USER's half of
+    // every private conversation was ever remembered, and the agent's half simply did not exist to be
+    // retrieved. The conversation object carries continuity WITHIN a thread; it demonstrably did not
+    // carry a week-old detail, which is the symptom that started this. Per the owner's layer contract:
+    // chunks are safe for BOTH sides of a 1:1 -- it is TRIPLES that are user-only (see below).
+    if (data.memoryMode !== "researched" || !openaiKey) return;
     const anyShared = data.members.some((id) => {
       const c = agentsCfg[id]?.rag;
       return c?.store === "azure" && c.chunks && (c.sharing ?? "shared") === "shared";
@@ -5792,7 +5800,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       try {
         const { azurePgStore } = await import("./rag/azure-pg.server");
         const { embed } = await import("./rag/embed.server");
-        const { extractTriples } = await import("./rag/triples.server");
+        // extractTriples is no longer imported here -- triples are user-only and are produced solely
+        // from the user message near line 980. See the note at the former tool-triple loop below.
         const src = `huddle:${data.huddleId}`;
         // A1 — distilled agent-reply chunks
         for (const r of finalReplies) {
@@ -5815,30 +5824,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             authorAgentIds: [r.agentId],
           });
         }
-        // Tool-confirmed triples — canonical facts an agent actually established (ok:true only)
-        for (const t of finalTools) {
-          if (!t.ok || !t.summary) continue;
-          const name = AGENT_BY_ID[t.agentId]?.name ?? t.agentId;
-          let facts: { subject: string; predicate: string; object: string; confidence: number }[] = [];
-          try {
-            facts = await extractTriples(`${name} ${t.tool}: ${t.summary}`);
-          } catch {
-            facts = [];
-          }
-          if (facts.length) {
-            await azurePgStore.writeTriples(
-              facts.map((f) => ({
-                scope: "global" as const,
-                subject: f.subject,
-                predicate: f.predicate,
-                object: f.object,
-                confidence: f.confidence,
-                authorAgentIds: [t.agentId],
-                supersede: true,
-              })),
-            );
-          }
-        }
+        // TRIPLES ARE USER-ONLY -- deliberately nothing here any more.
+        //
+        // This block used to extract triples from `${name} ${tool}: ${summary}` -- an AGENT's own tool
+        // summary -- and write them with `supersede: true`. Downstream, lookupTriples injects those under
+        // the header "Latest known facts (these supersede anything older -- treat as the current truth)".
+        // So an agent's account of its own action was being presented to the model as canonical truth
+        // ABOUT THE USER, and could override a real user-stated fact. That inverts the layer contract:
+        // triples are facts about the USER; an agent's statements belong in CHUNKS, which is exactly what
+        // the loop above now writes for both sides of a 1:1.
+        //
+        // The user-message triple extraction (from `data.text`, ~line 983) is the correct and only
+        // producer, and is untouched. Existing agent-derived triples remain in the store -- deleting a
+        // user's history is destructive and not ours to decide -- so they will age out via supersede
+        // rather than being purged. Flag for the owner if they should be cleaned up.
       } catch (e) {
         console.error("[researched-mem] persist failed", e instanceof Error ? e.message : e);
       }
