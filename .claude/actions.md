@@ -43,8 +43,35 @@ user cannot see why. Asks themselves ARE firing (08-22/24/25) — the cadence is
   question that raises — how three artifacts reached review without a confirm-ask — is NOT yet investigated.
 - I said "no confirm-ask has fired since Aug 21." Wrong: an artifact of my query's `LIMIT 25` truncating the sort.
 
-**Status: DIAGNOSED, nothing built. Awaiting the user's call on scope** (deterministic `confirmAsk` attach;
-re-ask with backoff vs. standup roll-up of stuck asks vs. both).
+**FINDING 3 (NEW, root-caused 2026-08-26) — the standup credits the USER'S OWN chat uploads to an agent as
+completed work.** The user's report that closed this: *"I just checked the app again and the board shows
+nothing in review."* Their observation is ground truth, and it means Terry's standup line was FALSE, not the
+board. Mechanism, proven from source + DB:
+- `runScheduledStandup` calls `listArtifacts(email)` with **NO folder and NO status filter**, keeps anything
+  `created_at` within 24h, and renders it as *"Work the team completed since yesterday (N document(s), for
+  your review)"* attributed to `agent_id`.
+- A chat attachment (`artifacts/attachments.functions.ts:66-72`) is written with `agentId` = **the agent the
+  user was messaging**, `folder:"Uploads"`, `status:"approved"`, and the in-code comment *"an input, not a
+  deliverable to review"*. The standup ignores both fields.
+- **Live DB:** `tasks_in_review = 0` (board is right, nothing awaits review); `Uploads/approved = 29 rows`.
+  Also surfaced: ~86 artifacts sit at `status='review'` while ZERO tasks are `IN_REVIEW` — a SECOND possible
+  inconsistency, not yet investigated.
+- So "Finn Reid completed three Huddle screenshot uploads… waiting for your review" = the user's own three
+  screenshots. **There is NO confirm-gate leak** — the earlier worry is retired. Terry's own wording
+  ("screenshot **uploads**") corroborates. (Directly observed: 0-in-review, the unfiltered query, the upload
+  write path. Inferred: that those 3 specific rows were the screenshots — from naming + code path.)
+
+**APPROVED SCOPE (user, 2026-08-26) — build all three:**
+- **Fix A** — attach `confirmAsk` server-side at enqueue so Confirm/Revise/Backlog/Archive render on EVERY
+  confirm-intent reach-out; the `propose_task_intent` tool call should only SUPPLY the DoD, never gate buttons.
+- **Fix B** — user chose **BOTH**: (i) re-ask with backoff on a stuck `asked` row, (ii) standup roll-up line
+  listing everything awaiting confirmation. Implements `docs/plan-wip-confirm-review-gate.md` #6, never built.
+  **Flood risk is a first-class constraint:** 34 backlogged items must not re-ask in one morning — needs a cap,
+  spacing, and the existing 9/13/17 `CONFIRM_FAN_WINDOWS`.
+- **Fix C** — exclude the user's own uploads from the standup's "produced" list.
+
+**Status: ACs IN PROGRESS** (independent subagent → `.claude/AC-confirm-ask-fixes.md`, feasibility table first).
+Nothing implemented yet. No code touched.
 
 
 ### 🔄 ACT-67: Write-time dedup for `rag_chunks` — the half of "do we have proper dedup in memory?" the cleanup didn't fix (2026-08-26)

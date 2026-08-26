@@ -1506,6 +1506,39 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+**ACT-64 — confirm-ask visibility: buttons, re-ask, and a lying standup (2026-08-26, IN PROGRESS).**
+Read this before touching the confirm-intent gate, the standup, or `artifacts.items` reads.
+
+**The three facts that took two wrong answers to reach:**
+1. **The 4 confirm buttons ARE deployed and ARE conditional on the MODEL.** `ConfirmAskRow`
+   (Confirm/Revise/Backlog/Archive) renders only when a reply carries `confirmAsk`, which comes ONLY from the
+   agent calling `propose_task_intent`. `confirmIntentDirective` just asks for that in prose. Prose-only
+   reach-out ⇒ no buttons. Do NOT diagnose this as "not deployed" — `claude/confirm-ask-buttons` is merged.
+2. **The re-ask was SPECCED, never built** (`docs/plan-wip-confirm-review-gate.md` #6). `markConfirmAsked` is
+   one-way awaiting→asked; `autowork.server.ts:701` literally says *"already sent … nothing to do this pass"*;
+   `reArmConfirmAskAt` matches only `WHERE confirm_status='awaiting'` so it can never touch an asked row.
+   34 OPEN tasks are stuck, oldest 21 days. Absence verified by an ALL-BRANCH sweep, not a single-file grep.
+3. **The standup reports the USER'S OWN chat uploads as agent-completed work.** `listArtifacts(email)` is
+   called with NO folder/status filter; chat attachments are written `agentId`=addressed agent,
+   `folder:"Uploads"`, `status:"approved"` ("an input, not a deliverable to review"). Live: 0 tasks IN_REVIEW,
+   29 Uploads/approved rows. **There is NO confirm-gate leak** — that worry is retired.
+
+**HARD-WON PROCESS LESSON (cost two wrong answers in one turn):** the user asked "did you read the transcript?"
+and the answer was no — I had asserted what an agent SAID from the ABSENCE of a task row. `chat.pending_turns`
+`payload->>'text'` is the DIRECTIVE (system-authored); the agent's actual words are in `replies` /
+`result->'replies'`. **Reading the directive is not reading the transcript.** Separately, I reported a query's
+`LIMIT 25` as a count. Both are the same failure: answering from a proxy. The user's own observation ("the board
+shows nothing in review") is what cracked finding 3 — treat their observation as the fact to EXPLAIN, never to
+contradict.
+
+**Approved build (user chose BOTH on the stuck-ask question):** (A) attach `confirmAsk` server-side at enqueue
+so buttons always render, tool call only supplies the DoD; (B) re-ask with backoff **and** a standup roll-up of
+everything awaiting confirmation — with a hard flood constraint, since 34 backlogged items must not all re-ask
+in one morning (cap + spacing + the existing 9/13/17 CONFIRM_FAN_WINDOWS); (C) filter the user's own uploads out
+of the standup's "produced" list.
+**Status: ACs in progress (independent subagent → `.claude/AC-confirm-ask-fixes.md`). No code touched yet.**
+Open, uninvestigated: ~86 artifacts sit at `status='review'` while ZERO tasks are `IN_REVIEW`.
+
 **ACT-63 — the away-gate asks the wrong question at the wrong TIME (2026-08-25).** Read this before
 touching notification delivery. The reply push gate lived on `payload.foreground`, a **send-time**
 snapshot of "was this huddle on screen when they hit send". A turn runs 19-24s, so send-and-walk-away
