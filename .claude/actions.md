@@ -52,8 +52,23 @@ row keeps triple provenance pointing at a real chunk.
 `{finn-reid,iris-chase}`. `store_total` 579 before and after.
 **AC-11a** (run `32921842761`): 36 reply chunks, 4 at the truncation boundary, **0** first-400 collisions.
 
-**Status:** typecheck clean; index live (`32920664371`); `4c066ce` deployed; `c0ff987` deploying;
-independent verifier running. **NOT yet user-confirmed live.**
+**Verifier (independent, own probes — did not reuse mine):** C1-C6, C8, C9 all **CONFIRMED**; C7
+(concurrency) confirmed by reasoning only, stated as such. It proved the 42P10 fallback reachable at
+*runtime* by importing the real error class, and re-ran the dedup probe itself (14 writes → 10 rows,
+rolled back, store still 579). Its 3 adversarial findings were fixed in `34efe3f`: the two dedup-key
+expression lists are now ONE constant (`CHUNK_DEDUP_KEY`) so drift is impossible — it had become a
+*silent* failure once the 42P10 fallback existed; the bootstrap guard widened from `unique_violation`
+to `WHEN OTHERS` (42501/53100/54000 would each have lost `rag_triples`); and `metadata`/`embedding`
+first-writer-wins is now documented rather than undocumented.
+
+**Deployed:** `4c066ce` (run `32920749324`), `c0ff987` (`32921834525`), `34efe3f` (`32973331472`) — all
+success. **NOT yet user-confirmed live** — the live check is conversational recall, below.
+
+**⛔ OPEN — needs your decision (see memory.md):** the verifier asked why `rag_chunks` got dedup and
+`rag_triples` didn't. Measuring it found something bigger than duplication: of 500 triples, only
+**176 are about you** — **152 are about the AGENTS** (`assistant`, `finn reid`, `iris chase`) and 172
+are about tasks/entities. Against your stated contract *"triples are supposed to be only about me."*
+Different write path from the one already fixed. Not touched — it's your data and a real fork.
 
 ### ✅ ACT-63: Two notification bugs — blocker messages had no name; away replies never buzzed (2026-08-25)
 **Ask (user, verbatim):** *"Terry messaged me about a blocker but didn't mention who was blocked so I

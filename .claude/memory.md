@@ -39,6 +39,34 @@ Last updated: 2026-08-25
   **Fail-safe:** a `42P10` (no matching unique index) falls back to the historical plain INSERT. Memory writes are
   fire-and-forget, so a throw there is a SILENT loss of the user's words — an environment whose bootstrap predates
   the index must degrade to old behaviour, never drop the chunk.
+- [2026-08-26] **THE TRIPLES LAYER IS ~65% NOT-ABOUT-THE-USER — measured, and it is a bigger problem than
+  the duplication that surfaced it. AWAITING OWNER DECISION, nothing changed yet.**
+  Found by the verifier's adversarial pass (C10-a) asking why `rag_chunks` got dedup and its sibling
+  `rag_triples` — written from the SAME call sites, in the SAME turn, off the SAME user text — did not.
+  That was a fair hit: I fixed one layer and left the other duplicating at 11%. But measuring it
+  (runs `32973089858`, `32973289274`) exposed the real issue. Against the owner's verbatim contract —
+  *"triples are supposed to be only about me"* — of **500** triples:
+  | subject class | total | live |
+  |---|---|---|
+  | about the USER | 176 | 132 |
+  | other/named entity (`task`, `task <uuid>`, `assigned_task`, `task_artifact`, `nexus application`) | 172 | 169 |
+  | **about an AGENT** (`assistant` ×152, `finn reid` ×5, `iris chase` ×3) | **152** | **134** |
+  So only ~35% of the user-only layer is about the user, and ~30% is about the AGENTS — injected under
+  *"Latest known facts (these supersede anything older — treat as the current truth)"*. Top duplicated
+  groups are all agent-subject: `assistant|has_role|startup planner` ×5, `assistant|role|career coach` ×5,
+  `assistant|assigned_task|work on nexus application` ×4.
+  **This is a DIFFERENT source from the one already fixed.** The `:5827` fix removed triples extracted
+  from an agent's own tool summaries. These come from `extractTriples(data.text)` running over the USER's
+  message — "you're my career coach" becomes `assistant | role | career coach`. Same contract violation,
+  different write path; fixing one did not touch the other. **Lesson: when a contract is violated, sweep
+  every writer to that store, not the one the symptom pointed at.**
+  Duplication numbers for whenever this is picked up: 32 groups / 55 excess rows overall, **24 groups /
+  35 excess LIVE**. A partial unique index on `WHERE superseded_at IS NULL` is the right shape (it lets
+  superseded history coexist) but **CANNOT be created until the 24 live groups are cleaned** — same
+  precondition as the chunks index. `writeTriples` (`azure-pg.server.ts`) is still a bare INSERT.
+  **Not acted on: it is the owner's data and a real fork** (stop writing agent-subject triples? purge
+  existing? are task-subject triples legitimate?). Asked, not assumed.
+
 - [2026-08-26] **Truncated agent-reply over-collapse (AC-11a): measured, exposure is ZERO, and the risk is
   misattributed anyway.** Reply chunks are `` `${name} said: ${gist}` `` with `gist = …slice(0, 400)`
   (`huddle.functions.ts:5808`), so two long replies from one agent sharing their first 400 chars now
