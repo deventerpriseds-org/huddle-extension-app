@@ -223,6 +223,18 @@ export async function runBootstrap(): Promise<{
   error?: { message: string; code?: string; detail?: string };
   extensions: string[];
   tables: { rag_chunks: boolean; rag_triples: boolean };
+  /**
+   * Whether the two write-time dedup indexes actually EXIST after the batch ran.
+   *
+   * Both CREATE UNIQUE INDEX statements are wrapped in `DO $$ … EXCEPTION WHEN OTHERS … RAISE WARNING`
+   * so one failure cannot abort the batch and cost us the tables below it. The cost of that safety is
+   * that a failure is now INVISIBLE: on a database still holding duplicate rows the index fails 23505,
+   * the warning goes to a notice channel nobody is subscribed to, this function checked only
+   * information_schema.tables and returned ok:true, and writeChunk/writeTriples then quietly fell back
+   * to plain duplicate-producing INSERTs. The whole feature would report green while doing nothing.
+   * Reporting presence is what closes that gap -- `ok` means the batch ran, these mean it WORKED.
+   */
+  indexes: { rag_chunks_dedup: boolean; rag_triples_dedup: boolean };
 }> {
   const url = process.env.AZURE_PG_URL;
   if (!url) {
@@ -232,6 +244,7 @@ export async function runBootstrap(): Promise<{
       error: { message: "AZURE_PG_URL not configured" },
       extensions: [],
       tables: { rag_chunks: false, rag_triples: false },
+      indexes: { rag_chunks_dedup: false, rag_triples_dedup: false },
     };
   }
   const client = new Client({
@@ -249,11 +262,21 @@ export async function runBootstrap(): Promise<{
       "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('rag_chunks','rag_triples')",
     );
     const names = new Set(t.rows.map((r) => r.table_name));
+    const idx = await client.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes
+        WHERE schemaname='public'
+          AND indexname IN ('rag_chunks_dedup_idx','rag_triples_dedup_idx')`,
+    );
+    const idxNames = new Set(idx.rows.map((r) => r.indexname));
     return {
       ok: true,
       ranSql: BOOTSTRAP_SQL,
       extensions: ext.rows.map((r) => r.extname),
       tables: { rag_chunks: names.has("rag_chunks"), rag_triples: names.has("rag_triples") },
+      indexes: {
+        rag_chunks_dedup: idxNames.has("rag_chunks_dedup_idx"),
+        rag_triples_dedup: idxNames.has("rag_triples_dedup_idx"),
+      },
     };
   } catch (err) {
     const e = err as { message?: string; code?: string; detail?: string };
@@ -267,6 +290,7 @@ export async function runBootstrap(): Promise<{
       },
       extensions: [],
       tables: { rag_chunks: false, rag_triples: false },
+      indexes: { rag_chunks_dedup: false, rag_triples_dedup: false },
     };
   } finally {
     await client.end().catch(() => undefined);
@@ -294,6 +318,8 @@ interface DiagnoseResult {
     version?: string;
     extensions?: string[];
     tables?: { rag_chunks: boolean; rag_triples: boolean };
+    /** Write-time dedup indexes. Absent = duplicates are re-accumulating; see runBootstrap's note. */
+    indexes?: { rag_chunks_dedup: boolean; rag_triples_dedup: boolean };
     rows?: { rag_chunks: number; rag_triples: number };
   };
   timestamp: string;
@@ -421,6 +447,20 @@ export async function diagnoseAzurePg(): Promise<DiagnoseResult> {
       rows.rag_triples = Number(c.rows[0]?.n ?? 0);
     }
     result.server.rows = rows;
+
+    // Surface dedup-index presence in the diagnostic too, not just runBootstrap -- this is the panel
+    // the user actually looks at, and an index that failed to create is exactly the condition that
+    // otherwise looks identical to everything being fine.
+    const idx = await client.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes
+        WHERE schemaname='public'
+          AND indexname IN ('rag_chunks_dedup_idx','rag_triples_dedup_idx')`,
+    );
+    const idxNames = new Set(idx.rows.map((r) => r.indexname));
+    result.server.indexes = {
+      rag_chunks_dedup: idxNames.has("rag_chunks_dedup_idx"),
+      rag_triples_dedup: idxNames.has("rag_triples_dedup_idx"),
+    };
   } catch (err) {
     const e = err as { message?: string; code?: string; severity?: string; routine?: string; detail?: string };
     result.handshake = {
@@ -588,10 +628,20 @@ export const azurePgStore: RagStore = {
       if (t.supersede) {
         try {
           await q(
+            // `AND lower(object) <> lower($4)` -- supersede means the VALUE CHANGED, and re-asserting a
+            // fact identical to the live one is not a change. Without this clause the dominant producer
+            // (memoryMode "researched" is the DEFAULT, so supersede is on for almost every write)
+            // superseded the live row and inserted a fresh copy every single time, so there was never a
+            // live row left to conflict with -- write-time dedup would have been structurally unable to
+            // fire on the path that produces the most triples, while quietly growing the superseded
+            // chains instead (measured: 8 supersede-chain groups, 20 excess rows, 36% of all excess).
+            // Now an unchanged re-assertion leaves the live row alone and falls through to the ON
+            // CONFLICT below, which collapses it.
             `UPDATE rag_triples SET superseded_at = now()
              WHERE scope = $1 AND lower(subject) = lower($2) AND lower(predicate) = lower($3)
+               AND lower(object) <> lower($4)
                AND superseded_at IS NULL`,
-            [t.scope, t.subject, t.predicate],
+            [t.scope, t.subject, t.predicate, t.object],
           );
         } catch (err) {
           console.warn("[rag] triple supersession skipped:", err);
@@ -625,8 +675,14 @@ export const azurePgStore: RagStore = {
         t.sourceChunkId ?? null,
         t.authorAgentIds ?? [],
       ];
+      // created_at IS bumped here, the OPPOSITE of writeChunk -- and the difference is deliberate, not
+      // an inconsistency. lookupTriples orders `confidence DESC, created_at DESC`, so for triples
+      // created_at is LOAD-BEARING ranking input; searchChunks orders purely by vector distance, so for
+      // chunks it is display metadata only. Keeping the original timestamp here would make a fact the
+      // user keeps re-asserting rank as though it were the stalest thing in the store.
       const tOnConflict = `ON CONFLICT (${TRIPLE_DEDUP_KEY}) WHERE ${TRIPLE_DEDUP_PRED}
          DO UPDATE SET confidence = greatest(rag_triples.confidence, EXCLUDED.confidence),
+                       created_at = now(),
                        author_agent_ids = CASE
                          WHEN EXCLUDED.author_agent_ids <@ rag_triples.author_agent_ids
                            THEN rag_triples.author_agent_ids

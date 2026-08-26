@@ -249,6 +249,7 @@ function firstError(d: Diagnostic): string {
 function DiagBlock({ diag }: { diag: Diagnostic }) {
   const cs = diag.connectionString;
   const tables = diag.server.tables;
+  const indexes = diag.server.indexes;
   const rows = diag.server.rows;
   return (
     <div className="flex flex-col gap-2 text-[11px]">
@@ -304,6 +305,19 @@ function DiagBlock({ diag }: { diag: Diagnostic }) {
           value={`rag_chunks=${tables.rag_chunks ? "yes" : "MISSING"}, rag_triples=${
             tables.rag_triples ? "yes" : "MISSING"
           }`}
+        />
+      )}
+      {indexes && (
+        <Row
+          label="Dedup indexes"
+          ok={indexes.rag_chunks_dedup && indexes.rag_triples_dedup}
+          value={
+            indexes.rag_chunks_dedup && indexes.rag_triples_dedup
+              ? "rag_chunks=yes, rag_triples=yes"
+              : `rag_chunks=${indexes.rag_chunks_dedup ? "yes" : "MISSING"}, rag_triples=${
+                  indexes.rag_triples_dedup ? "yes" : "MISSING"
+                } — duplicates are re-accumulating; de-duplicate, then re-run bootstrap`
+          }
         />
       )}
       {rows && (
