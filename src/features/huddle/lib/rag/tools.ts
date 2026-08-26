@@ -128,6 +128,14 @@ export async function dispatchTool(
       k: (call.arguments.k as number | undefined) ?? 8,
       agentId,
       mode,
+      // A superseded triple is BY DEFINITION one the user has since changed. This tool was reading
+      // them: the auto-retrieval path (huddle.functions.ts) passes excludeSuperseded, `lookup_facts`
+      // did not, so an agent that elected to look a fact up got the stale values back alongside the
+      // current one -- and the store's single worst duplicate family (`user has_spouse wife`, 8 rows,
+      // only 1 live) is entirely superseded rows, so it was invisible to the write-time dedup index
+      // and fully visible here. Safe in every mode: superseded_at is only ever set on the supersede
+      // path (memoryMode "researched"), so in legacy modes this filter matches everything anyway.
+      excludeSuperseded: true,
     });
     if (rows.length === 0) return JSON.stringify({ results: [], guidance: EMPTY_RESULT_GUIDANCE });
     return JSON.stringify({

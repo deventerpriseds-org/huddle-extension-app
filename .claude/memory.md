@@ -39,6 +39,66 @@ Last updated: 2026-08-25
   **Fail-safe:** a `42P10` (no matching unique index) falls back to the historical plain INSERT. Memory writes are
   fire-and-forget, so a throw there is a SILENT loss of the user's words — an environment whose bootstrap predates
   the index must degrade to old behaviour, never drop the chunk.
+- [2026-08-26] **Hardening — the triples dedup as first built would have SILENTLY DONE NOTHING and reported
+  green. Caught by the cold AC pass, before it shipped this time.** Four findings, all real, all measured:
+  1. **The safety guard defeated the feature.** `BOOTSTRAP_SQL`'s `CREATE UNIQUE INDEX` is wrapped in
+     `EXCEPTION WHEN OTHERS → RAISE WARNING` so one failure can't abort the batch. But the live DB HAS 24
+     live duplicate groups → index fails 23505 → warning goes to a notice channel nobody subscribes to →
+     `runBootstrap` checked only `information_schema.tables` and returned **ok:true** → `writeTriples`
+     42P10s to a plain INSERT behind one `console.warn`. Green light, zero effect. **The generalisable
+     trap: a guard that converts a hard failure into a warning ALSO converts it into an invisible one.
+     Whenever you add one, add the positive check that the guarded thing actually happened.** Fixed:
+     `runBootstrap` AND `diagnoseAzurePg` now report `indexes.{rag_chunks_dedup,rag_triples_dedup}` from
+     `pg_indexes`, and MemoryDbPanel renders a "Dedup indexes" row that goes red with a remedy.
+  2. **The index could never have fired on the dominant producer.** `memoryMode` defaults to
+     `"researched"` → `supersede:true` → supersede-then-insert, so there was never a LIVE row left to
+     conflict with. Root cause: the supersede predicate keyed on `(scope,subject,predicate)` and ignored
+     `object`, so re-asserting an UNCHANGED fact still superseded-and-reinserted. Fixed by adding
+     `AND lower(object) <> lower($4)` — supersede now means the value actually CHANGED, which is what it
+     always meant to mean, and an unchanged re-assertion falls through to the ON CONFLICT.
+  3. **`lookup_facts` was reading superseded rows.** `rag/tools.ts` called `lookupTriples` WITHOUT
+     `excludeSuperseded` while the auto-retrieval path passed it. So the single worst duplicate family
+     (`user has_spouse wife` ×8, only 1 live) was invisible to write-time dedup AND fully visible to the
+     tool. One line. **The lesson: two consumers of one store diverged, and the fix targeted only the one
+     the symptom pointed at — the same shape as the agent-triples miss earlier the same day.**
+  4. **A naive cleanup would have degraded 10 facts.** `lookupTriples` orders `confidence DESC,
+     created_at DESC`, so keeping the oldest row of each group loses the group's max confidence.
+     **Measured in the rehearsal: `rows_that_wouldve_lost_confidence = 10`**, plus 10 groups losing author
+     attribution. The migration now rolls max-confidence, newest-created_at and the author UNION into the
+     survivor BEFORE deleting; verified `24/24` survivors carried both.
+  **`created_at` is bumped on conflict for triples — the OPPOSITE of chunks, deliberately.** `lookupTriples`
+  RANKS on `created_at`; `searchChunks` orders purely by vector distance and only displays it. Same-looking
+  field, different load-bearing status — copying the chunks decision across would have made a fact the user
+  keeps re-asserting rank as the stalest thing in the store.
+
+- [2026-08-26] **Triples write-time dedup — built, live-rehearsed, parked on `claude/triples-dedup`.**
+  **Owner ruling on the subject question below: agent-subject triples STAY.** Verbatim: *"I'm fine with
+  this because its clearly tagged to them and not me, so facts about me can be discerned. Just focus on
+  the duplicates."* The `subject` field IS the discriminator — that reframing is correct and the entry
+  below over-read it as a contract violation. **Scope: duplicates only. No subject filter, no purge.**
+  **The design, every element measured rather than guessed** (runs `32975915210`, `32976307300`):
+  - **PARTIAL index, LIVE rows only** (`WHERE superseded_at IS NULL`). Superseded rows are the record of
+    what a fact USED to be — two with identical values are history, not duplication. A full-table unique
+    index would ALSO break supersede, because re-asserting a fact after superseding it is legitimate and
+    must still insert. **Proven in the rehearsal**: after superseding `Test Object Alpha`, re-inserting it
+    returned a NEW id, not a collapse.
+  - **Only `object` is hashed.** subject 66 bytes / predicate 59 / **object 809** — subject and predicate
+    are short by nature and stay READABLE in the index; `object` is free model text with no schema cap and
+    is the only one that could reach the ~2704-byte btree limit. `length(object)` guards md5 collisions.
+  - **`lower()` is safe**: measured **0** triples differing only by case. Rehearsal confirmed a repeat with
+    a different-cased object collapses onto the first row — and the stored row keeps its ORIGINAL casing,
+    since `object` is not in the DO UPDATE.
+  - **FK sweep BEFORE any delete** — the lesson from the chunks cleanup, applied preemptively this time.
+    The ONLY FK touching `rag_triples` is `rag_triples_source_chunk_id_fkey → rag_chunks`. **Nothing
+    references `rag_triples.id`**, so deleting duplicate triples carries no provenance hazard. That is a
+    materially different (and safer) situation than the chunks cleanup, and it was worth proving, not assuming.
+  - `DO UPDATE` keeps the **higher** confidence and merges authors behind the `<@` no-growth guard;
+    `source_chunk_id` untouched so provenance points at the chunk that FIRST carried the fact.
+  **Full migration rehearsed inside `BEGIN … ROLLBACK`** — dedup delete AND index creation AND every
+  conflict case really executed against the live schema, then rolled back to `500 total / 435 live / 0
+  probe rows`. **Rehearsing a destructive migration in a rolled-back transaction is now the pattern to
+  reach for** — it is strictly better than reasoning about what the SQL would do.
+
 - [2026-08-26] **THE TRIPLES LAYER IS ~65% NOT-ABOUT-THE-USER — measured, and it is a bigger problem than
   the duplication that surfaced it. AWAITING OWNER DECISION, nothing changed yet.**
   Found by the verifier's adversarial pass (C10-a) asking why `rag_chunks` got dedup and its sibling
