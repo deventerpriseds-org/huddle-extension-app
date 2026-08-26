@@ -102,6 +102,23 @@ CREATE INDEX IF NOT EXISTS rag_chunks_agent_idx
 CREATE INDEX IF NOT EXISTS rag_chunks_authors_idx
   ON rag_chunks USING gin (author_agent_ids);
 
+-- Write-time dedup key. Before this existed, writeChunk was a bare INSERT with no constraint and the
+-- live store had drifted to 716 rows / 579 distinct -- 137 exact duplicates (19%), one phrase stored
+-- 36 times -- each of them competing for the handful of slots auto-retrieval injects per turn.
+-- Three deliberate choices, each measured on the live store rather than assumed:
+--   * md5(text), never raw text. The longest chunk is 2732 BYTES; a btree tuple caps near 2704, so a
+--     raw-text key would ERROR on insert for exactly the longest, most content-rich memories.
+--     length(text) rides along so an md5 collision cannot silently swallow a distinct memory.
+--   * coalesce(), not bare columns. agent_id is NULL on every scope='global' row and NULLs compare
+--     DISTINCT in a unique index by default -- a naive UNIQUE(scope, agent_id, ...) would have caught
+--     none of the global duplicates, which is all of them. (PG17 offers NULLS NOT DISTINCT; coalesce
+--     is version-proof and reads the same way the ON CONFLICT clause does.)
+--   * source IS in the key. Measured: zero texts span more than one source, so including it collapses
+--     nothing extra -- but the Settings memory drawer DISPLAYS source per row, so keeping it means a
+--     collapse can never silently rewrite where something was said.
+CREATE UNIQUE INDEX IF NOT EXISTS rag_chunks_dedup_idx
+  ON rag_chunks (scope, coalesce(agent_id, ''), coalesce(source, ''), md5(text), length(text));
+
 CREATE TABLE IF NOT EXISTS rag_triples (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   scope rag_scope NOT NULL,
@@ -412,21 +429,57 @@ export const azurePgStore: RagStore = {
 
   async writeChunk(input: WriteChunkInput) {
     const vec = input.embedding ?? (await embed(input.text));
-    const { rows } = await q<{ id: string }>(
-      `INSERT INTO rag_chunks (scope, agent_id, text, source, embedding, metadata, author_agent_ids)
-       VALUES ($1, $2, $3, $4, $5::vector, $6, $7)
-       RETURNING id`,
-      [
-        input.scope,
-        input.agentId ?? null,
-        input.text,
-        input.source ?? null,
-        toPgVector(vec),
-        input.metadata ?? {},
-        input.authorAgentIds ?? [],
-      ],
-    );
-    return { id: rows[0].id };
+    const params = [
+      input.scope,
+      input.agentId ?? null,
+      input.text,
+      input.source ?? null,
+      toPgVector(vec),
+      input.metadata ?? {},
+      input.authorAgentIds ?? [],
+    ];
+    const cols = `(scope, agent_id, text, source, embedding, metadata, author_agent_ids)`;
+    const vals = `VALUES ($1, $2, $3, $4, $5::vector, $6, $7)`;
+
+    // An exact repeat is a no-op that hands back the row already holding this text. The conflict
+    // target mirrors rag_chunks_dedup_idx expression-for-expression (Postgres infers the index from
+    // the expression list, so the two must not drift apart).
+    //
+    // DO UPDATE, not DO NOTHING: DO NOTHING suppresses the RETURNING row on a conflict, so rows[0]
+    // would be undefined on exactly the path this exists to handle. Assigning text to itself is the
+    // cheapest touch that still returns the row. Two things are deliberately NOT updated:
+    //   * created_at -- the surviving row keeps its ORIGINAL timestamp. Nothing in retrieval ranks on
+    //     it (searchChunks orders purely by vector distance); the Settings drawer displays it, where
+    //     "when this was first said" is the honest reading, and it matches the one-off cleanup that
+    //     preceded this, which kept the oldest row of each duplicate.
+    //   * author_agent_ids -- first write wins. Merging would need a subquery, which Postgres forbids
+    //     inside ON CONFLICT DO UPDATE. A repeat by a different author keeps the first author's row.
+    const onConflict =
+      `ON CONFLICT (scope, coalesce(agent_id, ''), coalesce(source, ''), md5(text), length(text))
+       DO UPDATE SET text = EXCLUDED.text`;
+
+    try {
+      const { rows } = await q<{ id: string }>(
+        `INSERT INTO rag_chunks ${cols} ${vals} ${onConflict} RETURNING id`,
+        params,
+      );
+      return { id: rows[0].id };
+    } catch (err) {
+      // 42P10 = no unique index matches the conflict target. That is an environment whose bootstrap
+      // predates rag_chunks_dedup_idx, NOT a bad write -- and memory writes are fire-and-forget, so a
+      // throw here is a SILENT loss of the user's words. Degrade to the historical plain INSERT
+      // (duplicates, which is merely the old behaviour) rather than drop the chunk. Any other error
+      // is a real failure and still propagates.
+      if ((err as { code?: string })?.code !== "42P10") throw err;
+      console.warn(
+        "[rag] rag_chunks_dedup_idx missing -- inserting without dedup. Run the memory bootstrap.",
+      );
+      const { rows } = await q<{ id: string }>(
+        `INSERT INTO rag_chunks ${cols} ${vals} RETURNING id`,
+        params,
+      );
+      return { id: rows[0].id };
+    }
   },
 
   async writeTriples(inputs: WriteTripleInput[]) {

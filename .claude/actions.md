@@ -3,6 +3,39 @@ Last updated: 2026-08-25 (ACT-63 two notification bugs DEPLOYED 6dccf41, awaitin
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
+### 🔄 ACT-67: Write-time dedup for `rag_chunks` — the half of "do we have proper dedup in memory?" the cleanup didn't fix (2026-08-26)
+**Ask (user, verbatim):** *"do we have proper dedup in memory?"* → answered **no**, then *"you should
+clear the 137 duplicates"* (done, ACT-66 note in memory.md). Clearing rows was the cleanup; the write
+path was untouched, so duplicates would re-accumulate. This closes it, per the user's standing order:
+*"look upstream and downstream to avoid the short-sightedness that has had you committing half solutions."*
+
+**Ground truth first** (live DB, `azure-pg-query.yml` run `32920484607`, success) — three facts that
+each changed the design, none of which were assumable:
+- `max(octet_length(text)) = 2732` **> the ~2704-byte btree tuple cap** → a raw-`text` unique key would
+  have ERRORED on insert for the longest chunks. `md5(text)` is mandatory, not stylistic.
+- `agent_id` is NULL on every `scope='global'` row, and NULLs compare **DISTINCT** in a unique index →
+  a naive `UNIQUE(scope, agent_id, text, source)` would have caught **none** of the duplicates.
+  `coalesce()` in an expression index fixes it version-independently.
+- **0** texts span more than one `source` → putting `source` in the key collapses nothing extra, while
+  preserving the provenance the Settings drawer displays per row (`AgentSettingsDrawer.tsx:657-658`).
+- `579 total / 579 distinct` under every candidate key → `CREATE UNIQUE INDEX` cannot fail on existing rows.
+
+**The change** (one funnel — `azurePgStore.writeChunk`, extended, no parallel layer):
+`rag_chunks_dedup_idx` unique on `(scope, coalesce(agent_id,''), coalesce(source,''), md5(text), length(text))`,
+added to `BOOTSTRAP_SQL` **and** applied to the live DB; `writeChunk` gains `ON CONFLICT … DO UPDATE SET
+text = EXCLUDED.text RETURNING id` (DO NOTHING would suppress RETURNING on exactly the conflict path),
+with a **42P10 fallback to the historical plain INSERT** so an environment lacking the index degrades to
+old behaviour instead of throwing — memory writes are fire-and-forget, so a throw is a silent loss of the
+user's words. `created_at` and `author_agent_ids` are deliberately not updated (original timestamp
+survives, matching the cleanup that kept the oldest row).
+
+**Downstream check:** all five `writeChunk` callers verified — `huddle.functions.ts:952/:964` feed the
+returned id into `writeTriples({sourceChunkId})`; `:5819`, `voice-memory.functions.ts:75` and
+`rag.functions.ts:101` discard or pass it through. **None require a NEW id**, so returning the existing
+row keeps triple provenance pointing at a real chunk.
+
+**Status:** typecheck clean; index created live; NOT yet deployed or independently verified.
+
 ### ✅ ACT-63: Two notification bugs — blocker messages had no name; away replies never buzzed (2026-08-25)
 **Ask (user, verbatim):** *"Terry messaged me about a blocker but didn't mention who was blocked so I
 could work with them. also I went away after sending a message and her response didn't come as a
