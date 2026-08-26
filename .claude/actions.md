@@ -64,7 +64,29 @@ first-writer-wins is now documented rather than undocumented.
 **Deployed:** `4c066ce` (run `32920749324`), `c0ff987` (`32921834525`), `34efe3f` (`32973331472`) — all
 success. **NOT yet user-confirmed live** — the live check is conversational recall, below.
 
-**⛔ OPEN — needs your decision (see memory.md):** the verifier asked why `rag_chunks` got dedup and
+### ✅ ACT-68: Triples duplicates — cleaned and structurally prevented (2026-08-26)
+**Ask (user):** *"Just focus on the duplicates"* — after reviewing and DISMISSING the agent-subject
+finding: *"I'm fine with this because its clearly tagged to them and not me, so facts about me can be
+discerned."* The `subject` field is the discriminator. Scope: duplicates only, no subject filter, no purge.
+
+**Applied to production** (run `32997278076`, COMMIT): `rag_triples` 500 → **465** total, 435 → **400**
+live, `DELETE 35`, 0 duplicate groups remaining, `rag_triples_dedup_idx` created. Code (`1cbb976`)
+deployed first (run `32977953917`), then the migration.
+
+**The AC pass caught that the change as first built would have silently done nothing:** the live DB had
+24 duplicate groups → `CREATE UNIQUE INDEX` fails 23505 → swallowed by the `WHEN OTHERS` guard →
+`runBootstrap` returned `ok:true` → `writeTriples` fell back to plain INSERT. Four fixes in `1cbb976`:
+index presence now reported through `runBootstrap`/`diagnoseAzurePg` into a MemoryDbPanel "Dedup
+indexes" row; `AND lower(object) <> lower($4)` on the supersede predicate (without it the DEFAULT
+`researched` mode superseded-and-reinserted every time, so the index could never fire); `lookup_facts`
+now passes `excludeSuperseded`; and the cleanup MERGES max-confidence/newest-created_at/author-union
+into each survivor before deleting — rehearsal measured **10 groups would otherwise have lost their max
+confidence** and 10 their authors.
+
+**Committed migration:** `scripts/migrations/2026-08-26-dedup-live-triples.sql` (idempotent, reviewable).
+**Independent verifier: running.** **NOT yet user-confirmed live.**
+
+**⛔ Earlier finding, CLOSED by owner decision (kept for context):** the verifier asked why `rag_chunks` got dedup and
 `rag_triples` didn't. Measuring it found something bigger than duplication: of 500 triples, only
 **176 are about you** — **152 are about the AGENTS** (`assistant`, `finn reid`, `iris chase`) and 172
 are about tasks/entities. Against your stated contract *"triples are supposed to be only about me."*

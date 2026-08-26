@@ -71,6 +71,17 @@ Last updated: 2026-08-25
   field, different load-bearing status — copying the chunks decision across would have made a fact the user
   keeps re-asserting rank as the stalest thing in the store.
 
+- [2026-08-26] **APPLIED to production (run `32997278076`, COMMIT).** `rag_triples` **500 → 465 total,
+  435 → 400 live**; `DELETE 35`; `live_dup_groups_remaining 0`; `rag_triples_dedup_idx` created. Both
+  dedup indexes now exist (`rag_chunks_dedup_idx` + `rag_triples_dedup_idx`), and `rag_chunks` verified
+  independently at `chunk_dup_groups = 0` (run `32997082118`). Code (`1cbb976`) deployed FIRST via run
+  `32977953917`, then the migration — deliberate ordering, since code-without-index degrades safely via
+  the 42P10 fallback while index-without-code raises 23505 into a fire-and-forget catch.
+  **Operational gotcha that cost three wrong log reads:** a PARALLEL session was dispatching
+  `azure-pg-query.yml` concurrently, so "newest run" was repeatedly SOMEONE ELSE'S run — twice I read
+  another session's output before noticing. **Never identify a workflow run by recency alone when other
+  sessions share the repo; match it by its content or by dispatch timestamp.**
+
 - [2026-08-26] **Triples write-time dedup — built, live-rehearsed, parked on `claude/triples-dedup`.**
   **Owner ruling on the subject question below: agent-subject triples STAY.** Verbatim: *"I'm fine with
   this because its clearly tagged to them and not me, so facts about me can be discerned. Just focus on
