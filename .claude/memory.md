@@ -1531,13 +1531,40 @@ and the answer was no — I had asserted what an agent SAID from the ABSENCE of 
 shows nothing in review") is what cracked finding 3 — treat their observation as the fact to EXPLAIN, never to
 contradict.
 
-**Approved build (user chose BOTH on the stuck-ask question):** (A) attach `confirmAsk` server-side at enqueue
-so buttons always render, tool call only supplies the DoD; (B) re-ask with backoff **and** a standup roll-up of
-everything awaiting confirmation — with a hard flood constraint, since 34 backlogged items must not all re-ask
-in one morning (cap + spacing + the existing 9/13/17 CONFIRM_FAN_WINDOWS); (C) filter the user's own uploads out
-of the standup's "produced" list.
-**Status: ACs in progress (independent subagent → `.claude/AC-confirm-ask-fixes.md`). No code touched yet.**
-Open, uninvestigated: ~86 artifacts sit at `status='review'` while ZERO tasks are `IN_REVIEW`.
+**REVISED SCOPE (user, 2026-08-26) — supersedes the earlier "re-ask backfill + roll-up" plan. FOUR items:**
+1. **Assist-mode tasks must propose an agent-EXECUTED slice, never a plan for the user to follow.** User:
+   *"they keep getting assigned tasks they can't achieve, like go to the bank, and instead of it being treated
+   as a support vs do task as we designed it gives me a plan to do it. id expect most tickets to be research
+   tickets or the plan they are communicating being a portion they can actually do to help me… whether it's
+   remind me, find store hours, research, plan, outline, draft etc."*
+   **Diagnosis (read before editing): `classifyTaskMode` is CORRECT** — "Go to the bank" matches `ASSIST_VERBS`
+   on `go` → assist. The defect is `modeProposalHint`'s ASSIST branch (`lib/tasks/workability.ts`): it states
+   what NOT to do ("not a document about it") with vague examples ("prep the options they'll choose from") and
+   **never says the deliverable must be something the AGENT performs**. So the model returns a to-do plan.
+   Fix direction: demand a concrete agent-executed deliverable, explicitly ban "step-by-step instructions for
+   the user" as an assist outcome, and ground the menu in the agent's REAL tools so it scales per agent
+   (repo rule: systematic capability, never a hardcoded example list).
+2. **Re-ask cadence = every 24 HOURS** (not "a few days").
+3. **Reset the jam by RE-GROOMING, not by back-filling re-asks** — stuck tasks back to BACKLOG, confirm state
+   cleared, then run grooming. Bulk LIVE-BOARD mutation: capture prior state, show the user the scope, then execute.
+4. Standup must stop crediting the user's own uploads to agents (unchanged).
+
+**AC pass result — INTERRUPTED, but 262 lines survived** (`.claude/AC-confirm-ask-fixes.md`): feasibility
+table, both blockers, and all of Fix A. Fix B/C ACs were never written. It survived ONLY because the brief
+required incremental file writes — keep that pattern on every spawn.
+**TWO BLOCKERS that still bind under the revised scope:**
+- **A-blocker:** `confirmTaskFromButtonFn` (`confirm-ask.functions.ts:36-39`) rejects an empty `proposed_dod`
+  with *"No proposed plan found for this reach-out — it may be stale."* `proposed_dod` is written ONLY by
+  `propose_task_intent`. So forcing the buttons to always render WITHOUT making the DoD deterministic yields a
+  Confirm that reliably FAILS on exactly the reach-outs the fix exists to rescue. (Item 1 helps here: a concrete
+  assist DoD is what makes Confirm worth having.)
+- **B-blocker:** `fireDueConfirmAsks` enqueues `autowork-confirm-${task_id}` with NO run id; `enqueueTurn` is
+  `ON CONFLICT (id) DO NOTHING`; and the call site IGNORES the returned boolean and increments `fired++` anyway.
+  A re-ask on that path **inserts nothing, reaches the user never, and reports success.** The other site
+  (`autowork.server.ts:735`) uses a per-pass-unique id — so the two paths differ and testing only the cadence
+  path hides it. Any 24h re-ask MUST fix the id + honour the boolean.
+**Status: no code touched yet.** Open, uninvestigated: ~86 artifacts sit at `status='review'` while ZERO tasks
+are `IN_REVIEW` — a possible second reason Files and Board disagree.
 
 **ACT-63 — the away-gate asks the wrong question at the wrong TIME (2026-08-25).** Read this before
 touching notification delivery. The reply push gate lived on `payload.foreground`, a **send-time**
