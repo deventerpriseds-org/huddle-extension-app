@@ -86,6 +86,26 @@ async function q<T extends Record<string, unknown> = Record<string, unknown>>(
  */
 const CHUNK_DEDUP_KEY = `scope, coalesce(agent_id, ''), coalesce(source, ''), md5(text), length(text)`;
 
+/**
+ * The rag_triples write-time dedup key, and the PARTIAL-index predicate that goes with it. Same
+ * one-constant discipline as CHUNK_DEDUP_KEY -- and a partial index adds a second thing that must
+ * stay in sync, because Postgres can only infer a partial index when the ON CONFLICT clause repeats
+ * its WHERE predicate. Both live here so neither can drift.
+ *
+ * LIVE ROWS ONLY. Superseded rows are the record of what a fact USED to be; two of them with the same
+ * values are history, not duplication, and a full-table unique index would also break the supersede
+ * path (re-asserting a fact after it was superseded is legitimate and must still insert).
+ *
+ * Only `object` is hashed. Measured on the live store: subject 66 bytes, predicate 59, object 809 --
+ * subject and predicate are short by nature (entity and relation names) and stay READABLE in the
+ * index, while `object` is free model-generated text with no schema cap and is the only one that
+ * could approach the ~2704-byte btree tuple limit. length(object) rides along so an md5 collision
+ * cannot silently merge two different facts. lower() is safe: measured ZERO triples that differ only
+ * by case, so normalising collapses nothing real.
+ */
+const TRIPLE_DEDUP_KEY = `scope, coalesce(agent_id, ''), lower(subject), lower(predicate), md5(lower(object)), length(object)`;
+const TRIPLE_DEDUP_PRED = `superseded_at IS NULL`;
+
 export const BOOTSTRAP_SQL = `
 -- Azure's azure.extensions allow-list can reject CREATE EXTENSION even for an extension that is
 -- ALREADY installed and working (e.g. after the allow-list was reset/tightened post-install). That
@@ -177,6 +197,19 @@ CREATE INDEX IF NOT EXISTS rag_triples_fts_idx
   ON rag_triples USING gin (to_tsvector('english', subject || ' ' || predicate || ' ' || object));
 CREATE INDEX IF NOT EXISTS rag_triples_authors_idx
   ON rag_triples USING gin (author_agent_ids);
+
+-- Write-time dedup for LIVE triples. writeTriples was a bare INSERT with no constraint, the same gap
+-- rag_chunks had, from the SAME call sites in the SAME turn off the SAME user text -- measured at 32
+-- duplicate groups / 55 excess rows (11%), of which 24 groups / 35 rows are live. Partial, so the
+-- superseded history is untouched and re-asserting a previously-superseded fact still inserts.
+-- Guarded WHEN OTHERS for the same reason as the chunks index above: a DB still holding live
+-- duplicates fails here (23505), and an unguarded failure would abort the remainder of the batch.
+DO $$ BEGIN
+  CREATE UNIQUE INDEX IF NOT EXISTS rag_triples_dedup_idx
+    ON rag_triples (${TRIPLE_DEDUP_KEY}) WHERE ${TRIPLE_DEDUP_PRED};
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'rag_triples_dedup_idx not created (SQLSTATE %): %. Facts still work, without write-time dedup.', SQLSTATE, SQLERRM;
+END $$;
 `;
 
 /**
@@ -564,22 +597,64 @@ export const azurePgStore: RagStore = {
           console.warn("[rag] triple supersession skipped:", err);
         }
       }
-      const { rows } = await q<{ id: string }>(
-        `INSERT INTO rag_triples (scope, agent_id, subject, predicate, object, confidence, source_chunk_id, author_agent_ids)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id`,
-        [
-          t.scope,
-          t.agentId ?? null,
-          t.subject,
-          t.predicate,
-          t.object,
-          t.confidence ?? 0.8,
-          t.sourceChunkId ?? null,
-          t.authorAgentIds ?? [],
-        ],
-      );
-      ids.push(rows[0].id);
+      // Re-asserting a fact that is already LIVE is not a new fact -- it collapses onto the existing
+      // row and returns that row's id. The conflict target repeats TRIPLE_DEDUP_PRED because Postgres
+      // cannot infer a PARTIAL index without its predicate; both come from the constants above so the
+      // index and this clause cannot drift.
+      //
+      // This deliberately does NOT interfere with supersede: that path marks prior live rows superseded
+      // BEFORE inserting, so by the time this runs there is no live row to conflict with and the insert
+      // proceeds normally. Superseded history is outside the index entirely.
+      //
+      // DO UPDATE rather than DO NOTHING, for a reason that bit the chunks version: DO NOTHING
+      // suppresses the RETURNING row on conflict, so rows[0] would be undefined on exactly the path
+      // this exists to handle -- and `ids` is what rag.functions.ts reports to the UI as tripleCount,
+      // so it would silently undercount too. The SETs are meaningful rather than a no-op touch: keep
+      // the HIGHER confidence of the two assertions, and merge authors (guarded with `<@` so an
+      // identical repeat writes the array back unchanged instead of growing it). source_chunk_id is
+      // left alone -- provenance points at the chunk that FIRST carried the fact.
+      const head = `INSERT INTO rag_triples (scope, agent_id, subject, predicate, object, confidence, source_chunk_id, author_agent_ids)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`;
+      const tParams = [
+        t.scope,
+        t.agentId ?? null,
+        t.subject,
+        t.predicate,
+        t.object,
+        t.confidence ?? 0.8,
+        t.sourceChunkId ?? null,
+        t.authorAgentIds ?? [],
+      ];
+      const tOnConflict = `ON CONFLICT (${TRIPLE_DEDUP_KEY}) WHERE ${TRIPLE_DEDUP_PRED}
+         DO UPDATE SET confidence = greatest(rag_triples.confidence, EXCLUDED.confidence),
+                       author_agent_ids = CASE
+                         WHEN EXCLUDED.author_agent_ids <@ rag_triples.author_agent_ids
+                           THEN rag_triples.author_agent_ids
+                         ELSE rag_triples.author_agent_ids || EXCLUDED.author_agent_ids
+                       END`;
+
+      let inserted: { id: string };
+      try {
+        const { rows } = await q<{ id: string }>(`${head} ${tOnConflict} RETURNING id`, tParams);
+        inserted = rows[0];
+      } catch (err) {
+        // Same fail-safe as writeChunk, and the same reason it must read BOTH error shapes: q() wraps
+        // driver errors in RagStoreUnavailableError, which lifts `code` off its cause -- testing only
+        // the bare `err.code` is what made the chunks version dead code. 42P10 means this environment's
+        // bootstrap predates rag_triples_dedup_idx. Facts are written fire-and-forget alongside chunks,
+        // so a throw here silently drops a fact about the user; degrade to the historical plain INSERT
+        // (duplicates -- merely the old behaviour) instead. Any other error is real and propagates.
+        const pgCode =
+          (err as { code?: string })?.code ??
+          (err as { cause?: { code?: string } })?.cause?.code;
+        if (pgCode !== "42P10") throw err;
+        console.warn(
+          "[rag] rag_triples_dedup_idx missing -- inserting without dedup. Run the memory bootstrap.",
+        );
+        const { rows } = await q<{ id: string }>(`${head} RETURNING id`, tParams);
+        inserted = rows[0];
+      }
+      ids.push(inserted.id);
     }
     return { ids };
   },
