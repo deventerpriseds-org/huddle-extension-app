@@ -38,13 +38,58 @@ export const confirmTaskFromButtonFn = createServerFn({ method: "POST" })
         return { ok: false, error: "No proposed plan found for this reach-out — it may be stale." };
       }
       await confirmTaskIntent(data.taskId, email, task.proposed_dod);
+
+      // REMIND mode: confirming IS the scheduling. This has to happen HERE, in the button handler, not
+      // only in the agent's tool path — this function is deliberately model-free (see the header), so
+      // wiring the reminder solely into the agent side would make the Confirm tap look successful while
+      // scheduling nothing, and the task would drop back to the backlog silently. That is precisely the
+      // leak the whole reminder flow exists to close.
+      //
+      // Scheduled from the STRUCTURED proposed_reminder_at, never by parsing a date out of the DoD text.
+      // Non-fatal by design: the confirmation above is already durable, so a reminder failure degrades
+      // to "confirmed but not scheduled" (reported back) rather than losing the user's tap.
+      let reminderNote: string | undefined;
+      const isRemind = (task.tags ?? []).some((t) => String(t).toLowerCase() === "reminder");
+      if (isRemind && task.proposed_reminder_at) {
+        const dueMs = Date.parse(task.proposed_reminder_at);
+        if (Number.isFinite(dueMs) && dueMs > Date.now()) {
+          try {
+            const { createReminder } = await import("./turns.server");
+            await createReminder({
+              // Deterministic id keyed on the task + instant, so a double-tap or a retry can never
+              // schedule the same nudge twice (the insert simply conflicts).
+              id: `taskremind-${data.taskId}-${Math.floor(dueMs / 1000)}`,
+              userEmail: email,
+              huddleId: task.assigned_agent ? `dm-${task.assigned_agent}` : "all-members",
+              agentId: task.assigned_agent,
+              text: task.title.slice(0, 300),
+              kind: "reminder",
+              dueAtMs: dueMs,
+              taskId: data.taskId,
+            });
+          } catch {
+            reminderNote = "Confirmed, but the reminder couldn't be scheduled — ask me to set it again.";
+          }
+        } else {
+          reminderNote = "Confirmed, but that reminder time has already passed — tell me a new one.";
+        }
+      }
+
       const { invokeJourneyTool } = await import("../journey/proxy.functions");
       const r = await invokeJourneyTool({
         toolName: "update_task",
-        args: { task_id: data.taskId, definition_of_done: task.proposed_dod },
+        args: {
+          task_id: data.taskId,
+          definition_of_done: task.proposed_dod,
+          // A confirmed reminder task goes back to BACKLOG: the agent isn't working it, so it must not
+          // sit in UP_NEXT holding a WIP slot. The reminder window keeps it out of automation until the
+          // nudge fires (taskIdsInReminderWindow), so "back to backlog" is a rest state, not a demotion.
+          ...(isRemind && !reminderNote ? { status: "BACKLOG" } : {}),
+        },
         caller: data.caller ?? {},
         context: { source: "huddle" },
       });
+      if (reminderNote) return { ok: true, error: reminderNote };
       // Huddle's own confirm_status is already durable even if the journey mirror write fails — same
       // non-fatal posture as the model's confirm_task_intent tool handler.
       return {

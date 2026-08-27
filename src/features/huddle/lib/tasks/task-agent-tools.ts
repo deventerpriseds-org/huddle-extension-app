@@ -80,6 +80,15 @@ export const PROPOSE_TASK_INTENT_TOOL = {
         description:
           "The concrete, testable Definition of Done you just proposed to the user in this same message.",
       },
+      reminder_at: {
+        type: "string",
+        description:
+          "REMIND-mode tasks only (the user's own errand — you can't complete any of it). The exact " +
+          "date+time you just proposed to remind them, as an ISO 8601 timestamp with offset, e.g. " +
+          "2026-08-29T10:00:00-04:00. Must match the day/time you stated in your message. Set this and " +
+          "their Confirm tap schedules the reminder for you — omit it and Confirm has nothing to " +
+          "schedule. Leave it out entirely for produce/assist tasks.",
+      },
     },
     required: ["task_id", "task_title", "definition_of_done"],
   },

@@ -243,7 +243,11 @@ export async function dispatchPrioritize(
           return true; // "priorities" — all open tasks
       }
     });
-    const ranked = rankTasks(inView, limit);
+    // Third and final REMINDER WINDOW filter site (groom.ts and autowork.server.ts are the other two).
+    // All three must exclude, or a deferred task leaks back into automation from whichever one was
+    // missed — the exact failure the parking-lot rollout hit when it was applied in only one place.
+    const { taskIdsInReminderWindow } = await import("./turns.server");
+    const ranked = rankTasks(inView, limit, await taskIdsInReminderWindow(userEmail));
     const tz = timeZone || "UTC";
     return JSON.stringify({
       view,

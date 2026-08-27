@@ -94,6 +94,13 @@ CREATE TABLE IF NOT EXISTS chat.reminders (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE chat.reminders ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'reminder';
+-- Links a reminder back to the board task it was scheduled FOR. This is what lets a reminder-tagged
+-- task be skipped by grooming/auto-work while its reminder is still pending (parking-lot style) and
+-- become eligible again the moment it fires. Deliberately the ONLY source of that date: encoding it in
+-- a tag string would mean parsing dates out of text and would let the two drift apart. NULL for every
+-- ordinary "remind me in 20 minutes" reminder, which has no task.
+ALTER TABLE chat.reminders ADD COLUMN IF NOT EXISTS task_id TEXT;
+CREATE INDEX IF NOT EXISTS reminders_task_pending_idx ON chat.reminders (task_id, status, due_at);
 ALTER TABLE chat.reminders ADD COLUMN IF NOT EXISTS user_id TEXT;
 CREATE INDEX IF NOT EXISTS reminders_userid_idx  ON chat.reminders(user_id);
 CREATE INDEX IF NOT EXISTS reminders_due_idx    ON chat.reminders (status, due_at);
@@ -494,6 +501,9 @@ export interface ReminderRecord {
   kind: string;
   due_ms: number;
   fired_ms: number | null;
+  /** Board task this reminder was set FOR, when it came from a REMIND-mode confirm. Drives the
+   *  close-out ("did this happen?") on firing; NULL for an ordinary ad-hoc reminder. */
+  task_id: string | null;
 }
 
 function mapReminder(r: Record<string, unknown>): ReminderRecord {
@@ -506,6 +516,7 @@ function mapReminder(r: Record<string, unknown>): ReminderRecord {
     kind: (r.kind as string) ?? "reminder",
     due_ms: Number(r.due_ms ?? 0),
     fired_ms: r.fired_ms == null ? null : Number(r.fired_ms),
+    task_id: (r.task_id as string) ?? null,
   };
 }
 
@@ -517,15 +528,46 @@ export async function createReminder(args: {
   text: string;
   kind: string;
   dueAtMs: number;
+  /** Board task this reminder is FOR — set only for REMIND-mode task reminders; see the schema note. */
+  taskId?: string | null;
 }): Promise<void> {
   await ensureBootstrapped();
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { userId } = await resolveScopeByEmail(args.userEmail);
   await getPool().query(
-    `INSERT INTO chat.reminders (id, user_email, huddle_id, agent_id, text, kind, due_at, status, user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7 / 1000.0), 'pending', $8)`,
-    [args.id, args.userEmail, args.huddleId, args.agentId, args.text.slice(0, 500), args.kind, args.dueAtMs, userId],
+    `INSERT INTO chat.reminders (id, user_email, huddle_id, agent_id, text, kind, due_at, status, user_id, task_id)
+     VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7 / 1000.0), 'pending', $8, $9)`,
+    [args.id, args.userEmail, args.huddleId, args.agentId, args.text.slice(0, 500), args.kind, args.dueAtMs, userId, args.taskId ?? null],
   );
+}
+
+/**
+ * Task ids that are inside an unfired reminder window — i.e. the user has already said WHEN, and the
+ * nudge hasn't landed yet. These are skipped by grooming, auto-work candidate selection and ranking,
+ * exactly like `parking-lot`.
+ *
+ * Returns a Set so all three call sites share ONE query and ONE definition of "in its window". The
+ * parking-lot precedent is the warning here: that filter was originally applied in only one of the
+ * three places and tasks leaked back into automation from the other two.
+ *
+ * Non-throwing: on any error it returns an EMPTY set, so a DB hiccup means "skip nothing" — tasks stay
+ * visible to automation rather than silently vanishing from the board.
+ */
+export async function taskIdsInReminderWindow(userEmail: string): Promise<Set<string>> {
+  try {
+    await ensureBootstrapped();
+    const { rows } = await getPool().query<{ task_id: string }>(
+      `SELECT DISTINCT task_id FROM chat.reminders
+        WHERE task_id IS NOT NULL
+          AND status = 'pending'
+          AND due_at > now()
+          AND lower(coalesce(user_email, '')) = lower($1)`,
+      [userEmail],
+    );
+    return new Set(rows.map((r) => r.task_id));
+  } catch {
+    return new Set();
+  }
 }
 
 /** Atomically claim due reminders and mark them fired, so the per-minute drain fires each exactly once. */
@@ -540,7 +582,7 @@ export async function claimDueReminders(max = 25): Promise<ReminderRecord[]> {
          LIMIT $1
          FOR UPDATE SKIP LOCKED
       )
-      RETURNING id, user_email, huddle_id, agent_id, text, kind,
+      RETURNING id, user_email, huddle_id, agent_id, text, kind, task_id,
         (EXTRACT(EPOCH FROM due_at) * 1000)::bigint AS due_ms,
         (EXTRACT(EPOCH FROM fired_at) * 1000)::bigint AS fired_ms`,
     [max],

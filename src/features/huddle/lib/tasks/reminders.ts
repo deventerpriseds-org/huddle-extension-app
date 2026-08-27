@@ -199,6 +199,51 @@ export async function fireDueReminders(max = 25): Promise<number> {
       } catch {
         /* best-effort; the in-chat delivery still happens */
       }
+
+      // CLOSE-OUT for a REMIND-mode task reminder. Without this the fired reminder just lapses: the
+      // task silently re-enters grooming and gets proposed from scratch, so an errand the user already
+      // did comes back as a fresh confirm-ask. That is how the 34-item pile was built, and it would
+      // rebuild on a slower clock. Instead the nudge itself becomes the decision point — done, or a
+      // new date.
+      //
+      // Enqueued as a REAL durable turn (not a bare push) so it rides the same path as every other
+      // reply: it lands in the transcript, survives a closed app, and fires the existing away-push. No
+      // new sender, no parallel delivery mechanism. Idempotent id — a retry cannot double-ask.
+      if (r.task_id && r.user_email && r.agent_id) {
+        try {
+          const { enqueueTurn } = await import("./turns.server");
+          const huddleId = `dm-${r.agent_id}`;
+          const directive =
+            `The reminder you set for the user's task "${r.text}" just came due. This is a CLOSE-OUT, ` +
+            `not new work: they own this task, you only own the follow-up.\n` +
+            `Send ONE short, warm line asking whether they got it done — nothing else, no plan, no ` +
+            `offer to do it for them, no restating the task's history.\n` +
+            `If they say it's DONE, call update_task to mark it done and confirm briefly. If they want ` +
+            `more time, ask for the new day/time and call schedule_reminder for it. If they no longer ` +
+            `want it, offer to archive it. Do NOT create a new task and do NOT propose a deliverable.`;
+          const fresh = await enqueueTurn(`taskremind-closeout-${r.id}`, huddleId, r.user_email, {
+            text: directive,
+            huddleId,
+            scope: "one-to-one",
+            members: [r.agent_id],
+            targetAgentId: r.agent_id,
+            history: [],
+            router: { backend: "openai", model: "gpt-4o-mini", soloOnCoverage: true, interjections: false },
+            agents: { [r.agent_id]: { backend: "openai" } },
+            caller: { entra_email: r.user_email },
+            notify: "push", // a due reminder is exactly the case that SHOULD reach the phone
+            internal: true,
+          });
+          if (fresh) {
+            // Same inline-run pattern the standup digest uses (surfaceDigest): run it now so the
+            // close-out's push fires with the reminder rather than waiting for the next drain tick.
+            const { runTurnById } = await import("../huddle.functions");
+            await runTurnById(`taskremind-closeout-${r.id}`);
+          }
+        } catch {
+          /* close-out is best-effort — the push above already landed; the task simply becomes eligible */
+        }
+      }
     }),
   );
   return due.length;

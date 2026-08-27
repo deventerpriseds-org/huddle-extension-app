@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS tasks.task_engagement_state (
   user_email          TEXT NOT NULL,
   confirm_status      TEXT NOT NULL DEFAULT 'awaiting',
   proposed_dod        TEXT,
+  proposed_reminder_at TIMESTAMPTZ,
   confirmed_dod       TEXT,
   confirm_ask_at      TIMESTAMPTZ,
   confirmed_at        TIMESTAMPTZ,
@@ -175,6 +176,7 @@ ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_revisi
 -- Mid-work clarifying question (ask_clarifying_question tool): clarify_status='open' pauses that task's
 -- autowork research cadence until answered. clarify_count is the lifetime cap counter (bounded — an agent
 -- that's still stuck after the cap must flag_blocker or proceed on its own judgment, not keep asking).
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS proposed_reminder_at TIMESTAMPTZ;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS clarify_status TEXT NOT NULL DEFAULT 'none';
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS clarify_count INT NOT NULL DEFAULT 0;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS open_question TEXT;
@@ -1102,6 +1104,9 @@ export async function proposeTaskDod(
   taskId: string,
   userEmail: string,
   dod: string,
+  /** REMIND mode only: the date+time the agent proposed, stored STRUCTURALLY so the model-free Confirm
+   *  button can schedule the reminder without parsing a timestamp back out of the DoD prose. */
+  proposedReminderAtIso?: string | null,
 ): Promise<void> {
   await ensureBootstrapped();
   // user_email is NOT NULL with no default (schema above) — omitting it here would risk the insert
@@ -1110,12 +1115,13 @@ export async function proposeTaskDod(
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, proposed_dod, user_id)
-     VALUES ($1,$2,$3,$4)
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, proposed_dod, user_id, proposed_reminder_at)
+     VALUES ($1,$2,$3,$4,$5)
      ON CONFLICT (task_id) DO UPDATE SET
        proposed_dod=EXCLUDED.proposed_dod,
+       proposed_reminder_at=EXCLUDED.proposed_reminder_at,
        user_id=COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at=now()`,
-    [taskId, userEmail.toLowerCase(), dod, userId],
+    [taskId, userEmail.toLowerCase(), dod, userId, proposedReminderAtIso || null],
   );
 }
 
@@ -1130,6 +1136,10 @@ export interface OwnedTaskForConfirmAsk {
   tags: string[] | null;
   confirm_status: "awaiting" | "asked" | "confirmed";
   proposed_dod: string | null;
+  /** REMIND mode: the date+time the agent proposed. The Confirm button schedules the reminder from THIS,
+   *  never by parsing the DoD prose. NULL for produce/assist tasks and for any pre-existing row. */
+  proposed_reminder_at: string | null;
+  assigned_agent: string | null;
 }
 export async function getOwnedTaskForConfirmAsk(
   taskId: string,
@@ -1141,7 +1151,7 @@ export async function getOwnedTaskForConfirmAsk(
   const { rows } = await getPool().query<OwnedTaskForConfirmAsk>(
     `SELECT t.id, t.title, t.status, t.tags,
             COALESCE(es.confirm_status, 'awaiting') AS confirm_status,
-            es.proposed_dod
+            es.proposed_dod, es.proposed_reminder_at, t.assigned_agent
        FROM tasks.journey_tasks t
        LEFT JOIN tasks.task_engagement_state es ON es.task_id = t.id
       WHERE t.id = $1 AND lower(t.user_email) = ANY($2)`,
