@@ -6,6 +6,7 @@
 // the normal sync into Huddle's mirror. Gated to Terry (scrum master) at the call site.
 
 import { AGENTS, type AgentId } from "../../data/agents";
+import { REMINDER_TAG } from "./workability";
 
 export const GROOM_BACKLOG_TOOL = {
   type: "function",
@@ -121,6 +122,23 @@ export async function dispatchGroomBacklog(
 
     const system = `You are Terry Locke, the scrum master, grooming a backlog like in Jira. For each task: assign it to exactly ONE agent (the best fit by their domains/role), give it 0-3 short lowercase descriptive tags, set a priority (LOW|MEDIUM|HIGH|URGENT), and set an integer rank (1 = do first) reflecting the order to tackle things. You are ORGANIZING the backlog — assigning, tagging, prioritizing, ordering. You do NOT decide whether a task is "blocked" or un-doable; the assigned agent determines that by actually working it. Just route every task to its best owner and rank it.
 
+REMINDER TAG — the one judgement that is yours. Add the tag "${REMINDER_TAG}" when NO agent could finish
+anything real on this task using only what the team already has (the user's profile, memory, board,
+email/calendar, and their own tools). These are the user's own errands, purchases, payments, physical
+trips, and anything needing access or facts only they hold: "Order replacement tire" (nobody knows their
+car or tire size), "Go to church", "Transfer funds", "Investigate <third-party> issues" (the records are
+not reachable). Still assign an owner — that agent owns the FOLLOW-UP, not the doing.
+Do NOT tag genuine knowledge-work the team can complete alone: research, drafting, planning, analysis,
+specs, outlines, summaries. When in doubt, ADD the tag: a wrong "${REMINDER_TAG}" costs the user one
+correcting message, while a wrong omission makes an agent promise work it cannot do.
+If a task ALREADY carries "${REMINDER_TAG}" in its current tags, keep it unless it is now plainly
+agent-doable work.
+
+ASSIGNMENT STABILITY — if a task already has an assignee and that agent is still a reasonable fit, KEEP
+them. Do not reshuffle owners between passes for a marginal improvement: re-assigning resets the task's
+confirmation state and re-triggers a fresh check-in message to the user, so churn here becomes noise for
+them.
+
 AGENTS (id — name, role: domains):
 ${rosterForPrompt()}
 
@@ -134,8 +152,18 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     for (let i = 0; i < slice.length; i += CHUNK) chunks.push(slice.slice(i, i + CHUNK));
     const _tClf0 = Date.now();
     const classifyChunk = async (chunkTasks: typeof slice): Promise<Assignment[]> => {
+      // `current_tags` and `current_agent` are sent because two rules above depend on the model SEEING
+      // today's state: keep an existing `reminder` tag, and keep an existing assignee rather than
+      // reshuffling (which resets confirmation state and re-pings the user). Without these fields both
+      // instructions are unenforceable — the model would be guessing at state it was never shown.
       const taskLines = chunkTasks
-        .map((t) => `{"id":"${t.id}","title":${JSON.stringify(t.title)},"category":${JSON.stringify(t.category ?? "")},"due_date":${JSON.stringify(t.due_date ?? "")}}`)
+        .map(
+          (t) =>
+            `{"id":"${t.id}","title":${JSON.stringify(t.title)},"category":${JSON.stringify(t.category ?? "")},` +
+            `"due_date":${JSON.stringify(t.due_date ?? "")},` +
+            `"current_tags":${JSON.stringify((t.tags ?? []).map((x) => String(x).toLowerCase()))},` +
+            `"current_agent":${JSON.stringify(t.assigned_agent ?? "")}}`,
+        )
         .join("\n");
       const res = await withTimeout(
         fetch("https://api.openai.com/v1/chat/completions", {
@@ -183,7 +211,12 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     // tags the model doesn't know about (ACT-17 parity: an automation pass must never clobber a user's
     // deliberate control state). `parking-lot` is already filtered out above; keeping it here too — plus
     // `blocked` — makes the writeback safe even if a parked task ever reaches this point.
-    const CONTROL_TAGS = new Set(["parking-lot", "blocked"]);
+    // `reminder` is a control tag too: grooming itself sets it (a task no agent can do alone), and it
+    // must survive the next pass or the mode silently reverts and the agent goes back to inventing a
+    // deliverable. Preserved here rather than left to the model's fresh descriptive tags, which are
+    // replaced wholesale. The user removes it in the UI (or tells an agent) to escalate the task back
+    // to real work — that removal must stick, so it is only preserved when already present, never re-added.
+    const CONTROL_TAGS = new Set(["parking-lot", "blocked", REMINDER_TAG]);
     const tagsById = new Map(slice.map((t) => [t.id, (t.tags ?? []).map((x) => String(x).toLowerCase())]));
     const updates = assignments.map((a) => {
       const llmTags = Array.isArray(a.tags) ? a.tags.map((t) => String(t).toLowerCase()) : [];

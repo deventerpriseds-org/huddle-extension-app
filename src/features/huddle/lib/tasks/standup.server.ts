@@ -133,7 +133,19 @@ export async function runScheduledStandup(
   const produced = artifacts
     .filter((a) => {
       const t = Date.parse(a.created_at);
-      return Number.isFinite(t) && now - t <= LOOKBACK_MS;
+      if (!Number.isFinite(t) || now - t > LOOKBACK_MS) return false;
+      // The user's OWN chat uploads live in this same table and must never be reported as the team's
+      // output. attachments.functions.ts writes them with folder "Uploads", status "approved", and
+      // `agentId` set to the agent they were SENT TO — which is why a standup once announced "Finn Reid
+      // completed three Huddle screenshot uploads... waiting for your review" for three screenshots the
+      // user had uploaded to Finn, while the board correctly showed nothing in review.
+      //
+      // Discriminate on folder + the absence of a task link, NOT on status: a genuine agent deliverable
+      // becomes `approved` the moment the user approves it, so filtering on status would swap this false
+      // positive for a false negative and hide real completed work. `agent_id` is unusable here for the
+      // same reason it caused the bug — an upload carries the addressed agent's id.
+      if ((a.folder ?? "").toLowerCase() === "uploads" && !a.task_id) return false;
+      return true;
     })
     .map((a) => ({ name: a.name, agentId: a.agent_id, folder: a.folder }));
 
