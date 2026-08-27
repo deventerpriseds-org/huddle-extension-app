@@ -1506,6 +1506,27 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+**ACT-65 — grooming FORCES an agent owner on every task; that one line causes the overreach (2026-08-26).**
+Read before touching task assignment, grooming, or the confirm-intent gate.
+`groom.ts:122-127` instructs *"assign it to exactly ONE agent… Include every task id exactly once"* with
+a schema requiring `assigned_agent`. There is no "this stays with the user" outcome, so an errand like
+"Order replacement tire" MUST get an owner; auto-work then picks it up *because it is assigned*, and the
+agent invents a deliverable for work it cannot do. This is the upstream cause of: agents proposing
+impossible work, 34 tasks frozen at `confirm_status='asked'` (oldest 21 days), and the user's
+*"it's still me doing the work."* The downstream half already behaves: `autowork.server.ts:540` and
+`:370` both skip a task with no `assigned_agent`, and unassigned is already representable in the data.
+
+**The fix is a `reminder` TAG, not a new mode or a new lane** — the user's design, chosen over mine:
+tags already exist, grooming already writes them, they render on the card, they are correctable and
+queryable. Same shape as the documented parking-lot precedent. The tag FEEDS `classifyTaskMode`
+(which already reads tags); it does not bypass it. **The processing window is the pending
+`chat.reminders` row — NOT a dated tag string.** Encoding an expiry into a TEXT[] would mean parsing
+dates out of strings and would drift from the real reminder; the row is the single source of truth
+(needs only an additive `task_id` column).
+**Two constraints that are easy to lose:** a reminder task must NOT occupy a WIP/UP_NEXT slot (17 of
+them would starve real work out of the lane), and the reminder FIRING must ask "did this happen?" —
+without it these silently re-accumulate in BACKLOG, which is the same silent-pile failure in a new column.
+
 **ACT-64 — confirm-ask visibility: buttons, re-ask, and a lying standup (2026-08-26, IN PROGRESS).**
 Read this before touching the confirm-intent gate, the standup, or `artifacts.items` reads.
 

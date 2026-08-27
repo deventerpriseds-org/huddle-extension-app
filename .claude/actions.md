@@ -3,6 +3,50 @@ Last updated: 2026-08-26 (ACT-64 confirm-ask/assist scope revised, no code yet; 
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
+### 🔨 ACT-65: `reminder` task tag — stop agents owning work only the user can do (2026-08-26)
+**Root cause (found by the user, not me).** `groom.ts:122-127` FORCES an agent owner on every task:
+*"assign it to exactly ONE agent… Include every task id exactly once"*, schema `assigned_agent MUST be
+one of the agent ids`. There is no "this one is the user's" outcome. So "Order replacement tire" must go
+to somebody, Ezra is the nearest lane, auto-work picks it up BECAUSE it is assigned, and Ezra has to
+invent a deliverable for a task he cannot do. Every symptom below falls out of that single line:
+- agents proposing work they cannot perform (Ezra *"verify the tire specification"* without knowing the
+  car; Iris *"reconstruct transaction details from available records"* she has no access to);
+- 34 open tasks frozen at `confirm_status='asked'`, oldest 21 days;
+- the user's summary: *"they are just overreaching in things I would have to do and give them which
+  makes it me doing it not them."*
+
+**DESIGN (user's, and better than mine — recorded because the reasoning matters).** I proposed a third
+MODE inside `classifyTaskMode`. The user proposed a `reminder` TAG written by grooming and carried
+through the existing chain. Theirs wins on three counts: (1) it reuses the tag system that already
+exists and that grooming already writes — the documented parking-lot precedent, *"tags already exist…
+parking-lot is JUST a tag, no new lane"*; (2) it is VISIBLE on the card and correctable by the user,
+where a runtime classifier decides invisibly; (3) it is durable and queryable rather than recomputed
+each pass. The tag FEEDS `classifyTaskMode` (which already reads tags) rather than bypassing it.
+The user also rejected my dated-tag expiry: the pending `chat.reminders` row IS the processing window,
+so there is no second source of truth. Correct — it needs one additive `task_id` column, nothing more.
+
+**Scope (widget deliberately PARKED at the user's request — they called this a big blocker, ship fast):**
+1. Grooming may tag `reminder` when the agent can finish nothing alone; 2. `classifyTaskMode` returns
+`remind` on that tag; 3. the proposal defaults to "I'll remind you at X" — which ALSO supplies the
+concrete DoD that `confirmTaskFromButtonFn` hard-requires (it rejects an empty `proposed_dod` with
+"may be stale"); 4. confirm → schedule → back to BACKLOG, no WIP slot; 5. a pending reminder makes
+grooming/auto-work skip the task; 6. the reminder firing asks "did this happen?" — without it these
+silently re-accumulate, the exact leak we agreed must not recur; 7. de-dup near-duplicate live rows;
+8. standup credits only agent-completed work and hides upload noise.
+
+**Standup bug proven separately:** `runScheduledStandup` calls `listArtifacts(email)` with NO filter and
+reports everything created in 24h as completed team work. Chat uploads are written with the addressed
+agent's id, `folder:"Uploads"`, `status:"approved"` ("an input, not a deliverable to review"). That
+produced the false line *"Finn Reid completed three Huddle screenshot uploads… waiting for your review"*
+while the board had **0 tasks IN_REVIEW** — which is how the user caught it.
+
+**Also confirmed live and still open:** agents silently losing tools mid-turn and promising the work
+anyway (Eli: `dropped tools: code_interpreter` while promising to read an image). User: *"it happens
+often."* Tracked separately.
+
+**Status: ACs being written by an independent pass; NOTHING built yet.**
+
+
 ### 🔎 ACT-64: WIP confirm-asks go silent — 34 open tasks stuck, and the 4 buttons often don't render (2026-08-26)
 **Ask (user):** *"terry just mentioned giving finn an assignment to research somehting but i never recieved a
 conformation reach out so the wip doesnt seem to be autofiring efficiently. check the transcripts"* — then,
