@@ -256,6 +256,7 @@ jobs:
         env:
           TENANT: ${{ secrets.AZURE_TENANT_ID }}
           JPT: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          GHCR_PAT: ${{ secrets.GHCR_PULL_PAT }}
         run: |
           set -euo pipefail
           ENV_ID=$(az containerapp env show -g "$RG" -n "$ACA_ENV" --query id -o tsv)
@@ -269,11 +270,29 @@ jobs:
           #  auto-migrate. This forces a clean restart AFTER the schema grant + password reset are applied.)
           NONCE=$(date +%s)
           ACCESS_MODE="${{ github.event.inputs.access_mode }}"
+          # Optional authenticated pull for our own ghcr.io/deventerpriseds-org/mcp-oauth-proxy image, so
+          # that image's GitHub package can go back to private without breaking this deploy. Only wired in
+          # when the GHCR_PULL_PAT org secret (a PAT with read:packages on deventerpriseds-org) actually
+          # exists — omitted entirely otherwise, so a not-yet-created secret can't break a deploy that
+          # currently relies on the image being public.
+          # (an empty-string secret value can fail ACA's own validation, so the secret entry itself is
+          # conditional too, not just the registries block that references it.)
+          REGISTRIES_YAML=""
+          GHCR_SECRET_YAML=""
+          if [ -n "$GHCR_PAT" ]; then
+            REGISTRIES_YAML="registries:
+                - server: ghcr.io
+                  username: x-access-token
+                  passwordSecretRef: ghcr-pat"
+            GHCR_SECRET_YAML="- name: ghcr-pat
+                  value: \"${GHCR_PAT}\""
+          fi
           cat > app.yaml <<YAML
           properties:
             managedEnvironmentId: ${ENV_ID}
             configuration:
               activeRevisionsMode: Single
+              ${REGISTRIES_YAML}
               ingress:
                 external: true
                 targetPort: 8080
@@ -288,6 +307,7 @@ jobs:
                   value: "${ENTRA_CLIENT_SECRET}"
                 - name: enc-key
                   value: "${ENC_KEY}"
+                ${GHCR_SECRET_YAML}
             template:
               scale: { minReplicas: 1, maxReplicas: 1 }
               containers:
