@@ -1,0 +1,38 @@
+{
+  "results": [
+    {
+      "name": "App shell rendered (auth bypass consumed)",
+      "pass": true
+    },
+    {
+      "name": "Board still renders task cards after the rankTasks/candidate-filter change (found 0)",
+      "pass": false,
+      "detail": "0 cards would mean the new reminder-window filter is dropping everything, not just parked tasks"
+    },
+    {
+      "name": "INFORMATIONAL: 'reminder' tag chips currently on the board: 0",
+      "pass": true,
+      "detail": "expected 0 until grooming runs with the new prompt — NOT a failure"
+    },
+    {
+      "name": "INFORMATIONAL: confirm-ask rows visible (Confirm 0 / Revise 0 / Backlog 0 / Archive 0)",
+      "pass": true
+    },
+    {
+      "name": "No console/page errors (0)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
