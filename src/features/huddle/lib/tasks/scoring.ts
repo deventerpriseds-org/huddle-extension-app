@@ -120,7 +120,12 @@ export interface RankedTask {
  * Rank open tasks (not DONE/BLOCKED, not completed) by the scoring above, applying journey's
  * tiebreaker (explicit priority → priority_rank → score → due_date NULLS LAST) and title dedup.
  */
-export function rankTasks(tasks: ScorableTask[], limit = 25): RankedTask[] {
+/**
+ * @param excludeIds task ids to drop before ranking — used for the REMINDER WINDOW (a `reminder`-tagged
+ * task whose reminder is scheduled and unfired). Passed in rather than queried here because this module
+ * is deliberately pure/synchronous. Omitting it degrades to "exclude nothing", i.e. today's behaviour.
+ */
+export function rankTasks(tasks: ScorableTask[], limit = 25, excludeIds?: ReadonlySet<string>): RankedTask[] {
   const seen = new Set<string>();
   return tasks
     .filter((t) => t.status !== "DONE" && t.status !== "BLOCKED")
@@ -130,6 +135,10 @@ export function rankTasks(tasks: ScorableTask[], limit = 25): RankedTask[] {
     // before it was parked, it must not surface as work to prioritize (the standup/agent leak: grooming
     // ranked a parked "Prepare investor pitch" #3 Urgent). Single-sourced here so every prioritize view drops it.
     .filter((t) => !(t.tags ?? []).includes("parking-lot"))
+    // REMINDER WINDOW: identical rationale to parking-lot directly above. A task already waiting on a
+    // scheduled reminder must not surface in the prioritized list every agent reads — otherwise an
+    // agent proposes work on something the user has explicitly deferred to a chosen day.
+    .filter((t) => !excludeIds?.has(t.id))
     .map((t) => ({ t, score: scoreTask(t) }))
     .sort((a, b) => {
       const aPri = a.t.is_priority ? 1 : 0;

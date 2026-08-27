@@ -3463,8 +3463,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+              // REMIND mode carries the proposed date+time structurally so the model-free Confirm
+              // button can schedule from it. Validated here rather than trusted: a malformed or
+              // already-past timestamp drops to null, degrading to "confirmed but nothing scheduled"
+              // (reported to the user) instead of persisting an instant that silently never fires.
+              const rawWhen = typeof a.reminder_at === "string" ? a.reminder_at.trim() : "";
+              let reminderAt: string | null = null;
+              if (rawWhen) {
+                const whenMs = Date.parse(rawWhen);
+                if (Number.isFinite(whenMs) && whenMs > Date.now()) reminderAt = new Date(whenMs).toISOString();
+              }
               const { proposeTaskDod } = await import("./tasks/tasks.server");
-              await proposeTaskDod(taskId, email, dod);
+              await proposeTaskDod(taskId, email, dod, reminderAt);
               // Encoded as JSON in `detail` (a plain string field) so the reply-assembly step below can
               // recover structured {taskId, taskTitle, proposedDod} the same way replyArtifacts recovers
               // an artifact id from create_artifact's detail — this is what drives the confirm-ask
@@ -4529,6 +4539,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             task_id: z.string(),
             task_title: z.string(),
             definition_of_done: z.string(),
+            // REMIND mode only — see PROPOSE_TASK_INTENT_TOOL. Optional so produce/assist are unaffected.
+            reminder_at: z.string().optional(),
           }),
           execute: async (args) => {
             const a = args as Record<string, unknown>;
@@ -4545,8 +4557,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+              // REMIND mode carries the proposed date+time structurally so the model-free Confirm
+              // button can schedule from it. Validated here rather than trusted: a malformed or
+              // already-past timestamp drops to null, degrading to "confirmed but nothing scheduled"
+              // (reported to the user) instead of persisting an instant that silently never fires.
+              const rawWhen = typeof a.reminder_at === "string" ? a.reminder_at.trim() : "";
+              let reminderAt: string | null = null;
+              if (rawWhen) {
+                const whenMs = Date.parse(rawWhen);
+                if (Number.isFinite(whenMs) && whenMs > Date.now()) reminderAt = new Date(whenMs).toISOString();
+              }
               const { proposeTaskDod } = await import("./tasks/tasks.server");
-              await proposeTaskDod(taskId, email, dod);
+              await proposeTaskDod(taskId, email, dod, reminderAt);
               recordToolUse(
                 winner.id,
                 "propose_task_intent",

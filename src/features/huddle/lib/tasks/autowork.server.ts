@@ -524,8 +524,13 @@ export async function runScheduledAutoWork(
   // PARKING LOT: a task tagged `parking-lot` opts OUT of all automation — it is filtered here at
   // candidate-selection time, so it is never promoted (BACKLOG→UP_NEXT→DOING) and never enqueues a work
   // turn. It stays on the board (typically Backlog) with the tag until the user un-parks it. (ACT-13.)
+  // REMINDER WINDOW: same treatment as parking-lot. A `reminder`-tagged task with a scheduled, unfired
+  // reminder has already had its decision made by the user — it must not be re-promoted, re-asked, or
+  // enqueued for work while it waits. It re-enters candidate selection when the reminder fires.
+  const { taskIdsInReminderWindow } = await import("./turns.server");
+  const inReminderWindow = await taskIdsInReminderWindow(email);
   const assigned = (await getOpenAssignedTasks(email)).filter(
-    (t) => !(t.tags ?? []).includes("parking-lot"),
+    (t) => !(t.tags ?? []).includes("parking-lot") && !inReminderWindow.has(t.id),
   );
   const signature = backlogSignature(assigned);
 

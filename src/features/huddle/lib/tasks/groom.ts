@@ -111,8 +111,14 @@ export async function dispatchGroomBacklog(
     // below REPLACES the whole tags array, which would silently STRIP `parking-lot` and un-park the task,
     // letting journey's nightly builder re-schedule it. Filter parked tasks out here so grooming never
     // touches them (mirrors autowork.server.ts candidate filtering).
+    // REMINDER WINDOW: a `reminder`-tagged task whose reminder is scheduled and hasn't fired yet is
+    // skipped for the same reason a parked task is — the user has already decided what happens next and
+    // when. Re-grooming it would churn a decision they just made, and could re-propose a reminder for
+    // something already waiting on one. It becomes eligible again the moment the reminder fires.
+    const { taskIdsInReminderWindow } = await import("./turns.server");
+    const inWindow = await taskIdsInReminderWindow(email);
     const tasks = (await getTasksForUser(email, category)).filter(
-      (t) => !(t.tags ?? []).includes("parking-lot"),
+      (t) => !(t.tags ?? []).includes("parking-lot") && !inWindow.has(t.id),
     );
     const _readMs = Date.now() - _tRead0;
     if (!tasks.length) {
