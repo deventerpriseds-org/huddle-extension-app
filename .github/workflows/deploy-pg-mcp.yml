@@ -10,6 +10,14 @@ name: Deploy Postgres MCP (Azure Container Apps)
 # already holds Application.ReadWrite.All), so the redirect URI is set automatically (no portal step, per the
 # enterpriseds "one app per app" rule) and a client secret is minted inline each run (no new stored org secret).
 #
+# obot image = `ghcr.io/deventerpriseds-org/mcp-oauth-proxy:main`, an EnterpriseDS fork of upstream
+# (`deventerpriseds-org/mcp-oauth-proxy`, built by its own `build.yml` on every push to its `main`), NOT
+# the upstream `ghcr.io/obot-platform/mcp-oauth-proxy` image. Upstream hardcodes a 1-hour access-token
+# lifetime with no config option, and Claude's MCP OAuth client doesn't auto-refresh on expiry (only a
+# full manual reconnect works — anthropics/claude-code#65036), so every connector prompted for re-auth
+# roughly daily. The fork extends the access-token lifetime to 30 days (matching the refresh-token
+# lifetime already in upstream) — doesn't fix Claude's refresh bug, but makes the prompt far rarer.
+#
 # Why Entra over Google here: EnterpriseDS redirect URIs are centrally managed via Graph for Entra apps only
 # (Google requires a manual console entry). Bonus: signInAudience=AzureADMyOrg restricts login to org accounts
 # → that IS the access allowlist, enforced at the IdP. obot's generic OIDC provider discovers Entra correctly
@@ -291,7 +299,7 @@ jobs:
                     - name: DATABASE_URI
                       secretRef: ro-dsn
                 - name: oauth
-                  image: ghcr.io/obot-platform/mcp-oauth-proxy:latest
+                  image: ghcr.io/deventerpriseds-org/mcp-oauth-proxy:main
                   resources: { cpu: 0.25, memory: 0.5Gi }   # total with pgmcp = 0.75 CPU / 1.5Gi (a valid ACA combo)
                   env:
                     - name: DEPLOY_NONCE
