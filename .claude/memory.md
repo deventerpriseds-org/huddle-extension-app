@@ -3,6 +3,27 @@ Last updated: 2026-08-25
 
 ## Hardening — the phase-tag gate was GREEN while 67% of output was non-compliant (2026-08-25)
 
+- [2026-09-02] **Hardening — I rebuilt a system that already existed, because I trusted a LOCAL clone.**
+  Asked to cut token usage, I hand-wrote a bounded multi-repo SessionStart brief script. `setup.sh`
+  **already had one** (`eds-session-memory.py`, v30) and better — it also fixed a bug I never found
+  (`||` binds to a PIPELINE whose exit status is always `head`'s, so one fallback had **never once
+  fired**). Root cause: this session was pinned at hook **v16** while upstream was **v30**, *and* the
+  local `eds-claude-skills` clone was ALSO v16 — so both I and the AC subagent I spawned reasoned from a
+  14-version-old baseline, and two of that review's headline findings were **already fixed upstream**.
+  **The guard: before building ANY shared-tooling improvement, run `sync-setup-script` and compare
+  `CURRENT_VERSION` in `/workspace/eds-claude-skills` against the installed `_eds_version`.** A local
+  clone is not evidence of what the org has — this is the "answered from a proxy, not ground truth"
+  failure applied to tooling instead of data. Cost: ~25k tokens of duplicated work in one turn, on a
+  task whose entire purpose was to REDUCE token use.
+  **What actually fixed the problem was running the existing skill**: the brief went from
+  *98,897 bytes OR silently empty depending on cwd* → a bounded, correct **27,352 bytes**.
+  **Second lesson, for the next efficiency pass:** the largest single item measured all day was ONE MCP
+  tool result at **~24.5k tokens** — bigger than the entire Huddle `CLAUDE.md` I was proposing to split.
+  Tool-result hygiene (`minimal_output`, `tail_lines`, psql `-t -A`) may dominate instruction-file size
+  entirely. Measure the tool results before restructuring the instruction files.
+  Brief for an independent second opinion: `docs/CONTEXT-EFFICIENCY-BRIEF.md` (`738c8b5`); 3 owner
+  decisions open — see ACT-huddle-70.
+
 - [2026-08-26] **Memory dedup cleanup — 137 duplicate `rag_chunks` removed (owner-authorised, one transaction).**
   Before: 716 rows / 579 distinct / **137 exact duplicates** (`"let's run the daily stand-up"` ×36, `"Hey, Sam."` ×11).
   After: **579 / 579 / 0**, `orphan_refs 0`, triples still 500 with `null_source` unchanged at 29.

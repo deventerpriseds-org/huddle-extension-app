@@ -957,6 +957,31 @@ Driven by the user's live stand-up transcripts + the persisted `barge_route` log
 
 ## Open
 
+### ACT-huddle-70: Token/context efficiency — brief delivered, 3 owner decisions OPEN
+- **Status:** brief WRITTEN + PUSHED (`738c8b5`, `docs/CONTEXT-EFFICIENCY-BRIEF.md`) and delivered to the
+  owner as a file for a second opinion from another session. **Implementation BLOCKED on 3 decisions.**
+- **Ask (owner):** *"explain the effort and pros / cons for saving token usage so that I can get another
+  sessions opinion"* — after *"why did this take 4 hours and 164k tokens? … i worry that some of it is
+  copied context that wasnt needed."* Their instinct was right.
+- **DONE + verified:** SessionStart brief was either **98,897 bytes (~24.7k tok)** or **silently empty**
+  depending on cwd; now bounded + correct at **27,352 bytes**. Achieved by running `sync-setup-script`
+  (hooks v16 → **v30**), NOT by anything written here.
+- **The correction that matters:** I hand-built a bounded multi-repo brief script that `setup.sh`
+  **already had at v30**. Session AND local `eds-claude-skills` clone were both pinned at v16, so the AC
+  subagent I commissioned reviewed a 14-version-old baseline and two of its headline findings were
+  already fixed upstream. Duplicate deleted, hand-edits reverted, org version live.
+- **OPEN — needs owner decision:** (1) de-dup global vs eds `CLAUDE.md` (**96% duplicated**, ~11.4k
+  tok/injection) — edit live or PR? *rec: PR*; (2) split Huddle `CLAUDE.md` — **"under 3k" is not
+  achievable honestly** (`docs/` is not auto-injected, so a moved rule becomes ABSENT; floor ~4.6–5.2k
+  keeping every hard rule) — do at ~5k or skip? *rec: do, after (1)*; (3) memory rotation — **now saves
+  ~0** since v30 caps the brief at 60 lines/file — *rec: drop*.
+- **Unblocked, not yet started:** redundant `psql` install in 4 workflows (latency only, ~9s — NOT
+  tokens), psql `-t -A` vs aligned output (~3,000 padding chars per query read — the real recurring
+  leak), `minimal_output: true` on MCP list calls (one call measured at **~24.5k tok**), durable
+  hand-off `.md`.
+- **Unproven, flagged in the brief:** the ~4× per-session `CLAUDE.md` re-injection was **observed, not
+  proven** — the entire split proposal rests on it.
+
 ### ACT-huddle-49: Semantic 1:1 owner-resolution — replace keyword laneOwnerFor in the follow-up path
 - **Status:** FIXED + DEPLOYED + verifier-confirmed (PASS 7/7). **Awaiting user live-confirm** (repo rule: the user seeing it is the verdict). (this session, user-approved). Root cause: the LLM router is group-only (`canLLMRoute` requires scope==='group', huddle.functions.ts:1028), so a 1:1 owner hand-off is decided by keyword `laneOwnerFor` — which mis-routed a FINANCE spreadsheet from Finn → Tess ("build a spreadsheet" keyword-matched Tess's build lane).
 - **Fix:** replace the keyword decision in the 1:1 owner-follow-up (huddle.functions.ts:5277) with a cheap LLM owner-classification, mirroring the existing 1:1 difficulty-backfill LLM call (scoreDifficultyLLM, ~1104). capabilityOwnerFor (exclusive) stays an authoritative pre-check; laneOwnerFor stays as the no-key/failure fallback.
