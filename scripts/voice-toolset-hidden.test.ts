@@ -1,4 +1,4 @@
-// WHAT:       Offline guard for the VOICE (Realtime) surface, now covering TWO defect classes:
+// WHAT:       Offline guard for the VOICE (Realtime) surface, now covering THREE defect classes:
 //             (1) NAME COLLISION — never two tools with the same name as a Huddle-native one:
 //                 exactly ONE `send_email` (the native Graph schema that REQUIRES a recipient) and
 //                 ZERO journey `web_search`.
@@ -8,6 +8,9 @@
 //                 so a tool added to the toolset but NOT to NATIVE is silently proxied to journey,
 //                 where it does not exist. The assertions below prove the DISPATCH, not just the set:
 //                 they observe which journey tool name (if any) actually goes out on the wire.
+//             (3) NO TELEMETRY — every executeRealtimeTool call, native or journey-fallthrough,
+//                 must emit a tool-use record. The voice path recorded nothing at all, which is the
+//                 observability gap that let defect class (1) live here for weeks unseen.
 // WHY:        buildRealtimeToolset pushed journey's ENTIRE catalog unfiltered on top of its own
 //             native Graph `send_email`, while the text path filtered it through HIDDEN_FROM_HUDDLE.
 //             Journey's `send_email` has no recipient field and mails the OWNER, and the model picks
@@ -15,7 +18,8 @@
 //             the owner). Verified from source 2026-09-03.
 // SUPERSEDES: nothing
 // SUPERSEDED-BY: nothing -- current
-// EVIDENCE:   docs/cross-app-agent/FIX-send-email-collision.md (nexus-hub)
+// EVIDENCE:   docs/cross-app-agent/FIX-send-email-collision.md and
+//             docs/cross-app-agent/FIX-voice-telemetry.md (nexus-hub)
 //
 // Run:  npm run test:voice-tools     (bun scripts/voice-toolset-hidden.test.ts)
 // No network, no API spend: journey's /tools catalog is served by a stubbed global fetch, so the
@@ -205,6 +209,70 @@ check(
   confirmOut.ok !== true,
   `ok = ${String(confirmOut.ok)}`,
 );
+
+// ---------------------------------------------------------------------------------------------
+// PART 3 — TOOL TELEMETRY (docs/cross-app-agent/FIX-voice-telemetry.md, nexus-hub).
+// The defect this guards: the voice path recorded NOTHING. Measured on RAG_AI_Agents 2026-09-03,
+// chat.ceremony_transcript held 236 kind='tool' rows and ZERO on a voice call (huddle_id LIKE
+// 'dm-%'), while 19 voice rows existed — all spoken turns. That blindness is why the duplicate
+// send_email survived here for weeks, so the guard has to cover BOTH halves of the dispatcher:
+// a NATIVE tool and the JOURNEY FALLTHROUGH. Covering only the easy half would rebuild the exact
+// asymmetry that caused the original defect.
+//
+// SCOPE, stated honestly: the durable INSERT needs a database and a resolved user email, and this
+// test is offline with caller {} — so what is proved here is that executeRealtimeTool EMITS a
+// telemetry event, with the right tool name, the right branch, and a real duration, on both paths.
+// The INSERT itself (appendCeremonyToolCall) is not offline-provable and is not claimed.
+const { __observeVoiceToolUse } = await import(
+  "../src/features/huddle/lib/voice/voice-tool-telemetry.server"
+);
+
+type TelemetryEvent = { toolName: string; via: string; ms: number; ok: boolean; agentId: string };
+const telemetry: TelemetryEvent[] = [];
+const stopObserving = __observeVoiceToolUse((ev) => {
+  telemetry.push({ toolName: ev.toolName, via: ev.via, ms: ev.ms, ok: ev.ok, agentId: ev.agentId });
+});
+
+async function telemetryFor(name: string, args: Record<string, unknown>): Promise<TelemetryEvent[]> {
+  telemetry.length = 0;
+  await executeRealtimeTool(name, args, CTX);
+  return telemetry.filter((e) => e.toolName === name);
+}
+
+// HALF 1 — a NATIVE tool is recorded.
+const nativeEvents = await telemetryFor("create_huddle_task", { title: "Test-voice telemetry native" });
+check(
+  "a NATIVE voice tool call is RECORDED (tool telemetry emitted)",
+  nativeEvents.length === 1,
+  `events for create_huddle_task = ${nativeEvents.length}`,
+);
+check(
+  "the native telemetry row is attributed to the native branch and the calling agent",
+  nativeEvents[0]?.via === "native" && nativeEvents[0]?.agentId === "iris-chase",
+  `via = ${nativeEvents[0]?.via}, agentId = ${nativeEvents[0]?.agentId}`,
+);
+check(
+  "the native telemetry row carries a real duration (executeRealtimeTool's own t0 timer, not a second clock)",
+  typeof nativeEvents[0]?.ms === "number" && Number.isFinite(nativeEvents[0]?.ms) && nativeEvents[0]!.ms >= 0,
+  `ms = ${String(nativeEvents[0]?.ms)}`,
+);
+
+// HALF 2 — the JOURNEY FALLTHROUGH is recorded too. `create_task` is in the journey catalog and is
+// NOT in NATIVE, so it takes the `if (!NATIVE.has(name))` proxy hop — the half that crosses an app
+// boundary and therefore needs telemetry MORE, not less.
+const journeyEvents = await telemetryFor("create_task", { title: "Test-voice telemetry fallthrough" });
+check(
+  "a JOURNEY-FALLTHROUGH voice tool call is RECORDED (tool telemetry emitted)",
+  journeyEvents.length === 1,
+  `events for create_task = ${journeyEvents.length}`,
+);
+check(
+  "the fallthrough telemetry row is attributed to the journey branch, not reported as native",
+  journeyEvents[0]?.via === "journey",
+  `via = ${journeyEvents[0]?.via}`,
+);
+
+stopObserving();
 
 globalThis.fetch = realFetch;
 console.log(`\n${pass} passed, ${fail} failed`);

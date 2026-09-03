@@ -30,6 +30,10 @@
 
 import type { AgentId } from "../../data/agents";
 import { AGENT_BY_ID } from "../../data/agents";
+// Voice-surface tool telemetry. The text path records every tool call (recordToolUse ->
+// trackCeremonyTool); this path recorded NOTHING, which is why the duplicate send_email survived
+// here for weeks. Same store, same row shape — see voice-tool-telemetry.server.ts.
+import { recordVoiceToolUse } from "./voice-tool-telemetry.server";
 import { agentOwnsCapability } from "../capabilities";
 import { getAssistantSnapshot } from "../openai-assistants.server";
 import {
@@ -70,6 +74,12 @@ export interface RealtimeToolContext {
   caller: RealtimeCaller;
   huddleId: string;
   timeZone?: string;
+  /** The voice call's run id (useVoiceCallRealtimeSpeak's callIdRef). Tool telemetry rows are keyed
+   *  to it so they land in the SAME chat.ceremony_transcript run as that call's spoken turns —
+   *  "said it" and "did it" side by side. Optional: an older client that does not send one still
+   *  gets recorded, under a per-huddle fallback run, because losing telemetry is the bug being
+   *  fixed here. */
+  runId?: string;
 }
 
 const VOICE_HOUSE_STYLE =
@@ -351,6 +361,24 @@ export async function buildRealtimeToolset(
   return { tools: raw.map(toRealtimeTool), journeyNames };
 }
 
+/** Did this tool output represent a FAILURE? The executor returns an opaque string (its own JSON,
+ *  or journey's passthrough output), so outcome has to be read from it. A JSON object carrying a
+ *  truthy `error` or `ok:false` is a failure; anything else — including non-JSON journey output —
+ *  is treated as success. Deliberately conservative: over-reporting failure would make the
+ *  telemetry noisier than the silence it replaces. */
+function outputLooksOk(output: string): boolean {
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return true;
+    const o = parsed as Record<string, unknown>;
+    if (o.ok === false) return false;
+    if (o.error != null && o.error !== "" && o.error !== false) return false;
+    return true;
+  } catch {
+    return true; // not JSON — journey passthrough text, not an error signal
+  }
+}
+
 /** DIRECT, one-hop executor for a realtime tool call. Returns the tool output string + elapsed ms
  *  (instrumented so "too slow" is measured). Reuses the SAME dispatchers as the text turn. */
 export async function executeRealtimeTool(
@@ -359,7 +387,29 @@ export async function executeRealtimeTool(
   ctx: RealtimeToolContext,
 ): Promise<{ output: string; ms: number }> {
   const t0 = Date.now();
-  const done = (output: string) => ({ output, ms: Date.now() - t0 });
+  // Which branch handled the call. Set to "journey" at the fallthrough below so a throw AFTER that
+  // point is still attributed to the proxy hop rather than silently reported as native.
+  let via: "native" | "journey" = "native";
+  // EVERY return in this function goes through done(), including the journey fallthrough and the
+  // catch — so recording here covers the whole surface with ONE call site and cannot drift out of
+  // sync the way ~90 hand-placed recordToolUse calls on the text path can. It reuses the EXISTING
+  // t0 timer (no second clock) and is fire-and-forget: recordVoiceToolUse never throws and is never
+  // awaited, so telemetry can never delay or break a live call.
+  const done = (output: string) => {
+    const ms = Date.now() - t0;
+    recordVoiceToolUse({
+      agentId: ctx.agentId,
+      caller: ctx.caller ?? {},
+      huddleId: ctx.huddleId,
+      runId: ctx.runId || `voice-${ctx.huddleId || ctx.agentId}`,
+      toolName: name,
+      ok: outputLooksOk(output),
+      ms,
+      via,
+      error: outputLooksOk(output) ? null : output.slice(0, 500),
+    });
+    return { output, ms };
+  };
   // EVERY name offered by buildRealtimeToolset as a Huddle-native tool MUST be in this set. It is the
   // ONLY thing standing between a native tool and the `if (!NATIVE.has(name))` journey fallthrough
   // below — a native name missing from here is silently proxied to journey, where it does not exist,
@@ -648,6 +698,7 @@ export async function executeRealtimeTool(
     // Anything not native → route to the journey catalog directly (no per-call catalog fetch → lower
     // latency). An unknown/unsupported name comes back as a journey error, surfaced to the model.
     if (!NATIVE.has(name)) {
+      via = "journey";
       const r = await invokeJourneyTool({
         toolName: name,
         args,
