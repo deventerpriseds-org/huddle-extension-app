@@ -1,0 +1,138 @@
+name: Journey proxy probe (read-only health + tools)
+
+# WHAT:       Dispatch-only, STRICTLY READ-ONLY probe of the journey `huddle-proxy` Supabase edge
+#             function. Calls `GET /health` and `GET /tools` with the shared JOURNEY_PROXY_TOKEN
+#             bearer and prints the status code, `ok`, `version`, the advertised tool COUNT and the
+#             full list of tool NAMES.
+#
+# WHY:        Batch 1 test 1.1 of the cross-app agent spec proves the shared-secret transport, and
+#             it could not be run at all. JOURNEY_PROXY_TOKEN / JOURNEY_PROXY_URL are GitHub ORG
+#             secrets and are unset in a CCR session, so the call cannot be made from a session
+#             shell. The three workflows that DO carry the token -- run-grooming.yml,
+#             run-autowork.yml, run-standup.yml -- each perform REAL agent work with REAL writes to
+#             the owner's live board, so none of them can be borrowed as a probe. This workflow is
+#             the smallest thing that closes that gap: the token, no side effects.
+#
+# SUPERSEDES: nothing
+# SUPERSEDED-BY: nothing -- current
+# EVIDENCE:   docs/cross-app-agent/BATCH-1.1-RESULTS.md (in the nexus-hub repo) records the live
+#             response this workflow returned, and the verdict on the spec's kill criteria.
+#
+# ---------------------------------------------------------------------------------------------
+# READ-ONLY CONTRACT -- DO NOT WEAKEN THIS.
+#
+#   This workflow calls ONLY:   GET /health     GET /tools
+#   It MUST NEVER call:         POST /tool
+#
+#   `POST /tool` EXECUTES A REAL TOOL against the owner's real journey account -- it can create
+#   tasks on the live board, send push notifications, send email, and write calendar entries. A
+#   probe has no business doing any of that. If you need to exercise `POST /tool`, do it in a
+#   separate, clearly-named workflow with the owner's explicit go-ahead; do not add it here.
+#
+# SECRET HYGIENE: the token is never printed. It is passed to curl from an env var and explicitly
+# ::add-mask::'d, so even an unexpected echo in a response body is redacted by the runner. A leaked
+# secret in a build log is unrecoverable.
+# ---------------------------------------------------------------------------------------------
+
+on:
+  workflow_dispatch:
+    inputs:
+      list_tool_names:
+        description: "Print the full list of tool names from /tools."
+        required: false
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: GET /health and GET /tools (read-only)
+        env:
+          # deploy-swa.yml:407 uses exactly this fallback, so an EMPTY JOURNEY_PROXY_URL org secret
+          # is the normal, working production configuration -- not a misconfiguration. Mirror it.
+          PROXY_URL: ${{ secrets.JOURNEY_PROXY_URL || 'https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/huddle-proxy' }}
+          PROXY_TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          LIST_NAMES: ${{ inputs.list_tool_names }}
+        run: |
+          set -uo pipefail
+          echo "::add-mask::$PROXY_TOKEN"
+          [ -n "$PROXY_URL" ] && echo "::add-mask::$PROXY_URL"
+
+          if [ -z "$PROXY_TOKEN" ]; then
+            echo "::error::JOURNEY_PROXY_TOKEN is empty. Either the org secret is unset, or this"
+            echo "::error::repository is not in that secret's Repository-access list (GitHub passes"
+            echo "::error::an empty string rather than erroring). Nothing was probed."
+            exit 1
+          fi
+          URL="${PROXY_URL%/}"
+          echo "Proxy URL host: $(printf '%s' "$URL" | sed -E 's#^https?://([^/]+).*#\1#')"
+          echo "Proxy URL path: $(printf '%s' "$URL" | sed -E 's#^https?://[^/]+##')"
+          echo "Token length: ${#PROXY_TOKEN} chars (value never printed)"
+          echo
+
+          # ---------------- GET /health ----------------
+          echo "===== GET /health ====="
+          H_START=$(date +%s%3N)
+          H_CODE=$(curl -sS --max-time 30 -o /tmp/health.json -w '%{http_code}' \
+            -H "authorization: Bearer $PROXY_TOKEN" \
+            -H "content-type: application/json" \
+            -H "x-huddle-proxy: 1" \
+            "$URL/health")
+          H_CURL=$?
+          H_MS=$(( $(date +%s%3N) - H_START ))
+          echo "curl exit: $H_CURL   http_status: ${H_CODE:-none}   latency: ${H_MS}ms"
+          if [ "$H_CURL" = "28" ]; then
+            echo "KILL-CRITERION: TIMEOUT -- the runner could not reach the proxy within 30s."
+          fi
+          echo "--- /health body ---"
+          cat /tmp/health.json 2>/dev/null; echo
+          echo "--- /health parsed ---"
+          jq -r '"ok        = \(.ok)\nversion   = \(.version // "<absent>")\ntoolCount = \(.toolCount // "<absent>")\nerror     = \(.error // "<none>")"' \
+            /tmp/health.json 2>/dev/null || echo "(body was not valid JSON)"
+          echo
+
+          # ---------------- GET /tools ----------------
+          echo "===== GET /tools ====="
+          T_START=$(date +%s%3N)
+          T_CODE=$(curl -sS --max-time 30 -o /tmp/tools.json -w '%{http_code}' \
+            -H "authorization: Bearer $PROXY_TOKEN" \
+            -H "content-type: application/json" \
+            -H "x-huddle-proxy: 1" \
+            "$URL/tools")
+          T_CURL=$?
+          T_MS=$(( $(date +%s%3N) - T_START ))
+          echo "curl exit: $T_CURL   http_status: ${T_CODE:-none}   latency: ${T_MS}ms"
+          if [ "$T_CURL" = "28" ]; then
+            echo "KILL-CRITERION: TIMEOUT -- the runner could not reach the proxy within 30s."
+          fi
+          echo "--- /tools summary ---"
+          jq -r '"ok = \(.ok)\ntools advertised = \(.tools | length)"' /tmp/tools.json 2>/dev/null \
+            || { echo "(body was not valid JSON) raw:"; head -c 800 /tmp/tools.json; echo; }
+          if [ "$LIST_NAMES" = "true" ]; then
+            echo "--- tool names ---"
+            jq -r '.tools[]? | "  - \(.name)"' /tmp/tools.json 2>/dev/null || true
+          fi
+          echo
+
+          # ---------------- verdict on the spec's kill criteria ----------------
+          echo "===== VERDICT ====="
+          if [ "$H_CODE" = "401" ] || [ "$T_CODE" = "401" ]; then
+            echo "KILL-CRITERION MET: 401 UNAUTHORIZED."
+            echo "The token is not what the design assumes, or is not shared with this proxy."
+            echo "The 'reuse JOURNEY_PROXY_TOKEN, mint nothing' premise FAILS and must be re-decided."
+            exit 1
+          fi
+          if [ "$H_CODE" != "200" ]; then
+            echo "FAIL: /health returned ${H_CODE:-<no response>} (expected 200)."
+            exit 1
+          fi
+          if [ "$(jq -r '.ok' /tmp/health.json 2>/dev/null)" != "true" ]; then
+            echo "FAIL: /health returned ok != true."
+            exit 1
+          fi
+          echo "PASS: /health 200 ok=true; /tools ${T_CODE}."
+          echo "Kill criterion '401'     : NOT met."
+          echo "Kill criterion 'timeout' : NOT met."
