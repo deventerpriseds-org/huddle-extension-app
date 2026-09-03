@@ -1,6 +1,13 @@
-// WHAT:       Offline guard — the VOICE (Realtime) toolset must never offer two tools with the same
-//             name as a Huddle-native one. Specifically: exactly ONE `send_email` (the native Graph
-//             schema that REQUIRES a recipient) and ZERO journey `web_search`.
+// WHAT:       Offline guard for the VOICE (Realtime) surface, now covering TWO defect classes:
+//             (1) NAME COLLISION — never two tools with the same name as a Huddle-native one:
+//                 exactly ONE `send_email` (the native Graph schema that REQUIRES a recipient) and
+//                 ZERO journey `web_search`.
+//             (2) HALF-WIRED NATIVE TOOL — every Huddle-native tool must be offered by
+//                 buildRealtimeToolset AND dispatched natively by executeRealtimeTool. The dispatcher
+//                 routes on a local NATIVE set and everything else falls through to invokeJourneyTool,
+//                 so a tool added to the toolset but NOT to NATIVE is silently proxied to journey,
+//                 where it does not exist. The assertions below prove the DISPATCH, not just the set:
+//                 they observe which journey tool name (if any) actually goes out on the wire.
 // WHY:        buildRealtimeToolset pushed journey's ENTIRE catalog unfiltered on top of its own
 //             native Graph `send_email`, while the text path filtered it through HIDDEN_FROM_HUDDLE.
 //             Journey's `send_email` has no recipient field and mails the OWNER, and the model picks
@@ -98,6 +105,100 @@ check("native tavily_web_search IS offered", named("tavily_web_search").length =
 check("a benign journey tool still reaches the toolset", named("create_task").length === 1, `found ${named("create_task").length}`);
 check("journeyNames excludes the hidden names", !journeyNames.has("send_email") && !journeyNames.has("web_search"), `journeyNames = [${[...journeyNames].join(", ")}]`);
 check("journeyNames still carries the benign tool", journeyNames.has("create_task"), `journeyNames = [${[...journeyNames].join(", ")}]`);
+
+// ---------------------------------------------------------------------------------------------
+// PART 2 — the tools closed by docs/cross-app-agent/FIX-voice-capability-gaps.md (nexus-hub).
+// Each one needs BOTH halves. The DEFINITION half is a plain lookup in the toolset above. The
+// DISPATCH half is proved by watching the wire: executeRealtimeTool's journey fallthrough posts
+// /tool with `toolName` set to the ORIGINAL name, so if a native tool is missing from NATIVE we see
+// its own name go out to journey. A correctly-native tool either posts a DIFFERENT journey tool
+// (quick_create_task / parse_and_create_tasks) or posts nothing at all.
+
+const { executeRealtimeTool } = await import("../src/features/huddle/lib/voice/realtime-tools.server");
+
+/** Every toolName posted to journey's /tool during one executeRealtimeTool call. */
+const journeyCalls: string[] = [];
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url);
+  if (url.includes("/tools")) {
+    return new Response(JSON.stringify({ ok: true, tools: JOURNEY_CATALOG }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  if (url.includes("/tool")) {
+    try {
+      journeyCalls.push(String(JSON.parse(String(init?.body ?? "{}")).toolName ?? ""));
+    } catch {
+      journeyCalls.push("<unparseable>");
+    }
+    return new Response(JSON.stringify({ ok: true, output: "{}" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  throw new Error(`unexpected network call in offline test: ${url} (${init?.method ?? "GET"})`);
+}) as typeof fetch;
+
+// caller {} on purpose: no entra_email, so the cross-turn dedup read short-circuits and no database
+// is touched. The dispatch decision under test happens before any of that.
+const CTX = { agentId: "iris-chase" as const, caller: {}, huddleId: "dm-iris-chase", timeZone: "UTC" };
+
+async function dispatched(name: string, args: Record<string, unknown>): Promise<string[]> {
+  journeyCalls.length = 0;
+  await executeRealtimeTool(name, args, CTX);
+  return [...journeyCalls];
+}
+
+for (const [tool, args, expectedJourneyTool] of [
+  ["create_huddle_task", { title: "Test-voice parity single" }, "quick_create_task"],
+  ["create_huddle_tasks", { tasks: ["Test-voice parity A", "Test-voice parity B"] }, "parse_and_create_tasks"],
+  ["confirm_task_intent", {}, null],
+] as Array<[string, Record<string, unknown>, string | null]>) {
+  // HALF 1 — the model is actually offered it.
+  check(`${tool} is OFFERED by buildRealtimeToolset`, named(tool).length === 1, `found ${named(tool).length}`);
+  // HALF 2 — and executeRealtimeTool handles it natively instead of proxying it to journey.
+  const calls = await dispatched(tool, args);
+  check(
+    `${tool} is dispatched NATIVELY (never proxied to journey under its own name)`,
+    !calls.includes(tool),
+    `journey /tool calls = [${calls.join(", ")}]`,
+  );
+  if (expectedJourneyTool) {
+    check(
+      `${tool} reaches journey via ${expectedJourneyTool} (the native executor ran)`,
+      calls.includes(expectedJourneyTool),
+      `journey /tool calls = [${calls.join(", ")}]`,
+    );
+  }
+}
+
+// The confirm gate must FAIL CLOSED on voice: with no outstanding confirm-intent ask it must refuse,
+// and it must never write anything. A voice confirm that can manufacture a confirmation is worse than
+// no voice confirm at all (memory.md 2026-08-05: the gate was ON and 8 unconfirmed tasks still reached
+// review). Note the model is given NO task_id and NO definition_of_done to supply — see the schema.
+const confirmTool = named("confirm_task_intent")[0] as
+  | { parameters?: { properties?: Record<string, unknown>; required?: string[] } }
+  | undefined;
+const confirmProps = Object.keys(confirmTool?.parameters?.properties ?? {});
+check(
+  "voice confirm_task_intent does NOT let the model choose the task (no task_id param)",
+  !confirmProps.includes("task_id"),
+  `params = [${confirmProps.join(", ")}]`,
+);
+check(
+  "voice confirm_task_intent does NOT let the model author the DoD (no definition_of_done param)",
+  !confirmProps.includes("definition_of_done"),
+  `params = [${confirmProps.join(", ")}]`,
+);
+const confirmOut = JSON.parse((await executeRealtimeTool("confirm_task_intent", {}, CTX)).output) as {
+  ok?: boolean;
+};
+check(
+  "voice confirm_task_intent FAILS CLOSED with no outstanding ask",
+  confirmOut.ok !== true,
+  `ok = ${String(confirmOut.ok)}`,
+);
 
 globalThis.fetch = realFetch;
 console.log(`\n${pass} passed, ${fail} failed`);
