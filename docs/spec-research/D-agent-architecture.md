@@ -1,5 +1,30 @@
 # D — How Huddle's agents ACTUALLY run today (model / text / voice)
 
+> ## ⚠ SCOPE CORRECTION, added 2026-09-03 after the owner read this — READ BEFORE THE ConvAI SECTION
+>
+> This document's finding that **"ConvAI is unreachable dead scaffolding" is about HUDDLE ONLY.**
+> It must NOT be read as "ConvAI never worked" or "ConvAI is not viable".
+>
+> Owner, 2026-09-03: *"I do remember now it worked and was authenticated. it worked well in fact so
+> leave it as an option but of course Cole is default."* That is ground truth, and it refers to
+> **BOOST's** ConvAI integration — a provisioned agent (`ELEVENLABS_AGENT_ID=agent_1901kx…`, boost
+> `.github/workflows/api-deploy.yml:98`) pointed at Boost's `/api/app/voice/chat` as its custom LLM.
+> Different repo, different code path, and it worked well.
+>
+> Both statements are true at once:
+>
+> | | Huddle | Boost |
+> |---|---|---|
+> | ConvAI code | present but **unreachable** (`MeetingBar.tsx:131` hardcodes `"openai"`) | **provisioned and used** |
+> | ElevenLabs' live role | **TTS only** | ConvAI voice agent |
+>
+> The session that wrote this doc had already conflated the two systems once — it took "voice calls
+> work fine" (Huddle) and started building against Boost's ConvAI endpoint. If you are here to
+> decide something about ConvAI, establish WHICH app you mean first.
+>
+> Status: Boost's ConvAI path is a kept **OPTION**; **Cole is the DEFAULT** path for the bridge.
+> See boost `.claude/actions.md` → `ACT:convai-voice-option`.
+
 WHAT:       A source-grounded map of the runtime paths a Huddle agent takes to answer a
             typed message and to answer on a voice call, with exact model ids.
 WHY:        Repeated re-derivation of "which model / is ConvAI used" from comments and
