@@ -194,8 +194,14 @@ check(
 const confirmOut = JSON.parse((await executeRealtimeTool("confirm_task_intent", {}, CTX)).output) as {
   ok?: boolean;
 };
+// HONEST SCOPE, stated because the label used to overclaim: offline there is no database, so the
+// executor cannot get as far as the no-pending-ask branch — it refuses earlier, at identity. What
+// this proves is that NO offline path returns ok, i.e. the executor never reports a confirmation it
+// did not obtain. The no-pending-ask refusal itself is structural (getPendingConfirmForAgent filters
+// confirm_status='asked' AND assigned_agent) and is NOT offline-provable; a mutation that fails it
+// open comes back INERT here for exactly that reason, which is equivalence, not a broken guard.
 check(
-  "voice confirm_task_intent FAILS CLOSED with no outstanding ask",
+  "voice confirm_task_intent never returns ok when it cannot establish identity or state",
   confirmOut.ok !== true,
   `ok = ${String(confirmOut.ok)}`,
 );
