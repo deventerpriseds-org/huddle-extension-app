@@ -831,15 +831,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     if (journeyToolsCache || journeyToolsError) return journeyToolsCache;
     if (journeyEnabledMembers.length === 0) return null;
     try {
-      const { fetchJourneyToolDefinitions, toResponsesTool } =
+      const { fetchJourneyToolDefinitionsForHuddle, toResponsesTool } =
         await import("./journey/proxy.functions");
-      // Tools Huddle owns natively (or doesn't want) — don't offer journey's:
-      //  - web_search: Huddle uses its own Tavily.
-      //  - send_email: Huddle sends via Microsoft Graph (email/graph-email.server).
-      const HIDDEN_FROM_HUDDLE = new Set(["web_search", "send_email"]);
-      const defs = (await fetchJourneyToolDefinitions()).filter(
-        (d) => !HIDDEN_FROM_HUDDLE.has(d.name),
-      );
+      // Tools Huddle owns natively (or doesn't want) are excluded by HIDDEN_FROM_HUDDLE, which now
+      // lives in journey/proxy.functions.ts so the VOICE path applies the identical exclusion.
+      const defs = await fetchJourneyToolDefinitionsForHuddle();
       journeyToolsCache = { defs, tools: defs.map(toResponsesTool) };
       return journeyToolsCache;
     } catch (err) {

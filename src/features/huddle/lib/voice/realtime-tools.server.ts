@@ -23,7 +23,11 @@ import { AGENT_BY_ID } from "../../data/agents";
 import { agentOwnsCapability } from "../capabilities";
 import { getAssistantSnapshot } from "../openai-assistants.server";
 import {
-  fetchJourneyToolDefinitions,
+  // NOT the raw fetch: the ...ForHuddle variant drops journey tools Huddle owns natively
+  // (HIDDEN_FROM_HUDDLE = web_search, send_email). Offering journey's recipient-less `send_email`
+  // next to Huddle's native Graph one let the model pick the wrong same-named tool and mail the
+  // owner instead of the intended recipient — the text path had always filtered; this one had not.
+  fetchJourneyToolDefinitionsForHuddle,
   toResponsesTool,
   invokeJourneyTool,
 } from "../journey/proxy.functions";
@@ -204,7 +208,7 @@ export async function buildRealtimeToolset(
   const journeyNames = new Set<string>();
   if (opts.journey !== false) {
     try {
-      const defs = await fetchJourneyToolDefinitions();
+      const defs = await fetchJourneyToolDefinitionsForHuddle();
       for (const d of defs) {
         journeyNames.add(d.name);
         raw.push(toResponsesTool(d));

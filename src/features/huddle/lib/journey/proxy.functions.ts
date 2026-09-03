@@ -71,6 +71,28 @@ export async function fetchJourneyToolDefinitions(): Promise<JourneyToolDefiniti
   return tools;
 }
 
+/**
+ * Journey tools Huddle owns natively (or doesn't want) — never offer journey's version:
+ *  - web_search: Huddle uses its own Tavily (`tavily_web_search`).
+ *  - send_email: Huddle sends via Microsoft Graph (email/graph-email.server).
+ *
+ * SINGLE SOURCE. This used to be declared inline inside huddle.functions.ts's text-turn engine, so
+ * the VOICE path (voice/realtime-tools.server.ts) pushed the whole catalog unfiltered and offered a
+ * SECOND `send_email` — journey's, which has no recipient field and mails the owner — alongside
+ * Huddle's native Graph one. The model picks by name; the wrong pick SUCCEEDED and reported success,
+ * so "email Sarah the summary" silently emailed the owner. Both consumers now filter through here.
+ */
+export const HIDDEN_FROM_HUDDLE = new Set(["web_search", "send_email"]);
+
+/**
+ * The journey catalog as Huddle is allowed to offer it — `fetchJourneyToolDefinitions` minus
+ * HIDDEN_FROM_HUDDLE. Every consumer that builds an AGENT TOOLSET must use this, not the raw fetch
+ * (the raw one stays for diagnostics like `listJourneyTools`, which should show the real catalog).
+ */
+export async function fetchJourneyToolDefinitionsForHuddle(): Promise<JourneyToolDefinition[]> {
+  return (await fetchJourneyToolDefinitions()).filter((d) => !HIDDEN_FROM_HUDDLE.has(d.name));
+}
+
 /** Convert a journey ToolDefinition into an OpenAI Responses `type:"function"` tool. */
 export function toResponsesTool(t: JourneyToolDefinition): JourneyResponsesTool {
   return {
