@@ -36,6 +36,17 @@ import {
   classifyTurnIntent,
   type TurnIntent,
 } from "./capabilities";
+// Surface-independent half of task creation — the capability meta-task guard, cross-turn dedup,
+// journey date normalization and the honest outcome note. Shared with the VOICE executor
+// (voice/realtime-tools.server.ts) so the two surfaces cannot drift; see create-task-core.ts.
+import {
+  loadOpenTaskTitles,
+  normalizeJourneyDate,
+  normalizeTaskTitle,
+  screenCapabilityMetaTask,
+  splitTaskEntries,
+  summarizeQuickCreateOutcome,
+} from "./tasks/create-task-core";
 import {
   detectCeremony,
   buildCeremonyReport,
@@ -1684,24 +1695,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // turn; the board clutter came from the SAME task being (re)created across many turns/test runs.
   // Load the user's already-open task titles ONCE per turn from the mirror and skip creating a
   // duplicate of one that already exists. Best-effort: a failed read never blocks task creation.
-  const normTitle = (t: string) => t.trim().toLowerCase().replace(/\s+/g, " ");
+  // normTitle / the mirror read now live in tasks/create-task-core.ts so the VOICE executor dedups
+  // by the exact same rule — a title typed and the same title spoken must collide, not diverge.
+  const normTitle = normalizeTaskTitle;
   let existingOpenTitles: Set<string> | null = null;
   async function loadExistingOpenTitles(): Promise<Set<string>> {
     if (existingOpenTitles) return existingOpenTitles;
-    const set = new Set<string>();
-    try {
-      const email = data.caller?.entra_email;
-      if (email) {
-        const { resolveTaskEmail } = await import("./journey/identity");
-        const resolved = (await resolveTaskEmail(data.caller ?? {})) ?? email;
-        const { getTasksForUser } = await import("./tasks/tasks.server");
-        for (const t of await getTasksForUser(resolved)) {
-          if (t.title) set.add(normTitle(t.title));
-        }
-      }
-    } catch {
-      /* dedup read is best-effort — never block a create on it */
-    }
+    const set = await loadOpenTaskTitles(data.caller);
     existingOpenTitles = set;
     return set;
   }
@@ -2529,24 +2529,22 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // after assigning). Case (2) slipped through the original owner-mismatch-only check and
       // polluted the live board (2026-07-31 incident) — the prose rule forbids restating a PERFORMED
       // action regardless of who performed it, so the code guard must too.
-      const titleOwner = capabilityOwnerFor(title);
+      // Shared with the voice executor — see tasks/create-task-core.ts.
+      const titleOwner = screenCapabilityMetaTask(title, winner.id);
       if (titleOwner) {
-        const isSelf = titleOwner.agent.id === winner.id;
         recordToolUse(
           winner.id,
           "create_huddle_task",
-          isSelf
-            ? `blocked self-restating meta-task “${title.slice(0, 60)}” — ${titleOwner.cap.label} is your own job, not a to-do`
-            : `blocked meta-task “${title.slice(0, 60)}” — ${titleOwner.cap.label} belongs to ${titleOwner.agent.name}`,
+          titleOwner.isSelf
+            ? `blocked self-restating meta-task “${title.slice(0, 60)}” — ${titleOwner.reason}`
+            : `blocked meta-task “${title.slice(0, 60)}” — ${titleOwner.reason}`,
           true,
         );
         return {
           ok: true,
           deferred: true,
-          handedTo: isSelf ? undefined : titleOwner.agent.id,
-          note: isSelf
-            ? `That's your own job to perform, not a task to file — do it, don't card it.`
-            : `That's ${titleOwner.agent.name}'s exclusive job — it's been handed to them; do not file a task about it.`,
+          handedTo: titleOwner.handedTo,
+          note: titleOwner.note,
         };
       }
       // Cross-agent / re-run dedup: if this exact title was already created earlier in this turn,
@@ -2600,11 +2598,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // Validate here (don't just trust the tool description) so a model slip — a weekday name,
           // "next Friday" — can't silently break the scheduling call; drop it and fall back to the
           // title-text NL parser, which handles those phrases correctly.
-          const rawDate = typeof args.date === "string" ? args.date.trim().toLowerCase() : "";
-          const dateArg =
-            rawDate === "today" || rawDate === "tomorrow" || /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
-              ? rawDate
-              : undefined;
+          const dateArg = normalizeJourneyDate(args.date);
           const r = await invokeJourneyTool({
             toolName: "quick_create_task",
             args: dateArg ? { title: task.title, date: dateArg } : { title: task.title },
@@ -2620,33 +2614,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             // placement is provisional until tonight's planner runs; a future due date has no exact
             // time yet). Shape: {created, scheduled:[{title,time}], deferredToNightly:[{title,
             // due_date}], tasks:[{due_date,start_time,is_scheduled,...}]} — see parseAndCreateTasks.
-            let outcomeNote: string | undefined;
-            let outcome:
-              | { due_date?: string | null; start_time?: string | null; is_scheduled?: boolean }
-              | undefined;
-            try {
-              const parsed = JSON.parse(r.output) as {
-                scheduled?: Array<{ title: string; time: string }>;
-                deferredToNightly?: Array<{ title: string; due_date: string }>;
-                tasks?: Array<{
-                  due_date?: string | null;
-                  start_time?: string | null;
-                  is_scheduled?: boolean;
-                }>;
-              };
-              outcome = parsed.tasks?.[0];
-              if (parsed.scheduled && parsed.scheduled.length > 0) {
-                outcomeNote = `scheduled at ${parsed.scheduled[0].time} today (provisional — the nightly planner may move it)`;
-              } else if (parsed.deferredToNightly && parsed.deferredToNightly.length > 0) {
-                outcomeNote = `due ${parsed.deferredToNightly[0].due_date} — no exact time yet, the nightly planner will place one`;
-              } else if (outcome?.due_date && !outcome.start_time) {
-                outcomeNote = `due ${outcome.due_date} — no exact time yet`;
-              } else if (!outcome?.due_date && !outcome?.start_time) {
-                outcomeNote = "added to the backlog, unscheduled";
-              }
-            } catch {
-              /* r.output wasn't the expected JSON shape — outcome stays undefined, note omitted */
-            }
+            // Shared with the voice executor — see tasks/create-task-core.ts.
+            const { outcome, note: outcomeNote } = summarizeQuickCreateOutcome(r.output);
             recordToolUse(
               winner.id,
               "create_huddle_task",
@@ -2720,18 +2689,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // Accept an explicit list (preferred — the model enumerates each task) or a single multi-task
       // text blob. A blob is kept intact for journey's NL parser (it extracts times/dates); only split
       // on hard separators so a compound single task isn't torn apart.
-      const rawList = Array.isArray(args.tasks)
-        ? (args.tasks as unknown[]).map((t) => String(t ?? "").trim()).filter(Boolean)
-        : [];
-      const blob = typeof args.text === "string" ? args.text.trim() : "";
-      let entries = rawList;
-      if (!entries.length && blob) {
-        entries = blob
-          .split(/\n|;/)
-          .map((s) => s.trim())
-          .filter(Boolean);
-        if (!entries.length) entries = [blob];
-      }
+      const entries = splitTaskEntries(args); // shared with voice — tasks/create-task-core.ts
       if (!entries.length) {
         const error = "create_huddle_tasks requires a non-empty `tasks` array (or `text`)";
         recordToolUse(winner.id, "create_huddle_tasks", "batch task creation failed", false, error);
@@ -2744,16 +2702,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       const skipped: Array<{ title: string; reason: string }> = [];
       const deferred: Array<{ title: string; handedTo?: string; reason: string }> = [];
       for (const entry of entries) {
-        const titleOwner = capabilityOwnerFor(entry);
+        const titleOwner = screenCapabilityMetaTask(entry, winner.id);
         if (titleOwner) {
-          const isSelf = titleOwner.agent.id === winner.id;
-          deferred.push({
-            title: entry,
-            handedTo: isSelf ? undefined : titleOwner.agent.id,
-            reason: isSelf
-              ? `${titleOwner.cap.label} is your own job to perform, not a card`
-              : `${titleOwner.cap.label} belongs to ${titleOwner.agent.name}`,
-          });
+          deferred.push({ title: entry, handedTo: titleOwner.handedTo, reason: titleOwner.reason });
           continue;
         }
         const key = entry.trim().toLowerCase();
@@ -2780,11 +2731,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       if (agentBackend.journey?.enabled && data.caller?.entra_email) {
         try {
           const { invokeJourneyTool } = await import("./journey/proxy.functions");
-          const rawDate = typeof args.date === "string" ? args.date.trim().toLowerCase() : "";
-          const target_date =
-            rawDate === "today" || rawDate === "tomorrow" || /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
-              ? rawDate
-              : undefined;
+          const target_date = normalizeJourneyDate(args.date);
           const r = await invokeJourneyTool({
             toolName: "parse_and_create_tasks",
             args: {

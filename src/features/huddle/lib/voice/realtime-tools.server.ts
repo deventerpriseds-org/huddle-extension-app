@@ -13,10 +13,18 @@
 // Governance is data-driven (agents.ts capabilities via lib/capabilities.ts): grooming only for its
 // owner, exactly as the text path gates it — so an ownership rotation propagates here for free.
 //
-// NOTE (v1 scope): the Huddle-native create_huddle_task / create_artifact executors are TURN-SCOPED
-// inside runAgentTurn (they render UI board/artifact cards via per-turn state), so they are NOT wired
-// into this v1 voice executor — journey's own task tools (from the journey catalog) cover task ops.
-// Extracting those turn-scoped executors for full parity is the documented next layer.
+// NOTE (v1 scope, NOW CLOSED — kept for the history): create_huddle_task / create_artifact were once
+// text-only because their executors are TURN-SCOPED inside runAgentTurn (they render UI board/artifact
+// cards via per-turn state). create_artifact was retro-fitted first (ACT-huddle-40); create_huddle_task,
+// create_huddle_tasks and confirm_task_intent followed after BATCH-3-RESULTS.md measured the gap. The
+// turn-scoped half (board cards, recordToolUse breadcrumbs) genuinely does not exist on a voice call;
+// the DURABLE half was extracted to tasks/create-task-core.ts and tasks/confirm-ask.functions.ts
+// (confirmTaskFromProposal) and is now CALLED here, not reimplemented. See
+// docs/cross-app-agent/FIX-voice-capability-gaps.md (nexus-hub) for which tools stay text-only and why.
+//
+// THE ASYMMETRY THAT BITES: executeRealtimeTool dispatches on a local NATIVE set, and anything NOT in
+// that set falls through to invokeJourneyTool. A Huddle-native tool added to buildRealtimeToolset but
+// NOT to NATIVE is silently proxied to journey and fails there. Both halves, every time.
 
 import type { AgentId } from "../../data/agents";
 import { AGENT_BY_ID } from "../../data/agents";
@@ -34,6 +42,17 @@ import { TAVILY_WEB_SEARCH_TOOL, tavilySearch, type TavilySearchArgs } from "../
 // SINGLE SOURCE — the same calendar schemas the text turn engine uses (no voice-local copy).
 // get_calendar_events = alias → combined schedule; get_external_calendar_events = raw Outlook (Graph).
 import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "../calendar/tools";
+// SHARED with the text turn engine — the capability meta-task guard, cross-turn dedup, journey date
+// normalization and the honest outcome note. NOT a voice copy: huddle.functions.ts's two task-create
+// closures call these same functions, so the two surfaces cannot drift.
+import {
+  loadOpenTaskTitles,
+  normalizeJourneyDate,
+  normalizeTaskTitle,
+  screenCapabilityMetaTask,
+  splitTaskEntries,
+  summarizeQuickCreateOutcome,
+} from "../tasks/create-task-core";
 
 export interface RealtimeCaller {
   entra_object_id?: string;
@@ -118,6 +137,95 @@ export async function buildRealtimeToolset(
 
   if (opts.webSearch !== false) raw.push(TAVILY_WEB_SEARCH_TOOL);
   if (agentOwnsCapability(agent, "backlog-grooming")) raw.push(GROOM_BACKLOG_TOOL);
+
+  // Native task capture — the voice agent was MISSING create_huddle_task/create_huddle_tasks, so a
+  // spoken "add that to my board" could not create a Huddle card; it reached only journey's raw
+  // quick_create_task from the catalog, which skips Huddle's exclusive-capability meta-task guard, its
+  // cross-turn dedup, and the honest scheduled/deferred outcome note. Same guards, same journey tools,
+  // same shared helpers as the text path (tasks/create-task-core.ts) — see the file header.
+  raw.push(
+    {
+      type: "function",
+      name: "create_huddle_task",
+      description:
+        "Create ONE task when the user asks to add, log, track, capture or put something on their " +
+        "board. It lands on the Huddle board and their journey board in one call. For MORE THAN ONE " +
+        "task in a single request use create_huddle_tasks instead. Report what the result actually " +
+        "says — it tells you whether it was scheduled, is unscheduled, or was skipped as a duplicate.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          title: { type: "string", description: "Short task title. Keep any time/date phrase inline in the title (e.g. \"Renew passport by Friday\") — it is parsed server-side." },
+          date: {
+            type: "string",
+            description:
+              "Optional, ONLY for exactly 'today', 'tomorrow', or an explicit YYYY-MM-DD you are certain of. For any other date the user said (a weekday name, 'next Tuesday'), leave this unset and keep the phrase in the title instead.",
+          },
+        },
+        required: ["title"],
+      },
+    },
+    {
+      type: "function",
+      name: "create_huddle_tasks",
+      description:
+        "Create SEVERAL tasks at once — use this, NOT repeated create_huddle_task calls, whenever the " +
+        "user rattles off more than one thing (\"gym at nine, lunch at twelve, call mom at five\"). One " +
+        "call creates and co-schedules all of them. The result gives the EXACT number created plus " +
+        "anything skipped as a duplicate — state that number, never assume they all landed.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          tasks: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              'The tasks, one string each. Keep any time/date phrase inline in the string ("Gym at 9am", "Call mom tomorrow") — it is parsed and scheduled server-side.',
+          },
+          date: {
+            type: "string",
+            description:
+              "Optional shared date for the whole batch, ONLY 'today', 'tomorrow', or an explicit YYYY-MM-DD. For any other phrasing keep it inline in each task string.",
+          },
+        },
+        required: ["tasks"],
+      },
+    },
+    // THE CONFIRM-INTENT / DEFINITION-OF-DONE GATE, on voice for the first time. Deliberately a
+    // NARROWER schema than the text path's: text takes a model-supplied `task_id` AND a model-authored
+    // `definition_of_done`, and is safe only because the turn engine injects the exact pending task id
+    // and title into that agent's scene (huddle.functions.ts pendingConfirm). No such injection exists
+    // on voice, so a model-supplied id would be a GUESS and a model-authored DoD would let an agent
+    // manufacture a confirmation the user never gave. Neither is accepted here: the SERVER resolves
+    // which task is awaiting a reply (getPendingConfirmForAgent) and the SERVER's own recorded proposal
+    // is what gets confirmed. No outstanding ask -> the tool refuses. It fails CLOSED.
+    {
+      type: "function",
+      name: "confirm_task_intent",
+      description:
+        "Lock in the Definition of Done for the task you are WAITING ON — call this ONLY when the user " +
+        "has just answered your outstanding check-in about a task (\"yes, go ahead\", \"yep that's right, " +
+        "but also…\"). You do not choose the task: it confirms the one check-in you are actually waiting " +
+        "on, and refuses if you are not waiting on any — so never tell the user something was confirmed " +
+        "unless this returned ok. The result gives you the task's title; say which task you locked in. " +
+        "If they added or changed something, pass it as `additions`. If they declined or are still " +
+        "deciding, do NOT call this.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          additions: {
+            type: "string",
+            description:
+              "Optional. Anything the user added or corrected when they confirmed, in their words. It is appended to the plan you already proposed to them — it never replaces it.",
+          },
+        },
+        required: [],
+      },
+    },
+  );
 
   // Native artifact production — the voice agent was MISSING create_artifact (text-engine only), so on a
   // call it would SAY "let me generate that MD file" and produce nothing (ACT-huddle-40). Task-scoped
