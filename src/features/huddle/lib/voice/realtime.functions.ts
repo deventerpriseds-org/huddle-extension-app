@@ -179,6 +179,9 @@ export const runRealtimeTool = createServerFn({ method: "POST" })
       caller: (r.caller && typeof r.caller === "object" ? r.caller : {}) as RealtimeCaller,
       huddleId: typeof r.huddleId === "string" ? r.huddleId : "",
       timeZone: typeof r.timeZone === "string" ? r.timeZone : undefined,
+      // The voice call's run id, so this tool call's telemetry row joins the SAME
+      // chat.ceremony_transcript run as that call's spoken turns.
+      runId: typeof r.runId === "string" ? r.runId : undefined,
     };
   })
   .handler(async ({ data }): Promise<RealtimeToolResult> => {
@@ -190,6 +193,7 @@ export const runRealtimeTool = createServerFn({ method: "POST" })
         caller: data.caller,
         huddleId: data.huddleId,
         timeZone: data.timeZone,
+        runId: data.runId,
       });
       return { ok: true, output, ms };
     } catch (err) {
