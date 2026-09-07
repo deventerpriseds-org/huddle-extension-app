@@ -22,6 +22,7 @@ import { Route as ApiPublicRunReviewDigestRouteImport } from './routes/api/publi
 import { Route as ApiPublicRunGroomingRouteImport } from './routes/api/public/run-grooming'
 import { Route as ApiPublicRunCeremonyRouteImport } from './routes/api/public/run-ceremony'
 import { Route as ApiPublicRunAutoworkRouteImport } from './routes/api/public/run-autowork'
+import { Route as ApiPublicRunAgentTurnRouteImport } from './routes/api/public/run-agent-turn'
 import { Route as ApiPublicAuthTraceRouteImport } from './routes/api/public/auth-trace'
 
 const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
@@ -90,6 +91,11 @@ const ApiPublicRunAutoworkRoute = ApiPublicRunAutoworkRouteImport.update({
   path: '/api/public/run-autowork',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicRunAgentTurnRoute = ApiPublicRunAgentTurnRouteImport.update({
+  id: '/api/public/run-agent-turn',
+  path: '/api/public/run-agent-turn',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicAuthTraceRoute = ApiPublicAuthTraceRouteImport.update({
   id: '/api/public/auth-trace',
   path: '/api/public/auth-trace',
@@ -101,6 +107,7 @@ export interface FileRoutesByFullPath {
   '/auth': typeof AuthRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/run-agent-turn': typeof ApiPublicRunAgentTurnRoute
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
@@ -116,6 +123,7 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/': typeof AuthenticatedIndexRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/run-agent-turn': typeof ApiPublicRunAgentTurnRoute
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
@@ -133,6 +141,7 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/run-agent-turn': typeof ApiPublicRunAgentTurnRoute
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
@@ -150,6 +159,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/sitemap.xml'
     | '/api/public/auth-trace'
+    | '/api/public/run-agent-turn'
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
@@ -165,6 +175,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/'
     | '/api/public/auth-trace'
+    | '/api/public/run-agent-turn'
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
@@ -181,6 +192,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/_authenticated/'
     | '/api/public/auth-trace'
+    | '/api/public/run-agent-turn'
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
@@ -197,6 +209,7 @@ export interface RootRouteChildren {
   AuthRoute: typeof AuthRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiPublicAuthTraceRoute: typeof ApiPublicAuthTraceRoute
+  ApiPublicRunAgentTurnRoute: typeof ApiPublicRunAgentTurnRoute
   ApiPublicRunAutoworkRoute: typeof ApiPublicRunAutoworkRoute
   ApiPublicRunCeremonyRoute: typeof ApiPublicRunCeremonyRoute
   ApiPublicRunGroomingRoute: typeof ApiPublicRunGroomingRoute
@@ -301,6 +314,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicRunAutoworkRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/run-agent-turn': {
+      id: '/api/public/run-agent-turn'
+      path: '/api/public/run-agent-turn'
+      fullPath: '/api/public/run-agent-turn'
+      preLoaderRoute: typeof ApiPublicRunAgentTurnRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/auth-trace': {
       id: '/api/public/auth-trace'
       path: '/api/public/auth-trace'
@@ -328,6 +348,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiPublicAuthTraceRoute: ApiPublicAuthTraceRoute,
+  ApiPublicRunAgentTurnRoute: ApiPublicRunAgentTurnRoute,
   ApiPublicRunAutoworkRoute: ApiPublicRunAutoworkRoute,
   ApiPublicRunCeremonyRoute: ApiPublicRunCeremonyRoute,
   ApiPublicRunGroomingRoute: ApiPublicRunGroomingRoute,

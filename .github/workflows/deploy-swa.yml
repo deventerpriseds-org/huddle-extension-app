@@ -416,6 +416,10 @@ jobs:
               AZURE_CLIENT_SECRET="${{ secrets.AZURE_CLIENT_SECRET }}" \
               AZURE_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
               HUDDLE_EMAIL_FROM="${{ secrets.HUDDLE_EMAIL_FROM || 'dev@enterpriseds.io,von.ellis@enterpriseds.io' }}" \
+              # D-16 cross-app agent turn: the acting SUBJECT for POST /api/public/run-agent-turn.
+              # NOT a credential -- an identifier, safe in plaintext, never rotated as a secret.
+              # The route fails CLOSED (503 subject_not_configured) when this is unset.
+              CROSS_APP_TURN_SUBJECT="${{ secrets.CROSS_APP_TURN_SUBJECT || 'dev@enterpriseds.io' }}" \
               AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
               HUDDLE_APP_URL="https://${SWA_HOST}"
 
