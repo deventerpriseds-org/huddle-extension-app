@@ -1174,6 +1174,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // resolveExecContext) used to each call resolveTaskEmail themselves, paying that round-trip
   // twice per turn. One resolve, shared.
   let resolvedCallerEmail: string | null | undefined;
+  // D4b: the OWNER'S OWN words for this turn, captured HERE and never re-read.
+  // `data.text` is MUTATED later in this function (the deep-confirm resume path does
+  // `data.text = pending.askText`), and this value feeds an AUTHORISATION decision -- whether an
+  // ON-REQUEST self address may be sent to. An authorisation input that a later code path can swap is
+  // not an authorisation input, so it is frozen before anything can touch it.
+  const ownerTurnText: string = String(data.text ?? "");
+
   const resolveCallerEmail = async (): Promise<string | null> => {
     if (resolvedCallerEmail !== undefined) return resolvedCallerEmail;
     const { resolveTaskEmail } = await import("./journey/identity");
@@ -3101,9 +3108,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const { emailFromOptions, graphEmailConfigured } =
           await import("./email/graph-email.server");
         const emailTools: unknown[] = [];
-        // Fails CLOSED to false (drafts only) on any error — see isEmailSendEnabled's contract.
-        const { isEmailSendEnabled } = await import("./identity/agent-workflow-config.server");
-        const emailSendEnabled = await isEmailSendEnabled(await resolveCallerEmail(), winner.id);
+        // D4b: this boolean now answers "may the send_email TOOL be offered", NOT "may mail be sent".
+        // Recipients are unknown at assembly time, so the real authorisation moved to the send path
+        // (sendOrDraftEmail -> the three-tier recipient gate). The tool is offered when the GLOBAL
+        // D4a flag is on OR the caller has any self address that could ever send. The variable keeps
+        // its D4a name deliberately: voice-toolset-hidden.test.ts asserts the literal line
+        // `if (emailSendEnabled) {` and that guard is mutation-proved (M4) -- renaming it for
+        // cosmetics would break a proven guard and invalidate recorded evidence.
+        // Fails CLOSED to false (tool withheld) on any error — see canOfferSendEmailTool's contract.
+        const { canOfferSendEmailTool } = await import("./identity/agent-workflow-config.server");
+        const emailSendEnabled = await canOfferSendEmailTool(await resolveCallerEmail(), winner.id);
         if (graphEmailConfigured()) {
           const fromOpts = emailFromOptions();
           // EMAIL SEND GATE (2026-09-07). `send_email` is offered to the model ONLY when the owner has
@@ -3117,7 +3131,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               description:
                 `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
                 `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
-                `Requires a recipient (to), a subject, and a body. Use this whenever the user asks to email someone.`,
+                `Requires a recipient (to), a subject, and a body. Use this whenever the user asks to email someone. ` +
+                `Mail addressed only to the user's own address is sent; any other recipient is saved as a DRAFT ` +
+                `instead and the result says so — when that happens, tell them it was saved to drafts, never that it was sent.`,
               parameters: {
                 type: "object",
                 additionalProperties: false,
@@ -3755,21 +3771,29 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               });
             }
             try {
-              const { sendGraphEmail } = await import("./email/graph-email.server");
-              const r = await sendGraphEmail({
+              const { sendOrDraftEmail } = await import("./email/graph-email.server");
+              const r = await sendOrDraftEmail({
                 to: String(a.to ?? ""),
                 subject: String(a.subject ?? ""),
                 body: String(a.body ?? ""),
                 from: a.from ? String(a.from) : undefined,
                 cc: a.cc ? String(a.cc) : undefined,
+                bcc: a.bcc ? String(a.bcc) : undefined,
                 // For the send gate's dispatch backstop only (never sent to Graph).
                 callerEmail: await resolveCallerEmail(),
                 callerAgentId: winner.id,
+                // D4b: frozen at the top of the turn, so a later `data.text` reassignment cannot
+                // change who this message is allowed to reach.
+                ownerTurnText,
               });
               recordToolUse(
                 winner.id,
                 "send_email",
-                r.ok ? `sent from ${r.from} → ${(r.to ?? []).join(", ")}` : `send failed`,
+                r.ok
+                  ? `sent from ${r.from} → ${(r.to ?? []).join(", ")}`
+                  : r.drafted
+                    ? `saved to drafts (blocked: ${(r.blockedRecipients ?? []).join(", ") || "no recipient"})`
+                    : `send failed`,
                 r.ok,
                 r.ok ? undefined : r.error,
               );
@@ -4877,11 +4901,14 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         {
           const { emailFromOptions, graphEmailConfigured } =
             await import("./email/graph-email.server");
-          // Fails CLOSED to false (drafts only) on any error - see isEmailSendEnabled's contract.
-          const { isEmailSendEnabled: isEmailSendEnabledLovable } = await import(
+          // D4b: same meaning change as the OpenAI path above - "may the TOOL be offered", not "may
+          // mail be sent". Both surfaces MUST move together; gating one and not the other is the exact
+          // defect that produced the duplicate send_email.
+          // Fails CLOSED to false (tool withheld) on any error - see canOfferSendEmailTool's contract.
+          const { canOfferSendEmailTool: canOfferSendEmailToolLovable } = await import(
             "./identity/agent-workflow-config.server",
           );
-          const lovableEmailSendEnabled = await isEmailSendEnabledLovable(
+          const lovableEmailSendEnabled = await canOfferSendEmailToolLovable(
             await resolveCallerEmail(),
             winner.id,
           );
@@ -4897,7 +4924,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 description:
                   `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
                   `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
-                  `Requires to, subject, and body. Use whenever the user asks to email someone.`,
+                  `Requires to, subject, and body. Use whenever the user asks to email someone. ` +
+                  `Mail addressed only to the user's own address is sent; any other recipient is saved as a DRAFT ` +
+                  `instead and the result says so — when that happens, say it was saved to drafts, never that it was sent.`,
                 inputSchema: z.object({
                   to: z.string(),
                   subject: z.string(),
@@ -4920,21 +4949,28 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                       message: "That email was already sent this turn.",
                     });
                   }
-                  const { sendGraphEmail } = await import("./email/graph-email.server");
-                  const r = await sendGraphEmail({
+                  const { sendOrDraftEmail } = await import("./email/graph-email.server");
+                  const r = await sendOrDraftEmail({
                     to: String(a.to ?? ""),
                     subject: String(a.subject ?? ""),
                     body: String(a.body ?? ""),
                     from: a.from ? String(a.from) : undefined,
                     cc: a.cc ? String(a.cc) : undefined,
+                    bcc: a.bcc ? String(a.bcc) : undefined,
                     // For the send gate's dispatch backstop only (never sent to Graph).
                     callerEmail: await resolveCallerEmail(),
                     callerAgentId: winner.id,
+                    // D4b: frozen at the top of the turn (see ownerTurnText's declaration).
+                    ownerTurnText,
                   });
                   recordToolUse(
                     winner.id,
                     "send_email",
-                    r.ok ? `sent from ${r.from} → ${(r.to ?? []).join(", ")}` : "send failed",
+                    r.ok
+                      ? `sent from ${r.from} → ${(r.to ?? []).join(", ")}`
+                      : r.drafted
+                        ? `saved to drafts (blocked: ${(r.blockedRecipients ?? []).join(", ") || "no recipient"})`
+                        : "send failed",
                     r.ok,
                     r.ok ? undefined : r.error,
                   );

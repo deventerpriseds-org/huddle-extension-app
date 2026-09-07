@@ -14,8 +14,10 @@
     "test:presence": "bun scripts/presence-timing.test.mjs",
     "test:mode": "bun scripts/task-mode.test.mjs",
     "test:voice-tools": "bun scripts/voice-toolset-hidden.test.ts",
+    "test:cross-app": "bun scripts/cross-app-turn-gate.test.ts",
     "format": "prettier --write .",
-    "fetch:assistants": "bun run scripts/fetch-openai-assistants.ts"
+    "fetch:assistants": "bun run scripts/fetch-openai-assistants.ts",
+    "test:email-gate": "bun scripts/email-self-send.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

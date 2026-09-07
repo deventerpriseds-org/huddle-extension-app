@@ -320,10 +320,10 @@ export async function buildRealtimeToolset(
                 const { resolveTaskEmail } = await import("../journey/identity");
                 const email =
                   (await resolveTaskEmail(opts.caller ?? {})) ?? opts.caller?.entra_email ?? null;
-                const { isEmailSendEnabled } = await import(
+                const { canOfferSendEmailTool } = await import(
                   "../identity/agent-workflow-config.server"
                 );
-                return await isEmailSendEnabled(email, agentId);
+                return await canOfferSendEmailTool(email, agentId);
               } catch {
                 return false;
               }
@@ -335,7 +335,9 @@ export async function buildRealtimeToolset(
           description:
             `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
             `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
-            `Requires a recipient (to), a subject, and a body. Use this whenever the user asks to email someone.`,
+            `Requires a recipient (to), a subject, and a body. Use this whenever the user asks to email someone. ` +
+            `Mail addressed only to the user's own main address is sent; any other recipient is saved as a DRAFT ` +
+            `instead and the result says so — if that happens, say it was saved to drafts, never that it was sent.`,
           parameters: {
             type: "object",
             additionalProperties: false,
@@ -503,19 +505,34 @@ export async function executeRealtimeTool(
       return done(JSON.stringify(r));
     }
     if (name === "send_email") {
-      const { sendGraphEmail } = await import("../email/graph-email.server");
+      const { sendOrDraftEmail } = await import("../email/graph-email.server");
       // The gate's dispatch backstop needs the caller. A live voice session can still hold a toolset
       // minted BEFORE the owner flipped sending off, so this branch is genuinely reachable with the
-      // gate closed - resolve the email and let sendGraphEmail refuse.
+      // gate closed - resolve the email and let the send path refuse.
       const { resolveTaskEmail } = await import("../journey/identity");
       const gateEmail =
         (await resolveTaskEmail(ctx.caller ?? {})) ?? ctx.caller?.entra_email ?? null;
-      const r = await sendGraphEmail({
+      // D4b: `ownerTurnText` is DELIBERATELY NOT PASSED on the voice surface.
+      //
+      // RealtimeToolContext carries { agentId, caller, huddleId, timeZone?, runId? } and NOTHING that
+      // holds what the owner actually said, so there is no admissible evidence here that he asked for
+      // an ON-REQUEST address - and the consequence is that voice sends to AUTO addresses only, while
+      // on-request ones become drafts. That is the fail-closed answer the owner's own rule requires of
+      // a surface that cannot supply his words.
+      //
+      // The tempting shortcut is to search `args.body` or `args.subject` for the address and call that
+      // "the mention". DO NOT. Those strings are written by the model, so an agent could manufacture
+      // its own authorisation - the precise thing this gate exists to prevent (AC-16 / AC-28, and
+      // failure mode #3 in AC-email-self-send.md). Threading the speech-to-text transcript in would be
+      // no better: STT output is a worse trust boundary than typed text, for the sole benefit of
+      // spoken "email it to dev@".
+      const r = await sendOrDraftEmail({
         to: String(args.to ?? ""),
         subject: String(args.subject ?? ""),
         body: String(args.body ?? ""),
         from: args.from ? String(args.from) : undefined,
         cc: args.cc ? String(args.cc) : undefined,
+        bcc: args.bcc ? String(args.bcc) : undefined,
         callerEmail: gateEmail,
         callerAgentId: ctx.agentId,
       });
