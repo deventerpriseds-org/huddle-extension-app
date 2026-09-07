@@ -397,7 +397,14 @@ jobs:
           fi
           # CROSS_APP_TURN_SUBJECT (D-16) is the acting SUBJECT for POST /api/public/run-agent-turn.
           # It is NOT a credential -- an identifier, safe in plaintext, never rotated as a secret.
-          # The route fails CLOSED (503 subject_not_configured) when it is unset.
+          # The route fails CLOSED (503 subject_not_configured) only when this setting is genuinely
+          # absent -- which this deploy PREVENTS, because the `||` below supplies a default. So the
+          # route is OPEN after any deploy, acting as that default subject. That is intended, not an
+          # oversight: dev@ and von.ellis@ both hang off the same entra_object_id
+          # (a89e3652-...) in identity.profile_emails, so either address resolves to the SAME person
+          # -- `resolveScopeByEmail` looks the anchor up by email and both rows point at it.
+          # Set the CROSS_APP_TURN_SUBJECT secret to override; do not read "fails closed" as meaning
+          # the route stays shut until someone configures it. It does not.
           # NOTE: every line below is inside ONE backslash-continued command. A `#` comment must
           # NEVER be placed between those lines: bash splices the continuation BEFORE it parses
           # comments, so the comment swallows the rest of the command and every later setting is
