@@ -471,5 +471,80 @@ console.log("\n--- 7. The real orchestrator, run for real (no network, no mail) 
   );
 }
 
+console.log("\n--- 8. AC-28 for real: drive the VOICE dispatch and watch which Graph endpoint it hits ---");
+
+// The strongest form of AC-28 available offline. Every other check in this file proves what the gate
+// DECIDES; this one proves what the voice surface actually DOES with an ON-REQUEST address.
+//
+// The naive version ("assert no network call") would be INERT here: with no Graph credentials
+// getAppToken throws before any fetch, so the assertion would pass even with the gate deleted. So the
+// credentials are set, fetch is stubbed to serve a fake token, and the assertion is on WHICH endpoint
+// is reached: `/sendMail` means it sent (the defect), `/messages` means it drafted (correct).
+{
+  process.env.AZURE_CLIENT_ID = "test-client";
+  process.env.AZURE_CLIENT_SECRET = "test-secret";
+  process.env.AZURE_TENANT_ID = "test-tenant";
+
+  let sendMailHit = false;
+  let draftHit = false;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(
+      typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url,
+    );
+    if (url.includes("login.microsoftonline.com")) {
+      return new Response(JSON.stringify({ access_token: "fake-token" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (url.includes("/sendMail")) {
+      sendMailHit = true;
+      return new Response("", { status: 202 });
+    }
+    if (url.includes("/messages")) {
+      draftHit = true;
+      return new Response(JSON.stringify({ id: "fake-draft", webLink: "https://example.invalid/d" }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  const { executeRealtimeTool } = await import(
+    "../src/features/huddle/lib/voice/realtime-tools.server"
+  );
+  const out = await executeRealtimeTool(
+    "send_email",
+    { to: ONREQ_ADDR, subject: "Test-D4b voice on-request must draft", body: "must not be sent" },
+    { agentId: "iris-chase", caller: {}, huddleId: "dm-iris-chase" } as never,
+  );
+  globalThis.fetch = realFetch;
+
+  check(
+    "AC-28 runtime: a voice send to an ON-REQUEST address NEVER reaches Graph /sendMail",
+    sendMailHit === false,
+    `sendMail hit = ${sendMailHit}, draft hit = ${draftHit}`,
+  );
+  check(
+    "AC-28 runtime: the voice call reports a NON-success so the agent cannot claim it was sent",
+    /"ok":\s*false/.test(out.output),
+    out.output.slice(0, 160),
+  );
+  // Proof the harness itself is not inert: the stub really does observe /sendMail when it is called.
+  {
+    let probeHit = false;
+    const f2 = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("/sendMail")) probeHit = true;
+      return new Response("", { status: 202 });
+    }) as typeof fetch;
+    await globalThis.fetch("https://graph.microsoft.com/v1.0/users/x/sendMail");
+    globalThis.fetch = f2;
+    check("AC-28 runtime: the wire-watcher is not inert (it does observe /sendMail)", probeHit === true);
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
