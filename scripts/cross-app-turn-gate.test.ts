@@ -503,14 +503,30 @@ const callerAssignments = gateCode
   .split("\n")
   .filter((l) => /caller:\s*\{\s*entra_email:/.test(l) && !/entra_email:\s*string\b/.test(l));
 
+// The route's ONE call into the adapter, matched EXACTLY. An earlier version of this assertion
+// searched for `payload.caller`-shaped reads with a regex, and a mutation that wrote
+// `(payload as { caller?: ... }).caller?.entra_email` slipped straight through it -- reported INERT
+// by mutate.sh, which is the whole reason that outcome exists. Pinning the call site is not
+// evadable by a cast, a rename or a nested access: anything other than the subject the gate
+// resolved changes this line.
+const buildCallSites = routeCode
+  .split("\n")
+  .map((l) => l.trim())
+  .filter((l) => l.includes("buildTurnInput("));
+
 check(
   "G4 `caller` is CONSTRUCTED exactly once, from the resolved subject, never from the body",
   callerAssignments.length === 1 &&
     /subject\.entra_email/.test(callerAssignments[0]) &&
     !/body|payload/.test(callerAssignments[0]) &&
-    !/(body|payload)\s*[?.]?\.\s*caller/.test(gateCode) &&
-    !/(body|payload)\s*[?.]?\.\s*caller/.test(routeCode),
-  `assignments=${callerAssignments.length}: ${callerAssignments.join(" | ")}`,
+    buildCallSites.length === 1 &&
+    buildCallSites[0] === "const built = buildTurnInput(payload, subject.value);" &&
+    // No identity is read out of the request anywhere in the route: no `.caller` property access
+    // and no `caller:` object key survive comment-stripping. (`findCallerAssertedIdentity` and the
+    // `caller_identity_not_accepted` code contain neither form.)
+    !/\.\s*caller\b/.test(routeCode) &&
+    !/\bcaller\s*:/.test(routeCode),
+  `assignments=${callerAssignments.length} callSites=${JSON.stringify(buildCallSites)}`,
 );
 
 check(
