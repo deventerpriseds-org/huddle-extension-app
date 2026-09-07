@@ -47,6 +47,18 @@ ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS user_id TEXT
 -- workflow required", so reusing it would give one value two contradictory meanings.
 ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS email_send_enabled BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS email_send_agent_overrides JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- D4b (2026-09-07): RECIPIENT-SCOPED self-send policy. email_send_enabled above is GLOBAL and still
+-- governs THIRD-PARTY recipients; this map governs the owner's OWN addresses, one entry per address:
+--   'auto'        send without asking (his primary -- "when I want it to send me a summary or digest
+--                 or other email it should be able to do so")
+--   'on-request'  draft UNLESS he named that exact address in his own message this turn (dev@ is
+--                 normally Emily's send-from, so an agent must never pick it on its own initiative)
+--   'excluded'    never a self-send target
+-- An address ABSENT from this map derives its tier from identity.profile_emails.source: 'entra' (the
+-- sign-in primary) => auto, anything else => on-request. An address in NEITHER is a third party. The
+-- map is an OVERRIDE layer, so the common case needs no row in it at all.
+ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS email_self_tiers JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE INDEX IF NOT EXISTS agent_workflow_config_userid_idx ON identity.agent_workflow_config(user_id);
 `;
 
@@ -84,6 +96,8 @@ export interface AgentWorkflowConfig {
   email_send_enabled: boolean;
   /** Per-agent override of email_send_enabled, same shape as agent_cap_overrides. */
   email_send_agent_overrides: Record<string, boolean>;
+  /** D4b per-address self-send policy: address -> 'auto' | 'on-request' | 'excluded'. */
+  email_self_tiers: Record<string, string>;
 }
 
 // Gate is ON by default (2026-08-05): the confirm-intent/DoD gate is a SAFETY gate, so a user (or an
@@ -101,6 +115,7 @@ const DEFAULT_CONFIG: AgentWorkflowConfig = {
   // no config row, or an email-scoping miss, must land on "cannot send", never on "can send".
   email_send_enabled: false,
   email_send_agent_overrides: {},
+  email_self_tiers: {},
 };
 
 /** Read the config for an email. Returns the default (all discretionary) when nothing is set.
@@ -117,16 +132,17 @@ export async function getAgentWorkflowConfig(email: string): Promise<AgentWorkfl
     agent_cap_overrides: Record<string, Partial<WorkflowCaps>>;
     email_send_enabled: boolean;
     email_send_agent_overrides: Record<string, boolean>;
+    email_self_tiers: Record<string, string>;
   }>(
     userId
       ? `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides,
-                 email_send_enabled, email_send_agent_overrides
+                 email_send_enabled, email_send_agent_overrides, email_self_tiers
            FROM identity.agent_workflow_config
           WHERE user_id = $1 OR (user_id IS NULL AND lower(email) = ANY($2))
           ORDER BY (user_id IS NOT NULL) DESC, updated_at DESC
           LIMIT 1`
       : `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides,
-                 email_send_enabled, email_send_agent_overrides
+                 email_send_enabled, email_send_agent_overrides, email_self_tiers
            FROM identity.agent_workflow_config WHERE lower(email) = lower($1) LIMIT 1`,
     userId ? [userId, emails] : [email],
   );
@@ -138,6 +154,7 @@ export async function getAgentWorkflowConfig(email: string): Promise<AgentWorkfl
     agent_cap_overrides: r.rows[0].agent_cap_overrides ?? {},
     email_send_enabled: r.rows[0].email_send_enabled === true,
     email_send_agent_overrides: r.rows[0].email_send_agent_overrides ?? {},
+    email_self_tiers: r.rows[0].email_self_tiers ?? {},
   };
 }
 
@@ -158,19 +175,21 @@ export async function setAgentWorkflowConfig(
     email_send_enabled: patch.email_send_enabled ?? current.email_send_enabled,
     email_send_agent_overrides:
       patch.email_send_agent_overrides ?? current.email_send_agent_overrides,
+    email_self_tiers: patch.email_self_tiers ?? current.email_self_tiers,
   };
   // Dual-write: user_id (primary going forward) + email (retained for display/fallback). Upsert stays on
   // the email PK (the canonical email is stable per user); user_id is set/refreshed when resolvable.
   await getPool().query(
     `INSERT INTO identity.agent_workflow_config
        (email, default_required, agent_overrides, default_caps, agent_cap_overrides, user_id,
-        email_send_enabled, email_send_agent_overrides, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+        email_send_enabled, email_send_agent_overrides, email_self_tiers, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
      ON CONFLICT (email) DO UPDATE SET
        default_required=EXCLUDED.default_required, agent_overrides=EXCLUDED.agent_overrides,
        default_caps=EXCLUDED.default_caps, agent_cap_overrides=EXCLUDED.agent_cap_overrides,
        email_send_enabled=EXCLUDED.email_send_enabled,
        email_send_agent_overrides=EXCLUDED.email_send_agent_overrides,
+       email_self_tiers=EXCLUDED.email_self_tiers,
        user_id=COALESCE(EXCLUDED.user_id, identity.agent_workflow_config.user_id), updated_at=now()`,
     [
       email,
@@ -181,6 +200,7 @@ export async function setAgentWorkflowConfig(
       userId,
       next.email_send_enabled,
       JSON.stringify(next.email_send_agent_overrides),
+      JSON.stringify(next.email_self_tiers),
     ],
   );
   return next;
@@ -279,6 +299,86 @@ export async function isEmailSendEnabled(
   } catch (err) {
     console.error(
       `[isEmailSendEnabled] config read failed for ${email}/${agentId ?? "-"}; failing CLOSED (drafts only):`,
+      err instanceof Error ? err.message : err,
+    );
+    return false;
+  }
+}
+
+/**
+ * D4b: everything the recipient-scoped gate needs about THIS caller, in one read.
+ *
+ * Returns the caller's own profile_emails rows, the per-address tier policy, and -- crucially --
+ * whether the policy read actually SUCCEEDED. The three are separate because their failure modes are
+ * separate and the ACs demand different answers for each:
+ *   * profile_emails unreadable   -> selfRows [] -> EVERY address, including the primary, drafts (AC-6)
+ *   * tier policy unreadable      -> tiersReadable false -> nothing is AUTO, everything drafts (AC-5)
+ *   * tier policy readable, empty -> the common case: derive from source, primary AUTO (AC-4)
+ *
+ * Collapsing "unreadable" into "empty" is exactly the bug this shape prevents: an empty map is a
+ * PERMISSION ("use the defaults") and a failed read is an ABSENCE OF INFORMATION, and only one of
+ * those may leave an address auto-sendable.
+ */
+export async function resolveSelfSendPolicy(email: string | null | undefined): Promise<{
+  selfRows: Array<{ email: string; source: string }>;
+  tierMap: Record<string, string>;
+  tiersReadable: boolean;
+}> {
+  const e = (email ?? "").trim();
+  if (!e) return { selfRows: [], tierMap: {}, tiersReadable: false };
+  let selfRows: Array<{ email: string; source: string }> = [];
+  try {
+    const { getSelfEmailRows } = await import("./identity.server");
+    selfRows = await getSelfEmailRows(e);
+  } catch (err) {
+    console.error(
+      `[resolveSelfSendPolicy] profile_emails read failed for ${e}; failing CLOSED (empty self set):`,
+      err instanceof Error ? err.message : err,
+    );
+    selfRows = [];
+  }
+  try {
+    const cfg = await getAgentWorkflowConfig(e);
+    return { selfRows, tierMap: cfg.email_self_tiers ?? {}, tiersReadable: true };
+  } catch (err) {
+    console.error(
+      `[resolveSelfSendPolicy] tier policy read failed for ${e}; failing CLOSED (nothing is AUTO):`,
+      err instanceof Error ? err.message : err,
+    );
+    return { selfRows, tierMap: {}, tiersReadable: false };
+  }
+}
+
+/**
+ * May the `send_email` TOOL be offered to the model at all?
+ *
+ * D4a answered this with `isEmailSendEnabled` alone, because the gate was global. D4b cannot decide
+ * the real question at assembly time -- RECIPIENTS ARE NOT KNOWN UNTIL THE MODEL CALLS THE TOOL -- so
+ * the tool must be PRESENT whenever ANY send is possible, and the actual authorisation happens at
+ * execution time in the send path. Offer it when the global flag is on (third-party sending allowed)
+ * OR the caller has at least one address that could ever send (auto, or on-request when named).
+ *
+ * Still FAILS CLOSED in every direction, for the same reason `isEmailSendEnabled` does: a caller that
+ * resolves to nothing, or a read that throws, yields `false` and the model never sees the tool.
+ * Withholding the tool is not the security boundary any more -- the send path is -- but it remains the
+ * cheapest way to stop a tool being mis-picked, so it stays.
+ */
+export async function canOfferSendEmailTool(
+  email: string | null | undefined,
+  agentId?: string,
+): Promise<boolean> {
+  try {
+    if (await isEmailSendEnabled(email, agentId)) return true;
+    const { selfRows, tierMap, tiersReadable } = await resolveSelfSendPolicy(email);
+    if (!tiersReadable || selfRows.length === 0) return false;
+    const { resolveTier } = await import("../email/self-send-gate");
+    return selfRows.some((r) => {
+      const tier = resolveTier(r.email, { selfRows, tierMap, tiersReadable });
+      return tier === "auto" || tier === "on-request";
+    });
+  } catch (err) {
+    console.error(
+      `[canOfferSendEmailTool] resolution failed for ${email ?? "-"}; failing CLOSED (tool withheld):`,
       err instanceof Error ? err.message : err,
     );
     return false;

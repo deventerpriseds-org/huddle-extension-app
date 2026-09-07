@@ -72,6 +72,11 @@ export interface SendEmailInput {
   body: string;
   from?: string;
   cc?: string | string[];
+  /** D4b: swept by the recipient gate. NOTE: no tool schema exposes bcc today and neither
+   *  sendGraphEmail nor createGraphDraft puts bccRecipients on the Graph wire -- this field exists so
+   *  that the day a caller DOES pass one, the gate already counts it instead of silently ignoring a
+   *  recipient. Defence in depth, not a live hole. */
+  bcc?: string | string[];
   html?: boolean;
   /** The signed-in user this send is on behalf of. Used ONLY by sendGraphEmail's email-send gate
    *  (identity.agent_workflow_config.email_send_enabled) - never put on the wire to Graph.
@@ -80,6 +85,11 @@ export interface SendEmailInput {
   callerEmail?: string | null;
   /** Optional agent id, so a per-agent override in email_send_agent_overrides can apply. */
   callerAgentId?: string;
+  /** D4b: the OWNER'S OWN message text for this turn -- the ONLY admissible evidence that he asked
+   *  for an ON-REQUEST address. Never the agent's reply, a system prompt, retrieved memory, or any
+   *  tool argument the model chose: admitting model output here would let an agent manufacture its
+   *  own authorisation. A surface that cannot supply it omits it, and on-request addresses draft. */
+  ownerTurnText?: string | null;
 }
 
 export interface SendEmailResult {
@@ -87,6 +97,15 @@ export interface SendEmailResult {
   from?: string;
   to?: string[];
   error?: string;
+  /** D4b: true when the send was refused on recipient scope and a real draft was created instead.
+   *  `ok` stays FALSE on a degraded send, deliberately: the house style tells every agent to claim an
+   *  email was "sent" only if send_email returned success, so a truthy result here would make the
+   *  agent report a send that did not happen. */
+  drafted?: boolean;
+  draftId?: string;
+  draftWebLink?: string;
+  /** The recipients that blocked the send, so the agent can say WHICH address caused the draft. */
+  blockedRecipients?: string[];
 }
 
 function toRecipients(v: string | string[] | undefined) {
@@ -133,6 +152,7 @@ export async function createGraphDraft(input: SendEmailInput): Promise<DraftEmai
         body: { contentType: input.html ? "HTML" : "Text", content: input.body ?? "" },
         toRecipients: toRecipients(input.to),
         ccRecipients: toRecipients(input.cc),
+        bccRecipients: toRecipients(input.bcc),
       }),
     });
     if (res.status === 201) {
@@ -237,7 +257,56 @@ export async function getGraphCalendarEvents(input: {
   }
 }
 
+/**
+ * D4b: resolve, for ONE send attempt, whether every recipient clears the recipient-scoped gate.
+ *
+ * Pulled out of sendGraphEmail so BOTH the send path and the orchestrator (`sendOrDraftEmail`) reach
+ * the same verdict from the same code -- two copies of an authorisation decision is how one surface
+ * ends up gated and another not, which is the defect class this repo has already paid for twice.
+ *
+ * FAILS CLOSED: any throw yields a "draft" verdict with an explanatory reason, never a "send".
+ */
+async function resolveRecipientScope(input: SendEmailInput): Promise<{
+  decision: "send" | "draft" | "no-recipients";
+  blocked: string[];
+  reason: string;
+}> {
+  try {
+    const { resolveSelfSendPolicy } = await import("../identity/agent-workflow-config.server");
+    const { classifySendScope, draftReasonSentence } = await import("./self-send-gate");
+    const { selfRows, tierMap, tiersReadable } = await resolveSelfSendPolicy(input.callerEmail);
+    const scope = classifySendScope({
+      to: input.to,
+      cc: input.cc,
+      bcc: input.bcc,
+      selfRows,
+      tierMap,
+      tiersReadable,
+      ownerTurnText: input.ownerTurnText,
+    });
+    return {
+      decision: scope.decision,
+      blocked: scope.blocked.map((b) => b.address || b.raw),
+      reason: scope.blocked.length ? draftReasonSentence(scope.blocked) : "",
+    };
+  } catch (err) {
+    console.error(
+      "[resolveRecipientScope] recipient-scope resolution failed; failing CLOSED (draft):",
+      err instanceof Error ? err.message : err,
+    );
+    return { decision: "draft", blocked: [], reason: "Saved to drafts instead of sending: the recipient check could not be completed." };
+  }
+}
+
 export async function sendGraphEmail(input: SendEmailInput): Promise<SendEmailResult> {
+  // D4b RECIPIENT SCOPE (2026-09-07). Owner: "when I want it to send me a summary or digest or other
+  // email it should be able to do so - it's other recipients that should be draft". A message whose
+  // recipients are ALL his own sendable addresses bypasses the GLOBAL flag below; anything else still
+  // has to satisfy it. Note the direction: this can only ever SKIP the global gate for mail going to
+  // the owner himself, and it can never open the global gate for anyone else.
+  const scope = await resolveRecipientScope(input);
+  const selfOnly = scope.decision === "send";
+  if (!selfOnly) {
   // EMAIL SEND GATE - BACKSTOP (2026-09-07). The PRIMARY gate is at tool assembly: when sending is
   // disabled, `send_email` is never offered to the model on either surface (huddle.functions.ts for
   // text, voice/realtime-tools.server.ts for the Realtime session). This is belt and braces for the
@@ -271,6 +340,7 @@ export async function sendGraphEmail(input: SendEmailInput): Promise<SendEmailRe
       };
     }
   }
+  }
   const options = emailFromOptions();
   const requested = (input.from ?? "").trim();
   const from = requested || options[0];
@@ -297,6 +367,7 @@ export async function sendGraphEmail(input: SendEmailInput): Promise<SendEmailRe
           body: { contentType: input.html ? "HTML" : "Text", content: input.body ?? "" },
           toRecipients: to,
           ccRecipients: toRecipients(input.cc),
+          bccRecipients: toRecipients(input.bcc),
         },
         saveToSentItems: true,
       }),
@@ -317,4 +388,61 @@ export async function sendGraphEmail(input: SendEmailInput): Promise<SendEmailRe
   } catch (err) {
     return { ok: false, from, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * D4b: THE ORCHESTRATOR every agent-facing dispatch site should call instead of `sendGraphEmail`.
+ *
+ * Send when the recipients clear the gate; otherwise create a REAL draft and say so. The owner's
+ * requirement in one function: "when I want it to send me a summary or digest or other email it
+ * should be able to do so -- it's other recipients that should be draft."
+ *
+ * WHY THE DEGRADATION LIVES HERE AND NOT INSIDE `sendGraphEmail`. That function's backstop has a
+ * proven property, asserted by `voice-toolset-hidden.test.ts` 4d: when the gate is closed it REFUSES
+ * WITHOUT TOUCHING THE NETWORK AT ALL. Creating a draft is a Graph call. Folding the draft into the
+ * refusal would have destroyed that property -- the backstop would start making network calls on the
+ * refusal path -- and the only way to keep the existing test green would have been to weaken it. So
+ * the authorisation DECISION stays in the one choke point and the degradation ACTION happens one
+ * layer out, where drafting already lives.
+ *
+ * `ok` is FALSE on a degraded send even though a draft was successfully created. That is deliberate:
+ * the shared house style tells every agent to say an email was "sent" only if `send_email` returned
+ * success. A truthy result would make the agent claim a send that never happened, which is the exact
+ * dishonesty the D4a work existed to prevent.
+ */
+export async function sendOrDraftEmail(input: SendEmailInput): Promise<SendEmailResult> {
+  const scope = await resolveRecipientScope(input);
+  if (scope.decision === "send") return sendGraphEmail(input);
+
+  // Not self-only. The GLOBAL D4a flag may still permit it (that is what the owner flips when he is
+  // ready for third-party sending); sendGraphEmail re-checks it and refuses if not.
+  if (scope.decision !== "no-recipients") {
+    const sent = await sendGraphEmail(input);
+    if (sent.ok) return sent;
+  }
+
+  const draft = await createGraphDraft(input);
+  const why =
+    scope.decision === "no-recipients"
+      ? "Saved to drafts instead of sending: no recipient was given."
+      : scope.reason || "Saved to drafts instead of sending: a recipient is not one of your own addresses.";
+  if (!draft.ok) {
+    return {
+      ok: false,
+      from: draft.from,
+      blockedRecipients: scope.blocked,
+      error: `${why} The draft could not be created either: ${draft.error ?? "unknown error"}`,
+    };
+  }
+  return {
+    ok: false,
+    drafted: true,
+    from: draft.from,
+    draftId: draft.id,
+    draftWebLink: draft.webLink,
+    blockedRecipients: scope.blocked,
+    error:
+      `${why} It is waiting in the ${draft.from} Drafts folder for you to review and send.` +
+      (draft.webLink ? ` (${draft.webLink})` : ""),
+  };
 }
