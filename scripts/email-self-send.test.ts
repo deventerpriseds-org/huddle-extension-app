@@ -337,5 +337,70 @@ check(
   scope({ to: ONREQ_ADDR }).blocked[0]?.reason ?? "",
 );
 
+console.log("\n--- 6. Wiring, asserted against SOURCE (AC-16, AC-27, AC-28, AC-33) ---");
+
+// runHuddleTurn cannot be invoked offline without a model, so its wiring is asserted the same way
+// voice-toolset-hidden.test.ts Part 4e asserts the D4a gates: lexically. Weaker than a runtime check,
+// still mutation-sensitive -- deleting the freeze, or handing the voice path owner text, fails here.
+const turnSrc = await Bun.file(
+  new URL("../src/features/huddle/lib/huddle.functions.ts", import.meta.url),
+).text();
+const turnLines = turnSrc.split("\n");
+const freezeIdx = turnLines.findIndex((l) =>
+  l.includes("const ownerTurnText: string = String(data.text ?? \"\")"),
+);
+const reassignIdx = turnLines.findIndex((l) => l.trim() === "data.text = pending.askText;");
+
+check(
+  "AC-33a: the owner's turn text is frozen into a const, not read at send time",
+  freezeIdx >= 0,
+  `freeze at line ${freezeIdx + 1}`,
+);
+check(
+  "AC-33b: the freeze happens BEFORE the deep-confirm path reassigns data.text",
+  freezeIdx >= 0 && reassignIdx >= 0 && freezeIdx < reassignIdx,
+  `freeze line ${freezeIdx + 1}, reassign line ${reassignIdx + 1}`,
+);
+check(
+  "AC-27a: BOTH text dispatch sites hand the frozen owner text to the send path",
+  (turnSrc.match(/^\s*ownerTurnText,$/gm) ?? []).length === 2,
+  `found ${(turnSrc.match(/^\s*ownerTurnText,$/gm) ?? []).length}`,
+);
+check(
+  "AC-27b: BOTH text dispatch sites call sendOrDraftEmail, not sendGraphEmail directly",
+  (turnSrc.match(/sendOrDraftEmail\(\{/g) ?? []).length === 2 &&
+    !/const \{ sendGraphEmail \} = await import\("\.\/email\/graph-email\.server"\)/.test(turnSrc),
+  `sendOrDraftEmail calls: ${(turnSrc.match(/sendOrDraftEmail\(\{/g) ?? []).length}`,
+);
+
+const voiceSrc = await Bun.file(
+  new URL("../src/features/huddle/lib/voice/realtime-tools.server.ts", import.meta.url),
+).text();
+const voiceSendBlock = voiceSrc.slice(
+  voiceSrc.indexOf('if (name === "send_email")'),
+  voiceSrc.indexOf('if (name === "create_email_draft")'),
+);
+check(
+  "AC-28a: the voice send path exists and routes through sendOrDraftEmail",
+  voiceSendBlock.includes("sendOrDraftEmail({"),
+);
+// AC-28/AC-16 and failure mode #3: the voice surface has no owner words, and the model-authored
+// `args.body`/`args.subject` must never be smuggled in as a stand-in for them.
+// Comments in that block DISCUSS ownerTurnText at length (explaining why it is withheld), so the
+// assertion must read CODE, not prose -- strip line comments before looking for an actual argument.
+const voiceSendCode = voiceSendBlock
+  .split("\n")
+  .filter((l) => !l.trim().startsWith("//"))
+  .join("\n");
+check(
+  "AC-28b: the voice send path passes NO ownerTurnText argument (fail closed for on-request)",
+  !/ownerTurnText\s*[,:]/.test(voiceSendCode),
+  "voice passes ownerTurnText -- model output on the authorisation path",
+);
+check(
+  "AC-28c: the voice send path never treats args.body/args.subject as owner intent",
+  !/ownerTurnText\s*:\s*String\(args\./.test(voiceSendCode),
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
