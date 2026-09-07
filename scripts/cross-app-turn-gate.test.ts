@@ -589,14 +589,73 @@ check(
   })(),
 );
 
+// Scoped to THIS CHANGE'S OWN COMMITS, not to the working tree, and that distinction is load-bearing.
+// The first version compared the D4 gate files byte-for-byte against d0f8511 and went red the moment a
+// CONCURRENT lane (D4b, the three-tier email gate) started editing them in this shared checkout -- a
+// false alarm blaming D-16 for another lane's legitimate in-flight work. The claim D-16 actually makes
+// is narrower and is the one worth guarding: no commit belonging to this change touches those files.
+const D4_GATE_FILES = [
+  "src/features/huddle/lib/voice/realtime-tools.server.ts",
+  "src/features/huddle/lib/email/graph-email.server.ts",
+  "src/features/huddle/lib/tasks/../identity/agent-workflow-config.server.ts",
+];
+let d16TouchedD4 = "unknown";
+try {
+  d16TouchedD4 = execFileSync(
+    "git",
+    ["log", "--format=%h %s", "--grep=D-16", "d0f8511..HEAD", "--", ...D4_GATE_FILES],
+    { encoding: "utf8" },
+  ).trim();
+} catch {
+  d16TouchedD4 = "unknown";
+}
+
 check(
-  "G9 REGRESSION: the D4 email send-gate files are untouched by this change",
-  ["src/features/huddle/lib/voice/realtime-tools.server.ts", "src/features/huddle/lib/email/graph-email.server.ts"].every(
-    (p) => {
-      const base = gitShow(p, "d0f8511");
-      return base !== null && base === readFileSync(p, "utf8");
-    },
-  ),
+  "G9 REGRESSION: no D-16 commit touches a D4 email send-gate file",
+  d16TouchedD4 === "",
+  d16TouchedD4 === "unknown" ? "git log failed" : d16TouchedD4,
+);
+
+// G10 exists because of a defect this change ITSELF introduced and an independent verifier caught:
+// three `#` comment lines were placed BETWEEN the backslash-continued arguments of the
+// `az staticwebapp appsettings set` call. Bash splices a line continuation BEFORE it parses
+// comments, so the comment swallowed the rest of the command -- silently dropping
+// CROSS_APP_TURN_SUBJECT *and two unrelated pre-existing settings* -- and still exited 0, so CI
+// would have gone green on a half-configured deploy. Reproduced: the broken block emitted 4
+// arguments, the fixed one 28. This guard EXECUTES the real block with `az` stubbed rather than
+// pattern-matching for comments, so it catches any future way of truncating that argument list.
+const deploySrc = readFileSync(".github/workflows/deploy-swa.yml", "utf8").split("\n");
+const azStart = deploySrc.findIndex((l) => l.includes("az staticwebapp appsettings set"));
+let azEnd = azStart;
+while (azEnd >= 0 && deploySrc[azEnd].trimEnd().endsWith("\\")) azEnd++;
+const azBlock = deploySrc
+  .slice(azStart, azEnd + 1)
+  .join("\n")
+  .replace(/\$\{\{[^}]*\}\}/g, "SUBST")
+  .replace("az staticwebapp appsettings set", "echo_args");
+const azArgs =
+  azStart < 0
+    ? []
+    : execFileSync(
+        "bash",
+        [
+          "-c",
+          'echo_args(){ for a in "$@"; do echo "ARG: $a"; done; }\nSWA_NAME=n\nAZURE_RESOURCE_GROUP=g\n' +
+            "AZURE_PG_URL_RESOLVED=u\nSWA_HOST=h\n" +
+            azBlock,
+        ],
+        { encoding: "utf8" },
+      )
+        .split("\n")
+        .filter((l) => l.startsWith("ARG: "));
+
+check(
+  "G10 the deploy app-settings command actually PASSES every setting (no truncated continuation)",
+  azStart >= 0 &&
+    ["CROSS_APP_TURN_SUBJECT", "AZURE_STORAGE_CONNECTION_STRING", "HUDDLE_APP_URL", "HUDDLE_EMAIL_FROM", "JOURNEY_PROXY_TOKEN"].every(
+      (name) => azArgs.some((a) => a.includes(name)),
+    ),
+  `${azArgs.length} args emitted`,
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);
