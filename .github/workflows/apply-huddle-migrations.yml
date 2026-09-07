@@ -60,6 +60,52 @@ jobs:
             --resource-group "$RG" --server-name "$PG_SERVER" --name "$RULE" \
             --start-ip-address "$RUNNER_IP" --end-ip-address "$RUNNER_IP" >/dev/null
 
+      # NOTHING WE DO SHOULD EVER BE IRREVERSIBLE (owner, 2026-09-07). Two independent nets, because
+      # each covers what the other cannot:
+      #   1. Azure's own point-in-time restore on the flexible server -- reported here rather than
+      #      assumed, so a run's log says what the recovery window actually was at that moment.
+      #   2. A snapshot of the rows this runner can reach, taken BEFORE any migration executes and
+      #      kept as a workflow artifact. PITR restores a whole server to a moment; the snapshot
+      #      restores these specific rows without touching anything else.
+      # The embedding column is excluded from the CSV on purpose: it is ~3072 floats a row and is
+      # never what a schema migration changes. Row identity, ownership and content are.
+      - name: Snapshot before applying
+        env:
+          PGPASSWORD: ${{ secrets.Azure_admin_pw }}
+          PGSSLMODE: require
+          DB_NAME: ${{ github.event.inputs.db || 'RAG_AI_Agents' }}
+        run: |
+          set -euo pipefail
+          mkdir -p snapshot
+          echo "----- AZURE POINT-IN-TIME RESTORE WINDOW -----"
+          az postgres flexible-server show \
+            --resource-group "$RG" --name "$PG_SERVER" \
+            --query "{retentionDays:backup.backupRetentionDays, geoRedundant:backup.geoRedundantBackup, earliestRestore:backup.earliestRestoreDate}" \
+            -o table || echo "(could not read backup config -- snapshot below still applies)"
+          echo "----- ROW SNAPSHOT (pre-migration) -----"
+          for t in rag_chunks rag_triples; do
+            cols=$(psql -h "$PG_HOST" -p 5432 -U "$PG_ADMIN" -d "$DB_NAME" -tAc \
+              "SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position)
+                 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='$t' AND column_name <> 'embedding';")
+            psql -h "$PG_HOST" -p 5432 -U "$PG_ADMIN" -d "$DB_NAME" -v ON_ERROR_STOP=1 \
+              -c "\copy (SELECT $cols FROM public.$t) TO 'snapshot/${t}.csv' WITH CSV HEADER"
+            echo "  $t: $(( $(wc -l < snapshot/${t}.csv) - 1 )) rows -> snapshot/${t}.csv"
+          done
+          psql -h "$PG_HOST" -p 5432 -U "$PG_ADMIN" -d "$DB_NAME" -tAc \
+            "SELECT table_name||': '||string_agg(column_name, ', ' ORDER BY ordinal_position)
+               FROM information_schema.columns
+              WHERE table_schema='public' AND table_name IN ('rag_chunks','rag_triples')
+              GROUP BY table_name;" > snapshot/schema-before.txt
+          cat snapshot/schema-before.txt
+
+      - name: Keep the snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: pre-migration-snapshot-${{ github.run_id }}
+          path: snapshot/
+          retention-days: 90
+
       - name: Apply migrations
         env:
           PGPASSWORD: ${{ secrets.Azure_admin_pw }}
