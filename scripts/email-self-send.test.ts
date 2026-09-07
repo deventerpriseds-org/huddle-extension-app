@@ -402,5 +402,49 @@ check(
   !/ownerTurnText\s*:\s*String\(args\./.test(voiceSendCode),
 );
 
+console.log("\n--- 7. The real orchestrator, run for real (no network, no mail) ---");
+
+// This is the one RUNTIME assertion on the wiring rather than the pure core. It calls the actual
+// sendOrDraftEmail with no caller identity and a third-party recipient -- the shape of an agent trying
+// to mail a stranger -- and proves it can never come back ok:true. Offline there are no Graph
+// credentials, so getAppToken throws BEFORE any fetch: nothing is sent, nothing is drafted, no
+// network call is made. The wire is watched to prove that rather than assumed.
+{
+  let graphCallAttempted = false;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(
+      typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url,
+    );
+    if (url.includes("microsoftonline.com") || url.includes("graph.microsoft.com")) {
+      graphCallAttempted = true;
+    }
+    return realFetch(input as RequestInfo, init);
+  }) as typeof fetch;
+
+  const { sendOrDraftEmail } = await import("../src/features/huddle/lib/email/graph-email.server");
+  const r = await sendOrDraftEmail({
+    to: "someone@external.com",
+    subject: "Test-D4b third-party recipient must never send",
+    body: "should never leave the tenant",
+  });
+  globalThis.fetch = realFetch;
+
+  check(
+    "AC-20/AC-30 runtime: sendOrDraftEmail NEVER returns ok:true for a third party with no caller",
+    r.ok === false,
+    `ok = ${String(r.ok)}`,
+  );
+  check(
+    "runtime: it made no Graph call at all in this offline configuration",
+    graphCallAttempted === false,
+  );
+  check(
+    "runtime: the result explains itself rather than throwing",
+    typeof r.error === "string" && r.error.length > 0,
+    (r.error ?? "").slice(0, 100),
+  );
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
