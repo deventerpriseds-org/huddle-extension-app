@@ -73,6 +73,13 @@ export interface SendEmailInput {
   from?: string;
   cc?: string | string[];
   html?: boolean;
+  /** The signed-in user this send is on behalf of. Used ONLY by sendGraphEmail's email-send gate
+   *  (identity.agent_workflow_config.email_send_enabled) - never put on the wire to Graph.
+   *  Omitting it means the gate cannot find an affirmative permission, so the send is REFUSED.
+   *  createGraphDraft ignores it: drafting is always allowed. */
+  callerEmail?: string | null;
+  /** Optional agent id, so a per-agent override in email_send_agent_overrides can apply. */
+  callerAgentId?: string;
 }
 
 export interface SendEmailResult {
@@ -231,6 +238,39 @@ export async function getGraphCalendarEvents(input: {
 }
 
 export async function sendGraphEmail(input: SendEmailInput): Promise<SendEmailResult> {
+  // EMAIL SEND GATE - BACKSTOP (2026-09-07). The PRIMARY gate is at tool assembly: when sending is
+  // disabled, `send_email` is never offered to the model on either surface (huddle.functions.ts for
+  // text, voice/realtime-tools.server.ts for the Realtime session). This is belt and braces for the
+  // case the primary gate is bypassed - a stale minted toolset still held by a live voice session, a
+  // cached tool definition, or a future call site that forgets the gate. It is the LAST thing between
+  // an agent and real mail leaving the tenant, so it fails CLOSED in every direction: no callerEmail,
+  // a config-read error, or an explicit false all refuse. The error names the exact setting to flip.
+  {
+    // Even LOADING the config module is inside the try: a module-resolution failure must fail CLOSED
+    // (drafts only) and never throw out of a tool call. `false` is the only safe value here.
+    const allowed = await (async () => {
+      try {
+        const { isEmailSendEnabled } = await import("../identity/agent-workflow-config.server");
+        return await isEmailSendEnabled(input.callerEmail, input.callerAgentId);
+      } catch (err) {
+        console.error(
+          "[sendGraphEmail] email-send-gate resolution failed; failing CLOSED (drafts only):",
+          err instanceof Error ? err.message : err,
+        );
+        return false;
+      }
+    })();
+    if (!allowed) {
+      return {
+        ok: false,
+        error:
+          "Sending email is currently disabled - agents may only prepare drafts. Use create_email_draft " +
+          "instead; the draft lands in the mailbox's Drafts folder ready to review and send by hand. " +
+          "(To re-enable sending, set identity.agent_workflow_config.email_send_enabled = true for this " +
+          "user; it takes effect on the next turn, no redeploy needed.)",
+      };
+    }
+  }
   const options = emailFromOptions();
   const requested = (input.from ?? "").trim();
   const from = requested || options[0];

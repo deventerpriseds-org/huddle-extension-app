@@ -75,7 +75,12 @@ export const getRealtimeSession = createServerFn({ method: "POST" })
       if (data.agentId) {
         const [instructions, toolset] = await Promise.all([
           assembleRealtimeInstructions(data.agentId, { memoryQuery: data.memoryQuery }),
-          buildRealtimeToolset(data.agentId, { webSearch: data.webSearch, journey: data.journey }),
+          buildRealtimeToolset(data.agentId, {
+          webSearch: data.webSearch,
+          journey: data.journey,
+          // Needed for the email SEND gate — without a caller it resolves to drafts only.
+          caller: data.caller,
+        }),
         ]);
         // EL-VOICE HYBRID: Realtime is the fast streaming BRAIN only — it emits TEXT over the WebRTC
         // data channel (create_response:true), which the client speaks sentence-by-sentence through
@@ -154,7 +159,12 @@ export const warmupRealtime = createServerFn({ method: "POST" })
     try {
       await Promise.all([
         assembleRealtimeInstructions(data.agentId, { memoryQuery: data.memoryQuery }),
-        buildRealtimeToolset(data.agentId, { webSearch: data.webSearch, journey: data.journey }),
+        buildRealtimeToolset(data.agentId, {
+          webSearch: data.webSearch,
+          journey: data.journey,
+          // Needed for the email SEND gate — without a caller it resolves to drafts only.
+          caller: data.caller,
+        }),
       ]);
       return { ok: true };
     } catch {
