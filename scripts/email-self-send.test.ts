@@ -551,5 +551,94 @@ console.log("\n--- 8. The VOICE dispatch for real: watch which Graph endpoint it
   }
 }
 
+console.log("\n--- 9. AC-21/AC-29: the OTHER direction -- did D4b break D4a? ---");
+
+// Raised by the independent verifier as the most serious GAP: every test above proves the gate
+// BLOCKS things. Nothing proved that the global third-party flag still WORKS, i.e. that the new
+// `if (!selfOnly)` wrapper did not quietly strand D4a's enabled path. A regression there would ship
+// invisibly, because no offline test would go red. "Correct by reading" is exactly the standard this
+// exercise exists not to rely on -- so it is executed here.
+{
+  const { mock } = await import("bun:test");
+  // Stand in for the config store with the global flag ON and NO self addresses, so the recipient is
+  // an ordinary third party and only `email_send_enabled` can permit the send.
+  mock.module("../src/features/huddle/lib/identity/agent-workflow-config.server", () => ({
+    isEmailSendEnabled: async () => true,
+    resolveSelfSendPolicy: async () => ({ selfRows: [], tierMap: {}, tiersReadable: true }),
+    canOfferSendEmailTool: async () => true,
+  }));
+
+  let sendMailHit = false;
+  let draftHit = false;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(
+      typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url,
+    );
+    if (url.includes("login.microsoftonline.com")) {
+      return new Response(JSON.stringify({ access_token: "fake-token" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (url.includes("/sendMail")) {
+      sendMailHit = true;
+      return new Response("", { status: 202 });
+    }
+    if (url.includes("/messages")) {
+      draftHit = true;
+      return new Response(JSON.stringify({ id: "d", webLink: "https://example.invalid/d" }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+
+  const { sendOrDraftEmail: sendOrDraft2 } = await import(
+    "../src/features/huddle/lib/email/graph-email.server"
+  );
+  const r21 = await sendOrDraft2({
+    to: "someone@external.com",
+    subject: "Test-D4b D4a global flag still sends",
+    body: "third party, global flag on",
+    callerEmail: "von.ellis@enterpriseds.io",
+  });
+  globalThis.fetch = realFetch;
+
+  check(
+    "AC-21: with email_send_enabled TRUE, a third-party send still SENDS (D4a not broken by D4b)",
+    r21.ok === true && sendMailHit === true && draftHit === false,
+    `ok=${String(r21.ok)} sendMail=${sendMailHit} draft=${draftHit} err=${(r21.error ?? "").slice(0, 80)}`,
+  );
+}
+
+// AC-29: the tool must be OFFERED whenever ANY send is possible -- an AUTO-only self set and a self
+// set containing an ON-REQUEST address must BOTH offer it. The regression the verifier named is
+// someone later narrowing that condition to `tier === "auto"`, which would silently hide the tool
+// from a user whose only sendable address is on-request.
+{
+  const autoOnly: SelfEmailRow[] = [{ email: AUTO_ADDR, source: "entra" }];
+  const onReqOnly: SelfEmailRow[] = [{ email: ONREQ_ADDR, source: "manual" }];
+  const offerable = (rows: SelfEmailRow[]) =>
+    rows.some((r) => {
+      const tier = resolveTier(r.email, { selfRows: rows, tiersReadable: true });
+      return tier === "auto" || tier === "on-request";
+    });
+  check("AC-29a: an AUTO-only self set makes the tool offerable", offerable(autoOnly) === true);
+  check(
+    "AC-29b: an ON-REQUEST-only self set ALSO makes the tool offerable (it can send when named)",
+    offerable(onReqOnly) === true,
+  );
+  check("AC-29c: an EMPTY self set makes it NOT offerable", offerable([]) === false);
+  const cfgSrc = await Bun.file(
+    new URL("../src/features/huddle/lib/identity/agent-workflow-config.server.ts", import.meta.url),
+  ).text();
+  check(
+    "AC-29d: canOfferSendEmailTool really tests BOTH tiers, not just auto",
+    /tier === "auto" \|\| tier === "on-request"/.test(cfgSrc),
+  );
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
