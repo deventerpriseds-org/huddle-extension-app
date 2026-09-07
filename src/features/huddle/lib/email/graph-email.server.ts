@@ -425,11 +425,15 @@ export async function sendOrDraftEmail(input: SendEmailInput): Promise<SendEmail
   // ready for third-party sending); sendGraphEmail re-checks it and refuses if not.
   if (scope.decision !== "no-recipients") {
     const sent = await sendGraphEmail(input);
-    if (sent.ok) return sent;
-    // Degrade ONLY when the gate refused. If the send was PERMITTED and Graph failed (a 5xx, an
-    // expired secret, a missing consent), that is a transport failure and must surface as itself --
-    // reporting it as "saved to drafts because X is not one of your addresses" would be a false
-    // explanation of a real outage, and would hide it from whoever has to fix it.
+    // Degrade ONLY when the GATE refused. Everything else -- a success, or a transport failure (a
+    // 5xx, an expired secret, a missing consent) -- is returned as itself. Reporting a real outage as
+    // "saved to drafts because X is not one of your addresses" would be a false explanation that
+    // hides the outage from whoever has to fix it.
+    //
+    // There is deliberately ONE condition here. An earlier version also had `if (sent.ok) return
+    // sent;` above it, which read well and was redundant: mutating it away changed no behaviour
+    // (mutation M21 came back INERT, correctly), because a successful send never carries gateRefused.
+    // A line that cannot be proved is a line that will be believed anyway, so it is gone.
     if (!sent.gateRefused) return sent;
   }
 
