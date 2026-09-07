@@ -343,15 +343,26 @@ check(
 // when the gate is closed, and the refusal names the setting to flip. Fully offline — the gate check
 // returns before any Graph token or fetch.
 const { sendGraphEmail } = await import("../src/features/huddle/lib/email/graph-email.server");
+// `ok === false` ALONE is not a real assertion here: sendGraphEmail already returns ok:false when a
+// fetch throws, so a bypassed gate that got as far as the Graph token call would still read false.
+// Watch the wire instead — a refusal that never touched the network is the thing being proved.
+let graphCallAttempted = false;
+const fetchBeforeBackstop = globalThis.fetch;
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url);
+  if (url.includes("microsoftonline.com") || url.includes("graph.microsoft.com")) graphCallAttempted = true;
+  return fetchBeforeBackstop(input as RequestInfo, init);
+}) as typeof fetch;
 const refused = await sendGraphEmail({
   to: "someone@example.com",
   subject: "Test-email send gate backstop",
   body: "should never leave the tenant",
 });
+globalThis.fetch = fetchBeforeBackstop;
 check(
-  "dispatch backstop: sendGraphEmail REFUSES when the gate is closed",
-  refused.ok === false,
-  `ok = ${String(refused.ok)}`,
+  "dispatch backstop: sendGraphEmail REFUSES when the gate is closed, without calling Graph at all",
+  refused.ok === false && !graphCallAttempted,
+  `ok = ${String(refused.ok)}, graph call attempted = ${graphCallAttempted}`,
 );
 check(
   "the refusal names the setting to flip (email_send_enabled) and points at drafting",
