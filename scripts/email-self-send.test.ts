@@ -471,10 +471,15 @@ console.log("\n--- 7. The real orchestrator, run for real (no network, no mail) 
   );
 }
 
-console.log("\n--- 8. AC-28 for real: drive the VOICE dispatch and watch which Graph endpoint it hits ---");
+console.log("\n--- 8. The VOICE dispatch for real: watch which Graph endpoint it hits ---");
 
-// The strongest form of AC-28 available offline. Every other check in this file proves what the gate
-// DECIDES; this one proves what the voice surface actually DOES with an ON-REQUEST address.
+// WHAT THIS DOES AND DOES NOT PROVE -- read before trusting it. Offline there is no AZURE_PG_URL, so
+// resolveSelfSendPolicy returns { selfRows: [], tiersReadable: false } and dev@enterpriseds.io
+// resolves to THIRD-PARTY, not ON-REQUEST (measured, not assumed). So this exercises the voice
+// dispatch end to end against a NON-SELF recipient. It does NOT prove the ON-REQUEST branch on voice
+// -- that needs a database and is recorded as NOT PROVEN offline in FIX-email-self-send.md. The
+// on-request behaviour is proved at the decision layer (AC-14/AC-32, mutation M3) and structurally
+// (AC-28b/AC-28c, mutation M13).
 //
 // The naive version ("assert no network call") would be INERT here: with no Graph credentials
 // getAppToken throws before any fetch, so the assertion would pass even with the gate deleted. So the
@@ -523,12 +528,12 @@ console.log("\n--- 8. AC-28 for real: drive the VOICE dispatch and watch which G
   globalThis.fetch = realFetch;
 
   check(
-    "AC-28 runtime: a voice send to an ON-REQUEST address NEVER reaches Graph /sendMail",
+    "voice runtime: a send the gate did not clear NEVER reaches Graph /sendMail",
     sendMailHit === false,
     `sendMail hit = ${sendMailHit}, draft hit = ${draftHit}`,
   );
   check(
-    "AC-28 runtime: the voice call reports a NON-success so the agent cannot claim it was sent",
+    "voice runtime: the call reports a NON-success so the agent cannot claim it was sent",
     /"ok":\s*false/.test(out.output),
     out.output.slice(0, 160),
   );
@@ -542,7 +547,7 @@ console.log("\n--- 8. AC-28 for real: drive the VOICE dispatch and watch which G
     }) as typeof fetch;
     await globalThis.fetch("https://graph.microsoft.com/v1.0/users/x/sendMail");
     globalThis.fetch = f2;
-    check("AC-28 runtime: the wire-watcher is not inert (it does observe /sendMail)", probeHit === true);
+    check("voice runtime: the wire-watcher is not inert (it does observe /sendMail)", probeHit === true);
   }
 }
 
