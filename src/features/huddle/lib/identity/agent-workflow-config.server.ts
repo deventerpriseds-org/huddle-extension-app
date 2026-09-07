@@ -37,6 +37,16 @@ ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS agent_cap_ov
 -- display. Resolved in-store from the passed email via resolveScopeByEmail, so both of a user's emails
 -- converge to one config row regardless of which email a caller presents.
 ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS user_id TEXT;
+-- Agent email SEND gate (2026-09-07, owner: "d4 is drafts only for now but be able to quickly set it
+-- to send by design once I'm comfortable enough"). FALSE = agents may only create drafts; the
+-- send_email tool is not offered to the model at all and sendGraphEmail refuses. Flipping this one
+-- boolean to true re-enables sending on the very next turn — no code change, no redeploy (nothing
+-- caches it; getAgentWorkflowConfig queries on every call). email_send_agent_overrides is the same
+-- per-agent partial-override shape as agent_cap_overrides: {"<agentId>": true|false}. It is a
+-- SEPARATE column from agent_overrides on purpose — that one's booleans already mean "structured
+-- workflow required", so reusing it would give one value two contradictory meanings.
+ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS email_send_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS email_send_agent_overrides JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE INDEX IF NOT EXISTS agent_workflow_config_userid_idx ON identity.agent_workflow_config(user_id);
 `;
 
@@ -70,6 +80,10 @@ export interface AgentWorkflowConfig {
   agent_overrides: Record<string, boolean>;
   default_caps: WorkflowCaps;
   agent_cap_overrides: Record<string, Partial<WorkflowCaps>>;
+  /** Agents may SEND email (not just draft it). Defaults to false — drafts only. */
+  email_send_enabled: boolean;
+  /** Per-agent override of email_send_enabled, same shape as agent_cap_overrides. */
+  email_send_agent_overrides: Record<string, boolean>;
 }
 
 // Gate is ON by default (2026-08-05): the confirm-intent/DoD gate is a SAFETY gate, so a user (or an
@@ -83,6 +97,10 @@ const DEFAULT_CONFIG: AgentWorkflowConfig = {
   agent_overrides: {},
   default_caps: DEFAULT_CAPS,
   agent_cap_overrides: {},
+  // Drafts only until the owner flips it. This default is the whole point of the setting: a user with
+  // no config row, or an email-scoping miss, must land on "cannot send", never on "can send".
+  email_send_enabled: false,
+  email_send_agent_overrides: {},
 };
 
 /** Read the config for an email. Returns the default (all discretionary) when nothing is set.
@@ -97,14 +115,18 @@ export async function getAgentWorkflowConfig(email: string): Promise<AgentWorkfl
     agent_overrides: Record<string, boolean>;
     default_caps: Partial<WorkflowCaps>;
     agent_cap_overrides: Record<string, Partial<WorkflowCaps>>;
+    email_send_enabled: boolean;
+    email_send_agent_overrides: Record<string, boolean>;
   }>(
     userId
-      ? `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides
+      ? `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides,
+                 email_send_enabled, email_send_agent_overrides
            FROM identity.agent_workflow_config
           WHERE user_id = $1 OR (user_id IS NULL AND lower(email) = ANY($2))
           ORDER BY (user_id IS NOT NULL) DESC, updated_at DESC
           LIMIT 1`
-      : `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides
+      : `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides,
+                 email_send_enabled, email_send_agent_overrides
            FROM identity.agent_workflow_config WHERE lower(email) = lower($1) LIMIT 1`,
     userId ? [userId, emails] : [email],
   );
@@ -114,6 +136,8 @@ export async function getAgentWorkflowConfig(email: string): Promise<AgentWorkfl
     agent_overrides: r.rows[0].agent_overrides ?? {},
     default_caps: { ...DEFAULT_CAPS, ...(r.rows[0].default_caps ?? {}) },
     agent_cap_overrides: r.rows[0].agent_cap_overrides ?? {},
+    email_send_enabled: r.rows[0].email_send_enabled === true,
+    email_send_agent_overrides: r.rows[0].email_send_agent_overrides ?? {},
   };
 }
 
@@ -131,16 +155,22 @@ export async function setAgentWorkflowConfig(
     agent_overrides: patch.agent_overrides ?? current.agent_overrides,
     default_caps: patch.default_caps ?? current.default_caps,
     agent_cap_overrides: patch.agent_cap_overrides ?? current.agent_cap_overrides,
+    email_send_enabled: patch.email_send_enabled ?? current.email_send_enabled,
+    email_send_agent_overrides:
+      patch.email_send_agent_overrides ?? current.email_send_agent_overrides,
   };
   // Dual-write: user_id (primary going forward) + email (retained for display/fallback). Upsert stays on
   // the email PK (the canonical email is stable per user); user_id is set/refreshed when resolvable.
   await getPool().query(
     `INSERT INTO identity.agent_workflow_config
-       (email, default_required, agent_overrides, default_caps, agent_cap_overrides, user_id, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6, now())
+       (email, default_required, agent_overrides, default_caps, agent_cap_overrides, user_id,
+        email_send_enabled, email_send_agent_overrides, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
      ON CONFLICT (email) DO UPDATE SET
        default_required=EXCLUDED.default_required, agent_overrides=EXCLUDED.agent_overrides,
        default_caps=EXCLUDED.default_caps, agent_cap_overrides=EXCLUDED.agent_cap_overrides,
+       email_send_enabled=EXCLUDED.email_send_enabled,
+       email_send_agent_overrides=EXCLUDED.email_send_agent_overrides,
        user_id=COALESCE(EXCLUDED.user_id, identity.agent_workflow_config.user_id), updated_at=now()`,
     [
       email,
@@ -149,6 +179,8 @@ export async function setAgentWorkflowConfig(
       JSON.stringify(next.default_caps),
       JSON.stringify(next.agent_cap_overrides),
       userId,
+      next.email_send_enabled,
+      JSON.stringify(next.email_send_agent_overrides),
     ],
   );
   return next;
@@ -205,6 +237,51 @@ export async function isStructuredWorkflowRequiredForUser(email: string): Promis
       err instanceof Error ? err.message : err,
     );
     return true;
+  }
+}
+
+/**
+ * Resolve whether agents may actually SEND email (as opposed to only creating drafts) for this user,
+ * right now. Per-agent override wins; falls back to the global default; the global default is FALSE.
+ *
+ * FAILS CLOSED, and "closed" here means `false` — DRAFTS ONLY. This is the mirror image of
+ * isStructuredWorkflowRequired's `catch { return true }`, not a contradiction of it: both return the
+ * value that cannot cause an irreversible action. A sent email cannot be unsent; a missing send is
+ * recoverable (the user opens the draft and clicks send). So EVERY failure path — no email resolved,
+ * config pool throw, missing column, transient network — must land on `false`.
+ *
+ * DO NOT "simplify" this to `catch { return true }` or to a truthy default. The 2026-08-05 incident
+ * (8 unconfirmed tasks reached IN_REVIEW because a single transient pool throw hit a fail-OPEN catch)
+ * is the same failure mode with a different blast radius; here the blast radius is real mail leaving
+ * the tenant.
+ *
+ * Owner's decision, 2026-09-07: "d4 is drafts only for now but be able to quickly set it to send by
+ * design once I'm comfortable enough." The flip is:
+ *   UPDATE identity.agent_workflow_config SET email_send_enabled = true, updated_at = now()
+ *    WHERE lower(email) = lower('<the owner email>');
+ * Nothing caches the result — getAgentWorkflowConfig queries on every call — so it takes effect on
+ * the next turn / next voice mint with no redeploy.
+ */
+export async function isEmailSendEnabled(
+  email: string | null | undefined,
+  agentId?: string,
+): Promise<boolean> {
+  if (!email || !email.trim()) {
+    // No resolved identity means no config row can be read, so there is no affirmative permission to
+    // send. Closed by definition, not by error.
+    console.warn("[isEmailSendEnabled] no caller email resolved; failing CLOSED (drafts only)");
+    return false;
+  }
+  try {
+    const cfg = await getAgentWorkflowConfig(email);
+    const override = agentId ? cfg.email_send_agent_overrides[agentId] : undefined;
+    return typeof override === "boolean" ? override : cfg.email_send_enabled === true;
+  } catch (err) {
+    console.error(
+      `[isEmailSendEnabled] config read failed for ${email}/${agentId ?? "-"}; failing CLOSED (drafts only):`,
+      err instanceof Error ? err.message : err,
+    );
+    return false;
   }
 }
 

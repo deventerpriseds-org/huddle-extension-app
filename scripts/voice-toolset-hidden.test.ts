@@ -88,9 +88,23 @@ const named = (n: string) => (tools as Tool[]).filter((t) => t?.name === n);
 const names = (tools as Tool[]).map((t) => t?.name).filter(Boolean) as string[];
 console.log(`\nvoice toolset (${tools.length}): ${names.join(", ")}\n`);
 
+// The EMAIL SEND GATE (docs/cross-app-agent/FIX-email-send-gate.md, nexus-hub) means the toolset
+// above is the DRAFTS-ONLY one: offline there is no AZURE_PG_URL, so isEmailSendEnabled fails closed
+// and send_email is not offered at all. Build a second toolset with the gate open so the original
+// name-collision assertions still run against the state where send_email actually exists.
+// `emailSendEnabled: true` is the pre-resolved form of the same flag the mint path resolves from the
+// database; it exercises the ASSEMBLY wiring. The database read itself needs a database and is NOT
+// claimed here.
+const { tools: toolsSendOn } = await buildRealtimeToolset("iris-chase", {
+  webSearch: true,
+  journey: true,
+  emailSendEnabled: true,
+});
+const namedOn = (n: string) => (toolsSendOn as Tool[]).filter((t) => t?.name === n);
+
 // 1. THE defect: two tools called send_email.
-const sendEmails = named("send_email");
-check("exactly ONE send_email in the voice toolset", sendEmails.length === 1, `found ${sendEmails.length}`);
+const sendEmails = namedOn("send_email");
+check("exactly ONE send_email in the voice toolset (gate OPEN)", sendEmails.length === 1, `found ${sendEmails.length}`);
 
 // 2. …and the survivor is the NATIVE Graph one, which cannot silently mail the owner.
 const req = sendEmails[0]?.parameters?.required ?? [];
@@ -273,6 +287,143 @@ check(
 );
 
 stopObserving();
+
+// ---------------------------------------------------------------------------------------------
+// PART 4 — THE EMAIL SEND GATE (docs/cross-app-agent/FIX-email-send-gate.md, nexus-hub).
+// Owner, 2026-09-07: "d4 is drafts only for now but be able to quickly set it to send by design
+// once I'm comfortable enough." So: drafting always available, sending available only when
+// identity.agent_workflow_config.email_send_enabled is true — and flipping that one boolean is the
+// whole re-enable, no code change and no redeploy.
+//
+// SCOPE, stated honestly because two of the four checks below are source-shape checks, not runtime
+// ones. The VOICE surface is exercised for real (buildRealtimeToolset runs, both states). The TEXT
+// surface lives inside runHuddleTurn — a function that cannot be invoked offline without a model —
+// so its two gates are asserted against the SOURCE: that each `send_email` definition is lexically
+// inside its gate's block and each `create_email_draft` is outside it. That is weaker than a runtime
+// check and is still mutation-sensitive: deleting either gate, or moving the draft inside one, fails.
+
+// 4a. GATE CLOSED (the offline default: no AZURE_PG_URL, so isEmailSendEnabled fails closed).
+check(
+  "gate CLOSED: send_email is NOT offered on the voice surface",
+  named("send_email").length === 0,
+  `found ${named("send_email").length}`,
+);
+check(
+  "gate CLOSED: create_email_draft IS still offered (drafting is always allowed)",
+  named("create_email_draft").length === 1,
+  `found ${named("create_email_draft").length}`,
+);
+
+// 4b. GATE OPEN: send_email comes back, and drafting is unaffected.
+check(
+  "gate OPEN: send_email IS offered on the voice surface",
+  namedOn("send_email").length === 1,
+  `found ${namedOn("send_email").length}`,
+);
+check(
+  "gate OPEN: create_email_draft is still offered",
+  namedOn("create_email_draft").length === 1,
+  `found ${namedOn("create_email_draft").length}`,
+);
+
+// 4c. A caller that cannot be resolved must NOT open the gate. This is the fail-closed contract:
+// no resolved identity means no affirmative permission, so drafts only.
+const { tools: toolsUnknownCaller } = await buildRealtimeToolset("iris-chase", {
+  webSearch: true,
+  journey: true,
+  caller: { entra_email: "nobody@example.invalid" },
+});
+check(
+  "gate FAILS CLOSED for an unresolvable caller (no config row / no database)",
+  (toolsUnknownCaller as Tool[]).filter((t) => t?.name === "send_email").length === 0,
+  `found ${(toolsUnknownCaller as Tool[]).filter((t) => t?.name === "send_email").length}`,
+);
+
+// 4d. DISPATCH BACKSTOP: even if a stale toolset gets send_email through, sendGraphEmail refuses
+// when the gate is closed, and the refusal names the setting to flip. Fully offline — the gate check
+// returns before any Graph token or fetch.
+const { sendGraphEmail } = await import("../src/features/huddle/lib/email/graph-email.server");
+// `ok === false` ALONE is not a real assertion here: sendGraphEmail already returns ok:false when a
+// fetch throws, so a bypassed gate that got as far as the Graph token call would still read false.
+// Watch the wire instead — a refusal that never touched the network is the thing being proved.
+let graphCallAttempted = false;
+const fetchBeforeBackstop = globalThis.fetch;
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url);
+  if (url.includes("microsoftonline.com") || url.includes("graph.microsoft.com")) graphCallAttempted = true;
+  return fetchBeforeBackstop(input as RequestInfo, init);
+}) as typeof fetch;
+const refused = await sendGraphEmail({
+  to: "someone@example.com",
+  subject: "Test-email send gate backstop",
+  body: "should never leave the tenant",
+});
+globalThis.fetch = fetchBeforeBackstop;
+check(
+  "dispatch backstop: sendGraphEmail REFUSES when the gate is closed, without calling Graph at all",
+  refused.ok === false && !graphCallAttempted,
+  `ok = ${String(refused.ok)}, graph call attempted = ${graphCallAttempted}`,
+);
+check(
+  "the refusal names the setting to flip (email_send_enabled) and points at drafting",
+  (refused.error ?? "").includes("email_send_enabled") &&
+    (refused.error ?? "").includes("create_email_draft"),
+  `error = ${(refused.error ?? "").slice(0, 120)}`,
+);
+
+// 4e. TEXT SURFACE (source-shape). Both text-path assemblies must put send_email inside a gate and
+// create_email_draft outside it. Gating one surface and not the other is the exact defect that
+// produced the duplicate send_email — the guard covers every surface, together.
+const textSrc = await Bun.file(
+  new URL("../src/features/huddle/lib/huddle.functions.ts", import.meta.url),
+).text();
+const textLines = textSrc.split("\n");
+
+/** Index of the line closing the block opened on `openIdx` (brace depth; template `${}` pairs balance). */
+function blockCloseIndex(lines: string[], openIdx: number): number {
+  let depth = 0;
+  for (let i = openIdx; i < lines.length; i++) {
+    for (const ch of lines[i]) {
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) return i;
+      }
+    }
+  }
+  return -1;
+}
+
+for (const [label, gateLine, sendMarker, draftMarker] of [
+  ["OpenAI Responses path", "if (emailSendEnabled) {", 'name: "send_email",', 'name: "create_email_draft",'],
+  ["Lovable path", "if (lovableEmailSendEnabled) {", "lovableTools.send_email = tool({", "lovableTools.create_email_draft = tool({"],
+] as Array<[string, string, string, string]>) {
+  const gateIdxs = textLines.map((l, i) => (l.trim() === gateLine ? i : -1)).filter((i) => i >= 0);
+  check(
+    `text/${label}: exactly one \`${gateLine}\` gate exists`,
+    gateIdxs.length === 1,
+    `found ${gateIdxs.length}`,
+  );
+  if (gateIdxs.length !== 1) continue;
+  const open = gateIdxs[0];
+  const close = blockCloseIndex(textLines, open);
+  const sendIdxs = textLines
+    .map((l, i) => (l.trim() === sendMarker.trim() ? i : -1))
+    .filter((i) => i >= 0);
+  const draftIdxs = textLines
+    .map((l, i) => (l.trim() === draftMarker.trim() ? i : -1))
+    .filter((i) => i >= 0);
+  check(
+    `text/${label}: EVERY send_email definition is INSIDE the gate block (lines ${open + 1}-${close + 1})`,
+    sendIdxs.length > 0 && sendIdxs.every((i) => i > open && i < close),
+    `send_email at lines [${sendIdxs.map((i) => i + 1).join(", ")}]`,
+  );
+  check(
+    `text/${label}: create_email_draft is OUTSIDE the gate (drafting always allowed)`,
+    draftIdxs.length > 0 && draftIdxs.every((i) => i < open || i > close),
+    `create_email_draft at lines [${draftIdxs.map((i) => i + 1).join(", ")}]`,
+  );
+}
 
 globalThis.fetch = realFetch;
 console.log(`\n${pass} passed, ${fail} failed`);

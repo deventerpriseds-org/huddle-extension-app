@@ -153,7 +153,16 @@ function toRealtimeTool(t: unknown): unknown {
  *  SANITIZED to the Realtime-accepted shape (drops `strict`/Responses-only fields). */
 export async function buildRealtimeToolset(
   agentId: AgentId,
-  opts: { webSearch?: boolean; journey?: boolean } = {},
+  opts: {
+    webSearch?: boolean;
+    journey?: boolean;
+    /** Who the session is being minted for. Needed to resolve the email SEND gate below; the mint
+     *  and warmup server fns already receive it from the client. */
+    caller?: RealtimeCaller;
+    /** Pre-resolved value of the email send gate. When omitted it is resolved from `caller`.
+     *  Supplying it never widens the gate — an absent/false value still means drafts only. */
+    emailSendEnabled?: boolean;
+  } = {},
 ): Promise<{ tools: unknown[]; journeyNames: Set<string> }> {
   const agent = AGENT_BY_ID[agentId];
   const raw: unknown[] = [PRIORITIZE_TOOL, SCHEDULE_REMINDER_TOOL, GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL];
@@ -295,8 +304,32 @@ export async function buildRealtimeToolset(
     const { graphEmailConfigured, emailFromOptions } = await import("../email/graph-email.server");
     if (graphEmailConfigured()) {
       const fromOpts = emailFromOptions();
-      raw.push(
-        {
+      // EMAIL SEND GATE (2026-09-07). Owner: "d4 is drafts only for now but be able to quickly set it
+      // to send by design once I'm comfortable enough". `send_email` is offered to the model ONLY when
+      // identity.agent_workflow_config.email_send_enabled is true for this caller; a tool the model
+      // cannot SEE cannot be mis-picked, which is why the primary gate lives here at ASSEMBLY rather
+      // than only at dispatch. `create_email_draft` is pushed unconditionally below.
+      // FAILS CLOSED: isEmailSendEnabled returns false on ANY error, and an unresolvable caller is
+      // also false. The TEXT path (huddle.functions.ts) carries the identical gate - gating one
+      // surface and not the other is exactly the defect that produced the duplicate send_email.
+      const emailSendEnabled =
+        typeof opts.emailSendEnabled === "boolean"
+          ? opts.emailSendEnabled
+          : await (async () => {
+              try {
+                const { resolveTaskEmail } = await import("../journey/identity");
+                const email =
+                  (await resolveTaskEmail(opts.caller ?? {})) ?? opts.caller?.entra_email ?? null;
+                const { isEmailSendEnabled } = await import(
+                  "../identity/agent-workflow-config.server"
+                );
+                return await isEmailSendEnabled(email, agentId);
+              } catch {
+                return false;
+              }
+            })();
+      if (emailSendEnabled) {
+        raw.push({
           type: "function",
           name: "send_email",
           description:
@@ -315,8 +348,10 @@ export async function buildRealtimeToolset(
             },
             required: ["to", "subject", "body"],
           },
-        },
-        {
+        });
+      }
+      // DRAFTING IS ALWAYS ALLOWED - this push is deliberately outside the gate above.
+      raw.push({
           type: "function",
           name: "create_email_draft",
           description:
@@ -334,8 +369,7 @@ export async function buildRealtimeToolset(
             },
             required: ["subject", "body"],
           },
-        },
-      );
+      });
     }
   } catch {
     // Email is optional — voice still works without it.
@@ -470,12 +504,20 @@ export async function executeRealtimeTool(
     }
     if (name === "send_email") {
       const { sendGraphEmail } = await import("../email/graph-email.server");
+      // The gate's dispatch backstop needs the caller. A live voice session can still hold a toolset
+      // minted BEFORE the owner flipped sending off, so this branch is genuinely reachable with the
+      // gate closed - resolve the email and let sendGraphEmail refuse.
+      const { resolveTaskEmail } = await import("../journey/identity");
+      const gateEmail =
+        (await resolveTaskEmail(ctx.caller ?? {})) ?? ctx.caller?.entra_email ?? null;
       const r = await sendGraphEmail({
         to: String(args.to ?? ""),
         subject: String(args.subject ?? ""),
         body: String(args.body ?? ""),
         from: args.from ? String(args.from) : undefined,
         cc: args.cc ? String(args.cc) : undefined,
+        callerEmail: gateEmail,
+        callerAgentId: ctx.agentId,
       });
       return done(JSON.stringify(r));
     }

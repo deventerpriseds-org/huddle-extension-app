@@ -3101,35 +3101,44 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const { emailFromOptions, graphEmailConfigured } =
           await import("./email/graph-email.server");
         const emailTools: unknown[] = [];
+        // Fails CLOSED to false (drafts only) on any error — see isEmailSendEnabled's contract.
+        const { isEmailSendEnabled } = await import("./identity/agent-workflow-config.server");
+        const emailSendEnabled = await isEmailSendEnabled(await resolveCallerEmail(), winner.id);
         if (graphEmailConfigured()) {
           const fromOpts = emailFromOptions();
-          emailTools.push({
-            type: "function" as const,
-            name: "send_email",
-            description:
-              `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
-              `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
-              `Requires a recipient (to), a subject, and a body. Use this whenever the user asks to email someone.`,
-            parameters: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                to: {
-                  type: "string",
-                  description: "Recipient email address. Comma-separate multiple recipients.",
+          // EMAIL SEND GATE (2026-09-07). `send_email` is offered to the model ONLY when the owner has
+          // flipped identity.agent_workflow_config.email_send_enabled on. A tool the model cannot SEE
+          // cannot be mis-picked, so this — not the dispatch check below — is the primary gate.
+          // `create_email_draft` is offered unconditionally: drafting is always allowed.
+          if (emailSendEnabled) {
+            emailTools.push({
+              type: "function" as const,
+              name: "send_email",
+              description:
+                `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
+                `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
+                `Requires a recipient (to), a subject, and a body. Use this whenever the user asks to email someone.`,
+              parameters: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  to: {
+                    type: "string",
+                    description: "Recipient email address. Comma-separate multiple recipients.",
+                  },
+                  subject: { type: "string", description: "Email subject line." },
+                  body: { type: "string", description: "Email body (plain text)." },
+                  from: {
+                    type: "string",
+                    description: `Optional sender mailbox. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.`,
+                  },
+                  cc: { type: "string", description: "Optional CC address(es), comma-separated." },
                 },
-                subject: { type: "string", description: "Email subject line." },
-                body: { type: "string", description: "Email body (plain text)." },
-                from: {
-                  type: "string",
-                  description: `Optional sender mailbox. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.`,
-                },
-                cc: { type: "string", description: "Optional CC address(es), comma-separated." },
+                required: ["to", "subject", "body"],
               },
-              required: ["to", "subject", "body"],
-            },
-            strict: false,
-          });
+              strict: false,
+            });
+          }
           emailTools.push({
             type: "function" as const,
             name: "create_email_draft",
@@ -3753,6 +3762,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 body: String(a.body ?? ""),
                 from: a.from ? String(a.from) : undefined,
                 cc: a.cc ? String(a.cc) : undefined,
+                // For the send gate's dispatch backstop only (never sent to Graph).
+                callerEmail: await resolveCallerEmail(),
+                callerAgentId: winner.id,
               });
               recordToolUse(
                 winner.id,
@@ -4865,53 +4877,71 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         {
           const { emailFromOptions, graphEmailConfigured } =
             await import("./email/graph-email.server");
+          // Fails CLOSED to false (drafts only) on any error - see isEmailSendEnabled's contract.
+          const { isEmailSendEnabled: isEmailSendEnabledLovable } = await import(
+            "./identity/agent-workflow-config.server",
+          );
+          const lovableEmailSendEnabled = await isEmailSendEnabledLovable(
+            await resolveCallerEmail(),
+            winner.id,
+          );
           if (graphEmailConfigured()) {
             const fromOpts = emailFromOptions();
-            lovableTools.send_email = tool({
-              description:
-                `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
-                `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
-                `Requires to, subject, and body. Use whenever the user asks to email someone.`,
-              inputSchema: z.object({
-                to: z.string(),
-                subject: z.string(),
-                body: z.string(),
-                from: z.string().optional(),
-                cc: z.string().optional(),
-              }),
-              execute: async (args) => {
-                const a = args as Record<string, unknown>;
-                if (!claimAction(`send_email:${a.to ?? ""}:${a.subject ?? ""}`)) {
+            // EMAIL SEND GATE (2026-09-07) - same gate as the OpenAI path above. When the owner has not
+            // flipped identity.agent_workflow_config.email_send_enabled on, `send_email` is never handed
+            // to the model on this surface either. `create_email_draft` below stays unconditional.
+            // Gating one surface and not the other is exactly the defect that produced the duplicate
+            // send_email (FIX-send-email-collision.md) - both are gated, together.
+            if (lovableEmailSendEnabled) {
+              lovableTools.send_email = tool({
+                description:
+                  `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
+                  `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
+                  `Requires to, subject, and body. Use whenever the user asks to email someone.`,
+                inputSchema: z.object({
+                  to: z.string(),
+                  subject: z.string(),
+                  body: z.string(),
+                  from: z.string().optional(),
+                  cc: z.string().optional(),
+                }),
+                execute: async (args) => {
+                  const a = args as Record<string, unknown>;
+                  if (!claimAction(`send_email:${a.to ?? ""}:${a.subject ?? ""}`)) {
+                    recordToolUse(
+                      winner.id,
+                      "send_email",
+                      "already sent this turn — skipped duplicate",
+                      true,
+                    );
+                    return JSON.stringify({
+                      ok: true,
+                      deduped: true,
+                      message: "That email was already sent this turn.",
+                    });
+                  }
+                  const { sendGraphEmail } = await import("./email/graph-email.server");
+                  const r = await sendGraphEmail({
+                    to: String(a.to ?? ""),
+                    subject: String(a.subject ?? ""),
+                    body: String(a.body ?? ""),
+                    from: a.from ? String(a.from) : undefined,
+                    cc: a.cc ? String(a.cc) : undefined,
+                    // For the send gate's dispatch backstop only (never sent to Graph).
+                    callerEmail: await resolveCallerEmail(),
+                    callerAgentId: winner.id,
+                  });
                   recordToolUse(
                     winner.id,
                     "send_email",
-                    "already sent this turn — skipped duplicate",
-                    true,
+                    r.ok ? `sent from ${r.from} → ${(r.to ?? []).join(", ")}` : "send failed",
+                    r.ok,
+                    r.ok ? undefined : r.error,
                   );
-                  return JSON.stringify({
-                    ok: true,
-                    deduped: true,
-                    message: "That email was already sent this turn.",
-                  });
-                }
-                const { sendGraphEmail } = await import("./email/graph-email.server");
-                const r = await sendGraphEmail({
-                  to: String(a.to ?? ""),
-                  subject: String(a.subject ?? ""),
-                  body: String(a.body ?? ""),
-                  from: a.from ? String(a.from) : undefined,
-                  cc: a.cc ? String(a.cc) : undefined,
-                });
-                recordToolUse(
-                  winner.id,
-                  "send_email",
-                  r.ok ? `sent from ${r.from} → ${(r.to ?? []).join(", ")}` : "send failed",
-                  r.ok,
-                  r.ok ? undefined : r.error,
-                );
-                return JSON.stringify(r);
-              },
-            });
+                  return JSON.stringify(r);
+                },
+              });
+            }
             lovableTools.create_email_draft = tool({
               description:
                 `Save a REAL draft email to the ${fromOpts[0]} mailbox's Drafts folder (does NOT send it). ` +
