@@ -439,6 +439,31 @@ console.log("\n--- 7. The real orchestrator, run for real (no network, no mail) 
     "runtime: it made no Graph call at all in this offline configuration",
     graphCallAttempted === false,
   );
+  // The orchestrator degrades to a draft ONLY on a GATE refusal. If a permitted send fails at
+  // transport (Graph 5xx, expired secret, missing consent) it must surface as itself -- calling that
+  // "saved to drafts because X is not one of your addresses" would be a false explanation of a real
+  // outage. That distinction rests on this structural marker, so the marker is asserted directly.
+  const { sendGraphEmail: sendDirect } = await import(
+    "../src/features/huddle/lib/email/graph-email.server"
+  );
+  const refused = await sendDirect({
+    to: "someone@external.com",
+    subject: "Test-D4b gate refusal carries its marker",
+    body: "should never leave the tenant",
+  });
+  check(
+    "the D4a gate refusal is marked STRUCTURALLY (gateRefused), not sniffed from its message text",
+    refused.ok === false && refused.gateRefused === true,
+    `ok=${String(refused.ok)} gateRefused=${String(refused.gateRefused)}`,
+  );
+  const graphSrc = await Bun.file(
+    new URL("../src/features/huddle/lib/email/graph-email.server.ts", import.meta.url),
+  ).text();
+  check(
+    "the orchestrator degrades to a draft ONLY on a gate refusal, never on a transport failure",
+    /if \(!sent\.gateRefused\) return sent;/.test(graphSrc),
+  );
+
   check(
     "runtime: the result explains itself rather than throwing",
     typeof r.error === "string" && r.error.length > 0,

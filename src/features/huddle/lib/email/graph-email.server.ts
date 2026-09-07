@@ -106,6 +106,10 @@ export interface SendEmailResult {
   draftWebLink?: string;
   /** The recipients that blocked the send, so the agent can say WHICH address caused the draft. */
   blockedRecipients?: string[];
+  /** True when the D4a GLOBAL gate refused this send (as opposed to Graph failing). Lets the
+   *  orchestrator degrade to a draft ONLY on a refusal, and surface a genuine transport failure as
+   *  itself instead of mislabelling it "not one of your own addresses". */
+  gateRefused?: boolean;
 }
 
 function toRecipients(v: string | string[] | undefined) {
@@ -332,6 +336,9 @@ export async function sendGraphEmail(input: SendEmailInput): Promise<SendEmailRe
     if (!allowed) {
       return {
         ok: false,
+        // Structural marker so sendOrDraftEmail can tell "the GATE refused" from "Graph failed".
+        // Sniffing the message text for that distinction would break the moment the wording changed.
+        gateRefused: true,
         error:
           "Sending email is currently disabled - agents may only prepare drafts. Use create_email_draft " +
           "instead; the draft lands in the mailbox's Drafts folder ready to review and send by hand. " +
@@ -419,6 +426,11 @@ export async function sendOrDraftEmail(input: SendEmailInput): Promise<SendEmail
   if (scope.decision !== "no-recipients") {
     const sent = await sendGraphEmail(input);
     if (sent.ok) return sent;
+    // Degrade ONLY when the gate refused. If the send was PERMITTED and Graph failed (a 5xx, an
+    // expired secret, a missing consent), that is a transport failure and must surface as itself --
+    // reporting it as "saved to drafts because X is not one of your addresses" would be a false
+    // explanation of a real outage, and would hide it from whoever has to fix it.
+    if (!sent.gateRefused) return sent;
   }
 
   const draft = await createGraphDraft(input);
