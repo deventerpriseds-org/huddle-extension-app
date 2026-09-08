@@ -1,9 +1,19 @@
 // WHAT:       Direction 1 of the cross-app bridge -- lets a Huddle agent READ the owner's Nexus
-//             coursework. EIGHT tools, one shared executor, reachable from both live Huddle
+//             coursework. ELEVEN tools, one shared executor, reachable from both live Huddle
 //             surfaces: assignments (with real due dates), programs and courses, the class
 //             schedule (batch one), then module contents, the owner's own page notes, a recorded
 //             lecture's transcript/insights/Q&A, the unified library, and the AI writer's working
-//             transcript (batch two, A-READ-7/9/10/4/8).
+//             transcript (batch two, A-READ-7/9/10/4/8), and finally a literal search of the
+//             indexed knowledge base, the list of what IS indexed, and an assignment's case-study
+//             analysis (batch three, A-RAG-1/5/3).
+//
+//             BATCH THREE CARRIES ONE LIMIT WORTH STATING AT THE TOP. `search_nexus_knowledge` is a
+//             LITERAL substring match, not a semantic one. Nexus HAS real pgvector retrieval
+//             (api/src/lib/vectorSearch.ts) but it is a LIBRARY with exactly one importer,
+//             embaAssistantChat.ts, and no HTTP route exposes it -- so the sharpest operator
+//             reachable from here is the d1 GET's `ilike`. The tool says so to the model, because
+//             one that believes it searched by MEANING reports a miss as "that is not in your
+//             knowledge base" instead of "that word does not appear".
 // WHY:        Two separate problems, and the second is the worse one.
 //             (1) Nothing on the Huddle side could reach Nexus at all -- grepped 2026-09-08, zero
 //                 references. So "what's due this week in my EMBA?" had no route to the data.
@@ -256,6 +266,53 @@ function strArg(v: unknown): string {
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
+/** d1's zero-UUID sentinel owner (api/src/lib/auth.ts:35). Rows carrying it on an `anonUnion`
+ *  route are the shared demo corpus, not the owner's own material. */
+const NEXUS_ANON_OWNER = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * DROP THE RAW EMBEDDING VECTOR. `/api/d1/{table}` runs a bare `SELECT *` with no column
+ * projection anywhere (d1.ts handleGet), and content.assistant_knowledge_chunks.embedding is a
+ * pgvector column at 1536 dimensions (vectorSearch.ts EMBED_DIMS, asserted on both ingest and
+ * query). Twenty rows is ~30,000 floats that mean nothing to a language model and would dominate
+ * the tool result it has to read. Nothing downstream wants it, so it never leaves this module.
+ */
+function stripEmbedding(row: Row): Row {
+  if (!("embedding" in row)) return row;
+  const { embedding: _dropped, ...rest } = row;
+  return rest;
+}
+
+/** The text columns of content.case_study_analyses, read from that route's `writable` list
+ *  (d1.ts:391) and confirmed against the CREATE TABLE (002_app_tables.sql:207). `completed_sections`
+ *  is jsonb and is returned separately, not as a section. */
+const CASE_STUDY_SECTIONS = [
+  "case_text", "questions", "supplemental_context", "extracted_data", "concepts_taught",
+  "case_analysis", "verification_needed", "outline", "summaries", "conceptual_learning",
+  "case_extraction", "missing_extracts", "sourced_answers", "draft_writeup",
+] as const;
+
+/** The rich extraction columns of content.extracted_content, from its CREATE TABLE
+ *  (001_d1_content.sql:58). Reported by NAME in the knowledge-base listing instead of by value --
+ *  see the projection note at the call site. */
+const EXTRACTED_CONTENT_FIELDS = [
+  "quick_summary", "comprehensive_summary", "atoms", "assumptions", "case_facts_statistics",
+  "case_players", "key_terms", "key_concepts", "frameworks", "formulas", "learning_objectives",
+  "key_definitions", "study_questions", "case_problem", "case_approach", "case_outcome",
+  "assignment_guidance", "v2_extraction_data",
+] as const;
+
+/** Non-empty in the sense the listing means: a present string with text, or a non-empty array or
+ *  object. `[]` and `{}` are the DEFAULTS on several of these columns, so counting them as content
+ *  would report every document as carrying every extraction. */
+function hasContent(v: unknown): boolean {
+  if (v === null || v === undefined) return false;
+  if (typeof v === "string") return v.trim() !== "";
+  if (Array.isArray(v)) return v.length > 0;
+  if (typeof v === "object") return Object.keys(v as object).length > 0;
+  return true;
+}
+
 export const GET_NEXUS_MODULE_MATERIALS_TOOL = {
   type: "function" as const,
   name: "get_nexus_module_materials",
@@ -368,7 +425,77 @@ export const GET_NEXUS_WRITER_TRANSCRIPT_TOOL = {
   strict: false,
 };
 
-/** The eight tools, or none at all when Nexus is not configured. */
+export const SEARCH_NEXUS_KNOWLEDGE_TOOL = {
+  type: "function" as const,
+  name: "search_nexus_knowledge",
+  description:
+    "Search the TEXT of the owner's indexed Nexus course material — syllabi, readings, decks, case files and the summaries/facts/atoms extracted from them — for a LITERAL word or phrase. Use for 'what does the CF syllabus say about the grading breakdown', 'find where the reading mentions working capital', 'what did that case say about margins'. THIS IS A LITERAL SUBSTRING MATCH, NOT A MEANING-BASED SEARCH: pass the exact distinctive WORD the document would use ('grading', 'rubric', 'weighting'), not a whole question, and try a second wording before concluding anything is absent — a miss means that word does not appear, NOT that the topic is missing from the owner's materials. For which DOCUMENTS are indexed rather than what they say, use get_nexus_knowledge_base.",
+  parameters: {
+    type: "object" as const,
+    additionalProperties: false,
+    properties: {
+      query: {
+        type: "string",
+        description: "The literal word or short phrase to find in the material. One distinctive term works far better than a sentence.",
+      },
+      course_id: {
+        type: "string",
+        description: "Restrict to one course, by Nexus course id (from get_nexus_courses). Applied to each chunk's recorded course.",
+      },
+      source_type: {
+        type: "string",
+        description: "Restrict to one kind of indexed text, exactly as Nexus stores it: 'summary', 'fact', 'assumption', 'atom', 'full_text' or 'knowledge_base'. Omit for all.",
+      },
+      limit: { type: "number", description: "Max passages to return. Defaults to 20." },
+    },
+    required: ["query"] as string[],
+  },
+  strict: false,
+};
+
+export const GET_NEXUS_KNOWLEDGE_BASE_TOOL = {
+  type: "function" as const,
+  name: "get_nexus_knowledge_base",
+  description:
+    "WHICH documents the owner has analysed and indexed into his Nexus knowledge base, and what was extracted from each. Use for \"what's in my knowledge base for this course\", 'what have I actually indexed', 'which readings have you analysed'. Pass course_id to scope it to one course — call get_nexus_courses first to turn a course NAME into its id. This answers WHAT IS INDEXED; to search what those documents SAY, use search_nexus_knowledge; for files the owner merely holds without analysis, use get_nexus_library.",
+  parameters: {
+    type: "object" as const,
+    additionalProperties: false,
+    properties: {
+      course_id: { type: "string", description: "Restrict to one course, by Nexus course id (from get_nexus_courses)." },
+      limit: { type: "number", description: "Max documents. Defaults to 100." },
+    },
+    required: [] as string[],
+  },
+  strict: false,
+};
+
+export const GET_NEXUS_CASE_STUDY_ANALYSIS_TOOL = {
+  type: "function" as const,
+  name: "get_nexus_case_study_analysis",
+  description:
+    "The case-study analysis Nexus ran for ONE assignment — its extracted case data, the concepts taught, the analysis itself, the outline, the sourced answers and the draft write-up. Use for 'summarise the case-study analysis you ran on Marketing Strategy', 'what did the case analysis conclude', 'read me the outline it produced'. It needs an assignment_id: resolve it with get_nexus_assignments{title} first, which will ask the owner which course he means if the title matches more than one. Sections are long, so each is trimmed by default — pass `sections` to pull specific ones back in full.",
+  parameters: {
+    type: "object" as const,
+    additionalProperties: false,
+    properties: {
+      assignment_id: { type: "string", description: "The assignment whose case-study analysis to read (from get_nexus_assignments)." },
+      sections: {
+        type: "array",
+        items: { type: "string" },
+        description: "Only these sections, each returned in full — e.g. ['case_analysis','outline','draft_writeup']. Omit for every non-empty section, trimmed.",
+      },
+      max_chars: {
+        type: "number",
+        description: "Trim each returned section to this many characters. Defaults to 4000. Ignored for sections named in `sections`.",
+      },
+    },
+    required: ["assignment_id"] as string[],
+  },
+  strict: false,
+};
+
+/** The eleven tools, or none at all when Nexus is not configured. */
 export function nexusReadTools(): unknown[] {
   if (!nexusReadConfigured()) return [];
   return [
@@ -380,6 +507,9 @@ export function nexusReadTools(): unknown[] {
     GET_NEXUS_LECTURE_CAPTURE_TOOL,
     GET_NEXUS_LIBRARY_TOOL,
     GET_NEXUS_WRITER_TRANSCRIPT_TOOL,
+    SEARCH_NEXUS_KNOWLEDGE_TOOL,
+    GET_NEXUS_KNOWLEDGE_BASE_TOOL,
+    GET_NEXUS_CASE_STUDY_ANALYSIS_TOOL,
   ];
 }
 
@@ -392,6 +522,9 @@ export const NEXUS_TOOL_NAMES = new Set([
   "get_nexus_lecture_capture",
   "get_nexus_library",
   "get_nexus_writer_transcript",
+  "search_nexus_knowledge",
+  "get_nexus_knowledge_base",
+  "get_nexus_case_study_analysis",
 ]);
 
 /**
@@ -812,6 +945,216 @@ export async function executeNexusTool(
       note:
         rows.length === 0
           ? "The writer has no recorded exchange for that assignment. Say that rather than that no draft exists — the finished document is a separate thing and lives in get_nexus_library{assignment_id}."
+          : undefined,
+    };
+  }
+
+  // A-RAG-1 -- "what does the CF syllabus say about the grading breakdown?"
+  //
+  // WHAT THIS IS NOT: a semantic search. Nexus HAS one -- api/src/lib/vectorSearch.ts does real
+  // pgvector KNN with a similarity floor and a metadata containment filter -- but its only importer
+  // is embaAssistantChat.ts, and that module's own header records why it is not a tool ("the chat
+  // endpoint dispatches a tool call one-shot and has no tool-RESULT round-trip"). Grepped across
+  // api/src: one hit. So no HTTP route performs a vector search, and the sharpest operator the d1
+  // GET offers is `ilike`. This is a LITERAL substring match, the tool description says so in those
+  // words, and the empty-result note repeats it -- because a model that thinks it searched by
+  // MEANING reads a miss as "that is not in your knowledge base", which is a confidently-wrong
+  // answer rather than a null one.
+  if (name === "search_nexus_knowledge") {
+    const query = likeTerm(args.query);
+    if (!query) {
+      return {
+        ok: false,
+        error: "query_required",
+        note: "This tool matches a literal word in the material, so it needs one. If the owner asked WHICH documents are indexed rather than what they say, call get_nexus_knowledge_base instead.",
+      };
+    }
+    const limit = Math.max(1, Math.min(numArg(args.limit) ?? 20, 200));
+    const courseId = strArg(args.course_id);
+    const sourceType = strArg(args.source_type);
+
+    const filters: [string, string][] = [["content", `ilike.%${query}%`]];
+    // `source_type` is in this route's OWN `filters` list (d1.ts:352), so this is server-side.
+    if (sourceType) filters.push(["source_type", `eq.${sourceType}`]);
+
+    // THE COURSE SCOPE IS A CLIENT-SIDE POST-FILTER, and it has to be. The chunks table has no
+    // course_id column; the link is `metadata.topic_id`, and a topic IS a course (TopicDetail.tsx
+    // passes the route's topicId straight in as course_id to assignments/modules/class_schedules;
+    // every upload path passes topicId: courseId; extractContent writes that value into both
+    // extracted_content.topic_id and every chunk's metadata.topic_id). d1 cannot filter a jsonb
+    // PATH -- `metadata` is filterable by NAME, so d1 would build `"metadata" ILIKE $1`, and jsonb
+    // has no ~~* operator, which is a 500. So the ilike bounds the fetch server-side and the course
+    // narrows it here. Over-fetch when scoping, or a course with few hits returns nothing while a
+    // wider read had them.
+    const fetchLimit = courseId ? Math.min(limit * 5, 500) : limit;
+    const r = await nexusGet("assistant-knowledge-chunks", filters, {
+      // created_at ONLY. `updated_at` is in d1's COMMON list and is therefore ACCEPTED as an order
+      // name on every table -- and this table does not have the column (002_app_tables.sql:296),
+      // so it is accepted and then fails in Postgres.
+      order: "created_at.desc",
+      limit: fetchLimit,
+    });
+    if (!r.ok) return { ok: false, error: r.error };
+
+    const scanned = r.rows.length;
+    const scoped = courseId
+      ? r.rows.filter((row) => {
+          const md = row.metadata;
+          const topic = md && typeof md === "object" ? (md as Record<string, unknown>).topic_id : undefined;
+          return str(topic) === courseId;
+        })
+      : r.rows;
+
+    const passages = scoped.slice(0, limit).map(stripEmbedding);
+
+    return {
+      ok: true,
+      query,
+      match_type: "literal_substring",
+      course_id: courseId || undefined,
+      source_type: sourceType || undefined,
+      scanned,
+      count: passages.length,
+      truncated: scoped.length > passages.length || undefined,
+      passages,
+      note:
+        passages.length === 0
+          ? `Nothing in the indexed material contains the literal text "${query}"${courseId ? " for that course" : ""}. This is a WORD match, not a meaning match — say that the word does not appear and TRY ANOTHER WORDING before telling the owner the topic is missing from his knowledge base. get_nexus_knowledge_base will show whether the document is indexed at all.`
+          : undefined,
+    };
+  }
+
+  // A-RAG-5 -- "what's in my knowledge base for this course?"
+  //
+  // A DIFFERENT TABLE FROM A-RAG-1 ON PURPOSE. The owner is asking which DOCUMENTS are indexed;
+  // chunks are fragments of those documents, so answering from chunks is wrong in kind and not
+  // merely in shape. content.extracted_content is one row per analysed file and its `topic_id` IS
+  // the course id -- and unlike the chunks' metadata it is a real COLUMN in this route's `filters`
+  // list (d1.ts:172), so the course scope here is server-side.
+  if (name === "get_nexus_knowledge_base") {
+    const courseId = strArg(args.course_id);
+    const limit = Math.max(1, Math.min(numArg(args.limit) ?? 100, 500));
+    const filters: [string, string][] = [];
+    if (courseId) filters.push(["topic_id", `eq.${courseId}`]);
+
+    const [docs, courses] = await Promise.all([
+      nexusGet("extracted-content", filters, { order: "created_at.desc", limit }),
+      nexusGet("courses"),
+    ]);
+    if (!docs.ok) return { ok: false, error: docs.error };
+    const courseName = new Map<string, string>();
+    if (courses.ok) for (const c of courses.rows) courseName.set(str(c.id), str(c.name));
+
+    // PROJECTED, NOT PASSED THROUGH. A d1 GET is `SELECT *` and an extracted_content row carries
+    // atoms, v2_extraction_data, case_facts_statistics, case_players, study_questions,
+    // key_definitions and two comprehensive summaries (001_d1_content.sql:58). A dozen of those is
+    // larger than the answer, so the listing reports WHICH rich fields a document has and the model
+    // asks for a specific one rather than being handed everything.
+    const documents = docs.rows.map((d) => ({
+      id: str(d.id),
+      file_name: d.file_name ?? null,
+      content_type: d.content_type ?? null,
+      course_id: str(d.topic_id) || null,
+      course_name: courseName.get(str(d.topic_id)) ?? null,
+      is_case_analysis: d.is_case_analysis ?? null,
+      extracted_at: d.extracted_at ?? d.created_at ?? null,
+      extracted: EXTRACTED_CONTENT_FIELDS.filter((f) => hasContent(d[f])),
+      // `extracted-content` is the one route in this file carrying anonUnion (d1.ts:171), so the
+      // owner clause widens to `(user_id = $1 OR user_id = ANON_OWNER)` and a read can return the
+      // shared demo corpus alongside the owner's own. Flagged rather than dropped: presenting demo
+      // material as the owner's coursework is the same class of error as the stale journey fork
+      // this bridge exists to remove, and silently dropping rows he CAN see is its own surprise.
+      shared_sample: str(d.user_id) === NEXUS_ANON_OWNER || undefined,
+    }));
+
+    return {
+      ok: true,
+      course_id: courseId || undefined,
+      course_name: courseId ? (courseName.get(courseId) ?? null) : undefined,
+      count: documents.length,
+      truncated: documents.length >= limit || undefined,
+      documents,
+      note:
+        documents.length === 0
+          ? "No analysed documents are indexed for that scope. Report it as 'nothing is indexed there' and state the scope — if the owner named a course, confirm you resolved the right course_id with get_nexus_courses first. Files he merely HOLDS without having analysed them are a different question: use get_nexus_library."
+          : "Each entry lists which extractions exist for that document under `extracted`; the text itself is not included here. Search it with search_nexus_knowledge.",
+    };
+  }
+
+  // A-RAG-3 -- "summarise the case-study analysis you ran on Marketing Strategy".
+  //
+  // The row has NO title and NO course: content.case_study_analyses is assignment_id, user_id and
+  // sixteen long text columns (002_app_tables.sql:207). So a NAME cannot be resolved here, and the
+  // only route from a name to an assignment_id is get_nexus_assignments{title}, which already asks
+  // the owner which course he means when a title matches several. Same refusal as
+  // get_nexus_writer_transcript, for the same reason: reading a different case brief's analysis
+  // back as "the one on Marketing Strategy" is a confidently-wrong answer, not a partial one.
+  if (name === "get_nexus_case_study_analysis") {
+    const assignmentId = strArg(args.assignment_id);
+    if (!assignmentId) {
+      return {
+        ok: false,
+        error: "assignment_id_required",
+        note: "Resolve the assignment first with get_nexus_assignments{title} — it will ask the owner which course he means if the title matches more than one — then call this again with that id.",
+      };
+    }
+    const wanted = Array.isArray(args.sections)
+      ? new Set(
+          (args.sections as unknown[])
+            .map((x) => strArg(x))
+            .filter((x) => (CASE_STUDY_SECTIONS as readonly string[]).includes(x)),
+        )
+      : new Set<string>();
+    const maxChars = Math.max(200, Math.min(numArg(args.max_chars) ?? 4000, 50_000));
+
+    const r = await nexusGet("case-study-analyses", [["assignment_id", `eq.${assignmentId}`]]);
+    if (!r.ok) return { ok: false, error: r.error };
+    const row = r.rows[0];
+    if (!row) {
+      return {
+        ok: true,
+        assignment_id: assignmentId,
+        count: 0,
+        sections: {},
+        note: "No case-study analysis has been run for that assignment. Say that rather than that the assignment has no case — the analysis is a thing Nexus RUNS, and it may simply not have been run yet.",
+      };
+    }
+
+    const sections: Record<string, string> = {};
+    const truncated: string[] = [];
+    const omitted: string[] = [];
+    for (const f of CASE_STUDY_SECTIONS) {
+      const raw = row[f];
+      const text = typeof raw === "string" ? raw : raw == null ? "" : JSON.stringify(raw);
+      if (!text.trim()) continue;
+      // A section the caller NAMED comes back whole; everything else is trimmed. Trimming is
+      // REPORTED per section rather than done quietly -- a model that summarises the first 4000
+      // characters as though they were the document is the failure this reporting exists to stop.
+      if (wanted.size && !wanted.has(f)) {
+        omitted.push(f);
+        continue;
+      }
+      if (!wanted.has(f) && text.length > maxChars) {
+        sections[f] = text.slice(0, maxChars);
+        truncated.push(f);
+      } else {
+        sections[f] = text;
+      }
+    }
+
+    return {
+      ok: true,
+      assignment_id: assignmentId,
+      updated_at: row.updated_at ?? null,
+      completed_sections: row.completed_sections ?? null,
+      count: Object.keys(sections).length,
+      sections,
+      truncated_sections: truncated.length ? truncated : undefined,
+      available_sections: omitted.length ? omitted : undefined,
+      note: truncated.length
+        ? `These sections were TRIMMED to ${maxChars} characters and are incomplete: ${truncated.join(", ")}. Do not summarise a trimmed section as though it were the whole thing — call this again with sections:["<name>"] to read one in full.`
+        : Object.keys(sections).length === 0
+          ? "A case-study analysis row exists for that assignment but every section is empty. Say exactly that — an empty analysis and a failed read look identical from here."
           : undefined,
     };
   }

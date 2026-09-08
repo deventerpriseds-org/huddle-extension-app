@@ -38,6 +38,7 @@ import {
   GET_NEXUS_ASSIGNMENTS_TOOL,
   GET_NEXUS_SLIDE_NOTES_TOOL,
 } from "../src/features/huddle/lib/nexus/nexus.server";
+import { LIST_ARTIFACTS_TOOL } from "../src/features/huddle/lib/artifacts/artifact-tool";
 import { readFileSync } from "node:fs";
 
 let pass = 0;
@@ -68,7 +69,7 @@ t("url only -> zero tools", nexusReadTools().length, 0);
 setEnv({ NEXUS_OWNER_ID: "abc" });
 t("owner only -> zero tools", nexusReadTools().length, 0);
 setEnv({ NEXUS_API_URL: "https://x", NEXUS_OWNER_ID: "abc" });
-t("both set -> eight tools", nexusReadTools().length, 8);
+t("both set -> eleven tools", nexusReadTools().length, 11);
 
 console.log("=== PART 2 — VOICE DRIFT: every tool defined on text is reachable on voice ===");
 const voiceSrc = readFileSync("src/features/huddle/lib/voice/realtime-tools.server.ts", "utf8");
@@ -138,7 +139,7 @@ globalThis.fetch = origFetch;
 
 console.log("=== PART 5 — an unknown name is refused, not silently proxied ===");
 t("unknown tool", ((await executeNexusTool("get_nexus_everything", {}, "UTC")) as { error?: string }).error, "unknown_nexus_tool_get_nexus_everything");
-t("NEXUS_TOOL_NAMES has exactly 8", NEXUS_TOOL_NAMES.size, 8);
+t("NEXUS_TOOL_NAMES has exactly 11", NEXUS_TOOL_NAMES.size, 11);
 t(
   "every advertised tool is dispatchable (no definition without a name entry)",
   (nexusReadTools() as { name: string }[]).filter((x) => !NEXUS_TOOL_NAMES.has(x.name)).length,
@@ -380,6 +381,143 @@ t("with an assignment it reads /api/writer-transcript", calls[0].includes("/api/
 t("assignmentId is camelCase for that endpoint", calls[0].includes("assignmentId=a1"), true);
 t("phase is forwarded", calls[0].includes("phase=reviewer"), true);
 t("transcript rows are returned as messages", wt.count, 2);
+
+console.log("=== PART 8 — A-RAG rows: the knowledge base, and what it can and cannot do ===");
+
+// --- A-RAG-1. The two things that make this tool honest: the raw 1536-float embedding never
+//     reaches the model, and the search is described (and reported) as LITERAL, not semantic.
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/assistant-knowledge-chunks": [
+    { id: "k1", content: "Grading breakdown: 40% exam", source_type: "summary",
+      metadata: { topic_id: "c1", file_name: "cf-syllabus.pdf" }, embedding: [0.1, 0.2, 0.3], created_at: "2026-09-01" },
+    { id: "k2", content: "Grading is on a curve", source_type: "atom",
+      metadata: { topic_id: "c2" }, embedding: [0.4, 0.5], created_at: "2026-09-02" },
+  ],
+});
+const kb = (await executeNexusTool("search_nexus_knowledge", { query: "grading" }, "UTC")) as {
+  passages: Record<string, unknown>[]; match_type: string; count: number;
+};
+t("chunk search is a server-side ilike on content", calls[0].includes('["content","ilike.%grading%"]'), true);
+t("it orders on created_at (updated_at does not exist on this table)", calls[0].includes("order=created_at.desc"), true);
+t("NO order on updated_at — d1 accepts the name and Postgres then fails", calls[0].includes("updated_at"), false);
+t("it never filters on metadata (jsonb has no ILIKE operator — that is a 500)", calls[0].includes('"metadata"'), false);
+t("the owner still comes from config, not the args", calls[0].includes("owner=owner-uuid"), true);
+// THE GUARD. /api/d1/{table} is a bare `SELECT *` with no projection, so every chunk row arrives
+// carrying its pgvector embedding — 1536 floats each. Nothing downstream wants it and it would
+// dominate the tool result the model has to read.
+t("the raw embedding vector is STRIPPED from every passage",
+  kb.passages.some((r) => "embedding" in r), false);
+t("...while the content itself survives", kb.passages.every((r) => typeof r.content === "string"), true);
+t("the result names the match type so the model cannot assume semantic search", kb.match_type, "literal_substring");
+
+// The course scope is a CLIENT-SIDE filter on metadata.topic_id — a topic IS a course — because
+// d1 cannot filter a jsonb path.
+calls = [];
+const kbScoped = (await executeNexusTool(
+  "search_nexus_knowledge", { query: "grading", course_id: "c1" }, "UTC",
+)) as { count: number; scanned: number; passages: { id: string }[] };
+t("a course scope keeps only chunks whose metadata.topic_id matches", kbScoped.count, 1);
+t("...and it is the right one", kbScoped.passages[0]?.id, "k1");
+t("the unscoped scan size is reported, so a narrow result is explainable", kbScoped.scanned, 2);
+
+calls = [];
+globalThis.fetch = route({ "/api/d1/assistant-knowledge-chunks": [] });
+const kbEmpty = (await executeNexusTool("search_nexus_knowledge", { query: "waffles" }, "UTC")) as { note?: string };
+t("an empty search says the WORD is absent, not the topic", /WORD match/.test(kbEmpty.note ?? ""), true);
+t("...and tells the model to try another wording first", /ANOTHER WORDING/.test(kbEmpty.note ?? ""), true);
+
+calls = [];
+const kbNoQuery = (await executeNexusTool("search_nexus_knowledge", {}, "UTC")) as { error?: string };
+t("a search with no query is REFUSED", kbNoQuery.error, "query_required");
+t("...and nothing was fetched", calls.length, 0);
+
+// --- A-RAG-5. A DIFFERENT table on purpose: the owner is asking which DOCUMENTS are indexed.
+//     topic_id is a real column in that route's own `filters` list, so this scope is server-side.
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/extracted-content": [
+    { id: "e1", user_id: "owner-uuid", file_name: "cf-syllabus.pdf", topic_id: "c1",
+      content_type: "document", quick_summary: "x", atoms: [{ q: 1 }], key_terms: [], case_players: {} },
+    { id: "e2", user_id: "00000000-0000-0000-0000-000000000000", file_name: "demo.pdf", topic_id: "c1" },
+  ],
+  "/api/d1/courses": [{ id: "c1", name: "Corporate Finance" }],
+});
+const base = (await executeNexusTool("get_nexus_knowledge_base", { course_id: "c1" }, "UTC")) as {
+  documents: { file_name: unknown; course_name: unknown; extracted: string[]; shared_sample?: boolean }[];
+  course_name?: unknown;
+};
+t("the course scope is a SERVER-side topic_id filter", calls[0].includes('["topic_id","eq.c1"]'), true);
+t("the course id is resolved to a NAME the owner can recognise", base.course_name, "Corporate Finance");
+t("only NON-EMPTY extractions are listed ([] and {} are column DEFAULTS)",
+  base.documents[0].extracted.join(","), "quick_summary,atoms");
+// anonUnion widens the owner clause to include the zero-UUID sentinel, so a read can return the
+// shared demo corpus. Flagged, not silently dropped and not silently presented as the owner's.
+t("a sentinel-owner row is FLAGGED as a shared sample", base.documents[1].shared_sample, true);
+t("...and the owner's own row is not", base.documents[0].shared_sample, undefined);
+
+calls = [];
+globalThis.fetch = route({ "/api/d1/extracted-content": [], "/api/d1/courses": [] });
+const baseEmpty = (await executeNexusTool("get_nexus_knowledge_base", {}, "UTC")) as { note?: string };
+t("an empty knowledge base points at get_nexus_library rather than claiming he has nothing",
+  /get_nexus_library/.test(baseEmpty.note ?? ""), true);
+
+// --- A-RAG-3. Same refusal as the writer transcript: the row has no title, so a NAME cannot be
+//     resolved here and guessing would read another case brief back as this one.
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/case-study-analyses": [
+    { id: "cs1", assignment_id: "a1", case_analysis: "A".repeat(9000), outline: "short outline",
+      draft_writeup: "", completed_sections: ["outline"], updated_at: "2026-09-05" },
+  ],
+});
+const csNoId = (await executeNexusTool("get_nexus_case_study_analysis", {}, "UTC")) as { error?: string };
+t("a case-study read without an assignment is REFUSED", csNoId.error, "assignment_id_required");
+t("...and nothing was fetched (no reading of another case's analysis)", calls.length, 0);
+
+const cs = (await executeNexusTool(
+  "get_nexus_case_study_analysis", { assignment_id: "a1", max_chars: 500 }, "UTC",
+)) as { sections: Record<string, string>; truncated_sections?: string[]; note?: string };
+t("it filters server-side on assignment_id", calls[0].includes('["assignment_id","eq.a1"]'), true);
+t("an empty section is omitted rather than returned blank", "draft_writeup" in cs.sections, false);
+t("a long section is TRIMMED to max_chars", cs.sections.case_analysis.length, 500);
+t("...and the trim is REPORTED, never silent", (cs.truncated_sections ?? []).join(","), "case_analysis");
+t("the note forbids summarising a trimmed section as the whole thing", /Do not summarise a trimmed section/.test(cs.note ?? ""), true);
+t("a short section is returned whole", cs.sections.outline, "short outline");
+
+const csOne = (await executeNexusTool(
+  "get_nexus_case_study_analysis", { assignment_id: "a1", sections: ["case_analysis"], max_chars: 500 }, "UTC",
+)) as { sections: Record<string, string>; truncated_sections?: string[]; available_sections?: string[] };
+t("a NAMED section comes back in FULL, past max_chars", csOne.sections.case_analysis.length, 9000);
+t("...and is not reported as truncated", csOne.truncated_sections, undefined);
+t("the sections left out are named so the model can ask for them", (csOne.available_sections ?? []).join(","), "outline");
+
+globalThis.fetch = route({ "/api/d1/case-study-analyses": [] });
+const csNone = (await executeNexusTool("get_nexus_case_study_analysis", { assignment_id: "zz" }, "UTC")) as { note?: string };
+t("no analysis row says the analysis was never RUN, not that there is no case",
+  /may simply not have been run/.test(csNone.note ?? ""), true);
+
+console.log("=== PART 9 — B-OPS-2: list_artifacts reaches BOTH surfaces from ONE executor ===");
+const artifactToolSrc = readFileSync("src/features/huddle/lib/artifacts/artifact-tool.ts", "utf8");
+const artifactServerSrc = readFileSync("src/features/huddle/lib/artifacts/artifacts.server.ts", "utf8");
+t("the schema lives beside create_artifact, not in a new module", artifactToolSrc.includes("LIST_ARTIFACTS_TOOL"), true);
+t("text offers it in mergedTools", textSrc.includes("LIST_ARTIFACTS_TOOL"), true);
+t("text dispatches it", textSrc.includes('c.name === "list_artifacts"'), true);
+t("voice offers it", voiceSrc.includes("raw.push(LIST_ARTIFACTS_TOOL)"), true);
+t("voice adds it to NATIVE (else it is journey-proxied and 'broken')", voiceSrc.includes('"list_artifacts",'), true);
+t("voice dispatches it", voiceSrc.includes('name === "list_artifacts"'), true);
+t("BOTH surfaces call the SAME executor, so they cannot drift",
+  textSrc.includes("listArtifactsForTool") && voiceSrc.includes("listArtifactsForTool"), true);
+// The same identity rule as the Nexus owner id: listArtifacts scopes every row by email, so an
+// argument-supplied email would be a read of another user's documents.
+const artKeys = Object.keys(
+  (JSON.parse(JSON.stringify(LIST_ARTIFACTS_TOOL)) as { parameters: { properties: Record<string, unknown> } }).parameters.properties,
+).map((k) => k.toLowerCase().replace(/[_-]/g, ""));
+t("list_artifacts exposes NO identity parameter",
+  artKeys.find((k) => ["owner", "user", "userid", "email", "useremail", "caller"].includes(k)) ?? "none", "none");
+t("the executor resolves the email from the CALLER", artifactServerSrc.includes("resolveTaskEmail(caller"), true);
+t("a store failure is reported as a failed READ, not as an empty shelf",
+  artifactServerSrc.includes("artifact_store_unavailable"), true);
 
 globalThis.fetch = origFetch;
 

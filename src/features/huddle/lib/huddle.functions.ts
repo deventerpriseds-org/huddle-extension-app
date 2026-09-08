@@ -68,7 +68,7 @@ import {
   tavilySearch,
   type TavilySearchArgs,
 } from "./tavily-search.functions";
-import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
+import { CREATE_ARTIFACT_TOOL, LIST_ARTIFACTS_TOOL } from "./artifacts/artifact-tool";
 import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "./calendar/tools";
 import {
   DELEGATE_TO_SPECIALIST_TOOL,
@@ -3250,6 +3250,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           createHuddleTaskTool,
           createHuddleTasksTool,
           CREATE_ARTIFACT_TOOL,
+          // B-OPS-2 -- read back what the agents already produced. The write half
+          // (CREATE_ARTIFACT_TOOL) has been here since the artifact store shipped; nothing could
+          // LIST them, so an agent could save a document and then had no way to see it or a
+          // teammate's again.
+          LIST_ARTIFACTS_TOOL,
           DELEGATE_TO_SPECIALIST_TOOL,
           FLAG_BLOCKER_TOOL,
           CONFIRM_TASK_INTENT_TOOL,
@@ -3300,6 +3305,15 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
           if (c.name === "delegate_to_specialist") {
             return await dispatchDelegate(c.arguments);
+          }
+          if (c.name === "list_artifacts") {
+            // Read-only, so no ledger claim (claimAction guards MUTATING actions). The executor is
+            // shared with the voice path -- see listArtifactsForTool's header for why it is not
+            // duplicated per surface. The caller's email is resolved inside it and is never an arg.
+            const { listArtifactsForTool } = await import("./artifacts/artifacts.server");
+            return JSON.stringify(
+              await listArtifactsForTool(data.caller, c.arguments as Record<string, unknown>),
+            );
           }
           if (c.name === "create_artifact") {
             const a = c.arguments as Record<string, unknown>;
