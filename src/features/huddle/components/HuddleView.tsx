@@ -35,6 +35,7 @@ import {
   listCeremonyRuns,
 } from "../lib/huddle.functions";
 import { uploadChatAttachmentFn } from "../lib/artifacts/attachments.functions";
+import { userTurnTs } from "../lib/turn-identity";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
@@ -1018,6 +1019,8 @@ function Composer({ huddle }: { huddle: Huddle }) {
     result: TurnResult,
     final: boolean,
     userText?: string | null,
+    /** Server-supplied timestamp, for a turn id that does not embed one (cross-app). */
+    updatedMs?: number,
   ) {
     const state = useHuddleStore.getState();
     // Re-add the user's OWN message for this turn from the durable store. The turn (chat.pending_turns)
@@ -1030,8 +1033,13 @@ function Composer({ huddle }: { huddle: Huddle }) {
     // agent-INITIATED turn (autowork/standup/groom/followup) stores its internal directive in the same
     // payload field — surfacing it would render the directive as a "You" bubble. The server already nulls
     // userText for those; this is defense-in-depth in case a stale server build still sends it.
-    const um = /^u-(\d+)$/.exec(turnId);
-    const ut = um ? (userText ?? "").trim() : "";
+    // `userTurnTs` replaces the inline `/^u-(\d+)$/` this used to run. That regex answered TWO
+    // questions at once -- "is this the user talking" and "at what time" -- and both answers were
+    // wrong for a turn forwarded from another app: its id is `xapp-<sha>`, so the user's half was
+    // dropped and, had the shape check alone been widened, the message would have rendered at NaN.
+    // Agent-initiated turns still return null and still never render as "You".
+    const uts = userTurnTs(turnId, updatedMs ?? 0);
+    const ut = uts !== null ? (userText ?? "").trim() : "";
     if (ut) {
       const existing = state.messages.find((m) => m.id === turnId);
       if (!existing || existing.text !== ut) {
@@ -1040,7 +1048,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
           huddleId: huddle.id,
           author: { kind: "user" },
           text: ut,
-          ts: existing?.ts ?? Number(um![1]),
+          ts: existing?.ts ?? uts!,
         });
       }
     }
@@ -1356,7 +1364,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
         for (const t of turns) {
           cursor = Math.max(cursor, t.updated_ms);
           if (t.status === "done") {
-            applyTurnStream(t.id, t.replies, t.result as TurnResult, true, t.userText);
+            applyTurnStream(t.id, t.replies, t.result as TurnResult, true, t.userText, t.updated_ms);
             clearPendingFor(t.id);
           } else if (t.status === "error") {
             toast.error((t.error as string) || "That turn hit an error.");
@@ -1364,7 +1372,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
           } else {
             // 'partial' | 'running' — stream the replies produced so far and KEEP the typing indicator
             // up (do NOT clear pending) until the turn reaches 'done'/'error'.
-            applyTurnStream(t.id, t.replies, null, false, t.userText);
+            applyTurnStream(t.id, t.replies, null, false, t.userText, t.updated_ms);
           }
         }
       } catch {

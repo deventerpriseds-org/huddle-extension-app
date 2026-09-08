@@ -2689,3 +2689,42 @@ That lane's first `H12` matched a substring the *triples* INSERT also satisfies,
 protecting nothing when the mutation had simply landed elsewhere. Rewritten to parse the two column
 lists separately, both then FIRED. **An anchor that is not unique to the statement under test makes
 the mutation result meaningless in the alarming direction.**
+
+### The forwarded turn was persisted, remembered and attributed — then rendered as half a conversation
+
+**Live, measured 2026-09-08 after the four-PR merge** (huddle `932c9b4`, nexus `ece6e71`, both deploys
+green). Probe run `34222975557` pushed a marked turn through the deployed bridge; `db-query`
+`34223230387` found it: `pending_turns` **1**, `rag_chunks` **1**, `owner_entra_oid` set **1**. B1, C1
+and D1 confirmed in production, which is what the owner meant by "memory now works".
+
+**The next defect was in the same feature and had no test that could catch it.** The owner: *"the
+huddle chat only has her messages from nexus not my messages ... it's only one side of the
+conversation."*
+
+Three copies of `/^u-(\d+)$/` — `getTurnUpdates`, `HuddleView.applyTurnStream`, `HuddleApp`'s poll —
+decided whether a durable turn carries a genuine user utterance. **The id SHAPE was standing in for
+"is this the user talking"**, which held only while every user turn came from `submit()`. A forwarded
+turn is the user talking and its id is `xapp-<sha>`, so all three nulled it.
+
+The id was doing a **second** job nobody had separated out: `Number(um[1])` was the display
+timestamp. An `xapp-` id embeds none, so widening the shape check alone would have rendered the
+message at `NaN`. `lib/turn-identity.ts` now owns both jobs, takes no node import (two callers are
+browser bundles), and `cross-app/turn-gate.ts` re-exports its prefix rather than holding a second
+spelling.
+
+### Hardening — a PROXY for identity survives exactly as long as there is one front door
+
+The regex was correct when written and correct for its stated purpose: keeping an agent-initiated
+turn's INTERNAL DIRECTIVE ("This task is on the board for you: ... confirm with the user") out of the
+owner's mouth. It broke because a second, legitimate producer of user utterances appeared, and the
+rule keyed on where turns came FROM rather than on what they ARE.
+
+**Rule: when a check asks "is this X" but tests an id shape, a prefix, or a source, it is a proxy —
+and it will break the day a second producer of genuine X appears.** The cost is asymmetric and that
+is why it went unseen: the false-negative direction (drop the user's words) is silent, while the
+false-positive direction (render a directive as "You") is loud. Both are asserted now, five
+agent-initiated prefixes among them, and all three mutations FIRED.
+
+Same shape as the `data.agents` gate two defects earlier: both were server logic that quietly did
+nothing on a path its author never had. **The generalisation: adding a second front door invalidates
+every rule that was allowed to assume one.**
