@@ -42,9 +42,14 @@ import { readFileSync } from "node:fs";
 
 let pass = 0;
 let fail = 0;
+// The "ok"/"not ok" words are load-bearing, not decoration: scripts/mutate.sh attributes a
+// mutation to a NAMED test by grepping for `not ok .*<name>` (TAP) or `FAIL <name>`. With only the
+// ✔/✘ glyphs it could not read this suite at all and returned UNDETERMINED for every guard here --
+// which is correctly NOT "inert", but it means nothing in the file could be mutation-proved.
+// Measured 2026-09-08: five mutations, five UNDETERMINED, before this line was changed.
 const t = (name: string, got: unknown, want: unknown) => {
   const ok = String(got) === String(want);
-  console.log(`  ${ok ? "✔" : "✘"} ${name}: ${got}${ok ? "" : `  (EXPECTED ${want})`}`);
+  console.log(`  ${ok ? "✔ ok" : "✘ not ok"} ${name}: ${got}${ok ? "" : `  (EXPECTED ${want})`}`);
   ok ? pass++ : fail++;
 };
 
