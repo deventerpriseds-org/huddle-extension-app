@@ -631,11 +631,21 @@ assertion), `chainGateSetting` (the `user_settings` column that switches that ch
 and the thing it toggles cannot drift), `requires`/`produces`, and `workflowTypes`.
 
 **The parity test is real and is the part that answers the owner's coverage question.**
-`nexus-hub/api/scripts/assignment-actions.test.cjs`, 39 checks, in the api build chain. It walks
+`nexus-hub/api/scripts/assignment-actions.test.cjs`, **42 checks**, in the api build chain. It walks
 nexus's own `app.http` `route:` values **and** nexus's own `nexusFnUrl(...)` client call sites, so
-an action added to either side with no registry row **fails the build**. Four mutations, all FIRED:
-removing the chain rule, dropping an action the client calls, naming a route the API does not
-serve, and removing the `case_study` chain exclusion.
+an action added to either side with no registry row **fails the build**. **Eight mutations, all
+FIRED.**
+
+> **CORRECTION, stamped 2026-09-08.** This paragraph first read *"39 checks"* and made the
+> either-side claim when only ONE direction was asserted. An independent verifier disproved it by
+> adding a real `app.http` route to nexus and running the full build: **39 passed, 0 failed, exit
+> 0** — nothing failed and nothing was reported. `C1` asserted registry ⊆ API; the API ⊆ registry
+> direction, which is the one a new nexus endpoint arrives from, did not exist. `C5`/`C6` now close
+> it, and the new guard immediately found `generate-peer-reply` — a real assignment action the API
+> served with no registry row. Two further guards (`F2`/`F3`) were **INERT** against a
+> comment-out mutation and are now comment-stripped. The claim above is true as of this stamp; it
+> was not true when it was written, and the difference matters to anyone deciding how much to trust
+> a parity test they did not run themselves.
 
 **Two facts from nexus that this spec's §7.3 gate design must absorb:**
 
