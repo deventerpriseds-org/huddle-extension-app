@@ -105,6 +105,25 @@ export function crossAppAgentBackends(members: string[]): Record<string, CrossAp
         fileSearch: true,
         sharing: "shared" as const,
       },
+      // THE SAME DEFECT, ONE FIELD OVER, found by the 2026-09-08 status audit. `rag` was absent and
+      // made the forward memory-blind; `journey` was absent and made it TOOL-blind. Neither omission
+      // was deliberate -- there was never a comment claiming otherwise, only silence, which is how
+      // an omission survives a review that reads what IS there.
+      //
+      // Consequence measured across the 77-row ledger: 13 Part B scenarios were NOT BUILT for this
+      // reason alone, because `ensureJourneyTools()` filters members on `agents[id].journey.enabled`
+      // and no member had the key at all -- so a forwarded turn saw NONE of journey's catalogue.
+      //
+      // Worse than absent, and the reason this is not a nice-to-have: `create_huddle_task` skipped
+      // its journey write, fell to the Huddle-only card path, returned ok:true -- and
+      // `projectTurnResult` then dropped `suggestedTasks` before the reply left Huddle. The user was
+      // told the task was added and NO ROW EXISTED ANYWHERE. That path is closed by opening this one.
+      //
+      // No new exposure: journey tools act as the server-held CROSS_APP_TURN_SUBJECT, the same
+      // identity the memory writes above already use, and the route still refuses any caller-supplied
+      // identity at any depth. Mirrors `defaultAgents()`, which is the contract this function exists
+      // to reproduce.
+      journey: { enabled: true },
     };
   }
   return out;
@@ -120,6 +139,19 @@ export type CrossAppAgentBackend = {
     fileSearch: boolean;
     sharing: "shared";
   };
+  /**
+   * REQUIRED, not optional, and that is the point.
+   *
+   * Both cross-app defects so far were a MISSING FIELD on this object -- `rag` (memory-blind) and
+   * then `journey` (tool-blind, and the cause of a create that reported success and stored nothing).
+   * An optional field cannot fail a typecheck when it is left out, so the type was silent on exactly
+   * the mistake being made twice. Declaring it required means the compiler now refuses the third
+   * instance of this shape rather than shipping it.
+   *
+   * Add any FUTURE per-agent capability flag here as required too, and let `crossAppAgentBackends`
+   * decide its value deliberately -- an omission should be a build error, never a runtime surprise.
+   */
+  journey: { enabled: boolean };
 };
 
 /** Idempotency-key prefix for a forwarded turn. Visible in `chat.pending_turns.id`, so a row's
