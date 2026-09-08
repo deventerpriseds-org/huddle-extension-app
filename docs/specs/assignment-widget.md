@@ -62,10 +62,25 @@ request. The owner's own follow-up question was *"how will you make sure all of 
 covered?"* — so the deliverable is a mechanism that makes the claim checkable by running something,
 not a table in a document that is true on the day it is written.
 
-**OBSERVATION (measured this session).** The nexus assignment action surface is **109 interactive
-controls across six components**, of which **49 are in `AgenticWriterModal.tsx` alone** (3,305
-lines), against only **8 named `handle*` functions** in that file. The controls vastly outnumber
-the named handlers, which means most actions are inline closures with no stable name to enumerate.
+**OBSERVATION (measured this session, in this repo checkout).** The nexus assignment action
+surface is somewhere between **70 and 129 interactive controls**, depending where you draw the
+line, and the ambiguity is itself part of the finding:
+
+| Counting rule | Components | Controls |
+|---|---|---|
+| `onClick`/`onCheckedChange`/`onValueChange`/`onSelect`/`onSubmit` | 9 assistant components | **70** |
+| the above **+** `onChange`/`onOpenChange`/`onKeyDown`/`onBlur`/`onDrop`/`onPaste` | 11 assistant components | **129** |
+
+`AgenticWriterModal.tsx` is **3,305 lines** and holds **38 (narrow) / 58 (broad)** of them by
+itself, against exactly **8** named `handle*` functions in the whole file — `handleSSEProgress`,
+`handleRestoreOutline`, `handleUploadToOpenAI`, `handleFileUpload`, `handleWriteFullDraft`,
+`handleRequirementsApproved`, `handleReset`, `handleQCCheck`.
+
+*(A figure of "109 across six components" was carried into this task from an earlier measurement.
+I could not reproduce that exact number and am reporting my own counts instead, with the regex that
+produced each. The disagreement does not matter to the argument and the structural fact is stable
+under every rule I tried: **controls outnumber named handlers by roughly an order of magnitude**,
+so most actions are inline closures with no stable name to enumerate.)*
 
 **INTERPRETATION.** Any spec that answers "how will you cover all of these?" with a hand-written
 list has already failed: nobody can maintain a 109-row table against a file where the actions have
