@@ -770,19 +770,34 @@ check(
 // only adds the column to the INSERT list passes D1 and fails D2: every repeated utterance takes
 // the ON CONFLICT branch and would stay NULL-owned forever.
 const storeSrc = readFileSync("src/features/huddle/lib/rag/azure-pg.server.ts", "utf8");
+// Parsed out of the two INSERTs SEPARATELY, and that is not fussiness: the first version of H12
+// asserted `storeSrc.includes("author_agent_ids, owner_entra_oid)")`, which the TRIPLES insert also
+// satisfies -- so deleting the column from writeChunk's `cols` left the guard green. Measured as
+// INERT by mutate.sh (M4) before this rewrite, which is the whole reason mutation-proving is the
+// step never skipped.
+const chunkInsertCols = (storeSrc.match(/const cols = `\(([^`]*)\)`/)?.[1] ?? "")
+  .split(",")
+  .map((c) => c.trim());
+const tripleInsertCols = (storeSrc.match(/INSERT INTO rag_triples \(([^)]*)\)/)?.[1] ?? "")
+  .split(",")
+  .map((c) => c.trim());
 check(
-  "H12 writeChunk INSERTS owner_entra_oid",
-  /INSERT INTO rag_chunks|const cols = `\(scope, agent_id, text, source, embedding, metadata, author_agent_ids, owner_entra_oid\)`/.test(storeSrc) &&
-    storeSrc.includes("author_agent_ids, owner_entra_oid)"),
+  "H12 writeChunk's own INSERT column list carries owner_entra_oid",
+  chunkInsertCols.includes("owner_entra_oid"),
+  chunkInsertCols.join("|"),
+);
+check(
+  "H12b writeTriples' own INSERT column list carries owner_entra_oid",
+  tripleInsertCols.includes("owner_entra_oid"),
+  tripleInsertCols.join("|"),
 );
 check(
   "H13 writeChunk's ON CONFLICT DO UPDATE also stamps owner_entra_oid (AC D2 -- the dedup path)",
   storeSrc.includes("owner_entra_oid = COALESCE(rag_chunks.owner_entra_oid, EXCLUDED.owner_entra_oid)"),
 );
 check(
-  "H14 writeTriples INSERTS and re-stamps owner_entra_oid (AC D4)",
-  storeSrc.includes("author_agent_ids, owner_entra_oid)") &&
-    storeSrc.includes("owner_entra_oid = COALESCE(rag_triples.owner_entra_oid, EXCLUDED.owner_entra_oid)"),
+  "H14 writeTriples re-stamps owner_entra_oid on the dedup path (AC D4)",
+  storeSrc.includes("owner_entra_oid = COALESCE(rag_triples.owner_entra_oid, EXCLUDED.owner_entra_oid)"),
 );
 
 // D5 -- the oid is RESOLVED from identity.profile_emails, never guessed, and NEVER defaulted to
