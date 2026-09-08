@@ -1030,3 +1030,201 @@ the axis explicitly: output format is *"NOT a function of the workflow type."*
    value without the flag would be silently reverted by the next extraction (step 2). This is
    precisely the kind of two-field invariant a registry entry should own rather than a button
    handler.
+
+---
+
+## 9. Editing both ways — the two input paths converge
+
+> *"I should be able to text it or tell it any items to update in the form as well as well as enter
+> it myself."*
+
+### 9.1 One action, two entrances
+
+**PROPOSAL.** Typed instruction and direct widget entry are two *entrances to the same action*, not
+two implementations. Both produce an `{actionId, args}` pair against the registry; from there the
+code path is identical, including `needsConfirmation`.
+
+```
+  "we will focus on my            typing in the widget's
+   football championship"          context box, then blur
+            │                              │
+     intent resolver (§7)          direct bind: the control
+     → {set_context, {text}}       IS registry entry set_context
+            │                              │
+            └──────────┬───────────────────┘
+                       ▼
+        ONE executor: needsConfirmation? → gate : run
+                       ▼
+        nexus call → re-render field → one-line confirmation in chat
+```
+
+**The property this buys:** it is impossible for a typed instruction and a widget control to have
+different semantics, because there is only one set of semantics. If `set_workflow_type` requires
+confirmation, it requires it from both entrances. A bug fixed in one is fixed in both.
+
+**INTERPRETATION.** This is also what makes [§6](#6-mechanism-part-2--the-parity-test-that-fails-on-omission)'s
+assertions 3 and 4 meaningful. "Every entry has a widget affordance AND a natural-language trigger"
+is only a coherent requirement because both are bindings onto the same entry.
+
+### 9.2 The third entrance already exists: composer prefill
+
+**OBSERVATION.** `ConfirmAskRow`'s *Revise* button makes no API call. It calls
+`useHuddleStore.getState().setDraftPrefill(...)` (`HuddleView.tsx:667`), pre-filling the composer
+with `` `I have edits for the task regarding "${ask.taskTitle}": ` ``. The store slice is
+`store.ts:146/271`, and `HuddleView.tsx:911-917` consumes and clears it.
+
+**PROPOSAL.** Every gate's *Revise* uses this same mechanism, prefilled with the stage's own
+context — e.g. `` `For "${title}", change the outline: ` ``. This is the cheapest possible bridge
+between the two paths: a button that produces a typed instruction, which then flows through the
+resolver like any other. **It already exists, it is already the pattern for "I want to change this
+but not with a control", and it needs no new machinery.**
+
+### 9.3 Direct entry and echo
+
+**PROPOSAL.** When the owner edits a field in the widget directly:
+
+- the change commits on blur (not per keystroke), through the same action;
+- the agent posts **one short line** in the thread recording it ("Context updated"), so the
+  conversation stays a complete record of what happened to the assignment;
+- that line is **not** another card. The thread should not accumulate a new assignment card per
+  edit; the existing card re-renders.
+
+**Why the echo matters.** Everything else about the assignment's history is in nexus. If a widget
+edit left no trace in chat, the thread would show an agent responding to instructions that appear
+nowhere — the same "silently dropping the count would misrepresent what the agent actually found"
+principle the checklist's `more` branch records.
+
+---
+
+## 10. Cross-app failure modes
+
+This is Option A's real cost, and the section is written because the failure modes are the part of a
+two-app design that gets discovered in production rather than in a spec.
+
+### 10.1 The outcome contract
+
+**OBSERVATION.** `ConfirmAskRow` already consumes a three-way outcome
+([§2.3](#23-the-gate-precedent-confirmaskrow)), and `invokeJourneyTool` already *produces* that
+shape, normalising an HTTP failure into `{ok:false, output, error}` rather than throwing.
+`nexusGet` produces the same shape with a closed error vocabulary: `nexus_not_configured`,
+`timeout`, `network_error`, `http_<status>`.
+
+**PROPOSAL.** Every widget action returns `{ ok: boolean; error?: string; … }` with the same
+three-way reading, extended by the error vocabulary `nexusGet` already uses. No new contract.
+
+### 10.2 The modes, and what the widget shows
+
+| Mode | Detected by | Widget shows | Buttons | Rationale |
+|---|---|---|---|---|
+| **Not configured** — `NEXUS_API_URL`/`NEXUS_OWNER_ID` unset | `nexusReadConfigured()` false | **no card, no tool** | n/a | The existing rule, quoted: *"a tool the model can see but cannot use is worse than one it never had, because the model will keep retrying it and narrate the failure to the user."* |
+| **Nexus down / unreachable** | `network_error` | snapshot with an explicit "couldn't reach Nexus — showing what I last saw" banner | mutating **disabled**; retry enabled | §8.1: acting on unverified state is the harm |
+| **Nexus slow** | `timeout` (15s in `nexusGet`) | same as down, worded as slow | same | a 15s hang with a live-looking button is worse than a stated timeout |
+| **Auth expired / rejected** | `http_401` | "Nexus needs re-authorising" | mutating disabled; **no automatic retry** | retrying a 401 in a loop is how a rate limit or a lockout gets earned |
+| **Not found** | `http_404` | "this assignment no longer exists in Nexus" | all disabled | the card is now about nothing; offering actions would be a lie |
+| **Partial success** | `ok:true` **with** `error` | the action's success message **plus** the caveat, exactly `ConfirmAskRow`'s middle branch | proceeds | the primary write landed; hiding the caveat overstates, calling it a failure understates |
+| **Draft stream interrupted** | SSE ends without terminal frame | "draft stopped partway" + what was received | *Resume*/*Redraft* | `assignmentAgenticWorkflow` streams SSE and *"There is no poll loop to hang progress off"*; a dropped stream is not a failed draft |
+
+### 10.3 Two rules that are easy to get wrong
+
+**PROPOSAL — reads degrade quietly, writes never do.** A failed reconcile keeps the snapshot and
+says so ([§8.1](#81-reconcile-on-mount--the-checklist-rule-under-option-a)). A failed *write* is
+always surfaced. The checklist's silent-degrade comment is scoped to a refresh and must not be
+generalised to a mutation.
+
+**PROPOSAL — never retry a mutating call automatically.** Reads may retry once on `network_error`.
+Mutations may not: `extract_requirements` and `start_draft` both spend model budget, and neither is
+idempotent by construction. **This is an assumption I could not verify** — I did not establish
+whether `assignmentAgenticWorkflow` deduplicates a repeated call. It is in
+[§12](#12-open-questions-i-could-not-settle-from-the-code) and the conservative default holds until
+it is answered.
+
+**OBSERVATION supporting the caution.** `nexus-hub/api/src/functions/assignmentRuns.ts` exists and
+its header describes *"run-cancel and check-active-run … separate endpoints already ported
+(`/api/cancel-run`, `/api/check-active-run`)"*, and `assignmentAgenticWorkflow`'s header states it
+*"coordinates run state ONLY through OpenAI (the thread's runs), not a DB table."* **INTERPRETATION:**
+there is an in-flight-run concept and a way to ask about it, so the widget should call
+`check-active-run` before starting a draft rather than assuming none is running. Whether that is
+sufficient to make a retry safe is the open question above.
+
+---
+
+## 11. Phasing, and what is explicitly NOT in scope
+
+### 11.1 Phasing, driven by the auth split
+
+The split in [§3.5](#35-direction-1-already-exists--the-read-half-is-built) is the natural phase
+boundary, because it is a boundary in what is *possible* today, not just in what is convenient.
+
+| Phase | Contains | Blocked on |
+|---|---|---|
+| **1 — read-only card** | `show_assignment` tool; the sixth payload kind; the card rendering assignment + requirements + outline + materials; reconcile-on-mount; all buttons disabled with "read-only" | nothing — `nexusGet` and `?owner=` already authorise reads |
+| **2 — registry + tests** | `assignmentActions.ts`; the parity test in `run-tests.mjs` `REQUIRED`; the Huddle test aggregator; the intent fixture + offline harness | nothing |
+| **3 — writes** | the nexus fifth `resolveOwner` source ([§3.3](#33-the-gap-nexus-has-no-credential-for-a-machine-caller-acting-for-a-human)); every mutating action; the four gates live | **the nexus auth change** |
+
+Phase 1 delivers something the owner can see and correct early, and it cannot break anything —
+`nexus.server.ts` is read-only by construction. Phase 2 is where the coverage claim becomes real,
+and it is worth doing before phase 3 so the write actions are registered from the start rather than
+retrofitted. **Phase 3 cannot start until a decision is taken on the nexus auth gate**, and that
+decision is the owner's, not this spec's.
+
+### 11.2 Not in scope, with reasons
+
+| Not doing | Why |
+|---|---|
+| **Mirroring assignment state in Huddle** | The owner chose Option A. Huddle's own `CLAUDE.md` forbids a second writer to a mirrored read-model; an assignment mirror would be that, on another app's canonical data |
+| **Refactoring nexus's assistant UI to render from the registry** | Large refactor of a 3,305-line modal, not requested; [§6.4](#64-the-trade-this-makes-and-what-it-costs) takes the tripwire instead, explicitly |
+| **A format selector in the widget** | `output_format` already has four inputs with a documented precedence ([§8.5](#85-output-format--already-decided-never-re-asked)); a fifth would be a new writer to a settled field |
+| **Editing the draft prose in chat** | The draft is a document; `docxBuilder`/`generateDocument` own its shape and the artifact store owns its review. Chat is the wrong surface for editing a document body |
+| **Grading, submission, or Canvas write-back** | Nothing read this session suggests nexus writes back to Canvas. Out of scope until someone establishes it exists |
+| **Voice-surface parity for the widget's controls** | A widget is visual; its *actions* reach voice for free through `executeNexusTool`, which is *"ONE executor, called by BOTH surfaces"*. Rendering a card in voice is a separate question. **Flagging it deliberately** — that file records *"nine such divergences, all one-directional, all voice"*, so this is the known trap, named rather than ignored |
+| **Retiring journey's `list_pending_assignments`** | `nexus.server.ts` says retiring it is *"a journey-side change and a separate, deliberate step"* |
+| **Any product code in this branch** | This branch is the spec |
+
+---
+
+## 12. Open questions I could not settle from the code
+
+Listed rather than guessed. Each names what would settle it.
+
+1. **Is `assignmentAgenticWorkflow` idempotent on retry?** Decides whether a failed draft may be
+   retried automatically ([§10.3](#103-two-rules-that-are-easy-to-get-wrong)). *Settled by:* reading
+   the run-creation path against `/api/check-active-run`, or one live double-dispatch. Conservative
+   default assumed meanwhile: **no automatic retry of any mutation.**
+2. **What owner id does `NEXUS_OWNER_ID` actually hold, and does one exist per human?** The read path
+   works, so a value is configured; `auth.ts` says `owner` is *"today … the Supabase auth UUID"* with
+   *"a later cross-cutting pass"* to re-key to email. Whether the write bridge should key on the same
+   value, and whether the estate is truly single-user, is a configuration fact.
+   *Settled by:* reading the deployed app setting.
+3. **Which endpoint sets an assignment's context text, and does one exist?** I found
+   `appendAssignmentContextFile.ts` and `assignmentContextToggle.ts` by name and read neither in
+   full. The owner's central example (`set_context`) needs a specific route.
+   *Settled by:* reading those two files. **This is the highest-value unknown in the list** — it is
+   the action the owner named.
+4. **Where do "supplemental files from the list" come from?** `ReferenceFilesSelector.tsx`,
+   `CourseMaterialsSelector.tsx` and `AnalyzedContentSelector.tsx` all exist; which populates the
+   picker, and from which table, I did not establish.
+5. **Are requirements individually addressable?** Fixture row 6 ("that second requirement is wrong")
+   assumes requirement rows have stable ids. `content.assignment_requirements` is named in
+   `assignmentAgenticWorkflow`'s header; I did not read its schema.
+6. **Does `case_study` reach the draft gate at all?** `canAgenticDraft()` returns true only for
+   `essay`, `discussion_post`, `question_response`, and is commented as *"An ALLOW-LIST that fails
+   CLOSED: a type missing here does not fall back … it produces an outline and then stops with no
+   draft, no error and no toast."* `analyzeCaseStudy.ts` and `CaseStudyPanel.tsx` exist, so case
+   studies presumably have their own path — but a widget that offers "Case Study" and then silently
+   produces no draft would reproduce exactly the failure that comment warns about.
+   *Settled by:* reading `analyzeCaseStudy.ts`. **Until then the widget must not present the draft
+   gate for `case_study`.**
+7. **Does the composer accept a message while a card is open without ambiguity?** The resolver
+   defaults to the open card ([§7.2](#72-the-resolution-pipeline)), but Huddle threads are
+   multi-agent and a message may be addressed at an agent, not the card.
+   *Settled by:* deciding whether `@mention`ing an agent suppresses card targeting. **A design
+   decision, not a fact to look up** — and it belongs to the owner.
+
+---
+
+## 13. Section list
+
+0. How to read this document · 1. The request · 2. Ground truth · 3. Architecture (Option A) ·
+4. The sixth payload kind · 5. The action registry · 6. The parity test · 7. Intent → action
+resolution · 8. The staged gates · 9. Editing both ways · 10. Cross-app failure modes ·
+11. Phasing and non-scope · 12. Open questions · 13. This list
