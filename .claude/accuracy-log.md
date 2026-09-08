@@ -45,3 +45,55 @@ native reminder**, not the journey/Huddle full-screen alarm — which is exactly
 seeing. (Journey's full-screen alarm for external events comes from `notification-scheduler` →
 `calendar_event_reminder`, and only after `calendar-delta-sync` pulls the event back into
 `external_calendar_events` — a lagged round-trip, not something `createOutlookEvent` arms directly.)
+
+---
+
+## 2026-09-08 — the log itself was not read, and three misses it had ALREADY catalogued recurred
+
+Owner: *"are you updating and guarding according to the accuracy log and themes it identifies? wasn't
+that a part of the hook instructions?"* It is — Stop-gate clauses **(l) accuracy-log** and
+**(m) theme-mitigation** have been ALWAYS-required since v32 (2026-09-03). Answer: **partially, and
+the gap is the interesting part.**
+
+| | |
+|---|---|
+| `nexus-hub/.claude/accuracy-log.md` | 118 entries, **updated today** (the az `--offset` window defect) |
+| `huddle-extension-app/.claude/accuracy-log.md` | 7 entries, **last touched 2026-08-24** — every huddle-side miss today went unlogged until now |
+
+**Three of today's misses match themes ALREADY IN THE LOG, and I did not read it first.**
+
+| today's miss | the theme it belongs to | prior instances |
+|---|---|---|
+| `turn_1925 = 5` read as "he told Huddle too" — a `LIKE '%1925%'` over a whole JSONB blob, matching ids and timestamps | **"the zero-over-wrong-population pattern"** (2026-09-06) — a count taken over the wrong population | logged as **three in one day**; this is the fourth, and the first in the *non*-zero direction |
+| "zero assignments are due in the future", stated twice, used to argue the date filter was untestable — two were | **"it isn't stored / it needs a new import"** (2026-09-08) — asserting absence about data already present | logged that morning as **five times**; this is the sixth |
+| "batches 5-7 were DEFERRED, correctly" — said from the pre-Option-B plan while eight `BATCH-*-RESULTS.md` files sat in the folder | **"absence is not evidence; read the record"** | the family the SessionStart banner warns about every single turn |
+
+### The structural cause, which is not "I forgot"
+
+**The accuracy log is PER-REPO, and the work is cross-repo.** The zero-over-wrong-population theme
+was logged in `nexus-hub` on 2026-09-06. Today's instance of it happened while I was reasoning about
+`RAG_AI_Agents` from the huddle side. **A theme recorded in one repo's log does not reach a session
+working in the other**, and this integration spans two repos by construction — which is exactly the
+class of work most likely to repeat a theme, because the two halves are read by different sessions.
+
+The Stop gate cannot catch this either: it judges whether the log was UPDATED, not whether it was
+READ, and updating one repo's log satisfies it.
+
+### The guard this earns, stated as a check rather than an intention
+
+**Before answering any "is X true / did Y happen / does Z exist" question in a cross-repo task, grep
+the accuracy log of BOTH repos for the shape of the claim** — not for its subject. The three misses
+above would each have been caught by searching for `zero|absent|never|none` in a log I had not
+opened. Concretely, and cheap enough to actually do:
+
+```
+grep -hiE "zero|absent|never|no rows|not stored|deferred" \
+  /home/user/*/.claude/accuracy-log.md | head -40
+```
+
+**And the narrower rule the second row earns, because it has now cost three separate answers:**
+a measured COUNT of live data expires; a structural fact does not. Two copies of
+*"534 assignments … 0 due in the future"* had been baked into `nexus.server.ts` and
+`nexus-read-tools.test.ts` as though structural, and were quoted back to the owner twice as a reason
+the date filter could not be tested. **Both are now deleted rather than restated** — a count with no
+date and no expiry condition becomes a false constraint on advice.
