@@ -947,6 +947,36 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         const vec = await embed(data.text);
         const source = `huddle:${data.huddleId}`;
 
+        // WHOSE memory this is (AC D1/D4/D5). `001_memory_owner_attribution.sql` added
+        // `owner_entra_oid` to rag_chunks and rag_triples, indexed both and backfilled 627 rows --
+        // and then NOTHING wrote it: `grep -rn owner_entra_oid src/` returned zero hits, so every
+        // row written after the backfill was NULL-owned (2 of the 7 chunks written in the 2 days to
+        // 2026-09-08, and the only NULL rows in the table).
+        //
+        // RESOLVED, NEVER FABRICATED. The column is deliberately keyed on the Entra OBJECT ID, while
+        // a turn carries an EMAIL -- so this is a lookup, not a pass-through.
+        // `resolveObjectIdByEmail` reads `identity.profile_emails` (unique on lower(email)), which is
+        // the map that makes dev@ and von.ellis@ resolve to ONE object id. It returns null on a miss
+        // AND on any DB error, and never throws -- required here, because this whole block is
+        // fire-and-forget: a throw would silently lose the user's words, which is exactly why the
+        // migration declined to add a foreign key.
+        //
+        // It does NOT fall back to "the only profile in the table". That inference is correct today
+        // with one profile and silently wrong the day there are two -- the same reasoning the
+        // migration's own backfill guard applies before declining to guess. NULL means "not
+        // attributable", which is a true statement; a guessed owner is not.
+        let ownerEntraOid: string | null = null;
+        try {
+          const { resolveObjectIdByEmail } = await import("./identity/identity.server");
+          ownerEntraOid =
+            (await resolveObjectIdByEmail(data.caller?.entra_email)) ??
+            // Secondary, not a guess: the acting subject's OWN object id when the client supplied one
+            // (interactive sign-in) but no profile_emails row maps their address yet.
+            (data.caller?.entra_object_id?.trim() || null);
+        } catch {
+          ownerEntraOid = null;
+        }
+
         const writes: Array<{
           chunk: { id: string };
           scope: "global" | "agent";
@@ -962,6 +992,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             source,
             embedding: vec,
             authorAgentIds: authors,
+            ownerEntraOid,
           });
           writes.push({ chunk, scope: "global", authors });
         }
@@ -975,6 +1006,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             source,
             embedding: vec,
             authorAgentIds: authors,
+            ownerEntraOid,
           });
           writes.push({ chunk, scope: "agent", agentId, authors });
         }
@@ -998,6 +1030,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
                   sourceChunkId: w.chunk.id,
                   authorAgentIds: w.authors,
                   supersede: researchedMem,
+                  ownerEntraOid,
                 })),
               );
             }
@@ -6604,9 +6637,33 @@ async function executeClaimedTurn(record: {
  * heartbeat finishes it — either way the result lands in the durable store and is delivered on
  * return. Returns the result when the fast path completes; the client also polls `getTurnUpdates`.
  */
-export const enqueueHuddleTurn = createServerFn({ method: "POST" })
-  .inputValidator((raw: unknown) => EnqueueTurnInput.parse(raw))
-  .handler(async ({ data }) => {
+/**
+ * THE DURABLE TURN PATH, as a plain function -- persist to `chat.pending_turns`, claim it, run it.
+ *
+ * Extracted from `enqueueHuddleTurn`'s handler (its behaviour is unchanged; the server fn now calls
+ * this) so a SECOND entrypoint can reach the same path without going through a TanStack server
+ * function. The cross-app HTTP route (`/api/public/run-agent-turn`) is that second entrypoint: it
+ * called `runHuddleTurn` DIRECTLY, so a forwarded turn ran to completion and left NO row in
+ * `chat.pending_turns` -- invisible in the Huddle UI, absent from `getTurnUpdates`, and not counted
+ * alongside the turns the owner typed (AC B1-B4).
+ *
+ * `sendHuddleMessage` is NOT the model to copy here, despite being the other "client" entrypoint:
+ * it also calls `runHuddleTurn` directly and is just as store-blind. `enqueueHuddleTurn` is what
+ * `HuddleView.tsx` (the text UI), `useVoiceCallRealtime.ts` and `MeetingBar.tsx` actually use.
+ *
+ * `notify` rides on the payload rather than through `Input`: `executeClaimedTurn` reads it off the
+ * stored `record.payload`, which is exactly how `autowork.server.ts` sets "batch" today. It is not
+ * in the zod schema, so it is passed through here explicitly instead of being silently stripped.
+ */
+export async function runDurableHuddleTurn(
+  data: z.infer<typeof EnqueueTurnInput> & { notify?: "push" | "batch" | "silent" },
+): Promise<{
+  turnId: string;
+  status: string;
+  result: HuddleTurnResult | null;
+  error: string | null;
+}> {
+  {
     const { turnId, ...turnData } = data;
     // Resolve the sign-in email (possibly an alias) to the canonical journey email for push targeting.
     let email: string | null = null;
@@ -6658,7 +6715,7 @@ export const enqueueHuddleTurn = createServerFn({ method: "POST" })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(
-        `[enqueueHuddleTurn] unhandled error (turn ${turnId}, huddle ${data.huddleId}):`,
+        `[runDurableHuddleTurn] unhandled error (turn ${turnId}, huddle ${data.huddleId}):`,
         err,
       );
       return {
@@ -6668,7 +6725,12 @@ export const enqueueHuddleTurn = createServerFn({ method: "POST" })
         error: message,
       };
     }
-  });
+  }
+}
+
+export const enqueueHuddleTurn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => EnqueueTurnInput.parse(raw))
+  .handler(async ({ data }) => runDurableHuddleTurn(data));
 
 /** The public VAPID key the browser needs to create a push subscription (null if push isn't set up). */
 export const getPushConfig = createServerFn({ method: "GET" }).handler(async () => {

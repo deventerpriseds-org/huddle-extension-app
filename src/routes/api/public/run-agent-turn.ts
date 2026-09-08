@@ -31,16 +31,23 @@ import type {} from "@tanstack/react-start";
 //
 // Body (all optional except `text`):
 //   { text: string(1..4000), huddleId?, scope?: "group"|"one-to-one", members?: agentId[],
-//     history?: [], timeZone? }
+//     history?: [], timeZone?, idempotencyKey? }
 // A bare `{ "text": "..." }` is a complete, valid request -- an integrating app is not expected to
 // know Huddle's huddle/scope/member model.
 //
-// Returns: { ok:true, replies:[...], toolUses:[{agentId,tool,ok}] }
+// Returns: { ok:true, turnId, status, replies:[...], toolUses:[{agentId,tool,ok}] }
+//
+// PERSISTENCE (added 2026-09-08, AC-turn-is-real B1-B5). The turn runs through the DURABLE path --
+// chat.pending_turns -> claim -> run -- so a forwarded turn is a real Huddle turn: visible in the UI
+// through getTurnUpdates, counted in the same bucket as the owner's own turns, and replayable. The
+// turn id is DERIVED from (subject, huddleId, text, 15-min window), so a caller retry re-enters the
+// same row rather than running and billing the message twice.
 
 import {
   MAX_BODY_BYTES,
   authenticateCaller,
   buildTurnInput,
+  crossAppTurnId,
   findCallerAssertedIdentity,
   projectTurnResult,
   resolveActingSubject,
@@ -96,19 +103,66 @@ export const Route = createFileRoute("/api/public/run-agent-turn")({
         const built = buildTurnInput(payload, subject.value);
         if (!built.ok) return json({ ok: false, error: built.error }, built.status);
 
+        // The DURABLE turn id. Deterministic, so a caller retry re-enters the same row instead of
+        // billing a second run of the same message (AC B5) -- `enqueueTurn` is
+        // `INSERT ... ON CONFLICT DO NOTHING` and execution is claim-locked, which only guarantees
+        // "exactly once" if the id is stable across attempts.
+        const turnId = crossAppTurnId({
+          subject: subject.value.entra_email,
+          huddleId: built.value.huddleId,
+          text: built.value.text,
+          idempotencyKey:
+            typeof payload.idempotencyKey === "string" && payload.idempotencyKey.trim()
+              ? payload.idempotencyKey.trim()
+              : undefined,
+        });
+
         try {
-          // The EXISTING turn machinery -- the exact function `sendHuddleMessage` calls. Routing,
-          // agent selection, tool dispatch, the action ledger, the confirm-intent gate and the D4
-          // email send-gate all live inside it and are reached unchanged. The synchronous
-          // (non-chunked) path is used deliberately: an HTTP caller is waiting on this response, and
-          // runHuddleTurn's own 36s deadline already bounds it under the hosting ceiling. Wiring the
-          // durable `turnId` path would hand the caller an id to poll, which is a different product
-          // decision, not this route's to make.
-          const { runHuddleTurn } = await import("@/features/huddle/lib/huddle.functions");
-          const result = await runHuddleTurn(
-            built.value as unknown as Parameters<typeof runHuddleTurn>[0],
-          );
-          return json({ ok: true, ...projectTurnResult(result) });
+          // THE DURABLE PATH -- `chat.pending_turns` -> claim -> run, the same one `HuddleView.tsx`
+          // uses through `enqueueHuddleTurn`. This route used to call `runHuddleTurn` DIRECTLY, and
+          // that is measured, not theorised: bridge probe run 34191804298 sent one marked turn and
+          // got `{"ok":true,"replies":[{"agentId":"elle-rowan","text":"ACK"}]}` back, and
+          // azure-pg-query run 34192165151 then found ZERO rows for that marker in BOTH
+          // chat.pending_turns and public.rag_chunks. A forward that demonstrably worked was
+          // invisible in Huddle's own UI (AC B1-B4).
+          //
+          // `sendHuddleMessage` also calls `runHuddleTurn` directly and is NOT the model to copy --
+          // it is store-blind in exactly the same way.
+          //
+          // notify:"silent" -- the reply is handed back in THIS HTTP response, so the calling app has
+          // already shown it to the user. Firing journey's phone push as well would buzz them about a
+          // message they are reading. Same mechanism autowork.server.ts uses for "batch"; one word to
+          // change if the owner wants a buzz.
+          const { runDurableHuddleTurn } = await import("@/features/huddle/lib/huddle.functions");
+          const outcome = await runDurableHuddleTurn({
+            ...(built.value as unknown as Parameters<typeof runDurableHuddleTurn>[0]),
+            turnId,
+            notify: "silent",
+          });
+
+          if (outcome.result) {
+            return json({ ok: true, turnId, status: outcome.status, ...projectTurnResult(outcome.result) });
+          }
+
+          // No result in hand. Either another runner already owns this turn id (a retry landing on
+          // the in-flight original), or it completed on an earlier attempt. Read the stored row: a
+          // finished turn REPLAYS its persisted replies, so a retry returns text character-identical
+          // to what is in the table rather than running the message a second time (AC B5).
+          const { getTurn } = await import("@/features/huddle/lib/tasks/turns.server");
+          const rec = await getTurn(turnId);
+          const stored = (rec as { result?: unknown; replies?: unknown } | null) ?? null;
+          const replayable =
+            stored && (stored.result ?? (Array.isArray(stored.replies) ? { replies: stored.replies } : null));
+          if (replayable) {
+            return json({ ok: true, turnId, status: outcome.status, ...projectTurnResult(replayable) });
+          }
+          if (outcome.error) {
+            console.error(`[run-agent-turn] turn ${turnId} failed:`, outcome.error);
+            return json({ ok: false, error: "turn_failed", turnId }, 500);
+          }
+          // Persisted and claimable but not finished here (the cron heartbeat will finish it). The
+          // caller gets the id so it can poll rather than being told the turn failed.
+          return json({ ok: true, turnId, status: outcome.status, replies: [], toolUses: [] });
         } catch (err) {
           // Generic on the wire, detailed only in the server log. Echoing the error would leak
           // stack frames, file paths and connection strings to an external caller.

@@ -27,7 +27,9 @@
 // mailbox and 40+ tools, so "whose data does this act on" is the entire security question. Keeping
 // the body field here would have moved the defect to a new URL instead of closing it.
 
+import { createHash } from "node:crypto";
 import { AGENTS } from "@/features/huddle/data/agents";
+import assistantIds from "@/features/huddle/data/assistant-ids.json";
 
 /** The env var naming the acting subject. NOT A CREDENTIAL -- it is an identifier, and it is safe
  *  in plaintext config. It must never be rotated as though it were a secret, and a new SECRET must
@@ -47,6 +49,118 @@ export const DEFAULT_SCOPE = "group" as const;
  *  stale id here that `Input`'s `z.enum(AgentIds)` would reject at runtime. */
 export function defaultMembers(): string[] {
   return AGENTS.map((a) => a.id);
+}
+
+/**
+ * THE PER-AGENT BACKEND CONFIG THE FORWARDED TURN CARRIES -- and the fix for the defect that
+ * actually explains "the Huddle agent was unaware of the Nexus conversation".
+ *
+ * `runHuddleTurn` gates BOTH halves of memory on per-agent RAG configuration read from
+ * `data.agents`, and this adapter never set it:
+ *
+ *   WRITE      huddle.functions.ts  `const ragAgents = data.members.map(id => agentsCfg[id]?.rag)
+ *                                    .filter(x => x && x.store === "azure" && x.cfg.chunks)`
+ *                                   -- empty, so the `if (... anyShared || privateAgents.length)`
+ *                                   block never runs and NOTHING is written to rag_chunks.
+ *   RETRIEVAL  huddle.functions.ts  `const ragCfg = agentBackend.rag;
+ *                                    if (!isCeremonyTrigger && ragCfg && ragCfg.store === "azure"
+ *                                        && ragCfg.chunks && openaiKey)`
+ *                                   -- `ragCfg` is undefined, so auto-retrieval never runs and no
+ *                                   memoryBlock reaches the prompt.
+ *
+ * So a forwarded turn that ran PERFECTLY wrote nothing and recalled nothing: memory-blind in both
+ * directions. `data.agents` being `.optional()` in the schema is why this parsed cleanly and failed
+ * silently. Two independent `if` statements on the same missing config -- which is why C1 (write)
+ * and C2 (read) are separate criteria and why the guard below asserts the SHAPE, not the symptom.
+ *
+ * WHY THIS IS BUILT HERE AND NOT IMPORTED FROM `agent-backends.ts`: that module's `defaultAgents()`
+ * is not exported, and the module itself instantiates a zustand store with the `persist` middleware
+ * at import time -- a browser-storage-backed singleton that a server route has no business pulling
+ * in. `assistant-ids.json` is the same JSON `agent-backends.ts` reads, imported directly, so the
+ * assistant ids cannot drift between the two.
+ *
+ * DELIBERATELY NARROWER THAN THE CLIENT'S DEFAULT, and this is a scope decision, not an oversight:
+ * `defaultAgents()` also sets `journey: { enabled: true }` and `webSearch: true`. Turning those on
+ * here would widen what an unattended, machine-driven turn can DO (journey task/email/push tools,
+ * paid web search) beyond anything the criteria ask for. No criterion in AC-turn-is-real needs
+ * them; C1/C2/C3/D1 need `rag`. They are one line away if the owner wants full parity.
+ */
+export function crossAppAgentBackends(members: string[]): Record<string, CrossAppAgentBackend> {
+  const ids = assistantIds as Record<string, string | undefined>;
+  const out: Record<string, CrossAppAgentBackend> = {};
+  for (const id of members) {
+    const assistantId = ids[id];
+    out[id] = {
+      // Mirrors defaultAgents(): an agent WITH a platform assistant runs the OpenAI path so it
+      // answers as itself from its snapshot persona; one without falls back exactly as the client's
+      // default does. Previously `agents` was absent entirely, so every cross-app responder took
+      // `?? { backend: "lovable" }` at huddle.functions.ts -- the fallback, never a chosen path.
+      backend: assistantId ? ("openai" as const) : ("lovable" as const),
+      ...(assistantId ? { assistantId } : {}),
+      // THE FIELD THE WHOLE MEMORY DEFECT TURNS ON. Same values as the client's `defaultRag`.
+      rag: {
+        store: "azure" as const,
+        chunks: true,
+        triples: true,
+        fileSearch: true,
+        sharing: "shared" as const,
+      },
+    };
+  }
+  return out;
+}
+
+export type CrossAppAgentBackend = {
+  backend: "openai" | "lovable";
+  assistantId?: string;
+  rag: {
+    store: "azure";
+    chunks: boolean;
+    triples: boolean;
+    fileSearch: boolean;
+    sharing: "shared";
+  };
+};
+
+/** Idempotency-key prefix for a forwarded turn. Visible in `chat.pending_turns.id`, so a row's
+ *  origin is readable at a glance without a join. */
+export const CROSS_APP_TURN_ID_PREFIX = "xapp-";
+
+/**
+ * The DURABLE TURN ID for one forwarded turn -- deterministic, so a caller retry is idempotent
+ * rather than a second billed run of the same message (AC B5).
+ *
+ * `enqueueTurn` is `INSERT ... ON CONFLICT DO NOTHING` and execution is claim-locked, so two
+ * requests carrying the same id can only ever produce ONE row and ONE execution. That guarantee is
+ * worth nothing if the id is freshly minted per attempt, which is the trap B5 names.
+ *
+ * The id is a hash of (subject, huddleId, text, window) where `window` is the 15-minute UTC bucket
+ * the request lands in. The bucket is the deliberate compromise between the two failure modes:
+ *   * a PURE content hash makes an identical question asked again next week replay the OLD answer
+ *     forever -- an agent that looks broken;
+ *   * NO hash at all double-runs every retry, which is today's behaviour and what B5 forbids.
+ * A real retry follows within seconds, so it lands in the same bucket; a genuine repeat of the same
+ * sentence in a later bucket runs fresh. A caller that wants the guarantee to be exact should send
+ * its own `idempotencyKey` (below), which removes the time component entirely.
+ *
+ * `idempotencyKey` is NOT identity-shaped (`findCallerAssertedIdentity` does not list it, and it
+ * cannot: it names a REQUEST, not a person) so it passes the identity refusal untouched.
+ */
+export function crossAppTurnId(args: {
+  subject: string;
+  huddleId: string;
+  text: string;
+  idempotencyKey?: string;
+  now?: number;
+}): string {
+  const bucket = args.idempotencyKey
+    ? `key:${args.idempotencyKey}`
+    : `t:${Math.floor((args.now ?? Date.now()) / 900_000)}`;
+  const digest = createHash("sha256")
+    .update([args.subject, args.huddleId, args.text, bucket].join("\u001f"))
+    .digest("hex")
+    .slice(0, 40);
+  return `${CROSS_APP_TURN_ID_PREFIX}${digest}`;
 }
 
 export type GateFailure = { ok: false; status: number; error: string };
@@ -169,6 +283,10 @@ export type CrossAppTurnBody = {
   members?: unknown;
   history?: unknown;
   timeZone?: unknown;
+  /** Optional caller-supplied idempotency key. Names a REQUEST, never a person, so it is not an
+   *  identity-shaped field and is not refused by findCallerAssertedIdentity. When present it makes
+   *  the durable turn id exact (see crossAppTurnId). */
+  idempotencyKey?: unknown;
 };
 
 export type TurnInput = {
@@ -177,6 +295,9 @@ export type TurnInput = {
   scope: "group" | "one-to-one";
   members: string[];
   history: unknown[];
+  /** Per-agent backend + RAG configuration. ABSENT on this path until 2026-09-08, which is what
+   *  made a forwarded turn memory-blind in both directions -- see crossAppAgentBackends. */
+  agents: Record<string, CrossAppAgentBackend>;
   caller: { entra_email: string };
   timeZone?: string;
 };
@@ -223,6 +344,11 @@ export function buildTurnInput(
     scope,
     members,
     history,
+    // Memory ON, for exactly the members that will respond. Without this key `runHuddleTurn`
+    // reads `data.agents ?? {}`, every `agentsCfg[id]?.rag` is undefined, and both the write and
+    // the auto-retrieval gates evaluate false -- the forwarded turn writes nothing to rag_chunks
+    // and gets no memoryBlock. See crossAppAgentBackends for the two gates, quoted.
+    agents: crossAppAgentBackends(members),
     // THE LINE THE WHOLE ROUTE EXISTS FOR. Server-held, never caller-supplied.
     caller: { entra_email: subject.entra_email },
   };
