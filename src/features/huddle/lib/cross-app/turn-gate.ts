@@ -123,8 +123,14 @@ export type CrossAppAgentBackend = {
 };
 
 /** Idempotency-key prefix for a forwarded turn. Visible in `chat.pending_turns.id`, so a row's
- *  origin is readable at a glance without a join. */
-export const CROSS_APP_TURN_ID_PREFIX = "xapp-";
+ *  origin is readable at a glance without a join.
+ *
+ *  RE-EXPORTED, not redefined. It also decides whether the Huddle UI renders the user's half of a
+ *  forwarded turn (`lib/turn-identity.ts`), and two of those callers are browser components that
+ *  cannot import this file -- it pulls in `node:crypto`. Two spellings of the prefix would mean the
+ *  UI silently stops recognising forwarded turns the day either one changes. */
+export { CROSS_APP_TURN_ID_PREFIX } from "../turn-identity";
+import { CROSS_APP_TURN_ID_PREFIX } from "../turn-identity";
 
 /**
  * The DURABLE TURN ID for one forwarded turn -- deterministic, so a caller retry is idempotent

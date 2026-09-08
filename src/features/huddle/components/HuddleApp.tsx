@@ -17,6 +17,7 @@ import { breadcrumbToolsFor, type ChecklistPayload, type ToolUseEvent } from "..
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
 import { useAuth } from "@/hooks/useAuth";
 import { getAllTurnUpdates } from "../lib/huddle.functions";
+import { userTurnTs } from "../lib/turn-identity";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 
 /** Presence heartbeat while the user is watching. MUST stay below the server's PRESENCE_FRESH_MS
@@ -158,15 +159,19 @@ export function HuddleApp() {
         // agents' replies orphaned without it. Guarded to genuine user turns (`u-<ms>`): an
         // agent-initiated turn stores its internal directive in payload.text, which must NOT render as
         // "You". See TurnUpdateDTO.userText / applyTurnStream.
-        const um = /^u-(\d+)$/.exec(t.id);
-        const ut = um ? (t.userText ?? "").trim() : "";
+        // Same rule as the server and as applyTurnStream, from one module rather than a third copy
+        // of `/^u-(\d+)$/`. That regex decided BOTH "is this the user" and "at what time", and a
+        // forwarded `xapp-<sha>` turn fails it on the first and has no answer for the second -- which
+        // is why a Nexus exchange showed here as the agent's replies alone.
+        const uts = userTurnTs(t.id, t.updated_ms ?? 0);
+        const ut = uts !== null ? (t.userText ?? "").trim() : "";
         if (ut && !useHuddleStore.getState().messages.some((m) => m.id === t.id)) {
           upsert({
             id: t.id,
             huddleId: t.huddleId,
             author: { kind: "user" },
             text: ut,
-            ts: Number(um![1]),
+            ts: uts!,
           });
         }
         (t.replies ?? []).forEach((reply, i) => {

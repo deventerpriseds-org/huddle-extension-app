@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
+import { isUserTurn } from "./turn-identity";
 import type { ChecklistPayload, HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
 import {
   parseMentions,
@@ -6783,10 +6784,15 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
         error: t.error,
         updated_ms: t.updated_ms,
         seq: t.seq,
-        // ONLY for genuine user turns. submit() ids every user turn `u-<ms>`; every agent-INITIATED
-        // turn (autowork/standup/groom/followup) uses a semantic prefix and stores its INTERNAL
-        // DIRECTIVE in payload.text — surfacing that would render the directive as a "You" message.
-        userText: (/^u-\d+$/.test(t.id) ? ((t.payload as { text?: string } | null)?.text ?? null) : null) as
+        // ONLY for genuine user turns, and `isUserTurn` owns that rule for all three call sites.
+        // TWO shapes qualify: submit()'s `u-<ms>` for an interactively-typed turn, and `xapp-<sha>`
+        // for one forwarded from another app's front door -- also the user talking. The second was
+        // nulled here until 2026-09-08, which is exactly why a Nexus exchange rendered in the Huddle
+        // 1:1 as Elle's replies with nothing said to her: one side of the conversation.
+        // Every agent-INITIATED turn (autowork/standup/groom/followup) uses a different semantic
+        // prefix and stores its INTERNAL DIRECTIVE in payload.text -- surfacing that would render the
+        // directive as a "You" message, so those still resolve to null. That guard is unchanged.
+        userText: (isUserTurn(t.id) ? ((t.payload as { text?: string } | null)?.text ?? null) : null) as
           | string
           | null,
         replies: (t.replies ?? []) as {
