@@ -3196,9 +3196,14 @@ is present.
 pipeline is the tool built for producing assignment text — Elle via `create_artifact` is a different,
 one-pass path. Recommended asking by COURSE, and using the Nexus writer for the text itself.
 
-**Open at time of writing:** one `db-query` dispatch (run `34232249111`) asks whether the
-introduction discussion exists in `content.assignments` with its instructions in `description`. If
-the row is title-only, Elle can confirm the assignment exists but cannot read what it asks for —
-which would mean drafting from a guess. NOT yet answered; no claim made either way.
+**RESOLVED — run `34232249111`:** the introduction discussion IS readable. *Discussion Board 1 -
+Introduce Yourself and Start Building a Literature…*, status `active`, due **2026-09-07**, with
+**5,282 characters** of instructions in `description` matching both "prompt 1" and "introduce
+yourself". A second row, *Introductions*, is due **2026-09-10** with 451 characters. The other 13
+matches carry `desc_len = 0`, so description coverage is partial — these two happen to be complete.
+
+**Correction it forced:** the earlier baseline number *"zero assignments due in the future"* is
+EXPIRED. Two are. `due_within_days` and "what's due this week" now return real rows, and the advice
+that they were unfalsifiable no longer holds.
 
 **NOT confirmed by the owner in his own session** — this is a code-and-config read, not a live turn.

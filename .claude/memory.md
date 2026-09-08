@@ -2766,3 +2766,32 @@ this one bit: three tools deployed and configured perfectly, and the natural phr
 **Rule: before answering "can it do X", read the tool's PARAMETER LIST against the sentence the
 owner would actually type.** A tool that can reach the data but cannot be aimed at it makes the
 model improvise — which is the exact failure the integration existed to remove.
+
+
+### RESULTS — the assignment IS readable, and one earlier "measured" fact has EXPIRED (2026-09-08)
+
+`db-query` run **34232249111** against `nexus_hub`, 15 rows matching `introduc%`/`discussion%`:
+
+| title | status | due | `desc_len` | has the prompt text |
+|---|---|---|---|---|
+| **Discussion Board 1 - Introduce Yourself and Start Building a Literatur…** | active | **2026-09-07** | **5282** | **YES** |
+| Introductions | active | **2026-09-10** | 451 | no |
+| 13 others (Forum 3.4 x6, Case READ x3, Discussion 2, Economics x3) | mixed | 2025-10 → 2026-02 | **0** | no |
+
+**So the answer is yes**: the introduction discussion carries **5,282 characters** of instructions in
+`description`, and it matches on both "prompt 1" and "introduce yourself". Elle can read what it
+actually asks for, not merely that it exists.
+
+**And a fact this file previously carried as MEASURED is now stale, which matters more than the
+answer.** The `AC-turn-is-real` baseline recorded *"534 assignments, 504 with due dates, and ZERO due
+in the future"*, and that was used to justify the standing advice that `due_within_days` is
+unfalsifiable and "what's due this week" always returns empty. **Two assignments are now due in the
+future** (2026-09-07 and 2026-09-10). The date filter works today; the advice built on that number
+does not.
+
+**Hardening — a measured number about LIVE DATA has a shelf life, and nothing was stamping it.**
+Structural facts (a gate exists, a column is keyed on X) stay true until code changes. A COUNT of
+rows in a moving dataset is true only on the day it was taken, and this one was quoted back three
+times across a week as though it were structural. **Rule: when recording a measured count of live
+data, record the DATE IN THE SENTENCE and state what would make it change** — here, "the owner
+imports a new term." A count with no expiry becomes a false constraint on advice.
