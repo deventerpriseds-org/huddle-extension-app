@@ -3229,3 +3229,26 @@ worked around.
 themes and the per-repo/cross-repo structural cause recorded.
 
 **NOT confirmed by the owner** — deployed, mechanism proven, awaiting his use of it.
+
+
+## ACT:spec-registry-built — the widget spec's registry proposal is now a built thing (2026-09-08)
+
+**Asked for:** the owner, on the assignment widget — *"doesn't the registry building need to happen
+here for the widget? there seems to be a split of what you would do vs the other huddle session."*
+
+**Found:** the split was real and already half-resolved on paper. `docs/specs/assignment-widget.md`
+§5.2 had PROPOSED `nexus-hub/api/src/shared/assignmentActions.ts` — exact path, exact `rootDir`
+reasoning — and nothing recorded that nexus then had to build it. Neither repo's ledger carried the
+handoff.
+
+**Done:** nexus-hub PR #87 built it. This repo gets §5.2b, which stamps the result into the spec
+that asked for it and is deliberately unflattering about scope: the coverage half shipped, the
+execution half (`uiLabel`/`modelDescription`, typed `args`, `mutating`) did not, so §5.3's claim is
+not yet true. Also absorbed into the spec: option C, and the array-index rule.
+
+**Evidence:** huddle PR #53 (this repo, docs only). nexus-hub PR #87 — 39-check parity test in the
+api build chain, 4 mutations FIRED.
+
+**Open:** the execution-half fields are a nexus-side change to the same file, NOT a second registry
+here. Option C's implementation is nexus-hub `claude/shared-requirement-set`, unmerged, with an
+independent verifier pending.

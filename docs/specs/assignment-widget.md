@@ -603,6 +603,66 @@ real model budget and is the gate the owner asked for by name. Re-reading the re
 `mutating: false`. Collapsing the two into one boolean would either put a confirm dialog in front of
 the owner's own example utterance, or remove the gate he asked for.
 
+### 5.2b RESULT — the registry is BUILT, and here is exactly how much of §5.2 it is
+
+**Stamped 2026-09-08.** §5.2 was a PROPOSAL. `nexus-hub/api/src/shared/assignmentActions.ts` now
+exists on `claude/assignment-action-registry` (nexus-hub **PR #87**), in the exact location and
+for the exact `rootDir` reason §5.2 gives. The owner's question that prompted this — *"doesn't the
+registry building need to happen here for the widget? there seems to be a split of what you would
+do vs the other huddle session"* — is answered: the split was real, the spec proposed it, nexus had
+to build it, and it is built. **This section exists so nobody re-derives that from memory.**
+
+**What shipped, field by field against §5.2's proposal.** The honest answer is *the coverage half,
+not the execution half*:
+
+| §5.2 proposed | shipped? | note |
+|---|---|---|
+| `id` | ✅ | unchanged |
+| `endpoint {method, path}` | ✅ as `route` + `method` + `transport` | flatter; `transport` (`sse`\|`json`) was added because half these endpoints stream and the widget must know |
+| `needsConfirmation` | ✅ as `gate: 'auto' \| 'confirm'` | same meaning, renamed |
+| `stage` | ⚠️ partial | expressed as `requires` / `produces` preconditions instead, which orders the actions by data dependency rather than by a hand-assigned bucket. A widget section still needs the bucket. |
+| `uiLabel` **+** `modelDescription` | ❌ **NOT shipped** — one `label` only | This is the `workflowTypes` `uiNoun`/`modelNoun` lesson §5.1 quotes, and it is currently un-applied. The intent resolver has nothing written for it to read. |
+| `args` (typed) | ❌ **NOT shipped** | Without it the widget and the resolver cannot build the same call from the registry, which is §5.3's whole claim. |
+| `mutating` | ❌ **NOT shipped** | §5.2 argues at length that `mutating` and `needsConfirmation` are different fields. Only the second shipped. The argument still stands and the field is still owed. |
+
+**Added beyond the proposal**, and worth knowing before extending it:
+`chainsTo` (the action that MUST auto-run on success — the owner's requirements→outline rule as an
+assertion), `chainGateSetting` (the `user_settings` column that switches that chain, so the toggle
+and the thing it toggles cannot drift), `requires`/`produces`, and `workflowTypes`.
+
+**The parity test is real and is the part that answers the owner's coverage question.**
+`nexus-hub/api/scripts/assignment-actions.test.cjs`, **42 checks**, in the api build chain. It walks
+nexus's own `app.http` `route:` values **and** nexus's own `nexusFnUrl(...)` client call sites, so
+an action added to either side with no registry row **fails the build**. **Eight mutations, all
+FIRED.**
+
+> **CORRECTION, stamped 2026-09-08.** This paragraph first read *"39 checks"* and made the
+> either-side claim when only ONE direction was asserted. An independent verifier disproved it by
+> adding a real `app.http` route to nexus and running the full build: **39 passed, 0 failed, exit
+> 0** — nothing failed and nothing was reported. `C1` asserted registry ⊆ API; the API ⊆ registry
+> direction, which is the one a new nexus endpoint arrives from, did not exist. `C5`/`C6` now close
+> it, and the new guard immediately found `generate-peer-reply` — a real assignment action the API
+> served with no registry row. Two further guards (`F2`/`F3`) were **INERT** against a
+> comment-out mutation and are now comment-stripped. The claim above is true as of this stamp; it
+> was not true when it was written, and the difference matters to anyone deciding how much to trust
+> a parity test they did not run themselves.
+
+**Two facts from nexus that this spec's §7.3 gate design must absorb:**
+
+1. **Option C was chosen by the owner** — nexus requirement rows stop being scoped by
+   `workflow_type` on the read path. Any widget section keyed on a workflow type is keyed on
+   something that is going away.
+2. **A live note-misattribution defect was proven on the owner's own assignment**
+   (`5785e241`): per-question notes are keyed by ARRAY INDEX into a requirement list chosen by
+   `workflow_type`, so the same index resolves to a different requirement under a different lane —
+   notes written 13 days before the other lane existed land on a `learning_outcome` and on
+   *"Watch Video 1.4"*. **The widget must never key anything on an array index into a requirement
+   list.** If a widget action carries a per-requirement payload, it carries a stable anchor.
+
+**Still owed before §5.3's "both surfaces render FROM it" is true:** `uiLabel`/`modelDescription`,
+`args`, `mutating`, and a `stage` bucket. Those are the execution half, and they are a nexus-side
+change to the same file — not a second registry here.
+
 ### 5.3 Both surfaces render FROM it
 
 **PROPOSAL.** The registry is not documentation about the actions; it is **the definition the code
