@@ -1,5 +1,19 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-08-25
+Last updated: 2026-09-08 — **the assignment-widget spec's action registry is BUILT in nexus** (see
+`docs/specs/assignment-widget.md` §5.2b, huddle PR #53): the spec PROPOSED
+`nexus-hub/api/src/shared/assignmentActions.ts` and nexus-hub PR #87 built it there, closing the
+"who builds the registry" split the owner named. What shipped is the COVERAGE half (id, endpoint,
+gate, plus chainsTo/chainGateSetting/requires/produces, and a 39-check parity test that fails the
+build when nexus grows an action with no row). What did NOT ship is the EXECUTION half —
+`uiLabel`/`modelDescription`, typed `args`, and `mutating` — so §5.3's "both surfaces render FROM
+it" is **not yet true**. Two nexus facts the widget's gate design must absorb: the owner chose
+**option C** (nexus requirement rows unscope from `workflow_type`, so a widget section keyed on a
+workflow type is keyed on something going away), and a **live note-misattribution defect** was
+proven on his own assignment `5785e241` — per-question notes keyed by ARRAY INDEX resolve to a
+different requirement under a different lane, so **the widget must never key anything on an array
+index into a requirement list**.
+
+(previous header) Last updated: 2026-08-25
 
 ## Hardening — the phase-tag gate was GREEN while 67% of output was non-compliant (2026-08-25)
 
