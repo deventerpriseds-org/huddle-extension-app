@@ -56,6 +56,7 @@ import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "../
 // file records nine native tools that exist on text and are silently absent when spoken, and the
 // drift is always one-directional. Adding it to one surface "for now" is how that list got to nine.
 import { nexusReadTools, NEXUS_TOOL_NAMES, executeNexusTool } from "../nexus/nexus.server";
+import { LIST_ARTIFACTS_TOOL } from "../artifacts/artifact-tool";
 // SHARED with the text turn engine — the exclusive-capability meta-task guard, cross-turn title dedup,
 // journey date normalization and the honest outcome note. NOT a voice-local copy: huddle.functions.ts's
 // two task-create closures call these same functions, so the surfaces cannot drift.
@@ -301,6 +302,12 @@ export async function buildRealtimeToolset(
     },
   });
 
+  // B-OPS-2 -- the READ half of the same pair. It is pushed here, next to the write half, because
+  // the write half's own comment above is the record of what happens when only one of a pair reaches
+  // voice: the agent narrates work it cannot do. Reusing the SHARED schema (rather than restating it
+  // as create_artifact does) is what keeps the two surfaces from drifting the way they already have.
+  raw.push(LIST_ARTIFACTS_TOOL);
+
   // Native email (Outlook/Graph) — mirror the TEXT engine. The voice agent was MISSING these, so a spoken
   // "email me X" fell through to a journey messaging/push tool and the user got a message instead of an
   // email (ACT-huddle-34). Same gate + schemas + dispatch (executeRealtimeTool) as the text path.
@@ -466,6 +473,7 @@ export async function executeRealtimeTool(
     "send_email",
     "create_email_draft",
     "create_artifact",
+    "list_artifacts",
     "create_huddle_task",
     "create_huddle_tasks",
     "confirm_task_intent",
@@ -556,6 +564,12 @@ export async function executeRealtimeTool(
         cc: args.cc ? String(args.cc) : undefined,
       });
       return done(JSON.stringify(r));
+    }
+    if (name === "list_artifacts") {
+      // The SAME executor the text path calls -- see listArtifactsForTool's header. The caller's
+      // email is resolved inside it from ctx.caller and is never a spoken argument.
+      const { listArtifactsForTool } = await import("../artifacts/artifacts.server");
+      return done(JSON.stringify(await listArtifactsForTool(ctx.caller, args)));
     }
     if (name === "create_artifact") {
       const artName = String(args.name ?? "").trim();

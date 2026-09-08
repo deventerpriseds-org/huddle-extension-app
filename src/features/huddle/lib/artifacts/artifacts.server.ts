@@ -380,3 +380,106 @@ export async function mirrorArtifactToOneDrive(userEmail: string, id: string): P
   await getPool().query(`UPDATE artifacts.items SET onedrive_url = $2, updated_at = now() WHERE id = $1`, [id, r.webUrl ?? null]);
   return { ok: true, onedrive_url: r.webUrl ?? null };
 }
+
+// B-OPS-2 -- ONE executor for the `list_artifacts` agent tool, called by BOTH surfaces.
+//
+// The text and voice paths each carry their OWN copy of the create_artifact dispatch, and
+// realtime-tools.server.ts's own header records what that costs: NINE native tools that exist when
+// typed and are silently absent when spoken, create_artifact among them until it was retro-fitted.
+// A second tool with two copies of its dispatch would be the tenth. So the logic lives here once
+// and each surface only routes the name to it -- the same shape as executeNexusTool.
+//
+// THE EMAIL COMES FROM THE SIGNED-IN CALLER AND IS NEVER A TOOL ARGUMENT. listArtifacts scopes
+// every row by it, so an argument would be a read of another user's documents. `list_artifacts`
+// exposes no email/user parameter and this function does not accept one.
+export async function listArtifactsForTool(
+  caller: { entra_object_id?: string; entra_email?: string } | undefined,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const { resolveTaskEmail } = await import("../journey/identity");
+  const email = (await resolveTaskEmail(caller ?? {})) ?? caller?.entra_email;
+  if (!email) return { ok: false, error: "sign_in_required" };
+
+  const s = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+  const n = (v: unknown): number | undefined => {
+    if (typeof v === "number" && Number.isFinite(v)) return Math.trunc(v);
+    if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Math.trunc(Number(v));
+    return undefined;
+  };
+
+  // An unrecognised status is DROPPED, not passed through: listArtifacts would append
+  // `AND status = 'finished'`, match nothing, and the empty result would read as "no artifacts"
+  // rather than as "that is not a status". Same rule as the library tool's `kind`.
+  const statusRaw = s(args.status);
+  const status = (ARTIFACT_STATUSES as readonly string[]).includes(statusRaw)
+    ? (statusRaw as ArtifactStatus)
+    : undefined;
+  const limit = Math.max(1, Math.min(n(args.limit) ?? 50, 200));
+  const days = n(args.days);
+
+  let rows: ArtifactRow[];
+  try {
+    rows = await listArtifacts(email, {
+      folder: s(args.folder) || undefined,
+      status,
+      agentId: s(args.agent_id) || undefined,
+      taskId: s(args.task_id) || undefined,
+    });
+  } catch {
+    // Reported as a failed READ, never as an empty shelf. A broken query and a user with no
+    // artifacts return the same thing otherwise, and "your agents haven't produced anything" is the
+    // confidently-wrong answer this whole bridge exists to remove.
+    return { ok: false, error: "artifact_store_unavailable" };
+  }
+
+  // `days` IS A CLIENT-SIDE WINDOW BECAUSE THE STORE HAS NO DATE FILTER. listArtifacts takes only
+  // folder/status/agentId/taskId and then `ORDER BY updated_at DESC LIMIT 500`. Filtering here is
+  // therefore over the newest 500, which is stated in the result rather than assumed away.
+  let windowed = rows;
+  let since: string | undefined;
+  if (days !== undefined && days > 0) {
+    const cutoff = Date.now() - days * 86_400_000;
+    since = new Date(cutoff).toISOString();
+    windowed = rows.filter((r) => {
+      const t = Date.parse(String(r.updated_at ?? r.created_at ?? ""));
+      return Number.isFinite(t) ? t >= cutoff : false;
+    });
+  }
+
+  const artifacts = windowed.slice(0, limit).map((r) => ({
+    id: r.id,
+    name: r.name,
+    folder: r.folder,
+    status: r.status,
+    agent_id: r.agent_id,
+    task_id: r.task_id,
+    mime: r.mime,
+    size_bytes: r.size_bytes,
+    version: r.version,
+    review_note: r.review_note,
+    reviewed_at: r.reviewed_at,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+    // Mirror state as a BOOLEAN, not a URL. A OneDrive/Drive link read aloud or pasted into a reply
+    // is a live credentialed location; the model only needs to know whether it landed.
+    mirrored: !!(r.onedrive_url || r.gdrive_url),
+  }));
+  // `blob_path` and `user_email` are deliberately not projected -- an internal storage key and the
+  // caller's own address, neither of which the model needs and both of which it would repeat.
+
+  return {
+    ok: true,
+    count: artifacts.length,
+    total_matched: windowed.length,
+    since,
+    truncated: windowed.length > artifacts.length || undefined,
+    store_scan_capped: rows.length >= 500 || undefined,
+    artifacts,
+    note:
+      artifacts.length === 0
+        ? days !== undefined
+          ? `No artifacts were saved or updated in the last ${days} days. Say that, WITH the window used, and offer to look further back — do not tell the user his agents have produced nothing.`
+          : "No artifacts matched those filters. Report it as 'nothing matched' and state the filters — do not report that the user has no documents unless an unfiltered read also returns nothing."
+        : undefined,
+  };
+}
