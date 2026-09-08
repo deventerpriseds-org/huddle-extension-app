@@ -7,13 +7,19 @@
 //             indexed knowledge base, the list of what IS indexed, and an assignment's case-study
 //             analysis (batch three, A-RAG-1/5/3).
 //
-//             BATCH THREE CARRIES ONE LIMIT WORTH STATING AT THE TOP. `search_nexus_knowledge` is a
-//             LITERAL substring match, not a semantic one. Nexus HAS real pgvector retrieval
-//             (api/src/lib/vectorSearch.ts) but it is a LIBRARY with exactly one importer,
-//             embaAssistantChat.ts, and no HTTP route exposes it -- so the sharpest operator
-//             reachable from here is the d1 GET's `ilike`. The tool says so to the model, because
-//             one that believes it searched by MEANING reports a miss as "that is not in your
-//             knowledge base" instead of "that word does not appear".
+//             THAT LIMIT IS NOW LIFTED, AND THE WORDING MOVED WITH IT. `search_nexus_knowledge`
+//             used to be a LITERAL substring match, because Nexus's real pgvector retrieval
+//             (api/src/lib/vectorSearch.ts) was a LIBRARY with one importer, embaAssistantChat.ts,
+//             and no HTTP route exposed it -- leaving the d1 GET's `ilike` as the sharpest operator
+//             reachable from here. nexus-hub now registers GET /api/knowledge-search over that same
+//             KNN, so the tool searches BY MEANING and its description says so.
+//
+//             The literal path is KEPT as a labelled fallback for when that route is unreachable,
+//             and the result carries `match_type` ('semantic' | 'literal_substring_fallback') plus
+//             `has_corpus` so the model can tell THREE different misses apart: nothing was close
+//             enough; nothing is indexed at all; or the search service was down and this degraded
+//             to a word match. Collapsing those is how an agent tells the owner "that is not in
+//             your knowledge base" about material that is sitting there, or about an outage.
 // WHY:        Two separate problems, and the second is the worse one.
 //             (1) Nothing on the Huddle side could reach Nexus at all -- grepped 2026-09-08, zero
 //                 references. So "what's due this week in my EMBA?" had no route to the data.
@@ -177,6 +183,53 @@ async function nexusGetPath(
     sp.set(k, String(v));
   }
   return nexusFetch(path, sp);
+}
+
+/**
+ * SEMANTIC search over the owner's indexed Nexus knowledge base — `GET /api/knowledge-search`.
+ *
+ * Ranking is by MEANING (pgvector cosine KNN over text-embedding-3-small), not by substring. The
+ * caller sends WORDS: the query is embedded on the Nexus side, deliberately, because a
+ * caller-supplied vector cannot be validated — EMBED_DIMS is 1536 and so is
+ * text-embedding-ada-002, so a vector from the wrong 1536-dim model passes every assertion and
+ * ranks against the wrong corpus with no error raised anywhere.
+ *
+ * STILL READ-ONLY BY CONSTRUCTION: it goes through nexusGetPath -> nexusFetch, a bare `fetch(url)`
+ * with no method, no body and no headers, and the Nexus route is declared methods:['GET','OPTIONS'].
+ *
+ * Returns the parsed body, not rows — the response is an object carrying `hasCorpus` alongside the
+ * passages, and that flag is the whole reason this is not shaped like nexusGet. See the executor.
+ */
+type SemanticBody = {
+  matchType?: string;
+  model?: string;
+  hasCorpus?: boolean;
+  count?: number;
+  passages?: Row[];
+};
+
+async function nexusSemanticSearch(params: {
+  query: string;
+  k: number;
+  courseId?: string;
+  sourceType?: string;
+}): Promise<{ ok: true; body: SemanticBody } | { ok: false; error: string }> {
+  const r = await nexusGetPath("/api/knowledge-search", {
+    query: params.query,
+    k: params.k,
+    courseId: params.courseId || undefined,
+    sourceType: params.sourceType || undefined,
+  });
+  if (!r.ok) return r;
+  const body = r.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    // A route that answered 200 with something that is not the documented object is a DEPLOY SKEW
+    // signal, not a search result — an older Function App build, or a host returning an error page
+    // as 200. Treating it as "no hits" would report a service problem as a fact about the owner's
+    // material, which is the exact confusion this whole tool exists to avoid.
+    return { ok: false, error: "bad_response_shape" };
+  }
+  return { ok: true, body: body as SemanticBody };
 }
 
 /** yyyy-mm-dd in the caller's zone, so "this week" means their week and not the server's. */
@@ -464,14 +517,14 @@ export const SEARCH_NEXUS_KNOWLEDGE_TOOL = {
   type: "function" as const,
   name: "search_nexus_knowledge",
   description:
-    "Search the TEXT of the owner's indexed Nexus course material — syllabi, readings, decks, case files and the summaries/facts/atoms extracted from them — for a LITERAL word or phrase. Use for 'what does the CF syllabus say about the grading breakdown', 'find where the reading mentions working capital', 'what did that case say about margins'. THIS IS A LITERAL SUBSTRING MATCH, NOT A MEANING-BASED SEARCH: pass the exact distinctive WORD the document would use ('grading', 'rubric', 'weighting'), not a whole question, and try a second wording before concluding anything is absent — a miss means that word does not appear, NOT that the topic is missing from the owner's materials. For which DOCUMENTS are indexed rather than what they say, use get_nexus_knowledge_base.",
+    "Search the TEXT of the owner's indexed Nexus course material — syllabi, readings, decks, case files and the summaries/facts/atoms extracted from them — BY MEANING. Use for 'what does the CF syllabus say about the grading breakdown', 'find where the reading mentions working capital', 'what did that case say about margins'. This is a SEMANTIC search: ask it in WORDS, a phrase or a whole question, the way the owner asked you — it finds passages that mean the same thing even when they share no words with your query, so you do NOT need to guess the document's exact vocabulary. ALWAYS read `match_type` on the result before you characterise a miss: 'semantic' means the search really did run by meaning, and 'literal_substring_fallback' means the semantic service was unreachable and this degraded to an exact-word match, where a miss proves only that the word is absent. Never tell the owner something is not in his knowledge base without checking `has_corpus` too. For which DOCUMENTS are indexed rather than what they say, use get_nexus_knowledge_base.",
   parameters: {
     type: "object" as const,
     additionalProperties: false,
     properties: {
       query: {
         type: "string",
-        description: "The literal word or short phrase to find in the material. One distinctive term works far better than a sentence.",
+        description: "What to look for, in words. A phrase or a full question works well and is preferred — this searches by meaning, so the owner's own phrasing is usually the best query. Do not reduce it to a single keyword.",
       },
       course_id: {
         type: "string",
@@ -481,7 +534,7 @@ export const SEARCH_NEXUS_KNOWLEDGE_TOOL = {
         type: "string",
         description: "Restrict to one kind of indexed text, exactly as Nexus stores it: 'summary', 'fact', 'assumption', 'atom', 'full_text' or 'knowledge_base'. Omit for all.",
       },
-      limit: { type: "number", description: "Max passages to return. Defaults to 20." },
+      limit: { type: "number", description: "Max passages to return. Defaults to 8; Nexus caps a semantic search at 50, because ranked passages are meant to be read, not skimmed." },
     },
     required: ["query"] as string[],
   },
@@ -987,26 +1040,97 @@ export async function executeNexusTool(
   // A-RAG-1 -- "what does the CF syllabus say about the grading breakdown?"
   //
   // WHAT THIS IS NOT: a semantic search. Nexus HAS one -- api/src/lib/vectorSearch.ts does real
-  // pgvector KNN with a similarity floor and a metadata containment filter -- but its only importer
-  // is embaAssistantChat.ts, and that module's own header records why it is not a tool ("the chat
-  // endpoint dispatches a tool call one-shot and has no tool-RESULT round-trip"). Grepped across
-  // api/src: one hit. So no HTTP route performs a vector search, and the sharpest operator the d1
-  // GET offers is `ilike`. This is a LITERAL substring match, the tool description says so in those
-  // words, and the empty-result note repeats it -- because a model that thinks it searched by
-  // MEANING reads a miss as "that is not in your knowledge base", which is a confidently-wrong
-  // answer rather than a null one.
+  // A-RAG-1 -- NOW SEMANTIC, with the literal path kept as a labelled fallback.
+  //
+  // HISTORY, because the wording of this tool is the load-bearing part and it changed with the
+  // behaviour. Nexus has always had real pgvector KNN in api/src/lib/vectorSearch.ts, but that is a
+  // LIB with one importer (embaAssistantChat.ts) and no `app.http` registration, so nothing outside
+  // that one chat endpoint could reach it and the sharpest operator available here was the d1 GET's
+  // `ilike`. This tool therefore performed a LITERAL substring match and said so, loudly, in its
+  // description and in its empty-result note -- because a model that believes it searched by
+  // MEANING reports a miss as "that is not in your knowledge base", a confidently-wrong statement
+  // about the owner's own material rather than a null one.
+  //
+  // nexus-hub `claude/nexus-vector-search-route` adds GET /api/knowledge-search, which exposes that
+  // KNN. So the search is now semantic and EVERY ONE OF THOSE WORDS HAD TO CHANGE IN THE SAME
+  // COMMIT. A description that understates a tool is nearly as misleading as one that overstates
+  // it: told the search is literal, a model needlessly reduces the owner's question to one keyword,
+  // and then reads a semantic hit list as if it were a word match.
+  //
+  // THREE MISSES THAT MUST NOT READ ALIKE -- this is the whole reason the result carries
+  // `match_type` and `has_corpus` rather than just a count:
+  //   1. semantic ran, nothing was close enough      -> a real statement about the material
+  //   2. semantic ran, the owner has NO corpus at all -> a statement about indexing, not content
+  //   3. semantic was UNREACHABLE, this degraded to `ilike` -> a statement about the SERVICE; a
+  //      miss here proves only that a word is absent, and must never be reported as "not in your
+  //      knowledge base"
   if (name === "search_nexus_knowledge") {
-    const query = likeTerm(args.query);
+    // The RAW query is what the semantic path wants -- a whole question ranks fine and ranks
+    // better. `likeTerm` strips `%` and `_` because those are SQL LIKE wildcards; that mangling is
+    // meaningful only on the fallback path, so it is applied only there.
+    const rawQuery = strArg(args.query);
+    if (!rawQuery) {
+      return {
+        ok: false,
+        error: "query_required",
+        note: "This tool searches the owner's indexed material by meaning, so it needs something to search for — a phrase or the owner's own question works best. If he asked WHICH documents are indexed rather than what they say, call get_nexus_knowledge_base instead.",
+      };
+    }
+    const courseId = strArg(args.course_id);
+    const sourceType = strArg(args.source_type);
+
+    // SEMANTIC FIRST. The cap is the route's own MAX_K (50): a ranked KNN is meant to be read, and
+    // pouring 200 passages into a prompt is a context-budget hazard rather than a better answer.
+    const semanticLimit = Math.max(1, Math.min(numArg(args.limit) ?? 8, 50));
+    const sem = await nexusSemanticSearch({
+      query: rawQuery,
+      k: semanticLimit,
+      courseId,
+      sourceType,
+    });
+
+    if (sem.ok) {
+      const passages = (sem.body.passages ?? []).map(stripEmbedding);
+      const hasCorpus = sem.body.hasCorpus !== false;
+      return {
+        ok: true,
+        query: rawQuery,
+        match_type: "semantic",
+        model: sem.body.model,
+        has_corpus: hasCorpus,
+        course_id: courseId || undefined,
+        source_type: sourceType || undefined,
+        count: passages.length,
+        passages,
+        note:
+          passages.length > 0
+            ? undefined
+            : hasCorpus
+              // Miss 1. The search really did run by meaning over material that exists. This is the
+              // ONLY branch in which "it does not appear to be in your knowledge base" is a fair
+              // thing to say -- and even here, rephrasing is cheap and sometimes works.
+              ? `Nothing in the owner's indexed material is semantically close to "${rawQuery}"${courseId ? " for that course" : ""}. This WAS a meaning-based search over material that exists, so this is real evidence the topic is not covered — say so plainly, but offer to try a differently-framed question, and use get_nexus_knowledge_base if he wants to know which documents are indexed at all.`
+              // Miss 2. A different fact entirely: nothing is indexed. Telling this owner "that is
+              // not in your knowledge base" is technically true and completely misleading -- the
+              // knowledge base is EMPTY, which is a thing he can fix.
+              : "The owner has NO indexed material at all, so this search had nothing to look through. Do NOT report this as 'that topic is not in your knowledge base' — say that nothing has been indexed yet, and point him at get_nexus_knowledge_base to confirm.",
+      };
+    }
+
+    // FALLBACK. The semantic route was unreachable -- not deployed yet, timing out, or erroring.
+    // Degrade to the literal `ilike` rather than failing the tool, but SAY SO in the result: a
+    // service-down miss and a semantic miss are different facts and the model must not blur them.
+    const semanticError = sem.error;
+    const query = likeTerm(rawQuery);
     if (!query) {
       return {
         ok: false,
         error: "query_required",
-        note: "This tool matches a literal word in the material, so it needs one. If the owner asked WHICH documents are indexed rather than what they say, call get_nexus_knowledge_base instead.",
+        degraded_from_semantic: semanticError,
+        note: "The semantic search was unavailable and the fallback is a literal word match, which this query reduces to nothing once SQL wildcards are stripped. Do not conclude anything about the owner's material from this.",
       };
     }
     const limit = Math.max(1, Math.min(numArg(args.limit) ?? 20, 200));
-    const courseId = strArg(args.course_id);
-    const sourceType = strArg(args.source_type);
 
     const filters: [string, string][] = [["content", `ilike.%${query}%`]];
     // `source_type` is in this route's OWN `filters` list (d1.ts:352), so this is server-side.
@@ -1059,10 +1183,16 @@ export async function executeNexusTool(
     }));
     const sampleCount = passages.filter((p) => p.shared_sample).length;
 
+    // Miss 3 lives here. `match_type` is NOT "literal_substring" but
+    // "literal_substring_fallback", and `degraded_from_semantic` carries the reason, because the
+    // model has just been told by this tool's description that it searches by meaning. Reporting a
+    // degraded run under the same label the healthy literal path used would let it treat a service
+    // outage as evidence about the owner's material.
     return {
       ok: true,
       query,
-      match_type: "literal_substring",
+      match_type: "literal_substring_fallback",
+      degraded_from_semantic: semanticError,
       course_id: courseId || undefined,
       source_type: sourceType || undefined,
       scanned,
@@ -1076,10 +1206,8 @@ export async function executeNexusTool(
       // Only ever present when something is actually flagged.
       note:
         passages.length === 0
-          ? `Nothing in the indexed material contains the literal text "${query}"${courseId ? " for that course" : ""}. This is a WORD match, not a meaning match — say that the word does not appear and TRY ANOTHER WORDING before telling the owner the topic is missing from his knowledge base. get_nexus_knowledge_base will show whether the document is indexed at all.`
-          : sampleCount
-            ? `${sampleCount} of these passages are marked shared_sample: they are seeded DEMO content in Nexus, not the owner's own material. Do not quote them back as his coursework — if you use one, say it is sample content.`
-            : undefined,
+          ? `SEMANTIC SEARCH WAS UNAVAILABLE (${semanticError}) and this fell back to an exact-word match, which found nothing containing the literal text "${query}"${courseId ? " for that course" : ""}. This says almost NOTHING about whether the topic is in the owner's knowledge base — only that this exact word is absent. Do NOT tell him the topic is missing. Say the search service was degraded, and try another wording.`
+          : `SEMANTIC SEARCH WAS UNAVAILABLE (${semanticError}); these passages come from an exact-word match on "${query}", not a meaning-based one. They are real, but they are whatever happened to contain that word — better passages may exist and were not searched for.${sampleCount ? ` ${sampleCount} of these passages are marked shared_sample: they are seeded DEMO content in Nexus, not the owner's own material. Do not quote them back as his coursework — if you use one, say it is sample content.` : ""}`,
     };
   }
 

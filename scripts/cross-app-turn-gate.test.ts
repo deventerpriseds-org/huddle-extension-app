@@ -30,7 +30,9 @@ import {
   findCallerAssertedIdentity,
   normalizeKey,
   projectTurnResult,
+  projectTurnTasks,
   resolveActingSubject,
+  UNPERSISTED_TASK_NOTE,
 } from "../src/features/huddle/lib/cross-app/turn-gate";
 import { AGENTS } from "../src/features/huddle/data/agents";
 
@@ -444,17 +446,41 @@ check(
   })(),
 );
 
+// NARROWED 2026-09-08, deliberately and not silently -- read this before treating it as a
+// weakened guard.
+//
+// This check's fixture used to include `suggestedTasks: [{ title: SUBJECT }]`, and it passed
+// because `suggestedTasks` was dropped WHOLESALE. Task cards are now projected (see F4-F11), so
+// that fixture would fail -- and the honest reading is that it was never testing what its NAME
+// says. `replies` is also free-text model output that can quote the subject, and the projector has
+// ALWAYS passed `replies` through verbatim. So the invariant this suite actually holds, and the
+// only one it ever held, is narrower than the name: THE INTROSPECTION CHANNELS NEVER CROSS.
+// `prompts`, `reasoning` and a tool use's free-text `summary` exist to explain the model to itself
+// and have no consumer on the far side; `replies` and a card's `title` are the PRODUCT of the turn
+// and are what the caller asked for. F2b below states that asymmetry as its own assertion so it is
+// a decision on the record rather than a gap.
 check(
-  "F2 free-text model output that could quote the subject is NOT echoed back to the caller",
+  "F2 model INTROSPECTION channels (prompts, reasoning, tool summary) are NOT echoed back",
   (() => {
     const p = projectTurnResult({
       replies: [],
       toolUses: [{ tool: "x", ok: true, summary: `sent to ${SUBJECT}` }],
       prompts: [`you are acting for ${SUBJECT}`],
       reasoning: [`the owner is ${SUBJECT}`],
-      suggestedTasks: [{ title: SUBJECT }],
     });
     return !JSON.stringify(p).includes(SUBJECT);
+  })(),
+);
+
+check(
+  "F2b the PRODUCT of the turn (replies, and a card's title) DOES cross -- stated, not accidental",
+  (() => {
+    const p = projectTurnResult({
+      replies: [{ agentId: "finn-reid", text: "here you go" }],
+      journeyTaskUpdates: [{ id: "j-1", title: "finish the CF case brief", status: "BACKLOG" }],
+    });
+    const first = p.replies[0] as { text?: string };
+    return first?.text === "here you go" && p.tasks[0]?.title === "finish the CF case brief";
   })(),
 );
 
@@ -464,6 +490,135 @@ check(
     const a = projectTurnResult(undefined);
     const b = projectTurnResult({ replies: "nope", toolUses: 7 });
     return a.replies.length === 0 && b.replies.length === 0 && b.toolUses.length === 0;
+  })(),
+);
+
+// ------------------------------------------- F4-F12. task cards across the boundary (B-TASK-1/2)
+//
+// THE ONE DEFECT THESE EXIST TO PREVENT: a card that was NOT written to journey's canonical
+// `public.tasks` presenting to the calling app as a saved record. That is the exact shape `5aaef9e`
+// closed on the reply side ("the user was told the task was added and NO ROW EXISTED ANYWHERE") and
+// projecting cards is the way it could reopen.
+console.log("\nF4-F12. task cards across the cross-app boundary");
+
+/** A journey-echoed row: proof of a write, because journey handed its own uuid back. */
+const journeyRow = { id: "6f1c-uuid", title: "finish the CF case brief", status: "BACKLOG" };
+/** A Huddle-side draft: NOT proof of a write. Shape per SuggestedTaskDraft (seed.ts). */
+const huddleCard = { id: "task-abc", title: "book the flights", ownerId: "troy-mercer", lane: "Backlog" };
+
+check(
+  "F4 a journey-ECHOED row projects as persisted, carrying journey's own id",
+  (() => {
+    const t = projectTurnTasks({ journeyTaskUpdates: [journeyRow] });
+    return (
+      t.length === 1 && t[0].persisted === true && t[0].id === "6f1c-uuid" && t[0].lane === "BACKLOG"
+    );
+  })(),
+);
+
+check(
+  "F5 a Huddle-only card projects as NOT persisted and CARRIES the do-not-claim-saved note",
+  (() => {
+    const t = projectTurnTasks({ suggestedTasks: [huddleCard] });
+    if (t.length !== 1 || t[0].persisted !== false) return false;
+    return t[0].persisted === false && t[0].note === UNPERSISTED_TASK_NOTE;
+  })(),
+);
+
+// THE CENTRAL GUARD. Mutation target: make the suggestedTasks arm emit `persisted: true` (or drop
+// the note) and this must go red.
+check(
+  "F6 a non-persisted card can NEVER present as saved -- no suggestedTasks entry projects persisted",
+  (() => {
+    const t = projectTurnTasks({
+      suggestedTasks: [
+        huddleCard,
+        { title: "second card" },
+        { id: "task-x", title: "third", lane: "Doing" },
+      ],
+    });
+    if (t.length !== 3) return false;
+    return t.every((c) => c.persisted === false && "note" in c && c.note === UNPERSISTED_TASK_NOTE);
+  })(),
+);
+
+check(
+  "F6b the note forbids the exact words that would misreport a suggestion as a write",
+  /do NOT present it as added, created or saved/.test(UNPERSISTED_TASK_NOTE) &&
+    /SUGGESTED ONLY/.test(UNPERSISTED_TASK_NOTE) &&
+    /no canonical row was written/.test(UNPERSISTED_TASK_NOTE),
+);
+
+check(
+  "F7 a journeyTaskUpdates entry with NO journey id is DEMOTED to a suggestion, not promoted",
+  (() => {
+    const t = projectTurnTasks({ journeyTaskUpdates: [{ title: "no uuid here", status: "BACKLOG" }] });
+    return t.length === 1 && t[0].persisted === false && "note" in t[0];
+  })(),
+);
+
+check(
+  "F7b a blank/whitespace id is not an id either (a trimmed-empty string cannot prove a row)",
+  (() => {
+    const t = projectTurnTasks({ journeyTaskUpdates: [{ id: "   ", title: "blank id" }] });
+    return t.length === 1 && t[0].persisted === false;
+  })(),
+);
+
+check(
+  "F8 both arrays in one turn keep their own verdicts -- they are not merged into one state",
+  (() => {
+    const t = projectTurnTasks({ journeyTaskUpdates: [journeyRow], suggestedTasks: [huddleCard] });
+    const saved = t.filter((c) => c.persisted);
+    const proposed = t.filter((c) => !c.persisted);
+    return (
+      t.length === 2 &&
+      saved.length === 1 &&
+      saved[0].title === "finish the CF case brief" &&
+      proposed.length === 1 &&
+      proposed[0].title === "book the flights"
+    );
+  })(),
+);
+
+check(
+  "F9 garbage or absent task arrays never throw -- they project to []",
+  (() => {
+    return (
+      projectTurnTasks(undefined).length === 0 &&
+      projectTurnTasks({}).length === 0 &&
+      projectTurnTasks({ journeyTaskUpdates: 7, suggestedTasks: "nope" }).length === 0 &&
+      projectTurnTasks({ journeyTaskUpdates: [null, 3, "x"], suggestedTasks: [undefined] }).length === 0
+    );
+  })(),
+);
+
+check(
+  "F10 a titleless entry is dropped rather than emitted as an untitled card",
+  (() => {
+    const t = projectTurnTasks({
+      journeyTaskUpdates: [{ id: "j-2", title: "   " }, { id: "j-3" }],
+      suggestedTasks: [{ id: "task-y", lane: "Backlog" }],
+    });
+    return t.length === 0;
+  })(),
+);
+
+check(
+  "F11 titles are capped at 160, the same bound the Huddle draft path applies",
+  (() => {
+    const long = "x".repeat(500);
+    const t = projectTurnTasks({ journeyTaskUpdates: [{ id: "j-4", title: long }] });
+    return t.length === 1 && t[0].title.length === 160;
+  })(),
+);
+
+check(
+  "F12 projectTurnResult ALWAYS carries a tasks key, even for a garbage result",
+  (() => {
+    const a = projectTurnResult(undefined);
+    const b = projectTurnResult({ replies: [] });
+    return Array.isArray(a.tasks) && a.tasks.length === 0 && Array.isArray(b.tasks);
   })(),
 );
 
@@ -849,6 +1004,42 @@ check(
   check(
     "J6 that note forbids the exact words the ghost produced",
     /do NOT say it was added, created, or saved/.test(turnSrc),
+  );
+
+  // ------------------------------------------------ K. structural guards on the card projection
+  //
+  // Same reasoning as J4, one boundary further out. J4 made a MISSING FIELD a build error; these
+  // make a card that does not state its persistence, or states it without the disclaimer, a build
+  // error too. A runtime assertion alone would only catch the paths this suite happens to exercise.
+  console.log("\nK. structural guards on the card projection");
+
+  check(
+    "K1 ProjectedTask is a union discriminated on persisted -- there is no third, unstated state",
+    /persisted: true;/.test(gateSrc) && /persisted: false;/.test(gateSrc) && !/persisted\?:/.test(gateSrc),
+  );
+
+  // THE TYPE-LEVEL VERSION OF F6. `note: string` (not `note?:`) on the persisted:false arm means a
+  // future edit that builds a suggestion and forgets to say it is a suggestion does not compile.
+  check(
+    "K2 `note` is REQUIRED on the persisted:false arm, so an unsaved card cannot omit its disclaimer",
+    /\{ persisted: false;[^}]*note: string \}/.test(gateSrc) &&
+      !/\{ persisted: false;[^}]*note\?: string/.test(gateSrc),
+  );
+
+  check(
+    "K3 the projector reads suggestedTasks -- the array whose drop was the original defect",
+    /suggestedTasks/.test(stripComments(gateSrc)) && /journeyTaskUpdates/.test(stripComments(gateSrc)),
+  );
+
+  check(
+    "K4 every route success response carries a tasks key (absent-vs-empty is not a caller's problem)",
+    (() => {
+      const successes = routeCode.split("\n").filter((l) => /json\(\{ ok: true/.test(l));
+      return (
+        successes.length > 0 &&
+        successes.every((l) => /projectTurnResult\(/.test(l) || /tasks: \[\]/.test(l))
+      );
+    })(),
   );
 }
 
