@@ -762,3 +762,158 @@ otherwise would be the "should work" this repo's `verify-work` skill bans.
 **Recommendation: do not refactor nexus's UI in this change.** Ship the registry as authoritative
 for the widget, with assertion 5 as the tripwire. Revisit the refactor only if assertion 5's
 allow-list starts growing, which is itself the signal that the scan is losing.
+
+---
+
+## 7. Mechanism, part 3 — intent → action resolution
+
+### 7.1 The hard case is the owner's own example
+
+> *"if it shows me an assignment to describe a good memory, I will text in the chat, **we will focus
+> on my high school football championship** and it should update and refresh the context text box
+> before the instructions."*
+
+Look at what that utterance contains:
+
+| | |
+|---|---|
+| a verb | **no** |
+| an action name | **no** |
+| a field name | **no** |
+| a widget reference | **no** |
+| pure assignment content | **yes** |
+
+**INTERPRETATION.** This is the case that breaks a keyword or verb-based approach, and it is not an
+edge case — it is the owner's *primary* example of how he expects to use the widget. The correct
+behaviour is to recognise that a statement carrying only subject matter, arriving while an
+assignment card is open at the context stage, **is** a `set_context` action with the whole utterance
+as its argument. No verb will ever appear.
+
+**This repo has already learned this lesson, twice, and written it down both times.** Huddle's
+`CLAUDE.md`: *"Routing is the auto-scaling brain — fix multi-agent behavior THERE, not with regex …
+do not bolt on hardcoded agent lists or verb-regexes to steer who responds — they won't keep up."*
+And nexus's `workflowTypes.ts`, on `recommendWorkflowType`:
+
+> *"Detection must fire on DIRECTIVE prompts, not just interrogatives. Ground truth from the live
+> data: this owner's requirements are all directives ("Describe a moment…", "Assess your current AI
+> readiness…"). **A question-mark or wh-word test would match none of them — a mistake made twice
+> before it was written down.**"*
+
+Same owner, same failure, both repos. The resolver is semantic over the registry, not lexical.
+
+### 7.2 The resolution pipeline
+
+**PROPOSAL.** Four stages, each of which can decline. Stage 0 is not optional — it is the existing
+disambiguation policy from [§3.5](#35-direction-1-already-exists--the-read-half-is-built).
+
+```
+utterance + open-card context (assignmentId, current stage, field values)
+    │
+    ├─ 0. TARGET RESOLUTION ─ which assignment? If the utterance names one and
+    │       get_nexus_assignments returns needs_disambiguation → ASK, never guess.
+    │       If a card is open in the thread, that card is the default target.
+    │
+    ├─ 1. CANDIDATE FILTER ─ registry entries whose `stage` is the card's current
+    │       stage or "any". A draft action is not a candidate at the context gate.
+    │
+    ├─ 2. SEMANTIC RANK ─ the model reads `modelDescription` for each candidate and
+    │       the utterance, and returns {actionId, args, confidence} or null.
+    │       Content with no action intent falls through to stage 3 — it does NOT
+    │       become a low-confidence guess at some other action.
+    │
+    └─ 3. CONTENT FALLBACK ─ no candidate matched AND the card's current stage has a
+            free-text field (context) AND the utterance is not a question about the
+            card → resolve to `set_context`, argument = the utterance.
+            THIS is the branch the football-championship example takes.
+```
+
+**Stage 3 is the design's key decision and it is deliberately narrow.** It fires only when the card
+is at a stage with a free-text field. At the outline gate, an unmatched content-shaped utterance is
+*not* silently written anywhere; the agent asks. Widening stage 3 beyond the context stage would
+turn every stray sentence in the thread into an edit.
+
+### 7.3 Confirm-before-mutate, derived not guessed
+
+**PROPOSAL.** `needsConfirmation` is read from the registry entry, never inferred at resolution
+time. The behaviour:
+
+| Resolved action | Behaviour |
+|---|---|
+| `mutating: false` | run immediately, render the result |
+| `mutating: true, needsConfirmation: false` | run immediately, **re-render the affected field**, and say what changed in one line |
+| `mutating: true, needsConfirmation: true` | render a `ConfirmAskRow`-shaped gate; nothing happens until pressed |
+| resolver returned `null` | the agent says what it did not understand and names the actions available at this stage — from the registry, so the list cannot go stale |
+
+The owner's example is row two: `set_context` is mutating, needs no confirmation, and the response
+is *"it should update and refresh the context text box"* — a visible field change, not a dialog.
+**The confirmation for a low-stakes reversible edit is seeing it happen.**
+
+### 7.4 The fixture — "can it do X" becomes a command you run
+
+**OBSERVATION.** Huddle already has the right precedent for this in
+`scripts/router-winners.test.ts`: *"Offline unit test for the router's pure winner-assembly logic.
+NO OpenAI calls — feeds mocked router outputs … straight into `assembleWinners` and asserts the
+final winner set … the cheap layer that proves the mention/handoff/multi-lane routing WITHOUT
+running full multi-agent turns (which would fire N agent-reply LLM calls per test and burn quota)."*
+This matters concretely: Huddle's `CLAUDE.md` records six rounds of routing prompt tweaks that were
+chasing an OpenAI 429 quota fallback rather than the code under test.
+
+**PROPOSAL.** `scripts/assignment-intent.fixture.mjs` — a data file of real utterances with their
+expected resolution, consumed by two different harnesses:
+
+```js
+// { utterance, stage, expect: { actionId, args? } | null, why }
+{ utterance: "we will focus on my high school football championship",
+  stage: "context",
+  expect: { actionId: "set_context" },
+  why: "OWNER'S OWN EXAMPLE. No verb, no action name, pure content. The regression that " +
+       "matters most: any resolver change that makes this return null has broken the feature." },
+```
+
+Seed set, each row a behaviour someone could otherwise get wrong:
+
+| # | Utterance | Stage | Expect | Why it is in the set |
+|---|---|---|---|---|
+| 1 | "we will focus on my high school football championship" | context | `set_context` | the owner's example; verbless content |
+| 2 | "actually make it about my first job instead" | context | `set_context` (replace) | replacement, not append — the distinction the widget must get right |
+| 3 | "add the syllabus PDF to the materials" | context | `add_context_file` | names a file; must not become `set_context` |
+| 4 | "use the case study from week 3 too" | context | `add_context_file` | "too" = additive, no file name given → needs the file picker, not a guess |
+| 5 | "pull the requirements" | context | `extract_requirements` | explicit verb, the easy case, present as a control |
+| 6 | "that second requirement is wrong, it should say 500 words" | requirements | `edit_requirement` | targets one row of a list by description, not index |
+| 7 | "looks good, go ahead" | requirements | `approve_requirements` | pure assent; meaning comes entirely from the stage |
+| 8 | "looks good, go ahead" | outline | `approve_outline` | **same words, different action** — proves stage is part of resolution |
+| 9 | "redo the outline, make it 4 sections" | outline | `regenerate_outline` | "rerun" from the owner's request |
+| 10 | "write it" | outline | `start_draft` | the gated one; must produce a confirm, not a run |
+| 11 | "make this a discussion post not an essay" | any | `set_workflow_type` | changes downstream format ([§8](#8-the-staged-gates)) |
+| 12 | "what's the word count again?" | requirements | `null` | a **question**, not an action — must not mutate anything |
+| 13 | "when is this due?" | context | `null` | ditto; the stage-3 fallback must not swallow it |
+| 14 | "the introduction discussion" (2 courses match) | any | `null` + `needs_disambiguation` | the owner's stated policy from `nexus.server.ts` |
+
+Rows 7/8 and rows 12/13 are the two that earn the fixture's existence: the first pair proves stage
+is load-bearing, the second proves stage 3 does not swallow questions.
+
+**Two harnesses, one fixture:**
+
+1. **Offline** (`bun scripts/assignment-intent.test.mjs`) — mocks the semantic ranker's output and
+   asserts the *deterministic* parts: candidate filtering by stage, the stage-3 fallback condition,
+   `needsConfirmation` lookup, disambiguation short-circuit. No API spend, runs in the build. This
+   is what parity assertion 4 ([§6.3](#63-what-it-asserts)) reads to confirm every registry entry
+   has a trigger.
+2. **Live** (`test-agent-serverfn` skill, per this repo's `CLAUDE.md`) — runs the real utterances
+   through the real turn. Necessarily slower and quota-dependent, so it is a periodic check, not a
+   build gate. **Per this repo's rules, any live run must use `journey:{enabled:false}` or a
+   `Test-` prefix so it cannot write to the owner's real board.**
+
+**Answering "can it do X" therefore becomes: add X to the fixture and run it.** That is the concrete
+form of the owner's question this whole spec is built to satisfy.
+
+### 7.5 Why all three parts are required
+
+Each part alone fails in a specific, nameable way:
+
+| Have | Missing | Failure |
+|---|---|---|
+| registry only | test, fixture | drifts silently — the exact `workflowTypes.ts` history |
+| registry + test | fixture | every action is reachable by *button*; the owner's verbless utterance resolves to nothing |
+| registry + fixture | test | both stay correct until someone adds an action to nexus and nothing notices |
+| fixture only | registry | utterances map to hand-written handlers; back to a list that cannot be maintained |
