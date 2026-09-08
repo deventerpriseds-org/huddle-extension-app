@@ -3158,3 +3158,25 @@ object id). Nexus-side telemetry read: nexus-hub PR #68.
 this lane AND a different `Q6` by `claude/probe-q6-forward-logs` — collision, needs renumbering at
 merge. An independent verifier (`turn-is-real`, loop 1) is checking this lane's claims; its report is
 `docs/VERIFY-turn-is-real-1.md`.
+
+## 2026-09-08 — cross-app turn: merged, deployed, and one follow-on defect fixed
+
+**Merged in the owner's stated order** (44 before 70): huddle #44 `932c9b4`, nexus #69 `6d23fae`,
+#68 `68fc220`, #70 `ece6e71`. #70 conflicted once the two under it landed — `memory.md`/`actions.md`,
+one hunk each, resolved keeping BOTH sides (`+66 lines, 0 deletions` vs main is the proof nothing was
+dropped). Both deploys fired automatically on push to main and both succeeded.
+
+**Verified live, not inferred:** probe `34222975557` → query `34223230387` → the marked turn is in
+`chat.pending_turns` (1), in `public.rag_chunks` (1), with an owner attached (1).
+
+**The owner's test value, end to end** (`nexus_hub.content.conversation_messages`): told to Elle at
+04:52 and 04:54 as "1925", answered "I've recorded the test integration code securely"; at 05:52 she
+could not find it. Zero `rag_chunks` matched it. The five `pending_turns` that appeared to match were
+an artefact of a four-digit substring over a whole JSONB blob — the rotated value `1825` matched the
+SAME five rows, dated 2026-07-30 to 2026-08-31, `in_user_text` false on every one.
+
+**Shipped after that:** `lib/turn-identity.ts` + 22 assertions (`npm run test:turn-identity`), three
+mutations all FIRED, `tsc` clean on the four touched files. Fixes the Huddle 1:1 rendering a Nexus
+exchange as the agent's replies with nothing said to her.
+
+**NOT yet confirmed by the owner in his own browser** — deployed, mechanism proven, awaiting his look.
