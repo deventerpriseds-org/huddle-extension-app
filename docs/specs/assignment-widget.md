@@ -522,3 +522,243 @@ carry the same instruction that `tools.ts:90` carries — when the user asks for
 the app resolves the full set itself rather than the model hand-picking a sample. An assignment
 card that silently showed 3 of 7 due assignments would be the same defect the checklist's *"LEGACY
 ONLY. New checklists are never truncated"* comment records having already been fixed once.
+
+---
+
+## 5. Mechanism, part 1 — the action registry
+
+> The owner's question: **"how will you make sure all of these actions are covered?"**
+> This section and the two after it are the whole answer. None of the three is optional; each alone
+> fails in a specific way named at the end of [§7](#74-why-all-three-parts-are-required).
+
+### 5.1 The precedent is documented, not argued
+
+**OBSERVATION.** `nexus-hub/api/src/shared/workflowTypes.ts` opens by narrating exactly the failure
+this spec must avoid:
+
+> *"WHY IT EXISTS AT ALL: this registry was created to be a single source of truth and was
+> immediately written down TWICE — `api/src/lib/workflowTypes.ts` and `src/lib/workflowTypes.ts`.
+> **Within one working session the copies had already drifted:**"*
+>
+> ```
+> deliverableNoun('question_response')   server: 'set of question responses'   client: 'question response'
+> deliverableNoun('case_study')          server: 'case write-up'               client: 'case study'
+> ```
+>
+> *"Same name, same stated purpose, different answers, no error anywhere."*
+
+It also records **why the file lives where it does**, which the widget's registry must respect:
+
+> *"WHY IT LIVES UNDER `api/src/`: `api/tsconfig.json` sets `rootDir: "src"`, so the Functions build
+> physically cannot compile a file outside that tree … So the constrained side owns the file and the
+> flexible side imports it via the `@shared` alias. The alternative was another copy, and copies are
+> the entire problem this file exists to end."*
+
+And the subtler lesson, which the widget's registry design follows directly:
+
+> *"the two values were not a mistake, they were two genuinely different registers — one goes into a
+> model prompt … the other onto a button … So the distinction is now NAMED and deliberate —
+> `modelNoun` vs `uiNoun` — instead of being an accident of which file you happened to open."*
+
+**INTERPRETATION.** Two audiences, two names, one entry. The action registry needs the same split:
+every action has a name the **user** sees on a button, and a description the **model** reads when
+deciding whether an utterance means that action. Collapsing them into one string is the identical
+mistake, one layer up.
+
+### 5.2 What the registry is
+
+**PROPOSAL.** One module, `nexus-hub/api/src/shared/assignmentActions.ts`, beside
+`workflowTypes.ts`, for the reason `workflowTypes.ts` gives about `rootDir` — the constrained side
+owns it, the flexible side imports it via `@shared`, and Huddle imports it as a build-time copy
+([§5.4](#54-how-huddle-gets-the-registry-across-a-repo-boundary)).
+
+Each entry declares:
+
+```ts
+export interface AssignmentAction {
+  /** Stable id. Never renamed — the parity test and the fixture both key on it. */
+  id: string;
+  /** What the USER sees on a widget button / in a confirmation. (cf. workflowTypes uiNoun) */
+  uiLabel: string;
+  /** What the MODEL reads when resolving an utterance to this action. (cf. modelNoun) */
+  modelDescription: string;
+  /** Typed arguments, so the intent resolver and the widget build the same call. */
+  args: Record<string, { type: "string" | "number" | "boolean" | "string[]"; required: boolean }>;
+  /** Does it change nexus state? Read-only actions skip the confirm step entirely. */
+  mutating: boolean;
+  /** Must the user press something before this runs? See §7.3 for how this is derived, not guessed. */
+  needsConfirmation: boolean;
+  /** Which gate this action belongs to — drives which widget section renders it. */
+  stage: "context" | "requirements" | "outline" | "draft" | "any";
+  /** The nexus endpoint it calls, so the parity test can assert the route exists. */
+  endpoint: { method: "GET" | "POST" | "PATCH"; path: string };
+}
+```
+
+**The `mutating` / `needsConfirmation` split is deliberate and they are not the same field.**
+Setting the context text is `mutating: true` but `needsConfirmation: false` — it is trivially
+reversible and the owner explicitly wants it to just happen ("it should update and refresh the
+context text box"). Starting the draft is `mutating: true, needsConfirmation: true` — it spends
+real model budget and is the gate the owner asked for by name. Re-reading the requirements is
+`mutating: false`. Collapsing the two into one boolean would either put a confirm dialog in front of
+the owner's own example utterance, or remove the gate he asked for.
+
+### 5.3 Both surfaces render FROM it
+
+**PROPOSAL.** The registry is not documentation about the actions; it is **the definition the code
+executes**.
+
+```
+                    assignmentActions.ts  (ONE array)
+                              │
+        ┌─────────────────────┼──────────────────────┐
+        │                     │                      │
+   nexus UI              Huddle widget         intent resolver
+   renders buttons       renders buttons       ranks candidates
+   from entries          from entries          from modelDescription
+        │                     │                      │
+        └──────── same endpoint, same args ──────────┘
+```
+
+**The nexus half is the part that makes this real, and it is also the part that costs the most.**
+If nexus keeps rendering its 70–129 controls as hand-written JSX while Huddle renders from a
+registry, the registry is a *second* description of the actions and will drift exactly as
+`workflowTypes.ts` drifted — and this time the drift is invisible, because the two surfaces are in
+different repos and no build compiles both.
+
+**INTERPRETATION / honest scoping.** Converting all of nexus's assistant components to render from
+the registry is a large refactor of a 3,305-line modal, and it is **not** what the owner asked for.
+The recommended compromise, and the reason [§6](#6-mechanism-part-2--the-parity-test-that-fails-on-omission)
+exists in the form it does:
+
+- **Registry is authoritative for the widget** from day one — Huddle renders only what it declares.
+- **Nexus is not refactored** to render from it in this change.
+- **The parity test runs against nexus's source** and fails when nexus grows an action the registry
+  does not know about. The registry does not have to *drive* nexus to stay in sync with it, as long
+  as something goes red when nexus moves without it.
+
+That is the trade the owner should see explicitly, so it is drawn out in
+[§6.4](#64-the-trade-this-makes-and-what-it-costs).
+
+### 5.4 How Huddle gets the registry across a repo boundary
+
+**OBSERVATION.** Huddle already vendors a nexus-derived constant this way, though not via a shared
+file: `nexus.server.ts` hardcodes the `/api/d1/{table}` route shape and the operator syntax
+(`gte.`, `ilike.`), citing `d1.ts:461` and `d1.ts:523-527` in comments as the source it was read
+from.
+
+**PROPOSAL — and this is a genuine fork, so it is drawn rather than asserted.**
+
+| Option | What actually happens | Cost / what you lose | Makes easy later | Makes hard later |
+|---|---|---|---|---|
+| **A. Vendor a generated copy** — a build step in Huddle fetches `assignmentActions.ts` from nexus and writes `src/features/huddle/lib/nexus/assignmentActions.generated.ts`, checked in | Huddle builds offline; the copy is diffable in review; the parity test compares copy vs source and fails when they differ | It IS a copy — the thing `workflowTypes.ts` warns about — and is only as fresh as the last regeneration | Reviewing exactly what changed; building Huddle with nexus unreachable | Nothing; staleness is caught by the test rather than by a person |
+| **B. Fetch at runtime** — Huddle GETs the registry from nexus on boot | Always current, no copy | Huddle's tool list now depends on nexus being up; `nexusReadConfigured()`'s "half-configured reads as no tools" rule would have to extend to "nexus down reads as no widget" | Never being stale | Every failure mode in [§10](#10-cross-app-failure-modes), now applied to whether the feature exists at all |
+| **C. Publish a shared npm package** | Proper single source | New package, new release step, new version-skew mode, for two consumers in one estate | Adding a third consumer | Every change now needs a publish; the estate has no precedent for this |
+
+**Recommendation: A.** The failure mode of a checked-in generated copy is *staleness*, and staleness
+is exactly what [§6](#6-mechanism-part-2--the-parity-test-that-fails-on-omission) is built to
+detect — so its one weakness is the one already covered. B makes the widget's *existence* depend on
+nexus's uptime, which is strictly worse than the [§10](#10-cross-app-failure-modes) degradation
+where the widget exists and reports that it cannot reach nexus. C is real single-sourcing but adds
+release machinery this estate has no precedent for, for two consumers.
+
+**Reversible / not:** A and B are both reversible in an afternoon. C is not — once a package is
+published and depended on, unwinding it touches both repos' build config.
+
+---
+
+## 6. Mechanism, part 2 — the parity test that fails on omission
+
+### 6.1 The rule it enforces
+
+> **Every registry entry MUST have (a) a widget affordance and (b) at least one natural-language
+> trigger. Every action nexus can perform MUST be in the registry. A violation of either turns the
+> build red.**
+
+This is what converts "everything I can do manually" from a promise into a property. The claim
+becomes: *adding an action to nexus without registering it breaks the build*, which is checkable by
+running one command.
+
+### 6.2 Where it lives — and why that choice is the whole point
+
+**OBSERVATION.** `nexus-hub/scripts/run-tests.mjs` exists because guards that were not wired into
+the deploy path had never run. Its header:
+
+> *"All 16 suites — 348 checks — ran only when a human typed them. `npm run build` was
+> `check-model-config && vite build`, and `deploy-swa.yml` runs exactly that, so a change that broke
+> every guard in the repo still deployed green."*
+>
+> **_"A guard that is not in the deploy path is not a guard. It is a note."_**
+
+And it happened **twice** — the same file records finding the identical gap again in
+`extension/tests/`, where two suites *"had never run in any build — they were notes with a
+`.test.mjs` extension."* It defends against a third recurrence with a `REQUIRED` list:
+
+> `const REQUIRED = ['extension/tests/one-scrape.test.mjs', 'scripts/outline-chain.test.mjs'];`
+>
+> *"renaming or deleting it makes this runner refuse to report success, rather than quietly testing
+> one file less."*
+
+**OBSERVATION — the same gap exists in Huddle today.** Huddle's `package.json` declares nine test
+scripts (`test:router`, `test:blocked`, `test:presence`, `test:mode`, `test:voice-tools`,
+`test:cross-app`, `test:email-gate`, `test:nexus-tools`, `test:turn-identity`), each `bun
+scripts/<name>.test.*`. There is **no `test` script and no aggregator**, and `build` is plain `vite
+build`. Per this repo's `CLAUDE.md`, `deploy-swa.yml` auto-deploys on every push to `main`.
+
+**INTERPRETATION.** By nexus's own standard, all nine Huddle suites are currently notes. A parity
+test added as a tenth `test:` script would be a tenth note. **So the parity test's placement is not
+an afterthought — it is the deliverable.**
+
+**PROPOSAL.**
+
+1. **The assertion lives in nexus**, at `nexus-hub/scripts/assignment-action-parity.test.mjs`,
+   because that is where `run-tests.mjs` already globs `scripts/*.test.mjs` and where the registry
+   source of truth lives.
+2. **It is added to `REQUIRED`**, so deleting or renaming it fails the run rather than quietly
+   reducing coverage — using the mechanism that file already built for exactly this.
+3. **The Huddle half needs an aggregator first.** Add `"test": "bun scripts/*.test.*"`-equivalent
+   (a small `run-tests.mjs` mirroring nexus's, since bun does not glob reliably across the mixed
+   `.ts`/`.mjs` extensions in `scripts/`) and put it in `build`, so the nine existing suites *and*
+   the widget's suite run on the path to prod. **This is a prerequisite, and it is worth doing on
+   its own merits regardless of this feature.**
+
+### 6.3 What it asserts
+
+**PROPOSAL.** Six assertions, each naming its mutation target — the change that must make it fail:
+
+| # | Assertion | Mutation that must turn it red |
+|---|---|---|
+| 1 | Every `AssignmentAction.id` is unique and matches `/^[a-z][a-z0-9_]*$/` | duplicate an id |
+| 2 | Every entry's `endpoint.path` appears in a route registered under `api/src/functions/` | change an entry's path to a route that does not exist |
+| 3 | **Every entry has a widget affordance**: its `id` appears in the widget's action→control map | add a registry entry, render nothing for it |
+| 4 | **Every entry has ≥1 fixture utterance** resolving to it ([§7](#7-mechanism-part-3--intent--action-resolution)) | add a registry entry with no utterance |
+| 5 | **Every mutating call site in nexus's assistant components is registered** — scan `src/components/assistant/*.tsx` for `fetch`/`nexusFnUrl`/`supabase.from(...).update|insert|delete` calls and require each resolved endpoint to appear in some entry's `endpoint.path` | add a new action to `AgenticWriterModal.tsx` without registering it |
+| 6 | The Huddle vendored copy is byte-identical to the nexus source (Option A, [§5.4](#54-how-huddle-gets-the-registry-across-a-repo-boundary)) | edit one copy only |
+
+**Assertion 5 is the one that answers the owner's question**, and it is also the one that can be
+wrong in the direction that matters. It is a **static scan of a file whose actions are mostly inline
+closures** — so it will produce false positives (a `fetch` that is not an assignment action) and can
+miss indirection (a call built through a helper). Both are stated here rather than discovered later:
+
+- **False positives** are handled by an explicit, commented allow-list in the test file. An
+  allow-list entry is a deliberate act a reviewer can see, which is the property that matters.
+- **Misses** are the real limit. Assertion 5 raises the cost of adding an unregistered action from
+  zero to "you must also edit an allow-list"; it does not make it impossible. **Say so plainly
+  rather than claiming completeness the mechanism cannot deliver.**
+
+**This is the honest boundary of the coverage claim.** The registry + parity test make coverage
+*checkable and hard to break silently*. They do not make it *provable*. A spec that claimed
+otherwise would be the "should work" this repo's `verify-work` skill bans.
+
+### 6.4 The trade this makes, and what it costs
+
+| | If nexus renders from the registry | If nexus does not (recommended for this change) |
+|---|---|---|
+| Effort | large refactor of a 3,305-line modal | none in nexus's UI |
+| Drift | structurally impossible | possible, but detected by assertion 5 |
+| Failure mode | none | an unregistered action slips past the scan's blind spot |
+| Reversible | yes, but expensive to redo | yes, cheaply |
+
+**Recommendation: do not refactor nexus's UI in this change.** Ship the registry as authoritative
+for the widget, with assertion 5 as the tripwire. Revisit the refactor only if assertion 5's
+allow-list starts growing, which is itself the signal that the scan is losing.
