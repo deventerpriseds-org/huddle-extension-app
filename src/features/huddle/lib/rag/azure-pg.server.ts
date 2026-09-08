@@ -545,9 +545,10 @@ export const azurePgStore: RagStore = {
       toPgVector(vec),
       input.metadata ?? {},
       input.authorAgentIds ?? [],
+      input.ownerEntraOid ?? null,
     ];
-    const cols = `(scope, agent_id, text, source, embedding, metadata, author_agent_ids)`;
-    const vals = `VALUES ($1, $2, $3, $4, $5::vector, $6, $7)`;
+    const cols = `(scope, agent_id, text, source, embedding, metadata, author_agent_ids, owner_entra_oid)`;
+    const vals = `VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8)`;
 
     // An exact repeat is a no-op that hands back the row already holding this text. The conflict target
     // is CHUNK_DEDUP_KEY, the same constant the index is built from, so it cannot drift out of sync.
@@ -578,6 +579,19 @@ export const azurePgStore: RagStore = {
     const onConflict =
       `ON CONFLICT (${CHUNK_DEDUP_KEY})
        DO UPDATE SET text = EXCLUDED.text,
+                     -- owner_entra_oid IS in the DO UPDATE, and that is the whole point of AC D2.
+                     -- Adding the column to the INSERT list alone stamps only rows that are BRAND NEW;
+                     -- every repeated utterance takes this conflict branch instead and would stay
+                     -- NULL-owned forever. The two rows measured NULL on 2026-09-08 are exactly the
+                     -- kind this path keeps re-touching.
+                     --
+                     -- COALESCE(existing, incoming) -- FIRST NON-NULL WRITER WINS, deliberately in
+                     -- this order. An existing NULL row is stamped (D2 satisfied); an owned row is
+                     -- never REASSIGNED to a later writer. Identical text under the same
+                     -- (scope, agent_id, source) is the dedup key, so with two people that collision
+                     -- is reachable, and silently flipping ownership on a shared row would be worse
+                     -- than the NULL it replaced.
+                     owner_entra_oid = COALESCE(rag_chunks.owner_entra_oid, EXCLUDED.owner_entra_oid),
                      author_agent_ids = CASE
                        WHEN EXCLUDED.author_agent_ids <@ rag_chunks.author_agent_ids
                          THEN rag_chunks.author_agent_ids
@@ -675,8 +689,8 @@ export const azurePgStore: RagStore = {
       // the HIGHER confidence of the two assertions, and merge authors (guarded with `<@` so an
       // identical repeat writes the array back unchanged instead of growing it). source_chunk_id is
       // left alone -- provenance points at the chunk that FIRST carried the fact.
-      const head = `INSERT INTO rag_triples (scope, agent_id, subject, predicate, object, confidence, source_chunk_id, author_agent_ids)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`;
+      const head = `INSERT INTO rag_triples (scope, agent_id, subject, predicate, object, confidence, source_chunk_id, author_agent_ids, owner_entra_oid)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`;
       const tParams = [
         t.scope,
         t.agentId ?? null,
@@ -686,6 +700,7 @@ export const azurePgStore: RagStore = {
         t.confidence ?? 0.8,
         t.sourceChunkId ?? null,
         t.authorAgentIds ?? [],
+        t.ownerEntraOid ?? null,
       ];
       // created_at IS bumped here, the OPPOSITE of writeChunk -- and the difference is deliberate, not
       // an inconsistency. lookupTriples orders `confidence DESC, created_at DESC`, so for triples
@@ -695,6 +710,10 @@ export const azurePgStore: RagStore = {
       const tOnConflict = `ON CONFLICT (${TRIPLE_DEDUP_KEY}) WHERE ${TRIPLE_DEDUP_PRED}
          DO UPDATE SET confidence = greatest(rag_triples.confidence, EXCLUDED.confidence),
                        created_at = now(),
+                       -- Same first-non-null-wins rule as writeChunk, for the same reason (AC D4):
+                       -- a re-asserted fact collapses onto the live row via this branch, so without
+                       -- it a repeated fact would never gain an owner.
+                       owner_entra_oid = COALESCE(rag_triples.owner_entra_oid, EXCLUDED.owner_entra_oid),
                        author_agent_ids = CASE
                          WHEN EXCLUDED.author_agent_ids <@ rag_triples.author_agent_ids
                            THEN rag_triples.author_agent_ids
