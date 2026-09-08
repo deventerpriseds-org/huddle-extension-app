@@ -424,6 +424,17 @@ t("the embedding model is reported, so a corpus/query mismatch is visible", kb.m
 t("the owner's whole question is sent, not a keyword",
   calls[0].includes("query=how+is+the+course+graded?"), true);
 t("...and the default k rides with it", calls[0].includes("k=8"), true);
+
+// AND IT REACHES THE ROUTE UNMANGLED. `likeTerm` strips `%` and `_` because those are SQL LIKE
+// wildcards -- meaningful ONLY on the fallback path. A question like "what is the 40% weighting?"
+// is entirely ordinary, and running it through likeTerm would silently send "40 weighting" to a
+// semantic search. Tested with a query that actually CONTAINS those characters: without one, this
+// assertion and a likeTerm'd query are indistinguishable (measured -- the mutation was INERT until
+// this case existed).
+calls = [];
+await executeNexusTool("search_nexus_knowledge", { query: "the 40% rule for working_capital" }, "UTC");
+t("SQL LIKE wildcards are NOT stripped from a semantic query",
+  calls[0].includes("query=the+40%+rule+for+working_capital"), true);
 t("the owner still comes from config, not the args", calls[0].includes("owner=owner-uuid"), true);
 // THE GUARD SURVIVES THE REWRITE. The route projects rows itself, but stripEmbedding still runs --
 // a 1536-float vector per passage would dominate the tool result the model has to read.
