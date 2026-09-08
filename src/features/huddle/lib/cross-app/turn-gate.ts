@@ -395,16 +395,137 @@ export function buildTurnInput(
 }
 
 /**
+ * A TASK CARD as it crosses the cross-app boundary.
+ *
+ * A DISCRIMINATED UNION ON `persisted`, and that shape is the whole point -- the same reasoning that
+ * made `journey` REQUIRED on CrossAppAgentBackend, applied one boundary further out.
+ *
+ *   * `persisted` is REQUIRED on both arms, so a card cannot be constructed without stating whether
+ *     a canonical row exists. There is no "not sure" value and no default.
+ *   * `note` is REQUIRED on the `persisted: false` arm ONLY. So it is not merely possible to say
+ *     "this was not saved" -- it is impossible to emit an unsaved card WITHOUT saying it. A future
+ *     edit that builds a suggestion and forgets the disclaimer is a build error, not a turn that
+ *     quietly reads as a saved record on the far side.
+ *
+ * `persisted` is NOT a new vocabulary. It is the flag `create_huddle_task` already returns to the
+ * model on its Huddle-only branch (`{ ok: true, task, boards: ["huddle"], persisted: false, note:
+ * "SUGGESTED ONLY -- ..." }`, huddle.functions.ts). The projector cannot read it from there -- the
+ * tool RESULT is not on the turn result, only the card it pushed is -- so the same distinction is
+ * recovered from WHICH ARRAY the card arrived in. See projectTurnResult for that mapping.
+ */
+export type ProjectedTask =
+  | { persisted: true; title: string; id?: string; lane?: string }
+  | { persisted: false; title: string; id?: string; lane?: string; note: string };
+
+/** The disclaimer carried on every non-persisted card. Deliberately the same words the tool result
+ *  already hands the model, so the calling app and the agent cannot describe one card two ways. */
+export const UNPERSISTED_TASK_NOTE =
+  "SUGGESTED ONLY \u2014 no canonical row was written. Present this as a proposal awaiting approval; " +
+  "do NOT present it as added, created or saved.";
+
+/** Titles are model- or user-authored and unbounded on the journey side. Capped at the same 160 the
+ *  Huddle draft path already applies (`title.slice(0, 160)`) so one arm cannot return more than the
+ *  other for the same task. */
+const TITLE_MAX = 160;
+
+function readTitle(v: unknown): string | null {
+  const t = (v ?? {}) as Record<string, unknown>;
+  const title = typeof t.title === "string" ? t.title.trim() : "";
+  return title ? title.slice(0, TITLE_MAX) : null;
+}
+
+/**
+ * Project a turn's TASK CARDS for the calling app -- what the turn created, and what it merely
+ * proposed, kept apart.
+ *
+ * THE TWO SOURCES ARE NOT TWO VIEWS OF ONE THING (huddle.functions.ts):
+ *
+ *   journeyTaskUpdates[]  pushed ONLY from `if (r.ok && r.tasks?.length) push(...r.tasks)` after an
+ *                         `invokeJourneyTool` call -- i.e. a row journey ECHOED BACK out of its
+ *                         canonical `public.tasks`, carrying journey's own uuid. A row here is
+ *                         proof of a write.
+ *   suggestedTasks[]      a Huddle-side `SuggestedTaskDraft` built in-process. Three push sites:
+ *                         journey succeeded but echoed no row; the Huddle-only branch (journey
+ *                         disabled or no caller -- the branch that returns `persisted: false`); and
+ *                         the batch fallback. NONE of them is proof of a write, and only the first
+ *                         is one in fact.
+ *
+ * SO THE MAPPING IS DELIBERATELY ASYMMETRIC AND FAILS TOWARD "SUGGESTED":
+ *   - a `journeyTaskUpdates` entry becomes `persisted: true` ONLY when it carries BOTH a non-empty
+ *     string `id` (journey's uuid -- the thing that makes it a row rather than a draft) and a title.
+ *     Anything short of that is demoted to a suggestion rather than dropped or asserted as saved.
+ *   - EVERY `suggestedTasks` entry becomes `persisted: false`, including the one case that really
+ *     was written (journey ok, no echo). Under-claiming a real write costs the caller a redundant
+ *     confirmation; over-claiming a write that never happened is the defect `5aaef9e` just closed
+ *     and the one this projection must not reopen.
+ *
+ * A journey write that FAILED reaches neither array -- that handler returns `ok: false` and pushes
+ * nothing -- so a failure can never appear here in any state. Checked in source, not assumed.
+ *
+ * ON `title` CROSSING THE BOUNDARY, since the sibling projection below drops model prose on purpose:
+ * a title is not a debug channel, it is the PRODUCT of the turn -- a card with no title renders
+ * nothing and the caller may as well have been sent an empty array. It carries the same exposure
+ * `replies` already carries and is bounded the same way the Huddle board bounds it. The fields that
+ * exist only to explain the model to itself -- `prompts`, `reasoning`, a tool use's free-text
+ * `summary` -- are still dropped entirely.
+ */
+export function projectTurnTasks(result: unknown): ProjectedTask[] {
+  const r = (result ?? {}) as { journeyTaskUpdates?: unknown; suggestedTasks?: unknown };
+  const out: ProjectedTask[] = [];
+
+  if (Array.isArray(r.journeyTaskUpdates)) {
+    for (const row of r.journeyTaskUpdates) {
+      const title = readTitle(row);
+      if (!title) continue;
+      const t = row as Record<string, unknown>;
+      const id = typeof t.id === "string" && t.id.trim() ? t.id.trim() : null;
+      const lane = typeof t.status === "string" && t.status ? t.status : undefined;
+      if (!id) {
+        // No journey uuid -> no evidence of a canonical row. Demote, never promote.
+        out.push({ persisted: false, title, ...(lane ? { lane } : {}), note: UNPERSISTED_TASK_NOTE });
+        continue;
+      }
+      out.push({ persisted: true, title, id, ...(lane ? { lane } : {}) });
+    }
+  }
+
+  if (Array.isArray(r.suggestedTasks)) {
+    for (const card of r.suggestedTasks) {
+      const title = readTitle(card);
+      if (!title) continue;
+      const c = card as Record<string, unknown>;
+      const id = typeof c.id === "string" && c.id.trim() ? c.id.trim() : undefined;
+      const lane = typeof c.lane === "string" && c.lane ? c.lane : undefined;
+      out.push({
+        persisted: false,
+        title,
+        ...(id ? { id } : {}),
+        ...(lane ? { lane } : {}),
+        note: UNPERSISTED_TASK_NOTE,
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
  * Project the turn result down to what an external caller needs. Deliberately NARROW.
  *
  * `replies` is the answer. `toolUses` is projected to `{agentId, tool, ok}` -- names and outcomes,
- * never the free-text `summary` -- and `prompts`/`reasoning`/`suggestedTasks` are dropped entirely,
- * because they carry model-authored prose that can quote the resolved subject's email or other
- * account detail back to a caller that must not learn it.
+ * never the free-text `summary` -- and `prompts`/`reasoning` are dropped entirely, because they
+ * carry model-authored prose that can quote the resolved subject's email or other account detail
+ * back to a caller that must not learn it.
+ *
+ * `tasks` (added 2026-09-08) is the one thing that was dropped and should not have been. A forwarded
+ * turn can create a task; before this, the caller got reply prose and tool NAMES and no structured
+ * view of what was created or proposed, so nothing downstream could render the card or tell a saved
+ * row from a suggestion. See projectTurnTasks for the mapping and why it fails toward "suggested".
  */
 export function projectTurnResult(result: unknown): {
   replies: unknown[];
   toolUses: { agentId: unknown; tool: unknown; ok: unknown }[];
+  tasks: ProjectedTask[];
 } {
   const r = (result ?? {}) as { replies?: unknown; toolUses?: unknown };
   const replies = Array.isArray(r.replies) ? r.replies : [];
@@ -414,5 +535,5 @@ export function projectTurnResult(result: unknown): {
         return { agentId: u.agentId, tool: u.tool, ok: u.ok };
       })
     : [];
-  return { replies, toolUses };
+  return { replies, toolUses, tasks: projectTurnTasks(result) };
 }

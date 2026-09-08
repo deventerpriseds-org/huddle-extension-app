@@ -162,7 +162,10 @@ export const Route = createFileRoute("/api/public/run-agent-turn")({
           }
           // Persisted and claimable but not finished here (the cron heartbeat will finish it). The
           // caller gets the id so it can poll rather than being told the turn failed.
-          return json({ ok: true, turnId, status: outcome.status, replies: [], toolUses: [] });
+          // `tasks: []` is present, not omitted. Every other success response carries the key
+          // (projectTurnResult always returns it), and a caller that has to distinguish
+          // "absent" from "empty" on one status out of three will get it wrong.
+          return json({ ok: true, turnId, status: outcome.status, replies: [], toolUses: [], tasks: [] });
         } catch (err) {
           // Generic on the wire, detailed only in the server log. Echoing the error would leak
           // stack frames, file paths and connection strings to an external caller.
