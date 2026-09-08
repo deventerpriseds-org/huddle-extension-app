@@ -114,6 +114,11 @@ export const GET_NEXUS_ASSIGNMENTS_TOOL = {
         description: "Filter by lifecycle status exactly as Nexus stores it (e.g. 'pending', 'submitted'). Omit for all.",
       },
       course_id: { type: "string", description: "Restrict to one course, by Nexus course id." },
+      title: {
+        type: "string",
+        description:
+          "Case-insensitive substring of the assignment TITLE, for when the owner names one ('the introduction discussion', 'Discussion Board 1'). Pass the distinctive words only, not the whole phrase.",
+      },
     },
     required: [] as string[],
   },
@@ -201,6 +206,14 @@ export async function executeNexusTool(
     if (typeof args.status === "string" && args.status.trim()) {
       filters.push(["status", `eq.${args.status.trim()}`]);
     }
+    // TITLE SEARCH. The owner names an assignment in words ("the introduction discussion"); without
+    // this the model could only filter by course/status/date and had to scan. `ilike` is whitelisted
+    // by the Nexus API's operator table (d1.ts:461), so this is a server-side filter, not a fetch-
+    // everything-and-sift. Wildcards are stripped from the input so a stray % cannot widen the match
+    // back to everything and look like a working search.
+    const titleQuery =
+      typeof args.title === "string" ? args.title.trim().replace(/[%_]/g, "") : "";
+    if (titleQuery) filters.push(["title", `ilike.%${titleQuery}%`]);
     const within = typeof args.due_within_days === "number" ? args.due_within_days : undefined;
     if (within !== undefined && Number.isFinite(within)) {
       filters.push(["due_date", `gte.${dayIn(timeZone)}`]);
@@ -219,16 +232,27 @@ export async function executeNexusTool(
     });
 
     // AN EMPTY RESULT IS REPORTED AS EMPTY, not dressed up. A correct pipeline and a broken one both
-    // return zero rows, and the owner's data genuinely has no future due dates (measured: 534
-    // assignments, 504 with a due date, 0 in the future, latest 2026-08-18). If a date-bounded query
-    // finds nothing, say so and say the bound -- an agent that answers "you're all caught up!" from
-    // an empty set is the confident-wrong-answer failure this whole bridge exists to remove.
+    // return zero rows, so an agent answering "you're all caught up!" from an empty set is the
+    // confident-wrong-answer failure this whole bridge exists to remove.
+    //
+    // A COUNT OF LIVE DATA HAS A SHELF LIFE, and this comment previously carried one as though it
+    // did not: "534 assignments, 504 with a due date, 0 in the future, latest 2026-08-18", measured
+    // 2026-09-03 and used to argue the date filter was untestable. On 2026-09-08 two assignments
+    // were due in the FUTURE (2026-09-07 and 2026-09-10) -- the owner had imported a new term. The
+    // structural point survives; the number did not, so the number is gone rather than restated.
+    const ambiguous = titleQuery !== "" && rows.length > 1;
     return {
       ok: true,
       count: rows.length,
       filtered_by: filters.map(([c, v]) => `${c} ${v}`),
-      note:
-        rows.length === 0
+      // WHEN A TITLE SEARCH MATCHES SEVERAL, ASK -- never pick. The owner: "if there are multiple,
+      // I'd expect it to clarify for which course before executing." Guessing between two courses'
+      // assignments and then DRAFTING against the wrong one wastes the turn and looks like the tool
+      // worked. The course name is what disambiguates, so the directive names it explicitly.
+      needs_disambiguation: ambiguous || undefined,
+      note: ambiguous
+        ? `${rows.length} assignments match that title. STOP and ask the owner which COURSE he means -- list the matches with their course and due date, and do not act on any of them until he answers.`
+        : rows.length === 0
           ? "No assignments matched. Report this as 'nothing matched those filters' and state the filters used -- do NOT tell the owner he is caught up unless an unfiltered read also returns nothing."
           : undefined,
       assignments: rows,
