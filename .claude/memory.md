@@ -2728,3 +2728,70 @@ agent-initiated prefixes among them, and all three mutations FIRED.
 Same shape as the `data.agents` gate two defects earlier: both were server logic that quietly did
 nothing on a path its author never had. **The generalisation: adding a second front door invalidates
 every rule that was allowed to assume one.**
+
+### Can Elle draft a coursework assignment? The capability, read from the deployed code (2026-09-08)
+
+Owner asked, after the cross-app integration shipped: *"so I can now ask Elle to generate a draft for
+the introduction discussion assignment?"* Answered from `origin/main` at `fe59daa` and the deploy
+workflow, not from what was built.
+
+**Confirmed present and live:**
+
+| piece | evidence |
+|---|---|
+| `get_nexus_assignments` / `_courses` / `_class_schedule` | `lib/nexus/nexus.server.ts:101,125,139`, on main |
+| wired to BOTH surfaces | text `huddle.functions.ts:3230`; voice `realtime-tools.server.ts:172` + `NEXUS_TOOL_NAMES` at `:472` |
+| `NEXUS_API_URL` / `NEXUS_OWNER_ID` on the live SWA | `deploy-swa.yml:434-435`, with hard defaults so they are set even when the secrets are unset |
+| `create_artifact` in the agent toolset | `huddle.functions.ts:3235` |
+
+**Two limits that decide how to ask, and they are properties of the TOOL, not of the agent:**
+
+1. **`get_nexus_assignments` has no title filter.** Its parameters are `due_within_days`, `status`,
+   `course_id`. Combined with the measured fact that ~every assignment's due date is in the past, a
+   date-bounded ask returns empty and a title-only ask makes the model scan. **Give the COURSE.**
+2. **Reading an assignment is not the same as being able to write it.** Nexus already has a
+   purpose-built writer — `extract → outline → writer ↔ reviewer`, captured phase by phase in
+   `content.conversation_messages`. Elle drafting via `create_artifact` is a DIFFERENT, one-pass
+   path. The integration bought cross-app AWARENESS and continuity, not a second writer.
+
+### Hardening — "can it do X now" is a TOOL-SURFACE question, not a capability question
+
+The instinct after shipping an integration is to answer "yes, that's what we built". The useful
+answer is narrower and comes from four separate reads: is the tool on main, is it wired to the
+surface the owner will actually use, are its settings synced by the deploy, and **do its PARAMETERS
+admit the question the owner will ask**. The fourth is the one that gets skipped, and it is where
+this one bit: three tools deployed and configured perfectly, and the natural phrasing of the ask
+("the introduction discussion assignment") matches no filter the tool exposes.
+
+**Rule: before answering "can it do X", read the tool's PARAMETER LIST against the sentence the
+owner would actually type.** A tool that can reach the data but cannot be aimed at it makes the
+model improvise — which is the exact failure the integration existed to remove.
+
+
+### RESULTS — the assignment IS readable, and one earlier "measured" fact has EXPIRED (2026-09-08)
+
+`db-query` run **34232249111** against `nexus_hub`, 15 rows matching `introduc%`/`discussion%`:
+
+| title | status | due | `desc_len` | has the prompt text |
+|---|---|---|---|---|
+| **Discussion Board 1 - Introduce Yourself and Start Building a Literatur…** | active | **2026-09-07** | **5282** | **YES** |
+| Introductions | active | **2026-09-10** | 451 | no |
+| 13 others (Forum 3.4 x6, Case READ x3, Discussion 2, Economics x3) | mixed | 2025-10 → 2026-02 | **0** | no |
+
+**So the answer is yes**: the introduction discussion carries **5,282 characters** of instructions in
+`description`, and it matches on both "prompt 1" and "introduce yourself". Elle can read what it
+actually asks for, not merely that it exists.
+
+**And a fact this file previously carried as MEASURED is now stale, which matters more than the
+answer.** The `AC-turn-is-real` baseline recorded *"534 assignments, 504 with due dates, and ZERO due
+in the future"*, and that was used to justify the standing advice that `due_within_days` is
+unfalsifiable and "what's due this week" always returns empty. **Two assignments are now due in the
+future** (2026-09-07 and 2026-09-10). The date filter works today; the advice built on that number
+does not.
+
+**Hardening — a measured number about LIVE DATA has a shelf life, and nothing was stamping it.**
+Structural facts (a gate exists, a column is keyed on X) stay true until code changes. A COUNT of
+rows in a moving dataset is true only on the day it was taken, and this one was quoted back three
+times across a week as though it were structural. **Rule: when recording a measured count of live
+data, record the DATE IN THE SENTENCE and state what would make it change** — here, "the owner
+imports a new term." A count with no expiry becomes a false constraint on advice.
