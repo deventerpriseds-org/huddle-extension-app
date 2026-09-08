@@ -917,3 +917,116 @@ Each part alone fails in a specific, nameable way:
 | registry + test | fixture | every action is reachable by *button*; the owner's verbless utterance resolves to nothing |
 | registry + fixture | test | both stay correct until someone adds an action to nexus and nothing notices |
 | fixture only | registry | utterances map to hand-written handlers; back to a list that cannot be maintained |
+
+---
+
+## 8. The staged gates
+
+> **"the checklist doesn't have gates but the wip buttons in the thread chain do, you should look
+> into that."** — and *"it should have a requirements and outline section populated for my review,
+> before I give it the go ahead on the actual draft."*
+
+### 8.1 Reconcile on mount — the checklist rule under Option A
+
+**PROPOSAL.** The widget repeats `ChecklistCard`'s two-stage effect
+([§2.2](#22-the-checklists-two-hard-won-properties)) exactly:
+
+1. **Paint from `payload.snapshot`** immediately, so the card appears with no spinner.
+2. **Reconcile against nexus on mount** — one read per mounted card, fetching the assignment row,
+   its requirements, its outline and its context files.
+
+**The failure this prevents is worse here than for the checklist.** A checklist showing a stale
+status is misleading. An assignment card showing a stale **stage** invites the owner to press
+"Approve outline" on an outline that has since been regenerated — an action against state that no
+longer exists. So the gate buttons stay **disabled until reconcile completes or fails**, which is a
+deliberate departure from the checklist (whose rows are actionable from the snapshot).
+
+**On reconcile failure the widget does NOT silently degrade.** The checklist's rule — *"A failed
+refresh is not an error the user needs … Degrade to it silently"* — is right for a read-only
+tick-list and wrong here, because the buttons act on the state that failed to load. Instead: keep
+the snapshot visible, mark it plainly as unverified, and leave the mutating buttons disabled. See
+[§10](#10-cross-app-failure-modes).
+
+### 8.2 The four gates
+
+Each gate is a `ConfirmAskRow`-shaped control: a `busy` lock, an explicit press, a `resolved`
+terminal render. Between gates the widget shows the *output* of the completed stage, so the owner is
+always reviewing something concrete rather than approving in the abstract.
+
+| Gate | Shows | Primary button | Secondary | Resolved renders |
+|---|---|---|---|---|
+| **1. Context** | editable context text box; the selected supplemental files with a picker over the assignment's available materials; the assignment's own description read-only | **Prep requirements** | *Revise* (composer prefill) | "Context set" + a one-line summary |
+| **2. Requirements** | the extracted requirements, each row editable | **Approve requirements** | *Re-extract*, *Revise* | "Requirements approved (N)" |
+| **3. Outline** | the generated outline under its type-specific heading | **Approve outline — start draft** | *Regenerate*, *Revise* | "Outline approved" |
+| **4. Draft** | draft progress, then the finished draft in the assignment's required format | **Accept** | *Redraft*, *Revise* | "Draft accepted" + artifact chip |
+
+**The context box sits above the extracted requirements**, per the owner: *"it should update and
+refresh the context text box **before the instructions**."* Read literally that is a layout
+instruction — the box he types into comes first, the assignment's own instructions come after it —
+and the widget follows it literally.
+
+**Gate 3's button carries both verbs on purpose.** "Approve outline — start draft" states that the
+press spends real model budget, rather than presenting drafting as a silent consequence of approval.
+This is the `confirmAsk` discipline applied to the one genuinely expensive action.
+
+### 8.3 Type-specific headings come from the registry's sibling, not from new strings
+
+**OBSERVATION.** `workflowTypes.ts` already exports `OUTLINE_HEADING` — `essay: 'Essay Outline'`,
+`discussion_post: 'Post Structure'`, `question_response: 'Answer Plan'`, `case_study: 'Analysis
+Structure'` — plus `BUILDER_TITLE`/`builderTitle()`, `WORKFLOW_LABEL`, `documentTitle()`,
+`modelNoun()` and `uiNoun()`.
+
+**PROPOSAL.** The widget imports these; it does not define its own labels. Every string the outline
+gate renders already exists and is already the one nexus shows.
+
+### 8.4 What "resolved" means when the truth is in another app
+
+**OBSERVATION.** `ConfirmAskRow` sets `resolved` **client-side**:
+`useHuddleStore.getState().resolveConfirmAsk(m.id)` on a successful call.
+
+**PROPOSAL, and this is a real difference from the precedent.** For the assignment widget,
+`resolvedStages` is a *display optimisation only*, never the source of truth. The authority for
+"which gate am I at" is the reconcile read from nexus ([§8.1](#81-reconcile-on-mount--the-checklist-rule-under-option-a)).
+
+**Why the difference matters.** A confirm-ask targets one task and one irreversible decision, so
+client-side resolution is safe. An assignment can advance *in nexus's own UI* while the Huddle
+message sits in the thread — the owner approves an outline in nexus, then scrolls back to the Huddle
+card. If the card trusted its local `resolvedStages` it would offer "Approve outline" for an outline
+already approved. **Local state decides what to paint before the read returns; the read decides what
+is true.**
+
+### 8.5 Output format — already decided, never re-asked
+
+> *"the output should be in whatever format the assignment requires which should already be a part
+> of the flow now."*
+
+The owner is right that it is already part of the flow. **OBSERVATION** — traced through nexus:
+
+| Step | Where | What happens |
+|---|---|---|
+| 1. Derived at import | `api/src/functions/d1.ts` — `deriveOutputFormat(rowIn.submission_types)`, applied on insert only when the caller did not supply `output_format` | Canvas's `submission_types` → `output_format`. The branch is guarded so *"a user override is never clobbered here"* |
+| 2. Refined by extraction | `api/src/functions/extractAssignmentRequirements.ts` — `SET output_format = $2 … AND NOT COALESCE(output_format_overridden, false)` | the requirements extraction reads the real instructions and corrects the derived guess — **unless the user has overridden it** |
+| 3. User override | `assignments.output_format_overridden` | a per-assignment lock that steps 1 and 2 both respect |
+| 4. User default | `default_output_format` in user settings (`src/components/settings/AISyncSettings.tsx`, defaulting to `'copy'`) | account-level fallback |
+| 5. Consumed | `api/src/functions/generateDocument.ts` selects `a.output_format AS output_format` → `outputFormat`; `api/src/lib/docxBuilder.ts` uses it to decide *whether to render a cover page* — *"Decided by the caller from `assignments.output_format`, NOT by"* the builder | the draft is produced in the required shape |
+
+The two values are `'copy'` (paste into a board or text box) and `'document'` (upload a file), per
+the comment on `AssignmentCard.tsx`'s `output_format` field: *"how this assignment's output is
+submitted: 'copy' … vs 'document' … Determined at import from Canvas submission_types,
+per-assignment overridable."* `docxBuilder.ts` notes the consequence: *"a draft meant to be pasted
+into a forum box no longer"* gets document furniture. And `api/src/shared/documentStyle.ts` states
+the axis explicitly: output format is *"NOT a function of the workflow type."*
+
+**PROPOSAL — three consequences for the widget:**
+
+1. **No format selector.** The widget renders the resolved format as a fact ("Output: document"),
+   not a control. Adding a picker would create a fifth writer to a field that already has four
+   inputs with a documented precedence.
+2. **Format and workflow type are independent axes.** `documentStyle.ts` says so directly. The four
+   workflow buttons (Essay / Discussion / Questions / Case Study) choose *what is written*;
+   `output_format` decides *how it is delivered*. The widget must not couple them.
+3. **The override is reachable, as an action, not a control.** "make this a document" resolves to a
+   registry action that sets `output_format` **and** `output_format_overridden`, because setting the
+   value without the flag would be silently reverted by the next extraction (step 2). This is
+   precisely the kind of two-field invariant a registry entry should own rather than a button
+   handler.
