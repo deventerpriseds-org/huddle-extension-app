@@ -3207,3 +3207,25 @@ EXPIRED. Two are. `due_within_days` and "what's due this week" now return real r
 that they were unfalsifiable no longer holds.
 
 **NOT confirmed by the owner in his own session** — this is a code-and-config read, not a live turn.
+
+## 2026-09-08 — assignment title filter + ask-when-ambiguous (merged 22de99d, PR #47)
+
+**Asked:** provide the title filter now, and clarify which course before executing when several match.
+
+**Shipped:** `title` parameter reaching the Nexus API as a server-side `ilike` (its operator table
+already allowed it); `%`/`_` stripped so a stray wildcard cannot widen the search; several matches
+return `needs_disambiguation` plus a directive naming COURSE and forbidding action until answered.
+
+**Also removed:** an expired live-data count from two files where it had been treated as structural,
+after it was quoted to the owner twice as a reason the date filter was untestable.
+
+**Verified:** 39 assertions pass (`npm run test:nexus-tools`). Two mutations run by hand with the
+restore asserted against the object hash — disambiguation disabled → 3 assertions failed; wildcard
+strip removed → 1 failed; both restored byte-identical. `mutate.sh` reported NOT-APPLIED first
+because this suite prints `✔/✘` rather than a name its matcher reads — recorded rather than
+worked around.
+
+**Accuracy log:** this repo's log was 2 weeks stale and is now current, with the three recurring
+themes and the per-repo/cross-repo structural cause recorded.
+
+**NOT confirmed by the owner** — deployed, mechanism proven, awaiting his use of it.

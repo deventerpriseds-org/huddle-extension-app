@@ -2795,3 +2795,44 @@ rows in a moving dataset is true only on the day it was taken, and this one was 
 times across a week as though it were structural. **Rule: when recording a measured count of live
 data, record the DATE IN THE SENTENCE and state what would make it change** — here, "the owner
 imports a new term." A count with no expiry becomes a false constraint on advice.
+
+### `get_nexus_assignments` takes a TITLE, and asks which course when several match (2026-09-08)
+
+Owner: *"if there are multiple, I'd expect it to clarify for which course before executing and if it
+needs a title filter why not provide it now?"* Both shipped in `22de99d`.
+
+- **`title` → `ilike.%…%`, server-side.** `ilike` was ALREADY whitelisted in Nexus's own operator
+  table (`api/src/functions/d1.ts:461`), so this was never a new capability — only an unexposed one.
+  Check the far side's operator support before concluding a filter "isn't available".
+- **`%` and `_` are stripped from the input.** An unstripped wildcard widens the search back to
+  everything and returns a confident, plausible, wrong set — a working-looking search is worse than
+  a failing one.
+- **Several matches → `needs_disambiguation` + a directive naming COURSE.** Picking between two
+  courses' assignments and then drafting against the wrong one wastes the turn AND looks like the
+  tool worked. Ambiguity is a question, never a guess.
+
+**Two copies of an EXPIRED count deleted, not restated** — `"534 assignments, 504 with a due date, 0
+in the future, latest 2026-08-18"` was baked into `nexus.server.ts` and `nexus-read-tools.test.ts`
+as though structural, and quoted to the owner twice as the reason the date filter could not be
+tested. Two were due in the future on 2026-09-08.
+
+### Hardening — the accuracy log is PER-REPO and the work is CROSS-REPO, so themes do not reach the session that needs them
+
+Asked whether the log's themes were being applied, the answer was no, and not because of
+forgetfulness. `nexus-hub`'s log carried the *count-over-the-wrong-population* theme (three
+instances, 2026-09-06) and the *absence-asserted-about-data-in-hand* theme (five instances,
+2026-09-08 morning). **Both recurred today while I was reasoning from the huddle side, where a
+different, 2-week-stale log lives.** This repo's log had not been touched since 2026-08-24.
+
+The Stop gate cannot close this: clauses (l)/(m) judge whether a log was **updated**, not whether one
+was **read**, and updating either repo's log satisfies them.
+
+**The check, cheap enough to actually run, before answering any is-X-true question in cross-repo
+work — grep for the SHAPE of the claim, not its subject:**
+
+```
+grep -hiE "zero|absent|never|no rows|not stored|deferred" /home/user/*/.claude/accuracy-log.md
+```
+
+All three of today's misses would have been caught by that one command. Full entry with the theme
+table in `.claude/accuracy-log.md`.
