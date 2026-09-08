@@ -3190,6 +3190,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
         const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
         const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
+        // Direction 1 of the cross-app bridge: READ the owner's live Nexus coursework. Empty array
+        // when Nexus is unconfigured, so an unconfigured environment shows the model no tool rather
+        // than one that exists and fails.
+        const { nexusReadTools } = await import("./nexus/nexus.server");
+        const nexusTools = nexusReadTools() as { type: "function"; name: string }[];
         const mergedTools = [
           createHuddleTaskTool,
           createHuddleTasksTool,
@@ -3211,6 +3216,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           ...ragTools,
           ...journeyTools,
           ...webSearchTools,
+          ...nexusTools,
         ];
         toolTypes = mergedTools
           .map((t) => {
@@ -3702,6 +3708,24 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             }
             recordToolUse(winner.id, "build_checklist", ok ? "checklist rendered" : "checklist -- failed", ok, detail);
             return out;
+          }
+          const nexusMod = await import("./nexus/nexus.server");
+          if (nexusMod.NEXUS_TOOL_NAMES.has(c.name)) {
+            const out = await nexusMod.executeNexusTool(
+              c.name,
+              (c.arguments ?? {}) as Record<string, unknown>,
+              data.timeZone || "UTC",
+            );
+            const o = out as { ok?: boolean; count?: number; error?: unknown };
+            const okFlag = o?.ok === true;
+            recordToolUse(
+              winner.id,
+              c.name,
+              okFlag ? `${o.count ?? "ok"} row(s) from Nexus` : "Nexus read failed",
+              okFlag,
+              okFlag ? undefined : String(o?.error ?? "failed"),
+            );
+            return JSON.stringify(out);
           }
           if (c.name === "schedule_and_priorities" || c.name === "get_calendar_events") {
             const { dispatchPrioritize } = await import("./tasks/tools");

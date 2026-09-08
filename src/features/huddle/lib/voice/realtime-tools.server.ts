@@ -52,6 +52,10 @@ import { TAVILY_WEB_SEARCH_TOOL, tavilySearch, type TavilySearchArgs } from "../
 // SINGLE SOURCE — the same calendar schemas the text turn engine uses (no voice-local copy).
 // get_calendar_events = alias → combined schedule; get_external_calendar_events = raw Outlook (Graph).
 import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "../calendar/tools";
+// Direction 1 of the cross-app bridge. Present on voice from the FIRST commit, deliberately: this
+// file records nine native tools that exist on text and are silently absent when spoken, and the
+// drift is always one-directional. Adding it to one surface "for now" is how that list got to nine.
+import { nexusReadTools, NEXUS_TOOL_NAMES, executeNexusTool } from "../nexus/nexus.server";
 // SHARED with the text turn engine — the exclusive-capability meta-task guard, cross-turn title dedup,
 // journey date normalization and the honest outcome note. NOT a voice-local copy: huddle.functions.ts's
 // two task-create closures call these same functions, so the surfaces cannot drift.
@@ -165,7 +169,7 @@ export async function buildRealtimeToolset(
   } = {},
 ): Promise<{ tools: unknown[]; journeyNames: Set<string> }> {
   const agent = AGENT_BY_ID[agentId];
-  const raw: unknown[] = [PRIORITIZE_TOOL, SCHEDULE_REMINDER_TOOL, GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL];
+  const raw: unknown[] = [PRIORITIZE_TOOL, SCHEDULE_REMINDER_TOOL, GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL, ...nexusReadTools()];
 
   if (opts.webSearch !== false) raw.push(TAVILY_WEB_SEARCH_TOOL);
   if (agentOwnsCapability(agent, "backlog-grooming")) raw.push(GROOM_BACKLOG_TOOL);
@@ -465,8 +469,12 @@ export async function executeRealtimeTool(
     "create_huddle_task",
     "create_huddle_tasks",
     "confirm_task_intent",
+    ...NEXUS_TOOL_NAMES,
   ]);
   try {
+    if (NEXUS_TOOL_NAMES.has(name)) {
+      return done(JSON.stringify(await executeNexusTool(name, args, ctx.timeZone || "UTC")));
+    }
     if (name === "get_external_calendar_events") {
       const { resolveTaskEmail } = await import("../journey/identity");
       const mailbox = (await resolveTaskEmail(ctx.caller)) ?? ctx.caller?.entra_email;
