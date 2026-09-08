@@ -2702,8 +2702,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         };
       }
 
-      // Huddle-only path (journey deliberately disabled, or no caller identity). A card is correct
-      // here: no journey write was attempted, so nothing is being misrepresented.
+      // Huddle-only path (journey disabled, or no caller identity). A card is rendered and nothing
+      // is written to the canonical store.
+      //
+      // THE COMMENT HERE USED TO READ "nothing is being misrepresented", and that was true only of
+      // the client that can SEE the card. On the cross-app route `projectTurnResult` returns just
+      // {replies, toolUses} -- `suggestedTasks` is dropped before the reply leaves Huddle -- so the
+      // caller got `ok:true`, no card, and an agent saying it had been added. Found by the
+      // 2026-09-08 status audit; the code four lines up already called this shape a GHOST.
+      //
+      // Enabling journey on the forward stops this path being reached there at all. This note is the
+      // belt to that braces: it makes the RETURN honest on its own, so the same hole cannot reopen
+      // the next time some caller has journey off. It is accurate for the real client too -- a
+      // suggested card IS awaiting approval, not saved.
       suggestedTasks.push(task);
       recordToolUse(
         winner.id,
@@ -2711,7 +2722,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         `suggested “${task.title}” · owner ${AGENT_BY_ID[task.ownerId].name}`,
         true,
       );
-      return { ok: true, task, boards: ["huddle"] };
+      return {
+        ok: true,
+        task,
+        boards: ["huddle"],
+        persisted: false,
+        note: "SUGGESTED ONLY — this was NOT saved to the user's real board (no canonical row was written). Say you have put it forward as a suggestion for approval; do NOT say it was added, created, or saved.",
+      };
     }
 
     // Batch create — the honest multi-task path. When the user asks for SEVERAL tasks in one message

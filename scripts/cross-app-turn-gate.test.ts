@@ -813,5 +813,44 @@ check(
   !/identity\.profiles/.test(turnSrc),
 );
 
+// ---------------------------------------------------------------------------------------------
+// J — THE TOOL-BLINDNESS DEFECT (2026-09-08 status audit). Same shape as the memory defect: a field
+// missing from crossAppAgentBackends. `rag` absent -> memory-blind. `journey` absent -> tool-blind,
+// and a create that reported success while storing nothing. These assert the FIX and, more
+// importantly, the property that stops a third instance: the field is REQUIRED on the type.
+// ---------------------------------------------------------------------------------------------
+{
+  const backends = crossAppAgentBackends(["elle-rowan"]);
+  const b = backends["elle-rowan"] as { journey?: { enabled?: boolean }; rag?: unknown };
+
+  check(
+    "J1 a forwarded turn carries journey.enabled -- without it, ensureJourneyTools filters every member out",
+    b.journey?.enabled === true,
+  );
+  check(
+    "J2 it still carries rag, so fixing tool-blindness did not regress memory",
+    !!b.rag,
+  );
+  check(
+    "J3 EVERY member gets it, not just the first (the loop body, not a one-off)",
+    Object.values(crossAppAgentBackends(["elle-rowan", "terry-locke", "finn-reid"]))
+      .every((x) => (x as { journey?: { enabled?: boolean } }).journey?.enabled === true),
+  );
+  // The structural guard. An OPTIONAL field cannot fail a typecheck when omitted, which is exactly
+  // why the same mistake shipped twice. Required means the compiler catches the third.
+  check(
+    "J4 journey is REQUIRED on CrossAppAgentBackend, so a future omission is a build error",
+    /journey: \{ enabled: boolean \};/.test(gateSrc) && !/journey\?:/.test(gateSrc),
+  );
+  check(
+    "J5 the Huddle-only create says it was NOT persisted, so the model cannot claim it was saved",
+    /persisted: false/.test(turnSrc) && /SUGGESTED ONLY/.test(turnSrc),
+  );
+  check(
+    "J6 that note forbids the exact words the ghost produced",
+    /do NOT say it was added, created, or saved/.test(turnSrc),
+  );
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
