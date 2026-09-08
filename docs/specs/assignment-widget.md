@@ -193,7 +193,7 @@ four properties this widget copies:
    `useHuddleStore.getState().setDraftPrefill(...)`, pre-filling the composer with
    `` `I have edits for the task regarding "${ask.taskTitle}": ` ``. It converts a button press into
    a *typed instruction*, which is precisely the bridge this widget needs between its two input
-   modes ([§9](#9-editing-both-ways-the-two-input-paths-converge)).
+   modes ([§9](#9-editing-both-ways--the-two-input-paths-converge)).
 
 **INTERPRETATION.** Property 3 is the single most important thing to carry over, because Option A
 makes **every** widget action cross-app. A cross-app call has three genuinely distinct outcomes —
@@ -481,7 +481,7 @@ working session**.
 ### 4.3 Payload shape
 
 **PROPOSAL.** The payload is a **snapshot for instant paint**, mirroring `ChecklistPayload`'s
-contract — never authority, always reconciled ([§8.1](#81-reconcile-on-mount-the-checklist-rule-under-option-a)).
+contract — never authority, always reconciled ([§8.1](#81-reconcile-on-mount--the-checklist-rule-under-option-a)).
 
 ```ts
 export interface AssignmentCardPayload {
@@ -529,7 +529,7 @@ ONLY. New checklists are never truncated"* comment records having already been f
 
 > The owner's question: **"how will you make sure all of these actions are covered?"**
 > This section and the two after it are the whole answer. None of the three is optional; each alone
-> fails in a specific way named at the end of [§7](#74-why-all-three-parts-are-required).
+> fails in a specific way named at the end of [§7](#75-why-all-three-parts-are-required).
 
 ### 5.1 The precedent is documented, not argued
 
