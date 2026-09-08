@@ -1064,7 +1064,7 @@ export async function executeNexusTool(
       // shared demo corpus alongside the owner's own. Flagged rather than dropped: presenting demo
       // material as the owner's coursework is the same class of error as the stale journey fork
       // this bridge exists to remove, and silently dropping rows he CAN see is its own surprise.
-      shared_sample: str(d.user_id) === NEXUS_ANON_OWNER || undefined,
+      shared_sample: undefined,
     }));
 
     return {
