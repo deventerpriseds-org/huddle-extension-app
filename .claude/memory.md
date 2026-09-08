@@ -2728,3 +2728,41 @@ agent-initiated prefixes among them, and all three mutations FIRED.
 Same shape as the `data.agents` gate two defects earlier: both were server logic that quietly did
 nothing on a path its author never had. **The generalisation: adding a second front door invalidates
 every rule that was allowed to assume one.**
+
+### Can Elle draft a coursework assignment? The capability, read from the deployed code (2026-09-08)
+
+Owner asked, after the cross-app integration shipped: *"so I can now ask Elle to generate a draft for
+the introduction discussion assignment?"* Answered from `origin/main` at `fe59daa` and the deploy
+workflow, not from what was built.
+
+**Confirmed present and live:**
+
+| piece | evidence |
+|---|---|
+| `get_nexus_assignments` / `_courses` / `_class_schedule` | `lib/nexus/nexus.server.ts:101,125,139`, on main |
+| wired to BOTH surfaces | text `huddle.functions.ts:3230`; voice `realtime-tools.server.ts:172` + `NEXUS_TOOL_NAMES` at `:472` |
+| `NEXUS_API_URL` / `NEXUS_OWNER_ID` on the live SWA | `deploy-swa.yml:434-435`, with hard defaults so they are set even when the secrets are unset |
+| `create_artifact` in the agent toolset | `huddle.functions.ts:3235` |
+
+**Two limits that decide how to ask, and they are properties of the TOOL, not of the agent:**
+
+1. **`get_nexus_assignments` has no title filter.** Its parameters are `due_within_days`, `status`,
+   `course_id`. Combined with the measured fact that ~every assignment's due date is in the past, a
+   date-bounded ask returns empty and a title-only ask makes the model scan. **Give the COURSE.**
+2. **Reading an assignment is not the same as being able to write it.** Nexus already has a
+   purpose-built writer — `extract → outline → writer ↔ reviewer`, captured phase by phase in
+   `content.conversation_messages`. Elle drafting via `create_artifact` is a DIFFERENT, one-pass
+   path. The integration bought cross-app AWARENESS and continuity, not a second writer.
+
+### Hardening — "can it do X now" is a TOOL-SURFACE question, not a capability question
+
+The instinct after shipping an integration is to answer "yes, that's what we built". The useful
+answer is narrower and comes from four separate reads: is the tool on main, is it wired to the
+surface the owner will actually use, are its settings synced by the deploy, and **do its PARAMETERS
+admit the question the owner will ask**. The fourth is the one that gets skipped, and it is where
+this one bit: three tools deployed and configured perfectly, and the natural phrasing of the ask
+("the introduction discussion assignment") matches no filter the tool exposes.
+
+**Rule: before answering "can it do X", read the tool's PARAMETER LIST against the sentence the
+owner would actually type.** A tool that can reach the data but cannot be aimed at it makes the
+model improvise — which is the exact failure the integration existed to remove.

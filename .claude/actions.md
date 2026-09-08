@@ -3180,3 +3180,25 @@ mutations all FIRED, `tsc` clean on the four touched files. Fixes the Huddle 1:1
 exchange as the agent's replies with nothing said to her.
 
 **NOT yet confirmed by the owner in his own browser** — deployed, mechanism proven, awaiting his look.
+
+## 2026-09-08 — "can Elle draft the introduction discussion?" — capability read, not assumed
+
+**Asked:** whether the shipped cross-app integration means Elle can now draft a specific coursework
+assignment.
+
+**Read from `origin/main` (`fe59daa`) and the deploy workflow:** the three Nexus read tools are on
+main and wired to BOTH the text and voice surfaces; `NEXUS_API_URL`/`NEXUS_OWNER_ID` are synced by
+`deploy-swa.yml:434-435` with hard defaults; `create_artifact` is in the toolset. So the mechanism
+is present.
+
+**Flagged rather than buried:** `get_nexus_assignments` exposes no title filter (only
+`due_within_days`, `status`, `course_id`), and Nexus's own `extract → outline → writer ↔ reviewer`
+pipeline is the tool built for producing assignment text — Elle via `create_artifact` is a different,
+one-pass path. Recommended asking by COURSE, and using the Nexus writer for the text itself.
+
+**Open at time of writing:** one `db-query` dispatch (run `34232249111`) asks whether the
+introduction discussion exists in `content.assignments` with its instructions in `description`. If
+the row is title-only, Elle can confirm the assignment exists but cannot read what it asks for —
+which would mean drafting from a guess. NOT yet answered; no claim made either way.
+
+**NOT confirmed by the owner in his own session** — this is a code-and-config read, not a live turn.
