@@ -17,6 +17,12 @@
 //             (4) A NAMED ASSIGNMENT MATCHING SEVERAL. The owner names one in words; if the tool
 //                 picks between matches, it can draft against the wrong course and look correct
 //                 doing it. Ambiguity must come back as a QUESTION.
+//             (5) BATCH TWO (Part 7): the same ambiguity trap on two more axes -- "module 3" is
+//                 unique only WITHIN a course, and "last week's lecture" is a WINDOW that routinely
+//                 holds several classes -- plus two shapes that only source-reading settles: slide
+//                 notes are keyed by page_number (nothing writes slide_number), and three capture
+//                 tables have created_at and NO updated_at while d1 whitelists `updated_at` as a
+//                 name on every table, so an order on it is accepted and then fails in Postgres.
 // SUPERSEDES: nothing.
 // SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   the NATIVE-set comment at realtime-tools.server.ts:450; CAP-nexus §2.1 (unverified
@@ -30,14 +36,20 @@ import {
   NEXUS_TOOL_NAMES,
   executeNexusTool,
   GET_NEXUS_ASSIGNMENTS_TOOL,
+  GET_NEXUS_SLIDE_NOTES_TOOL,
 } from "../src/features/huddle/lib/nexus/nexus.server";
 import { readFileSync } from "node:fs";
 
 let pass = 0;
 let fail = 0;
+// The "ok"/"not ok" words are load-bearing, not decoration: scripts/mutate.sh attributes a
+// mutation to a NAMED test by grepping for `not ok .*<name>` (TAP) or `FAIL <name>`. With only the
+// ✔/✘ glyphs it could not read this suite at all and returned UNDETERMINED for every guard here --
+// which is correctly NOT "inert", but it means nothing in the file could be mutation-proved.
+// Measured 2026-09-08: five mutations, five UNDETERMINED, before this line was changed.
 const t = (name: string, got: unknown, want: unknown) => {
   const ok = String(got) === String(want);
-  console.log(`  ${ok ? "✔" : "✘"} ${name}: ${got}${ok ? "" : `  (EXPECTED ${want})`}`);
+  console.log(`  ${ok ? "✔ ok" : "✘ not ok"} ${name}: ${got}${ok ? "" : `  (EXPECTED ${want})`}`);
   ok ? pass++ : fail++;
 };
 
@@ -56,7 +68,7 @@ t("url only -> zero tools", nexusReadTools().length, 0);
 setEnv({ NEXUS_OWNER_ID: "abc" });
 t("owner only -> zero tools", nexusReadTools().length, 0);
 setEnv({ NEXUS_API_URL: "https://x", NEXUS_OWNER_ID: "abc" });
-t("both set -> three tools", nexusReadTools().length, 3);
+t("both set -> eight tools", nexusReadTools().length, 8);
 
 console.log("=== PART 2 — VOICE DRIFT: every tool defined on text is reachable on voice ===");
 const voiceSrc = readFileSync("src/features/huddle/lib/voice/realtime-tools.server.ts", "utf8");
@@ -126,7 +138,12 @@ globalThis.fetch = origFetch;
 
 console.log("=== PART 5 — an unknown name is refused, not silently proxied ===");
 t("unknown tool", ((await executeNexusTool("get_nexus_everything", {}, "UTC")) as { error?: string }).error, "unknown_nexus_tool_get_nexus_everything");
-t("NEXUS_TOOL_NAMES has exactly 3", NEXUS_TOOL_NAMES.size, 3);
+t("NEXUS_TOOL_NAMES has exactly 8", NEXUS_TOOL_NAMES.size, 8);
+t(
+  "every advertised tool is dispatchable (no definition without a name entry)",
+  (nexusReadTools() as { name: string }[]).filter((x) => !NEXUS_TOOL_NAMES.has(x.name)).length,
+  0,
+);
 
 console.log("=== PART 6 — a named assignment: the title filter, and ASKING when several match ===");
 setEnv({ NEXUS_API_URL: "https://nexus.example", NEXUS_OWNER_ID: "owner-uuid" });
@@ -179,6 +196,190 @@ globalThis.fetch = (async (u: string) => {
 }) as unknown as typeof fetch;
 await executeNexusTool("get_nexus_assignments", { title: "%" }, "UTC");
 t("a bare wildcard is stripped, so no title filter is sent", decodeURIComponent(seenUrl).includes("title"), false);
+
+globalThis.fetch = origFetch;
+
+console.log("=== PART 7 — batch two: modules, slide notes, lecture capture, library, transcript ===");
+setEnv({ NEXUS_API_URL: "https://nexus.example", NEXUS_OWNER_ID: "owner-uuid" });
+
+let calls: string[] = [];
+const route = (map: Record<string, unknown>) =>
+  (async (u: string) => {
+    const url = decodeURIComponent(String(u));
+    calls.push(url);
+    for (const [k, v] of Object.entries(map)) if (url.includes(k)) return new Response(JSON.stringify(v), { status: 200 });
+    return new Response(JSON.stringify([]), { status: 200 });
+  }) as unknown as typeof fetch;
+
+// --- A-READ-7: "module 3" matches one module per course, so several matches must ASK.
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/modules": [
+    { id: "m1", course_id: "c1", module_number: 3, name: "Process Design" },
+    { id: "m2", course_id: "c2", module_number: 3, name: "Pricing" },
+  ],
+  "/api/d1/courses": [{ id: "c1", name: "Ops Management" }, { id: "c2", name: "Corporate Finance" }],
+});
+const modsMany = (await executeNexusTool("get_nexus_module_materials", { module_number: 3 }, "UTC")) as {
+  needs_disambiguation?: boolean;
+  modules: { course_name: string | null }[];
+  note?: string;
+};
+t("two modules match -> disambiguation", modsMany.needs_disambiguation, true);
+t("the ask carries the COURSE NAME, not a bare uuid", modsMany.modules[0].course_name, "Ops Management");
+t("the directive names COURSE", /which COURSE/.test(modsMany.note ?? ""), true);
+t(
+  "ambiguous -> the module's CONTENTS were never fetched",
+  calls.some((u) => u.includes("module-items") || u.includes("course-materials")),
+  false,
+);
+
+// --- one module -> its items and its materials, both filtered by module_id, both ordered on a
+//     column that physically exists on that table.
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/modules": [{ id: "m1", course_id: "c1", module_number: 3, name: "Process Design" }],
+  "/api/d1/courses": [{ id: "c1", name: "Ops Management" }],
+  "/api/d1/module-items": [{ id: "i1", title: "Read chapter 4", type: "File", position: 1 }],
+  "/api/d1/course-materials": [{ id: "f1", title: "Chapter 4.pdf" }],
+});
+const modOne = (await executeNexusTool(
+  "get_nexus_module_materials",
+  { module_number: 3, course_id: "c1" },
+  "UTC",
+)) as { item_count: number; material_count: number; needs_disambiguation?: boolean; note?: string };
+t("one module -> no disambiguation", modOne.needs_disambiguation ?? false, false);
+t("its ordered item spine is read", modOne.item_count, 1);
+t("its filed materials are read", modOne.material_count, 1);
+t(
+  "items are filtered by module_id server-side",
+  calls.some((u) => u.includes("module-items") && u.includes('["module_id","eq.m1"]')),
+  true,
+);
+t(
+  "items are ordered by position (a column module_items actually has)",
+  calls.some((u) => u.includes("module-items") && u.includes("order=position")),
+  true,
+);
+
+// --- A-READ-9: notes are keyed by PAGE. slide_number is in the table and in d1's allow-list and is
+//     written by nothing (DocumentViewer.tsx handleNoteSave), so offering it would return zero rows
+//     for every real note while looking like a working search.
+const slideProps = Object.keys(GET_NEXUS_SLIDE_NOTES_TOOL.parameters.properties);
+t("slide notes expose page_number", slideProps.includes("page_number"), true);
+t("slide notes do NOT expose slide_number", slideProps.includes("slide_number"), false);
+
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/course-materials": [
+    { id: "f1", title: "Strategy deck week 1" },
+    { id: "f2", title: "Strategy deck week 2" },
+  ],
+});
+const decksMany = (await executeNexusTool("get_nexus_slide_notes", { deck_title: "strategy deck" }, "UTC")) as {
+  needs_disambiguation?: boolean;
+  note?: string;
+};
+t("two decks match -> disambiguation", decksMany.needs_disambiguation, true);
+t("ambiguous deck -> no annotations were read", calls.some((u) => u.includes("slide-annotations")), false);
+
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/course-materials": [{ id: "f1", title: "Strategy deck week 1" }],
+  "/api/d1/slide-annotations": [],
+});
+const noteMiss = (await executeNexusTool(
+  "get_nexus_slide_notes",
+  { deck_title: "strategy deck", page_number: 14 },
+  "UTC",
+)) as { count: number; note?: string };
+t("'slide 14' becomes a page_number filter", calls.some((u) => u.includes('["page_number","eq.14"]')), true);
+t("an empty page is reported as empty", noteMiss.count, 0);
+t("and is NOT reported as 'you never annotated it'", /page 14 .*no note|Nothing is noted on page 14/.test(noteMiss.note ?? ""), true);
+
+// --- A-READ-10: a session IS a class_schedules row, and a week routinely holds several classes.
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/class-schedules": [
+    { id: "s1", course_name: "Ops Management", date: "2026-09-02" },
+    { id: "s2", course_name: "Corporate Finance", date: "2026-09-04" },
+  ],
+});
+const capMany = (await executeNexusTool("get_nexus_lecture_capture", {}, "UTC")) as {
+  needs_disambiguation?: boolean;
+  from?: string;
+  to?: string;
+  note?: string;
+};
+const today = new Date().toLocaleDateString("en-CA", { timeZone: "UTC" });
+const weekAgoD = new Date();
+weekAgoD.setDate(weekAgoD.getDate() - 7);
+const weekAgo = weekAgoD.toLocaleDateString("en-CA", { timeZone: "UTC" });
+t("the default window ends today", capMany.to, today);
+t("the default window starts 7 days back ('last week')", capMany.from, weekAgo);
+t("two sessions in the window -> disambiguation", capMany.needs_disambiguation, true);
+t("no transcript was read while ambiguous", calls.some((u) => u.includes("lecture-transcripts-segments")), false);
+
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/lecture-transcripts-segments": [{ id: "g1", segment_number: 1, text: "welcome" }],
+  "/api/d1/live-insights": [{ id: "n1", category: "core_knowledge" }],
+  "/api/d1/session-qa": [{ id: "q1", question: "why?" }],
+});
+const capOne = (await executeNexusTool("get_nexus_lecture_capture", { session_id: "s1" }, "UTC")) as {
+  segment_count: number;
+  insight_count: number;
+  qa_count: number;
+};
+t("a known session reads all three capture tables", `${capOne.segment_count}/${capOne.insight_count}/${capOne.qa_count}`, "1/1/1");
+t(
+  "segments are ordered by segment_number, never by the double-precision start_time",
+  calls.some((u) => u.includes("lecture-transcripts-segments") && u.includes("order=segment_number")),
+  true,
+);
+t(
+  "NO capture read orders by updated_at — those three tables do not have that column",
+  calls.filter((u) => /lecture-transcripts-segments|live-insights|session-qa/.test(u) && u.includes("order=updated_at")).length,
+  0,
+);
+
+// --- an existing-but-unrecorded session must not read as "nothing happened".
+globalThis.fetch = route({});
+const capEmpty = (await executeNexusTool("get_nexus_lecture_capture", { session_id: "s9" }, "UTC")) as { note?: string };
+t("an unrecorded session says so explicitly", /nothing was recorded/.test(capEmpty.note ?? ""), true);
+
+// --- A-READ-4 / A-READ-8: the two NON-d1 endpoints. Different path, camelCase params, {count,...}
+//     bodies — and the same owner-from-config rule.
+calls = [];
+globalThis.fetch = route({ "/api/library": { count: 1, items: [{ kind: "material", title: "Chapter 4.pdf" }] } });
+const lib = (await executeNexusTool(
+  "get_nexus_library",
+  { course_id: "c1", kind: "everything", q: "%", limit: 25 },
+  "UTC",
+)) as { count: number; items: unknown[] };
+t("library reads /api/library, not a d1 table", calls[0].includes("/api/library") && !calls[0].includes("/api/d1/"), true);
+t("library params are camelCase as that endpoint expects", calls[0].includes("courseId=c1"), true);
+t("library carries the configured owner", calls[0].includes("owner=owner-uuid"), true);
+t("exactly one owner parameter is ever sent", (calls[0].match(/owner=/g) ?? []).length, 1);
+t("an unrecognised kind is DROPPED, not passed through", calls[0].includes("kind="), false);
+t("a bare wildcard q is stripped", calls[0].includes("q="), false);
+t("library returns its items", lib.count, 1);
+
+calls = [];
+globalThis.fetch = route({ "/api/writer-transcript": { count: 2, rows: [{ seq: 1 }, { seq: 2 }] } });
+const noId = (await executeNexusTool("get_nexus_writer_transcript", {}, "UTC")) as { ok: boolean; error?: string };
+t("writer transcript without an assignment is REFUSED", noId.error, "assignment_id_required");
+t("...and nothing was fetched (no reading of another assignment's draft)", calls.length, 0);
+
+const wt = (await executeNexusTool(
+  "get_nexus_writer_transcript",
+  { assignment_id: "a1", phase: "reviewer" },
+  "UTC",
+)) as { count: number };
+t("with an assignment it reads /api/writer-transcript", calls[0].includes("/api/writer-transcript"), true);
+t("assignmentId is camelCase for that endpoint", calls[0].includes("assignmentId=a1"), true);
+t("phase is forwarded", calls[0].includes("phase=reviewer"), true);
+t("transcript rows are returned as messages", wt.count, 2);
 
 globalThis.fetch = origFetch;
 
