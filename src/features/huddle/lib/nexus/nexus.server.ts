@@ -271,6 +271,41 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const NEXUS_ANON_OWNER = "00000000-0000-0000-0000-000000000000";
 
 /**
+ * Nexus's OWN demo identity -- note the trailing 1, it is NOT the anon owner above.
+ * `supabase/functions/demo-extract-content/index.ts:11` declares it as DEMO_USER_ID and
+ * `supabase/migrations/20251020134607_*.sql` writes RLS policies against that literal, so it is a
+ * real second sentinel and not a typo. Measured on nexus_hub 2026-09-08: it owns the single seeded
+ * chunk in content.assistant_knowledge_chunks (topic_id "demo-topic-1759504678226-twfwzpb64",
+ * "AI-driven process redesign.pdf", content beginning "Demo: ") and one row in
+ * content.extracted_content.
+ *
+ * Recorded here because nothing on the Huddle side knew this value existed: the check below used
+ * to name only the zero UUID, so it was half-blind to the very rows it exists to catch.
+ */
+const NEXUS_DEMO_OWNER = "00000000-0000-0000-0000-000000000001";
+
+/**
+ * Is this Nexus row seeded SAMPLE material rather than the owner's own?
+ *
+ * ONE detector, used by every tool that can surface a Nexus row, so "shared_sample" means the same
+ * thing everywhere and a new sentinel is added in one place instead of three.
+ *
+ * Keyed on `user_id` -- the same signal the knowledge-base listing has always used -- and NOT on a
+ * "demo-" topic-id prefix. The prefix is real (every seeded row has one) but it is a string the
+ * seeding path chooses, it lives inside `metadata` jsonb on the chunks table rather than in a
+ * column, and matching it would blame any genuine course whose id ever took that shape. The owner
+ * sentinels are all-zero UUIDs that no real account holds.
+ *
+ * FLAG, NEVER DROP. Presenting demo material as the owner's coursework is the same class of error
+ * as the stale journey fork this bridge exists to remove -- and silently hiding a row he CAN see is
+ * its own surprise. The model needs to be able to say "this passage is sample content, not yours".
+ */
+function isSharedSample(row: Row): boolean {
+  const owner = str(row.user_id);
+  return owner === NEXUS_ANON_OWNER || owner === NEXUS_DEMO_OWNER;
+}
+
+/**
  * DROP THE RAW EMBEDDING VECTOR. `/api/d1/{table}` runs a bare `SELECT *` with no column
  * projection anywhere (d1.ts handleGet), and content.assistant_knowledge_chunks.embedding is a
  * pgvector column at 1536 dimensions (vectorSearch.ts EMBED_DIMS, asserted on both ingest and
@@ -1005,7 +1040,24 @@ export async function executeNexusTool(
         })
       : r.rows;
 
-    const passages = scoped.slice(0, limit).map(stripEmbedding);
+    // SEEDED SAMPLE CHUNKS ARE MARKED, NOT PASSED OFF AS HIS OWN. Same treatment, same field name
+    // and same detector as the document listing above -- one concept, one name. A course-scoped
+    // search cannot reach a demo chunk (its topic_id is a `demo-…` string, never a real course id),
+    // so this is the UNSCOPED path's problem: without the flag the model reads "Demo: AI-driven
+    // process redesign.pdf" as the owner's own knowledge base and quotes it back to him as such.
+    //
+    // MEASURED REACHABILITY, so nobody re-derives this later. Today the flag fires for NOTHING:
+    // `assistant-knowledge-chunks` carries no `anonUnion` (d1.ts:351-355), so d1's owner clause is
+    // a plain `"user_id" = $1` and the one demo chunk -- owned by …0001, while NEXUS_OWNER_ID is
+    // a3378f93-… -- is filtered out server-side before it ever gets here. The flag is here because
+    // that is ONE config change away in three directions: the route gaining anonUnion the way
+    // extracted-content already has, NEXUS_OWNER_ID being pointed at a demo identity (which is what
+    // that sentinel is FOR), or a future seeding path writing sample rows under the real owner.
+    const passages = scoped.slice(0, limit).map((row) => ({
+      ...stripEmbedding(row),
+      shared_sample: isSharedSample(row) || undefined,
+    }));
+    const sampleCount = passages.filter((p) => p.shared_sample).length;
 
     return {
       ok: true,
@@ -1016,11 +1068,18 @@ export async function executeNexusTool(
       scanned,
       count: passages.length,
       truncated: scoped.length > passages.length || undefined,
+      // Omitted entirely when nothing is flagged, so the ordinary result stays byte-identical to
+      // what every existing caller and test already reads.
+      shared_sample_count: sampleCount || undefined,
       passages,
+      // A FLAG IS A FIELD THE MODEL MAY NOT READ; this says the same thing in words it cannot miss.
+      // Only ever present when something is actually flagged.
       note:
         passages.length === 0
           ? `Nothing in the indexed material contains the literal text "${query}"${courseId ? " for that course" : ""}. This is a WORD match, not a meaning match — say that the word does not appear and TRY ANOTHER WORDING before telling the owner the topic is missing from his knowledge base. get_nexus_knowledge_base will show whether the document is indexed at all.`
-          : undefined,
+          : sampleCount
+            ? `${sampleCount} of these passages are marked shared_sample: they are seeded DEMO content in Nexus, not the owner's own material. Do not quote them back as his coursework — if you use one, say it is sample content.`
+            : undefined,
     };
   }
 
@@ -1064,7 +1123,11 @@ export async function executeNexusTool(
       // shared demo corpus alongside the owner's own. Flagged rather than dropped: presenting demo
       // material as the owner's coursework is the same class of error as the stale journey fork
       // this bridge exists to remove, and silently dropping rows he CAN see is its own surprise.
-      shared_sample: str(d.user_id) === NEXUS_ANON_OWNER || undefined,
+      //
+      // Now via the shared `isSharedSample`, which knows BOTH sentinels. This used to compare
+      // against the zero UUID alone and therefore missed the one `…0001`-owned row measured in
+      // content.extracted_content -- the guard was half-blind to the thing it guards.
+      shared_sample: isSharedSample(d) || undefined,
     }));
 
     return {

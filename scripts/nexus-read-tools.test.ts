@@ -432,6 +432,64 @@ const kbNoQuery = (await executeNexusTool("search_nexus_knowledge", {}, "UTC")) 
 t("a search with no query is REFUSED", kbNoQuery.error, "query_required");
 t("...and nothing was fetched", calls.length, 0);
 
+// --- A-RAG-1, the demo-chunk flag. content.assistant_knowledge_chunks holds 867 rows owned by the
+//     real owner and ONE seeded row ("Demo: AI-driven process redesign.pdf") owned by Nexus's own
+//     DEMO_USER_ID -- the …0001 sentinel, NOT the …0000 anon owner the listing tool already knew
+//     about. A course-scoped search cannot reach a demo chunk (its topic_id is a `demo-…` string,
+//     never a real course id); an unscoped one is the exposure, and unflagged it reads to the model
+//     as the owner's own knowledge base.
+//
+//     The flag fires for nothing TODAY -- this route carries no anonUnion, so d1 filters the row
+//     out server-side before Huddle sees it. These fixtures are the reachable case, which is one
+//     config change away (the route gaining anonUnion, or NEXUS_OWNER_ID pointed at a demo id).
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/assistant-knowledge-chunks": [
+    { id: "own", user_id: "owner-uuid", content: "Grading breakdown: 40% exam",
+      source_type: "summary", metadata: { topic_id: "c1" }, created_at: "2026-09-01" },
+    { id: "demo1", user_id: "00000000-0000-0000-0000-000000000001",
+      content: "Demo: AI-driven process redesign.pdf — grading", source_type: "knowledge_base",
+      metadata: { topic_id: "demo-topic-1759504678226-twfwzpb64" }, created_at: "2026-09-02" },
+    { id: "demo0", user_id: "00000000-0000-0000-0000-000000000000",
+      content: "shared corpus grading note", source_type: "knowledge_base",
+      metadata: { topic_id: "demo-topic-x" }, created_at: "2026-09-03" },
+  ],
+});
+const kbMixed = (await executeNexusTool("search_nexus_knowledge", { query: "grading" }, "UTC")) as {
+  passages: { id: string; shared_sample?: boolean }[]; count: number;
+  shared_sample_count?: number; note?: string;
+};
+const byId = (id: string) => kbMixed.passages.find((r) => r.id === id);
+t("a chunk owned by Nexus's DEMO sentinel (…0001) is FLAGGED as a shared sample",
+  byId("demo1")?.shared_sample, true);
+t("a chunk owned by the ANON sentinel (…0000) is flagged too — one detector, both sentinels",
+  byId("demo0")?.shared_sample, true);
+t("...and the owner's own chunk is NOT flagged", byId("own")?.shared_sample, undefined);
+// FLAG, NEVER DROP. Deleting is the owner's data and not ours; silently dropping hides a real row.
+t("nothing is dropped — every matching passage is still returned", kbMixed.count, 3);
+t("the sample count is reported so the model cannot miss it", kbMixed.shared_sample_count, 2);
+// A flag is a field the model may not read; the note says it in words it cannot miss.
+t("the note names the passages as DEMO content, not the owner's material",
+  /seeded DEMO content/.test(kbMixed.note ?? ""), true);
+t("...and forbids quoting them back as his coursework",
+  /Do not quote them back as his coursework/.test(kbMixed.note ?? ""), true);
+
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/assistant-knowledge-chunks": [
+    { id: "own", user_id: "owner-uuid", content: "grading", source_type: "summary",
+      metadata: { topic_id: "c1" }, created_at: "2026-09-01" },
+  ],
+});
+const kbClean = (await executeNexusTool("search_nexus_knowledge", { query: "grading" }, "UTC")) as {
+  shared_sample_count?: number; note?: string; passages: { shared_sample?: boolean }[];
+};
+// The ordinary result must stay byte-identical to what every existing caller already reads.
+t("with no samples present the count key is ABSENT, not zero", kbClean.shared_sample_count, undefined);
+t("...and no sample note is emitted", kbClean.note, undefined);
+t("...and an unflagged passage carries shared_sample undefined, not false",
+  kbClean.passages[0]?.shared_sample, undefined);
+
 // --- A-RAG-5. A DIFFERENT table on purpose: the owner is asking which DOCUMENTS are indexed.
 //     topic_id is a real column in that route's own `filters` list, so this scope is server-side.
 calls = [];
@@ -440,6 +498,10 @@ globalThis.fetch = route({
     { id: "e1", user_id: "owner-uuid", file_name: "cf-syllabus.pdf", topic_id: "c1",
       content_type: "document", quick_summary: "x", atoms: [{ q: 1 }], key_terms: [], case_players: {} },
     { id: "e2", user_id: "00000000-0000-0000-0000-000000000000", file_name: "demo.pdf", topic_id: "c1" },
+    // THE ROW THE OLD DETECTOR MISSED. Nexus's DEMO_USER_ID ends in 1, not 0, and the check here
+    // used to name the zero UUID alone -- so a seeded row (one exists in content.extracted_content,
+    // measured 2026-09-08) would have been listed as the owner's own analysed document.
+    { id: "e3", user_id: "00000000-0000-0000-0000-000000000001", file_name: "demo-2.pdf", topic_id: "c1" },
   ],
   "/api/d1/courses": [{ id: "c1", name: "Corporate Finance" }],
 });
@@ -455,6 +517,8 @@ t("only NON-EMPTY extractions are listed ([] and {} are column DEFAULTS)",
 // shared demo corpus. Flagged, not silently dropped and not silently presented as the owner's.
 t("a sentinel-owner row is FLAGGED as a shared sample", base.documents[1].shared_sample, true);
 t("...and the owner's own row is not", base.documents[0].shared_sample, undefined);
+t("the OTHER sentinel (Nexus's DEMO_USER_ID, …0001) is flagged here too",
+  base.documents[2].shared_sample, true);
 
 calls = [];
 globalThis.fetch = route({ "/api/d1/extracted-content": [], "/api/d1/courses": [] });
