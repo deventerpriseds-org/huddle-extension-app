@@ -1031,6 +1031,57 @@ the axis explicitly: output format is *"NOT a function of the workflow type."*
    precisely the kind of two-field invariant a registry entry should own rather than a button
    handler.
 
+### 8.6 CLOSED QUESTION: where `set_context` actually writes, and why it is the one new endpoint
+
+This was listed as an open question, then closed by reading. The answer changes a design
+conclusion, so it is recorded here rather than in [§12](#12-open-questions-i-could-not-settle-from-the-code).
+
+**OBSERVATION — the table.** Per-assignment user context lives in
+`content.assignment_user_context`, keyed `(user_id, assignment_id)`. Columns seen this session:
+
+| Column | Holds | Written by |
+|---|---|---|
+| `persistent_instructions` | the free-text instruction body — **the owner's "context text box"** | the SPA, directly |
+| `supplemental_context` | additional context / frameworks (a *second* free-text field) | the SPA, directly |
+| `context_file_urls` | attached file URLs | **API** `POST /api/assignment-context/append-file`, and the SPA |
+| `excluded_context_file_urls` | assignment-level URLs toggled off, non-destructively | **API** `POST /api/assignment-context/toggle` |
+| `included_course_material_ids` | course materials opted IN for this assignment | **API** `POST /api/assignment-context/toggle` |
+
+**OBSERVATION — two writers, only one of which Huddle can use.** The API endpoints exist and are
+careful: `appendAssignmentContextFile.ts` describes replacing *"a client-side GET-then-POST in
+`extension/background.js`'s `attachFile()` that was a real lost-update race … whichever POST landed
+second silently overwrote the first's URL"*, fixed with *"a single `INSERT … ON CONFLICT DO
+UPDATE`"* whose SET clause re-reads the locked row. `assignmentContextToggle.ts` uses the same
+atomic pattern and whitelists the three array columns it may touch *"so `column` can be safely
+interpolated into SQL (never taken from the request as free text)."*
+
+But `AgenticWriterModal.tsx` writes the same row a different way — a direct
+`supabase.from('assignment_user_context').upsert({ assignment_id, user_id, persistent_instructions,
+context_file_urls })`, appearing at more than one call site, sending the **whole object**.
+
+**INTERPRETATION — three consequences, and they are the most actionable findings in this spec:**
+
+1. **`set_context` has no API route today.** Every other action in this spec maps to an endpoint
+   that already exists. The owner's *primary* example — *"we will focus on my high school football
+   championship"* → update the context box — is the one that does not. **A `POST
+   /api/assignment-context/set-instructions` is a hard prerequisite for the owner's headline use
+   case**, and it should follow the atomic `INSERT … ON CONFLICT DO UPDATE` pattern its two siblings
+   already established rather than inventing a third.
+2. **Huddle must not take the Supabase path, for two independent reasons.** It has no
+   Supabase-authenticated user session (`nexus.server.ts` reaches nexus over `/api/d1` with a
+   configured owner id), and doing so would make Huddle a *third* writer to a row that already has
+   two — the pattern this estate's rules name directly. The API layer is the only correct route.
+3. **The whole-object upsert is a pre-existing lost-update risk, and the widget would sharpen it.**
+   The modal's upsert sends `persistent_instructions` **and** `context_file_urls` together, so it
+   writes back whatever those held when the modal loaded. That is the same shape of race
+   `appendAssignmentContextFile` was built to fix for one column, still present for the others.
+   Today the two writers are one user in one browser. Add a Huddle widget and they become **two
+   surfaces editing one row concurrently** — the owner types context in chat while the nexus modal
+   is open, and one silently overwrites the other. **This is not caused by the widget, but the
+   widget makes it reachable.** A column-scoped, atomic `set-instructions` endpoint (consequence 1)
+   is what keeps the widget out of that race; whether to also migrate the modal's upsert onto it is
+   a nexus decision this spec flags rather than takes.
+
 ---
 
 ## 9. Editing both ways — the two input paths converge
@@ -1195,25 +1246,30 @@ Listed rather than guessed. Each names what would settle it.
    *"a later cross-cutting pass"* to re-key to email. Whether the write bridge should key on the same
    value, and whether the estate is truly single-user, is a configuration fact.
    *Settled by:* reading the deployed app setting.
-3. **Which endpoint sets an assignment's context text, and does one exist?** I found
-   `appendAssignmentContextFile.ts` and `assignmentContextToggle.ts` by name and read neither in
-   full. The owner's central example (`set_context`) needs a specific route.
-   *Settled by:* reading those two files. **This is the highest-value unknown in the list** — it is
-   the action the owner named.
+3. ~~**Which endpoint sets an assignment's context text?**~~ **CLOSED — see
+   [§8.6](#86-closed-question-where-set_context-actually-writes-and-why-it-is-the-one-new-endpoint).**
+   The answer changed a design conclusion, so it was promoted out of this list into its own section:
+   the table is `content.assignment_user_context`, and **no API endpoint writes its free-text
+   columns** — nexus's own UI writes them with a direct Supabase call. `set_context` is therefore a
+   new endpoint, and it is the only genuinely new one this feature needs.
 4. **Where do "supplemental files from the list" come from?** `ReferenceFilesSelector.tsx`,
    `CourseMaterialsSelector.tsx` and `AnalyzedContentSelector.tsx` all exist; which populates the
    picker, and from which table, I did not establish.
 5. **Are requirements individually addressable?** Fixture row 6 ("that second requirement is wrong")
    assumes requirement rows have stable ids. `content.assignment_requirements` is named in
    `assignmentAgenticWorkflow`'s header; I did not read its schema.
-6. **Does `case_study` reach the draft gate at all?** `canAgenticDraft()` returns true only for
-   `essay`, `discussion_post`, `question_response`, and is commented as *"An ALLOW-LIST that fails
-   CLOSED: a type missing here does not fall back … it produces an outline and then stops with no
-   draft, no error and no toast."* `analyzeCaseStudy.ts` and `CaseStudyPanel.tsx` exist, so case
-   studies presumably have their own path — but a widget that offers "Case Study" and then silently
-   produces no draft would reproduce exactly the failure that comment warns about.
-   *Settled by:* reading `analyzeCaseStudy.ts`. **Until then the widget must not present the draft
-   gate for `case_study`.**
+6. ~~**Does `case_study` reach the draft gate at all?**~~ **CLOSED — partially.**
+   `canAgenticDraft()` returns true only for `essay`, `discussion_post`, `question_response`, and is
+   commented as *"An ALLOW-LIST that fails CLOSED: a type missing here does not fall back … it
+   produces an outline and then stops with no draft, no error and no toast."* I then read
+   `api/src/functions/analyzeCaseStudy.ts`: it is *"a REAL SSE endpoint … that emits **7 sequential
+   case-analysis sections**"* driven by `DEFAULT_CASE_STUDY_ANALYSIS_PROMPT`. **So case_study has a
+   separate, real path — it is not broken, it is different.**
+   **Design consequence:** gate 4 for `case_study` calls `analyze-case-study`, not
+   `assignment-agentic-workflow`, and its registry entry therefore has a different `endpoint`. This
+   is exactly the kind of per-type divergence the registry exists to hold in one place instead of in
+   a branch inside the widget. *Still open:* whether the 7-section analysis is reviewed and accepted
+   like a draft, or is a different artifact with a different terminal state.
 7. **Does the composer accept a message while a card is open without ambiguity?** The resolver
    defaults to the open card ([§7.2](#72-the-resolution-pipeline)), but Huddle threads are
    multi-agent and a message may be addressed at an agent, not the card.
