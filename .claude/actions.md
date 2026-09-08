@@ -3139,3 +3139,22 @@ confirmed normal (non-timeout) replies are unaffected — a group turn (12.7s) a
 OpenAI timeout mid-tool-loop — cannot be forced deterministically from this environment, so that
 specific scenario is mechanism-verified, not live-timeout-confirmed. Stays open until a real slow-
 agent occurrence is observed live and its toolUses/replies checked against the DB.
+
+## 2026-09-08 — cross-app turn: durable path, memory gates, owner attribution
+
+**Asked (via nexus-hub's `AC-turn-is-real.md`, sections B/C/D/E):** make the forwarded turn real —
+persisted, remembered, and attributed.
+
+**Pushed to `claude/fix-turn-is-real`, NOT merged, NOT deployed, live halves NOT verified:**
+`runDurableHuddleTurn` extracted so the route uses the durable path (B1/D2); `agents` supplied so
+the memory write and auto-retrieval gates open (C1/C2/D3); `owner_entra_oid` written in the INSERT
+and the dedup update (D4/D5). Suites green; 12 mutations run, 11 FIRED, 1 INERT and rewritten.
+
+**Evidence:** probe 34191804298 (`HTTP 200`, Elle replies), azure-pg-query 34192165151 (0 marker
+rows either table), db-query 34192710533 (`identity.profile_emails` maps both owner addresses to one
+object id). Nexus-side telemetry read: nexus-hub PR #68.
+
+**Open:** a step named `Q6` was added to `nexus-hub/.github/workflows/cross-app-bridge-probe.yml` by
+this lane AND a different `Q6` by `claude/probe-q6-forward-logs` — collision, needs renumbering at
+merge. An independent verifier (`turn-is-real`, loop 1) is checking this lane's claims; its report is
+`docs/VERIFY-turn-is-real-1.md`.

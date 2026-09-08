@@ -2661,3 +2661,31 @@ journey-side step, so until then do NOT leave two answers standing silently.
 `?owner=<uuid>` it does not verify, so an agent-supplied id would let any prompt read any user's
 coursework by guessing a UUID. Mutation-proved on the voice surface (M1/M2/M3 all FIRED), because
 that file already records NINE native tools that exist on text and are silently absent when spoken.
+
+## Cross-app bridge (Nexus -> Huddle), Huddle side — measured 2026-09-08
+
+**The defect, now observed rather than read.** `buildTurnInput` (`cross-app/turn-gate.ts`) never set
+`data.agents`, so BOTH the memory write gate (`huddle.functions.ts` near `ragAgents`/`anyShared`)
+and auto-retrieval (near `ragCfg`) evaluated false on the cross-app path. A forward that returned
+`HTTP 200` with Elle Rowan replying and `tool_catalog` called left **0** rows carrying its marker in
+`chat.pending_turns` and **0** in `public.rag_chunks` (`azure-pg-query` run 34192165151 against
+probe run 34191804298). **That, alone, is why the Huddle agent had no idea about a Nexus
+conversation** — not retrieval, not threading; nothing was written.
+
+**Corollary to keep:** row counts discriminate NOTHING here. They read identically whether the
+bridge is perfect or dead. Only a caller-supplied marker, attached to a forward independently known
+to have succeeded, distinguishes them.
+
+**Fix lane `claude/fix-turn-is-real`** (pushed to this repo and nexus-hub, NOT merged, NOT deployed):
+route goes through the durable path so turns reach `chat.pending_turns`; `crossAppAgentBackends`
+supplies per-member RAG config so both gates open; `owner_entra_oid` resolved via the existing
+`resolveObjectIdByEmail` and carried in the INSERT **and** in `ON CONFLICT DO UPDATE` — the dedup
+path being the documented trap where an INSERT-only fix leaves every deduped row NULL.
+
+### Hardening — a mutation can match the WRONG statement and report a real guard as inert
+
+That lane's first `H12` matched a substring the *triples* INSERT also satisfies, so deleting
+`owner_entra_oid` from `writeChunk`'s column list left the suite green: a guard reported as
+protecting nothing when the mutation had simply landed elsewhere. Rewritten to parse the two column
+lists separately, both then FIRED. **An anchor that is not unique to the statement under test makes
+the mutation result meaningless in the alarming direction.**
