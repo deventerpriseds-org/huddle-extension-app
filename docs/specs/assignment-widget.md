@@ -347,6 +347,13 @@ defect `turn-gate.ts` was written to close, restated in the opposite direction*.
 widget on the UAT bypass would import a known security defect into production traffic while the fix
 for it sits in the same estate.
 
+> **CORRECTION, made after writing the paragraph above.** I wrote "there is no credential" before
+> reading `src/features/huddle/lib/nexus/nexus.server.ts`, which I found later in the same session.
+> **Half the bridge already exists**, and the half that exists already solves the Q2 problem the way
+> this spec was about to propose. See [§3.5](#35-direction-1-already-exists--the-read-half-is-built).
+> The paragraph above remains true of **writes**, which is the half that does not exist. I am
+> leaving both, labelled, rather than silently rewriting — the sequence is the point.
+
 **PROPOSAL — the bridge nexus must grow before the widget can write.** Mirror `turn-gate.ts`
 exactly, on the nexus side, as a fifth `resolveOwner` source:
 
@@ -362,6 +369,62 @@ exactly, on the nexus side, as a fifth `resolveOwner` source:
 mutating action in this spec.** Read-only rendering of the widget can ship without it (path #4,
 `?owner=`, authorises reads); nothing that mutates can. That split is the recommended phasing
 ([§11](#11-phasing-and-what-is-explicitly-not-in-scope)).
+
+### 3.5 Direction 1 already exists — the READ half is built
+
+**OBSERVATION.** `src/features/huddle/lib/nexus/nexus.server.ts` (263 lines) is titled *"Direction 1
+of the cross-app bridge — lets a Huddle agent READ the owner's Nexus coursework."* It already
+provides:
+
+- **Configuration**: `NEXUS_API_URL` and `NEXUS_OWNER_ID`, both server-held env vars, with
+  `nexusReadConfigured()` requiring **both** — the file explains that *"a tool the model can see but
+  cannot use is worse than one it never had, because the model will keep retrying it and narrate the
+  failure to the user."*
+- **A transport**: `nexusGet(table, filters)` → `GET {base}/api/d1/{table}?owner=…&filters=[…]`, with
+  a 15s `AbortController` timeout and failures normalised to `{ok:false, error:"http_404" |
+  "timeout" | "network_error" | "nexus_not_configured"}`. It carries a warning not to "simplify" the
+  single JSON `filters` param, because *"repeated query keys get merged into a comma-joined value by
+  the Azure Functions host, which corrupts same-column ranges."*
+- **Three tools** — `get_nexus_assignments` (filters: `due_within_days`, `status`, `course_id`,
+  `title`), `get_nexus_courses`, `get_nexus_class_schedule` — surfaced via `nexusReadTools()` and
+  named in a `NEXUS_TOOL_NAMES` set.
+- **One executor for both surfaces**: `executeNexusTool(name, args, timeZone)`, with the reason
+  stated — *"The text path and the voice path having separate copies is exactly how this estate ends
+  up with tools that work when typed and are silently missing when spoken — CAP-huddle-journey
+  records nine such divergences, all one-directional, all voice."*
+
+**Three properties of this file are load-bearing for the widget, and two of them I had proposed
+independently before finding it:**
+
+1. **The Q2 answer is already server-held.** The file's own note: *"Nexus authorises these reads
+   from an `?owner=<uuid>` query parameter that it does NOT verify — the UUID is the only secret …
+   it is why this module takes the owner id from SERVER CONFIG and never from a tool argument. If an
+   agent could pass an owner id, any prompt could read any user's coursework by guessing a UUID. The
+   model cannot reach this value."* That is `turn-gate.ts`'s Q2 discipline, already applied in this
+   direction. **`NEXUS_OWNER_ID` is the identity mapping I said was missing** — it exists for reads.
+2. **The file states its own boundary.** *"READ-ONLY BY CONSTRUCTION. Every call here is a GET
+   against `/api/d1/{table}`. Nothing in this file can write, and the Nexus side blocks writes on
+   this auth path anyway (`requireWrite` rejects the owner-parameter identity). **Adding a write
+   path is a different decision with a different gate.**"* The spec agrees with that sentence and
+   does not try to route around it: [§3.3](#33-the-gap-nexus-has-no-credential-for-a-machine-caller-acting-for-a-human)
+   is the different gate.
+3. **Disambiguation is already owner-directed policy.** `get_nexus_assignments` returns
+   `needs_disambiguation` when a title search matches more than one, with a directive quoting the
+   owner: *"if there are multiple, I'd expect it to clarify for which course before executing."* The
+   note goes further — *"Guessing between two courses' assignments and then DRAFTING against the
+   wrong one wastes the turn and looks like the tool worked."* **The widget inherits this
+   unchanged**; it is the resolution step in front of every utterance in
+   [§7](#7-mechanism-part-3--intent--action-resolution).
+
+**INTERPRETATION — what this does to the plan.** The widget is not a new integration. It is:
+
+| Half | Status | Work |
+|---|---|---|
+| **Read** — fetch the assignment, requirements, outline, context files | **exists** | EXTEND `nexus.server.ts`: more tables through the same `nexusGet`, a `show_assignment` tool through the same `executeNexusTool` |
+| **Write** — set context, run extraction, approve, draft | **does not exist** | NEW, and the file above says it needs *"a different gate"* — [§3.3](#33-the-gap-nexus-has-no-credential-for-a-machine-caller-acting-for-a-human) |
+
+Every mutating action in this spec sits in the second row. That is the whole risk of the feature and
+it is a nexus-side auth change, not a Huddle-side rendering change.
 
 ### 3.4 Why not "just use the existing Huddle→journey proxy"
 
