@@ -2648,3 +2648,16 @@ and reversible (email columns retained; dual-read still honors un-migrated rows)
 - **The container rewound the working tree mid-session again** (2026-08-20): an uncommitted memory.md
   append vanished and `git status` came back clean at the last pushed commit. Pushed code was safe.
   Reinforces: commit + push docs IMMEDIATELY, and re-check `git log origin/<branch>` after any gap.
+
+## 2026-09-08 — DIRECTION 1 BUILT: a Huddle agent can now READ Nexus coursework
+Three tools — `get_nexus_assignments`, `get_nexus_courses`, `get_nexus_class_schedule` — in
+`lib/nexus/nexus.server.ts`, wired into BOTH surfaces from the first commit. Enabled by
+`NEXUS_API_URL` + `NEXUS_OWNER_ID`, synced in `deploy-swa.yml`.
+**This replaces a silently-wrong answer, not a missing one.** journey's `list_pending_assignments`
+reads a STALE FORK: 469 rows, newest created 2026-04-06, against Nexus's 534 of which 241 are newer.
+The tool descriptions steer the model to the live source; retiring journey's copy is a separate
+journey-side step, so until then do NOT leave two answers standing silently.
+**The owner id is server-config, never a tool argument** — Nexus authorises these reads from an
+`?owner=<uuid>` it does not verify, so an agent-supplied id would let any prompt read any user's
+coursework by guessing a UUID. Mutation-proved on the voice surface (M1/M2/M3 all FIRED), because
+that file already records NINE native tools that exist on text and are silently absent when spoken.
