@@ -18,11 +18,14 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
+  CROSS_APP_TURN_ID_PREFIX,
   MAX_BODY_BYTES,
   SUBJECT_ENV,
   TEXT_MAX,
   authenticateCaller,
   buildTurnInput,
+  crossAppAgentBackends,
+  crossAppTurnId,
   defaultMembers,
   findCallerAssertedIdentity,
   normalizeKey,
@@ -482,8 +485,13 @@ const gateCode = stripComments(gateSrc);
 
 
 check(
-  "G1 the route calls the EXISTING runHuddleTurn from huddle.functions",
-  /runHuddleTurn/.test(routeSrc) && /@\/features\/huddle\/lib\/huddle\.functions/.test(routeSrc),
+  // UPDATED 2026-09-08 (AC-turn-is-real B1). The intent is unchanged -- the route must REUSE the
+  // existing turn machinery rather than reimplement it -- but the entrypoint moved from the direct
+  // `runHuddleTurn` call to `runDurableHuddleTurn`, the shared durable path `enqueueHuddleTurn`
+  // also runs. Asserted on routeCODE, not routeSrc: the header comment names the old function on
+  // purpose, and matching prose would let the real call vanish while this stayed green.
+  "G1 the route calls the EXISTING durable turn path from huddle.functions",
+  /runDurableHuddleTurn/.test(routeCode) && /@\/features\/huddle\/lib\/huddle\.functions/.test(routeCode),
 );
 
 check(
@@ -656,6 +664,138 @@ check(
       (name) => azArgs.some((a) => a.includes(name)),
     ),
   `${azArgs.length} args emitted`,
+);
+
+// ---------------------------------------------------------------------------------------------
+// H -- AC-turn-is-real guards (2026-09-08). Every one of these asserts a value that must be
+// PRESENT, not merely that something wrong is absent. Both shipped defects of this bridge were
+// fields that should have been there and were not, and both suites were green (AC E6).
+// ---------------------------------------------------------------------------------------------
+
+const subj = { entra_email: "owner@example.com" };
+
+// E5 -- the adapter's output shape, asserted POSITIVELY. `data.agents` being absent is what made a
+// forwarded turn memory-blind in BOTH directions: the write gate
+// (huddle.functions.ts `ragAgents ... filter(cfg.store === "azure" && cfg.chunks)`) and
+// auto-retrieval (`ragCfg && ragCfg.store === "azure" && ragCfg.chunks`) are two independent `if`s
+// reading the same missing config. Live proof of the consequence: bridge probe run 34191804298
+// returned {"ok":true,"replies":[{"agentId":"elle-rowan","text":"ACK"}]} -- a fully successful
+// forward -- and azure-pg-query run 34192165151 then found ZERO rows for its marker in rag_chunks.
+const builtOne = buildTurnInput({ text: "hi", members: ["elle-rowan"], huddleId: "dm-elle-rowan" }, subj);
+const agentsOne = builtOne.ok ? (builtOne.value as { agents?: Record<string, { rag?: { store?: string; chunks?: boolean; triples?: boolean } }> }).agents : undefined;
+check(
+  "H1 buildTurnInput HAS an `agents` key (absent = memory write AND retrieval both gated off)",
+  !!agentsOne && typeof agentsOne === "object",
+  `agents = ${JSON.stringify(agentsOne)}`,
+);
+check(
+  "H2 every member's agents entry is rag.store 'azure' with chunks AND triples on",
+  !!agentsOne &&
+    ["elle-rowan"].every(
+      (id) =>
+        agentsOne[id]?.rag?.store === "azure" &&
+        agentsOne[id]?.rag?.chunks === true &&
+        agentsOne[id]?.rag?.triples === true,
+    ),
+  JSON.stringify(agentsOne?.["elle-rowan"]?.rag),
+);
+
+// The default (no `members` in the body) must be covered too -- Nexus sends an explicit member
+// today, but a bare {"text":"..."} is documented as a complete request.
+const builtDefault = buildTurnInput({ text: "hi" }, subj);
+const agentsDefault = builtDefault.ok ? (builtDefault.value as { agents: Record<string, { rag: { store: string; chunks: boolean } }> }).agents : {};
+check(
+  "H3 the DEFAULT member set also gets rag config -- every member, no gaps",
+  Object.keys(agentsDefault).length === defaultMembers().length &&
+    defaultMembers().every(
+      (id) => agentsDefault[id]?.rag?.store === "azure" && agentsDefault[id]?.rag?.chunks === true,
+    ),
+  `${Object.keys(agentsDefault).length} entries vs ${defaultMembers().length} members`,
+);
+check(
+  "H4 agents carries entries for the members and nobody else",
+  !!agentsOne && Object.keys(agentsOne).join(",") === "elle-rowan",
+  Object.keys(agentsOne ?? {}).join(","),
+);
+
+// The new key must not itself be identity-shaped, or the route's own 400 guard would refuse a body
+// that echoed it back. (Checked on the agents sub-object: the built input also carries `caller`,
+// which findCallerAssertedIdentity is SUPPOSED to flag.)
+check(
+  "H5 the agents block trips no identity key at any depth",
+  findCallerAssertedIdentity({ agents: crossAppAgentBackends(["elle-rowan", "iris-chase"]) }) === null,
+  String(findCallerAssertedIdentity({ agents: crossAppAgentBackends(["elle-rowan"]) })),
+);
+
+// B5 -- exactly ONE execution per forwarded turn. `enqueueTurn` is INSERT ... ON CONFLICT DO
+// NOTHING and execution is claim-locked, so "exactly once" holds only if the id is STABLE across
+// attempts. A freshly-minted id per attempt is the trap B5 names by name.
+const idArgs = { subject: "owner@example.com", huddleId: "dm-elle-rowan", text: "when is my capstone due?" };
+check(
+  "H6 the durable turn id is DETERMINISTIC for one forwarded turn (a retry re-enters the same row)",
+  crossAppTurnId({ ...idArgs, now: 1_757_000_000_000 }) ===
+    crossAppTurnId({ ...idArgs, now: 1_757_000_000_000 + 30_000 }),
+  `${crossAppTurnId({ ...idArgs, now: 1_757_000_000_000 })} vs ${crossAppTurnId({ ...idArgs, now: 1_757_000_000_000 + 30_000 })}`,
+);
+check(
+  "H7 a DIFFERENT message gets a different id (an id that collapsed them would drop turns)",
+  crossAppTurnId({ ...idArgs, now: 1_757_000_000_000 }) !==
+    crossAppTurnId({ ...idArgs, text: "who is my thesis advisor?", now: 1_757_000_000_000 }),
+);
+check(
+  "H8 an explicit idempotencyKey removes the time component entirely",
+  crossAppTurnId({ ...idArgs, idempotencyKey: "nexus-turn-42", now: 1 }) ===
+    crossAppTurnId({ ...idArgs, idempotencyKey: "nexus-turn-42", now: 9_999_999_999_999 }),
+);
+check(
+  "H9 the id is prefixed so a forwarded row is identifiable in chat.pending_turns",
+  crossAppTurnId(idArgs).startsWith(CROSS_APP_TURN_ID_PREFIX),
+  crossAppTurnId(idArgs),
+);
+
+// B1/E3 (offline half) -- the route must reach the DURABLE path. E3 proper is a live check on
+// chat.pending_turns and needs a deploy; this is the edit-time guard that stops the direct
+// runHuddleTurn call from coming back, which is precisely how the turn became invisible.
+// `routeSrc` / `routeCode` (comments stripped) are already built in section G above.
+check(
+  "H10 the route CALLS runDurableHuddleTurn (the chat.pending_turns path)",
+  /runDurableHuddleTurn\s*\(/.test(routeCode),
+);
+check(
+  "H11 the route does NOT call runHuddleTurn directly (that bypass IS defect D2)",
+  !/[^a-zA-Z]runHuddleTurn\s*\(/.test(routeCode),
+);
+
+// D1/D2/D4 -- owner attribution has a WRITER, on both the insert and the dedup path. A fix that
+// only adds the column to the INSERT list passes D1 and fails D2: every repeated utterance takes
+// the ON CONFLICT branch and would stay NULL-owned forever.
+const storeSrc = readFileSync("src/features/huddle/lib/rag/azure-pg.server.ts", "utf8");
+check(
+  "H12 writeChunk INSERTS owner_entra_oid",
+  /INSERT INTO rag_chunks|const cols = `\(scope, agent_id, text, source, embedding, metadata, author_agent_ids, owner_entra_oid\)`/.test(storeSrc) &&
+    storeSrc.includes("author_agent_ids, owner_entra_oid)"),
+);
+check(
+  "H13 writeChunk's ON CONFLICT DO UPDATE also stamps owner_entra_oid (AC D2 -- the dedup path)",
+  storeSrc.includes("owner_entra_oid = COALESCE(rag_chunks.owner_entra_oid, EXCLUDED.owner_entra_oid)"),
+);
+check(
+  "H14 writeTriples INSERTS and re-stamps owner_entra_oid (AC D4)",
+  storeSrc.includes("author_agent_ids, owner_entra_oid)") &&
+    storeSrc.includes("owner_entra_oid = COALESCE(rag_triples.owner_entra_oid, EXCLUDED.owner_entra_oid)"),
+);
+
+// D5 -- the oid is RESOLVED from identity.profile_emails, never guessed, and NEVER defaulted to
+// "the only profile in the table" (correct with one profile, silently wrong with two).
+const turnSrc = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
+check(
+  "H15 the memory write resolves the owner via resolveObjectIdByEmail and passes it to the store",
+  /resolveObjectIdByEmail\(data\.caller\?\.entra_email\)/.test(turnSrc) &&
+    turnSrc.includes("ownerEntraOid,"),
+);
+check(
+  "H16 nothing in the turn path reads identity.profiles directly (no sole-profile guess)",
+  !/identity\.profiles/.test(turnSrc),
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);
