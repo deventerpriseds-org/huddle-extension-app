@@ -37,6 +37,7 @@ import {
   executeNexusTool,
   GET_NEXUS_ASSIGNMENTS_TOOL,
   GET_NEXUS_SLIDE_NOTES_TOOL,
+  SEARCH_NEXUS_KNOWLEDGE_TOOL,
 } from "../src/features/huddle/lib/nexus/nexus.server";
 import { LIST_ARTIFACTS_TOOL } from "../src/features/huddle/lib/artifacts/artifact-tool";
 import { readFileSync } from "node:fs";
@@ -384,53 +385,152 @@ t("transcript rows are returned as messages", wt.count, 2);
 
 console.log("=== PART 8 — A-RAG rows: the knowledge base, and what it can and cannot do ===");
 
-// --- A-RAG-1. The two things that make this tool honest: the raw 1536-float embedding never
-//     reaches the model, and the search is described (and reported) as LITERAL, not semantic.
-calls = [];
-globalThis.fetch = route({
-  "/api/d1/assistant-knowledge-chunks": [
-    { id: "k1", content: "Grading breakdown: 40% exam", source_type: "summary",
-      metadata: { topic_id: "c1", file_name: "cf-syllabus.pdf" }, embedding: [0.1, 0.2, 0.3], created_at: "2026-09-01" },
-    { id: "k2", content: "Grading is on a curve", source_type: "atom",
-      metadata: { topic_id: "c2" }, embedding: [0.4, 0.5], created_at: "2026-09-02" },
+// --- A-RAG-1. NOW SEMANTIC. The tool searches by MEANING via GET /api/knowledge-search, and the
+//     literal `ilike` survives only as a LABELLED fallback. Everything below exists because the
+//     wording of a search tool is as load-bearing as its behaviour: a model told it searched by
+//     meaning reports a miss as "that is not in your knowledge base", and a model told it searched
+//     literally needlessly reduces the owner's question to one keyword. Both are wrong answers
+//     produced by correct code, so the DESCRIPTION and the RESULT LABELS are tested, not just the
+//     rows. Three misses must stay distinguishable: nothing close enough; nothing indexed at all;
+//     the search service was down.
+const semanticHit = {
+  matchType: "semantic",
+  model: "text-embedding-3-small",
+  hasCorpus: true,
+  count: 1,
+  passages: [
+    { id: "k1", content: "Assessment weighting: 40% final exam", similarity: 0.61,
+      metadata: { topic_id: "c1", file_name: "cf-syllabus.pdf" }, sourceType: "knowledge_base",
+      embedding: [0.1, 0.2, 0.3] },
   ],
-});
-const kb = (await executeNexusTool("search_nexus_knowledge", { query: "grading" }, "UTC")) as {
-  passages: Record<string, unknown>[]; match_type: string; count: number;
 };
-t("chunk search is a server-side ilike on content", calls[0].includes('["content","ilike.%grading%"]'), true);
-t("it orders on created_at (updated_at does not exist on this table)", calls[0].includes("order=created_at.desc"), true);
-t("NO order on updated_at — d1 accepts the name and Postgres then fails", calls[0].includes("updated_at"), false);
-t("it never filters on metadata (jsonb has no ILIKE operator — that is a 500)", calls[0].includes('"metadata"'), false);
+
+calls = [];
+globalThis.fetch = route({ "/api/knowledge-search": semanticHit });
+const kb = (await executeNexusTool(
+  "search_nexus_knowledge", { query: "how is the course graded?" }, "UTC",
+)) as { passages: Record<string, unknown>[]; match_type: string; count: number; has_corpus: boolean; model?: string };
+
+t("the search goes to the semantic route", calls[0].includes("/api/knowledge-search"), true);
+t("it does NOT fall back to the d1 ilike when semantic works",
+  calls.some((c) => c.includes("/api/d1/assistant-knowledge-chunks")), false);
+t("the result is labelled semantic", kb.match_type, "semantic");
+t("the embedding model is reported, so a corpus/query mismatch is visible", kb.model, "text-embedding-3-small");
+// THE QUERY IS NOT REDUCED TO A KEYWORD. Under the literal path the query was run through
+// `likeTerm`; a semantic search wants the owner's own phrasing, and a whole question ranks better.
+// Spaces ride as `+` (URLSearchParams' encoding); the Nexus side reads it with
+// url.searchParams.get(), which decodes `+` back to a space. Asserted in the wire form because
+// that is what was actually observed on the wire, not the form it is convenient to write.
+t("the owner's whole question is sent, not a keyword",
+  calls[0].includes("query=how+is+the+course+graded?"), true);
+t("...and the default k rides with it", calls[0].includes("k=8"), true);
+
+// AND IT REACHES THE ROUTE UNMANGLED. `likeTerm` strips `%` and `_` because those are SQL LIKE
+// wildcards -- meaningful ONLY on the fallback path. A question like "what is the 40% weighting?"
+// is entirely ordinary, and running it through likeTerm would silently send "40 weighting" to a
+// semantic search. Tested with a query that actually CONTAINS those characters: without one, this
+// assertion and a likeTerm'd query are indistinguishable (measured -- the mutation was INERT until
+// this case existed).
+calls = [];
+await executeNexusTool("search_nexus_knowledge", { query: "the 40% rule for working_capital" }, "UTC");
+t("SQL LIKE wildcards are NOT stripped from a semantic query",
+  calls[0].includes("query=the+40%+rule+for+working_capital"), true);
 t("the owner still comes from config, not the args", calls[0].includes("owner=owner-uuid"), true);
-// THE GUARD. /api/d1/{table} is a bare `SELECT *` with no projection, so every chunk row arrives
-// carrying its pgvector embedding — 1536 floats each. Nothing downstream wants it and it would
-// dominate the tool result the model has to read.
+// THE GUARD SURVIVES THE REWRITE. The route projects rows itself, but stripEmbedding still runs --
+// a 1536-float vector per passage would dominate the tool result the model has to read.
 t("the raw embedding vector is STRIPPED from every passage",
   kb.passages.some((r) => "embedding" in r), false);
 t("...while the content itself survives", kb.passages.every((r) => typeof r.content === "string"), true);
-t("the result names the match type so the model cannot assume semantic search", kb.match_type, "literal_substring");
+// A meaning match with NO shared word is the entire point of the change: the query said "graded",
+// the passage says "Assessment weighting". The old ilike could not have found this row.
+t("a passage sharing no word with the query is returned", kb.count, 1);
 
-// The course scope is a CLIENT-SIDE filter on metadata.topic_id — a topic IS a course — because
-// d1 cannot filter a jsonb path.
+// The course scope is now a SERVER-SIDE jsonb containment filter on the Nexus side (metadata @>
+// {topic_id}), not a client-side post-filter over an over-fetch. It rides as a query parameter.
 calls = [];
 const kbScoped = (await executeNexusTool(
   "search_nexus_knowledge", { query: "grading", course_id: "c1" }, "UTC",
-)) as { count: number; scanned: number; passages: { id: string }[] };
-t("a course scope keeps only chunks whose metadata.topic_id matches", kbScoped.count, 1);
-t("...and it is the right one", kbScoped.passages[0]?.id, "k1");
-t("the unscoped scan size is reported, so a narrow result is explainable", kbScoped.scanned, 2);
+)) as { count: number };
+t("a course scope is sent to the server, not applied after fetching", calls[0].includes("courseId=c1"), true);
+t("...and no over-fetch multiplier is needed any more", calls[0].includes("limit=100"), false);
 
+// MISS 1 -- semantic ran over material that EXISTS and found nothing close enough.
 calls = [];
-globalThis.fetch = route({ "/api/d1/assistant-knowledge-chunks": [] });
-const kbEmpty = (await executeNexusTool("search_nexus_knowledge", { query: "waffles" }, "UTC")) as { note?: string };
-t("an empty search says the WORD is absent, not the topic", /WORD match/.test(kbEmpty.note ?? ""), true);
-t("...and tells the model to try another wording first", /ANOTHER WORDING/.test(kbEmpty.note ?? ""), true);
+globalThis.fetch = route({ "/api/knowledge-search": { matchType: "semantic", hasCorpus: true, count: 0, passages: [] } });
+const kbEmpty = (await executeNexusTool("search_nexus_knowledge", { query: "waffles" }, "UTC")) as
+  { note?: string; match_type: string; has_corpus: boolean };
+t("a semantic miss is still labelled semantic", kbEmpty.match_type, "semantic");
+t("a semantic miss reports that a corpus exists", kbEmpty.has_corpus, true);
+t("a semantic miss says the search WAS meaning-based", /meaning-based search/.test(kbEmpty.note ?? ""), true);
+t("...and does not blame a missing word", /WORD match/.test(kbEmpty.note ?? ""), false);
+
+// MISS 2 -- a DIFFERENT FACT. Nothing is indexed. "That topic is not in your knowledge base" is
+// technically true here and completely misleading: the knowledge base is empty, and that is
+// fixable. This branch must never produce the miss-1 sentence.
+calls = [];
+globalThis.fetch = route({ "/api/knowledge-search": { matchType: "semantic", hasCorpus: false, count: 0, passages: [] } });
+const kbNoCorpus = (await executeNexusTool("search_nexus_knowledge", { query: "waffles" }, "UTC")) as
+  { note?: string; has_corpus: boolean };
+t("an empty corpus is reported as empty, not as a miss", kbNoCorpus.has_corpus, false);
+t("...and the note says nothing has been indexed", /NO indexed material at all/.test(kbNoCorpus.note ?? ""), true);
+t("...and explicitly forbids the 'not in your knowledge base' answer",
+  /Do NOT report this as/.test(kbNoCorpus.note ?? ""), true);
+t("the empty-corpus note differs from the semantic-miss note",
+  (kbNoCorpus.note ?? "") === (kbEmpty.note ?? ""), false);
+
+// MISS 3 -- THE SERVICE WAS DOWN. This is the one the brief calls out: a service-down miss and a
+// semantic miss must not read alike. It degrades to the literal ilike rather than failing the
+// tool, but it must SAY it degraded.
+calls = [];
+globalThis.fetch = (async (u: string) => {
+  const url = decodeURIComponent(String(u));
+  calls.push(url);
+  if (url.includes("/api/knowledge-search")) return new Response("nope", { status: 500 });
+  return new Response(JSON.stringify([]), { status: 200 });
+}) as unknown as typeof fetch;
+const kbDown = (await executeNexusTool("search_nexus_knowledge", { query: "grading" }, "UTC")) as
+  { match_type: string; degraded_from_semantic?: string; note?: string };
+t("an unreachable semantic route falls back rather than failing the tool", kbDown.match_type, "literal_substring_fallback");
+t("...and it DID fall back to the d1 ilike",
+  calls.some((c) => c.includes('["content","ilike.%grading%"]')), true);
+t("...ordering on created_at, since this table has no updated_at column",
+  calls.some((c) => c.includes("order=created_at.desc")), true);
+t("...never ordering on updated_at (d1 accepts the name, Postgres then fails)",
+  calls.some((c) => c.includes("updated_at")), false);
+t("the reason for the degrade is carried, not swallowed", kbDown.degraded_from_semantic, "http_500");
+t("the note leads with the outage, not with a claim about the material",
+  /SEMANTIC SEARCH WAS UNAVAILABLE/.test(kbDown.note ?? ""), true);
+t("...and explicitly says this is NOT evidence the topic is missing",
+  /Do NOT tell him the topic is missing/.test(kbDown.note ?? ""), true);
+t("a service-down miss does NOT read like a semantic miss",
+  (kbDown.note ?? "") === (kbEmpty.note ?? ""), false);
+
+// A 200 carrying the WRONG SHAPE is a deploy-skew signal (an older Function App build, or a host
+// returning an error page as 200), not a search result. Treating it as "no hits" would report a
+// service problem as a fact about the owner's material.
+calls = [];
+globalThis.fetch = route({ "/api/knowledge-search": [] });
+const kbSkew = (await executeNexusTool("search_nexus_knowledge", { query: "grading" }, "UTC")) as
+  { match_type: string; degraded_from_semantic?: string };
+t("a 200 with an unexpected shape is treated as a service fault, not as zero hits",
+  kbSkew.degraded_from_semantic, "bad_response_shape");
+t("...and it degrades rather than reporting an empty semantic result", kbSkew.match_type, "literal_substring_fallback");
+
+// THE DESCRIPTION MUST MOVE WITH THE BEHAVIOUR. A tool whose description understates it is nearly
+// as misleading as one that overstates it, and this description previously insisted in capitals
+// that the search was literal. That sentence became FALSE the moment the route landed.
+const kbDesc = SEARCH_NEXUS_KNOWLEDGE_TOOL.description;
+t("the description no longer claims a literal substring match", /LITERAL SUBSTRING MATCH/.test(kbDesc), false);
+t("...nor tells the model to pass a single exact word", /exact distinctive WORD/.test(kbDesc), false);
+t("the description says the search is semantic", /SEMANTIC search/.test(kbDesc), true);
+t("...and tells the model to read match_type before characterising a miss", /match_type/.test(kbDesc), true);
+t("...and names the degraded label it might see", /literal_substring_fallback/.test(kbDesc), true);
+t("...and points at has_corpus before any 'not in your knowledge base' claim", /has_corpus/.test(kbDesc), true);
 
 calls = [];
 const kbNoQuery = (await executeNexusTool("search_nexus_knowledge", {}, "UTC")) as { error?: string };
 t("a search with no query is REFUSED", kbNoQuery.error, "query_required");
-t("...and nothing was fetched", calls.length, 0);
+t("...and nothing was fetched", calls.length, 0)
 
 // --- A-RAG-5. A DIFFERENT table on purpose: the owner is asking which DOCUMENTS are indexed.
 //     topic_id is a real column in that route's own `filters` list, so this scope is server-side.
