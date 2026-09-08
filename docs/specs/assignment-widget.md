@@ -252,3 +252,210 @@ already *takes `requirements` and `outline` as inputs*, meaning the boundary bet
 already a real API boundary rather than an internal step of one monolithic call. The widget's gates
 therefore sit exactly where nexus's own seams already are. This is the difference between a design
 that extends the existing machinery and one that runs a parallel flow beside it.
+
+---
+
+## 3. Architecture — Option A, and the one thing it does not yet have
+
+### 3.1 The shape the owner chose
+
+> **"we'll go with A"** — the widget calls nexus's API; nexus stays the single source of truth;
+> Huddle does not mirror assignment state.
+
+**This is the right call and it is consistent with a standing rule in this repo.** Huddle's
+`CLAUDE.md` describes the journey task mirror as *"a single-writer read-model"* and warns against
+adding *"a second writer"*. An assignment mirror in Huddle would be exactly that second writer, on
+data whose canonical home is a third application. Option A avoids it by holding **no assignment
+state at all** in Huddle: the widget is a *view plus a remote control*.
+
+```
+  HUDDLE (chat)                                     NEXUS (source of truth)
+  ┌──────────────────────────┐                      ┌──────────────────────────────┐
+  │ AssignmentCardWidget     │   1. read  (GET)     │ /api/d1  assignments,        │
+  │  · renders payload       │ ───────────────────► │          requirements,       │
+  │  · gate buttons          │                      │          context files       │
+  │  · composer prefill      │   2. act   (POST)    │ /api/extract-assignment-…    │
+  └──────────┬───────────────┘ ───────────────────► │ /api/generate-outline        │
+             │                                      │ /api/assignment-agentic-…    │
+             │ payload (snapshot only)              │ /api/generate-document       │
+  ┌──────────┴───────────────┐                      └──────────────────────────────┘
+  │ assignment_widget tool   │                        state lives HERE, only here
+  │ (agent-callable, Huddle) │
+  └──────────────────────────┘
+```
+
+**PROPOSAL.** Huddle stores exactly one thing about an assignment: the **snapshot inside the chat
+message**, which is a record of what the agent saw when it wrote the message — the identical
+contract the checklist payload already has ([§2.2](#22-the-checklists-two-hard-won-properties)),
+and for the identical reason. It is never read back as authority; it is reconciled against nexus on
+mount.
+
+### 3.2 The cross-app bridge exists — pointing the other way
+
+**OBSERVATION.** `src/features/huddle/lib/cross-app/turn-gate.ts` is the authorisation gate for
+`POST /api/public/run-agent-turn`, an *inbound* door: **nexus calls Huddle**. Its header states the
+defect it was built to close:
+
+> *"Huddle's existing turn entrypoint, the `sendHuddleMessage` server function, accepts an ANONYMOUS
+> POST and takes the acting user's identity from an unverified request body field
+> (`caller.entra_email`) … So anyone who can reach the site and knows the current build
+> content-hash can drive a turn AS ANY USER."*
+
+And the two questions it insists on keeping apart:
+
+> ```
+> Q1 WHO IS CALLING?   -> `x-webhook-secret` == JOURNEY_PROXY_TOKEN. Proves "a trusted
+>                         integrating app". Proves NOTHING about which human it acts for.
+> Q2 ON WHOSE BEHALF?  -> CROSS_APP_TURN_SUBJECT, a server-held app setting. The request has
+>                         NO input to this answer -- not a header, not a body field, not a
+>                         query string.
+> ```
+
+**INTERPRETATION.** The estate has a *pattern* for cross-app calls and a hard-won *lesson* about
+it, but the plumbing runs nexus→Huddle and this widget needs Huddle→nexus. The direction is new;
+the lesson is not, and it applies with full force.
+
+### 3.3 The gap: nexus has no credential for a machine caller acting for a human
+
+**OBSERVATION.** `nexus-hub/api/src/lib/auth.ts` `resolveOwner` accepts identity from exactly four
+sources, in precedence order:
+
+| # | Source | Verified? | Notes from the file |
+|---|---|---|---|
+| 1 | `Authorization: Bearer` → nexus HMAC session (`verifySession`) | yes | *"the permanent path"*; HMAC key reuses `AZURE_CLIENT_SECRET` |
+| 2 | `Authorization: Bearer` → Supabase access token | yes | *"TRANSITIONAL (bake window only) … REMOVED at the D1 cutover"* |
+| 3 | `x-uat-token` == `UAT_BYPASS_TOKEN`, owner from `?owner=` / `UAT_USER` | yes | *"UAT bypass for the automated verifier (never OAuth)"* |
+| 4 | `?owner=` | **no** | reads only — `requireWrite` rejects it |
+
+`requireWrite` returns 401 unless `verified && owner && owner !== ANON_OWNER`.
+
+**And the owner key is not the identity Huddle holds.** The file states:
+
+> *"Owner keying (Phase 3 D1 decision, 2026-08-07): `owner` is generic. Today it is the Supabase
+> auth UUID (the app still keys rows by `user.id`); a later cross-cutting pass re-keys to email.
+> Nothing here assumes an email shape."*
+
+Huddle's caller, everywhere in `HuddleView.tsx`, is
+`{ entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }`.
+
+**INTERPRETATION — this is the biggest design risk in the spec, stated plainly.** There is today
+**no credential a Huddle server can present to nexus that both (a) proves Huddle is a trusted app
+and (b) names the human on whose behalf it acts**, and there is **no recorded mapping from a
+Huddle Entra email to a nexus Supabase-UUID `owner`**. Of the four paths, only #3 is reachable by a
+machine — and #3 takes the acting subject from `?owner=` on the request, which is *precisely the
+defect `turn-gate.ts` was written to close, restated in the opposite direction*. Shipping the
+widget on the UAT bypass would import a known security defect into production traffic while the fix
+for it sits in the same estate.
+
+**PROPOSAL — the bridge nexus must grow before the widget can write.** Mirror `turn-gate.ts`
+exactly, on the nexus side, as a fifth `resolveOwner` source:
+
+- **Q1 (who is calling)** — a shared secret header. **Reuse `JOURNEY_PROXY_TOKEN`**; per the
+  standing rule in both repos' `CLAUDE.md`, *"Never mint a new org secret."*
+- **Q2 (on whose behalf)** — resolved from **server-held configuration**, never from the request.
+  The minimal form is the same shape as `CROSS_APP_TURN_SUBJECT`: a single configured owner id,
+  since this estate is effectively single-user. The general form is a small server-side map from
+  Entra email → nexus owner. **Either way the request contributes no byte to the answer.**
+- Precedence: after the Bearer paths, before the UAT bypass, so a real user session always wins.
+
+**This is a nexus-side change, not a Huddle-side one, and it is a hard prerequisite for every
+mutating action in this spec.** Read-only rendering of the widget can ship without it (path #4,
+`?owner=`, authorises reads); nothing that mutates can. That split is the recommended phasing
+([§11](#11-phasing-and-what-is-explicitly-not-in-scope)).
+
+### 3.4 Why not "just use the existing Huddle→journey proxy"
+
+**OBSERVATION.** Huddle already has an outbound cross-app helper:
+`src/features/huddle/lib/journey/proxy.functions.ts` `invokeJourneyTool`, which POSTs to
+journey's `/tool` and normalises failures into `{ ok:false, output, error }` rather than throwing —
+`` `journey /tool ${res.status}` `` with the body truncated to 400 chars.
+
+**INTERPRETATION.** That is the right *error-normalisation shape* to copy, and this spec copies it
+(the `{ ok, error }` triple in [§10](#10-cross-app-failure-modes) is the same contract
+`ConfirmAskRow` already consumes). It is the wrong *route*: journey is a different application with
+a different tool surface, and routing assignment calls through it would put a third app in the path
+between Huddle and the only system that holds assignment state. The widget calls nexus directly.
+
+---
+
+## 4. The sixth payload kind
+
+### 4.1 The message field
+
+**PROPOSAL.** Add one optional field to `HuddleMessage` (`src/features/huddle/data/seed.ts`),
+alongside `checklist` and `confirmAsk`:
+
+```ts
+assignmentCard?: AssignmentCardPayload;
+```
+
+rendered by one new branch in `HuddleView.tsx` beside the existing five:
+
+```tsx
+{m.assignmentCard && <AssignmentCardWidget m={m} />}
+```
+
+**Why a sixth kind rather than extending `checklist`.** The five kinds are independent `m.<kind> &&`
+branches with no shared machinery to extend ([§2.1](#21-huddle-renders-exactly-five-payload-kinds)):
+"extending" the checklist would mean overloading `ChecklistPayload` with a discriminant and
+branching inside `ChecklistCard`, which makes two unrelated widgets share a render path and a
+`checklistState` store slice keyed by `taskId` — a key an assignment does not have. The additive
+branch is the smaller change and matches how the other four were added.
+
+### 4.2 The payload type lives in ONE place
+
+**OBSERVATION.** The existing payload kinds are declared structurally in at least four files —
+`data/seed.ts:26-48`, `lib/huddle.functions.ts:538-540`, `:814-819` and `:6779`, and
+`components/HuddleApp.tsx:147-154`.
+
+**PROPOSAL, and it is a hard requirement, not a preference.** `AssignmentCardPayload` is declared
+**once** and imported everywhere else. The precedent is not a style opinion; it is the documented
+history of `nexus-hub/api/src/shared/workflowTypes.ts`, quoted in full in
+[§5.1](#51-the-precedent-is-documented-not-argued). A type that must agree across five call sites
+and is typed out five times is the exact setup that produced silent drift in nexus **within one
+working session**.
+
+### 4.3 Payload shape
+
+**PROPOSAL.** The payload is a **snapshot for instant paint**, mirroring `ChecklistPayload`'s
+contract — never authority, always reconciled ([§8.1](#81-reconcile-on-mount-the-checklist-rule-under-option-a)).
+
+```ts
+export interface AssignmentCardPayload {
+  /** nexus assignment id. The ONLY durable key; everything else is re-fetchable from it. */
+  assignmentId: string;
+  /** Snapshot fields, for the pre-reconcile paint. Mirrors nexus's `Assignment` type. */
+  snapshot: {
+    title: string;
+    courseCode: string | null;      // from the joined `courses.code`
+    dueDate: string | null;
+    points: number | null;
+    priority: string | null;
+    status: string;
+    outputFormat: string | null;    // nexus `output_format` — see §8
+    workflowType: string | null;    // nexus WorkflowType, or null if not yet chosen
+  };
+  /** Which gate this card is currently parked at. See §8. */
+  stage: "context" | "requirements" | "outline" | "draft" | "done";
+  /** Set client-side once a gate is passed, exactly as ConfirmAskRow sets `resolved`. */
+  resolvedStages?: Array<"context" | "requirements" | "outline" | "draft">;
+}
+```
+
+Note what is **absent**: no requirements array, no outline text, no draft, no context-file list.
+Those are large, they change, and they live in nexus. Persisting them into a chat message would
+recreate the stale-snapshot problem the checklist's reconcile step exists to solve, at a hundred
+times the size. The card fetches them on mount and holds them in component state.
+
+### 4.4 How the card gets into the thread
+
+**PROPOSAL.** A new agent-callable tool, `show_assignment`, following `build_checklist`'s two-part
+shape (`src/features/huddle/lib/tasks/tools.ts` defines the schema at `:54` and its execution
+returns *"a JSON string for the model AND the structured payload"*, `:93`). Same split here: the
+model gets a short JSON summary; the structured `AssignmentCardPayload` rides back on the message.
+
+**And it inherits `build_checklist`'s completeness discipline verbatim.** The tool description must
+carry the same instruction that `tools.ts:90` carries — when the user asks for their assignments,
+the app resolves the full set itself rather than the model hand-picking a sample. An assignment
+card that silently showed 3 of 7 due assignments would be the same defect the checklist's *"LEGACY
+ONLY. New checklists are never truncated"* comment records having already been fixed once.
