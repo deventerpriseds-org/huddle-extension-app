@@ -9,10 +9,14 @@
 //             (2) OWNER SPOOFING. Nexus authorises these reads from an ?owner=<uuid> it does not
 //                 verify. If an agent could pass that id, any prompt could read any user's
 //                 coursework by guessing a UUID.
-//             (3) CONFIDENT EMPTY ANSWER. The owner's data has 534 assignments, 504 with a due date
-//                 and ZERO due in the future. A correct pipeline and a broken one both return no
-//                 rows, so an agent that says "you're caught up!" is indistinguishable from one
-//                 whose query is broken.
+//             (3) CONFIDENT EMPTY ANSWER. A correct pipeline and a broken one both return no rows,
+//                 so an agent that says "you're caught up!" is indistinguishable from one whose
+//                 query is broken. (This comment used to cite "534 assignments, ZERO due in the
+//                 future" as though it were structural. It EXPIRED -- two were due in the future on
+//                 2026-09-08. A count of live data is true on its measurement date only.)
+//             (4) A NAMED ASSIGNMENT MATCHING SEVERAL. The owner names one in words; if the tool
+//                 picks between matches, it can draft against the wrong course and look correct
+//                 doing it. Ambiguity must come back as a QUESTION.
 // SUPERSEDES: nothing.
 // SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   the NATIVE-set comment at realtime-tools.server.ts:450; CAP-nexus §2.1 (unverified
@@ -123,6 +127,60 @@ globalThis.fetch = origFetch;
 console.log("=== PART 5 — an unknown name is refused, not silently proxied ===");
 t("unknown tool", ((await executeNexusTool("get_nexus_everything", {}, "UTC")) as { error?: string }).error, "unknown_nexus_tool_get_nexus_everything");
 t("NEXUS_TOOL_NAMES has exactly 3", NEXUS_TOOL_NAMES.size, 3);
+
+console.log("=== PART 6 — a named assignment: the title filter, and ASKING when several match ===");
+setEnv({ NEXUS_API_URL: "https://nexus.example", NEXUS_OWNER_ID: "owner-uuid" });
+
+t(
+  "the schema exposes a title parameter at all",
+  Object.prototype.hasOwnProperty.call(GET_NEXUS_ASSIGNMENTS_TOOL.parameters.properties, "title"),
+  true,
+);
+
+// The filter must reach the SERVER as an ilike, not be applied after fetching everything.
+let seenUrl = "";
+globalThis.fetch = (async (u: string) => {
+  seenUrl = String(u);
+  return new Response(JSON.stringify([{ id: "1", title: "Discussion Board 1", due_date: "2026-09-07" }]), { status: 200 });
+}) as unknown as typeof fetch;
+const one = (await executeNexusTool(
+  "get_nexus_assignments",
+  { title: "Discussion Board 1" },
+  "UTC",
+)) as { count: number; note?: string; needs_disambiguation?: boolean };
+t("title reaches the server as an ilike filter", /ilike\.%Discussion\+Board\+1%|ilike\.%25Discussion/.test(decodeURIComponent(seenUrl)) || decodeURIComponent(seenUrl).includes("ilike.%Discussion Board 1%"), true);
+t("one match does NOT ask for disambiguation", one.needs_disambiguation ?? false, false);
+t("one match carries no note", one.note ?? "none", "none");
+
+// SEVERAL matches -> a question, never a pick. This is the assertion the owner asked for.
+globalThis.fetch = (async () =>
+  new Response(
+    JSON.stringify([
+      { id: "1", title: "Introductions", course_id: "c1", due_date: "2026-09-10" },
+      { id: "2", title: "Discussion Board 1 - Introduce Yourself", course_id: "c2", due_date: "2026-09-07" },
+    ]),
+    { status: 200 },
+  )) as typeof fetch;
+const many = (await executeNexusTool(
+  "get_nexus_assignments",
+  { title: "introduc" },
+  "UTC",
+)) as { count: number; note?: string; needs_disambiguation?: boolean };
+t("several matches are all returned", many.count, 2);
+t("several matches FLAG disambiguation", many.needs_disambiguation, true);
+t("the directive names COURSE as the thing to ask about", /which COURSE/.test(many.note ?? ""), true);
+t("the directive forbids acting before he answers", /do not act on any of them/.test(many.note ?? ""), true);
+
+// A stray wildcard must not widen the search back to everything and look like it worked.
+seenUrl = "";
+globalThis.fetch = (async (u: string) => {
+  seenUrl = String(u);
+  return new Response(JSON.stringify([]), { status: 200 });
+}) as unknown as typeof fetch;
+await executeNexusTool("get_nexus_assignments", { title: "%" }, "UTC");
+t("a bare wildcard is stripped, so no title filter is sent", decodeURIComponent(seenUrl).includes("title"), false);
+
+globalThis.fetch = origFetch;
 
 console.log(`\n${fail === 0 ? "ALL PASS" : "FAILURES"}: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
