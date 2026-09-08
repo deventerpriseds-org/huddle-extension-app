@@ -567,6 +567,13 @@ mistake, one layer up.
 
 ### 5.2 What the registry is
 
+> **DO NOT CODE AGAINST THE INTERFACE BELOW — see §5.2b, immediately after this section.**
+> The registry was built and its shipped shape differs: `uiLabel`, `modelDescription`, `args`,
+> `mutating` and `stage` do NOT exist, and `transport`, `requires`/`produces`, `chainsTo`,
+> `chainGateSetting` and `workflowTypes` were added. §5.2 is kept for its REASONING — why a
+> registry at all, and why `mutating` and `needsConfirmation` are different questions (an
+> argument that still stands, and a field still owed). §5.2b is the contract.
+
 **PROPOSAL.** One module, `nexus-hub/api/src/shared/assignmentActions.ts`, beside
 `workflowTypes.ts`, for the reason `workflowTypes.ts` gives about `rootDir` — the constrained side
 owns it, the flexible side imports it via `@shared`, and Huddle imports it as a build-time copy
@@ -606,7 +613,7 @@ the owner's own example utterance, or remove the gate he asked for.
 ### 5.2b RESULT — the registry is BUILT, and here is exactly how much of §5.2 it is
 
 **Stamped 2026-09-08.** §5.2 was a PROPOSAL. `nexus-hub/api/src/shared/assignmentActions.ts` now
-exists on `claude/assignment-action-registry` (nexus-hub **PR #87**), in the exact location and
+exists **on nexus-hub `main`** (merged as **PR #87**), in the exact location and
 for the exact `rootDir` reason §5.2 gives. The owner's question that prompted this — *"doesn't the
 registry building need to happen here for the widget? there seems to be a split of what you would
 do vs the other huddle session"* — is answered: the split was real, the spec proposed it, nexus had
@@ -662,6 +669,55 @@ FIRED.**
 **Still owed before §5.3's "both surfaces render FROM it" is true:** `uiLabel`/`modelDescription`,
 `args`, `mutating`, and a `stage` bucket. Those are the execution half, and they are a nexus-side
 change to the same file — not a second registry here.
+
+### 5.2c AS BUILT — three nexus behaviours the widget must inherit, not re-implement
+
+The owner's standing rule: *"the widget, extension and webapp dont diverge from eachother in ways
+other than style like capability."* These three shipped in nexus after this document was written.
+Each is enforced at a layer the widget shares, so inheriting them is the DEFAULT — the failure mode
+is a widget that re-implements one slightly differently.
+
+**1. A per-requirement note must carry its content anchor, and the API enforces it.**
+`content.assignment_question_notes` rows carry `requirement_key` — a content hash of the
+requirement's own description (`requirementAnchorKey`, FNV-1a, `api/src/shared/requirementSet.ts`).
+Position keying caused a proven live defect: notes written against a 3-row `essay` set resolved at
+the same positions in a 23-row `question_response` set created thirteen days later, landing a note
+on a `learning_outcome` and on "Watch Video 1.4".
+
+The `d1` table policy now declares `required: ['requirement_key']`, checked **before the row is
+built and before the ownership round trip**, answering 400 with the offending column named. It is
+required on POST; on `PATCH ?id=` the column may be omitted (so pre-migration rows stay editable)
+but may not be sent blank (so an anchored row can never be un-anchored). Blank means null, undefined
+or all-whitespace; `false` and `0` are real values.
+
+**The widget gets this for free by using the same endpoint, and only by using it.** A widget that
+writes notes through any other path re-opens the defect. This is the concrete instance of the
+no-divergence rule: enforcement was moved OUT of the webapp's React hook precisely so Huddle would
+inherit it.
+
+**2. Which requirements can take a note is a function, not a type literal.** `acceptsNote()`
+(same module) is a deny-list of structural types — word counts, format rules, rubric items,
+learning outcomes — and **fails open for unknown types**. It replaced a check for
+`requirement_type === 'content_requirement'`, which was wrong: the owner's actual questions are
+`question_to_answer` rows, so his own notes had no editable box. Call `acceptsNote`; never test a
+type string.
+
+**3. The Answer Plan and the Outline are two different objects.** `create_outline` returns
+`strategy_summary` (the DECISIONS — chosen option, word-count strategy, approach rationale,
+supplemental-material usage, separate deliverables, requirements mapping) and `sections` (the SHAPE
+— title, description, key points with sub-bullets, estimated words). They deserve separate
+collapsibles; rendering the plan under a heading that says "Outline" is the defect the owner
+reported. `requirements_mapping` had never been rendered at all despite 11 of 12 stored outlines
+carrying one; it now renders as per-section chips with the full mapping sentence in a popover, and
+entries matching no section surface as coverage the outline does not account for.
+
+**IN FLIGHT, not yet merged — do not build against it:** requirement-level ids in that mapping
+("option B"), which turn the chips into R-keys naming individual requirements and produce a real
+coverage count. Its contract, if it lands: a third key `requirement_ids: string[]` on each mapping
+entry, and `outline_structure._metadata.requirement_anchors = { R1: <content anchor>, ... }` whose
+KEY PRESENCE discriminates an id-capable outline from a legacy one. Every mapping entry stored to
+date — 44 of 44 — is the legacy two-key shape, so the legacy path is 100% of real data, not an edge
+case. **Check this section is updated before relying on any of it.**
 
 ### 5.3 Both surfaces render FROM it
 

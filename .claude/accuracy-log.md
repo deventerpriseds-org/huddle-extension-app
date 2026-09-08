@@ -48,6 +48,50 @@ seeing. (Journey's full-screen alarm for external events comes from `notificatio
 
 ---
 
+## 2026-09-08 — "there is no §5.2b in the widget spec" — read off a STALE working tree
+
+**Claim made:** Working on `docs/specs/assignment-widget.md`, I stated plainly that the spec had
+**no as-built section at all** — that `### 5.2b` did not exist, that the document was "still
+entirely a proposal", and that anyone building the widget from it would code against a phantom
+interface. I then wrote a replacement §5.2b from scratch.
+
+**Ground truth:** `### 5.2b RESULT — the registry is BUILT, and here is exactly how much of §5.2 it
+is` **already existed**, stamped 2026-09-08, merged in PR #53. It is BETTER than the section I
+wrote: it carries the field-by-field delta with shipped / not-shipped / partial marks, the list of
+fields added beyond the proposal, AND a correction stamp recording that the parity test's coverage
+claim had been refuted. My duplicate had to be deleted — **3,523 characters removed** from my own
+diff before the commit.
+
+**The single source that would have settled it up front:**
+`git show origin/main:docs/specs/assignment-widget.md | grep -n '5.2b'` — one command, against
+**origin**, rather than `grep` against the working tree. The section appeared the instant I ran
+`git checkout -B <branch> origin/main`; every grep before that had been reading a checkout that
+predated PR #53.
+
+**Root-cause pattern — and it is the nastier variant, not the plain one.** This is not "failed to
+verify". I DID verify. I caught myself using a label from memory (`§5.2b`), stopped, announced the
+correction, and grepped — **against the wrong copy of the file.** The verification step ran and
+returned a confident false negative, which is worse than not checking, because it produced a
+correction I then stated to the owner with more confidence than the original claim. The repo's own
+rule already covers this and I applied only half of it: the rule is not "verify", it is **"answer
+from `origin/main`, never from the local working tree"** — written for deploy-status questions, and
+exactly as binding for "does this section exist".
+
+Compounding factor: the working directory flipped between two repos several times across the turn
+(`/home/user/nexus-hub` ↔ `/home/user/huddle-extension-app`), so which tree a bare `grep` read was
+not obvious from the command.
+
+**The guard it implies — a `grep` that returns ZERO is not evidence until it has been run against
+`origin`.** A non-zero result proves presence from any copy; **absence proves nothing from a local
+tree.** So: before writing or saying "X does not exist / there is no Y / this was never built",
+re-run the search as `git grep <pattern> origin/main -- <path>` or
+`git show origin/main:<path> | grep`. This costs one command and it is the same guard the log
+already carries in another form — *"never claim a capability is ABSENT from a single-file /
+single-name grep"* — which this miss proves is not yet reflexive. Absence claims are the ones that
+need the strongest source, and they are consistently the ones given the weakest.
+
+---
+
 ## 2026-09-08 — the log itself was not read, and three misses it had ALREADY catalogued recurred
 
 Owner: *"are you updating and guarding according to the accuracy log and themes it identifies? wasn't
