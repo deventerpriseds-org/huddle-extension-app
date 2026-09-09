@@ -1,11 +1,23 @@
 // WHAT:       Direction 1 of the cross-app bridge -- lets a Huddle agent READ the owner's Nexus
-//             coursework. ELEVEN tools, one shared executor, reachable from both live Huddle
+//             coursework, plus (the twelfth, and the only OUTWARD-looking one) search the world's
+//             published scholarly literature for work he does not hold yet. TWELVE tools, one
+//             shared executor, reachable from both live Huddle
 //             surfaces: assignments (with real due dates), programs and courses, the class
 //             schedule (batch one), then module contents, the owner's own page notes, a recorded
 //             lecture's transcript/insights/Q&A, the unified library, and the AI writer's working
 //             transcript (batch two, A-READ-7/9/10/4/8), and finally a literal search of the
 //             indexed knowledge base, the list of what IS indexed, and an assignment's case-study
 //             analysis (batch three, A-RAG-1/5/3).
+//
+//             `search_scholar` is the ODD ONE OUT and is filed here deliberately rather than in a
+//             module of its own: it rides the same base URL, the same server-configured owner id,
+//             the same single outbound call site and the same executor as everything above, so a
+//             parallel module would duplicate all four and drift on the fifth. What differs is the
+//             DIRECTION -- every other tool answers "what do I have", and that one answers "what
+//             exists", which is the literature-review half of the owner's DBA. Its results carry
+//             his university library link because roughly a third of published work has no free
+//             full text and the library proxy is the only route to those; see the tool's own
+//             comment for why that link is PASSED THROUGH and never built here.
 //
 //             THAT LIMIT IS NOW LIFTED, AND THE WORDING MOVED WITH IT. `search_nexus_knowledge`
 //             used to be a LITERAL substring match, because Nexus's real pgvector retrieval
@@ -583,7 +595,53 @@ export const GET_NEXUS_CASE_STUDY_ANALYSIS_TOOL = {
   strict: false,
 };
 
-/** The eleven tools, or none at all when Nexus is not configured. */
+/**
+ * THE ONE TOOL IN THIS FILE THAT LOOKS OUTWARD.
+ *
+ * Every other tool here reads what the owner ALREADY HOLDS. This one searches the world's published
+ * scholarly literature (OpenAlex, falling back to Crossref) for work he does not have yet — the
+ * literature-review half of a DBA, where the answer is a paper nobody in this estate has ever seen.
+ * That boundary is the description's whole job: `search_nexus_knowledge` and `get_nexus_library`
+ * answer "what do I have", and this answers "what exists". A model that reaches for the wrong one
+ * tells him a paper does not exist when it merely is not on his shelf.
+ *
+ * THE LIBRARY LINK IS THE REQUIREMENT, NOT A FIELD. The owner is a University of Michigan-Flint DBA
+ * student and a measured ~30% of results carry no free full text; for those, his university's
+ * EZproxy link is the ONLY route to the paper. A result presented without it is not a partial
+ * answer, it is an unusable one — he would have to go and re-find the paper himself, which is the
+ * work he asked the tool to do. So `library_url` is carried per result AND the description tells the
+ * model to present it every time, because a field the model never reads is not delivered.
+ *
+ * IT IS NEVER CONSTRUCTED HERE. The EZproxy prefix and the DOI-to-link rule live on the API side,
+ * which is what the owner has confirmed live resolves to the right paper. This module passes through
+ * what the API returned or it passes through nothing — guessing a proxy URL shape would produce
+ * links that look right, 404 quietly, and be blamed on the library rather than on this file.
+ */
+export const SEARCH_SCHOLAR_TOOL = {
+  type: "function" as const,
+  name: "search_scholar",
+  description:
+    "Search the WORLD'S PUBLISHED ACADEMIC LITERATURE — peer-reviewed papers, journal articles and conference work, by title, abstract and topic, ranked with citation counts — for sources the owner does NOT already have. Use it for doctoral and research work: 'find me papers on dynamic capabilities in family firms', 'what's been published recently on AI adoption in mid-market manufacturing', 'find peer-reviewed sources for my literature review', 'is there research supporting this claim'. THE BOUNDARY, and it matters: this tool searches the OUTSIDE WORLD and returns NEW sources; search_nexus_knowledge and get_nexus_library search only what the owner ALREADY HOLDS in Nexus. So use those when he says 'my', 'in my course', 'the reading you analysed', 'what do I have on'; use THIS one when he wants literature, citations, evidence, prior research or anything he has not collected yet. Never report 'no research exists' from a Nexus tool — it can only tell you what is on his shelf. ALWAYS PRESENT THE LIBRARY LINK. The owner is a University of Michigan-Flint DBA student and roughly a third of results have no free full text; for those his university library proxy is the only way in. So for EVERY result you show him, give the paper (title, authors, year, venue, DOI) AND its `library_url` on the same line or immediately under it — plus `open_access_url` when it is present, because that one is free and instant. Never omit `library_url`, never summarise a list without the links, and never invent, edit or reconstruct one: show exactly the string this tool returned, and if it is null say the DOI is missing so the library link could not be built.",
+  parameters: {
+    type: "object" as const,
+    additionalProperties: false,
+    properties: {
+      query: {
+        type: "string",
+        description:
+          "What to search for, in words — a topic, a phrase, a research question or a paper's title. The owner's own phrasing is usually a good query; keep the substantive terms rather than reducing it to one keyword.",
+      },
+      limit: {
+        type: "number",
+        description: "How many papers to return. Defaults to 10; more than about 20 is a list nobody reads.",
+      },
+    },
+    required: ["query"] as string[],
+  },
+  strict: false,
+};
+
+/** The twelve tools, or none at all when Nexus is not configured. */
 export function nexusReadTools(): unknown[] {
   if (!nexusReadConfigured()) return [];
   return [
@@ -598,6 +656,7 @@ export function nexusReadTools(): unknown[] {
     SEARCH_NEXUS_KNOWLEDGE_TOOL,
     GET_NEXUS_KNOWLEDGE_BASE_TOOL,
     GET_NEXUS_CASE_STUDY_ANALYSIS_TOOL,
+    SEARCH_SCHOLAR_TOOL,
   ];
 }
 
@@ -613,6 +672,10 @@ export const NEXUS_TOOL_NAMES = new Set([
   "search_nexus_knowledge",
   "get_nexus_knowledge_base",
   "get_nexus_case_study_analysis",
+  // A name missing from THIS set is never routed to executeNexusTool at all — the voice surface
+  // proxies it to journey, where it does not exist, and it fails as "the tool is broken". The tool
+  // being defined and offered is not enough; all four registration points or none.
+  "search_scholar",
 ]);
 
 /**
@@ -1347,6 +1410,87 @@ export async function executeNexusTool(
         : Object.keys(sections).length === 0
           ? "A case-study analysis row exists for that assignment but every section is empty. Say exactly that — an empty analysis and a failed read look identical from here."
           : undefined,
+    };
+  }
+
+  // OUTWARD-LOOKING, and the only tool here that is. /api/scholar-search fans out to OpenAlex (and
+  // Crossref when OpenAlex is unreachable), resolves each hit's free full text if one exists, and
+  // builds the owner's University of Michigan-Flint EZproxy link from the DOI.
+  //
+  // NOT a d1 route, so nexusGetPath — same reason as /api/library and /api/writer-transcript: it is
+  // an aggregate with its own parameter names and its own body shape, not a table read. Still
+  // READ-ONLY by construction, because nexusGetPath goes through nexusFetch's bare `fetch(url)`.
+  //
+  // THE PASS-THROUGH RULE, which is the sharpest thing in this branch. `library_url` is COPIED from
+  // the API's `libraryUrl` and is never derived here — not from `proxyPrefix + doi`, not from the
+  // landing page, not from anything. The proxy shape is the API's business and the owner has
+  // confirmed live that what it builds resolves to the right paper; a second construction site in
+  // this file would drift from that one silently and produce links that look correct and 404. When
+  // the API sends null (which it does exactly when the DOI is missing), null is what the model gets
+  // and the note tells it to say so rather than to improvise a link.
+  if (name === "search_scholar") {
+    const query = strArg(args.query);
+    if (!query) {
+      return {
+        ok: false,
+        error: "query_required",
+        note: "This tool searches the world's published literature, so it needs a topic, a question or a title to search for. If the owner asked about material he ALREADY holds, use search_nexus_knowledge or get_nexus_library instead.",
+      };
+    }
+    const limit = Math.max(1, Math.min(numArg(args.limit) ?? 10, 50));
+
+    const r = await nexusGetPath("/api/scholar-search", { q: query, limit });
+    if (!r.ok) return { ok: false, error: r.error };
+    const body = r.body;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      // Same deploy-skew reasoning as the semantic search above: a 200 carrying something that is
+      // not the documented object is a fact about the SERVICE. Reporting it as "no papers found"
+      // would be a confident statement about the literature drawn from an outage.
+      return { ok: false, error: "bad_response_shape" };
+    }
+    const parsed = body as { source?: unknown; proxyPrefix?: unknown; results?: unknown };
+    const raw = Array.isArray(parsed.results) ? (parsed.results as Row[]) : [];
+
+    // Abstracts are the long field here — ten of them in full is bigger than the answer and is the
+    // same context hazard the semantic search's k-cap exists to avoid. Trimmed, and the trim is
+    // REPORTED per paper, so the model cannot summarise a truncated abstract as the whole one.
+    const ABSTRACT_MAX = 1200;
+    const results = raw.slice(0, limit).map((p) => {
+      const abstract = str(p.abstract);
+      const over = abstract.length > ABSTRACT_MAX;
+      return {
+        title: p.title ?? null,
+        authors: Array.isArray(p.authors) ? p.authors : [],
+        year: p.year ?? null,
+        venue: p.venue ?? null,
+        doi: p.doi ?? null,
+        cited_by_count: p.citedByCount ?? null,
+        abstract: over ? abstract.slice(0, ABSTRACT_MAX) : abstract || null,
+        abstract_truncated: over || undefined,
+        open_access_url: p.openAccessUrl ?? null,
+        // COPIED, NEVER BUILT. See the pass-through rule above.
+        library_url: p.libraryUrl ?? null,
+        landing_page_url: p.landingPageUrl ?? null,
+      };
+    });
+
+    const withLibrary = results.filter((p) => !!p.library_url).length;
+    const withoutOpenAccess = results.filter((p) => !p.open_access_url).length;
+
+    return {
+      ok: true,
+      query,
+      source: parsed.source ?? null,
+      count: results.length,
+      truncated: raw.length > results.length || undefined,
+      results,
+      // A FIELD THE MODEL MAY NOT READ IS NOT DELIVERED. The owner's actual requirement is that he
+      // SEES the library link beside every paper, so it is restated here in words the model cannot
+      // skim past, on every non-empty result — not only when something is unusual.
+      note:
+        results.length === 0
+          ? `Nothing was published matching "${query}" that this search could find. Say that it found no papers for that phrasing — not that no research exists — and offer to broaden or re-word it. This searched the outside literature; if he meant material he already holds, that is search_nexus_knowledge or get_nexus_library.`
+          : `PRESENT THE LIBRARY LINK WITH EVERY PAPER. Give the title, authors, year and venue, then \`library_url\` (the owner's university library proxy — for the ${withoutOpenAccess} of these ${results.length} with no free full text it is the ONLY way to read the paper), and \`open_access_url\` as well wherever it is present, because that one is free and immediate. ${withLibrary} of ${results.length} have a library link; for any where it is null, say the DOI was missing so no library link could be built — do NOT construct, guess or repair one.`,
     };
   }
 

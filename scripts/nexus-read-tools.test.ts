@@ -38,6 +38,7 @@ import {
   GET_NEXUS_ASSIGNMENTS_TOOL,
   GET_NEXUS_SLIDE_NOTES_TOOL,
   SEARCH_NEXUS_KNOWLEDGE_TOOL,
+  SEARCH_SCHOLAR_TOOL,
 } from "../src/features/huddle/lib/nexus/nexus.server";
 import { LIST_ARTIFACTS_TOOL } from "../src/features/huddle/lib/artifacts/artifact-tool";
 import { readFileSync } from "node:fs";
@@ -70,7 +71,7 @@ t("url only -> zero tools", nexusReadTools().length, 0);
 setEnv({ NEXUS_OWNER_ID: "abc" });
 t("owner only -> zero tools", nexusReadTools().length, 0);
 setEnv({ NEXUS_API_URL: "https://x", NEXUS_OWNER_ID: "abc" });
-t("both set -> eleven tools", nexusReadTools().length, 11);
+t("both set -> twelve tools", nexusReadTools().length, 12);
 
 console.log("=== PART 2 — VOICE DRIFT: every tool defined on text is reachable on voice ===");
 const voiceSrc = readFileSync("src/features/huddle/lib/voice/realtime-tools.server.ts", "utf8");
@@ -140,7 +141,7 @@ globalThis.fetch = origFetch;
 
 console.log("=== PART 5 — an unknown name is refused, not silently proxied ===");
 t("unknown tool", ((await executeNexusTool("get_nexus_everything", {}, "UTC")) as { error?: string }).error, "unknown_nexus_tool_get_nexus_everything");
-t("NEXUS_TOOL_NAMES has exactly 11", NEXUS_TOOL_NAMES.size, 11);
+t("NEXUS_TOOL_NAMES has exactly 12", NEXUS_TOOL_NAMES.size, 12);
 t(
   "every advertised tool is dispatchable (no definition without a name entry)",
   (nexusReadTools() as { name: string }[]).filter((x) => !NEXUS_TOOL_NAMES.has(x.name)).length,
@@ -689,6 +690,149 @@ t("list_artifacts exposes NO identity parameter",
 t("the executor resolves the email from the CALLER", artifactServerSrc.includes("resolveTaskEmail(caller"), true);
 t("a store failure is reported as a failed READ, not as an empty shelf",
   artifactServerSrc.includes("artifact_store_unavailable"), true);
+
+console.log("=== PART 10 — search_scholar: all FOUR registration points, and the library link ===");
+//
+// TWO failure modes, and the second is the owner's actual requirement rather than a code property.
+//
+// (1) PARTIAL REGISTRATION. A tool has to be present at four places — the exported const, the
+//     nexusReadTools() array, the NEXUS_TOOL_NAMES set and the executor — and missing ONE fails
+//     silently in a different way each time. Missing from the array: the model never sees it.
+//     Missing from the set: it is never routed to the executor at all, and on voice it is proxied
+//     to journey, where it does not exist, and reports as "the tool is broken". Missing from the
+//     executor: it returns unknown_nexus_tool_*. So each point is asserted through BEHAVIOUR (the
+//     real exported value, the real returned array, the real dispatch) rather than by grepping the
+//     source — a source match can be satisfied by a commented-out line or by a regex window that
+//     reached into the neighbouring entry, and both of those have produced an INERT guard in this
+//     estate already.
+//
+// (2) A CONSTRUCTED LIBRARY URL. ~30% of scholarly results have no free full text and the owner's
+//     University of Michigan-Flint EZproxy link is the only route to those, so the link is the
+//     requirement. The dangerous version of "helpful" here is building it locally from
+//     `proxyPrefix + doi` when the API sent null: that yields a link that LOOKS right, resolves to
+//     nothing, and gets blamed on the library. The null case below is the mutation target — a
+//     fallback added to the pass-through would fire it.
+setEnv({ NEXUS_API_URL: "https://nexus.example", NEXUS_OWNER_ID: "owner-uuid" });
+
+// --- registration points 1-3: the real exported value, the real array, the real set.
+t("1/4 the exported const is the tool", SEARCH_SCHOLAR_TOOL.name, "search_scholar");
+t("1/4 it matches the house tool shape (strict:false, closed params)",
+  `${SEARCH_SCHOLAR_TOOL.type}/${SEARCH_SCHOLAR_TOOL.strict}/${SEARCH_SCHOLAR_TOOL.parameters.additionalProperties}`,
+  "function/false/false");
+t("2/4 nexusReadTools() offers it to the model",
+  (nexusReadTools() as { name: string }[]).some((x) => x.name === "search_scholar"), true);
+t("3/4 NEXUS_TOOL_NAMES routes it to the executor (else voice proxies it to journey)",
+  NEXUS_TOOL_NAMES.has("search_scholar"), true);
+
+// --- registration point 4: dispatched, not answered with unknown_nexus_tool_*.
+const SCHOLAR_BODY = {
+  query: "dynamic capabilities",
+  source: "openalex",
+  proxyPrefix: "https://libproxy.umflint.edu/login?url=",
+  results: [
+    {
+      title: "Dynamic Capabilities and Strategic Management",
+      authors: ["David J. Teece", "Gary Pisano", "Amy Shuen"],
+      year: 1997,
+      venue: "Strategic Management Journal",
+      doi: "10.1002/smj.288",
+      citedByCount: 61234,
+      abstract: "The dynamic capabilities framework analyzes the sources of wealth creation.",
+      openAccessUrl: null,
+      libraryUrl: "https://libproxy.umflint.edu/login?url=https://doi.org/10.1002/smj.288",
+      landingPageUrl: "https://onlinelibrary.wiley.com/doi/10.1002/smj.288",
+    },
+    {
+      // A paper with NO doi: the API sends libraryUrl null, and null is what must come back.
+      title: "A working paper with no DOI",
+      authors: ["A. Author"],
+      year: 2024,
+      venue: "Working Papers",
+      doi: null,
+      citedByCount: 3,
+      abstract: "Preprint.",
+      openAccessUrl: "https://example.org/preprint.pdf",
+      libraryUrl: null,
+      landingPageUrl: "https://example.org/wp",
+    },
+  ],
+};
+
+// The RAW url, parsed with URL/URLSearchParams rather than substring-matched. A space is encoded
+// as `+` by URLSearchParams and decodeURIComponent does NOT undo that, so a naive
+// `includes("q=dynamic capabilities")` reads false on a perfectly correct request — this asserts
+// the decoded PARAMETER, which is the thing that actually has to be right.
+let scholarUrl = "";
+globalThis.fetch = (async (u: string) => {
+  scholarUrl = String(u);
+  return new Response(JSON.stringify(SCHOLAR_BODY), { status: 200 });
+}) as unknown as typeof fetch;
+
+const scholar = (await executeNexusTool("search_scholar", { query: "dynamic capabilities", limit: 5 }, "UTC")) as {
+  ok: boolean;
+  error?: string;
+  count?: number;
+  source?: unknown;
+  note?: string;
+  results?: { title: unknown; library_url: unknown; open_access_url: unknown; doi: unknown; cited_by_count: unknown }[];
+};
+t("4/4 the executor dispatches it", scholar.error ?? "dispatched", "dispatched");
+t("4/4 and it succeeds", scholar.ok, true);
+const scholarQs = new URL(scholarUrl);
+t("it calls the contract's route", scholarQs.pathname, "/api/scholar-search");
+t("it sends the query as q=", scholarQs.searchParams.get("q"), "dynamic capabilities");
+t("it sends the caller's limit", scholarQs.searchParams.get("limit"), "5");
+t("the owner id comes from CONFIG, never the caller", scholarQs.searchParams.get("owner"), "owner-uuid");
+t("both papers come back", scholar.count, 2);
+t("the API's own source label is reported", scholar.source, "openalex");
+
+// --- THE REQUIREMENT: libraryUrl survives into what the model sees, byte-for-byte.
+const paper0 = scholar.results?.[0];
+t("library_url reaches the model UNMODIFIED",
+  paper0?.library_url,
+  "https://libproxy.umflint.edu/login?url=https://doi.org/10.1002/smj.288");
+t("the rest of the paper survives too (doi bare, citations kept)",
+  `${paper0?.doi}/${paper0?.cited_by_count}`, "10.1002/smj.288/61234");
+t("open_access_url passes through as null when there is no free full text", paper0?.open_access_url, null);
+
+// THE MUTATION TARGET. proxyPrefix and the doi are BOTH in scope at the mapping site, so building
+// `proxyPrefix + doi` is one plausible line away. Here the doi is null, so any locally-constructed
+// link would be a fabricated one — this asserts nothing was constructed.
+const paper1 = scholar.results?.[1];
+t("a null library_url stays NULL — it is never built from proxyPrefix + doi", paper1?.library_url, null);
+t("its free copy is still offered", paper1?.open_access_url, "https://example.org/preprint.pdf");
+
+// --- the link is only delivered if the model is TOLD to show it. A field it never reads is not
+// delivered, which is why this lives in the description AND in the per-result note.
+const scholarDesc = SEARCH_SCHOLAR_TOOL.description;
+t("the description orders the library link to be shown", /library_url/.test(scholarDesc), true);
+t("the description forbids inventing one", /never invent, edit or reconstruct one/.test(scholarDesc), true);
+t("the description draws the boundary against the owner's OWN material",
+  /search_nexus_knowledge and get_nexus_library search only what the owner ALREADY HOLDS/.test(scholarDesc), true);
+t("the result note repeats it where the model cannot skim past it",
+  /PRESENT THE LIBRARY LINK WITH EVERY PAPER/.test(scholar.note ?? ""), true);
+
+// --- an empty search is a statement about the SEARCH, not about the literature.
+globalThis.fetch = (async () =>
+  new Response(JSON.stringify({ query: "x", source: "crossref", proxyPrefix: "p", results: [] }), { status: 200 })) as unknown as typeof fetch;
+const scholarNone = (await executeNexusTool("search_scholar", { query: "waffles in strategy" }, "UTC")) as {
+  count?: number;
+  note?: string;
+};
+t("no hits -> zero, not an error", scholarNone.count, 0);
+t("no hits is NOT reported as 'no research exists'", /not that no research exists/.test(scholarNone.note ?? ""), true);
+
+// --- a 200 carrying the wrong shape is a SERVICE fact, not a fact about the literature.
+globalThis.fetch = (async () => new Response(JSON.stringify([1, 2]), { status: 200 })) as unknown as typeof fetch;
+t("a 200 with the wrong body shape is refused, not read as no papers",
+  ((await executeNexusTool("search_scholar", { query: "q" }, "UTC")) as { error?: string }).error, "bad_response_shape");
+
+globalThis.fetch = (async () => new Response("nope", { status: 503 })) as unknown as typeof fetch;
+t("an upstream failure is ok:false, never an empty paper list",
+  ((await executeNexusTool("search_scholar", { query: "q" }, "UTC")) as { error?: string }).error, "http_503");
+
+const scholarNoQuery = (await executeNexusTool("search_scholar", {}, "UTC")) as { error?: string };
+t("a missing query is refused rather than searched blank", scholarNoQuery.error, "query_required");
 
 globalThis.fetch = origFetch;
 
