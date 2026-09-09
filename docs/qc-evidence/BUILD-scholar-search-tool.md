@@ -141,4 +141,4 @@ Stated plainly rather than left implied:
 
 **Not merged.** `main` auto-deploys on push in this repo, so merging is deploying.
 
-_(PR number appended below.)_
+**PR #58** — https://github.com/deventerpriseds-org/huddle-extension-app/pull/58 (open, NOT merged).
