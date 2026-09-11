@@ -1,5 +1,6 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-09-08 — **the assignment-widget spec's action registry is BUILT in nexus** (see
+Last updated: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
+Previous: 2026-09-08 — **the assignment-widget spec's action registry is BUILT in nexus** (see
 `docs/specs/assignment-widget.md` §5.2b, huddle PR #53): the spec PROPOSED
 `nexus-hub/api/src/shared/assignmentActions.ts` and nexus-hub PR #87 built it there, closing the
 "who builds the registry" split the owner named. What shipped is the COVERAGE half (id, endpoint,
