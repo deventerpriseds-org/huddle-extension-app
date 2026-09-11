@@ -1,5 +1,6 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-08-26 (ACT-64 confirm-ask/assist scope revised, no code yet; ACT-63 notification bugs DEPLOYED 6dccf41, Bug 2 user-confirmed live; ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
+Last updated: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
+Previous: 2026-08-26 (ACT-64 confirm-ask/assist scope revised, no code yet; ACT-63 notification bugs DEPLOYED 6dccf41, Bug 2 user-confirmed live; ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
