@@ -88,8 +88,16 @@ checkout, the local tree is stale by default — a status answer sourced from it
   the latest `deploy-swa.yml` run's `head_sha`/`conclusion` (the deployed SHA is the truth, not `HEAD`).
   For "does feature X exist?" grep **`git show origin/main:<file>`**, not the local file.
 - **Say you fetched** ("as of origin/main <sha>…") so the answer is auditable.
-- **Then re-sync** if local is behind (`git reset --hard origin/main`, saving genuine local work first) so
-  the next edit isn't built on a stale base.
+- **Then re-sync — but CHECK THE DIRECTION FIRST**, because behind and diverged look identical and need
+  opposite commands. `git rev-list --left-right --count origin/main...HEAD` prints `behind<TAB>ahead`.
+  - **`ahead` is 0:** `git reset --hard origin/main`, saving genuine *uncommitted* work first.
+  - **`ahead` is NOT 0:** **never `reset --hard`** — it destroys those commits, and "saving genuine local
+    work first" reads as being about uncommitted work. Use `git pull --rebase` or `git merge origin/main`.
+  Either way, so the next edit isn't built on a stale base.
+  *(2026-09-11: this line said `reset --hard` unconditionally. A squash merge leaves the local branch
+  behind AND ahead — the ordinary state after any PR merges — measured at `ahead=2` and `ahead=3` on two
+  real repos in one session, five commits a bare reset would have deleted. Found by a verifier sweeping
+  for copies of this advice after the same defect was fixed in eds-claude-skills' guard and global rules.)*
   *(2026-08-10: asked "confirm the conversation-objects in 1:1 were deployed," the agent answered "no, it's
   an un-built scaffold — new work" from its STALE local branch. In fact another session had already built
   the OpenAI Conversations-object runtime (`rag/conversation-store.server.ts`, `chat.agent_conversations`),
