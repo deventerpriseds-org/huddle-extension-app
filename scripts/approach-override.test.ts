@@ -77,16 +77,104 @@ mock.module(TASKS_SERVER, () => ({
   getTaskTitle: async () => TASK_TITLE,
 }));
 
+// ---- the fake TURN store + the fake GRADER -------------------------------------------------------
+// The relay path reads two turns out of chat.pending_turns and asks the approach gate's grader one
+// question. Both are faked here so the SERVER'S OWN decisions are what the assertions see: which turn
+// it fetched, whether it consulted the grader at all, and what text it handed over. The grader's
+// judgement is a live model call and is NOT under test — what IS under test is that no caller-supplied
+// string ever reaches it, and that every structural check refuses BEFORE it is consulted.
+const TURNS_SERVER = "/home/user/huddle-extension-app/src/features/huddle/lib/tasks/turns.server";
+const APPROACH_GATE = "/home/user/huddle-extension-app/src/features/huddle/lib/tasks/approach-gate.server";
+
+type FakeTurn = { id: string; replies: unknown[]; updated_ms: number };
+let ownerUtterances: { id: string; text: string; updatedMs: number; huddleId: string | null }[] = [];
+let turnsById: Record<string, FakeTurn> = {};
+let recentTurns: FakeTurn[] = [];
+let graderVerdict: { authorised: boolean; reason: string } = { authorised: false, reason: "default" };
+let graderThrows: string | null = null;
+
+mock.module(TURNS_SERVER, () => ({
+  getUserTurnById: async (userEmail: string, id: string) => {
+    calls.push({ fn: "getUserTurnById", args: { userEmail, id } });
+    // The real read is SCOPED IN SQL: another user's turn and a nonexistent turn are the same answer.
+    if (userEmail !== EMAIL) return null;
+    return turnsById[id] ?? null;
+  },
+  getUserTurnsSince: async (userEmail: string, sinceMs: number) => {
+    calls.push({ fn: "getUserTurnsSince", args: { userEmail, sinceMs } });
+    if (userEmail !== EMAIL) return [];
+    return recentTurns.filter((t) => t.updated_ms > sinceMs); // real: updated_at > to_timestamp(...)
+  },
+  getRecentUserUtterances: async (userEmail: string, sinceMs: number, limit?: number) => {
+    calls.push({ fn: "getRecentUserUtterances", args: { userEmail, sinceMs, limit } });
+    if (userEmail !== EMAIL) return [];
+    return ownerUtterances.filter((u) => u.updatedMs > sinceMs);
+  },
+}));
+
+mock.module(APPROACH_GATE, () => ({
+  gradeOverrideAuthorisation: async (o: unknown) => {
+    calls.push({ fn: "gradeOverrideAuthorisation", args: o });
+    if (graderThrows) throw new Error(graderThrows);
+    return graderVerdict;
+  },
+}));
+
 const {
   requestApproachOverride,
   overrideEscalatedApproach,
+  overrideApproachFromTurnPair,
+  OVERRIDE_TURN_PAIR_WINDOW_MS,
 } = await import("/home/user/huddle-extension-app/src/features/huddle/lib/tasks/confirm-ask.functions");
+
+// The clock and the fixture timeline. The engagement mock reports approach_escalated_at 10:00Z, so
+// everything below hangs off that: the agent's escalation notice at 10:30, the owner's reply at 11:00,
+// "now" at 12:00. All three are inside the 24h window; the stale cases move the pair, not the clock.
+const NOW = Date.parse("2026-09-12T12:00:00Z");
+const AGENT_TURN_MS = Date.parse("2026-09-12T10:30:00Z");
+const OWNER_TURN_MS = Date.parse("2026-09-12T11:00:00Z");
+const OWNER_TURN = `u-${OWNER_TURN_MS}`;
+const AGENT_TURN = `u-${Date.parse("2026-09-12T10:29:00Z")}`; // the turn the escalation row rode on
+const AWAY_NOTICE = `ovrreq-${TASK_ID}`;
+const OTHER_TASK_ID = "task-0000feed-1111-2222-3333-444455556666";
+
+/** An agent turn carrying the in-thread "Approve anyway" row for `taskId` — the real persisted shape
+ *  (`replies[].overrideAsk`), assembled by the reply site and stored whole in the replies JSONB. */
+function escalationTurn(id: string, taskId: string, ms = AGENT_TURN_MS): FakeTurn {
+  return {
+    id,
+    updated_ms: ms,
+    replies: [
+      {
+        agentId: ASSIGNEE,
+        text: "The approach review on this one escalated — it's waiting on your call.",
+        overrideAsk: { taskId, taskTitle: TASK_TITLE, note: "the plan is sound enough to run as-is" },
+      },
+    ],
+  };
+}
+
+function resetTurns(opts: { ownerText?: string; ownerMs?: number } = {}) {
+  ownerUtterances = [
+    {
+      id: OWNER_TURN,
+      text: opts.ownerText ?? "override it and proceed anyway",
+      updatedMs: opts.ownerMs ?? OWNER_TURN_MS,
+      huddleId: `dm-${ASSIGNEE}`,
+    },
+  ];
+  turnsById = { [AGENT_TURN]: escalationTurn(AGENT_TURN, TASK_ID) };
+  recentTurns = [turnsById[AGENT_TURN]];
+  graderVerdict = { authorised: false, reason: "default" };
+  graderThrows = null;
+}
 
 function reset(opts: { approach?: string; status?: string; pending?: boolean } = {}) {
   calls = [];
   approachStatus = opts.approach ?? "escalated";
   taskStatus = opts.status ?? "UP_NEXT";
   requestPending = opts.pending ?? false;
+  resetTurns();
 }
 const called = (fn: string) => calls.some((c) => c.fn === fn);
 
@@ -282,9 +370,12 @@ check("the tap succeeds", [tap.ok, tap.alreadyDone], [true, undefined]);
 check("it DID reach the grant statement", called("overrideApproachGate"), true);
 check("the gate is now approved", approachStatus, "approved");
 check(
-  "the grant is passed only the task and the AUTHENTICATED caller — no quote, no turn id, no `via`",
-  Object.keys((calls.find((c) => c.fn === "overrideApproachGate")?.args ?? {}) as object).sort(),
-  ["taskId", "userEmail"],
+  "the tap records itself as a TAP, and carries no quote and no turn id — there is nothing to quote",
+  (() => {
+    const a = (calls.find((c) => c.fn === "overrideApproachGate")?.args ?? {}) as Record<string, unknown>;
+    return [a.via, a.quote ?? null, a.turnId ?? null];
+  })(),
+  ["button", null, null],
 );
 
 console.log("\n  ...and a tap on a task that is no longer escalated is a SAFE NO-OP");
@@ -320,6 +411,210 @@ const racy = await (async () => {
   return p;
 })();
 check("a lost race reports alreadyDone, never a failure the owner must act on", [racy.ok, racy.alreadyDone], [true, true]);
+
+// ==================================================================================================
+console.log("\nTHE RELAY — the agent passes a TURN PAIR; the server fetches it and the grader judges");
+// ==================================================================================================
+// The owner's own spec: "I want the agent to tell me it's blocked, attempt to get what I needs to
+// pass and or have me tell it override/proceed anyway and it passes my timestamped turn and the turn
+// I was responding into the verifier who should then let it pass."
+const relay = (o: Partial<Parameters<typeof overrideApproachFromTurnPair>[0]> = {}) =>
+  overrideApproachFromTurnPair({
+    taskId: TASK_ID,
+    email: EMAIL,
+    ownerTurnId: OWNER_TURN,
+    agentTurnId: AGENT_TURN,
+    nowMs: NOW,
+    ...o,
+  });
+
+console.log("\n  A GENUINE authorisation, with a correct turn pair, DOES grant");
+reset();
+graderVerdict = { authorised: true, reason: "the user told the agent to proceed on this task" };
+const granted = await relay();
+check("it succeeded and applied", [granted.ok, granted.applied], [true, true]);
+check("the gate is now approved", approachStatus, "approved");
+const grantArgs = calls.find((c) => c.fn === "overrideApproachGate")?.args as {
+  via?: string;
+  turnId?: string;
+  quote?: string;
+  userEmail?: string;
+};
+check("recorded as a RELAY, distinguishable from a tap and from a graded pass", grantArgs?.via, "turn-pair");
+check("the OWNER's turn id is recorded, so the authorisation is findable later", grantArgs?.turnId, OWNER_TURN);
+check(
+  "the quote recorded is the text the SERVER read, not anything a caller passed",
+  grantArgs?.quote,
+  "override it and proceed anyway",
+);
+check("the actor is the authenticated user, never an agent id", grantArgs?.userEmail, EMAIL);
+const gradeArgs = calls.find((c) => c.fn === "gradeOverrideAuthorisation")?.args as {
+  ownerText?: string;
+  agentText?: string;
+  taskTitle?: string;
+};
+check("the grader was handed the OWNER's own fetched words", gradeArgs?.ownerText, "override it and proceed anyway");
+check(
+  "...and the AGENT's escalation, so 'go ahead' is judged as a reply to a known question",
+  gradeArgs?.agentText?.includes("the plan is sound enough to run as-is"),
+  true,
+);
+check("...and the task it is about", gradeArgs?.taskTitle, TASK_TITLE);
+
+console.log("\n  ...and the AWAY notice (ovrreq-<taskId>) works as the anchor too");
+reset();
+graderVerdict = { authorised: true, reason: "yes" };
+turnsById = { [AWAY_NOTICE]: { id: AWAY_NOTICE, updated_ms: AGENT_TURN_MS, replies: [] } };
+recentTurns = [];
+const viaNotice = await relay({ agentTurnId: AWAY_NOTICE });
+check("the deterministic task-scoped notice id anchors it", [viaNotice.ok, viaNotice.applied], [true, true]);
+
+console.log("\n  ...and with NO agent turn named, the server finds this task's escalation itself");
+reset();
+graderVerdict = { authorised: true, reason: "yes" };
+const derived = await relay({ agentTurnId: null });
+check("the server derived the anchor", [derived.ok, derived.applied], [true, true]);
+check("...and it consulted the store to do it", called("getUserTurnsSince") || called("getUserTurnById"), true);
+
+// --------------------------------------------------------------------------------------------------
+console.log("\n  THE ATTACKS, arm 1: WITHOUT the anchor they never even reach the grader");
+// Every string below defeated `verifyOwnerQuote`. The binding attacks (title collision, two-topic,
+// unrelated go-ahead) worked by aiming a real authorisation at the wrong task. That is now structural:
+// the turn the owner answered must BE this task's escalation notice.
+// --------------------------------------------------------------------------------------------------
+for (const a of ATTACKS) {
+  reset();
+  graderVerdict = { authorised: true, reason: "a grader that says yes to everything" };
+  // The owner really said it, in a real turn of his — but he was answering the OTHER task's notice.
+  ownerUtterances[0].text = a.text;
+  turnsById = { [AGENT_TURN]: escalationTurn(AGENT_TURN, OTHER_TASK_ID) };
+  recentTurns = [turnsById[AGENT_TURN]];
+  const r = await relay();
+  check(`[${a.source}] refused — wrong task's escalation: "${a.label}"`, [r.ok, r.applied], [false, false]);
+  check(`[${a.source}] the grader was never consulted`, called("gradeOverrideAuthorisation"), false);
+  check(`[${a.source}] the gate is STILL escalated`, approachStatus, "escalated");
+  check(`[${a.source}] nothing was written`, called("overrideApproachGate"), false);
+}
+
+// --------------------------------------------------------------------------------------------------
+console.log("\n  THE ATTACKS, arm 2: WITH a valid anchor, the text is still not a caller's input");
+// Here the pair is well-formed and the attack string is what the owner actually typed. The point is
+// no longer that the string is blocked by a word list — there is no word list. It is that the ONLY
+// thing that sees the string is the grader, it sees it in context, and its verdict decides. With a
+// grader that (correctly) reads these as non-authorisations, nothing is granted.
+// --------------------------------------------------------------------------------------------------
+for (const a of ATTACKS) {
+  reset();
+  ownerUtterances[0].text = a.text;
+  graderVerdict = { authorised: false, reason: "not an authorisation to proceed on this task" };
+  const r = await relay();
+  check(`[${a.source}] not granted: "${a.label}"`, [r.ok, r.applied], [false, false]);
+  check(`[${a.source}] the gate is STILL escalated`, approachStatus, "escalated");
+  check(
+    `[${a.source}] the grader saw the DB text verbatim — the caller never supplied it`,
+    (calls.find((c) => c.fn === "gradeOverrideAuthorisation")?.args as { ownerText?: string })?.ownerText,
+    a.text,
+  );
+}
+
+// --------------------------------------------------------------------------------------------------
+console.log("\n  EVERY OTHER FAILURE PATH REFUSES, and writes nothing");
+// --------------------------------------------------------------------------------------------------
+const yes = () => {
+  graderVerdict = { authorised: true, reason: "a maximally permissive grader" };
+};
+
+reset();
+yes();
+turnsById = {};
+recentTurns = [];
+const noAnchor = await relay();
+check("no escalation notice at all → refused", [noAnchor.ok, noAnchor.applied], [false, false]);
+check("...grader never consulted", called("gradeOverrideAuthorisation"), false);
+check("...nothing written", called("overrideApproachGate"), false);
+
+reset();
+yes();
+const noOwnerTurn = await relay({ ownerTurnId: null });
+check("no owner turn identified → refused", [noOwnerTurn.ok, noOwnerTurn.applied], [false, false]);
+check("...nothing written", called("overrideApproachGate"), false);
+
+reset();
+yes();
+// An agent-initiated turn keeps its INTERNAL DIRECTIVE in payload.text — including the override notice
+// itself. Pointing at one would be an agent authorising itself out of its own instructions.
+const selfAuth = await relay({ ownerTurnId: AWAY_NOTICE });
+check("an AGENT turn as the 'owner' turn → refused by isUserTurn", [selfAuth.ok, selfAuth.applied], [false, false]);
+check("...the owner transcript was never even read", called("getRecentUserUtterances"), false);
+check("...nothing written", called("overrideApproachGate"), false);
+
+reset();
+yes();
+const notHis = await relay({ ownerTurnId: `u-${OWNER_TURN_MS + 5}` });
+check("an id that is not in HIS OWN recent turns → refused", [notHis.ok, notHis.applied], [false, false]);
+check("...grader never consulted", called("gradeOverrideAuthorisation"), false);
+
+reset();
+yes();
+resetTurns({ ownerMs: NOW - OVERRIDE_TURN_PAIR_WINDOW_MS - 60_000 });
+const stale = await relay({ nowMs: NOW });
+check("a pair OUTSIDE the 24h window → refused", [stale.ok, stale.applied], [false, false]);
+check("...grader never consulted", called("gradeOverrideAuthorisation"), false);
+check("...nothing written", called("overrideApproachGate"), false);
+
+reset();
+yes();
+resetTurns({ ownerMs: AGENT_TURN_MS - 60_000 });
+const beforeAsk = await relay();
+check("a reply that PREDATES the notice cannot be answering it → refused", [beforeAsk.ok, beforeAsk.applied], [false, false]);
+check("...grader never consulted", called("gradeOverrideAuthorisation"), false);
+
+reset();
+yes();
+// approach_escalated_at is 10:00Z; the notice is faked earlier so only the escalation floor can refuse.
+turnsById = { [AGENT_TURN]: escalationTurn(AGENT_TURN, TASK_ID, Date.parse("2026-09-12T08:00:00Z")) };
+recentTurns = [turnsById[AGENT_TURN]];
+ownerUtterances[0].updatedMs = Date.parse("2026-09-12T09:00:00Z");
+const preEscalation = await relay();
+check("a reply that predates THIS escalation → refused", [preEscalation.ok, preEscalation.applied], [false, false]);
+check("...grader never consulted", called("gradeOverrideAuthorisation"), false);
+
+reset();
+graderThrows = "OpenAI Responses 429 insufficient_quota";
+const graderDown = await relay();
+check("A GRADER THAT THROWS REFUSES — it does NOT inherit the fresh-path fail-open", [graderDown.ok, graderDown.applied], [false, false]);
+check("...the gate is still escalated", approachStatus, "escalated");
+check("...nothing was written", called("overrideApproachGate"), false);
+
+reset();
+yes();
+const relayForeign = await overrideApproachFromTurnPair({
+  taskId: "task-not-yours",
+  email: EMAIL,
+  ownerTurnId: OWNER_TURN,
+  agentTurnId: AGENT_TURN,
+  nowMs: NOW,
+});
+check("someone else's task is 'Task not found.'", relayForeign.error, "Task not found.");
+check("...nothing written", called("overrideApproachGate"), false);
+
+reset({ status: "DONE" });
+yes();
+const relayDone = await relay();
+check("a DONE task is refused", relayDone.ok, false);
+check("...nothing written", called("overrideApproachGate"), false);
+
+reset({ approach: "pending" });
+yes();
+const relayPending = await relay();
+check("a PENDING gate is refused — the relay cannot skip the grader entirely", relayPending.ok, false);
+check("...nothing written", called("overrideApproachGate"), false);
+
+reset({ approach: "approved" });
+yes();
+const relayApproved = await relay();
+check("an already-approved task reports alreadyDone", [relayApproved.ok, relayApproved.alreadyDone, relayApproved.applied], [true, true, false]);
+check("...nothing written", called("overrideApproachGate"), false);
 
 // ==================================================================================================
 console.log("\n(B) THE RE-GRADE LOOP IS BOUNDED — unchanged, and must stay that way");
@@ -461,8 +756,19 @@ check(
 check("it records WHO overrode", /approach_override_by=\$2/.test(overrideSql), true);
 check("it records WHEN", /approach_override_at=now\(\)/.test(overrideSql), true);
 check(
-  "it records HOW — now hardcoded 'button', because that is the only route that exists",
-  /approach_override_via='button'/.test(overrideSql),
+  "it records HOW as a BOUND PARAMETER, so the two routes are distinguishable in the audit columns",
+  /approach_override_via=\$3/.test(overrideSql),
+  true,
+);
+check(
+  "...and that parameter can only ever be one of two server-chosen words — never caller text",
+  /relay \? "turn-pair" : "button"/.test(overrideSql),
+  true,
+);
+check(
+  "...with the owner's turn id and his fetched words recorded on the relay route only",
+  /approach_override_quote=\$4, approach_override_turn_id=\$5/.test(overrideSql) &&
+    /relay && opts\.quote \? opts\.quote\.slice\(0, 2000\) : null/.test(overrideSql),
   true,
 );
 check(
@@ -487,10 +793,112 @@ check(
 
 console.log("\nSTRUCTURAL: the TOOL a model reads cannot suggest it applied anything");
 check("the tool is named for what it does", /name: "request_approach_override"/.test(toolDefs), true);
-check("the old name is gone", /override_approach_gate/.test(toolDefs), false);
 check(
   "owner_quote is DELETED from the schema, not accepted-and-ignored",
   /owner_quote/.test(stripComments(toolDefs)),
+  false,
+);
+
+console.log("\nSTRUCTURAL: the RELAY tool passes REFERENCES — it has no text parameter at all");
+const relayToolBlock = toolDefs.slice(
+  toolDefs.indexOf("export const OVERRIDE_APPROACH_GATE_TOOL"),
+  toolDefs.indexOf("// ask_clarifying_question"),
+);
+check("the relay tool exists", /name: "override_approach_gate"/.test(relayToolBlock), true);
+check(
+  "its ONLY required argument is the task — an id, not a sentence",
+  /required: \["task_id"\]/.test(relayToolBlock),
+  true,
+);
+check(
+  "its properties are a task id and two TURN ids, and nothing else",
+  Object.keys(
+    Object.fromEntries(
+      // No `$` anchor: `task_id` fits on one line while the other two wrap, so anchoring the brace to
+      // end-of-line silently dropped it. (Caught by this very assertion — the shape was typed from
+      // memory rather than read.)
+      [...relayToolBlock.matchAll(/^ {6}(\w+): \{/gm)].map((m) => [m[1], true]),
+    ),
+  ).sort(),
+  ["agent_turn_id", "owner_turn_id", "task_id"],
+);
+check(
+  "NO free-text authorisation field of any name can be passed",
+  /quote|utterance|owner_text|owner_message|authorisation_text|said/i.test(
+    stripComments(relayToolBlock).replace(/description:[\s\S]*?(?=\n\s{6}\w+: \{|\n\s{4}\},)/g, ""),
+  ),
+  false,
+);
+
+console.log("\nSTRUCTURAL: the relay's own signature takes ids, and the server does the reading");
+const relayFn = confirmAsk.slice(
+  confirmAsk.indexOf("export async function overrideApproachFromTurnPair"),
+  confirmAsk.indexOf("/** What the grader is shown"),
+);
+check("the relay was located", relayFn.length > 0, true);
+const relayParams = relayFn.slice(0, relayFn.indexOf("}): Promise<"));
+check(
+  "no parameter carries the owner's words",
+  /quote|ownerText|utterance|message\??:/i.test(stripComments(relayParams)),
+  false,
+);
+check(
+  "the owner's turn is read through the read SCOPED TO HIM, not an unscoped getTurn",
+  /getRecentUserUtterances\(email, windowStart/.test(relayFn) && !/\bgetTurn\(/.test(relayFn),
+  true,
+);
+check(
+  "the agent turn is read through the SCOPED by-id read",
+  /getUserTurnById\(email,/.test(relayFn),
+  true,
+);
+check(
+  "a turn that is not the user talking is refused BEFORE any transcript is read",
+  relayFn.indexOf("isUserTurn(opts.ownerTurnId)") < relayFn.indexOf("getRecentUserUtterances(email"),
+  true,
+);
+check(
+  "the grader is the approach gate's own, not a second one stood up beside it",
+  /import\("\.\/approach-gate\.server"\)/.test(relayFn) && /gradeOverrideAuthorisation/.test(relayFn),
+  true,
+);
+check(
+  "a grader that throws REFUSES — the fresh-path fail-open is not inherited",
+  /catch \(err\) \{[\s\S]{0,400}?return refuse\(`The override check couldn't run/.test(relayFn),
+  true,
+);
+check(
+  "the anchor is structural: the turn id carries the task, or a persisted overrideAsk names it",
+  /turn\.id === `ovrreq-\$\{taskId\}`/.test(confirmAsk) && /ask\.taskId === taskId/.test(confirmAsk),
+  true,
+);
+check(
+  "the anchor never compares the task TITLE to anything — that is what collided before",
+  /title/i.test(
+    stripComments(
+      confirmAsk.slice(
+        confirmAsk.indexOf("function turnIsEscalationFor"),
+        confirmAsk.indexOf("export async function overrideApproachFromTurnPair"),
+      ),
+    ),
+  ),
+  false,
+);
+
+console.log("\nSTRUCTURAL: the relay is wired to BOTH dispatch paths through ONE shared helper");
+check(
+  "the dispatch sites call the shared helper, not the grant",
+  (huddleFns.match(/relayApproachOverride\(taskId, ownerTurnArg, agentTurnArg\)/g) ?? []).length,
+  2, // the OpenAI path and the Lovable path
+);
+check(
+  "the helper defaults the owner turn to the turn being EXECUTED — server-supplied, not model-supplied",
+  /ownerTurnId: ownerTurnId \|\| turnId \|\| null/.test(huddleFns),
+  true,
+);
+check(
+  "huddle.functions.ts still never mentions the grant itself",
+  /overrideApproachGate|overrideEscalatedApproach/.test(huddleFns),
   false,
 );
 const toolBlock = toolDefs.slice(toolDefs.indexOf("export const REQUEST_APPROACH_OVERRIDE_TOOL"));
