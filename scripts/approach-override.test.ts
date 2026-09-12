@@ -560,7 +560,6 @@ check("an id that is not in HIS OWN recent turns → refused", [notHis.ok, notHi
 check("...grader never consulted", called("gradeOverrideAuthorisation"), false);
 
 reset();
-yes();
 // The whole exchange is old, and so is the escalation it answered — so the ONLY thing that can refuse
 // this is the window itself. (An escalation floor left at 'today' would refuse it regardless, and a
 // mutation to the window would then look inert when it is not.)
@@ -570,14 +569,17 @@ turnsById = {
   [AGENT_TURN]: escalationTurn(AGENT_TURN, TASK_ID, NOW - OVERRIDE_TURN_PAIR_WINDOW_MS - 120_000),
 };
 recentTurns = [turnsById[AGENT_TURN]];
+// AFTER resetTurns, which resets the verdict — putting yes() first made the grader mock, not the
+// window, the thing doing the refusing, and a mutation removing the window reported a false INERT.
+yes();
 const stale = await relay({ nowMs: NOW });
 check("a pair OUTSIDE the 24h window → refused", [stale.ok, stale.applied], [false, false]);
 check("...grader never consulted", called("gradeOverrideAuthorisation"), false);
 check("...nothing written", called("overrideApproachGate"), false);
 
 reset();
-yes();
 resetTurns({ ownerMs: AGENT_TURN_MS - 60_000 });
+yes(); // after resetTurns — see the note above; otherwise the grader refuses and the guard is untested
 const beforeAsk = await relay();
 check("a reply that PREDATES the notice cannot be answering it → refused", [beforeAsk.ok, beforeAsk.applied], [false, false]);
 check("...grader never consulted", called("gradeOverrideAuthorisation"), false);
