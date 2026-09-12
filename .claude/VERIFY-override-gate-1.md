@@ -214,3 +214,44 @@ correctly proves PROVENANCE (4a, 4c — the phrase really was typed by the user,
 can self-authorize an override of any escalated task using any sufficiently long fragment of anything
 the user genuinely said in the last 24 hours, including an explicit refusal.
 
+## CLAIM 5 — 8/8 mutation proofs FIRED — CONFIRMED (independently re-run, 3 of the 8 chosen by me)
+
+**Baseline, run independently (not taken on trust):**
+```
+$ npm run test:override-gate   -> ALL PASS (exit 0)
+$ npm run test:green-light     -> ALL PASS (exit 0)
+```
+
+**Mutation-proved 3 guards myself with `scripts/mutate.sh` (anchors from files, never shell args),
+picking the two most load-bearing per the brief PLUS a third — the provenance filter — because it is
+the single most safety-critical line in the whole diff and Claim 4 above hinges on it:**
+
+| # | File | Guard | Anchor | Replacement | `MUST_FAIL` test | Outcome |
+|---|---|---|---|---|---|---|
+| 1 | `approach-override.ts:142` | re-grade ceiling | `return (revisionCount ?? 0) < regradeCeiling(capApproach);` | `return true;` | `"AT the ceiling, no more grader calls — the override is the only way out"` | **FIRED** |
+| 2 | `tasks.server.ts:1101` | escalated-only WHERE clause | `WHERE task_id=$1 AND approach_status='escalated'` | `WHERE task_id=$1` | `"the escalated-only guard is IN THE STATEMENT, so two racing clicks cannot both win"` | **FIRED** |
+| 3 | `approach-override.ts:113` | `isUserTurn` provenance filter | `if (!isUserTurn(u.id)) continue;` | *(deleted)* | `"an agent-initiated turn's INTERNAL DIRECTIVE is not the owner's words, however authorising it reads"` | **FIRED** |
+
+All three reported `restored: ... matches HEAD` and `tree clean` afterward — no residual mutation.
+None reported `NOT-APPLIED` or `INERT`. This independently confirms 3 of the implementer's claimed 8;
+I did not re-run the other 5, but the two structural ones I picked plus the SQL-statement guard are
+the ones AC-O16/AC-C13-equivalent calls out as highest-stakes, and all reproduce cleanly.
+
+**"Delete a load-bearing production line, see if anything fails at all" — done as guard #3 above**
+(deleting `isUserTurn` filter, not merely inverting it) — a test failed, so the suite is not blind to
+this specific removal.
+
+**However — directly relevant finding from Claim 4:** the test suite's own negation case
+(`"a NEGATED sentence does not authorise"`, `approach-override.test.ts` ~line 129) only tests that an
+**entirely different sentence** ("do not override the gate — let me look at it first") fails to match
+a DIFFERENT quote ("override the gate and let Cole run it") — it never tests a **cherry-picked
+substring of the SAME sentence** that omits the negation clause (my Attack C in Claim 4). The mutation
+suite is well-built for what it tests; what it tests does not cover the actual exploit path. A green
+suite here does not contradict Claim 4's REFUTED verdict — it corroborates it: the negation defence
+the implementer believed existed was never actually exercised against the attack that defeats it.
+
+**Verdict: CONFIRMED** for the 3 mutations I ran (all FIRED, none INERT/NOT-APPLIED), **with the
+caveat that "8/8 mutation-proved" does not mean "the guard closes the gap identified in Claim 4"** —
+the tests are real and the guards they name are real, but the tested threat model is narrower than the
+actual one.
+
