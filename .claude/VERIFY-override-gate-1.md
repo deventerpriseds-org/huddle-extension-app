@@ -339,3 +339,101 @@ confirm-ask.functions.ts, 0 in tasks.server.ts):
 **Verdict: CONFIRMED.** No fail-closed resolver was touched, and the new code's own error handling
 fails toward refusal/no-display, never toward a permissive default on a decision that matters.
 
+## CLAIM 8 — blast radius — CONFIRMED
+
+**Every `===`/`!==` reader of `approach_status`** (`grep -rn "approach_status\s*===\|approach_status\s*!=="
+src/`): exactly 3 hits —
+- `approach-gate.server.ts:63` (`state?.approach_status === "approved"`) — the short-circuit that
+  proves AC-O10 (an overridden task is no longer refused).
+- `approach-gate.server.ts:81` (`wasEscalated = state?.approach_status === "escalated"`) — internal to
+  the gate's own re-grade logic, already fully audited under Claims 2/3; not a downstream consumer.
+- `autowork.server.ts:697` (`promotedToDoing = state?.approach_status === "approved"`) — confirmed true
+  for an overridden row (Claim 1's live SQL test left the row at `approach_status='approved'`).
+
+Both externally-relevant consumers (excluding the gate's own internal check) match the AC's predicted
+list exactly and both behave correctly with an overridden row.
+
+**The two dispatch paths' tool-response echo** (`huddle.functions.ts:3662`, `:4833`,
+`approach_status: "approved"` in the JSON returned to the model) are literal echoes of the override
+result, not decision points — both paths are symmetric and both route through the same shared
+`overrideEscalatedApproach` core (confirmed by reading both blocks side by side — byte-identical
+except imports).
+
+**`standup.server.ts` / `review-recheck.server.ts`**: `grep -n "approach"` on both files returns
+**zero hits** — confirmed independently, matches AC-O12's predicted answer exactly. Neither can
+misreport an override as a quality pass because neither makes any claim about the approach gate.
+
+**The 5 new audit columns** (`approach_override_by/at/via/quote/turn_id`): written only by
+`overrideApproachGate` (`tasks.server.ts:1099-1100`), included in the `TaskEngagementState` type and
+the `ENGAGEMENT_COLS` SELECT projection — but swept with
+`grep -rn "approach_override_" src/ --include=*.ts --include=*.tsx` and found **no UI/reporting
+consumer anywhere** renders or queries them. This is not a defect against any stated AC (AC-O5 asks
+only that the DB distinguish the two cases, which Claim 1's live SQL test already confirmed it does),
+but it means the audit trail is currently write-and-select-only — reachable by a manual query, not
+surfaced to the owner anywhere in the app today. Worth naming since AC-O5 was flagged
+"highest skip-risk... invisible in the happy path."
+
+**Verdict: CONFIRMED** — the blast radius is exactly as small as claimed, both real consumers behave
+correctly, and no downstream surface misreports an override. The audit columns exist and are correctly
+distinguishable in the database (proven live in Claim 1) but have no display surface yet — an
+observation, not a refutation of any AC as written.
+
+---
+
+# BOTTOM LINE
+
+## Regression baseline — run independently
+
+```
+npm run test:router        -> 20 passed, 0 failed
+npm run test:blocked       -> 21/21 passed
+npm run test:presence      -> 18/18 passed
+npm run test:mode          -> 22/22 passed
+npm run test:turn-identity -> ALL PASS
+npm run test:cross-app     -> 83 passed, 0 failed
+npx tsc --noEmit           -> exit 0, no errors
+```
+No app-specific Playwright/live-UI baseline was run: this app (huddle-extension-app) has no live
+deployed URL supplied in this task's scope, and the change is server-side gate logic with no live SWA
+target named in the brief — the regression evidence available and applicable here is the offline test
+suites and typecheck above, all independently re-run rather than taken from the IMPL log.
+
+## Summary table
+
+| # | Claim | Verdict |
+|---|---|---|
+| 1 | SQL never executed — execute it | **CONFIRMED** |
+| 2 | Re-grade loop is bounded | **CONFIRMED** (one inherited, pre-existing caveat noted) |
+| 3 | Errored re-grade fails closed | **CONFIRMED** |
+| 4 | Anti-self-override guard prevents self-override | **REFUTED** — proves provenance only, not authorization semantics or task-binding; 3 live attacks reproduced |
+| 5 | 8/8 mutation proofs FIRED | **CONFIRMED** (3 independently re-run, all FIRED) with a caveat tying back to Claim 4 |
+| 6 | Green-light fix is real and complete | **CONFIRMED** |
+| 7 | Nothing that must fail closed was loosened | **CONFIRMED** |
+| 8 | Blast radius fully enumerated, nothing broken | **CONFIRMED** |
+
+## BOTTOM LINE
+
+**Not safe to merge to `main` and auto-deploy as-is.** Claims 1, 2, 3, 5, 6, 7, and 8 all hold up under
+independent, adversarial re-verification — including executing the actual DDL against a populated
+prior-schema database (Claim 1), which closes the implementer's own largest disclosed risk, and
+reproducing the exact live green-light defect and its fix by running the real code (Claim 6). The loop
+bound, fail-closed error handling, and blast radius are all sound.
+
+**The one thing that must not ship as-is: the anti-self-override guard (Claim 4) does not do what its
+name and its own threat-model comment claim.** It proves the quoted text was genuinely typed by the
+user recently — that part is solid and well-tested — but it does **not** verify that the text, in
+context, constitutes actual consent to override, and it does **not** bind an authorization to the
+specific task it is applied to. I reproduced, by directly calling the shipped `verifyOwnerQuote`
+function, three concrete cases where the guard returns `ok:true` for text that is not authorization at
+all: a real but unrelated complaint, a pasted/questioned agent proposal, and — most seriously — a
+substring of a sentence in which the user explicitly says NOT to proceed right now. Since the model
+itself chooses which substring of real conversation history to submit as `owner_quote`, and the file's
+own stated adversary is "an AGENT IN THIS APP holding the owner's tools, trying to unblock ITSELF,"
+this is not a theoretical edge case — it is the exact self-authorization path the feature was built to
+close, still open. Given this is a TIER-1 safety-gate change and the owner's explicit condition for
+building the model-callable tool at all was "prevent self override by agent," this gap should be closed
+(bind the quote check to the specific `task_id`, and/or require the quote to be checked against the
+FULL sentence/clause it was drawn from rather than an arbitrary substring, plus a negation scan like
+the one `green-light.ts` already has) before this ships to production — or, at minimum, the
+model-callable tool path (`OVERRIDE_APPROACH_GATE_TOOL`) should be withheld pending that fix while the
+model-free BUTTON path (which needs no quote at all — a click is already a user act) ships on its own.
