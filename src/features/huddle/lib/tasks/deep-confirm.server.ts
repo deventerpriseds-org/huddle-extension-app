@@ -7,6 +7,7 @@
 // chat-friendly tier. The original ask is stored here. One pending row per (user, huddle); best-effort
 // (any DB error → null, so the turn simply proceeds normally). No new secret; reuses AZURE_PG_URL.
 import { Pool } from "pg";
+import { isGreenLight } from "./green-light";
 
 let _pool: Pool | null = null;
 function getPool(): Pool {
@@ -108,5 +109,56 @@ export function classifyConfirmReply(text: string): "produce" | "quick" | "cance
     return "produce";
   if (/\b(produce|make it a task|as a task|work on it|async|artifact|full (write|work) ?up|deep dive|do the (research|work))/.test(t))
     return "produce";
+  // A GREEN LIGHT ANYWHERE IN THE LINE, not just at the start. The two patterns above are anchored
+  // with `^`, and that is exactly how the measured defect happened: the ask fired at 01:32, the owner
+  // replied "Go for it" (caught by `^go\b`) and then "Okay knock it out" — which starts with "okay",
+  // matches neither pattern, and was classified "unrelated", so the gate kept asking a question the
+  // owner had answered three times. Verified before the fix: classifyConfirmReply("Okay knock it out")
+  // returned "unrelated". Owner: "need to make sure it works and doesn't ignore a green light."
+  if (isGreenLight(text)) return "produce";
   return "unrelated";
+}
+
+/**
+ * The produce-vs-quick ask itself.
+ *
+ * Two things the owner named, and one honest limitation:
+ *  - THE WORDING. "the wording is bad and it needs a cleanup that will help." The old copy opened
+ *    "That's a meaty one." and read like a form: it named the mechanism ("take it on as a task, do the
+ *    deep work async") instead of the outcome the user cares about, and ended in a quoted command
+ *    list. This says what the user gets either way, in the order they'd choose in.
+ *  - EVERY AGENT RECITED IT IDENTICALLY, because it is a hardcoded literal returned before any
+ *    persona/snapshot call. Fully voicing it through the persona would mean a model call, which is the
+ *    exact cost this gate exists to avoid — so instead each agent gets a STABLE variant chosen by its
+ *    id: Cole always phrases it one way, Elle another, and no agent's phrasing wanders between turns.
+ *    That removes the chorus effect for the price of nothing. It is NOT full persona voicing, and if
+ *    that is wanted it needs a cheap model tier here, not a bigger literal.
+ *
+ * Every variant keeps the produce / quick / cancel contract `classifyConfirmReply` parses, and keeps
+ * those three words bold and literal so the reply is easy to give.
+ */
+const PRODUCE_VS_QUICK_VARIANTS: (() => string)[] = [
+  () =>
+    "That's a real piece of work, not a chat answer. I can **produce** it — put it on the board, dig in " +
+    "properly, and come back with a draft you can mark up. Or a **quick** take right now, off what I " +
+    "already know. Which would you rather? (**cancel** if you'd sooner park it.)",
+  () =>
+    "Happy to run at this properly. Two ways: **produce** — I take it away, do the work, hand you " +
+    "something written to react to. Or **quick** — my read right here, right now, off the top. Say " +
+    "which, or **cancel** and I'll drop it.",
+  () =>
+    "This one deserves more than a paragraph. Want me to **produce** it (I'll work it up and bring you " +
+    "a draft to pick apart) or give you a **quick** answer here and now? **cancel** if it can wait.",
+  () =>
+    "I can go two ways on this. **produce**: on the board, worked properly, a draft back to you. " +
+    "**quick**: an answer in this thread in a few seconds, no digging. Your call — or **cancel** it.",
+];
+
+export function produceVsQuickAsk(agentId: string | null | undefined): string {
+  // Stable per agent (a sum over the id), so an agent's phrasing never wanders between turns — a
+  // teammate who says it differently every time reads as MORE robotic, not less.
+  const id = agentId ?? "";
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h + id.charCodeAt(i)) % 9973;
+  return PRODUCE_VS_QUICK_VARIANTS[h % PRODUCE_VS_QUICK_VARIANTS.length]();
 }

@@ -90,5 +90,43 @@ check("empty history", hasGreenLit([]), false);
 check("blank lines are ignored, not counted against the lookback", hasGreenLit(["go for it", "", "  ", ""]), true);
 check("undefined-safe", hasGreenLit(undefined as unknown as string[]), false);
 
+// --- THE INTEGRATION THAT ACTUALLY FAILED LIVE -----------------------------------------------------
+// The predicate above being right is not the point; the point is that the produce-vs-quick gate USES
+// it. Before this change `classifyConfirmReply("Okay knock it out")` returned "unrelated" (measured by
+// running it), which is precisely why the owner's second and third go-aheads were ignored.
+const { classifyConfirmReply, produceVsQuickAsk } = await import(
+  "../src/features/huddle/lib/tasks/deep-confirm.server"
+);
+
+console.log("\nclassifyConfirmReply now honours a go-ahead anywhere in the line");
+check("'Okay knock it out' — returned 'unrelated' before this fix", classifyConfirmReply("Okay knock it out"), "produce");
+check("'Go for it' (was already caught by the ^go anchor)", classifyConfirmReply("Go for it"), "produce");
+check("'yeah have at it'", classifyConfirmReply("yeah have at it"), "produce");
+check("'alright, run with it'", classifyConfirmReply("alright, run with it"), "produce");
+
+console.log("\n...without breaking the other three verdicts");
+check("cancel still wins over everything", classifyConfirmReply("no, forget it"), "cancel");
+check("an explicit cancel", classifyConfirmReply("cancel"), "cancel");
+check("quick still beats the green light", classifyConfirmReply("just a quick take please"), "quick");
+check("'give me the short version'", classifyConfirmReply("give me the brief version"), "quick");
+check("an unrelated message stays unrelated", classifyConfirmReply("what did Finn say about the runway?"), "unrelated");
+check("a question is not a go-ahead", classifyConfirmReply("should we just do it?"), "unrelated");
+
+console.log("\nThe ask itself: reworded, and NOT the same literal from every agent");
+const asks = ["cole-blake", "elle-rowan", "finn-reid", "terry-locke"].map((id) => produceVsQuickAsk(id));
+check("more than one distinct phrasing across the roster", new Set(asks).size > 1, true);
+check("stable per agent — an agent that rephrases every turn reads MORE robotic", produceVsQuickAsk("cole-blake"), produceVsQuickAsk("cole-blake"));
+check("the old copy is gone", asks.some((a) => a.includes("That's a meaty one")), false);
+for (const [i, a] of asks.entries()) {
+  // Every variant MUST keep the contract classifyConfirmReply parses, or the reply can't be understood.
+  check(`variant ${i} offers produce`, /\bproduce\b/.test(a), true);
+  check(`variant ${i} offers quick`, /\bquick\b/.test(a), true);
+  check(`variant ${i} offers cancel`, /\bcancel\b/.test(a), true);
+  // ...and the gate must be able to parse the words it just told the user to say.
+  check(`variant ${i}'s own words round-trip: "produce"`, classifyConfirmReply("produce"), "produce");
+  check(`variant ${i}'s own words round-trip: "quick"`, classifyConfirmReply("quick"), "quick");
+  check(`variant ${i}'s own words round-trip: "cancel"`, classifyConfirmReply("cancel"), "cancel");
+}
+
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

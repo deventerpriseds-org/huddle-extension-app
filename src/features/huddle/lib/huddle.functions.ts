@@ -1523,7 +1523,63 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         setPendingDeepConfirm,
         clearPendingDeepConfirm,
         classifyConfirmReply,
+        produceVsQuickAsk,
       } = await import("./tasks/deep-confirm.server");
+      const { hasGreenLit } = await import("./tasks/green-light");
+
+      // THE PRODUCE PATH, once. Reached from TWO places now — an explicit "produce" reply to a pending
+      // ask, and a fresh deep ask the user has ALREADY green-lit in this thread — and they must do the
+      // identical thing (board task + async kick + the same ack), so this is a closure rather than a
+      // second copy of fifty lines that would drift the first time one of them was touched.
+      const runProduce = async (agentId: AgentId, askText: string, note: string) => {
+        const title = produceTitleFrom(askText);
+        // Create the produce task on the board (dual-write to journey). Non-fatal.
+        let created = false;
+        try {
+          if (data.caller?.entra_email) {
+            const { invokeJourneyTool } = await import("./journey/proxy.functions");
+            const r = await invokeJourneyTool({
+              toolName: "quick_create_task",
+              args: { title },
+              caller: data.caller ?? {},
+              context: { source: "huddle", huddleId: data.huddleId, agentId },
+            });
+            created = !!r.ok;
+            if (r.ok && r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+          }
+        } catch (e) {
+          console.warn(
+            `[huddle-model] produce-confirm task create failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+        // Kick the async WIP pipeline (fire-and-forget; the gated 9/13/17 cadence also picks it up).
+        try {
+          const { runScheduledAutoWork } = await import("./tasks/autowork.server");
+          void runScheduledAutoWork(data.caller, { force: true }).catch(() => {});
+        } catch {
+          /* best-effort */
+        }
+        return finalize({
+          decision: {
+            ...routed.decision,
+            reason: `${routed.decision.reason} [${note}]`.slice(0, 220),
+          },
+          replies: [
+            {
+              agentId,
+              text: created
+                ? `Done — I've put “${title}” on the board as a produce task and kicked it to the team to work up async. You'll get the draft to review. Want me to steer it any particular way?`
+                : `I'll take “${title}” on as a produce task and work it up async — you'll get the draft to review. (Heads up: I couldn't confirm the board write just now, so give it a quick check.)`,
+            },
+          ] as Reply[],
+          fallbacks,
+          prompts,
+          journeyTaskUpdates,
+          suggestedTasks,
+          toolUses,
+          reasoning: reasoningSummaries,
+        });
+      };
 
       const pending = await getPendingDeepConfirm(email, data.huddleId);
       if (pending) {
@@ -1543,53 +1599,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         } else if (verdict === "produce") {
           await clearPendingDeepConfirm(email, data.huddleId);
           const agentId = (pending.agentId as AgentId) ?? routed.winners[0] ?? data.members[0];
-          const title = produceTitleFrom(pending.askText);
-          // Create the produce task on the board (dual-write to journey). Non-fatal.
-          let created = false;
-          try {
-            if (data.caller?.entra_email) {
-              const { invokeJourneyTool } = await import("./journey/proxy.functions");
-              const r = await invokeJourneyTool({
-                toolName: "quick_create_task",
-                args: { title },
-                caller: data.caller ?? {},
-                context: { source: "huddle", huddleId: data.huddleId, agentId },
-              });
-              created = !!r.ok;
-              if (r.ok && r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
-            }
-          } catch (e) {
-            console.warn(
-              `[huddle-model] produce-confirm task create failed: ${e instanceof Error ? e.message : String(e)}`,
-            );
-          }
-          // Kick the async WIP pipeline (fire-and-forget; the gated 9/13/17 cadence also picks it up).
-          try {
-            const { runScheduledAutoWork } = await import("./tasks/autowork.server");
-            void runScheduledAutoWork(data.caller, { force: true }).catch(() => {});
-          } catch {
-            /* best-effort */
-          }
-          return finalize({
-            decision: {
-              ...routed.decision,
-              reason: `${routed.decision.reason} [deep-confirm: produce]`.slice(0, 220),
-            },
-            replies: [
-              {
-                agentId,
-                text: created
-                  ? `Done — I've put “${title}” on the board as a produce task and kicked it to the team to work up async. You'll get the draft to review. Want me to steer it any particular way?`
-                  : `I'll take “${title}” on as a produce task and work it up async — you'll get the draft to review. (Heads up: I couldn't confirm the board write just now, so give it a quick check.)`,
-              },
-            ] as Reply[],
-            fallbacks,
-            prompts,
-            journeyTaskUpdates,
-            suggestedTasks,
-            toolUses,
-            reasoning: reasoningSummaries,
-          });
+          return runProduce(agentId, pending.askText, "deep-confirm: produce");
         } else if (verdict === "cancel") {
           await clearPendingDeepConfirm(email, data.huddleId);
           return finalize({
@@ -1614,6 +1624,20 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // Fresh deep ask (no manual override): HOLD and ask produce-vs-quick instead of spending o3 inline.
       if (!deepManual && routed.winners.length > 0 && (routed.difficulty ?? 2) >= 3) {
         const primary = routed.winners[0];
+        // ...UNLESS THE USER HAS ALREADY SAID GO. Measured: the ask fired at 01:32, the owner replied
+        // "Go for it" at 02:06 and "Okay knock it out" at 02:50 — three go-aheads — and it was still
+        // asking. Half of that was the classifier (fixed in classifyConfirmReply); this is the other
+        // half: once someone has told you to get on with it, asking them to choose a shape reads as
+        // not listening. A go-ahead in the thread means PRODUCE, which is the answer the gate was
+        // fishing for anyway. The current message counts too — "go for it, and do the pricing one"
+        // is a go-ahead AND a fresh deep ask in one line.
+        const recentUserLines = [
+          ...(data.history as HuddleMessage[]).filter((m) => m.author.kind === "user").map((m) => m.text),
+          data.text,
+        ];
+        if (hasGreenLit(recentUserLines)) {
+          return runProduce(primary, data.text, "deep-confirm: already green-lit");
+        }
         await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
         return finalize({
           decision: {
@@ -1623,9 +1647,8 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           replies: [
             {
               agentId: primary,
-              text:
-                "That's a meaty one. Want me to **produce** it — take it on as a task, do the deep work async, and hand you a draft to review — " +
-                'or would a **quick take right here** do for now? Reply "produce", "quick", or "cancel".',
+              // Per-agent phrasing, not one literal every agent recites — see produceVsQuickAsk.
+              text: produceVsQuickAsk(primary),
             },
           ] as Reply[],
           fallbacks,
