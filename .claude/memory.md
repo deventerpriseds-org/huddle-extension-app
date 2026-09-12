@@ -2954,3 +2954,37 @@ of its `.output` file not having grown — while `ListAgents` said `running` the
 is appended per assistant MESSAGE; an agent deep in a read/grep chain legitimately writes nothing for
 hours. **Only `ListAgents` plus the agent's own artifact file are valid liveness reads.** Same class
 as the org-wide rule about a verifier declared dead 14 seconds before delivering 9/9.
+
+## A task handed DIRECTLY to an agent lands with NO assignee — the owner is chosen, then discarded (2026-09-12)
+
+Traced end to end across both repos. Do not re-derive; verify the line numbers still match, then act.
+
+```
+owner asks an agent in a 1:1 to do X
+   -> createSuggestedTaskFromTool (huddle.functions.ts ~:2649)
+        ownerId: resolveTaskOwner(args.ownerId ?? args.owner ?? args.assignee)
+        ... an owner IS resolved, and is used ONLY for the local UI card draft
+   -> the CANONICAL journey write, ~20 lines later:
+        invokeJourneyTool({toolName:"quick_create_task", args:{title} | {title,date}})
+        ... no assignee. NOT dropped by a bug -- there is nowhere to put one.
+   -> journey quickCreateTask (journey-voice execute-tool/index.ts, case ~:432)
+        accepts ONLY title / date / auto_schedule, forwards to parseAndCreateTasks
+   -> public.tasks row created with assigned_agent = NULL
+   -> mirror row NULL (pg_net, 1-3s)
+   -> autowork.server.ts:370   if (!row.assigned_agent) continue;
+   -> INERT. No confirm ask, no promotion, no work, no reach-out, until GROOMING assigns it.
+```
+
+**So a task the owner hands to a named agent behaves exactly like an unassigned one.** Observed on
+the Trinnex row, whose `assigned_agent` read genuinely NULL in journey.
+
+**The write path already exists — do NOT add one.** journey's `update_task` writes `assigned_agent`
+(`execute-tool/index.ts` ~:906-908), as does `batch_update_tasks` (`:971`); the board drag already
+uses it via `board.functions.ts`. The fix is a best-effort follow-up `update_task` after create — no
+journey deploy, and its failure mode degrades to exactly today's behaviour.
+
+**WHO to assign is the only real decision, and it is decided:** 1:1 -> the responding agent; GROUP ->
+only when the agent explicitly named an owner. Not the lead: `huddle.functions.ts` ~:2221 makes the
+lead capture items across EVERY lane, so defaulting to it would assign other lanes' work wrongly.
+
+**Full diagnosis + the rejected alternative:** `.claude/actions.md`, `ACT:assign-on-direct-ask`.
