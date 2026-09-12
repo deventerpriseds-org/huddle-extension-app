@@ -418,6 +418,48 @@ export async function getUserTurnsSince(userEmail: string, sinceMs: number): Pro
   return res.rows.map(mapRow);
 }
 
+/**
+ * The user's OWN recent utterances, newest first — the transcript the owner-quote override check reads.
+ *
+ * A separate read from `getUserTurnsSince` above, and it has to be: that one filters `status = 'done'`
+ * because it is a back-fill of finished turns, and the message that authorises an override is very
+ * often the turn being EXECUTED right now ("I said proceed — override it"), which is `running`. Using
+ * the back-fill read would have made the override fail in its single most common case.
+ *
+ * Returns EVERY status and every huddle, projected down to just what the check needs. It does NOT
+ * filter agent-initiated turns in SQL — `verifyOwnerQuote` applies `isUserTurn()` to the id, which is
+ * the single source of truth for that rule and must not be re-implemented as a LIKE pattern here.
+ */
+export async function getRecentUserUtterances(
+  userEmail: string,
+  sinceMs: number,
+  limit = 200,
+): Promise<{ id: string; text: string; updatedMs: number }[]> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
+  const since = Math.max(0, sinceMs);
+  const cap = Math.min(Math.max(1, limit), 500);
+  const cols = `id, payload->>'text' AS text, (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_ms`;
+  const res = await getPool().query<{ id: string; text: string | null; updated_ms: string | number }>(
+    userId
+      ? `SELECT ${cols} FROM chat.pending_turns
+          WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2)))
+            AND updated_at > to_timestamp($3 / 1000.0)
+          ORDER BY updated_at DESC
+          LIMIT ${cap}`
+      : `SELECT ${cols} FROM chat.pending_turns
+          WHERE lower(user_email) = lower($1)
+            AND updated_at > to_timestamp($2 / 1000.0)
+          ORDER BY updated_at DESC
+          LIMIT ${cap}`,
+    userId ? [userId, emails, since] : [userEmail, since],
+  );
+  return res.rows
+    .filter((r) => typeof r.text === "string" && r.text.length > 0)
+    .map((r) => ({ id: r.id, text: r.text as string, updatedMs: Number(r.updated_ms) }));
+}
+
 // ---- Delegation / orchestration (Pillar 2) -------------------------------------------------------
 
 export interface OrchestrationWorker {

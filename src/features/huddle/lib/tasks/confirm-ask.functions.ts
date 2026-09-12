@@ -126,6 +126,143 @@ export async function confirmTaskFromProposal(opts: {
   }
 }
 
+// ---- OWNER OVERRIDE of an escalated approach gate ------------------------------------------------
+
+export type OverrideSource =
+  /** A click in the app. No quote: the click IS the user act, and no model was involved in it. */
+  | { via: "button" }
+  /** A model relayed the owner's words. The server must LOCATE them before honouring anything. */
+  | { via: "quote"; quote: string };
+
+export type OverrideResult = ButtonResult & {
+  taskId?: string;
+  title?: string;
+  /** true when the refusal was specifically "that quote isn't the owner's" — the caller (an agent)
+   *  should ask the user to click the button rather than retry with a different guess. */
+  quoteRejected?: boolean;
+};
+
+/**
+ * THE ONE PLACE an escalated approach gate is overridden, shared by the button and the tool exactly
+ * the way `confirmTaskFromProposal` is shared by the button and the voice executor — for the same
+ * reason: a safety gate with two implementations is a safety gate that leaks through the one nobody
+ * re-read (memory.md 2026-08-05, the gate was ON and 8 unconfirmed tasks still reached review).
+ *
+ * Everything that makes it safe lives here, so it is identical on every surface:
+ *  - OWNERSHIP: `getOwnedTaskForConfirmAsk` — a task that doesn't exist and a task that isn't yours
+ *    return the SAME error, so a guessed id cannot probe.
+ *  - ESCALATED ONLY: it refuses on any other status. Approving a `pending` task would skip the grader
+ *    entirely, which is not "unstick a dead end", it is "bypass the whole approach gate".
+ *  - THE OWNER'S WORDS ARE VERIFIED, NOT TRUSTED: for `via:'quote'` the quote must be found in a real,
+ *    recent user turn. This is the owner's own anti-self-override condition and the whole reason a
+ *    model may call this at all.
+ *  - IDEMPOTENT FROM PERSISTED STATE, not from the turn ledger: `turnActionLedger` is per-turn and
+ *    in-memory, so it cannot dedupe two clicks seconds apart in different turns. The status read (and
+ *    the `WHERE approach_status='escalated'` on the write) is what does.
+ *  - ATTRIBUTED TO THE USER: the actor recorded is the resolved caller email. Never an agentId.
+ *  - NEVER SWALLOWED: a DB failure returns `{ok:false}`. Reporting "unstuck" about a task that is
+ *    still stuck is worse than reporting the error.
+ */
+export async function overrideEscalatedApproach(opts: {
+  taskId: string;
+  email: string;
+  source: OverrideSource;
+}): Promise<OverrideResult> {
+  const { taskId, email, source } = opts;
+  try {
+    const { getOwnedTaskForConfirmAsk, getTaskEngagementState, overrideApproachGate } =
+      await import("./tasks.server");
+    const task = await getOwnedTaskForConfirmAsk(taskId, email);
+    if (!task) return { ok: false, error: "Task not found." };
+    if ((task.status ?? "").toUpperCase() === "DONE") {
+      return { ok: false, error: "That task is already done — there's nothing to unstick.", taskId, title: task.title };
+    }
+
+    const state = await getTaskEngagementState(taskId).catch(() => null);
+    const status = state?.approach_status ?? "pending";
+    if (status === "approved") {
+      // Covers BOTH "already overridden" (a second click) and "the grader passed it in between".
+      // Either way the task is not stuck, nothing is written, and no second audit record is appended.
+      return { ok: true, alreadyDone: true, taskId, title: task.title };
+    }
+    if (status !== "escalated") {
+      // Includes the reassignment case, which is CORRECT and must not be "fixed" by loosening this:
+      // `resetEngagementOnReassignment` puts the row back to 'pending' because the new assignee never
+      // proposed the approach the owner was overriding. Approving on their behalf recreates the exact
+      // inheritance bug that reset exists to prevent — so say what happened instead.
+      return {
+        ok: false,
+        error:
+          "That task isn't waiting on your approval — its approach gate is at “pending”. If it changed " +
+          "hands, the new assignee starts the approach fresh and will come back to you.",
+        taskId,
+        title: task.title,
+      };
+    }
+
+    let quote: string | null = null;
+    let sourceTurnId: string | null = null;
+    if (source.via === "quote") {
+      const { verifyOwnerQuote, QUOTE_MAX_AGE_MS, QUOTE_MIN_WORDS } = await import("./approach-override");
+      const { getRecentUserUtterances } = await import("./turns.server");
+      const now = Date.now();
+      const utterances = await getRecentUserUtterances(email, now - QUOTE_MAX_AGE_MS);
+      const verdict = verifyOwnerQuote(source.quote ?? "", utterances, now);
+      if (!verdict.ok) {
+        return {
+          ok: false,
+          quoteRejected: true,
+          error:
+            verdict.reason === "too-short"
+              ? `Quote too short to authorise an override — it needs to be at least ${QUOTE_MIN_WORDS} words of what the user actually said.`
+              : "I couldn't find those words in anything the user said recently, so I can't treat that as their authorisation. Ask them to say it here, or to use the Approve anyway button.",
+          taskId,
+          title: task.title,
+        };
+      }
+      quote = source.quote;
+      sourceTurnId = verdict.turnId;
+    }
+
+    const applied = await overrideApproachGate({ taskId, userEmail: email, via: source.via, quote, sourceTurnId });
+    // Not applied = the row stopped being 'escalated' between the read above and this write (a second
+    // click, or the grader landing a pass). Nothing is stuck either way, so report it as already done
+    // rather than as a failure the user has to act on.
+    if (!applied) return { ok: true, alreadyDone: true, taskId, title: task.title };
+    return { ok: true, taskId, title: task.title };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** The in-thread / board "Approve anyway" button. Model-free, like its three neighbours: the click is
+ *  the user act, so there is no quote to verify and nothing for a model to forge. */
+export const overrideApproachFromButtonFn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, taskId: z.string().min(1) }).parse(raw),
+  )
+  .handler(async ({ data }): Promise<OverrideResult> => {
+    const email = await resolveCallerEmail(data.caller);
+    if (!email) return { ok: false, error: "Sign-in required." };
+    return overrideEscalatedApproach({ taskId: data.taskId, email, source: { via: "button" } });
+  });
+
+/** The board's "what is stuck waiting on me?" read, so an escalation that happened during an autowork
+ *  run the owner never opened is still discoverable. Returns ids only; the board already has titles. */
+export const getEscalatedApproachTasksFn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => z.object({ caller: Caller }).parse(raw))
+  .handler(async ({ data }): Promise<{ taskIds: string[] }> => {
+    const email = await resolveCallerEmail(data.caller);
+    if (!email) return { taskIds: [] };
+    try {
+      const { getEscalatedApproachTaskIds } = await import("./tasks.server");
+      return { taskIds: [...(await getEscalatedApproachTaskIds(email))] };
+    } catch {
+      // A board that can't read engagement state still renders every card — it just shows no chips.
+      return { taskIds: [] };
+    }
+  });
+
 export const confirmTaskFromButtonFn = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) =>
     z.object({ caller: Caller, taskId: z.string().min(1) }).parse(raw),

@@ -173,6 +173,18 @@ ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS entered_review_
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_status TEXT NOT NULL DEFAULT 'pending';
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS proposed_approach TEXT;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_revision_count INT NOT NULL DEFAULT 0;
+-- OWNER OVERRIDE of an escalated approach (.claude/IMPL-override-gate.md). approach_status now reaches
+-- 'approved' by TWO routes -- the grader passing it, and the owner overriding a dead end -- and the two
+-- must NOT be indistinguishable: without these columns a later reader auditing "which work was actually
+-- quality-gated?" counts an override as a pass. NULL on a graded pass; set on an override.
+--   approach_override_via: 'button' (a click in the app -- the click IS the user act) | 'quote' (a model
+--     relayed the owner's own words, and the server LOCATED them in a real user turn before honouring it).
+--   approach_override_turn_id: which utterance authorised it, so a replay is visible after the fact.
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_by TEXT;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_at TIMESTAMPTZ;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_via TEXT;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_quote TEXT;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_turn_id TEXT;
 -- Mid-work clarifying question (ask_clarifying_question tool): clarify_status='open' pauses that task's
 -- autowork research cadence until answered. clarify_count is the lifetime cap counter (bounded — an agent
 -- that's still stuck after the cap must flag_blocker or proceed on its own judgment, not keep asking).
@@ -706,11 +718,19 @@ export interface TaskEngagementState {
   clarify_count: number;
   open_question: string | null;
   open_question_asked_at: string | null;
+  /** NULL unless the OWNER overrode an escalated approach — see the DDL note. An `approved` row with
+   *  approach_override_at set was NOT graded to a pass; anything auditing quality must read this. */
+  approach_override_by: string | null;
+  approach_override_at: string | null;
+  approach_override_via: "button" | "quote" | null;
+  approach_override_quote: string | null;
+  approach_override_turn_id: string | null;
 }
 
 const ENGAGEMENT_COLS =
   "task_id,user_email,confirm_status,proposed_dod,confirmed_dod,confirm_ask_at,confirmed_at,last_review_ping_at,next_review_ping_at,revision_count,entered_review_at," +
-  "approach_status,proposed_approach,approach_revision_count,clarify_status,clarify_count,open_question,open_question_asked_at";
+  "approach_status,proposed_approach,approach_revision_count,clarify_status,clarify_count,open_question,open_question_asked_at," +
+  "approach_override_by,approach_override_at,approach_override_via,approach_override_quote,approach_override_turn_id";
 
 /** Batch-read engagement state for a set of task ids (a missing entry means "never asked yet"). */
 export async function getTaskEngagementStates(taskIds: string[]): Promise<Map<string, TaskEngagementState>> {
@@ -1043,6 +1063,75 @@ export async function escalateApproach(taskId: string, userEmail: string): Promi
        user_id=COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at=now()`,
     [taskId, userEmail.toLowerCase(), userId],
   );
+}
+
+/**
+ * THE OWNER OVERRIDE — the one way out of an escalated approach that the grader will not pass.
+ *
+ * Deliberately NOT `approveApproach` with an extra argument, for two reasons that are both defects if
+ * ignored:
+ *  1. `approveApproach(taskId, email, approach)` WRITES `proposed_approach` from its argument. There is
+ *     no caller-supplied approach here — the record of what the agent actually proposed is exactly what
+ *     an audit needs — so this statement never touches that column.
+ *  2. `approveApproach` is an unguarded upsert: it moves ANY status to 'approved', including 'pending'.
+ *     Approving a pending task would skip the grader entirely, turning "unstick a dead end" into
+ *     "bypass the whole approach gate". The `WHERE approach_status='escalated'` below is that guard,
+ *     and it is in the STATEMENT rather than in a read-then-write so two clicks (or a click racing the
+ *     grader) cannot both win — the second one updates zero rows and the caller reports "already done".
+ *
+ * @returns true if THIS call performed the override; false if the row was not escalated (missing,
+ *          already approved, pending, or reset by a reassignment between the ask and the click).
+ */
+export async function overrideApproachGate(opts: {
+  taskId: string;
+  /** The RESOLVED CALLER email. The actor is the authenticated user, never an agentId, never "system". */
+  userEmail: string;
+  via: "button" | "quote";
+  /** For `via:'quote'`, the owner's own words the server located in the transcript. */
+  quote?: string | null;
+  /** For `via:'quote'`, the `chat.pending_turns.id` the quote was found in. */
+  sourceTurnId?: string | null;
+}): Promise<boolean> {
+  await ensureBootstrapped();
+  const res = await getPool().query(
+    `UPDATE tasks.task_engagement_state
+        SET approach_status='approved',
+            approach_override_by=$2, approach_override_at=now(), approach_override_via=$3,
+            approach_override_quote=$4, approach_override_turn_id=$5, updated_at=now()
+      WHERE task_id=$1 AND approach_status='escalated'`,
+    [
+      opts.taskId,
+      opts.userEmail.toLowerCase(),
+      opts.via,
+      opts.quote ? opts.quote.slice(0, 1000) : null,
+      opts.sourceTurnId ?? null,
+    ],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/**
+ * The caller's tasks whose approach gate is currently ESCALATED — i.e. stuck waiting on them.
+ *
+ * This exists because escalation had NO user-visible surface at all: `grep -rn escalated src/**\/*.tsx`
+ * returned zero, so the only way the owner learned a task was stuck was an agent mentioning it in a
+ * thread they happened to be reading. Backs the board's "Needs your call" chip, which is the surface
+ * that still works for a task that escalated during an autowork run the owner never opened.
+ */
+export async function getEscalatedApproachTaskIds(userEmail: string): Promise<Set<string>> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
+  const { rows } = await getPool().query<{ task_id: string }>(
+    userId
+      ? `SELECT task_id FROM tasks.task_engagement_state
+          WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2)))
+            AND approach_status = 'escalated'`
+      : `SELECT task_id FROM tasks.task_engagement_state
+          WHERE lower(user_email) = $1 AND approach_status = 'escalated'`,
+    userId ? [userId, emails] : [userEmail.toLowerCase()],
+  );
+  return new Set(rows.map((r) => r.task_id));
 }
 
 // ---- Mid-work clarifying question (bounded, rate-limited — see ask_clarifying_question tool) --------

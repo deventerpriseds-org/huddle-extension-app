@@ -9,6 +9,7 @@
 // exhausted, at which point the caller escalates by telling the user directly instead of looping.
 
 import { WORKERS } from "../agents/workers";
+import { mayRegradeEscalated } from "./approach-override";
 
 const VERDICT_SCHEMA = {
   type: "object",
@@ -62,18 +63,42 @@ export async function runApproachGate(opts: {
   if (state?.approach_status === "approved") {
     return { gated: true, approved: true, escalated: false, note: "already approved" };
   }
-  if (state?.approach_status === "escalated") {
-    return { gated: true, approved: false, escalated: true, note: "already escalated to the user — address it with them directly" };
-  }
 
   const revisionCount = state?.approach_revision_count ?? 0;
+  const caps = await getWorkflowCaps(opts.email, opts.agentId).catch(() => ({ approach: 3, review: 3, question: 2 }));
+
+  // (B) AN ESCALATED TASK IS NO LONGER A DEAD END. This used to return here without grading anything,
+  // which made 'escalated' terminal: the owner could supply exactly the missing input the gate asked
+  // for and the next propose_approach was still refused unread. Cole Blake, live: "the workflow remains
+  // locked in its prior escalated state and is rejecting further approach submissions... the task needs
+  // to be reset before I can execute it." There was no reset the owner could reach.
+  //
+  // The short-circuit WAS the loop bound, though, so removing it needs a replacement, and the
+  // replacement reuses the counter that already exists rather than adding a column: a re-grade attempt
+  // is COUNTED BEFORE IT IS GRADED (below), and once approach_revision_count reaches
+  // regradeCeiling(cap) the gate stops spending grader calls and says so. Past that point the only way
+  // forward is a recorded owner override (overrideApproachGate) — which is now a thing the owner has.
+  const wasEscalated = state?.approach_status === "escalated";
+  if (wasEscalated && !mayRegradeEscalated(revisionCount, caps.approach)) {
+    return {
+      gated: true,
+      approved: false,
+      escalated: true,
+      note:
+        "still escalated, and the re-grade limit is reached — don't submit another approach. Tell the " +
+        "user plainly what you're blocked on; they can approve it as-is with the Approve anyway button.",
+    };
+  }
+
   if (!opts.claim(`approach_gate:${opts.taskId}:${revisionCount}`)) {
     return { gated: true, approved: false, escalated: false, note: "approach review already in flight this turn" };
   }
 
-  const caps = await getWorkflowCaps(opts.email, opts.agentId).catch(() => ({ approach: 3, review: 3, question: 2 }));
-
   try {
+    // Count the attempt BEFORE grading, so a grader that errors or times out still consumes one and a
+    // failing re-grade loop cannot run forever. Only on the escalated path: the normal path's counter
+    // is driven by the `revise` verdict below and must keep its existing meaning.
+    if (wasEscalated) await incrementApproachRevisionCount(opts.taskId, opts.email).catch(() => {});
     const { callOpenAIRouter } = await import("../openai-responses.server");
     const reviewer = WORKERS["assignment-reviewer"];
     const dod = state?.confirmed_dod?.trim();
@@ -96,7 +121,25 @@ export async function runApproachGate(opts: {
 
     if (verdict.verdict === "pass") {
       await approveApproach(opts.taskId, opts.email, opts.approach).catch(() => {});
-      return { gated: true, approved: true, escalated: false, note: "approach approved" };
+      return {
+        gated: true,
+        approved: true,
+        escalated: false,
+        note: wasEscalated ? "re-graded after escalation — approach approved" : "approach approved",
+      };
+    }
+    // A failed RE-grade goes straight back to escalated rather than into the revise loop. The task is
+    // already in the owner's court and they have been told about it; quietly taking it back out of
+    // their court is how a stuck task becomes invisible again. They get the fresh deficiencies instead.
+    if (wasEscalated) {
+      await escalateApproach(opts.taskId, opts.email).catch(() => {});
+      return {
+        gated: true,
+        approved: false,
+        escalated: true,
+        note: `re-graded and still not sound — ${verdict.deficiencies.slice(0, 3).join("; ")}`,
+        deficiencies: verdict.deficiencies,
+      };
     }
     if (revisionCount + 1 < caps.approach) {
       await incrementApproachRevisionCount(opts.taskId, opts.email).catch(() => {});
@@ -119,9 +162,22 @@ export async function runApproachGate(opts: {
       deficiencies: verdict.deficiencies,
     };
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // A RE-grade that errors leaves the task escalated. The fail-open below is a deliberate, long-
+    // standing property of this gate for a FRESH approach (don't block a task on a gate outage), but
+    // extending it here would make a grader outage a silent escape from a state the owner has already
+    // been told about — and the owner would never learn the difference, because an overridden-looking
+    // 'approved' row is exactly what they would see. Escalated it stays; the override is the way out.
+    if (wasEscalated) {
+      return {
+        gated: true,
+        approved: false,
+        escalated: true,
+        note: `re-grade couldn't run (${msg.slice(0, 100)}) — still escalated, so raise it with the user`,
+      };
+    }
     // The grading call itself errored/timed out — fail open to autonomy (approve) rather than block
     // the task on a gate outage, mirroring review-gate.server.ts's precedent.
-    const msg = err instanceof Error ? err.message : String(err);
     await approveApproach(opts.taskId, opts.email, opts.approach).catch(() => {});
     return { gated: true, approved: true, escalated: false, note: `approach gate error, proceeding: ${msg.slice(0, 120)}` };
   }
