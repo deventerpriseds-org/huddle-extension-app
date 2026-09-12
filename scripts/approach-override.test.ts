@@ -544,10 +544,14 @@ check(
   /enqueueTurn\(/.test(noticeBody) && /kickNextChunk\(/.test(noticeBody),
   true,
 );
+// COUNTED, not merely present. The first version of this check used `.test()`, and a mutation that
+// removed the `r.fresh &&` gate from the OpenAI dispatch site left it GREEN because the Lovable site
+// still matched — mutate.sh reported INERT and was right. A guard over a mechanism that exists at two
+// dispatch sites has to assert BOTH, or it only ever protects whichever one it happens to find first.
 check(
-  "it fires only on a FRESH request, so a repeat cannot re-notify",
-  /if \(r\.fresh && data\.internal\) void deliverOverrideRequestNotice/.test(huddleFns),
-  true,
+  "it fires only on a FRESH request, so a repeat cannot re-notify — at BOTH dispatch sites",
+  (huddleFns.match(/if \(r\.fresh && data\.internal\) void deliverOverrideRequestNotice/g) ?? []).length,
+  2,
 );
 
 console.log("\nSTRUCTURAL: the request surfaces through the EXISTING confirm row, not a second UI");
