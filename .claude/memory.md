@@ -2907,3 +2907,50 @@ Read this before anyone concludes again that "the board can't do projects."
 **The mistake to not repeat:** this was first reported as "all absent" from a grep for the NAMES
 `parent_task|subtask|epic|depends_on|sequence|project_id`. Two of three capabilities were sitting
 there under different names. Sweep by CAPABILITY (who writes it, who reads it), never by name.
+
+## The approach gate: what actually clears `escalated`, and a fail-open that LIES (2026-09-12)
+
+Independently verified (`.claude/VERIFY-escalated-dead-end-1.md`, 5 claims, 3 CONFIRMED 2 REFUTED).
+Read this before anyone says again that an escalated task has no way out.
+
+**TWO ways out already exist. Both are blunt; neither is per-task.**
+1. **Settings has a per-agent kill switch.** `AgentWorkflowPanel.tsx`, mounted at
+   `SettingsSheet.tsx:157` under "Confirm-intent & review gate". Off = the gate is bypassed for
+   EVERY task that agent owns. Both consumers miss the escalated state entirely:
+   `approach-gate.server.ts:51-52` returns `approved:true` BEFORE the escalated check at :65, and
+   `autowork.server.ts:686-688` promotes to DOING in a branch that never reaches the :697 test.
+   Nothing caches the config — next pass, no deploy.
+2. **ANY reassignment clears it.** `resetEngagementOnReassignment` is called from
+   `tasks.server.ts:296` inside `upsertJourneyTask` — the GENERIC mirror writer, not a grooming
+   path. journey's `execute-tool` writes `assigned_agent` from `update_task` (`index.ts:906-908`)
+   and `batch_update_tasks` (`:971`). It also wipes `confirmed_dod` and the clarify state, which is
+   why reassigning the Trinnex row needed a restore afterwards.
+
+**LIVE DEFECT, still open on main: `approach-gate.server.ts:121-127` fails open into STORED STATE.**
+On a grader throw it calls `approveApproach`, so a task is permanently marked approved that no
+grader ever read. One transient 429 — recurring in this repo — approves it forever, indistinguishably.
+The REVIEW gate's equivalent returns `proceed:true` and **writes nothing**; that is the correct
+shape. **Fail open in the RETURN, never in the STORED STATE.** The override work hardened the
+errored RE-GRADE path to stay escalated and deliberately left this fresh path alone.
+
+**`approveApproach` (`tasks.server.ts:1023-1036`) is an UNGUARDED upsert** — no `WHERE` on current
+status, so it moves any status to `approved`. Not a bypass today, but any new caller silently voids
+an escalation. New callers must be status-guarded `UPDATE`s.
+
+**Escalated is invisible in every deterministic surface** — no query selects it, no UI rendered it,
+`review-digest` and `standup` never read `approach_status`. The only notification was a PROMPT
+DIRECTIVE (`autowork.server.ts:159`) asking the model to mention it — a prose-only step, exactly the
+failure these gates were hardened against.
+
+**The "meaty" produce-vs-quick ask has TWO causes, and only one is fixed.** Trigger is seven
+conjuncts (1:1 only, difficulty >= 3, no pending row, ...). (a) the produce patterns were anchored
+`^(`, so `"Okay knock it out"` classified as `unrelated` — FIXED. (b) the pending row is
+`PRIMARY KEY (user_email, huddle_id)` and EVERY verdict deletes it, so a prior "produce" does NOT
+suppress the next difficulty>=3 ask — **still open**. Only `data.modelEscalate` suppresses, per-request.
+
+### Liveness: a stale transcript mtime is NOT proof a subagent died
+This verifier delivered at ~7 hours and was reported to the owner as dead at hour 6, on the strength
+of its `.output` file not having grown — while `ListAgents` said `running` the whole time. The JSONL
+is appended per assistant MESSAGE; an agent deep in a read/grep chain legitimately writes nothing for
+hours. **Only `ListAgents` plus the agent's own artifact file are valid liveness reads.** Same class
+as the org-wide rule about a verifier declared dead 14 seconds before delivering 9/9.
