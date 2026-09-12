@@ -818,9 +818,15 @@ function WidgetUnreachable({ label }: { label: string }) {
  * `messages`, which is what `history` (and therefore the turn payload sent to the model, and the
  * unread watermark) is built from. A pinned MESSAGE would have leaked a widget payload into every
  * turn's prompt and into the scrollback the user reads; this cannot.
- * Collapsed by default so it never buries the conversation. */
+ *
+ * EXPANDED by default, and the strip is labelled "Docked in this huddle" — both taken from the
+ * design prototype committed alongside the spec (docs/widgets/prototype/canvas.json, annotation
+ * `docked-placement`: "Both widgets sit in a two-up grid under a 'Docked in this huddle' strip,
+ * ABOVE the transcript, inside Iris's 1:1 only. They are pinned furniture, not chat messages").
+ * An earlier version of this collapsed by default to avoid burying the conversation; the prototype
+ * is the design intent, so it wins — the disclosure is kept so the user can still fold it away. */
 export function DockedJourneyWidgets() {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   return (
     <div className="rounded-xl border border-hairline bg-surface-2/60">
       <button
@@ -834,10 +840,10 @@ export function DockedJourneyWidgets() {
         ) : (
           <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
         )}
-        <span className="text-[12px] font-semibold text-foreground">Priorities &amp; schedule</span>
-        <span className="text-[11px] text-muted-foreground">· pinned here</span>
+        <span className="text-[12px] font-semibold text-foreground">Docked in this huddle</span>
+        <span className="text-[11px] text-muted-foreground">· priorities &amp; schedule</span>
       </button>
-      {/* Mounted only while open, so the two Lane-B reads do not fire for a user who never expands it. */}
+      {/* Mounted only while open, so the two Lane-B reads do not fire for a user who folds it away. */}
       {open && (
         <div className="grid gap-3 px-2 pb-2 lg:grid-cols-2">
           <LivePrioritiesWidget />

@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, Menu, PanelRight, Settings } from "lucide-react";
+import {
+  CalendarDays,
+  ChevronLeft,
+  FolderOpen,
+  LayoutGrid,
+  ListChecks,
+  Menu,
+  MessageSquare,
+  PanelRight,
+  Settings,
+} from "lucide-react";
 import { BoardView } from "./BoardView";
 import { ArtifactsView } from "./ArtifactsView";
 import { ContextPanel } from "./ContextPanel";
@@ -44,13 +54,21 @@ const VIEWS: Record<View, React.ReactNode> = {
 };
 
 /** Mobile switcher entries, in order. "Files" is Artifacts' user-facing name (kept from the previous
- *  hardcoded list); the two widget views get their spec names. */
-const NAV_LABELS: { id: View; label: string }[] = [
-  { id: "huddle", label: "Huddle" },
-  { id: "board", label: "Board" },
-  { id: "artifacts", label: "Files" },
-  { id: "priorities", label: "Priorities" },
-  { id: "schedule", label: "Schedule" },
+ *  hardcoded list); the two widget views get their spec names. Icons match `Rail.tsx`'s, so the same
+ *  view reads the same on both surfaces.
+ *
+ *  ICON-OVER-LABEL, not a row of bare labels. Five entries do not fit a 390px phone as text — the
+ *  design prototype names this exact constraint and this exact answer
+ *  (docs/widgets/prototype/canvas.json, annotation `phone-note`: "The mobile switcher in HuddleApp
+ *  is currently a 3-entry row of labels. Six entries means icon-over-label"). An earlier version of
+ *  this made the label row scroll horizontally instead, which hides entries behind a gesture with
+ *  nothing on screen saying so. */
+const NAV_LABELS: { id: View; label: string; icon: typeof MessageSquare }[] = [
+  { id: "huddle", label: "Huddle", icon: MessageSquare },
+  { id: "board", label: "Board", icon: LayoutGrid },
+  { id: "priorities", label: "Priorities", icon: ListChecks },
+  { id: "schedule", label: "Schedule", icon: CalendarDays },
+  { id: "artifacts", label: "Files", icon: FolderOpen },
 ];
 
 export function HuddleApp() {
@@ -389,26 +407,30 @@ export function HuddleApp() {
             Huddle/Board/Files toggle inside HuddleView's header unmounts the moment you leave the
             huddle view, which stranded users on Board/Files with no way back). Kept always-mounted
             here so it works from every view. */}
-        {/* Five entries no longer fit a centred row on a ~360px phone, so the strip scrolls
-            horizontally instead of squeezing the labels. `shrink-0` on each button is what stops
-            flex from compressing them into unreadable slivers. */}
-        <div className="flex items-center overflow-x-auto border-b border-hairline bg-surface px-3 py-1.5 md:app-hidden">
-          <div className="mx-auto inline-flex shrink-0 rounded-lg border border-hairline bg-background p-0.5">
-            {NAV_LABELS.map((v) => (
-              <button
-                key={v.id}
-                type="button"
-                onClick={() => setView(v.id)}
-                className={
-                  "shrink-0 whitespace-nowrap rounded-md px-3 py-1 text-xs font-medium transition " +
-                  (view === v.id
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground hover:text-foreground")
-                }
-              >
-                {v.label}
-              </button>
-            ))}
+        {/* Icon-over-label, five equal columns — see NAV_LABELS. Every entry stays visible and
+            tappable at 390px without a scroll gesture, and each column is a ≥44px touch target. */}
+        <div className="border-b border-hairline bg-surface px-2 py-1 md:app-hidden">
+          <div className="grid grid-cols-5 gap-0.5 rounded-lg border border-hairline bg-background p-0.5">
+            {NAV_LABELS.map((v) => {
+              const Icon = v.icon;
+              return (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => setView(v.id)}
+                  aria-current={view === v.id ? "page" : undefined}
+                  className={
+                    "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-[10px] font-medium leading-none transition " +
+                    (view === v.id
+                      ? "bg-muted text-foreground"
+                      : "text-muted-foreground hover:text-foreground")
+                  }
+                >
+                  <Icon size={16} strokeWidth={1.8} aria-hidden />
+                  <span className="w-full truncate text-center">{v.label}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 

@@ -319,3 +319,56 @@ every adaptation above is justified against them.
   Right: a green `✓` and an **orange `⏸`**.
 - `UP NEXT` — label, then a cream card. Card heading: orange `★` + orange/brown bold `This Week`.
   Rows: orange `★` bullet, truncated title, pale `▲ Today` button right.
+
+## The design prototype — found late, and what it changed
+
+`docs/widgets/prototype/` (a design canvas: `canvas.json` + four artboards) appeared **untracked
+during this lane**, after I had built against the two JPGs. It is a placement mockup of this exact
+feature, and its annotations are explicit design intent. I read it and reconciled.
+
+**It CONFIRMS three of my load-bearing decisions independently:**
+- *Docking:* "Both widgets sit in a two-up grid under a 'Docked in this huddle' strip, ABOVE the
+  transcript, inside Iris's 1:1 only. **They are pinned furniture, not chat messages**." — exactly
+  the mechanism and the reasoning I arrived at from the code.
+- *The view registry:* it names the pre-existing Rail/HuddleApp mismatch as a bug and says the fix is
+  for the registry to become "a VIEW MAP keyed by id" instead of a compounded ternary. That is what I
+  built (`Record<View, ReactNode>`).
+- *Writes:* "▲/✓ Today = move_task_to_day / unschedule_task … No new writer to the mirror; it
+  re-syncs in ~1–3s." — matches Lane B's `updateWidgetTask`, which is what every control here calls.
+
+**Two things I CHANGED to match it** (committed after the reconciliation):
+1. **The dock is EXPANDED by default** and its strip now reads "Docked in this huddle". I had it
+   collapsed-by-default to avoid burying the conversation; the prototype is the design intent, so it
+   wins. The disclosure is kept so the user can fold it away.
+2. **The mobile switcher is icon-over-label in five equal columns**, per `phone-note`: "Six entries
+   means icon-over-label". I had made the label row scroll horizontally — which hides entries behind
+   a gesture with nothing on screen saying so. Icons now match `Rail.tsx`'s for the same view.
+
+**Four divergences I did NOT resolve, because they are not mine to settle:**
+1. **⏸ pause: the prototype says "park with the parking-lot tag"; Lane B's shipped writer says
+   `pause → UP_NEXT`.** These are different behaviours (parking excludes a task from auto-work; UP_NEXT
+   keeps it queued). **I follow Lane B**, because that is the writer that exists and its
+   `ACTION_STATUS` was read from journey's own enum. Someone should pick one deliberately.
+2. **Memory rail entry.** The prototype wants the registry change to *also* fix Memory (today it is
+   decorative — it renders Huddles). I preserved the existing behaviour explicitly, with a comment,
+   rather than removing a nav entry or inventing a Memory view: both are product decisions outside
+   this lane's ask. The map makes the situation visible instead of compounding it.
+3. **Phone: "the second widget collapses to a one-line summary that expands on tap."** My dock stacks
+   at narrow width (`lg:grid-cols-2`) but both stay full. Not implemented.
+4. **Cream band colour.** The prototype gives a literal `oklch(0.975 0.032 92)`. I use
+   `color-mix(in oklch, var(--warning) 9%, var(--surface))` so it flips with the theme — and the
+   prototype's own header says journey's raw colours "map onto Huddle tokens", which is the principle
+   I followed. Worth a glance side by side.
+
+## Lane hygiene — two things to know
+
+1. **My first commit (`4c68ff2`) swept in `docs/widgets/prototype/` (~11.8k lines).** Those files are
+   NOT mine; they were untracked in the working tree and a `git add -A` captured them under my commit
+   message. Nothing is lost or altered — the content is intact and now tracked — but the attribution
+   is wrong. **I deliberately did not try to unpick it**, because rewriting another lane's work out
+   of shared history is the more destructive option. Flagging it instead.
+2. **`origin/claude/journey-widgets-in-chat` already contained `4c68ff2` without me pushing it.**
+   `git reflog` for the branch shows only my two `commit:` entries and no push; another session
+   pushed the branch. My second commit (`3ead8e6`) and the prototype-alignment commit are local.
+   Per the brief I ran **no `git push` and no merge to `main`**, so nothing has deployed —
+   `main` has not moved.
