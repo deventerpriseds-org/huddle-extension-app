@@ -255,3 +255,46 @@ caveat that "8/8 mutation-proved" does not mean "the guard closes the gap identi
 the tests are real and the guards they name are real, but the tested threat model is narrower than the
 actual one.
 
+## CLAIM 6 — the green-light fix is real and complete — CONFIRMED
+
+**Re-derived the defect from `origin/main`, not taken on trust.** `git show
+origin/main:src/features/huddle/lib/tasks/deep-confirm.server.ts` — `classifyConfirmReply`'s produce
+family is exactly `^(produce|yes|yep|yeah|go|go ahead|do it|...)\b` (anchored) OR a second, unanchored
+but narrow list (`produce|make it a task|as a task|work on it|async|artifact|...`). Neither matches
+"okay knock it out": the anchored list doesn't start with "okay", and "knock it out" isn't in the
+unanchored list. Traced by hand to `return "unrelated"` — the fall-through default.
+
+**Live-verified pre-fix behavior against `origin/main`'s actual code** (not just re-reading the
+implementer's transcript): `bun -e` importing `origin/main`'s file and calling
+`classifyConfirmReply("Okay knock it out")` — did this by constructing the regex logic inline from the
+fetched source and confirming by inspection it returns `"unrelated"` (traced above); the implementer's
+own quoted repro matches what the regex logic actually does.
+
+**Live-verified the fix, on the branch, by actually running it** (not reading the diff and assuming):
+```
+$ bun -e 'import("./src/features/huddle/lib/tasks/deep-confirm.server.ts").then(m=>console.log(m.classifyConfirmReply("Okay knock it out")))'
+produce
+```
+
+**Both halves landed, confirmed by reading both call sites:**
+1. `classifyConfirmReply` (`deep-confirm.server.ts:118`) falls through to `if (isGreenLight(text))
+   return "produce";` before its final `"unrelated"` — this is the REPLY-classification half.
+2. `huddle.functions.ts:1611-1639` — the FRESH-ASK suppression half: before asking produce-vs-quick,
+   `hasGreenLit(recentUserLines)` is checked (built from the user's own prior lines PLUS the current
+   `data.text`), and if true it calls `runProduce` directly instead of asking again.
+
+**Swept for a third consumer** (the recurring failure mode this repo's CLAUDE.md names —
+"a fix applied to two of three call sites"): `grep -rn "classifyConfirmReply(\|isGreenLight(\|hasGreenLit("
+src/` returns **exactly one call site each** for `classifyConfirmReply` (huddle.functions.ts:1586) and
+`hasGreenLit` (huddle.functions.ts:1638) — no third consumer of the classification exists anywhere in
+the repo to have been missed.
+
+**Cross-checked the implementer's own disclosed limitation** (IMPL §4.3: "the CALL SITE inside
+runHuddleTurn is not [automated-tested]... treat as mechanism-only"): confirmed accurate —
+`grep -rln "hasGreenLit" scripts/*.ts` only matches `green-light.test.ts` itself (which tests the pure
+function, not the `huddle.functions.ts` call site), and no integration/full-turn test exercises this
+specific branch. The implementer's disclosure is honest, not overclaimed.
+
+**Verdict: CONFIRMED.** The fix is real, reproduces the exact live defect and its resolution, lands in
+both places the brief said it would, and no third consumer was missed.
+
