@@ -82,3 +82,42 @@ holds: `verdict-memory.ts` (a separate, later commit `03a5276`) is the thing tha
 `isGreenLight("produce")===false` gap, and it does so via a NEW remembered-verdict mechanism, not by
 touching `green-light.ts`.
 
+
+## CLAIM — update_task arg name is `task_id`, not `id`; call site matches — CONFIRMED (brief's premise corrected)
+
+**Ground truth read directly** (`/home/user/journey-voice/supabase/functions/execute-tool/index.ts:895-896`):
+```
+async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse> {
+  if (!args.task_id) return { success: false, error: "Task ID is required" };
+```
+Confirms the handler requires **`task_id`**, never `id` — the verify brief's own premise ("my brief
+wrongly said `id`") is the wrong one, and the implementer's claim is correct.
+
+**Call site** (`assign-on-create.ts:143-147`, inside `assignCreatedJourneyTasks`):
+```
+toolName: "update_task",
+args: { task_id: id, assigned_agent: params.agentId },
+```
+Uses `task_id` — matches the handler exactly. Every other `update_task` call site in
+`huddle.functions.ts` (grep, 6 hits: lines 679, 3579, 3698, 4744, plus two `task_id: taskId` variable
+builds) also uses `task_id`, so this is not a one-off correct guess — it is the repo's one consistent
+convention.
+
+**Verdict: CONFIRMED.** No wrong-arg-name defect exists; this call will not silently fail.
+
+## CLAIM — runProduce (huddle.functions.ts ~:1542-1575) assigns BEFORE kicking autowork — CONFIRMED
+
+**Read** `huddle.functions.ts:1541-1579` in full (the `runProduce` closure). Sequence, in order:
+1. `invokeJourneyTool({toolName:"quick_create_task", args:{title}, ...})` creates the journey row.
+2. `if (r.ok) { const a = await assignCreatedJourneyTasks({taskIds: r.tasks.map(t=>t.id), agentId, ...}); if (!a.assigned) console.warn(...) }` — assignment happens HERE, awaited, still inside the same `try` block, before the function returns.
+3. **After** the `try/catch` around task creation+assignment, a SEPARATE, later step (lines ~1590+)
+   does `const { runScheduledAutoWork } = await import(...); void runScheduledAutoWork(data.caller,
+   {force:true}).catch(()=>{})` — fire-and-forget, and textually AFTER step 2 has already completed
+   (step 2 is `await`ed, not fired-and-forgotten).
+
+**Consumer check** (`autowork.server.ts:544`, read directly): `if (!agent || !AGENT_BY_ID[agent])
+continue;` — skips unassigned rows. Since assignment is awaited before `runScheduledAutoWork` is even
+invoked, the row is assigned by the time autowork's candidate-selection query runs.
+
+**Verdict: CONFIRMED** — assign-before-kick ordering is real, not merely commented.
+
