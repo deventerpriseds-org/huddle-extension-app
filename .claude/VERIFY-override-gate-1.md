@@ -298,3 +298,44 @@ specific branch. The implementer's disclosure is honest, not overclaimed.
 **Verdict: CONFIRMED.** The fix is real, reproduces the exact live defect and its resolution, lands in
 both places the brief said it would, and no third consumer was missed.
 
+## CLAIM 7 — nothing that must fail CLOSED was loosened — CONFIRMED
+
+**Byte-identical / untouched-file checks, run directly (not trusted from the IMPL log):**
+```
+$ git diff origin/main..HEAD -- src/features/huddle/lib/tasks/tasks.server.ts | grep -A30 resetEngagementOnReassignment
+(empty output — zero diff lines touch this function)
+
+$ git diff origin/main..HEAD --stat -- src/features/huddle/lib/identity/agent-workflow-config.server.ts
+(empty — file not in the changed-files list at all)
+
+$ git diff origin/main..HEAD --stat -- src/features/huddle/lib/tasks/autowork.server.ts
+(empty — file not in the changed-files list at all)
+
+$ git diff origin/main..HEAD -- src/features/huddle/lib/tasks/confirm-ask.functions.ts | grep -c "^-[^-]"
+0   (zero deleted lines — purely additive, matching `git diff --stat`'s "137 ++++++" with no "-")
+```
+
+- `agent-workflow-config.server.ts`'s fail-closed resolvers (`catch (err) { ... return true; }` at
+  lines 238-243 and 254-259) are untouched by definition (file has zero diff).
+- `autowork.server.ts`'s `?? true` promotion-gate defaults (`armRequired.get(f.agent) ?? true` line
+  654, `requiredByAgent.get(c.agent) ?? true` line 685) are untouched (file has zero diff).
+- `ensureReviewFlip`'s affirmative-only check: `if (state?.confirm_status !== "confirmed")` still
+  present at `tasks.server.ts:1312`; the ONLY diff to this file's confirm-intent-adjacent area is
+  `ENGAGEMENT_COLS` gaining the 5 new audit column names (a SELECT projection, purely additive).
+
+**Swept the NEW code itself for any catch that introduces a permissive default on a gate path**
+(`git diff origin/main..HEAD -- confirm-ask.functions.ts tasks.server.ts | grep catch`, 3 hits in
+confirm-ask.functions.ts, 0 in tasks.server.ts):
+- `getTaskEngagementState(taskId).catch(() => null)` inside `overrideEscalatedApproach` — a failed
+  read defaults `status` to `"pending"` via `state?.approach_status ?? "pending"`, and the very next
+  check `if (status !== "escalated") return {ok:false, ...}` means a failed read causes the override
+  to **refuse**, not approve. Fail-closed, correct direction.
+- The outer `catch (err) { return {ok:false, error: ...} }` wrapping `overrideEscalatedApproach` —
+  matches AC-O14, never swallowed.
+- `getEscalatedApproachTasksFn`'s `catch { return {taskIds: []} }` — a **read-only discovery** path
+  (the board's "Needs your call" chip); failing to `[]` just means no chip renders, it does not
+  approve, override, or bypass anything. Not a gate.
+
+**Verdict: CONFIRMED.** No fail-closed resolver was touched, and the new code's own error handling
+fails toward refusal/no-display, never toward a permissive default on a decision that matters.
+
