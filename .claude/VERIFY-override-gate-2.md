@@ -51,3 +51,34 @@ matching the intent. This closes the exact bug class the comment describes.
 
 **Verdict: CONFIRMED.**
 
+
+## BLAST-RADIUS CLAIM 2 — GREEN_LIGHT/isGreenLight behaviourally untouched by the override-gate work — CONFIRMED
+
+**Method:** `git log --oneline --all -- green-light.ts` shows the file was CREATED WHOLESALE in commit
+`d6f0296` ("the anti-self-override guard + the green-light matcher, as pure modules") — it does not
+exist on `origin/main` at all (`git grep GREEN_LIGHT origin/main` → no hits; the pre-fix logic lived
+nowhere as a shared module). So "untouched" cannot mean "identical diff to origin/main" — it means the
+produce-vs-quick consumers were never re-pointed at anything the override-gate work touched.
+
+**Consumer sweep** (`grep -rn "isGreenLight\|hasGreenLit" src/`): exactly one call site each —
+`deep-confirm.server.ts:217` (`isGreenLight`) and `huddle.functions.ts:1665` (`hasGreenLit`) — both
+reading the same `GREEN_LIGHT`/`isGreenLight`/`hasGreenLit` block (green-light.ts:19-85) that the
+override-gate additions (`isAuthorisation`, `isNegatedOrAsked` export, `OVERRIDE_AUTHORISATION`,
+`opensAsQuestion`, `DEFERRED`) never modify — confirmed by reading green-light.ts:87-148 top to bottom:
+every new export/const is additive below a `// ---- AUTHORISATION ----` divider, and `isAuthorisation`
+(the one new function `approach-override.ts` calls) is defined at line 141 using its OWN checks plus a
+call to `GREEN_LIGHT.some(...)` (read-only reference) — it does not redefine or wrap `isGreenLight`.
+
+**Differential run, empirical, not read-only** (`bun -e` importing the real module):
+```
+isGreenLight("produce")    = false   -- matches verdict-memory.ts's own documented finding
+isGreenLight("go for it")  = true    -- the baseline positive case still fires
+```
+This matches `deep-confirm.server.ts`'s and `verdict-memory.ts`'s own in-code claims about this exact
+behavior, confirming the produce-vs-quick gate's classifier is unaffected.
+
+**Verdict: CONFIRMED** — no drift, no second copy, and the "another lane owns the consumers" framing
+holds: `verdict-memory.ts` (a separate, later commit `03a5276`) is the thing that closes the
+`isGreenLight("produce")===false` gap, and it does so via a NEW remembered-verdict mechanism, not by
+touching `green-light.ts`.
+
