@@ -1527,6 +1527,8 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         getPendingDeepConfirm,
         setPendingDeepConfirm,
         clearPendingDeepConfirm,
+        recordDeepConfirmVerdict,
+        getRecentDeepVerdict,
         classifyConfirmReply,
         produceVsQuickAsk,
       } = await import("./tasks/deep-confirm.server");
@@ -1618,9 +1620,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             routed.winners = [pending.agentId as AgentId];
             routed.interjectors = [];
           }
-          await clearPendingDeepConfirm(email, data.huddleId);
+          // REMEMBER the answer instead of deleting it. This used to clear the row outright, so the
+          // next deep ask in this same 1:1 re-asked a question the user had just answered.
+          await recordDeepConfirmVerdict(email, data.huddleId, pending.agentId, pending.askText, "quick");
         } else if (verdict === "produce") {
-          await clearPendingDeepConfirm(email, data.huddleId);
+          await recordDeepConfirmVerdict(email, data.huddleId, pending.agentId, pending.askText, "produce");
           const agentId = (pending.agentId as AgentId) ?? routed.winners[0] ?? data.members[0];
           return runProduce(agentId, pending.askText, "deep-confirm: produce");
         } else if (verdict === "cancel") {
@@ -1659,28 +1663,56 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           data.text,
         ];
         if (hasGreenLit(recentUserLines)) {
+          // Remember it, so the NEXT deep ask a minute later is not asked either. `hasGreenLit` only
+          // looks back four user lines, so it decays out from under a conversation that is still
+          // plainly in the same flow.
+          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "produce");
           return runProduce(primary, data.text, "deep-confirm: already green-lit");
         }
-        await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
-        return finalize({
-          decision: {
-            ...routed.decision,
-            reason: `${routed.decision.reason} [deep-confirm: produce-vs-quick]`.slice(0, 220),
-          },
-          replies: [
-            {
-              agentId: primary,
-              // Per-agent phrasing, not one literal every agent recites — see produceVsQuickAsk.
-              text: produceVsQuickAsk(primary),
+        // ...OR THE USER ALREADY ANSWERED THIS QUESTION. Every verdict used to DELETE the pending
+        // row, so the gate had no memory past the single reply: answer "produce", and the next
+        // difficulty>=3 message in the same 1:1 asked again from scratch a minute later. Note that
+        // the green-light check above does NOT cover this — measured this session,
+        // isGreenLight("produce") is FALSE, so replying with the exact word the gate asked for
+        // suppressed nothing. A recent verdict now applies the shape the user already chose instead
+        // of re-asking. "cancel" is never remembered (it deletes the row), so parking one ask can
+        // never silence a later genuine one. Window + expiry: tasks/verdict-memory.ts.
+        const remembered = await getRecentDeepVerdict(email, data.huddleId);
+        if (remembered === "produce") {
+          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "produce");
+          return runProduce(primary, data.text, "deep-confirm: remembered produce");
+        }
+        if (remembered === "quick") {
+          // Same landing as the explicit "quick" reply: answer INLINE on the chat-friendly tier,
+          // never the deep o3 rung. data.text is already the real ask here (unlike the reply path,
+          // which has to restore it from the stored pending), so only the tier and the recorded
+          // difficulty change.
+          deepManual = "terra-med";
+          routed.difficulty = 2;
+          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "quick");
+        } else {
+          // Nothing remembered — ask, exactly as before.
+          await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
+          return finalize({
+            decision: {
+              ...routed.decision,
+              reason: `${routed.decision.reason} [deep-confirm: produce-vs-quick]`.slice(0, 220),
             },
-          ] as Reply[],
-          fallbacks,
-          prompts,
-          journeyTaskUpdates,
-          suggestedTasks,
-          toolUses,
-          reasoning: reasoningSummaries,
-        });
+            replies: [
+              {
+                agentId: primary,
+                // Per-agent phrasing, not one literal every agent recites — see produceVsQuickAsk.
+                text: produceVsQuickAsk(primary),
+              },
+            ] as Reply[],
+            fallbacks,
+            prompts,
+            journeyTaskUpdates,
+            suggestedTasks,
+            toolUses,
+            reasoning: reasoningSummaries,
+          });
+        }
       }
     } catch (err) {
       console.warn(

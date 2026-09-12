@@ -185,6 +185,11 @@ ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_overri
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_via TEXT;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_quote TEXT;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_turn_id TEXT;
+-- WHEN the gate escalated. The quote override requires the owner's authorising words to POSTDATE this:
+-- a sentence typed before the task ever escalated cannot be consenting to an override of it, and the
+-- row's own updated_at is not a substitute (any later write bumps it). NULL on a row that escalated
+-- before this column existed -- the reader falls back to updated_at there, which is stricter, not looser.
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_escalated_at TIMESTAMPTZ;
 -- Mid-work clarifying question (ask_clarifying_question tool): clarify_status='open' pauses that task's
 -- autowork research cadence until answered. clarify_count is the lifetime cap counter (bounded — an agent
 -- that's still stuck after the cap must flag_blocker or proceed on its own judgment, not keep asking).
@@ -725,12 +730,17 @@ export interface TaskEngagementState {
   approach_override_via: "button" | "quote" | null;
   approach_override_quote: string | null;
   approach_override_turn_id: string | null;
+  /** When the approach gate escalated. NULL on a row that escalated before the column existed. */
+  approach_escalated_at: string | null;
+  /** The row's own last-write time — the fallback floor when approach_escalated_at is NULL. */
+  updated_at: string | null;
 }
 
 const ENGAGEMENT_COLS =
   "task_id,user_email,confirm_status,proposed_dod,confirmed_dod,confirm_ask_at,confirmed_at,last_review_ping_at,next_review_ping_at,revision_count,entered_review_at," +
   "approach_status,proposed_approach,approach_revision_count,clarify_status,clarify_count,open_question,open_question_asked_at," +
-  "approach_override_by,approach_override_at,approach_override_via,approach_override_quote,approach_override_turn_id";
+  "approach_override_by,approach_override_at,approach_override_via,approach_override_quote,approach_override_turn_id," +
+  "approach_escalated_at,updated_at";
 
 /** Batch-read engagement state for a set of task ids (a missing entry means "never asked yet"). */
 export async function getTaskEngagementStates(taskIds: string[]): Promise<Map<string, TaskEngagementState>> {
@@ -1057,9 +1067,12 @@ export async function escalateApproach(taskId: string, userEmail: string): Promi
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_status, user_id)
-     VALUES ($1,$2,'escalated',$3)
-     ON CONFLICT (task_id) DO UPDATE SET approach_status='escalated',
+    // approach_escalated_at is stamped on EVERY escalation, including a re-escalation after a failed
+    // re-grade: the owner is being told about the task again, so an override has to be authorised by
+    // words typed after THAT, not by something they said before the first escalation.
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_status, approach_escalated_at, user_id)
+     VALUES ($1,$2,'escalated',now(),$3)
+     ON CONFLICT (task_id) DO UPDATE SET approach_status='escalated', approach_escalated_at=now(),
        user_id=COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at=now()`,
     [taskId, userEmail.toLowerCase(), userId],
   );
@@ -1132,6 +1145,31 @@ export async function getEscalatedApproachTaskIds(userEmail: string): Promise<Se
     userId ? [userId, emails] : [userEmail.toLowerCase()],
   );
   return new Set(rows.map((r) => r.task_id));
+}
+
+/**
+ * The caller's ESCALATED task ids that are assigned to one specific agent.
+ *
+ * Narrower sibling of `getEscalatedApproachTaskIds` above, and it exists for one reason: the quote
+ * override's weakest binding is "the owner typed this in that agent's DM". That is only unambiguous
+ * while the agent has exactly ONE escalated task — with two, a bare "go ahead" in the DM does not
+ * say which one, and honouring it would re-open the cross-task replay the verifier confirmed
+ * (.claude/VERIFY-override-gate-1.md CLAIM 4d). The caller treats >1, and any throw, as "ambiguous".
+ */
+export async function getEscalatedTaskIdsForAgent(userEmail: string, agentId: string): Promise<string[]> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
+  const { rows } = await getPool().query<{ task_id: string }>(
+    `SELECT es.task_id
+       FROM tasks.task_engagement_state es
+       JOIN tasks.journey_tasks t ON t.id = es.task_id
+      WHERE es.approach_status = 'escalated'
+        AND lower(t.user_email) = ANY($1)
+        AND lower(COALESCE(t.assigned_agent,'')) = lower($2)`,
+    [emails, agentId],
+  );
+  return rows.map((r) => r.task_id);
 }
 
 // ---- Mid-work clarifying question (bounded, rate-limited — see ask_clarifying_question tool) --------
@@ -1264,6 +1302,7 @@ export async function resetEngagementOnReassignment(taskId: string): Promise<voi
         SET confirm_status='awaiting', proposed_dod=NULL, confirmed_dod=NULL, confirm_ask_at=NULL,
             confirmed_at=NULL, revision_count=0,
             approach_status='pending', proposed_approach=NULL, approach_revision_count=0,
+            approach_escalated_at=NULL,
             clarify_status='none', clarify_count=0, open_question=NULL, open_question_asked_at=NULL,
             updated_at=now()
       WHERE task_id = $1`,

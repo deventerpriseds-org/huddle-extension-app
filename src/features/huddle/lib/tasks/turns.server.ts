@@ -429,19 +429,29 @@ export async function getUserTurnsSince(userEmail: string, sinceMs: number): Pro
  * Returns EVERY status and every huddle, projected down to just what the check needs. It does NOT
  * filter agent-initiated turns in SQL — `verifyOwnerQuote` applies `isUserTurn()` to the id, which is
  * the single source of truth for that rule and must not be re-implemented as a LIKE pattern here.
+ *
+ * `huddle_id` rides along (added 2026-09-12) because the override check binds an authorisation to the
+ * task it applies to, and one of the three bindings is "the owner typed this in the assignee's own
+ * DM". The dispatch sites do not pass the current huddle, so the matched TURN's channel is the
+ * evidence — server-written either way, never model-supplied.
  */
 export async function getRecentUserUtterances(
   userEmail: string,
   sinceMs: number,
   limit = 200,
-): Promise<{ id: string; text: string; updatedMs: number }[]> {
+): Promise<{ id: string; text: string; updatedMs: number; huddleId: string | null }[]> {
   await ensureBootstrapped();
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { userId, emails } = await resolveScopeByEmail(userEmail);
   const since = Math.max(0, sinceMs);
   const cap = Math.min(Math.max(1, limit), 500);
-  const cols = `id, payload->>'text' AS text, (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_ms`;
-  const res = await getPool().query<{ id: string; text: string | null; updated_ms: string | number }>(
+  const cols = `id, huddle_id, payload->>'text' AS text, (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_ms`;
+  const res = await getPool().query<{
+    id: string;
+    huddle_id: string | null;
+    text: string | null;
+    updated_ms: string | number;
+  }>(
     userId
       ? `SELECT ${cols} FROM chat.pending_turns
           WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2)))
@@ -457,7 +467,12 @@ export async function getRecentUserUtterances(
   );
   return res.rows
     .filter((r) => typeof r.text === "string" && r.text.length > 0)
-    .map((r) => ({ id: r.id, text: r.text as string, updatedMs: Number(r.updated_ms) }));
+    .map((r) => ({
+      id: r.id,
+      text: r.text as string,
+      updatedMs: Number(r.updated_ms),
+      huddleId: r.huddle_id ?? null,
+    }));
 }
 
 // ---- Delegation / orchestration (Pillar 2) -------------------------------------------------------

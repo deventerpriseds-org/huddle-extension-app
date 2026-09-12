@@ -206,16 +206,67 @@ export async function overrideEscalatedApproach(opts: {
       const { verifyOwnerQuote, QUOTE_MAX_AGE_MS, QUOTE_MIN_WORDS } = await import("./approach-override");
       const { getRecentUserUtterances } = await import("./turns.server");
       const now = Date.now();
-      const utterances = await getRecentUserUtterances(email, now - QUOTE_MAX_AGE_MS);
-      const verdict = verifyOwnerQuote(source.quote ?? "", utterances, now);
-      if (!verdict.ok) {
+
+      // WHEN this task escalated. The words that authorise an override have to come AFTER it — a
+      // sentence typed before the gate ever escalated cannot be consenting to an override of it, and
+      // that one rule kills most of the "any long fragment of anything they said" attack class.
+      // `approach_escalated_at` is stamped by escalateApproach; a row that escalated before that
+      // column existed falls back to its own updated_at, which is later (stricter), never earlier.
+      const escalatedAtMs = Date.parse(state?.approach_escalated_at ?? state?.updated_at ?? "");
+      if (!Number.isFinite(escalatedAtMs)) {
+        // FAIL CLOSED: with no floor there is nothing to order the authorisation against. The button
+        // still works — a click is the user act and needs no quote at all.
         return {
           ok: false,
           quoteRejected: true,
           error:
-            verdict.reason === "too-short"
-              ? `Quote too short to authorise an override — it needs to be at least ${QUOTE_MIN_WORDS} words of what the user actually said.`
-              : "I couldn't find those words in anything the user said recently, so I can't treat that as their authorisation. Ask them to say it here, or to use the Approve anyway button.",
+            "I can't tell when this task's approach gate escalated, so I can't verify the user's words " +
+            "authorise overriding it. They can approve it with the Approve anyway button.",
+          taskId,
+          title: task.title,
+        };
+      }
+
+      // The weakest of the three bindings — "they said it in this agent's DM" — is only unambiguous
+      // while that agent has exactly ONE escalated task. Any doubt, INCLUDING a failed read, disables
+      // it (the other two bindings, task id and task title, are unaffected).
+      let assigneeBindingUnambiguous = false;
+      const assignedAgent = task.assigned_agent ?? null;
+      if (assignedAgent) {
+        try {
+          const { getEscalatedTaskIdsForAgent } = await import("./tasks.server");
+          const escalatedForAgent = await getEscalatedTaskIdsForAgent(email, assignedAgent);
+          assigneeBindingUnambiguous =
+            escalatedForAgent.length === 1 && escalatedForAgent[0] === taskId;
+        } catch {
+          assigneeBindingUnambiguous = false;
+        }
+      }
+
+      const utterances = await getRecentUserUtterances(email, now - QUOTE_MAX_AGE_MS);
+      const verdict = verifyOwnerQuote(source.quote ?? "", utterances, now, {
+        taskId,
+        taskTitle: task.title ?? "",
+        assignedAgent,
+        escalatedAtMs,
+        assigneeBindingUnambiguous,
+      });
+      if (!verdict.ok) {
+        const REASONS: Record<string, string> = {
+          "too-short": `Quote too short to authorise an override — it needs to be at least ${QUOTE_MIN_WORDS} words of what the user actually said.`,
+          "not-found":
+            "I couldn't find those words in anything the user said recently, so I can't treat that as their authorisation. Ask them to say it here, or to use the Approve anyway button.",
+          "predates-escalation":
+            "The user did say that, but before this task's approach gate escalated — so it wasn't about this. Ask them now, or they can use the Approve anyway button.",
+          "not-consent":
+            "The user did say those words, but read in full the sentence isn't them telling you to proceed. Ask them plainly, or they can use the Approve anyway button.",
+          "not-this-task":
+            "I can't tell that the user was authorising THIS task — ask them to name it, or they can use the Approve anyway button on the task itself.",
+        };
+        return {
+          ok: false,
+          quoteRejected: true,
+          error: REASONS[verdict.reason] ?? REASONS["not-found"],
           taskId,
           title: task.title,
         };

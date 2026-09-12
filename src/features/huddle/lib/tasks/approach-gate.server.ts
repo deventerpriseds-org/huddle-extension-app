@@ -176,9 +176,15 @@ export async function runApproachGate(opts: {
         note: `re-grade couldn't run (${msg.slice(0, 100)}) — still escalated, so raise it with the user`,
       };
     }
-    // The grading call itself errored/timed out — fail open to autonomy (approve) rather than block
-    // the task on a gate outage, mirroring review-gate.server.ts's precedent.
-    await approveApproach(opts.taskId, opts.email, opts.approach).catch(() => {});
+    // The grading call itself errored/timed out — FAIL OPEN IN THE RETURN, NEVER IN THE STORED STATE.
+    // This used to `await approveApproach(...)` here, which permanently recorded an approval no grader
+    // ever produced: one transient OpenAI 429 (a recurring event in this repo — see CLAUDE.md's
+    // "fail fast on quota") marked a task approved forever, indistinguishable from a real pass, and
+    // `autowork.server.ts` would then auto-promote it to DOING on every later pass. The sibling review
+    // gate has the correct shape and always did (review-gate.server.ts:104-109): it returns
+    // `proceed:true` and writes nothing. So this turn proceeds — the task is not blocked on a gate
+    // outage — but the gate's own record still says "not approved", so the next pass grades it for
+    // real once the grader is back. A degraded moment must not become a permanent verdict.
     return { gated: true, approved: true, escalated: false, note: `approach gate error, proceeding: ${msg.slice(0, 120)}` };
   }
 }
