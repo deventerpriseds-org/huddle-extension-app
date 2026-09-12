@@ -3622,3 +3622,44 @@ Three verifiers ran concurrently against one working tree while a builder rewrot
 One hit three `stash`/`pull --rebase`/`stash pop` collisions and **diffed the stash against the live
 tree before dropping it each time**, confirming the newer edits were a strict superset. No loss — but
 concurrent lanes on one tree is a real cost, and `git add -A` bit three separate lanes today.
+
+
+## ACT:serverfn-body-identity — identity is a body-supplied email, app-wide and PRE-EXISTING (2026-09-12)
+
+**Found by the cold AC pass** (`.claude/AC-override-no-model-path.md`, AC-25/26, correctly marked
+`not_applicable` rather than `pass` because it inferred from the signature without tracing HTTP).
+Traced to ground truth here.
+
+**OBSERVED.** `overrideApproachFromButtonFn` is a `createServerFn` with **no middleware**:
+```
+resolveCallerEmail(data.caller) -> resolveTaskEmail(caller) -> caller?.entra_object_id / caller?.entra_email
+                                                               ^^ read from the REQUEST BODY
+```
+`resolveUserId`/`resolveUserScope` (`journey/identity.ts:66-117`) derive identity solely from that
+object. No token verification, no signature, no session cookie, anywhere in the chain. There is **no
+`staticwebapp.config.json`**, no `allowedRoles`, and no EasyAuth/`x-ms-client-principal` handling
+anywhere in the repo.
+
+**The proof it is reachable is this repo's OWN HARNESS**, not a probe: `agent-serverfn-uat.yml` and
+the documented `test-agent-serverfn` pattern POST to `/_serverFn/<id>` **from a GitHub runner** with
+`caller:{entra_email:"von.ellis@enterpriseds.io"}` and receive the live user's data. CLAUDE.md
+documents this as the FASTEST way to read chat messages. It has been used repeatedly this session.
+
+**THIS IS PRE-EXISTING AND APP-WIDE — the override change neither created nor worsened it.**
+`board.functions.ts` has the same shape with *less* checking (`confirm-ask.functions.ts:7-9` says so
+in its own header). Every confirm/board/task write already rests on it.
+
+**A CORRECTION I OWE.** I described the override's residual to the owner, twice, as resting on "an
+authenticated browser session." That is **wrong**. The true half of my claim was the narrower one —
+it is the SAME boundary every other write already uses. I mis-described what that boundary is.
+
+**Why it does NOT block this merge.** The owner's precondition is *"prevent self override by agent"*.
+A Huddle agent has no arbitrary-HTTP tool and the grant function is not named anywhere in
+`huddle.functions.ts` (verified loop 3), so no agent can reach it. The threat this opens is a
+different one — an external caller who knows the owner's email — and it is identical on `main` today.
+
+**Open, tracked, NOT fixed here.** A real fix is server-side verification of the caller (validate the
+Entra token / `x-ms-client-principal` rather than trusting the body) and is an app-wide change
+touching every server function. Scoping it into this branch would be exactly the "widen the PR"
+failure. It needs its own AC pass, because every UAT harness in this repo depends on the current
+behaviour and would break.
