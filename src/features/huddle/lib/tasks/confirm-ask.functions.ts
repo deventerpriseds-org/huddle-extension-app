@@ -163,12 +163,14 @@ export type OverrideRequestResult = {
  *    return the SAME error, so a guessed id cannot probe.
  *  - ESCALATED ONLY: it refuses on any other status. Approving a `pending` task would skip the grader
  *    entirely, which is not "unstick a dead end", it is "bypass the whole approach gate".
- *  - THERE IS NO MODEL PATH TO IT AT ALL. This function had a second caller until 2026-09-12: a
- *    `via:'quote'` arm in which a model relayed the owner's words and `verifyOwnerQuote` decided
- *    whether they MEANT consent. Three independent adversarial passes refuted that classifier with
- *    three non-overlapping sets of ordinary English it misread as consent, so the arm is deleted
- *    rather than tightened. An agent may now only REQUEST (requestApproachOverride below); the owner's
- *    tap is the grant. See .claude/BUILD-override-request-then-tap.md.
+ *  - NO CALLER SUPPLIES ITS EVIDENCE. This function had a `via:'quote'` caller until 2026-09-12, in
+ *    which a model passed the owner's words as TEXT and `verifyOwnerQuote` decided whether they MEANT
+ *    consent. Three independent adversarial passes refuted that classifier with three non-overlapping
+ *    sets of ordinary English it misread as consent, so it is deleted rather than tightened. It has
+ *    two callers today and neither hands it a caller-chosen string: the owner's TAP
+ *    (`overrideApproachFromButtonFn`), and the RELAY (`overrideApproachFromTurnPair` below), which is
+ *    given TURN IDS, reads the turns out of the store itself, and is gated on this gate's own grader.
+ *    See .claude/BUILD-override-request-then-tap.md and .claude/BUILD-override-turn-pair.md.
  *  - IDEMPOTENT FROM PERSISTED STATE, not from the turn ledger: `turnActionLedger` is per-turn and
  *    in-memory, so it cannot dedupe two clicks seconds apart in different turns. The status read (and
  *    the `WHERE approach_status='escalated'` on the write) is what does.
@@ -241,8 +243,9 @@ export async function overrideEscalatedApproach(opts: {
 }
 
 /**
- * AN AGENT ASKS THE OWNER TO OVERRIDE. This is the ONLY override-related function a model can reach,
- * and it CANNOT APPLY AN OVERRIDE — not "will not", cannot: it never calls `overrideApproachGate`, and
+ * AN AGENT ASKS THE OWNER TO OVERRIDE — step 1 of the owner's four steps, and the call to make when he
+ * has NOT said anything yet. (The relay below is step 4, for when he has.) This one CANNOT APPLY AN
+ * OVERRIDE — not "will not", cannot: it never calls `overrideApproachGate`, and
  * the statement it does call (`recordApproachOverrideRequest`) has no `approach_status` in its SET
  * clause, so the row stays `escalated` no matter what any caller passes.
  *

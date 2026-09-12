@@ -34,11 +34,17 @@
 // enumerates the ways a person can decline, attribute or postpone, which is open-ended by construction.
 // Adding words to the lists is the failure mode, not the fix.
 //
-// What replaced it is structural, not smarter: a model may only REQUEST an override
-// (`request_approach_override` -> `requestApproachOverride`), and the ONLY thing that grants one is the
-// owner tapping "Approve anyway" — `overrideApproachFromButtonFn`, a server fn reachable only from an
-// authenticated browser session. No string is an input to the decision, so no string can defeat it.
-// See .claude/BUILD-override-request-then-tap.md.
+// What replaced it is structural, not smarter, and it comes in TWO parts (both 2026-09-12):
+//   1. A model may only REQUEST an override (`request_approach_override` -> `requestApproachOverride`).
+//      That call cannot grant one; the owner tapping "Approve anyway" can.
+//   2. A model may also RELAY an authorisation the owner has already given — `override_approach_gate`
+//      -> `overrideApproachFromTurnPair` — by passing TURN IDS. The server fetches the owner's turn and
+//      the escalation turn it answered out of `chat.pending_turns` itself, requires the latter to BE
+//      this task's notice, and hands the pair to this gate's own grader.
+// Deleting the model path outright (part 1 alone) was an OVER-correction: "I never asked to prevent
+// self override!" What must never come back is a WORD LIST over model-supplied text. In neither part
+// is any caller-chosen string an input to the decision.
+// See .claude/BUILD-override-request-then-tap.md and .claude/BUILD-override-turn-pair.md.
 // ---------------------------------------------------------------------------------------------------
 
 // ---- re-grading bound ----------------------------------------------------------------------------

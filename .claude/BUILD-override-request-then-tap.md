@@ -24,7 +24,12 @@ SUPERSEDES: .claude/BUILD-override-quote-hardening.md (the hardened classifier).
             construction. Its NON-classifier work -- the escalation timestamp, the guarded
             `WHERE approach_status='escalated'` write, the audit columns, the approach-gate fresh-path
             fail-open fix, the re-grade bound -- is CORRECT, verifier-CONFIRMED, and is KEPT UNTOUCHED.
-SUPERSEDED-BY: nothing -- current
+SUPERSEDED-BY: .claude/BUILD-override-turn-pair.md -- which RESTORES the relay this file removed.
+            What is still current here: the request path (step 1) and the owner's tap, both
+            unchanged. What is superseded: this file's conclusion that deleting the model path
+            outright was the fix. The owner called that an over-correction -- "I never asked to
+            prevent self override!" -- and the replacement is a verified TURN PAIR, not a
+            classifier over model-supplied text.
 EVIDENCE:   this file; scripts/approach-override.test.ts (executed attack + tap tests, bun mock.module
             against the REAL server functions with a fake DB); mutation outcomes recorded verbatim below.
 BRANCH:     claude/iris-huddle-interaction-baj51c

@@ -940,8 +940,8 @@ check(
   true,
 );
 check(
-  "...and that only the user's tap can",
-  /Only their tap can approve it/.test(toolBlock),
+  "...and that only the USER can — this tool never does, whichever route the user then uses",
+  /Only the user can approve it; nothing you say or pass here can\./.test(toolBlock),
   true,
 );
 check(

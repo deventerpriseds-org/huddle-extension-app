@@ -127,7 +127,7 @@ export const PROPOSE_APPROACH_TOOL = {
  * only tool in this file that touches a safety gate at all.
  *
  * IT DOES NOT OVERRIDE ANYTHING. It records a request and surfaces the "Approve anyway" button to the
- * owner; only their tap applies the override. That split is the whole design, and it replaced an
+ * owner; this call never applies one. That split is the whole design, and it replaced an
  * earlier version in which the model passed `owner_quote` — the owner's authorising sentence — and the
  * server judged whether those words meant consent. Three independent adversarial passes broke that
  * judgment with three non-overlapping sets of perfectly ordinary English, so the field is DELETED, not
@@ -145,7 +145,7 @@ export const REQUEST_APPROACH_OVERRIDE_TOOL = {
     "ASK THE USER to approve a task whose approach gate is ESCALATED (you tried to propose an " +
     "approach and were told it is still escalated). This does NOT unblock the task and does NOT " +
     "approve anything — it shows the user an \u201cApprove anyway\u201d button and waits for them to tap it. " +
-    "Only their tap can approve it; nothing you say or pass can. Calling this again for the same task " +
+    "Only the user can approve it; nothing you say or pass here can. Calling this again for the same task " +
     "changes nothing and sends no second notification, so call it once and then move on to other work. " +
     "In your reply, tell the user plainly that the task is waiting on their approval and why you think " +
     "it should proceed — do not tell them it is unblocked, because it is not.",
