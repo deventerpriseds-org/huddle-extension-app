@@ -114,3 +114,103 @@ propagates as a thrown `Error` from inside the `try` block (nothing between the 
 
 **Verdict: CONFIRMED.**
 
+## CLAIM 4 — the anti-self-override guard actually prevents self-override — REFUTED (partial: provenance holds, authorization semantics do not)
+
+### 4a. Can an agent-authored turn ever satisfy `isUserTurn()`? — CONFIRMED (this narrow sub-claim holds)
+
+Read `turn-identity.ts` in full: `isUserTurn(id) = /^u-(\d+)$/.test(id) || id.startsWith("xapp-")`.
+
+Swept **every** call site of `enqueueTurn` in the repo (14 sites, `grep -rn "enqueueTurn("`).
+Every agent/system-initiated turn uses a descriptive, non-matching id prefix:
+`groom-summary-`, `review-recheck-`, `autowork-confirm-`, `autowork-`, `autowork-blocked-`,
+`followup-`, `unblock-`, `standup-`, `review-digest-`, `taskremind-closeout-`. The only two writers
+of a `u-`/`xapp-`-shaped id are (1) the real client submit path (`enqueueHuddleTurn` → `u-<Date.now()>`,
+never called from agent code) and (2) `/api/public/run-agent-turn.ts`, the authenticated cross-app
+route, whose subject is resolved server-side from `CROSS_APP_TURN_SUBJECT`, not request input. No
+agent-callable tool in the repo writes a `chat.pending_turns` row through either of those two paths.
+**This specific sub-claim (an agent cannot forge a `u-`/`xapp-` row) is CONFIRMED.**
+
+### 4b. Does the match logic verify AUTHORIZATION, or only PROVENANCE? — REFUTED, with reproduced attacks
+
+Read `verifyOwnerQuote` (`approach-override.ts:103-119`) and its caller
+(`confirm-ask.functions.ts:200-217`, `overrideEscalatedApproach`). The check is:
+`isUserTurn(id)` (provenance) + recency (24h) + `normalizeQuote(turn.text).includes(normalizeQuote(quote))`
+(a CONTIGUOUS SUBSTRING test — the model supplies **any span** of ≥24 chars/4 words it chooses; the
+server does not require the quote to be the WHOLE utterance, a whole sentence, or bounded by sentence
+punctuation).
+
+The file's own comment claims protection against negation: *"a similarity score drops exactly the
+words ('not', 'don't') that decide whether the sentence authorises anything"* — implying exact-substring
+matching (vs. fuzzy) is what preserves negation-sensitivity. **This is false, and I reproduced it.**
+Exact substring matching does nothing to stop the model from choosing a **fragment that excludes**
+the negating word, because the model chooses which characters to submit as `owner_quote` — it is not
+required to submit the negation-bearing clause.
+
+Ran the exported `verifyOwnerQuote` directly (`bun /tmp/attack1.mjs`, importing the real module):
+
+```
+Attack A (real, but semantically-UNRELATED substring of "I really don't like it when the app moves
+  tasks around without asking me first, that drives me crazy honestly." — a COMPLAINT about
+  autonomous action, not authorization of anything):
+  quote submitted: "it when the app moves tasks around without asking me first" (58 chars, 11 words)
+  -> {"ok":true,"turnId":"u-...","matchedMs":...}
+
+Attack B (user pasting/questioning the AGENT's own proposal: "what is this: Do the risky migration
+  and skip the backup step entirely" -- not an instruction to the agent at all):
+  quote submitted: "Do the risky migration and skip the backup step entirely"
+  -> {"ok":true,"turnId":"u-...","matchedMs":...}
+
+Attack C (an EXPLICIT REFUSAL: "Do NOT proceed with that approach, override it later once we know
+  more, not now" -- the user is telling the agent NOT to act now):
+  quote submitted (a substring starting AFTER "NOT"): "proceed with that approach, override it
+  later once we know more"
+  -> {"ok":true,"turnId":"u-...","matchedMs":...}
+```
+
+All three return `{ok:true}` — the guard would authorize the override tool call in every case. Attack
+C is the most serious: the user's genuine, contemporaneous message is an explicit **refusal**, and the
+guard still returns `ok:true` because the model is free to quote only the clause after "NOT". There is
+no negation scan, no requirement that the match span the sentence boundary, and no semantic check that
+the matched text constitutes affirmative consent — `isNegatedOrAsked` (the negation guard that DOES
+exist in this same change, in `green-light.ts`) is never applied here.
+
+**This directly contradicts the implementer's framing** ("the tool takes the owner's own words as a
+REQUIRED argument, and the server VERIFIES that the quote actually occurs in a recent, genuine USER
+turn... The model's claim is never trusted; the DB is"). The DB **is** consulted, but what it proves
+is only that the CHARACTERS were typed by the user somewhere recently — it proves nothing about
+whether those characters, IN CONTEXT, authorized anything. Since the adversary in this file's own
+stated threat model is "an AGENT IN THIS APP holding the owner's tools, trying to unblock ITSELF"
+(approach-override.ts header), and that agent has full read access to the user's real turn history
+(it is the same conversation), the agent can search that history for ANY qualifying-length substring
+and submit it — the guard cannot distinguish a genuine go-ahead from a cherry-picked, out-of-context,
+or explicitly-negated fragment of real text.
+
+### 4c. Is the 24h window enforced server-side? — CONFIRMED
+
+`verifyOwnerQuote` computes `floor = nowMs - QUOTE_MAX_AGE_MS` and filters `u.updatedMs > floor` inline
+in the function body (`approach-override.ts:114`), not merely documented in a comment. Confirmed by
+reading the executable line, and it is unit-tested (Attack scripts above used real elapsed offsets).
+
+### 4d. Can one authorising quote be replayed to override a DIFFERENT task? — CONFIRMED exploitable (implementer's own disclosed residual, verified real)
+
+Read the full call chain: `overrideEscalatedApproach({taskId, email, source})` in
+`confirm-ask.functions.ts:167-227`. `verifyOwnerQuote` is called with **no `taskId` argument at all** —
+it only receives `source.quote`, the list of recent utterances, and `now`. The `taskId` the override
+actually applies to comes from a **completely separate** model-tool argument
+(`OVERRIDE_APPROACH_GATE_TOOL.parameters.task_id`) that is never cross-checked against the content of
+the quote. So: a single genuine authorization the user gave about Task A ("I said proceed on the
+pricing brief, override it") can be submitted by the model with a **different** `task_id` for Task B,
+Task C, etc., and `verifyOwnerQuote` will happily return `ok:true` again on each call within the 24h
+window, because it re-derives the SAME verdict from the SAME transcript text regardless of which task
+the caller claims it is about. **Confirmed exploitable, not merely theoretical** — the implementer
+disclosed this themselves (IMPL §1.3/§4.7, "recorded, not closed") and it is real: nothing in
+`overrideApproachGate`'s SQL (`WHERE task_id=$1 AND approach_status='escalated'`) or in the quote
+verifier binds the quote to a specific task.
+
+**Verdict: REFUTED** on the claim's core assertion ("actually prevents self-override"). The mechanism
+correctly proves PROVENANCE (4a, 4c — the phrase really was typed by the user, recently) but does
+**not** verify AUTHORIZATION (4b — negated, unrelated, or out-of-context real text passes) and does
+**not** bind an authorization to the task it is applied to (4d). An agent holding conversation history
+can self-authorize an override of any escalated task using any sufficiently long fragment of anything
+the user genuinely said in the last 24 hours, including an explicit refusal.
+
