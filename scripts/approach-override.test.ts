@@ -45,6 +45,10 @@ let calls: CallLog = [];
 let taskStatus = "UP_NEXT";
 let approachStatus: string = "escalated";
 let requestPending = false;
+// When this task's gate escalated. Settable so the RECENCY WINDOW and the ESCALATION FLOOR can be
+// mutation-proved independently of each other -- with a fixed floor, a stale pair is refused by the
+// floor no matter what the window does, and a mutation to the window would report a false INERT.
+let escalatedAt = "2026-09-12T10:00:00Z";
 
 const TASKS_SERVER = "/home/user/huddle-extension-app/src/features/huddle/lib/tasks/tasks.server";
 
@@ -58,7 +62,7 @@ mock.module(TASKS_SERVER, () => ({
   },
   getTaskEngagementState: async (taskId: string) => {
     calls.push({ fn: "getTaskEngagementState", args: { taskId } });
-    return { approach_status: approachStatus, approach_escalated_at: "2026-09-12T10:00:00Z", updated_at: "2026-09-12T10:00:00Z" };
+    return { approach_status: approachStatus, approach_escalated_at: escalatedAt, updated_at: escalatedAt };
   },
   recordApproachOverrideRequest: async (o: unknown) => {
     calls.push({ fn: "recordApproachOverrideRequest", args: o });
@@ -174,6 +178,7 @@ function reset(opts: { approach?: string; status?: string; pending?: boolean } =
   approachStatus = opts.approach ?? "escalated";
   taskStatus = opts.status ?? "UP_NEXT";
   requestPending = opts.pending ?? false;
+  escalatedAt = "2026-09-12T10:00:00Z";
   resetTurns();
 }
 const called = (fn: string) => calls.some((c) => c.fn === fn);
@@ -556,7 +561,15 @@ check("...grader never consulted", called("gradeOverrideAuthorisation"), false);
 
 reset();
 yes();
+// The whole exchange is old, and so is the escalation it answered — so the ONLY thing that can refuse
+// this is the window itself. (An escalation floor left at 'today' would refuse it regardless, and a
+// mutation to the window would then look inert when it is not.)
+escalatedAt = new Date(NOW - OVERRIDE_TURN_PAIR_WINDOW_MS - 300_000).toISOString();
 resetTurns({ ownerMs: NOW - OVERRIDE_TURN_PAIR_WINDOW_MS - 60_000 });
+turnsById = {
+  [AGENT_TURN]: escalationTurn(AGENT_TURN, TASK_ID, NOW - OVERRIDE_TURN_PAIR_WINDOW_MS - 120_000),
+};
+recentTurns = [turnsById[AGENT_TURN]];
 const stale = await relay({ nowMs: NOW });
 check("a pair OUTSIDE the 24h window → refused", [stale.ok, stale.applied], [false, false]);
 check("...grader never consulted", called("gradeOverrideAuthorisation"), false);
