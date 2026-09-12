@@ -3663,3 +3663,49 @@ Entra token / `x-ms-client-principal` rather than trusting the body) and is an a
 touching every server function. Scoping it into this branch would be exactly the "widen the PR"
 failure. It needs its own AC pass, because every UAT harness in this repo depends on the current
 behaviour and would break.
+
+
+## ACT:huddle-deploy-2026-09-12 — 59 commits live; NOT user-confirmed
+
+**Deployed.** `main` fast-forwarded `d20bb5e -> 6f6b79c` (59 commits, no merge commit).
+`deploy-swa.yml` run **34710107108**, `conclusion: success`, matched on `head_sha` — NOT on
+"the latest run", which is the documented way to confirm a deploy that never happened.
+
+**Verified at the exact merged HEAD `6f6b79c`, re-run because `93f1036` touched SOURCE after the
+first pass:** 13/13 suites, `tsc --noEmit` exit 0, `npm run build` exit 0.
+
+**What went live**
+- **assign-on-create** — a task handed directly to an agent no longer lands unassigned and inert. Two
+  call sites, including `runProduce`, whose "I've kicked it to the team" was an overclaim every time.
+- **green-light + verdict-memory** — `isGreenLight("produce")` measured FALSE before this; replying
+  with the exact word the gate asked for suppressed nothing. The ask is also 4 per-agent variants now,
+  not one hardcoded literal.
+- **approach-gate fail-open** — a grader timeout no longer permanently stores an approval no grader
+  produced. Returns proceed, writes nothing, matching `review-gate.server.ts`.
+- **Override as a VERIFIED TURN PAIR** — the tool sends NO text; the server fetches the owner's turn
+  and the agent turn itself, requires the agent turn to BE this task's escalation notice
+  (`ovrreq-<taskId>`), and hands the pair to the existing grader. Button path unchanged.
+
+**Verification history — four loops, the design changed twice**
+loop 1 REFUTED (3 attacks) -> hardened -> loop 2 REFUTED again (3 adversaries, 3 NON-OVERLAPPING sets
+of holes in two word lists) -> rewritten as request-then-tap -> loop 3 CONFIRMED -> **the owner
+rejected it as an over-correction**: *"I never asked to prevent self override!"* -> rebuilt as the
+turn pair he had described from the start -> loop 4 CONFIRMED, safe to merge.
+
+**My misread, named:** he wrote *"to prevent self override by agent"* and I took it as the GOAL rather
+than a guardrail on the goal, then spent two rounds hardening against an adversary he never asked me
+to defend against. The correct reading was available at loop 1: stop asking a regex what his sentence
+meant and give the verifier the conversation.
+
+**OPEN, surfaced not hidden**
+1. **Multi-task ambiguity — the grader is the SOLE defence.** With 2+ tasks escalated at once, every
+   structural guard is satisfiable by an agent legitimately calling the tool about its own task, so
+   only the live LLM grader stops a go-ahead meant for a different task being misapplied. **No test
+   covers it** — the grader is mocked throughout. Not a regression; not closed.
+2. **Server-fn identity is a body-supplied email** (`ACT:serverfn-body-identity`) — app-wide,
+   pre-existing, unchanged by this deploy.
+3. Stale comment `turns.server.ts:459` still describes the deleted `verifyOwnerQuote` in the present
+   tense — missed by the cleanup sweep.
+
+**STATUS: implemented, mechanism verified, deployed — NOT yet confirmed live by the owner.** Nothing
+here may be written as "fixed" until he reports back from his own environment.
