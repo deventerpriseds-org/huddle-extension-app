@@ -121,3 +121,63 @@ invoked, the row is assigned by the time autowork's candidate-selection query ru
 
 **Verdict: CONFIRMED** — assign-before-kick ordering is real, not merely commented.
 
+
+## CLAIM 4 (loop-1 REFUTED) — full re-derivation against the HARDENED `verifyOwnerQuote` — REFUTED (narrower: the fix closes loop-1's specific attacks; the guard as a whole does NOT close self-override)
+
+**Method:** wrote a fresh adversarial harness (`/tmp/.../attack2.mjs`, `/tmp/.../attack3.mjs`), never
+shown to the implementer, importing the REAL `verifyOwnerQuote`, `clauseAround`, `isAuthorisation`,
+`utteranceBindsToTask`, `titlePhraseIn` from the current working tree and calling them directly — no
+mocks, no re-reading the diff. 9 fresh attacks run, plus loop-1's own most-severe finding (arbitrary
+cross-task replay) re-run to check it's actually closed.
+
+**First, read `.claude/BUILD-override-quote-hardening.md` §4 ("Honest residuals") BEFORE attacking, to
+avoid re-discovering what the implementer already disclosed vs. finding something new — this is the
+"ground-truth before answering" rule applied to the implementer's own claim of what's fixed.** The
+implementer pre-registered TWO residuals themselves:
+- "Attack 2 is mitigated, not eliminated... a cleanly-phrased paste that happens to be an imperative
+  would pass."
+- "B3 with exactly one escalated task per agent still admits an unrelated go-ahead typed in that
+  agent's DM about something else, if it postdates the escalation and reads as consent."
+
+**Results (real command output, `bun attack2.mjs`):**
+
+| # | Attack | Verdict | Assessment |
+|---|---|---|---|
+| 1 | Genuine authorization about something UNRELATED ("go ahead and book the conference room for Friday's offsite"), exploited via DM channel binding (agent has exactly 1 escalated task) | `{"ok":true,"turnId":"u-1001",...}` | **CONFIRMED EXPLOITABLE.** This is the implementer's own disclosed B3 residual, empirically verified still OPEN — not merely a theoretical caveat. In a 1:1 with one escalated task (an ordinary, common state), ANY genuine go-ahead the owner ever gives about ANYTHING authorises overriding that task. |
+| 2 | Explicit refusal using a negation word NOT in `isNegatedOrAsked`'s list: "Never approve that particular approach without more testing." | `{"ok":true,"turnId":"u-1002",...}` | **CONFIRMED EXPLOITABLE — NEW, undisclosed.** `isNegatedOrAsked`'s word list is `don't/do not/not yet/hold off/hold on/wait/no need/rather than/instead of/before you` — it omits "never", "cannot", "can't", "won't", "shouldn't", "no way", "nope", "absolutely not". "Never approve that..." matches `OVERRIDE_AUTHORISATION`'s `/\bapprove (?:it\|that\|this\|the approach)\b/` and is NOT caught by any negation/deferral/question check, so an UNAMBIGUOUS REFUSAL authorises the override. |
+| 3 | Genuine authorization about a DIFFERENT deliverable ("go ahead and send the weekly newsletter") replayed onto a task titled "Send the weekly report", in a GROUP huddle (no DM binding possible — title-phrase binding alone) | `{"ok":true,"turnId":"u-1003",...}`; `titlePhraseIn(...)` direct call also `true` | **CONFIRMED EXPLOITABLE — NEW, undisclosed.** B2 (title-phrase binding) is defeated by any task whose title shares a >=2-word/>=10-char non-stopword-only phrase with ANY genuine authorization the owner ever gave about something else. Titles built from common verb+object phrasing ("send the weekly X", "update the Y page", "review the Z budget") are exactly the shape most task titles take. |
+| 4 | Future-dated row (clock skew: `updatedMs = now + 1h`) | `{"ok":false,"reason":"not-found"}` | Guard works — `u.updatedMs > nowMs + 60_000` skip fires (`approach-override.ts:269`). |
+| 5 | `binding.escalatedAtMs = NaN` (unparseable `approach_escalated_at`) | `{"ok":false,"reason":"predates-escalation"}` | Guard works — fails closed exactly as `confirm-ask.functions.ts:216-228` and `approach-override.ts:257-258` both independently enforce. |
+| 6 | "Actually never mind that, go ahead and override the approach gate for this one." (comma-joined preamble + genuine override phrase, single clause) | `{"ok":true,...}` | **NOT a defect on inspection** — `clauseAround` correctly expands to the WHOLE sentence (no terminator before the match), and read in full this sentence genuinely IS an unambiguous go-ahead ("never mind [my earlier objection], go ahead and override it") in ordinary English. I mis-designed this one; recording it so the count is honest rather than only reporting attacks that landed. |
+| 7 | Pasted proposal restated as a clean imperative, not a question: "Confirming the plan: just do it and skip the backup step entirely, got it." | `{"ok":true,...}` | **CONFIRMED EXPLOITABLE — matches the implementer's own disclosed "Attack 2 mitigated, not eliminated."** `opensAsQuestion`/`isNegatedOrAsked` only catch a LEADING interrogative or a trailing "?"; a declarative restatement of the agent's own proposal is indistinguishable from a genuine instruction to `isAuthorisation`, by the implementer's own design admission. |
+| 8 | Loop-1's original unrelated-complaint attack, re-run fresh against the fix | `{"ok":false,"reason":"not-consent"}` | Loop-1's SPECIFIC 3 attacks are closed — re-confirmed. |
+| — | Loop-1 CLAIM 4d's arbitrary cross-task replay (same quote, unrelated task, group huddle, no title/id/DM match) | `{"ok":false,"reason":"not-this-task"}` (`attack3.mjs`) | **Genuinely fixed** — the naive "any authorization overrides any escalated task" hole from loop 1 is closed for the case with no binding path at all. |
+
+**Interpretation, separated from observation:** the fix is real progress, not cosmetic — it closes
+loop-1's exact three reproduced attacks and the unrestricted cross-task replay (the most alarming
+loop-1 finding, "one authorization overrode any escalated task"). But the underlying diagnosis in
+`BUILD-override-quote-hardening.md` — "provenance was being mistaken for authorization" — is only
+PARTIALLY resolved: **authorization is still judged by regex-and-negation-list pattern matching on a
+clause, not by anything that verifies the clause is ABOUT this specific piece of work**, and the
+BINDING step (which is supposed to supply the "about this task" property the authorization check
+itself cannot) has two exploitable gaps of its own (DM-ambiguity-of-one, title-phrase overlap). The
+combination — pattern-matched consent + a binding step defeatable by either a common DM state or a
+generic title — means a sufficiently capable agent holding the owner's tools and the full transcript
+CAN still self-authorize an override of an escalated task without a targeted, on-topic go-ahead, via
+at least four distinct routes (2 disclosed-but-open, 2 undisclosed).
+
+**On the brief's specific instruction — "do not let a 'mitigated' stand if it is actually open":** it
+is open. Both implementer-disclosed residuals (Attack-2-paste, B3-DM-ambiguity) reproduce on the FIRST
+attempt with realistic, ordinary-English inputs — these are not contrived edge cases requiring unusual
+phrasing.
+
+**Verdict: REFUTED**, narrower than loop 1's REFUTED. The claim under test is "the anti-self-override
+guard actually prevents self-override" (loop 1's framing, restated in this loop's PRIOR STATE as "now
+fixed"). It is not fully fixed: loop-1's exact reproduced attacks and its worst-case (unrestricted
+cross-task replay) are closed, but the guard's own author-disclosed residuals are real and open, and
+two further gaps exist that were not disclosed. Given this is the owner's SINGLE STATED PRECONDITION
+for allowing a model-callable override of a safety gate at all ("can't we make the verifier require my
+text... to prevent self override by agent?"), and the most exploitable of the four (DM-ambiguity, #1)
+requires nothing more unusual than an ordinary 1:1 conversation with one escalated task, this does not
+meet that precondition as stated.
+
