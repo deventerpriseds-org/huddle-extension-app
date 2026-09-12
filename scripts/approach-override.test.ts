@@ -530,6 +530,18 @@ const yes = () => {
 };
 
 reset();
+// ANOTHER task's away notice. `ovrreq-<taskId>` carries the task id IN the turn id, so this must be
+// compared whole — a `startsWith("ovrreq-")` would let any stuck task's notice anchor any other one,
+// which is the same aiming defect as the old title-phrase binding, wearing a different shape.
+turnsById = { [`ovrreq-${OTHER_TASK_ID}`]: { id: `ovrreq-${OTHER_TASK_ID}`, updated_ms: AGENT_TURN_MS, replies: [] } };
+recentTurns = [];
+yes();
+const foreignNotice = await relay({ agentTurnId: `ovrreq-${OTHER_TASK_ID}` });
+check("another task's away notice cannot anchor this one", [foreignNotice.ok, foreignNotice.applied], [false, false]);
+check("...grader never consulted", called("gradeOverrideAuthorisation"), false);
+check("...nothing written", called("overrideApproachGate"), false);
+
+reset();
 yes();
 turnsById = {};
 recentTurns = [];
