@@ -23,6 +23,7 @@ import {
   Pause,
   CircleStop,
   ListChecks,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -47,6 +48,7 @@ import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useAuth } from "@/hooks/useAuth";
 import {
   confirmTaskFromButtonFn,
+  overrideApproachFromButtonFn,
   backlogTaskFromButtonFn,
   parkTaskFromButtonFn,
 } from "../lib/tasks/confirm-ask.functions";
@@ -704,6 +706,86 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
   );
 }
 
+/**
+ * The "Approve anyway" row — the owner's way out of an escalated approach gate, in the thread where
+ * they were told about it.
+ *
+ * This row is the whole answer to the owner's actual complaint ("I cannot unstick a task"). The server
+ * fn behind it existed nowhere the owner could reach before: escalation reached ZERO components, so a
+ * task could be permanently stuck with the only signal being an agent saying so in prose. Modelled on
+ * ConfirmAskRow above, deliberately — same button styling, same resolved badge, same model-free path.
+ *
+ * NO QUOTE IS ASKED FOR HERE. A click is already a user act: it carries an authenticated session no
+ * model can forge. The transcript-quote check exists for the TOOL, where the caller is a model.
+ */
+function OverrideAskRow({ m }: { m: HuddleMessage }) {
+  const { user } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const ask = m.overrideAsk;
+  if (!ask) return null;
+  if (ask.resolved) {
+    return (
+      <div className={cn(CONFIRM_ASK_BTN, "mt-2 text-muted-foreground")}>
+        <Check size={12} /> Approved — they'll pick it back up
+      </div>
+    );
+  }
+  const caller = user
+    ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+    : undefined;
+  async function approveAnyway() {
+    setBusy(true);
+    try {
+      const res = await overrideApproachFromButtonFn({ data: { caller, taskId: ask!.taskId } });
+      if (res.ok) {
+        useHuddleStore.getState().resolveOverrideAsk(m.id);
+        if (!res.alreadyDone) toast.success("Approved — the team can run with it");
+      } else {
+        // Never a silent failure: telling the owner "unstuck" about a task that is still stuck is the
+        // one outcome worse than the error itself.
+        toast.error(res.error ?? "Couldn't approve that.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2">
+      <div className="flex items-start gap-1.5 text-xs text-foreground">
+        <AlertTriangle size={12} className="mt-0.5 shrink-0 text-destructive" />
+        <span className="min-w-0">
+          <span className="font-semibold">Stuck on your call.</span>{" "}
+          {ask.taskTitle ? <span className="italic">“{ask.taskTitle}”</span> : "This task"} didn't get
+          past the approach review, so nobody is working it until you say so.
+        </span>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={approveAnyway}
+          className={cn(CONFIRM_ASK_BTN, "font-semibold")}
+        >
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} style={{ color: "var(--ai)" }} />}
+          Approve anyway
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            useHuddleStore
+              .getState()
+              .setDraftPrefill(`Here's what you were missing on "${ask.taskTitle}": `)
+          }
+          className={CONFIRM_ASK_BTN}
+        >
+          Give them what's missing
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
   if (m.author.kind === "user") {
     return (
@@ -828,6 +910,7 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
         )}
         {m.checklist && <ChecklistCard m={m} />}
         {m.confirmAsk && <ConfirmAskRow m={m} />}
+        {m.overrideAsk && <OverrideAskRow m={m} />}
       </div>
     </div>
   );
@@ -1013,6 +1096,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
           text: string;
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+          overrideAsk?: { taskId: string; taskTitle: string; note?: string };
           checklist?: ChecklistPayload;
         }[]
       | undefined,
@@ -1077,6 +1161,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
         artifacts: reply.artifacts,
         toolUses: crumbs,
         confirmAsk: reply.confirmAsk,
+        overrideAsk: reply.overrideAsk,
         checklist: reply.checklist,
       });
     });

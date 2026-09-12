@@ -146,6 +146,7 @@ export function HuddleApp() {
           text: string;
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+          overrideAsk?: { taskId: string; taskTitle: string; note?: string };
           // MUST be declared here too. This DTO is re-declared inline at BOTH mapping sites, and an
           // undeclared field is dropped silently -- no error, no crash -- so a checklist would decay
           // into plain text after a reload with nothing to attribute it to.
@@ -188,6 +189,7 @@ export function HuddleApp() {
             replyTo: t.id,
             artifacts: reply.artifacts,
             confirmAsk: reply.confirmAsk,
+            overrideAsk: reply.overrideAsk,
             checklist: reply.checklist,
             toolUses: t.toolUses ? breadcrumbToolsFor(reply.agentId, t.toolUses) : undefined,
           });

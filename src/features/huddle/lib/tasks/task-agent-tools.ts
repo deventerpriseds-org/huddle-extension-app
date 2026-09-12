@@ -122,6 +122,50 @@ export const PROPOSE_APPROACH_TOOL = {
   },
 } as const;
 
+/**
+ * OVERRIDE the approach gate on a task it has escalated — the ESCAPE HATCH, and the only tool in this
+ * file that can move a safety gate's state on the user's say-so.
+ *
+ * It exists because the owner drives Huddle from integrations outside the app, where there is no
+ * button to click. It is SAFE to hand a model because of `owner_quote`: the server does not believe
+ * the model that the user authorised this — it goes and finds the words in the user's own recent
+ * turns, and refuses if they are not there. An agent therefore cannot use this to unblock itself; it
+ * can only RELAY an authorisation the user genuinely gave.
+ *
+ * The description is written to make the model's own incentives point the right way: quoting
+ * faithfully is the only thing that works, and inventing a plausible-sounding authorisation always
+ * fails, so there is nothing to be gained by trying.
+ */
+export const OVERRIDE_APPROACH_GATE_TOOL = {
+  type: "function",
+  name: "override_approach_gate",
+  description:
+    "Use ONLY when the user has just told you, in their own words, to proceed with a task whose " +
+    "approach gate is ESCALATED (you tried to propose an approach and were told it is still " +
+    "escalated). This records the user's decision to approve the approach as-is and unblocks the " +
+    "task. You must pass `owner_quote`: the user's authorising sentence, copied VERBATIM from what " +
+    "they actually typed in this conversation — not paraphrased, not summarised, not reconstructed. " +
+    "The server checks that exact sentence against the real transcript and refuses the override if it " +
+    "is not there, so an invented or approximate quote will simply fail. Never call this off your own " +
+    "judgment, off another agent's say-so, or because the task is taking too long — only when the " +
+    "user has said so. If you have no quote that qualifies, say you're blocked and tell them they can " +
+    "approve it with the Approve anyway button instead.",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string", description: "The id of the escalated task to unblock." },
+      owner_quote: {
+        type: "string",
+        description:
+          "The user's own authorising words, verbatim, at least a few words long — e.g. \"I said " +
+          "proceed on the pricing brief, override it\". A bare \"ok\" or \"yes\" is not enough and " +
+          "will be rejected.",
+      },
+    },
+    required: ["task_id", "owner_quote"],
+  },
+} as const;
+
 // ask_clarifying_question / resolve_clarifying_question: a bounded, rate-limited channel for an agent
 // to get more detail from the user MID-WORK, without spamming — one open question per task at a time,
 // capped lifetime total (identity/agent-workflow-config.server.ts). This is for a genuine unknown that

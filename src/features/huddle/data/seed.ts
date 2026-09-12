@@ -38,6 +38,12 @@ export interface HuddleMessage {
   // is set client-side once a button action succeeds, swapping the live buttons for a resolved badge.
   // Absent on messages from before this feature shipped, or on any non-confirm-ask message → no row.
   confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string; resolved?: boolean };
+  // Present when THIS message reports an approach gate that ESCALATED — the agent tried to propose an
+  // approach, the reviewer wouldn't pass it, and the task is now stuck waiting on the user. Renders the
+  // "Approve anyway" row. Before this existed, escalation reached NO component at all, so the owner's
+  // only signal that a task was permanently stuck was an agent mentioning it in prose. `resolved` is set
+  // client-side once the override succeeds. Absent on every other message → no row.
+  overrideAsk?: { taskId: string; taskTitle: string; note?: string; resolved?: boolean };
   // An in-chat CHECKLIST an agent produced (the `build_checklist` tool). Rendered as a stable list of
   // tick-boxes with a per-row status pill. This is a SNAPSHOT of server truth at the moment the reply
   // was written — deliberately NOT the live state. Live per-row state lives in the store's

@@ -148,6 +148,7 @@ interface HuddleState {
   addAgentMessage: (m: HuddleMessage) => void;
   upsertAgentMessage: (m: HuddleMessage) => void;
   resolveConfirmAsk: (messageId: string) => void;
+  resolveOverrideAsk: (messageId: string) => void;
   /** Seed live state for rows not yet tracked. Never overwrites a row the user has already acted on. */
   seedChecklistRows: (rows: { taskId: string; status: string; tags: string[] }[]) => void;
   /** Overwrite rows with fresh SERVER truth (mount refresh). Skips rows with a write in flight. */
@@ -300,6 +301,7 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
         artifacts: m.artifacts ?? next[i].artifacts,
         toolUses: m.toolUses ?? next[i].toolUses,
         confirmAsk: m.confirmAsk ?? next[i].confirmAsk,
+        overrideAsk: m.overrideAsk ?? next[i].overrideAsk,
         // Same `??` shape as the others, and for the same reason: a later partial doesn't re-supply it.
         // NOTE this is only safe because the checklist message body is a SNAPSHOT — all mutable per-row
         // state lives in `checklistState` keyed by taskId. If live state were stored here instead, `??`
@@ -350,6 +352,17 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
       messages: s.messages.map((m) =>
         m.id === messageId && m.confirmAsk
           ? { ...m, confirmAsk: { ...m.confirmAsk, resolved: true } }
+          : m,
+      ),
+    })),
+  // The same swap for the "Approve anyway" row, and scoped by messageId for the same reason: a task
+  // can escalate, be overridden, be reassigned and escalate AGAIN, and resolving by taskId would blank
+  // the live row on the new escalation as well as the old one.
+  resolveOverrideAsk: (messageId) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.id === messageId && m.overrideAsk
+          ? { ...m, overrideAsk: { ...m.overrideAsk, resolved: true } }
           : m,
       ),
     })),

@@ -81,6 +81,7 @@ import {
   CONFIRM_TASK_INTENT_TOOL,
   PROPOSE_TASK_INTENT_TOOL,
   PROPOSE_APPROACH_TOOL,
+  OVERRIDE_APPROACH_GATE_TOOL,
   ASK_CLARIFYING_QUESTION_TOOL,
   RESOLVE_CLARIFYING_QUESTION_TOOL,
 } from "./tasks/task-agent-tools";
@@ -537,6 +538,7 @@ type TurnResumeState = {
     fallbackNotes?: string[];
     artifacts?: { id: string; name: string }[];
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+    overrideAsk?: { taskId: string; taskTitle: string; note?: string };
     checklist?: ChecklistPayload;
   }[];
   journeyTaskUpdates: import("./journey/types").JourneyTask[];
@@ -816,6 +818,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // message. Derived the same way as artifacts — from this agent's own propose_task_intent
     // toolUse this turn — NOT injected from another turn/agent.
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+    overrideAsk?: { taskId: string; taskTitle: string; note?: string };
     checklist?: ChecklistPayload;
   };
 
@@ -1727,6 +1730,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // re-run of the same turn) can't create duplicate board cards for one intent. See
   // createSuggestedTaskFromTool below, which claims a title here before writing.
   const createdTaskTitles = new Set<string>(resume?.createdTaskTitles ?? []);
+
+  // Tasks whose approach gate ESCALATED during this turn, by the agent that hit it. Drives the
+  // in-thread "Approve anyway" row (the same reply-chip channel as confirmAsk), because escalation had
+  // NO user-visible surface at all before this: `grep -rn escalated src/**/*.tsx` returned zero, so a
+  // task could sit permanently stuck while the owner's only clue was an agent mentioning it in prose.
+  // Not persisted across a resume: a chip is a per-reply decoration, and the board chip is the durable
+  // half of the same discovery.
+  const escalatedApproachByAgent = new Map<string, { taskId: string; taskTitle: string; note: string }>();
 
   // Cross-turn / cross-run dedup for create_huddle_task. `createdTaskTitles` only guards WITHIN a
   // turn; the board clutter came from the SAME task being (re)created across many turns/test runs.
@@ -3260,6 +3271,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           CONFIRM_TASK_INTENT_TOOL,
           PROPOSE_TASK_INTENT_TOOL,
           PROPOSE_APPROACH_TOOL,
+          OVERRIDE_APPROACH_GATE_TOOL,
           ASK_CLARIFYING_QUESTION_TOOL,
           RESOLVE_CLARIFYING_QUESTION_TOOL,
           SCHEDULE_REMINDER_TOOL,
@@ -3590,6 +3602,49 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               return JSON.stringify({ ok: false, error: msg });
             }
           }
+          if (c.name === "override_approach_gate") {
+            const a = c.arguments as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const ownerQuote = String(a.owner_quote ?? "").trim();
+            if (!taskId || !ownerQuote)
+              return JSON.stringify({ ok: false, error: "task_id and owner_quote are required" });
+            try {
+              const email =
+                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                data.caller?.entra_email;
+              if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+              const { overrideEscalatedApproach } = await import("./tasks/confirm-ask.functions");
+              // The QUOTE IS NOT TRUSTED HERE and must not be: everything on this side of the call is
+              // model-supplied. `overrideEscalatedApproach` goes to chat.pending_turns and finds the
+              // words in a real user turn, or refuses. That is the whole safety property of letting a
+              // model call this at all — see task-agent-tools.ts OVERRIDE_APPROACH_GATE_TOOL.
+              const r = await overrideEscalatedApproach({
+                taskId,
+                email,
+                source: { via: "quote", quote: ownerQuote },
+              });
+              recordToolUse(
+                winner.id,
+                "override_approach_gate",
+                r.ok
+                  ? r.alreadyDone
+                    ? "already unblocked"
+                    : "approach approved on the user's say-so"
+                  : `override refused — ${r.error ?? ""}`.slice(0, 160),
+                r.ok,
+                r.ok ? undefined : r.error,
+              );
+              return JSON.stringify(
+                r.ok
+                  ? { ok: true, task_id: taskId, already_done: !!r.alreadyDone, approach_status: "approved" }
+                  : { ok: false, error: r.error, quote_rejected: !!r.quoteRejected },
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "override_approach_gate", "override failed", false, msg);
+              return JSON.stringify({ ok: false, error: msg });
+            }
+          }
           if (c.name === "propose_approach") {
             const a = c.arguments as Record<string, unknown>;
             const taskId = String(a.task_id ?? "").trim();
@@ -3612,6 +3667,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 approach,
                 claim: claimAction,
               });
+              // An escalation is the ONE gate outcome the user has to act on, so it is the one that
+              // gets a chip. Recorded here rather than derived from the tool-use detail (the way
+              // confirmAsk is) because that detail is human prose shown in the tool chip's tooltip —
+              // turning it into JSON to carry a payload would degrade a surface the owner reads.
+              if (gate.escalated) {
+                escalatedApproachByAgent.set(winner.id, { taskId, taskTitle: title, note: gate.note });
+              }
               recordToolUse(
                 winner.id,
                 "propose_approach",
@@ -4710,6 +4772,52 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           },
         });
 
+        // override_approach_gate — the owner's escape hatch out of an escalated approach (mirrors the
+        // OpenAI path). The quote is verified against the real transcript server-side, not trusted.
+        lovableTools.override_approach_gate = tool({
+          description: OVERRIDE_APPROACH_GATE_TOOL.description,
+          inputSchema: z.object({ task_id: z.string(), owner_quote: z.string() }),
+          execute: async (args) => {
+            const a = args as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const ownerQuote = String(a.owner_quote ?? "").trim();
+            if (!taskId || !ownerQuote)
+              return JSON.stringify({ ok: false, error: "task_id and owner_quote are required" });
+            try {
+              const email =
+                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                data.caller?.entra_email;
+              if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+              const { overrideEscalatedApproach } = await import("./tasks/confirm-ask.functions");
+              const r = await overrideEscalatedApproach({
+                taskId,
+                email,
+                source: { via: "quote", quote: ownerQuote },
+              });
+              recordToolUse(
+                winner.id,
+                "override_approach_gate",
+                r.ok
+                  ? r.alreadyDone
+                    ? "already unblocked"
+                    : "approach approved on the user's say-so"
+                  : `override refused — ${r.error ?? ""}`.slice(0, 160),
+                r.ok,
+                r.ok ? undefined : r.error,
+              );
+              return JSON.stringify(
+                r.ok
+                  ? { ok: true, task_id: taskId, already_done: !!r.alreadyDone, approach_status: "approved" }
+                  : { ok: false, error: r.error, quote_rejected: !!r.quoteRejected },
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "override_approach_gate", "override failed", false, msg);
+              return JSON.stringify({ ok: false, error: msg });
+            }
+          },
+        });
+
         // propose_approach — pre-work approach gate (mirrors the OpenAI path).
         lovableTools.propose_approach = tool({
           description: PROPOSE_APPROACH_TOOL.description,
@@ -4736,6 +4844,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 approach,
                 claim: claimAction,
               });
+              // An escalation is the ONE gate outcome the user has to act on, so it is the one that
+              // gets a chip. Recorded here rather than derived from the tool-use detail (the way
+              // confirmAsk is) because that detail is human prose shown in the tool chip's tooltip —
+              // turning it into JSON to carry a payload would degrade a surface the owner reads.
+              if (gate.escalated) {
+                escalatedApproachByAgent.set(winner.id, { taskId, taskTitle: title, note: gate.note });
+              }
               recordToolUse(
                 winner.id,
                 "propose_approach",
@@ -5674,12 +5789,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         console.warn("[checklist] build_checklist detail was not valid JSON; no widget rendered");
       }
     }
+    // An approach this agent proposed THIS turn was escalated — attach the "Approve anyway" row to its
+    // own reply, the same scoping rule confirmAsk uses: the ask belongs to the agent whose turn raised
+    // it, so it is keyed by that agent rather than broadcast to whoever happens to speak next.
+    const replyOverrideAsk = escalatedApproachByAgent.get(nextId);
     replies.push({
       agentId: nextId,
       text: safeText,
       fallbackNotes: outcome.perAgentFallbacks.length > 0 ? outcome.perAgentFallbacks : undefined,
       artifacts: replyArtifacts.length ? replyArtifacts : undefined,
       confirmAsk: replyConfirmAsk,
+      overrideAsk: replyOverrideAsk,
       checklist: replyChecklist,
     });
     spoken.add(nextId);
@@ -6792,6 +6912,7 @@ type TurnUpdateDTO = {
     text: string;
     artifacts?: { id: string; name: string }[];
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+    overrideAsk?: { taskId: string; taskTitle: string; note?: string };
     checklist?: ChecklistPayload;
   }[];
   result: HuddleTurnResult | null;
@@ -6831,6 +6952,7 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
           text: string;
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+          overrideAsk?: { taskId: string; taskTitle: string; note?: string };
           checklist?: ChecklistPayload;
         }[],
         result: (t.result ?? null) as HuddleTurnResult | null,
@@ -6896,6 +7018,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         text: string;
         artifacts?: { id: string; name: string }[];
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+        overrideAsk?: { taskId: string; taskTitle: string; note?: string };
         checklist?: ChecklistPayload;
       }[];
       // Tool-use breadcrumbs for away/cross-device turns — the client filters per agent + drops tool_catalog.
@@ -6932,6 +7055,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         text: string;
         artifacts?: { id: string; name: string }[];
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+        overrideAsk?: { taskId: string; taskTitle: string; note?: string };
         checklist?: ChecklistPayload;
       }[],
       toolUses: ((t.result as { toolUses?: unknown } | null)?.toolUses ?? undefined) as
