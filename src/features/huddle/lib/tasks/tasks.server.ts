@@ -740,7 +740,7 @@ const ENGAGEMENT_COLS =
   "task_id,user_email,confirm_status,proposed_dod,confirmed_dod,confirm_ask_at,confirmed_at,last_review_ping_at,next_review_ping_at,revision_count,entered_review_at," +
   "approach_status,proposed_approach,approach_revision_count,clarify_status,clarify_count,open_question,open_question_asked_at," +
   "approach_override_by,approach_override_at,approach_override_via,approach_override_quote,approach_override_turn_id," +
-  "approach_escalated_at,updated_at";
+  "approach_escalated_at,approach_override_requested_at,approach_override_requested_by,approach_override_request_reason,updated_at";
 
 /** Batch-read engagement state for a set of task ids (a missing entry means "never asked yet"). */
 export async function getTaskEngagementStates(taskIds: string[]): Promise<Map<string, TaskEngagementState>> {

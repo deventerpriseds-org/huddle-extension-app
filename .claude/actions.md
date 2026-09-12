@@ -3562,3 +3562,63 @@ agents, so anything without a column ceases to exist between turns.
 
 **Do not assess it from memory of the product.** Establish what ChatGPT's work flow does from a
 primary source; WebFetch 403s on parts of that estate, so the `tavily-fallback` skill may be needed.
+
+
+## ACT:override-gate-verdicts — three independent passes, one blocking defect (2026-09-12)
+
+**All three verification lanes closed.** Artifacts committed on the branch:
+`.claude/VERIFY-override-gate-2.md` (structural + attacks, 12 claims),
+`.claude/VERIFY-override-gate-2-attacks.md` (independent attack re-derivation),
+`.claude/VERIFY-escalated-dead-end-2.md` (were loop 1's findings acted on).
+
+### CONFIRMED — safe, and not to be re-litigated
+- **The fail-open is genuinely fixed.** `approach-gate.server.ts`'s fresh-path catch now returns
+  proceed and **writes nothing**, matching `review-gate.server.ts` — verified by reading BOTH catch
+  blocks side by side, not by trusting the claim. Consumer traced at `autowork.server.ts:697`: a task
+  hit by a grader outage stays un-promoted rather than silently approved.
+- **`update_task` takes `task_id`, not `id`.** My implementation brief said `id`, from memory. The
+  implementer read the handler and used the right one; a verifier then confirmed the handler is
+  ground truth. **My brief was the thing that was wrong.**
+- `runProduce` now assigns before kicking auto-work; `GREEN_LIGHT`/`isGreenLight` behaviourally
+  untouched (proven by a differential run, not a diff read); the guarded override `UPDATE` is
+  race-safe on live Postgres; DM binding correctly turns ambiguous at 2+ escalated tasks; loop bound
+  and errored-re-grade unchanged; nothing fail-closed loosened; blast radius unchanged.
+- **"Already said go" is now honoured.** The single hardcoded produce-vs-quick literal is gone
+  (4 hashed per-agent variants) and two new gates close loop 1's flagged gap. 13/13 suites and
+  `tsc --noEmit` green, independently re-run by every verifier rather than taken on report.
+
+### REFUTED — the one that decides shipping
+`verifyOwnerQuote` does not deliver the owner's stated precondition ("prevent self override by
+agent"). It closes loop 1's three reproduced attacks AND the unrestricted cross-task replay — real
+progress — but **three adversaries produced three NON-OVERLAPPING sets of new holes in the same two
+word lists**:
+
+| Route | Example that returned `ok:true` |
+|---|---|
+| **DM-ambiguity-of-one** (the ordinary state) | *"Sure, go ahead and book the conference room for Friday's offsite"* |
+| **Negation gaps** (`never`/`cannot`/`won't`/`nope`/`not now`) | *"Never approve that particular approach without more testing."* |
+| **Clean-imperative paste** | the owner quoting an agent's own proposal back |
+| **Title-phrase collision** | an authorisation about the *weekly newsletter* unblocking *"Send the weekly report"* |
+
+**The finding is the pattern, not the four rows.** Patch these and a fourth adversary brings a
+fifth — and all 13 suites stay green throughout, because none is shaped like any of them. **A green
+suite is not evidence a consent classifier is complete.** Consent-over-free-text cannot be made safe
+by extending word lists; that is the failure mode, not the fix.
+
+**Decision taken (mine, reversible, stated to the owner):** the tool becomes a REQUEST — the model
+may ask, only a human tap may grant. Text stops being an input to the decision, so nothing to leak.
+Reuses the existing confirm-row + `send_push` path; no new sender, no second confirmation UI.
+Restoring direct override is a flag, not a rebuild, if the owner prefers the risk.
+
+### Residual, tracked not fixed
+`approveApproach` (`tasks.server.ts` ~:1023) is still an **unconditional upsert** with no `WHERE` on
+status. Its one real caller is safe by construction (fires only on a genuine grader pass) and the new
+override path uses its own status-guarded `UPDATE` rather than this primitive — so the cross-turn
+race (a concurrent turn escalating mid-grading) is **latent, not triggered**. Any future caller must
+be status-guarded.
+
+### Operational note worth keeping
+Three verifiers ran concurrently against one working tree while a builder rewrote files under them.
+One hit three `stash`/`pull --rebase`/`stash pop` collisions and **diffed the stash against the live
+tree before dropping it each time**, confirming the newer edits were a strict superset. No loss — but
+concurrent lanes on one tree is a real cost, and `git add -A` bit three separate lanes today.
