@@ -19,7 +19,9 @@
     "fetch:assistants": "bun run scripts/fetch-openai-assistants.ts",
     "test:email-gate": "bun scripts/email-self-send.test.ts",
     "test:nexus-tools": "bun scripts/nexus-read-tools.test.ts",
-    "test:turn-identity": "bun scripts/turn-identity.test.ts"
+    "test:turn-identity": "bun scripts/turn-identity.test.ts",
+    "test:override-gate": "bun scripts/approach-override.test.ts",
+    "test:green-light": "bun scripts/green-light.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
