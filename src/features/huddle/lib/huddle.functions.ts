@@ -81,7 +81,7 @@ import {
   CONFIRM_TASK_INTENT_TOOL,
   PROPOSE_TASK_INTENT_TOOL,
   PROPOSE_APPROACH_TOOL,
-  OVERRIDE_APPROACH_GATE_TOOL,
+  REQUEST_APPROACH_OVERRIDE_TOOL,
   ASK_CLARIFYING_QUESTION_TOOL,
   RESOLVE_CLARIFYING_QUESTION_TOOL,
 } from "./tasks/task-agent-tools";
@@ -1898,6 +1898,74 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     }
   }
 
+  /**
+   * The owner is AWAY and an agent has asked them to unstick an escalated task. Deliver the ask the
+   * same way every other reply reaches them — a REAL durable turn in the requesting agent's own DM, so
+   * the runner produces the reply and fires the EXISTING away-notification (send_push -> Android
+   * bridge). No new sender; that is a standing rule in this repo's CLAUDE.md, and this follows
+   * deliverOwnerFollowup above line for line for exactly that reason.
+   *
+   * Only called when `data.internal` (an agent-initiated turn — autowork, a groom pass): in a live
+   * conversation the confirm row on the agent's reply is already in front of the owner, and a push on
+   * top of it is noise.
+   *
+   * Idempotent TWICE OVER, deliberately, because a duplicate nudge about a stuck task is the kind of
+   * thing that trains an owner to ignore the channel: `recordApproachOverrideRequest`'s guarded UPDATE
+   * means this is reached once per escalation episode, and the turn id below makes a retry of THAT
+   * call a no-op as well (enqueueTurn conflicts). The id carries the task so two stuck tasks never
+   * collapse into one notice.
+   */
+  async function deliverOverrideRequestNotice(
+    agentId: AgentId,
+    taskId: string,
+    taskTitle: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      const agent = AGENT_BY_ID[agentId];
+      if (!agent) return;
+      const cleanReason = (reason ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
+      const cleanTitle = (taskTitle ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
+      const agentHuddle = `dm-${agentId}`;
+      // Canonical journey email (see deliverOwnerFollowup) so the finished turn is matchable by the
+      // client's cross-huddle back-fill — the raw login can resolve to a different address.
+      let email: string | null = null;
+      try {
+        const { resolveTaskEmail } = await import("./journey/identity");
+        email = (await resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
+      } catch {
+        email = data.caller?.entra_email ?? null;
+      }
+      // The directive is careful about ONE thing above all: the agent must not tell the user the task
+      // is unblocked. It is not, and it cannot be until they tap.
+      const directive =
+        `You are ${agent.name}. The approach review on "${cleanTitle}" escalated, so nobody is working ` +
+        `it until the user approves it themselves. You have already asked for their approval` +
+        (cleanReason ? ` — your reason was: "${cleanReason}"` : "") +
+        `. Send ONE short message telling them this task is waiting on their call and why you think it ` +
+        `should go ahead, and that there is an "Approve anyway" button on it. Do NOT say it is ` +
+        `unblocked, approved or in progress — it is none of those until they tap. Do not do the work.`;
+      const notifyPayload = {
+        text: directive,
+        huddleId: agentHuddle,
+        scope: "one-to-one",
+        members: [agentId],
+        targetAgentId: agentId,
+        history: [],
+        router: data.router,
+        agents: data.agents,
+        timeZone: data.timeZone,
+        caller: data.caller,
+        internal: true, // never let a notice spawn another notice
+      };
+      const { enqueueTurn } = await import("./tasks/turns.server");
+      const fresh = await enqueueTurn(`ovrreq-${taskId}`, agentHuddle, email, notifyPayload);
+      if (fresh) void kickNextChunk(`ovrreq-${taskId}`);
+    } catch {
+      /* best-effort — the confirm row and the board chip are the durable surfaces */
+    }
+  }
+
   // Chat-driven UNBLOCK routing: the user cleared a blocker while talking to a NON-owner (e.g. Terry,
   // who surfaced it) — only the OWNING agent can move its task out of Blocked. Enqueue a REAL durable
   // turn in the owner's own DM. Unlike deliverOwnerFollowup (which defers and re-asks for confirmation),
@@ -3391,7 +3459,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           CONFIRM_TASK_INTENT_TOOL,
           PROPOSE_TASK_INTENT_TOOL,
           PROPOSE_APPROACH_TOOL,
-          OVERRIDE_APPROACH_GATE_TOOL,
+          REQUEST_APPROACH_OVERRIDE_TOOL,
           ASK_CLARIFYING_QUESTION_TOOL,
           RESOLVE_CLARIFYING_QUESTION_TOOL,
           SCHEDULE_REMINDER_TOOL,
@@ -3722,47 +3790,73 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               return JSON.stringify({ ok: false, error: msg });
             }
           }
-          if (c.name === "override_approach_gate") {
+          if (c.name === "request_approach_override") {
             const a = c.arguments as Record<string, unknown>;
             const taskId = String(a.task_id ?? "").trim();
-            const ownerQuote = String(a.owner_quote ?? "").trim();
-            if (!taskId || !ownerQuote)
-              return JSON.stringify({ ok: false, error: "task_id and owner_quote are required" });
+            const reason = String(a.reason ?? "").trim();
+            if (!taskId) return JSON.stringify({ ok: false, error: "task_id is required" });
             try {
               const email =
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
-              const { overrideEscalatedApproach } = await import("./tasks/confirm-ask.functions");
-              // The QUOTE IS NOT TRUSTED HERE and must not be: everything on this side of the call is
-              // model-supplied. `overrideEscalatedApproach` goes to chat.pending_turns and finds the
-              // words in a real user turn, or refuses. That is the whole safety property of letting a
-              // model call this at all — see task-agent-tools.ts OVERRIDE_APPROACH_GATE_TOOL.
-              const r = await overrideEscalatedApproach({
+              const { requestApproachOverride } = await import("./tasks/confirm-ask.functions");
+              // NOTHING ON THIS SIDE OF THE CALL CAN GRANT AN OVERRIDE, and that is structural rather
+              // than a matter of care here: `requestApproachOverride` does not call
+              // `overrideApproachGate` at all. It used to — via a `source:{via:"quote"}` arm carrying
+              // model-supplied text that the server tried to read as the owner's consent — and three
+              // independent adversarial passes broke that reading with ordinary English. The only
+              // grant is the owner's tap on the row attached below.
+              const r = await requestApproachOverride({
                 taskId,
                 email,
-                source: { via: "quote", quote: ownerQuote },
+                requestedByAgent: winner.id,
+                reason,
               });
+              // EXTEND the existing confirm-row channel rather than building a second one: the same
+              // map `propose_approach` writes when a gate escalates, read at the reply-assembly site
+              // into `replies[].overrideAsk` -> OverrideAskRow's "Approve anyway". The board card chip
+              // (driven by approach_status='escalated') is the durable half and needs no change.
+              if (r.ok && r.awaitingUserTap) {
+                const title = r.title ?? (await (await import("./tasks/tasks.server")).getTaskTitle(taskId));
+                escalatedApproachByAgent.set(winner.id, { taskId, taskTitle: title, note: reason });
+                // Away-notification ONLY on the first ask of this escalation episode, and only when the
+                // owner is not already in this conversation — the row above is the surface when they
+                // are. Rides the existing durable-turn path (send_push), never a new sender.
+                if (r.fresh && data.internal) void deliverOverrideRequestNotice(winner.id, taskId, title, reason);
+              }
               recordToolUse(
                 winner.id,
-                "override_approach_gate",
+                "request_approach_override",
                 r.ok
                   ? r.alreadyDone
                     ? "already unblocked"
-                    : "approach approved on the user's say-so"
-                  : `override refused — ${r.error ?? ""}`.slice(0, 160),
+                    : r.alreadyRequested
+                      ? "already waiting on the user's approval"
+                      : "asked the user to approve it"
+                  : `request refused — ${r.error ?? ""}`.slice(0, 160),
                 r.ok,
                 r.ok ? undefined : r.error,
               );
               return JSON.stringify(
                 r.ok
-                  ? { ok: true, task_id: taskId, already_done: !!r.alreadyDone, approach_status: "approved" }
-                  : { ok: false, error: r.error, quote_rejected: !!r.quoteRejected },
+                  ? {
+                      ok: true,
+                      task_id: taskId,
+                      applied: false,
+                      approach_status: r.alreadyDone ? "approved" : "escalated",
+                      awaiting_user_tap: !!r.awaitingUserTap,
+                      already_requested: !!r.alreadyRequested,
+                      note: r.alreadyDone
+                        ? "Already approved — nothing to wait for."
+                        : "NOT approved. The user has been shown an Approve anyway button; the task stays escalated until they tap it.",
+                    }
+                  : { ok: false, applied: false, error: r.error },
               );
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
-              recordToolUse(winner.id, "override_approach_gate", "override failed", false, msg);
-              return JSON.stringify({ ok: false, error: msg });
+              recordToolUse(winner.id, "request_approach_override", "request failed", false, msg);
+              return JSON.stringify({ ok: false, applied: false, error: msg });
             }
           }
           if (c.name === "propose_approach") {
@@ -4892,48 +4986,65 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           },
         });
 
-        // override_approach_gate — the owner's escape hatch out of an escalated approach (mirrors the
-        // OpenAI path). The quote is verified against the real transcript server-side, not trusted.
-        lovableTools.override_approach_gate = tool({
-          description: OVERRIDE_APPROACH_GATE_TOOL.description,
-          inputSchema: z.object({ task_id: z.string(), owner_quote: z.string() }),
+        // request_approach_override — the agent ASKS the owner to unstick an escalated approach
+        // (mirrors the OpenAI path). It cannot apply the override; only the owner's tap can.
+        lovableTools.request_approach_override = tool({
+          description: REQUEST_APPROACH_OVERRIDE_TOOL.description,
+          inputSchema: z.object({ task_id: z.string(), reason: z.string() }),
           execute: async (args) => {
             const a = args as Record<string, unknown>;
             const taskId = String(a.task_id ?? "").trim();
-            const ownerQuote = String(a.owner_quote ?? "").trim();
-            if (!taskId || !ownerQuote)
-              return JSON.stringify({ ok: false, error: "task_id and owner_quote are required" });
+            const reason = String(a.reason ?? "").trim();
+            if (!taskId) return JSON.stringify({ ok: false, error: "task_id is required" });
             try {
               const email =
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
-              const { overrideEscalatedApproach } = await import("./tasks/confirm-ask.functions");
-              const r = await overrideEscalatedApproach({
+              const { requestApproachOverride } = await import("./tasks/confirm-ask.functions");
+              const r = await requestApproachOverride({
                 taskId,
                 email,
-                source: { via: "quote", quote: ownerQuote },
+                requestedByAgent: winner.id,
+                reason,
               });
+              if (r.ok && r.awaitingUserTap) {
+                const title = r.title ?? (await (await import("./tasks/tasks.server")).getTaskTitle(taskId));
+                escalatedApproachByAgent.set(winner.id, { taskId, taskTitle: title, note: reason });
+                if (r.fresh && data.internal) void deliverOverrideRequestNotice(winner.id, taskId, title, reason);
+              }
               recordToolUse(
                 winner.id,
-                "override_approach_gate",
+                "request_approach_override",
                 r.ok
                   ? r.alreadyDone
                     ? "already unblocked"
-                    : "approach approved on the user's say-so"
-                  : `override refused — ${r.error ?? ""}`.slice(0, 160),
+                    : r.alreadyRequested
+                      ? "already waiting on the user's approval"
+                      : "asked the user to approve it"
+                  : `request refused — ${r.error ?? ""}`.slice(0, 160),
                 r.ok,
                 r.ok ? undefined : r.error,
               );
               return JSON.stringify(
                 r.ok
-                  ? { ok: true, task_id: taskId, already_done: !!r.alreadyDone, approach_status: "approved" }
-                  : { ok: false, error: r.error, quote_rejected: !!r.quoteRejected },
+                  ? {
+                      ok: true,
+                      task_id: taskId,
+                      applied: false,
+                      approach_status: r.alreadyDone ? "approved" : "escalated",
+                      awaiting_user_tap: !!r.awaitingUserTap,
+                      already_requested: !!r.alreadyRequested,
+                      note: r.alreadyDone
+                        ? "Already approved — nothing to wait for."
+                        : "NOT approved. The user has been shown an Approve anyway button; the task stays escalated until they tap it.",
+                    }
+                  : { ok: false, applied: false, error: r.error },
               );
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
-              recordToolUse(winner.id, "override_approach_gate", "override failed", false, msg);
-              return JSON.stringify({ ok: false, error: msg });
+              recordToolUse(winner.id, "request_approach_override", "request failed", false, msg);
+              return JSON.stringify({ ok: false, applied: false, error: msg });
             }
           },
         });

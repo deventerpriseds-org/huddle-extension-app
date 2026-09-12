@@ -123,46 +123,44 @@ export const PROPOSE_APPROACH_TOOL = {
 } as const;
 
 /**
- * OVERRIDE the approach gate on a task it has escalated — the ESCAPE HATCH, and the only tool in this
- * file that can move a safety gate's state on the user's say-so.
+ * ASK THE OWNER to override the approach gate on a task that escalated — the escape hatch, and the
+ * only tool in this file that touches a safety gate at all.
  *
- * It exists because the owner drives Huddle from integrations outside the app, where there is no
- * button to click. It is SAFE to hand a model because of `owner_quote`: the server does not believe
- * the model that the user authorised this — it goes and finds the words in the user's own recent
- * turns, and refuses if they are not there. An agent therefore cannot use this to unblock itself; it
- * can only RELAY an authorisation the user genuinely gave.
+ * IT DOES NOT OVERRIDE ANYTHING. It records a request and surfaces the "Approve anyway" button to the
+ * owner; only their tap applies the override. That split is the whole design, and it replaced an
+ * earlier version in which the model passed `owner_quote` — the owner's authorising sentence — and the
+ * server judged whether those words meant consent. Three independent adversarial passes broke that
+ * judgment with three non-overlapping sets of perfectly ordinary English, so the field is DELETED, not
+ * tightened: there is now no string a model can send that affects whether an override happens.
+ * (.claude/BUILD-override-request-then-tap.md.)
  *
- * The description is written to make the model's own incentives point the right way: quoting
- * faithfully is the only thing that works, and inventing a plausible-sounding authorisation always
- * fails, so there is nothing to be gained by trying.
+ * The description is written so the model cannot come away believing it has applied anything: the name
+ * says "request", the first sentence says the user must still tap, and the return value says
+ * `applied:false`.
  */
-export const OVERRIDE_APPROACH_GATE_TOOL = {
+export const REQUEST_APPROACH_OVERRIDE_TOOL = {
   type: "function",
-  name: "override_approach_gate",
+  name: "request_approach_override",
   description:
-    "Use ONLY when the user has just told you, in their own words, to proceed with a task whose " +
-    "approach gate is ESCALATED (you tried to propose an approach and were told it is still " +
-    "escalated). This records the user's decision to approve the approach as-is and unblocks the " +
-    "task. You must pass `owner_quote`: the user's authorising sentence, copied VERBATIM from what " +
-    "they actually typed in this conversation — not paraphrased, not summarised, not reconstructed. " +
-    "The server checks that exact sentence against the real transcript and refuses the override if it " +
-    "is not there, so an invented or approximate quote will simply fail. Never call this off your own " +
-    "judgment, off another agent's say-so, or because the task is taking too long — only when the " +
-    "user has said so. If you have no quote that qualifies, say you're blocked and tell them they can " +
-    "approve it with the Approve anyway button instead.",
+    "ASK THE USER to approve a task whose approach gate is ESCALATED (you tried to propose an " +
+    "approach and were told it is still escalated). This does NOT unblock the task and does NOT " +
+    "approve anything — it shows the user an \u201cApprove anyway\u201d button and waits for them to tap it. " +
+    "Only their tap can approve it; nothing you say or pass can. Calling this again for the same task " +
+    "changes nothing and sends no second notification, so call it once and then move on to other work. " +
+    "In your reply, tell the user plainly that the task is waiting on their approval and why you think " +
+    "it should proceed — do not tell them it is unblocked, because it is not.",
   parameters: {
     type: "object",
     properties: {
-      task_id: { type: "string", description: "The id of the escalated task to unblock." },
-      owner_quote: {
+      task_id: { type: "string", description: "The id of the escalated task to ask about." },
+      reason: {
         type: "string",
         description:
-          "The user's own authorising words, verbatim, at least a few words long — e.g. \"I said " +
-          "proceed on the pricing brief, override it\". A bare \"ok\" or \"yes\" is not enough and " +
-          "will be rejected.",
+          "One sentence for the user: why you think this approach should proceed as-is. This is shown " +
+          "to them to help them decide — it does not influence whether the override happens.",
       },
     },
-    required: ["task_id", "owner_quote"],
+    required: ["task_id", "reason"],
   },
 } as const;
 

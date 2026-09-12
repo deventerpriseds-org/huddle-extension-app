@@ -128,18 +128,28 @@ export async function confirmTaskFromProposal(opts: {
 
 // ---- OWNER OVERRIDE of an escalated approach gate ------------------------------------------------
 
-export type OverrideSource =
-  /** A click in the app. No quote: the click IS the user act, and no model was involved in it. */
-  | { via: "button" }
-  /** A model relayed the owner's words. The server must LOCATE them before honouring anything. */
-  | { via: "quote"; quote: string };
-
 export type OverrideResult = ButtonResult & {
   taskId?: string;
   title?: string;
-  /** true when the refusal was specifically "that quote isn't the owner's" — the caller (an agent)
-   *  should ask the user to click the button rather than retry with a different guess. */
-  quoteRejected?: boolean;
+};
+
+/**
+ * What an AGENT gets back when it asks the owner to override. Note what is NOT here: any field that
+ * could read as "done". `applied` is always false, by construction — see requestApproachOverride.
+ */
+export type OverrideRequestResult = {
+  ok: boolean;
+  error?: string;
+  taskId?: string;
+  title?: string;
+  /** ALWAYS false. The override is not applied by this call and cannot be. */
+  applied: false;
+  /** true when the owner still has to tap. */
+  awaitingUserTap?: boolean;
+  /** true when an ask for this task was already pending — no second notice was sent. */
+  alreadyRequested?: boolean;
+  /** true when the task was not escalated at all: already approved, or never stuck. */
+  alreadyDone?: boolean;
 };
 
 /**
@@ -153,9 +163,12 @@ export type OverrideResult = ButtonResult & {
  *    return the SAME error, so a guessed id cannot probe.
  *  - ESCALATED ONLY: it refuses on any other status. Approving a `pending` task would skip the grader
  *    entirely, which is not "unstick a dead end", it is "bypass the whole approach gate".
- *  - THE OWNER'S WORDS ARE VERIFIED, NOT TRUSTED: for `via:'quote'` the quote must be found in a real,
- *    recent user turn. This is the owner's own anti-self-override condition and the whole reason a
- *    model may call this at all.
+ *  - THERE IS NO MODEL PATH TO IT AT ALL. This function had a second caller until 2026-09-12: a
+ *    `via:'quote'` arm in which a model relayed the owner's words and `verifyOwnerQuote` decided
+ *    whether they MEANT consent. Three independent adversarial passes refuted that classifier with
+ *    three non-overlapping sets of ordinary English it misread as consent, so the arm is deleted
+ *    rather than tightened. An agent may now only REQUEST (requestApproachOverride below); the owner's
+ *    tap is the grant. See .claude/BUILD-override-request-then-tap.md.
  *  - IDEMPOTENT FROM PERSISTED STATE, not from the turn ledger: `turnActionLedger` is per-turn and
  *    in-memory, so it cannot dedupe two clicks seconds apart in different turns. The status read (and
  *    the `WHERE approach_status='escalated'` on the write) is what does.
@@ -166,9 +179,8 @@ export type OverrideResult = ButtonResult & {
 export async function overrideEscalatedApproach(opts: {
   taskId: string;
   email: string;
-  source: OverrideSource;
 }): Promise<OverrideResult> {
-  const { taskId, email, source } = opts;
+  const { taskId, email } = opts;
   try {
     const { getOwnedTaskForConfirmAsk, getTaskEngagementState, overrideApproachGate } =
       await import("./tasks.server");
@@ -200,82 +212,7 @@ export async function overrideEscalatedApproach(opts: {
       };
     }
 
-    let quote: string | null = null;
-    let sourceTurnId: string | null = null;
-    if (source.via === "quote") {
-      const { verifyOwnerQuote, QUOTE_MAX_AGE_MS, QUOTE_MIN_WORDS } = await import("./approach-override");
-      const { getRecentUserUtterances } = await import("./turns.server");
-      const now = Date.now();
-
-      // WHEN this task escalated. The words that authorise an override have to come AFTER it — a
-      // sentence typed before the gate ever escalated cannot be consenting to an override of it, and
-      // that one rule kills most of the "any long fragment of anything they said" attack class.
-      // `approach_escalated_at` is stamped by escalateApproach; a row that escalated before that
-      // column existed falls back to its own updated_at, which is later (stricter), never earlier.
-      const escalatedAtMs = Date.parse(state?.approach_escalated_at ?? state?.updated_at ?? "");
-      if (!Number.isFinite(escalatedAtMs)) {
-        // FAIL CLOSED: with no floor there is nothing to order the authorisation against. The button
-        // still works — a click is the user act and needs no quote at all.
-        return {
-          ok: false,
-          quoteRejected: true,
-          error:
-            "I can't tell when this task's approach gate escalated, so I can't verify the user's words " +
-            "authorise overriding it. They can approve it with the Approve anyway button.",
-          taskId,
-          title: task.title,
-        };
-      }
-
-      // The weakest of the three bindings — "they said it in this agent's DM" — is only unambiguous
-      // while that agent has exactly ONE escalated task. Any doubt, INCLUDING a failed read, disables
-      // it (the other two bindings, task id and task title, are unaffected).
-      let assigneeBindingUnambiguous = false;
-      const assignedAgent = task.assigned_agent ?? null;
-      if (assignedAgent) {
-        try {
-          const { getEscalatedTaskIdsForAgent } = await import("./tasks.server");
-          const escalatedForAgent = await getEscalatedTaskIdsForAgent(email, assignedAgent);
-          assigneeBindingUnambiguous =
-            escalatedForAgent.length === 1 && escalatedForAgent[0] === taskId;
-        } catch {
-          assigneeBindingUnambiguous = false;
-        }
-      }
-
-      const utterances = await getRecentUserUtterances(email, now - QUOTE_MAX_AGE_MS);
-      const verdict = verifyOwnerQuote(source.quote ?? "", utterances, now, {
-        taskId,
-        taskTitle: task.title ?? "",
-        assignedAgent,
-        escalatedAtMs,
-        assigneeBindingUnambiguous,
-      });
-      if (!verdict.ok) {
-        const REASONS: Record<string, string> = {
-          "too-short": `Quote too short to authorise an override — it needs to be at least ${QUOTE_MIN_WORDS} words of what the user actually said.`,
-          "not-found":
-            "I couldn't find those words in anything the user said recently, so I can't treat that as their authorisation. Ask them to say it here, or to use the Approve anyway button.",
-          "predates-escalation":
-            "The user did say that, but before this task's approach gate escalated — so it wasn't about this. Ask them now, or they can use the Approve anyway button.",
-          "not-consent":
-            "The user did say those words, but read in full the sentence isn't them telling you to proceed. Ask them plainly, or they can use the Approve anyway button.",
-          "not-this-task":
-            "I can't tell that the user was authorising THIS task — ask them to name it, or they can use the Approve anyway button on the task itself.",
-        };
-        return {
-          ok: false,
-          quoteRejected: true,
-          error: REASONS[verdict.reason] ?? REASONS["not-found"],
-          taskId,
-          title: task.title,
-        };
-      }
-      quote = source.quote;
-      sourceTurnId = verdict.turnId;
-    }
-
-    const applied = await overrideApproachGate({ taskId, userEmail: email, via: source.via, quote, sourceTurnId });
+    const applied = await overrideApproachGate({ taskId, userEmail: email });
     // Not applied = the row stopped being 'escalated' between the read above and this write (a second
     // click, or the grader landing a pass). Nothing is stuck either way, so report it as already done
     // rather than as a failure the user has to act on.
@@ -283,6 +220,101 @@ export async function overrideEscalatedApproach(opts: {
     return { ok: true, taskId, title: task.title };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * AN AGENT ASKS THE OWNER TO OVERRIDE. This is the ONLY override-related function a model can reach,
+ * and it CANNOT APPLY AN OVERRIDE — not "will not", cannot: it never calls `overrideApproachGate`, and
+ * the statement it does call (`recordApproachOverrideRequest`) has no `approach_status` in its SET
+ * clause, so the row stays `escalated` no matter what any caller passes.
+ *
+ * WHY IT IS SHAPED THIS WAY. Until 2026-09-12 a model could pass `owner_quote` and the server tried to
+ * decide, from that free text, whether the owner's words MEANT consent to override THIS task. Three
+ * independent adversarial passes refuted it with three NON-OVERLAPPING sets of ordinary English —
+ * an unrelated go-ahead binding because the agent had exactly one escalated task, "Never approve that
+ * particular approach without more testing", "not now", the owner quoting an agent's own proposal back
+ * with a hedge attached, and an authorisation about the weekly NEWSLETTER unblocking a task titled
+ * "Send the weekly report". All 13 suites were green through all of it. The lesson recorded here so it
+ * is not re-learned: the fix for a leaky classifier over natural language is to STOP CLASSIFYING, not
+ * to add words to its lists. (.claude/VERIFY-override-gate-1.md, -2.md, -2-attacks.md.)
+ *
+ * So: no text is an input to the decision. `reason` is shown to the owner and stored; nothing branches
+ * on it. The owner's tap — `overrideApproachFromButtonFn`, a `createServerFn` reachable only from an
+ * authenticated browser session — is the grant.
+ *
+ * The checks below are the SAME ones the tap path runs, for the same reasons (ownership via
+ * `getOwnedTaskForConfirmAsk`, which returns the byte-identical error for "doesn't exist" and "isn't
+ * yours"; DONE and non-escalated refused). An agent must not be able to use this to probe for task ids
+ * it does not own, or to raise the owner's attention about a task that is not stuck.
+ *
+ * @returns `fresh:true` on the ONE call per escalation episode that actually stamped the ask — the
+ *          caller notifies only then. Everything else is `alreadyRequested` or `alreadyDone`.
+ */
+export async function requestApproachOverride(opts: {
+  taskId: string;
+  email: string;
+  /** The requesting agent's id, for the audit record and the owner-facing message. */
+  requestedByAgent: string | null;
+  /** The agent's own stated reason. Shown to the owner; never read to decide anything. */
+  reason?: string;
+}): Promise<OverrideRequestResult & { fresh?: boolean }> {
+  const { taskId, email } = opts;
+  try {
+    const { getOwnedTaskForConfirmAsk, getTaskEngagementState, recordApproachOverrideRequest } =
+      await import("./tasks.server");
+    const task = await getOwnedTaskForConfirmAsk(taskId, email);
+    if (!task) return { ok: false, applied: false, error: "Task not found." };
+    if ((task.status ?? "").toUpperCase() === "DONE") {
+      return {
+        ok: false,
+        applied: false,
+        error: "That task is already done — there's nothing to unstick.",
+        taskId,
+        title: task.title,
+      };
+    }
+
+    const state = await getTaskEngagementState(taskId).catch(() => null);
+    const status = state?.approach_status ?? "pending";
+    if (status === "approved") {
+      return { ok: true, applied: false, alreadyDone: true, taskId, title: task.title };
+    }
+    if (status !== "escalated") {
+      // Same refusal, and the same reasoning, as the tap path: `resetEngagementOnReassignment` puts a
+      // reassigned task back to 'pending' because the new assignee never proposed the approach that
+      // was escalated. There is nothing for the owner to approve, so there is nothing to ask them.
+      return {
+        ok: false,
+        applied: false,
+        error:
+          "That task isn't waiting on the user's approval — its approach gate is at \u201cpending\u201d. If it " +
+          "changed hands, the new assignee starts the approach fresh.",
+        taskId,
+        title: task.title,
+      };
+    }
+
+    // The guarded UPDATE is the rate limiter. true only for the first ask of this escalation episode;
+    // a repeat writes nothing, returns false, and therefore sends no second notification.
+    const fresh = await recordApproachOverrideRequest({
+      taskId,
+      requestedBy: opts.requestedByAgent ?? null,
+      reason: (opts.reason ?? "").trim() || null,
+    });
+    return {
+      ok: true,
+      applied: false,
+      awaitingUserTap: true,
+      alreadyRequested: !fresh,
+      fresh,
+      taskId,
+      title: task.title,
+    };
+  } catch (err) {
+    // Never swallowed into a false "asked": an agent that believes the owner was notified will stop
+    // mentioning it, and the task goes quiet while still stuck.
+    return { ok: false, applied: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -295,7 +327,7 @@ export const overrideApproachFromButtonFn = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<OverrideResult> => {
     const email = await resolveCallerEmail(data.caller);
     if (!email) return { ok: false, error: "Sign-in required." };
-    return overrideEscalatedApproach({ taskId: data.taskId, email, source: { via: "button" } });
+    return overrideEscalatedApproach({ taskId: data.taskId, email });
   });
 
 /** The board's "what is stuck waiting on me?" read, so an escalation that happened during an autowork

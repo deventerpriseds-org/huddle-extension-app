@@ -190,6 +190,17 @@ ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_overri
 -- row's own updated_at is not a substitute (any later write bumps it). NULL on a row that escalated
 -- before this column existed -- the reader falls back to updated_at there, which is stricter, not looser.
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_escalated_at TIMESTAMPTZ;
+-- A PENDING OVERRIDE REQUEST (.claude/BUILD-override-request-then-tap.md). An agent may ASK the owner
+-- to override an escalated gate; it may not grant one. These three columns are that ask, and they are
+-- NOT an approval -- nothing reads them to decide anything. approach_status stays 'escalated' until the
+-- owner taps "Approve anyway".
+--   Idempotence is structural rather than timed: this table's PRIMARY KEY is task_id, so N requests
+--   cannot make N records, and recordApproachOverrideRequest's guarded UPDATE (requested_at IS NULL)
+--   means only the FIRST request of an escalation episode notifies. escalateApproach and
+--   resetEngagementOnReassignment clear all three, so a genuine RE-escalation re-arms exactly one notice.
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_requested_at TIMESTAMPTZ;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_requested_by TEXT;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_request_reason TEXT;
 -- Mid-work clarifying question (ask_clarifying_question tool): clarify_status='open' pauses that task's
 -- autowork research cadence until answered. clarify_count is the lifetime cap counter (bounded — an agent
 -- that's still stuck after the cap must flag_blocker or proceed on its own judgment, not keep asking).
@@ -727,11 +738,18 @@ export interface TaskEngagementState {
    *  approach_override_at set was NOT graded to a pass; anything auditing quality must read this. */
   approach_override_by: string | null;
   approach_override_at: string | null;
+  /** 'quote' is LEGACY DATA ONLY — the model-text override path was deleted 2026-09-12 and nothing
+   *  writes it any more. It stays in the union so historical rows still type-check on read. */
   approach_override_via: "button" | "quote" | null;
   approach_override_quote: string | null;
   approach_override_turn_id: string | null;
   /** When the approach gate escalated. NULL on a row that escalated before the column existed. */
   approach_escalated_at: string | null;
+  /** An agent ASKED the owner to override. NOT an approval — see the DDL note. Nothing reads these to
+   *  decide anything; they exist so a second ask cannot re-notify, and so the ask is auditable. */
+  approach_override_requested_at: string | null;
+  approach_override_requested_by: string | null;
+  approach_override_request_reason: string | null;
   /** The row's own last-write time — the fallback floor when approach_escalated_at is NULL. */
   updated_at: string | null;
 }
@@ -1068,11 +1086,17 @@ export async function escalateApproach(taskId: string, userEmail: string): Promi
   const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
     // approach_escalated_at is stamped on EVERY escalation, including a re-escalation after a failed
-    // re-grade: the owner is being told about the task again, so an override has to be authorised by
-    // words typed after THAT, not by something they said before the first escalation.
+    // re-grade: the owner is being told about the task again, so the ask has to be about THAT.
+    //
+    // A NEW escalation also RE-ARMS the override ask by clearing the three request columns. That is
+    // what makes recordApproachOverrideRequest's "requested_at IS NULL" guard mean "once per
+    // escalation episode" rather than "once ever" — without it a task that escalated, was declined,
+    // and escalated again months later could never notify the owner a second time.
     `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_status, approach_escalated_at, user_id)
      VALUES ($1,$2,'escalated',now(),$3)
      ON CONFLICT (task_id) DO UPDATE SET approach_status='escalated', approach_escalated_at=now(),
+       approach_override_requested_at=NULL, approach_override_requested_by=NULL,
+       approach_override_request_reason=NULL,
        user_id=COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at=now()`,
     [taskId, userEmail.toLowerCase(), userId],
   );
@@ -1099,26 +1123,61 @@ export async function overrideApproachGate(opts: {
   taskId: string;
   /** The RESOLVED CALLER email. The actor is the authenticated user, never an agentId, never "system". */
   userEmail: string;
-  via: "button" | "quote";
-  /** For `via:'quote'`, the owner's own words the server located in the transcript. */
-  quote?: string | null;
-  /** For `via:'quote'`, the `chat.pending_turns.id` the quote was found in. */
-  sourceTurnId?: string | null;
+}): Promise<boolean> {
+  await ensureBootstrapped();
+  // via is HARDCODED 'button' and is not a parameter. It was `"button" | "quote"` until 2026-09-12,
+  // when the model-text override path was deleted (.claude/BUILD-override-request-then-tap.md): the
+  // only remaining way to reach this statement is the owner tapping "Approve anyway", so a caller
+  // CHOOSING what to record here would be recording a distinction that no longer exists. The two quote
+  // columns stay in the table for historical rows and are written NULL.
+  const res = await getPool().query(
+    `UPDATE tasks.task_engagement_state
+        SET approach_status='approved',
+            approach_override_by=$2, approach_override_at=now(), approach_override_via='button',
+            approach_override_quote=NULL, approach_override_turn_id=NULL, updated_at=now()
+      WHERE task_id=$1 AND approach_status='escalated'`,
+    [opts.taskId, opts.userEmail.toLowerCase()],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/**
+ * Record that an AGENT asked the owner to override this task's escalated approach gate.
+ *
+ * THIS IS NOT AN APPROVAL AND MUST NEVER BECOME ONE. `approach_status` is deliberately absent from the
+ * SET clause: the row stays `escalated`, and the only statement that moves it is
+ * `overrideApproachGate` above, reachable only from the owner's tap. Everything a model supplies
+ * (`requestedBy`, `reason`) lands in a TEXT column that nothing branches on.
+ *
+ * Idempotence and rate-limiting are STRUCTURAL, not timed:
+ *  - this table's PRIMARY KEY is `task_id`, so N calls cannot create N records;
+ *  - `approach_override_requested_at IS NULL` in the WHERE means only the FIRST request of an
+ *    escalation episode returns true, and only a `true` return notifies the owner;
+ *  - `escalateApproach` clears the three columns, so a genuine RE-escalation re-arms exactly one
+ *    notice. There is no interval to tune and no clock to be wrong about.
+ *
+ * `approach_status='escalated'` in the WHERE is the same guard `overrideApproachGate` carries, for the
+ * same reason: a task that is not stuck has nothing to ask about, and the check is in the STATEMENT so
+ * a request racing the grader loses cleanly instead of stamping a stale ask.
+ *
+ * @returns true if THIS call stamped the request (so THIS call should notify); false if one was
+ *          already pending, or the task is no longer escalated.
+ */
+export async function recordApproachOverrideRequest(opts: {
+  taskId: string;
+  /** The requesting agent's id — recorded for audit only. Never read to decide anything. */
+  requestedBy: string | null;
+  /** The agent's stated reason, shown to the owner. Never read to decide anything. */
+  reason: string | null;
 }): Promise<boolean> {
   await ensureBootstrapped();
   const res = await getPool().query(
     `UPDATE tasks.task_engagement_state
-        SET approach_status='approved',
-            approach_override_by=$2, approach_override_at=now(), approach_override_via=$3,
-            approach_override_quote=$4, approach_override_turn_id=$5, updated_at=now()
-      WHERE task_id=$1 AND approach_status='escalated'`,
-    [
-      opts.taskId,
-      opts.userEmail.toLowerCase(),
-      opts.via,
-      opts.quote ? opts.quote.slice(0, 1000) : null,
-      opts.sourceTurnId ?? null,
-    ],
+        SET approach_override_requested_at=now(), approach_override_requested_by=$2,
+            approach_override_request_reason=$3, updated_at=now()
+      WHERE task_id=$1 AND approach_status='escalated'
+        AND approach_override_requested_at IS NULL`,
+    [opts.taskId, opts.requestedBy ?? null, opts.reason ? opts.reason.slice(0, 1000) : null],
   );
   return (res.rowCount ?? 0) > 0;
 }
@@ -1145,31 +1204,6 @@ export async function getEscalatedApproachTaskIds(userEmail: string): Promise<Se
     userId ? [userId, emails] : [userEmail.toLowerCase()],
   );
   return new Set(rows.map((r) => r.task_id));
-}
-
-/**
- * The caller's ESCALATED task ids that are assigned to one specific agent.
- *
- * Narrower sibling of `getEscalatedApproachTaskIds` above, and it exists for one reason: the quote
- * override's weakest binding is "the owner typed this in that agent's DM". That is only unambiguous
- * while the agent has exactly ONE escalated task — with two, a bare "go ahead" in the DM does not
- * say which one, and honouring it would re-open the cross-task replay the verifier confirmed
- * (.claude/VERIFY-override-gate-1.md CLAIM 4d). The caller treats >1, and any throw, as "ambiguous".
- */
-export async function getEscalatedTaskIdsForAgent(userEmail: string, agentId: string): Promise<string[]> {
-  await ensureBootstrapped();
-  const { resolveScopeByEmail } = await import("../identity/identity.server");
-  const { emails } = await resolveScopeByEmail(userEmail);
-  const { rows } = await getPool().query<{ task_id: string }>(
-    `SELECT es.task_id
-       FROM tasks.task_engagement_state es
-       JOIN tasks.journey_tasks t ON t.id = es.task_id
-      WHERE es.approach_status = 'escalated'
-        AND lower(t.user_email) = ANY($1)
-        AND lower(COALESCE(t.assigned_agent,'')) = lower($2)`,
-    [emails, agentId],
-  );
-  return rows.map((r) => r.task_id);
 }
 
 // ---- Mid-work clarifying question (bounded, rate-limited — see ask_clarifying_question tool) --------
@@ -1303,6 +1337,8 @@ export async function resetEngagementOnReassignment(taskId: string): Promise<voi
             confirmed_at=NULL, revision_count=0,
             approach_status='pending', proposed_approach=NULL, approach_revision_count=0,
             approach_escalated_at=NULL,
+            approach_override_requested_at=NULL, approach_override_requested_by=NULL,
+            approach_override_request_reason=NULL,
             clarify_status='none', clarify_count=0, open_question=NULL, open_question_asked_at=NULL,
             updated_at=now()
       WHERE task_id = $1`,
