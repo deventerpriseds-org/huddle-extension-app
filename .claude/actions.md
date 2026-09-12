@@ -3434,3 +3434,72 @@ separate and still open.**
 **The one thing it could not reach** — Cole's actual row — is now settled independently: it read
 `escalated / confirm_status=confirmed / approach_revision_count=2` before the fix
 (`azure-pg-query.yml` job `103551067437`).
+
+
+## ACT:assign-on-direct-ask — why a task you hand an agent directly stays UNASSIGNED (2026-09-12)
+
+**Asked for:** the owner — assignment *"should have happened immediately just like grooming but from
+my direct ask of the task to an agent."* Diagnosed; NOT built (it is unrequested code in a file the
+override-gate verifier is currently reading).
+
+**Root cause, traced end to end across both repos. The assignee is picked and then thrown away.**
+
+```
+you ask an agent in a 1:1 to do X
+   |
+   v
+create_huddle_task          huddle.functions.ts:2649
+   ownerId: resolveTaskOwner(args.ownerId ?? args.owner ?? args.assignee)
+   |                         <-- an owner IS resolved here ...
+   |                         ... and is used ONLY for the local UI card draft
+   v
+journey write               huddle.functions.ts:2673-2677
+   invokeJourneyTool({ toolName: "quick_create_task",
+                       args: dateArg ? { title, date } : { title } })
+   |                         <-- NO assignee is sent. Not dropped by a bug: never passed.
+   v
+journey quickCreateTask     journey-voice execute-tool/index.ts:432 -> quickCreateTask()
+   accepts ONLY { title, date, auto_schedule } and forwards to parseAndCreateTasks.
+   There is NO assigned_agent parameter anywhere in this chain.
+   |
+   v
+public.tasks row created with assigned_agent = NULL
+   |
+   v  (pg_net sync, 1-3s)
+tasks.journey_tasks mirror row, assigned_agent = NULL
+   |
+   v
+autowork.server.ts:370      if (!row.assigned_agent) continue;
+   -> the task is INERT. No confirm ask, no promotion, no work, no reach-out.
+   |
+   v
+nothing changes until GROOMING runs and assigns it
+```
+
+**So a task the owner hands directly to a named agent behaves exactly like an unassigned one until
+the next groom.** That is precisely what was observed on the Trinnex row, whose `assigned_agent` was
+genuinely `NULL` when read from journey earlier today.
+
+**The fix is small and the capability already exists — do NOT build a parallel path.** journey's
+`update_task` DOES accept `assigned_agent` (`execute-tool/index.ts:906-908`), and so does
+`batch_update_tasks` (`:971`); the board drag already uses that route
+(`board.functions.ts:59` -> `update_task`). Two candidate shapes:
+
+| Option | What happens | Cost |
+|---|---|---|
+| **A. Follow-up `update_task`** | After `quick_create_task` returns the new id, call `update_task({id, assigned_agent})` | Two round-trips; a failure between them leaves the task unassigned (same as today, so it degrades to the current behaviour rather than worse) |
+| **B. Teach `quick_create_task` an assignee** | One write, atomic | Touches journey's edge function and its tool schema — a second repo and a deploy |
+
+**A is preferable** — it reuses a write path that already exists and already works, needs no journey
+deploy, and its failure mode is exactly today's behaviour.
+
+**The open design question is WHO to assign**, and it is a genuine fork, not a detail: the responding
+agent in a 1:1 is the obvious assignee, but in a GROUP huddle the lead captures items across every
+lane (`huddle.functions.ts:2221`), so assigning them all to the lead would be wrong. Likely shape:
+1:1 -> the responding agent; group -> only when the agent named an owner explicitly.
+
+**Evidence:** `huddle.functions.ts:2649` and `:2673-2677`; `journey-voice
+supabase/functions/execute-tool/index.ts:432` + `quickCreateTask()` (accepts title/date/auto_schedule
+only); `autowork.server.ts:370`. Cross-checked against the verifier's finding that journey's
+`update_task`/`batch_update_tasks` are the writers of `assigned_agent`
+(`.claude/VERIFY-escalated-dead-end-1.md`).
