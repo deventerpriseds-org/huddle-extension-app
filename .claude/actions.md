@@ -3305,3 +3305,65 @@ api build chain, 4 mutations FIRED.
 **Open:** the execution-half fields are a nexus-side change to the same file, NOT a second registry
 here. Option C's implementation is nexus-hub `claude/shared-requirement-set`, unmerged, with an
 independent verifier pending.
+
+
+## ACT:trinnex-unblock — Trinnex row reassigned to Cole + approach gate restored (2026-09-12) — DONE
+
+**Asked for:** the owner — *"just trinnex row fixed and reassign to Cole, which should have happened
+immediately just like grooming but from my direct ask of the task to an agent."*
+
+**Done, and exactly one row touched:**
+1. journey `public.tasks` (canonical) — `UPDATE ... SET assigned_agent='cole-blake' WHERE
+   id='449c770f-f8f6-4a50-a7b6-980c60476350' AND assigned_agent IS NULL`. Guarded on NULL so it
+   could not overwrite an existing assignment. Returned `cole-blake`, status `DOING`.
+2. The sync trigger then fired `resetEngagementOnReassignment`, which by design wiped
+   `approach_status` -> `pending` and `confirm_status` -> `awaiting`. Restored both to what the
+   owner had already granted via `azure-pg-query.yml` run `34692847699`.
+
+**Evidence (job `103551067437`):** BEFORE `cole-blake | DOING | escalated | confirmed | 2` ->
+AFTER `cole-blake | DOING | approved | confirmed | 0 | has_dod=t`.
+
+**A prediction of mine was wrong and the follow-up query settled it.** I said 3 other escalated rows
+would remain; the count came back **4**. Listed them (run `34693032022`, job `103551577028`):
+
+| task_id | title | agent | status |
+|---|---|---|---|
+| `0fd63c58` | Apply to the Trinnex position with Boost | cole-blake | **DONE** |
+| `daf067e6` | Transfer Jotform Resume Tool Suite to N8N | elle-rowan | UP_NEXT |
+| `870a7fa9` | Set up call with U-Michigan financial aid | finn-reid | **DONE** |
+| `9976cdbb` | Layout Compass pages, frameworks, and tools | tess-sutton | BACKLOG |
+
+Two are on **DONE** tasks, where `escalated` is inert (auto-work never selects a DONE row) — so only
+2 of the 4 are live blockers. There is also a **duplicate Trinnex task** (`0fd63c58`, DONE) distinct
+from the live one (`449c770f`, DOING). Not touched; flagged for the owner.
+
+**Open:** the owner's second half — assignment *"should have happened immediately ... from my direct
+ask of the task to an agent"* — is a real gap, not yet investigated. Today only `groom_backlog`
+writes `assigned_agent`; a direct 1:1 ask to an agent does not.
+
+## ACT:epics-tasks-subtasks — feasibility done, design fork open (2026-09-12)
+
+**Asked for:** the owner — *"shouldn't it be the idea if tasks and subtasks with order and pointers?
+I don't understand how chatgpt gets that out the gate and we lose it somehow ... the board and
+grooming also have to be able to handle it."*
+
+**CORRECTION to an earlier claim in this session.** I reported that `parent_task` / `subtask` /
+`epic` / `depends_on` / `sequence` / `project_id` were all absent, therefore multi-step projects were
+unsupported. That was a **name grep**, and two of the three requested capabilities exist under other
+names. The "never conclude a capability is ABSENT from a single-name grep" rule, broken again.
+
+**Ground truth (journey Supabase + src greps, n=412 tasks):**
+- **Order — EXISTS and works end to end.** `priority_rank int`, written by `groom.ts:206-232`, read
+  by `BoardView.tsx:76-77`, `scoring.ts:54,148`, `autowork.server.ts:523`, `standup.server.ts:165`.
+  139 of 412 rows carry one.
+- **Pointers — EXISTS-BUT-CONSTRAINED.** `blocked_by uuid[]` is on the canonical table with the
+  right type and is **completely dead**: 0 of 412 rows use it, zero grep hits in `src/`, not in the
+  mirror DDL, never synced, never read.
+- **Hierarchy — ABSENT.** No parent pointer anywhere; grooming normalises a **flat** dense 1..N
+  across the whole backlog (`groom.ts:206-211`) with no notion of intra-group order.
+
+**Evidence:** `docs/feasibility-epics-tasks-subtasks.md` — feasibility table, the ChatGPT-vs-Huddle
+architectural diagram, and the three mutually-exclusive schema options with a recommendation (A:
+`parent_task_id` + revive `blocked_by`) and an explicit reversible/irreversible split.
+
+**Open — this is a genuine fork and needs the owner's pick before any schema work starts.**

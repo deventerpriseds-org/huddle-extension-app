@@ -30,3 +30,36 @@ requiring live rows is NOT_APPLICABLE with a note on what would settle it.
 | 5 | "That's a meaty one" is one hardcoded literal bypassing the persona layer | pending |
 
 ---
+
+## FINDING 0 (unasked, read this first) — the tree MOVED mid-verification
+
+My first tool call saw `HEAD 40777ee`, a clean tree, and **no** `approach-override.ts`. Seconds
+later the same checkout was at `HEAD d6f0296` on branch `claude/iris-huddle-interaction-baj51c`
+with `approach-override.ts` and `green-light.ts` present and `tasks.server.ts` +
+`turns.server.ts` modified. The implementing session is building the fix WHILE I verify.
+
+```
+$ git log --oneline d20bb5e..d6f0296
+d6f0296 feat(override-gate): the anti-self-override guard + the green-light matcher, as pure modules
+e84fc60 docs: implementation log + design decisions for the approach-gate override
+4fe2fa7 docs: ACs for the override gate + checker scoping -- and two of my claims REFUTED
+40777ee docs: the approach gate's escalated state is terminal and has no user override
+```
+
+`40777ee` IS the diagnosis commit, and it is **docs-only** over `d20bb5e`:
+
+```
+$ git diff --stat d20bb5e 40777ee
+ .claude/actions.md | 54 ++++++++++++++++++++++++++++++++++++++++++++++-
+ .claude/memory.md  | 30 ++++++++++++++++++++++++++
+ 2 files changed, 83 insertions(+), 1 deletion(-)
+```
+
+**So the source at the diagnosis is exactly `d20bb5e`'s source.** All five claims below are
+verified against an immutable extract of `40777ee` (`git archive 40777ee`), NOT the live working
+tree, which is a moving target. Where the in-flight fix changes the answer, I say so separately
+and label it clearly. `approach-override.ts` and `green-light.ts` are **ABSENT** at `d20bb5e`
+(`git cat-file -e` → path exists on disk but not in the commit), so they cannot rescue or
+condemn any claim about the diagnosed state.
+
+---

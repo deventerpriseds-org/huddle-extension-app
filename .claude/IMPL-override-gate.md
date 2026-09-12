@@ -125,3 +125,145 @@ so a replay is visible after the fact.
 ---
 
 ## 2. IMPLEMENTATION LOG (appended as it happens)
+
+### Chunk 1 — the pure guards (`d6f0296`)
+`lib/tasks/approach-override.ts` (quote verification + the re-grade ceiling) and
+`lib/tasks/green-light.ts` (the shared go-ahead matcher), both node-free, with
+`scripts/approach-override.test.ts` and `scripts/green-light.test.ts`
+(`npm run test:override-gate` / `test:green-light`).
+
+### Chunk 2 — (B) re-grading and the override's server half (`83071e6`)
+- `approach-gate.server.ts`: the `escalated` early return at the old :65-66 is gone. Replaced by
+  `wasEscalated` + `mayRegradeEscalated`; attempt counted before grading; failed re-grade
+  re-escalates; errored re-grade stays escalated.
+- `tasks.server.ts`: five `ADD COLUMN IF NOT EXISTS` audit columns, `overrideApproachGate()`,
+  `getEscalatedApproachTaskIds()`, and both added to `ENGAGEMENT_COLS`/`TaskEngagementState`.
+- `confirm-ask.functions.ts`: `overrideEscalatedApproach()` shared core,
+  `overrideApproachFromButtonFn`, `getEscalatedApproachTasksFn`.
+- `turns.server.ts`: `getRecentUserUtterances()`.
+
+### Chunk 3 — the tool and both discovery surfaces (`c1339fd`)
+`OVERRIDE_APPROACH_GATE_TOOL` + handlers in BOTH dispatch paths; `escalatedApproachByAgent` →
+`overrideAsk` on the reply → `OverrideAskRow` in `HuddleView.tsx`; `escalated` chip + Approve anyway
+on `BoardCard`. `overrideAsk` plumbed through all 9 DTO sites, the store merge and both mappers.
+
+### Chunk 4 — produce-vs-quick (`feccc1e`)
+`classifyConfirmReply` now falls through to `isGreenLight`; the fresh-ask branch short-circuits to
+produce when `hasGreenLit` sees a go-ahead in the user's recent lines (including the current
+message); `produceVsQuickAsk(agentId)` replaces the single literal with four stable per-agent
+variants. The produce path is now ONE closure (`runProduce`) called from both entry points.
+
+---
+
+## 3. VERIFIED — what was actually run, and what it showed
+
+### 3.1 The live defect, reproduced from ground truth rather than inferred
+
+Before the fix, run directly:
+
+```
+$ bun -e 'import(".../deep-confirm.server.ts").then(m=>console.log(m.classifyConfirmReply("Okay knock it out")))'
+unrelated
+```
+
+That is the owner's 02:50 go-ahead being thrown away. The produce patterns are anchored with `^(`,
+and "Okay knock it out" starts with "okay". `"Go for it"` did classify (it hits `^go\b`), so the
+02:06 one should have worked — which means the 01:32→02:06 failure has a second cause I could NOT
+ground-truth from here (see §4). The 02:50 one is now explained and fixed.
+
+### 3.2 Suites — 8/8 green
+
+| suite | result |
+|---|---|
+| `test:override-gate` (new, 80 cases) | ALL PASS |
+| `test:green-light` (new, 76 cases) | ALL PASS |
+| `test:router` | 20 passed, 0 failed |
+| `test:blocked` | 21/21 |
+| `test:presence` | 18/18 |
+| `test:mode` | 22/22 |
+| `test:turn-identity` | ALL PASS |
+| `test:cross-app` | 83 passed, 0 failed |
+
+`npx tsc --noEmit` exit 0. `npm run build` succeeded.
+
+### 3.3 MUTATION PROOFS — 8 guards, 8 FIRED, 0 INERT
+
+Run with `mutate.sh <file> <anchor-file> <replacement-file> <test-cmd> <must-fail-pattern>`; anchors
+from files, never shell arguments.
+
+| # | Guard mutated | Defect reinstated | Outcome |
+|---|---|---|---|
+| 1 | `if (!isUserTurn(u.id)) continue;` (approach-override.ts) | an agent-initiated turn's directive counts as the owner's words | **FIRED** |
+| 2 | the 24-char/4-word floor | "ok" can authorise an override | **FIRED** |
+| 3 | `if (!(u.updatedMs > floor)) continue;` | a year-old go-ahead still authorises | **FIRED** |
+| 4 | `mayRegradeEscalated` → `return true` | the re-grade loop is unbounded | **FIRED** |
+| 5 | `if (isNegatedOrAsked(n)) return false;` (green-light.ts) | "do not proceed" reads as consent | **FIRED** |
+| 6 | `WHERE task_id=$1 AND approach_status='escalated'` (tasks.server.ts) | the override approves a `pending` task, skipping the grader | **FIRED** |
+| 7 | `if (status !== "escalated")` (confirm-ask.functions.ts) | same, one layer up | **FIRED** |
+| 8 | `if (isGreenLight(text)) return "produce";` (deep-confirm.server.ts) | the live green-light defect | **FIRED** |
+
+Two runs first came back **NOT-APPLIED** (a `must-fail-pattern` containing an apostrophe, and anchor
+files written to the wrong directory). Both were re-run correctly rather than banked — a NOT-APPLIED
+is not a pass, and reporting one as INERT is the exact collapse `mutate.sh` exists to prevent.
+
+### 3.4 AC-O11 — blast radius of `approach_status === "approved"`
+
+`grep -rn 'approach_status ===' src/ --include=*.ts` returns exactly the two the AC predicted, and
+both are correct with an overridden row:
+
+| Reader | Behaviour on an overridden row |
+|---|---|
+| `approach-gate.server.ts:63` | short-circuits `{approved:true, note:"already approved"}` — the task is no longer refused. This is AC-O10. |
+| `autowork.server.ts:697` | `promotedToDoing = true`, so the task can take a DOING slot on the next cadence. |
+
+### 3.5 AC-O12 — standup / review-recheck
+
+`grep -n approach standup.server.ts review-recheck.server.ts` returns **nothing**. Neither reads
+`approach_status` at all: standup reads `entered_review_at` via `getTaskEngagementStatesSince`, and
+review-recheck reads the review-ping fields. **So they cannot misreport an override as a quality
+pass, because they make no claim about the approach in the first place.** No change was needed;
+that is the answer, stated rather than left silent.
+
+### 3.6 AC-O15 — what must NOT have changed, checked by diff against `d20bb5e`
+
+| Must be unchanged | Check | Result |
+|---|---|---|
+| `resetEngagementOnReassignment` | diff for that symbol | no `+`/`-` lines — byte-identical |
+| `isStructuredWorkflowRequired`'s `?? true` | diff of `agent-workflow-config.server.ts` | empty — file untouched |
+| autowork's `?? true` promotion gate | diff of `autowork.server.ts` | empty — file untouched |
+| `ensureReviewFlip` affirmative-only | `confirm_status !== "confirmed"` still at tasks.server.ts:1312 | present |
+| the three existing confirm-ask buttons | deleted lines in `confirm-ask.functions.ts` | **0** — purely additive |
+
+---
+
+## 4. WHAT I COULD **NOT** PROVE — read this before believing anything above
+
+1. **NOTHING IS CONFIRMED LIVE.** This is on the feature branch, not merged, not deployed. Status is
+   **"implemented, mechanism verified locally, NOT yet confirmed live"** — never "fixed". The owner
+   taking a genuinely escalated task and using the override is the verdict (AC-O17).
+2. **The DB layer is not executed anywhere in these tests.** `overrideApproachGate`'s SQL, the five
+   `ADD COLUMN` statements and `getRecentUserUtterances` are asserted STRUCTURALLY (guards 6, 7) and
+   typecheck, but no test connects to Postgres — the CCR session cannot reach Azure PG (TCP 5432 is
+   blocked by session egress) and the MCP connectors are unauthenticated this session. **The first
+   real execution of that SQL will be on the live database.** The columns are additive and the write
+   is a guarded UPDATE, so the risk is bounded, but it is unproven.
+3. **The fresh-ask green-light suppression has no automated test.** `hasGreenLit` is proven (76
+   cases); the CALL SITE inside `runHuddleTurn` is not, because exercising it needs a full turn. It
+   is three lines and typechecks, but treat it as mechanism-only.
+4. **The 02:06 "Go for it" failure is unexplained.** `classifyConfirmReply("Go for it")` returned
+   `"produce"` BEFORE my change, so the classifier does not explain that one. Candidates I could not
+   distinguish without the live transcript: the 2h pending expiry, a `getPendingDeepConfirm` read
+   failure (it swallows every error and returns null), or the go-aheads landing in a different
+   huddle. The fresh-ask suppression in §2 chunk 4 covers all three cases as a side effect — a
+   green-lit thread no longer asks at all, pending row or not — but I have not shown that the
+   original cause was any of them.
+5. **AC-O1 is deliberately not met as written** — a model-callable tool DOES exist. The reasoning is
+   in §1.1. If the owner disagrees, deleting `OVERRIDE_APPROACH_GATE_TOOL` and its two handlers
+   leaves the button path fully working.
+6. **AC-O15.2 is superseded, not met.** It asserts that an escalated task still returns
+   `{approved:false, escalated:true}` from `runApproachGate`. After (B) — which the owner explicitly
+   approved — that is only true when the re-grade fails, errors, or the ceiling is reached; a
+   re-graded approach that passes now returns approved. That is the requested behaviour change, not
+   a regression, but the AC as written would read as REFUTED and should not be ticked.
+7. **Quote replay across tasks is possible inside the 24h window** (§1.3). Recorded, not closed.
+8. **No independent verifier has read this.** Everything above is my own evidence.
