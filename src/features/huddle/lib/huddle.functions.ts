@@ -86,6 +86,11 @@ import {
   RESOLVE_CLARIFYING_QUESTION_TOOL,
 } from "./tasks/task-agent-tools";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
+import {
+  assignCreatedJourneyTasks,
+  pickCreatedTaskAssignee,
+  resolveExplicitOwner,
+} from "./tasks/assign-on-create";
 
 // Feature flag: gates the intent-classification guard on capability/lane hand-off.
 // Set to false for an instant rollback to the previous (trigger-word-only) behaviour.
@@ -1546,6 +1551,24 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             });
             created = !!r.ok;
             if (r.ok && r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+            // ASSIGN IT TO THE AGENT THAT IS TAKING IT ON. Without this the row lands with
+            // assigned_agent = NULL and `runScheduledAutoWork` — kicked on the very next line —
+            // skips it entirely (autowork.server.ts:544), so "I've kicked it to the team to work up
+            // async" was an overclaim: nothing could pick it up until the next groom. This path is
+            // 1:1 by construction (the gate is inside `data.scope === "one-to-one"`), so the
+            // responding agent is the assignee by the same rule used for create_huddle_task.
+            // Best-effort: a failure leaves it exactly as it was before this line existed.
+            if (r.ok) {
+              const a = await assignCreatedJourneyTasks({
+                taskIds: (r.tasks ?? []).map((t) => t.id),
+                agentId,
+                caller: (data.caller ?? {}) as Record<string, unknown>,
+                huddleId: data.huddleId,
+              });
+              if (!a.assigned) {
+                console.warn(`[huddle-model] produce task created but NOT assigned: ${a.error ?? "no id"}`);
+              }
+            }
           }
         } catch (e) {
           console.warn(
@@ -2562,20 +2585,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       return "Backlog";
     }
 
+    // The owner the agent NAMED, or null. One implementation, shared with the journey assignment
+    // below (tasks/assign-on-create.ts), so the card's owner and the canonical assignee can never
+    // disagree — before this they were two different questions answered in two different places.
+    function resolveNamedTaskOwner(value: unknown): AgentId | null {
+      return resolveExplicitOwner(value, AGENTS) as AgentId | null;
+    }
+
+    // ...and the same answer with the long-standing fallback applied, for the UI card, which must
+    // always show SOMEONE. The fallback is exactly why this cannot be the input to an assignment:
+    // it returns the responding agent whether or not one was ever named.
     function resolveTaskOwner(value: unknown): AgentId {
-      const raw = String(value ?? "")
-        .trim()
-        .toLowerCase();
-      if (!raw) return winner.id;
-      if (AGENT_BY_ID[raw as AgentId]) return raw as AgentId;
-      const matched = AGENTS.find(
-        (a) =>
-          a.name.toLowerCase() === raw ||
-          a.handle.toLowerCase() === raw ||
-          a.name.toLowerCase().includes(raw) ||
-          raw.includes(a.handle.toLowerCase()),
-      );
-      return matched?.id ?? winner.id;
+      return resolveNamedTaskOwner(value) ?? winner.id;
     }
 
     async function createSuggestedTaskFromTool(args: Record<string, unknown>) {
@@ -2643,10 +2664,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         return { ok: true, deduped: true, task: { title: title.slice(0, 160) } };
       }
       createdTaskTitles.add(titleKey);
+      // Did the agent actually NAME an owner? Kept separate from the card's ownerId because that
+      // one falls back to the responder, and the group rule below turns on the difference.
+      const namedOwner = resolveNamedTaskOwner(args.ownerId ?? args.owner ?? args.assignee);
       const task: SuggestedTaskDraft = {
         id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
         title: title.slice(0, 160),
-        ownerId: resolveTaskOwner(args.ownerId ?? args.owner ?? args.assignee),
+        ownerId: namedOwner ?? winner.id,
         lane: resolveTaskLane(args.lane ?? args.status),
         progress: typeof args.progress === "number" ? args.progress : undefined,
         blockReason: typeof args.blockReason === "string" ? args.blockReason : undefined,
@@ -2679,6 +2703,31 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           if (r.ok) {
             if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
             else suggestedTasks.push(task); // journey didn't echo a row — keep a Huddle card
+            // ASSIGN IT. `quick_create_task` has no assignee parameter (journey
+            // execute-tool/index.ts:2658-2670 forwards only text/target_date/auto_schedule), so the
+            // row lands with assigned_agent = NULL and the whole auto-work engine skips it
+            // (autowork.server.ts:544 drops it from the WIP buckets, :370 from the confirm
+            // reach-outs) until grooming assigns it. A follow-up update_task — the same write the
+            // board drag already uses — closes that, with no journey deploy.
+            // 1:1 → the responding agent; group → only an explicitly named owner (the LEAD captures
+            // every lane's items in a group, :2221, so defaulting to it would assign other lanes'
+            // work to the wrong agent). BEST-EFFORT: a failure leaves the task unassigned, which is
+            // exactly the old behaviour, and the outcome is reported verbatim so the agent cannot
+            // claim an assignment that did not happen.
+            const assignee = pickCreatedTaskAssignee({
+              scope: data.scope,
+              huddleId: data.huddleId,
+              responderId: winner.id,
+              explicitOwner: namedOwner,
+            });
+            const assignment = assignee
+              ? await assignCreatedJourneyTasks({
+                  taskIds: (r.tasks ?? []).map((t) => t.id),
+                  agentId: assignee,
+                  caller: (data.caller ?? {}) as Record<string, unknown>,
+                  huddleId: data.huddleId,
+                })
+              : null;
             // journey's `output` IS execute-tool's `result` object verbatim (huddle-proxy forwards
             // exec.result, not the sibling exec.message string) — parse it so the model can report
             // honestly instead of a flat "added it" that overclaims what actually happened (same-day
@@ -2687,13 +2736,29 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             // due_date}], tasks:[{due_date,start_time,is_scheduled,...}]} — see parseAndCreateTasks.
             // Shared with the voice executor — see tasks/create-task-core.ts.
             const { outcome, note: outcomeNote } = summarizeQuickCreateOutcome(r.output);
+            const assignNote = assignment
+              ? assignment.assigned
+                ? ` · assigned to ${AGENT_BY_ID[assignment.agentId as AgentId]?.name ?? assignment.agentId}`
+                : ` · NOT assigned (${assignment.error ?? "assignment failed"})`
+              : "";
             recordToolUse(
               winner.id,
               "create_huddle_task",
-              `“${task.title}” → Huddle board + journey${outcomeNote ? ` — ${outcomeNote}` : ""}`,
+              `“${task.title}” → Huddle board + journey${outcomeNote ? ` — ${outcomeNote}` : ""}${assignNote}`,
               true,
             );
-            return { ok: true, task, boards: ["huddle", "journey"], outcome, note: outcomeNote };
+            return {
+              ok: true,
+              task,
+              boards: ["huddle", "journey"],
+              outcome,
+              // The assignment is a SEPARATE fact from the create and is reported as one. `assigned`
+              // is true only when a journey row really changed owner; when it is false the task
+              // still exists, unassigned, and the note says so in words the model must not soften.
+              assigned: assignment?.assigned ?? false,
+              assignedTo: assignment?.assigned ? assignment.agentId : null,
+              note: [outcomeNote, assignment?.note].filter(Boolean).join(" ") || undefined,
+            };
           }
           const ev = recordFallback(
             "tool",
