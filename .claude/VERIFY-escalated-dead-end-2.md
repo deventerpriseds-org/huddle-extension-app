@@ -193,3 +193,61 @@ holds. **UI confirmed wired**, not just a server primitive: `overrideApproachGat
 rendered in both `HuddleView.tsx:770` (in-thread) and `BoardView.tsx:775` (board card) — this is
 new since loop 1, which found no per-task override existed at all.
 
+
+## Cheap suite re-run covering EVERYTHING — independently run, not taken on report — **ALL GREEN**
+
+Ran all 13 `test:*` scripts in `package.json` plus `npx tsc --noEmit` myself this loop:
+
+| Script | Result |
+|---|---|
+| `test:router` | 20 passed, 0 failed |
+| `test:blocked` | 21/21 passed |
+| `test:presence` | 18/18 passed |
+| `test:mode` | 22/22 passed |
+| `test:voice-tools` | 36 passed, 0 failed |
+| `test:cross-app` | 83 passed, 0 failed |
+| `test:email-gate` | 73 passed, 0 failed |
+| `test:nexus-tools` | 190 passed, 0 failed |
+| `test:turn-identity` | ALL PASS (exit 0) |
+| `test:override-gate` | ALL PASS (exit 0) |
+| `test:green-light` | ALL PASS (exit 0) |
+| `test:assign-on-create` | ALL PASS (exit 0) |
+| `test:verdict-memory` | ALL PASS (exit 0) |
+| `npx tsc --noEmit` | exit 0, no diagnostics |
+
+All 13 exit codes confirmed `0` individually (not inferred from log text alone). **CONFIRMS** the
+"13/13 green and tsc exit 0" figure handed to me in the prior-state block — I did not take that
+number on report, I reran every script myself.
+
+## CHALLENGE THE RADIUS
+
+The stated blast radius (approach-gate, tasks.server.ts's approve/override primitive, review-gate
+as reference, autowork's consumer, the two Settings components) is the right radius for the
+approach-gate work itself, and I did not find a claim inside it that went unchecked. One thing
+sits just OUTSIDE the stated radius and is worth naming rather than silently including or
+silently dropping: the produce-vs-quick deep-confirm gate (`huddle.functions.ts`'s
+`data.scope === "one-to-one"` block, `deep-confirm.server.ts`) is a DIFFERENT gate from the
+approach gate — it does not touch `task_engagement_state.approach_status` at all — but Claim 3
+in this same work's prior loop was about it, so I traced it anyway (see Claim 3 above) rather than
+declaring it out of scope. I found no evidence the two gates interact (no shared state, no shared
+code path); they are two independent WIP-limiting mechanisms that happen to have been diagnosed in
+the same loop-1 pass. I did not find a fourth mechanism or gate that the brief's radius missed.
+
+## Closing paragraph
+
+Loop 1's findings were substantively acted on, not just narrated as fixed. The terminal
+early-return that made `escalated` a dead end is gone, replaced by a bounded re-grade path plus a
+new, properly `WHERE`-guarded owner-override primitive (`overrideApproachGate`) wired to a real,
+mounted "Approve anyway" button in both the thread view and the board — this is the actual fix for
+the diagnosis, not a document describing an intended one. The fail-open-writes-a-durable-lie defect
+is fixed and now matches `review-gate.server.ts`'s shape exactly, verified by reading both catch
+blocks side by side rather than trusting the claim that they match. The one thing NOT fully closed
+is the `approveApproach` primitive itself: it remains an unconditional upsert with no `WHERE`
+clause, and while its one real caller is safe by construction today (a genuine grader pass is the
+only thing that reaches it), the narrow cross-turn race described under Claim (b) is still
+latent in the primitive — it just isn't triggered by any caller that exists right now. Separately,
+and outside this work's stated radius but inside its prior loop's claims, the produce-vs-quick
+single-literal defect and its missing "already said go" memory have ALSO been fixed on this same
+branch, with tests (`test:green-light`, `test:verdict-memory`) exercising exactly those gaps — so
+nothing loop 1 surfaced for this work slug is still live except the one narrow, low-probability
+`approveApproach` race noted above, which I am reporting as residual rather than as a fresh defect.
