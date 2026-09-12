@@ -169,5 +169,91 @@ check("AT the ceiling, no more grader calls — the override is the only way out
 check("past the ceiling", mayRegradeEscalated(9, 3), false);
 check("a higher configured cap raises the ceiling with it", mayRegradeEscalated(6, 5), true);
 
+// --- STRUCTURAL GUARDS ----------------------------------------------------------------------------
+// These three cannot be exercised by a pure unit test — they live in a SQL statement and in a server
+// fn that needs a database — but each is a guard whose absence is a real, specific defect, so each is
+// asserted against the source. (A source grep is the fallback for a structural rule, never the first
+// choice: everything above this line is a real execution.)
+const src = (p: string) => require("fs").readFileSync(p, "utf8") as string;
+const tasksServer = src("src/features/huddle/lib/tasks/tasks.server.ts");
+const confirmAsk = src("src/features/huddle/lib/tasks/confirm-ask.functions.ts");
+
+console.log("\nSTRUCTURAL: the override writes only what it should, and only when it should");
+const overrideSql = tasksServer.slice(
+  tasksServer.indexOf("export async function overrideApproachGate"),
+  tasksServer.indexOf("export async function getEscalatedApproachTaskIds"),
+);
+check("overrideApproachGate exists", overrideSql.length > 0, true);
+check(
+  "the escalated-only guard is IN THE STATEMENT, so two racing clicks cannot both win",
+  /WHERE task_id=\$1 AND approach_status='escalated'/.test(overrideSql),
+  true,
+);
+check(
+  "it NEVER writes proposed_approach — that column is the record of what the AGENT proposed",
+  /proposed_approach/.test(overrideSql),
+  false,
+);
+check("it records WHO overrode", /approach_override_by=\$2/.test(overrideSql), true);
+check("it records WHEN", /approach_override_at=now\(\)/.test(overrideSql), true);
+check("it records HOW (button vs verified quote)", /approach_override_via=\$3/.test(overrideSql), true);
+check(
+  "it records WHICH UTTERANCE authorised it — a marker with no provenance is not an audit trail",
+  /approach_override_turn_id=\$5/.test(overrideSql),
+  true,
+);
+check(
+  "an overridden row is distinguishable from a graded one: the audit columns are SELECTed back",
+  /approach_override_by,approach_override_at,approach_override_via/.test(tasksServer),
+  true,
+);
+
+console.log("\nSTRUCTURAL: the shared core is the only door, and it refuses a non-escalated task");
+const core = confirmAsk.slice(
+  confirmAsk.indexOf("export async function overrideEscalatedApproach"),
+  confirmAsk.indexOf("export const overrideApproachFromButtonFn"),
+);
+check("the shared core exists", core.length > 0, true);
+check(
+  "ownership comes from the EXISTING helper, not a new check",
+  /getOwnedTaskForConfirmAsk\(taskId, email\)/.test(core),
+  true,
+);
+check(
+  "a missing task and a foreign task give the byte-identical error",
+  (core.match(/"Task not found\."/g) ?? []).length,
+  1,
+);
+check(
+  "it REFUSES any status that is not 'escalated' — approving a 'pending' task would skip the grader",
+  /status !== "escalated"/.test(core),
+  true,
+);
+check(
+  "idempotency is a read of PERSISTED status, not the per-turn ledger",
+  /status === "approved"/.test(core) && !/claimAction/.test(core),
+  true,
+);
+check(
+  "the quote path verifies against the transcript rather than trusting the caller",
+  /verifyOwnerQuote\(source\.quote/.test(core) && /getRecentUserUtterances/.test(core),
+  true,
+);
+check(
+  "a DB failure is RETURNED, never swallowed into a false 'unstuck'",
+  /catch \(err\) \{\s*return \{ ok: false, error:/.test(core),
+  true,
+);
+check(
+  "the BUTTON path passes no quote — a click is already a user act",
+  /source: \{ via: "button" \}/.test(confirmAsk),
+  true,
+);
+
+console.log("\nSTRUCTURAL: the override touches the APPROACH gate ONLY (AC-O8)");
+check("it never writes confirm_status", /confirm_status\s*=/.test(core), false);
+check("it never calls confirmTaskIntent", /confirmTaskIntent/.test(core), false);
+check("it never writes revision_count", /revision_count\s*=/.test(core), false);
+
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);
