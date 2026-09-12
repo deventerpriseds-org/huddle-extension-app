@@ -73,3 +73,35 @@ Same 3 writers loop 1 found, plus exactly one new one (`overrideApproachGate`) �
 primitive this whole fix was built to add. No stray fifth writer anywhere else in the tree.
 CONFIRMED: the set is what loop 1 found, correctly extended by one guarded writer.
 
+
+## CLAIM 3 (re-checked at reduced depth) — "one hardcoded literal / seven conjuncts, 1:1 only" — **PARTIALLY REFUTED, premise moved**
+
+**1:1 scoping — still holds.** The gate is still entered only under (`huddle.functions.ts:1520`):
+`!resume && !data.internal && !data.ceremonyBarge && data.scope === "one-to-one"`. A group huddle
+still never reaches this path — unchanged from loop 1.
+
+**"One hardcoded literal" — no longer true; this is now an intentional, documented fix, not a
+regression.** `grep -n meaty huddle.functions.ts` returns **zero matches** (loop 1 quoted the
+literal at `:1624` verbatim — it is gone). The reply is now `produceVsQuickAsk(primary)`
+(`huddle.functions.ts:1697`, `deep-confirm.server.ts:256-262`), which hashes `agentId` into one of
+**4** stable per-agent variants (`PRODUCE_VS_QUICK_VARIANTS`, `deep-confirm.server.ts:239-254`) —
+still model-free (no persona/snapshot call, matching the gate's original cost rationale), but no
+longer one shared string every agent recites identically. The file's own comment
+(`deep-confirm.server.ts:222-234`) documents this as a direct response to the owner's complaint
+about the old copy and the "every agent recited it identically" defect — i.e. this is the
+diagnosed problem being fixed, not a new one.
+
+**Conjunct count — INCREASED, not merely "still seven".** Loop 1 counted 7 conjuncts gating the
+literal. The current code adds two more gates BEFORE the ask is ever emitted (`huddle.functions.ts
+:1651-1690`): a `hasGreenLit(recentUserLines)` check (an explicit prior go-ahead skips straight to
+`runProduce`) and a `getRecentDeepVerdict` check (a remembered "produce"/"quick" answer is replayed
+instead of re-asking). Both are new since loop 1 and directly address loop 1's own flagged gap
+("Already said go is NOT honoured today" / no per-huddle memory of a prior answer) — confirmed via
+`test:green-light` (ALL PASS) and `test:verdict-memory` (ALL PASS, including "a remembered
+'produce' runs the produce path instead of asking").
+
+**Verdict: the claim as stated no longer describes the code.** It is not that the claim was
+verified false — the underlying defect it named (single literal, no memory of a prior go-ahead)
+has been intentionally fixed on this branch. Re-confirming the ORIGINAL wording is not possible;
+what is confirmed is that the two gaps loop 1's Claim 5 finding implied are now closed.
+
