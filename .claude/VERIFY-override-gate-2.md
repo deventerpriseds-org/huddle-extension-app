@@ -254,3 +254,137 @@ adversarial test above, not a silent loosening.
 
 **Verdict: CONFIRMED.**
 
+
+## CHEAP SUITE RE-RUN — covering EVERYTHING, real output, not reported numbers
+
+Every `test:*` script in `package.json`, run directly (not taken from a commit message or reported count):
+
+```
+test:router          -> 20 passed, 0 failed
+test:blocked         -> 21/21 passed
+test:presence        -> 18/18 passed
+test:mode            -> 22/22 passed
+test:voice-tools     -> 36 passed, 0 failed
+test:cross-app       -> 83 passed, 0 failed
+test:email-gate      -> 73 passed, 0 failed
+test:nexus-tools     -> ALL PASS: 190 passed, 0 failed
+test:turn-identity   -> ALL PASS
+test:override-gate   -> ALL PASS
+test:green-light     -> ALL PASS
+test:assign-on-create-> ALL PASS
+test:verdict-memory  -> ALL PASS
+npx tsc --noEmit     -> exit 0, no errors
+```
+
+**Important, separating observation from interpretation:** the full suite is green, AND every attack in
+the CLAIM 4 re-derivation above (ATTACK1/2/3/7, all `ok:true` when they should be `ok:false`) passed
+against this exact code with the suite still green. This is not a contradiction — it means the suite
+does not contain a test case shaped like these 4 attacks (confirmed by reading `scripts/approach-
+override.test.ts` for a "never"/negation-word-gap case, a DM-off-topic case, or a title-phrase-
+collision case — none exist). A green suite here is evidence the SHIPPED tests pass; it is not evidence
+the guard is complete, and should not be read as such.
+
+## MUTATION-PROOF SPOT-CHECK — the task-binding guard (new since loop 1)
+
+Loop 1 mutation-proved 3 guards from the pre-hardening code. This loop spot-checks ONE new guard the
+hardening introduced — the task-binding check, since CLAIM 4 above found it has real gaps and I want to
+confirm the check that DOES exist is at least real (not merely inert on top of being incomplete).
+
+
+**`scripts/mutate.sh` result** (anchor from file, replacement from file, per the org rule):
+```
+Guard: utteranceBindsToTask (approach-override.ts) -> replaced body with `return true`
+Test:  bun scripts/approach-override.test.ts
+Must-fail pattern: "not-this-task"
+
+FIRED: 'not-this-task' failed with the defect reinstated. The guard is real.
+restored: sha256 match (file is git-tracked -- `git ls-files --error-unmatch` confirms it; the
+          tool's own "UNTRACKED" note appears to be a false read on its tracked-file check, but the
+          restore was independently verified by sha256 match AND a clean post-restore test pass, so
+          the guard-proof result stands regardless of that cosmetic note)
+tree clean: 'not-this-task' passes again on the restored tree
+```
+
+**Verdict: CONFIRMED** — the task-binding check that DOES exist is real and load-bearing (FIRED, not
+inert). This does not change CLAIM 4's verdict: a real guard with real gaps is still a guard with real
+gaps, and both were demonstrated above with the guard fully intact and passing its own test suite.
+
+## REGRESSION BASELINE — golden path
+
+This is a server-side gate/task-logic repo with no live-deployed SWA target named in this verify
+brief (unlike `boost-application-packet-platform`'s Playwright golden path). The applicable regression
+evidence is the full offline test suite + typecheck above, run independently, all green — matching
+loop 1's conclusion that no live UI baseline applies to this change's scope.
+
+- App loads / Today / Opportunities / Pipeline screens: **NOT APPLICABLE** — this is not that app;
+  no live URL or UI surface was named in scope for this change (server-side task-gate logic only).
+- Server-side logic golden path: **CONFIRMED** — all 13 `test:*` suites pass, `tsc --noEmit` clean,
+  and the specific consumers of every changed export (`approach_status` readers, `update_task` call
+  sites, `isGreenLight`/`hasGreenLit` consumers) were traced and shown to still agree.
+
+
+---
+
+# BOTTOM LINE
+
+## Summary table
+
+| # | Claim | Method | Result |
+|---|---|---|---|
+| 1 | approach-gate.server.ts fresh-path catch matches review-gate shape | diff `31df508`→`83071e6`, read review-gate.server.ts | CONFIRMED |
+| 2 | GREEN_LIGHT/isGreenLight behaviourally untouched | consumer sweep + differential `bun -e` run | CONFIRMED |
+| 3 | update_task arg is `task_id` not `id` | read journey's `updateTask` handler directly | CONFIRMED (brief's premise was wrong) |
+| 4 | runProduce assigns before kicking autowork | read call order in huddle.functions.ts | CONFIRMED |
+| 5 | Guarded override UPDATE is race-safe, `proposed_approach` untouched | live replay on populated prior-schema Postgres | CONFIRMED |
+| 6 | DM-binding query correctly ambiguous at 2+ escalated tasks | live SQL, 1-task then 2-task cases | CONFIRMED |
+| 7 | Re-grade loop bound / errored-re-grade-stays-escalated | diff shows zero change since loop-1's proof | CONFIRMED |
+| 8 | Nothing fail-closed loosened | real diff pasted, all 5 deleted lines accounted for | CONFIRMED |
+| 9 | Blast radius unchanged (3 readers of approach_status) | fresh grep, same 3 hits as loop 1 | CONFIRMED |
+| 10 | **The anti-self-override guard actually prevents self-override** | 9 fresh adversarial attacks against the real function | **REFUTED (narrower)** — loop-1's 3 specific attacks and unrestricted cross-task replay are closed; 4 other routes remain open (2 implementer-disclosed, 2 newly found) |
+| 11 | Cheap suite + typecheck | ran all 13 `test:*` + `tsc --noEmit` myself | CONFIRMED, all green |
+| 12 | task-binding guard is real (not inert) | `scripts/mutate.sh`, FIRED | CONFIRMED |
+
+## What remains genuinely open, in order of how easily it triggers in ordinary use
+
+1. **DM-ambiguity-of-one (implementer-disclosed, confirmed still open):** in a 1:1 where the assigned
+   agent has exactly one escalated task — an entirely ordinary state, not a contrived edge case — ANY
+   genuine go-ahead the owner gives about ANYTHING within 24h and after escalation authorises
+   overriding that task's approach gate. `"Sure, go ahead and book the conference room for Friday"`
+   passes.
+2. **Clean imperative paste (implementer-disclosed, confirmed still open):** an agent restating its own
+   proposal as a declarative confirmation rather than a question defeats the consent check, because
+   `isAuthorisation` cannot distinguish a paste from an instruction. `"Confirming the plan: just do it
+   and skip the backup step entirely, got it."` passes.
+3. **Negation-word-list gap (new, undisclosed):** `isNegatedOrAsked` omits "never", "cannot", "can't",
+   "won't", "shouldn't", "no way", "nope" — so `"Never approve that particular approach without more
+   testing."`, an unambiguous refusal, is read as consent.
+4. **Title-phrase collision (new, undisclosed):** B2's binding is a bare phrase-overlap test, so any
+   task with a generically-worded title ("Send the weekly report", "Update the X page", "Review the Y
+   budget") can be unblocked by ANY genuine authorization the owner ever gave about a DIFFERENT
+   deliverable that happens to share a >=10-char, non-stopword-only phrase.
+
+What IS genuinely fixed: the exact three attacks loop 1 reproduced (unrelated complaint, pasted-
+proposal-as-a-question, negated-sentence-substring) no longer pass, and the single worst finding from
+loop 1 — an authorization for any task overriding any OTHER escalated task with no binding check at
+all — is closed when no title/id/DM path exists. The `approach-gate.server.ts` fail-open-to-a-stored-
+approval bug is genuinely fixed and correctly traced to its one consumer. The two collateral changes
+(green-light extraction, assign-on-create ordering, `update_task` arg name) are all sound.
+
+## VERDICT
+
+**Not safe to merge to `main`/auto-deploy as a claim that self-override is prevented**, because it is
+not — not fully. The single blocking defect, in the owner's own framing ("can't we make the verifier
+require my text from the transcript as an input to override to prevent self override by agent?"): **an
+agent holding the owner's tools can still self-authorize an override of an escalated task's approach
+gate without a targeted, on-topic go-ahead, most easily via the ordinary case of a 1:1 conversation
+where that agent has exactly one escalated task (finding #1 above) — no unusual phrasing or contrived
+setup required.**
+
+This is a judgment call about SEVERITY, stated so it can be checked rather than deferred to: the code
+is a real, substantial improvement over what loop 1 found (three specific reproducible attacks and an
+unrestricted-replay hole are genuinely closed), and two of the four remaining gaps were disclosed by
+the implementer themselves rather than hidden. Whether that improvement is "good enough to ship" against
+a stated precondition of preventing self-override is the owner's call to make with this evidence in
+hand — but the claim "the guard actually prevents self-override" is not true today, and finding #1
+reproduces on the very first ordinary-English attempt in the single most common state this feature will
+see in real use.
