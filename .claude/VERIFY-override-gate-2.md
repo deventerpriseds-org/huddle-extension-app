@@ -181,3 +181,76 @@ text... to prevent self override by agent?"), and the most exploitable of the fo
 requires nothing more unusual than an ordinary 1:1 conversation with one escalated task, this does not
 meet that precondition as stated.
 
+
+## PREVIOUSLY-CONFIRMED CLAIMS — RE-CHECKED THIS LOOP (reduced depth, real execution where the brief asked for it)
+
+### (1) Guarded override UPDATE is race-safe and leaves `proposed_approach` untouched — RE-CONFIRMED by live replay
+
+**Re-derived, not re-read.** Stood up local Postgres 16 fresh (`/tmp/pgd`, `upg2` db). Applied
+`origin/main`'s `tasks.server.ts` `BOOTSTRAP_SQL` (extracted by locating the template literal in the
+raw TS source, not the built bundle) to a fresh db — exit 0. Seeded 2 real journey tasks +
+1 escalated `task_engagement_state` row (`proposed_approach='Do the risky thing'`, revision_count=3).
+Applied the BRANCH's `BOOTSTRAP_SQL` (14,534 chars, up from loop-1's 14,020 — the new
+`approach_escalated_at` column plus `getEscalatedTaskIdsForAgent`'s supporting DDL) on top — **exit 0**,
+only pre-existing/expected `already exists, skipping` NOTICEs.
+
+`\d tasks.task_engagement_state` confirms the new column: `approach_escalated_at | timestamptz |
+nullable, no default` — matches the source comment exactly.
+
+**Replayed the exact guarded UPDATE statement twice** against the seeded escalated row:
+```
+run 1: UPDATE 1
+run 2 (identical statement): UPDATE 0
+```
+Post-state: `approach_status='approved'`, `proposed_approach` still `'Do the risky thing'` (untouched —
+the statement's column list does not include it), `approach_override_via='quote'`.
+
+**Verdict: CONFIRMED**, by real replay against a populated prior-schema database, exactly as asked.
+
+### (2)/(5) New binding query `getEscalatedTaskIdsForAgent` — RE-CONFIRMED live (the actual DM-binding dependency)
+
+The disclosed DM-binding safety net ("ambiguous with 2+ escalated tasks") is exactly this SQL query —
+tested live rather than trusted from the source comment:
+- Re-escalated the row, ran the query with 1 escalated task for `finn-reid` → **1 row returned**
+  (`assigneeBindingUnambiguous` would be `true`).
+- Escalated a SECOND task for the same agent, ran the identical query → **2 rows returned** — the
+  caller's `escalatedForAgent.length === 1 && escalatedForAgent[0] === taskId` check correctly
+  evaluates `false`, so the binding degrades to ambiguous exactly as designed. This is real and
+  correctly implemented — it just doesn't close ATTACK1 above, which relies on the *common* single-
+  escalated-task case, not the ambiguous one.
+
+**Verdict: CONFIRMED** (the mechanism itself; does not change CLAIM 4's overall verdict above).
+
+### (3) Errored re-grade stays escalated; loop bound cannot spin — RE-CONFIRMED by reading, unchanged code
+
+`git diff c284c8a..HEAD -- approach-gate.server.ts` shows only the fresh-path catch changed (see
+BLAST-RADIUS CLAIM 1 above); the `if (wasEscalated)` re-grade-error branch (lines 171-178) and
+`mayRegradeEscalated`/`regradeCeiling` (`approach-override.ts:302-310`) are BYTE-IDENTICAL to what
+loop 1 executed and mutation-proved. No re-derivation needed beyond confirming the diff is empty on
+this exact code, which it is.
+
+**Verdict: CONFIRMED** (unchanged code, diff-verified).
+
+### (4) Nothing fail-closed was loosened — RE-CONFIRMED by real diff, pasted
+
+```
+$ git diff c284c8a..HEAD --stat -- agent-workflow-config.server.ts autowork.server.ts
+(empty — neither file appears in the changed-file list at all since loop 1's tested commit)
+
+$ git diff c284c8a..HEAD -- confirm-ask.functions.ts | grep -c "^-[^-]"
+5   -- all 5 accounted for: (a) 1 line swapping the 3-arg verifyOwnerQuote(quote,utterances,now) call
+    for the 4-arg call with the new OverrideBinding (expected — this IS the fix under test), (b) 4
+    lines replacing a 2-branch ternary error message with a REASONS lookup table covering the 3 NEW
+    rejection reasons (predates-escalation/not-consent/not-this-task) in addition to the original 2 —
+    an EXPANSION of user-facing error specificity, not a removal of any check.
+
+$ git diff c284c8a..HEAD -- tasks.server.ts | grep -B3 -A2 resetEngagementOnReassignment
++  approach_escalated_at=NULL,   -- ADDED to the reassignment reset, consistent with the existing
+                                     "reassignment wipes the approach state" invariant loop 1 confirmed.
+```
+No fail-closed resolver was touched; every diff either adds a new column/field or expands a lookup
+table. The one substantive line change (the verifyOwnerQuote call signature) is the change under
+adversarial test above, not a silent loosening.
+
+**Verdict: CONFIRMED.**
+
