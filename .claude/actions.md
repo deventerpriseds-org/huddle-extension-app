@@ -3503,3 +3503,62 @@ supabase/functions/execute-tool/index.ts:432` + `quickCreateTask()` (accepts tit
 only); `autowork.server.ts:370`. Cross-checked against the verifier's finding that journey's
 `update_task`/`batch_update_tasks` are the writers of `assigned_agent`
 (`.claude/VERIFY-escalated-dead-end-1.md`).
+
+
+## ACT:task-hierarchy — epics / tasks / subtasks with order and pointers — OPEN, owner-requested
+
+**Asked for:** the owner — *"shouldn't it be the idea if tasks and subtasks with order and pointers?
+... the idea of organizing into Epics, tasks, and subtasks is important the board and grooming also
+have to be able to handle it."* Feasibility done; the build is not started.
+
+**Do not re-derive the feasibility** — it is in `docs/feasibility-epics-tasks-subtasks.md` with the
+evidence. The one-line summary: **ordering already works** (`priority_rank`, written by grooming,
+read by the board sort, scorer, auto-work and stand-up; 139 of 412 live rows carry one);
+**pointers exist as a correctly-typed DEAD column** (`blocked_by uuid[]` on journey's canonical
+table — 0 of 412 rows, zero references anywhere in `src/`, never mirrored, never read); **hierarchy
+is genuinely absent** and grooming's ranking is FLAT, so it cannot express "these five belong
+together and keep their relative order".
+
+**Recommended shape (option A in the doc): add `parent_task_id` to journey `public.tasks`, mirror
+it, and revive `blocked_by`.** Reversible — both nullable, 0 rows to migrate, every existing task
+reads as flat until something sets it. The irreversible-in-practice part is grooming: once ranking
+is two-level the flat normaliser is gone and the ordering written to 139 live rows changes shape.
+
+**Blocked on nothing but a build slot.** Board and grooming are both in scope per the owner.
+
+## ACT:agent-runtime-path — config setting for the Codex SDK path vs the new Agents API — OPEN
+
+**Asked for:** the owner — *"adding another configuration setting for the agents to use the codex
+sdk path or the new agents API path just released."*
+
+**Must be a USER-CHANGEABLE SETTING, not a constant.** This repo's standing rule: code may seed the
+first value; a behaviour-affecting literal with no UI path is a violation. The natural home is the
+existing per-agent backend config that already carries `journey:{enabled}` and the OpenAI-vs-Lovable
+dispatch split (`agents.ts` + the Settings drawer), so this EXTENDS that selector rather than
+standing up a parallel one.
+
+**Before building, establish what is actually true about both paths** — this is a factual claim
+about external APIs and must not be written from memory: what the Agents API actually offers, what
+the Codex SDK path requires, whether either changes the ElevenLabs-voice composition the repo has
+already proven, and what each costs. Feasibility table FIRST (producer / consumer / proof /
+verdict), per the standing rule, then ACs, then build.
+
+## ACT:chatgpt-work-flow-parity — how close is Huddle's agent flow to ChatGPT's "work" experience — OPEN
+
+**Asked for:** the owner — *"we also need an action to determine how closely the current agent flow
+in huddle mirrors the 'work' flow experience provided in the chatgpt browser app for agentic long
+running autonomous work."*
+
+**This is an ASSESSMENT, not a build.** Deliverable: a side-by-side comparison of Huddle's
+BACKLOG -> UP_NEXT -> DOING -> IN_REVIEW -> DONE loop (WIP caps, the confirm-intent gate, the
+approach gate, the jittered thrice-daily reach-out cadence, artifacts, the review flip) against what
+ChatGPT's browser "work" mode actually does for long-running autonomous tasks — with an explicit
+column for what Huddle has that it does not, since the comparison is not one-directional.
+
+**Related and already measured, do not re-derive:** the state-location difference is written up in
+`docs/feasibility-epics-tasks-subtasks.md` — ChatGPT never represents the plan (the transcript IS
+the state, re-read whole each turn), while Huddle's turns are independent and answered by different
+agents, so anything without a column ceases to exist between turns.
+
+**Do not assess it from memory of the product.** Establish what ChatGPT's work flow does from a
+primary source; WebFetch 403s on parts of that estate, so the `tavily-fallback` skill may be needed.
