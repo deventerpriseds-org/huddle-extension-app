@@ -3367,3 +3367,70 @@ architectural diagram, and the three mutually-exclusive schema options with a re
 `parent_task_id` + revive `blocked_by`) and an explicit reversible/irreversible split.
 
 **Open — this is a genuine fork and needs the owner's pick before any schema work starts.**
+
+
+## ACT:escalated-verify-1 — the independent verifier REFUTED two of my claims (2026-09-12)
+
+**Vehicle note first, because I got this wrong out loud.** I declared this verifier dead on a stale
+output-file mtime and told the owner it was "a corpse". It was alive and delivered at ~7 hours
+(24,935s). `ListAgents` said `running` the whole time and I discounted it. This is the exact error
+the org rules name as the costliest recurring one ("a verifier was declared dead 14 seconds before
+it delivered 9/9"). **A stale mtime on the JSONL transcript is NOT proof of death** — the transcript
+is appended per assistant message, and a verifier deep in a long read/grep chain writes nothing for
+hours. The only safe reads are `ListAgents` plus the agent's own artifact file.
+
+### The two verdicts that change the picture
+
+**REFUTED — "there is no user-facing override anywhere."** One ships today.
+`AgentWorkflowPanel.tsx` renders a per-agent switch, mounted at `SettingsSheet.tsx:157` under
+"Confirm-intent & review gate". Flipping it off bypasses BOTH consumers, neither of which reads
+`approach_status`: `approach-gate.server.ts:51-52` returns `approved:true` **before** the escalated
+check at :65, and `autowork.server.ts:686-688` promotes to DOING in a branch that never reaches the
+:697 status test. Nothing caches the config — it takes effect on the next pass, no deploy.
+**The defensible claim is narrower:** there is no PER-TASK override; there is a per-agent, gate-wide
+one that disables the gate for all of that agent's tasks and reads as a preference, not a remedy.
+
+**REFUTED (sub-clause) — "only grooming triggers the reassignment reset."**
+`resetEngagementOnReassignment`'s only caller is `tasks.server.ts:296`, inside `upsertJourneyTask` —
+the generic mirror writer, not a grooming path. journey's `execute-tool` writes `assigned_agent` from
+`update_task` (`index.ts:906-908`) and `batch_update_tasks` (`:971`). So ANY reassignment clears the
+dead end — at the cost of also wiping `confirmed_dod` and the clarify state. **This is exactly what
+happened when the Trinnex row was reassigned, and is why the restore step was needed.**
+
+### A LIVE DEFECT ON MAIN that neither the build nor I addressed — OPEN
+
+`approach-gate.server.ts:121-127` — **the fail-open catch writes a durable lie.** On a grader throw
+it calls `approveApproach`, permanently marking as approved an approach no grader ever read. One
+transient OpenAI 429 (documented as recurring in this repo) approves it forever, and nothing
+distinguishes it afterward. The REVIEW gate's equivalent returns `proceed:true` and **writes
+nothing** — that is the correct shape. The override build hardened the ERRORED RE-GRADE path to stay
+escalated, but deliberately left this FRESH path's fail-open alone. It should be fixed to match the
+review gate: fail open in the RETURN, never in the STORED STATE.
+
+### Two more findings worth keeping
+
+- **`approveApproach` is an unguarded upsert** (`tasks.server.ts:1023-1036`) — no `WHERE` on current
+  status, so it moves ANY status to `approved`. Not reachable as a bypass today, but any new caller
+  silently voids an escalation. The override build independently made its own path a status-guarded
+  `UPDATE`, which is the right shape; this older primitive is still unguarded.
+- **Escalated is invisible in every deterministic surface.** No query selects it, no UI renders it,
+  `review-digest` and `standup` never mention `approach`. The only notification is a PROMPT DIRECTIVE
+  (`autowork.server.ts:159`) asking the model to mention it — a prose-only step, the precise failure
+  mode the gates were hardened against. This is the strongest evidence for AC-O9 (discovery
+  surfaces), which the override build shipped on two surfaces.
+
+### On the "meaty" question — the root cause is bigger than the classifier
+
+Trigger is SEVEN conjuncts (1:1 only, difficulty >= 3, no pending row, ...), not two. And **"already
+said go" is not honoured**: the pending row is `PRIMARY KEY (user_email, huddle_id)` and EVERY
+verdict deletes it, so the next difficulty>=3 ask re-asks from scratch a minute after the owner
+answered "produce". Only `data.modelEscalate` suppresses it, and that is per-request. The override
+build fixed the classifier anchoring (`^(`) and the green-light path; **this persistence gap is
+separate and still open.**
+
+**Evidence:** `.claude/VERIFY-escalated-dead-end-1.md`. Baseline at `c284c8a`: `tsc --noEmit` exit 0,
+`test:mode` 22/22, `test:presence` 18/18, `test:blocked` 21/21, `test:router` 20/20.
+
+**The one thing it could not reach** — Cole's actual row — is now settled independently: it read
+`escalated / confirm_status=confirmed / approach_revision_count=2` before the fix
+(`azure-pg-query.yml` job `103551067437`).
