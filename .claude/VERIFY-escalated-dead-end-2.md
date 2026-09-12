@@ -105,3 +105,91 @@ verified false — the underlying defect it named (single literal, no memory of 
 has been intentionally fixed on this branch. Re-confirming the ORIGINAL wording is not possible;
 what is confirmed is that the two gaps loop 1's Claim 5 finding implied are now closed.
 
+
+## CLAIM (a) — fail-open never stores a durable lie, and now matches review-gate's shape — **CONFIRMED**
+
+`approach-gate.server.ts:164-189`, the `catch` block. Two branches:
+
+- `wasEscalated === true` (a re-grade attempt errored): returns `{approved:false, escalated:true,
+  note:"re-grade couldn't run ... still escalated"}` — **writes nothing**, task stays escalated.
+- `wasEscalated === false` (a fresh grading call errored): returns `{approved:true, escalated:false,
+  note:"approach gate error, proceeding: ..."}` — **also writes nothing**. No call to
+  `approveApproach` anywhere in the `catch` block (`grep -n approveApproach approach-gate.server.ts`
+  → only line 123, inside the `try`'s pass-verdict branch). The file's own comment (lines 179-187)
+  narrates exactly this history: it used to call `approveApproach` here, permanently recording an
+  approval no grader produced, and was changed to "fail open in the RETURN, never in the STORED
+  STATE."
+
+**Matches `review-gate.server.ts`'s shape, read side by side this loop.** Its own catch
+(`review-gate.server.ts:107-111`) also returns `{proceed:true, note:"review gate error,
+proceeding: ..."}` with no store call. Both gates now fail open identically: the CALLER is told to
+proceed (never blocks a turn on a grader outage), but neither PERSISTS a verdict the grader never
+computed.
+
+**Consumer trace — what actually happens to a task during a grader outage, right now.**
+`autowork.server.ts:697`: `promotedToDoing = state?.approach_status === "approved"`. Since the
+fail-open return does not write `approved` to the DB row, a task whose grading call is erroring
+stays `approach_status='pending'` (or whatever it already was) in the DB and is **not** promoted to
+DOING by `autowork.server.ts`'s scheduled pass — even though the SAME turn's live tool response
+told the calling agent "proceeding". This is an intentional split: the in-turn agent is unblocked
+for the current turn's own flow (no hang), but the durable WIP-promotion path still requires a real
+approved row, so a `429`-storm cannot inflate `autowork`'s DOING queue with ungraded approaches.
+The next real pass grades the task for real once the grader recovers — this is stated in the
+comment and the code's own field values are consistent with it.
+
+## CLAIM (b) — `approveApproach` is still an unguarded upsert — **CONFIRMED, with one residual, narrow caveat**
+
+`tasks.server.ts:1050-1060`: `approveApproach` remains an unconditional
+`INSERT ... ON CONFLICT (task_id) DO UPDATE SET approach_status='approved', ...` — **no `WHERE`
+clause of any kind**. This part of loop 1's finding is unchanged.
+
+**Every caller on the current branch** (`grep -rn "approveApproach(" src/` minus the function
+definition and its own doc comment) — **exactly one**:
+
+| Caller | Context | Can it move a row out of `escalated` without meaning to? |
+|---|---|---|
+| `approach-gate.server.ts:123`, inside `if (verdict.verdict === "pass")` | Reached after `callOpenAIRouter` returns a REAL pass verdict, for both a fresh approach (`wasEscalated=false`) and a re-grade of an escalated one (`wasEscalated=true`) | **No, by design, for the intended case.** A passing re-grade of an escalated task is exactly what is supposed to clear escalation now (Claim 1) — that is the whole point of removing the terminal early-return. For the fresh-path branch, the row was not escalated to begin with (state read at line 61 showed `wasEscalated=false`), so there is nothing to "move out of." |
+
+**The residual, narrow race not closed by this fix**: `approveApproach`'s write happens seconds
+after `getTaskEngagementState` is read (line 61) — an `await callOpenAIRouter` network round-trip
+sits in between. `turnActionLedger`/`claimAction` (`huddle.functions.ts:1962-1966`) is a
+per-turn, in-memory `Set` — it prevents a SECOND dispatch inside the SAME turn from double-grading,
+but it does **not** span turns. If a fresh (`wasEscalated=false`) grading call is in flight and a
+**different, concurrent turn** escalates the same task in between (calls `escalateApproach`) before
+this call's `approveApproach` write lands, the unconditional upsert would silently overwrite that
+fresh `'escalated'` with `'approved'`. I did not find evidence this has ever fired (no test
+exercises cross-turn concurrency on the same `taskId`), and the window is one LLM round-trip wide,
+but the primitive itself is unchanged and the guard that would close it (a `WHERE approach_status
+IN ('pending')` on this specific INSERT-or-UPDATE, mirroring `overrideApproachGate`'s pattern) has
+not been added to `approveApproach` itself — only to the NEW `overrideApproachGate` writer.
+**So: loop 1's specific worded risk ("any NEW caller silently voids an escalation") is closed —
+the one new caller (`overrideApproachGate`) is properly `WHERE`-guarded and does not reuse
+`approveApproach`. The underlying unguarded primitive is unchanged and retains a narrow,
+unaddressed cross-turn race for its one pre-existing caller.**
+
+## CLAIM (c) — per-agent kill switch — **CONFIRMED still present; coexists with the new per-task override without conflict**
+
+`AgentWorkflowPanel.tsx` (mounted at `SettingsSheet.tsx:157`) is unchanged in shape from loop 1: a
+`defaultRequired` switch plus per-agent `overrides`, persisted via `setMyWorkflowConfigFn`.
+`isStructuredWorkflowRequired` is still the single gate both consumers check:
+
+- `approach-gate.server.ts:51-53`: `if (!required) return {gated:false, approved:true, ...}` —
+  BEFORE any `approach_status` read.
+- `autowork.server.ts:684-687`: `if (!(requiredByAgent.get(c.agent) ?? true)) { promotedToDoing =
+  true; }` — BEFORE the `approach_status === "approved"` check at line 697.
+
+So the coarse, per-agent, gate-wide bypass loop 1 found (Claim 3b) is byte-for-byte still there.
+
+**Interaction with the new per-task override — no conflict, because they are structurally
+independent.** `overrideApproachGate` (`tasks.server.ts:1097-1121`) writes `approach_status`
+directly in the DB row; it is never read or gated by `isStructuredWorkflowRequired` at all. If an
+owner flips the per-agent switch OFF, `approach-gate.server.ts` and `autowork.server.ts` both skip
+reading `approach_status` entirely (as above) — so a stale `'escalated'` row for that agent simply
+becomes irrelevant rather than blocking anything; the per-task override would be a no-op in that
+state but nothing errors or double-applies. If the switch is ON, the per-task override is the only
+way to clear a specific escalated row without disabling the gate for every other task that agent
+holds. **UI confirmed wired**, not just a server primitive: `overrideApproachGate` is called from
+`confirm-ask.functions.ts:278` (the model-free "Approve anyway" button handler), and that button is
+rendered in both `HuddleView.tsx:770` (in-thread) and `BoardView.tsx:775` (board card) — this is
+new since loop 1, which found no per-task override existed at all.
+
