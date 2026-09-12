@@ -282,3 +282,67 @@ It also carries STRUCTURAL guards for the half no offline runtime test can reach
 `getPendingDeepConfirm` branches filter `resolved_at IS NULL`, produce/quick record while cancel
 clears, and the memory is read BEFORE the ask is stored. Comments are stripped before matching, so
 a guard cannot pass on prose.
+
+### Mutation proof (fix 2) — `mutate.sh`, verbatim
+
+```
+===== M6 verdict-memory-expires =====
+FIRED: 'produce, 1ms past the window' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/tasks/verdict-memory.ts matches HEAD
+
+===== M7 cancel-is-never-remembered =====
+FIRED: '"cancel" one second ago' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/tasks/verdict-memory.ts matches HEAD
+
+===== M8 clock-skew-guard =====
+FIRED: 'a timestamp in the FUTURE' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/tasks/verdict-memory.ts matches HEAD
+
+===== M9 resolved-rows-are-not-pending (proves the STRUCTURAL guard is not vacuous) =====
+FIRED: 'and BOTH filter resolved_at IS NULL' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/tasks/deep-confirm.server.ts matches HEAD
+
+===== M10 cancel-still-deletes =====
+FIRED: 'the cancel branch still CLEARS (a park must not be remembered)' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/huddle.functions.ts matches HEAD
+
+===== M11 remembered-produce-runs-produce =====
+FIRED: 'a remembered 'produce' runs the produce path instead of asking' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/huddle.functions.ts matches HEAD
+```
+
+**11 FIRED across both fixes. 0 INERT. 0 NOT-APPLIED.** M9-M11 deliberately mutate the SOURCE the
+structural guards watch, rather than the guards themselves, which is what proves those greps are not
+vacuous.
+
+---
+
+## CONCURRENCY INCIDENT — recorded, not hidden
+
+Another lane was committing to this same branch throughout. Twice this crossed wires:
+
+1. **My first `git add -A` swept in THEIR uncommitted files** (`approach-override.ts`,
+   `green-light.ts`, `BUILD-override-quote-hardening.md`). Caught before pushing; the commit was
+   soft-reset and re-made with only this lane's files.
+2. **Their `git add -A` swept in MY fix-2 files mid-test** — `verdict-memory.ts`,
+   `deep-confirm.server.ts`, `huddle.functions.ts` and `deep-confirm-store.probe.ts` landed inside
+   commits `2907e6e` and `baeffa8`, whose subjects say `fix(override-gate)` / `test(override-gate)`.
+
+The CONTENT is correct and pushed, and everything was re-verified against the merged HEAD
+afterwards (tsc exit 0, 13/13 suites, store probe 15/15). Only the commit subjects misdescribe it.
+History was NOT rewritten: the branch is shared and that lane is actively committing to it, so a
+rebase would have risked their work. The attribution is corrected in prose in commit `03a5276`
+instead.
+
+**The generalisable lesson: `git add -A` is unsafe on a branch another lane is working.** Stage
+explicit paths.
+
+---
+
+## STATUS — NOTHING IS CONFIRMED LIVE
+
+Both fixes are on `claude/iris-huddle-interaction-baj51c` and pushed. **Not merged to `main`, so
+NOT deployed** (`deploy-swa.yml` fires only on a push to `main`). No live turn has exercised either
+change; no board row has actually been assigned by the new code in production. The evidence here is
+offline tests, mutation proofs, a typecheck, and a real-Postgres execution of the store — which
+proves the MECHANISM, not the owner's experience.
