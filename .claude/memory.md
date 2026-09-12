@@ -2881,3 +2881,29 @@ grep -hiE "zero|absent|never|no rows|not stored|deferred" /home/user/*/.claude/a
 
 All three of today's misses would have been caught by that one command. Full entry with the theme
 table in `.claude/accuracy-log.md`.
+
+## Multi-step projects: order EXISTS, pointers are DEAD schema, hierarchy is ABSENT (2026-09-12)
+
+Read this before anyone concludes again that "the board can't do projects."
+
+- **`public.tasks.priority_rank int` is the ordering system and it is fully wired** — grooming
+  writes a dense normalised 1..N (`groom.ts:206-232`); the board sort, the scorer, auto-work's slice
+  ordering and the stand-up all read it. 139 of 412 live journey tasks carry one. Ordering is NOT
+  missing.
+- **`public.tasks.blocked_by uuid[]` exists on the canonical table, correctly typed, and is dead.**
+  0 of 412 rows populate it; ZERO grep hits in `huddle-extension-app/src`; it is not in the mirror
+  DDL (`tasks.server.ts:39`), not in the sync upsert, never read. This is the cheapest available
+  route to "do this after that" — reviving it is not a new system.
+- **A parent pointer genuinely does not exist** (no `parent_task_id`, and no `epic`/`subtask`
+  anything). Grooming's ranking is FLAT — it cannot express "these five belong together and keep
+  their relative order."
+- **Why ChatGPT holds a chunked plan and Huddle drops it:** ChatGPT never represents the plan — the
+  transcript IS the state, re-read whole on every turn. Huddle's turns are independent and answered
+  by different agents, so state must live in COLUMNS; anything without a column ceases to exist
+  between turns. The trade is real in both directions (ChatGPT's plan dies with the thread and no
+  agent owns it, nothing schedules or reminds it).
+- Full table + the three mutually-exclusive schema options: `docs/feasibility-epics-tasks-subtasks.md`.
+
+**The mistake to not repeat:** this was first reported as "all absent" from a grep for the NAMES
+`parent_task|subtask|epic|depends_on|sequence|project_id`. Two of three capabilities were sitting
+there under different names. Sweep by CAPABILITY (who writes it, who reads it), never by name.
