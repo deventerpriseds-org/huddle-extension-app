@@ -1,4 +1,7 @@
 import { AGENTS, type AgentId } from "./agents";
+// Type-only: `widgets.server.ts` holds the widget payload contract (Lane B) and is deliberately
+// dependency-free, so this import is erased at compile time and pulls no server code into the client.
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
 
 export type MessageAuthor =
   | { kind: "user" }
@@ -52,70 +55,21 @@ export interface HuddleMessage {
   // renderer overlays `checklistState[taskId]` on top of these rows, so a stale snapshot is harmless.
   // Absent on every message that isn't a checklist → no widget.
   checklist?: ChecklistPayload;
-  // The in-chat PRIORITIES widget (journey's Android "Priorities" home widget, brought inside Huddle).
-  // Same SNAPSHOT discipline as `checklist` above and for the same reason: live per-row state lives in
-  // the store's `checklistState` keyed by taskId, so a re-delivered turn cannot revert a Today toggle
-  // the user just made. Absent on every message that isn't a priorities widget → no widget.
-  priorities?: PrioritiesPayload;
-  // The in-chat SCHEDULE widget (journey's Android "Schedule" home widget). Snapshot, same as above.
-  schedule?: SchedulePayload;
-}
-
-/* ---------- in-chat widget payloads ----------
- * These extend the ChecklistPayload pattern rather than introducing a parallel widget system: a
- * snapshot of server truth on the message, mutable per-row state in the store keyed by journey taskId.
- * Every row type therefore carries `taskId`/`status`/`tags` — the three fields `checklistState` needs
- * to seed and reconcile a row — so all three widgets share ONE live-state map and one writer
- * (`updateBoardTask`). A task shown in two widgets at once stays consistent in both for free. */
-
-/** One row of the PRIORITIES widget's task band, or of the SCHEDULE widget's three sections. Fields
- *  beyond the shared three are per-widget presentation (time, category chip, Today state). */
-export interface WidgetTaskRow {
-  taskId: string;
-  title: string;
-  /** journey task_status at snapshot time (BACKLOG/TODO/UP_NEXT/DOING/IN_REVIEW/BLOCKED/DONE…). */
-  status: string;
-  /** Full tag set at snapshot time. Parking-lot is a TAG, not a status — see BoardView's toggle. */
-  tags: string[];
-  /** journey category (e.g. "LIFE", "EDUCATION") — drives the colour-coded chip. Absent → no chip. */
-  category?: string;
-  /** Already placed on today: the green `✓ Today` state. False/absent renders the grey `▲ Today`. */
-  today?: boolean;
-  /** Pre-formatted LOCAL time for a scheduled row, e.g. "10:00AM". The server formats it (it owns the
-   *  user's timezone); the client never converts. Absent on an unscheduled row. */
-  time?: string;
-}
-
-/** One node of the PRIORITIES widget's collapsible topic tree. `count` is omitted when a topic has no
- *  open tasks — the spec renders those BLANK, never "0" (e.g. "Family", "Grooming Management"). */
-export interface WidgetTopicNode {
-  id: string;
-  label: string;
-  count?: number;
-  children?: WidgetTopicNode[];
-}
-
-export interface PrioritiesPayload {
-  /** Heading shown next to the gear. Defaults to "Priorities" when the producer omits it. */
-  title?: string;
-  rows: WidgetTaskRow[];
-  /** Top-level categories, each expandable to sub-topics. Empty is a legitimate result. */
-  topics: WidgetTopicNode[];
-  /** Set when the tree could NOT be read (journey's `get_task_topics` is not deployed yet). The tree
-   *  then renders a labelled empty state instead of looking like "you have no topics" — the rest of
-   *  the widget must stay usable before that deploy lands. */
-  topicsUnavailable?: boolean;
-}
-
-export interface SchedulePayload {
-  /** TODAY'S SCHEDULE — rows carrying `time`, ordered by the server. */
-  todays: WidgetTaskRow[];
-  /** CURRENTLY DOING — normally 0 or 1 rows; empty renders the spec's bold "Nothing in progress". */
-  doing: WidgetTaskRow[];
-  /** UP NEXT — the cream band. Empty renders a quiet empty line, not a missing section. */
-  upNext: WidgetTaskRow[];
-  /** Heading inside the UP NEXT band, e.g. "This Week". Defaults to "This Week". */
-  upNextLabel?: string;
+  // The in-chat PRIORITIES widget (journey's Android "Priorities" home widget, brought inside
+  // Huddle) and the SCHEDULE widget beside it. Same SNAPSHOT discipline as `checklist` above and for
+  // the same reason: live per-row state lives in the store's `checklistState` keyed by taskId, so a
+  // re-delivered turn cannot revert a Today toggle or a ✓ the user just made.
+  //
+  // THE TYPES ARE LANE B'S, imported rather than redeclared. An earlier draft of this file defined a
+  // parallel `PrioritiesPayload`/`SchedulePayload` pair with its own field names (taskId, today,
+  // pre-formatted `time`) because Lane B's contract had not landed yet. Keeping both would have left
+  // two shapes for one payload and a same-named `WidgetTaskRow` in two modules — so the assumed pair
+  // was deleted in favour of the real one. `widgets.server.ts` is deliberately dependency-free (pure
+  // types + pure functions, no pg, no fetch), and this is a type-only import, so nothing server-side
+  // reaches the client bundle.
+  // Absent on every message that isn't the relevant widget → no widget.
+  priorities?: PrioritiesWidgetData;
+  schedule?: ScheduleWidgetData;
 }
 
 export interface ChecklistRow {

@@ -13,13 +13,9 @@ import { FallbackBanner } from "./FallbackBanner";
 import { isWorkspaceHydrated, setDeepLinkTarget, useHuddleStore, useVisibleHuddles, type View } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
-import {
-  breadcrumbToolsFor,
-  type ChecklistPayload,
-  type PrioritiesPayload,
-  type SchedulePayload,
-  type ToolUseEvent,
-} from "../data/seed";
+import { breadcrumbToolsFor, type ChecklistPayload, type ToolUseEvent } from "../data/seed";
+// Lane B's widget payload contract. Type-only import (that module is dependency-free).
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
 import { PrioritiesView, ScheduleView } from "./JourneyWidgets";
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
 import { useAuth } from "@/hooks/useAuth";
@@ -185,8 +181,8 @@ export function HuddleApp() {
           // Same rule as `checklist` directly above, and the same cost if omitted: this DTO is
           // re-declared inline at BOTH mapping sites (the other is HuddleView's applyTurnStream) and
           // an undeclared field is dropped silently, so a back-filled widget would arrive as text.
-          priorities?: PrioritiesPayload;
-          schedule?: SchedulePayload;
+          priorities?: PrioritiesWidgetData;
+          schedule?: ScheduleWidgetData;
         }[];
         toolUses?: ToolUseEvent[];
       }[]) {

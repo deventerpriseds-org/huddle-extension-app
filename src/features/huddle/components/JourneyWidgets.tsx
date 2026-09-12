@@ -6,17 +6,26 @@
 //             docs/widgets/spec-schedule-widget.jpg.
 // SUPERSEDES: nothing
 // SUPERSEDED-BY: nothing -- current
-// EVIDENCE:   docs/LANE-C-widget-ui.md records the spec read, the adaptations for the narrow chat
-//             column, the docking mechanism, and the Lane-B data dependency.
+// EVIDENCE:   docs/LANE-C-widget-ui.md records the spec read, the narrow-column adaptations, the
+//             docking mechanism and the reconciliation onto Lane B's contract
+//             (docs/LANE-B-widget-data.md + lib/tasks/widgets.server.ts, read this session).
+//
+// DATA AND WRITES ARE ALL LANE B'S (lib/tasks/widgets.functions.ts). This file adds NO query and NO
+// writer of its own:
+//   getScheduleWidget   -> ScheduleWidgetData   { todaySchedule, currentlyDoing, upNext, ... }
+//   getPrioritiesWidget -> PrioritiesWidgetData { band, topics: TopicTreeResult, ... }
+//   updateWidgetTask    -> WidgetActionResult   for all five buttons (start/done/pause/today/untoday)
+// None of the three ever throws; every failure is a normal return with ok:false + error, so the
+// widget always renders something truthful.
 //
 // EXTENDS THE CHECKLIST WIDGET, does not parallel it. Same three rules, for the same reasons:
-//   1. The message payload is a SNAPSHOT of server truth; mutable per-row state lives in the store's
-//      `checklistState`, keyed by journey taskId OUTSIDE the message, so a re-delivered turn can never
-//      revert an action the user just took.
+//   1. A widget on a MESSAGE carries a SNAPSHOT; mutable per-row state lives in the store's
+//      `checklistState`, keyed by journey taskId OUTSIDE the message, so a re-delivered turn can
+//      never revert an action the user just took.
 //   2. Every control is an OPTIMISTIC write with a VISIBLE ROLLBACK on failure
 //      (setChecklistRow / rollbackChecklistRow), one in-flight write per row.
-//   3. Every write goes through `updateBoardTask` -- the same server fn BoardView's applyMove and the
-//      chat checklist call -- so there is no second writer into journey.
+//   3. One writer into journey. The mirror behind every read is eventually consistent (~1-3s), which
+//      is why the optimistic overlay — not a refetch — is what the user sees immediately.
 // NO ROW CAP anywhere, deliberately: the owner rejected exactly that on the checklist ("it should
 // include all that comes back from the query no matter how long that is"). Sections scroll instead.
 
@@ -38,55 +47,76 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 import type {
-  PrioritiesPayload,
-  SchedulePayload,
+  PrioritiesWidgetData,
+  ScheduleWidgetData,
+  TopicNode,
+  TopicTreeResult,
+  WidgetTaskAction,
   WidgetTaskRow,
-  WidgetTopicNode,
-} from "../data/seed";
-import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
+} from "../lib/tasks/widgets.server";
+import {
+  getPrioritiesWidget,
+  getScheduleWidget,
+  updateWidgetTask,
+} from "../lib/tasks/widgets.functions";
 import { useDictation } from "../hooks/useDictation";
 import { useHuddleStore } from "../store";
 
 /** The 1:1 huddle the widgets are docked in. Iris is agent `iris-chase`; `dm-<agentId>` is how
- *  data/seed.ts builds every 1:1 huddle id, so this is derived from that convention, not invented. */
+ *  data/seed.ts builds every 1:1 huddle id, so this follows that convention rather than inventing one. */
 export const WIDGET_DOCK_HUDDLE_ID = "dm-iris-chase";
 
-const PARKING_LOT_TAG = "parking-lot";
+/** The viewer's IANA zone. Lane B asks the client to pass this: `resolveTimeZone` prefers the stored
+ *  profile zone and falls back to THIS, then UTC — so passing it is what makes "today" correct for a
+ *  caller with no stored profile zone. Resolved once; it does not change mid-session. */
+function browserTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+const TIME_ZONE = browserTimeZone();
 
-/* ── The Today writer: ONE injection point ────────────────────────────────────────────────────────
- * `▲ Today` / `✓ Today` means "scheduled onto today" in journey. That is NOT a status and NOT a tag,
- * so `updateBoardTask` cannot express it -- it validates and forwards only
- * status/assigned_agent/category/tags/addTags/removeTags.
- * journey DOES have the right tools already (`schedule_task { task_id, date? }` and
- * `unschedule_task { task_id }` in execute-tool), but reaching them from the client needs a thin
- * client-callable server fn over `invokeJourneyTool`, and `lib/journey` + any new `.functions.ts`
- * are Lane B's files. So the control is built to spec and takes its writer from HERE.
- * While this is null the button renders DISABLED with an explanatory title rather than silently
- * no-op'ing or faking "today" with a tag that journey would not honour -- an inert control that looks
- * live is worse than one that is visibly not wired. Wiring Lane B's fn is a one-line change here. */
-export type TodayWriter = (taskId: string, today: boolean) => Promise<{ ok: boolean; error?: string }>;
-export const WIDGET_TODAY_WRITER: TodayWriter | null = null;
-const TODAY_UNWIRED_TITLE =
-  "Scheduling onto today isn't wired up yet (needs journey's schedule_task/unschedule_task exposed to the client).";
+/** `"10:00AM"` — the spec's compact form, formatted CLIENT-side because Lane B returns raw ISO
+ *  (`startTime`) on purpose: the widget renders in the viewer's locale, so the server never
+ *  pre-formats a clock time. The zone is the same one passed to the read, so the label and the
+ *  server's own "today" boundary agree. */
+function shortTime(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: TIME_ZONE,
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+      .format(d)
+      // "10:00 AM" -> "10:00AM": the screenshots run the meridiem onto the time, which buys a
+      // character of title width on every row.
+      .replace(/\s?(AM|PM)$/i, (_m, p: string) => p.toUpperCase());
+  } catch {
+    return null;
+  }
+}
 
 /* ── Category chips ──────────────────────────────────────────────────────────────────────────────
  * The spec colour-codes chips per category (Life = blue, Education = amber). Implemented as a
  * DETERMINISTIC hash of the category name to a hue rather than a lookup table, because a table only
  * covers the categories that happened to be in the screenshot and journey's categories are data the
- * user can add to -- the same reason routing is roster-driven instead of a per-agent list. Every
- * category gets a stable, distinct colour with zero per-category code, and the mix is against the
- * theme's own surface/foreground so it reads in dark mode too. */
-function categoryChipStyle(category: string): React.CSSProperties {
+ * user can add to — the same reason routing is roster-driven instead of a per-agent list. Every
+ * category gets a stable, distinct colour with zero per-category code. */
+function categoryHue(name: string): number {
   let h = 0;
-  for (let i = 0; i < category.length; i++) h = (h * 31 + category.charCodeAt(i)) % 360;
-  return {
-    backgroundColor: `oklch(0.95 0.05 ${h} / 0.55)`,
-    color: `oklch(0.42 0.13 ${h})`,
-  };
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+  return h;
 }
 
-function CategoryChip({ category }: { category?: string }) {
+function CategoryChip({ category }: { category: string | null }) {
   if (!category) return null;
+  const h = categoryHue(category);
   // journey stores categories upper-snake (LIFE, PROF_EDUCATION); the spec shows them title-cased.
   const label = category
     .replace(/_/g, " ")
@@ -95,7 +125,7 @@ function CategoryChip({ category }: { category?: string }) {
   return (
     <span
       className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none"
-      style={categoryChipStyle(category)}
+      style={{ backgroundColor: `oklch(0.95 0.05 ${h} / 0.55)`, color: `oklch(0.42 0.13 ${h})` }}
       title={category}
     >
       {label}
@@ -103,9 +133,7 @@ function CategoryChip({ category }: { category?: string }) {
   );
 }
 
-/* ── Shared row plumbing ─────────────────────────────────────────────────────────────────────────
- * Lifted out of both widgets rather than duplicated: identical optimistic-write + rollback discipline,
- * identical one-write-per-row guard. `caller` threading matches the chat checklist exactly. */
+/* ── Shared row plumbing ───────────────────────────────────────────────────────────────────────── */
 
 type Caller = { entra_object_id?: string; entra_email?: string } | undefined;
 
@@ -120,94 +148,80 @@ function useCaller(): Caller {
   );
 }
 
-/** Optimistic write + rollback for one row, shared by every control in both widgets. Returns false
- *  when the write was refused up front (a write already in flight for this row). */
-async function applyRowWrite(
-  row: WidgetTaskRow,
-  caller: Caller,
-  patch: { status?: string; addTags?: string[]; removeTags?: string[] },
-  opts: { nextPrev?: string; optimisticTags?: string[] } = {},
-): Promise<boolean> {
-  const store = useHuddleStore.getState();
-  const before = store.checklistState[row.taskId] ?? { status: row.status, tags: row.tags };
-  if (before.busy) return false; // one in-flight write per row; a double-tap must not race itself
-  store.setChecklistRow(row.taskId, {
-    ...(patch.status !== undefined ? { status: patch.status } : {}),
-    ...(opts.optimisticTags !== undefined ? { tags: opts.optimisticTags } : {}),
-    busy: true,
-    ...(opts.nextPrev !== undefined ? { prevStatus: opts.nextPrev } : {}),
-  });
-  try {
-    const r = await updateBoardTask({ data: { caller, taskId: row.taskId, ...patch } });
-    if (!r.ok) {
-      // Roll back to exactly what it was, prevStatus included — a failed write must leave no trace,
-      // or the next un-tick would restore a status that never took effect.
-      store.rollbackChecklistRow(row.taskId, before);
-      toast.error(r.error || "Couldn't update that task.");
-      return false;
-    }
-    store.setChecklistRow(row.taskId, { busy: false });
-    return true;
-  } catch (err) {
-    store.rollbackChecklistRow(row.taskId, before);
-    toast.error(err instanceof Error ? err.message : "Couldn't update that task.");
-    return false;
-  }
+/** Lane B returns `status: string | null`; the store map and every comparison here want a plain
+ *  upper-case string, so normalize in ONE place rather than at each use site. */
+function rowStatus(row: WidgetTaskRow): string {
+  return (row.status ?? "BACKLOG").toUpperCase();
 }
 
-/** The resolved display state for a row: the store overlay IS the display value; the snapshot only
- *  covers the first paint before the seed effect runs. That is what makes a stale snapshot harmless. */
+/** The resolved display state for a row: the store overlay IS the display value; the payload only
+ *  covers the first paint before the seed effect runs. That is what makes a stale snapshot harmless,
+ *  and it is also what covers the mirror's ~1-3s lag after a write — the overlay holds the new value
+ *  while journey → pg_net → webhook → mirror catches up. */
 function useRowState(row: WidgetTaskRow) {
-  const live = useHuddleStore((s) => s.checklistState[row.taskId]);
+  const live = useHuddleStore((s) => s.checklistState[row.id]);
   return {
-    status: live?.status ?? row.status,
+    status: live?.status ?? rowStatus(row),
     tags: live?.tags ?? row.tags,
     busy: live?.busy ?? false,
     prevStatus: live?.prevStatus,
-    // `today` is only meaningful once somebody supplied it; `?? row.today` keeps the snapshot as the
-    // first-paint value without inventing `false` for a row whose today-ness was never read.
-    today: live?.today ?? row.today,
+    today: live?.today ?? row.isToday,
   };
 }
 
-/** Seed + reconcile the shared row map for a set of rows. Two stages, exactly as ChecklistCard does:
- *  seed from the snapshot so the widget paints instantly (never overwriting a row the user acted on),
- *  then reconcile status/tags against server truth because `checklistState` is NOT persisted while
- *  `messages` is — after a reload a snapshot would otherwise show hours-stale status. */
-function useSeededRows(rows: WidgetTaskRow[], caller: Caller) {
-  const seedChecklistRows = useHuddleStore((s) => s.seedChecklistRows);
-  // Identity over ids+today, so re-running is driven by the row SET rather than by array identity
-  // (a new array every render would re-fire the reconcile read on every paint).
-  const key = useMemo(() => rows.map((r) => `${r.taskId}:${r.today ?? ""}`).join(","), [rows]);
+/** One optimistic write, shared by all five buttons. Rolls the row back VISIBLY on failure.
+ *  `optimisticStatus` is what to show immediately; `undefined` means this action does not change the
+ *  status (the Today toggle), so only `today` moves. */
+async function runAction(
+  row: WidgetTaskRow,
+  caller: Caller,
+  action: WidgetTaskAction,
+  optimistic: { status?: string; today?: boolean; prevStatus?: string },
+): Promise<void> {
+  const store = useHuddleStore.getState();
+  const before = store.checklistState[row.id] ?? { status: rowStatus(row), tags: row.tags, today: row.isToday };
+  if (before.busy) return; // one in-flight write per row; a double-tap must not race itself
+  store.setChecklistRow(row.id, {
+    ...(optimistic.status !== undefined ? { status: optimistic.status } : {}),
+    ...(optimistic.today !== undefined ? { today: optimistic.today } : {}),
+    ...(optimistic.prevStatus !== undefined ? { prevStatus: optimistic.prevStatus } : {}),
+    busy: true,
+  });
+  try {
+    const r = await updateWidgetTask({ data: { caller, taskId: row.id, action, timeZone: TIME_ZONE } });
+    if (!r.ok) {
+      // Roll back to exactly what it was, prevStatus included — a failed write must leave no trace,
+      // or the next un-tick would restore a status that never took effect.
+      store.rollbackChecklistRow(row.id, before);
+      toast.error(r.error || "Couldn't update that task.");
+      return;
+    }
+    // `r.status` is journey's OWN value for start/done/pause (absent for today/untoday), so prefer it
+    // over the status we guessed — if journey normalized it differently, the row now shows the truth.
+    store.setChecklistRow(row.id, { busy: false, ...(r.status ? { status: r.status.toUpperCase() } : {}) });
+  } catch (err) {
+    // updateWidgetTask is documented never to throw; this covers a transport failure before it runs.
+    store.rollbackChecklistRow(row.id, before);
+    toast.error(err instanceof Error ? err.message : "Couldn't update that task.");
+  }
+}
 
+/** Seed the shared row map from a payload. Never overwrites a row the user already acted on
+ *  (`seedChecklistRows`' own guarantee), so re-rendering a snapshot cannot revert an action.
+ *  NOTE: unlike the chat checklist, there is no second reconcile read here — these payloads already
+ *  come from a live Lane-B read on mount (docked/full-page) or are the message's own snapshot, and
+ *  the optimistic overlay is what covers the mirror lag. A refetch immediately after a write would
+ *  hand back the PRE-write value (~1-3s propagation) and visibly undo the user's tap. */
+function useSeededRows(rows: WidgetTaskRow[]) {
+  const seedChecklistRows = useHuddleStore((s) => s.seedChecklistRows);
+  const key = useMemo(() => rows.map((r) => `${r.id}:${r.isToday ? 1 : 0}`).join(","), [rows]);
   useEffect(() => {
-    if (rows.length) seedChecklistRows(rows);
+    if (!rows.length) return;
+    seedChecklistRows(
+      rows.map((r) => ({ taskId: r.id, status: rowStatus(r), tags: r.tags, today: r.isToday })),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, seedChecklistRows]);
-
-  useEffect(() => {
-    if (!key || !caller?.entra_email) return;
-    let cancelled = false;
-    const wanted = new Set(key.split(",").map((k) => k.split(":")[0]));
-    void getBoardTasks({ data: { caller } })
-      .then((res) => {
-        if (cancelled) return;
-        const fresh = res.tasks
-          .filter((t) => wanted.has(t.id))
-          .map((t) => ({
-            taskId: t.id,
-            status: (t.status ?? "BACKLOG").toUpperCase(),
-            tags: t.tags ?? [],
-          }));
-        if (fresh.length) useHuddleStore.getState().refreshChecklistRows(fresh);
-      })
-      // A failed refresh is not an error the user needs: the snapshot is still a truthful record of
-      // what the server said. Degrade to it silently rather than throwing a toast at an idle screen.
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [key, caller]);
 }
 
 /* ── Controls ────────────────────────────────────────────────────────────────────────────────────
@@ -219,43 +233,20 @@ const CTRL_BASE =
   "inline-flex shrink-0 items-center justify-center gap-1 rounded-md text-[11px] font-semibold " +
   "leading-none transition disabled:opacity-50 disabled:cursor-not-allowed";
 
+/** `▲ Today` (grey, tap to put it on today) / `✓ Today` (green, already today). Writes through Lane
+ *  B's `today`/`untoday` actions, which map to journey's `move_task_to_day` / `unschedule_task`. */
 function TodayButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
   const { today, busy } = useRowState(row);
-  const [pending, setPending] = useState(false);
-  const writer = WIDGET_TODAY_WRITER;
   const on = today === true;
-
-  async function toggle() {
-    if (!writer) return;
-    const store = useHuddleStore.getState();
-    const before = store.checklistState[row.taskId] ?? { status: row.status, tags: row.tags };
-    if (before.busy || pending) return;
-    setPending(true);
-    store.setChecklistRow(row.taskId, { today: !on, busy: true });
-    try {
-      const r = await writer(row.taskId, !on);
-      if (!r.ok) {
-        store.rollbackChecklistRow(row.taskId, before);
-        toast.error(r.error || "Couldn't change that task's day.");
-        return;
-      }
-      store.setChecklistRow(row.taskId, { busy: false });
-    } catch (err) {
-      store.rollbackChecklistRow(row.taskId, before);
-      toast.error(err instanceof Error ? err.message : "Couldn't change that task's day.");
-    } finally {
-      setPending(false);
-    }
-  }
-
   return (
     <button
       type="button"
-      disabled={!writer || busy || !caller?.entra_email}
-      onClick={toggle}
+      disabled={busy || !caller?.entra_email}
+      onClick={() =>
+        void runAction(row, caller, on ? "untoday" : "today", { today: !on })
+      }
       aria-pressed={on}
-      title={writer ? undefined : TODAY_UNWIRED_TITLE}
-      aria-label={on ? `"${row.title}" is on today — remove it` : `Put "${row.title}" on today`}
+      aria-label={on ? `"${row.title}" is on today — take it off` : `Put "${row.title}" on today`}
       className={cn(CTRL_BASE, "-my-2 min-h-11 px-2")}
       style={
         on
@@ -263,12 +254,12 @@ function TodayButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
           : { backgroundColor: "var(--muted)", color: "var(--muted-foreground)" }
       }
     >
-      {pending || busy ? (
+      {busy ? (
         <Loader2 size={10} className="animate-spin" aria-hidden />
       ) : on ? (
         <Check size={10} strokeWidth={3} aria-hidden />
       ) : (
-        // The spec's ▲ glyph. `Triangle` filled at this size reads as the same mark and needs no font.
+        // The spec's ▲ glyph. `Triangle` filled at this size reads as the same mark, no font needed.
         <Triangle size={9} strokeWidth={0} className="fill-current" aria-hidden />
       )}
       Today
@@ -276,34 +267,33 @@ function TodayButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
   );
 }
 
-/** ▶ start → DOING. Clearing parking-lot alongside it, for the checklist's reason: parking-lot is a
- *  tag, and leaving it on would keep the row excluded from auto-work while it looks active. */
+/** ▶ start → DOING. The spec pairs a LIGHTER teal ▶ beside a DARKER green ✓; both are expressed as
+ *  mixes of the theme's own `--success` so the pair stays distinguishable in dark mode too, instead
+ *  of the lighter one washing out to a pale blob on a dark card. */
 function StartButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
-  const { status, tags, busy } = useRowState(row);
+  const { status, busy } = useRowState(row);
   const doing = status === "DOING";
   return (
     <button
       type="button"
       disabled={busy || doing || !caller?.entra_email}
-      onClick={() =>
-        void applyRowWrite(
-          row,
-          caller,
-          { status: "DOING", removeTags: [PARKING_LOT_TAG] },
-          { nextPrev: status, optimisticTags: tags.filter((t) => t !== PARKING_LOT_TAG) },
-        )
-      }
+      onClick={() => void runAction(row, caller, "start", { status: "DOING", prevStatus: status })}
       aria-label={doing ? `"${row.title}" is already in progress` : `Start "${row.title}"`}
       className={cn(CTRL_BASE, "-my-2 min-h-11 w-10")}
-      style={{ backgroundColor: "var(--success)", color: "var(--success-foreground)", opacity: doing ? 0.45 : undefined }}
+      style={{
+        backgroundColor: "color-mix(in oklch, var(--success) 72%, var(--surface))",
+        color: "var(--success-foreground)",
+      }}
     >
       {busy ? <Loader2 size={13} className="animate-spin" aria-hidden /> : <Play size={13} className="fill-current" aria-hidden />}
     </button>
   );
 }
 
-/** ✓ done → DONE, and un-ticking restores where the row WAS (prevStatus), never a blanket BACKLOG —
- *  a mis-tap on a DOING task must not silently demote it out of the active lane. */
+/** ✓ done → DONE. Un-ticking restores where the row WAS (prevStatus), never a blanket BACKLOG — a
+ *  mis-tap on a DOING task must not silently demote it out of the active lane. The row's title gains
+ *  a strike-through, which is the visible state; the button itself stays full-strength, because
+ *  dimming it as well made a completed row's only affordance look disabled. */
 function DoneButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
   const { status, busy, prevStatus } = useRowState(row);
   const done = status === "DONE";
@@ -314,34 +304,36 @@ function DoneButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
       aria-checked={done}
       disabled={busy || !caller?.entra_email}
       onClick={() =>
-        void applyRowWrite(
-          row,
-          caller,
-          { status: done ? (prevStatus ?? "BACKLOG") : "DONE" },
-          done ? {} : { nextPrev: status },
-        )
+        done
+          ? // "Un-done" is not one of Lane B's five actions (its set is start/done/pause/today/
+            // untoday), and `pause` is the closest honest match only when the row came from UP_NEXT.
+            // Rather than guess, restore where it was: prevStatus DOING -> start, anything else ->
+            // pause (which writes UP_NEXT). Both are real actions with real semantics.
+            void runAction(row, caller, prevStatus === "DOING" ? "start" : "pause", {
+              status: prevStatus === "DOING" ? "DOING" : "UP_NEXT",
+            })
+          : void runAction(row, caller, "done", { status: "DONE", prevStatus: status })
       }
       aria-label={done ? `Mark "${row.title}" not done` : `Mark "${row.title}" done`}
       className={cn(CTRL_BASE, "-my-2 min-h-11 w-10")}
-      style={{
-        backgroundColor: done ? "var(--success)" : "color-mix(in oklch, var(--success) 55%, var(--surface))",
-        color: "var(--success-foreground)",
-      }}
+      style={{ backgroundColor: "var(--success)", color: "var(--success-foreground)" }}
     >
       {busy ? <Loader2 size={13} className="animate-spin" aria-hidden /> : <Check size={14} strokeWidth={3} aria-hidden />}
     </button>
   );
 }
 
-/** ⏸ pause → BACKLOG. The spec's orange control; `--warning` is the theme's orange and flips with it. */
+/** ⏸ pause → UP_NEXT (Lane B's mapping, read from ACTION_STATUS — NOT BACKLOG, so pausing something
+ *  you are doing leaves it queued rather than demoting it to the bottom of the board).
+ *  `--warning` is the theme's orange and flips with it. */
 function PauseButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
   const { status, busy } = useRowState(row);
   return (
     <button
       type="button"
       disabled={busy || !caller?.entra_email}
-      onClick={() => void applyRowWrite(row, caller, { status: "BACKLOG" }, { nextPrev: status })}
-      aria-label={`Pause "${row.title}" back to the backlog`}
+      onClick={() => void runAction(row, caller, "pause", { status: "UP_NEXT", prevStatus: status })}
+      aria-label={`Pause "${row.title}"`}
       className={cn(CTRL_BASE, "-my-2 min-h-11 w-10")}
       style={{ backgroundColor: "var(--warning)", color: "var(--warning-foreground)" }}
     >
@@ -353,16 +345,17 @@ function PauseButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
 /* ── Compose row ─────────────────────────────────────────────────────────────────────────────────
  * The spec's "Add a priority…" / "What's next…" pill with mic / send / mic.
  *
- * ADAPTED (documented in docs/LANE-C-widget-ui.md): ONE mic, not two. The Android widget's two mics
- * are the same affordance (system voice-input beside the app's), and duplicate chrome is exactly what
- * a narrow chat column cannot spare.
+ * ADAPTED: ONE mic, not two. The Android widget's two mics are the same affordance (the system
+ * voice-input beside the app's own), and duplicate chrome is exactly what a narrow chat column
+ * cannot spare.
  *
- * WHERE SEND GOES: there is no client-callable task-CREATE server fn in this repo (board.functions
- * exposes only getBoardTasks/updateBoardTask), and adding one would be a new `.functions.ts` module
- * — Lane B's file. So rather than stand up a second task writer, send hands the text to the EXISTING
- * path that already creates tasks: it prefills the chat composer (the same `draftPrefill` bridge the
- * checklist's Revise button uses) in Iris's 1:1, where `create_huddle_task`/`quick_create_task` do
- * the create. One writer, no new plumbing, and the user sees what will be sent before it is sent. */
+ * WHERE SEND GOES: there is no task-CREATE server fn in this repo's client surface (Lane B's three
+ * widget fns are two reads and a per-task action; board.functions exposes getBoardTasks and
+ * updateBoardTask), and standing up another task writer would break the single-writer rule. So send
+ * hands the text to the path that ALREADY creates tasks: it prefills the chat composer (the same
+ * `draftPrefill` bridge the checklist's Revise button uses) in Iris's 1:1, where
+ * `create_huddle_task`/`quick_create_task` do the create. The user also sees exactly what will be
+ * sent before it is sent, which a blind widget-side create would not give them. */
 function WidgetComposeRow({ placeholder, prefix }: { placeholder: string; prefix?: string }) {
   const [text, setText] = useState("");
   const dictation = useDictation();
@@ -375,8 +368,8 @@ function WidgetComposeRow({ placeholder, prefix }: { placeholder: string; prefix
     const t = text.trim();
     if (!t) return;
     // Only relocate when there is no composer on screen to receive the text (a full-page widget view,
-    // or a huddle that isn't the dock). Typing into the widget while already in a chat should not
-    // yank the user out of the conversation they are in.
+    // or some other huddle). Typing into the docked widget while already in a chat should not yank
+    // the user out of the conversation they are in.
     if (view !== "huddle" || activeHuddleId !== WIDGET_DOCK_HUDDLE_ID) setActive(WIDGET_DOCK_HUDDLE_ID);
     setDraftPrefill(prefix ? `${prefix}${t}` : t);
     setText("");
@@ -443,8 +436,8 @@ function WidgetComposeRow({ placeholder, prefix }: { placeholder: string; prefix
 
 /* ── Section chrome ──────────────────────────────────────────────────────────────────────────────
  * The cream/ivory band from both screenshots, expressed against the THEME's own warning hue rather
- * than a hardcoded off-white — a literal #FFFCF0 would be invisible in light mode's white surface and
- * glaring in dark mode. */
+ * than a hardcoded off-white — a literal #FFFCF0 would be near-invisible on light mode's white
+ * surface and glaring in dark mode. */
 const BAND_STYLE: React.CSSProperties = {
   backgroundColor: "color-mix(in oklch, var(--warning) 9%, var(--surface))",
 };
@@ -457,24 +450,32 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Rows scroll rather than truncate — see the NO ROW CAP note at the top of this file. The cap here
- *  is on HEIGHT (a viewport fraction), never on row count, so every row the query returned is
- *  reachable. In a full-page view there is no reason to constrain it at all. */
-function ScrollBand({
-  children,
-  band,
-  full,
-}: {
-  children: React.ReactNode;
-  band?: boolean;
-  full?: boolean;
-}) {
+function EmptyLine({ children, band }: { children: React.ReactNode; band?: boolean }) {
   return (
-    <div
-      className={cn("overflow-y-auto", full ? "" : "max-h-[min(22rem,45vh)]")}
-      style={band ? BAND_STYLE : undefined}
-    >
+    <div className="px-3 py-2.5 text-[12px] text-muted-foreground" style={band ? BAND_STYLE : undefined}>
       {children}
+    </div>
+  );
+}
+
+/** Rows scroll rather than truncate — see the NO ROW CAP note at the top of this file. The cap is on
+ *  HEIGHT (a viewport fraction), never on row count, so every row the query returned is reachable.
+ *  In a full-page view there is no reason to constrain it at all. */
+function ScrollBand({ children, band, full }: { children: React.ReactNode; band?: boolean; full?: boolean }) {
+  return (
+    <div className={cn("overflow-y-auto", full ? "" : "max-h-[min(22rem,45vh)]")} style={band ? BAND_STYLE : undefined}>
+      {children}
+    </div>
+  );
+}
+
+/** The one place a failed Lane-B read is surfaced. `ok:false` always arrives with empty sections, so
+ *  without this the widget would look like "you have nothing" when it actually means "we couldn't
+ *  read it" — two different facts the user is entitled to tell apart. */
+function ReadError({ error }: { error?: string }) {
+  return (
+    <div className="border-t border-hairline px-3 py-3 text-[12px] text-destructive">
+      Couldn’t load this from your board{error ? ` — ${error}` : "."}
     </div>
   );
 }
@@ -498,20 +499,22 @@ function PriorityRow({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
   );
 }
 
-/** One top-level topic and its sub-topics. Expansion is LOCAL component state, not store state: it is
- *  per-view chrome with no consequence if it resets, and putting it in the store would make two
- *  mounted copies of the widget (chat card + docked) fight over one expanded set. */
-function TopicRow({ node, depth }: { node: WidgetTopicNode; depth: number }) {
-  const [open, setOpen] = useState(depth === 0 && !!node.children?.length);
-  const hasChildren = !!node.children?.length;
-  // The coloured left rail in the spec, one hue per top-level topic. Same deterministic hash as the
-  // category chips, so a topic and its category chip agree in colour for free.
-  const rail = depth === 0 ? categoryChipStyle(node.label).color : undefined;
+/** One topic and its sub-topics. Expansion is LOCAL component state, not store state: it is per-view
+ *  chrome with no consequence if it resets, and putting it in the store would make two mounted copies
+ *  of the widget (a chat card and the docked pair) fight over one expanded set. */
+function TopicRow({ node, depth }: { node: TopicNode; depth: number }) {
+  const hasChildren = node.children.length > 0;
+  // Top level starts expanded (the spec shows Career open with its children visible); deeper levels
+  // start closed so a large tree does not arrive as a wall of rows.
+  const [open, setOpen] = useState(depth === 0 && hasChildren);
+  // The coloured left rail, one hue per top-level topic — the same deterministic hash as the category
+  // chips, so a topic and a category of the same name agree in colour for free.
+  const rail = depth === 0 ? `oklch(0.62 0.16 ${categoryHue(node.name)})` : undefined;
   return (
     <li>
       <div className="flex items-stretch">
         {depth === 0 && (
-          <span aria-hidden className="mr-1.5 w-[3px] shrink-0 rounded-full" style={{ backgroundColor: rail as string }} />
+          <span aria-hidden className="mr-1.5 w-[3px] shrink-0 rounded-full" style={{ backgroundColor: rail }} />
         )}
         <button
           type="button"
@@ -519,25 +522,20 @@ function TopicRow({ node, depth }: { node: WidgetTopicNode; depth: number }) {
           onClick={() => setOpen((v) => !v)}
           aria-expanded={hasChildren ? open : undefined}
           className="-my-1.5 flex min-h-11 min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-3 text-left disabled:cursor-default"
-          style={{ paddingLeft: `${depth * 0.875 + (depth === 0 ? 0 : 0.75)}rem` }}
+          style={{ paddingLeft: `${depth === 0 ? 0 : depth * 0.875 + 0.75}rem` }}
         >
           <span className="w-3 shrink-0 text-muted-foreground">
-            {hasChildren ? (
-              open ? (
-                <ChevronDown size={11} aria-hidden />
-              ) : (
-                <ChevronRight size={11} aria-hidden />
-              )
-            ) : null}
+            {hasChildren ? (open ? <ChevronDown size={11} aria-hidden /> : <ChevronRight size={11} aria-hidden />) : null}
           </span>
           <span
             className={cn("min-w-0 flex-1 truncate text-[13px]", depth === 0 ? "text-foreground" : "text-foreground/85")}
-            title={node.label}
+            title={node.name}
           >
-            {node.label}
+            {node.name}
           </span>
-          {/* A topic with no open tasks renders BLANK, never "0" — matches the spec (Family, and
-              several sub-topics, carry no number at all). */}
+          {/* `count: null` is a REAL state in Lane B's contract, and the spec renders it BLANK — never
+              "0" (Family, Grooming Management and several other sub-topics carry no number at all).
+              A zero count is treated the same way, for the same visual reason. */}
           {node.count ? (
             <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground">{node.count}</span>
           ) : null}
@@ -545,7 +543,7 @@ function TopicRow({ node, depth }: { node: WidgetTopicNode; depth: number }) {
       </div>
       {hasChildren && open && (
         <ul>
-          {node.children!.map((c) => (
+          {node.children.map((c) => (
             <TopicRow key={c.id} node={c} depth={depth + 1} />
           ))}
         </ul>
@@ -554,24 +552,41 @@ function TopicRow({ node, depth }: { node: WidgetTopicNode; depth: number }) {
   );
 }
 
+/** The topic tree's empty states, one per `TopicTreeResult.reason`. Lane B's contract is explicit
+ *  that an empty tree is SUCCESS, not an error, and that `tool-absent` is the expected steady state
+ *  until journey deploys `get_task_topics` — so each reason gets its own honest sentence instead of
+ *  one generic "no topics", and the band above stays fully usable in every case. */
+function TopicsEmpty({ topics }: { topics: TopicTreeResult }) {
+  const copy =
+    topics.reason === "tool-absent"
+      ? "Topic breakdown isn’t available yet — journey hasn’t deployed its topic list. Everything above is live."
+      : topics.reason === "not-configured"
+        ? "Topic breakdown isn’t configured in this environment. Everything above is live."
+        : topics.reason === "error"
+          ? `Couldn’t load the topic breakdown${topics.error ? ` — ${topics.error}` : ""}. Everything above is live.`
+          : "No topics yet.";
+  return <div className="border-t border-hairline px-3 py-3 text-[12px] text-muted-foreground">{copy}</div>;
+}
+
 export function PrioritiesWidget({
-  payload,
+  data,
   full,
+  title,
   onSettings,
 }: {
-  payload: PrioritiesPayload;
+  data: PrioritiesWidgetData;
   full?: boolean;
+  /** Optional heading override (an agent can scope the card, e.g. "Career priorities"). */
+  title?: string;
   onSettings?: () => void;
 }) {
   const caller = useCaller();
-  useSeededRows(payload.rows, caller);
+  useSeededRows(data.band);
 
   return (
     <div className="overflow-hidden rounded-xl border border-hairline bg-surface shadow-soft">
       <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
-        <span className="min-w-0 flex-1 truncate text-sm font-bold text-foreground">
-          {payload.title || "Priorities"}
-        </span>
+        <span className="min-w-0 flex-1 truncate text-sm font-bold text-foreground">{title || "Priorities"}</span>
         <button
           type="button"
           onClick={onSettings}
@@ -587,41 +602,30 @@ export function PrioritiesWidget({
         <WidgetComposeRow placeholder="Add a priority…" prefix="Add a priority: " />
       </div>
 
-      {payload.rows.length > 0 ? (
+      {!data.ok ? (
+        <ReadError error={data.error} />
+      ) : data.band.length > 0 ? (
         <ScrollBand band full={full}>
           <ul>
-            {payload.rows.map((row) => (
-              <PriorityRow key={row.taskId} row={row} caller={caller} />
+            {data.band.map((row) => (
+              <PriorityRow key={row.id} row={row} caller={caller} />
             ))}
           </ul>
         </ScrollBand>
       ) : (
-        <div style={BAND_STYLE} className="px-3 py-3 text-[12px] text-muted-foreground">
-          No priorities right now.
-        </div>
+        <EmptyLine band>No priorities right now.</EmptyLine>
       )}
 
-      {/* The topic tree. When journey's `get_task_topics` is unavailable this renders a LABELLED
-          empty state rather than an empty or half-built tree: the rest of the widget has to stay
-          usable and honest before that deploy lands, and "no topics" and "couldn't read topics" are
-          different facts the user is entitled to tell apart. */}
-      {payload.topicsUnavailable ? (
-        <div className="border-t border-hairline px-3 py-3 text-[12px] text-muted-foreground">
-          Topic breakdown isn’t available yet — journey’s topic list isn’t deployed. Everything above
-          is live.
-        </div>
-      ) : payload.topics.length > 0 ? (
+      {data.topics.roots.length > 0 ? (
         <ScrollBand full={full}>
           <ul className="border-t border-hairline py-1">
-            {payload.topics.map((t) => (
+            {data.topics.roots.map((t) => (
               <TopicRow key={t.id} node={t} depth={0} />
             ))}
           </ul>
         </ScrollBand>
       ) : (
-        <div className="border-t border-hairline px-3 py-3 text-[12px] text-muted-foreground">
-          No topics yet.
-        </div>
+        <TopicsEmpty topics={data.topics} />
       )}
     </div>
   );
@@ -632,12 +636,11 @@ export function PrioritiesWidget({
 function ScheduleRowItem({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
   const { status } = useRowState(row);
   const done = status === "DONE";
+  const time = shortTime(row.startTime);
   return (
     <li className="flex items-center gap-2 border-b border-hairline px-3 py-2 last:border-b-0">
       <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
-        {row.time && (
-          <span className="shrink-0 text-[12px] font-semibold tabular-nums text-foreground">{row.time}</span>
-        )}
+        {time && <span className="shrink-0 text-[12px] font-semibold tabular-nums text-foreground">{time}</span>}
         <span
           className={cn("min-w-0 truncate text-[13px] leading-snug", done ? "text-muted-foreground line-through" : "text-foreground")}
           title={row.title}
@@ -665,16 +668,17 @@ function UpNextRowItem({ row, caller }: { row: WidgetTaskRow; caller: Caller }) 
   );
 }
 
-export function ScheduleWidget({ payload, full }: { payload: SchedulePayload; full?: boolean }) {
+export function ScheduleWidget({ data, full }: { data: ScheduleWidgetData; full?: boolean }) {
   const caller = useCaller();
-  // ONE seed/reconcile pass over every row in the widget, so a task appearing in both "today" and
-  // "up next" is tracked once and stays consistent between the two sections.
+  // ONE seed pass over every row in the widget, so a task that Lane B legitimately places in two
+  // sections is tracked once and agrees with itself. (Lane B de-dupes `upNext` against the other
+  // two, so in practice this is belt-and-braces — and it is the cheap half.)
   const allRows = useMemo(
-    () => [...payload.todays, ...payload.doing, ...payload.upNext],
-    [payload.todays, payload.doing, payload.upNext],
+    () => [...data.todaySchedule, ...data.currentlyDoing, ...data.upNext],
+    [data.todaySchedule, data.currentlyDoing, data.upNext],
   );
-  useSeededRows(allRows, caller);
-  const doing = payload.doing[0];
+  useSeededRows(allRows);
+  const doing = data.currentlyDoing[0];
 
   return (
     <div className="overflow-hidden rounded-xl border border-hairline bg-surface shadow-soft">
@@ -682,29 +686,29 @@ export function ScheduleWidget({ payload, full }: { payload: SchedulePayload; fu
         <WidgetComposeRow placeholder="What's next…" />
       </div>
 
+      {!data.ok && <ReadError error={data.error} />}
+
       <SectionLabel>Today’s schedule</SectionLabel>
-      {payload.todays.length > 0 ? (
+      {data.todaySchedule.length > 0 ? (
         <ScrollBand full={full}>
           <ul className="border-t border-hairline">
-            {payload.todays.map((row) => (
-              <ScheduleRowItem key={row.taskId} row={row} caller={caller} />
+            {data.todaySchedule.map((row) => (
+              <ScheduleRowItem key={row.id} row={row} caller={caller} />
             ))}
           </ul>
         </ScrollBand>
       ) : (
-        <div className="border-t border-hairline px-3 py-2.5 text-[12px] text-muted-foreground">
-          Nothing scheduled for today.
+        <div className="border-t border-hairline">
+          <EmptyLine>Nothing scheduled for today.</EmptyLine>
         </div>
       )}
 
       <SectionLabel>Currently doing</SectionLabel>
       <div className="flex items-center gap-2 border-t border-hairline px-3 py-2">
-        {/* The spec puts this in BOLD and spells the empty state out — it is the one line the user
-            checks at a glance, so an empty section here would read as a rendering failure. */}
-        <span
-          className={cn("min-w-0 flex-1 truncate text-[13px] font-bold", doing ? "text-foreground" : "text-foreground")}
-          title={doing?.title}
-        >
+        {/* The spec puts this in BOLD and spells the empty state out. Lane B's contract is explicit
+            that `currentlyDoing: []` is a NORMAL result, so this is a legitimate state, not an
+            error — and a blank section here would read as a rendering failure. */}
+        <span className="min-w-0 flex-1 truncate text-[13px] font-bold text-foreground" title={doing?.title}>
           {doing ? doing.title : "Nothing in progress"}
         </span>
         {doing && (
@@ -720,14 +724,14 @@ export function ScheduleWidget({ payload, full }: { payload: SchedulePayload; fu
         <div className="flex items-center gap-1.5 px-3 pt-2">
           <Star size={11} className="fill-current" style={{ color: "var(--warning)" }} aria-hidden />
           <span className="text-[12px] font-bold" style={{ color: "var(--warning-foreground)" }}>
-            {payload.upNextLabel || "This Week"}
+            This Week
           </span>
         </div>
-        {payload.upNext.length > 0 ? (
+        {data.upNext.length > 0 ? (
           <ScrollBand full={full}>
             <ul className="pb-1">
-              {payload.upNext.map((row) => (
-                <UpNextRowItem key={row.taskId} row={row} caller={caller} />
+              {data.upNext.map((row) => (
+                <UpNextRowItem key={row.id} row={row} caller={caller} />
               ))}
             </ul>
           </ScrollBand>
@@ -739,114 +743,57 @@ export function ScheduleWidget({ payload, full }: { payload: SchedulePayload; fu
   );
 }
 
-/* ── Live data ───────────────────────────────────────────────────────────────────────────────────
- * A widget rendered from a chat MESSAGE carries its own payload. The DOCKED copy in Iris's 1:1 and
- * the two full-page VIEWS have no message, so they need a live read.
- *
- * Lane B's dedicated read fns did not exist when this was written (docs/LANE-B-widget-data.md had no
- * types and an unticked implementation list), so this derives what it can from the server fn that
- * DOES exist — `getBoardTasks` — and is explicit about what that cannot cover. It does NOT fabricate:
- * per CLAUDE.md, an absent dependency is derived from the real distinct values present, or degraded
- * to a labelled empty state; never seeded with invented rows.
- *
- * What `BoardTaskRow` gives us: id, title, status, category, tags, is_priority, priority_rank,
- * due_date. What it does NOT give us: `start_time` / `is_scheduled` — so:
- *   • SCHEDULE "Today's schedule" (which is defined by those columns) stays EMPTY here and says so.
- *   • `today` is left UNDEFINED rather than false, so the Today control never claims a task is off
- *     today on the strength of a column we never read.
- *   • "Currently doing" and "Up next" ARE real: they are status reads.
- *   • PRIORITIES topics are derived from the real distinct categories with real open counts; sub-topics
- *     are journey's `get_task_topics` and are genuinely absent, so no sub-topic is invented.
- * Swapping in Lane B's reads replaces this one hook and nothing else. */
+/* ── Live data (docked + full-page copies) ───────────────────────────────────────────────────────
+ * A widget rendered from a chat MESSAGE carries its own snapshot payload. The docked copy in Iris's
+ * 1:1 and the two full-page views have no message, so they read live through Lane B's server fns.
+ * Neither fn throws — a failure is `ok:false` with empty sections — so there is no catch-and-invent
+ * path here, and `ReadError` inside each widget is what tells the user a read failed. */
 
-type LiveWidgetData = {
-  loading: boolean;
-  priorities: PrioritiesPayload;
-  schedule: SchedulePayload;
-};
-
-const EMPTY_PRIORITIES: PrioritiesPayload = { rows: [], topics: [] };
-const EMPTY_SCHEDULE: SchedulePayload = { todays: [], doing: [], upNext: [] };
-
-function useLiveWidgetData(): LiveWidgetData {
+function useScheduleData(): { loading: boolean; data: ScheduleWidgetData | null } {
   const caller = useCaller();
-  const [state, setState] = useState<LiveWidgetData>({
+  const [state, setState] = useState<{ loading: boolean; data: ScheduleWidgetData | null }>({
     loading: true,
-    priorities: EMPTY_PRIORITIES,
-    schedule: EMPTY_SCHEDULE,
+    data: null,
   });
-
   useEffect(() => {
-    if (!caller?.entra_email) {
-      setState({ loading: false, priorities: EMPTY_PRIORITIES, schedule: EMPTY_SCHEDULE });
-      return;
-    }
     let cancelled = false;
-    void getBoardTasks({ data: { caller } })
-      .then((res) => {
-        if (cancelled) return;
-        const rows = res.tasks.map<WidgetTaskRow>((t) => ({
-          taskId: t.id,
-          title: t.title,
-          status: (t.status ?? "BACKLOG").toUpperCase(),
-          tags: t.tags ?? [],
-          ...(t.category ? { category: t.category } : {}),
-        }));
-        const open = rows.filter((r) => r.status !== "DONE");
-        const rank = new Map(res.tasks.map((t) => [t.id, t.priority_rank ?? Number.MAX_SAFE_INTEGER]));
-        const byRank = (a: WidgetTaskRow, b: WidgetTaskRow) =>
-          (rank.get(a.taskId) ?? 0) - (rank.get(b.taskId) ?? 0);
-        const flagged = new Set(res.tasks.filter((t) => t.is_priority).map((t) => t.id));
-
-        // PRIORITIES band: what the user has actually flagged or queued. Falls back to the whole open
-        // set when nothing is flagged, so the widget is never mysteriously empty on a real board.
-        const banded = open.filter((r) => flagged.has(r.taskId) || r.status === "UP_NEXT" || r.status === "READY");
-        const priorityRows = (banded.length ? banded : open).slice().sort(byRank);
-
-        // Topic tree: real categories, real open counts, no invented sub-topics.
-        const counts = new Map<string, number>();
-        for (const r of open) {
-          const c = r.category?.trim();
-          if (!c) continue;
-          counts.set(c, (counts.get(c) ?? 0) + 1);
-        }
-        const topics = [...counts.entries()]
-          .sort((a, b) => b[1] - a[1])
-          .map<WidgetTopicNode>(([label, count]) => ({ id: `cat-${label}`, label, count }));
-
-        setState({
-          loading: false,
-          priorities: {
-            rows: priorityRows,
-            topics,
-            // Sub-topics come from journey's get_task_topics, which is not reachable from here. Say so
-            // only when we have nothing at all to show; otherwise the real category counts stand.
-            ...(topics.length ? {} : { topicsUnavailable: true }),
-          },
-          schedule: {
-            // Deliberately empty: "today's schedule" is start_time/is_scheduled, columns this read
-            // does not return. An empty section that says so beats a wrong one that looks right.
-            todays: [],
-            doing: open.filter((r) => r.status === "DOING").slice().sort(byRank),
-            upNext: open
-              .filter((r) => r.status === "UP_NEXT" || r.status === "READY" || flagged.has(r.taskId))
-              .slice()
-              .sort(byRank),
-          },
-        });
+    void getScheduleWidget({ data: { caller, timeZone: TIME_ZONE } })
+      .then((d) => {
+        if (!cancelled) setState({ loading: false, data: d });
       })
       .catch(() => {
-        if (!cancelled) setState({ loading: false, priorities: EMPTY_PRIORITIES, schedule: EMPTY_SCHEDULE });
+        if (!cancelled) setState({ loading: false, data: null });
       });
     return () => {
       cancelled = true;
     };
   }, [caller]);
-
   return state;
 }
 
-function WidgetLoading({ label }: { label: string }) {
+function usePrioritiesData(): { loading: boolean; data: PrioritiesWidgetData | null } {
+  const caller = useCaller();
+  const [state, setState] = useState<{ loading: boolean; data: PrioritiesWidgetData | null }>({
+    loading: true,
+    data: null,
+  });
+  useEffect(() => {
+    let cancelled = false;
+    void getPrioritiesWidget({ data: { caller, timeZone: TIME_ZONE } })
+      .then((d) => {
+        if (!cancelled) setState({ loading: false, data: d });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ loading: false, data: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [caller]);
+  return state;
+}
+
+function WidgetPlaceholder({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 rounded-xl border border-hairline bg-surface px-3 py-4 text-[12px] text-muted-foreground shadow-soft">
       <Loader2 size={13} className="animate-spin" aria-hidden />
@@ -855,17 +802,25 @@ function WidgetLoading({ label }: { label: string }) {
   );
 }
 
+/** Shown only when the server fn itself could not be reached (a transport failure — the fns never
+ *  throw of their own accord), which is why it is a separate, plainer message from `ReadError`. */
+function WidgetUnreachable({ label }: { label: string }) {
+  return (
+    <div className="rounded-xl border border-hairline bg-surface px-3 py-4 text-[12px] text-destructive shadow-soft">
+      Couldn’t reach {label}. Check your connection and reopen this view.
+    </div>
+  );
+}
+
 /* ── Docked pair (Iris's 1:1) ────────────────────────────────────────────────────────────────────
  * "Docked" = persistently present in that huddle, NOT a message. Rendered by Transcript above the
  * message list, so it is there whether or not a tool ever fired, and — critically — it is NOT in
- * `messages`, which is what `history` (and therefore the turn payload and the unread watermark) is
- * built from. A pinned MESSAGE would have leaked a widget into every turn's model context and into
- * the transcript the user scrolls; this cannot.
- * Collapsed by default so it never buries the conversation; the toggle is device-local chrome. */
+ * `messages`, which is what `history` (and therefore the turn payload sent to the model, and the
+ * unread watermark) is built from. A pinned MESSAGE would have leaked a widget payload into every
+ * turn's prompt and into the scrollback the user reads; this cannot.
+ * Collapsed by default so it never buries the conversation. */
 export function DockedJourneyWidgets() {
-  const { loading, priorities, schedule } = useLiveWidgetData();
   const [open, setOpen] = useState(false);
-
   return (
     <div className="rounded-xl border border-hairline bg-surface-2/60">
       <button
@@ -874,24 +829,37 @@ export function DockedJourneyWidgets() {
         aria-expanded={open}
         className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left"
       >
-        {open ? <ChevronDown size={13} className="shrink-0 text-muted-foreground" /> : <ChevronRight size={13} className="shrink-0 text-muted-foreground" />}
+        {open ? (
+          <ChevronDown size={13} className="shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
+        )}
         <span className="text-[12px] font-semibold text-foreground">Priorities &amp; schedule</span>
         <span className="text-[11px] text-muted-foreground">· pinned here</span>
       </button>
+      {/* Mounted only while open, so the two Lane-B reads do not fire for a user who never expands it. */}
       {open && (
         <div className="grid gap-3 px-2 pb-2 lg:grid-cols-2">
-          {loading ? (
-            <WidgetLoading label="Loading your priorities…" />
-          ) : (
-            <>
-              <PrioritiesWidget payload={priorities} />
-              <ScheduleWidget payload={schedule} />
-            </>
-          )}
+          <LivePrioritiesWidget />
+          <LiveScheduleWidget />
         </div>
       )}
     </div>
   );
+}
+
+function LivePrioritiesWidget({ full }: { full?: boolean }) {
+  const { loading, data } = usePrioritiesData();
+  if (loading) return <WidgetPlaceholder label="Loading your priorities…" />;
+  if (!data) return <WidgetUnreachable label="your priorities" />;
+  return <PrioritiesWidget data={data} full={full} />;
+}
+
+function LiveScheduleWidget({ full }: { full?: boolean }) {
+  const { loading, data } = useScheduleData();
+  if (loading) return <WidgetPlaceholder label="Loading your schedule…" />;
+  if (!data) return <WidgetUnreachable label="your schedule" />;
+  return <ScheduleWidget data={data} full={full} />;
 }
 
 /* ── Full-page views (side menu) ─────────────────────────────────────────────────────────────────── */
@@ -910,19 +878,17 @@ function WidgetPage({ title, children }: { title: string; children: React.ReactN
 }
 
 export function PrioritiesView() {
-  const { loading, priorities } = useLiveWidgetData();
   return (
     <WidgetPage title="Priorities">
-      {loading ? <WidgetLoading label="Loading your priorities…" /> : <PrioritiesWidget payload={priorities} full />}
+      <LivePrioritiesWidget full />
     </WidgetPage>
   );
 }
 
 export function ScheduleView() {
-  const { loading, schedule } = useLiveWidgetData();
   return (
     <WidgetPage title="Schedule">
-      {loading ? <WidgetLoading label="Loading your schedule…" /> : <ScheduleWidget payload={schedule} full />}
+      <LiveScheduleWidget full />
     </WidgetPage>
   );
 }

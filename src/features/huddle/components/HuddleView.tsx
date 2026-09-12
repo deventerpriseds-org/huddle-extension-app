@@ -33,10 +33,11 @@ import {
   type ChecklistPayload,
   type Huddle,
   type HuddleMessage,
-  type PrioritiesPayload,
-  type SchedulePayload,
   type ToolUseEvent,
 } from "../data/seed";
+// The widget payload contract is Lane B's (lib/tasks/widgets.server.ts). Type-only import — that
+// module is deliberately dependency-free, so nothing server-side reaches the client bundle.
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
 import {
   enqueueHuddleTurn,
   getTurnUpdates,
@@ -938,12 +939,12 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
             above reads live instead). Same placement and same conditional shape as the checklist. */}
         {m.priorities && (
           <div className="mt-2">
-            <PrioritiesWidget payload={m.priorities} />
+            <PrioritiesWidget data={m.priorities} />
           </div>
         )}
         {m.schedule && (
           <div className="mt-2">
-            <ScheduleWidget payload={m.schedule} />
+            <ScheduleWidget data={m.schedule} />
           </div>
         )}
         {m.confirmAsk && <ConfirmAskRow m={m} />}
@@ -1138,8 +1139,8 @@ function Composer({ huddle }: { huddle: Huddle }) {
           // MUST be declared here AND at HuddleApp's copy of this DTO. This shape is re-declared
           // inline at both mapping sites and an undeclared field is dropped SILENTLY — no error, no
           // crash — so a widget would decay into plain text after a reload with nothing to blame.
-          priorities?: PrioritiesPayload;
-          schedule?: SchedulePayload;
+          priorities?: PrioritiesWidgetData;
+          schedule?: ScheduleWidgetData;
         }[]
       | undefined,
     result: TurnResult,
