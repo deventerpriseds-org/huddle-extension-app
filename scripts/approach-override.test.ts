@@ -226,6 +226,27 @@ check(
   verifyOwnerQuote("proceed with that approach, override it later once we know more", [REFUSAL], NOW, BIND()),
   { ok: false, reason: "not-consent" },
 );
+/**
+ * The same attack in its purest form: the negation and the go-ahead words are in ONE clause, and the
+ * model submits only the tail. This is the case that proves the CLAUSE EXPANSION specifically — judge
+ * the model's span and it reads as consent; judge the owner's clause and it is a refusal.
+ */
+const REFUSAL_SAME_CLAUSE: UserUtterance = {
+  id: "u-1788197600000",
+  text: "Do NOT override the gate and let Cole run it until I have looked at the numbers.",
+  updatedMs: mins(5),
+  huddleId: `dm-${ASSIGNEE}`,
+};
+check(
+  "the model quotes only the tail of a negated clause — REFUSED, because the clause is expanded first",
+  verifyOwnerQuote("override the gate and let Cole run it", [REFUSAL_SAME_CLAUSE], NOW, BIND()),
+  { ok: false, reason: "not-consent" },
+);
+check(
+  "and the model's own span, judged alone, WOULD have read as consent — which is why expanding matters",
+  isAuthorisation("override the gate and let Cole run it"),
+  true,
+);
 check(
   "and the same refusal still fails even when the task escalated long before it",
   verifyOwnerQuote(
