@@ -337,3 +337,96 @@ proven only for in-process calls and must be stated that narrowly.**
    behind a human tap. Saying so explicitly rather than silently omitting the category. If the owner
    wants a bound, a sensible default to confirm is: the tap returns within 2s p95.
 3. **AC-21 and AC-24 are reasoned-only by design.** I have not invented test shapes for them.
+
+---
+
+# GAP ANALYSIS — what `scripts/approach-override.test.ts` covers, and what it does not
+
+Read AFTER the criteria above were written and committed (commit history proves the order).
+
+**The headline, stated first because it is not what I expected to find:** this suite is markedly
+better than a self-written suite usually is. It tests the strong claim ("the attacks are IRRELEVANT")
+rather than the weak one ("these strings are refused"), it asserts on **recorded database calls**
+rather than return values, it feeds all 14 historical attack strings verbatim from the three verifier
+files, and — the case I thought would be missing — it explicitly includes **a genuine owner
+authorisation relayed faithfully** and asserts it does nothing. Its own header names the trap
+("this very suite stayed green" through three refutations). Two of its structural guards carry
+comments recording that they were INERT when first written and were fixed.
+
+| # | Criterion | Covered? | Note |
+|---|---|---|---|
+| AC-1 | one writer of `approved` | **NO** | see "A. Gap 1" |
+| AC-2 | execution-driven spy over all tools | **NO** | source grep only — see "A. Gap 2" |
+| AC-3 | request statement cannot grant | partial | source regex + mock; not executed on real PG here |
+| AC-4 | `via` is not a parameter | **YES** | asserts hardcoded `'button'` |
+| AC-5 | no re-export door | **NO** | |
+| AC-6 | both dispatch paths | **YES** | counts 2 call sites AND 2 `r.fresh` gates; INERT-then-fixed |
+| AC-7 | a future tool cannot inherit the grant | partial | caught only inside `huddle.functions.ts` |
+| AC-8 | genuine authorisation still does not grant | **YES** | present, labelled "the sharpest case in the file" |
+| AC-9 | no argument is read to decide | partial | 14 attacks + empty/blank/undefined; not `"approach_status=approved"`, 10k chars, SQL metachars |
+| AC-10 | no classifier reintroduced | partial | 5 frozen names + no `verifyOwnerQuote` caller; a NEW name would pass |
+| AC-11 | the tap grants | **YES** | mock-level |
+| AC-12 | idempotent at the statement | partial | mock + race; real `UPDATE 1`/`UPDATE 0` was the verifiers' work, not this suite's |
+| AC-13 | safe no-op on approved/pending/DONE | **YES** | both paths, and the `pending` case is explicit |
+| AC-14 | foreign == missing, byte-identical | partial | "not yours" asserted; "does not exist" not asserted as its own case |
+| AC-15 | `proposed_approach` untouched | **YES** | |
+| AC-16 | DB failure never reported as success | partial | regex on the catch, not executed with a throwing pool |
+| AC-17 | structural rate limit + re-arm | **YES** | strong — three asks, plus `escalateApproach` clearing |
+| AC-18 | owner can find a stuck task unaided | **NO** | no assertion on `getEscalatedApproachTaskIds` |
+| AC-19 | no second authorisation system | partial | `HuddleView` wiring asserted; **`BoardView`'s call site is not** |
+| AC-20 | a new convenience arg fails the suite | **mostly YES** | the grant's exact key set `["taskId","userEmail"]` is asserted — a new text arg into the grant fails |
+| AC-21 | a green suite is not coverage | **YES, as prose** | the file's own header says it |
+| AC-22 | delete each load-bearing line | **NO** (as a standing check) | two INERT mutations are recorded as having been found and fixed |
+| AC-23 | tool cannot mislead the model | **YES** | name, description, `applied:false` |
+| AC-24 | the claim is scoped in writing | partial | mechanism documented; "overrides ARE possible" not stated as a residual |
+| AC-25 | HTTP-boundary auth of the tap | **NO** | **nothing in the suite touches this** |
+| AC-26 | model's own HTTP transport swept | **NO** | **nothing in the suite touches this** |
+
+## The gaps that matter, in order
+
+**Gap 1 — AC-1. The suite proves one caller of `overrideApproachGate`; it never enumerates the other
+writer.** `approveApproach` is, by the grant statement's own comment, "an unguarded upsert [that]
+moves ANY status to 'approved', including 'pending'." I traced its callers: exactly one live site,
+`approach-gate.server.ts:123`, the grader's pass. So the structural claim as literally stated —
+*no model path to `approach_status='approved'`* — is **false**; the true claim is *no model path
+that bypasses the grader*. A model calls `propose_approach`, the grader assents, `approveApproach`
+writes. That is the design working, but no test pins `approveApproach` to one caller, and a second
+caller added later is the cheapest way to reopen this gate. **This is the single most valuable
+criterion the suite does not have.**
+
+**Gap 2 — AC-2/AC-5/AC-7. The structural proof is a grep over one file.** The check is
+`/overrideApproachGate|overrideEscalatedApproach/.test(huddleFns) === false`. A dispatcher branch
+calling a helper in *another* module that calls `overrideEscalatedApproach` passes this check. So
+does a dynamic `import(name)`. The author knows source greps are a fallback and says so at line 339 —
+the gap is that the fallback is doing the work of the primary here. An execution-driven spy (mock
+`overrideApproachGate`, drive every tool in both dispatchers, assert call-count 0) would hold under
+refactoring; the grep will not.
+
+**Gap 3 — AC-25/AC-26. The residual is not tested and, I believe, not stated accurately.**
+`overrideApproachFromButtonFn` is a `createServerFn` with **no middleware** (checked) whose entire
+authorisation is `resolveCallerEmail(data.caller)`, where `caller` is
+`{entra_object_id?: string, entra_email?: string}` **read from the request body**. The claimed
+residual is "can an authenticated browser session be forged." *Observation:* I see an identity
+asserted in the body, not a verified session. *Interpretation (inference — I did not trace the HTTP
+layer and could not exercise it here):* the residual may be "can anything POST this endpoint naming
+the owner's email," which is a materially weaker position. **Verdict on this criterion:
+`not_applicable` — not `pass`.** Nothing was checked, so nothing passed.
+
+## Is the self-written suite adequate evidence for this gate?
+
+**No — but for one reason, not the usual one.**
+
+It is adequate for the claim it actually tests: *given a model's tool call, the server does not apply
+an override.* That claim is well tested, with the right attacks, at the right layer, including the
+case most authors would have omitted (AC-8).
+
+It is **not** adequate as evidence for the owner's precondition, because the precondition is about
+what an agent can reach, and the suite's reachability proof is a grep over a single file (Gap 2), it
+never enumerates the second writer of the approved status (Gap 1), and it does not touch the
+authorisation of the one path that *does* grant (Gap 3). The design moved the risk out of language
+and into authentication — and authentication is the part with no test.
+
+The pattern to notice: every gap above is at a **boundary the author was not thinking about** —
+another module, another writer, another protocol. Inside the boundary they were thinking about, the
+work is genuinely good. That is exactly the failure mode a cold pass exists to find, and it is why
+"the author's suite is thorough" is not the same as "the author's suite is sufficient."
