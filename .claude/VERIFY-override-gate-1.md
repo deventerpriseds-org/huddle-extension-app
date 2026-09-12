@@ -55,3 +55,62 @@ implementer's own admitted largest unproven risk (IMPL §4.2) for the DDL-and-gu
 NOT for the live Azure PG environment itself (different host, but same engine/schema/statements;
 no environment-specific SQL feature was used — no vector, no extensions, no Azure-specific syntax).
 
+## CLAIM 2 — the loop bound is real and cannot spin forever — CONFIRMED (with one noted caveat)
+
+**Read:** `approach-gate.server.ts:1-184` (whole file) + `approach-override.ts:135-143`.
+
+- `regradeCeiling(capApproach)` (`approach-override.ts:135-138`): `cap = Number.isFinite(capApproach) &&
+  capApproach > 0 ? Math.floor(capApproach) : 3; return cap * 2`. Boundary values `0`, `undefined`,
+  `NaN`, negative all fall to the `3` default (ceiling 6) rather than producing `0` or `Infinity` —
+  checked by inline reading, not assumed.
+- `mayRegradeEscalated(revisionCount, capApproach)` = `revisionCount < regradeCeiling(...)` — strict
+  `<`, so at `revisionCount === ceiling` it returns `false` and the gate stops exactly at the ceiling,
+  not one-past-it.
+- The counter is incremented **before** grading on the escalated path
+  (`approach-gate.server.ts:101`, `if (wasEscalated) await incrementApproachRevisionCount(...)`) —
+  inside the `try` block, before `callOpenAIRouter` is invoked — so a grader that throws still consumes
+  the attempt (confirmed by control flow: the increment statement executes and can only be skipped if
+  it itself throws, which it cannot since it's `.catch(() => {})`-guarded).
+- **Every writer of `approach_revision_count` in the repo**, swept via
+  `grep -rn "approach_revision_count\s*="`: exactly one increment path (`incrementApproachRevisionCount`,
+  called only from `approach-gate.server.ts:101` and `:145`) and exactly one reset path
+  (`resetEngagementOnReassignment`, `tasks.server.ts:1260`, called only from one site,
+  `tasks.server.ts:308`, which is the genuine-reassignment sync writer). **No other code path resets or
+  increments this counter** — a re-entrant caller cannot silently rewind it.
+- `escalateApproach()` does **not** reset `approach_revision_count` (grep confirms — its INSERT/UPDATE
+  touches only `approach_status`), so re-escalating after a failed re-grade does not give the task a
+  fresh budget.
+
+**Caveat, not a refutation:** `incrementApproachRevisionCount(...).catch(() => {})` silently swallows a
+DB write failure. If that specific write persistently failed while the DB read (`getTaskEngagementState`)
+and the grader (OpenAI, a separate service) kept succeeding, the persisted counter would never advance
+and `mayRegradeEscalated` would keep returning the same answer on every call — an edge case where the
+bound would not actually converge. This is **not a new risk this diff introduces**: the identical
+`.catch(() => {})`-swallow-on-write pattern already exists on the fresh-path increment
+(`approach-gate.server.ts:145`, unchanged by this diff) and is the repo's own accepted design for this
+exact gate (AC-O14 itself cites "`approach-gate.server.ts:98/113`... acceptable because the gate
+re-runs" as the precedent). So the loop-bound claim holds under the gate's own existing failure model;
+it inherits, rather than introduces, this one theoretical gap.
+
+**Verdict: CONFIRMED.**
+
+## CLAIM 3 — the errored re-grade does NOT fail open — CONFIRMED
+
+**Read:** `approach-gate.server.ts:164-183`, the `catch (err)` block.
+
+```
+if (wasEscalated) {
+  return { gated: true, approved: false, escalated: true, note: `re-grade couldn't run (...) — still escalated...` };
+}
+// fresh-path fail-open (pre-existing, unchanged):
+await approveApproach(...).catch(() => {});
+return { gated: true, approved: true, escalated: false, note: `approach gate error, proceeding: ...` };
+```
+
+Traced the realistic case named in the brief: `callOpenAIRouter` throwing on a 429/`insufficient_quota`
+propagates as a thrown `Error` from inside the `try` block (nothing between the increment and the
+`callOpenAIRouter` call can throw first, since the increment is `.catch`-guarded) → caught by the outer
+`catch (err)` → `wasEscalated` was captured **before** the try block (`const wasEscalated = state?.approach_status === "escalated"`, line ~78, outside the try) so its value is fixed regardless of what happened inside → `if (wasEscalated)` is `true` for a re-grade → returns `escalated:true, approved:false` and **does not call `approveApproach`**. A fresh (never-escalated) task hitting the same 429 still fails open via the untouched pre-existing branch — confirmed this is the ONLY path that calls `approveApproach` inside the catch, and it is gated by `!wasEscalated` (the early return above intercepts every `wasEscalated` case first).
+
+**Verdict: CONFIRMED.**
+
