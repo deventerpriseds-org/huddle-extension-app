@@ -1,8 +1,60 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
+Last updated: 2026-09-12 (ACT:escalated-dead-end -- approach gate's `escalated` is terminal with NO user override, diagnosed from Cole Blake's live transcript, fork awaiting owner choice; ACT:meaty-literal -- the produce-vs-quick prompt is one hardcoded string bypassing every persona)
+Previous: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
 Previous: 2026-08-26 (ACT-64 confirm-ask/assist scope revised, no code yet; ACT-63 notification bugs DEPLOYED 6dccf41, Bug 2 user-confirmed live; ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
 
 ## LIVE STATUS BOARD (surface this every check-in)
+
+### 🔎 ACT:escalated-dead-end — the approach gate has a TERMINAL state and no user override (2026-09-12)
+**Ask (owner):** *"look at the cole Blake transcript as the reviewer is blocking us from proceeding and I
+have no way of telling it to tell the reviewer I said it can override and continue."*
+
+**DIAGNOSED. No code changed this session — investigation only.**
+
+**Ground truth, from the live transcript** (`chat.pending_turns`, `dm-cole-blake`, via `azure-pg-query.yml`
+because both PG connectors' OAuth had lapsed). Cole says it himself across five turns:
+- 2026-09-11 23:45 — *"the review process rejected my approach after three revisions, so I'm pausing"*
+- 2026-09-12 02:50 — *"held because the quality gate rejected three approach revisions"*
+- 2026-09-12 02:57 — *"still blocked at the quality gate, so I can't responsibly produce the artifact"*
+- 2026-09-12 03:01 — *"the workflow remains **locked in its prior escalated state** and is rejecting
+  further approach submissions... **the task needs to be reset** before I can execute it."*
+
+**It is the APPROACH gate, not the review gate.** `approach_status` is `pending|approved|escalated`
+(tasks.server.ts:702). Three rejected revisions writes `'escalated'` (tasks.server.ts:1042), and
+`approach-gate.server.ts:65-66` returns on `escalated` **BEFORE it ever calls the grader** — so a
+resubmitted approach can never be re-graded. It is a TERMINAL state.
+
+**There is no override, and that claim is a full-repo sweep, not a single grep.** The entire agent tool
+surface is: ask_clarifying_question, build_checklist, confirm_task_intent, flag_blocker, groom_backlog,
+propose_approach, propose_task_intent, resolve_clarifying_question, schedule_and_priorities,
+schedule_reminder. **None encodes "the user overrode this."** So the owner telling Cole to proceed has
+nowhere to land — exactly what was reported.
+The ONLY path clearing `escalated` is `resetEngagementOnReassignment()` (tasks.server.ts:1177), which
+fires only when grooming assigns a DIFFERENT agent. So today the only escape is an accidental
+reassignment. The gate's own note — *"already escalated to the user — address it with them directly"* —
+instructs a conversation that has no power to unblock anything.
+
+**Owner's fork, presented, AWAITING CHOICE:** (A) new `override_gate` tool, escalated→approved with the
+override recorded [recommended]; (B) drop the line-65 short-circuit so a fresh approach is re-graded —
+rejected as insufficient on its own, because Cole's stated blocker is missing stakeholder data he will
+never have in a demo, so re-grading loops forever.
+**Also pending owner go-ahead:** a single-row reset of the live Trinnex framework task so Cole can move
+now, separate from the fix.
+
+### 🔎 ACT:meaty-literal — "That's a meaty one" is one hardcoded string, not the agent's voice (2026-09-12)
+**Ask (owner):** *"I also didn't know why when I give it a large task it says it's 'meaty' and should it
+tackle or etc etc. [all] agents say it so it [sounds] hard-headed."*
+
+`huddle.functions.ts:1624` — a single hardcoded literal in the SHARED turn path, fired whenever
+`routed.difficulty >= 3` and `!deepManual`:
+> *"That's a meaty one. Want me to **produce** it ... or would a **quick take right here** do for now?
+> Reply "produce", "quick", or "cancel"."*
+It is a produce-vs-quick gate (async deep work vs. an answer now). It reads as hard-headed and is
+IDENTICAL from every agent because it bypasses the persona layer entirely — it is a literal, not
+generated speech. Live instance in the transcript at 2026-09-12 01:32.
+**Proposed (owner leaning yes, not yet confirmed):** put it in the agent's own voice, and skip the gate
+when the owner has already said go ("knock it out") — being asked twice is the actual irritation.
+
 
 ### 🔨 ACT-65: `reminder` task tag — stop agents owning work only the user can do (2026-08-26)
 **Root cause (found by the user, not me).** `groom.ts:122-127` FORCES an agent owner on every task:

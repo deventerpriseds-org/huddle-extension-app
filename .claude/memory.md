@@ -1418,6 +1418,36 @@ it does not reflect the user. Accurate harness: `e2e/realtime-speak-multiturn.e2
   can kill a genuine BARGE-IN reply. FIX: drop the manual response.cancel (let interrupt_response handle
   barge); test the barge-in variant (phrase 2 over the still-playing turn-1 reply) to nail it.
 
+## The approach gate's `escalated` is a TERMINAL state — read this before touching the gates (2026-09-12)
+
+Diagnosed from Cole Blake's live transcript; NO code changed yet, fork awaiting the owner.
+
+`approach_status` is `pending|approved|escalated`. Three rejected approach revisions writes `'escalated'`,
+and **`approach-gate.server.ts:65-66` returns on `escalated` BEFORE calling the grader** — so a
+resubmitted approach is never re-graded. The task is stuck permanently.
+
+**And there is no user override anywhere in the product.** Swept the whole agent tool surface (ten tools:
+ask_clarifying_question, build_checklist, confirm_task_intent, flag_blocker, groom_backlog,
+propose_approach, propose_task_intent, resolve_clarifying_question, schedule_and_priorities,
+schedule_reminder) — none encodes "the user said proceed anyway." The only thing that clears `escalated`
+is `resetEngagementOnReassignment()`, which fires solely on a grooming reassignment to a DIFFERENT agent.
+
+**The cruel detail worth remembering:** the gate's own note reads *"already escalated to the user —
+address it with them directly"* — it instructs a conversation with the user that is given no power to
+change the state. The agent does exactly as told and the user is still stuck, which is precisely how the
+owner experienced it: *"I have no way of telling it to tell the reviewer I said it can override."*
+
+**This is the fail-CLOSED family and it must stay fail-closed** (see the 2026-08-05 leak below) — the fix
+is an EXPLICIT, RECORDED override, never loosening the grader.
+
+## The produce-vs-quick prompt is a hardcoded literal, not agent speech (2026-09-12)
+
+`huddle.functions.ts:1624`. One string in the SHARED turn path, fired on `routed.difficulty >= 3`:
+*"That's a meaty one. Want me to produce it … or would a quick take right here do for now?"*
+It bypasses the persona layer, so EVERY agent says it identically — which is why the owner read it as
+hard-headed. When a canned line is reported as "the agents sound robotic", check for a literal in the
+shared path before touching any prompt: the snapshot layer is not always the source of an agent's words.
+
 ## Active work — 1:1 VOICE latency (journey-speed) — plan + premise CONFIRMED, build next (2026-08-01)
 User complaint: "the delay for my convo with Flex to SPEAK takes way too long, much longer than journey."
 It's a VOICE latency ask (not text). Today's 1:1 voice is SLOW because Realtime is ears-only
