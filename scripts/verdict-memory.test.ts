@@ -99,5 +99,81 @@ check(
   null,
 );
 
+// ---------------------------------------------------------------------------------------------
+// STRUCTURAL GUARDS. The window logic above is pure and provable; the other half of this fix is
+// SQL and call-site wiring, which no offline runtime test can exercise. `deep-confirm-store.probe.ts`
+// proves those against a real Postgres, but it needs a database and therefore SKIPS in CI — so
+// these greps are the always-on floor under it. They assert the CONSTRUCT, not a line number.
+// ---------------------------------------------------------------------------------------------
+import { readFileSync } from "fs";
+const store = readFileSync("src/features/huddle/lib/tasks/deep-confirm.server.ts", "utf8");
+const turn = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
+/** Source with // line comments and block comments stripped — a guard must never pass on prose. */
+function code(s: string): string {
+  return s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+}
+const storeCode = code(store);
+const turnCode = code(turn);
+
+console.log("\nSTRUCTURAL — a verdict memory must not read back as an outstanding ask");
+// Both branches of getPendingDeepConfirm (the user_id path and the email fallback) must filter it.
+// Miss either and a resolved row returns as `pending`, so the user's NEXT message is classified as
+// a reply to a question nobody just asked.
+const pendingSelects = storeCode.match(/SELECT ask_text[\s\S]*?LIMIT 1/g) ?? [];
+check("both getPendingDeepConfirm queries exist", pendingSelects.length, 2);
+check(
+  "and BOTH filter resolved_at IS NULL",
+  pendingSelects.filter((q) => /resolved_at IS NULL/.test(q)).length,
+  2,
+);
+check(
+  "a new ask reopens the row (resolved_at=NULL on conflict)",
+  /ON CONFLICT \(user_email, huddle_id\) DO UPDATE SET[^`]*resolved_at=NULL/.test(storeCode),
+  true,
+);
+
+console.log("\nSTRUCTURAL — produce/quick REMEMBER, cancel still DELETES");
+check(
+  "the produce branch records a verdict",
+  /verdict === "produce"[\s\S]{0,200}?recordDeepConfirmVerdict\([^)]*"produce"\)/.test(turnCode),
+  true,
+);
+check(
+  "the quick branch records a verdict",
+  /recordDeepConfirmVerdict\([^)]*"quick"\)/.test(turnCode),
+  true,
+);
+check(
+  "the cancel branch still CLEARS (a park must not be remembered)",
+  /verdict === "cancel"\)\s*\{\s*await clearPendingDeepConfirm\(/.test(turnCode),
+  true,
+);
+check(
+  "no verdict branch clears instead of recording",
+  /verdict === "produce"\)\s*\{\s*await clearPendingDeepConfirm\(/.test(turnCode),
+  false,
+);
+check(
+  "recordDeepConfirmVerdict is typed to the two remembered verdicts only",
+  /verdict: RememberedVerdict/.test(storeCode),
+  true,
+);
+
+console.log("\nSTRUCTURAL — the fresh-ask path consults the memory BEFORE asking");
+const askIdx = turnCode.indexOf("await setPendingDeepConfirm(");
+const memIdx = turnCode.indexOf("await getRecentDeepVerdict(");
+check("both the memory read and the ask are present", askIdx > -1 && memIdx > -1, true);
+check("the memory is read BEFORE the ask is stored", memIdx < askIdx, true);
+check(
+  "a remembered 'produce' runs the produce path instead of asking",
+  /remembered === "produce"[\s\S]{0,300}?runProduce\(/.test(turnCode),
+  true,
+);
+check(
+  "a remembered 'quick' drops to the chat tier instead of asking",
+  /remembered === "quick"[\s\S]{0,400}?deepManual = "terra-med"/.test(turnCode),
+  true,
+);
+
 console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

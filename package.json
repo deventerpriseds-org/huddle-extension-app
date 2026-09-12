@@ -22,7 +22,8 @@
     "test:turn-identity": "bun scripts/turn-identity.test.ts",
     "test:override-gate": "bun scripts/approach-override.test.ts",
     "test:green-light": "bun scripts/green-light.test.ts",
-    "test:assign-on-create": "bun scripts/assign-on-create.test.ts"
+    "test:assign-on-create": "bun scripts/assign-on-create.test.ts",
+    "test:verdict-memory": "bun scripts/verdict-memory.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

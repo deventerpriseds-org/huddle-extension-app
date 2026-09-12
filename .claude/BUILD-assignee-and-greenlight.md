@@ -148,3 +148,137 @@ TSC_EXIT=0
 | test:override-gate | 0 | 60 pass |
 | test:green-light | 0 | 78 pass |
 | test:assign-on-create | 0 | 45 pass |
+
+### Mutation proof (fix 1) — `mutate.sh`, verbatim
+
+Anchors and replacements came from FILES, never shell arguments.
+
+```
+===== M1 group-only-when-named =====
+FIRED: 'group, nobody named -> null (left for grooming, NOT dumped on the lead)' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/tasks/assign-on-create.ts matches HEAD
+tree clean: ... passes again on the restored tree
+
+===== M2 one-to-one-assigns-responder =====
+FIRED: '1:1, no owner named -> the responder' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/tasks/assign-on-create.ts matches HEAD
+
+===== M3 no-silent-default =====
+FIRED: 'resolveExplicitOwner("nobody-by-that-name")' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/tasks/assign-on-create.ts matches HEAD
+
+===== M4 one-char-slip =====
+FIRED: 'a 1-char slip does not fuzzy-match anyone' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/tasks/assign-on-create.ts matches HEAD
+
+===== M5 dm-huddle-is-one-to-one =====
+FIRED: 'huddleId "dm-<id>" even when scope says group' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/tasks/assign-on-create.ts matches HEAD
+```
+
+5 FIRED, 0 INERT, 0 NOT-APPLIED.
+
+### A note on the commit
+
+The first `git add -A` swept in three files this lane did not author — another lane's uncommitted
+override-quote-hardening work (`approach-override.ts`, `green-light.ts`,
+`.claude/BUILD-override-quote-hardening.md`). The commit was soft-reset and re-made with only this
+lane's five files; the other lane's changes were left uncommitted exactly as found (the
+`eds-git-guard` PostToolUse autosave already mirrors them to `refs/heads/eds-wip/*`).
+
+---
+
+## FIX 2 — "already said go" is not remembered, so the produce-vs-quick question re-asks
+
+### Verification of the verifier's description (read directly, not taken on trust)
+
+| Claim | Verified? | Where |
+|---|---|---|
+| the pending row is `PRIMARY KEY (user_email, huddle_id)` | YES | `deep-confirm.server.ts` BOOTSTRAP, line 28 |
+| EVERY verdict deletes the row | YES | `huddle.functions.ts` quick -> `clearPendingDeepConfirm` (was :1598), produce -> `clear` (:1600), cancel -> `clear` (:1604) |
+| the ask is gated on that row | YES | `getPendingDeepConfirm` at the top of the gate; the fresh-ask branch fires on `!deepManual && winners.length && difficulty >= 3` |
+| only `data.modelEscalate` suppresses it | **STALE** | `hasGreenLit(recentUserLines)` was added earlier today and also suppresses. See below — it does not cover the case being fixed. |
+
+**The part that matters, and it is measured rather than reasoned.** The green-light suppression
+added today does NOT cover an ANSWERED gate, because the words the gate asks for are not go-ahead
+idioms:
+
+```
+$ bun -e 'import {isGreenLight,hasGreenLit} from "./src/features/huddle/lib/tasks/green-light";...'
+"produce"    -> isGreenLight: false
+"quick"      -> isGreenLight: false
+"produce it" -> isGreenLight: false
+"yes"        -> isGreenLight: false
+hasGreenLit(["produce"]): false
+```
+
+So replying with the exact word the gate asked for suppressed nothing at all, and the next
+difficulty>=3 message in the same 1:1 asked again from scratch. The defect is real and uncovered.
+
+### What was changed
+
+**New — `src/features/huddle/lib/tasks/verdict-memory.ts`** (pure, no node imports):
+`VERDICT_MEMORY_MS`, `asRememberedVerdict`, `verdictToApply(verdict, atMs, nowMs)`.
+
+**`deep-confirm.server.ts` — the EXISTING row is extended, no new table:**
+three idempotent `ADD COLUMN IF NOT EXISTS` — `resolved_at`, `last_verdict`, `last_verdict_at`.
+- `getPendingDeepConfirm` gains `AND resolved_at IS NULL` on **both** query branches, so a verdict
+  memory can never masquerade as an outstanding ask.
+- `setPendingDeepConfirm` sets `resolved_at=NULL` on conflict — a new ask reopens the row.
+- **new** `recordDeepConfirmVerdict(...)` — retires the pending and stores the verdict.
+  UPDATE-then-INSERT rather than a bare upsert, because the read path resolves a user by `user_id`
+  OR any of their emails, so `ON CONFLICT (user_email, huddle_id)` alone could create a second row
+  under the user's other address. The INSERT covers the green-lit path, which has no pending row.
+- **new** `getRecentDeepVerdict(...)` — returns the verdict only if `verdictToApply` says it is
+  still in-window. Null on any error, i.e. ask normally.
+
+**`huddle.functions.ts`:** produce and quick now RECORD instead of clearing; **cancel still calls
+`clearPendingDeepConfirm`**, which deletes the row and takes the memory with it, so parking one ask
+can never silence a later genuine one. The fresh-ask branch consults `getRecentDeepVerdict` before
+asking — `produce` runs the produce path, `quick` drops to the `terra-med` tier and answers inline,
+anything else asks exactly as before. The green-lit path also records its verdict, because
+`hasGreenLit` only looks back four user lines and decays out mid-conversation.
+
+### THE WINDOW IS A JUDGEMENT CALL AND IS TUNABLE
+
+`VERDICT_MEMORY_MS = 30 * 60_000` — thirty minutes, a named constant with the reasoning in its
+doc comment. The failure being fixed is a re-ask "a minute later" inside one continuous
+conversation, and half an hour covers a sitting at the keyboard; it is also well inside the store's
+existing 2h pending expiry, since a verdict should not outlive an unanswered ask. It refreshes on
+every verdict, so a flowing conversation keeps the memory warm rather than hitting a cliff.
+**Change the constant to tune it — nothing else reads a duration.**
+
+### Executed against a real Postgres, on a POPULATED old-schema database
+
+A fresh database would have proved nothing: `CREATE TABLE IF NOT EXISTS` is skipped on the database
+that actually matters, so the new columns can only arrive via the idempotent ALTERs.
+
+```
+=== 1. OLD (HEAD) bootstrap ===            OK old schema applied, exit 0
+=== 2. seed a live pending ask ===         1 row
+=== 3. NEW bootstrap ON TOP ===            NOTICE: relation "deep_confirm" already exists, skipping
+                                           OK new schema applied on top, exit 0
+```
+and the resulting table carries all three new columns alongside the pre-existing row.
+
+Then the REAL store functions (not a paraphrase of their SQL) were exercised against that database —
+15/15 PASS, including that the pre-migration row still reads as pending, that `produce` retires the
+ask but is remembered, that the memory expires, that `cancel` wipes both, that the no-pending INSERT
+fallback works, and that huddles are isolated. Preserved as
+**`scripts/deep-confirm-store.probe.ts`**, which SKIPS cleanly (exit 0) unless
+`DEEP_CONFIRM_TEST_PG_URL` is set; the header carries the exact commands to stand a cluster up.
+
+> One local-harness gotcha worth recording: the store's pool hardcodes `ssl`, so against a local
+> cluster with SSL off EVERY call returns null via its own best-effort catch — which looks exactly
+> like a code defect. `ssl=on` + a self-signed cert is required. Half an hour was nearly spent
+> debugging working code.
+
+### Offline test
+
+`scripts/verdict-memory.test.ts` (`npm run test:verdict-memory`) — 46 checks. It **imports**
+`VERDICT_MEMORY_MS` rather than copying it, so tuning the window cannot leave a test asserting the
+old value; the bounds it does assert are sanity bounds (positive, < the 2h expiry, >= 5 min).
+It also carries STRUCTURAL guards for the half no offline runtime test can reach: both
+`getPendingDeepConfirm` branches filter `resolved_at IS NULL`, produce/quick record while cancel
+clears, and the memory is read BEFORE the ask is stored. Comments are stripped before matching, so
+a guard cannot pass on prose.
