@@ -177,9 +177,13 @@ ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_revisi
 -- 'approved' by TWO routes -- the grader passing it, and the owner overriding a dead end -- and the two
 -- must NOT be indistinguishable: without these columns a later reader auditing "which work was actually
 -- quality-gated?" counts an override as a pass. NULL on a graded pass; set on an override.
---   approach_override_via: 'button' (a click in the app -- the click IS the user act) | 'quote' (a model
---     relayed the owner's own words, and the server LOCATED them in a real user turn before honouring it).
---   approach_override_turn_id: which utterance authorised it, so a replay is visible after the fact.
+--   approach_override_via: 'button' (a click in the app -- the click IS the user act) | 'turn-pair' (an
+--     agent relayed the owner's authorisation by REFERENCE: the server fetched HIS turn and the
+--     escalation turn it answered, and the approach gate's own grader judged the exchange -- see
+--     .claude/BUILD-override-turn-pair.md). Old rows may carry the historical 'quote', whose route
+--     classified model-supplied TEXT and is deleted.
+--   approach_override_turn_id: which OWNER utterance authorised it, so a replay is visible after the fact.
+--   approach_override_quote: that utterance as the SERVER read it back out of chat.pending_turns.
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_by TEXT;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_at TIMESTAMPTZ;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_via TEXT;
@@ -1123,20 +1127,42 @@ export async function overrideApproachGate(opts: {
   taskId: string;
   /** The RESOLVED CALLER email. The actor is the authenticated user, never an agentId, never "system". */
   userEmail: string;
+  /**
+   * WHICH ROUTE granted it, and the audit trail is the whole point of the parameter existing:
+   *  - `button`    the owner tapped "Approve anyway" in the app. The click IS the user act.
+   *  - `turn-pair` an agent relayed the owner's authorisation by REFERENCE, the server fetched the
+   *                owner's turn and the escalation turn it answered, and the approach gate's own
+   *                grader judged the exchange (.claude/BUILD-override-turn-pair.md).
+   * A reader auditing "which work was actually quality-gated?" must be able to tell all three apart —
+   * a graded pass (every override column NULL), a tap, and a relay.
+   */
+  via: "button" | "turn-pair";
+  /** `turn-pair` only: the OWNER's turn id, so the authorising utterance is findable after the fact. */
+  turnId?: string | null;
+  /** `turn-pair` only: the owner's own words, AS THE SERVER FETCHED THEM from `chat.pending_turns`.
+   *  Never a caller-supplied string — the caller passes a turn reference and the server reads the row. */
+  quote?: string | null;
 }): Promise<boolean> {
   await ensureBootstrapped();
-  // via is HARDCODED 'button' and is not a parameter. It was `"button" | "quote"` until 2026-09-12,
-  // when the model-text override path was deleted (.claude/BUILD-override-request-then-tap.md): the
-  // only remaining way to reach this statement is the owner tapping "Approve anyway", so a caller
-  // CHOOSING what to record here would be recording a distinction that no longer exists. The two quote
-  // columns stay in the table for historical rows and are written NULL.
+  // `via` was hardcoded 'button' between 2026-09-12 and this change, because the model path had been
+  // deleted outright. It is a PARAMETER again, but a two-value union rather than free text, and the
+  // two extra columns are written only on the relay route. What is NOT restored is the old `'quote'`
+  // route: that one honoured a string the MODEL chose, and three adversaries broke it. Here the quote
+  // is evidence recorded after the fact, read by nothing.
+  const relay = opts.via === "turn-pair";
   const res = await getPool().query(
     `UPDATE tasks.task_engagement_state
         SET approach_status='approved',
-            approach_override_by=$2, approach_override_at=now(), approach_override_via='button',
-            approach_override_quote=NULL, approach_override_turn_id=NULL, updated_at=now()
+            approach_override_by=$2, approach_override_at=now(), approach_override_via=$3,
+            approach_override_quote=$4, approach_override_turn_id=$5, updated_at=now()
       WHERE task_id=$1 AND approach_status='escalated'`,
-    [opts.taskId, opts.userEmail.toLowerCase()],
+    [
+      opts.taskId,
+      opts.userEmail.toLowerCase(),
+      relay ? "turn-pair" : "button",
+      relay && opts.quote ? opts.quote.slice(0, 2000) : null,
+      relay ? (opts.turnId ?? null) : null,
+    ],
   );
   return (res.rowCount ?? 0) > 0;
 }

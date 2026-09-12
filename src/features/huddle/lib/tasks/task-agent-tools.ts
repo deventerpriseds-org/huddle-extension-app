@@ -164,6 +164,58 @@ export const REQUEST_APPROACH_OVERRIDE_TOOL = {
   },
 } as const;
 
+/**
+ * override_approach_gate — the agent RELAYS an authorisation the owner already gave, by REFERENCE.
+ *
+ * This is step 4 of the owner's own four steps (tell me it's blocked / try to earn the pass / I say
+ * proceed / you pass my turn AND the turn I was answering to the verifier). It exists because deleting
+ * the model path outright — the state of this file between 2026-09-12 and this change — was an
+ * OVER-correction: *"I never asked to prevent self override!"*
+ *
+ * WHAT IT DOES NOT HAVE, and this is the entire design: a text parameter. The refuted version took
+ * `owner_quote`, a sentence the MODEL chose, and tried to read consent out of it; three independent
+ * adversaries broke that with three non-overlapping sets of ordinary English. Here the model names
+ * TURNS, the server reads those turns out of the durable store itself, and a grader sees the exchange
+ * with the question it answers attached. There is no string to craft.
+ *
+ * Both id arguments are OPTIONAL and default to server-resolved values (the turn being executed, and
+ * this task's own escalation turn), because turn ids are deliberately NOT in the transcript a model
+ * reads — a reference the server supplies cannot be forged at all. Passing one is a claim that is
+ * validated exactly as strictly. (.claude/BUILD-override-turn-pair.md.)
+ */
+export const OVERRIDE_APPROACH_GATE_TOOL = {
+  type: "function",
+  name: "override_approach_gate",
+  description:
+    "Use this ONLY when the user has JUST told you, in their own words, to proceed anyway / override " +
+    "the approach review on a task that is ESCALATED. It does not approve anything by itself: the " +
+    "server re-reads the user's actual message and the message of yours it answered, and an " +
+    "independent reviewer decides whether that exchange really authorises this task. If it does not, " +
+    "the task stays blocked and you must tell the user so. Do NOT call it speculatively, do not call " +
+    "it because you think the work should proceed, and do not call it about a task the user was " +
+    "talking about in some other context — the check is about THIS task's escalation. If the user has " +
+    "not said anything yet, call request_approach_override instead and wait.",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string", description: "The id of the escalated task the user just authorised." },
+      owner_turn_id: {
+        type: "string",
+        description:
+          "Optional. The id of the user's own message that authorises this. Leave it out and the " +
+          "server uses the message you are replying to right now.",
+      },
+      agent_turn_id: {
+        type: "string",
+        description:
+          "Optional. The id of the message of yours the user was answering. Leave it out and the " +
+          "server finds this task's own escalation notice.",
+      },
+    },
+    required: ["task_id"],
+  },
+} as const;
+
 // ask_clarifying_question / resolve_clarifying_question: a bounded, rate-limited channel for an agent
 // to get more detail from the user MID-WORK, without spamming — one open question per task at a time,
 // capped lifetime total (identity/agent-workflow-config.server.ts). This is for a genuine unknown that

@@ -179,6 +179,17 @@ export type OverrideRequestResult = {
 export async function overrideEscalatedApproach(opts: {
   taskId: string;
   email: string;
+  /**
+   * ABSENT = the owner's tap, which is the default and needs no evidence: the click IS the user act.
+   * PRESENT = the RELAY route (`overrideApproachFromTurnPair` below), which has already fetched the
+   * owner's turn and the escalation turn it answered and had them graded. Nothing here re-decides
+   * that; the object exists so the two routes are DISTINGUISHABLE in the audit columns, which is the
+   * property that lets a later reader tell a graded pass from a tap from a relay.
+   *
+   * It is not optional-in-the-sense-of-trusting-a-caller: this function is not exported to any model
+   * path. Its two callers are the button server fn and the relay, both in this file.
+   */
+  grant?: { via: "turn-pair"; turnId: string; quote: string };
 }): Promise<OverrideResult> {
   const { taskId, email } = opts;
   try {
@@ -212,7 +223,13 @@ export async function overrideEscalatedApproach(opts: {
       };
     }
 
-    const applied = await overrideApproachGate({ taskId, userEmail: email });
+    const applied = await overrideApproachGate({
+      taskId,
+      userEmail: email,
+      via: opts.grant?.via ?? "button",
+      turnId: opts.grant?.turnId ?? null,
+      quote: opts.grant?.quote ?? null,
+    });
     // Not applied = the row stopped being 'escalated' between the read above and this write (a second
     // click, or the grader landing a pass). Nothing is stuck either way, so report it as already done
     // rather than as a failure the user has to act on.
@@ -316,6 +333,235 @@ export async function requestApproachOverride(opts: {
     // mentioning it, and the task goes quiet while still stuck.
     return { ok: false, applied: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+// ---- THE RELAY: an agent passes the TURN PAIR, the server fetches it, the grader judges it ---------
+
+/** How far back an authorising exchange may be. A turn pair older than this is refused outright — an
+ *  authorisation is a reply to a live ask, not a licence found in last month's transcript. */
+export const OVERRIDE_TURN_PAIR_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** The minimum this path needs off a durable turn row. Structural rather than an import of
+ *  `TurnRecord`, so nothing in this file depends on the server store's shape beyond what it reads. */
+type TurnLike = { id: string; replies: unknown[]; updated_ms: number };
+
+/**
+ * IS THIS TURN THIS TASK'S ESCALATION NOTICE? — the anchor, and the reason this design is not a third
+ * attempt at phrase-matching.
+ *
+ * The old classifier bound an authorisation to a task by scanning the owner's sentence for the task's
+ * TITLE, which is how a genuine go-ahead about the weekly NEWSLETTER unblocked a task called "Send the
+ * weekly report" (.claude/VERIFY-override-gate-2.md #3). Here the binding is structural: the turn the
+ * owner replied to must BE the notice about this task id. Two shapes, both written by the server:
+ *
+ *  1. `ovrreq-<taskId>` — the AWAY notice's deterministic id (huddle.functions.ts
+ *     `deliverOverrideRequestNotice` -> ``enqueueTurn(`ovrreq-${taskId}`, ...)``). The task id is in
+ *     the turn id, so this shape cannot be aimed at another task.
+ *  2. a turn whose persisted `replies[]` carry `overrideAsk.taskId === taskId` — the IN-THREAD row the
+ *     owner sees, assembled at the reply site as `overrideAsk: replyOverrideAsk` and stored whole in
+ *     the `replies` JSONB by `saveTurnChunk`/`updateTurnReplies`.
+ *
+ * Both are server-written records of "we asked about THIS task". Neither is a string comparison
+ * against anything a model or the owner typed.
+ */
+function turnIsEscalationFor(turn: TurnLike, taskId: string): boolean {
+  if (turn.id === `ovrreq-${taskId}`) return true;
+  return (turn.replies ?? []).some((r) => {
+    const ask = (r as { overrideAsk?: { taskId?: unknown } } | null)?.overrideAsk;
+    return !!ask && typeof ask.taskId === "string" && ask.taskId === taskId;
+  });
+}
+
+/**
+ * THE OWNER AUTHORISED IT IN CONVERSATION, and the agent is relaying that — by REFERENCE.
+ *
+ * The owner's specification, verbatim: *"I never asked to prevent self override! I want the agent to
+ * tell me it's blocked, attempt to get what I needs to pass and or have me tell it override/proceed
+ * anyway and it passes my timestamped turn and the turn I was responding into the verifier who should
+ * then let it pass."* Steps 1 and 2 are `request_approach_override` and the re-grade path, both
+ * unchanged. This is step 4.
+ *
+ * WHY THIS IS NOT THE CLASSIFIER THAT WAS REFUTED THREE TIMES. Every attack that worked handed an
+ * ISOLATED, MODEL-CHOSEN FRAGMENT to a regex over two word lists. Here:
+ *  - the caller passes TURN IDS. There is no text parameter, so there is no string to craft.
+ *  - the SERVER reads both turns out of `chat.pending_turns`. What the model believes was said is
+ *    never consulted; what the row says was said is.
+ *  - the owner's turn is fetched through a read SCOPED TO HIM (`getRecentUserUtterances`), and must
+ *    pass `isUserTurn` — an agent-initiated turn stores its own internal DIRECTIVE in `payload.text`,
+ *    and that directive is exactly what a self-override would want to quote.
+ *  - the agent turn must BE this task's escalation (`turnIsEscalationFor`) — a structural anchor that
+ *    replaces title-phrase binding, so an authorisation cannot be aimed at a different task.
+ *  - the reply must POSTDATE both the escalation and the notice, and fall inside the window.
+ *  - only then does the grader see the PAIR, with the question it is answering in front of it.
+ *
+ * EVERY FAILURE IS A REFUSAL. Including — especially — a grader that throws: `runApproachGate` fails
+ * OPEN on a grader outage for a FRESH approach (a task must not be blocked by an outage), and
+ * inheriting that here would turn one OpenAI 429 into an override the owner never gave. There is a
+ * recorded defect of exactly that shape in this gate's history (approach-gate.server.ts's catch, which
+ * used to `approveApproach`), and it is not repeated.
+ */
+export async function overrideApproachFromTurnPair(opts: {
+  taskId: string;
+  email: string;
+  /** The OWNER's turn. The dispatch site passes the turn being executed; it is never model-supplied
+   *  text and, when a model does name one, it must still resolve inside the owner's own scoped turns. */
+  ownerTurnId: string | null;
+  /** The AGENT turn he was replying to. Null = let the server find this task's escalation turn. */
+  agentTurnId: string | null;
+  /** The requesting agent, for the audit line only. Never read to decide anything. */
+  requestedByAgent?: string | null;
+  /** Injectable clock, so the recency rules are testable without waiting a day. */
+  nowMs?: number;
+}): Promise<OverrideResult & { applied: boolean; refusal?: string }> {
+  const { taskId, email } = opts;
+  const now = opts.nowMs ?? Date.now();
+  const refuse = (refusal: string, extra?: Partial<OverrideResult>) => ({
+    ok: false,
+    applied: false,
+    refusal,
+    error: refusal,
+    taskId,
+    ...extra,
+  });
+  try {
+    const { getOwnedTaskForConfirmAsk, getTaskEngagementState } = await import("./tasks.server");
+    const { getUserTurnById, getUserTurnsSince, getRecentUserUtterances } = await import("./turns.server");
+    const { isUserTurn } = await import("../turn-identity");
+
+    // The same three preconditions the tap path and the request path enforce, in the same order and
+    // with the same wording — a task that isn't yours is indistinguishable from one that doesn't exist.
+    const task = await getOwnedTaskForConfirmAsk(taskId, email);
+    if (!task) return refuse("Task not found.");
+    if ((task.status ?? "").toUpperCase() === "DONE") {
+      return refuse("That task is already done — there's nothing to unstick.", { title: task.title });
+    }
+    const state = await getTaskEngagementState(taskId).catch(() => null);
+    const status = state?.approach_status ?? "pending";
+    if (status === "approved") {
+      return { ok: true, applied: false, alreadyDone: true, taskId, title: task.title };
+    }
+    if (status !== "escalated") {
+      return refuse(
+        "That task isn't waiting on the user's approval — its approach gate is at “pending”. If it " +
+          "changed hands, the new assignee starts the approach fresh.",
+        { title: task.title },
+      );
+    }
+
+    const windowStart = now - OVERRIDE_TURN_PAIR_WINDOW_MS;
+
+    // ---- the OWNER's turn ------------------------------------------------------------------------
+    // Fetched through the read that is already scoped to this user across every huddle and every
+    // status — `status='done'` would miss the single most common case, the turn being executed right
+    // now ("I said proceed — override it"). Not finding the id here covers three refusals at once:
+    // it isn't his, it doesn't exist, or it is older than the window.
+    if (!opts.ownerTurnId) return refuse("No authorising message was identified.", { title: task.title });
+    if (!isUserTurn(opts.ownerTurnId)) {
+      // An agent-initiated turn (autowork, groom, standup, an owner-followup, and notably the override
+      // NOTICE itself) keeps its internal directive in payload.text. Honouring one would let an agent
+      // authorise itself by pointing at its own instructions.
+      return refuse("That message is not something the user typed.", { title: task.title });
+    }
+    const utterances = await getRecentUserUtterances(email, windowStart, 500);
+    const ownerTurn = utterances.find((u) => u.id === opts.ownerTurnId);
+    if (!ownerTurn) {
+      return refuse("The authorising message could not be found in the user's recent messages.", {
+        title: task.title,
+      });
+    }
+    const ownerText = (ownerTurn.text ?? "").trim();
+    if (!ownerText) return refuse("That message has no text to act on.", { title: task.title });
+
+    // ---- the AGENT turn it answered --------------------------------------------------------------
+    let agentTurn: TurnLike | null = null;
+    if (opts.agentTurnId) {
+      const t = await getUserTurnById(email, opts.agentTurnId);
+      if (t && turnIsEscalationFor(t, taskId)) agentTurn = t;
+    } else {
+      // Derive it. The away notice's id is deterministic, so try that first and only scan if it is
+      // absent (the in-thread case, where the escalation row rode on an ordinary conversation turn).
+      const notice = await getUserTurnById(email, `ovrreq-${taskId}`);
+      if (notice) agentTurn = notice;
+      else {
+        const recent = await getUserTurnsSince(email, windowStart);
+        for (const t of recent) if (turnIsEscalationFor(t, taskId)) agentTurn = t; // oldest-first: keep the newest
+      }
+    }
+    if (!agentTurn) {
+      return refuse(
+        "No escalation notice for this task was found to have been answered — the override has to be " +
+          "a reply to the message that told the user this task was blocked.",
+        { title: task.title },
+      );
+    }
+
+    // ---- ordering and recency --------------------------------------------------------------------
+    if (!(ownerTurn.updatedMs > agentTurn.updated_ms)) {
+      return refuse("That message came before the task was flagged, so it cannot be answering it.", {
+        title: task.title,
+      });
+    }
+    const escalatedMs = state?.approach_escalated_at ? Date.parse(state.approach_escalated_at) : NaN;
+    if (Number.isFinite(escalatedMs) && ownerTurn.updatedMs < escalatedMs) {
+      // The row's own updated_at is NOT a substitute for this column — any later write bumps it.
+      return refuse("That message predates this escalation.", { title: task.title });
+    }
+
+    // ---- the verdict -----------------------------------------------------------------------------
+    const agentText = agentTurnEvidence(agentTurn, taskId);
+    let verdict: { authorised: boolean; reason: string };
+    try {
+      const { gradeOverrideAuthorisation } = await import("./approach-gate.server");
+      verdict = await gradeOverrideAuthorisation({
+        taskTitle: task.title,
+        agentText,
+        ownerText,
+      });
+    } catch (err) {
+      // FAIL CLOSED. The fresh-approach path fails open by design; this one must not inherit it.
+      const msg = err instanceof Error ? err.message : String(err);
+      return refuse(`The override check couldn't run (${msg.slice(0, 120)}) — nothing was changed.`, {
+        title: task.title,
+      });
+    }
+    if (!verdict.authorised) {
+      return refuse(
+        `That doesn't read as approval to proceed on this task${verdict.reason ? ` — ${verdict.reason.slice(0, 200)}` : ""}.`,
+        { title: task.title },
+      );
+    }
+
+    const granted = await overrideEscalatedApproach({
+      taskId,
+      email,
+      grant: { via: "turn-pair", turnId: ownerTurn.id, quote: ownerText },
+    });
+    return { ...granted, applied: !!granted.ok && !granted.alreadyDone };
+  } catch (err) {
+    // Never swallowed into a false "unblocked": an agent that believes the gate opened will start work.
+    return refuse(err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** What the grader is shown as "what the agent told the user". The escalation row's own note when the
+ *  turn carries one (that is the agent's stated case, in its own words), else the turn's reply text.
+ *  Server-read either way — this function only chooses which server-written field to quote. */
+function agentTurnEvidence(turn: TurnLike, taskId: string): string {
+  const parts: string[] = [];
+  for (const r of turn.replies ?? []) {
+    const rep = r as { text?: unknown; overrideAsk?: { taskId?: unknown; note?: unknown } } | null;
+    if (!rep) continue;
+    const ask = rep.overrideAsk;
+    if (ask && typeof ask.taskId === "string" && ask.taskId === taskId && typeof ask.note === "string") {
+      parts.push(ask.note);
+    }
+    if (typeof rep.text === "string" && rep.text.trim()) parts.push(rep.text.trim());
+  }
+  const joined = parts.join("\n\n").trim();
+  return (
+    joined ||
+    "(The agent told the user this task's approach review escalated and asked them to approve it anyway.)"
+  );
 }
 
 /** The in-thread / board "Approve anyway" button. Model-free, like its three neighbours: the click is

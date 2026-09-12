@@ -120,7 +120,21 @@ agent: override_approach_gate(task_id)                 [step 4 — NEW]
 - [x] read `approach-gate.server.ts`, `approach-override.ts`, `confirm-ask.functions.ts`,
       `tasks.server.ts`, `turns.server.ts`, `turn-identity.ts`, both dispatch sites, the tool defs
 - [x] doc written and pushed before the first edit
-- [ ] implementation
+- [x] **implementation** — `npx tsc --noEmit` exit 0. Files touched:
+  - `turns.server.ts` — `getUserTurnById(userEmail, id)`, scoped in SQL (not `getTurn`, which is
+    unscoped, because this read is reachable from a path a model can aim).
+  - `tasks.server.ts` — `overrideApproachGate` takes `via: "button" | "turn-pair"` plus the two audit
+    values; the schema comment now describes the real value set. No new column.
+  - `approach-gate.server.ts` — `gradeOverrideAuthorisation`, same `callOpenAIRouter` path, same
+    reviewer model and charter, one different question. Throws rather than returning a fallback.
+  - `confirm-ask.functions.ts` — `turnIsEscalationFor` (the anchor), `agentTurnEvidence`,
+    `overrideApproachFromTurnPair`, and a `grant` parameter on the shared core so the tap and the
+    relay are distinguishable in the audit columns.
+  - `task-agent-tools.ts` — `OVERRIDE_APPROACH_GATE_TOOL`. **No text parameter of any kind.**
+  - `huddle.functions.ts` — `relayApproachOverride` (one shared helper, both dispatch paths) +
+    `override_approach_gate` wired into the OpenAI and Lovable dispatches and the toolset.
+  - Suites after chunk 1: 12/13 green; `test:override-gate` red on exactly 3 assertions that describe
+    the OLD shape (`no via`, `hardcoded 'button'`, `the old name is gone`). Fixed in chunk 2.
 - [ ] tests
 - [ ] mutation proofs
 - [ ] suites + tsc + build

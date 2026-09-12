@@ -82,6 +82,7 @@ import {
   PROPOSE_TASK_INTENT_TOOL,
   PROPOSE_APPROACH_TOOL,
   REQUEST_APPROACH_OVERRIDE_TOOL,
+  OVERRIDE_APPROACH_GATE_TOOL,
   ASK_CLARIFYING_QUESTION_TOOL,
   RESOLVE_CLARIFYING_QUESTION_TOOL,
 } from "./tasks/task-agent-tools";
@@ -1966,6 +1967,38 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     }
   }
 
+  /**
+   * THE RELAY (step 4 of the owner's four): an agent says the user has just authorised an override, and
+   * this hands the TURN PAIR to the server to fetch and to the approach gate's grader to judge.
+   *
+   * Shared by both dispatch paths deliberately — a safety gate with two implementations is a safety
+   * gate that leaks through whichever one nobody re-read (memory.md 2026-08-05). The model's arguments
+   * reach `overrideApproachFromTurnPair` as REFERENCES and nothing else; there is no text parameter on
+   * this path at all.
+   *
+   * `turnId` is this closure's own durable turn id — the turn being executed, i.e. the message the
+   * agent is replying to RIGHT NOW. That is the owner's authorising turn in the ordinary case, and the
+   * server supplying it is stronger than a model naming it: `isUserTurn` still has to accept it, so an
+   * agent-initiated turn (autowork, a groom pass, the override NOTICE itself) is refused even here.
+   */
+  async function relayApproachOverride(
+    taskId: string,
+    ownerTurnId: string | null,
+    agentTurnId: string | null,
+  ): Promise<{ ok: boolean; applied: boolean; title?: string; error?: string }> {
+    const email =
+      (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ?? data.caller?.entra_email;
+    if (!email) return { ok: false, applied: false, error: "sign-in required" };
+    const { overrideApproachFromTurnPair } = await import("./tasks/confirm-ask.functions");
+    const r = await overrideApproachFromTurnPair({
+      taskId,
+      email,
+      ownerTurnId: ownerTurnId || turnId || null,
+      agentTurnId: agentTurnId || null,
+    });
+    return { ok: !!r.ok, applied: !!r.applied, title: r.title, error: r.error };
+  }
+
   // Chat-driven UNBLOCK routing: the user cleared a blocker while talking to a NON-owner (e.g. Terry,
   // who surfaced it) — only the OWNING agent can move its task out of Blocked. Enqueue a REAL durable
   // turn in the owner's own DM. Unlike deliverOwnerFollowup (which defers and re-asks for confirmation),
@@ -3460,6 +3493,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           PROPOSE_TASK_INTENT_TOOL,
           PROPOSE_APPROACH_TOOL,
           REQUEST_APPROACH_OVERRIDE_TOOL,
+          OVERRIDE_APPROACH_GATE_TOOL,
           ASK_CLARIFYING_QUESTION_TOOL,
           RESOLVE_CLARIFYING_QUESTION_TOOL,
           SCHEDULE_REMINDER_TOOL,
@@ -3856,6 +3890,46 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               recordToolUse(winner.id, "request_approach_override", "request failed", false, msg);
+              return JSON.stringify({ ok: false, applied: false, error: msg });
+            }
+          }
+          if (c.name === "override_approach_gate") {
+            const a = c.arguments as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const ownerTurnArg = String(a.owner_turn_id ?? "").trim() || null;
+            const agentTurnArg = String(a.agent_turn_id ?? "").trim() || null;
+            if (!taskId) return JSON.stringify({ ok: false, applied: false, error: "task_id is required" });
+            try {
+              const r = await relayApproachOverride(taskId, ownerTurnArg, agentTurnArg);
+              recordToolUse(
+                winner.id,
+                "override_approach_gate",
+                r.applied
+                  ? "the user's authorisation checked out — approach approved"
+                  : `not approved — ${r.error ?? "the exchange did not authorise it"}`.slice(0, 160),
+                r.applied,
+                r.applied ? undefined : r.error,
+              );
+              return JSON.stringify(
+                r.applied
+                  ? {
+                      ok: true,
+                      task_id: taskId,
+                      applied: true,
+                      approach_status: "approved",
+                      note: "Approved on the user's own authorisation. You may proceed.",
+                    }
+                  : {
+                      ok: false,
+                      applied: false,
+                      approach_status: "escalated",
+                      error: r.error,
+                      note: "STILL BLOCKED. Do not proceed and do not tell the user it is unblocked — say what is missing, or ask them to use the Approve anyway button.",
+                    },
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "override_approach_gate", "override check failed", false, msg);
               return JSON.stringify({ ok: false, applied: false, error: msg });
             }
           }
@@ -5044,6 +5118,57 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               recordToolUse(winner.id, "request_approach_override", "request failed", false, msg);
+              return JSON.stringify({ ok: false, applied: false, error: msg });
+            }
+          },
+        });
+
+        // override_approach_gate — the agent RELAYS an authorisation the user just gave, by turn
+        // reference (mirrors the OpenAI path). Nothing it passes is text; the server fetches the pair.
+        lovableTools.override_approach_gate = tool({
+          description: OVERRIDE_APPROACH_GATE_TOOL.description,
+          inputSchema: z.object({
+            task_id: z.string(),
+            owner_turn_id: z.string().optional(),
+            agent_turn_id: z.string().optional(),
+          }),
+          execute: async (args) => {
+            const a = args as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const ownerTurnArg = String(a.owner_turn_id ?? "").trim() || null;
+            const agentTurnArg = String(a.agent_turn_id ?? "").trim() || null;
+            if (!taskId) return JSON.stringify({ ok: false, applied: false, error: "task_id is required" });
+            try {
+              const r = await relayApproachOverride(taskId, ownerTurnArg, agentTurnArg);
+              recordToolUse(
+                winner.id,
+                "override_approach_gate",
+                r.applied
+                  ? "the user's authorisation checked out — approach approved"
+                  : `not approved — ${r.error ?? "the exchange did not authorise it"}`.slice(0, 160),
+                r.applied,
+                r.applied ? undefined : r.error,
+              );
+              return JSON.stringify(
+                r.applied
+                  ? {
+                      ok: true,
+                      task_id: taskId,
+                      applied: true,
+                      approach_status: "approved",
+                      note: "Approved on the user's own authorisation. You may proceed.",
+                    }
+                  : {
+                      ok: false,
+                      applied: false,
+                      approach_status: "escalated",
+                      error: r.error,
+                      note: "STILL BLOCKED. Do not proceed and do not tell the user it is unblocked — say what is missing, or ask them to use the Approve anyway button.",
+                    },
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "override_approach_gate", "override check failed", false, msg);
               return JSON.stringify({ ok: false, applied: false, error: msg });
             }
           },

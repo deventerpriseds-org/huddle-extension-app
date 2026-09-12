@@ -419,6 +419,35 @@ export async function getUserTurnsSince(userEmail: string, sinceMs: number): Pro
 }
 
 /**
+ * ONE turn, by id, SCOPED TO THIS USER — the read the turn-pair override uses to fetch the AGENT turn
+ * the owner was replying to.
+ *
+ * Deliberately not `getTurn(id)`, which is unscoped: this read is reached from a path a MODEL can
+ * invoke with an id it chose, so "is this turn even this owner's?" has to be answered in the SQL
+ * rather than by a caller remembering to check. A turn belonging to anyone else is indistinguishable
+ * from one that does not exist — the same property `getOwnedTaskForConfirmAsk` has, for the same
+ * reason: an id that is refused differently from an id that is absent is an id-probing oracle.
+ *
+ * Scope resolution mirrors `getUserTurnsSince` exactly (user_id, falling back to the email set), so a
+ * user whose identity row has not been resolved yet is matched the same way everywhere.
+ */
+export async function getUserTurnById(userEmail: string, id: string): Promise<TurnRecord | null> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
+  const res = await getPool().query(
+    userId
+      ? `SELECT ${ROW_COLS} FROM chat.pending_turns
+          WHERE id = $1
+            AND (user_id = $2 OR (user_id IS NULL AND lower(user_email) = ANY($3)))`
+      : `SELECT ${ROW_COLS} FROM chat.pending_turns
+          WHERE id = $1 AND lower(user_email) = lower($2)`,
+    userId ? [id, userId, emails] : [id, userEmail],
+  );
+  return res.rows[0] ? mapRow(res.rows[0]) : null;
+}
+
+/**
  * The user's OWN recent utterances, newest first — the transcript the owner-quote override check reads.
  *
  * A separate read from `getUserTurnsSince` above, and it has to be: that one filters `status = 'done'`

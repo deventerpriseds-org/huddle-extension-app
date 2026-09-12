@@ -23,6 +23,66 @@ const VERDICT_SCHEMA = {
 
 const REVIEWER_MODEL = "gpt-4o-mini";
 
+/**
+ * DID THE OWNER AUTHORISE PROCEEDING ON THIS TASK? — the verdict the turn-pair override rests on.
+ *
+ * This is the SAME grading path `runApproachGate` uses below (`callOpenAIRouter`, the same reviewer
+ * model, the same structured-output contract), asked a different question. It is here rather than in
+ * a module of its own on purpose: a second grader is a second thing to keep calibrated, and this file
+ * is already where "the gate asks a model to judge something" lives.
+ *
+ * WHAT IT IS HANDED, and why this is not the refuted classifier: both texts are read by the SERVER out
+ * of `chat.pending_turns` after the caller names a turn (.claude/BUILD-override-turn-pair.md). The
+ * agent's own escalation notice is in the prompt, so "go ahead" is judged AS A REPLY TO A KNOWN
+ * QUESTION rather than as an isolated fragment. Every attack that broke `verifyOwnerQuote` was an
+ * isolated fragment: an unrelated go-ahead, a pasted proposal, a postponement, a two-topic message.
+ *
+ * FAILS CLOSED. A throw propagates; there is no verdict-shaped fallback, because a grader outage that
+ * silently authorised an override would be indistinguishable to the owner from one he granted.
+ */
+export async function gradeOverrideAuthorisation(opts: {
+  taskTitle: string;
+  /** The escalation notice the owner was replying to — server-fetched, anchored to this task. */
+  agentText: string;
+  /** The owner's own reply — server-fetched from HIS turn. */
+  ownerText: string;
+}): Promise<{ authorised: boolean; reason: string }> {
+  const { callOpenAIRouter } = await import("../openai-responses.server");
+  const reviewer = WORKERS["assignment-reviewer"];
+  const verdict = await callOpenAIRouter<{ authorised: boolean; reason: string }>({
+    model: REVIEWER_MODEL,
+    system: reviewer.charter,
+    prompt:
+      "You are deciding ONE question about a two-message exchange, and nothing else. An automated " +
+      "quality gate blocked a task; an agent told the user it was blocked; the user replied. Did the " +
+      "USER, in that reply, authorise this specific task going ahead anyway despite the gate?\n\n" +
+      "Answer true ONLY if the reply is an affirmative instruction to proceed on THIS task. Answer " +
+      "false for anything else, and these are the cases that matter most:\n" +
+      "- a refusal, a hedge, a doubt, or a condition attached (\"not until...\", \"never approve that\")\n" +
+      "- a POSTPONEMENT (\"not now\", \"later\", \"remind me tomorrow\")\n" +
+      "- the user quoting, forwarding or restating somebody else's words or the agent's own proposal " +
+      "without adopting it as their own instruction\n" +
+      "- a go-ahead that is plainly about something ELSE (another task, an errand, a different topic " +
+      "mentioned in the same message)\n" +
+      "- a question, an acknowledgement (\"ok\", \"got it\", \"thanks\") or a comment with no instruction\n" +
+      "If you are unsure, answer false. A wrong true lets work proceed that the user never approved.\n\n" +
+      `The blocked task: ${opts.taskTitle}\n\n` +
+      `What the agent told the user:\n${opts.agentText.slice(0, 3000)}\n\n` +
+      `What the user replied:\n${opts.ownerText.slice(0, 3000)}`,
+    schema: {
+      type: "object",
+      properties: {
+        authorised: { type: "boolean" },
+        reason: { type: "string" },
+      },
+      required: ["authorised", "reason"],
+      additionalProperties: false,
+    },
+    schemaName: "override_authorisation_verdict",
+  });
+  return { authorised: verdict.authorised === true, reason: String(verdict.reason ?? "") };
+}
+
 export interface ApproachGateResult {
   /** false = requireStructuredWorkflow is OFF for this agent — the gate did not run at all. */
   gated: boolean;
