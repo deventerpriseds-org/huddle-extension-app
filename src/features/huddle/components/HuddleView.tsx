@@ -28,7 +28,15 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
-import { breadcrumbToolsFor, type ChecklistPayload, type Huddle, type HuddleMessage, type ToolUseEvent } from "../data/seed";
+import {
+  breadcrumbToolsFor,
+  type ChecklistPayload,
+  type Huddle,
+  type HuddleMessage,
+  type PrioritiesPayload,
+  type SchedulePayload,
+  type ToolUseEvent,
+} from "../data/seed";
 import {
   enqueueHuddleTurn,
   getTurnUpdates,
@@ -40,7 +48,13 @@ import { userTurnTs } from "../lib/turn-identity";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
-import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind } from "../store";
+import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind, type View } from "../store";
+import {
+  DockedJourneyWidgets,
+  PrioritiesWidget,
+  ScheduleWidget,
+  WIDGET_DOCK_HUDDLE_ID,
+} from "./JourneyWidgets";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useDictation } from "../hooks/useDictation";
 import { usePush } from "../hooks/usePush";
@@ -92,8 +106,10 @@ function HuddleHeader({
   setView,
 }: {
   huddle: Huddle;
-  view: "huddle" | "board" | "artifacts";
-  setView: (v: "huddle" | "board" | "artifacts") => void;
+  // The store's exported View union, NOT a re-typed literal list. These props used to spell the union
+  // out by hand, so adding a view broke the typecheck here rather than simply working.
+  view: View;
+  setView: (v: View) => void;
 }) {
   const startMeeting = useHuddleStore((s) => s.startMeeting);
   const patchMeeting = useHuddleStore((s) => s.patchMeeting);
@@ -320,6 +336,15 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
             {dayLabel}
           </span>
         </div>
+
+        {/* DOCKED journey widgets — Iris's 1:1 only. Rendered here, INSIDE the scrolling transcript
+            but OUTSIDE `messages`, which is the whole point: `history` (and so every turn's model
+            payload) and the unread watermark are both built from `messages`, so a "pinned message"
+            would have leaked a widget payload into every prompt and into the scrollback the user
+            reads. This is present whether or not a tool ever fired, scrolls away with the history
+            like a channel header, and costs the conversation nothing.
+            See docs/LANE-C-widget-ui.md → "Docking interpretation". */}
+        {huddle.id === WIDGET_DOCK_HUDDLE_ID && <DockedJourneyWidgets />}
 
         {messages.map((m) => (
           <MessageRow key={m.id} m={m} huddle={huddle} />
@@ -909,6 +934,18 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
           </div>
         )}
         {m.checklist && <ChecklistCard m={m} />}
+        {/* In-chat widget cards, rendered from the message's own SNAPSHOT payload (the docked copy
+            above reads live instead). Same placement and same conditional shape as the checklist. */}
+        {m.priorities && (
+          <div className="mt-2">
+            <PrioritiesWidget payload={m.priorities} />
+          </div>
+        )}
+        {m.schedule && (
+          <div className="mt-2">
+            <ScheduleWidget payload={m.schedule} />
+          </div>
+        )}
         {m.confirmAsk && <ConfirmAskRow m={m} />}
         {m.overrideAsk && <OverrideAskRow m={m} />}
       </div>
@@ -1098,6 +1135,11 @@ function Composer({ huddle }: { huddle: Huddle }) {
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
           overrideAsk?: { taskId: string; taskTitle: string; note?: string };
           checklist?: ChecklistPayload;
+          // MUST be declared here AND at HuddleApp's copy of this DTO. This shape is re-declared
+          // inline at both mapping sites and an undeclared field is dropped SILENTLY — no error, no
+          // crash — so a widget would decay into plain text after a reload with nothing to blame.
+          priorities?: PrioritiesPayload;
+          schedule?: SchedulePayload;
         }[]
       | undefined,
     result: TurnResult,
@@ -1163,6 +1205,8 @@ function Composer({ huddle }: { huddle: Huddle }) {
         confirmAsk: reply.confirmAsk,
         overrideAsk: reply.overrideAsk,
         checklist: reply.checklist,
+        priorities: reply.priorities,
+        schedule: reply.schedule,
       });
     });
 

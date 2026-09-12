@@ -18,7 +18,12 @@ import {
 } from "./data/seed";
 import type { JourneyTask } from "./lib/journey/types";
 
-type View = "huddle" | "board" | "artifacts";
+// The side-menu view registry. EXPORTED because HuddleView's header switcher and HuddleApp's mobile
+// switcher both type their props off it — before this was exported they each re-declared the literal
+// union by hand, so adding a view broke the typecheck in two places instead of none.
+// "priorities"/"schedule" are the two journey widgets as full-page views (they also render inline in
+// chat and docked in Iris's 1:1 — three surfaces, one component each).
+export type View = "huddle" | "board" | "artifacts" | "priorities" | "schedule";
 export type ContextPanelTab = "queue" | "activity" | "memory" | "artifacts";
 
 // Pure client-device UI layout prefs (panel collapse, active side-panel tab) — deliberately NOT part
@@ -47,14 +52,20 @@ export function writeBoolPref(key: string, value: boolean) {
   }
 }
 
-/** Live state for ONE checklist row. `prevStatus` is what un-ticking restores (owner's choice:
- *  revert to where the row was, not a blanket fall back to BACKLOG — a mis-tap on a DOING task
- *  should not silently demote it out of the active lane). `busy` drives the per-row spinner. */
+/** Live state for ONE task row, shared by ALL THREE in-chat task widgets (checklist, priorities,
+ *  schedule) — they all key off the same journey taskId, so one map keeps a task consistent wherever
+ *  it appears and keeps ONE writer (`updateBoardTask`). `prevStatus` is what un-ticking restores
+ *  (owner's choice: revert to where the row was, not a blanket fall back to BACKLOG — a mis-tap on a
+ *  DOING task should not silently demote it out of the active lane). `busy` drives the per-row spinner.
+ *  `today` is the priorities/up-next `✓ Today` toggle; undefined means "not yet known", which is why
+ *  it is optional rather than defaulted to false — a seed that does not carry it must not claim the
+ *  task is off today. The interface name is kept for continuity with the map it backs. */
 export interface ChecklistRowState {
   status: string;
   tags: string[];
   prevStatus?: string;
   busy?: boolean;
+  today?: boolean;
 }
 
 export type MeetingKind = "morning" | "midday" | "afternoon" | "adhoc" | "virtual-meeting";
@@ -128,6 +139,10 @@ interface HuddleState {
   // taskId outside the message makes that class of bug impossible rather than merely unlikely: the
   // renderer overlays this map on the snapshot, so re-delivery cannot lose a user action. It also
   // means the SAME task appearing in two checklists stays consistent in both.
+  // SHARED by the priorities and schedule widgets too (added with them, deliberately NOT a second
+  // map): they key off the same journey taskId with the same snapshot-plus-overlay contract, so a
+  // task ticked in a checklist and shown in the schedule agrees in both, and there is still exactly
+  // one place a row's live status can live.
   checklistState: Record<string, ChecklistRowState>;
   meeting: null | MeetingState;
   // Desktop panel chrome (device-local, read synchronously from localStorage so there's no
@@ -149,10 +164,14 @@ interface HuddleState {
   upsertAgentMessage: (m: HuddleMessage) => void;
   resolveConfirmAsk: (messageId: string) => void;
   resolveOverrideAsk: (messageId: string) => void;
-  /** Seed live state for rows not yet tracked. Never overwrites a row the user has already acted on. */
-  seedChecklistRows: (rows: { taskId: string; status: string; tags: string[] }[]) => void;
+  /** Seed live state for rows not yet tracked. Never overwrites a row the user has already acted on.
+   *  `today` is optional so the checklist (which has no Today control) can keep passing its own rows
+   *  unchanged while the priorities/schedule widgets supply it. */
+  seedChecklistRows: (rows: { taskId: string; status: string; tags: string[]; today?: boolean }[]) => void;
   /** Overwrite rows with fresh SERVER truth (mount refresh). Skips rows with a write in flight. */
-  refreshChecklistRows: (rows: { taskId: string; status: string; tags: string[] }[]) => void;
+  refreshChecklistRows: (
+    rows: { taskId: string; status: string; tags: string[]; today?: boolean }[],
+  ) => void;
   /** Optimistically apply a row change; returns nothing — call rollbackChecklistRow on failure. */
   setChecklistRow: (taskId: string, patch: Partial<ChecklistRowState>) => void;
   rollbackChecklistRow: (taskId: string, prev: ChecklistRowState) => void;
@@ -319,7 +338,9 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
         // Only seed rows we have never tracked. An existing entry is either a user action or an
         // in-flight write, and a re-rendered snapshot must never stomp either.
         if (next[r.taskId]) continue;
-        next[r.taskId] = { status: r.status, tags: r.tags };
+        // `today` only lands when the producer supplied it — spreading an undefined key would make a
+        // checklist seed (which has no Today notion) look like an authoritative "not today".
+        next[r.taskId] = { status: r.status, tags: r.tags, ...(r.today !== undefined ? { today: r.today } : {}) };
         changed = true;
       }
       return changed ? { checklistState: next } : {};
@@ -331,7 +352,12 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
         // A row mid-write is the ONE case server truth must not win: the write has not landed yet,
         // so the server would hand back the pre-click value and visibly undo the user's tap.
         if (next[r.taskId]?.busy) continue;
-        next[r.taskId] = { ...next[r.taskId], status: r.status, tags: r.tags };
+        next[r.taskId] = {
+          ...next[r.taskId],
+          status: r.status,
+          tags: r.tags,
+          ...(r.today !== undefined ? { today: r.today } : {}),
+        };
       }
       return { checklistState: next };
     }),

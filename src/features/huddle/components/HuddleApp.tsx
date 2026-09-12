@@ -10,10 +10,17 @@ import { Sidebar } from "./Sidebar";
 import { SettingsSheet } from "./SettingsSheet";
 import { AgentSettingsDrawer } from "./AgentSettingsDrawer";
 import { FallbackBanner } from "./FallbackBanner";
-import { isWorkspaceHydrated, setDeepLinkTarget, useHuddleStore, useVisibleHuddles } from "../store";
+import { isWorkspaceHydrated, setDeepLinkTarget, useHuddleStore, useVisibleHuddles, type View } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
-import { breadcrumbToolsFor, type ChecklistPayload, type ToolUseEvent } from "../data/seed";
+import {
+  breadcrumbToolsFor,
+  type ChecklistPayload,
+  type PrioritiesPayload,
+  type SchedulePayload,
+  type ToolUseEvent,
+} from "../data/seed";
+import { PrioritiesView, ScheduleView } from "./JourneyWidgets";
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
 import { useAuth } from "@/hooks/useAuth";
 import { getAllTurnUpdates } from "../lib/huddle.functions";
@@ -25,6 +32,30 @@ import { useAgentPanelStore } from "../lib/agent-panel-store";
  *  than imported because that module is server-only — changing one without the other silently either
  *  buzzes a present user or, worse, silences an absent one. */
 const PRESENCE_BEAT_MS = 5_000;
+
+/** THE SIDE-MENU VIEW REGISTRY. Was a nested ternary (`huddle ? … : board ? … : <ArtifactsView/>`),
+ *  which had a silent trap: its final `else` rendered Artifacts for ANY unrecognised view, so adding
+ *  a view and forgetting to wire it here showed the WRONG screen with no error. Keyed by the store's
+ *  `View` union, TypeScript now fails the build until every view has an entry.
+ *  These are element descriptors, not rendered components — nothing here mounts until it is selected.
+ *  Labels live in NAV_LABELS below so the mobile switcher and this list cannot drift apart. */
+const VIEWS: Record<View, React.ReactNode> = {
+  huddle: <HuddleView />,
+  board: <BoardView />,
+  artifacts: <ArtifactsView />,
+  priorities: <PrioritiesView />,
+  schedule: <ScheduleView />,
+};
+
+/** Mobile switcher entries, in order. "Files" is Artifacts' user-facing name (kept from the previous
+ *  hardcoded list); the two widget views get their spec names. */
+const NAV_LABELS: { id: View; label: string }[] = [
+  { id: "huddle", label: "Huddle" },
+  { id: "board", label: "Board" },
+  { id: "artifacts", label: "Files" },
+  { id: "priorities", label: "Priorities" },
+  { id: "schedule", label: "Schedule" },
+];
 
 export function HuddleApp() {
   useWorkspaceSync();
@@ -151,6 +182,11 @@ export function HuddleApp() {
           // undeclared field is dropped silently -- no error, no crash -- so a checklist would decay
           // into plain text after a reload with nothing to attribute it to.
           checklist?: ChecklistPayload;
+          // Same rule as `checklist` directly above, and the same cost if omitted: this DTO is
+          // re-declared inline at BOTH mapping sites (the other is HuddleView's applyTurnStream) and
+          // an undeclared field is dropped silently, so a back-filled widget would arrive as text.
+          priorities?: PrioritiesPayload;
+          schedule?: SchedulePayload;
         }[];
         toolUses?: ToolUseEvent[];
       }[]) {
@@ -191,6 +227,8 @@ export function HuddleApp() {
             confirmAsk: reply.confirmAsk,
             overrideAsk: reply.overrideAsk,
             checklist: reply.checklist,
+            priorities: reply.priorities,
+            schedule: reply.schedule,
             toolUses: t.toolUses ? breadcrumbToolsFor(reply.agentId, t.toolUses) : undefined,
           });
         });
@@ -355,21 +393,24 @@ export function HuddleApp() {
             Huddle/Board/Files toggle inside HuddleView's header unmounts the moment you leave the
             huddle view, which stranded users on Board/Files with no way back). Kept always-mounted
             here so it works from every view. */}
-        <div className="flex items-center justify-center border-b border-hairline bg-surface px-3 py-1.5 md:app-hidden">
-          <div className="inline-flex rounded-lg border border-hairline bg-background p-0.5">
-            {(["huddle", "board", "artifacts"] as const).map((v) => (
+        {/* Five entries no longer fit a centred row on a ~360px phone, so the strip scrolls
+            horizontally instead of squeezing the labels. `shrink-0` on each button is what stops
+            flex from compressing them into unreadable slivers. */}
+        <div className="flex items-center overflow-x-auto border-b border-hairline bg-surface px-3 py-1.5 md:app-hidden">
+          <div className="mx-auto inline-flex shrink-0 rounded-lg border border-hairline bg-background p-0.5">
+            {NAV_LABELS.map((v) => (
               <button
-                key={v}
+                key={v.id}
                 type="button"
-                onClick={() => setView(v)}
+                onClick={() => setView(v.id)}
                 className={
-                  "rounded-md px-4 py-1 text-xs font-medium transition " +
-                  (view === v
+                  "shrink-0 whitespace-nowrap rounded-md px-3 py-1 text-xs font-medium transition " +
+                  (view === v.id
                     ? "bg-muted text-foreground"
                     : "text-muted-foreground hover:text-foreground")
                 }
               >
-                {v === "huddle" ? "Huddle" : v === "board" ? "Board" : "Files"}
+                {v.label}
               </button>
             ))}
           </div>
@@ -377,7 +418,7 @@ export function HuddleApp() {
 
         <FallbackBanner />
 
-        {view === "huddle" ? <HuddleView /> : view === "board" ? <BoardView /> : <ArtifactsView />}
+        {VIEWS[view]}
       </div>
 
 
