@@ -186,3 +186,69 @@ worth recording because both are the repo's named failure modes:
   explaining why it is gone — a cry-wolf guard. Fixed by stripping comments before matching, with a
   second assertion that the stripping left the executable body intact.
 
+## 8. MUTATION PROOFS — every new guard, `mutate.sh`, anchors from FILES
+
+Command shape (one test command for all, `npm run test:override-gate`):
+`mutate.sh <file> <anchor-file> <replacement-file> "npm run test:override-gate" "<test name that must fail>"`
+
+| # | Guard | Mutation applied | Outcome |
+|---|---|---|---|
+| M1 | the CLAUSE is judged, not the model's span | `isAuthorisation(clauseAround(...))` -> `isAuthorisation(needle)` | **FIRED** |
+| M2 | a consent check exists at all | the whole `if (!isAuthorisation(...)) {...}` block deleted | **FIRED** |
+| M3 | the authorisation must postdate the escalation | `if (!(u.updatedMs >= escalatedAtMs))` -> `if (false)` | **FIRED** |
+| M4 | the authorisation must bind to the task | `if (!utteranceBindsToTask(u, binding))` -> `if (false)` | **FIRED** |
+| M5 | channel binding only while unambiguous | `if (agent && ...Unambiguous === true)` -> `if (agent)` | **FIRED** |
+| M6 | the missing-binding fail-closed line | line deleted | **UNDETERMINED — see below, NOT banked** |
+| M7a | negation scan reaches the override path | `if (isNegatedOrAsked(n)) return false;` deleted from `isAuthorisation` | **FIRED** (2nd run — see below) |
+| M7b | leading-interrogative scan | `if (opensAsQuestion(n)) return false;` deleted | **FIRED** |
+| M7c | deferral scan | `if (DEFERRED.test(n)) return false;` deleted | **FIRED** |
+| M8 | the errored grader stores nothing | `await approveApproach(...)` reinstated in the catch | **FIRED** |
+| M9 | escalation stamps when it happened | `approach_escalated_at=now()` removed from the UPSERT | **FIRED** |
+| M10 | the floor is read from the engagement row | `Date.parse(state?....)` -> `0` | **FIRED** |
+| M11 | the ambiguity count is `=== 1`, not `> 0` | `length === 1 && [0] === taskId` -> `length > 0` | **FIRED** |
+
+Every FIRED run also printed `restored: <file> matches HEAD` and `tree clean: ... passes again on the
+restored tree`. None reported `INERT` or `NOT-APPLIED`.
+
+**M7a's first run was UNDETERMINED and is reported as such rather than banked.** Verbatim:
+
+```
+UNDETERMINED: the suite FAILED (rc=1) but no recognised failure marker named
+              'NOT consent: "do not proceed with that approach, overr"'. ... NOTHING IS PROVEN.
+```
+
+The cause is real and worth recording: that sentence is refused by the DEFERRAL scan too ("later",
+"once we"), so deleting the negation scan does not change its verdict — a *different* test failed.
+Re-run against the case the negation scan UNIQUELY protects ("Do NOT override the gate and let Cole
+run it until I have looked at the numbers" — no deferral, not interrogative) it **FIRED**. This is
+exactly the trap `mutate.sh` exists to surface: a two-outcome harness would have called it INERT and
+I would have "fixed" a guard that was fine.
+
+**M6 is NOT proven, and is not claimed to be.** Deleting the line does not produce a clean test
+failure — it makes the call THROW. Probed directly rather than guessed:
+
+```
+no-binding, guard REMOVED -> THREW: undefined is not an object (evaluating 'binding.escalatedAtMs')
+```
+
+So that line is **defence in depth**: with it gone, `overrideEscalatedApproach`'s own outer
+`catch (err)` turns the throw into `{ok:false, error}` — still a refusal, never an approval. The
+honest verdict is "behaviourally equivalent at the caller, therefore not independently provable",
+not "proven".
+
+## 9. MISTAKE I MADE, RECORDED RATHER THAN QUIETLY FIXED
+
+`git add -A` on my first commit (2907e6e, already pushed) **swept in the OTHER lane's uncommitted
+work** — `huddle.functions.ts`, `deep-confirm.server.ts`, `verdict-memory.ts`,
+`verdict-memory.test.ts` — and the second commit took `deep-confirm-store.probe.ts`. I did not EDIT
+any of those files; I committed them.
+
+Deliberately NOT "fixed", because every fix is worse than the problem: their file CONTENTS on disk
+are untouched, so no work is lost, and reverting those paths would DELETE their in-progress work from
+the branch. History is not rewritten either — they may already have built on it. Switched to
+explicit `git add <paths>` for everything after this point. Flagged in the report so the other lane
+knows their changes are already on origin under my commit message.
+
+Consequence for my own evidence, stated plainly: the suites and `tsc` below ran against a tree that
+also contained their in-flight changes. Everything passed, so nothing of theirs conflicts with this
+work — but the runs are not a clean isolation of my diff alone.
