@@ -12,6 +12,7 @@
     "test:router": "bun scripts/router-winners.test.ts",
     "test:blocked": "bun scripts/blocked-line.test.mjs",
     "test:standup-ranking": "bun scripts/standup-ranking.test.ts",
+    "test:standup-deliver": "bun scripts/standup-deliver-mode.test.ts",
     "test:presence": "bun scripts/presence-timing.test.mjs",
     "test:mode": "bun scripts/task-mode.test.mjs",
     "test:voice-tools": "bun scripts/voice-toolset-hidden.test.ts",
