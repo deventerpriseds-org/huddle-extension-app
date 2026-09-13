@@ -133,7 +133,7 @@ export interface PrioritiesWidgetData {
 }
 
 /** The five widget buttons, as one closed set. */
-export type WidgetTaskAction = "start" | "done" | "pause" | "today" | "untoday";
+export type WidgetTaskAction = "start" | "done" | "pause" | "reopen" | "today" | "untoday";
 
 export interface WidgetActionResult {
   ok: boolean;
@@ -235,7 +235,7 @@ const CLOSED_STATUSES = new Set(["DONE"]);
 
 /** A task the user deliberately set aside must never surface in a widget (same rule the ceremony
  *  read enforces at source in getStandupTasks). */
-const PARKING_LOT_TAG = "parking-lot";
+export const PARKING_LOT_TAG = "parking-lot";
 
 function upper(s: string | null | undefined): string {
   return (s ?? "").trim().toUpperCase();
@@ -507,16 +507,31 @@ export function buildTopicTree(payload: unknown): TopicNode[] {
  * `supabase/functions/_shared/tool-definitions.ts`:
  *   ["BACKLOG","TODO","READY","UP_NEXT","DOING","IN_REVIEW","DONE","BLOCKED","PLANNING"]
  *
- *  ▶ start → DOING    (the WIP flow's active lane)
- *  ✓ done  → DONE     (the user is the only one who may set DONE — this button IS the user)
- *  ⏸ pause → UP_NEXT  (the staged lane immediately before DOING, so pausing returns it to the
- *                      queue rather than burying it in BACKLOG)
+ *  ▶ start  → DOING    (the WIP flow's active lane)
+ *  ✓ done   → DONE     (the user is the only one who may set DONE — this button IS the user)
+ *  ⏸ pause  → BACKLOG  + the `parking-lot` tag. See PAUSE IS A PARK below.
+ *  ↺ reopen → BACKLOG  (no tag change — un-ticking ✓ is "not actually done", NOT "stop working it")
+ *
+ * PAUSE IS A PARK, AND IT MUST BE — this mapping was `UP_NEXT` and that silently un-paused the task.
+ * `autowork.server.ts` promotes one UP_NEXT item to DOING whenever the agent has none in flight
+ * (cap 1), and ⏸ empties that DOING slot in the same write. So a "paused" task was a promotion
+ * candidate at the very next 9/13/17 tick — and the confirm-intent gate waved it straight through,
+ * because a task that had already reached DOING had already been confirmed. Pressing pause resumed
+ * the task within hours.
+ * BACKLOG + `parking-lot` is this repo's EXISTING park mechanism, not a new one: `autowork.server.ts`
+ * filters candidates with `!(t.tags ?? []).includes("parking-lot")`, and `BoardView` already renders
+ * the tag as a chip. (CLAUDE.md: "parking-lot is JUST a tag, no new lane".)
+ *
+ * REOPEN EXISTS SO THE TWO GESTURES STOP SHARING ONE ACTION. Un-ticking ✓ on a non-DOING row used to
+ * send `pause`; once pause parks, that gesture would have opted the task out of automation — a much
+ * bigger side effect than the user asked for by un-ticking a box.
  *
  * `today`/`untoday` are NOT here: they change the SCHEDULE, not the status, and route to
  * `move_task_to_day` / `unschedule_task` instead.
  */
-export const ACTION_STATUS: Readonly<Record<"start" | "done" | "pause", string>> = Object.freeze({
+export const ACTION_STATUS: Readonly<Record<"start" | "done" | "pause" | "reopen", string>> = Object.freeze({
   start: "DOING",
   done: "DONE",
-  pause: "UP_NEXT",
+  pause: "BACKLOG",
+  reopen: "BACKLOG",
 });

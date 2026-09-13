@@ -305,12 +305,13 @@ function DoneButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
       disabled={busy || !caller?.entra_email}
       onClick={() =>
         done
-          ? // "Un-done" is not one of Lane B's five actions (its set is start/done/pause/today/
-            // untoday), and `pause` is the closest honest match only when the row came from UP_NEXT.
-            // Rather than guess, restore where it was: prevStatus DOING -> start, anything else ->
-            // pause (which writes UP_NEXT). Both are real actions with real semantics.
-            void runAction(row, caller, prevStatus === "DOING" ? "start" : "pause", {
-              status: prevStatus === "DOING" ? "DOING" : "UP_NEXT",
+          ? // "Un-done" restores where the row was: prevStatus DOING -> start, anything else ->
+            // `reopen` (BACKLOG, tags untouched).
+            // NOT `pause` — pause PARKS the task (adds the `parking-lot` tag that opts it out of all
+            // automation), which is a far bigger side effect than un-ticking a checkbox asks for.
+            // These two gestures shared one action until the pause-is-a-park fix; they must not again.
+            void runAction(row, caller, prevStatus === "DOING" ? "start" : "reopen", {
+              status: prevStatus === "DOING" ? "DOING" : "BACKLOG",
             })
           : void runAction(row, caller, "done", { status: "DONE", prevStatus: status })
       }
@@ -323,8 +324,9 @@ function DoneButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
   );
 }
 
-/** ⏸ pause → UP_NEXT (Lane B's mapping, read from ACTION_STATUS — NOT BACKLOG, so pausing something
- *  you are doing leaves it queued rather than demoting it to the bottom of the board).
+/** ⏸ pause PARKS: BACKLOG + the `parking-lot` tag (read from ACTION_STATUS / PARKING_LOT_TAG).
+ *  This was UP_NEXT, which auto-work promotes straight back into DOING — pressing pause un-paused
+ *  the task within hours. Parking is the only mapping that makes the button mean what it says.
  *  `--warning` is the theme's orange and flips with it. */
 function PauseButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
   const { status, busy } = useRowState(row);
@@ -332,7 +334,7 @@ function PauseButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
     <button
       type="button"
       disabled={busy || !caller?.entra_email}
-      onClick={() => void runAction(row, caller, "pause", { status: "UP_NEXT", prevStatus: status })}
+      onClick={() => void runAction(row, caller, "pause", { status: "BACKLOG", prevStatus: status })}
       aria-label={`Pause "${row.title}"`}
       className={cn(CTRL_BASE, "-my-2 min-h-11 w-10")}
       style={{ backgroundColor: "var(--warning)", color: "var(--warning-foreground)" }}

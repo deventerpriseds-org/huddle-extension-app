@@ -237,7 +237,7 @@ export const updateWidgetTask = createServerFn({ method: "POST" })
       .object({
         caller: Caller,
         taskId: z.string().min(1),
-        action: z.enum(["start", "done", "pause", "today", "untoday"]),
+        action: z.enum(["start", "done", "pause", "reopen", "today", "untoday"]),
         timeZone: TimeZoneInput,
       })
       .parse(raw),
@@ -261,7 +261,7 @@ export const updateWidgetTask = createServerFn({ method: "POST" })
       const owned = await getOwnedTaskForConfirmAsk(data.taskId, email);
       if (!owned) return fail("Task not found.");
 
-      const { ACTION_STATUS, safeTimeZone, localDateKey } = await import("./widgets.server");
+      const { ACTION_STATUS, PARKING_LOT_TAG, safeTimeZone, localDateKey } = await import("./widgets.server");
       const { invokeJourneyTool } = await import("../journey/proxy.functions");
 
       let toolName: string;
@@ -279,7 +279,25 @@ export const updateWidgetTask = createServerFn({ method: "POST" })
       } else if (action === "untoday") {
         toolName = "unschedule_task";
         args = { task_id: data.taskId };
+      } else if (action === "pause") {
+        // ⏸ PARKS the task: BACKLOG *plus* the `parking-lot` tag that `autowork.server.ts` filters
+        // on. Status alone is not enough — see ACTION_STATUS's "PAUSE IS A PARK" note for why
+        // UP_NEXT un-paused it within hours.
+        // journey's `update_task` REPLACES the tag array ("Replaces existing tags." —
+        // journey-voice `_shared/tool-definitions.ts`), so send the UNION. Sending just the one tag
+        // would silently wipe every other label the task carries (blocked, reminder, quick-win…).
+        status = ACTION_STATUS[action];
+        toolName = "update_task";
+        const existing = (owned.tags ?? []).map((t) => String(t));
+        const parked = existing.some((t) => t.toLowerCase() === PARKING_LOT_TAG);
+        args = {
+          task_id: data.taskId,
+          status,
+          tags: parked ? existing : [...existing, PARKING_LOT_TAG],
+        };
       } else {
+        // start / done / reopen — status only, tags untouched. `reopen` deliberately does NOT add or
+        // remove the parking-lot tag: un-ticking ✓ means "not actually done", never "park it".
         status = ACTION_STATUS[action];
         toolName = "update_task";
         args = { task_id: data.taskId, status };
