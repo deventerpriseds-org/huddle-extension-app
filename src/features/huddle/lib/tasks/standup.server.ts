@@ -13,6 +13,27 @@ import { rankTasks, type ScorableTask } from "./scoring";
 
 type Caller = { entra_object_id?: string; entra_email?: string };
 
+/**
+ * The stand-up's CONTENT, structured rather than prose.
+ *
+ * The stand-up used to exist only as a chat message: `surfaceDigest` handed the brief to Terry and
+ * the result carried nothing but COUNTS, so no other surface could render it. The owner asked for it
+ * to be deliverable the way the other digests are (email, Slack, phone), and a caller cannot render
+ * what it cannot see. This is the same data `buildBrief` formats, handed back unformatted so each
+ * channel can render it its own way -- journey's renderer owns the email HTML, not this module.
+ *
+ * Field-for-field the shape journey's `StandupDigestPayload` expects, MINUS `deepLink`/`date`/
+ * `timezone`: those are journey's to supply, because the absolute base URL is journey's env var.
+ */
+export interface StandupDigestContent {
+  produced: { title: string; agent: string | null }[];
+  blocked: { title: string; reason?: string; agent?: string | null }[];
+  inReview: { title: string; agent: string | null }[];
+  priorities: { title: string; agent: string | null }[];
+  /** The same prose `surfaceDigest` gives Terry -- for a caller that wants one string. */
+  brief: string;
+}
+
 export interface StandupRunResult {
   ok: boolean;
   skipped: boolean;
@@ -20,6 +41,8 @@ export interface StandupRunResult {
   produced?: number; // artifacts delivered since yesterday
   blocked?: number;
   movedToReview?: number; // tasks that entered IN_REVIEW since the last standup run
+  /** Present whenever the run was not skipped, whether or not it was delivered to chat. */
+  digest?: StandupDigestContent;
   runId: string;
 }
 
@@ -146,7 +169,19 @@ async function surfaceDigest(opts: { email: string; tz: string; caller: Caller; 
  */
 export async function runScheduledStandup(
   caller: Caller | undefined,
-  opts: { timeZone?: string; force?: boolean; runId?: string } = {},
+  opts: {
+    timeZone?: string;
+    force?: boolean;
+    runId?: string;
+    /**
+     * Deliver the stand-up into Terry's DM (default true -- the historical behaviour).
+     *
+     * A caller that only wants the CONTENT -- journey pulling it to send as an email -- passes
+     * false. That skips BOTH the chat delivery and `setLastStandupAt`, so a content pull does not
+     * consume the change-gate window and silence the real stand-up later the same morning.
+     */
+    deliver?: boolean;
+  } = {},
 ): Promise<StandupRunResult> {
   const runId =
     opts.runId?.trim() || `standup-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -221,7 +256,27 @@ export async function runScheduledStandup(
     return { ok: true, skipped: true, reason: "nothing_to_report", produced: 0, blocked: 0, runId };
   }
 
-  await surfaceDigest({ email, tz, caller, brief: buildBrief(produced, movedToReview, blocked, priorities), runId });
-  await setLastStandupAt(email).catch(() => {});
-  return { ok: true, skipped: false, produced: produced.length, blocked: blocked.length, movedToReview: movedToReview.length, runId };
+  const brief = buildBrief(produced, movedToReview, blocked, priorities);
+  const deliver = opts.deliver !== false;
+  if (deliver) {
+    await surfaceDigest({ email, tz, caller, brief, runId });
+    // Only a DELIVERED stand-up moves the watermark. A content pull that advanced it would make the
+    // real stand-up an hour later report "nothing to report" on work it never actually told anyone.
+    await setLastStandupAt(email).catch(() => {});
+  }
+  return {
+    ok: true,
+    skipped: false,
+    produced: produced.length,
+    blocked: blocked.length,
+    movedToReview: movedToReview.length,
+    digest: {
+      produced: produced.map((a) => ({ title: a.name, agent: agentName(a.agentId) })),
+      blocked,
+      inReview: movedToReview,
+      priorities,
+      brief,
+    },
+    runId,
+  };
 }
