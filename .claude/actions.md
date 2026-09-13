@@ -3790,9 +3790,20 @@ sits today."* + *"I also didn't know where you got the 9/13/17 tick idea."*
       `scripts/widget-topic-tree.test.ts` 12→**17 assertions**; two mutation proofs **FIRED**
       (sub-group compose, category merge). TASK hierarchy (epic→task→subtask,
       `docs/feasibility-epics-tasks-subtasks.md`) is a **different table and code path** — untouched.
-- [ ] **NOT DONE — the accuracy-log entry for that miss.** Two write attempts to
-      `.claude/accuracy-log.md` were declined, so the row is not recorded. Say the word and I'll add
-      it; the finding itself is in `.claude/memory.md`.
+- [x] **Accuracy-log entry written (`d3cbe63`).** Two large block-writes were declined; a compact edit
+      landed. Records the miss + two structural rules: *a fixture is a claim about a shape — measure
+      the shape first*, and *before porting a UI, find which REF is actually live*.
+- [x] **Independent verifier, loop 1 — `docs/VERIFY-topic-tree-categories-1.md`.** 10 claims, 10m45s
+      of a 25-min budget, artifact committed+pushed per claim. **REFUTED C7(v) with an executable
+      repro**, reproduced before fixing: two same-named topics in different categories →
+      `buildTopicTree` emitted ONE and silently deleted the other, category row and all. Root cause:
+      `byId` was both the parent lookup AND the emit list, so the loop over `byId.values()` dropped
+      any id collision. Not contrived — `toTopicNode` falls back to `id = name` when the payload has
+      no id (deliberate; journey's envelope is unpublished), and duplicate names are ordinary in a
+      158-topic tree. Fixed + deployed `0f0273c`; 17→20 assertions, two more mutation proofs FIRED.
+      Also fixed the verifier's D3 (an early return skipped parent nesting on any mixed payload).
+      **Known, NOT fixed (D4):** `hasAncestorCycle` is O(n²) — 24k-deep chain ~47s, 32k throws. Caught
+      into `{ok:false}`; live data is 158 parentless topics. Recorded, not pre-emptively optimised.
 - [ ] **OWNER — deploy journey `execute-tool`** so `get_task_topics` exists; the topic tree renders
       its labelled empty state until then. Only remaining piece of the original ask.
 - [ ] **OWNER — merge eds-skills PR #83** (`prototype-in-app-skin` + `ship-ui-that-belongs`), green.

@@ -3104,6 +3104,20 @@ which the owner's screenshot disproved.
 `return results.slice(0, 5)` and selects no `id` and no `category_affinity` — it is a top-5 voice
 briefing, not a tree. Worth knowing before writing anything else that wants topics.
 
+### `buildTopicTree`: EVERY PARSED NODE IS EMITTED EXACTLY ONCE — a malformed row costs nesting, never existence
+An independent verifier found `byId` doing two jobs — parent lookup AND the list of nodes to emit —
+so the loop over `byId.values()` **silently deleted** any id collision. Measured, then reproduced:
+two `Admin` topics in different categories → one row, the CAREER topic and its whole category row
+gone. Not contrived: `toTopicNode` falls back to `id = name` when a payload carries no id
+(deliberate — journey's envelope is unpublished), and duplicate names are ordinary in 158 topics.
+Fixed `0f0273c`: the emit loop reads `flat`, `byId` is lookup-only, and `attached` is keyed by NODE
+(an id-keyed set re-creates the same bug one layer down). `hasAncestorCycle` directly above it
+exists to enforce this exact invariant for cycles — that case was fixed and this one was not,
+because both were reasoned about rather than RUN. Guarded, mutation-proved FIRED.
+**Known, not fixed:** `hasAncestorCycle` is O(n²) — a 24k-deep parent chain takes ~47s, 32k throws
+`RangeError`. Caught into `{ok:false}` by `widgets.functions.ts`; live data is 158 PARENTLESS
+topics, so it is unreachable. Left alone on purpose — do not "optimise" it without a real input.
+
 ### journey's PRIORITIES VIEW RUNS AN UNMERGED BRANCH — `origin/main` is NOT what the owner sees
 **The live view is `claude/priority-widget-nesting-1jtwa9`** (journey-voice, commits `f0ab561` +
 `532da6b`, Jun 29). Proof it is the live one rather than `main`: `main` renders one row per raw
