@@ -234,3 +234,51 @@ status is that this one was caught by looking at the count, which is exactly the
 this log exists to stop relying on. Candidate: a lint rule or a suite-level assertion that the
 reported total matches the number of `check(` calls in the file. **Not built — do not record this row
 as mitigated.**
+
+## 2026-09-13 — SHIPPED FOUR VISUAL DEFECTS TO PRODUCTION; the owner found them, the suites could not
+The costliest miss of this session, and the only one a user saw in the live product.
+
+**Claim:** "Merged + deployed. tsc exit 0, 67 assertions green across four suites, three mutation
+proofs FIRED, three independent verification loops." Reported as shipped.
+**Ground truth (the owner, on his phone, in ONE screenshot):**
+1. The priority band renders **pink**, where the spec is pale yellow.
+2. **Two navigation bars stacked** — mine sits directly on top of one that already existed.
+3. That bar is at the **TOP** of a phone screen, where primary nav does not belong.
+4. Full-page views render as **small cards in an empty panel**.
+Plus: Priorities is not a faithful port of journey's view.
+
+**Root causes, both ground-truthed from source:**
+- **Pink:** `BAND_STYLE = color-mix(in oklch, var(--warning) 9%, var(--surface))`. `--surface` is
+  `oklch(1 0 0)` — white carrying an EXPLICIT hue of 0. A polar space interpolates hue, so 9% of
+  hue-55 orange against hue-0 lands on **hue ≈5, chroma ≈0.014: pale pink**. `docs/widgets/prototype/
+  Priorities.dc.html` had the CORRECT literal (`oklch(0.975 0.032 92)`, cream) — the prototype was
+  right and the implementation silently diverged from it.
+- **Two nav bars:** `HuddleView.tsx:190-206` ALREADY rendered a view switcher calling the same
+  `setView`, with the Meeting button beside it. I added a second five-entry bar in `HuddleApp.tsx`
+  instead of extending it. A straight **"extend, don't duplicate"** violation — the org's own first
+  rule — committed in the most visible element of the app.
+
+**Single source that would have settled ALL of it:** opening the app at 390px and looking. Failing
+that, `src/styles.css` for the token, and one grep for an existing switcher before adding one.
+
+**Root-cause pattern — and this is the part worth carrying:** every check I ran tested LOGIC. Types,
+enums, mappings, tag unions, cadence arithmetic, guard mutations. **Not one of them rendered
+anything.** So a colour could drift 87° off-hue, a duplicate nav could stack, and a layout could
+collapse into a card, and the suite stayed green through all of it. Three verification loops asked
+"is the logic right", never "what does this look like". Confidence came from the green count, and the
+green count was measuring the wrong dimension entirely.
+
+**Guards:**
+1. **SHIPPED — `ship-ui-that-belongs`** in eds-claude-skills (PR #83): the mandatory pre-flight for any
+   user-visible change — grep for the nav that already exists and EXTEND the incumbent; copy the
+   nearest existing component's anatomy; every visual value from real resolved tokens, never invented
+   or rounded; decide the PHONE layout first (bottom nav, safe-area insets, full-panel views). It
+   opens with the rule this miss earned: *a passing suite cannot see a visual defect.*
+2. **SHIPPED — the colour trap is recorded with its measured numbers**, because "use color-mix" reads
+   as safe and is not: mixing against a neutral that carries an explicit hue MOVES THE HUE.
+3. **IN FLIGHT — a hue assertion on the band**, mutation-proved, so the next silent colour drift fails
+   a test instead of reaching the owner.
+4. **NOT BUILT, and I am not claiming otherwise:** nothing in this repo renders a component and looks
+   at it. Until something does, "verified" for UI means a human opened it. `verify-uat.yml` +
+   Playwright-in-GHA already exist and could screenshot at 390px — that is the real structural fix and
+   it is unbuilt.
