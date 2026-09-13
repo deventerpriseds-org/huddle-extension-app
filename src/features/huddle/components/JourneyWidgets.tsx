@@ -54,6 +54,7 @@ import type {
   WidgetTaskAction,
   WidgetTaskRow,
 } from "../lib/tasks/widgets.server";
+import { categoryHue } from "../lib/tasks/widget-colors";
 import {
   getPrioritiesWidget,
   getScheduleWidget,
@@ -103,16 +104,12 @@ function shortTime(iso: string | null): string | null {
 }
 
 /* ── Category chips ──────────────────────────────────────────────────────────────────────────────
- * The spec colour-codes chips per category (Life = blue, Education = amber). Implemented as a
- * DETERMINISTIC hash of the category name to a hue rather than a lookup table, because a table only
- * covers the categories that happened to be in the screenshot and journey's categories are data the
- * user can add to — the same reason routing is roster-driven instead of a per-agent list. Every
- * category gets a stable, distinct colour with zero per-category code. */
-function categoryHue(name: string): number {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
-  return h;
-}
+ * The spec colour-codes chips per category (Life = blue, Education = amber). `categoryHue` lives in
+ * `lib/tasks/widget-colors.ts` — a SEEDED table for journey's four known categories (so the spec's
+ * colours are actually delivered and no two of them collide) with the original hash kept as the
+ * fallback for any category the user adds, which is what keeps this data-driven rather than a
+ * per-category list. A bare hash put LIFE and EDUCATION 20 degrees apart — two near-identical greens
+ * for the pair the spec makes the most distinct (VERIFY-journey-widgets-2.md N-5). */
 
 function CategoryChip({ category }: { category: string | null }) {
   if (!category) return null;
@@ -523,8 +520,10 @@ function TopicRow({ node, depth }: { node: TopicNode; depth: number }) {
   // Top level starts expanded (the spec shows Career open with its children visible); deeper levels
   // start closed so a large tree does not arrive as a wall of rows.
   const [open, setOpen] = useState(depth === 0 && hasChildren);
-  // The coloured left rail, one hue per top-level topic — the same deterministic hash as the category
-  // chips, so a topic and a category of the same name agree in colour for free.
+  // The coloured left rail, one hue per top-level topic — the SAME `categoryHue` the chips use, and
+  // it normalizes to upper-snake before looking up, so a topic and a category of the same name DO
+  // now agree in colour (topic "Life" and category "LIFE" both resolve to the seeded blue). Before
+  // normalization the case-sensitive hash made them disagree 5/5 — N-6.
   const rail = depth === 0 ? `oklch(0.62 0.16 ${categoryHue(node.name)})` : undefined;
   return (
     <li>

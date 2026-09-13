@@ -83,3 +83,87 @@ npm run test:widget-live  ->   9 passed, 0 failed
 
 Mutation proof: below, after the commit (`mutate.sh` refuses a dirty file, so it cannot run until
 the fix is committed).
+
+### N-8 mutation proof — **FIRED**
+
+`mutate.sh` was run on the COMMITTED tree (it refuses a dirty file), anchor and replacement supplied
+as FILES, never as shell arguments. Anchor uniqueness checked first:
+`grep -c "if (live) refreshChecklistRows(mapped);"` → **1**.
+
+```
+mutate.sh src/features/huddle/components/JourneyWidgets.tsx n8-anchor.txt n8-repl.txt \
+          "npm run test:widget-live" "useSeededRows routes a LIVE payload to refreshChecklistRows"
+
+FIRED: 'useSeededRows routes a LIVE payload to refreshChecklistRows' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/components/JourneyWidgets.tsx matches HEAD
+tree clean: 'useSeededRows routes a LIVE payload to refreshChecklistRows' passes again on the restored tree (build output regenerated)
+```
+
+The mutation reinstated exactly the defect: seed-only for every surface, live flag ignored. Not
+INERT, not NOT-APPLIED.
+
+---
+
+## N-5 (MODERATE) + N-6 (LOW–MOD) — category colours: a collision, and a false comment
+
+**Confirmed before changing.** `categoryHue` was a `h*31 + charCode` hash living inline in
+`JourneyWidgets.tsx:111`, used by BOTH the chip (`:119`) and the topic rail (`:514`). The verifier's
+measurement reproduces exactly: LIFE→108, EDUCATION→128 — 20° apart, two near-identical greens for
+the pair the spec (`docs/widgets/spec-priorities-widget.jpg`) makes most distinct (Life blue,
+Education amber). The rail comment claimed a topic and a category of the same name "agree in colour
+for free", which the case-sensitive hash could never deliver against upper-snake categories.
+
+### The fix
+
+`categoryHue` moved to a pure, DOM-free module `src/features/huddle/lib/tasks/widget-colors.ts` —
+one hue function, not two — and extended, not replaced:
+
+- **`CATEGORY_HUES` seeds journey's four real categories** (`LIFE | CAREER | VENTURES | EDUCATION`,
+  from journey-voice `_shared/tool-definitions.ts`): `LIFE 250` (blue, spec), `EDUCATION 70` (amber,
+  spec), `CAREER 340`, `VENTURES 160`.
+- **The original hash is kept as the FALLBACK** for any category the user adds, so this stays
+  data-driven rather than a per-category list — the design rationale the verifier explicitly did not
+  dispute.
+- **N-6:** the lookup normalizes to upper-snake first (`"Life"`/`"Prof Education"` → `LIFE`/
+  `PROF_EDUCATION`), so a topic and a category of the same name now genuinely resolve to the same
+  hue. The false comment in `TopicRow` is replaced with what the code actually does. The chip comment
+  is rewritten the same way.
+
+### Test added: `scripts/widget-colors.test.ts` (`npm run test:widget-colors`)
+
+Separation is **computed** (shortest arc on the 360° wheel), never eyeballed — which is precisely
+the check the old hash would have failed. Real output:
+
+```
+  PASS LIFE has an explicit seeded hue — LIFE -> 250
+  PASS CAREER has an explicit seeded hue — CAREER -> 340
+  PASS VENTURES has an explicit seeded hue — VENTURES -> 160
+  PASS EDUCATION has an explicit seeded hue — EDUCATION -> 70
+  PASS LIFE and EDUCATION are no longer near-identical (the N-5 collision) — gap = 180° (was 20° at hue 108 vs 128); LIFE=250 EDUCATION=70
+  PASS every pair of journey's four categories is visually distinct — closest pair LIFE/CAREER = 90° (floor 60°)
+  PASS LIFE lands in the BLUE band, as the spec draws it — LIFE -> 250 (blue band 220-280)
+  PASS EDUCATION lands in the AMBER band, as the spec draws it — EDUCATION -> 70 (amber band 40-110)
+  PASS topic "Life" and category "LIFE" agree in colour — 250 vs 250
+  PASS topic "Education" and category "EDUCATION" agree in colour — 70 vs 70
+  PASS topic "Career" and category "CAREER" agree in colour — 340 vs 340
+  PASS topic "Ventures" and category "VENTURES" agree in colour — 160 vs 160
+  PASS topic "Family" and category "FAMILY" agree in colour — 300 vs 300
+  PASS a spaced topic name matches its upper-snake category ("Prof Education" ~ "PROF_EDUCATION") — 234 vs 234
+  PASS an unknown category still gets a hue from the hash (no per-category code required) — SOME_USER_ADDED_CATEGORY -> 206
+  PASS the fallback is deterministic (same name, same hue, every call) — stable across calls -> 206
+
+==================== 16 passed, 0 failed ====================
+```
+
+Measured, not asserted: the worst pair among journey's four is now **90°** apart (was 20°), and the
+five topic/category pairs the verifier measured as DISAGREEING 5/5 now agree 5/5.
+
+### Checks at this commit
+
+```
+=== EXIT tsc: 0 ===
+npm run test:widget-park   ->  10 passed, 0 failed
+npm run test:router        ->  20 passed, 0 failed
+npm run test:widget-live   ->   9 passed, 0 failed
+npm run test:widget-colors ->  16 passed, 0 failed
+```
