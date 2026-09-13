@@ -51,6 +51,7 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-band-cream: var(--band-cream);
+  --color-success-soft: var(--success-soft);
 
   --shadow-hair: 0 0 0 1px var(--hairline);
   --shadow-soft: 0 1px 2px oklch(0 0 0 / 0.04), 0 8px 24px -12px oklch(0 0 0 / 0.10);
@@ -111,6 +112,13 @@
    * is why this is a literal and not a derivation. Guarded by scripts/widget-band-color.test.ts. */
   --band-cream: oklch(0.975 0.032 92);
 
+  /* The spec pairs a LIGHTER ▶ beside the DARKER ✓. This was
+   * `color-mix(in oklch, var(--success) 72%, var(--surface))`, and --surface is oklch(1 0 0) --
+   * white with an EXPLICIT hue of 0 -- so the mix dragged hue 155 to 111.6 and the START button
+   * rendered yellow-green instead of a lighter teal. Same defect as the pink band, same fix:
+   * a literal at the SAME hue, lit per theme, never a mix against a neutral. */
+  --success-soft: oklch(0.74 0.115 155);
+
   /* Agent color palette (per-agent tokens) */
   --agent-teal:    oklch(0.55 0.09 190);
   --agent-emerald: oklch(0.60 0.13 160);
@@ -160,6 +168,8 @@
   /* Same ROLE, same hue 92, re-lit for dark: a warm band that lifts off `--surface` (L 0.20) by
    * about as much as `--surface-2` (L 0.23) does, rather than a bright cream that would glare. */
   --band-cream: oklch(0.255 0.030 92);
+  /* Dark: lighter than --success (L 0.70) so the pair still reads as soft-vs-solid on a dark card. */
+  --success-soft: oklch(0.78 0.11 155);
 }
 
 /*
@@ -192,6 +202,7 @@
   /* The room is always dark regardless of app theme, so it needs its own copy — inheriting the light
    * `:root` cream here would put a near-white band on the dark stage. */
   --band-cream: oklch(0.25 0.030 92);
+  --success-soft: oklch(0.78 0.11 155);
   color: var(--foreground);
 }
 

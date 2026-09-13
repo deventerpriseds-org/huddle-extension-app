@@ -27,6 +27,7 @@
     "test:widget-park": "bun scripts/widget-park.test.ts",
     "test:widget-live": "bun scripts/widget-live-refresh.test.ts",
     "test:widget-colors": "bun scripts/widget-colors.test.ts",
+    "test:color-mix": "bun scripts/no-achromatic-color-mix.test.ts",
     "test:widget-band-color": "bun scripts/widget-band-color.test.ts"
   },
   "dependencies": {
