@@ -1,0 +1,46 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1440, "h": 900, "title": "Docked in Iris's 1:1 (desktop)" },
+    { "file": "Priorities.dc.html", "x": 1560, "y": 0, "w": 1440, "h": 900, "title": "Priorities — side-menu view" },
+    { "file": "Schedule.dc.html", "x": 3120, "y": 0, "w": 1440, "h": 900, "title": "Schedule — side-menu view" },
+    { "file": "Mobile.dc.html", "x": 4680, "y": 0, "w": 390, "h": 844, "title": "Phone — stacked + 6-way switcher" }
+  ],
+  "annotations": [
+    {
+      "id": "what-this-is",
+      "x": 0,
+      "y": -230,
+      "w": 420,
+      "text": "WHERE THE TWO JOURNEY WIDGETS LAND IN HUDDLE\n\nStatic placement mockups, not clickable prototypes — the question is where these things end up.\n\nEverything is lifted from the real app: tokens from src/styles.css, rail geometry from Rail.tsx (56px, bg-primary, 40px items, 18px icons @1.8 stroke), view registry from HuddleApp.tsx:380. journey's raw colours map onto Huddle tokens — purple send arrow = --ai, green start/complete = --success, orange pause = --warning, cream band = oklch(0.975 0.032 92).\n\nDashed purple outline = added by this work."
+    },
+    {
+      "id": "docked-placement",
+      "x": 470,
+      "y": -230,
+      "w": 420,
+      "text": "ARTBOARD 1 — docked in the chat column\n\nBoth widgets sit in a two-up grid under a 'Docked in this huddle' strip, ABOVE the transcript, inside Iris's 1:1 only. They are pinned furniture, not chat messages — so they don't scroll away like the checklist widget does, and Iris can reference them in her reply.\n\nThe context panel and huddle list are untouched."
+    },
+    {
+      "id": "registry-finding",
+      "x": 1560,
+      "y": -230,
+      "w": 460,
+      "text": "PRE-EXISTING BUG THIS WORK HAS TO STEP AROUND\n\nRail.tsx already offers four entries but HuddleApp.tsx:380 renders only three views. Line 39 marks Memory active when view === 'huddle', and line 45 maps Memory to 'huddle' — so clicking Memory silently renders Huddles. It is decorative today.\n\nAdding two more views to that three-way ternary compounds it. The prototype assumes the registry becomes a VIEW MAP keyed by id, which fixes Memory in the same change rather than leaving a fourth broken entry beside two new working ones."
+    },
+    {
+      "id": "one-read-model",
+      "x": 3120,
+      "y": -230,
+      "w": 440,
+      "text": "NOT A SECOND BOARD\n\nBoth views read the SAME tasks.journey_tasks mirror the Board reads — one read model, three surfaces. The topic tree is the only thing Huddle does not already hold; it comes from journey through a proxy tool (Lane A).\n\nEvery control writes through the existing update_task: ▶ = UP_NEXT→DOING (still behind the confirm-intent gate), ✓ = the user's own DONE, ⏸ = park with the parking-lot tag, ▲/✓ Today = move_task_to_day / unschedule_task. No new writer to the mirror; it re-syncs in ~1–3s."
+    },
+    {
+      "id": "phone-note",
+      "x": 4680,
+      "y": -230,
+      "w": 400,
+      "text": "PHONE\n\nTwo-up doesn't fit 390px, so the widgets stack and the second collapses to a one-line summary that expands on tap.\n\nThe mobile switcher in HuddleApp is currently a 3-entry row of labels. Six entries means icon-over-label; the two new ones are dashed here. This is the switcher's real constraint, not a redesign of it."
+    }
+  ],
+  "launch": { "view": "canvas" }
+}

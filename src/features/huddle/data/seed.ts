@@ -1,4 +1,7 @@
 import { AGENTS, type AgentId } from "./agents";
+// Type-only: `widgets.server.ts` holds the widget payload contract (Lane B) and is deliberately
+// dependency-free, so this import is erased at compile time and pulls no server code into the client.
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
 
 export type MessageAuthor =
   | { kind: "user" }
@@ -52,6 +55,21 @@ export interface HuddleMessage {
   // renderer overlays `checklistState[taskId]` on top of these rows, so a stale snapshot is harmless.
   // Absent on every message that isn't a checklist → no widget.
   checklist?: ChecklistPayload;
+  // The in-chat PRIORITIES widget (journey's Android "Priorities" home widget, brought inside
+  // Huddle) and the SCHEDULE widget beside it. Same SNAPSHOT discipline as `checklist` above and for
+  // the same reason: live per-row state lives in the store's `checklistState` keyed by taskId, so a
+  // re-delivered turn cannot revert a Today toggle or a ✓ the user just made.
+  //
+  // THE TYPES ARE LANE B'S, imported rather than redeclared. An earlier draft of this file defined a
+  // parallel `PrioritiesPayload`/`SchedulePayload` pair with its own field names (taskId, today,
+  // pre-formatted `time`) because Lane B's contract had not landed yet. Keeping both would have left
+  // two shapes for one payload and a same-named `WidgetTaskRow` in two modules — so the assumed pair
+  // was deleted in favour of the real one. `widgets.server.ts` is deliberately dependency-free (pure
+  // types + pure functions, no pg, no fetch), and this is a type-only import, so nothing server-side
+  // reaches the client bundle.
+  // Absent on every message that isn't the relevant widget → no widget.
+  priorities?: PrioritiesWidgetData;
+  schedule?: ScheduleWidgetData;
 }
 
 export interface ChecklistRow {
@@ -149,7 +167,14 @@ export function breadcrumbToolsFor(
   // ENTIRE widget payload (needed by the reply-assembly to rebuild the checklist without a second
   // read), and the breadcrumb renders `detail` into the chip's title tooltip -- so leaving it in
   // dumps the raw JSON on hover. The widget is already visible on screen; a chip adds nothing.
-  const HIDDEN_FROM_BREADCRUMBS = new Set(["tool_catalog", "build_checklist"]);
+  // `show_priorities_widget` / `show_schedule_widget` are the SAME shape (payload-in-detail, widget
+  // already on screen) and so belong in this set too -- any future widget tool does as well.
+  const HIDDEN_FROM_BREADCRUMBS = new Set([
+    "tool_catalog",
+    "build_checklist",
+    "show_priorities_widget",
+    "show_schedule_widget",
+  ]);
   return toolUses.filter((t) => t.agentId === agentId && !HIDDEN_FROM_BREADCRUMBS.has(t.tool));
 }
 

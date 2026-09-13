@@ -3709,3 +3709,228 @@ meant and give the verifier the conversation.
 
 **STATUS: implemented, mechanism verified, deployed — NOT yet confirmed live by the owner.** Nothing
 here may be written as "fixed" until he reports back from his own environment.
+## ACT:journey-widgets-in-chat — dock journey's PRIORITIES + SCHEDULE widgets in Iris's chat + side menu
+**Asked (2026-09-12):** *"run the eds sync skill including checking on a fresh clone and then I want to
+add these two external journey widgets as an internal chat widget like the checklists widget. these two
+need to be docked in irises chat and we views on the side menu."* + *"you also need to show prototypes of
+where these things will end up."*
+
+- [x] eds sync — hooks v30 → **v58** (13 hooks); re-confirmed 2026-09-13 against a FRESH clone of
+      `eds-claude-skills` (`CURRENT_VERSION = 58` == installed `_eds_version` 58). All clones current.
+- [x] Spec of record committed — `docs/widgets/spec-priorities-widget.jpg`, `spec-schedule-widget.jpg` (`3223bf3`).
+- [x] **Prototypes** — 4 artboards (desktop docked, Priorities view, Schedule view, phone) built from the
+      REAL design system (tokens from `src/styles.css`, rail geometry from `Rail.tsx`, registry from
+      `HuddleApp.tsx:380`). Published: https://claude.ai/code/artifact/da7013d0-2fff-4942-ae91-2a69dbd0cda3
+      Source in `docs/widgets/prototype/`.
+- [x] Lane A — journey `get_task_topics` proxy tool (journey-voice `ec508a5`, pushed, **not deployed**).
+- [x] Lane B — Huddle server fns + payload contract (`54639aa`, pushed).
+- [x] Lane C — Huddle chat cards, Iris docking, side-menu views (`4c68ff2`/`3ead8e6`/`59afbbb`, pushed).
+- [x] `npx tsc --noEmit` exit 0 on `claude/journey-widgets-in-chat`.
+- [ ] **Independent verifier** — NOT yet run (all three lanes died with a container restore).
+- [ ] Deploy journey `execute-tool` (owner's call) — until then the topic tree returns empty with a
+      `reason`, and the priorities band still renders.
+- [ ] Merge to `main` (auto-deploys).
+
+### ACT:journey-widgets-in-chat — progress 2026-09-13
+- [x] Loop-1 verification (`docs/VERIFY-journey-widgets-1.md`) — 9 CONFIRMED, 2 REFUTED, 1 partial.
+- [x] Independent ACs written cold (`docs/AC-journey-widgets.md`, 51 criteria + 7 gaps).
+- [x] **Defect 1 (HIGH) FIXED** — ⏸ pause un-paused itself. `966bd2f`, test + mutation proof FIRED.
+- [x] **GAP-1 FIXED** — widget tools registered nowhere; now wired both paths. `b56907e`.
+- [x] Rail Memory de-highlighted (minimal, reversible).
+- [ ] **OWNER DECISION — the Memory rail entry:** remove it (recommended), wire it to a real view, or
+      leave it decorative. Broken before this work; two new neighbours make it conspicuous.
+- [ ] **OWNER ACTION — deploy journey `execute-tool`** so `get_task_topics` exists. Until then the
+      topic tree (~60% of the Priorities screenshot) is a labelled empty state; the band works.
+- [ ] Loop-2 verification in flight; loop 3 must cover `huddle.functions.ts` + `Rail.tsx`.
+- [ ] **Spec-screenshot fidelity still unchecked** — missing affordances remain unknown.
+- [x] MERGED + DEPLOYED 2026-09-13 (`125409d`). Still NOT observed rendering in a browser.
+- [ ] **Separate pre-existing bug, NOT fixed:** the checklist widget renders nothing on the Lovable
+      path (`huddle.functions.ts:5472` omits `recordToolUse`). Owner's call whether to widen scope.
+
+### ACT:journey-widgets-in-chat — owner instructions 2026-09-13 (second batch)
+Owner: *"I like the idea of them having their own view not side by side and the location in the menu
+is good for now... just remember I use this on the phone. go ahead and add them as seen in the images
+attached."* + *"should this be added as a skill or prototype more in eds skills repo?"* + *"after the
+two widgets are deployed, I need to know what the original intent was for the memory view and where it
+sits today."* + *"I also didn't know where you got the 9/13/17 tick idea."*
+
+- [x] **Stacked, not side by side** (`9a8bbde`). `lg:grid-cols-2` removed; each widget renders at full
+      column width. The phone never received the two-up, which is what identified it as desktop-only
+      divergence from the spec screenshots. Menu location left as-is, per "good for now".
+- [x] **Eight loop-2 defects fixed** (`587bc38`..`37f25ea`), incl. stale-snapshot status (N-8) and the
+      LIFE/EDUCATION near-identical greens (N-5). Three mutation proofs, all FIRED.
+- [x] **The 9/13/17 challenge — owner was right.** See `.claude/accuracy-log.md` 2026-09-13 and the
+      corrected CLAUDE.md block. Short version: the autowork PASS is still [9,13,17], but the
+      confirm-ask REACH-OUT never rides that tick — `CONFIRM_JITTER` no longer exists; asks fall in
+      fan windows 9–18 / 20–22 with a 45–90 min gap. Other jobs ARE more frequent (`reviewDigest`
+      5×/day). `identity.scheduling_config` queried live: **0 rows**, so defaults are what runs.
+- [x] **Skill shipped** — `prototype-in-app-skin` captures the METHOD (lift the real skin before
+      drawing), not the artboards. `deventerpriseds-org/eds-claude-skills` **PR #83, CI green,
+      mergeable clean — awaiting the owner's merge.** Its first CI run failed a real guard
+      (every skill must be named in `bootstrap.md`); reproduced locally, fixed, re-verified 12/12.
+- [ ] Loop-3 verification in flight — first loop to cover the tool wiring + `Rail.tsx`.
+- [ ] **OWNER ACTION — deploy journey `execute-tool`.** Blocks the topic tree only; band works.
+- [ ] **OWNER DECISION deferred by the owner to post-deploy:** Memory view — original intent + where
+      it sits today. Do NOT remove the rail entry before answering that; it is de-highlighted only.
+- [x] MERGED + DEPLOYED 2026-09-13 (`125409d`). Never observed rendering in a browser — the one
+      remaining unknown; a live look is the owner's check.
+- [ ] Pre-existing, NOT this PR's: `check-skill-app-neutral.sh` fails on 3 older eds skills naming
+      `boost-application-packet-platform` outside a citation — fails identically on `origin/main`,
+      and is not wired into the `guards` workflow. Separate cleanup.
+
+### ACT:journey-widgets-in-chat — SHIPPED 2026-09-13
+- [x] **Merged to `main` (`125409d`) and DEPLOYED.** `deploy-swa.yml` run 34757153463 = success on
+      that exact head_sha; DB pin verified in the log as `eds-postgresql/RAG_AI_Agents`.
+      Live: https://icy-flower-0f415200f.7.azurestaticapps.net
+- [x] Pre-merge gate: `tsc` exit 0, and 67 assertions green (park 10, colours 25, live-refresh 12,
+      router 20). Post-merge `tsc` re-run on the merge commit: exit 0.
+- [x] **Memory view question ANSWERED** (owner asked for it post-deploy) — see `.claude/memory.md`.
+      Short form: added 2026-08-16 as a side-car in a routing commit, born pointing at Huddles, no
+      view ever in the registry; today memory is only an operator panel in Settings, with no way to
+      browse stored chunks/triples. Truncated history means "never existed" is unprovable.
+- [ ] **OWNER — deploy journey `execute-tool`** so `get_task_topics` exists; topic tree is an empty
+      state until then.
+- [ ] **OWNER — merge eds-skills PR #83** (`prototype-in-app-skin`), CI green, mergeable clean.
+- [ ] **OWNER DECISION — the Memory rail entry:** remove it, or scope a real browse-my-memory view.
+      Recommendation on record: remove now, scope the view separately; it is the more valuable of the
+      two and should not be back-filled to justify a placeholder.
+- [ ] **NOT user-confirmed live.** Nobody has seen the widgets render in a browser.
+- [ ] Known, not fixed (loop 3): three park-tag union copies remain (`HuddleView.tsx:566`,
+      `BoardView.tsx:750`, neither case-normalizing); the Lovable-path checklist renders nothing
+      (pre-existing, owner's call); empty-state buttons at 50% opacity vs the spec's full saturation.
+
+### ACT:journey-widgets-in-chat — CLOSED 2026-09-13 (live + visually verified)
+- [x] All five owner-reported UX defects fixed, merged (PR #60) and DEPLOYED.
+- [x] **"fix all color bugs"** — swept all six `color-mix` calls in `src/`. Two were real and both
+      shipped: the pink band and the yellow-green ▶. Fixed as literals at the intended hue, per
+      theme. Repo-wide guard added; six detector self-tests, including the false positives its own
+      first run produced.
+- [x] **"you should have impersonated me for uat"** — checked: the bypass already resolves to
+      `von.ellis@enterpriseds.io` and the shots show his real tasks. The blank screens were two
+      different bugs in MY harness (screenshot before fetch resolved; `networkidle` unreachable for a
+      polling app), both fixed.
+- [x] **5/6 browser checks PASS at 390px on production**, run 34763566801. Screenshots delivered.
+- [x] **"if tipics not available how is it that the journey apps view and the bridge widget both have
+      them"** — answered from the two call sites. Both read `task_topic_index` DIRECTLY over PostgREST
+      with the USER's Supabase session (`Priorities.tsx:222`; bridge `SupabaseTaskClient.kt:219`).
+      Huddle has no user session, only the shared-secret proxy, so it can reach only named
+      `execute-tool` tools. **The data was never missing — Huddle's route to it was**, and my earlier
+      wording said the wrong one.
+- [x] **Defect found while answering, fixed (`bc515d2`).** Measured on journey: `task_topic_index`
+      holds 158 topics with `parent_topic_id` **NULL on every row** and 5 categories. `buildTopicTree`
+      nested on `parent_topic_id` alone, so the live payload would have rendered 158 flat rows the
+      moment journey deployed. First coverage `buildTopicTree` has ever had.
+- [x] **OWNER CAUGHT A CLOBBER in that fix — corrected (`56f2411`).** *"there was work to give the
+      board heirarchy for tasks so sub tasks and epics can exist… don't clobber."* Right on both counts:
+      - journey's tree is **four levels, `category > group > sub-group > task`** (journey-voice
+        `f0ab561`). Category sits ABOVE `parent_topic_id` nesting; they COMPOSE. `groupByCategory` bailed
+        out on `roots.some(n => n.children.length > 0)`, so the first sub-group to appear would have
+        deleted the whole category level — and journey is actively building toward populated parents.
+      - my labels were **`origin/main`'s, not the owner's**. journey merges six raw keys into five rows
+        (`PERSONAL→LIFE` "Life & Personal", `PROF_EDUCATION→EDUCATION`, plus FAMILY). His screenshot is
+        the branch's five rows, not main's six.
+      **journey's live Priorities view runs `claude/priority-widget-nesting-1jtwa9`, which is NOT on its
+      `origin/main`** — and journey's clone has a truncated history, so `git log origin/main` there
+      cannot prove anything was never shipped. Recorded in `.claude/memory.md`.
+      `scripts/widget-topic-tree.test.ts` 12→**17 assertions**; two mutation proofs **FIRED**
+      (sub-group compose, category merge). TASK hierarchy (epic→task→subtask,
+      `docs/feasibility-epics-tasks-subtasks.md`) is a **different table and code path** — untouched.
+- [x] **Accuracy-log entry written (`d3cbe63`).** Two large block-writes were declined; a compact edit
+      landed. Records the miss + two structural rules: *a fixture is a claim about a shape — measure
+      the shape first*, and *before porting a UI, find which REF is actually live*.
+- [x] **Independent verifier, loop 1 — `docs/VERIFY-topic-tree-categories-1.md`.** 10 claims, 10m45s
+      of a 25-min budget, artifact committed+pushed per claim. **REFUTED C7(v) with an executable
+      repro**, reproduced before fixing: two same-named topics in different categories →
+      `buildTopicTree` emitted ONE and silently deleted the other, category row and all. Root cause:
+      `byId` was both the parent lookup AND the emit list, so the loop over `byId.values()` dropped
+      any id collision. Not contrived — `toTopicNode` falls back to `id = name` when the payload has
+      no id (deliberate; journey's envelope is unpublished), and duplicate names are ordinary in a
+      158-topic tree. Fixed + deployed `0f0273c`; 17→20 assertions, two more mutation proofs FIRED.
+      Also fixed the verifier's D3 (an early return skipped parent nesting on any mixed payload).
+      **Known, NOT fixed (D4):** `hasAncestorCycle` is O(n²) — 24k-deep chain ~47s, 32k throws. Caught
+      into `{ok:false}`; live data is 158 parentless topics. Recorded, not pre-emptively optimised.
+- [ ] **OWNER — deploy journey `execute-tool`** so `get_task_topics` exists; the topic tree renders
+      its labelled empty state until then. Only remaining piece of the original ask.
+- [ ] **OWNER — merge eds-skills PR #83** (`prototype-in-app-skin` + `ship-ui-that-belongs`), green.
+- [ ] **OWNER DECISION — the Memory rail entry:** remove, or scope a real browse-my-memory view.
+      Answered post-deploy as asked; recommendation on record is remove now, scope the view separately.
+
+## ACT:digest-standup-ranking — stand-up must rank through rankTasks (2026-09-13)
+
+**Origin:** owner request — three morning digests; this row is the Huddle half.
+**Status: IMPLEMENTED + PUSHED on `claude/huddle-workflows-setup-cucecs`. NOT merged, NOT deployed,
+NOT confirmed live.**
+
+**Evidence:** commits `0c06813` / `53e345b` / `f2179c6`; `.claude/IMPL-standup-ranking.md`;
+`npm run test:standup-ranking` 10/10; `scripts/mutate.sh` 4 × FIRED (AC-SU-2 parking-lot, AC-SU-3
+cross-surface order, AC-SU-4 is_priority, AC-SU-5 title dedup), 0 INERT, 0 NOT-APPLIED.
+**ACs:** `journey-voice/.claude/AC-digest-delivery.md` section G, written by an independent
+`ac-writer` subagent BEFORE implementation.
+
+**What it fixes for the owner:** a `parking-lot`-tagged task could appear — and did rank FIRST — in
+the daily stand-up brief. Now absent from both the stand-up and `prioritize`, proven over one shared
+fixture.
+
+**Open / not reached:**
+- `bun install` cannot complete in this environment — the registry mirror 403s through the session
+  proxy for ~6 packages (`ws`, `split2`, `postgres-interval`, …). Only `test:standup-ranking` ran;
+  other suites did NOT. An uncommitted local `node_modules` stub for `@fontsource/inter` was needed
+  to resolve the import chain.
+- `npx tsc --noEmit` shows one PRE-EXISTING error (`TS2688 vite/client`) on the untouched tree, from
+  that same failed install. Zero errors in changed files.
+- AC-SU-6 NOT REACHED (outside this lane).
+- **Independent verifier not yet run** — batched across all four digest lanes once the journey-side
+  lanes land.
+
+---
+
+### ACT:standup-digest-delivery — UPDATE 2026-09-13
+
+**Status: PUSHED on `claude/huddle-workflows-setup-cucecs`, PR #61 open and subscribed. NOT merged,
+NOT deployed, NOT live-confirmed.** 25/25 tests, 4/4 mutations FIRED.
+
+**Closed:**
+- ✅ **AC-SU-6 (merge blocker, verifier-found)** — `selectStandupPriorities` now takes `excludeIds`
+  and forwards it to `rankTasks`; `runScheduledStandup` resolves it at the call site. Guarded
+  behaviourally AND at the source, because an optional parameter hides a missing wire-up from `tsc`.
+- ✅ **`origin/main` merged in** — the branch was 222 behind. Ledger conflicts resolved keeping both
+  sides; `standup.server.ts` auto-merged.
+- ✅ **Stand-up deliverable off-chat** — `StandupRunResult.digest` + `deliver:false`, exposed on
+  `run-standup.ts`. This is what lets journey send Terry's stand-up as an email/Slack digest.
+
+**Open / not reached:**
+- ⏳ `origin/main` moved again (1 commit). Merge held until the running verifier finishes reading
+  this tree — merging under it would invalidate its C5 verdict.
+- ⏳ Independent verifier loop 2 in flight (`work: digest-delivery`), covering C5 here.
+- ⏳ `bun install` still cannot complete in this environment (registry mirror 403s through the
+  session proxy for ~6 packages), so only the two `bun scripts/*.test.ts` suites ran. `npx tsc
+  --noEmit` reports pre-existing errors from that same failed install; zero in changed files.
+
+---
+
+## ACT:viewport-height — the bottom dock would not stay at the bottom on the owner's phone (2026-09-13)
+
+**Asked:** *"why isn't the bottom [dock] staying at the bottom of my app / my device instead of being
+able to be scrolled up?"* — with a screenshot: nav bar floated to ~45% of screen height, blank strip
+beneath it, keyboard below that.
+
+- [x] **Root-caused from source, not guessed.** The page never scrolled — the WINDOW slid. The shell
+      was `h-dvh`; `dvh` tracks the **layout** viewport, which a soft keyboard does not shrink (it
+      shrinks only the **visual** viewport). So the column stayed full height, the nav fell below the
+      fold under the keyboard, and the browser panned the visible region to follow the caret.
+- [x] **Disconfirmed my own first hypothesis.** `interactive-widget=resizes-content` — the declarative
+      fix — was **already set** at `routes/__root.tsx:83`. It is CHROME-ON-ANDROID ONLY, so it was
+      never going to hold on Firefox/Samsung/WebView. Left in place; the fix layers over it.
+- [x] **Fixed + deployed** — `725e8ff`. `hooks/useAppViewportHeight.ts` publishes `--app-h` from
+      `window.visualViewport` (universal), subscribed ONCE on the shell; `HuddleApp.tsx` reads
+      `var(--app-h, 100dvh)`. Subtracts `offsetTop` so it stays anchored mid-pan. **No visualViewport
+      → sets nothing**, so `100dvh` behaviour is unchanged and no working browser can regress.
+- [x] **Guarded:** `scripts/app-viewport-height.test.ts`, 9 assertions; **two mutation proofs FIRED**
+      (offsetTop subtraction; the degrade path). tsc clean, production build clean.
+- [x] **Correction logged:** my first mutation run printed *unreadable — nothing proven*. That was my
+      INVOCATION, not the guard — `mutate.sh:133` prepends `FAIL ` itself and I passed it too. Re-run
+      with the bare test name, both fired. Worth remembering: that harness reports NOT-APPLIED rather
+      than a false INERT precisely so this is catchable.
+- [ ] **OWNER — live re-test, and this is the verdict.** A sandbox cannot open a soft keyboard, so
+      nothing here proves the phone is fixed. Open a 1:1, tap the composer, confirm the dock stays put.
+      Status stays **MECHANISM ONLY, NOT USER-CONFIRMED** until then.

@@ -28,7 +28,16 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
-import { breadcrumbToolsFor, type ChecklistPayload, type Huddle, type HuddleMessage, type ToolUseEvent } from "../data/seed";
+import {
+  breadcrumbToolsFor,
+  type ChecklistPayload,
+  type Huddle,
+  type HuddleMessage,
+  type ToolUseEvent,
+} from "../data/seed";
+// The widget payload contract is Lane B's (lib/tasks/widgets.server.ts). Type-only import — that
+// module is deliberately dependency-free, so nothing server-side reaches the client bundle.
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
 import {
   enqueueHuddleTurn,
   getTurnUpdates,
@@ -40,7 +49,13 @@ import { userTurnTs } from "../lib/turn-identity";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
-import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind } from "../store";
+import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind, type View } from "../store";
+import {
+  DockedJourneyWidgets,
+  PrioritiesWidget,
+  ScheduleWidget,
+  WIDGET_DOCK_HUDDLE_ID,
+} from "./JourneyWidgets";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useDictation } from "../hooks/useDictation";
 import { usePush } from "../hooks/usePush";
@@ -54,6 +69,7 @@ import {
 } from "../lib/tasks/confirm-ask.functions";
 
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
+import { ViewSwitcher } from "./ViewSwitcher";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,29 +88,21 @@ export function HuddleView() {
     () => allMessages.filter((m) => m.huddleId === activeId),
     [allMessages, activeId],
   );
-  const view = useHuddleStore((s) => s.view);
-  const setView = useHuddleStore((s) => s.setView);
-
   if (!huddle) return null;
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <HuddleHeader huddle={huddle} view={view} setView={setView} />
+      <HuddleHeader huddle={huddle} />
       <Transcript messages={messages} huddle={huddle} />
       <Composer huddle={huddle} />
     </section>
   );
 }
 
-function HuddleHeader({
-  huddle,
-  view,
-  setView,
-}: {
-  huddle: Huddle;
-  view: "huddle" | "board" | "artifacts";
-  setView: (v: "huddle" | "board" | "artifacts") => void;
-}) {
+// `view`/`setView` used to be threaded down here as props for the inline switcher. ViewSwitcher
+// reads them from the store itself, the same way Rail does, so the plumbing is gone rather than
+// left dangling.
+function HuddleHeader({ huddle }: { huddle: Huddle }) {
   const startMeeting = useHuddleStore((s) => s.startMeeting);
   const patchMeeting = useHuddleStore((s) => s.patchMeeting);
   const { user } = useAuth();
@@ -170,23 +178,11 @@ function HuddleHeader({
       </div>
 
       <div className="ml-auto flex items-center gap-2">
-        <div className="inline-flex rounded-lg border border-hairline bg-surface p-0.5">
-          {(["huddle", "board", "artifacts"] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setView(v)}
-              className={cn(
-                "rounded-md px-3 py-1 text-xs font-medium capitalize transition",
-                view === v
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {v === "huddle" ? "Huddle" : v === "board" ? "Board" : "Files"}
-            </button>
-          ))}
-        </div>
+        {/* The incumbent switcher, extended from three entries to five and lifted into ViewSwitcher
+            so the header and the phone's bottom bar cannot drift apart. Hidden below `md`, which is
+            exactly where the bottom bar takes over (HuddleApp) — the two are complementary, so
+            precisely one is on screen at any width. They used to BOTH render at 390px, stacked. */}
+        <ViewSwitcher variant="inline" className="app-hidden md:inline-flex" />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -320,6 +316,15 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
             {dayLabel}
           </span>
         </div>
+
+        {/* DOCKED journey widgets — Iris's 1:1 only. Rendered here, INSIDE the scrolling transcript
+            but OUTSIDE `messages`, which is the whole point: `history` (and so every turn's model
+            payload) and the unread watermark are both built from `messages`, so a "pinned message"
+            would have leaked a widget payload into every prompt and into the scrollback the user
+            reads. This is present whether or not a tool ever fired, scrolls away with the history
+            like a channel header, and costs the conversation nothing.
+            See docs/LANE-C-widget-ui.md → "Docking interpretation". */}
+        {huddle.id === WIDGET_DOCK_HUDDLE_ID && <DockedJourneyWidgets />}
 
         {messages.map((m) => (
           <MessageRow key={m.id} m={m} huddle={huddle} />
@@ -909,6 +914,18 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
           </div>
         )}
         {m.checklist && <ChecklistCard m={m} />}
+        {/* In-chat widget cards, rendered from the message's own SNAPSHOT payload (the docked copy
+            above reads live instead). Same placement and same conditional shape as the checklist. */}
+        {m.priorities && (
+          <div className="mt-2">
+            <PrioritiesWidget data={m.priorities} />
+          </div>
+        )}
+        {m.schedule && (
+          <div className="mt-2">
+            <ScheduleWidget data={m.schedule} />
+          </div>
+        )}
         {m.confirmAsk && <ConfirmAskRow m={m} />}
         {m.overrideAsk && <OverrideAskRow m={m} />}
       </div>
@@ -1098,6 +1115,11 @@ function Composer({ huddle }: { huddle: Huddle }) {
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
           overrideAsk?: { taskId: string; taskTitle: string; note?: string };
           checklist?: ChecklistPayload;
+          // MUST be declared here AND at HuddleApp's copy of this DTO. This shape is re-declared
+          // inline at both mapping sites and an undeclared field is dropped SILENTLY — no error, no
+          // crash — so a widget would decay into plain text after a reload with nothing to blame.
+          priorities?: PrioritiesWidgetData;
+          schedule?: ScheduleWidgetData;
         }[]
       | undefined,
     result: TurnResult,
@@ -1163,6 +1185,8 @@ function Composer({ huddle }: { huddle: Huddle }) {
         confirmAsk: reply.confirmAsk,
         overrideAsk: reply.overrideAsk,
         checklist: reply.checklist,
+        priorities: reply.priorities,
+        schedule: reply.schedule,
       });
     });
 

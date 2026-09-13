@@ -1574,6 +1574,13 @@ export interface BoardTaskRow {
   // The agent's saved outputs for this task (newest first), so the board card can link to them the same
   // way the chat thread does. Populated by getBoardTasks; absent on getOpenAssignedTasks (auto-work path).
   artifacts?: { id: string; name: string; status: string | null }[];
+  // Scheduling columns, for the in-chat SCHEDULE widget's "TODAY'S SCHEDULE" section (lib/tasks/
+  // widgets.server.ts). OPTIONAL for the same reason `artifacts` is: getBoardTasks selects them,
+  // getOpenAssignedTasks (the auto-work path) does not, so a consumer of that path must not be
+  // told they are present. Raw TIMESTAMPTZ — the client formats the clock time.
+  start_time?: string | null;
+  end_time?: string | null;
+  is_scheduled?: boolean | null;
 }
 
 /** Diagnostics: how many rows the mirror holds and under which emails (top 12). */
@@ -1602,6 +1609,7 @@ export async function getBoardTasks(userEmail: string): Promise<BoardTaskRow[]> 
   const withArtifacts = `
     SELECT t.id,t.title,t.status,t.priority,t.category,t.is_priority,t.priority_rank,t.due_date,
            t.completed_at,t.assigned_agent,t.tags,t.definition_of_done,
+           t.start_time,t.end_time,t.is_scheduled,
            COALESCE((
              SELECT json_agg(json_build_object('id',a.id,'name',a.name,'status',a.status) ORDER BY a.created_at DESC)
                FROM artifacts.items a
@@ -1612,7 +1620,8 @@ export async function getBoardTasks(userEmail: string): Promise<BoardTaskRow[]> 
      ORDER BY t.updated_at DESC
      LIMIT 500`;
   const plain = `
-    SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done
+    SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done,
+           start_time,end_time,is_scheduled
       FROM tasks.journey_tasks
      WHERE lower(user_email) = ANY($1)
      ORDER BY updated_at DESC

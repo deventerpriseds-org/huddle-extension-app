@@ -6,15 +6,20 @@ import { ContextPanel } from "./ContextPanel";
 import { HuddleView } from "./HuddleView";
 import { MeetingLayer } from "./MeetingBar";
 import { Rail } from "./Rail";
+import { ViewSwitcher } from "./ViewSwitcher";
 import { Sidebar } from "./Sidebar";
 import { SettingsSheet } from "./SettingsSheet";
 import { AgentSettingsDrawer } from "./AgentSettingsDrawer";
 import { FallbackBanner } from "./FallbackBanner";
-import { isWorkspaceHydrated, setDeepLinkTarget, useHuddleStore, useVisibleHuddles } from "../store";
+import { isWorkspaceHydrated, setDeepLinkTarget, useHuddleStore, useVisibleHuddles, type View } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
 import { breadcrumbToolsFor, type ChecklistPayload, type ToolUseEvent } from "../data/seed";
+// Lane B's widget payload contract. Type-only import (that module is dependency-free).
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
+import { PrioritiesView, ScheduleView } from "./JourneyWidgets";
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
+import { useAppViewportHeight } from "../hooks/useAppViewportHeight";
 import { useAuth } from "@/hooks/useAuth";
 import { getAllTurnUpdates } from "../lib/huddle.functions";
 import { userTurnTs } from "../lib/turn-identity";
@@ -26,11 +31,28 @@ import { useAgentPanelStore } from "../lib/agent-panel-store";
  *  buzzes a present user or, worse, silences an absent one. */
 const PRESENCE_BEAT_MS = 5_000;
 
+/** THE SIDE-MENU VIEW REGISTRY. Was a nested ternary (`huddle ? … : board ? … : <ArtifactsView/>`),
+ *  which had a silent trap: its final `else` rendered Artifacts for ANY unrecognised view, so adding
+ *  a view and forgetting to wire it here showed the WRONG screen with no error. Keyed by the store's
+ *  `View` union, TypeScript now fails the build until every view has an entry.
+ *  These are element descriptors, not rendered components — nothing here mounts until it is selected.
+ *  The switcher's labels live in ViewSwitcher.tsx, which is the ONE place any view is named. */
+const VIEWS: Record<View, React.ReactNode> = {
+  huddle: <HuddleView />,
+  board: <BoardView />,
+  artifacts: <ArtifactsView />,
+  priorities: <PrioritiesView />,
+  schedule: <ScheduleView />,
+};
+
 export function HuddleApp() {
   useWorkspaceSync();
+  // Publishes `--app-h` = the height actually visible, so the shell below ends where the on-screen
+  // keyboard begins instead of behind it. Must live on the SHELL, not per-view: one subscription,
+  // and every view inherits the corrected height for free.
+  useAppViewportHeight();
   const { isAuthenticated, user } = useAuth();
   const view = useHuddleStore((s) => s.view);
-  const setView = useHuddleStore((s) => s.setView);
   const huddles = useVisibleHuddles();
   const activeId = useHuddleStore((s) => s.activeHuddleId);
   const sidebarCollapsed = useHuddleStore((s) => s.sidebarCollapsed);
@@ -151,6 +173,11 @@ export function HuddleApp() {
           // undeclared field is dropped silently -- no error, no crash -- so a checklist would decay
           // into plain text after a reload with nothing to attribute it to.
           checklist?: ChecklistPayload;
+          // Same rule as `checklist` directly above, and the same cost if omitted: this DTO is
+          // re-declared inline at BOTH mapping sites (the other is HuddleView's applyTurnStream) and
+          // an undeclared field is dropped silently, so a back-filled widget would arrive as text.
+          priorities?: PrioritiesWidgetData;
+          schedule?: ScheduleWidgetData;
         }[];
         toolUses?: ToolUseEvent[];
       }[]) {
@@ -191,6 +218,8 @@ export function HuddleApp() {
             confirmAsk: reply.confirmAsk,
             overrideAsk: reply.overrideAsk,
             checklist: reply.checklist,
+            priorities: reply.priorities,
+            schedule: reply.schedule,
             toolUses: t.toolUses ? breadcrumbToolsFor(reply.agentId, t.toolUses) : undefined,
           });
         });
@@ -308,7 +337,15 @@ export function HuddleApp() {
     : "Huddle";
 
   return (
-    <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
+    // HEIGHT = WHAT THE USER CAN SEE, not what the layout viewport claims. `h-dvh` alone left the
+    // bottom nav UNDER the on-screen keyboard (the keyboard shrinks the VISUAL viewport; dvh follows
+    // the LAYOUT viewport), so the browser panned the window and the bar appeared to scroll away.
+    // `--app-h` is published by useAppViewportHeight; `100dvh` remains the fallback wherever
+    // visualViewport is unavailable, so this can only ever be equal to or better than before.
+    <div
+      className="flex w-full overflow-hidden bg-background text-foreground"
+      style={{ height: "var(--app-h, 100dvh)" }}
+    >
       {/* Desktop rails */}
       <div className="app-hidden md:flex md:h-full">
         <Rail />
@@ -351,33 +388,21 @@ export function HuddleApp() {
           </div>
         </div>
 
-        {/* Mobile view switcher — persistent (the desktop Rail is app-hidden on mobile, and the
-            Huddle/Board/Files toggle inside HuddleView's header unmounts the moment you leave the
-            huddle view, which stranded users on Board/Files with no way back). Kept always-mounted
-            here so it works from every view. */}
-        <div className="flex items-center justify-center border-b border-hairline bg-surface px-3 py-1.5 md:app-hidden">
-          <div className="inline-flex rounded-lg border border-hairline bg-background p-0.5">
-            {(["huddle", "board", "artifacts"] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => setView(v)}
-                className={
-                  "rounded-md px-4 py-1 text-xs font-medium transition " +
-                  (view === v
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground hover:text-foreground")
-                }
-              >
-                {v === "huddle" ? "Huddle" : v === "board" ? "Board" : "Files"}
-              </button>
-            ))}
-          </div>
-        </div>
-
         <FallbackBanner />
 
-        {view === "huddle" ? <HuddleView /> : view === "board" ? <BoardView /> : <ArtifactsView />}
+        {VIEWS[view]}
+
+        {/* PRIMARY NAV, AT THE BOTTOM ON PHONES. It was above `{VIEWS[view]}`, which put the app's
+            main navigation at the top of a phone screen — out of thumb reach and against the
+            convention every phone app follows. Below `md` this is the only switcher on screen; at
+            `md` and up it disappears and HuddleView's header pills take over, with the desktop Rail
+            unchanged beside them.
+
+            It is a normal flex child AFTER the view, not a fixed/absolute overlay, so the column
+            gives it its own height and the view above simply gets shorter. That is what keeps it off
+            the composer and the last message — there is nothing to "reserve", because it never
+            overlaps. Safe-area inset is handled inside ViewSwitcher. */}
+        <ViewSwitcher variant="bottom" className="md:app-hidden" />
       </div>
 
 
