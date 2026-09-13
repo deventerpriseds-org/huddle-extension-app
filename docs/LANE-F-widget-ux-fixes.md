@@ -142,6 +142,207 @@ the pre-check `grep -c` showed: 1 occurrence) and not `INERT` (the suite genuine
 
 ---
 
-## Status of the remaining defects
+## D-2 — TWO STACKED NAV BARS — FIXED
 
-<!-- STATUS -->
+### Ground truth
+
+Two switchers, both unguarded at 390px:
+
+| where | entries | guard |
+|---|---|---|
+| `HuddleView.tsx:190` — the **incumbent**, beside the Meeting button | `["huddle","board","artifacts"]` | none. It rendered at every width. |
+| `HuddleApp.tsx:66` + `:412` — `NAV_LABELS`, added later | five, icon-over-label | `md:app-hidden` — phone only |
+
+So on a phone both were on screen, stacked, which is what the screenshot shows. The second bar was
+not gratuitous: the incumbent lives inside `HuddleView`, which only mounts when `view === "huddle"`,
+so it **unmounts the moment you leave the huddle view** and stranded users on Board/Files with no way
+back. That behaviour has to survive the fix.
+
+### The fix — extend the incumbent, per `CLAUDE.md`'s "extend, don't duplicate"
+
+New `src/features/huddle/components/ViewSwitcher.tsx` carries the **incumbent's exact anatomy**
+(`rounded-lg border border-hairline bg-surface p-0.5`; pills `rounded-md px-3 py-1 text-xs
+font-medium`; active `bg-muted text-foreground`) and **one** entry list, now five entries. `NAV_LABELS`
+is deleted. The dead `view`/`setView` props that were threaded into `HuddleHeader` purely to feed the
+old inline map are removed too — `ViewSwitcher` reads the store directly, the same way `Rail` does.
+
+The always-mounted property is kept by rendering the bottom variant from `HuddleApp` (outside any
+view) rather than from inside `HuddleView`.
+
+**Exactly one switcher is on screen at any width**, because the two render sites are complementary at
+the same breakpoint:
+
+```
+$ grep -rn "ViewSwitcher variant" src/
+src/features/huddle/components/HuddleView.tsx:185:  <ViewSwitcher variant="inline" className="app-hidden md:inline-flex" />
+src/features/huddle/components/HuddleApp.tsx:392:   <ViewSwitcher variant="bottom" className="md:app-hidden" />
+```
+
+`md` is the breakpoint the desktop `Rail` and `Sidebar` already use (`md:flex`), so the header pills
+appear exactly where the rail does. **The Rail is untouched** — it already listed all five views
+(`Rail.tsx:20-25`), which is why the five icons match its icons for the same view.
+
+---
+
+## D-3 — PHONE NAV BELONGS AT THE BOTTOM — FIXED
+
+The surviving switcher rendered **above** `{VIEWS[view]}`. It now renders **after** it, below `md`.
+
+Two properties the brief called out, and how each is met structurally rather than by tuning:
+
+- **It must not cover the composer or the last message.** The bar is a **normal flex child** of the
+  same column, not `fixed`/`absolute`. The column gives it its own height and the view above simply
+  gets shorter. There is nothing to "reserve" because there is no overlap to compensate for — an
+  overlay plus matching bottom padding is the fragile version of this and is not what shipped.
+- **Safe-area inset.** `paddingBottom: calc(0.25rem + env(safe-area-inset-bottom))`, so it clears the
+  phone browser's bottom toolbar and the home indicator. `env()` resolves to `0` where there is no
+  inset, so it costs nothing on desktop.
+
+Five entries at 390px are **icon-over-label in five equal columns**, not text pills — five text pills
+do not fit, and the design prototype names this exact constraint and this exact answer
+(`docs/widgets/prototype/canvas.json`, annotation `phone-note`). Each column is `min-h-11` (44px), the
+minimum touch target. This is an **adaptation, stated**: the inline desktop variant is text-only
+because that is what the incumbent was.
+
+---
+
+## D-4 — CARDS INSTEAD OF THE PANEL — FIXED
+
+### Ground truth
+
+Both widgets opened with the same unconditional shell (`JourneyWidgets.tsx:660` and `:766`):
+
+```jsx
+<div className="overflow-hidden rounded-xl border border-hairline bg-surface shadow-soft">
+```
+
+That is correct for a card floating in the chat transcript and wrong in the other two places it was
+used:
+
+- **As a full-page view.** `WidgetPage` wrapped its child in `px-3 py-4 sm:px-6` and then
+  `mx-auto max-w-3xl`. Panel padding, then a width cap, then the widget's own border — so a full-page
+  view drew a **small bordered card marooned in a large empty panel**. The owner's words exactly.
+- **In the dock.** `DockedJourneyWidgets` is itself `rounded-xl border border-hairline`, and it
+  contained two more bordered, shadowed cards. **A box in a box.**
+
+### The fix
+
+One helper, three contexts, so a fourth caller cannot invent a fourth look:
+
+| `chrome` | used by | shell |
+|---|---|---|
+| `card` (default) | the chat stream | unchanged — it genuinely is a card |
+| `page` | `PrioritiesView` / `ScheduleView` | `flex min-h-0 min-w-0 flex-1 flex-col bg-surface` — no border, no radius, no shadow. The **panel** is the container; the widget fills it and its own sections scroll. |
+| `bare` | the dock | no chrome; the dock shell already provides it. The two widgets become sections of the dock, separated by `divide-y divide-hairline`. |
+
+`WidgetPage` loses its padding and `max-w-3xl` wrapper: the view's own header bar is the page chrome
+and the widget fills the rest edge to edge.
+
+### One guard had to be loosened — said out loud, not quietly
+
+`widget-live-refresh.test.ts` asserted the `live` prop with a regex that pinned it as the **final**
+attribute:
+
+```
+/<PrioritiesWidget data=\{data\} full=\{full\} live \/>/
+```
+
+Adding `chrome` after `live` made that fail while `live` was still being passed — a true statement
+reported as a defect. Per this repo's rule that a firing trap is signal, I did not delete it: the
+assertion's **intent** is that `live` reaches the widget, and the replacement asserts exactly that
+(lookaheads for `data`/`full`, then `live` as a bare prop anywhere in the element). **Mutation-proved
+that it still catches the real defect:**
+
+```
+$ printf -- '  return <PrioritiesWidget data={data} full={full} live chrome={chrome} />;' > /tmp/anchor-d4.txt
+$ printf -- '  return <PrioritiesWidget data={data} full={full} chrome={chrome} />;'      > /tmp/repl-d4.txt
+$ grep -c ... src/features/huddle/components/JourneyWidgets.tsx
+1
+$ mutate.sh src/features/huddle/components/JourneyWidgets.tsx /tmp/anchor-d4.txt /tmp/repl-d4.txt "npm run test:widget-live" "FAIL"
+
+FIRED: 'FAIL' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/components/JourneyWidgets.tsx matches HEAD
+tree clean: 'FAIL' passes again on the restored tree (build output regenerated)
+```
+
+**FIRED.** Remove `live` and the loosened guard still fails. It was over-specified, not load-bearing
+on attribute order.
+
+---
+
+## D-5 — PRIORITIES IS NOT A FAITHFUL PORT — **NOT REACHED**
+
+**I did not do this one, and I am not going to summarise it from the code alone.**
+
+The brief's first instruction for D-5 is to compare `docs/widgets/spec-priorities-widget.jpg` region
+by region against what the component renders, and list **every** divergence before fixing any of it.
+I never opened the JPEG. Anything I wrote about "what the spec shows" would be reconstructed from the
+prose in the brief and from comments already in the file — the same
+answering-from-a-proxy-instead-of-the-primary-source failure this repo's rules exist to stop. A
+divergence list assembled that way would look authoritative and be unverified.
+
+What I can say, strictly from source I did read, is that the elements the brief names as known are
+all **present in some form** in `PrioritiesWidget` — header with a gear (`:663`), an "Add a priority…"
+compose pill (`:675`), the banded flagged rows with a `CategoryChip` and a `TodayButton` per row
+(`PriorityRow`, `:549`), and the topic tree with coloured spines, disclosure triangles and
+right-aligned counts (`TopicRow`, `:569`). **Whether they match the spec in layout, order,
+proportion, typography or grouping is exactly the question I did not answer**, and "the elements
+exist" is not the same claim as "it is a faithful port". The owner says it is not a faithful port; he
+has seen both and I have not, so his report stands unchallenged.
+
+**Next session:** open the JPEG first, write the divergence table, then fix. Do not start from this
+file's element list.
+
+---
+
+## Also found, NOT fixed — the same hue-collapse bug, one more place
+
+`JourneyWidgets.tsx:318` — `color-mix(in oklch, var(--success) 72%, var(--surface))` on the
+`DoneButton` fill. Identical mechanism to D-1: hue 155 dragged to **111.6** against `--surface`'s
+explicit zero hue. Far less visible than the band (at 72% it still reads as green), which is why it
+is not what the owner saw. Left alone deliberately: he did not report it, and restyling a control is
+a design call I would rather show him than make silently. Recorded here so it is not lost a second
+time.
+
+---
+
+## Verification run on the final commit
+
+```
+$ npx tsc --noEmit                 -> exit 0
+$ npm run test:widget-park         -> 10 passed, 0 failed
+$ npm run test:widget-colors       -> 25 passed, 0 failed
+$ npm run test:widget-live         -> 12 passed, 0 failed
+$ npm run test:router              -> 20 passed, 0 failed
+$ npm run test:widget-band-color   -> 21 passed, 0 failed   (new)
+```
+
+`eslint` introduces **no new errors**. Both touched files report the identical pre-existing
+prettier-error count as their `HEAD` versions, measured by linting the `HEAD` copy of each file
+side by side: `HuddleApp.tsx` 13 before and after, `JourneyWidgets.tsx` 36 before and after. The
+pre-existing formatting noise is left alone rather than swept up, so the diff stays reviewable.
+
+## A container rewind happened mid-task, and what it cost
+
+Partway through D-2/D-3 the container was restored: the checkout was reset to `main` (which had
+meanwhile moved to `004341b`, another session's accuracy-log commit) and the D-1 work vanished from
+the working tree — `package.json` had lost its new script, which is how it surfaced, as a test suite
+that had passed minutes earlier reporting "Missing script".
+
+**Nothing was lost, because D-1 had been committed AND pushed.** `origin/claude/widget-ux-fixes` still
+had both commits; `git rev-list --left-right --count` showed `2 1` (behind 2, ahead 1) rather than a
+clean "behind", so a bare `reset --hard` was the wrong instrument. The uncommitted D-2/D-3 files were
+copied out to the scratchpad first, the branch was checked back out, and they were restored on top.
+This is the per-fix commit-and-push discipline paying for itself inside a single task.
+
+## What is confirmed and what is not
+
+**Confirmed by running it:** the band's hue arithmetic, the guard firing under mutation, the
+typecheck, the five suites, the lint delta, and that exactly two complementary `ViewSwitcher` render
+sites exist.
+
+**NOT confirmed:** any of it on a phone. Every one of these four defects was found by the owner
+looking at the live app on his own device, and three of the four are things only a rendered screen
+can settle — whether the cream reads as cream to his eye, whether the bottom bar actually clears his
+browser's toolbar, whether a full-bleed view looks right at 390px. There is no Playwright run behind
+this document. **Status: implemented, mechanism verified locally, NOT yet confirmed live.**
