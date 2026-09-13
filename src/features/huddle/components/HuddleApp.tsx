@@ -19,6 +19,7 @@ import { breadcrumbToolsFor, type ChecklistPayload, type ToolUseEvent } from "..
 import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
 import { PrioritiesView, ScheduleView } from "./JourneyWidgets";
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
+import { useAppViewportHeight } from "../hooks/useAppViewportHeight";
 import { useAuth } from "@/hooks/useAuth";
 import { getAllTurnUpdates } from "../lib/huddle.functions";
 import { userTurnTs } from "../lib/turn-identity";
@@ -46,6 +47,10 @@ const VIEWS: Record<View, React.ReactNode> = {
 
 export function HuddleApp() {
   useWorkspaceSync();
+  // Publishes `--app-h` = the height actually visible, so the shell below ends where the on-screen
+  // keyboard begins instead of behind it. Must live on the SHELL, not per-view: one subscription,
+  // and every view inherits the corrected height for free.
+  useAppViewportHeight();
   const { isAuthenticated, user } = useAuth();
   const view = useHuddleStore((s) => s.view);
   const huddles = useVisibleHuddles();
@@ -332,7 +337,15 @@ export function HuddleApp() {
     : "Huddle";
 
   return (
-    <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
+    // HEIGHT = WHAT THE USER CAN SEE, not what the layout viewport claims. `h-dvh` alone left the
+    // bottom nav UNDER the on-screen keyboard (the keyboard shrinks the VISUAL viewport; dvh follows
+    // the LAYOUT viewport), so the browser panned the window and the bar appeared to scroll away.
+    // `--app-h` is published by useAppViewportHeight; `100dvh` remains the fallback wherever
+    // visualViewport is unavailable, so this can only ever be equal to or better than before.
+    <div
+      className="flex w-full overflow-hidden bg-background text-foreground"
+      style={{ height: "var(--app-h, 100dvh)" }}
+    >
       {/* Desktop rails */}
       <div className="app-hidden md:flex md:h-full">
         <Rail />

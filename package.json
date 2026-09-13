@@ -31,7 +31,8 @@
     "test:widget-colors": "bun scripts/widget-colors.test.ts",
     "test:color-mix": "bun scripts/no-achromatic-color-mix.test.ts",
     "test:widget-band-color": "bun scripts/widget-band-color.test.ts",
-    "test:widget-topics": "bun scripts/widget-topic-tree.test.ts"
+    "test:widget-topics": "bun scripts/widget-topic-tree.test.ts",
+    "test:viewport-height": "bun scripts/app-viewport-height.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
