@@ -520,3 +520,60 @@ migrations (none); lint (no increase).
   (and therefore the CAREER/VENTURES colours of D-1) has never rendered with real data.
 - **No agent has been observed choosing to call either widget tool**, on either backend.
 - **The Lovable backend was not exercised at all.**
+
+---
+
+## D-1 HARDENED — the rail-bar → label mapping is pinned by STRUCTURE, and the AC file already recorded the right answer
+
+My first colour reading mapped bars to names by eye. That is exactly the kind of step that should
+not carry a MODERATE finding, so I pinned it two further ways.
+
+### 1. Structural pin: find the text rows, then read the rail pixel at each row's midpoint
+
+```
+text runs in the label column (x 163-420), and the rail-bar pixel at that row's midpoint:
+
+text y=815..834   (mid 825)   rgb(22,163,73)    C=0.171  hue=149      <- 1st top-level
+text y=858..876   … 12 consecutive rows …       C=0      no rail      <- indented children
+text y=1252..1270                               C=0      no rail
+text y=1294..1313 (mid 1304)  rgb(147,51,233)   C=0.252  hue=303      <- 2nd top-level
+text y=1342..1361 (mid 1352)  rgb(216,118,5)    C=0.157  hue=58       <- 3rd top-level
+text y=1389..1409 (mid 1399)  rgb(37,99,234)    C=0.214  hue=263      <- 4th top-level
+text y=1439..1458 (mid 1449)  rgb(106,114,128)  C=0.024  grey         <- 5th top-level
+```
+
+**Exactly 17 text rows; exactly 5 carry a rail slot; exactly 12 do not.** The spec's expanded
+`Career` node has exactly **12 children** — so the 12 unrailed rows are Career's subtree, and the
+five railed rows are the five top-level topics in their drawn order. Two of the five are already
+agreed by both sides (orange=Education, blue=Life), and they land **3rd and 4th**, which is where
+Education and Life sit in the spec. That fixes the other three by position with nothing left to
+guess:
+
+| position | rail hue | topic | code says |
+|---|---|---|---|
+| 1st | **149 green** | Career | 340 magenta ❌ |
+| 2nd | **303 purple** | Ventures | 160 teal ❌ |
+| 3rd | **58 orange** | Education | 70 ✅ |
+| 4th | **263 blue** | Life | 250 ✅ |
+| 5th | grey (C=0.024) | Family | hashed — no claim |
+
+### 2. The AC file recorded the same reading BEFORE any of this
+
+`docs/AC-journey-widgets.md:51-52`, under "Screenshot reading of record (the primary source)":
+
+> *top-level nodes each carry a **coloured vertical spine** on the far left — green (Career), purple
+> (Ventures), orange (Education), blue (Life), grey (Family).*
+
+and `:57-61` lists Career's **twelve** children by name — independently corroborating the 12-row
+count my pixel scan produced.
+
+**So D-1 is not a fidelity opinion I introduced.** The correct colours were written into the
+acceptance criteria at the start of this work, from the same screenshot, and
+`src/features/huddle/lib/tasks/widget-colors.ts:32-37` contradicts them while its own docblock
+(`:23-31`) says the two values were chosen for wheel-separation because the spec supposedly named
+only LIFE and EDUCATION. The spec named all five, and so did the AC file.
+
+No AC *binds* the hue — `AC-31` (`:346`) requires only that "every top-level node carries a
+coloured left spine", which the code satisfies. The binding record is the screenshot reading at
+`:51-52`. That is why D-1 is MODERATE and not HIGH: it breaks the recorded design intent, not a
+numbered criterion.
