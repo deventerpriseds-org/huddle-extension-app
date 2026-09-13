@@ -75,6 +75,22 @@ function unzip(bytes: Uint8Array): Record<string, string> {
   return files;
 }
 
+/**
+ * Every assertion reads the package through THIS, never through `unzip` directly.
+ * Found by mutation (both render engines forced to throw): when the module correctly degrades to raw
+ * text, a bare `unzip()` call throws, the suite dies mid-run, `process.exit(fail===0?0:1)` on the last
+ * line is never reached — and bun exits 0. A RED suite reporting GREEN is the worst possible failure
+ * mode, so a non-package must produce an empty record and a clean FAIL instead of an uncaught throw.
+ */
+function safeUnzip(bytes: Uint8Array): Record<string, string> {
+  try {
+    return unzip(bytes);
+  } catch (e) {
+    console.log(`  (not a readable package: ${e instanceof Error ? e.message : String(e)})`);
+    return {};
+  }
+}
+
 /** Strip XML tags so an assertion about TEXT is not defeated by Word splitting a run mid-word. */
 const textOf = (xml: string): string => xml.replace(/<[^>]+>/g, "");
 
@@ -136,7 +152,7 @@ Ship it.
   );
   check("a clean markdown render reports no warnings", warnings.length === 0, `warnings: [${warnings.join(" | ")}]`);
 
-  const files = unzip(bytes);
+  const files = safeUnzip(bytes);
   const xml = files["word/document.xml"] ?? "";
   const text = textOf(xml);
 
@@ -201,7 +217,7 @@ const slideNames = (files: Record<string, string>) =>
     bytes.length > 0 && hasZipMagic(bytes) && isZip(bytes),
     `${bytes.length} bytes, first four = "${magic(bytes)}"`,
   );
-  const files = unzip(bytes);
+  const files = safeUnzip(bytes);
   const slides = slideNames(files);
   check(
     "RICH_MD has two `#` headings separated by a `---`, and yields exactly 2 slides (the rule is: `#` OR `---` starts one, and the `---` immediately before a `#` must not open an empty third)",
@@ -231,7 +247,7 @@ const slideNames = (files: Record<string, string>) =>
   ];
   for (const [label, md, want] of cases) {
     const { bytes } = await renderMarkdownToPptx(md, { title: "Deck" });
-    const got = slideNames(unzip(bytes)).length;
+    const got = slideNames(safeUnzip(bytes)).length;
     check(`slide rule: ${label} -> ${want} slide(s)`, got === want, `got ${got}`);
   }
 }
@@ -251,7 +267,7 @@ const slideNames = (files: Record<string, string>) =>
     ],
   };
   const { bytes, warnings } = await renderDocumentToDocx(doc);
-  const text = textOf(unzip(bytes)["word/document.xml"] ?? "");
+  const text = textOf(safeUnzip(bytes)["word/document.xml"] ?? "");
   check(
     "the structured docx path renders every section it was given, in order",
     hasZipMagic(bytes) && isZip(bytes) &&
@@ -273,7 +289,7 @@ const slideNames = (files: Record<string, string>) =>
     ],
   };
   const { bytes, warnings } = await renderDeckToPptx(deck);
-  const files = unzip(bytes);
+  const files = safeUnzip(bytes);
   const slides = slideNames(files);
   const all = slides.map((s) => textOf(files[s])).join("\n");
   const notes = Object.keys(files)
@@ -381,8 +397,8 @@ const slideNames = (files: Record<string, string>) =>
   const kept = await renderArtifact({ format: "docx", document: { sections: [{ type: "flowchart", text: "keep me" }] }, name: "bad" });
   check(
     "content inside an unrecognised section is still written into the document, never dropped",
-    textOf(unzip(kept.bytes)["word/document.xml"] ?? "").includes("keep me"),
-    `document text: "${textOf(unzip(kept.bytes)["word/document.xml"] ?? "").slice(0, 60)}"`,
+    textOf(safeUnzip(kept.bytes)["word/document.xml"] ?? "").includes("keep me"),
+    `document text: "${textOf(safeUnzip(kept.bytes)["word/document.xml"] ?? "").slice(0, 60)}"`,
   );
 }
 
@@ -432,7 +448,7 @@ const slideNames = (files: Record<string, string>) =>
     !threw && docxBytes !== null && pptxBytes !== null && hasZipMagic(docxBytes) && hasZipMagic(pptxBytes) && isZip(docxBytes) && isZip(pptxBytes),
     threw ? `THREW: ${threw}` : `docx ${docxBytes?.length}b, pptx ${pptxBytes?.length}b`,
   );
-  const text = docxBytes ? textOf(unzip(docxBytes)["word/document.xml"] ?? "") : "";
+  const text = docxBytes ? textOf(safeUnzip(docxBytes)["word/document.xml"] ?? "") : "";
   check(
     "an UNTERMINATED code fence still carries its code into the document",
     text.includes("const x = 1;"),
