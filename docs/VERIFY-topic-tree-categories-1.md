@@ -287,3 +287,86 @@ returns 6 hits, and **every one is a comment or a markdown line** (`.claude/memo
 that task hierarchy is a different table, and the `widgets.server.ts:487` comment). Zero executable lines.
 `parent_task_id` does not appear as code anywhere in the diff — consistent with
 `docs/feasibility-epics-tasks-subtasks.md` recording that the column does not exist.
+
+---
+
+## C10 — ADVERSARIAL: attempts to break `groupByCategory` / `buildTopicTree`
+
+**COMPLETED — 4 defects found, all reproduced by running the real exported functions.**
+Probes: `/tmp/probe/p1.ts`, `/tmp/probe/p11.ts`, `/tmp/probe/deep*.ts`, run with `bun`.
+
+Attacks that FAILED to break it (the function is right about these):
+- mutual-parent cycle (`p→q`, `q→p`): both topics survive as roots — `hasAncestorCycle` works.
+- self-parent: handled by `parent !== n` (`:691`).
+- missing parent id: node promoted to root, not dropped.
+- double-wrapping: a payload of category roots is returned untouched (`:549`).
+- unknown category: passes through with a rank past the end; never dropped.
+- uncategorised topic: kept as its own top-level row.
+
+### D1 — LOSS: duplicate `id` drops a topic (also reported under C7(v-a))
+Input 3 topics with ids `dup, dup, ok` → output 2 topics `["First","Third"]`. `widgets.server.ts:686`.
+
+### D2 — LOSS: no `id` + repeated `topic_name` drops a topic AND its count (C7(v-b))
+Input `[{topic_name:"Admin",category_affinity:"LIFE",task_count:7},{topic_name:"Admin",category_affinity:"CAREER",task_count:9}]`
+→ output one row, `category:LIFE count=7`. The CAREER row and its 9 tasks vanish. `toTopicNode:431` +
+`buildTopicTree:686`.
+
+### D3 — NESTING SILENTLY DROPPED in a mixed payload (no topic lost, but the tree is wrong)
+Exact input:
+```
+[{id:"a", topic_name:"A", category_affinity:"LIFE", task_count:1, children:[{id:"a1",topic_name:"A1",task_count:1}]},
+ {id:"b", topic_name:"B", category_affinity:"LIFE", task_count:1},
+ {id:"c", topic_name:"C", parent_topic_id:"b", category_affinity:"LIFE", task_count:1}]
+```
+Exact output:
+```
+category:LIFE
+  a
+    a1
+  b
+  c            <-- C should be nested UNDER b; it is b's SIBLING
+C nested under B? -> false | LIFE count = 4
+```
+Cause: `buildTopicTree:683` — `if (flat.some(n => n.children.length > 0)) return sortNodes(groupByCategory(flat));`
+returns EARLY the moment ANY entry arrives pre-nested, so the `parent_topic_id` pass at `:685-697` never
+runs for the entries that used that shape. The two input shapes are treated as mutually exclusive, but the
+file's own doc at `:655-661` describes them as alternatives the parser accepts — it does not say they
+cannot co-occur. No topic is lost and the count stays correct (4), so this is a fidelity defect, not a
+data-loss one. It is exactly the "some topics nest and others do not" state the file says it was written
+to survive (`:664-666`) — that concern was addressed for the CATEGORY level but not for the NESTING level.
+
+### D4 — QUADRATIC cost on a deep parent chain; RangeError past ~24k–32k (caught, degrades to empty)
+Measured, one chain of N topics each parenting the next:
+```
+depth=500    26 ms      depth=4000    736 ms     depth=16000  14,522 ms
+depth=1000   59 ms      depth=8000  3,460 ms     depth=24000  46,771 ms  (still OK)
+depth=2000  256 ms                               depth=32000  RangeError: Maximum call stack size exceeded
+                                                 depth=50000  RangeError: Maximum call stack size exceeded
+```
+16× the nodes costs ~133× the time — O(n²), from `hasAncestorCycle` (`:627-636`) walking the full ancestor
+chain once per node. The recursion limit sits between 24,000 and 32,000 (`firstCategoryInSubtree`, the
+`walk` closure, and `sortNodes` are all unbounded-depth recursive; only `toTopicNode` is capped by
+`MAX_TREE_DEPTH`).
+
+**Severity is LOW and must be stated as such:** `buildTopicTree` is called at
+`widgets.functions.ts:151` INSIDE a `try` whose `catch` (`:153-157`) turns any throw into
+`{ok:false, roots:[], reason:"error"}`, and the widget's two halves are independent — so the overflow
+degrades to an empty topic tree, never a crash. And live data is 158 topics with ZERO parents (C4), so
+nothing approaches these depths today. The practical risk is the ~47s at depth 24k, which would blow the
+SWA request ceiling long before the stack does.
+
+### D5 — ORDERING: an uncategorised topic interleaves among the category rows
+```
+in : Zeta uncategorised(position 0, no category), Ventures thing(position 3), Life thing(position 4)
+out: ["Life & Personal(pos=0)", "Zeta uncategorised(pos=0)", "Ventures(pos=2)"]
+```
+Category roots get `position` = their rank 0-4 (`:593-594`), but an uncategorised topic passed through at
+`:566` keeps its RAW journey position (0…157). The two number spaces are then sorted together by
+`sortNodes`, so uncategorised topic rows land BETWEEN category rows rather than after them. Cosmetic, and
+not something any claim asserted — recorded because the rail's top level is meant to read as categories.
+
+---
+
+## VERDICT
+
+**C1 CONFIRMED · C2 CONFIRMED · C3 CONFIRMED (stated reason wrong about `id`: it IS selected, just not returned) · C4 CONFIRMED (but PERSONAL and FAMILY have zero live rows, so today's data yields FOUR occupied display rows, not five) · C5 CONFIRMED · C6 CONFIRMED (the map has SEVEN keys → five rows, not six) · C7 REFUTED IN PART — (i)(ii)(iii)(iv) all hold under execution, (v) FAILS: duplicate `id`, and no-`id`-plus-repeated-name, each silently delete a topic · C8 CONFIRMED (17 live `check(` call sites, single `process.exit` on the last line) · C9 CONFIRMED · C10 COMPLETED — 5 defects (2 data-loss, 1 nesting-fidelity, 1 O(n²)/stack, 1 ordering) — CONFIRMED 8 / REFUTED 1 (C7, in part) / UNPROVEN 0.**
