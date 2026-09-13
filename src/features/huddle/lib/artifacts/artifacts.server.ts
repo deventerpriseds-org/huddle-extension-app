@@ -149,6 +149,109 @@ export async function createArtifact(input: CreateArtifactInput): Promise<{ id: 
   return { id, deepLink: `/artifacts/${id}` };
 }
 
+/** Give `name` this exact extension, replacing a document extension it already carries rather than
+ *  appending to it — "flow.md" + ".mmd" is "flow.mmd", never "flow.md.mmd". Mirrors the rule in
+ *  render.server's `ensureExtension`, which cannot be reused here because it keys off a FORMAT it
+ *  knows and these two extensions belong to the tool's vocabulary instead. */
+export function withExtension(name: string, ext: string): string {
+  const base = String(name ?? "").trim() || "artifact";
+  if (base.toLowerCase().endsWith(ext)) return base;
+  const replaceable = [".md", ".markdown", ".txt", ".html", ".htm", ".docx", ".pptx", ".mmd", ".svg"];
+  for (const r of replaceable) {
+    if (base.toLowerCase().endsWith(r)) return base.slice(0, base.length - r.length) + ext;
+  }
+  return base + ext;
+}
+
+/**
+ * THE ONE PLACE a `create_artifact` tool call becomes a stored artifact.
+ *
+ * WHY THIS EXISTS RATHER THAN FOUR COPIES: the same six lines were repeated at four dispatch sites
+ * (huddle.functions.ts x3 — the OpenAI path, the Lovable path and the durable-turn path — plus
+ * voice/realtime-tools.server.ts), each hardcoding `Buffer.from(content, "utf8")` and
+ * `mime ?? "text/markdown"`. Adding Word/PowerPoint by editing all four is how one path silently
+ * keeps producing markdown forever. Every site now calls THIS, so a new format is one edit.
+ *
+ * Renders first (`format` decides), then stores. `renderArtifact` never throws: a malformed
+ * structure or unparseable markdown degrades to a valid document carrying the raw text plus a
+ * warning, so an agent's mistake costs fidelity, never the user's work.
+ */
+export async function createArtifactFromAgent(input: {
+  userEmail: string;
+  agentId?: string | null;
+  taskId?: string | null;
+  folder: string;
+  name: string;
+  /** Raw tool arguments, unvalidated — this is model output. */
+  args: { format?: unknown; content?: unknown; document?: unknown; mime?: unknown };
+}): Promise<{ id: string; deepLink: string; name: string; mime: string; warnings: string[] }> {
+  const { renderArtifact } = await import("./render.server");
+  const a = input.args;
+  const format = typeof a.format === "string" ? a.format.toLowerCase() : "md";
+
+  // FORMATS THE TOOL OFFERS THAT THE RENDERER DOES NOT KNOW.
+  // `render.server` handles md | html | docx | pptx and degrades anything else to markdown — correct
+  // for it, wrong here: `create_artifact` also offers `mermaid` and `svg`, and an end-to-end check
+  // caught both arriving as `name.md` + text/markdown, which the viewer can never render as a
+  // diagram or a vector. They are PASSTHROUGH TEXT like html, so they need no renderer — only the
+  // right extension and mime, which is a dispatch concern, not a rendering one. Keeping this at the
+  // boundary is also what stops the renderer growing a case per tool vocabulary word.
+  const PASSTHROUGH: Record<string, { ext: string; mime: string }> = {
+    mermaid: { ext: ".mmd", mime: "text/vnd.mermaid; charset=utf-8" },
+    svg: { ext: ".svg", mime: "image/svg+xml; charset=utf-8" },
+  };
+  const passthrough = PASSTHROUGH[format];
+  if (passthrough) {
+    const body = typeof a.content === "string" ? a.content : "";
+    // NOT render.server's `ensureExtension` — that takes a FORMAT and looks it up in its own
+    // EXTENSION_BY_FORMAT, which has no entry for mermaid or svg, so it returned `name + undefined`
+    // ("security-optionsundefined"). Caught by the dispatch suite the moment it was written. These
+    // two extensions belong to the TOOL's vocabulary, not the renderer's, so they are resolved here.
+    const outName = withExtension(input.name, passthrough.ext);
+    const { id, deepLink } = await createArtifact({
+      userEmail: input.userEmail,
+      agentId: input.agentId ?? null,
+      taskId: input.taskId ?? null,
+      folder: input.folder,
+      name: outName,
+      mime: passthrough.mime,
+      bytes: Buffer.from(body, "utf8"),
+    });
+    return {
+      id,
+      deepLink,
+      name: outName,
+      mime: passthrough.mime,
+      warnings: body.trim() ? [] : [`Empty ${format} content — the artifact will render blank.`],
+    };
+  }
+
+  const rendered = await renderArtifact({
+    format,
+    content: typeof a.content === "string" ? a.content : undefined,
+    document: a.document,
+    name: input.name,
+  });
+
+  // An explicit `mime` still wins — it is the documented escape hatch for a type `format` does not
+  // cover. It must NOT override a rendered Office package, though: a docx labelled text/markdown
+  // downloads as an unopenable file. So honour it only where the bytes are the caller's own.
+  const rawMime = typeof a.mime === "string" && a.mime.trim() ? a.mime.trim() : null;
+  const isPassthrough = rendered.mime.startsWith("text/") || rendered.mime === "application/json";
+  const mime = rawMime && isPassthrough ? rawMime : rendered.mime;
+
+  const { id, deepLink } = await createArtifact({
+    userEmail: input.userEmail,
+    agentId: input.agentId ?? null,
+    taskId: input.taskId ?? null,
+    folder: input.folder,
+    name: rendered.name,
+    mime,
+    bytes: rendered.bytes,
+  });
+  return { id, deepLink, name: rendered.name, mime, warnings: rendered.warnings ?? [] };
+}
+
 export interface ArtifactFilters {
   folder?: string;
   status?: ArtifactStatus;

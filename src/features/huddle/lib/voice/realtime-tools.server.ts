@@ -578,17 +578,18 @@ export async function executeRealtimeTool(
       const { resolveTaskEmail } = await import("../journey/identity");
       const email = (await resolveTaskEmail(ctx.caller ?? {})) ?? ctx.caller?.entra_email;
       if (!email) return done(JSON.stringify({ ok: false, error: "sign-in required" }));
-      const { createArtifact } = await import("../artifacts/artifacts.server");
+      const { createArtifactFromAgent } = await import("../artifacts/artifacts.server");
       // Voice artifacts aren't task-scoped (taskId=null) — they save straight to the Artifacts panel;
       // the task-scoped review-flip in the text path is intentionally skipped here.
-      const { id, deepLink } = await createArtifact({
+      // Formats go through the SAME renderer as the text path: "make me a deck" spoken out loud has
+      // to produce the same .pptx it would typed, or voice quietly becomes a second-class caller.
+      const { id, deepLink } = await createArtifactFromAgent({
         userEmail: email,
         agentId: ctx.agentId,
         taskId: null,
         folder: String(args.folder ?? "Research"),
         name: artName,
-        mime: String(args.mime ?? "text/markdown"),
-        bytes: Buffer.from(content, "utf8"),
+        args: { format: args.format, content, document: args.document, mime: args.mime },
       });
       return done(JSON.stringify({ ok: true, id, deepLink }));
     }

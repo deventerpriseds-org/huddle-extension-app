@@ -3604,15 +3604,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
-              const { createArtifact } = await import("./artifacts/artifacts.server");
-              const { id, deepLink } = await createArtifact({
+              // ONE renderer for every dispatch path — see createArtifactFromAgent. `format` decides
+              // whether this becomes markdown, a real .docx/.pptx, a mermaid diagram or a D3 page.
+              const { createArtifactFromAgent } = await import("./artifacts/artifacts.server");
+              const { id, deepLink } = await createArtifactFromAgent({
                 userEmail: email,
                 agentId: winner.id,
                 taskId: taskIdRaw || null,
                 folder: String(a.folder ?? "Research"),
                 name,
-                mime: String(a.mime ?? "text/markdown"),
-                bytes: Buffer.from(content, "utf8"),
+                args: { format: a.format, content, document: a.document, mime: a.mime },
               });
               let reviewSuffix = "";
               let review:
@@ -4863,15 +4864,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
-              const { createArtifact } = await import("./artifacts/artifacts.server");
-              const { id, deepLink } = await createArtifact({
+              // ONE renderer for every dispatch path — see createArtifactFromAgent. `format` decides
+              // whether this becomes markdown, a real .docx/.pptx, a mermaid diagram or a D3 page.
+              const { createArtifactFromAgent } = await import("./artifacts/artifacts.server");
+              const { id, deepLink } = await createArtifactFromAgent({
                 userEmail: email,
                 agentId: winner.id,
                 taskId: taskIdRaw || null,
                 folder: String(a.folder ?? "Research"),
                 name,
-                mime: String(a.mime ?? "text/markdown"),
-                bytes: Buffer.from(content, "utf8"),
+                args: { format: a.format, content, document: a.document, mime: a.mime },
               });
               let reviewSuffix = "";
               let review:
@@ -7018,15 +7020,14 @@ async function runWorkerTurn(record: {
         if (artifactId) return JSON.stringify({ ok: true, deduped: true, id: artifactId });
         if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
         try {
-          const { createArtifact } = await import("./artifacts/artifacts.server");
-          const { id, deepLink } = await createArtifact({
+          const { createArtifactFromAgent } = await import("./artifacts/artifacts.server");
+          const { id, deepLink } = await createArtifactFromAgent({
             userEmail: email,
             agentId: w.personaId ?? null, // attribute to the accountable persona
             taskId: a.task_id ? String(a.task_id) : null,
             folder: String(a.folder ?? worker.role),
             name,
-            mime: String(a.mime ?? "text/markdown"),
-            bytes: Buffer.from(content, "utf8"),
+            args: { format: a.format, content, document: a.document, mime: a.mime },
           });
           artifactId = id;
           artifactName = name;
