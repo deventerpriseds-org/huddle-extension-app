@@ -9,6 +9,7 @@
 
 import { AGENT_BY_ID, type AgentId } from "../../data/agents";
 import { blockedOwnerName } from "./autowork.server";
+import { rankTasks, type ScorableTask } from "./scoring";
 
 type Caller = { entra_object_id?: string; entra_email?: string };
 
@@ -28,6 +29,28 @@ const MAX_BRIEF = 2600; // keep the directive under the 4000-char turn-payload c
 
 function agentName(id: string | null): string {
   return (id && AGENT_BY_ID[id as AgentId]?.name) || id || "the team";
+}
+
+/**
+ * The stand-up's "today's top priorities" selection. Pure and exported so the cross-surface guard in
+ * `scripts/standup-ranking.test.ts` can run it offline against the SAME fixture it feeds `prioritize`.
+ *
+ * It is a thin adapter over `rankTasks`, deliberately: the only stand-up-specific step is dropping tasks
+ * that already appear in the digest's BLOCKED section (a blocked item is reported as blocked, not as a
+ * priority) -- that filter runs BEFORE ranking so the top-N is drawn from what actually remains. Every
+ * other ordering/filtering decision (parking-lot, is_priority, priority_rank, score, title dedup) is
+ * rankTasks's, not ours. Do NOT reintroduce a sort here.
+ */
+export function selectStandupPriorities(
+  tasks: ScorableTask[],
+  blockedIds: { has(id: string): boolean },
+  limit = 5,
+): { title: string; agent: string | null }[] {
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  return rankTasks(
+    tasks.filter((t) => !blockedIds.has(t.id)),
+    limit,
+  ).map((r) => ({ title: r.title, agent: byId.get(r.id)?.assigned_agent ?? null }));
 }
 
 /** Exported for `scripts/blocked-line.test.mjs` — pure, so the id→name resolution is testable offline. */
@@ -124,7 +147,7 @@ export async function runScheduledStandup(
   const email = (await resolveTaskEmail(caller)) ?? caller.entra_email;
   const tz = opts.timeZone ?? "America/New_York";
 
-  const { getBoardTasks, getTaskBlockers, getLastStandupAt, setLastStandupAt, getTaskEngagementStatesSince } =
+  const { getBoardTasks, getTasksForUser, getTaskBlockers, getLastStandupAt, setLastStandupAt, getTaskEngagementStatesSince } =
     await import("./tasks.server");
   const { listArtifacts } = await import("../artifacts/artifacts.server");
 
@@ -148,11 +171,16 @@ export async function runScheduledStandup(
   const blocked = notDone
     .filter((t) => blockers.has(t.id))
     .map((t) => ({ title: t.title, reason: blockers.get(t.id)?.reason, agent: t.assigned_agent }));
-  const priorities = notDone
-    .filter((t) => !blockers.has(t.id))
-    .sort((a, b) => (a.priority_rank ?? 9999) - (b.priority_rank ?? 9999))
-    .slice(0, 5)
-    .map((t) => ({ title: t.title, agent: t.assigned_agent }));
+  // PRIORITIES: ranked by `rankTasks` -- the SINGLE source of prioritization truth every agent reads
+  // (scoring.ts). This block used to sort `getBoardTasks` rows on raw `priority_rank`, which bypassed
+  // rankTasks entirely and so ALSO bypassed its parking-lot filter -- reopening the exact ACT-13/ACT-17
+  // leak ("grooming ranked a parked 'Prepare investor pitch' #3 Urgent") inside the owner's daily digest,
+  // months after that fix landed in rankTasks. It read from a DIFFERENT producer too (`getBoardTasks`,
+  // whose rows lack `pushed_count`/`created_at`/`is_scheduled` and so cannot even be scored), which is
+  // why the digest and `prioritize` could disagree four ways. Both surfaces now read `getTasksForUser`
+  // and rank with `rankTasks`, so a future change to ranking reaches the digest for free.
+  const scorable = await getTasksForUser(email);
+  const priorities = selectStandupPriorities(scorable, blockers);
 
   // Tasks that moved to IN_REVIEW since the last standup actually ran (WIP confirm-intent gate, Part 1)
   // — additive to Iris's separate passive review-digest, which reports the full "waiting now" snapshot.
