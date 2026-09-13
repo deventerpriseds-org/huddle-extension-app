@@ -1,0 +1,289 @@
+# VERIFY-journey-widgets-2 — independent verification, loop 2
+
+- WHAT:       Loop-2 adversarial verification of the in-chat journey widgets, re-deriving the three
+              loop-1 defects from source and re-checking the nine loop-1 CONFIRMED claims.
+- WHY:        Loop 1 (docs/VERIFY-journey-widgets-1.md) refuted three claims; commit 966bd2f claims
+              to fix them. A fix asserted by the implementing agent is not evidence.
+- SUPERSEDES: nothing (loop 1 stands as the loop-1 record)
+- SUPERSEDED-BY: nothing -- current
+- EVIDENCE:   command output pasted inline below; file:line for every source claim.
+
+Branch `claude/journey-widgets-in-chat` @ 966bd2f. Verification start 2026-09-13T11:23:35Z,
+30-minute budget.
+
+**Constraints honoured:** no live DB, no journey calls, no task writes, no deploy, no push to main.
+`huddle.functions.ts` and `Rail.tsx` are being edited by a concurrent agent and were NOT verified.
+
+---
+
+## F-01 — Cheap suite: 10/10 + 20/20 + tsc 0. CONFIRMED
+
+`npm run test:widget-park && npm run test:router && npx tsc --noEmit`, real output:
+
+```
+> test:widget-park
+> bun scripts/widget-park.test.ts
+
+  PASS pause does NOT write UP_NEXT (the lane auto-work promotes from) — pause -> BACKLOG
+  PASS pause writes BACKLOG — pause -> BACKLOG
+  PASS start still writes DOING — start -> DOING
+  PASS done still writes DONE — done -> DONE
+  PASS reopen writes BACKLOG (un-ticking done is not parking) — reopen -> BACKLOG
+  PASS parking adds the parking-lot tag — [] -> [parking-lot]
+  PASS parking PRESERVES other tags (update_task replaces the array) — [blocked, quick-win] -> [blocked, quick-win, parking-lot]
+  PASS parking twice does not duplicate the tag — [parking-lot] -> [parking-lot]
+  PASS auto-work filters candidates on the SAME tag string pause writes — autowork.server.ts contains .includes("parking-lot")
+  PASS un-ticking ✓ routes to "reopen", never "pause" — JourneyWidgets.tsx un-tick branch
+
+==================== 10 passed, 0 failed ====================
+=== EXIT widget-park: 0
+...
+==================== 20 passed, 0 failed ====================
+=== EXIT router: 0
+=== EXIT tsc: 0
+```
+
+`tsc --noEmit` exits 0 — loop-1 claim 9 re-confirmed by running it, not by reading a note.
+
+---
+
+## DEFECT 3 (loop 1) — mutation proof of the Lane-B guard. **FIRED** — CONFIRMED
+
+The single most important check in this loop, and it is honest: I ran `mutate.sh` myself, with the
+anchor supplied as a FILE (never a shell argument), on a clean `widgets.server.ts`.
+
+Anchor uniqueness verified before running — `grep -c '^  pause: "BACKLOG",$'` returned **1**, and
+`od -c` confirms the exact bytes (`  pause: "BACKLOG",\n`); the neighbouring `reopen: "BACKLOG",`
+line does not collide.
+
+```
+mutate.sh src/features/huddle/lib/tasks/widgets.server.ts anchor.txt repl.txt \
+          "npm run test:widget-park" "pause writes BACKLOG"
+
+FIRED: 'pause writes BACKLOG' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/tasks/widgets.server.ts matches HEAD
+tree clean: 'pause writes BACKLOG' passes again on the restored tree (build output regenerated)
+MUTATE-EXIT=0
+```
+
+Not INERT, not NOT-APPLIED. The baseline ran, the mutation applied, the named test failed, the
+source was restored and re-asserted against HEAD, and the post-restore run passes. **The guard is
+real.** Loop 1's defect 3 (no committed test for Lane B) is closed.
+
+---
+
+## DEFECT 1 (loop 1, HIGH) — can a paused task re-enter DOING by ANY path? **REFUTED — it cannot.** CONFIRMED FIXED
+
+Re-derived from `autowork.server.ts` end to end, not from the fix's own account.
+
+**The filter is not in the candidate selection — it is UPSTREAM of the bucketing**, which is what
+makes the fix total rather than partial:
+
+`src/features/huddle/lib/tasks/autowork.server.ts:532-534`
+```ts
+const assigned = (await getOpenAssignedTasks(email)).filter(
+  (t) => !(t.tags ?? []).includes("parking-lot") && !inReminderWindow.has(t.id),
+);
+```
+
+Everything downstream reads `assigned`, so a parked task never exists as far as the engine is
+concerned. Traced each path the brief named:
+
+| path | file:line | reaches a parked task? |
+|---|---|---|
+| bucketing into backlog/upNext/doing/inReview | 542-561 (`for (const t of assigned)`) | **no** — iterates `assigned` |
+| BACKLOG→UP_NEXT top-up | 588-590 (`bucket.backlog.slice(0, room)`) | **no** — bucket built from `assigned` |
+| UP_NEXT→DOING slot candidate | 593-595 (`upNextAfterTopUp[0]`) | **no** — same buckets |
+| already-in-DOING re-candidacy | 583-585 (`bucket.doing.slice(0, DOING_CAP)`) | **no** — same buckets |
+| reminder-window branch | 530-531, folded into the SAME filter at 533 | **no** |
+| `promoteOnly` grooming chain | 604-667, writes only `promotions` built at 590 | **no** |
+| the two batch writes | 606-611 and 748-753, both send `promotions` | **no** |
+
+`promotions.push` appears exactly twice in the file (590 `UP_NEXT`, 715 `DOING`), and both are fed
+from the buckets. There is no third status-writing path.
+
+**Independent corroboration that this is the repo's real park mechanism, not a new one** — the same
+tag is filtered in five other places, so pause now rides an existing rail:
+
+```
+autowork.server.ts:533         !(t.tags ?? []).includes("parking-lot")
+groom.ts:121                   !(t.tags ?? []).includes("parking-lot")
+groom.ts:225                   CONTROL_TAGS = new Set(["parking-lot", "blocked", REMINDER_TAG])
+scoring.ts:137                 .filter((t) => !(t.tags ?? []).includes("parking-lot"))
+tasks.server.ts:475, :888      AND NOT ('parking-lot' = ANY(tags))
+```
+
+`groom.ts:225` matters specifically: grooming REPLACES the tag array, and `CONTROL_TAGS` is what
+stops a groom pass from stripping the park back off. So the park survives grooming too.
+
+### The tag UNION — is it actually sent, and can parking wipe other labels? CONFIRMED SAFE
+
+Two things had to be true, and both are, from ground truth rather than the commit message.
+
+**(a) journey really does replace the array.** `journey-voice/supabase/functions/_shared/tool-definitions.ts:102`
+(inside the `update_task` definition that starts at line 86):
+
+```ts
+tags: { type: "array", items: { type: "string" },
+        description: "Labels for the task (e.g. needs-plaid, quick-win). Replaces existing tags." }
+```
+
+and the handler confirms the doc is not lying — `execute-tool/index.ts:915-917`:
+
+```ts
+if (args.tags !== undefined) {
+  updateData.tags = Array.isArray(args.tags) ? args.tags.map((t: unknown) => String(t)) : [];
+}
+```
+
+So `tags` absent = untouched; `tags` present = wholesale replace. The union is mandatory.
+
+**(b) the union is sent, and the source of `existing` is real.** This was the check most likely to
+expose a silent wipe, because the union is only as good as `owned.tags`:
+
+`widgets.functions.ts:291-297`
+```ts
+const existing = (owned.tags ?? []).map((t) => String(t));
+const parked = existing.some((t) => t.toLowerCase() === PARKING_LOT_TAG);
+args = { task_id: data.taskId, status, tags: parked ? existing : [...existing, PARKING_LOT_TAG] };
+```
+
+`owned` comes from `getOwnedTaskForConfirmAsk`, and that query **does** select tags —
+`tasks.server.ts:1339`:
+
+```sql
+SELECT t.id, t.title, t.status, t.tags, ...
+```
+
+Had `t.tags` not been in that SELECT, `existing` would have been `[]` and every pause would have
+wiped the task's labels while looking correct. It is there. **Union confirmed end to end.**
+
+`start` / `done` / `reopen` take the `else` branch (298-304) and send `{task_id, status}` with no
+`tags` key, so by (a) they leave tags untouched. `reopen` therefore cannot un-park anything, which
+is what the split was for.
+
+---
+
+## DEFECT 2 (loop 1) — the validator, and whether `reopen` is accepted end to end
+
+**The honest restatement still holds.** `.inputValidator` runs OUTSIDE the handler's try/catch, so
+"none of the three EVER throws" remains false at the validator boundary — a malformed `action`,
+a missing `taskId`, or a non-string `timeZone` raises a ZodError that the handler's catch at
+`widgets.functions.ts:320` can never see. The widening to six actions did not change that shape.
+
+`reopen` IS accepted end to end, on three independent legs:
+- validator enum — `widgets.functions.ts:240` `z.enum(["start","done","pause","reopen","today","untoday"])`
+- type — `widgets.server.ts:136` `WidgetTaskAction` includes `"reopen"`
+- mapping — `widgets.server.ts:536` `reopen: "BACKLOG"`, and `ACTION_STATUS` is typed
+  `Record<"start"|"done"|"pause"|"reopen", string>`, so `ACTION_STATUS[action]` at line 301
+  type-checks (tsc exit 0) for exactly this set
+
+`BACKLOG` is in journey's own status enum (`tool-definitions.ts:96`), so the value is real.
+
+---
+
+## Loop-1 CONFIRMED claims, re-checked at reduced depth
+
+| # | claim | result | evidence |
+|---|---|---|---|
+| 1 | dock scoped to `dm-iris-chase`, single site | CONFIRMED | `JourneyWidgets.tsx:67` `export const WIDGET_DOCK_HUDDLE_ID = "dm-iris-chase"` is the only definition; the two other repo hits (`MeetingBar.tsx:1375`, `huddle.functions.ts:6557`) are prose comments, not call sites |
+| 2 | no second writer to `tasks.journey_tasks` | CONFIRMED | one `INSERT INTO tasks.journey_tasks` in the whole tree, `tasks.server.ts:333`; zero `UPDATE tasks.journey_tasks` |
+| 3 | ownership gate precedes every write | CONFIRMED — incl. the NEW pause branch | gate at `widgets.functions.ts:260-262` (`getOwnedTaskForConfirmAsk` → `if (!owned) return fail`); the pause branch is at 282-297, the `today`/`untoday` branches at 270-281, the else at 298-304 — **all four are below the gate**, and the single `invokeJourneyTool` write is at 306 |
+| 4 | no migration needed | CONFIRMED | every column the widgets read is present in `tasks.server.ts`: is_priority, priority_rank, start_time, end_time, is_scheduled, tags, assigned_agent, due_date, category, completed_at |
+| 5 | `getBoardTasks` extended, not duplicated | CONFIRMED | `git show 54639aa --stat`: `tasks.server.ts \| 11 +-` — 11 changed, 1 deletion, against 522 new lines in `widgets.server.ts`. An extension, not a fork |
+| 6 | journey tool count 26→27 | CONFIRMED at 27 | `grep -c 'name: "'` on journey-voice HEAD `tool-definitions.ts` = **27** |
+| 7 | write path matches journey's real schemas | CONFIRMED, incl. the new `tags` send | `update_task` (:86) status enum contains BACKLOG (:96); `tags` array (:102); `move_task_to_day` exists (`tool-definitions.ts:190`, dispatched `execute-tool/index.ts:428`); `unschedule_task` exists (:138 region, dispatched :359) |
+| 9 | `npx tsc --noEmit` exits 0 | CONFIRMED | ran it — see F-01 |
+
+Claim 8 (degradation) is below.
+
+---
+
+## Claim 8 — degradation on empty topics, empty currentlyDoing, ok:false. CONFIRMED by execution
+
+Not reasoned about — **exercised**. A harness importing the real module (`bun`), real output:
+
+```
+buildTopicTree null -> [] len=0
+buildTopicTree undefined -> [] len=0
+buildTopicTree {} -> [] len=0
+buildTopicTree {"topics":[]} -> [] len=0
+buildTopicTree "nonsense" -> [] len=0
+buildTopicTree 42 -> [] len=0
+buildTopicTree {"result":{"topics":[]}} -> [] len=0
+buildScheduleSections([]) -> {"todayKey":"2026-09-13","weekStartKey":"2026-09-07","weekEndKey":"2026-09-13","todaySchedule":[],"currentlyDoing":[],"upNext":[]}
+buildPrioritiesBand([]) -> []
+safeTimeZone('Not/AZone') -> UTC
+safeTimeZone(null) -> UTC
+```
+
+Zero throws across seven malformed topic payloads including a bare string and a number. The empty
+schedule returns a STRUCTURALLY COMPLETE object — real `todayKey` and a correct Monday-start week
+(2026-09-13 is a Sunday; 09-07→09-13 is its Mon–Sun week) with three empty arrays, so an empty
+`currentlyDoing` is a normal value and the UI never receives `undefined` sections. A garbage IANA
+zone degrades to UTC instead of raising the `RangeError` that would take out every date comparison.
+
+The `ok:false` paths return the same `empty(...)` shape with populated `timeZone`/`todayKey`
+(`widgets.functions.ts:65-78`, `:174-181`) — read, not executed, since they need a server context.
+
+---
+
+## NEW FINDINGS (loop 2)
+
+### N-1 (LOW–MODERATE) — the `updateWidgetTask` docblock still documents the OLD, defective behaviour
+
+`widgets.functions.ts:214-221`, the function's own header comment, still reads:
+
+```
+ *   ⏸ pause   → update_task status=UP_NEXT
+```
+
+That is the exact defect loop 1 found and 966bd2f fixed. The code below it writes BACKLOG +
+parking-lot. The header also does not mention `reopen` at all, so the five-button list is now a
+six-button reality. Per the repo's own provenance rule ("a document that was true when written and
+became a lie because nothing stamped the transition"), this is the failure mode that rule exists to
+prevent, sitting inside the commit that cites it. A reader who trusts the docblock will re-introduce
+the bug. Cheap fix; no behaviour change.
+
+### N-2 (LOW) — case-sensitivity divergence between what pause WRITES and what auto-work FILTERS
+
+`widgets.functions.ts:292` dedups case-INSENSITIVELY (`t.toLowerCase() === PARKING_LOT_TAG`), but
+`autowork.server.ts:533` filters case-SENSITIVELY (`.includes("parking-lot")`).
+
+Consequence: a task already carrying a mixed-case tag such as `Parking-Lot` (from any other
+producer — a groom, a journey-side write, a user) makes `parked` true, so pause does **not** append
+the lowercase tag; auto-work's exact-match filter then does **not** exclude the task. The task reads
+as parked in the widget and remains a promotion candidate. Same class of bug as defect 1, far
+narrower trigger — it needs a mixed-case tag to already exist, which nothing in this repo produces.
+Not observed live (no DB access). Fix is to compare lowercased on both sides, or to normalise on
+write.
+
+### N-3 (LOW) — the park tag-union logic is duplicated rather than shared
+
+`confirm-ask.functions.ts:648-654` already implements exactly this union:
+
+```ts
+const alreadyParked = task.status === "BACKLOG" && existingTags.includes("parking-lot");
+const tags = existingTags.includes("parking-lot") ? existingTags : [...existingTags, "parking-lot"];
+```
+
+`widgets.functions.ts:291-297` re-implements it inline with slightly different semantics (the
+widget's check is case-insensitive, confirm-ask's is not — which is where N-2 comes from). Against
+CLAUDE.md's "Extend, don't duplicate", this wanted one exported helper next to `PARKING_LOT_TAG`.
+Two copies is how the two sides drift. Not a correctness defect today.
+
+### N-4 (INFORMATIONAL, outside the radius) — journey's `updateTask` has no ownership check
+
+`execute-tool/index.ts:932-937` updates `tasks` by `id` alone, with no user predicate. Huddle's
+`getOwnedTaskForConfirmAsk` gate is the only thing standing between a forged `task_id` and someone
+else's row on this path. That gate is present and correct here (claim 3), so the widget is safe —
+but the safety lives entirely in the caller. Pre-existing journey behaviour; noted, not a widget
+defect.
+
+---
+
+## NOT VERIFIED THIS LOOP
+
+- `huddle.functions.ts`, `Rail.tsx`, `docs/LANE-D-widget-tool-wiring.md` — **DEFERRED TO LOOP 3**.
+  A concurrent agent owns them; both files were dirty in the working tree during this pass, so
+  anything observed there would be mid-edit and worthless as evidence.
