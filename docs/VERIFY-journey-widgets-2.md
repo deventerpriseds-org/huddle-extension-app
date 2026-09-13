@@ -282,8 +282,142 @@ defect.
 
 ---
 
+## SPEC-SCREENSHOT FIDELITY (AC-23..AC-34) — loop 1 NOT REACHED, reached here
+
+Both specs read as images and compared against what `JourneyWidgets.tsx` actually renders. **The
+fidelity is high** — this is not a widget that ignored its spec. Findings are the exceptions.
+
+### SCHEDULE — `docs/widgets/spec-schedule-widget.jpg`
+
+| spec affordance | code | verdict |
+|---|---|---|
+| compose pill "What's next…" at the top | `:688` `WidgetComposeRow placeholder="What's next…"` | MATCH |
+| `TODAY'S SCHEDULE` in small caps | `:693` + `SectionLabel` `:449` has `uppercase tracking-wide text-[10px]` | MATCH |
+| time prefix `10:00AM` before the title | `:645` `shortTime(row.startTime)`, `tabular-nums font-semibold` | MATCH |
+| schedule rows carry ▶ and ✓ only — no pause, no Today | `:654-655` `StartButton` + `DoneButton`, nothing else | MATCH |
+| `CURRENTLY DOING` value in **bold** | `:713` `font-bold` | MATCH |
+| "Nothing in progress" as the empty text | `:714` verbatim | MATCH |
+| `UP NEXT` → cream `★ This Week` band | `:724-731` `BAND_STYLE` + `Star` + `"This Week"` | MATCH |
+| ★ bullet + `▲ Today` on each up-next row | `:664` `Star`, `:668` `TodayButton` | MATCH |
+| ✓ / ⏸ shown on the CURRENTLY DOING row **even while it reads "Nothing in progress"** | `:716` `{doing && (…)}` hides BOTH buttons when nothing is in progress | **DIVERGENCE — see N-7** |
+
+### PRIORITIES — `docs/widgets/spec-priorities-widget.jpg`
+
+| spec affordance | code | verdict |
+|---|---|---|
+| "Priorities" heading + ⚙ settings top-right | `:591` title, `:592-600` gear (`aria-label="Priorities settings"`) | MATCH |
+| compose "Add a priority…" | `:604` verbatim placeholder | MATCH |
+| cream band of priority rows | `BAND_STYLE` on the band | MATCH |
+| category chip per row (`Life`, `Education`) | `:498` `CategoryChip`, title-cased from upper-snake at `:121-124` | present, **but see N-5** |
+| `▲ Today` grey / `✓ Today` green two-state | `TodayButton` `:236-265`, both states | MATCH |
+| topic tree: ▼/► disclosure, indentation | `:530` `ChevronDown`/`ChevronRight`, `:527` depth-scaled `paddingLeft` | MATCH |
+| right-aligned counts, **blank when absent** (Family, Grooming Management carry none) | `:541-543` `node.count ? … : null` | MATCH |
+| coloured vertical rail on each top-level category | `:518-520` 3px rail, `depth === 0` only | present, **but see N-6** |
+| only ONE top-level topic expanded (Career ▼; Ventures/Education/Life/Family ►) | `:511` `useState(depth === 0 && hasChildren)` opens **every** top-level node | divergence, LOW confidence — a screenshot of a stateful tree is weak evidence of intended default; not filed as a defect |
+
+---
+
+## N-5 (MODERATE) — the category chip hash does NOT produce the spec's colours, and collides two real categories
+
+**Observation, measured.** `categoryHue` (`:111-115`) is a `h*31 + charCode` hash. Executed against
+the real journey category values:
+
+```
+LIFE       hue=108 -> green        spec says: blue
+EDUCATION  hue=128 -> green        spec says: amber
+CAREER     hue= 14 -> red
+VENTURES   hue=216 -> BLUE
+```
+
+Two separate problems, and the second is the one that matters:
+
+1. The code's own comment at `:106` states *"The spec colour-codes chips per category (Life = blue,
+   Education = amber)"* and then implements a hash that yields green for both. The comment asserts
+   spec-fidelity the code does not deliver.
+2. **`LIFE` (108) and `EDUCATION` (128) land 20 hue degrees apart — two of journey's four categories
+   render as near-identical greens.** The chip exists to tell categories apart at a glance; at 20°
+   separation in the same lightness/chroma it cannot. In the spec these two are the most visually
+   distinct pair on screen (blue vs amber).
+
+The *design rationale* for hashing over a lookup table is sound and I am not disputing it — journey's
+categories are user-extensible, and a table only covers what was in the screenshot. But "deterministic"
+is not "distinct": a hash gives stable colours, not separated ones. A seeded table for the four known
+categories with the hash as the fallback for unknown ones satisfies both the rationale and the spec.
+
+## N-6 (LOW–MODERATE) — "a topic and a category of the same name agree in colour for free" is false
+
+`:512-514` claims the topic rail reuses the chip hash *"so a topic and a category of the same name
+agree in colour for free."* Measured — they never do, because journey stores categories upper-snake
+(`:120` says so explicitly) while topic names arrive title-cased, and the hash is case-sensitive:
+
+```
+topic "Life"      hue=204 (BLUE)   vs  category "LIFE"      hue=108 (green)   -> DISAGREE
+topic "Education" hue=264 (purple) vs  category "EDUCATION" hue=128 (green)   -> DISAGREE
+topic "Career"    hue= 54 (amber)  vs  category "CAREER"    hue= 14 (red)     -> DISAGREE
+topic "Ventures"  hue= 80 (green)  vs  category "VENTURES"  hue=216 (BLUE)    -> DISAGREE
+topic "Family"    hue=340 (red)    vs  category "FAMILY"    hue=300 (purple)  -> DISAGREE
+```
+
+5 of 5 disagree. The rails still render and are still stable and distinct from each other, so nothing
+is broken — but the stated invariant does not hold, and in the PRIORITIES widget the two are on
+screen together (chips in the band, rails in the tree directly below), which is exactly where a
+reader would expect the claimed agreement. One `.toUpperCase()` inside `categoryHue` fixes it and
+would also be the natural place to seed N-5's table.
+
+## N-7 (LOW) — CURRENTLY DOING loses its ✓/⏸ buttons in the empty state
+
+The spec draws a green ✓ and an orange ⏸ beside "Nothing in progress"; `:716` renders them only when
+`doing` is truthy, so the row is text-only when empty.
+
+**Interpretation, separated from the observation:** the code's behaviour is arguably the better one —
+those buttons have no task to act on, and the spec is an Android widget where they may be fixed
+chrome. I am filing it as a fidelity divergence the owner should rule on, not as a bug. It is the
+only missing affordance I found across both specs.
+
+---
+
 ## NOT VERIFIED THIS LOOP
 
 - `huddle.functions.ts`, `Rail.tsx`, `docs/LANE-D-widget-tool-wiring.md` — **DEFERRED TO LOOP 3**.
   A concurrent agent owns them; both files were dirty in the working tree during this pass, so
   anything observed there would be mid-edit and worthless as evidence.
+
+- **store.ts / data/seed.ts Lane C changes** — NOT REACHED (budget).
+- **The second widget render path at HuddleView.tsx:938** — NOT REACHED (budget).
+- **Handler-body runtime behaviour** (`getScheduleWidget` / `getPrioritiesWidget` /
+  `updateWidgetTask` executed end to end) — UNVERIFIABLE HERE. Each handler's first act is a
+  dynamic `import("./tasks.server")` → `getPool()` against Azure PG; TCP 5432 is blocked from this
+  session and there are no PG credentials, and the branch is not deployed. The PURE layer beneath
+  them was executed instead (claim 8 above), and the handler bodies were read line by line.
+
+---
+
+## DEFECTS, RANKED
+
+| # | severity | defect | status |
+|---|---|---|---|
+| N-5 | **MODERATE** | `LIFE` and `EDUCATION` chips render as near-identical greens (hue 108 vs 128); the comment claims spec colours (blue/amber) the hash cannot produce | open |
+| N-6 | LOW–MODERATE | the stated "topic and category of the same name agree in colour" invariant is false 5/5 — case-sensitive hash vs upper-snake categories | open |
+| N-1 | LOW–MODERATE | `updateWidgetTask` docblock still documents `⏸ pause → status=UP_NEXT`, the exact defect 966bd2f fixed, and omits `reopen` | open |
+| N-2 | LOW | pause dedups case-insensitively, auto-work filters case-sensitively — a pre-existing mixed-case `Parking-Lot` tag would read as parked while staying an automation candidate | open |
+| N-3 | LOW | the park tag-union is duplicated between `confirm-ask.functions.ts:648-654` and `widgets.functions.ts:291-297`, with divergent case semantics (the source of N-2) | open |
+| N-7 | LOW | CURRENTLY DOING drops the spec's ✓/⏸ in the empty state — owner's call, not clearly a bug | open |
+| N-4 | INFO | journey's `updateTask` has no ownership predicate; Huddle's gate is the only control on this path (pre-existing, out of radius) | noted |
+
+**No HIGH defects found this loop.** All three loop-1 defects are closed, each re-derived from
+source rather than accepted from the fix's account, and the Lane-B guard is mutation-proved FIRED.
+
+### Challenging the radius, as asked
+The brief asked whether `reopen` reaches anything unlisted. **It does not** — I traced it: the enum
+(`widgets.functions.ts:240`), the type (`widgets.server.ts:136`), the mapping (`:536`), and the one
+UI call site the test pins (`prevStatus === "DOING" ? "start" : "reopen"`). It writes `{task_id,
+status}` with no `tags` key, so by journey's `if (args.tags !== undefined)` it cannot touch tags,
+and `BACKLOG` cannot re-enter automation while the parking-lot tag is absent — which is the point:
+`reopen` deliberately leaves an un-parked task automatable. That is correct, and it is the behaviour
+the split was for.
+
+The radius as given was accurate. The two things I would ADD to it are the two the radius did not
+cover and where the real findings landed: **`JourneyWidgets.tsx`'s colour layer** (`categoryHue`,
+`CategoryChip`, `TopicRow`'s rail — N-5/N-6, both measured, neither touched by 966bd2f) and
+**`confirm-ask.functions.ts:648-654`**, which is the pre-existing implementation of the very union
+the pause branch re-wrote inline (N-3).
