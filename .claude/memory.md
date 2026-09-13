@@ -2521,3 +2521,47 @@ and reversible (email columns retained; dual-read still honors un-migrated rows)
 - **The container rewound the working tree mid-session again** (2026-08-20): an uncommitted memory.md
   append vanished and `git status` came back clean at the last pushed commit. Pushed code was safe.
   Reinforces: commit + push docs IMMEDIATELY, and re-check `git log origin/<branch>` after any gap.
+
+
+## Active work — 2026-09-13: three-digest delivery (daily brief / meetings / stand-up)
+
+Owner wants THREE morning digests, and stated the architecture: **both apps must work standalone;
+when integrated, journey is the source and the switch** (the owner's case). So journey owns the
+send; Huddle owns the stand-up content and must retain the whole capability for a journey-less user.
+
+ACs: `journey-voice/.claude/AC-digest-delivery.md` (45 ACs, written by an independent `ac-writer`
+subagent). Tier 1 items: AC-SU-2..5 (ranking), AC-CH-3/4 (delivery is a stored claim), AC-REND-1.
+
+### Huddle lane — stand-up ranking divergence: FIXED, mutation-proven, NOT confirmed live
+Commits `0c06813`, `53e345b`, `f2179c6` on `claude/huddle-workflows-setup-cucecs`. Detail in
+`.claude/IMPL-standup-ranking.md`.
+
+`standup.server.ts` now calls **`rankTasks`** instead of sorting raw `priority_rank`. EXTENDED, not
+duplicated — `rankTasks` is unmodified and every other caller is untouched. New pure seam
+`selectStandupPriorities(tasks, blockedIds, limit)`.
+
+Guard `scripts/standup-ranking.test.ts` (`npm run test:standup-ranking`) 10/10, driving BOTH
+production entry points over ONE fixture. Mutation proof via `scripts/mutate.sh`: **4 × FIRED**,
+0 INERT, 0 NOT-APPLIED.
+
+## Hardening — 2026-09-13
+
+**A board row cannot be scored, and that is why the stand-up diverged.** `BoardTaskRow`
+(`tasks.server.ts:1361`) has no `pushed_count`, `created_at`, `is_scheduled` or `start_time`, so it
+is NOT a `ScorableTask`. The stand-up's raw `priority_rank` sort was not merely a different ordering
+— it was the only ordering that shape permits. Any fix that kept `getBoardTasks` on the priorities
+path would have had to widen the row or re-derive a score, i.e. duplicate ranking. **When two
+surfaces disagree on an order, check whether one of them is even capable of the shared function's
+input before assuming the caller was lazy.**
+
+**The parking-lot leak was closed in `rankTasks` and stayed open in the stand-up for months.** The
+filter (`scoring.ts:132`) carries an in-source comment naming the incident — *"grooming ranked a
+parked 'Prepare investor pitch' #3 Urgent"* (ACT-13/ACT-17) — yet the daily digest bypassed it, so
+the owner kept seeing parked work in the one place they read every morning. **A fix applied at the
+shared function does not reach a caller that never called it.** Grep every consumer when closing a
+leak, not just the one that reported it.
+
+**A mutation harness that prints the wrong marker reports UNDETERMINED, not INERT — and that is the
+correct behaviour.** Run 1 failed because the runner emitted a bare `❌` while `mutate.sh:121` greps
+a literal `FAIL <name>`. It was reported rather than silently re-run, then fixed (`53e345b`). A
+harness that cannot see a failure must never claim the guard is worthless.

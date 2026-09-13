@@ -2971,3 +2971,31 @@ confirmed normal (non-timeout) replies are unaffected — a group turn (12.7s) a
 OpenAI timeout mid-tool-loop — cannot be forced deterministically from this environment, so that
 specific scenario is mechanism-verified, not live-timeout-confirmed. Stays open until a real slow-
 agent occurrence is observed live and its toolUses/replies checked against the DB.
+
+
+## ACT:digest-standup-ranking — stand-up must rank through rankTasks (2026-09-13)
+
+**Origin:** owner request — three morning digests; this row is the Huddle half.
+**Status: IMPLEMENTED + PUSHED on `claude/huddle-workflows-setup-cucecs`. NOT merged, NOT deployed,
+NOT confirmed live.**
+
+**Evidence:** commits `0c06813` / `53e345b` / `f2179c6`; `.claude/IMPL-standup-ranking.md`;
+`npm run test:standup-ranking` 10/10; `scripts/mutate.sh` 4 × FIRED (AC-SU-2 parking-lot, AC-SU-3
+cross-surface order, AC-SU-4 is_priority, AC-SU-5 title dedup), 0 INERT, 0 NOT-APPLIED.
+**ACs:** `journey-voice/.claude/AC-digest-delivery.md` section G, written by an independent
+`ac-writer` subagent BEFORE implementation.
+
+**What it fixes for the owner:** a `parking-lot`-tagged task could appear — and did rank FIRST — in
+the daily stand-up brief. Now absent from both the stand-up and `prioritize`, proven over one shared
+fixture.
+
+**Open / not reached:**
+- `bun install` cannot complete in this environment — the registry mirror 403s through the session
+  proxy for ~6 packages (`ws`, `split2`, `postgres-interval`, …). Only `test:standup-ranking` ran;
+  other suites did NOT. An uncommitted local `node_modules` stub for `@fontsource/inter` was needed
+  to resolve the import chain.
+- `npx tsc --noEmit` shows one PRE-EXISTING error (`TS2688 vite/client`) on the untouched tree, from
+  that same failed install. Zero errors in changed files.
+- AC-SU-6 NOT REACHED (outside this lane).
+- **Independent verifier not yet run** — batched across all four digest lanes once the journey-side
+  lanes land.
