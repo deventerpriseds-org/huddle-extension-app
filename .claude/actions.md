@@ -3685,3 +3685,19 @@ where these things will end up."*
 - [ ] Deploy journey `execute-tool` (owner's call) — until then the topic tree returns empty with a
       `reason`, and the priorities band still renders.
 - [ ] Merge to `main` (auto-deploys).
+
+### ACT:journey-widgets-in-chat — progress 2026-09-13
+- [x] Loop-1 verification (`docs/VERIFY-journey-widgets-1.md`) — 9 CONFIRMED, 2 REFUTED, 1 partial.
+- [x] Independent ACs written cold (`docs/AC-journey-widgets.md`, 51 criteria + 7 gaps).
+- [x] **Defect 1 (HIGH) FIXED** — ⏸ pause un-paused itself. `966bd2f`, test + mutation proof FIRED.
+- [x] **GAP-1 FIXED** — widget tools registered nowhere; now wired both paths. `b56907e`.
+- [x] Rail Memory de-highlighted (minimal, reversible).
+- [ ] **OWNER DECISION — the Memory rail entry:** remove it (recommended), wire it to a real view, or
+      leave it decorative. Broken before this work; two new neighbours make it conspicuous.
+- [ ] **OWNER ACTION — deploy journey `execute-tool`** so `get_task_topics` exists. Until then the
+      topic tree (~60% of the Priorities screenshot) is a labelled empty state; the band works.
+- [ ] Loop-2 verification in flight; loop 3 must cover `huddle.functions.ts` + `Rail.tsx`.
+- [ ] **Spec-screenshot fidelity still unchecked** — missing affordances remain unknown.
+- [ ] NOT observed rendering in a browser. Not deployed. Not merged.
+- [ ] **Separate pre-existing bug, NOT fixed:** the checklist widget renders nothing on the Lovable
+      path (`huddle.functions.ts:5472` omits `recordToolUse`). Owner's call whether to widen scope.

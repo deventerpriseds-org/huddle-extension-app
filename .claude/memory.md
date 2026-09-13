@@ -3025,3 +3025,42 @@ behaviour. Every lane's work survived ONLY because each brief named a file and e
 it went; Lane C's last two commits sat UNPUSHED in the container and were recovered by comparing local
 HEAD to origin on the next turn, exactly as the re-sync rule prescribes. `ListAgents` after the restore
 showed zero agents, which is the only ground truth that they are gone.
+
+## Hardening — the checklist widget renders NOTHING on the Lovable path (found 2026-09-13, NOT fixed)
+Found while wiring the two journey widgets, in the existing feature they were modelled on.
+`lovableTools.build_checklist` (`huddle.functions.ts:5472`) never calls `recordToolUse`, and
+reply-assembly recovers a rendered payload ONLY from a toolUse's `detail`. So on the Lovable backend
+the checklist tool fires, does its work, and the card never reaches the client. The OpenAI path is
+fine — it records, so its payload rides back.
+**The two new widgets do NOT inherit this**: their Lovable dispatch calls `recordToolUse` explicitly.
+The checklist itself is UNFIXED — fixing it means editing that feature's own wiring, which is outside
+what the owner asked for. Reported to the owner; his call whether to widen.
+**The general lesson: on this codebase a tool that renders a card must call `recordToolUse` on BOTH
+dispatch paths, or it is silently inert on one of them.** Symmetry between the two paths is not
+enforced anywhere — nothing fails, nothing logs, the card just never appears.
+
+## Active work — journey widgets: wiring landed, verification loop 2 in flight (2026-09-13)
+Branch `claude/journey-widgets-in-chat` @ `b56907e`. Nothing on `main`, nothing deployed.
+
+**Since the last entry:**
+- **Pause defect FIXED (`966bd2f`).** `ACTION_STATUS.pause` was `UP_NEXT` — the lane
+  `autowork.server.ts` promotes from — while ⏸ emptied the DOING slot in the same write, so a paused
+  task was a promotion candidate at the next 9/13/17 tick and the confirm-intent gate passed it
+  through (a task that had reached DOING was already confirmed). Now `BACKLOG` + the `parking-lot`
+  tag auto-work already filters on. journey's `update_task` REPLACES the tag array, so the UNION is
+  sent — parking must never wipe a task's other labels. Un-ticking ✓ was split onto a new `reopen`
+  action so that gesture does not inherit the park.
+  `scripts/widget-park.test.ts` (`npm run test:widget-park`) 10/10; mutation-proved **FIRED** via
+  `mutate.sh` with `pause: "UP_NEXT"` reinstated.
+- **Widget tools WIRED (`b56907e`).** `show_priorities_widget` / `show_schedule_widget` existed fully
+  written in `tasks/tools.ts` but were registered NOWHERE — the render branches in `HuddleView.tsx`
+  were live but unreachable, so no agent could ever surface them. That was the "like the checklists
+  widget" half of the request, and it was the +160 unexplained lines on the branch. Now registered in
+  `mergedTools`, dispatched on BOTH paths with per-widget `claimAction` keys, `WIDGET_SYSTEM_HINT` on
+  both instruction branches, and the payload recovered from `detail` at all six reply-DTO sites.
+- **Rail Memory entry de-highlighted** (`Rail.tsx` `neverActive` flag) so two items no longer
+  highlight at once. Whether Memory is REMOVED or WIRED is still the owner's open decision.
+
+**Status: `tsc` exit 0; `test:widget-park` 10/10; `test:router` 20/20. NOT deployed, NOT observed in a
+browser — type agreement is not a rendered card.** Loop-2 verification running; `huddle.functions.ts`
+and `Rail.tsx` were moving targets during it and are DEFERRED TO LOOP 3.
