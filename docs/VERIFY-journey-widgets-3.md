@@ -388,3 +388,55 @@ Asked for directly, so stated directly.
    surface would miss the two new rail entries and the two new view mappings.
 4. **The radius omits `huddle.functions.ts`.** Same reason (it is LANE-D, commit `b56907e`), and it
    is by far the largest file touched by this work — ten insertion points into the turn pipeline.
+
+---
+
+## MUTATION PROOFS — all three re-run by me, anchors from FILES, on the committed tree
+
+`mutate.sh` is at `/usr/local/bin/mutate.sh` (on PATH; there is no `scripts/mutate.sh` in this
+repo). Anchor uniqueness was checked with `grep -c` before each run — all three returned **1**.
+
+| # | file | anchor (read from source this session) | result |
+|---|---|---|---|
+| N-8 | `JourneyWidgets.tsx` | `if (live) refreshChecklistRows(mapped);` + `else seedChecklistRows(mapped);` → seed-only | **FIRED** |
+| N-5 | `widget-colors.ts` | `const key = normalize(name);` + `return CATEGORY_HUES[key] ?? hashHue(key);` → `return hashHue(name);` | **FIRED** |
+| N-9 | `JourneyWidgets.tsx` | the whole `if (!tracked) { store.seedChecklistRows([…]) }` block → a comment | **FIRED** |
+
+Verbatim:
+
+```
+FIRED: 'useSeededRows routes a LIVE payload to refreshChecklistRows' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/components/JourneyWidgets.tsx matches HEAD
+
+FIRED: 'LIFE and EDUCATION are no longer near-identical (the N-5 collision)' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/tasks/widget-colors.ts matches HEAD
+
+FIRED: 'runAction seeds an untracked row BEFORE patching it' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/components/JourneyWidgets.tsx matches HEAD
+```
+
+None INERT, none NOT-APPLIED. The fixing agent's three claims are independently reproduced.
+
+### A FOURTH mutation I ran, which is not a re-run — and it found something
+
+I asked the colour guard a question nobody had asked it: **would it accept the spec's own
+colours?** I mutated `CATEGORY_HUES` to the hues I *measured from the spec screenshot* —
+`CAREER: 150` (spec 149, green), `VENTURES: 300` (spec 303, purple) — and ran the suite.
+
+```
+mutate.sh src/features/huddle/lib/tasks/widget-colors.ts aSpec.txt rSpec.txt \
+          "npm run test:widget-colors" "every pair of journey's four categories is visually distinct"
+
+FIRED: 'every pair of journey's four categories is visually distinct' failed …
+restored: src/features/huddle/lib/tasks/widget-colors.ts matches HEAD
+```
+
+**`mutate.sh` prints "the guard is real" because all it knows is that the test failed. The
+interpretation is mine and it is the opposite of reassuring:** the values that failed are the
+**spec-correct** ones, and the assertion that rejected them is the **60° pairwise floor the test
+itself invented**. With the spec's four hues (70 / 150 / 250 / 300) the closest pair is
+`LIFE/VENTURES` at **50°** — under the floor.
+
+So `scripts/widget-colors.test.ts` does not merely fail to catch the CAREER/VENTURES defect; it
+would **block the fix**. Whoever corrects those two values must also relax or re-justify that
+floor — it is an invented constraint that the design it is supposed to protect does not satisfy.
