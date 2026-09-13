@@ -621,7 +621,17 @@ function TopicRow({ node, depth }: { node: TopicNode; depth: number }) {
           style={{ paddingLeft: `${depth === 0 ? 0 : depth * 0.875 + 0.75}rem` }}
         >
           <span className="w-3 shrink-0 text-muted-foreground">
-            {hasChildren ? (open ? <ChevronDown size={11} aria-hidden /> : <ChevronRight size={11} aria-hidden />) : null}
+            {/* D-5 #12: the spec uses FILLED TRIANGLES here, not stroked chevrons, and the same
+                triangle family as the Today button's ▲ — so within the spec the two marks rhyme.
+                A rotated filled Triangle is that mark; `Triangle` is already imported. */}
+            {hasChildren ? (
+              <Triangle
+                size={8}
+                strokeWidth={0}
+                className={cn("fill-current transition-transform", open ? "rotate-180" : "rotate-90")}
+                aria-hidden
+              />
+            ) : null}
           </span>
           <span
             className={cn("min-w-0 flex-1 truncate text-[13px]", depth === 0 ? "text-foreground" : "text-foreground/85")}
