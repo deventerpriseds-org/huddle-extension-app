@@ -163,3 +163,108 @@ Every mime the claim says must be admitted is admitted and every one it says mus
 excluded. Note the regex is unanchored at the end, so it is a prefix match — `image/svg+xml;
 charset=utf-8` matching is a feature here, not an accident, and no binary mime shares a prefix with an
 admitted family.
+
+---
+
+## C4 — all four dispatch sites route through `createArtifactFromAgent`
+
+**REFUTED — in substance. The literal wiring claim is true; the thing the claim exists to guarantee is
+false at TWO of the four sites, and the brief's prediction that "voice is the likeliest miss" is
+correct but incomplete — the Lovable path is worse.**
+
+### The literal half: true
+
+`grep -rn "createArtifactFromAgent" src/` returns exactly four call sites, and no others:
+
+| # | site | file:line |
+|---|---|---|
+| 1 | OpenAI path | `src/features/huddle/lib/huddle.functions.ts:3610` |
+| 2 | Lovable path | `src/features/huddle/lib/huddle.functions.ts:4870` |
+| 3 | durable-turn worker | `src/features/huddle/lib/huddle.functions.ts:7024` |
+| 4 | voice | `src/features/huddle/lib/voice/realtime-tools.server.ts:586` |
+
+All four pass `args: { format: a.format, content, document: a.document, mime: a.mime }`.
+`grep -rn "createArtifact(" src/` finds only two remaining direct callers and **neither is a tool
+dispatch path**: `artifacts.functions.ts:207` (`saveArtifactFn`, a UI server-fn whose zod schema takes
+an explicit `mime` from the client) and `attachments.functions.ts:64` (a USER file upload into folder
+`"Uploads"`, bytes decoded from base64). Both correctly bypass the renderer — there is nothing to
+render. **No tool dispatch path was left behind.**
+
+### The substantive half: `format` cannot physically arrive at sites 2 and 4
+
+Routing through the renderer is worthless if the tool SCHEMA the model is shown has no `format` field.
+Two of the four sites declare their own schema instead of using `CREATE_ARTIFACT_TOOL`:
+
+| # | site | schema it advertises | can `format` arrive? |
+|---|---|---|---|
+| 1 | OpenAI | `CREATE_ARTIFACT_TOOL` verbatim (`huddle.functions.ts:3500`) | **YES** |
+| 3 | worker | `CREATE_ARTIFACT_TOOL` verbatim (`huddle.functions.ts:7082`) | **YES** |
+| 2 | Lovable | **its own zod object**, `huddle.functions.ts:4829-4835` | **NO** |
+| 4 | voice | **its own hand-written JSON schema**, `realtime-tools.server.ts:287-303` | **NO** |
+
+**Site 2 — Lovable (`huddle.functions.ts:4827-4835`). This is the worse of the two, because it
+advertises the feature and then discards it.**
+
+```
+lovableTools.create_artifact = tool({
+  description: CREATE_ARTIFACT_TOOL.description,      // <- L4828: tells the model "set format to 'docx'"
+  inputSchema: z.object({
+    name: z.string(), content: z.string(),
+    folder: z.string().optional(), task_id: z.string().optional(), mime: z.string().optional(),
+  }),                                                  // <- L4829-4835: no `format`, no `document`
+```
+
+It borrows C1's description — the one reading *"YOU ARE NOT LIMITED TO MARKDOWN: set `format` to
+'docx'…"* — while its `inputSchema` has no such property. A bare `z.object()` **strips** unknown keys.
+Proven, not asserted (`/tmp/probe/zod.ts`, the schema copied verbatim from L4829-4835):
+
+```
+model emitted keys:        [ "name", "content", "format", "document" ]
+keys surviving .parse():   [ "name", "content" ]
+parsed.format === undefined
+parsed.document === undefined
+```
+
+So on the Lovable path `a.format` at L4870 is **always `undefined`**, `createArtifactFromAgent`
+defaults to `"md"`, and a user who asks for a Word document on this path gets `name.md` +
+`text/markdown` — the exact bug that started this work, still live. L4841 also hard-requires `content`
+(`if (!name || !content)`), so the `document`-only route C1 unblocked is unreachable here too.
+
+**Site 4 — voice (`realtime-tools.server.ts:287-303).**
+
+```
+name: "create_artifact",
+description: "Save a document (markdown/plain text) as a reviewable artifact …"   // L288-291
+parameters: { type: "object", additionalProperties: false,
+  properties: { name, content, folder, mime },                                     // L292-300: no format/document
+  required: ["name", "content"] },
+```
+
+`additionalProperties: false` with no `format` property means the model cannot emit one even in
+principle. `args.format` at L590 is therefore always `undefined`. The description compounds it by
+telling the voice agent the artifact is *"markdown/plain text"*. This directly contradicts the comment
+sitting three lines above the call, at L583-584:
+
+> `// Formats go through the SAME renderer as the text path: "make me a deck" spoken out loud has`
+> `// to produce the same .pptx it would typed, or voice quietly becomes a second-class caller.`
+
+The renderer is reached; the format never is. Spoken "make me a deck" produces a `.md`. Line 578 also
+hard-requires `content`, so voice cannot use `document` either.
+
+### Concrete failing inputs
+
+| path | user says | model can emit | stored result | expected |
+|---|---|---|---|---|
+| Lovable | "put that in a Word doc" | `{name:"review", content:"# R", format:"docx"}` | `review.md`, `text/markdown` (`format` stripped by zod) | `review.docx`, Office mime |
+| voice | "make me a deck" | `{name:"deck", content:"# S1"}` — `format` impossible under `additionalProperties:false` | `deck.md`, `text/markdown` | `deck.pptx`, Office mime |
+
+### Fix direction (not applied — verifier does not edit the code under test)
+
+Add `format` and `document` to the Lovable `inputSchema` (`format: z.enum(["md","docx","pptx","html",
+"mermaid","svg"]).optional()`, `document: z.unknown().optional()`) and to the voice tool's
+`properties`, relax both `!content` guards to `!content && !document`, and replace the voice
+description's "markdown/plain text" with the multi-format wording. Sites 1 and 3 need nothing.
+
+**Note this also re-frames C1's minor finding:** `CreateArtifactToolArgs` omitting `format`/`document`
+is not merely cosmetic — two of the four dispatch sites carry the same omission in a place where it
+changes runtime behaviour.
