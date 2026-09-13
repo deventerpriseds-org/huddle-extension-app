@@ -3921,3 +3921,41 @@ diagrams and D3 visualisations were early requirements; the store takes any mime
       belongs to the artifacts.server lane.
 - [ ] **OWNER — live re-test is the verdict.** A sandbox cannot prove the CDN loads from the deployed
       origin. Open a mermaid or D3 artifact in the viewer. Status: **MECHANISM ONLY, NOT USER-CONFIRMED**.
+
+
+---
+
+## ACT:artifact-formats — "why is it saying we are limited to .md?" (2026-09-13)
+
+**Asked:** *"why is it saying we are limited to .me [.md] when full document, mermaid, d3 abilities etc
+were early requirements for the artifact library? this needs to be fixed right away."*
+
+- [x] **Root cause: the agent was reading its own instructions correctly.** FOUR of five fields in
+      `artifact-tool.ts` said markdown (description, name example, content, mime default). The STORE
+      was never the limit — `artifacts.items.mime` is free text and the blob takes arbitrary bytes,
+      so a mermaid or HTML artifact was always storable. The CONTRACT was.
+- [x] **Owner decision recorded:** markdown-default **plus** structured-when-layout-matters (asked
+      and answered before building, because it changes the whole shape of the docx/pptx path).
+- [x] **Contract** — `format` enum md|docx|pptx|html|mermaid|svg + optional structured `document`.
+- [x] **Renderer** — `render.server.ts`, markdown→.docx/.pptx and the structured path. 52 assertions,
+      every Office claim unzipped and read from real `word/document.xml` / `ppt/slides/slideN.xml`.
+      Two mutation proofs FIRED; a third honestly reported INERT rather than claimed.
+- [x] **Viewer** — mermaid, HTML/D3 and SVG render in a **sandboxed iframe, `allow-scripts` with NO
+      `allow-same-origin`** (opaque origin: scripts run, the app's DOM/cookies/storage stay out of
+      reach). SVG gets scripts disabled entirely. 28 assertions, three mutation proofs FIRED.
+- [x] **Preview gate** — `TEXT_PREVIEW_MIME` withheld SVG bytes, so the viewer could never render
+      one. Found by the viewer lane, fixed in the server lane that owns it.
+- [x] **Wiring** — `createArtifactFromAgent()` is now the ONE path; four dispatch sites rewired
+      (OpenAI, Lovable, durable-turn worker, **and voice** — otherwise a spoken "make me a deck"
+      would have differed from the typed one).
+- [x] **Two defects found by running it end to end**, neither visible to any single lane:
+      mermaid/svg silently degrading to `.md`, then my own `ensureExtension(name, ext)` call against
+      a `(name, FORMAT)` signature producing `security-optionsundefined`. Guard:
+      `scripts/artifact-format-dispatch.test.ts`, 21 assertions on the SEAM.
+- [ ] **OWNER — live check once the deploy lands.** Ask an agent for a Word doc, a deck and a mermaid
+      diagram. **Not user-confirmed:** no sandbox here can prove the CDN loads and a diagram draws in
+      your browser. Status is *mechanism verified locally, NOT yet confirmed live*.
+- [ ] **Known, unproven:** the repo has NO Content-Security-Policy (no `staticwebapp.config.json`,
+      nothing in `_headers`), so the pinned mermaid/d3 CDN tags load today. A CSP added at the Azure
+      layer later would silently stop diagrams drawing — a `srcdoc` iframe inherits the embedder's
+      CSP and would need `script-src https://cdn.jsdelivr.net`.

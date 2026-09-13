@@ -1572,7 +1572,47 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+**ARTIFACTS ARE NOT MARKDOWN-ONLY — `create_artifact` takes a `format` (2026-09-13).**
+Owner: *"why is it saying we are limited to .md when full document, mermaid, d3 abilities etc were
+early requirements for the artifact library?"* The agent was right about its own contract: four of
+the five fields said markdown. **The STORE was never the limit** — `artifacts.items.mime` is free
+text and the blob takes arbitrary bytes, so a mermaid or HTML artifact was always storable.
+
+- **`createArtifactFromAgent()` (artifacts.server.ts) is THE ONE PATH** from a tool call to a stored
+  artifact. Four sites used to call `createArtifact` directly with `Buffer.from(content,"utf8")` and
+  `mime ?? "text/markdown"` hardcoded — huddle.functions.ts ×3 plus voice/realtime-tools.server.ts.
+  **Add a format HERE, never at a call site**; four copies is how voice silently keeps emitting
+  markdown while text does not.
+- `format`: `md | docx | pptx | html | mermaid | svg`. docx/pptx go through `render.server.ts`
+  (markdown in, real Office package out; `#` or `---` starts a new slide). **mermaid and svg are
+  PASSTHROUGH and resolved in the dispatch layer, not the renderer** — the renderer knows only
+  md|html|docx|pptx and degrades everything else to markdown, which silently produced `name.md` for
+  both until an end-to-end run caught it.
+- **`render.server.ts`'s `ensureExtension(name, FORMAT)` takes a FORMAT, not an extension** — it
+  looks up its own `EXTENSION_BY_FORMAT`. Passing `".mmd"` yields `name + undefined`. Use
+  `withExtension(name, ext)` in artifacts.server.ts for tool-vocabulary extensions.
+- **Viewer renders mermaid/HTML/D3/SVG in a SANDBOXED iframe: `allow-scripts` with NO
+  `allow-same-origin`.** Adding `allow-same-origin` alongside `allow-scripts` disables the sandbox
+  entirely — artifact content is model-authored and untrusted. SVG gets `sandbox=""` (no scripts at
+  all) because an SVG can carry `<script>`/`onerror`.
+- `TEXT_PREVIEW_MIME` (artifacts.server.ts) gates whether bytes come back for preview at all. **The
+  viewer cannot render what the server never sends** — SVG was excluded and silently fell through to
+  the raster `<img>` path.
+- **No CSP exists in this repo**, so the pinned mermaid/d3 CDN tags load. A `srcdoc` iframe inherits
+  the embedder's CSP, so one added at the Azure layer later needs `script-src https://cdn.jsdelivr.net`
+  or diagrams stop drawing with no error.
+- Guards: `test:artifact-render` (52), `test:artifact-preview` (28), `test:artifact-format` (21 — the
+  SEAM between the tool's enum and the renderer's).
+
 **THE APP SHELL IS SIZED BY `--app-h`, NOT `h-dvh` — `dvh` DOES NOT SHRINK FOR THE KEYBOARD (2026-09-13).**
+**AND THE DOCUMENT IS LOCKED (`app-locked` on html+body) SO IT CANNOT BE DRAGGED.** Two separate
+defects, both owner-reported, both required. The second only became visible after the first was
+fixed: while the shell was `100dvh` it filled the layout viewport, so a pan still showed app content;
+once the shell became the VISUAL height it occupies only the top of a still-tall layout viewport and
+the pan reveals white. `position: fixed` is the load-bearing declaration — a mobile browser will
+still slide an `overflow:hidden` body without it. The lock is scoped to the shell's lifetime because
+`/auth` and the error routes use `min-h-screen` and need real page scrolling.
+
 Owner, on his phone: *"why isn't the bottom [dock] staying at the bottom of my device instead of being
 able to be scrolled up?"* Screenshot: the nav bar floated to ~45% of screen height, a blank strip
 beneath it, keyboard below that.
