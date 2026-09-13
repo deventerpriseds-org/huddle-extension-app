@@ -282,3 +282,38 @@ green count was measuring the wrong dimension entirely.
    at it. Until something does, "verified" for UI means a human opened it. `verify-uat.yml` +
    Playwright-in-GHA already exist and could screenshot at 390px — that is the real structural fix and
    it is unbuilt.
+
+## 2026-09-13 — "topics aren't available" — one ROUTE's absence reported as the DATA's absence
+
+| | |
+|---|---|
+| **Claim** | The topic tree stays empty "until journey deploys `get_task_topics`." |
+| **Ground truth** | Two journey surfaces already show the full tree. Both read `task_topic_index` **directly over PostgREST with the USER's session** (`Priorities.tsx:222`; `SupabaseTaskClient.kt:219`). Huddle holds only `JOURNEY_PROXY_TOKEN`, so it reaches only named `execute-tool` tools. The data was never missing; **Huddle's route to it was.** |
+| **One source that settles it** | One grep for `task_topic_index` across journey-voice **and** the bridge repo. Never run. |
+| **Root-cause pattern** | Stated a CONCLUSION ("not available") where only a PREMISE held. Same shape as the dead-connector rule already in CLAUDE.md — *one route failing is never proof the destination is unreachable* — applied to a data source. |
+
+### Two defects that would have shipped, both from unmeasured shapes
+
+1. **`parent_topic_id` is NULL on all 158 rows** (`select count(*), count(parent_topic_id) …` → 158, 0).
+   `buildTopicTree` nested on it alone → 158 flat rows. **Nothing tested `buildTopicTree`**, and every
+   hand-written fixture invented a `parent_topic_id` the real table has never contained.
+2. **The fix then clobbered journey's sub-group work** — it bailed out of category grouping whenever any
+   node had children, so the first sub-group would have deleted the category level. journey's tree is
+   four levels (`category > group > sub-group > task`, `f0ab561`) and the two COMPOSE.
+   **The owner caught this, not a test.** Its sibling: my labels came from journey's `origin/main`
+   (six rows) when the live view runs an unmerged branch (five merged rows).
+
+### Guard (shipped, deployed `1a9be2b`)
+`scripts/widget-topic-tree.test.ts` — 17 assertions built from journey's **real** payload shape; two
+mutation proofs **FIRED** (sub-group compose survives; six-into-five category merge).
+
+### The reusable rule — structural mitigation
+**A fixture is a claim about a shape. Measure the shape before writing the fixture.** The existing rule
+*"never type a literal that must exist in something you have not read"* covers literals in files; this
+extends it to **the shape of live data**, where the feedback loop is far slower because a hand-written
+fixture cannot disagree with production — it silently ratifies the assumption and reports it back as a
+green count. One read-only `execute_sql` against the source table costs one command.
+
+**Second rule, from defect 2:** *before porting a UI, find which REF is actually live.* `origin/main` is
+not it by default — journey's Priorities view runs an unmerged branch, and journey's clone has a
+truncated history, so `git log origin/main` there cannot prove anything was never shipped.
