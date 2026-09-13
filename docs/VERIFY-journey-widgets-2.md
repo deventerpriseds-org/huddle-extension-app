@@ -405,6 +405,29 @@ payload into every prompt. That reasoning checks out against the repo's own memo
 
 ---
 
+### data/seed.ts — a parallel type system WAS created, and WAS correctly collapsed. CONFIRMED
+
+Worth recording because it is the "Extend, don't duplicate" rule catching itself rather than a
+defect. `4c68ff2` introduced Lane C's own `WidgetTaskRow` / `WidgetTopicNode` / `PrioritiesPayload`
+/ `SchedulePayload` in `seed.ts`, with field names that did NOT match Lane B's — `taskId` vs `id`,
+`today` vs `isToday`, a pre-formatted `time` vs raw `startTime`, `label` vs `name`. That is two
+same-named `WidgetTaskRow` types in one feature.
+
+The later reconcile (`3ead8e6`) **deleted them**. Current state, verified by grep:
+
+- `seed.ts:71-72` — `priorities?: PrioritiesWidgetData; schedule?: ScheduleWidgetData;`, Lane B's
+  types, type-only imports
+- `grep -rn "PrioritiesPayload|SchedulePayload|WidgetTopicNode" src/` excluding seed.ts → **zero
+  hits**. No orphaned importers, no dead duplicate left behind
+- `seed.ts:62-69` carries the provenance note explaining the deletion, which is exactly what the
+  repo's SUPERSEDES discipline asks for
+- `seed.ts:175-176` adds `show_priorities_widget` / `show_schedule_widget` to the breadcrumb
+  exclusion set (those two tool names are what the concurrent agent is wiring — **deferred**)
+
+This is the one place I went looking for a duplicated subsystem and found it already reconciled.
+
+---
+
 ## N-8 (MODERATE) — a stale in-chat snapshot can pin a wrong status onto the LIVE docked widget, for the whole session
 
 This is the best finding of the loop and it falls out of the shared-map design confirmed above.
@@ -473,13 +496,27 @@ which is why this is LOW, not MODERATE — but it disables precisely the race th
   A concurrent agent owns them; both files were dirty in the working tree during this pass, so
   anything observed there would be mid-edit and worthless as evidence.
 
-- **`data/seed.ts` Lane C changes** — NOT REACHED (budget). `store.ts` and the second render path
-  were reached; see below.
+*(Everything loop 1 listed as NOT REACHED was reached this loop except the items below.)*
 - **Handler-body runtime behaviour** (`getScheduleWidget` / `getPrioritiesWidget` /
   `updateWidgetTask` executed end to end) — UNVERIFIABLE HERE. Each handler's first act is a
   dynamic `import("./tasks.server")` → `getPool()` against Azure PG; TCP 5432 is blocked from this
   session and there are no PG credentials, and the branch is not deployed. The PURE layer beneath
   them was executed instead (claim 8 above), and the handler bodies were read line by line.
+
+---
+
+## Post-mutation regression / tree state
+
+`mutate.sh` mutates real source, so the last act of this loop was to confirm it left nothing behind:
+
+```
+git status --short          ->  M docs/VERIFY-journey-widgets-2.md      (only this file)
+npm run test:widget-park    ->  10 passed, 0 failed
+npx tsc --noEmit            ->  exit 0
+```
+
+`widgets.server.ts` matches HEAD, the suite is green, and the typecheck is clean. No contamination
+from the mutation run, independently of `mutate.sh`'s own restore assertion.
 
 ---
 
