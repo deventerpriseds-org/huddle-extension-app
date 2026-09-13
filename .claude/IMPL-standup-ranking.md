@@ -81,3 +81,41 @@ registry mirror returns **403** through the session proxy for ~6 packages
 `TS2688 Cannot find type definition file for 'vite/client'` — a missing-dependency artifact of that
 same failed install, present on the untouched tree, and **zero** errors in any file this change
 touches.
+
+## RESULTS — mutation proof (Tier 1; run 2026-09-13)
+
+Defect reinstated inside `selectStandupPriorities`: the `rankTasks(...)` call replaced with the
+original `.sort((a, b) => (a.priority_rank ?? 9999) - (b.priority_rank ?? 9999)).slice(0, limit)`.
+Anchors passed as FILES, via `scripts/mutate.sh` — never hand-run.
+
+```
+mutate.sh src/features/huddle/lib/tasks/standup.server.ts <anchor> <repl> \
+          "bun scripts/standup-ranking.test.ts" "<test name>"
+```
+
+| # | Guard mutation-proved | Outcome |
+|---|---|---|
+| 1 | `AC-SU-2 standup drops the parking-lot task` | **FIRED** |
+| 2 | `AC-SU-3 standup and prioritize agree exactly, same order` | **FIRED** |
+| 3 | `AC-SU-4 standup puts the is_priority task first` | **FIRED** |
+| 4 | `AC-SU-5 standup dedups the duplicate title` | **FIRED** |
+
+Every run ended `restored: ... matches HEAD` and `tree clean: ... passes again on the restored tree`.
+No `INERT`, no `NOT-APPLIED`.
+
+**Run 1 first returned `UNDETERMINED`** — the suite failed but the harness printed a bare `❌`, and
+`mutate.sh:121` greps for a literal `FAIL <name>`. Reported here rather than quietly re-run: an
+UNDETERMINED proves nothing, and the fix was in the harness (commit "emit the FAIL marker
+mutate.sh actually greps for"), not in the guard.
+
+## NOT REACHED (35-minute budget)
+
+- **AC-SU-6** (delivered email body contains the produced/blocked/moved-to-review sections and no
+  chat markup) — not in scope for this lane; `buildBrief` is unchanged, so nothing regressed, but it
+  is not newly guarded here.
+- **Live verification against the deployed SWA.** The guard is offline and deterministic. The digest
+  has NOT been observed running end to end against real data, so this is *implemented and
+  mutation-proven locally, NOT yet confirmed live*.
+- **Full `bun install`** could not complete (registry 403 through the session proxy), so the rest of
+  the repo's suites were not run — only `test:standup-ranking` was executed.
+- Not merged to `main`, not deployed. Feature branch only, as instructed.
