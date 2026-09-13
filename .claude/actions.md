@@ -3663,3 +3663,25 @@ Entra token / `x-ms-client-principal` rather than trusting the body) and is an a
 touching every server function. Scoping it into this branch would be exactly the "widen the PR"
 failure. It needs its own AC pass, because every UAT harness in this repo depends on the current
 behaviour and would break.
+
+## ACT:journey-widgets-in-chat — dock journey's PRIORITIES + SCHEDULE widgets in Iris's chat + side menu
+**Asked (2026-09-12):** *"run the eds sync skill including checking on a fresh clone and then I want to
+add these two external journey widgets as an internal chat widget like the checklists widget. these two
+need to be docked in irises chat and we views on the side menu."* + *"you also need to show prototypes of
+where these things will end up."*
+
+- [x] eds sync — hooks v30 → **v58** (13 hooks); re-confirmed 2026-09-13 against a FRESH clone of
+      `eds-claude-skills` (`CURRENT_VERSION = 58` == installed `_eds_version` 58). All clones current.
+- [x] Spec of record committed — `docs/widgets/spec-priorities-widget.jpg`, `spec-schedule-widget.jpg` (`3223bf3`).
+- [x] **Prototypes** — 4 artboards (desktop docked, Priorities view, Schedule view, phone) built from the
+      REAL design system (tokens from `src/styles.css`, rail geometry from `Rail.tsx`, registry from
+      `HuddleApp.tsx:380`). Published: https://claude.ai/code/artifact/da7013d0-2fff-4942-ae91-2a69dbd0cda3
+      Source in `docs/widgets/prototype/`.
+- [x] Lane A — journey `get_task_topics` proxy tool (journey-voice `ec508a5`, pushed, **not deployed**).
+- [x] Lane B — Huddle server fns + payload contract (`54639aa`, pushed).
+- [x] Lane C — Huddle chat cards, Iris docking, side-menu views (`4c68ff2`/`3ead8e6`/`59afbbb`, pushed).
+- [x] `npx tsc --noEmit` exit 0 on `claude/journey-widgets-in-chat`.
+- [ ] **Independent verifier** — NOT yet run (all three lanes died with a container restore).
+- [ ] Deploy journey `execute-tool` (owner's call) — until then the topic tree returns empty with a
+      `reason`, and the priorities band still renders.
+- [ ] Merge to `main` (auto-deploys).

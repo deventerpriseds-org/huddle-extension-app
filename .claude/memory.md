@@ -2988,3 +2988,40 @@ only when the agent explicitly named an owner. Not the lead: `huddle.functions.t
 lead capture items across EVERY lane, so defaulting to it would assign other lanes' work wrongly.
 
 **Full diagnosis + the rejected alternative:** `.claude/actions.md`, `ACT:assign-on-direct-ask`.
+
+## Active work — journey PRIORITIES + SCHEDULE widgets as in-chat widgets (2026-09-13, NOT verified)
+Branch `claude/journey-widgets-in-chat` in BOTH repos. Nothing on `main`, nothing deployed.
+
+**Three lanes, all committed and pushed:**
+- **Lane A (journey-voice `ec508a5`)** — `get_task_topics` registered in `_shared/tool-definitions.ts`
+  (26→27 tools) + handler in `execute-tool/index.ts`. `huddle-proxy` needed NO change (it re-serves
+  `/definitions` verbatim). No new secret — `JOURNEY_PROXY_TOKEN` reused. **NOT deployed** —
+  `deploy-supabase-functions.yml` with `function_name=execute-tool` is the owner's call.
+  Non-obvious: `task_topic_index` IS the topics table (no separate topics table). A category badge is
+  the SUM of its topics' subtree counts, NOT the denormalized `stored_task_count` column (which read
+  15 where the truth was 1). Two topics naming each other as parent produced a CYCLIC object graph
+  that `JSON.stringify` throws on — would have 500'd the whole tool; fixed with `wouldCycle()`.
+- **Lane B (`54639aa`)** — `widgets.server.ts` + `widgets.functions.ts`: `getScheduleWidget`,
+  `getPrioritiesWidget`, `updateWidgetTask` (`start|done|pause|today|untoday`). None ever throws;
+  failures return `ok:false`. **No migration needed** — every column already exists in the mirror DDL.
+  Found by reading, not assuming: `getBoardTasks` did NOT select `start_time`/`end_time`/`is_scheduled`,
+  so TODAY'S SCHEDULE was unreachable — that one read was EXTENDED (additive, optional fields), not
+  duplicated. `updateWidgetTask` gates on the existing `getOwnedTaskForConfirmAsk` before any write.
+- **Lane C (`4c68ff2`, `3ead8e6`, `59afbbb`)** — `JourneyWidgets.tsx`, docked in Iris's 1:1 above the
+  transcript; Rail + HuddleApp view registry + mobile switcher.
+
+**Pre-existing bug this work had to step around:** `Rail.tsx:39/45` marks Memory active when
+`view==='huddle'` and maps it to `'huddle'` — clicking Memory silently renders Huddles. It is
+decorative today. Adding two views to that three-way ternary compounds it, so the registry becomes a
+VIEW MAP keyed by id, which fixes Memory in the same change.
+
+**Status: `npx tsc --noEmit` exit 0 on the branch. NO verifier has run, NO live check, NOT deployed.**
+Prototype canvas (where everything lands, incl. mobile):
+https://claude.ai/code/artifact/da7013d0-2fff-4942-ae91-2a69dbd0cda3
+
+## Hardening — a container restore killed all three lanes mid-flight (2026-09-13)
+All three agents died with the container (15h gap). NO notification fired — silence is the designed
+behaviour. Every lane's work survived ONLY because each brief named a file and each lane committed as
+it went; Lane C's last two commits sat UNPUSHED in the container and were recovered by comparing local
+HEAD to origin on the next turn, exactly as the re-sync rule prescribes. `ListAgents` after the restore
+showed zero agents, which is the only ground truth that they are gone.
