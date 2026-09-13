@@ -42,8 +42,8 @@ visual state the owner actually photographed.
 |---|---|---|---|
 | C1 | `--app-h` published, equals `round(vv.height - vv.offsetTop)` | **CONFIRMED** | run 34783668711 |
 | C2 | Shell's rendered height equals `--app-h` | **CONFIRMED** | run 34783668711 |
-| C3 | `--app-h` shrinks with a simulated visual-viewport shrink | **CONFIRMED, with a stated limit** | run 34783668711 / 34784103480 |
-| C4 | Bottom nav stays in the bottom of the visible region after the shrink | pending run 2 | — |
+| C3 | `--app-h` shrinks with a simulated visual-viewport shrink | **CONFIRMED, with a stated limit** | runs 34783668711, 34783820045 |
+| C4 | Bottom nav stays in the bottom of the visible region after the shrink | **CONFIRMED** | run 34783820045 |
 | C5 | Degrade path with `visualViewport` unavailable | **C5a CONFIRMED / C5b NOT PROVEN (harness limit)** | run 34783668711 |
 | C6 | No console errors, no failed requests | **CONFIRMED** | run 34783668711 |
 
@@ -110,7 +110,26 @@ moves both viewports together, this run **never entered the state the owner is a
 844, visual 500). Per the brief's instruction, the exact API attempted for that state and its exact
 result are named above rather than glossed.
 
-Screenshot: `03-c3-after-shrink.png`.
+Screenshot: `03-c3-after-shrink.png`. Identical numbers in both runs.
+
+### C4 — the nav does not fall below the fold after the shrink — **CONFIRMED**
+
+Measured in run 34783820045 **with the shrink verified still in effect at probe time** (the guard
+added after run 1's false pass):
+
+```
+visible height (round(vv.height - offsetTop))  =  500px
+nav[aria-label="Primary"] rect:  top 447.0   bottom 500.0   height 53.0
+gap between nav bottom and the visible edge   =  0.0px      (tolerance 20px)
+document.scrollingElement.scrollTop           =  0
+```
+
+The nav's bottom edge is flush with the bottom of the visible region, and the document has not
+scrolled — which is the specific thing that went wrong on the owner's phone (there, the browser
+panned the window and the bar rode up off the bottom). Confirmed visually in
+`04-c4-nav-after-shrink.png`: the five-item dock (Huddle / Board / Priorities / Schedule / Files)
+sits flush at the bottom of the 390x500 frame with the message composer directly above it, no blank
+strip beneath.
 
 ### C5 — degrade path
 
@@ -172,5 +191,33 @@ The check's name claimed "after shrink" while the number came from the un-shrunk
 read as strong evidence for exactly the claim most worth being sure about. Fixed in commit 3f85fb0:
 the shrink is re-asserted through Playwright's own `page.setViewportSize` (which survives a
 screenshot), and C4 now refuses to grade at all — reporting **NOT MEASURED** — unless the shrink is
-still in effect at probe time. Re-run below.
+still in effect at probe time. Run 34783820045 then measured C4 in the genuinely shrunk state
+(visible height 500px, not 844px), and it passed on the real numbers.
+
+Worth naming as a pattern rather than a one-off: this is the same shape as the `hueOf`/loading-state
+guard in `widget-ui-checks.mjs` — **a check that cannot tell "measured and correct" from "measured
+nothing" will report the confident answer**, and the confident answer is the dangerous one. C4 now
+distinguishes them.
+
+## Runs
+
+| Run | What it was | Outcome |
+|---|---|---|
+| [34783668711](https://github.com/deventerpriseds-org/huddle-extension-app/actions/runs/34783668711) | first pass | C1, C2, C3, C5a, C6 confirmed; **C4 false pass** (state reverted); C5b not proven |
+| [34783820045](https://github.com/deventerpriseds-org/huddle-extension-app/actions/runs/34783820045) | after the C4 guard (commit 3f85fb0) | C1, C2, C3, **C4**, C5a, C6 confirmed; C5b not proven, same harness limit |
+
+Both runs report `conclusion: failure` — that is `run-uat.mjs` exiting non-zero because C5b is
+recorded as a non-pass. The workflow conclusion is *not* the verdict; the per-claim table is.
+
+## What would close the gaps
+
+1. **C5b** needs a UAT token that survives one reload, or a second token minted for the reload — a
+   harness change, not a product change. C5a already proves the CSS fallback resolves.
+2. **The real keyboard shape** (layout viewport tall, visual viewport short) is not reachable from
+   Chromium via CDP here — `Emulation.setVisibleSize` is an inert no-op. A real device, or
+   BrowserStack on Samsung Internet, is the only route. Which is the same thing as the line below.
+
+## Verdict
+
+**CONFIRMED 5 (C1, C2, C3, C4, C6) · REFUTED 0 · NOT PROVEN 1 (C5b; C5a confirms the same fallback by another route) — MECHANISM ONLY: this is Chromium with a programmatic viewport resize, not Samsung Internet with a soft keyboard, and the owner opening the app on his own phone is the actual verdict.**
 
