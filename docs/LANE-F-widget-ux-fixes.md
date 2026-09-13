@@ -126,7 +126,19 @@ stays true if the palette moves.
 **Mutation proof** — the defect reinstated verbatim (the exact `color-mix` that shipped), anchors
 supplied from FILES, not shell arguments:
 
-<!-- MUTATION-RESULT-D1 -->
+```
+$ printf -- '  --band-cream: oklch(0.975 0.032 92);' > /tmp/anchor-d1.txt
+$ printf -- '  --band-cream: color-mix(in oklch, var(--warning) 9%%, var(--surface));' > /tmp/repl-d1.txt
+$ mutate.sh src/styles.css /tmp/anchor-d1.txt /tmp/repl-d1.txt "npm run test:widget-band-color" "FAIL"
+
+FIRED: 'FAIL' failed with the defect reinstated. The guard is real.
+restored: src/styles.css matches HEAD
+tree clean: 'FAIL' passes again on the restored tree (build output regenerated)
+```
+
+**FIRED.** The exact colour that shipped, put back into the token, makes the suite fail; the anchor
+matched once and the file was restored to `HEAD`. This is not `NOT-APPLIED` (the anchor matched, as
+the pre-check `grep -c` showed: 1 occurrence) and not `INERT` (the suite genuinely failed).
 
 ---
 
