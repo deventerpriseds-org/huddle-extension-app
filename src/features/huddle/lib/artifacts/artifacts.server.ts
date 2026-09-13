@@ -180,7 +180,20 @@ export async function listArtifacts(userEmail: string, f: ArtifactFilters = {}):
 }
 
 // Mime families the preview pane renders as text. Kept in sync with ArtifactsView.tsx's preview branch.
-const TEXT_PREVIEW_MIME = /^(text\/|application\/json|application\/csv)/;
+/** Which mimes get their BYTES returned for in-app preview.
+ *
+ *  THE VIEWER CANNOT RENDER WHAT THE SERVER NEVER SENDS. `text/html` and `text/vnd.mermaid` already
+ *  passed on `^text/`, so those render; **`image/svg+xml` did not**, so an SVG artifact came back
+ *  with `text: null` and fell through to the raster `<img>` path instead of the sandboxed frame.
+ *  Same for a mermaid file stored under a non-`text/` mime. Found by the viewer lane, which could
+ *  not fix it — it owns the component, this file is the gate.
+ *
+ *  DELIBERATELY NOT `/^image\//` — that would start streaming PNG and JPEG bytes through the text
+ *  preview path for no reason. SVG is here because it is TEXT that happens to carry an image mime,
+ *  which is exactly why it slipped through the original `^text/` rule.
+ *  `TEXT_PREVIEW_MAX_BYTES` still caps every one of these. */
+const TEXT_PREVIEW_MIME =
+  /^(text\/|application\/json|application\/csv|image\/svg\+xml|application\/vnd\.mermaid|application\/xhtml\+xml)/;
 // Above this, skip the server-side text read (still get a working download link) — a preview pane
 // isn't the place to pull multi-MB files into memory on every open.
 const TEXT_PREVIEW_MAX_BYTES = 2_000_000;
