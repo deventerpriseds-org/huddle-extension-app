@@ -303,3 +303,88 @@ edit: `CAREER: 150`, `VENTURES: 300` reproduces the spec and *keeps* the pairwis
 (150/300/250/70 → closest pair 50°… so the floor assertion at 60° would need revisiting, which is
 itself worth the owner knowing: the spec's own four colours are closer together than the test's
 invented floor allows).
+
+---
+
+## RE-DERIVED — N-3 / N-2 (the park tag-union): **PARTLY REFUTED — there are still THREE implementations, not one**
+
+### N-2 (the case semantics) — CONFIRMED, and the confirm-ask path is bit-identical
+
+I reconstructed **both** pre-extraction implementations verbatim from `git show 1bd280c` and ran
+all three against the same inputs, importing the real `withParkingLotTag` / `isParked`:
+
+```
+input                        NEW withParkingLotTag              OLD widget inline                  OLD confirm-ask                    isParked(new)
+[]                           ["parking-lot"]                    ["parking-lot"]                    ["parking-lot"]                    true
+["blocked"]                  ["blocked","parking-lot"]          ["blocked","parking-lot"]          ["blocked","parking-lot"]          true
+["parking-lot"]              ["parking-lot"]                    ["parking-lot"]                    ["parking-lot"]                    true
+["Parking-Lot"]              ["Parking-Lot","parking-lot"]      ["Parking-Lot"]                    ["Parking-Lot","parking-lot"]      true
+["PARKING-LOT"]              ["PARKING-LOT","parking-lot"]      ["PARKING-LOT"]                    ["PARKING-LOT","parking-lot"]      true
+["blocked","Parking-Lot"]    ["blocked","Parking-Lot","parking-lot"] ["blocked","Parking-Lot"]     ["blocked","Parking-Lot","parking-lot"] true
+
+idempotence: withParkingLotTag(withParkingLotTag(["Parking-Lot"])) = ["Parking-Lot","parking-lot"]
+```
+
+Two things fall straight out, and the second is the one the brief asked for:
+
+1. **`confirm-ask.functions.ts` is UNCHANGED — bit-identical on all six inputs.** That pre-existing
+   path (`parkTaskFromButtonFn`, the Park button) behaves exactly as it did before this work
+   touched it. Its guard `alreadyParked = status === "BACKLOG" && existingTags.includes("parking-lot")`
+   (`:648`) is exact-match and always was, so the helper matches its own former semantics precisely.
+2. **The widget ⏸ path DID change for a differently-cased existing tag, deliberately and for the
+   better.** `["Parking-Lot"]` used to be left alone; it now becomes
+   `["Parking-Lot","parking-lot"]`. Since `autowork.server.ts:533`, `groom.ts:121` and
+   `scoring.ts:137` all filter on an **exact** `.includes("parking-lot")`, the old behaviour parked
+   the task in the widget's eyes while leaving it a live automation candidate. The new behaviour
+   actually parks it. It is idempotent after one write (re-running adds nothing), and the odd-cased
+   tag is preserved rather than rewritten — the user's data is not edited.
+
+   **Cost, stated rather than glossed:** such a task now carries *two* tags, and `BoardView.tsx:794`
+   renders `task.tags` as chips, so it will show a duplicate-looking pair. Cosmetic, one-time, LOW.
+
+### N-3 (one implementation) — **REFUTED as stated. The extraction removed one of three copies.**
+
+`grep -rn "parking-lot|PARKING_LOT_TAG" src/` finds the union built in **three** places:
+
+| # | site | how it builds the union | shared? |
+|---|---|---|---|
+| 1 | `widgets.server.ts:263` `withParkingLotTag` | the helper | called by `widgets.functions.ts:295` **and** `confirm-ask.functions.ts:655` ✅ |
+| 2 | **`HuddleView.tsx:566`** | `apply({status:"BACKLOG", addTags:[PARKING_LOT_TAG]}, status, [...tags, PARKING_LOT_TAG])`, with its **own** `const PARKING_LOT_TAG = "parking-lot"` at `:389` | ❌ inline |
+| 3 | **`BoardView.tsx:750`** | `onMove(task.id, { tags: [...tags, "parking-lot"], status: "BACKLOG" })`, bare string literal | ❌ inline |
+
+Both #2 and #3 are **pre-existing** and outside this work's blast radius, so this is not a
+regression — but "there is genuinely one implementation now" is **not true**, and the drift N-3
+exists to prevent is still possible between the widget/confirm-ask pair and the chat checklist
+(#2) and the board (#3). Neither of those two normalizes case either, so they carry the identical
+N-2 bug the helper just fixed.
+
+One more inconsistency, inside the *same file* as the helper: the **reader** `isParked`
+(`widgets.server.ts:245`) is **case-insensitive** (`String(t).toLowerCase() === PARKING_LOT_TAG`)
+while the **writer** `withParkingLotTag` (`:263-265`) is **case-exact**. That asymmetry is what
+produces the two-tag result above. It is defensible (read generously, write canonically) but it is
+not stated anywhere, and a future reader will reasonably assume both ends agree.
+
+---
+
+## CHALLENGE TO THE STATED BLAST RADIUS
+
+Asked for directly, so stated directly.
+
+1. **`confirm-ask.functions.ts` reaches nothing new.** Its only change is
+   `existingTags.includes(...)` → `withParkingLotTag(existingTags)` inside `parkTaskFromButtonFn`
+   (`:648-656`), and the table above proves the two are bit-identical on every input including the
+   odd-cased ones. The new dynamic `await import("./widgets.server")` follows the pattern that file
+   already uses for server-only modules; `widgets.server.ts` is DOM-free and pulls in nothing the
+   confirm-ask path did not already reach. **Radius correct.**
+2. **The colour extraction changed NOTHING outside the category chip — but "outside the chip" was
+   never the right boundary.** `categoryHue` has exactly two consumers (`grep`):
+   `JourneyWidgets.tsx:116` (the chip) and **`JourneyWidgets.tsx:573` (the topic rail's coloured
+   left bar, `oklch(0.62 0.16 ${categoryHue(node.name)})`)**. The rail is a second rendering
+   surface, and it is the one the spec screenshot draws the four category colours on — which is
+   exactly where the CAREER/VENTURES defect above shows up. So the extraction is correctly scoped,
+   but describing it as "the category chip" understates where its output is visible.
+3. **The radius omits `Rail.tsx` and `HuddleApp.tsx`.** Both are listed in LANE-D rather than the
+   loop-2 fix list, so nothing was hidden — but a reader taking the loop-3 radius as the complete
+   surface would miss the two new rail entries and the two new view mappings.
+4. **The radius omits `huddle.functions.ts`.** Same reason (it is LANE-D, commit `b56907e`), and it
+   is by far the largest file touched by this work — ten insertion points into the turn pipeline.
