@@ -280,3 +280,62 @@ npm run test:router        ->  20 passed, 0 failed
 npm run test:widget-live   ->  12 passed, 0 failed
 npm run test:widget-colors ->  16 passed, 0 failed
 ```
+
+### N-9 mutation proof — **FIRED**
+
+Anchor uniqueness checked first: `grep -c "if (!tracked) {"` → **1**. Anchor and replacement as FILES.
+
+```
+mutate.sh src/features/huddle/components/JourneyWidgets.tsx n9-anchor.txt n9-repl.txt \
+          "npm run test:widget-live" "runAction seeds an untracked row BEFORE patching it"
+
+FIRED: 'runAction seeds an untracked row BEFORE patching it' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/components/JourneyWidgets.tsx matches HEAD
+tree clean: 'runAction seeds an untracked row BEFORE patching it' passes again on the restored tree (build output regenerated)
+```
+
+---
+
+## N-7 (LOW) — CURRENTLY DOING lost the spec's ✓/⏸ in the empty state
+
+**The screenshot was read this session before deciding** (`docs/widgets/spec-schedule-widget.jpg`),
+because the verifier explicitly filed this as a fidelity call rather than a bug.
+
+**Observation:** the spec DOES draw both buttons beside "Nothing in progress" — a full-size green ✓
+and a full-size orange ⏸, in the same geometry and colours as on a populated row. The code rendered
+them only when `doing` was truthy, so the empty row collapsed to bare text.
+
+**Interpretation, kept separate:** on an Android home widget those are fixed chrome. On the web, a
+live-looking button with no task to act on is a dead control — the user taps and nothing happens,
+which is worse than the missing affordance.
+
+**The fix takes both:** a new `EmptyDoingControl` renders the pair with the spec's geometry and theme
+colours, but `disabled`, `tabIndex={-1}`, and labelled for a screen reader as explicitly unavailable
+("Mark done — nothing in progress"). The row keeps the widget's shape; nothing is tappable that
+cannot act.
+
+**No automated test.** This is a render-shape change whose only real verdict is visual, and there is
+no browser here (see the top of this file). It is typechecked and it is the only defect in this batch
+with no executable guard — stated plainly rather than papered over with an assertion that would only
+re-state the JSX.
+
+## Lint
+
+`npm run lint` fails repo-wide (4142 problems, almost all `prettier/prettier`) and **was already
+failing before this work** — measured, not assumed: eslint on `JourneyWidgets.tsx` at the branch base
+`a772e42` reports **36 errors**, and it reports **36** after these changes. Net contribution: zero.
+The new files are clean apart from `cond ? pass++ : fail++`, which is the pattern every existing
+test script in `scripts/` uses. Lint is not one of the gates this work was given.
+
+## Final state — all gates, after every fix
+
+```
+=== EXIT tsc: 0 ===
+npm run test:widget-park   ->  10 passed, 0 failed
+npm run test:router        ->  20 passed, 0 failed
+npm run test:widget-live   ->  12 passed, 0 failed
+npm run test:widget-colors ->  16 passed, 0 failed
+```
+
+Mutation proofs: **N-8 FIRED, N-5 FIRED, N-9 FIRED.** None INERT, none NOT-APPLIED. N-7 has no
+guard and is reported as unproven rather than claimed.

@@ -188,7 +188,12 @@ async function runAction(
   // a row that IS tracked — it is a no-op in the common case.)
   if (!tracked) {
     store.seedChecklistRows([
-      { taskId: row.id, status: before.status, tags: before.tags, ...(before.today !== undefined ? { today: before.today } : {}) },
+      {
+        taskId: row.id,
+        status: before.status,
+        tags: before.tags,
+        ...(before.today !== undefined ? { today: before.today } : {}),
+      },
     ]);
   }
   store.setChecklistRow(row.id, {
@@ -364,6 +369,34 @@ function PauseButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
       style={{ backgroundColor: "var(--warning)", color: "var(--warning-foreground)" }}
     >
       {busy ? <Loader2 size={13} className="animate-spin" aria-hidden /> : <Pause size={13} className="fill-current" aria-hidden />}
+    </button>
+  );
+}
+
+/** The ✓ / ⏸ pair the spec draws beside "Nothing in progress", with NOTHING to act on — so it is
+ *  `disabled`, out of the tab order, and labelled for a screen reader as explicitly unavailable
+ *  rather than silently inert. Same geometry and theme colours as the real buttons, so the empty row
+ *  keeps the spec's shape (N-7). */
+function EmptyDoingControl({ kind }: { kind: "done" | "pause" }) {
+  const done = kind === "done";
+  return (
+    <button
+      type="button"
+      disabled
+      tabIndex={-1}
+      aria-label={done ? "Mark done — nothing in progress" : "Pause — nothing in progress"}
+      className={cn(CTRL_BASE, "-my-2 min-h-11 w-10")}
+      style={
+        done
+          ? { backgroundColor: "var(--success)", color: "var(--success-foreground)" }
+          : { backgroundColor: "var(--warning)", color: "var(--warning-foreground)" }
+      }
+    >
+      {done ? (
+        <Check size={14} strokeWidth={3} aria-hidden />
+      ) : (
+        <Pause size={13} className="fill-current" aria-hidden />
+      )}
     </button>
   );
 }
@@ -752,10 +785,22 @@ export function ScheduleWidget({
         <span className="min-w-0 flex-1 truncate text-[13px] font-bold text-foreground" title={doing?.title}>
           {doing ? doing.title : "Nothing in progress"}
         </span>
-        {doing && (
+        {doing ? (
           <div className="flex shrink-0 items-center gap-0.5">
             <DoneButton row={doing} caller={caller} />
             <PauseButton row={doing} caller={caller} />
+          </div>
+        ) : (
+          /* THE SPEC DRAWS BOTH BUTTONS BESIDE "Nothing in progress" — read from
+             docs/widgets/spec-schedule-widget.jpg this session: a full-size green ✓ and orange ⏸ sit
+             on the empty row exactly as they do on a populated one. Hiding them made the row collapse
+             to text and lose the widget's shape, which is the divergence N-7 filed.
+             RENDERED, BUT DISABLED. A live-looking button with no task to act on is a dead control —
+             the user taps and nothing happens. On an Android home widget these are fixed chrome; on
+             the web the honest equivalent is the same geometry and colour, visibly inert. */
+          <div className="flex shrink-0 items-center gap-0.5">
+            <EmptyDoingControl kind="done" />
+            <EmptyDoingControl kind="pause" />
           </div>
         )}
       </div>

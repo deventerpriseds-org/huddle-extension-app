@@ -48,7 +48,10 @@ function hashHue(name: string): number {
  *  the old case-sensitive hash therefore gave them different colours in the one widget that shows
  *  both at once. */
 function normalize(name: string): string {
-  return name.trim().replace(/[\s-]+/g, "_").toUpperCase();
+  return name
+    .trim()
+    .replace(/[\s-]+/g, "_")
+    .toUpperCase();
 }
 
 /** The hue (OKLCH degrees, 0-359) for a category or topic name. Seeded for journey's four known
