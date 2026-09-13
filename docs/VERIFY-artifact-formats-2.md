@@ -466,3 +466,60 @@ this is a write-outside-the-intended-folder bug rather than a cross-user one —
 
 **Fix direction:** sanitise `name` at `createArtifactFromAgent` (strip `/`, `\` and `..` segments,
 keeping `withExtension`'s behaviour) rather than only in `slug()`, which protects the blob path alone.
+
+---
+
+## C10 — `npx tsc --noEmit` clean and `npm run build` succeeds
+
+**CONFIRMED.** Actual output:
+
+```
+$ npx tsc --noEmit ; echo "TSC_EXIT=$?"
+TSC_EXIT=0
+```
+
+The command produced **one line of output total** (the exit marker) — `grep -c "error TS"` over the
+log returns **0**. That is zero errors repo-wide, so a fortiori zero in the artifact files.
+
+```
+$ npm run build ; echo "BUILD_EXIT=$?"
+BUILD_EXIT=0
+…
+.output/server/_libs/pptxgenjs.mjs        398.92 kB │ gzip: 116.41 kB
+.output/server/_libs/docx.mjs            843.27 kB │ gzip: 179.31 kB
+✓ built in 2.04s
+[nitro] √ You can preview this build using npx vite preview
+```
+
+Both Office renderers are really in the server bundle (`docx.mjs` 843.27 kB, `pptxgenjs.mjs`
+398.92 kB) — the multi-format path is not tree-shaken away. The only `error|failed` grep hit in the
+whole build log is a **pre-existing, unrelated** Vite advisory about `node:util` being externalised for
+`web-push/src/web-push-error.js` — not an error, not in the artifact path, and not introduced here.
+
+---
+
+## Summary table
+
+| # | claim | verdict |
+|---|---|---|
+| C1 | tool schema: six formats, `content` not required | **CONFIRMED** (+ minor: `CreateArtifactToolArgs` omits `format`/`document`) |
+| C2 | all six formats produce the promised artifact end to end | **CONFIRMED** |
+| C3 | docx/pptx are genuinely openable Office packages | **CONFIRMED** |
+| C4 | all four dispatch sites route through `createArtifactFromAgent` | **REFUTED** — wiring true; `format` cannot reach the **Lovable** (zod strips it) or **voice** (`additionalProperties:false`, no `format` property) sites, so both still emit markdown only |
+| C5 | markup renders only in a sandboxed opaque-origin iframe; no escape | **CONFIRMED** — 10/10 attacks contained in real Chromium |
+| C6 | `TEXT_PREVIEW_MIME` admits SVG, excludes PNG/JPEG/PDF/Office | **CONFIRMED** |
+| C7 | no markdown regression | **CONFIRMED** |
+| C8 | `renderArtifact` never throws | **CONFIRMED** — 18 hostile inputs, 0 threw, 0 hung, max 124 ms, largest input 1 MB |
+| C9 | adversarial: no misrepresenting/unopenable file | **REFUTED** — (1) `format:"md"` + an Office `mime` stores markdown under the Word mime; (2) `..` in the artifact name survives into the OneDrive mirror path |
+| C10 | `tsc --noEmit` clean, `npm run build` succeeds | **CONFIRMED** |
+
+### Must fix before this is done
+1. **C4a — Lovable path** (`huddle.functions.ts:4829-4835`): add `format` + `document` to `inputSchema`; relax `!content` at L4841.
+2. **C4b — voice path** (`realtime-tools.server.ts:287-303`): add `format` + `document` to `properties`, relax `!content` at L578, drop "markdown/plain text" from the description.
+3. **C9a — mime override** (`artifacts.server.ts:224-226`): gate the override on the OVERRIDE's own type, not on `rendered.mime`.
+4. **C9b — name sanitising** (`createArtifactFromAgent`): strip `/`, `\` and `..` from `name`, not only from the blob `slug()`.
+
+### VERDICT
+**REFUTED overall — 8 CONFIRMED, 2 REFUTED (C4, C9), 0 NOT PROVEN, 0 NOT REACHED: the six formats
+work and are genuinely safe, but the voice and Lovable dispatch paths still cannot receive `format` at
+all, and two adversarial inputs produce a mislabelled file and an out-of-folder mirror write.**
