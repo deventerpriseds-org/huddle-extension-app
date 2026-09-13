@@ -286,17 +286,32 @@ export async function buildRealtimeToolset(
     type: "function",
     name: "create_artifact",
     description:
-      "Save a document (markdown/plain text) as a reviewable artifact the user can open, review, and " +
-      "approve — a memo, plan, budget, brief, notes, or any file you produce for them. Call this WHENEVER " +
-      "you produce a document; do not merely say you'll generate a file. Returns the saved artifact.",
+      "Save a document as a reviewable artifact the user can open, review, and approve — a memo, plan, " +
+      "budget, brief, deck, diagram, or any file you produce for them. Call this WHENEVER you produce a " +
+      "document; do not merely say you'll generate a file. " +
+      "YOU ARE NOT LIMITED TO MARKDOWN: set `format` to 'docx' for a real Word document, 'pptx' for a " +
+      "PowerPoint deck, 'mermaid' for a diagram, 'html' for an interactive/D3 visualisation. If the user " +
+      "SAYS Word, deck, slides or diagram, produce THAT. Returns the saved artifact.",
     parameters: {
       type: "object",
+      // `additionalProperties: false` means an omitted field is UNREACHABLE, not merely undocumented —
+      // the model cannot emit it at all. `format` was missing here while the shared dispatch happily
+      // accepted it, so spoken "make me a deck" silently returned markdown: the exact bug the owner
+      // reported, still live on this path. Keep this list in step with CREATE_ARTIFACT_TOOL.
       additionalProperties: false,
       properties: {
-        name: { type: "string", description: "File name, e.g. 'alabama-trip-budget.md'." },
-        content: { type: "string", description: "The FULL document content (markdown/plain text)." },
+        name: { type: "string", description: "File name; the extension is corrected to match `format`." },
+        content: { type: "string", description: "The FULL document. Markdown for md/docx/pptx; native source for html/mermaid/svg." },
+        format: {
+          type: "string",
+          enum: ["md", "docx", "pptx", "html", "mermaid", "svg"],
+          description:
+            "What to produce. Default 'md'. 'docx' = Word, 'pptx' = PowerPoint deck (write markdown; a " +
+            "top-level heading starts each slide), 'mermaid' = diagram source, 'html' = interactive page, " +
+            "'svg' = vector image.",
+        },
         folder: { type: "string", description: "Optional folder/category, e.g. Finance, Research, Ventures. Default Research." },
-        mime: { type: "string", description: "Optional MIME type. Default text/markdown." },
+        mime: { type: "string", description: "Rarely needed — `format` sets this." },
       },
       required: ["name", "content"],
     },

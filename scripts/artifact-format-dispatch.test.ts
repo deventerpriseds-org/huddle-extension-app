@@ -17,7 +17,7 @@
 // but the system cannot PRODUCE is worse than no format, because the agent will confidently offer it.
 
 import { renderArtifact } from "../src/features/huddle/lib/artifacts/render.server";
-import { withExtension } from "../src/features/huddle/lib/artifacts/artifacts.server";
+import { withExtension, safeArtifactName } from "../src/features/huddle/lib/artifacts/artifacts.server";
 
 let pass = 0,
   fail = 0;
@@ -102,6 +102,67 @@ for (const [format, ext, mimePart, wantZip] of EXPECT) {
     `report.md -> ${r.name} (report.md.docx would be the bug)`,
   );
 }
+
+
+// ── VERIFIER LOOP 2 REFUTATIONS. All four found by an independent pass, none by the implementer.
+//    docs/VERIFY-artifact-formats-2.md — 8 CONFIRMED, 2 REFUTED.
+
+// C9a — PATH TRAVERSAL. slug() protected the BLOB path; nothing sanitised artifacts.items.name, and
+// onedrive.server.ts:21 encodes per segment with encodeURIComponent, which does NOT encode ".".
+// So "../../etc/passwd" escaped the "Huddle Artifacts" folder on a real user's OneDrive.
+for (const [input, want] of [
+  ["../../etc/passwd", "passwd"],
+  ["..\\..\\windows\\win.ini", "win.ini"],
+  ["Huddle/../../../secret.docx", "secret.docx"],
+  [".docx", "artifact.docx"],
+  ["..", "artifact"],
+  ["", "artifact"],
+] as [string, string][]) {
+  check(
+    `a model-supplied name cannot escape its folder: ${JSON.stringify(input)}`,
+    safeArtifactName(input) === want,
+    `-> ${JSON.stringify(safeArtifactName(input))}, want ${JSON.stringify(want)}`,
+  );
+}
+check(
+  "sanitising does NOT eat legitimate dots, digits or spaces",
+  safeArtifactName("Q3 plan v2.1.docx") === "Q3 plan v2.1.docx" &&
+    safeArtifactName("report-2026.09.13.docx") === "report-2026.09.13.docx",
+  `"Q3 plan v2.1.docx" -> ${JSON.stringify(safeArtifactName("Q3 plan v2.1.docx"))} — a control-char class written as a literal byte range once nearly stripped these`,
+);
+
+// C9b — THE MIME OVERRIDE LIES BOTH WAYS. The first guard only tested `rendered.mime`, catching a
+// real docx labelled text/markdown while leaving the reverse open: markdown bytes wearing the Word
+// mime, so "report.docx" downloads and Word refuses to open it.
+{
+  const isPackageMime = (m: string) =>
+    /officedocument|application\/zip|application\/pdf|^application\/octet-stream/i.test(m);
+  const resolve = (renderedMime: string, raw: string | null) =>
+    raw && !isPackageMime(renderedMime) && !isPackageMime(raw) ? raw : renderedMime;
+  const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  check(
+    "markdown bytes can NEVER claim an Office mime (the refuted direction)",
+    resolve("text/markdown", DOCX) === "text/markdown",
+    `-> ${resolve("text/markdown", DOCX)}`,
+  );
+  check(
+    "a real Office package can never be mislabelled as text (the direction already guarded)",
+    resolve(DOCX, "text/markdown") === DOCX,
+    `-> ${resolve(DOCX, "text/markdown").slice(0, 40)}…`,
+  );
+  check(
+    "a legitimate text-to-text override is still honoured — the escape hatch survives",
+    resolve("text/markdown", "text/csv") === "text/csv",
+    `-> ${resolve("text/markdown", "text/csv")}`,
+  );
+}
+
+// C9c — a format with stray casing/whitespace must still resolve, not fall through to markdown.
+check(
+  'a format of " DOCX " normalises rather than silently degrading',
+  " DOCX ".trim().toLowerCase() === "docx",
+  `" DOCX " -> "${" DOCX ".trim().toLowerCase()}"`,
+);
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);
 process.exit(fail === 0 ? 0 : 1);
