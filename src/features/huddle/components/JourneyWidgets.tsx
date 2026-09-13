@@ -301,9 +301,11 @@ function TodayButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
   );
 }
 
-/** ▶ start → DOING. The spec pairs a LIGHTER teal ▶ beside a DARKER green ✓; both are expressed as
- *  mixes of the theme's own `--success` so the pair stays distinguishable in dark mode too, instead
- *  of the lighter one washing out to a pale blob on a dark card. */
+/** ▶ start → DOING. The spec pairs a LIGHTER teal ▶ beside a DARKER green ✓.
+ *  This was a color-mix of `--success` against `--surface`, which is oklch(1 0 0) — white with an
+ *  EXPLICIT hue of 0 — so it dragged hue 155 to 111.6 and rendered YELLOW-GREEN, not a lighter teal.
+ *  Identical defect to the pink band (D-1), found by sweeping every color-mix in the repo.
+ *  `--success-soft` is a literal at the SAME hue, lit per theme. */
 function StartButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
   const { status, busy } = useRowState(row);
   const doing = status === "DOING";
@@ -315,7 +317,7 @@ function StartButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
       aria-label={doing ? `"${row.title}" is already in progress` : `Start "${row.title}"`}
       className={cn(CTRL_BASE, "-my-2 min-h-11 w-10")}
       style={{
-        backgroundColor: "color-mix(in oklch, var(--success) 72%, var(--surface))",
+        backgroundColor: "var(--success-soft)",
         color: "var(--success-foreground)",
       }}
     >
@@ -499,12 +501,39 @@ function WidgetComposeRow({ placeholder, prefix }: { placeholder: string; prefix
 }
 
 /* ── Section chrome ──────────────────────────────────────────────────────────────────────────────
- * The cream/ivory band from both screenshots, expressed against the THEME's own warning hue rather
- * than a hardcoded off-white — a literal #FFFCF0 would be near-invisible on light mode's white
- * surface and glaring in dark mode. */
+ * The cream/pale-yellow band from both screenshots. This reads ONE token, `--band-cream`, which
+ * styles.css defines per theme (light, dark and the always-dark meeting stage) as an explicit
+ * hue-92 literal.
+ *
+ * It used to be `color-mix(in oklch, var(--warning) 9%, var(--surface))`, and that shipped PINK.
+ * `--warning` is hue 55, but `--surface` is `oklch(1 0 0)` — white written with an EXPLICIT hue of
+ * ZERO, not a hueless white — so oklch interpolated 55 -> 0 and the 9% mix landed at hue ~4.95,
+ * chroma ~0.0144. That is a pale pink, and the owner saw it as one on his phone. Deriving the band
+ * from a mix against ANY neutral whose hue channel is written as 0 collapses the hue the same way,
+ * so the band is a literal now and the per-theme relighting happens in styles.css where the rest of
+ * the palette lives. Guarded by scripts/widget-band-color.test.ts. */
 const BAND_STYLE: React.CSSProperties = {
-  backgroundColor: "color-mix(in oklch, var(--warning) 9%, var(--surface))",
+  backgroundColor: "var(--band-cream)",
 };
+
+/** The widget's OUTER chrome, and the whole of defect D-4.
+ *
+ *  Every widget used to render `rounded-xl border border-hairline bg-surface shadow-soft`
+ *  unconditionally. That is right for a card in the chat stream and wrong everywhere else:
+ *    - as a full-page VIEW it drew a small bordered card marooned in a large empty panel, which is
+ *      what the owner called "cards instead of using the entire panel";
+ *    - in the DOCK it drew a bordered card inside the dock's own bordered shell — a box in a box.
+ *
+ *  Three contexts, one function, so a fourth caller cannot invent a fourth look:
+ *    card — the chat stream. Unchanged: it IS a card, floating on the transcript.
+ *    page — a full-page view. No border, no radius, no shadow: the PANEL is the container, the
+ *           widget fills it, and the widget's own sections do the scrolling.
+ *    bare — docked. No chrome at all; the dock shell already provides it. */
+function widgetShell(chrome: "card" | "page" | "bare"): string {
+  if (chrome === "page") return "flex min-h-0 min-w-0 flex-1 flex-col bg-surface";
+  if (chrome === "bare") return "overflow-hidden bg-surface";
+  return "overflow-hidden rounded-xl border border-hairline bg-surface shadow-soft";
+}
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -594,7 +623,17 @@ function TopicRow({ node, depth }: { node: TopicNode; depth: number }) {
           style={{ paddingLeft: `${depth === 0 ? 0 : depth * 0.875 + 0.75}rem` }}
         >
           <span className="w-3 shrink-0 text-muted-foreground">
-            {hasChildren ? (open ? <ChevronDown size={11} aria-hidden /> : <ChevronRight size={11} aria-hidden />) : null}
+            {/* D-5 #12: the spec uses FILLED TRIANGLES here, not stroked chevrons, and the same
+                triangle family as the Today button's ▲ — so within the spec the two marks rhyme.
+                A rotated filled Triangle is that mark; `Triangle` is already imported. */}
+            {hasChildren ? (
+              <Triangle
+                size={8}
+                strokeWidth={0}
+                className={cn("fill-current transition-transform", open ? "rotate-180" : "rotate-90")}
+                aria-hidden
+              />
+            ) : null}
           </span>
           <span
             className={cn("min-w-0 flex-1 truncate text-[13px]", depth === 0 ? "text-foreground" : "text-foreground/85")}
@@ -643,6 +682,7 @@ export function PrioritiesWidget({
   title,
   onSettings,
   live,
+  chrome = "card",
 }: {
   data: PrioritiesWidgetData;
   full?: boolean;
@@ -652,12 +692,14 @@ export function PrioritiesWidget({
   /** `data` came from a Lane-B read this mount, so it is server truth and must beat any stale
    *  snapshot already in the shared row map. See `useSeededRows`. */
   live?: boolean;
+  /** Outer chrome. Defaults to the chat-stream card; see `widgetShell`. */
+  chrome?: "card" | "page" | "bare";
 }) {
   const caller = useCaller();
   useSeededRows(data.band, live);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-hairline bg-surface shadow-soft">
+    <div className={widgetShell(chrome)}>
       <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
         <span className="min-w-0 flex-1 truncate text-sm font-bold text-foreground">{title || "Priorities"}</span>
         <button
@@ -745,11 +787,14 @@ export function ScheduleWidget({
   data,
   full,
   live,
+  chrome = "card",
 }: {
   data: ScheduleWidgetData;
   full?: boolean;
   /** See `PrioritiesWidget.live` / `useSeededRows` — live server truth overwrites a stale snapshot. */
   live?: boolean;
+  /** Outer chrome. Defaults to the chat-stream card; see `widgetShell`. */
+  chrome?: "card" | "page" | "bare";
 }) {
   const caller = useCaller();
   // ONE seed pass over every row in the widget, so a task that Lane B legitimately places in two
@@ -763,7 +808,7 @@ export function ScheduleWidget({
   const doing = data.currentlyDoing[0];
 
   return (
-    <div className="overflow-hidden rounded-xl border border-hairline bg-surface shadow-soft">
+    <div className={widgetShell(chrome)}>
       <div className="px-3 py-2">
         <WidgetComposeRow placeholder="What's next…" />
       </div>
@@ -946,43 +991,61 @@ export function DockedJourneyWidgets() {
         // that layout anyway, so the two-up was desktop-only divergence from the spec screenshots.
         // Each widget now renders at full column width, one above the other, the way each screenshot
         // draws it.
-        <div className="flex flex-col gap-3 px-2 pb-2">
-          <LivePrioritiesWidget />
-          <LiveScheduleWidget />
+        // `chrome="bare"` — D-4. Each widget used to draw its own rounded, bordered, shadowed card
+        // INSIDE this already-bordered dock shell: a box in a box. The dock is the container; the
+        // two widgets are sections of it, divided by a hairline rather than by two more borders.
+        <div className="flex flex-col divide-y divide-hairline border-t border-hairline">
+          <LivePrioritiesWidget chrome="bare" />
+          <LiveScheduleWidget chrome="bare" />
         </div>
       )}
     </div>
   );
 }
 
-function LivePrioritiesWidget({ full }: { full?: boolean }) {
+function LivePrioritiesWidget({
+  full,
+  chrome,
+}: {
+  full?: boolean;
+  chrome?: "card" | "page" | "bare";
+}) {
   const { loading, data } = usePrioritiesData();
   if (loading) return <WidgetPlaceholder label="Loading your priorities…" />;
   if (!data) return <WidgetUnreachable label="your priorities" />;
   // `live` — this payload IS the Lane-B read, so it must overwrite any stale in-chat snapshot that
   // seeded the shared row map first (see useSeededRows).
-  return <PrioritiesWidget data={data} full={full} live />;
+  return <PrioritiesWidget data={data} full={full} live chrome={chrome} />;
 }
 
-function LiveScheduleWidget({ full }: { full?: boolean }) {
+function LiveScheduleWidget({
+  full,
+  chrome,
+}: {
+  full?: boolean;
+  chrome?: "card" | "page" | "bare";
+}) {
   const { loading, data } = useScheduleData();
   if (loading) return <WidgetPlaceholder label="Loading your schedule…" />;
   if (!data) return <WidgetUnreachable label="your schedule" />;
   // `live` — same reason as LivePrioritiesWidget.
-  return <ScheduleWidget data={data} full={full} live />;
+  return <ScheduleWidget data={data} full={full} live chrome={chrome} />;
 }
 
 /* ── Full-page views (side menu) ─────────────────────────────────────────────────────────────────── */
 
+/** A full-page widget view. D-4: this used to pad the panel (`px-3 py-4 sm:px-6`) and then constrain
+ *  the widget to `max-w-3xl` inside it, so on any wide screen the view was a narrow card sitting in a
+ *  large empty area — and on a phone it was a card with a margin all round it for no reason. The
+ *  view's OWN chrome is the container now: the header bar is the page header, and the widget fills
+ *  the rest of the panel edge to edge and scrolls its own sections. */
 function WidgetPage({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <div className="border-b border-hairline bg-surface px-3 py-2.5 sm:px-6">
         <h1 className="text-sm font-semibold text-foreground">{title}</h1>
       </div>
-      <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-6">
-        <div className="mx-auto max-w-3xl">{children}</div>
-      </div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
     </section>
   );
 }
@@ -990,7 +1053,7 @@ function WidgetPage({ title, children }: { title: string; children: React.ReactN
 export function PrioritiesView() {
   return (
     <WidgetPage title="Priorities">
-      <LivePrioritiesWidget full />
+      <LivePrioritiesWidget full chrome="page" />
     </WidgetPage>
   );
 }
@@ -998,7 +1061,7 @@ export function PrioritiesView() {
 export function ScheduleView() {
   return (
     <WidgetPage title="Schedule">
-      <LiveScheduleWidget full />
+      <LiveScheduleWidget full chrome="page" />
     </WidgetPage>
   );
 }
