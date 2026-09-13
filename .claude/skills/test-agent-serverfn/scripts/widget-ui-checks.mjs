@@ -55,8 +55,35 @@ const hueGap = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360
 async function openView(page, label) {
   // Click by accessible name so this follows the app's real nav rather than a private test hook.
   const btn = page.getByRole("button", { name: new RegExp(`^${label}$`, "i") }).first();
-  if (await btn.count()) { await btn.click().catch(() => {}); await page.waitForTimeout(700); return true; }
-  return false;
+  if (!(await btn.count())) return false;
+  await btn.click().catch(() => {});
+  await page.waitForTimeout(400);
+  return true;
+}
+
+/** Wait for the widget to stop LOADING, and say so honestly when it never does.
+ *
+ *  THE DEFECT THIS CLOSES IS IN THIS FILE, NOT THE APP. The first run of these checks (2026-09-13,
+ *  against production) reported the band colour and the panel fill as FAILURES. They were not: the
+ *  view sat on "Loading your priorities…", so there was no band and no content to measure, and a
+ *  check that cannot tell "wrong colour" from "no colour" reports the alarming answer either way.
+ *  That is the same INERT-vs-NOT-APPLIED distinction mutate.sh exists to make — a check that did
+ *  nothing must never look like a check that found something.
+ *
+ *  Returns "ready" | "still-loading" | "absent". Callers MUST branch on it. */
+async function waitForWidgetData(page, { timeout = 20000 } = {}) {
+  const loadingRe = /Loading your (priorities|schedule)/i;
+  const deadline = Date.now() + timeout;
+  let sawLoading = false;
+  while (Date.now() < deadline) {
+    const text = await page.evaluate(() => document.body.innerText || "");
+    if (loadingRe.test(text)) { sawLoading = true; await page.waitForTimeout(500); continue; }
+    // Not loading. Is there actually a widget on screen?
+    const hasWidget = await page.evaluate(() =>
+      /Priorities|Schedule|Nothing in progress|No priorities right now/i.test(document.body.innerText || ""));
+    return hasWidget ? "ready" : "absent";
+  }
+  return sawLoading ? "still-loading" : "absent";
 }
 
 export const checks = [
@@ -106,7 +133,17 @@ export const checks = [
   // ── D-1: the band renders CREAM (hue ~92), not pink (hue ~5). The exact production defect.
   async ({ page, check, screenshot }) => {
     await openView(page, "Priorities");
+    const state = await waitForWidgetData(page);
     await screenshot("priorities-band");
+    if (state !== "ready") {
+      check(
+        "the Priorities band renders CREAM (hue ~92), not the shipped PINK (hue ~5)",
+        false,
+        `NOT MEASURED — the widget never rendered data (state: ${state}). This is not a colour verdict: ` +
+          `there was no band on screen to sample. Treat as UNPROVEN, never as "the colour is wrong".`,
+      );
+      return;
+    }
     const bg = await page.evaluate(() => {
       // The band is the only large tinted surface in this view; take the widest tinted block.
       const els = [...document.querySelectorAll("div,section,li")].filter((e) => {
@@ -130,7 +167,17 @@ export const checks = [
   // ── D-4: a full-page view FILLS its panel. It shipped as a small card in an empty panel.
   async ({ page, check, screenshot }) => {
     await openView(page, "Schedule");
+    const state = await waitForWidgetData(page);
     await screenshot("schedule-fills-panel");
+    if (state !== "ready") {
+      check(
+        "the Schedule view FILLS its panel rather than floating a small card in it",
+        false,
+        `NOT MEASURED — the widget never rendered data (state: ${state}). An empty view is not a ` +
+          `layout verdict; treat as UNPROVEN.`,
+      );
+      return;
+    }
     const ratio = await page.evaluate(() => {
       const vh = window.innerHeight;
       const blocks = [...document.querySelectorAll("main *, [role=main] *")]
