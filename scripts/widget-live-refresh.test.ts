@@ -123,12 +123,17 @@ check(
 );
 check(
   "LivePrioritiesWidget passes `live`",
-  /<PrioritiesWidget data=\{data\} full=\{full\} live \/>/.test(widgets),
+  // Matches `live` as a bare prop ANYWHERE in the element, not as the final attribute. It was
+  // pinned to `... full={full} live />`, which failed the moment a later prop (`chrome`) was added
+  // after it -- a true statement reported as a defect. The assertion that matters is that `live`
+  // reaches the widget, and removing it still fails this. (2026-09-13, lane F / D-4.)
+  /<PrioritiesWidget(?=[^>]*\bdata=\{data\})(?=[^>]*\bfull=\{full\})[^>]*\blive\b[^>]*\/>/.test(widgets),
   "JourneyWidgets.tsx LivePrioritiesWidget",
 );
 check(
   "LiveScheduleWidget passes `live`",
-  /<ScheduleWidget data=\{data\} full=\{full\} live \/>/.test(widgets),
+  // Same loosening, same reason, as LivePrioritiesWidget directly above.
+  /<ScheduleWidget(?=[^>]*\bdata=\{data\})(?=[^>]*\bfull=\{full\})[^>]*\blive\b[^>]*\/>/.test(widgets),
   "JourneyWidgets.tsx LiveScheduleWidget",
 );
 

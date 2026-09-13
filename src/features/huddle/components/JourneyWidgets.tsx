@@ -514,6 +514,25 @@ const BAND_STYLE: React.CSSProperties = {
   backgroundColor: "var(--band-cream)",
 };
 
+/** The widget's OUTER chrome, and the whole of defect D-4.
+ *
+ *  Every widget used to render `rounded-xl border border-hairline bg-surface shadow-soft`
+ *  unconditionally. That is right for a card in the chat stream and wrong everywhere else:
+ *    - as a full-page VIEW it drew a small bordered card marooned in a large empty panel, which is
+ *      what the owner called "cards instead of using the entire panel";
+ *    - in the DOCK it drew a bordered card inside the dock's own bordered shell — a box in a box.
+ *
+ *  Three contexts, one function, so a fourth caller cannot invent a fourth look:
+ *    card — the chat stream. Unchanged: it IS a card, floating on the transcript.
+ *    page — a full-page view. No border, no radius, no shadow: the PANEL is the container, the
+ *           widget fills it, and the widget's own sections do the scrolling.
+ *    bare — docked. No chrome at all; the dock shell already provides it. */
+function widgetShell(chrome: "card" | "page" | "bare"): string {
+  if (chrome === "page") return "flex min-h-0 min-w-0 flex-1 flex-col bg-surface";
+  if (chrome === "bare") return "overflow-hidden bg-surface";
+  return "overflow-hidden rounded-xl border border-hairline bg-surface shadow-soft";
+}
+
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -651,6 +670,7 @@ export function PrioritiesWidget({
   title,
   onSettings,
   live,
+  chrome = "card",
 }: {
   data: PrioritiesWidgetData;
   full?: boolean;
@@ -660,12 +680,14 @@ export function PrioritiesWidget({
   /** `data` came from a Lane-B read this mount, so it is server truth and must beat any stale
    *  snapshot already in the shared row map. See `useSeededRows`. */
   live?: boolean;
+  /** Outer chrome. Defaults to the chat-stream card; see `widgetShell`. */
+  chrome?: "card" | "page" | "bare";
 }) {
   const caller = useCaller();
   useSeededRows(data.band, live);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-hairline bg-surface shadow-soft">
+    <div className={widgetShell(chrome)}>
       <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
         <span className="min-w-0 flex-1 truncate text-sm font-bold text-foreground">{title || "Priorities"}</span>
         <button
@@ -753,11 +775,14 @@ export function ScheduleWidget({
   data,
   full,
   live,
+  chrome = "card",
 }: {
   data: ScheduleWidgetData;
   full?: boolean;
   /** See `PrioritiesWidget.live` / `useSeededRows` — live server truth overwrites a stale snapshot. */
   live?: boolean;
+  /** Outer chrome. Defaults to the chat-stream card; see `widgetShell`. */
+  chrome?: "card" | "page" | "bare";
 }) {
   const caller = useCaller();
   // ONE seed pass over every row in the widget, so a task that Lane B legitimately places in two
@@ -771,7 +796,7 @@ export function ScheduleWidget({
   const doing = data.currentlyDoing[0];
 
   return (
-    <div className="overflow-hidden rounded-xl border border-hairline bg-surface shadow-soft">
+    <div className={widgetShell(chrome)}>
       <div className="px-3 py-2">
         <WidgetComposeRow placeholder="What's next…" />
       </div>
@@ -954,43 +979,61 @@ export function DockedJourneyWidgets() {
         // that layout anyway, so the two-up was desktop-only divergence from the spec screenshots.
         // Each widget now renders at full column width, one above the other, the way each screenshot
         // draws it.
-        <div className="flex flex-col gap-3 px-2 pb-2">
-          <LivePrioritiesWidget />
-          <LiveScheduleWidget />
+        // `chrome="bare"` — D-4. Each widget used to draw its own rounded, bordered, shadowed card
+        // INSIDE this already-bordered dock shell: a box in a box. The dock is the container; the
+        // two widgets are sections of it, divided by a hairline rather than by two more borders.
+        <div className="flex flex-col divide-y divide-hairline border-t border-hairline">
+          <LivePrioritiesWidget chrome="bare" />
+          <LiveScheduleWidget chrome="bare" />
         </div>
       )}
     </div>
   );
 }
 
-function LivePrioritiesWidget({ full }: { full?: boolean }) {
+function LivePrioritiesWidget({
+  full,
+  chrome,
+}: {
+  full?: boolean;
+  chrome?: "card" | "page" | "bare";
+}) {
   const { loading, data } = usePrioritiesData();
   if (loading) return <WidgetPlaceholder label="Loading your priorities…" />;
   if (!data) return <WidgetUnreachable label="your priorities" />;
   // `live` — this payload IS the Lane-B read, so it must overwrite any stale in-chat snapshot that
   // seeded the shared row map first (see useSeededRows).
-  return <PrioritiesWidget data={data} full={full} live />;
+  return <PrioritiesWidget data={data} full={full} live chrome={chrome} />;
 }
 
-function LiveScheduleWidget({ full }: { full?: boolean }) {
+function LiveScheduleWidget({
+  full,
+  chrome,
+}: {
+  full?: boolean;
+  chrome?: "card" | "page" | "bare";
+}) {
   const { loading, data } = useScheduleData();
   if (loading) return <WidgetPlaceholder label="Loading your schedule…" />;
   if (!data) return <WidgetUnreachable label="your schedule" />;
   // `live` — same reason as LivePrioritiesWidget.
-  return <ScheduleWidget data={data} full={full} live />;
+  return <ScheduleWidget data={data} full={full} live chrome={chrome} />;
 }
 
 /* ── Full-page views (side menu) ─────────────────────────────────────────────────────────────────── */
 
+/** A full-page widget view. D-4: this used to pad the panel (`px-3 py-4 sm:px-6`) and then constrain
+ *  the widget to `max-w-3xl` inside it, so on any wide screen the view was a narrow card sitting in a
+ *  large empty area — and on a phone it was a card with a margin all round it for no reason. The
+ *  view's OWN chrome is the container now: the header bar is the page header, and the widget fills
+ *  the rest of the panel edge to edge and scrolls its own sections. */
 function WidgetPage({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <div className="border-b border-hairline bg-surface px-3 py-2.5 sm:px-6">
         <h1 className="text-sm font-semibold text-foreground">{title}</h1>
       </div>
-      <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-6">
-        <div className="mx-auto max-w-3xl">{children}</div>
-      </div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
     </section>
   );
 }
@@ -998,7 +1041,7 @@ function WidgetPage({ title, children }: { title: string; children: React.ReactN
 export function PrioritiesView() {
   return (
     <WidgetPage title="Priorities">
-      <LivePrioritiesWidget full />
+      <LivePrioritiesWidget full chrome="page" />
     </WidgetPage>
   );
 }
@@ -1006,7 +1049,7 @@ export function PrioritiesView() {
 export function ScheduleView() {
   return (
     <WidgetPage title="Schedule">
-      <LiveScheduleWidget full />
+      <LiveScheduleWidget full chrome="page" />
     </WidgetPage>
   );
 }
