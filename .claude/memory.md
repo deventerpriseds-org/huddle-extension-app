@@ -3344,3 +3344,36 @@ that omission compile cleanly. Both mutation-proved FIRED.
 **Assert on side effects the STUBS recorded, not on what the test computes.** `standup-deliver-mode`
 counts `enqueueTurn` / `setLastStandupAt` calls; that is what makes "a content pull posts nothing"
 a real assertion rather than a restatement of the code.
+
+## Artifact formats: the STORE is binary-capable; the AGENT-FACING TOOL is not (2026-09-13)
+
+Do not re-derive this, and do not tell the user rich formats are an OpenAI limitation — they are not.
+
+- `createArtifact` (`artifacts/artifacts.server.ts:123-150`) takes **`input.bytes` (Buffer) + an
+  arbitrary `input.mime`** and uploads via `putArtifactBlob`. `artifacts.items` stores `mime` /
+  `size_bytes` / `blob_path` verbatim. **Everything downstream of the agent can already hold a
+  .docx / .pptx / .png.**
+- `CREATE_ARTIFACT_TOOL` (`artifacts/artifact-tool.ts:24`) exposes only `content: string`, described
+  as "The FULL document in markdown", `mime` defaulting to `text/markdown`. **That single schema is
+  the whole limitation the user sees.** The voice twin (`voice/realtime-tools.server.ts:296-299`) has
+  the same shape — fix both or the surfaces diverge.
+- `mergedTools` (`huddle.functions.ts:3497`) is **100% custom `type:"function"` tools**. No OpenAI
+  built-in execution tool is ever offered. `snapshotResponsesTools`
+  (`openai-assistants.server.ts:32`) keeps only `file_search` + `function` and its own doc comment
+  says *"Drops `code_interpreter`"*. `openai-responses.server.ts:90` types `tools` as
+  *"(function/file_search). Not code_interpreter."*
+- Measured sweep of all `src/`: `image_generation` **0**, `dall-e` / `gpt-image` /
+  `images/generations` **0**. `code_interpreter` 7 hits, **every one either the snapshot declaring it
+  or the code stripping it**.
+
+**So an agent replying "I can only do .md" is reporting its toolset accurately.** Same OpenAI
+account, same Responses API, same models as ChatGPT — we hand it strictly less. ChatGPT's `.docx`
+comes from `code_interpreter` (python sandbox → container file); its images from `image_generation`.
+
+**Mermaid and D3 are a DIFFERENT bug and it is easy to misdiagnose.** They are *text*, so the
+generator was never the blocker — `TEXT_PREVIEW_MIME` (`artifacts.server.ts:183`) renders them as raw
+source. That one is viewer-side only. Do not "fix" it in the model layer.
+
+Tracked as `ACT:artifact-rich-formats`; PR #62. Built-in tools bill per session — gate them the way
+`emailTools` / `webSearchTools` / `nexusTools` are already conditionally spread into `mergedTools`,
+not unconditionally per turn.

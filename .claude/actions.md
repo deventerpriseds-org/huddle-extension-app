@@ -3664,6 +3664,51 @@ touching every server function. Scoping it into this branch would be exactly the
 failure. It needs its own AC pass, because every UAT harness in this repo depends on the current
 behaviour and would break.
 
+
+## ACT:huddle-deploy-2026-09-12 — 59 commits live; NOT user-confirmed
+
+**Deployed.** `main` fast-forwarded `d20bb5e -> 6f6b79c` (59 commits, no merge commit).
+`deploy-swa.yml` run **34710107108**, `conclusion: success`, matched on `head_sha` — NOT on
+"the latest run", which is the documented way to confirm a deploy that never happened.
+
+**Verified at the exact merged HEAD `6f6b79c`, re-run because `93f1036` touched SOURCE after the
+first pass:** 13/13 suites, `tsc --noEmit` exit 0, `npm run build` exit 0.
+
+**What went live**
+- **assign-on-create** — a task handed directly to an agent no longer lands unassigned and inert. Two
+  call sites, including `runProduce`, whose "I've kicked it to the team" was an overclaim every time.
+- **green-light + verdict-memory** — `isGreenLight("produce")` measured FALSE before this; replying
+  with the exact word the gate asked for suppressed nothing. The ask is also 4 per-agent variants now,
+  not one hardcoded literal.
+- **approach-gate fail-open** — a grader timeout no longer permanently stores an approval no grader
+  produced. Returns proceed, writes nothing, matching `review-gate.server.ts`.
+- **Override as a VERIFIED TURN PAIR** — the tool sends NO text; the server fetches the owner's turn
+  and the agent turn itself, requires the agent turn to BE this task's escalation notice
+  (`ovrreq-<taskId>`), and hands the pair to the existing grader. Button path unchanged.
+
+**Verification history — four loops, the design changed twice**
+loop 1 REFUTED (3 attacks) -> hardened -> loop 2 REFUTED again (3 adversaries, 3 NON-OVERLAPPING sets
+of holes in two word lists) -> rewritten as request-then-tap -> loop 3 CONFIRMED -> **the owner
+rejected it as an over-correction**: *"I never asked to prevent self override!"* -> rebuilt as the
+turn pair he had described from the start -> loop 4 CONFIRMED, safe to merge.
+
+**My misread, named:** he wrote *"to prevent self override by agent"* and I took it as the GOAL rather
+than a guardrail on the goal, then spent two rounds hardening against an adversary he never asked me
+to defend against. The correct reading was available at loop 1: stop asking a regex what his sentence
+meant and give the verifier the conversation.
+
+**OPEN, surfaced not hidden**
+1. **Multi-task ambiguity — the grader is the SOLE defence.** With 2+ tasks escalated at once, every
+   structural guard is satisfiable by an agent legitimately calling the tool about its own task, so
+   only the live LLM grader stops a go-ahead meant for a different task being misapplied. **No test
+   covers it** — the grader is mocked throughout. Not a regression; not closed.
+2. **Server-fn identity is a body-supplied email** (`ACT:serverfn-body-identity`) — app-wide,
+   pre-existing, unchanged by this deploy.
+3. Stale comment `turns.server.ts:459` still describes the deleted `verifyOwnerQuote` in the present
+   tense — missed by the cleanup sweep.
+
+**STATUS: implemented, mechanism verified, deployed — NOT yet confirmed live by the owner.** Nothing
+here may be written as "fixed" until he reports back from his own environment.
 ## ACT:journey-widgets-in-chat — dock journey's PRIORITIES + SCHEDULE widgets in Iris's chat + side menu
 **Asked (2026-09-12):** *"run the eds sync skill including checking on a fresh clone and then I want to
 add these two external journey widgets as an internal chat widget like the checklists widget. these two
@@ -3889,3 +3934,41 @@ beneath it, keyboard below that.
 - [ ] **OWNER — live re-test, and this is the verdict.** A sandbox cannot open a soft keyboard, so
       nothing here proves the phone is fixed. Open a 1:1, tap the composer, confirm the dock stays put.
       Status stays **MECHANISM ONLY, NOT USER-CONFIRMED** until then.
+
+## ACT:artifact-rich-formats — agents can only emit .md; ChatGPT-parity formats are missing
+
+**Asked (2026-09-13):** *"why is it saying we are limited to .me [.md] when full document, mermaid, d3
+abilities etc were early requirements for the artifact library? this needs to be fixed right away…
+if these are both using full openai agent capabilities, why can chatgpt generate these things with
+access to tools that this agent behaves like it's stripped back? it seems like an implimentatiom flaw"*
+Three screenshots of Cole Blake in the live app declining to generate an image and declining Word/PowerPoint.
+
+**Owner's read is correct — it is an implementation flaw, and it is ours, not OpenAI's.** Ground
+truth read at `origin/main` (merged locally at `79bfce3`):
+
+| Layer | Accepts | Evidence |
+|---|---|---|
+| Blob store | any bytes, any mime | `artifacts.server.ts:128-131` — `input.bytes` → Buffer → `putArtifactBlob(path, data, input.mime)` |
+| `artifacts.items` row | any mime | stores `mime`/`size_bytes`/`blob_path` verbatim |
+| **`create_artifact` tool** | **a markdown STRING only** | `artifact-tool.ts:24` `content: {type:"string", …"in markdown"}`; `mime` defaults `text/markdown`; no bytes/file parameter |
+| Tools handed to the model | **`function` + `file_search` only** | `mergedTools` `huddle.functions.ts:3497` is 100% custom functions; `snapshotResponsesTools` `openai-assistants.server.ts:32` doc-comment says *"Drops `code_interpreter`"* and does |
+
+Sweep of all `src/`: `image_generation` **0 hits**; `dall-e` / `gpt-image` / `images/generations`
+**0 hits**; `code_interpreter` 7 hits, **every one either the snapshot JSON declaring it or the code
+stripping it out**. So the agent's ".md only" reply is an accurate report of the toolset it was
+handed — not a hallucinated limit. Same account, same Responses API, same models as ChatGPT; we
+hand it strictly less.
+
+**Three gaps, none conflicting — all three in flight (fanned out 2026-09-13):**
+1. **Mermaid / D3** — these are TEXT, so the generator was never the blocker. `TEXT_PREVIEW_MIME`
+   (`artifacts.server.ts:183`) previews them as raw source. Fix is the VIEWER. → LANE B.
+2. **.docx/.pptx/.xlsx** — `code_interpreter` stripped; no path pulls a generated container file
+   into the blob store. → LANE A.
+3. **Images** — `image_generation` never added to `mergedTools`. → LANE A.
+
+- Lane A → `docs/qc-evidence/LANE-A-builtin-tools.md` (built-in tools + file output → `createArtifact`)
+- Lane B → `docs/qc-evidence/LANE-B-artifact-viewer.md` (mermaid render, sandboxed HTML, binary affordance)
+
+**Tier 2** (ordinary logic — no gate, no score, no accusation). Implement + build + mutation-prove any
+new guard; batch a verifier after both lanes land. **Status: IN FLIGHT — nothing verified, nothing
+deployed, and nothing here may be written as "fixed" until the owner sees it in his own app.**
