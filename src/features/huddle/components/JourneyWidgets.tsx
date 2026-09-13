@@ -54,7 +54,7 @@ import type {
   WidgetTaskAction,
   WidgetTaskRow,
 } from "../lib/tasks/widgets.server";
-import { categoryHue } from "../lib/tasks/widget-colors";
+import { categoryChromaScale, categoryHue } from "../lib/tasks/widget-colors";
 import {
   getPrioritiesWidget,
   getScheduleWidget,
@@ -114,6 +114,8 @@ function shortTime(iso: string | null): string | null {
 function CategoryChip({ category }: { category: string | null }) {
   if (!category) return null;
   const h = categoryHue(category);
+  // 0 for a category the spec draws GREY (Family); 1 otherwise. See widget-colors.ts.
+  const cs = categoryChromaScale(category);
   // journey stores categories upper-snake (LIFE, PROF_EDUCATION); the spec shows them title-cased.
   const label = category
     .replace(/_/g, " ")
@@ -122,7 +124,10 @@ function CategoryChip({ category }: { category: string | null }) {
   return (
     <span
       className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none"
-      style={{ backgroundColor: `oklch(0.95 0.05 ${h} / 0.55)`, color: `oklch(0.42 0.13 ${h})` }}
+      style={{
+        backgroundColor: `oklch(0.95 ${0.05 * cs} ${h} / 0.55)`,
+        color: `oklch(0.42 ${0.13 * cs} ${h})`,
+      }}
       title={category}
     >
       {label}
@@ -570,7 +575,10 @@ function TopicRow({ node, depth }: { node: TopicNode; depth: number }) {
   // it normalizes to upper-snake before looking up, so a topic and a category of the same name DO
   // now agree in colour (topic "Life" and category "LIFE" both resolve to the seeded blue). Before
   // normalization the case-sensitive hash made them disagree 5/5 — N-6.
-  const rail = depth === 0 ? `oklch(0.62 0.16 ${categoryHue(node.name)})` : undefined;
+  const rail =
+    depth === 0
+      ? `oklch(0.62 ${0.16 * categoryChromaScale(node.name)} ${categoryHue(node.name)})`
+      : undefined;
   return (
     <li>
       <div className="flex items-stretch">
