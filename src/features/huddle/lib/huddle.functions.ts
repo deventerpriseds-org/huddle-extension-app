@@ -73,6 +73,15 @@ import {
   type TavilySearchArgs,
 } from "./tavily-search.functions";
 import { CREATE_ARTIFACT_TOOL, LIST_ARTIFACTS_TOOL } from "./artifacts/artifact-tool";
+// Static import for the same reason artifact-tool.ts is one: openai-builtin-tools.ts is deliberately
+// dependency-free constants, so it costs the client bundle nothing.
+import {
+  BUILTIN_RESPONSES_TOOLS,
+  BUILTIN_TOOLS_SYSTEM_HINT,
+  BUILTIN_TOOL_TYPES,
+  basenameOf,
+  mimeForFilename,
+} from "./openai-builtin-tools";
 import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "./calendar/tools";
 import {
   DELEGATE_TO_SPECIALIST_TOOL,
@@ -3253,6 +3262,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           groomHint = "\n\n" + groom.GROOM_SYSTEM_HINT + groomHandoffHint;
         }
         const { REMINDER_SYSTEM_HINT } = await import("./tasks/reminders");
+        // May this agent use OpenAI's built-in code_interpreter + image_generation — i.e. produce a
+        // real .docx/.pptx/.xlsx/.csv/.png instead of only markdown? Resolved HERE, above the
+        // instruction assembly, because the hint that tells the model the capability exists has to go
+        // into the prompt and the tools have to go into mergedTools, and offering one without the
+        // other is the ACT-huddle-40 failure (narrating a file it never produced). One read, both uses.
+        // Same per-user config + per-agent override surface as the email send gate below; unlike that
+        // one it fails OPEN — see canOfferBuiltInTools for why a cost gate and a safety gate differ.
+        const { canOfferBuiltInTools } = await import("./identity/agent-workflow-config.server");
+        const builtInToolsAllowed = await canOfferBuiltInTools(
+          await resolveCallerEmail(),
+          winner.id,
+        );
         // Cache-friendly ordering (see the "prompt-payload efficiency" backlog item): put ALL
         // STABLE content first — persona/snapshot + roster + tool hints + house-style — so OpenAI
         // automatic prompt caching keys on a large prefix that's byte-identical across this agent's
@@ -3285,6 +3306,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // prefer an interactive card over a prose answer. Additive -- nothing above is altered.
           "\n\n" +
           WIDGET_SYSTEM_HINT +
+          // Same slot and same rule as the hints above: the built-in tools are offered in
+          // `mergedTools` below ONLY when builtInToolsAllowed, so the hint that says the capability
+          // exists is added under exactly the same condition. Purely ADDITIVE — it takes nothing away
+          // from any agent's prompt, and it is one shared block for every agent and lane rather than a
+          // per-persona list of file types.
+          (builtInToolsAllowed ? "\n\n" + BUILTIN_TOOLS_SYSTEM_HINT : "") +
           groomHint +
           "\n\n" +
           REMINDER_SYSTEM_HINT;
@@ -3306,11 +3333,24 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             .map((t) => (t as { name?: string })?.name)
             .filter((name): name is string => !!name),
         );
-        // Warn if snapshot had tools we can't wire (e.g. code_interpreter).
+        // Warn if the snapshot had tools we can't wire.
+        //
+        // `code_interpreter` used to be the headline example here and no longer belongs in the list
+        // when we are offering our own: the runtime now supplies a properly-configured
+        // code_interpreter (with the `container` the snapshot's bare copy lacks) in mergedTools below,
+        // so reporting it as "dropped, unsupported" would tell the user a capability was lost in the
+        // same turn the model actually has it. Filtered by TYPE against what we offer, so adding a
+        // built-in to openai-builtin-tools.ts keeps this honest with no edit here.
         if (snapshot && snapshot.tools.length > snapshotTools.length) {
+          const offeredBuiltIns = builtInToolsAllowed ? BUILTIN_TOOL_TYPES : [];
           const dropped = snapshot.tools
             .map((t) => t?.type)
-            .filter((t) => t !== "file_search" && t !== "function") as string[];
+            .filter(
+              (t) =>
+                t !== "file_search" &&
+                t !== "function" &&
+                !offeredBuiltIns.includes(t as string),
+            ) as string[];
           if (dropped.length > 0) {
             const ev = recordFallback(
               "tool",
@@ -4694,11 +4734,80 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             }
           : undefined;
 
+        // A file a BUILT-IN tool produced — an image from image_generation, or a file the model wrote
+        // inside the code-interpreter container. It reaches us as an output item, never as a
+        // function_call, so it cannot ride combinedOnToolCall; this is its dispatch.
+        //
+        // It funnels into the SAME createArtifact() the create_artifact tool uses — the store already
+        // takes `bytes: Buffer | Uint8Array` and an arbitrary `mime`, so there is nothing to build and
+        // no second storage path (the map in docs/qc-evidence/ACT-artifact-rich-formats-consumer-map.md
+        // is explicit that every route must funnel here).
+        //
+        // It records a `create_artifact` toolUse with the deepLink in `detail` for one concrete
+        // reason, not for tidiness: the chat bubble's "Open <name>" chip is DERIVED from exactly that
+        // shape (`t.tool === "create_artifact" && t.detail.startsWith("/artifacts/")`, and the name is
+        // parsed out of `saved "<name>"`). Recording it any other way would save the file and show the
+        // user nothing to click.
+        const onBuiltInFile = async (file: {
+          kind: "image" | "container";
+          filename: string;
+          base64?: string;
+          containerId?: string;
+          fileId?: string;
+        }) => {
+          try {
+            const email =
+              (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+              data.caller?.entra_email;
+            if (!email) return;
+            let bytes: Uint8Array;
+            if (file.kind === "image") {
+              if (!file.base64) return;
+              bytes = Buffer.from(file.base64, "base64");
+            } else {
+              if (!file.containerId || !file.fileId) return;
+              const { fetchContainerFileBytes } = await import("./openai-responses.server");
+              bytes = await fetchContainerFileBytes(file.containerId, file.fileId, signal);
+            }
+            if (bytes.length === 0) return;
+            const name = basenameOf(file.filename);
+            const { createArtifact } = await import("./artifacts/artifacts.server");
+            const { id, deepLink } = await createArtifact({
+              userEmail: email,
+              agentId: winner.id,
+              taskId: null,
+              folder: "Research",
+              name,
+              mime: mimeForFilename(name),
+              bytes,
+            });
+            void id;
+            recordToolUse(winner.id, "create_artifact", `saved "${name}"`, true, deepLink);
+          } catch (err) {
+            // A produced file we could not store is reported as a FAILED tool use, never swallowed:
+            // the model narrating a document that does not exist is the exact failure this whole lane
+            // is fixing, so the failure has to be visible rather than silent.
+            recordToolUse(
+              winner.id,
+              "create_artifact",
+              "built-in tool file could not be saved",
+              false,
+              err instanceof Error ? err.message : String(err),
+            );
+          }
+        };
+
         const personaArgs = {
           model: usedModel,
           instructions,
           fastMode: routerCfg.fastMode,
           tools: mergedTools.length > 0 ? mergedTools : undefined,
+          // Built-in tools travel SEPARATELY from `tools` (they are executed by OpenAI, never by
+          // combinedOnToolCall) so the transport's 400 fallback can drop exactly these and keep the
+          // function tools rather than costing the user the whole reply on a model that can't run them.
+          ...(builtInToolsAllowed
+            ? { builtInTools: BUILTIN_RESPONSES_TOOLS as unknown[], onBuiltInFile }
+            : {}),
           onToolCall: (c: { name: string; arguments: Record<string, unknown> }) =>
             runToolSafely(c.name, () => combinedOnToolCall(c)),
           toolChoice,

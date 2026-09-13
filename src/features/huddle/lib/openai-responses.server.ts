@@ -87,8 +87,23 @@ export interface OpenAIPersonaInput {
     content: string | Array<{ type: "input_text" | "input_image"; text?: string; image_url?: string }>;
   }>;
   fastMode?: boolean;
-  /** OpenAI Responses tools (function/file_search). Not code_interpreter. */
+  /** OpenAI Responses FUNCTION-style tools (`type:"function"` / `file_search`) — the ones this app
+   *  executes itself and answers via `onToolCall`. Built-in tools that OpenAI executes server-side go
+   *  in `builtInTools` instead; they are a different mechanism, not a different entry in this array.
+   *  (This comment used to read "Not code_interpreter." That stopped being true when the built-in
+   *  tools were offered — see `builtInTools` directly below.) */
   tools?: unknown[];
+  /** Built-in tools OpenAI RUNS ITSELF inside the same response — `code_interpreter`,
+   *  `image_generation` (see openai-builtin-tools.ts). Kept separate from `tools` for two concrete
+   *  reasons: they never produce a `function_call` for `onToolCall` to answer, and when a model or
+   *  account rejects them the 400 retry below has to be able to drop EXACTLY these and keep the
+   *  function tools. Merged into the request's single `tools` array at send time. */
+  builtInTools?: unknown[];
+  /** Called once per file a built-in tool produced (a generated image, or a file written inside the
+   *  code-interpreter container). Deduped by `key` across tool hops, so a container file cited in two
+   *  hops is handed over once. A throw is logged and swallowed — losing a produced file must never
+   *  fail the user's turn. */
+  onBuiltInFile?: (file: BuiltInProducedFile) => Promise<void> | void;
   /** Called when the model emits function_call items. */
   onToolCall?: ToolHandler;
   /** Max tool-call round-trips (default 2). */
@@ -123,6 +138,17 @@ export interface OpenAIPersonaInput {
   signal?: AbortSignal;
 }
 
+/** An annotation on an `output_text` content part. The only one this file acts on is
+ *  `container_file_citation` — how a file WRITTEN BY code_interpreter is reported.
+ *  Fields read from openai@7.15.0 `resources/responses/responses.d.ts`
+ *  (`ResponseOutputText.annotations`, `ResponseOutputText.ContainerFileCitation`). */
+interface ResponsesAnnotation {
+  type?: string;
+  container_id?: string;
+  file_id?: string;
+  filename?: string;
+}
+
 interface ResponsesReply {
   output_text?: string;
   output?: Array<{
@@ -131,10 +157,28 @@ interface ResponsesReply {
     call_id?: string;
     name?: string;
     arguments?: string;
-    content?: Array<{ text?: string; type?: string }>;
+    content?: Array<{ text?: string; type?: string; annotations?: ResponsesAnnotation[] }>;
     /** Present on reasoning items when reasoning.summary is enabled. */
     summary?: Array<{ text?: string; type?: string }>;
+    /** `image_generation_call` only: the generated image, base64. (`ResponseOutputItem
+     *  .ImageGenerationCall.result`, responses.d.ts:3689.) */
+    result?: string | null;
+    /** `image_generation_call` only: 'png' | 'webp' | 'jpeg'. */
+    output_format?: string | null;
   }>;
+}
+
+/** One file a built-in tool produced, normalised across the two very different ways they arrive. */
+export interface BuiltInProducedFile {
+  /** `image` — bytes are already in hand, base64. `container` — must be fetched from the container. */
+  kind: "image" | "container";
+  /** Filename WITH extension. For a container file this is the name the model chose. */
+  filename: string;
+  /** Stable identity, for deduping the same file across tool hops. */
+  key: string;
+  base64?: string;
+  containerId?: string;
+  fileId?: string;
 }
 
 function extractText(json: ResponsesReply): string {
@@ -204,6 +248,91 @@ async function readResponsesStream(
   return finalResponse;
 }
 
+/**
+ * Files produced by BUILT-IN tools in this response.
+ *
+ * The two built-ins report their output in two entirely different places, which is the whole reason
+ * this function exists rather than one filter:
+ *
+ *   image_generation  ->  an `image_generation_call` OUTPUT ITEM whose `result` is the base64 image.
+ *                         Nothing further to fetch.
+ *   code_interpreter  ->  a file written inside the container. The `code_interpreter_call` item does
+ *                         NOT carry it (its `outputs` are only `logs` and inline `image` URLs); the
+ *                         file surfaces as a `container_file_citation` ANNOTATION on the message text,
+ *                         carrying `container_id` + `file_id` + `filename`. The bytes need a second,
+ *                         authenticated GET — see fetchContainerFileBytes.
+ *
+ * Both shapes were read from openai@7.15.0's generated declarations, not from memory:
+ * responses.d.ts:3689 (ImageGenerationCall), :1553 (ResponseCodeInterpreterToolCall), :5353 +
+ * :5418 (ResponseOutputText.annotations / ContainerFileCitation).
+ *
+ * Returns at most one entry per distinct file; the caller dedups again ACROSS hops via `key`.
+ */
+function extractBuiltInFiles(json: ResponsesReply): BuiltInProducedFile[] {
+  const out: BuiltInProducedFile[] = [];
+  const seen = new Set<string>();
+  for (const item of json.output ?? []) {
+    if (item.type === "image_generation_call" && typeof item.result === "string" && item.result) {
+      const key = `image:${item.id ?? out.length}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      // The tool pins output_format:"png", but the item reports what was ACTUALLY produced — trust
+      // that over our request, and fall back to png only when the field is absent.
+      const ext = (item.output_format ?? "png").toLowerCase();
+      out.push({
+        kind: "image",
+        // The id is `ig_<hash>`; its tail keeps two images in one turn from colliding on name.
+        filename: `generated-image-${(item.id ?? "").slice(-8) || String(out.length + 1)}.${ext}`,
+        key,
+        base64: item.result,
+      });
+    }
+    for (const part of item.content ?? []) {
+      for (const ann of part.annotations ?? []) {
+        if (ann.type !== "container_file_citation") continue;
+        if (!ann.container_id || !ann.file_id) continue;
+        const key = `container:${ann.container_id}:${ann.file_id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          kind: "container",
+          filename: ann.filename || ann.file_id,
+          key,
+          containerId: ann.container_id,
+          fileId: ann.file_id,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Download one file the code interpreter wrote, from its container.
+ *
+ * Endpoint read from the OpenAI SDK itself (openai@7.15.0
+ * `resources/containers/files/content.js:14`): `GET /containers/{container_id}/files/{file_id}/content`.
+ * Returns the raw bytes; throws with the status so the caller can report a real failure rather than
+ * silently saving an empty artifact.
+ */
+export async function fetchContainerFileBytes(
+  containerId: string,
+  fileId: string,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error("OPENAI_API_KEY not configured");
+  const res = await fetch(
+    `https://api.openai.com/v1/containers/${encodeURIComponent(containerId)}/files/${encodeURIComponent(fileId)}/content`,
+    { headers: { Authorization: `Bearer ${key}` }, signal },
+  );
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`OpenAI container file ${res.status}: ${errText.slice(0, 200)}`);
+  }
+  return new Uint8Array(await res.arrayBuffer());
+}
+
 function extractToolCalls(json: ResponsesReply): Array<{
   call_id: string;
   name: string;
@@ -250,6 +379,12 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
   // Running input array. Each tool round appends function_call_output items.
   const runningInput: unknown[] = [...input.transcript];
   let previousResponseId: string | undefined;
+  // Built-in files already handed to onBuiltInFile, so a container file cited again on a later hop
+  // (which is normal — the citation rides the message text) is not saved twice.
+  const seenBuiltInFiles = new Set<string>();
+  // Flipped by the 400 fallback below. Once a request has been rejected WITH built-ins and accepted
+  // WITHOUT them, every remaining hop drops them too rather than re-paying for the same rejection.
+  let suppressBuiltIns = false;
 
   for (let hop = 0; hop <= maxHops; hop++) {
     // The caller's deadline already fired and stopped waiting on us — do not start another hop (a
@@ -262,7 +397,12 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
     // stored in the thread as a dangling function_call and 400 every subsequent turn ("No tool output
     // found for function call …"). Forcing text on the last hop closes the loop cleanly.
     const isFinalHop = hop === maxHops;
-    const hasTools = !isFinalHop && !!(input.tools && input.tools.length > 0);
+    // Function tools and built-ins travel in ONE `tools` array on the wire but are tracked separately
+    // here, because the 400 fallback below must be able to drop exactly the built-ins.
+    const fnTools = input.tools ?? [];
+    const builtIns = suppressBuiltIns ? [] : (input.builtInTools ?? []);
+    const allTools = [...fnTools, ...builtIns];
+    const hasTools = !isFinalHop && allTools.length > 0;
     const body: Record<string, unknown> = {
       model: input.model,
       instructions: input.instructions,
@@ -271,7 +411,7 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
       ...(wantReasoning
         ? { reasoning: { ...(input.reasoningEffort ? { effort: input.reasoningEffort } : {}), summary: "auto" } }
         : {}),
-      ...(hasTools ? { tools: input.tools } : {}),
+      ...(hasTools ? { tools: allTools } : {}),
       ...(input.promptCacheKey ? { prompt_cache_key: input.promptCacheKey } : {}),
       // Only force tool_choice on the FIRST hop; subsequent hops let the model
       // produce a normal text answer using the tool output.
@@ -290,12 +430,44 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
       "Content-Type": "application/json",
       Authorization: `Bearer ${key}`,
     };
-    const res = await fetch(OPENAI_URL, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(input.stream ? { ...body, stream: true } : body),
-      signal: input.signal,
-    });
+    const send = (b: Record<string, unknown>) =>
+      fetch(OPENAI_URL, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(input.stream ? { ...b, stream: true } : b),
+        signal: input.signal,
+      });
+
+    let res = await send(body);
+    // The body that was ACTUALLY accepted. The stream-parse fallback further down re-posts this rather
+    // than `body`, so a stream error after a built-ins retry doesn't re-send the shape just rejected.
+    let sentBody = body;
+
+    // BUILT-IN TOOL FALLBACK. A 400 is a request-SHAPE rejection, and when built-ins are attached they
+    // are the newest thing in that shape — a model or account that cannot run code_interpreter /
+    // image_generation rejects the whole request, which would otherwise cost the user their entire
+    // reply. So retry this hop ONCE with only the function tools. No error-string matching: if the 400
+    // was about something else, the retry is rejected identically and we throw exactly as before, so
+    // this can only ever turn a hard failure into a degraded success.
+    if (res.status === 400 && builtIns.length > 0) {
+      const errText = await res.text().catch(() => "");
+      console.warn(
+        `[callOpenAIResponses] ${input.model} rejected the request with built-in tools attached; ` +
+          `retrying without them (reply preserved, no code interpreter / image generation this turn): ` +
+          errText.slice(0, 200),
+      );
+      suppressBuiltIns = true;
+      const retryBody: Record<string, unknown> = { ...body };
+      if (!isFinalHop && fnTools.length > 0) {
+        retryBody.tools = fnTools;
+      } else {
+        // Nothing left to offer — drop tool_choice too, since it is only meaningful with tools.
+        delete retryBody.tools;
+        delete retryBody.tool_choice;
+      }
+      res = await send(retryBody);
+      sentBody = retryBody;
+    }
 
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
@@ -312,7 +484,7 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
         const res2 = await fetch(OPENAI_URL, {
           method: "POST",
           headers,
-          body: JSON.stringify(body),
+          body: JSON.stringify(sentBody),
           signal: input.signal,
         });
         if (!res2.ok) {
@@ -326,6 +498,26 @@ export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<Op
     }
     previousResponseId = json.id;
     if (wantReasoning) reasoning.push(...extractReasoning(json));
+
+    // BUILT-IN OUTPUT. Handed over BEFORE the return below, because a response that produced a file
+    // usually has no function_call at all and so returns on this very iteration. A built-in tool ran
+    // server-side and is already finished — there is no output for us to submit back, only bytes to
+    // collect.
+    if (input.onBuiltInFile) {
+      for (const file of extractBuiltInFiles(json)) {
+        if (seenBuiltInFiles.has(file.key)) continue;
+        seenBuiltInFiles.add(file.key);
+        try {
+          await input.onBuiltInFile(file);
+        } catch (err) {
+          // Never fail the turn over a file we could not store — the user still gets their reply.
+          console.error(
+            `[callOpenAIResponses] onBuiltInFile failed for ${file.filename}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+    }
 
     const toolCalls = extractToolCalls(json);
     if (toolCalls.length === 0 || !input.onToolCall || hop === maxHops) {

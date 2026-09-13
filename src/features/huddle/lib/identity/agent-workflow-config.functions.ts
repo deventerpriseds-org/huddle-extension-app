@@ -25,6 +25,12 @@ const ConfigInput = z.object({
   agent_overrides: z.record(z.string(), z.boolean()).optional(),
   default_caps: Caps.optional(),
   agent_cap_overrides: z.record(z.string(), PartialCaps).optional(),
+  // "No hardcoded config": whether agents may use OpenAI's built-in code interpreter / image
+  // generation (i.e. produce real .docx/.pptx/.xlsx/.png rather than only markdown) is a preference
+  // the owner can change, not a constant. It rides THIS existing config surface rather than a new
+  // one — same table, same server fn, same per-agent override shape as the caps above.
+  builtin_tools_enabled: z.boolean().optional(),
+  builtin_tools_agent_overrides: z.record(z.string(), z.boolean()).optional(),
 });
 
 export const getMyWorkflowConfigFn = createServerFn({ method: "POST" })
