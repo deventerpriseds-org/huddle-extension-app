@@ -3825,3 +3825,27 @@ fixture.
 - AC-SU-6 NOT REACHED (outside this lane).
 - **Independent verifier not yet run** — batched across all four digest lanes once the journey-side
   lanes land.
+
+---
+
+### ACT:standup-digest-delivery — UPDATE 2026-09-13
+
+**Status: PUSHED on `claude/huddle-workflows-setup-cucecs`, PR #61 open and subscribed. NOT merged,
+NOT deployed, NOT live-confirmed.** 25/25 tests, 4/4 mutations FIRED.
+
+**Closed:**
+- ✅ **AC-SU-6 (merge blocker, verifier-found)** — `selectStandupPriorities` now takes `excludeIds`
+  and forwards it to `rankTasks`; `runScheduledStandup` resolves it at the call site. Guarded
+  behaviourally AND at the source, because an optional parameter hides a missing wire-up from `tsc`.
+- ✅ **`origin/main` merged in** — the branch was 222 behind. Ledger conflicts resolved keeping both
+  sides; `standup.server.ts` auto-merged.
+- ✅ **Stand-up deliverable off-chat** — `StandupRunResult.digest` + `deliver:false`, exposed on
+  `run-standup.ts`. This is what lets journey send Terry's stand-up as an email/Slack digest.
+
+**Open / not reached:**
+- ⏳ `origin/main` moved again (1 commit). Merge held until the running verifier finishes reading
+  this tree — merging under it would invalidate its C5 verdict.
+- ⏳ Independent verifier loop 2 in flight (`work: digest-delivery`), covering C5 here.
+- ⏳ `bun install` still cannot complete in this environment (registry mirror 403s through the
+  session proxy for ~6 packages), so only the two `bun scripts/*.test.ts` suites ran. `npx tsc
+  --noEmit` reports pre-existing errors from that same failed install; zero in changed files.

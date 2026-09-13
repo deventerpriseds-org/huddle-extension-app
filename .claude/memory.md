@@ -3237,3 +3237,39 @@ leak, not just the one that reported it.
 correct behaviour.** Run 1 failed because the runner emitted a bare `❌` while `mutate.sh:121` greps
 a literal `FAIL <name>`. It was reported rather than silently re-run, then fixed (`53e345b`). A
 harness that cannot see a failure must never claim the guard is worthless.
+
+## Stand-up — 2026-09-13 continuation (merge blocker + off-chat delivery)
+
+Branch `claude/huddle-workflows-setup-cucecs`, pushed, PR #61. **Not merged, not deployed, not
+live-confirmed.** 25/25 tests (13 ranking + 12 deliver-mode), 4/4 mutations FIRED.
+
+### Facts worth not re-deriving
+- **AC-SU-6, the merge blocker a verifier caught.** The ranking seam landed on a branch 222 commits
+  behind `main`, where `rankTasks` had ALREADY grown a third parameter (`excludeIds`) and
+  `dispatchPrioritize` already passed `taskIdsInReminderWindow(email)`. `selectStandupPriorities`
+  called it with two arguments and **nothing failed to compile, because the parameter is optional**.
+  Merging would have silently reopened the leak: a task inside its reminder window is dropped by
+  `prioritize` and still greets the user in the digest. The stand-up is the FOURTH reminder-window
+  filter site — `tools.ts:406` says "all three must exclude"; that comment is now out of date by one.
+  **An optional parameter added upstream is invisible to `tsc` at every stale call site.** When a
+  long-lived branch merges, diff the SIGNATURES it calls, not just the files it touched.
+- **The stand-up now has a CONTENT mode.** `runScheduledStandup(caller, {deliver:false})` assembles
+  and returns `result.digest` (produced / blocked / inReview / priorities / brief) without posting
+  to Terry's DM. It also skips `setLastStandupAt` — that watermark is the trap: a content pull that
+  advanced it would make the real stand-up an hour later report "nothing to report" about work it
+  had never told anyone. journey pulls this over the existing `JOURNEY_PROXY_TOKEN`; no new secret.
+- **Position IS the rank on the wire.** journey records `rank: i+1` from the array order and never
+  re-sorts, because `rankTasks` already ordered it. A second sort on the journey side could disagree
+  with what the user sees in Huddle.
+
+## Hardening — 2026-09-13 (stand-up lane)
+
+**A behavioural guard alone cannot catch a missing wire-up behind an OPTIONAL parameter.** The
+`excludeIds` forward needed TWO guards: a behavioural one (stub `turns.server` at the module
+boundary so `dispatchPrioritize` resolves the set through its real path) AND a source guard on the
+call site. Only the second catches "someone forgot to pass it", because the optional parameter makes
+that omission compile cleanly. Both mutation-proved FIRED.
+
+**Assert on side effects the STUBS recorded, not on what the test computes.** `standup-deliver-mode`
+counts `enqueueTurn` / `setLastStandupAt` calls; that is what makes "a content pull posts nothing"
+a real assertion rather than a restatement of the code.
