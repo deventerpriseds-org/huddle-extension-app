@@ -268,3 +268,201 @@ description's "markdown/plain text" with the multi-format wording. Sites 1 and 3
 **Note this also re-frames C1's minor finding:** `CreateArtifactToolArgs` omitting `format`/`document`
 is not merely cosmetic — two of the four dispatch sites carry the same omission in a place where it
 changes runtime behaviour.
+
+---
+
+## C5 — SECURITY: artifact markup renders only inside a sandboxed, opaque-origin iframe
+
+**CONFIRMED.** I could not break it. Ten escape attempts in real Chromium, all contained.
+
+### Static read of the render path
+
+`grep -rn "dangerouslySetInnerHTML|innerHTML|document.write|insertAdjacentHTML|new Function|eval("`
+over `components/ArtifactsView.tsx` and `lib/artifacts/preview.ts` returns **no call sites** — only
+three comment mentions (`ArtifactsView.tsx:469`, `preview.ts:9`, `preview.ts:159`) and ONE real
+`insertAdjacentHTML` at `preview.ts:175`, which is a **static literal string inside the frame's own
+`<script>`** (`'<pre>Diagram engine unavailable…</pre>'`) — no artifact content reaches it. Not a vector.
+
+The only render site is `ArtifactsView.tsx:505-511`:
+
+```
+<iframe key={…} title={sel.name}
+  sandbox={sandboxFor(kind)}          // preview.ts:125-127 -> "" for svg, "allow-scripts" otherwise
+  srcDoc={buildSrcDoc(kind, text)}    // preview.ts:162
+  referrerPolicy="no-referrer" … />
+```
+
+`SANDBOX_SCRIPTS = "allow-scripts"` (preview.ts:34) and `SANDBOX_NONE = ""` (L36) are module
+constants; `sandboxFor` is a total function over `PreviewKind` returning one of exactly those two.
+Neither string contains `allow-same-origin`. `rendersInIframe` (L120-122) restricts the frame to
+`html | mermaid | svg`; everything else goes to a React `<pre>{text}</pre>` (L515), which React escapes.
+
+**The srcdoc-escaping question the brief raises does not arise, and here is why:** `srcDoc` is passed as
+a **React DOM prop**, so React sets it as a DOM attribute/property. The value is never concatenated
+into an HTML source string, so there is no attribute delimiter for a `"` in the content to close, and
+no element for a `</iframe>` in the content to terminate. A string-built `<iframe srcdoc="...">` would
+be vulnerable; this is not that.
+
+### Live attack results — Chromium `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`
+
+`/tmp/probe/c5.ts` calls the REAL `detectPreviewKind`/`sandboxFor`/`buildSrcDoc`, then builds the
+iframe the same way React does (`setAttribute("sandbox", …)`, `f.srcdoc = …`) in a parent page titled
+`APP-TITLE-CLEAN`. Escape = parent title changed, or a stray `<script>`/extra `<iframe>` in the parent.
+
+| # | attack payload | kind | sandbox | parent title after | escaped? | iframes in parent | scripts in parent |
+|---|---|---|---|---|---|---|---|
+| A1 | `</iframe><script>window.top.document.title='PWNED-A1'</script>` | html | `allow-scripts` | `APP-TITLE-CLEAN` | **NO** | 1 | 0 |
+| A2 | `" onload="window.top.document.title='PWNED-A2'" x="` | html | `allow-scripts` | `APP-TITLE-CLEAN` | **NO** | 1 | 0 |
+| A3 | `<script>window.parent.document.title='PWNED-A3'</script>` | html | `allow-scripts` | `APP-TITLE-CLEAN` | **NO** | 1 | 0 |
+| A4 | `localStorage.setItem('k','v')` | html | `allow-scripts` | `APP-TITLE-CLEAN` | **NO** | 1 | 0 |
+| A5 | `document.cookie='a=b'` | html | `allow-scripts` | `APP-TITLE-CLEAN` | **NO** | 1 | 0 |
+| A6 | SVG carrying `<script>` **and** `<image onerror=…>` | **svg** | **`""`** | `APP-TITLE-CLEAN` | **NO** | 1 | 0 |
+| A7 | mermaid source containing `</pre><script>…</script><pre>` | mermaid | `allow-scripts` | `APP-TITLE-CLEAN` | **NO** | 1 | 0 |
+| A8 | HTML entities `&lt;script&gt;` **and** numeric `&#60;script&#62;` | html | `allow-scripts` | `APP-TITLE-CLEAN` | **NO** | 1 | 0 |
+| A9 | markdown whose prose AND ```` ```mermaid ```` block both carry `</pre><script>` | mermaid | `allow-scripts` | `APP-TITLE-CLEAN` | **NO** | 1 | 0 |
+| A10 | `window.top.location='https://evil.example/'` | html | `allow-scripts` | `APP-TITLE-CLEAN` | **NO** (parent url stayed `about:blank`) | 1 | 0 |
+
+**10/10 contained. `iframeCount` stayed 1 in every case — `</iframe>` in the body did not close the
+element, confirming the React-prop reasoning empirically.**
+
+Two results are worth reading closely because they are the evidence the containment is real rather
+than the scripts merely failing to run:
+
+- **A7 / A9 frame body text** came back as
+  `"Diagram engine unavailable (offline or blocked).\ngraph TD;\nA-->B;\n</pre><script>window.top.document.title='PWNED-A7'</sc…"`.
+  Two facts at once: (a) `escapeHtml` (preview.ts:129-136, applied at L171-172) turned the injected
+  `</pre><script>` into **visible text inside the `<pre>`**, so it never became markup; and (b) the
+  "Diagram engine unavailable" line is `preview.ts:175`'s own catch handler firing — which **proves
+  script DID execute inside the frame**. So the sandbox is not silently script-dead; scripts run
+  (as D3/mermaid need) and still cannot reach the parent. (The CDN being unreachable is this
+  container's egress, not a defect.)
+- **A8** rendered `<script>window.top.document.title='PWNED-A8'</script>` as literal visible text.
+  Entities in a `srcdoc` body are decoded **once** by the frame's HTML parser into a text node, not
+  re-parsed into a tag. No double-decode path exists.
+- **A6** is the SVG case: `sandboxFor("svg")` returned `""`, so neither the embedded `<script>` nor
+  the `onerror` handler could fire. Matches the claim's "SVG: no scripts at all".
+
+**No input escaped.** Nothing to report as a break.
+
+---
+
+## C7 — no regression for plain markdown
+
+**CONFIRMED.** Same probe harness as C2 (`/tmp/probe/c789.ts`), input
+`"# Title\n\ntext with **bold** and a | table |\n"` (44 bytes), `name: "notes"`.
+
+| case | returned name | returned mime | bytes | warnings | body byte-for-byte identical to input |
+|---|---|---|---|---|---|
+| `format: "md"` | `notes.md` | `text/markdown; charset=utf-8` | 44 | `[]` | **yes** |
+| **format absent entirely** | `notes.md` | `text/markdown; charset=utf-8` | 44 | `[]` | **yes** |
+
+Both paths also wrote `notes.md` / `text/markdown; charset=utf-8` into the SQL INSERT, and the stored
+body printed back as exactly `# Title\n\ntext with **bold** and a | table |\n` — the markdown is
+**passed through untouched**, not re-serialised through the block parser. The default in
+`createArtifactFromAgent` L182 (`typeof a.format === "string" ? … : "md"`) is what makes the
+absent-format case identical.
+
+---
+
+## C8 — `renderArtifact` never throws
+
+**CONFIRMED.** 18 hostile inputs called directly against the real `renderArtifact`. **Zero threw,
+zero hung** — the slowest was 124 ms.
+
+| input | threw? | ms | result | warning |
+|---|---|---|---|---|
+| `document` as a string | no | 115 | `a.docx`, 8582 B | "Structured document was not an object — rendered its raw text instead." |
+| `document` as a number (42) | no | 22 | `a.docx`, 8576 B | same |
+| `document: null` | no | 20 | `a.docx`, 8530 B | "No content or document supplied — an empty document was produced." |
+| `document` nested **2000 deep** | no | 110 | `a.docx`, 8826 B | "Section 0 had unknown type …" — **no stack overflow** |
+| deck as a string | no | 86 | `a.pptx`, 44794 B | "Structured deck was not an object — rendered its raw text on one slide." |
+| deck nested 2000 deep | no | 4 | `a.pptx`, 44132 B | "Structured deck had no slides." |
+| **1 MB single-line** → docx | no | 124 | `a.docx`, 9655 B | `[]` |
+| **1 MB single-line** → pptx | no | 70 | `a.pptx`, 1 045 392 B | `[]` |
+| **1 MB single-line** → md | no | 1 | `a.md`, 1 000 000 B | `[]` |
+| unterminated ```` ``` ```` code fence | no | 19 | `a.docx`, 8711 B | `[]` |
+| malformed table (ragged rows, `\|\|\|`) | no | 22 | `a.docx`, 8780 B | `[]` |
+| neither content nor document | no | 15 | `a.docx`, 8531 B | "No content or document supplied…" |
+| `content` undefined, md | no | 0 | `a.md`, 0 B | "No content supplied — an empty file was produced." |
+| `format: null` | no | 0 | `a.md` | `Unknown format "null" — rendered as markdown.` |
+| `format: {a:1}` | no | 0 | `a.md` | `Unknown format "[object Object]" — rendered as markdown.` |
+| `content` is an object | no | 0 | `a.md`, 7 B | `[]` |
+| `name: ""` | no | 13 | **`artifact.docx`** (sane fallback) | `[]` |
+| **circular** `document` (`o.self = o`) | no | 9 | `a.docx`, 8572 B | "Structured document had no sections." — **no infinite loop** |
+
+**Largest input tried: a 1 000 000-character single-line string (1 MB), in all three of md, docx and
+pptx.** The docx result is only 9655 bytes, which looks like truncation and is not: unzipping
+`/tmp/probe/big.docx` gives `word/document.xml` of **1 002 706 uncompressed bytes**, and the full
+`"x" * 1 000 000` run **is present** in it — ZIP deflate simply compresses a million identical
+characters to almost nothing. Content preserved in full.
+
+---
+
+## C9 — ADVERSARIAL: can a misrepresenting or unopenable file be produced?
+
+**REFUTED — one real mislabelling hole, plus one path-traversal risk in the OneDrive mirror. The
+rest of the surface held.**
+
+### What HELD (no defect)
+
+| attempt | result | why it is fine |
+|---|---|---|
+| docx labelled `mime:"text/markdown"` | `report.docx`, **Office mime**, magic `50 4b 03 04` | the override was correctly IGNORED (`artifacts.server.ts:224-226`) |
+| pptx labelled `mime:"text/plain"` | `deck.pptx`, **Office mime**, ZIP magic | same guard |
+| name `"report.md"` + `format:"docx"` | `report.docx` | extension REPLACED, not appended — no `report.md.docx` |
+| `format: " DOCX "` (padding + caps) | **`report.docx`**, Office mime, ZIP magic | whitespace+case tolerated |
+| `format: "DOCX"` / `"MeRmAiD"` | `report.docx` / `diag.mmd` | case-insensitive |
+| `format: "pdf"` (unknown) | `doc.md` + warning `Unknown format "pdf" — rendered as markdown.` | degrades honestly |
+| **empty deck** (`format:"pptx", content:""`) | `deck.pptx`, 44 745 B + warning "No content or document supplied" | unzipped: `testzip()`=None, **1 real slide part** `ppt/slides/slide1.xml` (well-formed) and **1 `<p:sldId>`** in `presentation.xml`. It OPENS — an empty-looking deck, not a corrupt one |
+| empty docx / empty mermaid | `doc.docx` (valid pkg) / `diag.mmd` 0 B + warning | warned, not silent |
+| svg labelled `mime:"text/html"` | `pic.svg`, `image/svg+xml; charset=utf-8` | PASSTHROUGH branch ignores the override entirely |
+| name `".docx"` (extension only) | `.docx`, valid Office package | ugly (a dotfile with no basename) but openable and correctly typed — cosmetic only |
+| name `".."` | `...md` | harmless |
+| name `"a\b\c"` | `a\b\c.md`, blob path `…-a-b-c-md` | backslashes slugged out of the blob path |
+
+### DEFECT 1 — markdown can be stored under an Office mime (the mislabelling the guard misses)
+
+**Failing input:** `{ format: "md", content: "# R", mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }`
+
+**Observed:** `name: "report.md"`, `mime:
+"application/vnd.openxmlformats-officedocument.wordprocessingml.document"`, **3 bytes**, first bytes
+`23 20 52` (`# R`) — **NOT** `50 4b 03 04`. Both the blob's content-type and the `artifacts.items.mime`
+column carry the Word mime.
+
+**Root cause** — `artifacts.server.ts:224-226`:
+
+```
+const rawMime = typeof a.mime === "string" && a.mime.trim() ? a.mime.trim() : null;
+const isPassthrough = rendered.mime.startsWith("text/") || rendered.mime === "application/json";
+const mime = rawMime && isPassthrough ? rawMime : rendered.mime;
+```
+
+The gate tests the **rendered** mime, not the **override**. Its own comment says the point is that
+*"a docx labelled text/markdown downloads as an unopenable file"* — and it does block that direction
+(proven above). The **reverse is wide open**: because `rendered.mime` for `md` starts with `text/`,
+`isPassthrough` is true and ANY override wins, including a binary Office one. The result is 3 bytes of
+markdown that the browser and OneDrive will both announce as a Word document; Word will refuse it.
+That is precisely "a file that misrepresents itself". Consequences reach C6 too — `TEXT_PREVIEW_MIME`
+rejects the Office mime, so this artifact also silently loses its in-app preview.
+
+**Fix direction:** validate the override against an allow-list of text-ish mimes (or require it to
+start with `text/` / `application/json` itself), instead of inferring permission from the rendered mime.
+
+### DEFECT 2 — `..` survives the artifact NAME into the OneDrive mirror path
+
+**Failing input:** `{ format: "md", content: "# R" }` with `name: "../../etc/passwd"`.
+
+**Observed:** blob path is `p-e-com/f/art-<uuid>-etc-passwd-md` — `slug()` (`artifacts.server.ts:100`)
+strips the separators, so **Azure Blob is safe**. But the stored `artifacts.items.name` is
+**`../../etc/passwd.md`**, verbatim, and that column is what the OneDrive mirror interpolates:
+`onedrive.server.ts:52` builds `…/drive/root:/${encodePath(drivePath)}:` where `encodePath` (L21) is
+`p.split("/").map(encodeURIComponent).join("/")` — and `encodeURIComponent` does **not** encode `.`,
+so the `..` segments pass through intact and the `/` separators are preserved by the split/join. A
+mirrored artifact named `../../etc/passwd.md` therefore targets
+`Huddle Artifacts/<lane>/../../etc/passwd.md`, escaping the `Huddle Artifacts` folder to the drive
+root. Scope is the owner's OWN OneDrive (the mailbox is resolved server-side, not from the name), so
+this is a write-outside-the-intended-folder bug rather than a cross-user one — but the name is
+**model-authored**, so an agent can put a file anywhere in the user's drive.
+
+**Fix direction:** sanitise `name` at `createArtifactFromAgent` (strip `/`, `\` and `..` segments,
+keeping `withExtension`'s behaviour) rather than only in `slug()`, which protects the blob path alone.
