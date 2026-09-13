@@ -3104,3 +3104,30 @@ Bootstrap / Round-trip / Provision + schema status) and in the per-agent setting
 **Current state after this work:** de-highlighted via a `neverActive` flag so it no longer lights up
 alongside Huddles — the minimal fix, deliberately not a removal. Whether it is removed or backed by a
 real "browse my memory" view is the owner's open decision.
+
+## Feature status — journey widgets: LIVE and VISUALLY VERIFIED at phone width (2026-09-13)
+`main` @ `8ede4e0`; the widget+colour work deployed as `ea3c898` (deploy run 34757153463 / 34763…,
+DB pin `eds-postgresql/RAG_AI_Agents` confirmed in the log both times).
+
+**This is the first claim in this feature backed by a RENDERED SCREEN, not a passing suite.**
+`verify-uat.yml` + `widget-ui-checks.mjs`, 390×844, run **34763566801** against production, running
+as the owner (`entra-auth.ts` maps the UAT bypass to `von.ellis@enterpriseds.io`, and the shots show
+his real tasks): **5 of 6 PASS** — one switcher (was 2), nav at **796px of 844** (was 60px), band
+**hue 92 cream** with no pink, no console errors, no failed requests. The 6th was a false negative in
+the check, disproved by its own screenshot.
+
+**BOTH colour bugs were one class.** `--surface` is `oklch(1 0 0)` — white with an EXPLICIT hue of 0
+— and a polar space interpolates toward it:
+  `--warning 9%  + --surface` → hue 55 → **4.95**  (band shipped PINK)
+  `--success 72% + --surface` → hue 155 → **111.6** (▶ button shipped YELLOW-GREEN)
+Both are now literals (`--band-cream`, `--success-soft`) at the intended hue, per theme. The other
+four `color-mix` calls mix with `transparent`, where premultiplied alpha cannot move a hue — safe.
+`scripts/no-achromatic-color-mix.test.ts` fails the build on the construct repo-wide.
+
+**THE LESSON, and it is about the checks, not the app.** Three separate times a check reported a
+defect that did not exist: a colour verdict rendered from a loading screen; the PREVIOUS run's
+results read as this run's; a selector matching nothing reported as "0% of viewport". Every one was
+the same shape — **a measurement that did not happen, presented as a measurement that failed.** Each
+is now gated to report NOT MEASURED / UNPROVEN instead, and `uat-shots` commits stamp their run id so
+provenance is checkable. A check that cannot distinguish "I found nothing" from "there is nothing" is
+worse than no check, because the alarming reading is the one that gets acted on.

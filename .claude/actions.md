@@ -3753,3 +3753,20 @@ sits today."* + *"I also didn't know where you got the 9/13/17 tick idea."*
 - [ ] Known, not fixed (loop 3): three park-tag union copies remain (`HuddleView.tsx:566`,
       `BoardView.tsx:750`, neither case-normalizing); the Lovable-path checklist renders nothing
       (pre-existing, owner's call); empty-state buttons at 50% opacity vs the spec's full saturation.
+
+### ACT:journey-widgets-in-chat — CLOSED 2026-09-13 (live + visually verified)
+- [x] All five owner-reported UX defects fixed, merged (PR #60) and DEPLOYED.
+- [x] **"fix all color bugs"** — swept all six `color-mix` calls in `src/`. Two were real and both
+      shipped: the pink band and the yellow-green ▶. Fixed as literals at the intended hue, per
+      theme. Repo-wide guard added; six detector self-tests, including the false positives its own
+      first run produced.
+- [x] **"you should have impersonated me for uat"** — checked: the bypass already resolves to
+      `von.ellis@enterpriseds.io` and the shots show his real tasks. The blank screens were two
+      different bugs in MY harness (screenshot before fetch resolved; `networkidle` unreachable for a
+      polling app), both fixed.
+- [x] **5/6 browser checks PASS at 390px on production**, run 34763566801. Screenshots delivered.
+- [ ] **OWNER — deploy journey `execute-tool`** so `get_task_topics` exists; the topic tree renders
+      its labelled empty state until then. Only remaining piece of the original ask.
+- [ ] **OWNER — merge eds-skills PR #83** (`prototype-in-app-skin` + `ship-ui-that-belongs`), green.
+- [ ] **OWNER DECISION — the Memory rail entry:** remove, or scope a real browse-my-memory view.
+      Answered post-deploy as asked; recommendation on record is remove now, scope the view separately.
