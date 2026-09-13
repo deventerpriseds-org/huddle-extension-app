@@ -3104,7 +3104,35 @@ which the owner's screenshot disproved.
 `return results.slice(0, 5)` and selects no `id` and no `category_affinity` — it is a top-5 voice
 briefing, not a tree. Worth knowing before writing anything else that wants topics.
 
-### `parent_topic_id` IS NULL ON EVERY ROW — the tree is CATEGORY → topic (measured, do not re-derive)
+### journey's PRIORITIES VIEW RUNS AN UNMERGED BRANCH — `origin/main` is NOT what the owner sees
+**The live view is `claude/priority-widget-nesting-1jtwa9`** (journey-voice, commits `f0ab561` +
+`532da6b`, Jun 29). Proof it is the live one rather than `main`: `main` renders one row per raw
+config key (six rows, no Family); the branch declares
+`DISPLAY_CATEGORIES = ['LIFE','CAREER','VENTURES','EDUCATION','FAMILY']` — **exactly the five rows in
+the owner's screenshot** — and FAMILY holds no rows in `task_topic_index`, which is why that row
+carries no count. journey's clone has a **truncated history** (`origin/main...<branch>` reports *no
+merge base*), so `git log origin/main` **cannot** be used to argue a thing was never shipped there.
+
+What the branch establishes, and what Huddle must port:
+- **Four levels: `category > group > sub-group > task`** (f0ab561's own subject line). Category sits
+  ABOVE `parent_topic_id` nesting; the two COMPOSE. This is the "sub-tasks and epics" hierarchy work
+  the owner flagged — journey is building toward populated `parent_topic_id`, so *"some topics nest,
+  others do not"* is the state to survive, not an edge case.
+- **Six raw keys merge into five display rows**: `PERSONAL → LIFE` (label **"Life & Personal"**),
+  `PROF_EDUCATION → EDUCATION` (label **"Education"**), plus **FAMILY** as a fifth. Known categories
+  render in `DISPLAY_CATEGORIES` order; unknown keys pass through and append alphabetically
+  (`532da6b`, "hybrid dynamic category detection" — they are NOT dropped).
+- A topic's category is a **majority vote over its tasks' categories**, falling back to
+  `category_affinity`, then `window_affinity[0]`; children inherit the parent's. Huddle is handed
+  topics without their tasks, so it uses the fallbacks only — an honest subset, not the vote.
+
+**Separately — TASK hierarchy (epic → task → subtask) is a DIFFERENT thing and is ABSENT.** See
+`docs/feasibility-epics-tasks-subtasks.md` (2026-09-12): ordering EXISTS (`tasks.priority_rank`),
+inter-task pointers EXIST-BUT-DEAD (`tasks.blocked_by`, 0 of 412 rows, never written/mirrored/read),
+parent pointer ABSENT (no `parent_task_id` column). Different table, different code path from the
+topic tree. Do not conflate the two when either comes up.
+
+### `parent_topic_id` IS NULL ON EVERY ROW *TODAY* — a dated measurement, not the shape
     select count(*), count(parent_topic_id), count(distinct category_affinity)
       from public.task_topic_index;          -- journey wwxgajrtmslzklnyplah, 2026-09-13
     -> 158 topics, 0 with a parent, 5 categories
