@@ -132,3 +132,158 @@ data today. Under the C6 merge rules (`PROF_EDUCATION→EDUCATION`), today's liv
 occupied display rows — Life & Personal, Ventures, Education, Career — not five. FAMILY is a display category
 with no live data behind it. Any claim of "5 categories on screen" is a claim about the CODE's category list,
 not about what today's data produces.
+
+---
+
+## C5 — journey's tree is FOUR levels, and category COMPOSES with `parent_topic_id` rather than replacing it
+
+**CONFIRMED.**
+
+The commit exists and is absent from `origin/main`:
+```
+$ git -C /home/user/journey-voice cat-file -t f0ab561            -> commit
+$ git log -1 --format='%H %an %ad %s' f0ab561
+f0ab561ece771261319458714a3317747088a488 deventerprisesds Mon Jun 29 09:50:46 2026 -0400
+fix: priority widget proper nesting with category > group > sub-group > task tree
+$ git merge-base --is-ancestor f0ab561 origin/main                -> exit 1 (NOT an ancestor)
+$ git branch -a --contains f0ab561                                -> (empty)
+```
+Its own message says the four levels verbatim. `--stat`: `CategoryTreeSection.tsx` (+114 new) and
+`Priorities.tsx` (535 changed).
+
+The composition is visible in the code, not just the message (`git show f0ab561:src/pages/Priorities.tsx`):
+- L267 `DISPLAY_CATEGORIES.map(key => …)` — the OUTER level is category.
+- Inside each category, L268-270 selects top-level topics (`topics` = `allTopics.filter(t => !t.parent_topic_id)`,
+  built at Priorities.tsx L231-234) — the GROUP level.
+- L276-283 `children: (childrenMap.get(t.id) || []).map(child => ({ …, children: [] }))` — the SUB-GROUP
+  level, from `parent_topic_id`. So category wraps the parent-id nesting; they are not alternatives.
+- L279/L282 `tasks: (topicTasksMap.get(…) || []).sort(PRIORITY_SORT)` — the TASK level.
+- L257-262: a child topic with no category of its own INHERITS its parent's — further proof the two
+  levels coexist by design.
+
+Verifier's own addition: journey's sub-group depth is exactly ONE (`children: []` is hardcoded on the
+child at L282). journey does not render arbitrary depth.
+
+---
+
+## C6 — journey merges raw category keys into five display rows
+
+**CONFIRMED in substance; the count "six" is wrong — the map has SEVEN keys.**
+
+`git show f0ab561:src/pages/Priorities.tsx`, lines 46-72:
+```
+L46  const DISPLAY_CATEGORIES = ['LIFE', 'CAREER', 'VENTURES', 'EDUCATION', 'FAMILY'] as const;
+L48  const CATEGORY_DISPLAY_MAP: Record<string, string> = {
+       LIFE:'LIFE', PERSONAL:'LIFE', CAREER:'CAREER', VENTURES:'VENTURES',
+       EDUCATION:'EDUCATION', PROF_EDUCATION:'EDUCATION', FAMILY:'FAMILY' };
+L66  const CATEGORY_LABELS = { LIFE:'Life & Personal', CAREER:'Career', VENTURES:'Ventures',
+       EDUCATION:'Education', FAMILY:'Family' };
+```
+- `PERSONAL → LIFE`, labelled **"Life & Personal"** — CONFIRMED.
+- `PROF_EDUCATION → EDUCATION`, labelled **"Education"** — CONFIRMED.
+- `FAMILY` present as the fifth display category — CONFIRMED.
+- **Count correction:** `CATEGORY_DISPLAY_MAP` has **seven** keys collapsing to **five** values, not six.
+  (Six only if FAMILY is excluded from the count, which the claim's own wording "plus FAMILY" may intend.)
+
+**Divergence worth recording (verifier's own finding):** journey's `catData` is built by mapping over the
+FIXED `DISPLAY_CATEGORIES` list (L267). A category key that is not one of those five is **dropped from the
+category rail entirely** in journey — there is no dynamic append. Huddle deliberately does NOT copy that
+(see C7(iii)); Huddle is more forgiving than the thing it is modelled on. That is a deliberate, documented
+divergence (widgets.server.ts:474-478), not a faithful port.
+
+---
+
+## C7 — huddle's `widgets.server.ts` faithfully implements C5 and C6
+
+**CONFIRMED for (i)-(iv). REFUTED for (v): there ARE inputs that make a topic disappear entirely.**
+
+All results below are from executing the REAL exported `buildTopicTree` (probe `/tmp/probe/p1.ts`,
+`bun`), not from reading.
+
+| # | Question | Result | Observed |
+|---|---|---|---|
+| i | Category grouping still happens when SOME topics have children and others don't? | **YES** | in: `a`(CAREER, 1 child) + `b`(VENTURES, no children) → out top level `["category:CAREER\|pos=1\|count=5", "category:VENTURES\|pos=2\|count=5"]` — both wrapped |
+| ii | Category count = sum over WHOLE subtree? | **YES** | `a.count=2` + child `a1.count=3` → `category:CAREER.count = 5` |
+| iii | Unknown category key survives? | **YES** | `SIDE_HUSTLE` → `category:SIDE_HUSTLE`, label `"Side Hustle"`, `position=5` (past `DISPLAY_CATEGORY_ORDER.length`), sorts after every known one |
+| iv | Topic with no category survives? | **YES** | `NoCat` emerges as its own top-level row `x\|pos=null\|count=4`, not dropped, not bucketed as "Other" |
+| v | Any input that makes a topic disappear? | **YES — two** | see REFUTATION below |
+
+Code basis for (i): `buildTopicTree:683` and `:698` BOTH end in `sortNodes(groupByCategory(...))`, so the
+category step runs on every branch — the regression described in the file's own comment (`:519-523`) is
+genuinely fixed. (ii): `widgets.server.ts:600-612`, the `walk` closure recurses into `c.children`.
+(iii): `displayCategory:490-493` falls through with `?? k`, and `DISPLAY_CATEGORY_ORDER` is used only as an
+`indexOf` rank (`:593-594`), never as a filter. (iv): `:565-568` `if (!own) { out.push(n); continue; }`.
+
+### REFUTATION of (v) — two inputs that lose a topic outright
+
+**(v-a) Duplicate `id` — one topic silently vanishes.**
+```
+in  (3 topics): [{id:"dup",topic_name:"First",...},{id:"dup",topic_name:"Second",...},{id:"ok",topic_name:"Third",...}]
+out (2 topics): ["First","Third"]          <-- "Second" is GONE
+```
+Cause: `widgets.server.ts:686` `for (const n of flat) if (!byId.has(n.id)) byId.set(n.id, n);` — the second
+node with a taken id is never inserted, and `:689` iterates `byId.values()`, so it never reaches `roots`.
+This is the same class of failure the file's own comment at `:622-625` says must never happen again
+("a malformed row must cost its own nesting, never its existence"). The cycle case was fixed; this one
+was not. NOTE: it affects only the FLAT branch — the already-nested branch (`:683`) returns `flat` and
+does not dedup.
+
+**(v-b) No `id` field + a repeated `topic_name` — one topic vanishes, and its COUNT is lost with it.**
+```
+in  (2 topics): [{topic_name:"Admin", category_affinity:"LIFE",  task_count:7},
+                 {topic_name:"Admin", category_affinity:"CAREER", task_count:9}]
+out (1 topic):  ["Admin"], top level = ["category:LIFE|pos=0|count=7"]
+```
+The CAREER row and its 9 tasks are gone from the rail entirely. Cause: `toTopicNode:431`
+`const id = firstString(o, ["id","topic_id","topicId"]) ?? name;` — with no id, the NAME becomes the id,
+so two same-named topics collide and (v-a) then drops one. This is the more realistic of the two: journey's
+`get_task_topics` envelope "is NOT yet published" per the file's own comment at `:401-404`, so a payload
+without `id` is exactly the case the parser was written to tolerate — and it is the case that loses data.
+Severity is bounded (journey's own rows always carry a uuid `id`), but it is a real lossy input, and
+`JourneyWidgets.tsx` compounds it by keying React rows on `t.id`.
+
+---
+
+## C8 — `bun scripts/widget-topic-tree.test.ts` reports 17/0, with no stranded assertions
+
+**CONFIRMED.**
+
+```
+$ bun scripts/widget-topic-tree.test.ts
+...
+==================== 17 passed, 0 failed ====================
+```
+Stranded-assertion audit (the defect that previously left 7 assertions inert):
+- `grep -c "check(" scripts/widget-topic-tree.test.ts` → **18**.
+- `grep -n "function check"` → **line 30** — one of the 18 is the definition.
+- 18 − 1 definition = **17 call sites**, matching the 17 reported passes exactly. Nothing is skipped.
+- `grep -n "process.exit"` → **line 231 only**, and `wc -l` → **231**. The single `process.exit` is the
+  LAST line of the file, so no assertion can sit after it. The earlier defect cannot be present.
+
+---
+
+## C9 — nothing in this change touches TASK hierarchy (epic → task → subtask)
+
+**CONFIRMED.**
+
+```
+$ git diff --stat 7dc0243..1a9be2b
+ .claude/actions.md                                |  28 +
+ .claude/memory.md                                 |  63 +
+ package.json                                      |   3 +-
+ scripts/widget-topic-tree.test.ts                 | 231 +
+ src/features/huddle/components/JourneyWidgets.tsx |  24 +-
+ src/features/huddle/lib/tasks/widgets.server.ts   | 199 +-
+ 6 files changed, 532 insertions(+), 16 deletions(-)
+```
+Only TWO runtime files change, and neither is a task-hierarchy path:
+- `widgets.server.ts` — TOPIC tree only (`task_topic_index` shape: `parent_topic_id`, `category_affinity`).
+- `JourneyWidgets.tsx` — the entire runtime change is the expand-default: `TopicRow` gains a
+  `defaultOpen` prop, `useState(depth === 0 && hasChildren)` becomes `useState(defaultOpen && hasChildren)`,
+  and the caller passes `defaultOpen={i === 0}`. Presentation only.
+
+Grepping the diff for `epic|subtask|sub_task|parent_task|parentTask|task_hierarchy` (case-insensitive)
+returns 6 hits, and **every one is a comment or a markdown line** (`.claude/memory.md` lines describing
+that task hierarchy is a different table, and the `widgets.server.ts:487` comment). Zero executable lines.
+`parent_task_id` does not appear as code anywhere in the diff — consistent with
+`docs/feasibility-epics-tasks-subtasks.md` recording that the column does not exist.
