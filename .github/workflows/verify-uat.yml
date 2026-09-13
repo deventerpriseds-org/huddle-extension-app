@@ -13,6 +13,14 @@ on:
         description: "Path to the checks module to run (default: full huddle-checks suite)"
         required: false
         default: ".claude/skills/test-agent-serverfn/scripts/huddle-checks.mjs"
+      viewport_w:
+        description: "Viewport width. Use 390 for the owner's phone — the 2026-09-13 visual defects were width-dependent and a desktop width hid every one of them."
+        required: false
+        default: "1000"
+      viewport_h:
+        description: "Viewport height (390x844 is the phone pair). Defaults preserve the pre-existing 1000x680 the huddle-checks suite was written against."
+        required: false
+        default: "680"
 
 permissions:
   contents: write
@@ -39,8 +47,10 @@ jobs:
           UAT_TOKEN: ${{ secrets.UAT_BYPASS_TOKEN }}
           CHECKS_FILE: ${{ github.workspace }}/${{ inputs.checks_file }}
           SHOT_DIR: uat-shots
-          UAT_VIEWPORT_W: '1000'
-          UAT_VIEWPORT_H: '680'
+          # ONE definition only. A duplicate YAML key silently takes the LAST value, so an input
+          # added above a hardcoded pair would be overridden with nothing failing (caught 2026-09-13).
+          UAT_VIEWPORT_W: ${{ inputs.viewport_w }}
+          UAT_VIEWPORT_H: ${{ inputs.viewport_h }}
           # Real voice barge: synthesized speech (ElevenLabs) injected into a stubbed mic → real VAD/STT.
           FAKE_MIC: '1'
           ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
