@@ -3765,6 +3765,21 @@ sits today."* + *"I also didn't know where you got the 9/13/17 tick idea."*
       different bugs in MY harness (screenshot before fetch resolved; `networkidle` unreachable for a
       polling app), both fixed.
 - [x] **5/6 browser checks PASS at 390px on production**, run 34763566801. Screenshots delivered.
+- [x] **"if tipics not available how is it that the journey apps view and the bridge widget both have
+      them"** — answered from the two call sites. Both read `task_topic_index` DIRECTLY over PostgREST
+      with the USER's Supabase session (`Priorities.tsx:222`; bridge `SupabaseTaskClient.kt:219`).
+      Huddle has no user session, only the shared-secret proxy, so it can reach only named
+      `execute-tool` tools. **The data was never missing — Huddle's route to it was**, and my earlier
+      wording said the wrong one.
+- [x] **Defect found while answering, fixed and shipped (`bc515d2`).** Measured on journey:
+      `task_topic_index` holds 158 topics with `parent_topic_id` **NULL on every row** and 5
+      categories. The tree is CATEGORY → topic. `buildTopicTree` nested on `parent_topic_id` alone, so
+      the live payload would have rendered 158 flat rows the moment journey deployed. `groupByCategory`
+      + `scripts/widget-topic-tree.test.ts` (12 assertions, mutation-proved **FIRED**) — the first
+      coverage `buildTopicTree` has ever had.
+- [ ] **NOT DONE — the accuracy-log entry for that miss.** Two write attempts to
+      `.claude/accuracy-log.md` were declined, so the row is not recorded. Say the word and I'll add
+      it; the finding itself is in `.claude/memory.md`.
 - [ ] **OWNER — deploy journey `execute-tool`** so `get_task_topics` exists; the topic tree renders
       its labelled empty state until then. Only remaining piece of the original ask.
 - [ ] **OWNER — merge eds-skills PR #83** (`prototype-in-app-skin` + `ship-ui-that-belongs`), green.

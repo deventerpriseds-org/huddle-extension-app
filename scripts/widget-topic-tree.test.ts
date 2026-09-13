@@ -18,7 +18,12 @@
 //
 // Run:  bun scripts/widget-topic-tree.test.ts   (npm run test:widget-topics)
 
-import { buildTopicTree, categoryLabel, CATEGORY_ROOT_PREFIX } from "../src/features/huddle/lib/tasks/widgets.server";
+import {
+  buildTopicTree,
+  categoryLabel,
+  displayCategory,
+  CATEGORY_ROOT_PREFIX,
+} from "../src/features/huddle/lib/tasks/widgets.server";
 
 let pass = 0,
   fail = 0;
@@ -65,9 +70,9 @@ const LIVE_SHAPE = {
   );
 
   check(
-    "categories sort by their earliest topic's position, so journey's own ordering still drives the rail",
-    roots[0]?.categoryAffinity === "CAREER",
-    `order: [${roots.map((r) => r.categoryAffinity).join(", ")}] — Career's topic is position 0`,
+    "categories render in journey's DISPLAY_CATEGORIES order, not in topic-position order",
+    roots.map((r) => r.categoryAffinity).join(",") === "CAREER,VENTURES,EDUCATION",
+    `order: [${roots.map((r) => r.categoryAffinity).join(", ")}] — fixed by DISPLAY_CATEGORIES regardless of the topics' own positions`,
   );
 
   check(
@@ -92,31 +97,60 @@ const LIVE_SHAPE = {
   );
 }
 
-// ── Precedence: REAL nesting must win. Grouping is only for the no-parent case. ──────────────────
+// ── THE CLOBBER CASE. journey's tree is category > group > SUB-GROUP > task (f0ab561). Category
+//    and sub-group nesting COMPOSE. The first version of groupByCategory bailed out on
+//    `roots.some(n => n.children.length > 0)`, so one sub-group appearing deleted the whole category
+//    level — and journey is actively building toward populated parent_topic_id. Owner caught it.
 {
   const roots = buildTopicTree({
     topics: [
-      { id: "p1", topic_name: "Parent", parent_topic_id: null, category_affinity: "LIFE" },
-      { id: "c1", topic_name: "Child", parent_topic_id: "p1", category_affinity: "LIFE" },
+      { id: "g1", topic_name: "Fundraising", parent_topic_id: null, category_affinity: "VENTURES", task_count: 5 },
+      { id: "s1", topic_name: "Seed round", parent_topic_id: "g1", category_affinity: "VENTURES", task_count: 3 },
+      { id: "g2", topic_name: "Promotion case", parent_topic_id: null, category_affinity: "CAREER", task_count: 4 },
     ],
   });
+  const ventures = roots.find((r) => r.categoryAffinity === "VENTURES");
   check(
-    "when parent_topic_id IS populated, real nesting wins and no category root is synthesized",
-    roots.length === 1 && roots[0].id === "p1" && roots[0].children[0]?.id === "c1",
-    `roots: [${names(roots)}] with ${roots[0]?.children.length} child — journey may start populating parents later`,
+    "a SUB-GROUP does not delete the category level — the two nest, they are not alternatives",
+    roots.length === 2 &&
+      roots.every((r) => r.id.startsWith(CATEGORY_ROOT_PREFIX)) &&
+      ventures?.children[0]?.id === "g1" &&
+      ventures?.children[0]?.children[0]?.id === "s1",
+    `category > group > sub-group = ${roots.length} categories, Ventures > ${ventures?.children[0]?.name} > ${ventures?.children[0]?.children[0]?.name}`,
+  );
+  check(
+    "a category counts its WHOLE subtree, so a sub-group's tasks are not lost from the total",
+    ventures?.count === 8,
+    `Ventures = ${ventures?.count} (group 5 + sub-group 3) — direct children alone would read 5`,
   );
 }
 
 {
   const roots = buildTopicTree({
     topics: [
-      { topic_name: "Career", count: 3, children: [{ topic_name: "Promotion case", count: 3 }] },
+      { topic_name: "Promotion case", category_affinity: "CAREER", count: 3, children: [{ topic_name: "Evidence pack", count: 3 }] },
     ],
   });
   check(
-    "an already-nested payload is trusted as-is and never re-grouped",
-    roots.length === 1 && roots[0].children.length === 1 && !roots[0].id.startsWith(CATEGORY_ROOT_PREFIX),
-    `root id = ${roots[0]?.id}`,
+    "a pre-nested payload keeps its nesting AND still gets its category row",
+    roots.length === 1 &&
+      roots[0].id.startsWith(CATEGORY_ROOT_PREFIX) &&
+      roots[0].children[0]?.children.length === 1,
+    `roots: [${names(roots)}] > ${roots[0]?.children[0]?.name} > ${roots[0]?.children[0]?.children[0]?.name}`,
+  );
+}
+
+{
+  const roots = buildTopicTree({
+    topics: [
+      { id: "g", topic_name: "Group", parent_topic_id: null },
+      { id: "s", topic_name: "Sub", parent_topic_id: "g", category_affinity: "LIFE" },
+    ],
+  });
+  check(
+    "a group with no category of its own is placed by a category found beneath it",
+    roots.length === 1 && roots[0].categoryAffinity === "LIFE" && roots[0].children[0]?.id === "g",
+    `placed under [${names(roots)}]`,
   );
 }
 
@@ -145,17 +179,53 @@ const LIVE_SHAPE = {
   );
 }
 
-// ── Labels: journey's own display names, and an UNKNOWN key must still render ────────────────────
+// ── journey MERGES six raw keys into five display rows (f0ab561 CATEGORY_DISPLAY_MAP). ───────────
+//    An earlier version of this file rendered one row per raw key — a separate "Personal" and a
+//    separate "Prof. Education". That is what journey's `main` does and it is NOT what the owner
+//    sees; his screenshot has exactly five rows.
 check(
-  "PROF_EDUCATION uses journey's own label, not the raw key",
-  categoryLabel("PROF_EDUCATION") === "Prof. Education",
-  `-> "${categoryLabel("PROF_EDUCATION")}" (journey-voice KanbanBoard.tsx:57)`,
+  "PROF_EDUCATION and EDUCATION collapse into ONE Education row",
+  displayCategory("PROF_EDUCATION") === "EDUCATION" && displayCategory("EDUCATION") === "EDUCATION",
+  `PROF_EDUCATION -> ${displayCategory("PROF_EDUCATION")}`,
 );
 check(
-  "an unknown category key still renders, humanized — the map is a LOOKUP, not an allow-list",
-  categoryLabel("SIDE_HUSTLE") === "Side Hustle",
-  `-> "${categoryLabel("SIDE_HUSTLE")}" — categories are user config, so a new one must work with no code change`,
+  "PERSONAL folds into LIFE, labelled 'Life & Personal'",
+  displayCategory("PERSONAL") === "LIFE" && categoryLabel("LIFE") === "Life & Personal",
+  `PERSONAL -> ${displayCategory("PERSONAL")} -> "${categoryLabel("LIFE")}"`,
 );
+{
+  const roots = buildTopicTree({
+    topics: [
+      { id: "a", topic_name: "Degree", parent_topic_id: null, category_affinity: "EDUCATION", task_count: 1 },
+      { id: "b", topic_name: "Certification", parent_topic_id: null, category_affinity: "PROF_EDUCATION", task_count: 19 },
+      { id: "c", topic_name: "Errands", parent_topic_id: null, category_affinity: "PERSONAL", task_count: 2 },
+      { id: "d", topic_name: "Health", parent_topic_id: null, category_affinity: "LIFE", task_count: 27 },
+    ],
+  });
+  check(
+    "the merge happens end-to-end: four raw keys render as TWO category rows, not four",
+    roots.length === 2 && roots.find((r) => r.name === "Education")?.count === 20,
+    `rows: [${names(roots)}]; Education = ${roots.find((r) => r.name === "Education")?.count} (1 + 19)`,
+  );
+  check(
+    "known categories render in journey's fixed order — Life & Personal before Education",
+    roots[0]?.name === "Life & Personal",
+    `order: [${names(roots)}] (DISPLAY_CATEGORIES = LIFE, CAREER, VENTURES, EDUCATION, FAMILY)`,
+  );
+}
+{
+  const roots = buildTopicTree({
+    topics: [
+      { id: "u", topic_name: "Side gig", parent_topic_id: null, category_affinity: "SIDE_HUSTLE" },
+      { id: "k", topic_name: "Promotion", parent_topic_id: null, category_affinity: "CAREER" },
+    ],
+  });
+  check(
+    "an UNKNOWN category passes through, humanized, and sorts AFTER every known one",
+    roots.length === 2 && roots[0].name === "Career" && roots[1].name === "Side Hustle",
+    `order: [${names(roots)}] — 532da6b's hybrid dynamic detection; the map is an ORDERING, not an allow-list`,
+  );
+}
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);
 process.exit(fail === 0 ? 0 : 1);
