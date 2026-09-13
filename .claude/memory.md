@@ -3087,6 +3087,69 @@ user-confirmed**; the owner looking at it live is the verdict.
 but **NOT deployed**, so the topic tree — roughly 60% of the Priorities screenshot — renders its
 labelled empty state while the task band works fully. Deploying `execute-tool` is what lights it up.
 
+### Why journey and the Android widget HAVE topics and Huddle does not (owner's question, 2026-09-13)
+**OBSERVATION, from the two call sites.** journey's web app reads the table directly —
+`supabase.from('task_topic_index').select('*').eq('user_id', user.id)` (`src/pages/Priorities.tsx:222`)
+— and the Android bridge widget runs the identical read over PostgREST,
+`GET /rest/v1/task_topic_index?select=id,topic_name,position,category_affinity,parent_topic_id,window_affinity&user_id=eq.$userId`
+(`android-bridge-template SupabaseTaskClient.kt:219`). **Both hold the USER's Supabase session**, so
+RLS scopes the read to their own rows. Huddle holds only `JOURNEY_PROXY_TOKEN` and no user session,
+so it can reach nothing but named `execute-tool` tools. **The data was never missing — Huddle's ROUTE
+to it was.** Saying "topics aren't available" without that clause read as "the data isn't there",
+which the owner's screenshot disproved.
+
+**`get_tasks` already returns SOME topic data today, deployed.** `enrichTasksWithTopics` attaches a
+`topic_groups` array to `get_tasks`/`get_today_tasks`. It is **not** a substitute for the tree and
+`get_task_topics` is **not** a duplicate of it: `getTopicGroupsManual` ends in
+`return results.slice(0, 5)` and selects no `id` and no `category_affinity` — it is a top-5 voice
+briefing, not a tree. Worth knowing before writing anything else that wants topics.
+
+### journey's PRIORITIES VIEW RUNS AN UNMERGED BRANCH — `origin/main` is NOT what the owner sees
+**The live view is `claude/priority-widget-nesting-1jtwa9`** (journey-voice, commits `f0ab561` +
+`532da6b`, Jun 29). Proof it is the live one rather than `main`: `main` renders one row per raw
+config key (six rows, no Family); the branch declares
+`DISPLAY_CATEGORIES = ['LIFE','CAREER','VENTURES','EDUCATION','FAMILY']` — **exactly the five rows in
+the owner's screenshot** — and FAMILY holds no rows in `task_topic_index`, which is why that row
+carries no count. journey's clone has a **truncated history** (`origin/main...<branch>` reports *no
+merge base*), so `git log origin/main` **cannot** be used to argue a thing was never shipped there.
+
+What the branch establishes, and what Huddle must port:
+- **Four levels: `category > group > sub-group > task`** (f0ab561's own subject line). Category sits
+  ABOVE `parent_topic_id` nesting; the two COMPOSE. This is the "sub-tasks and epics" hierarchy work
+  the owner flagged — journey is building toward populated `parent_topic_id`, so *"some topics nest,
+  others do not"* is the state to survive, not an edge case.
+- **Six raw keys merge into five display rows**: `PERSONAL → LIFE` (label **"Life & Personal"**),
+  `PROF_EDUCATION → EDUCATION` (label **"Education"**), plus **FAMILY** as a fifth. Known categories
+  render in `DISPLAY_CATEGORIES` order; unknown keys pass through and append alphabetically
+  (`532da6b`, "hybrid dynamic category detection" — they are NOT dropped).
+- A topic's category is a **majority vote over its tasks' categories**, falling back to
+  `category_affinity`, then `window_affinity[0]`; children inherit the parent's. Huddle is handed
+  topics without their tasks, so it uses the fallbacks only — an honest subset, not the vote.
+
+**Separately — TASK hierarchy (epic → task → subtask) is a DIFFERENT thing and is ABSENT.** See
+`docs/feasibility-epics-tasks-subtasks.md` (2026-09-12): ordering EXISTS (`tasks.priority_rank`),
+inter-task pointers EXIST-BUT-DEAD (`tasks.blocked_by`, 0 of 412 rows, never written/mirrored/read),
+parent pointer ABSENT (no `parent_task_id` column). Different table, different code path from the
+topic tree. Do not conflate the two when either comes up.
+
+### `parent_topic_id` IS NULL ON EVERY ROW *TODAY* — a dated measurement, not the shape
+    select count(*), count(parent_topic_id), count(distinct category_affinity)
+      from public.task_topic_index;          -- journey wwxgajrtmslzklnyplah, 2026-09-13
+    -> 158 topics, 0 with a parent, 5 categories
+
+journey groups by `category_affinity` FIRST (`Priorities.tsx:284`, `categoryKeys.map`) and only then
+nests by parent — which currently never fires. Category keys come from user config
+(`user_scheduling_prefs.config.categoryMappings`): LIFE, CAREER, PERSONAL, VENTURES, EDUCATION,
+PROF_EDUCATION. The numbers on a category row are OPEN TASK COUNTS — the owner's screenshot reads
+Ventures 40 and open non-test `category = VENTURES` tasks measured exactly 40.
+
+Huddle's `buildTopicTree` nested on `parent_topic_id` alone, so the live payload would have rendered
+**158 flat rows**, never the five collapsible category rows. Fixed in `bc515d2` by `groupByCategory`
+(a no-op when real nesting exists, so journey populating parents later still wins), guarded by
+`scripts/widget-topic-tree.test.ts` — 12 assertions, mutation-proved **FIRED**. This is the first
+coverage `buildTopicTree` has ever had; every earlier fixture invented a `parent_topic_id` the real
+table has never contained, which is exactly why 67 green assertions never saw it.
+
 ## The Memory rail entry — intent and current state (answered 2026-09-13, post-deploy as asked)
 **OBSERVATION.** Added 2026-08-16 in `9a77207`, a commit titled *"fix(routing): deterministic
 multi-lane detection turns off solo…"* — it arrived as a side-car in an unrelated routing fix, not as

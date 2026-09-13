@@ -448,6 +448,174 @@ function toTopicNode(raw: unknown, depth: number): TopicNode | null {
 }
 
 /**
+ * journey MERGES raw category keys into DISPLAY categories. Six keys collapse to five rows.
+ *
+ * Read from journey's live Priorities view, `claude/priority-widget-nesting-1jtwa9` commit
+ * `f0ab561` — `CATEGORY_DISPLAY_MAP` / `CATEGORY_LABELS` / `DISPLAY_CATEGORIES`. That branch is
+ * **NOT on journey's `origin/main` and is nevertheless what the owner is looking at**: `main`
+ * renders one row per raw config key (six, no Family), while the branch renders exactly the five in
+ * his screenshot — Career, Ventures, Education, Life, Family — and FAMILY holds no rows in
+ * `task_topic_index`, which is why that row carries no count. journey's repo has a truncated
+ * history, so `git log origin/main` cannot be used to argue a thing was never shipped.
+ *
+ * An earlier version of this file mapped one label per raw key (a separate "Personal" row and a
+ * separate "Prof. Education" row). That is what `main` does and it is NOT what the owner sees.
+ */
+const CATEGORY_DISPLAY_MAP: Record<string, string> = {
+  LIFE: "LIFE",
+  PERSONAL: "LIFE",
+  CAREER: "CAREER",
+  VENTURES: "VENTURES",
+  EDUCATION: "EDUCATION",
+  PROF_EDUCATION: "EDUCATION",
+  FAMILY: "FAMILY",
+};
+
+/** The fixed order journey renders known categories in (`DISPLAY_CATEGORIES`, f0ab561:46).
+ *  Anything not in here is a DYNAMIC category and is appended alphabetically after these — the
+ *  "hybrid dynamic category detection" of `532da6b`, which exists so an unknown key passes through
+ *  instead of being silently dropped. Keep that property: this is an ORDERING, not an allow-list. */
+const DISPLAY_CATEGORY_ORDER = ["LIFE", "CAREER", "VENTURES", "EDUCATION", "FAMILY"] as const;
+
+const CATEGORY_LABELS: Record<string, string> = {
+  LIFE: "Life & Personal",
+  CAREER: "Career",
+  VENTURES: "Ventures",
+  EDUCATION: "Education",
+  FAMILY: "Family",
+};
+
+/** Raw `category_affinity` → the display bucket it renders in. `PROF_EDUCATION` → `EDUCATION`,
+ *  `PERSONAL` → `LIFE`. An unknown key is its own bucket rather than being dropped. */
+export function displayCategory(key: string): string {
+  const k = key.toUpperCase();
+  return CATEGORY_DISPLAY_MAP[k] ?? k;
+}
+
+/** `LIFE` → `Life & Personal`; an unknown `SIDE_HUSTLE` → `Side Hustle`. */
+export function categoryLabel(key: string): string {
+  const k = key.toUpperCase();
+  const known = CATEGORY_LABELS[k];
+  if (known) return known;
+  return k
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+/** Synthetic category roots are ids, not topics — prefixed so they can never collide with a
+ *  journey topic uuid, and so a click handler can tell them apart. */
+export const CATEGORY_ROOT_PREFIX = "category:";
+
+/**
+ * Wrap already-nested topic roots in synthetic CATEGORY roots.
+ *
+ * journey's tree is FOUR levels — `category > group > sub-group > task`
+ * (journey-voice `f0ab561`, "fix: priority widget proper nesting with category > group > sub-group >
+ * task tree"). Category is the OUTERMOST level; `parent_topic_id` produces the group → sub-group
+ * level INSIDE it. **The two compose; they are not alternatives.**
+ *
+ * THIS FUNCTION'S FIRST VERSION GOT THAT WRONG and bailed out entirely on
+ * `roots.some(n => n.children.length > 0)` — i.e. the moment any topic gained a sub-group, the whole
+ * category level vanished. That is the "sub-groups and epics" work this must not clobber: journey is
+ * actively building toward populated `parent_topic_id`, so the state this had to survive is the one
+ * where SOME topics nest and others do not. Caught by the owner before it shipped.
+ *
+ * Why the category level is needed at all — measured 2026-09-13 (journey wwxgajrtmslzklnyplah):
+ *
+ *     select count(*), count(parent_topic_id), count(distinct category_affinity)
+ *       from public.task_topic_index;
+ *     -> 158 topics, 0 with a parent, 5 distinct categories
+ *
+ * `parent_topic_id` is NULL on every row TODAY, so nesting alone yields 158 flat rows. That is a
+ * MEASUREMENT WITH A DATE, not a structural fact — do not turn it back into an assumption.
+ *
+ * Skipped only when there is genuinely nothing to do: no node carries a category, or the producer
+ * already sent category roots (double-wrapping them would add a level journey does not draw).
+ * A topic with no category stays a top-level row rather than being dropped or bucketed as "Other".
+ */
+/** Depth-first: the first `categoryAffinity` anywhere under these nodes, or null. */
+function firstCategoryInSubtree(nodes: TopicNode[]): string | null {
+  for (const n of nodes) {
+    if (n.categoryAffinity) return n.categoryAffinity;
+    const deeper = firstCategoryInSubtree(n.children);
+    if (deeper) return deeper;
+  }
+  return null;
+}
+
+function groupByCategory(roots: TopicNode[]): TopicNode[] {
+  if (roots.some((n) => n.id.startsWith(CATEGORY_ROOT_PREFIX))) return roots; // already categorised
+  // "Nothing to group on" must look at the WHOLE SUBTREE, not just each root's own field — a group
+  // can be uncategorised while its sub-group carries the category, and an own-field-only check
+  // returned early and left that tree flat.
+  if (!roots.some((n) => n.categoryAffinity ?? firstCategoryInSubtree(n.children))) return roots;
+
+  const byCat = new Map<string, TopicNode>();
+  const out: TopicNode[] = [];
+
+  for (const n of roots) {
+    // A group with no category of its own takes the first one found beneath it, so a sub-group's
+    // category still places the group. journey does the richer version of this — a majority vote
+    // over the topic's tasks' categories, then `category_affinity`, then `window_affinity[0]`
+    // (f0ab561:239-254) — but Huddle is handed topics, not their tasks, so the vote's input does not
+    // exist here. Taking the first is the honest subset; it is NOT a reimplementation of the vote.
+    const own = n.categoryAffinity ?? firstCategoryInSubtree(n.children);
+    if (!own) {
+      out.push(n); // uncategorised topic — a top-level row of its own, never silently dropped
+      continue;
+    }
+    // PROF_EDUCATION and EDUCATION share one row, PERSONAL folds into LIFE — journey's own merge.
+    const cat = displayCategory(own);
+    let parent = byCat.get(cat);
+    if (!parent) {
+      parent = {
+        id: `${CATEGORY_ROOT_PREFIX}${cat}`,
+        name: categoryLabel(cat),
+        parentId: null,
+        categoryAffinity: cat,
+        position: null,
+        count: null,
+        children: [],
+      };
+      byCat.set(cat, parent);
+      out.push(parent);
+    }
+    parent.children.push(n);
+  }
+
+  for (const parent of byCat.values()) {
+    // journey renders its five known categories in a FIXED order and appends unknown ones after
+    // them (`DISPLAY_CATEGORIES` + the dynamic scan in 532da6b). `position` is the sort key
+    // sortNodes already uses, so encode the rank there; an unknown category gets a rank past the
+    // end and therefore sorts after every known one, alphabetically by name via sortNodes' tiebreak.
+    const rank = DISPLAY_CATEGORY_ORDER.indexOf(parent.categoryAffinity as (typeof DISPLAY_CATEGORY_ORDER)[number]);
+    parent.position = rank >= 0 ? rank : DISPLAY_CATEGORY_ORDER.length;
+
+    // A category's count is the sum over its whole SUBTREE, not just its direct children — a
+    // sub-group's tasks are still that category's tasks. It stays NULL when nothing underneath
+    // reports a count, because the spec draws a BLANK there, never a "0" (the owner's screenshot
+    // has exactly one such row: Family, which holds no topics at all).
+    let sum = 0;
+    let sawCount = false;
+    const walk = (nodes: TopicNode[]) => {
+      for (const c of nodes) {
+        if (c.count !== null) {
+          sum += c.count;
+          sawCount = true;
+        }
+        walk(c.children);
+      }
+    };
+    walk(parent.children);
+    parent.count = sawCount ? sum : null;
+  }
+
+  return out;
+}
+
+/**
  * Would attaching `n` to its declared parent close a loop? Walks the ancestor chain looking for
  * `n` itself (or any repeat).
  *
@@ -481,12 +649,24 @@ function sortNodes(nodes: TopicNode[]): TopicNode[] {
 /**
  * Normalize journey's topic payload into nested roots.
  *
- * Handles both shapes without knowing which Lane A ships: a tree that already nests its children,
- * and the FLAT `task_topic_index` shape Lane A proved it reads (`parent_topic_id` null = top-level),
- * which is nested here by parent id. A node whose declared parent is missing from the payload is
- * promoted to a root rather than dropped, so a partial page can never silently lose topics.
- * Cycle-safe: a node whose parent chain loops back to it is promoted to a root (see
- * hasAncestorCycle) — an earlier version returned an EMPTY tree for that input, losing both nodes.
+ * journey's shape is FOUR levels — `category > group > sub-group > task` (journey-voice `f0ab561`).
+ * Huddle is handed the top three. They are built in two INDEPENDENT, COMPOSING steps:
+ *
+ *   STEP 1 — nesting (group → sub-group), from whatever the payload carries:
+ *     · already nested by the producer → trusted as sent;
+ *     · flat with real `parent_topic_id` → nested by parent id. Cycle-safe: see hasAncestorCycle,
+ *       which promotes a looping node to a root rather than returning an EMPTY tree and losing both.
+ *     · flat with no parent at all → one level, which is journey's data TODAY (158 topics, all
+ *       parentless, measured 2026-09-13). journey is actively working toward populated parents, so
+ *       treat that as a dated measurement, never as the shape.
+ *
+ *   STEP 2 — `groupByCategory` wraps whatever step 1 produced in category roots. It runs on EVERY
+ *     branch. It must never be conditional on step 1's outcome: a build where some topics nest and
+ *     others do not is the state journey is heading for, and an earlier version of this skipped the
+ *     category level entirely the moment ONE sub-group appeared.
+ *
+ * A node whose declared parent is missing from the payload is promoted to a root rather than
+ * dropped, so a partial page can never silently lose topics.
  */
 export function buildTopicTree(payload: unknown): TopicNode[] {
   const arr = findTopicArray(payload);
@@ -498,8 +678,9 @@ export function buildTopicTree(payload: unknown): TopicNode[] {
   }
   if (!flat.length) return [];
 
-  // Already nested by the producer — trust it and just order it.
-  if (flat.some((n) => n.children.length > 0)) return sortNodes(flat);
+  // Already nested by the producer — trust its nesting, but still place it under categories, because
+  // category is a level ABOVE the nesting journey sends, never an alternative to it.
+  if (flat.some((n) => n.children.length > 0)) return sortNodes(groupByCategory(flat));
 
   const byId = new Map<string, TopicNode>();
   for (const n of flat) if (!byId.has(n.id)) byId.set(n.id, n);
@@ -514,7 +695,7 @@ export function buildTopicTree(payload: unknown): TopicNode[] {
       roots.push(n);
     }
   }
-  return sortNodes(roots);
+  return sortNodes(groupByCategory(roots));
 }
 
 // ---------------------------------------------------------------------------

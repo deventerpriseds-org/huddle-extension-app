@@ -3765,6 +3765,34 @@ sits today."* + *"I also didn't know where you got the 9/13/17 tick idea."*
       different bugs in MY harness (screenshot before fetch resolved; `networkidle` unreachable for a
       polling app), both fixed.
 - [x] **5/6 browser checks PASS at 390px on production**, run 34763566801. Screenshots delivered.
+- [x] **"if tipics not available how is it that the journey apps view and the bridge widget both have
+      them"** — answered from the two call sites. Both read `task_topic_index` DIRECTLY over PostgREST
+      with the USER's Supabase session (`Priorities.tsx:222`; bridge `SupabaseTaskClient.kt:219`).
+      Huddle has no user session, only the shared-secret proxy, so it can reach only named
+      `execute-tool` tools. **The data was never missing — Huddle's route to it was**, and my earlier
+      wording said the wrong one.
+- [x] **Defect found while answering, fixed (`bc515d2`).** Measured on journey: `task_topic_index`
+      holds 158 topics with `parent_topic_id` **NULL on every row** and 5 categories. `buildTopicTree`
+      nested on `parent_topic_id` alone, so the live payload would have rendered 158 flat rows the
+      moment journey deployed. First coverage `buildTopicTree` has ever had.
+- [x] **OWNER CAUGHT A CLOBBER in that fix — corrected (`56f2411`).** *"there was work to give the
+      board heirarchy for tasks so sub tasks and epics can exist… don't clobber."* Right on both counts:
+      - journey's tree is **four levels, `category > group > sub-group > task`** (journey-voice
+        `f0ab561`). Category sits ABOVE `parent_topic_id` nesting; they COMPOSE. `groupByCategory` bailed
+        out on `roots.some(n => n.children.length > 0)`, so the first sub-group to appear would have
+        deleted the whole category level — and journey is actively building toward populated parents.
+      - my labels were **`origin/main`'s, not the owner's**. journey merges six raw keys into five rows
+        (`PERSONAL→LIFE` "Life & Personal", `PROF_EDUCATION→EDUCATION`, plus FAMILY). His screenshot is
+        the branch's five rows, not main's six.
+      **journey's live Priorities view runs `claude/priority-widget-nesting-1jtwa9`, which is NOT on its
+      `origin/main`** — and journey's clone has a truncated history, so `git log origin/main` there
+      cannot prove anything was never shipped. Recorded in `.claude/memory.md`.
+      `scripts/widget-topic-tree.test.ts` 12→**17 assertions**; two mutation proofs **FIRED**
+      (sub-group compose, category merge). TASK hierarchy (epic→task→subtask,
+      `docs/feasibility-epics-tasks-subtasks.md`) is a **different table and code path** — untouched.
+- [ ] **NOT DONE — the accuracy-log entry for that miss.** Two write attempts to
+      `.claude/accuracy-log.md` were declined, so the row is not recorded. Say the word and I'll add
+      it; the finding itself is in `.claude/memory.md`.
 - [ ] **OWNER — deploy journey `execute-tool`** so `get_task_topics` exists; the topic tree renders
       its labelled empty state until then. Only remaining piece of the original ask.
 - [ ] **OWNER — merge eds-skills PR #83** (`prototype-in-app-skin` + `ship-ui-that-belongs`), green.
