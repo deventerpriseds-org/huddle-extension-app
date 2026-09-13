@@ -50,6 +50,7 @@
   --color-hairline: var(--hairline);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-band-cream: var(--band-cream);
 
   --shadow-hair: 0 0 0 1px var(--hairline);
   --shadow-soft: 0 1px 2px oklch(0 0 0 / 0.04), 0 8px 24px -12px oklch(0 0 0 / 0.10);
@@ -100,6 +101,16 @@
   --input: oklch(0.92 0.008 220);
   --ring: oklch(0.55 0.05 200);
 
+  /* The cream/pale-yellow band behind the flagged rows in BOTH journey widgets
+   * (docs/widgets/spec-priorities-widget.jpg, spec-schedule-widget.jpg). It is an EXPLICIT literal,
+   * taken from the committed prototype (docs/widgets/prototype/Priorities.dc.html:155), and it must
+   * stay one — it was `color-mix(in oklch, var(--warning) 9%, var(--surface))`, and because
+   * `--surface` is `oklch(1 0 0)` (white with an EXPLICIT hue of ZERO, not a hueless white) oklch
+   * interpolated the hue 55 -> 0 and landed on hue ~5 at chroma ~0.014: PALE PINK, not cream. A
+   * mix against any neutral whose hue channel is written as 0 collapses the hue the same way, which
+   * is why this is a literal and not a derivation. Guarded by scripts/widget-band-color.test.ts. */
+  --band-cream: oklch(0.975 0.032 92);
+
   /* Agent color palette (per-agent tokens) */
   --agent-teal:    oklch(0.55 0.09 190);
   --agent-emerald: oklch(0.60 0.13 160);
@@ -146,6 +157,9 @@
   --hairline: oklch(1 0 0 / 0.09);
   --input: oklch(1 0 0 / 0.12);
   --ring: oklch(0.70 0.06 200);
+  /* Same ROLE, same hue 92, re-lit for dark: a warm band that lifts off `--surface` (L 0.20) by
+   * about as much as `--surface-2` (L 0.23) does, rather than a bright cream that would glare. */
+  --band-cream: oklch(0.255 0.030 92);
 }
 
 /*
@@ -175,6 +189,9 @@
   --hairline: oklch(1 0 0 / 0.09);
   --input: oklch(1 0 0 / 0.12);
   --ring: oklch(0.74 0.11 195);
+  /* The room is always dark regardless of app theme, so it needs its own copy — inheriting the light
+   * `:root` cream here would put a near-white band on the dark stage. */
+  --band-cream: oklch(0.25 0.030 92);
   color: var(--foreground);
 }
 

@@ -499,11 +499,19 @@ function WidgetComposeRow({ placeholder, prefix }: { placeholder: string; prefix
 }
 
 /* ── Section chrome ──────────────────────────────────────────────────────────────────────────────
- * The cream/ivory band from both screenshots, expressed against the THEME's own warning hue rather
- * than a hardcoded off-white — a literal #FFFCF0 would be near-invisible on light mode's white
- * surface and glaring in dark mode. */
+ * The cream/pale-yellow band from both screenshots. This reads ONE token, `--band-cream`, which
+ * styles.css defines per theme (light, dark and the always-dark meeting stage) as an explicit
+ * hue-92 literal.
+ *
+ * It used to be `color-mix(in oklch, var(--warning) 9%, var(--surface))`, and that shipped PINK.
+ * `--warning` is hue 55, but `--surface` is `oklch(1 0 0)` — white written with an EXPLICIT hue of
+ * ZERO, not a hueless white — so oklch interpolated 55 -> 0 and the 9% mix landed at hue ~4.95,
+ * chroma ~0.0144. That is a pale pink, and the owner saw it as one on his phone. Deriving the band
+ * from a mix against ANY neutral whose hue channel is written as 0 collapses the hue the same way,
+ * so the band is a literal now and the per-theme relighting happens in styles.css where the rest of
+ * the palette lives. Guarded by scripts/widget-band-color.test.ts. */
 const BAND_STYLE: React.CSSProperties = {
-  backgroundColor: "color-mix(in oklch, var(--warning) 9%, var(--surface))",
+  backgroundColor: "var(--band-cream)",
 };
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
