@@ -201,3 +201,157 @@ and clicking Memory lights Huddles too. This is pre-existing behaviour (the old 
 the same effect), so it is NOT a regression — but the refactor moved the two drifting chains onto
 one field without noticing that the one field makes the collision explicit. Severity: LOW (cosmetic),
 but it is a visible wrong-state in the primary navigation.
+---
+
+### F-10 — Lane A tool count 26→27 — **CONFIRMED exactly**
+
+```
+$ grep -cE '^\s+name: "' supabase/functions/_shared/tool-definitions.ts          -> 27
+$ git show ec508a5^:.../tool-definitions.ts | grep -cE '^\s+name: "'             -> 26
+```
+`get_task_topics` is defined at `tool-definitions.ts:74` and dispatched at
+`execute-tool/index.ts:415` (`case 'get_task_topics': return await getTaskTopics(supabase, userId, args);`).
+Both halves exist — a definition with no handler (or the reverse) was the thing worth checking.
+
+### F-11 — Lane A "huddle-proxy needed NO change" — **CONFIRMED**
+
+`huddle-proxy/index.ts:38-47` re-serves `${EXECUTE_TOOL_URL}/definitions` verbatim ("Tool definitions
+are owned by the execute-tool function (single source of truth)"). `:154-156` destructures
+`{toolName, args, caller}` and rejects only a MISSING `toolName`; `:206` forwards it. The only
+name-specific branch is `whoami` (`:170`). There is no allow-list, so a new tool needs no proxy
+change. `git show --stat ec508a5` touches 3 files, none of them `huddle-proxy` — consistent.
+
+### F-12 — Lane A `wouldCycle()` — **CONFIRMED PRESENT** (not executed: Deno/Supabase runtime)
+
+`execute-tool/index.ts:2325-2334` is a real ancestor-walk, used at `:2339`
+(`if (parent && parent.id !== n.id && !wouldCycle(n)) parent.children.push(n); else roots.push(n);`),
+plus a second "belt and braces" reachability sweep at `:2342-2356` that re-promotes any node not
+reachable from a root. **UNVERIFIABLE HERE that it was executed** — it is a Deno edge function and
+the branch is not deployed. Present and correct by reading; not run.
+
+---
+
+### F-13 — Attack 3, the write path against journey's REAL schemas — **CONFIRMED on all three tools**
+
+Read from `journey-voice/supabase/functions/_shared/tool-definitions.ts` this session:
+
+| Lane B sends (`widgets.functions.ts`) | journey's definition | verdict |
+|---|---|---|
+| `update_task {task_id, status}` — `DOING`/`DONE`/`UP_NEXT` | `:96` enum `["BACKLOG","TODO","READY","UP_NEXT","DOING","IN_REVIEW","DONE","BLOCKED","PLANNING"]`, `required:["task_id"]` | all three values EXIST |
+| `move_task_to_day {task_id, date}` where `date` = `localDateKey(...)` = `YYYY-MM-DD` | `:190` `date: "Target date YYYY-MM-DD"`, `required:["task_id","date"]` | matches; `window` is optional and correctly omitted |
+| `unschedule_task {task_id}` | `:139` `required:["task_id"]` | matches |
+
+No status value is invented, and no required parameter is missing.
+
+### F-14 — Attack 3b, `⏸ pause → UP_NEXT`: **REFUTED as a durable pause. This is the top defect.**
+
+The status value is legal (F-13). The SEMANTICS are not defensible against the WIP flow.
+
+`autowork.server.ts:492-493` states the pass's own contract:
+> *"per assigned agent, top up UP_NEXT (cap 3) from BACKLOG, **promote one UP_NEXT item to DOING if
+> the agent has none in flight (cap 1)**"*
+
+Chain, spelled out:
+1. The task is in `DOING`. The user taps `⏸`.
+2. `update_task status=UP_NEXT` moves it into UP_NEXT — **the exact lane auto-work promotes FROM**.
+3. That write also EMPTIES `DOING` for that agent, so the `cap 1` slot auto-work needs is now free.
+4. At the next cadence tick (`SCHEDULING_DEFAULTS.autowork.hours=[9,13,17]` ET) the pass looks for
+   one UP_NEXT item to promote, and the freshly-paused task is a candidate.
+5. The `UP_NEXT→DOING` confirm-intent gate does not save it: a task that was already in DOING has
+   already been confirmed, so it passes the gate and returns to `DOING`.
+
+**Net: `⏸` un-pauses itself, silently, within hours.** The user's most likely reading of a pause
+button ("stop working this") is not what the code delivers.
+
+There is a correct mechanism already in the codebase, and the lane's OWN design prototype named it.
+`docs/widgets/prototype/canvas.json` (committed in `4c68ff2`) says:
+> *"⏸ = **park with the parking-lot tag**"*
+
+and Huddle's CLAUDE.md is explicit that parking-lot is the set-aside mechanism and that
+`autowork.server.ts` excludes `'parking-lot' = ANY(tags)` from candidate selection — which is
+precisely the durability `UP_NEXT` lacks. `widgets.server.ts:238` even defines `PARKING_LOT_TAG` and
+filters parked rows OUT of every widget section, so Lane B knew about the tag and used it for READS
+while choosing a different mechanism for the WRITE. **The implementation diverges from its own
+design source of record**, and the divergence is the one that breaks the affordance.
+
+### F-15 — Attack 5, degradation with `get_task_topics` undeployed — **CONFIRMED: renders, does not blank or crash**
+
+`JourneyWidgets.tsx`, every branch observed in source:
+- `:605-607` — `{!data.ok ? <ReadError error={data.error}/> : data.band.length > 0 ? …}`. A failed
+  MIRROR read renders a sentence ("Couldn't load this from your board — …", `:475-478`), not a blank.
+- `:619` — `{data.topics.roots.length > 0 ? <tree> : <TopicEmpty/>}`. With `roots: []` the band above
+  still renders; only the tree degrades. This is the documented "half the widget works" behaviour.
+- `:555-566` — `TopicEmpty` switches on `reason` with a distinct honest sentence for each of
+  `tool-absent` / `not-configured` / `error`, the error case ending *"Everything above is live."*
+  So the undeployed-Lane-A steady state produces a specific, truthful message.
+- `:710-712` — `{doing ? doing.title : "Nothing in progress"}` — the empty `currentlyDoing` case
+  matches the spec text exactly.
+- `:196` / `:205` — an `ok:false` action result becomes `toast.error(r.error || "Couldn't update
+  that task.")`; the thrown case is also caught. No unhandled rejection from a failed button.
+
+### F-16 — a contradictory sentinel the lanes did not flag — LOW
+
+`widgets.functions.ts:173` — `const noTopics: TopicTreeResult = { ok: false, roots: [], reason: "ok" };`
+`ok:false` paired with `reason:"ok"` contradicts the type's own documented contract
+(`widgets.server.ts:104-108`: *"`ok` — journey answered; `roots` is the real tree"*). This sentinel is
+returned both when `includeTopics:false` (journey was never asked) and from `empty()` on a mirror
+failure. It falls through `TopicEmpty`'s reason chain to the final else, so the user is told there
+are no topics rather than that they were not loaded. Cosmetic/contract tidiness, not a crash.
+
+### F-17 — mutation proof of `hasAncestorCycle` — **FIRED (independently re-proved)**
+
+Lane B's claim is that it mutation-proved this guard. **No test for it exists in the repo** —
+`ls scripts/ | grep -i widget` is empty and `package.json` has no widget test script — so the lane's
+proof is NOT reproducible and the guard ships with NO committed regression test. I therefore wrote
+my own test and re-proved it:
+
+```
+$ sed -n '490p' src/features/huddle/lib/tasks/widgets.server.ts        # anchor, taken from the FILE
+    if (parent && parent !== n && !attached.has(n.id) && !hasAncestorCycle(n, byId)) {
+# replacement: the same line with `&& !hasAncestorCycle(n, byId)` removed
+
+$ mutate.sh src/features/huddle/lib/tasks/widgets.server.ts anchor.txt repl.txt "bun cycle.test.ts" "FAIL"
+FIRED: 'FAIL' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/tasks/widgets.server.ts matches HEAD
+tree clean: 'FAIL' passes again on the restored tree
+```
+Baseline (guard present), two topics each naming the other as parent:
+`roots: [{"n":"Alpha","kids":[]},{"n":"Beta","kids":[]}]` → `PASS cycle-guard`. Both survive.
+With the guard removed the same input loses them. **The guard is real. Its test is not committed.**
+
+---
+
+## NOT REACHED (wall-clock budget, loop 1 — stated rather than omitted)
+
+- **Attack 6, fidelity to the two spec `.jpg` screenshots.** I did not open
+  `docs/widgets/spec-priorities-widget.jpg` / `spec-schedule-widget.jpg` or diff the rendered
+  affordances against them. The `✓Today`/`▲Today` toggle, the per-topic counts, the ▶/✓ and ✓/⏸
+  pairs and the UP NEXT star rows are all referenced in `JourneyWidgets.tsx`, but I have NOT
+  compared them to the images. **Missing affordances remain unchecked.**
+- **`store.ts` / `data/seed.ts` Lane C changes** (+44 / +73) — not reviewed.
+- **`lib/tasks/tools.ts` +160 lines added by `3ead8e6`** — this is an AGENT-TOOL surface that no
+  lane claim mentions at all. Unreviewed, and it is the largest unexplained change on the branch.
+- **`HuddleView.tsx:938`** — in-chat widget cards rendered "from the message's own SNAPSHOT payload".
+  A second render path for the same data; not traced.
+- **Runtime behaviour of the handler BODIES** (as opposed to their validators) — see F-06's scope
+  limit. Needs a built bundle or a live deploy.
+- **Anything requiring the live DB or a deployed branch** — TCP 5432 blocked, no PG creds, not deployed.
+
+---
+
+## DEFECTS, ranked by severity
+
+| # | Severity | Defect | Evidence |
+|---|---|---|---|
+| 1 | **HIGH** | `⏸ pause → UP_NEXT` is not a durable pause. It parks the task in the exact lane `autowork` promotes FROM, and frees the `DOING` cap-1 slot in the same write, so the next 9/13/17 cadence tick can promote it straight back — past a confirm-intent gate it has already satisfied. The lane's own design prototype specified the parking-lot tag, which `autowork` genuinely excludes. | F-14 |
+| 2 | **MODERATE** | "None of the three EVER throws" is false. The `.inputValidator` runs outside the handler try/catch; 8 malformed inputs produced a `ZodError` that the client wrapper re-throws instead of an `{ok:false}` payload. Reachable non-hypothetically via `timeZone` > 64 chars and empty `taskId`. | F-06 |
+| 3 | **MODERATE** | Lane B's guard ships with NO committed test. `hasAncestorCycle` is real (I re-proved FIRED), but nothing in the repo protects it — the next refactor can delete it silently. Same for every other behaviour in `widgets.server.ts`, which is pure, dependency-free and trivially testable. | F-17 |
+| 4 | **LOW** | Memory rail item is still decorative (`view: "huddle"`), so the original bug is not resolved — and because `active` now reads the single `it.view` field, Huddles and Memory light up as active SIMULTANEOUSLY. Pre-existing, not a regression. | F-09 |
+| 5 | **LOW** | `{ok:false, reason:"ok"}` sentinel contradicts `TopicTreeResult`'s documented contract and makes "not loaded" render as "no topics". | F-16 |
+
+**What held up under attack:** the dock really is scoped to `dm-iris-chase` (F-07); there is no
+second writer to the mirror (F-08); the ownership gate is real and email-scoped (F-04); no migration
+is needed (F-02); `getBoardTasks` was extended, not forked (F-03); all three journey tool calls match
+journey's real schemas (F-13); the tool count really is 26→27 and `huddle-proxy` really needed no
+change (F-10, F-11); the UI degrades rather than blanking or crashing (F-15); and `npx tsc --noEmit`
+is clean across the repo (F-01).
