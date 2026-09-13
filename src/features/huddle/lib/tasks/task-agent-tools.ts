@@ -80,6 +80,15 @@ export const PROPOSE_TASK_INTENT_TOOL = {
         description:
           "The concrete, testable Definition of Done you just proposed to the user in this same message.",
       },
+      reminder_at: {
+        type: "string",
+        description:
+          "REMIND-mode tasks only (the user's own errand — you can't complete any of it). The exact " +
+          "date+time you just proposed to remind them, as an ISO 8601 timestamp with offset, e.g. " +
+          "2026-08-29T10:00:00-04:00. Must match the day/time you stated in your message. Set this and " +
+          "their Confirm tap schedules the reminder for you — omit it and Confirm has nothing to " +
+          "schedule. Leave it out entirely for produce/assist tasks.",
+      },
     },
     required: ["task_id", "task_title", "definition_of_done"],
   },
@@ -110,6 +119,100 @@ export const PROPOSE_APPROACH_TOOL = {
       },
     },
     required: ["task_id", "approach"],
+  },
+} as const;
+
+/**
+ * ASK THE OWNER to override the approach gate on a task that escalated — the escape hatch, and the
+ * only tool in this file that touches a safety gate at all.
+ *
+ * IT DOES NOT OVERRIDE ANYTHING. It records a request and surfaces the "Approve anyway" button to the
+ * owner; this call never applies one. That split is the whole design, and it replaced an
+ * earlier version in which the model passed `owner_quote` — the owner's authorising sentence — and the
+ * server judged whether those words meant consent. Three independent adversarial passes broke that
+ * judgment with three non-overlapping sets of perfectly ordinary English, so the field is DELETED, not
+ * tightened: there is now no string a model can send that affects whether an override happens.
+ * (.claude/BUILD-override-request-then-tap.md.)
+ *
+ * The description is written so the model cannot come away believing it has applied anything: the name
+ * says "request", the first sentence says the user must still tap, and the return value says
+ * `applied:false`.
+ */
+export const REQUEST_APPROACH_OVERRIDE_TOOL = {
+  type: "function",
+  name: "request_approach_override",
+  description:
+    "ASK THE USER to approve a task whose approach gate is ESCALATED (you tried to propose an " +
+    "approach and were told it is still escalated). This does NOT unblock the task and does NOT " +
+    "approve anything — it shows the user an \u201cApprove anyway\u201d button and waits for them to tap it. " +
+    "Only the user can approve it; nothing you say or pass here can. Calling this again for the same task " +
+    "changes nothing and sends no second notification, so call it once and then move on to other work. " +
+    "In your reply, tell the user plainly that the task is waiting on their approval and why you think " +
+    "it should proceed — do not tell them it is unblocked, because it is not.",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string", description: "The id of the escalated task to ask about." },
+      reason: {
+        type: "string",
+        description:
+          "One sentence for the user: why you think this approach should proceed as-is. This is shown " +
+          "to them to help them decide — it does not influence whether the override happens.",
+      },
+    },
+    required: ["task_id", "reason"],
+  },
+} as const;
+
+/**
+ * override_approach_gate — the agent RELAYS an authorisation the owner already gave, by REFERENCE.
+ *
+ * This is step 4 of the owner's own four steps (tell me it's blocked / try to earn the pass / I say
+ * proceed / you pass my turn AND the turn I was answering to the verifier). It exists because deleting
+ * the model path outright — the state of this file between 2026-09-12 and this change — was an
+ * OVER-correction: *"I never asked to prevent self override!"*
+ *
+ * WHAT IT DOES NOT HAVE, and this is the entire design: a text parameter. The refuted version took
+ * `owner_quote`, a sentence the MODEL chose, and tried to read consent out of it; three independent
+ * adversaries broke that with three non-overlapping sets of ordinary English. Here the model names
+ * TURNS, the server reads those turns out of the durable store itself, and a grader sees the exchange
+ * with the question it answers attached. There is no string to craft.
+ *
+ * Both id arguments are OPTIONAL and default to server-resolved values (the turn being executed, and
+ * this task's own escalation turn), because turn ids are deliberately NOT in the transcript a model
+ * reads — a reference the server supplies cannot be forged at all. Passing one is a claim that is
+ * validated exactly as strictly. (.claude/BUILD-override-turn-pair.md.)
+ */
+export const OVERRIDE_APPROACH_GATE_TOOL = {
+  type: "function",
+  name: "override_approach_gate",
+  description:
+    "Use this ONLY when the user has JUST told you, in their own words, to proceed anyway / override " +
+    "the approach review on a task that is ESCALATED. It does not approve anything by itself: the " +
+    "server re-reads the user's actual message and the message of yours it answered, and an " +
+    "independent reviewer decides whether that exchange really authorises this task. If it does not, " +
+    "the task stays blocked and you must tell the user so. Do NOT call it speculatively, do not call " +
+    "it because you think the work should proceed, and do not call it about a task the user was " +
+    "talking about in some other context — the check is about THIS task's escalation. If the user has " +
+    "not said anything yet, call request_approach_override instead and wait.",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string", description: "The id of the escalated task the user just authorised." },
+      owner_turn_id: {
+        type: "string",
+        description:
+          "Optional. The id of the user's own message that authorises this. Leave it out and the " +
+          "server uses the message you are replying to right now.",
+      },
+      agent_turn_id: {
+        type: "string",
+        description:
+          "Optional. The id of the message of yours the user was answering. Leave it out and the " +
+          "server finds this task's own escalation notice.",
+      },
+    },
+    required: ["task_id"],
   },
 } as const;
 

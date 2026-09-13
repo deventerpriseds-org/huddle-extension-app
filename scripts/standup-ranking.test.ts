@@ -49,6 +49,14 @@ mock.module("../src/features/huddle/lib/tasks/tasks.server.ts", () => ({
   getTasksForUser: async () => FIXTURE,
 }));
 
+// REMINDER WINDOW (AC-SU-6): a task the user deferred to a chosen day must vanish from BOTH surfaces.
+// `dispatchPrioritize` resolves this set itself from the DB; stubbing the module at the boundary lets
+// the real production path resolve it here too, instead of the test handing it an answer.
+const DEFERRED_ID = "plain";
+mock.module("../src/features/huddle/lib/tasks/turns.server.ts", () => ({
+  taskIdsInReminderWindow: async () => new Set([DEFERRED_ID]),
+}));
+
 const { dispatchPrioritize } = await import("../src/features/huddle/lib/tasks/tools.ts");
 const { selectStandupPriorities } = await import("../src/features/huddle/lib/tasks/standup.server.ts");
 
@@ -58,8 +66,12 @@ const noBlockers = new Set<string>();
 // PRODUCTION entry point A: the prioritize tool, real code, real JSON.
 const raw = await dispatchPrioritize("owner@example.com", { limit: LIMIT }, "UTC");
 const prioritizeTitles: string[] = JSON.parse(raw).ranked.map((r: { title: string }) => r.title);
-// PRODUCTION entry point B: the exact selection runScheduledStandup calls.
-const standupTitles = selectStandupPriorities(FIXTURE as never, noBlockers, LIMIT).map((x) => x.title);
+// PRODUCTION entry point B: the exact selection runScheduledStandup calls, fed the SAME way the real
+// call site feeds it -- by calling taskIdsInReminderWindow, not by the test asserting a set of its own.
+const { taskIdsInReminderWindow } = await import("../src/features/huddle/lib/tasks/turns.server.ts");
+const standupTitles = selectStandupPriorities(
+  FIXTURE as never, noBlockers, LIMIT, await taskIdsInReminderWindow("owner@example.com"),
+).map((x) => x.title);
 
 console.log("prioritize:", JSON.stringify(prioritizeTitles));
 console.log("standup:   ", JSON.stringify(standupTitles));
@@ -86,9 +98,23 @@ const dupCount = (l: string[]) => l.filter((x) => x.trim().toLowerCase().replace
 t("AC-SU-5 standup dedups the duplicate title", dupCount(standupTitles) === 1, String(dupCount(standupTitles)));
 t("AC-SU-5 prioritize dedups the duplicate title", dupCount(prioritizeTitles) === 1, String(dupCount(prioritizeTitles)));
 
+// AC-SU-6 — the reminder window drops the deferred task on BOTH surfaces.
+const deferredTitle = "Plain work item";
+t("AC-SU-6 standup drops the reminder-window task",
+  !standupTitles.includes(deferredTitle), standupTitles.join(" | "));
+t("AC-SU-6 prioritize drops the reminder-window task",
+  !prioritizeTitles.includes(deferredTitle), prioritizeTitles.join(" | "));
+
 // Structural: the stand-up must not re-derive an order. A future hand-rolled sort on the priority
 // path is the defect itself coming back, so fail on the construct, not only on the behaviour.
 const src = await Bun.file(new URL("../src/features/huddle/lib/tasks/standup.server.ts", import.meta.url)).text();
+
+// AC-SU-6 wire-up: the behavioural checks above prove the SEAM forwards excludeIds; only the source
+// proves the real caller SUPPLIES it. Forgetting this line is the whole defect (it is how the seam
+// shipped 219 commits behind a rankTasks signature that had already grown the parameter), and it is
+// invisible to type-checking because excludeIds is optional.
+t("AC-SU-6 runScheduledStandup passes the reminder window into selectStandupPriorities",
+  /selectStandupPriorities\([^;]*taskIdsInReminderWindow\(/s.test(src), "call site does not forward it");
 t("standup.server.ts calls rankTasks (single source of ranking truth)", /rankTasks\s*\(/.test(src), "no rankTasks call");
 t("standup.server.ts hand-rolls no priority_rank sort",
   !/\.sort\(\s*\([^)]*\)\s*=>\s*\(?[ab]\.priority_rank/.test(src), "hand-rolled priority_rank sort present");

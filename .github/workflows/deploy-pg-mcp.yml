@@ -10,6 +10,14 @@ name: Deploy Postgres MCP (Azure Container Apps)
 # already holds Application.ReadWrite.All), so the redirect URI is set automatically (no portal step, per the
 # enterpriseds "one app per app" rule) and a client secret is minted inline each run (no new stored org secret).
 #
+# obot image = `ghcr.io/deventerpriseds-org/mcp-oauth-proxy:main`, an EnterpriseDS fork of upstream
+# (`deventerpriseds-org/mcp-oauth-proxy`, built by its own `build.yml` on every push to its `main`), NOT
+# the upstream `ghcr.io/obot-platform/mcp-oauth-proxy` image. Upstream hardcodes a 1-hour access-token
+# lifetime with no config option, and Claude's MCP OAuth client doesn't auto-refresh on expiry (only a
+# full manual reconnect works — anthropics/claude-code#65036), so every connector prompted for re-auth
+# roughly daily. The fork extends the access-token lifetime to 30 days (matching the refresh-token
+# lifetime already in upstream) — doesn't fix Claude's refresh bug, but makes the prompt far rarer.
+#
 # Why Entra over Google here: EnterpriseDS redirect URIs are centrally managed via Graph for Entra apps only
 # (Google requires a manual console entry). Bonus: signInAudience=AzureADMyOrg restricts login to org accounts
 # → that IS the access allowlist, enforced at the IdP. obot's generic OIDC provider discovers Entra correctly
@@ -248,6 +256,7 @@ jobs:
         env:
           TENANT: ${{ secrets.AZURE_TENANT_ID }}
           JPT: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          GHCR_PAT: ${{ secrets.GHCR_PULL_PAT }}
         run: |
           set -euo pipefail
           ENV_ID=$(az containerapp env show -g "$RG" -n "$ACA_ENV" --query id -o tsv)
@@ -261,11 +270,29 @@ jobs:
           #  auto-migrate. This forces a clean restart AFTER the schema grant + password reset are applied.)
           NONCE=$(date +%s)
           ACCESS_MODE="${{ github.event.inputs.access_mode }}"
+          # Optional authenticated pull for our own ghcr.io/deventerpriseds-org/mcp-oauth-proxy image, so
+          # that image's GitHub package can go back to private without breaking this deploy. Only wired in
+          # when the GHCR_PULL_PAT org secret (a PAT with read:packages on deventerpriseds-org) actually
+          # exists — omitted entirely otherwise, so a not-yet-created secret can't break a deploy that
+          # currently relies on the image being public.
+          # (an empty-string secret value can fail ACA's own validation, so the secret entry itself is
+          # conditional too, not just the registries block that references it.)
+          REGISTRIES_YAML=""
+          GHCR_SECRET_YAML=""
+          if [ -n "$GHCR_PAT" ]; then
+            REGISTRIES_YAML="registries:
+                - server: ghcr.io
+                  username: x-access-token
+                  passwordSecretRef: ghcr-pat"
+            GHCR_SECRET_YAML="- name: ghcr-pat
+                  value: \"${GHCR_PAT}\""
+          fi
           cat > app.yaml <<YAML
           properties:
             managedEnvironmentId: ${ENV_ID}
             configuration:
               activeRevisionsMode: Single
+              ${REGISTRIES_YAML}
               ingress:
                 external: true
                 targetPort: 8080
@@ -280,6 +307,7 @@ jobs:
                   value: "${ENTRA_CLIENT_SECRET}"
                 - name: enc-key
                   value: "${ENC_KEY}"
+                ${GHCR_SECRET_YAML}
             template:
               scale: { minReplicas: 1, maxReplicas: 1 }
               containers:
@@ -291,7 +319,7 @@ jobs:
                     - name: DATABASE_URI
                       secretRef: ro-dsn
                 - name: oauth
-                  image: ghcr.io/obot-platform/mcp-oauth-proxy:latest
+                  image: ghcr.io/deventerpriseds-org/mcp-oauth-proxy:main
                   resources: { cpu: 0.25, memory: 0.5Gi }   # total with pgmcp = 0.75 CPU / 1.5Gi (a valid ACA combo)
                   env:
                     - name: DEPLOY_NONCE

@@ -88,8 +88,16 @@ checkout, the local tree is stale by default — a status answer sourced from it
   the latest `deploy-swa.yml` run's `head_sha`/`conclusion` (the deployed SHA is the truth, not `HEAD`).
   For "does feature X exist?" grep **`git show origin/main:<file>`**, not the local file.
 - **Say you fetched** ("as of origin/main <sha>…") so the answer is auditable.
-- **Then re-sync** if local is behind (`git reset --hard origin/main`, saving genuine local work first) so
-  the next edit isn't built on a stale base.
+- **Then re-sync — but CHECK THE DIRECTION FIRST**, because behind and diverged look identical and need
+  opposite commands. `git rev-list --left-right --count origin/main...HEAD` prints `behind<TAB>ahead`.
+  - **`ahead` is 0:** `git reset --hard origin/main`, saving genuine *uncommitted* work first.
+  - **`ahead` is NOT 0:** **never `reset --hard`** — it destroys those commits, and "saving genuine local
+    work first" reads as being about uncommitted work. Use `git pull --rebase` or `git merge origin/main`.
+  Either way, so the next edit isn't built on a stale base.
+  *(2026-09-11: this line said `reset --hard` unconditionally. A squash merge leaves the local branch
+  behind AND ahead — the ordinary state after any PR merges — measured at `ahead=2` and `ahead=3` on two
+  real repos in one session, five commits a bare reset would have deleted. Found by a verifier sweeping
+  for copies of this advice after the same defect was fixed in eds-claude-skills' guard and global rules.)*
   *(2026-08-10: asked "confirm the conversation-objects in 1:1 were deployed," the agent answered "no, it's
   an un-built scaffold — new work" from its STALE local branch. In fact another session had already built
   the OpenAI Conversations-object runtime (`rag/conversation-store.server.ts`, `chat.agent_conversations`),
@@ -490,10 +498,23 @@ Agents do work FOR the user on a WIP-limited cadence; the confirm-intent/DoD gat
   (2) `ensureReviewFlip` flips ONLY on an **affirmative** `confirm_status==='confirmed'` (never "proceed
   unless proven required") and resolves the requirement even when `agentId` is null — never `if (agentId)`-skip
   the gate (the `w.personaId ?? null` worker path was a real null bypass).
-- **Reach-out cadence — jittered, thrice-daily, throttled.** Auto-work wakes at
-  `SCHEDULING_DEFAULTS.autowork.hours=[9,13,17]` ET (`scheduling-config.server.ts`, user-editable in Settings).
-  Each task needing confirmation gets a ONE-TIME **15min–4h** jitter (`CONFIRM_JITTER_MIN/MAX_MS`); its ask
-  fires at the next 9/13/17 check after that instant, exactly once (`markConfirmAsked`), as a DM + phone push.
+- **Reach-out cadence — TWO SEPARATE CLOCKS. Do not conflate them (corrected 2026-09-13 from source).**
+  The file is **`lib/identity/scheduling-config.server.ts`** — NOT `lib/tasks/`, where this doc used to
+  point. All cadences are DEFAULTS with per-user overrides in `identity.scheduling_config`; **that table
+  had 0 rows when last queried (2026-09-13), so the defaults below are what is actually live.** Always
+  re-query it rather than quoting the defaults as fact — `resolveJobCadence(email, key)` is what runs.
+  1. **The auto-work PASS** (top up UP_NEXT, promote to DOING) wakes at
+     `SCHEDULING_DEFAULTS.autowork.hours = [9,13,17]` ET. Still accurate.
+  2. **The confirm-ask REACH-OUT does NOT ride that tick.** `CONFIRM_JITTER_MIN/MAX_MS` **no longer
+     exists anywhere in `src/`** — the 15min–4h jitter this doc described is gone. Asks are scheduled at a
+     random instant inside `CONFIRM_FAN_WINDOWS_DEFAULT` (**9–18 and 20–22**, the 18–20 gap deliberately
+     protecting dinner), spaced by a random **45–90 min** gap, resolved via `resolveConfirmFanWindows`
+     in three places in `autowork.server.ts`. Still exactly once per task (`markConfirmAsked`), still a
+     DM + phone push.
+  **Other jobs are NOT on the auto-work cadence and several are more frequent** — quoting "9/13/17" as
+  though it governed the whole system is the error this correction exists to stop:
+  `reviewDigest [8,11,13,16,19]` (5×/day), `reviewRecheck [10,16]`, `standup [8]`, `groom [8] Mondays only`
+  (cut back 2026-07-31 after firing 6×/day).
   WIP caps (UP_NEXT≤3 / DOING≤1 / REVIEW≤2 per agent) throttle daily volume so it feels like a real team.
   **Grooming completion ALSO arms these reach-outs** (the `promoteOnly` chain schedules `confirm_ask_at` for
   freshly-staged items), so check-ins begin relative to the groom, not only the next cadence tick.

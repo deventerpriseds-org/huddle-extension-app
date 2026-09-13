@@ -40,16 +40,25 @@ function agentName(id: string | null): string {
  * priority) -- that filter runs BEFORE ranking so the top-N is drawn from what actually remains. Every
  * other ordering/filtering decision (parking-lot, is_priority, priority_rank, score, title dedup) is
  * rankTasks's, not ours. Do NOT reintroduce a sort here.
+ *
+ * REMINDER WINDOW: `excludeIds` is forwarded straight to `rankTasks` -- it is NOT a stand-up rule, it is
+ * the same deferral rule `dispatchPrioritize`, `groom.ts` and `autowork.server.ts` each apply. The comment
+ * at tools.ts's call site says "all three must exclude, or a deferred task leaks back into automation from
+ * whichever one was missed"; the stand-up is the fourth site and it is a USER-FACING one, so a task the
+ * user explicitly deferred to a chosen day would otherwise reappear in their morning digest. Resolved at
+ * the CALL SITE (a DB read) rather than in here, so this stays pure and offline-testable.
  */
 export function selectStandupPriorities(
   tasks: ScorableTask[],
   blockedIds: { has(id: string): boolean },
   limit = 5,
+  excludeIds?: ReadonlySet<string>,
 ): { title: string; agent: string | null }[] {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   return rankTasks(
     tasks.filter((t) => !blockedIds.has(t.id)),
     limit,
+    excludeIds,
   ).map((r) => ({ title: r.title, agent: byId.get(r.id)?.assigned_agent ?? null }));
 }
 
@@ -156,7 +165,19 @@ export async function runScheduledStandup(
   const produced = artifacts
     .filter((a) => {
       const t = Date.parse(a.created_at);
-      return Number.isFinite(t) && now - t <= LOOKBACK_MS;
+      if (!Number.isFinite(t) || now - t > LOOKBACK_MS) return false;
+      // The user's OWN chat uploads live in this same table and must never be reported as the team's
+      // output. attachments.functions.ts writes them with folder "Uploads", status "approved", and
+      // `agentId` set to the agent they were SENT TO — which is why a standup once announced "Finn Reid
+      // completed three Huddle screenshot uploads... waiting for your review" for three screenshots the
+      // user had uploaded to Finn, while the board correctly showed nothing in review.
+      //
+      // Discriminate on folder + the absence of a task link, NOT on status: a genuine agent deliverable
+      // becomes `approved` the moment the user approves it, so filtering on status would swap this false
+      // positive for a false negative and hide real completed work. `agent_id` is unusable here for the
+      // same reason it caused the bug — an upload carries the addressed agent's id.
+      if ((a.folder ?? "").toLowerCase() === "uploads" && !a.task_id) return false;
+      return true;
     })
     .map((a) => ({ name: a.name, agentId: a.agent_id, folder: a.folder }));
 
@@ -180,7 +201,11 @@ export async function runScheduledStandup(
   // why the digest and `prioritize` could disagree four ways. Both surfaces now read `getTasksForUser`
   // and rank with `rankTasks`, so a future change to ranking reaches the digest for free.
   const scorable = await getTasksForUser(email);
-  const priorities = selectStandupPriorities(scorable, blockers);
+  // Fourth and final REMINDER WINDOW filter site (tools.ts, groom.ts and autowork.server.ts are the
+  // other three) -- see selectStandupPriorities. Without it, a task the user deferred to a chosen day
+  // is dropped by `prioritize` and still greets them in the morning digest.
+  const { taskIdsInReminderWindow } = await import("./turns.server");
+  const priorities = selectStandupPriorities(scorable, blockers, 5, await taskIdsInReminderWindow(email));
 
   // Tasks that moved to IN_REVIEW since the last standup actually ran (WIP confirm-intent gate, Part 1)
   // — additive to Iris's separate passive review-digest, which reports the full "waiting now" snapshot.

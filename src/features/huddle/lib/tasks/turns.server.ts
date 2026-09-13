@@ -94,6 +94,13 @@ CREATE TABLE IF NOT EXISTS chat.reminders (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE chat.reminders ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'reminder';
+-- Links a reminder back to the board task it was scheduled FOR. This is what lets a reminder-tagged
+-- task be skipped by grooming/auto-work while its reminder is still pending (parking-lot style) and
+-- become eligible again the moment it fires. Deliberately the ONLY source of that date: encoding it in
+-- a tag string would mean parsing dates out of text and would let the two drift apart. NULL for every
+-- ordinary "remind me in 20 minutes" reminder, which has no task.
+ALTER TABLE chat.reminders ADD COLUMN IF NOT EXISTS task_id TEXT;
+CREATE INDEX IF NOT EXISTS reminders_task_pending_idx ON chat.reminders (task_id, status, due_at);
 ALTER TABLE chat.reminders ADD COLUMN IF NOT EXISTS user_id TEXT;
 CREATE INDEX IF NOT EXISTS reminders_userid_idx  ON chat.reminders(user_id);
 CREATE INDEX IF NOT EXISTS reminders_due_idx    ON chat.reminders (status, due_at);
@@ -411,6 +418,92 @@ export async function getUserTurnsSince(userEmail: string, sinceMs: number): Pro
   return res.rows.map(mapRow);
 }
 
+/**
+ * ONE turn, by id, SCOPED TO THIS USER — the read the turn-pair override uses to fetch the AGENT turn
+ * the owner was replying to.
+ *
+ * Deliberately not `getTurn(id)`, which is unscoped: this read is reached from a path a MODEL can
+ * invoke with an id it chose, so "is this turn even this owner's?" has to be answered in the SQL
+ * rather than by a caller remembering to check. A turn belonging to anyone else is indistinguishable
+ * from one that does not exist — the same property `getOwnedTaskForConfirmAsk` has, for the same
+ * reason: an id that is refused differently from an id that is absent is an id-probing oracle.
+ *
+ * Scope resolution mirrors `getUserTurnsSince` exactly (user_id, falling back to the email set), so a
+ * user whose identity row has not been resolved yet is matched the same way everywhere.
+ */
+export async function getUserTurnById(userEmail: string, id: string): Promise<TurnRecord | null> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
+  const res = await getPool().query(
+    userId
+      ? `SELECT ${ROW_COLS} FROM chat.pending_turns
+          WHERE id = $1
+            AND (user_id = $2 OR (user_id IS NULL AND lower(user_email) = ANY($3)))`
+      : `SELECT ${ROW_COLS} FROM chat.pending_turns
+          WHERE id = $1 AND lower(user_email) = lower($2)`,
+    userId ? [id, userId, emails] : [id, userEmail],
+  );
+  return res.rows[0] ? mapRow(res.rows[0]) : null;
+}
+
+/**
+ * The user's OWN recent utterances, newest first — the transcript the owner-quote override check reads.
+ *
+ * A separate read from `getUserTurnsSince` above, and it has to be: that one filters `status = 'done'`
+ * because it is a back-fill of finished turns, and the message that authorises an override is very
+ * often the turn being EXECUTED right now ("I said proceed — override it"), which is `running`. Using
+ * the back-fill read would have made the override fail in its single most common case.
+ *
+ * Returns EVERY status and every huddle, projected down to just what the check needs. It does NOT
+ * filter agent-initiated turns in SQL — `verifyOwnerQuote` applies `isUserTurn()` to the id, which is
+ * the single source of truth for that rule and must not be re-implemented as a LIKE pattern here.
+ *
+ * `huddle_id` rides along (added 2026-09-12) because the override check binds an authorisation to the
+ * task it applies to, and one of the three bindings is "the owner typed this in the assignee's own
+ * DM". The dispatch sites do not pass the current huddle, so the matched TURN's channel is the
+ * evidence — server-written either way, never model-supplied.
+ */
+export async function getRecentUserUtterances(
+  userEmail: string,
+  sinceMs: number,
+  limit = 200,
+): Promise<{ id: string; text: string; updatedMs: number; huddleId: string | null }[]> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
+  const since = Math.max(0, sinceMs);
+  const cap = Math.min(Math.max(1, limit), 500);
+  const cols = `id, huddle_id, payload->>'text' AS text, (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_ms`;
+  const res = await getPool().query<{
+    id: string;
+    huddle_id: string | null;
+    text: string | null;
+    updated_ms: string | number;
+  }>(
+    userId
+      ? `SELECT ${cols} FROM chat.pending_turns
+          WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2)))
+            AND updated_at > to_timestamp($3 / 1000.0)
+          ORDER BY updated_at DESC
+          LIMIT ${cap}`
+      : `SELECT ${cols} FROM chat.pending_turns
+          WHERE lower(user_email) = lower($1)
+            AND updated_at > to_timestamp($2 / 1000.0)
+          ORDER BY updated_at DESC
+          LIMIT ${cap}`,
+    userId ? [userId, emails, since] : [userEmail, since],
+  );
+  return res.rows
+    .filter((r) => typeof r.text === "string" && r.text.length > 0)
+    .map((r) => ({
+      id: r.id,
+      text: r.text as string,
+      updatedMs: Number(r.updated_ms),
+      huddleId: r.huddle_id ?? null,
+    }));
+}
+
 // ---- Delegation / orchestration (Pillar 2) -------------------------------------------------------
 
 export interface OrchestrationWorker {
@@ -494,6 +587,9 @@ export interface ReminderRecord {
   kind: string;
   due_ms: number;
   fired_ms: number | null;
+  /** Board task this reminder was set FOR, when it came from a REMIND-mode confirm. Drives the
+   *  close-out ("did this happen?") on firing; NULL for an ordinary ad-hoc reminder. */
+  task_id: string | null;
 }
 
 function mapReminder(r: Record<string, unknown>): ReminderRecord {
@@ -506,6 +602,7 @@ function mapReminder(r: Record<string, unknown>): ReminderRecord {
     kind: (r.kind as string) ?? "reminder",
     due_ms: Number(r.due_ms ?? 0),
     fired_ms: r.fired_ms == null ? null : Number(r.fired_ms),
+    task_id: (r.task_id as string) ?? null,
   };
 }
 
@@ -517,15 +614,46 @@ export async function createReminder(args: {
   text: string;
   kind: string;
   dueAtMs: number;
+  /** Board task this reminder is FOR — set only for REMIND-mode task reminders; see the schema note. */
+  taskId?: string | null;
 }): Promise<void> {
   await ensureBootstrapped();
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { userId } = await resolveScopeByEmail(args.userEmail);
   await getPool().query(
-    `INSERT INTO chat.reminders (id, user_email, huddle_id, agent_id, text, kind, due_at, status, user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7 / 1000.0), 'pending', $8)`,
-    [args.id, args.userEmail, args.huddleId, args.agentId, args.text.slice(0, 500), args.kind, args.dueAtMs, userId],
+    `INSERT INTO chat.reminders (id, user_email, huddle_id, agent_id, text, kind, due_at, status, user_id, task_id)
+     VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7 / 1000.0), 'pending', $8, $9)`,
+    [args.id, args.userEmail, args.huddleId, args.agentId, args.text.slice(0, 500), args.kind, args.dueAtMs, userId, args.taskId ?? null],
   );
+}
+
+/**
+ * Task ids that are inside an unfired reminder window — i.e. the user has already said WHEN, and the
+ * nudge hasn't landed yet. These are skipped by grooming, auto-work candidate selection and ranking,
+ * exactly like `parking-lot`.
+ *
+ * Returns a Set so all three call sites share ONE query and ONE definition of "in its window". The
+ * parking-lot precedent is the warning here: that filter was originally applied in only one of the
+ * three places and tasks leaked back into automation from the other two.
+ *
+ * Non-throwing: on any error it returns an EMPTY set, so a DB hiccup means "skip nothing" — tasks stay
+ * visible to automation rather than silently vanishing from the board.
+ */
+export async function taskIdsInReminderWindow(userEmail: string): Promise<Set<string>> {
+  try {
+    await ensureBootstrapped();
+    const { rows } = await getPool().query<{ task_id: string }>(
+      `SELECT DISTINCT task_id FROM chat.reminders
+        WHERE task_id IS NOT NULL
+          AND status = 'pending'
+          AND due_at > now()
+          AND lower(coalesce(user_email, '')) = lower($1)`,
+      [userEmail],
+    );
+    return new Set(rows.map((r) => r.task_id));
+  } catch {
+    return new Set();
+  }
 }
 
 /** Atomically claim due reminders and mark them fired, so the per-minute drain fires each exactly once. */
@@ -540,7 +668,7 @@ export async function claimDueReminders(max = 25): Promise<ReminderRecord[]> {
          LIMIT $1
          FOR UPDATE SKIP LOCKED
       )
-      RETURNING id, user_email, huddle_id, agent_id, text, kind,
+      RETURNING id, user_email, huddle_id, agent_id, text, kind, task_id,
         (EXTRACT(EPOCH FROM due_at) * 1000)::bigint AS due_ms,
         (EXTRACT(EPOCH FROM fired_at) * 1000)::bigint AS fired_ms`,
     [max],

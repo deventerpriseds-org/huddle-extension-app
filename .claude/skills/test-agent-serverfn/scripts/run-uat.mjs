@@ -95,7 +95,21 @@ function fakeMicInit() {
   page.on("response", (r) => { if (r.status() >= 400) failedRequests.push(`HTTP ${r.status()} ${r.url()}`); });
 
   const url = UAT_TOKEN ? `${APP_URL}/?${UAT_TOKEN_PARAM}=${encodeURIComponent(UAT_TOKEN)}` : APP_URL;
-  await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
+
+  // NEVER BLOCK THE WHOLE RUN ON `networkidle`.
+  // Measured 2026-09-13 (run 34763366985): `goto(..., {waitUntil:"networkidle"})` timed out at 30s
+  // against the live SWA, so the page never loaded, ZERO checks ran, no screenshots were written,
+  // and the publish step then failed on missing files. An app that polls — this one holds an open
+  // turn-update poll — may never reach two-consecutive-idle-seconds at all, so that condition is
+  // unreachable by design rather than slow. Playwright's own docs discourage it for this reason.
+  //
+  // So: commit only to `domcontentloaded`, then treat quiet-network as a BEST-EFFORT settle. If it
+  // arrives, good; if it never does, carry on and let the checks decide — a check that runs and
+  // reports is always worth more than a run that dies at the front door.
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+  await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {
+    console.log("note: network never went idle (expected for a polling app) — proceeding.");
+  });
   await page.waitForTimeout(1500);
   await page.screenshot({ path: `${OUT_DIR}/00-loaded.png` });
 

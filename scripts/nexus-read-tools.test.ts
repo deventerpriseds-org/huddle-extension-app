@@ -1,0 +1,840 @@
+// WHAT:       Proves the three Nexus read tools are reachable from BOTH live surfaces, that the
+//             owner id can never come from a tool argument, and that an empty result is reported as
+//             empty rather than as "you're all caught up".
+// WHY:        Three failure modes, each with a precedent in this repo.
+//             (1) VOICE DRIFT. realtime-tools.server.ts records NINE native tools that exist on text
+//                 and are silently absent when spoken -- a name missing from its NATIVE set is
+//                 proxied to journey, where it does not exist, and fails as "the tool is broken".
+//                 There is no telemetry on that path. The drift is always one-directional.
+//             (2) OWNER SPOOFING. Nexus authorises these reads from an ?owner=<uuid> it does not
+//                 verify. If an agent could pass that id, any prompt could read any user's
+//                 coursework by guessing a UUID.
+//             (3) CONFIDENT EMPTY ANSWER. A correct pipeline and a broken one both return no rows,
+//                 so an agent that says "you're caught up!" is indistinguishable from one whose
+//                 query is broken. (This comment used to cite "534 assignments, ZERO due in the
+//                 future" as though it were structural. It EXPIRED -- two were due in the future on
+//                 2026-09-08. A count of live data is true on its measurement date only.)
+//             (4) A NAMED ASSIGNMENT MATCHING SEVERAL. The owner names one in words; if the tool
+//                 picks between matches, it can draft against the wrong course and look correct
+//                 doing it. Ambiguity must come back as a QUESTION.
+//             (5) BATCH TWO (Part 7): the same ambiguity trap on two more axes -- "module 3" is
+//                 unique only WITHIN a course, and "last week's lecture" is a WINDOW that routinely
+//                 holds several classes -- plus two shapes that only source-reading settles: slide
+//                 notes are keyed by page_number (nothing writes slide_number), and three capture
+//                 tables have created_at and NO updated_at while d1 whitelists `updated_at` as a
+//                 name on every table, so an order on it is accepted and then fails in Postgres.
+// SUPERSEDES: nothing.
+// SUPERSEDED-BY: nothing -- current.
+// EVIDENCE:   the NATIVE-set comment at realtime-tools.server.ts:450; CAP-nexus §2.1 (unverified
+//             owner parameter); SCENARIOS.md A-READ-2 (the zero-future-due-dates measurement).
+//
+// Run: npm run test:nexus-tools
+
+import {
+  nexusReadTools,
+  nexusReadConfigured,
+  NEXUS_TOOL_NAMES,
+  executeNexusTool,
+  GET_NEXUS_ASSIGNMENTS_TOOL,
+  GET_NEXUS_SLIDE_NOTES_TOOL,
+  SEARCH_NEXUS_KNOWLEDGE_TOOL,
+  SEARCH_SCHOLAR_TOOL,
+} from "../src/features/huddle/lib/nexus/nexus.server";
+import { LIST_ARTIFACTS_TOOL } from "../src/features/huddle/lib/artifacts/artifact-tool";
+import { readFileSync } from "node:fs";
+
+let pass = 0;
+let fail = 0;
+// The "ok"/"not ok" words are load-bearing, not decoration: scripts/mutate.sh attributes a
+// mutation to a NAMED test by grepping for `not ok .*<name>` (TAP) or `FAIL <name>`. With only the
+// ✔/✘ glyphs it could not read this suite at all and returned UNDETERMINED for every guard here --
+// which is correctly NOT "inert", but it means nothing in the file could be mutation-proved.
+// Measured 2026-09-08: five mutations, five UNDETERMINED, before this line was changed.
+const t = (name: string, got: unknown, want: unknown) => {
+  const ok = String(got) === String(want);
+  console.log(`  ${ok ? "✔ ok" : "✘ not ok"} ${name}: ${got}${ok ? "" : `  (EXPECTED ${want})`}`);
+  ok ? pass++ : fail++;
+};
+
+const setEnv = (o: Record<string, string>) => {
+  delete process.env.NEXUS_API_URL;
+  delete process.env.NEXUS_OWNER_ID;
+  Object.assign(process.env, o);
+};
+
+console.log("=== PART 1 — configuration gate: no tools unless BOTH are set ===");
+setEnv({});
+t("nothing set -> not configured", nexusReadConfigured(), false);
+t("nothing set -> zero tools", nexusReadTools().length, 0);
+setEnv({ NEXUS_API_URL: "https://x" });
+t("url only -> zero tools", nexusReadTools().length, 0);
+setEnv({ NEXUS_OWNER_ID: "abc" });
+t("owner only -> zero tools", nexusReadTools().length, 0);
+setEnv({ NEXUS_API_URL: "https://x", NEXUS_OWNER_ID: "abc" });
+t("both set -> twelve tools", nexusReadTools().length, 12);
+
+console.log("=== PART 2 — VOICE DRIFT: every tool defined on text is reachable on voice ===");
+const voiceSrc = readFileSync("src/features/huddle/lib/voice/realtime-tools.server.ts", "utf8");
+const textSrc = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
+t("voice imports the shared definitions", voiceSrc.includes("nexusReadTools"), true);
+t("voice pushes them into its toolset", /raw: unknown\[\][^\n]*nexusReadTools\(\)/.test(voiceSrc), true);
+t("voice adds them to NATIVE (else journey-proxied)", voiceSrc.includes("...NEXUS_TOOL_NAMES"), true);
+t("voice dispatches them", voiceSrc.includes("NEXUS_TOOL_NAMES.has(name)"), true);
+t("text pushes them into mergedTools", textSrc.includes("...nexusTools"), true);
+t("text dispatches them", textSrc.includes("NEXUS_TOOL_NAMES.has(c.name)"), true);
+t("both surfaces call the SAME executor", voiceSrc.includes("executeNexusTool") && textSrc.includes("executeNexusTool"), true);
+
+console.log("=== PART 3 — the owner id is NOT reachable from a tool argument ===");
+const names = new Set(Object.keys(GET_NEXUS_ASSIGNMENTS_TOOL.parameters.properties));
+t("assignments schema has no 'owner'", names.has("owner"), false);
+t("assignments schema has no 'user_id'", names.has("user_id"), false);
+for (const tool of nexusReadTools() as { name: string; parameters: { properties: Record<string, unknown> } }[]) {
+  const keys = Object.keys(tool.parameters.properties).map((k) => k.toLowerCase().replace(/[_-]/g, ""));
+  const leak = keys.find((k) => ["owner", "userid", "user", "email", "ownerid"].includes(k));
+  t(`${tool.name} exposes no identity parameter`, leak ?? "none", "none");
+}
+
+console.log("=== PART 4 — every failure returns ok:false; empty is reported as EMPTY ===");
+setEnv({});
+t("unconfigured", ((await executeNexusTool("get_nexus_courses", {}, "UTC")) as { error?: string }).error, "nexus_not_configured");
+setEnv({ NEXUS_API_URL: "https://x", NEXUS_OWNER_ID: "abc" });
+const origFetch = globalThis.fetch;
+
+globalThis.fetch = (async () => new Response("nope", { status: 500 })) as typeof fetch;
+t("upstream 500", ((await executeNexusTool("get_nexus_courses", {}, "UTC")) as { error?: string }).error, "http_500");
+
+globalThis.fetch = (async () => {
+  throw new Error("boom");
+}) as typeof fetch;
+t("network error", ((await executeNexusTool("get_nexus_courses", {}, "UTC")) as { error?: string }).error, "network_error");
+
+let sentUrl = "";
+globalThis.fetch = (async (u: string) => {
+  sentUrl = String(u);
+  return new Response(JSON.stringify([]), { status: 200 });
+}) as unknown as typeof fetch;
+const empty = (await executeNexusTool("get_nexus_assignments", { due_within_days: 7 }, "UTC")) as {
+  ok: boolean;
+  count: number;
+  note?: string;
+};
+t("empty result is ok:true", empty.ok, true);
+t("empty result reports count 0", empty.count, 0);
+t("empty result carries the do-not-say-caught-up note", !!empty.note && empty.note.includes("caught up"), true);
+t("owner rides in the query string", sentUrl.includes("owner=abc"), true);
+t("a due bound produces a date filter", sentUrl.includes("due_date"), true);
+
+globalThis.fetch = (async () =>
+  new Response(JSON.stringify([{ id: "2", due_date: "2026-10-02" }, { id: "1", due_date: "2026-09-09" }]), {
+    status: 200,
+  })) as typeof fetch;
+const rows = (await executeNexusTool("get_nexus_assignments", {}, "UTC")) as {
+  count: number;
+  note?: string;
+  assignments: { id: string }[];
+};
+t("rows counted", rows.count, 2);
+t("sorted by due date, soonest first", rows.assignments[0].id, "1");
+t("no caught-up note when rows exist", rows.note ?? "none", "none");
+
+globalThis.fetch = origFetch;
+
+console.log("=== PART 5 — an unknown name is refused, not silently proxied ===");
+t("unknown tool", ((await executeNexusTool("get_nexus_everything", {}, "UTC")) as { error?: string }).error, "unknown_nexus_tool_get_nexus_everything");
+t("NEXUS_TOOL_NAMES has exactly 12", NEXUS_TOOL_NAMES.size, 12);
+t(
+  "every advertised tool is dispatchable (no definition without a name entry)",
+  (nexusReadTools() as { name: string }[]).filter((x) => !NEXUS_TOOL_NAMES.has(x.name)).length,
+  0,
+);
+
+console.log("=== PART 6 — a named assignment: the title filter, and ASKING when several match ===");
+setEnv({ NEXUS_API_URL: "https://nexus.example", NEXUS_OWNER_ID: "owner-uuid" });
+
+t(
+  "the schema exposes a title parameter at all",
+  Object.prototype.hasOwnProperty.call(GET_NEXUS_ASSIGNMENTS_TOOL.parameters.properties, "title"),
+  true,
+);
+
+// The filter must reach the SERVER as an ilike, not be applied after fetching everything.
+let seenUrl = "";
+globalThis.fetch = (async (u: string) => {
+  seenUrl = String(u);
+  return new Response(JSON.stringify([{ id: "1", title: "Discussion Board 1", due_date: "2026-09-07" }]), { status: 200 });
+}) as unknown as typeof fetch;
+const one = (await executeNexusTool(
+  "get_nexus_assignments",
+  { title: "Discussion Board 1" },
+  "UTC",
+)) as { count: number; note?: string; needs_disambiguation?: boolean };
+t("title reaches the server as an ilike filter", /ilike\.%Discussion\+Board\+1%|ilike\.%25Discussion/.test(decodeURIComponent(seenUrl)) || decodeURIComponent(seenUrl).includes("ilike.%Discussion Board 1%"), true);
+t("one match does NOT ask for disambiguation", one.needs_disambiguation ?? false, false);
+t("one match carries no note", one.note ?? "none", "none");
+
+// SEVERAL matches -> a question, never a pick. This is the assertion the owner asked for.
+globalThis.fetch = (async () =>
+  new Response(
+    JSON.stringify([
+      { id: "1", title: "Introductions", course_id: "c1", due_date: "2026-09-10" },
+      { id: "2", title: "Discussion Board 1 - Introduce Yourself", course_id: "c2", due_date: "2026-09-07" },
+    ]),
+    { status: 200 },
+  )) as typeof fetch;
+const many = (await executeNexusTool(
+  "get_nexus_assignments",
+  { title: "introduc" },
+  "UTC",
+)) as { count: number; note?: string; needs_disambiguation?: boolean };
+t("several matches are all returned", many.count, 2);
+t("several matches FLAG disambiguation", many.needs_disambiguation, true);
+t("the directive names COURSE as the thing to ask about", /which COURSE/.test(many.note ?? ""), true);
+t("the directive forbids acting before he answers", /do not act on any of them/.test(many.note ?? ""), true);
+
+// A stray wildcard must not widen the search back to everything and look like it worked.
+seenUrl = "";
+globalThis.fetch = (async (u: string) => {
+  seenUrl = String(u);
+  return new Response(JSON.stringify([]), { status: 200 });
+}) as unknown as typeof fetch;
+await executeNexusTool("get_nexus_assignments", { title: "%" }, "UTC");
+t("a bare wildcard is stripped, so no title filter is sent", decodeURIComponent(seenUrl).includes("title"), false);
+
+globalThis.fetch = origFetch;
+
+console.log("=== PART 7 — batch two: modules, slide notes, lecture capture, library, transcript ===");
+setEnv({ NEXUS_API_URL: "https://nexus.example", NEXUS_OWNER_ID: "owner-uuid" });
+
+let calls: string[] = [];
+const route = (map: Record<string, unknown>) =>
+  (async (u: string) => {
+    const url = decodeURIComponent(String(u));
+    calls.push(url);
+    for (const [k, v] of Object.entries(map)) if (url.includes(k)) return new Response(JSON.stringify(v), { status: 200 });
+    return new Response(JSON.stringify([]), { status: 200 });
+  }) as unknown as typeof fetch;
+
+// --- A-READ-7: "module 3" matches one module per course, so several matches must ASK.
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/modules": [
+    { id: "m1", course_id: "c1", module_number: 3, name: "Process Design" },
+    { id: "m2", course_id: "c2", module_number: 3, name: "Pricing" },
+  ],
+  "/api/d1/courses": [{ id: "c1", name: "Ops Management" }, { id: "c2", name: "Corporate Finance" }],
+});
+const modsMany = (await executeNexusTool("get_nexus_module_materials", { module_number: 3 }, "UTC")) as {
+  needs_disambiguation?: boolean;
+  modules: { course_name: string | null }[];
+  note?: string;
+};
+t("two modules match -> disambiguation", modsMany.needs_disambiguation, true);
+t("the ask carries the COURSE NAME, not a bare uuid", modsMany.modules[0].course_name, "Ops Management");
+t("the directive names COURSE", /which COURSE/.test(modsMany.note ?? ""), true);
+t(
+  "ambiguous -> the module's CONTENTS were never fetched",
+  calls.some((u) => u.includes("module-items") || u.includes("course-materials")),
+  false,
+);
+
+// --- one module -> its items and its materials, both filtered by module_id, both ordered on a
+//     column that physically exists on that table.
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/modules": [{ id: "m1", course_id: "c1", module_number: 3, name: "Process Design" }],
+  "/api/d1/courses": [{ id: "c1", name: "Ops Management" }],
+  "/api/d1/module-items": [{ id: "i1", title: "Read chapter 4", type: "File", position: 1 }],
+  "/api/d1/course-materials": [{ id: "f1", title: "Chapter 4.pdf" }],
+});
+const modOne = (await executeNexusTool(
+  "get_nexus_module_materials",
+  { module_number: 3, course_id: "c1" },
+  "UTC",
+)) as { item_count: number; material_count: number; needs_disambiguation?: boolean; note?: string };
+t("one module -> no disambiguation", modOne.needs_disambiguation ?? false, false);
+t("its ordered item spine is read", modOne.item_count, 1);
+t("its filed materials are read", modOne.material_count, 1);
+t(
+  "items are filtered by module_id server-side",
+  calls.some((u) => u.includes("module-items") && u.includes('["module_id","eq.m1"]')),
+  true,
+);
+t(
+  "items are ordered by position (a column module_items actually has)",
+  calls.some((u) => u.includes("module-items") && u.includes("order=position")),
+  true,
+);
+
+// --- A-READ-9: notes are keyed by PAGE. slide_number is in the table and in d1's allow-list and is
+//     written by nothing (DocumentViewer.tsx handleNoteSave), so offering it would return zero rows
+//     for every real note while looking like a working search.
+const slideProps = Object.keys(GET_NEXUS_SLIDE_NOTES_TOOL.parameters.properties);
+t("slide notes expose page_number", slideProps.includes("page_number"), true);
+t("slide notes do NOT expose slide_number", slideProps.includes("slide_number"), false);
+
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/course-materials": [
+    { id: "f1", title: "Strategy deck week 1" },
+    { id: "f2", title: "Strategy deck week 2" },
+  ],
+});
+const decksMany = (await executeNexusTool("get_nexus_slide_notes", { deck_title: "strategy deck" }, "UTC")) as {
+  needs_disambiguation?: boolean;
+  note?: string;
+};
+t("two decks match -> disambiguation", decksMany.needs_disambiguation, true);
+t("ambiguous deck -> no annotations were read", calls.some((u) => u.includes("slide-annotations")), false);
+
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/course-materials": [{ id: "f1", title: "Strategy deck week 1" }],
+  "/api/d1/slide-annotations": [],
+});
+const noteMiss = (await executeNexusTool(
+  "get_nexus_slide_notes",
+  { deck_title: "strategy deck", page_number: 14 },
+  "UTC",
+)) as { count: number; note?: string };
+t("'slide 14' becomes a page_number filter", calls.some((u) => u.includes('["page_number","eq.14"]')), true);
+t("an empty page is reported as empty", noteMiss.count, 0);
+t("and is NOT reported as 'you never annotated it'", /page 14 .*no note|Nothing is noted on page 14/.test(noteMiss.note ?? ""), true);
+
+// --- A-READ-10: a session IS a class_schedules row, and a week routinely holds several classes.
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/class-schedules": [
+    { id: "s1", course_name: "Ops Management", date: "2026-09-02" },
+    { id: "s2", course_name: "Corporate Finance", date: "2026-09-04" },
+  ],
+});
+const capMany = (await executeNexusTool("get_nexus_lecture_capture", {}, "UTC")) as {
+  needs_disambiguation?: boolean;
+  from?: string;
+  to?: string;
+  note?: string;
+};
+const today = new Date().toLocaleDateString("en-CA", { timeZone: "UTC" });
+const weekAgoD = new Date();
+weekAgoD.setDate(weekAgoD.getDate() - 7);
+const weekAgo = weekAgoD.toLocaleDateString("en-CA", { timeZone: "UTC" });
+t("the default window ends today", capMany.to, today);
+t("the default window starts 7 days back ('last week')", capMany.from, weekAgo);
+t("two sessions in the window -> disambiguation", capMany.needs_disambiguation, true);
+t("no transcript was read while ambiguous", calls.some((u) => u.includes("lecture-transcripts-segments")), false);
+
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/lecture-transcripts-segments": [{ id: "g1", segment_number: 1, text: "welcome" }],
+  "/api/d1/live-insights": [{ id: "n1", category: "core_knowledge" }],
+  "/api/d1/session-qa": [{ id: "q1", question: "why?" }],
+});
+const capOne = (await executeNexusTool("get_nexus_lecture_capture", { session_id: "s1" }, "UTC")) as {
+  segment_count: number;
+  insight_count: number;
+  qa_count: number;
+};
+t("a known session reads all three capture tables", `${capOne.segment_count}/${capOne.insight_count}/${capOne.qa_count}`, "1/1/1");
+t(
+  "segments are ordered by segment_number, never by the double-precision start_time",
+  calls.some((u) => u.includes("lecture-transcripts-segments") && u.includes("order=segment_number")),
+  true,
+);
+t(
+  "NO capture read orders by updated_at — those three tables do not have that column",
+  calls.filter((u) => /lecture-transcripts-segments|live-insights|session-qa/.test(u) && u.includes("order=updated_at")).length,
+  0,
+);
+
+// --- an existing-but-unrecorded session must not read as "nothing happened".
+globalThis.fetch = route({});
+const capEmpty = (await executeNexusTool("get_nexus_lecture_capture", { session_id: "s9" }, "UTC")) as { note?: string };
+t("an unrecorded session says so explicitly", /nothing was recorded/.test(capEmpty.note ?? ""), true);
+
+// --- A-READ-4 / A-READ-8: the two NON-d1 endpoints. Different path, camelCase params, {count,...}
+//     bodies — and the same owner-from-config rule.
+calls = [];
+globalThis.fetch = route({ "/api/library": { count: 1, items: [{ kind: "material", title: "Chapter 4.pdf" }] } });
+const lib = (await executeNexusTool(
+  "get_nexus_library",
+  { course_id: "c1", kind: "everything", q: "%", limit: 25 },
+  "UTC",
+)) as { count: number; items: unknown[] };
+t("library reads /api/library, not a d1 table", calls[0].includes("/api/library") && !calls[0].includes("/api/d1/"), true);
+t("library params are camelCase as that endpoint expects", calls[0].includes("courseId=c1"), true);
+t("library carries the configured owner", calls[0].includes("owner=owner-uuid"), true);
+t("exactly one owner parameter is ever sent", (calls[0].match(/owner=/g) ?? []).length, 1);
+t("an unrecognised kind is DROPPED, not passed through", calls[0].includes("kind="), false);
+t("a bare wildcard q is stripped", calls[0].includes("q="), false);
+t("library returns its items", lib.count, 1);
+
+calls = [];
+globalThis.fetch = route({ "/api/writer-transcript": { count: 2, rows: [{ seq: 1 }, { seq: 2 }] } });
+const noId = (await executeNexusTool("get_nexus_writer_transcript", {}, "UTC")) as { ok: boolean; error?: string };
+t("writer transcript without an assignment is REFUSED", noId.error, "assignment_id_required");
+t("...and nothing was fetched (no reading of another assignment's draft)", calls.length, 0);
+
+const wt = (await executeNexusTool(
+  "get_nexus_writer_transcript",
+  { assignment_id: "a1", phase: "reviewer" },
+  "UTC",
+)) as { count: number };
+t("with an assignment it reads /api/writer-transcript", calls[0].includes("/api/writer-transcript"), true);
+t("assignmentId is camelCase for that endpoint", calls[0].includes("assignmentId=a1"), true);
+t("phase is forwarded", calls[0].includes("phase=reviewer"), true);
+t("transcript rows are returned as messages", wt.count, 2);
+
+console.log("=== PART 8 — A-RAG rows: the knowledge base, and what it can and cannot do ===");
+
+// --- A-RAG-1. NOW SEMANTIC. The tool searches by MEANING via GET /api/knowledge-search, and the
+//     literal `ilike` survives only as a LABELLED fallback. Everything below exists because the
+//     wording of a search tool is as load-bearing as its behaviour: a model told it searched by
+//     meaning reports a miss as "that is not in your knowledge base", and a model told it searched
+//     literally needlessly reduces the owner's question to one keyword. Both are wrong answers
+//     produced by correct code, so the DESCRIPTION and the RESULT LABELS are tested, not just the
+//     rows. Three misses must stay distinguishable: nothing close enough; nothing indexed at all;
+//     the search service was down.
+const semanticHit = {
+  matchType: "semantic",
+  model: "text-embedding-3-small",
+  hasCorpus: true,
+  count: 1,
+  passages: [
+    { id: "k1", content: "Assessment weighting: 40% final exam", similarity: 0.61,
+      metadata: { topic_id: "c1", file_name: "cf-syllabus.pdf" }, sourceType: "knowledge_base",
+      embedding: [0.1, 0.2, 0.3] },
+  ],
+};
+
+calls = [];
+globalThis.fetch = route({ "/api/knowledge-search": semanticHit });
+const kb = (await executeNexusTool(
+  "search_nexus_knowledge", { query: "how is the course graded?" }, "UTC",
+)) as { passages: Record<string, unknown>[]; match_type: string; count: number; has_corpus: boolean; model?: string };
+
+t("the search goes to the semantic route", calls[0].includes("/api/knowledge-search"), true);
+t("it does NOT fall back to the d1 ilike when semantic works",
+  calls.some((c) => c.includes("/api/d1/assistant-knowledge-chunks")), false);
+t("the result is labelled semantic", kb.match_type, "semantic");
+t("the embedding model is reported, so a corpus/query mismatch is visible", kb.model, "text-embedding-3-small");
+// THE QUERY IS NOT REDUCED TO A KEYWORD. Under the literal path the query was run through
+// `likeTerm`; a semantic search wants the owner's own phrasing, and a whole question ranks better.
+// Spaces ride as `+` (URLSearchParams' encoding); the Nexus side reads it with
+// url.searchParams.get(), which decodes `+` back to a space. Asserted in the wire form because
+// that is what was actually observed on the wire, not the form it is convenient to write.
+t("the owner's whole question is sent, not a keyword",
+  calls[0].includes("query=how+is+the+course+graded?"), true);
+t("...and the default k rides with it", calls[0].includes("k=8"), true);
+
+// AND IT REACHES THE ROUTE UNMANGLED. `likeTerm` strips `%` and `_` because those are SQL LIKE
+// wildcards -- meaningful ONLY on the fallback path. A question like "what is the 40% weighting?"
+// is entirely ordinary, and running it through likeTerm would silently send "40 weighting" to a
+// semantic search. Tested with a query that actually CONTAINS those characters: without one, this
+// assertion and a likeTerm'd query are indistinguishable (measured -- the mutation was INERT until
+// this case existed).
+calls = [];
+await executeNexusTool("search_nexus_knowledge", { query: "the 40% rule for working_capital" }, "UTC");
+t("SQL LIKE wildcards are NOT stripped from a semantic query",
+  calls[0].includes("query=the+40%+rule+for+working_capital"), true);
+t("the owner still comes from config, not the args", calls[0].includes("owner=owner-uuid"), true);
+// THE GUARD SURVIVES THE REWRITE. The route projects rows itself, but stripEmbedding still runs --
+// a 1536-float vector per passage would dominate the tool result the model has to read.
+t("the raw embedding vector is STRIPPED from every passage",
+  kb.passages.some((r) => "embedding" in r), false);
+t("...while the content itself survives", kb.passages.every((r) => typeof r.content === "string"), true);
+// A meaning match with NO shared word is the entire point of the change: the query said "graded",
+// the passage says "Assessment weighting". The old ilike could not have found this row.
+t("a passage sharing no word with the query is returned", kb.count, 1);
+
+// The course scope is now a SERVER-SIDE jsonb containment filter on the Nexus side (metadata @>
+// {topic_id}), not a client-side post-filter over an over-fetch. It rides as a query parameter.
+calls = [];
+const kbScoped = (await executeNexusTool(
+  "search_nexus_knowledge", { query: "grading", course_id: "c1" }, "UTC",
+)) as { count: number };
+t("a course scope is sent to the server, not applied after fetching", calls[0].includes("courseId=c1"), true);
+t("...and no over-fetch multiplier is needed any more", calls[0].includes("limit=100"), false);
+
+// MISS 1 -- semantic ran over material that EXISTS and found nothing close enough.
+calls = [];
+globalThis.fetch = route({ "/api/knowledge-search": { matchType: "semantic", hasCorpus: true, count: 0, passages: [] } });
+const kbEmpty = (await executeNexusTool("search_nexus_knowledge", { query: "waffles" }, "UTC")) as
+  { note?: string; match_type: string; has_corpus: boolean };
+t("a semantic miss is still labelled semantic", kbEmpty.match_type, "semantic");
+t("a semantic miss reports that a corpus exists", kbEmpty.has_corpus, true);
+t("a semantic miss says the search WAS meaning-based", /meaning-based search/.test(kbEmpty.note ?? ""), true);
+t("...and does not blame a missing word", /WORD match/.test(kbEmpty.note ?? ""), false);
+
+// MISS 2 -- a DIFFERENT FACT. Nothing is indexed. "That topic is not in your knowledge base" is
+// technically true here and completely misleading: the knowledge base is empty, and that is
+// fixable. This branch must never produce the miss-1 sentence.
+calls = [];
+globalThis.fetch = route({ "/api/knowledge-search": { matchType: "semantic", hasCorpus: false, count: 0, passages: [] } });
+const kbNoCorpus = (await executeNexusTool("search_nexus_knowledge", { query: "waffles" }, "UTC")) as
+  { note?: string; has_corpus: boolean };
+t("an empty corpus is reported as empty, not as a miss", kbNoCorpus.has_corpus, false);
+t("...and the note says nothing has been indexed", /NO indexed material at all/.test(kbNoCorpus.note ?? ""), true);
+t("...and explicitly forbids the 'not in your knowledge base' answer",
+  /Do NOT report this as/.test(kbNoCorpus.note ?? ""), true);
+t("the empty-corpus note differs from the semantic-miss note",
+  (kbNoCorpus.note ?? "") === (kbEmpty.note ?? ""), false);
+
+// MISS 3 -- THE SERVICE WAS DOWN. This is the one the brief calls out: a service-down miss and a
+// semantic miss must not read alike. It degrades to the literal ilike rather than failing the
+// tool, but it must SAY it degraded.
+calls = [];
+globalThis.fetch = (async (u: string) => {
+  const url = decodeURIComponent(String(u));
+  calls.push(url);
+  if (url.includes("/api/knowledge-search")) return new Response("nope", { status: 500 });
+  return new Response(JSON.stringify([]), { status: 200 });
+}) as unknown as typeof fetch;
+const kbDown = (await executeNexusTool("search_nexus_knowledge", { query: "grading" }, "UTC")) as
+  { match_type: string; degraded_from_semantic?: string; note?: string };
+t("an unreachable semantic route falls back rather than failing the tool", kbDown.match_type, "literal_substring_fallback");
+t("...and it DID fall back to the d1 ilike",
+  calls.some((c) => c.includes('["content","ilike.%grading%"]')), true);
+t("...ordering on created_at, since this table has no updated_at column",
+  calls.some((c) => c.includes("order=created_at.desc")), true);
+t("...never ordering on updated_at (d1 accepts the name, Postgres then fails)",
+  calls.some((c) => c.includes("updated_at")), false);
+t("the reason for the degrade is carried, not swallowed", kbDown.degraded_from_semantic, "http_500");
+t("the note leads with the outage, not with a claim about the material",
+  /SEMANTIC SEARCH WAS UNAVAILABLE/.test(kbDown.note ?? ""), true);
+t("...and explicitly says this is NOT evidence the topic is missing",
+  /Do NOT tell him the topic is missing/.test(kbDown.note ?? ""), true);
+t("a service-down miss does NOT read like a semantic miss",
+  (kbDown.note ?? "") === (kbEmpty.note ?? ""), false);
+
+// A 200 carrying the WRONG SHAPE is a deploy-skew signal (an older Function App build, or a host
+// returning an error page as 200), not a search result. Treating it as "no hits" would report a
+// service problem as a fact about the owner's material.
+calls = [];
+globalThis.fetch = route({ "/api/knowledge-search": [] });
+const kbSkew = (await executeNexusTool("search_nexus_knowledge", { query: "grading" }, "UTC")) as
+  { match_type: string; degraded_from_semantic?: string };
+t("a 200 with an unexpected shape is treated as a service fault, not as zero hits",
+  kbSkew.degraded_from_semantic, "bad_response_shape");
+t("...and it degrades rather than reporting an empty semantic result", kbSkew.match_type, "literal_substring_fallback");
+
+// THE DESCRIPTION MUST MOVE WITH THE BEHAVIOUR. A tool whose description understates it is nearly
+// as misleading as one that overstates it, and this description previously insisted in capitals
+// that the search was literal. That sentence became FALSE the moment the route landed.
+const kbDesc = SEARCH_NEXUS_KNOWLEDGE_TOOL.description;
+t("the description no longer claims a literal substring match", /LITERAL SUBSTRING MATCH/.test(kbDesc), false);
+t("...nor tells the model to pass a single exact word", /exact distinctive WORD/.test(kbDesc), false);
+t("the description says the search is semantic", /SEMANTIC search/.test(kbDesc), true);
+t("...and tells the model to read match_type before characterising a miss", /match_type/.test(kbDesc), true);
+t("...and names the degraded label it might see", /literal_substring_fallback/.test(kbDesc), true);
+t("...and points at has_corpus before any 'not in your knowledge base' claim", /has_corpus/.test(kbDesc), true);
+
+calls = [];
+const kbNoQuery = (await executeNexusTool("search_nexus_knowledge", {}, "UTC")) as { error?: string };
+t("a search with no query is REFUSED", kbNoQuery.error, "query_required");
+t("...and nothing was fetched", calls.length, 0)
+
+// --- A-RAG-1, the demo-chunk flag. content.assistant_knowledge_chunks holds 867 rows owned by the
+//     real owner and ONE seeded row ("Demo: AI-driven process redesign.pdf") owned by Nexus's own
+//     DEMO_USER_ID -- the …0001 sentinel, NOT the …0000 anon owner the listing tool already knew
+//     about. A course-scoped search cannot reach a demo chunk (its topic_id is a `demo-…` string,
+//     never a real course id); an unscoped one is the exposure, and unflagged it reads to the model
+//     as the owner's own knowledge base.
+//
+//     The flag fires for nothing TODAY -- this route carries no anonUnion, so d1 filters the row
+//     out server-side before Huddle sees it. These fixtures are the reachable case, which is one
+//     config change away (the route gaining anonUnion, or NEXUS_OWNER_ID pointed at a demo id).
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/assistant-knowledge-chunks": [
+    { id: "own", user_id: "owner-uuid", content: "Grading breakdown: 40% exam",
+      source_type: "summary", metadata: { topic_id: "c1" }, created_at: "2026-09-01" },
+    { id: "demo1", user_id: "00000000-0000-0000-0000-000000000001",
+      content: "Demo: AI-driven process redesign.pdf — grading", source_type: "knowledge_base",
+      metadata: { topic_id: "demo-topic-1759504678226-twfwzpb64" }, created_at: "2026-09-02" },
+    { id: "demo0", user_id: "00000000-0000-0000-0000-000000000000",
+      content: "shared corpus grading note", source_type: "knowledge_base",
+      metadata: { topic_id: "demo-topic-x" }, created_at: "2026-09-03" },
+  ],
+});
+const kbMixed = (await executeNexusTool("search_nexus_knowledge", { query: "grading" }, "UTC")) as {
+  passages: { id: string; shared_sample?: boolean }[]; count: number;
+  shared_sample_count?: number; note?: string;
+};
+const byId = (id: string) => kbMixed.passages.find((r) => r.id === id);
+t("a chunk owned by Nexus's DEMO sentinel (…0001) is FLAGGED as a shared sample",
+  byId("demo1")?.shared_sample, true);
+t("a chunk owned by the ANON sentinel (…0000) is flagged too — one detector, both sentinels",
+  byId("demo0")?.shared_sample, true);
+t("...and the owner's own chunk is NOT flagged", byId("own")?.shared_sample, undefined);
+// FLAG, NEVER DROP. Deleting is the owner's data and not ours; silently dropping hides a real row.
+t("nothing is dropped — every matching passage is still returned", kbMixed.count, 3);
+t("the sample count is reported so the model cannot miss it", kbMixed.shared_sample_count, 2);
+// A flag is a field the model may not read; the note says it in words it cannot miss.
+t("the note names the passages as DEMO content, not the owner's material",
+  /seeded DEMO content/.test(kbMixed.note ?? ""), true);
+t("...and forbids quoting them back as his coursework",
+  /Do not quote them back as his coursework/.test(kbMixed.note ?? ""), true);
+
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/assistant-knowledge-chunks": [
+    { id: "own", user_id: "owner-uuid", content: "grading", source_type: "summary",
+      metadata: { topic_id: "c1" }, created_at: "2026-09-01" },
+  ],
+});
+const kbClean = (await executeNexusTool("search_nexus_knowledge", { query: "grading" }, "UTC")) as {
+  shared_sample_count?: number; note?: string; passages: { shared_sample?: boolean }[];
+};
+// The ordinary result must stay byte-identical to what every existing caller already reads.
+t("with no samples present the count key is ABSENT, not zero", kbClean.shared_sample_count, undefined);
+// NARROWED, not weakened, when the semantic route landed (#54). This asserted `note ===
+// undefined`, which passed only because the pre-semantic fallback emitted no note at all.
+// The degraded path now ALWAYS explains itself — a caller must be able to tell "the search
+// service fell back" from "your material does not contain this" — so a note is expected and
+// correct. What the check was actually for is that a clean result never mentions SAMPLES,
+// and that is what it now asserts. Mutating the sample clause back in makes it fail.
+t("...and a clean result never mentions samples",
+  /shared_sample|sample content|DEMO content/.test(kbClean.note ?? ""), false);
+t("...and an unflagged passage carries shared_sample undefined, not false",
+  kbClean.passages[0]?.shared_sample, undefined);
+
+// --- A-RAG-5. A DIFFERENT table on purpose: the owner is asking which DOCUMENTS are indexed.
+//     topic_id is a real column in that route's own `filters` list, so this scope is server-side.
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/extracted-content": [
+    { id: "e1", user_id: "owner-uuid", file_name: "cf-syllabus.pdf", topic_id: "c1",
+      content_type: "document", quick_summary: "x", atoms: [{ q: 1 }], key_terms: [], case_players: {} },
+    { id: "e2", user_id: "00000000-0000-0000-0000-000000000000", file_name: "demo.pdf", topic_id: "c1" },
+    // THE ROW THE OLD DETECTOR MISSED. Nexus's DEMO_USER_ID ends in 1, not 0, and the check here
+    // used to name the zero UUID alone -- so a seeded row (one exists in content.extracted_content,
+    // measured 2026-09-08) would have been listed as the owner's own analysed document.
+    { id: "e3", user_id: "00000000-0000-0000-0000-000000000001", file_name: "demo-2.pdf", topic_id: "c1" },
+  ],
+  "/api/d1/courses": [{ id: "c1", name: "Corporate Finance" }],
+});
+const base = (await executeNexusTool("get_nexus_knowledge_base", { course_id: "c1" }, "UTC")) as {
+  documents: { file_name: unknown; course_name: unknown; extracted: string[]; shared_sample?: boolean }[];
+  course_name?: unknown;
+};
+t("the course scope is a SERVER-side topic_id filter", calls[0].includes('["topic_id","eq.c1"]'), true);
+t("the course id is resolved to a NAME the owner can recognise", base.course_name, "Corporate Finance");
+t("only NON-EMPTY extractions are listed ([] and {} are column DEFAULTS)",
+  base.documents[0].extracted.join(","), "quick_summary,atoms");
+// anonUnion widens the owner clause to include the zero-UUID sentinel, so a read can return the
+// shared demo corpus. Flagged, not silently dropped and not silently presented as the owner's.
+t("a sentinel-owner row is FLAGGED as a shared sample", base.documents[1].shared_sample, true);
+t("...and the owner's own row is not", base.documents[0].shared_sample, undefined);
+t("the OTHER sentinel (Nexus's DEMO_USER_ID, …0001) is flagged here too",
+  base.documents[2].shared_sample, true);
+
+calls = [];
+globalThis.fetch = route({ "/api/d1/extracted-content": [], "/api/d1/courses": [] });
+const baseEmpty = (await executeNexusTool("get_nexus_knowledge_base", {}, "UTC")) as { note?: string };
+t("an empty knowledge base points at get_nexus_library rather than claiming he has nothing",
+  /get_nexus_library/.test(baseEmpty.note ?? ""), true);
+
+// --- A-RAG-3. Same refusal as the writer transcript: the row has no title, so a NAME cannot be
+//     resolved here and guessing would read another case brief back as this one.
+calls = [];
+globalThis.fetch = route({
+  "/api/d1/case-study-analyses": [
+    { id: "cs1", assignment_id: "a1", case_analysis: "A".repeat(9000), outline: "short outline",
+      draft_writeup: "", completed_sections: ["outline"], updated_at: "2026-09-05" },
+  ],
+});
+const csNoId = (await executeNexusTool("get_nexus_case_study_analysis", {}, "UTC")) as { error?: string };
+t("a case-study read without an assignment is REFUSED", csNoId.error, "assignment_id_required");
+t("...and nothing was fetched (no reading of another case's analysis)", calls.length, 0);
+
+const cs = (await executeNexusTool(
+  "get_nexus_case_study_analysis", { assignment_id: "a1", max_chars: 500 }, "UTC",
+)) as { sections: Record<string, string>; truncated_sections?: string[]; note?: string };
+t("it filters server-side on assignment_id", calls[0].includes('["assignment_id","eq.a1"]'), true);
+t("an empty section is omitted rather than returned blank", "draft_writeup" in cs.sections, false);
+t("a long section is TRIMMED to max_chars", cs.sections.case_analysis.length, 500);
+t("...and the trim is REPORTED, never silent", (cs.truncated_sections ?? []).join(","), "case_analysis");
+t("the note forbids summarising a trimmed section as the whole thing", /Do not summarise a trimmed section/.test(cs.note ?? ""), true);
+t("a short section is returned whole", cs.sections.outline, "short outline");
+
+const csOne = (await executeNexusTool(
+  "get_nexus_case_study_analysis", { assignment_id: "a1", sections: ["case_analysis"], max_chars: 500 }, "UTC",
+)) as { sections: Record<string, string>; truncated_sections?: string[]; available_sections?: string[] };
+t("a NAMED section comes back in FULL, past max_chars", csOne.sections.case_analysis.length, 9000);
+t("...and is not reported as truncated", csOne.truncated_sections, undefined);
+t("the sections left out are named so the model can ask for them", (csOne.available_sections ?? []).join(","), "outline");
+
+globalThis.fetch = route({ "/api/d1/case-study-analyses": [] });
+const csNone = (await executeNexusTool("get_nexus_case_study_analysis", { assignment_id: "zz" }, "UTC")) as { note?: string };
+t("no analysis row says the analysis was never RUN, not that there is no case",
+  /may simply not have been run/.test(csNone.note ?? ""), true);
+
+console.log("=== PART 9 — B-OPS-2: list_artifacts reaches BOTH surfaces from ONE executor ===");
+const artifactToolSrc = readFileSync("src/features/huddle/lib/artifacts/artifact-tool.ts", "utf8");
+const artifactServerSrc = readFileSync("src/features/huddle/lib/artifacts/artifacts.server.ts", "utf8");
+t("the schema lives beside create_artifact, not in a new module", artifactToolSrc.includes("LIST_ARTIFACTS_TOOL"), true);
+t("text offers it in mergedTools", textSrc.includes("LIST_ARTIFACTS_TOOL"), true);
+t("text dispatches it", textSrc.includes('c.name === "list_artifacts"'), true);
+t("voice offers it", voiceSrc.includes("raw.push(LIST_ARTIFACTS_TOOL)"), true);
+t("voice adds it to NATIVE (else it is journey-proxied and 'broken')", voiceSrc.includes('"list_artifacts",'), true);
+t("voice dispatches it", voiceSrc.includes('name === "list_artifacts"'), true);
+t("BOTH surfaces call the SAME executor, so they cannot drift",
+  textSrc.includes("listArtifactsForTool") && voiceSrc.includes("listArtifactsForTool"), true);
+// The same identity rule as the Nexus owner id: listArtifacts scopes every row by email, so an
+// argument-supplied email would be a read of another user's documents.
+const artKeys = Object.keys(
+  (JSON.parse(JSON.stringify(LIST_ARTIFACTS_TOOL)) as { parameters: { properties: Record<string, unknown> } }).parameters.properties,
+).map((k) => k.toLowerCase().replace(/[_-]/g, ""));
+t("list_artifacts exposes NO identity parameter",
+  artKeys.find((k) => ["owner", "user", "userid", "email", "useremail", "caller"].includes(k)) ?? "none", "none");
+t("the executor resolves the email from the CALLER", artifactServerSrc.includes("resolveTaskEmail(caller"), true);
+t("a store failure is reported as a failed READ, not as an empty shelf",
+  artifactServerSrc.includes("artifact_store_unavailable"), true);
+
+console.log("=== PART 10 — search_scholar: all FOUR registration points, and the library link ===");
+//
+// TWO failure modes, and the second is the owner's actual requirement rather than a code property.
+//
+// (1) PARTIAL REGISTRATION. A tool has to be present at four places — the exported const, the
+//     nexusReadTools() array, the NEXUS_TOOL_NAMES set and the executor — and missing ONE fails
+//     silently in a different way each time. Missing from the array: the model never sees it.
+//     Missing from the set: it is never routed to the executor at all, and on voice it is proxied
+//     to journey, where it does not exist, and reports as "the tool is broken". Missing from the
+//     executor: it returns unknown_nexus_tool_*. So each point is asserted through BEHAVIOUR (the
+//     real exported value, the real returned array, the real dispatch) rather than by grepping the
+//     source — a source match can be satisfied by a commented-out line or by a regex window that
+//     reached into the neighbouring entry, and both of those have produced an INERT guard in this
+//     estate already.
+//
+// (2) A CONSTRUCTED LIBRARY URL. ~30% of scholarly results have no free full text and the owner's
+//     University of Michigan-Flint EZproxy link is the only route to those, so the link is the
+//     requirement. The dangerous version of "helpful" here is building it locally from
+//     `proxyPrefix + doi` when the API sent null: that yields a link that LOOKS right, resolves to
+//     nothing, and gets blamed on the library. The null case below is the mutation target — a
+//     fallback added to the pass-through would fire it.
+setEnv({ NEXUS_API_URL: "https://nexus.example", NEXUS_OWNER_ID: "owner-uuid" });
+
+// --- registration points 1-3: the real exported value, the real array, the real set.
+t("1/4 the exported const is the tool", SEARCH_SCHOLAR_TOOL.name, "search_scholar");
+t("1/4 it matches the house tool shape (strict:false, closed params)",
+  `${SEARCH_SCHOLAR_TOOL.type}/${SEARCH_SCHOLAR_TOOL.strict}/${SEARCH_SCHOLAR_TOOL.parameters.additionalProperties}`,
+  "function/false/false");
+t("2/4 nexusReadTools() offers it to the model",
+  (nexusReadTools() as { name: string }[]).some((x) => x.name === "search_scholar"), true);
+t("3/4 NEXUS_TOOL_NAMES routes it to the executor (else voice proxies it to journey)",
+  NEXUS_TOOL_NAMES.has("search_scholar"), true);
+
+// --- registration point 4: dispatched, not answered with unknown_nexus_tool_*.
+const SCHOLAR_BODY = {
+  query: "dynamic capabilities",
+  source: "openalex",
+  proxyPrefix: "https://libproxy.umflint.edu/login?url=",
+  results: [
+    {
+      title: "Dynamic Capabilities and Strategic Management",
+      authors: ["David J. Teece", "Gary Pisano", "Amy Shuen"],
+      year: 1997,
+      venue: "Strategic Management Journal",
+      doi: "10.1002/smj.288",
+      citedByCount: 61234,
+      abstract: "The dynamic capabilities framework analyzes the sources of wealth creation.",
+      openAccessUrl: null,
+      libraryUrl: "https://libproxy.umflint.edu/login?url=https://doi.org/10.1002/smj.288",
+      landingPageUrl: "https://onlinelibrary.wiley.com/doi/10.1002/smj.288",
+    },
+    {
+      // A paper with NO doi: the API sends libraryUrl null, and null is what must come back.
+      title: "A working paper with no DOI",
+      authors: ["A. Author"],
+      year: 2024,
+      venue: "Working Papers",
+      doi: null,
+      citedByCount: 3,
+      abstract: "Preprint.",
+      openAccessUrl: "https://example.org/preprint.pdf",
+      libraryUrl: null,
+      landingPageUrl: "https://example.org/wp",
+    },
+  ],
+};
+
+// The RAW url, parsed with URL/URLSearchParams rather than substring-matched. A space is encoded
+// as `+` by URLSearchParams and decodeURIComponent does NOT undo that, so a naive
+// `includes("q=dynamic capabilities")` reads false on a perfectly correct request — this asserts
+// the decoded PARAMETER, which is the thing that actually has to be right.
+let scholarUrl = "";
+globalThis.fetch = (async (u: string) => {
+  scholarUrl = String(u);
+  return new Response(JSON.stringify(SCHOLAR_BODY), { status: 200 });
+}) as unknown as typeof fetch;
+
+const scholar = (await executeNexusTool("search_scholar", { query: "dynamic capabilities", limit: 5 }, "UTC")) as {
+  ok: boolean;
+  error?: string;
+  count?: number;
+  source?: unknown;
+  note?: string;
+  results?: { title: unknown; library_url: unknown; open_access_url: unknown; doi: unknown; cited_by_count: unknown }[];
+};
+t("4/4 the executor dispatches it", scholar.error ?? "dispatched", "dispatched");
+t("4/4 and it succeeds", scholar.ok, true);
+const scholarQs = new URL(scholarUrl);
+t("it calls the contract's route", scholarQs.pathname, "/api/scholar-search");
+t("it sends the query as q=", scholarQs.searchParams.get("q"), "dynamic capabilities");
+t("it sends the caller's limit", scholarQs.searchParams.get("limit"), "5");
+t("the owner id comes from CONFIG, never the caller", scholarQs.searchParams.get("owner"), "owner-uuid");
+t("both papers come back", scholar.count, 2);
+t("the API's own source label is reported", scholar.source, "openalex");
+
+// --- THE REQUIREMENT: libraryUrl survives into what the model sees, byte-for-byte.
+const paper0 = scholar.results?.[0];
+t("library_url reaches the model UNMODIFIED",
+  paper0?.library_url,
+  "https://libproxy.umflint.edu/login?url=https://doi.org/10.1002/smj.288");
+t("the rest of the paper survives too (doi bare, citations kept)",
+  `${paper0?.doi}/${paper0?.cited_by_count}`, "10.1002/smj.288/61234");
+t("open_access_url passes through as null when there is no free full text", paper0?.open_access_url, null);
+
+// THE MUTATION TARGET. proxyPrefix and the doi are BOTH in scope at the mapping site, so building
+// `proxyPrefix + doi` is one plausible line away. Here the doi is null, so any locally-constructed
+// link would be a fabricated one — this asserts nothing was constructed.
+const paper1 = scholar.results?.[1];
+t("a null library_url stays NULL — it is never built from proxyPrefix + doi", paper1?.library_url, null);
+t("its free copy is still offered", paper1?.open_access_url, "https://example.org/preprint.pdf");
+
+// --- the link is only delivered if the model is TOLD to show it. A field it never reads is not
+// delivered, which is why this lives in the description AND in the per-result note.
+const scholarDesc = SEARCH_SCHOLAR_TOOL.description;
+t("the description orders the library link to be shown", /library_url/.test(scholarDesc), true);
+t("the description forbids inventing one", /never invent, edit or reconstruct one/.test(scholarDesc), true);
+t("the description draws the boundary against the owner's OWN material",
+  /search_nexus_knowledge and get_nexus_library search only what the owner ALREADY HOLDS/.test(scholarDesc), true);
+t("the result note repeats it where the model cannot skim past it",
+  /PRESENT THE LIBRARY LINK WITH EVERY PAPER/.test(scholar.note ?? ""), true);
+
+// --- an empty search is a statement about the SEARCH, not about the literature.
+globalThis.fetch = (async () =>
+  new Response(JSON.stringify({ query: "x", source: "crossref", proxyPrefix: "p", results: [] }), { status: 200 })) as unknown as typeof fetch;
+const scholarNone = (await executeNexusTool("search_scholar", { query: "waffles in strategy" }, "UTC")) as {
+  count?: number;
+  note?: string;
+};
+t("no hits -> zero, not an error", scholarNone.count, 0);
+t("no hits is NOT reported as 'no research exists'", /not that no research exists/.test(scholarNone.note ?? ""), true);
+
+// --- a 200 carrying the wrong shape is a SERVICE fact, not a fact about the literature.
+globalThis.fetch = (async () => new Response(JSON.stringify([1, 2]), { status: 200 })) as unknown as typeof fetch;
+t("a 200 with the wrong body shape is refused, not read as no papers",
+  ((await executeNexusTool("search_scholar", { query: "q" }, "UTC")) as { error?: string }).error, "bad_response_shape");
+
+globalThis.fetch = (async () => new Response("nope", { status: 503 })) as unknown as typeof fetch;
+t("an upstream failure is ok:false, never an empty paper list",
+  ((await executeNexusTool("search_scholar", { query: "q" }, "UTC")) as { error?: string }).error, "http_503");
+
+const scholarNoQuery = (await executeNexusTool("search_scholar", {}, "UTC")) as { error?: string };
+t("a missing query is refused rather than searched blank", scholarNoQuery.error, "query_required");
+
+globalThis.fetch = origFetch;
+
+console.log(`\n${fail === 0 ? "ALL PASS" : "FAILURES"}: ${pass} passed, ${fail} failed`);
+if (fail > 0) process.exit(1);

@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS tasks.task_engagement_state (
   user_email          TEXT NOT NULL,
   confirm_status      TEXT NOT NULL DEFAULT 'awaiting',
   proposed_dod        TEXT,
+  proposed_reminder_at TIMESTAMPTZ,
   confirmed_dod       TEXT,
   confirm_ask_at      TIMESTAMPTZ,
   confirmed_at        TIMESTAMPTZ,
@@ -172,9 +173,42 @@ ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS entered_review_
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_status TEXT NOT NULL DEFAULT 'pending';
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS proposed_approach TEXT;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_revision_count INT NOT NULL DEFAULT 0;
+-- OWNER OVERRIDE of an escalated approach (.claude/IMPL-override-gate.md). approach_status now reaches
+-- 'approved' by TWO routes -- the grader passing it, and the owner overriding a dead end -- and the two
+-- must NOT be indistinguishable: without these columns a later reader auditing "which work was actually
+-- quality-gated?" counts an override as a pass. NULL on a graded pass; set on an override.
+--   approach_override_via: 'button' (a click in the app -- the click IS the user act) | 'turn-pair' (an
+--     agent relayed the owner's authorisation by REFERENCE: the server fetched HIS turn and the
+--     escalation turn it answered, and the approach gate's own grader judged the exchange -- see
+--     .claude/BUILD-override-turn-pair.md). Old rows may carry the historical 'quote', whose route
+--     classified model-supplied TEXT and is deleted.
+--   approach_override_turn_id: which OWNER utterance authorised it, so a replay is visible after the fact.
+--   approach_override_quote: that utterance as the SERVER read it back out of chat.pending_turns.
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_by TEXT;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_at TIMESTAMPTZ;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_via TEXT;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_quote TEXT;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_turn_id TEXT;
+-- WHEN the gate escalated. The quote override requires the owner's authorising words to POSTDATE this:
+-- a sentence typed before the task ever escalated cannot be consenting to an override of it, and the
+-- row's own updated_at is not a substitute (any later write bumps it). NULL on a row that escalated
+-- before this column existed -- the reader falls back to updated_at there, which is stricter, not looser.
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_escalated_at TIMESTAMPTZ;
+-- A PENDING OVERRIDE REQUEST (.claude/BUILD-override-request-then-tap.md). An agent may ASK the owner
+-- to override an escalated gate; it may not grant one. These three columns are that ask, and they are
+-- NOT an approval -- nothing reads them to decide anything. approach_status stays 'escalated' until the
+-- owner taps "Approve anyway".
+--   Idempotence is structural rather than timed: this table's PRIMARY KEY is task_id, so N requests
+--   cannot make N records, and recordApproachOverrideRequest's guarded UPDATE (requested_at IS NULL)
+--   means only the FIRST request of an escalation episode notifies. escalateApproach and
+--   resetEngagementOnReassignment clear all three, so a genuine RE-escalation re-arms exactly one notice.
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_requested_at TIMESTAMPTZ;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_requested_by TEXT;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_override_request_reason TEXT;
 -- Mid-work clarifying question (ask_clarifying_question tool): clarify_status='open' pauses that task's
 -- autowork research cadence until answered. clarify_count is the lifetime cap counter (bounded — an agent
 -- that's still stuck after the cap must flag_blocker or proceed on its own judgment, not keep asking).
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS proposed_reminder_at TIMESTAMPTZ;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS clarify_status TEXT NOT NULL DEFAULT 'none';
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS clarify_count INT NOT NULL DEFAULT 0;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS open_question TEXT;
@@ -704,11 +738,31 @@ export interface TaskEngagementState {
   clarify_count: number;
   open_question: string | null;
   open_question_asked_at: string | null;
+  /** NULL unless the OWNER overrode an escalated approach — see the DDL note. An `approved` row with
+   *  approach_override_at set was NOT graded to a pass; anything auditing quality must read this. */
+  approach_override_by: string | null;
+  approach_override_at: string | null;
+  /** 'quote' is LEGACY DATA ONLY — the model-text override path was deleted 2026-09-12 and nothing
+   *  writes it any more. It stays in the union so historical rows still type-check on read. */
+  approach_override_via: "button" | "quote" | null;
+  approach_override_quote: string | null;
+  approach_override_turn_id: string | null;
+  /** When the approach gate escalated. NULL on a row that escalated before the column existed. */
+  approach_escalated_at: string | null;
+  /** An agent ASKED the owner to override. NOT an approval — see the DDL note. Nothing reads these to
+   *  decide anything; they exist so a second ask cannot re-notify, and so the ask is auditable. */
+  approach_override_requested_at: string | null;
+  approach_override_requested_by: string | null;
+  approach_override_request_reason: string | null;
+  /** The row's own last-write time — the fallback floor when approach_escalated_at is NULL. */
+  updated_at: string | null;
 }
 
 const ENGAGEMENT_COLS =
   "task_id,user_email,confirm_status,proposed_dod,confirmed_dod,confirm_ask_at,confirmed_at,last_review_ping_at,next_review_ping_at,revision_count,entered_review_at," +
-  "approach_status,proposed_approach,approach_revision_count,clarify_status,clarify_count,open_question,open_question_asked_at";
+  "approach_status,proposed_approach,approach_revision_count,clarify_status,clarify_count,open_question,open_question_asked_at," +
+  "approach_override_by,approach_override_at,approach_override_via,approach_override_quote,approach_override_turn_id," +
+  "approach_escalated_at,approach_override_requested_at,approach_override_requested_by,approach_override_request_reason,updated_at";
 
 /** Batch-read engagement state for a set of task ids (a missing entry means "never asked yet"). */
 export async function getTaskEngagementStates(taskIds: string[]): Promise<Map<string, TaskEngagementState>> {
@@ -1035,12 +1089,147 @@ export async function escalateApproach(taskId: string, userEmail: string): Promi
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_status, user_id)
-     VALUES ($1,$2,'escalated',$3)
-     ON CONFLICT (task_id) DO UPDATE SET approach_status='escalated',
+    // approach_escalated_at is stamped on EVERY escalation, including a re-escalation after a failed
+    // re-grade: the owner is being told about the task again, so the ask has to be about THAT.
+    //
+    // A NEW escalation also RE-ARMS the override ask by clearing the three request columns. That is
+    // what makes recordApproachOverrideRequest's "requested_at IS NULL" guard mean "once per
+    // escalation episode" rather than "once ever" — without it a task that escalated, was declined,
+    // and escalated again months later could never notify the owner a second time.
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, approach_status, approach_escalated_at, user_id)
+     VALUES ($1,$2,'escalated',now(),$3)
+     ON CONFLICT (task_id) DO UPDATE SET approach_status='escalated', approach_escalated_at=now(),
+       approach_override_requested_at=NULL, approach_override_requested_by=NULL,
+       approach_override_request_reason=NULL,
        user_id=COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at=now()`,
     [taskId, userEmail.toLowerCase(), userId],
   );
+}
+
+/**
+ * THE OWNER OVERRIDE — the one way out of an escalated approach that the grader will not pass.
+ *
+ * Deliberately NOT `approveApproach` with an extra argument, for two reasons that are both defects if
+ * ignored:
+ *  1. `approveApproach(taskId, email, approach)` WRITES `proposed_approach` from its argument. There is
+ *     no caller-supplied approach here — the record of what the agent actually proposed is exactly what
+ *     an audit needs — so this statement never touches that column.
+ *  2. `approveApproach` is an unguarded upsert: it moves ANY status to 'approved', including 'pending'.
+ *     Approving a pending task would skip the grader entirely, turning "unstick a dead end" into
+ *     "bypass the whole approach gate". The `WHERE approach_status='escalated'` below is that guard,
+ *     and it is in the STATEMENT rather than in a read-then-write so two clicks (or a click racing the
+ *     grader) cannot both win — the second one updates zero rows and the caller reports "already done".
+ *
+ * @returns true if THIS call performed the override; false if the row was not escalated (missing,
+ *          already approved, pending, or reset by a reassignment between the ask and the click).
+ */
+export async function overrideApproachGate(opts: {
+  taskId: string;
+  /** The RESOLVED CALLER email. The actor is the authenticated user, never an agentId, never "system". */
+  userEmail: string;
+  /**
+   * WHICH ROUTE granted it, and the audit trail is the whole point of the parameter existing:
+   *  - `button`    the owner tapped "Approve anyway" in the app. The click IS the user act.
+   *  - `turn-pair` an agent relayed the owner's authorisation by REFERENCE, the server fetched the
+   *                owner's turn and the escalation turn it answered, and the approach gate's own
+   *                grader judged the exchange (.claude/BUILD-override-turn-pair.md).
+   * A reader auditing "which work was actually quality-gated?" must be able to tell all three apart —
+   * a graded pass (every override column NULL), a tap, and a relay.
+   */
+  via: "button" | "turn-pair";
+  /** `turn-pair` only: the OWNER's turn id, so the authorising utterance is findable after the fact. */
+  turnId?: string | null;
+  /** `turn-pair` only: the owner's own words, AS THE SERVER FETCHED THEM from `chat.pending_turns`.
+   *  Never a caller-supplied string — the caller passes a turn reference and the server reads the row. */
+  quote?: string | null;
+}): Promise<boolean> {
+  await ensureBootstrapped();
+  // `via` was hardcoded 'button' between 2026-09-12 and this change, because the model path had been
+  // deleted outright. It is a PARAMETER again, but a two-value union rather than free text, and the
+  // two extra columns are written only on the relay route. What is NOT restored is the old `'quote'`
+  // route: that one honoured a string the MODEL chose, and three adversaries broke it. Here the quote
+  // is evidence recorded after the fact, read by nothing.
+  const relay = opts.via === "turn-pair";
+  const res = await getPool().query(
+    `UPDATE tasks.task_engagement_state
+        SET approach_status='approved',
+            approach_override_by=$2, approach_override_at=now(), approach_override_via=$3,
+            approach_override_quote=$4, approach_override_turn_id=$5, updated_at=now()
+      WHERE task_id=$1 AND approach_status='escalated'`,
+    [
+      opts.taskId,
+      opts.userEmail.toLowerCase(),
+      relay ? "turn-pair" : "button",
+      relay && opts.quote ? opts.quote.slice(0, 2000) : null,
+      relay ? (opts.turnId ?? null) : null,
+    ],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/**
+ * Record that an AGENT asked the owner to override this task's escalated approach gate.
+ *
+ * THIS IS NOT AN APPROVAL AND MUST NEVER BECOME ONE. `approach_status` is deliberately absent from the
+ * SET clause: the row stays `escalated`, and the only statement that moves it is
+ * `overrideApproachGate` above, reachable only from the owner's tap. Everything a model supplies
+ * (`requestedBy`, `reason`) lands in a TEXT column that nothing branches on.
+ *
+ * Idempotence and rate-limiting are STRUCTURAL, not timed:
+ *  - this table's PRIMARY KEY is `task_id`, so N calls cannot create N records;
+ *  - `approach_override_requested_at IS NULL` in the WHERE means only the FIRST request of an
+ *    escalation episode returns true, and only a `true` return notifies the owner;
+ *  - `escalateApproach` clears the three columns, so a genuine RE-escalation re-arms exactly one
+ *    notice. There is no interval to tune and no clock to be wrong about.
+ *
+ * `approach_status='escalated'` in the WHERE is the same guard `overrideApproachGate` carries, for the
+ * same reason: a task that is not stuck has nothing to ask about, and the check is in the STATEMENT so
+ * a request racing the grader loses cleanly instead of stamping a stale ask.
+ *
+ * @returns true if THIS call stamped the request (so THIS call should notify); false if one was
+ *          already pending, or the task is no longer escalated.
+ */
+export async function recordApproachOverrideRequest(opts: {
+  taskId: string;
+  /** The requesting agent's id — recorded for audit only. Never read to decide anything. */
+  requestedBy: string | null;
+  /** The agent's stated reason, shown to the owner. Never read to decide anything. */
+  reason: string | null;
+}): Promise<boolean> {
+  await ensureBootstrapped();
+  const res = await getPool().query(
+    `UPDATE tasks.task_engagement_state
+        SET approach_override_requested_at=now(), approach_override_requested_by=$2,
+            approach_override_request_reason=$3, updated_at=now()
+      WHERE task_id=$1 AND approach_status='escalated'
+        AND approach_override_requested_at IS NULL`,
+    [opts.taskId, opts.requestedBy ?? null, opts.reason ? opts.reason.slice(0, 1000) : null],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/**
+ * The caller's tasks whose approach gate is currently ESCALATED — i.e. stuck waiting on them.
+ *
+ * This exists because escalation had NO user-visible surface at all: `grep -rn escalated src/**\/*.tsx`
+ * returned zero, so the only way the owner learned a task was stuck was an agent mentioning it in a
+ * thread they happened to be reading. Backs the board's "Needs your call" chip, which is the surface
+ * that still works for a task that escalated during an autowork run the owner never opened.
+ */
+export async function getEscalatedApproachTaskIds(userEmail: string): Promise<Set<string>> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
+  const { rows } = await getPool().query<{ task_id: string }>(
+    userId
+      ? `SELECT task_id FROM tasks.task_engagement_state
+          WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2)))
+            AND approach_status = 'escalated'`
+      : `SELECT task_id FROM tasks.task_engagement_state
+          WHERE lower(user_email) = $1 AND approach_status = 'escalated'`,
+    userId ? [userId, emails] : [userEmail.toLowerCase()],
+  );
+  return new Set(rows.map((r) => r.task_id));
 }
 
 // ---- Mid-work clarifying question (bounded, rate-limited — see ask_clarifying_question tool) --------
@@ -1102,6 +1291,9 @@ export async function proposeTaskDod(
   taskId: string,
   userEmail: string,
   dod: string,
+  /** REMIND mode only: the date+time the agent proposed, stored STRUCTURALLY so the model-free Confirm
+   *  button can schedule the reminder without parsing a timestamp back out of the DoD prose. */
+  proposedReminderAtIso?: string | null,
 ): Promise<void> {
   await ensureBootstrapped();
   // user_email is NOT NULL with no default (schema above) — omitting it here would risk the insert
@@ -1110,12 +1302,13 @@ export async function proposeTaskDod(
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { userId } = await resolveScopeByEmail(userEmail);
   await getPool().query(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, proposed_dod, user_id)
-     VALUES ($1,$2,$3,$4)
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, proposed_dod, user_id, proposed_reminder_at)
+     VALUES ($1,$2,$3,$4,$5)
      ON CONFLICT (task_id) DO UPDATE SET
        proposed_dod=EXCLUDED.proposed_dod,
+       proposed_reminder_at=EXCLUDED.proposed_reminder_at,
        user_id=COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at=now()`,
-    [taskId, userEmail.toLowerCase(), dod, userId],
+    [taskId, userEmail.toLowerCase(), dod, userId, proposedReminderAtIso || null],
   );
 }
 
@@ -1130,6 +1323,10 @@ export interface OwnedTaskForConfirmAsk {
   tags: string[] | null;
   confirm_status: "awaiting" | "asked" | "confirmed";
   proposed_dod: string | null;
+  /** REMIND mode: the date+time the agent proposed. The Confirm button schedules the reminder from THIS,
+   *  never by parsing the DoD prose. NULL for produce/assist tasks and for any pre-existing row. */
+  proposed_reminder_at: string | null;
+  assigned_agent: string | null;
 }
 export async function getOwnedTaskForConfirmAsk(
   taskId: string,
@@ -1141,7 +1338,7 @@ export async function getOwnedTaskForConfirmAsk(
   const { rows } = await getPool().query<OwnedTaskForConfirmAsk>(
     `SELECT t.id, t.title, t.status, t.tags,
             COALESCE(es.confirm_status, 'awaiting') AS confirm_status,
-            es.proposed_dod
+            es.proposed_dod, es.proposed_reminder_at, t.assigned_agent
        FROM tasks.journey_tasks t
        LEFT JOIN tasks.task_engagement_state es ON es.task_id = t.id
       WHERE t.id = $1 AND lower(t.user_email) = ANY($2)`,
@@ -1165,6 +1362,9 @@ export async function resetEngagementOnReassignment(taskId: string): Promise<voi
         SET confirm_status='awaiting', proposed_dod=NULL, confirmed_dod=NULL, confirm_ask_at=NULL,
             confirmed_at=NULL, revision_count=0,
             approach_status='pending', proposed_approach=NULL, approach_revision_count=0,
+            approach_escalated_at=NULL,
+            approach_override_requested_at=NULL, approach_override_requested_by=NULL,
+            approach_override_request_reason=NULL,
             clarify_status='none', clarify_count=0, open_question=NULL, open_question_asked_at=NULL,
             updated_at=now()
       WHERE task_id = $1`,
@@ -1374,6 +1574,13 @@ export interface BoardTaskRow {
   // The agent's saved outputs for this task (newest first), so the board card can link to them the same
   // way the chat thread does. Populated by getBoardTasks; absent on getOpenAssignedTasks (auto-work path).
   artifacts?: { id: string; name: string; status: string | null }[];
+  // Scheduling columns, for the in-chat SCHEDULE widget's "TODAY'S SCHEDULE" section (lib/tasks/
+  // widgets.server.ts). OPTIONAL for the same reason `artifacts` is: getBoardTasks selects them,
+  // getOpenAssignedTasks (the auto-work path) does not, so a consumer of that path must not be
+  // told they are present. Raw TIMESTAMPTZ — the client formats the clock time.
+  start_time?: string | null;
+  end_time?: string | null;
+  is_scheduled?: boolean | null;
 }
 
 /** Diagnostics: how many rows the mirror holds and under which emails (top 12). */
@@ -1402,6 +1609,7 @@ export async function getBoardTasks(userEmail: string): Promise<BoardTaskRow[]> 
   const withArtifacts = `
     SELECT t.id,t.title,t.status,t.priority,t.category,t.is_priority,t.priority_rank,t.due_date,
            t.completed_at,t.assigned_agent,t.tags,t.definition_of_done,
+           t.start_time,t.end_time,t.is_scheduled,
            COALESCE((
              SELECT json_agg(json_build_object('id',a.id,'name',a.name,'status',a.status) ORDER BY a.created_at DESC)
                FROM artifacts.items a
@@ -1412,7 +1620,8 @@ export async function getBoardTasks(userEmail: string): Promise<BoardTaskRow[]> 
      ORDER BY t.updated_at DESC
      LIMIT 500`;
   const plain = `
-    SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done
+    SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done,
+           start_time,end_time,is_scheduled
       FROM tasks.journey_tasks
      WHERE lower(user_email) = ANY($1)
      ORDER BY updated_at DESC

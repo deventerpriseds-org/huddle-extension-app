@@ -2,7 +2,12 @@ import { createServerFn } from "@tanstack/react-start";
 import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
+import { isUserTurn } from "./turn-identity";
 import type { ChecklistPayload, HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
+// The two in-chat widget payloads ride back on a reply exactly as `checklist` does, so they are
+// declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
+// and the reply DTOs are shared with the client bundle.
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "./tasks/widgets.server";
 import {
   parseMentions,
   routeMessage,
@@ -36,6 +41,17 @@ import {
   classifyTurnIntent,
   type TurnIntent,
 } from "./capabilities";
+// Surface-independent half of task creation — the capability meta-task guard, cross-turn dedup,
+// journey date normalization and the honest outcome note. Shared with the VOICE executor
+// (voice/realtime-tools.server.ts) so the two surfaces cannot drift; see create-task-core.ts.
+import {
+  loadOpenTaskTitles,
+  normalizeJourneyDate,
+  normalizeTaskTitle,
+  screenCapabilityMetaTask,
+  splitTaskEntries,
+  summarizeQuickCreateOutcome,
+} from "./tasks/create-task-core";
 import {
   detectCeremony,
   buildCeremonyReport,
@@ -56,7 +72,7 @@ import {
   tavilySearch,
   type TavilySearchArgs,
 } from "./tavily-search.functions";
-import { CREATE_ARTIFACT_TOOL } from "./artifacts/artifact-tool";
+import { CREATE_ARTIFACT_TOOL, LIST_ARTIFACTS_TOOL } from "./artifacts/artifact-tool";
 import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "./calendar/tools";
 import {
   DELEGATE_TO_SPECIALIST_TOOL,
@@ -69,10 +85,17 @@ import {
   CONFIRM_TASK_INTENT_TOOL,
   PROPOSE_TASK_INTENT_TOOL,
   PROPOSE_APPROACH_TOOL,
+  REQUEST_APPROACH_OVERRIDE_TOOL,
+  OVERRIDE_APPROACH_GATE_TOOL,
   ASK_CLARIFYING_QUESTION_TOOL,
   RESOLVE_CLARIFYING_QUESTION_TOOL,
 } from "./tasks/task-agent-tools";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
+import {
+  assignCreatedJourneyTasks,
+  pickCreatedTaskAssignee,
+  resolveExplicitOwner,
+} from "./tasks/assign-on-create";
 
 // Feature flag: gates the intent-classification guard on capability/lane hand-off.
 // Set to false for an instant rollback to the previous (trigger-word-only) behaviour.
@@ -525,7 +548,10 @@ type TurnResumeState = {
     fallbackNotes?: string[];
     artifacts?: { id: string; name: string }[];
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+    overrideAsk?: { taskId: string; taskTitle: string; note?: string };
     checklist?: ChecklistPayload;
+    priorities?: PrioritiesWidgetData;
+    schedule?: ScheduleWidgetData;
   }[];
   journeyTaskUpdates: import("./journey/types").JourneyTask[];
   suggestedTasks: SuggestedTaskDraft[];
@@ -804,7 +830,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // message. Derived the same way as artifacts — from this agent's own propose_task_intent
     // toolUse this turn — NOT injected from another turn/agent.
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+    overrideAsk?: { taskId: string; taskTitle: string; note?: string };
     checklist?: ChecklistPayload;
+    priorities?: PrioritiesWidgetData;
+    schedule?: ScheduleWidgetData;
   };
 
   // Journey-voice mirror: any task rows that journey returns from a tool call
@@ -831,15 +860,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     if (journeyToolsCache || journeyToolsError) return journeyToolsCache;
     if (journeyEnabledMembers.length === 0) return null;
     try {
-      const { fetchJourneyToolDefinitions, toResponsesTool } =
+      const { fetchJourneyToolDefinitionsForHuddle, toResponsesTool } =
         await import("./journey/proxy.functions");
-      // Tools Huddle owns natively (or doesn't want) — don't offer journey's:
-      //  - web_search: Huddle uses its own Tavily.
-      //  - send_email: Huddle sends via Microsoft Graph (email/graph-email.server).
-      const HIDDEN_FROM_HUDDLE = new Set(["web_search", "send_email"]);
-      const defs = (await fetchJourneyToolDefinitions()).filter(
-        (d) => !HIDDEN_FROM_HUDDLE.has(d.name),
-      );
+      // Tools Huddle owns natively (or doesn't want) are excluded by HIDDEN_FROM_HUDDLE, which now
+      // lives in journey/proxy.functions.ts so the VOICE path applies the identical exclusion.
+      const defs = await fetchJourneyToolDefinitionsForHuddle();
       journeyToolsCache = { defs, tools: defs.map(toResponsesTool) };
       return journeyToolsCache;
     } catch (err) {
@@ -940,6 +965,36 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         const vec = await embed(data.text);
         const source = `huddle:${data.huddleId}`;
 
+        // WHOSE memory this is (AC D1/D4/D5). `001_memory_owner_attribution.sql` added
+        // `owner_entra_oid` to rag_chunks and rag_triples, indexed both and backfilled 627 rows --
+        // and then NOTHING wrote it: `grep -rn owner_entra_oid src/` returned zero hits, so every
+        // row written after the backfill was NULL-owned (2 of the 7 chunks written in the 2 days to
+        // 2026-09-08, and the only NULL rows in the table).
+        //
+        // RESOLVED, NEVER FABRICATED. The column is deliberately keyed on the Entra OBJECT ID, while
+        // a turn carries an EMAIL -- so this is a lookup, not a pass-through.
+        // `resolveObjectIdByEmail` reads `identity.profile_emails` (unique on lower(email)), which is
+        // the map that makes dev@ and von.ellis@ resolve to ONE object id. It returns null on a miss
+        // AND on any DB error, and never throws -- required here, because this whole block is
+        // fire-and-forget: a throw would silently lose the user's words, which is exactly why the
+        // migration declined to add a foreign key.
+        //
+        // It does NOT fall back to "the only profile in the table". That inference is correct today
+        // with one profile and silently wrong the day there are two -- the same reasoning the
+        // migration's own backfill guard applies before declining to guess. NULL means "not
+        // attributable", which is a true statement; a guessed owner is not.
+        let ownerEntraOid: string | null = null;
+        try {
+          const { resolveObjectIdByEmail } = await import("./identity/identity.server");
+          ownerEntraOid =
+            (await resolveObjectIdByEmail(data.caller?.entra_email)) ??
+            // Secondary, not a guess: the acting subject's OWN object id when the client supplied one
+            // (interactive sign-in) but no profile_emails row maps their address yet.
+            (data.caller?.entra_object_id?.trim() || null);
+        } catch {
+          ownerEntraOid = null;
+        }
+
         const writes: Array<{
           chunk: { id: string };
           scope: "global" | "agent";
@@ -955,6 +1010,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             source,
             embedding: vec,
             authorAgentIds: authors,
+            ownerEntraOid,
           });
           writes.push({ chunk, scope: "global", authors });
         }
@@ -968,6 +1024,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             source,
             embedding: vec,
             authorAgentIds: authors,
+            ownerEntraOid,
           });
           writes.push({ chunk, scope: "agent", agentId, authors });
         }
@@ -991,6 +1048,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
                   sourceChunkId: w.chunk.id,
                   authorAgentIds: w.authors,
                   supersede: researchedMem,
+                  ownerEntraOid,
                 })),
               );
             }
@@ -1167,6 +1225,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // resolveExecContext) used to each call resolveTaskEmail themselves, paying that round-trip
   // twice per turn. One resolve, shared.
   let resolvedCallerEmail: string | null | undefined;
+  // D4b: the OWNER'S OWN words for this turn, captured HERE and never re-read.
+  // `data.text` is MUTATED later in this function (the deep-confirm resume path does
+  // `data.text = pending.askText`), and this value feeds an AUTHORISATION decision -- whether an
+  // ON-REQUEST self address may be sent to. An authorisation input that a later code path can swap is
+  // not an authorisation input, so it is frozen before anything can touch it.
+  const ownerTurnText: string = String(data.text ?? "");
+
   const resolveCallerEmail = async (): Promise<string | null> => {
     if (resolvedCallerEmail !== undefined) return resolvedCallerEmail;
     const { resolveTaskEmail } = await import("./journey/identity");
@@ -1471,8 +1536,84 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         getPendingDeepConfirm,
         setPendingDeepConfirm,
         clearPendingDeepConfirm,
+        recordDeepConfirmVerdict,
+        getRecentDeepVerdict,
         classifyConfirmReply,
+        produceVsQuickAsk,
       } = await import("./tasks/deep-confirm.server");
+      const { hasGreenLit } = await import("./tasks/green-light");
+
+      // THE PRODUCE PATH, once. Reached from TWO places now — an explicit "produce" reply to a pending
+      // ask, and a fresh deep ask the user has ALREADY green-lit in this thread — and they must do the
+      // identical thing (board task + async kick + the same ack), so this is a closure rather than a
+      // second copy of fifty lines that would drift the first time one of them was touched.
+      const runProduce = async (agentId: AgentId, askText: string, note: string) => {
+        const title = produceTitleFrom(askText);
+        // Create the produce task on the board (dual-write to journey). Non-fatal.
+        let created = false;
+        try {
+          if (data.caller?.entra_email) {
+            const { invokeJourneyTool } = await import("./journey/proxy.functions");
+            const r = await invokeJourneyTool({
+              toolName: "quick_create_task",
+              args: { title },
+              caller: data.caller ?? {},
+              context: { source: "huddle", huddleId: data.huddleId, agentId },
+            });
+            created = !!r.ok;
+            if (r.ok && r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+            // ASSIGN IT TO THE AGENT THAT IS TAKING IT ON. Without this the row lands with
+            // assigned_agent = NULL and `runScheduledAutoWork` — kicked on the very next line —
+            // skips it entirely (autowork.server.ts:544), so "I've kicked it to the team to work up
+            // async" was an overclaim: nothing could pick it up until the next groom. This path is
+            // 1:1 by construction (the gate is inside `data.scope === "one-to-one"`), so the
+            // responding agent is the assignee by the same rule used for create_huddle_task.
+            // Best-effort: a failure leaves it exactly as it was before this line existed.
+            if (r.ok) {
+              const a = await assignCreatedJourneyTasks({
+                taskIds: (r.tasks ?? []).map((t) => t.id),
+                agentId,
+                caller: (data.caller ?? {}) as Record<string, unknown>,
+                huddleId: data.huddleId,
+              });
+              if (!a.assigned) {
+                console.warn(`[huddle-model] produce task created but NOT assigned: ${a.error ?? "no id"}`);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn(
+            `[huddle-model] produce-confirm task create failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+        // Kick the async WIP pipeline (fire-and-forget; the gated 9/13/17 cadence also picks it up).
+        try {
+          const { runScheduledAutoWork } = await import("./tasks/autowork.server");
+          void runScheduledAutoWork(data.caller, { force: true }).catch(() => {});
+        } catch {
+          /* best-effort */
+        }
+        return finalize({
+          decision: {
+            ...routed.decision,
+            reason: `${routed.decision.reason} [${note}]`.slice(0, 220),
+          },
+          replies: [
+            {
+              agentId,
+              text: created
+                ? `Done — I've put “${title}” on the board as a produce task and kicked it to the team to work up async. You'll get the draft to review. Want me to steer it any particular way?`
+                : `I'll take “${title}” on as a produce task and work it up async — you'll get the draft to review. (Heads up: I couldn't confirm the board write just now, so give it a quick check.)`,
+            },
+          ] as Reply[],
+          fallbacks,
+          prompts,
+          journeyTaskUpdates,
+          suggestedTasks,
+          toolUses,
+          reasoning: reasoningSummaries,
+        });
+      };
 
       const pending = await getPendingDeepConfirm(email, data.huddleId);
       if (pending) {
@@ -1488,57 +1629,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             routed.winners = [pending.agentId as AgentId];
             routed.interjectors = [];
           }
-          await clearPendingDeepConfirm(email, data.huddleId);
+          // REMEMBER the answer instead of deleting it. This used to clear the row outright, so the
+          // next deep ask in this same 1:1 re-asked a question the user had just answered.
+          await recordDeepConfirmVerdict(email, data.huddleId, pending.agentId, pending.askText, "quick");
         } else if (verdict === "produce") {
-          await clearPendingDeepConfirm(email, data.huddleId);
+          await recordDeepConfirmVerdict(email, data.huddleId, pending.agentId, pending.askText, "produce");
           const agentId = (pending.agentId as AgentId) ?? routed.winners[0] ?? data.members[0];
-          const title = produceTitleFrom(pending.askText);
-          // Create the produce task on the board (dual-write to journey). Non-fatal.
-          let created = false;
-          try {
-            if (data.caller?.entra_email) {
-              const { invokeJourneyTool } = await import("./journey/proxy.functions");
-              const r = await invokeJourneyTool({
-                toolName: "quick_create_task",
-                args: { title },
-                caller: data.caller ?? {},
-                context: { source: "huddle", huddleId: data.huddleId, agentId },
-              });
-              created = !!r.ok;
-              if (r.ok && r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
-            }
-          } catch (e) {
-            console.warn(
-              `[huddle-model] produce-confirm task create failed: ${e instanceof Error ? e.message : String(e)}`,
-            );
-          }
-          // Kick the async WIP pipeline (fire-and-forget; the gated 9/13/17 cadence also picks it up).
-          try {
-            const { runScheduledAutoWork } = await import("./tasks/autowork.server");
-            void runScheduledAutoWork(data.caller, { force: true }).catch(() => {});
-          } catch {
-            /* best-effort */
-          }
-          return finalize({
-            decision: {
-              ...routed.decision,
-              reason: `${routed.decision.reason} [deep-confirm: produce]`.slice(0, 220),
-            },
-            replies: [
-              {
-                agentId,
-                text: created
-                  ? `Done — I've put “${title}” on the board as a produce task and kicked it to the team to work up async. You'll get the draft to review. Want me to steer it any particular way?`
-                  : `I'll take “${title}” on as a produce task and work it up async — you'll get the draft to review. (Heads up: I couldn't confirm the board write just now, so give it a quick check.)`,
-              },
-            ] as Reply[],
-            fallbacks,
-            prompts,
-            journeyTaskUpdates,
-            suggestedTasks,
-            toolUses,
-            reasoning: reasoningSummaries,
-          });
+          return runProduce(agentId, pending.askText, "deep-confirm: produce");
         } else if (verdict === "cancel") {
           await clearPendingDeepConfirm(email, data.huddleId);
           return finalize({
@@ -1563,27 +1660,68 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // Fresh deep ask (no manual override): HOLD and ask produce-vs-quick instead of spending o3 inline.
       if (!deepManual && routed.winners.length > 0 && (routed.difficulty ?? 2) >= 3) {
         const primary = routed.winners[0];
-        await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
-        return finalize({
-          decision: {
-            ...routed.decision,
-            reason: `${routed.decision.reason} [deep-confirm: produce-vs-quick]`.slice(0, 220),
-          },
-          replies: [
-            {
-              agentId: primary,
-              text:
-                "That's a meaty one. Want me to **produce** it — take it on as a task, do the deep work async, and hand you a draft to review — " +
-                'or would a **quick take right here** do for now? Reply "produce", "quick", or "cancel".',
+        // ...UNLESS THE USER HAS ALREADY SAID GO. Measured: the ask fired at 01:32, the owner replied
+        // "Go for it" at 02:06 and "Okay knock it out" at 02:50 — three go-aheads — and it was still
+        // asking. Half of that was the classifier (fixed in classifyConfirmReply); this is the other
+        // half: once someone has told you to get on with it, asking them to choose a shape reads as
+        // not listening. A go-ahead in the thread means PRODUCE, which is the answer the gate was
+        // fishing for anyway. The current message counts too — "go for it, and do the pricing one"
+        // is a go-ahead AND a fresh deep ask in one line.
+        const recentUserLines = [
+          ...(data.history as HuddleMessage[]).filter((m) => m.author.kind === "user").map((m) => m.text),
+          data.text,
+        ];
+        if (hasGreenLit(recentUserLines)) {
+          // Remember it, so the NEXT deep ask a minute later is not asked either. `hasGreenLit` only
+          // looks back four user lines, so it decays out from under a conversation that is still
+          // plainly in the same flow.
+          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "produce");
+          return runProduce(primary, data.text, "deep-confirm: already green-lit");
+        }
+        // ...OR THE USER ALREADY ANSWERED THIS QUESTION. Every verdict used to DELETE the pending
+        // row, so the gate had no memory past the single reply: answer "produce", and the next
+        // difficulty>=3 message in the same 1:1 asked again from scratch a minute later. Note that
+        // the green-light check above does NOT cover this — measured this session,
+        // isGreenLight("produce") is FALSE, so replying with the exact word the gate asked for
+        // suppressed nothing. A recent verdict now applies the shape the user already chose instead
+        // of re-asking. "cancel" is never remembered (it deletes the row), so parking one ask can
+        // never silence a later genuine one. Window + expiry: tasks/verdict-memory.ts.
+        const remembered = await getRecentDeepVerdict(email, data.huddleId);
+        if (remembered === "produce") {
+          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "produce");
+          return runProduce(primary, data.text, "deep-confirm: remembered produce");
+        }
+        if (remembered === "quick") {
+          // Same landing as the explicit "quick" reply: answer INLINE on the chat-friendly tier,
+          // never the deep o3 rung. data.text is already the real ask here (unlike the reply path,
+          // which has to restore it from the stored pending), so only the tier and the recorded
+          // difficulty change.
+          deepManual = "terra-med";
+          routed.difficulty = 2;
+          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "quick");
+        } else {
+          // Nothing remembered — ask, exactly as before.
+          await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
+          return finalize({
+            decision: {
+              ...routed.decision,
+              reason: `${routed.decision.reason} [deep-confirm: produce-vs-quick]`.slice(0, 220),
             },
-          ] as Reply[],
-          fallbacks,
-          prompts,
-          journeyTaskUpdates,
-          suggestedTasks,
-          toolUses,
-          reasoning: reasoningSummaries,
-        });
+            replies: [
+              {
+                agentId: primary,
+                // Per-agent phrasing, not one literal every agent recites — see produceVsQuickAsk.
+                text: produceVsQuickAsk(primary),
+              },
+            ] as Reply[],
+            fallbacks,
+            prompts,
+            journeyTaskUpdates,
+            suggestedTasks,
+            toolUses,
+            reasoning: reasoningSummaries,
+          });
+        }
       }
     } catch (err) {
       console.warn(
@@ -1680,28 +1818,25 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // createSuggestedTaskFromTool below, which claims a title here before writing.
   const createdTaskTitles = new Set<string>(resume?.createdTaskTitles ?? []);
 
+  // Tasks whose approach gate ESCALATED during this turn, by the agent that hit it. Drives the
+  // in-thread "Approve anyway" row (the same reply-chip channel as confirmAsk), because escalation had
+  // NO user-visible surface at all before this: `grep -rn escalated src/**/*.tsx` returned zero, so a
+  // task could sit permanently stuck while the owner's only clue was an agent mentioning it in prose.
+  // Not persisted across a resume: a chip is a per-reply decoration, and the board chip is the durable
+  // half of the same discovery.
+  const escalatedApproachByAgent = new Map<string, { taskId: string; taskTitle: string; note: string }>();
+
   // Cross-turn / cross-run dedup for create_huddle_task. `createdTaskTitles` only guards WITHIN a
   // turn; the board clutter came from the SAME task being (re)created across many turns/test runs.
   // Load the user's already-open task titles ONCE per turn from the mirror and skip creating a
   // duplicate of one that already exists. Best-effort: a failed read never blocks task creation.
-  const normTitle = (t: string) => t.trim().toLowerCase().replace(/\s+/g, " ");
+  // normTitle / the mirror read now live in tasks/create-task-core.ts so the VOICE executor dedups
+  // by the exact same rule — a title typed and the same title spoken must collide, not diverge.
+  const normTitle = normalizeTaskTitle;
   let existingOpenTitles: Set<string> | null = null;
   async function loadExistingOpenTitles(): Promise<Set<string>> {
     if (existingOpenTitles) return existingOpenTitles;
-    const set = new Set<string>();
-    try {
-      const email = data.caller?.entra_email;
-      if (email) {
-        const { resolveTaskEmail } = await import("./journey/identity");
-        const resolved = (await resolveTaskEmail(data.caller ?? {})) ?? email;
-        const { getTasksForUser } = await import("./tasks/tasks.server");
-        for (const t of await getTasksForUser(resolved)) {
-          if (t.title) set.add(normTitle(t.title));
-        }
-      }
-    } catch {
-      /* dedup read is best-effort — never block a create on it */
-    }
+    const set = await loadOpenTaskTitles(data.caller);
     existingOpenTitles = set;
     return set;
   }
@@ -1770,6 +1905,106 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     } catch {
       /* follow-up delivery is best-effort — never fail the user's turn on it */
     }
+  }
+
+  /**
+   * The owner is AWAY and an agent has asked them to unstick an escalated task. Deliver the ask the
+   * same way every other reply reaches them — a REAL durable turn in the requesting agent's own DM, so
+   * the runner produces the reply and fires the EXISTING away-notification (send_push -> Android
+   * bridge). No new sender; that is a standing rule in this repo's CLAUDE.md, and this follows
+   * deliverOwnerFollowup above line for line for exactly that reason.
+   *
+   * Only called when `data.internal` (an agent-initiated turn — autowork, a groom pass): in a live
+   * conversation the confirm row on the agent's reply is already in front of the owner, and a push on
+   * top of it is noise.
+   *
+   * Idempotent TWICE OVER, deliberately, because a duplicate nudge about a stuck task is the kind of
+   * thing that trains an owner to ignore the channel: `recordApproachOverrideRequest`'s guarded UPDATE
+   * means this is reached once per escalation episode, and the turn id below makes a retry of THAT
+   * call a no-op as well (enqueueTurn conflicts). The id carries the task so two stuck tasks never
+   * collapse into one notice.
+   */
+  async function deliverOverrideRequestNotice(
+    agentId: AgentId,
+    taskId: string,
+    taskTitle: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      const agent = AGENT_BY_ID[agentId];
+      if (!agent) return;
+      const cleanReason = (reason ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
+      const cleanTitle = (taskTitle ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
+      const agentHuddle = `dm-${agentId}`;
+      // Canonical journey email (see deliverOwnerFollowup) so the finished turn is matchable by the
+      // client's cross-huddle back-fill — the raw login can resolve to a different address.
+      let email: string | null = null;
+      try {
+        const { resolveTaskEmail } = await import("./journey/identity");
+        email = (await resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
+      } catch {
+        email = data.caller?.entra_email ?? null;
+      }
+      // The directive is careful about ONE thing above all: the agent must not tell the user the task
+      // is unblocked. It is not, and it cannot be until they tap.
+      const directive =
+        `You are ${agent.name}. The approach review on "${cleanTitle}" escalated, so nobody is working ` +
+        `it until the user approves it themselves. You have already asked for their approval` +
+        (cleanReason ? ` — your reason was: "${cleanReason}"` : "") +
+        `. Send ONE short message telling them this task is waiting on their call and why you think it ` +
+        `should go ahead, and that there is an "Approve anyway" button on it. Do NOT say it is ` +
+        `unblocked, approved or in progress — it is none of those until they tap. Do not do the work.`;
+      const notifyPayload = {
+        text: directive,
+        huddleId: agentHuddle,
+        scope: "one-to-one",
+        members: [agentId],
+        targetAgentId: agentId,
+        history: [],
+        router: data.router,
+        agents: data.agents,
+        timeZone: data.timeZone,
+        caller: data.caller,
+        internal: true, // never let a notice spawn another notice
+      };
+      const { enqueueTurn } = await import("./tasks/turns.server");
+      const fresh = await enqueueTurn(`ovrreq-${taskId}`, agentHuddle, email, notifyPayload);
+      if (fresh) void kickNextChunk(`ovrreq-${taskId}`);
+    } catch {
+      /* best-effort — the confirm row and the board chip are the durable surfaces */
+    }
+  }
+
+  /**
+   * THE RELAY (step 4 of the owner's four): an agent says the user has just authorised an override, and
+   * this hands the TURN PAIR to the server to fetch and to the approach gate's grader to judge.
+   *
+   * Shared by both dispatch paths deliberately — a safety gate with two implementations is a safety
+   * gate that leaks through whichever one nobody re-read (memory.md 2026-08-05). The model's arguments
+   * reach `overrideApproachFromTurnPair` as REFERENCES and nothing else; there is no text parameter on
+   * this path at all.
+   *
+   * `turnId` is this closure's own durable turn id — the turn being executed, i.e. the message the
+   * agent is replying to RIGHT NOW. That is the owner's authorising turn in the ordinary case, and the
+   * server supplying it is stronger than a model naming it: `isUserTurn` still has to accept it, so an
+   * agent-initiated turn (autowork, a groom pass, the override NOTICE itself) is refused even here.
+   */
+  async function relayApproachOverride(
+    taskId: string,
+    ownerTurnId: string | null,
+    agentTurnId: string | null,
+  ): Promise<{ ok: boolean; applied: boolean; title?: string; error?: string }> {
+    const email =
+      (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ?? data.caller?.entra_email;
+    if (!email) return { ok: false, applied: false, error: "sign-in required" };
+    const { overrideApproachFromTurnPair } = await import("./tasks/confirm-ask.functions");
+    const r = await overrideApproachFromTurnPair({
+      taskId,
+      email,
+      ownerTurnId: ownerTurnId || turnId || null,
+      agentTurnId: agentTurnId || null,
+    });
+    return { ok: !!r.ok, applied: !!r.applied, title: r.title, error: r.error };
   }
 
   // Chat-driven UNBLOCK routing: the user cleared a blocker while talking to a NON-owner (e.g. Terry,
@@ -2491,20 +2726,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       return "Backlog";
     }
 
+    // The owner the agent NAMED, or null. One implementation, shared with the journey assignment
+    // below (tasks/assign-on-create.ts), so the card's owner and the canonical assignee can never
+    // disagree — before this they were two different questions answered in two different places.
+    function resolveNamedTaskOwner(value: unknown): AgentId | null {
+      return resolveExplicitOwner(value, AGENTS) as AgentId | null;
+    }
+
+    // ...and the same answer with the long-standing fallback applied, for the UI card, which must
+    // always show SOMEONE. The fallback is exactly why this cannot be the input to an assignment:
+    // it returns the responding agent whether or not one was ever named.
     function resolveTaskOwner(value: unknown): AgentId {
-      const raw = String(value ?? "")
-        .trim()
-        .toLowerCase();
-      if (!raw) return winner.id;
-      if (AGENT_BY_ID[raw as AgentId]) return raw as AgentId;
-      const matched = AGENTS.find(
-        (a) =>
-          a.name.toLowerCase() === raw ||
-          a.handle.toLowerCase() === raw ||
-          a.name.toLowerCase().includes(raw) ||
-          raw.includes(a.handle.toLowerCase()),
-      );
-      return matched?.id ?? winner.id;
+      return resolveNamedTaskOwner(value) ?? winner.id;
     }
 
     async function createSuggestedTaskFromTool(args: Record<string, unknown>) {
@@ -2529,24 +2762,22 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // after assigning). Case (2) slipped through the original owner-mismatch-only check and
       // polluted the live board (2026-07-31 incident) — the prose rule forbids restating a PERFORMED
       // action regardless of who performed it, so the code guard must too.
-      const titleOwner = capabilityOwnerFor(title);
+      // Shared with the voice executor — see tasks/create-task-core.ts.
+      const titleOwner = screenCapabilityMetaTask(title, winner.id);
       if (titleOwner) {
-        const isSelf = titleOwner.agent.id === winner.id;
         recordToolUse(
           winner.id,
           "create_huddle_task",
-          isSelf
-            ? `blocked self-restating meta-task “${title.slice(0, 60)}” — ${titleOwner.cap.label} is your own job, not a to-do`
-            : `blocked meta-task “${title.slice(0, 60)}” — ${titleOwner.cap.label} belongs to ${titleOwner.agent.name}`,
+          titleOwner.isSelf
+            ? `blocked self-restating meta-task “${title.slice(0, 60)}” — ${titleOwner.reason}`
+            : `blocked meta-task “${title.slice(0, 60)}” — ${titleOwner.reason}`,
           true,
         );
         return {
           ok: true,
           deferred: true,
-          handedTo: isSelf ? undefined : titleOwner.agent.id,
-          note: isSelf
-            ? `That's your own job to perform, not a task to file — do it, don't card it.`
-            : `That's ${titleOwner.agent.name}'s exclusive job — it's been handed to them; do not file a task about it.`,
+          handedTo: titleOwner.handedTo,
+          note: titleOwner.note,
         };
       }
       // Cross-agent / re-run dedup: if this exact title was already created earlier in this turn,
@@ -2574,10 +2805,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         return { ok: true, deduped: true, task: { title: title.slice(0, 160) } };
       }
       createdTaskTitles.add(titleKey);
+      // Did the agent actually NAME an owner? Kept separate from the card's ownerId because that
+      // one falls back to the responder, and the group rule below turns on the difference.
+      const namedOwner = resolveNamedTaskOwner(args.ownerId ?? args.owner ?? args.assignee);
       const task: SuggestedTaskDraft = {
         id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
         title: title.slice(0, 160),
-        ownerId: resolveTaskOwner(args.ownerId ?? args.owner ?? args.assignee),
+        ownerId: namedOwner ?? winner.id,
         lane: resolveTaskLane(args.lane ?? args.status),
         progress: typeof args.progress === "number" ? args.progress : undefined,
         blockReason: typeof args.blockReason === "string" ? args.blockReason : undefined,
@@ -2600,11 +2834,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // Validate here (don't just trust the tool description) so a model slip — a weekday name,
           // "next Friday" — can't silently break the scheduling call; drop it and fall back to the
           // title-text NL parser, which handles those phrases correctly.
-          const rawDate = typeof args.date === "string" ? args.date.trim().toLowerCase() : "";
-          const dateArg =
-            rawDate === "today" || rawDate === "tomorrow" || /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
-              ? rawDate
-              : undefined;
+          const dateArg = normalizeJourneyDate(args.date);
           const r = await invokeJourneyTool({
             toolName: "quick_create_task",
             args: dateArg ? { title: task.title, date: dateArg } : { title: task.title },
@@ -2614,46 +2844,62 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           if (r.ok) {
             if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
             else suggestedTasks.push(task); // journey didn't echo a row — keep a Huddle card
+            // ASSIGN IT. `quick_create_task` has no assignee parameter (journey
+            // execute-tool/index.ts:2658-2670 forwards only text/target_date/auto_schedule), so the
+            // row lands with assigned_agent = NULL and the whole auto-work engine skips it
+            // (autowork.server.ts:544 drops it from the WIP buckets, :370 from the confirm
+            // reach-outs) until grooming assigns it. A follow-up update_task — the same write the
+            // board drag already uses — closes that, with no journey deploy.
+            // 1:1 → the responding agent; group → only an explicitly named owner (the LEAD captures
+            // every lane's items in a group, :2221, so defaulting to it would assign other lanes'
+            // work to the wrong agent). BEST-EFFORT: a failure leaves the task unassigned, which is
+            // exactly the old behaviour, and the outcome is reported verbatim so the agent cannot
+            // claim an assignment that did not happen.
+            const assignee = pickCreatedTaskAssignee({
+              scope: data.scope,
+              huddleId: data.huddleId,
+              responderId: winner.id,
+              explicitOwner: namedOwner,
+            });
+            const assignment = assignee
+              ? await assignCreatedJourneyTasks({
+                  taskIds: (r.tasks ?? []).map((t) => t.id),
+                  agentId: assignee,
+                  caller: (data.caller ?? {}) as Record<string, unknown>,
+                  huddleId: data.huddleId,
+                })
+              : null;
             // journey's `output` IS execute-tool's `result` object verbatim (huddle-proxy forwards
             // exec.result, not the sibling exec.message string) — parse it so the model can report
             // honestly instead of a flat "added it" that overclaims what actually happened (same-day
             // placement is provisional until tonight's planner runs; a future due date has no exact
             // time yet). Shape: {created, scheduled:[{title,time}], deferredToNightly:[{title,
             // due_date}], tasks:[{due_date,start_time,is_scheduled,...}]} — see parseAndCreateTasks.
-            let outcomeNote: string | undefined;
-            let outcome:
-              | { due_date?: string | null; start_time?: string | null; is_scheduled?: boolean }
-              | undefined;
-            try {
-              const parsed = JSON.parse(r.output) as {
-                scheduled?: Array<{ title: string; time: string }>;
-                deferredToNightly?: Array<{ title: string; due_date: string }>;
-                tasks?: Array<{
-                  due_date?: string | null;
-                  start_time?: string | null;
-                  is_scheduled?: boolean;
-                }>;
-              };
-              outcome = parsed.tasks?.[0];
-              if (parsed.scheduled && parsed.scheduled.length > 0) {
-                outcomeNote = `scheduled at ${parsed.scheduled[0].time} today (provisional — the nightly planner may move it)`;
-              } else if (parsed.deferredToNightly && parsed.deferredToNightly.length > 0) {
-                outcomeNote = `due ${parsed.deferredToNightly[0].due_date} — no exact time yet, the nightly planner will place one`;
-              } else if (outcome?.due_date && !outcome.start_time) {
-                outcomeNote = `due ${outcome.due_date} — no exact time yet`;
-              } else if (!outcome?.due_date && !outcome?.start_time) {
-                outcomeNote = "added to the backlog, unscheduled";
-              }
-            } catch {
-              /* r.output wasn't the expected JSON shape — outcome stays undefined, note omitted */
-            }
+            // Shared with the voice executor — see tasks/create-task-core.ts.
+            const { outcome, note: outcomeNote } = summarizeQuickCreateOutcome(r.output);
+            const assignNote = assignment
+              ? assignment.assigned
+                ? ` · assigned to ${AGENT_BY_ID[assignment.agentId as AgentId]?.name ?? assignment.agentId}`
+                : ` · NOT assigned (${assignment.error ?? "assignment failed"})`
+              : "";
             recordToolUse(
               winner.id,
               "create_huddle_task",
-              `“${task.title}” → Huddle board + journey${outcomeNote ? ` — ${outcomeNote}` : ""}`,
+              `“${task.title}” → Huddle board + journey${outcomeNote ? ` — ${outcomeNote}` : ""}${assignNote}`,
               true,
             );
-            return { ok: true, task, boards: ["huddle", "journey"], outcome, note: outcomeNote };
+            return {
+              ok: true,
+              task,
+              boards: ["huddle", "journey"],
+              outcome,
+              // The assignment is a SEPARATE fact from the create and is reported as one. `assigned`
+              // is true only when a journey row really changed owner; when it is false the task
+              // still exists, unassigned, and the note says so in words the model must not soften.
+              assigned: assignment?.assigned ?? false,
+              assignedTo: assignment?.assigned ? assignment.agentId : null,
+              note: [outcomeNote, assignment?.note].filter(Boolean).join(" ") || undefined,
+            };
           }
           const ev = recordFallback(
             "tool",
@@ -2696,8 +2942,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         };
       }
 
-      // Huddle-only path (journey deliberately disabled, or no caller identity). A card is correct
-      // here: no journey write was attempted, so nothing is being misrepresented.
+      // Huddle-only path (journey disabled, or no caller identity). A card is rendered and nothing
+      // is written to the canonical store.
+      //
+      // THE COMMENT HERE USED TO READ "nothing is being misrepresented", and that was true only of
+      // the client that can SEE the card. On the cross-app route `projectTurnResult` returns just
+      // {replies, toolUses} -- `suggestedTasks` is dropped before the reply leaves Huddle -- so the
+      // caller got `ok:true`, no card, and an agent saying it had been added. Found by the
+      // 2026-09-08 status audit; the code four lines up already called this shape a GHOST.
+      //
+      // Enabling journey on the forward stops this path being reached there at all. This note is the
+      // belt to that braces: it makes the RETURN honest on its own, so the same hole cannot reopen
+      // the next time some caller has journey off. It is accurate for the real client too -- a
+      // suggested card IS awaiting approval, not saved.
       suggestedTasks.push(task);
       recordToolUse(
         winner.id,
@@ -2705,7 +2962,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         `suggested “${task.title}” · owner ${AGENT_BY_ID[task.ownerId].name}`,
         true,
       );
-      return { ok: true, task, boards: ["huddle"] };
+      return {
+        ok: true,
+        task,
+        boards: ["huddle"],
+        persisted: false,
+        note: "SUGGESTED ONLY — this was NOT saved to the user's real board (no canonical row was written). Say you have put it forward as a suggestion for approval; do NOT say it was added, created, or saved.",
+      };
     }
 
     // Batch create — the honest multi-task path. When the user asks for SEVERAL tasks in one message
@@ -2720,18 +2983,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // Accept an explicit list (preferred — the model enumerates each task) or a single multi-task
       // text blob. A blob is kept intact for journey's NL parser (it extracts times/dates); only split
       // on hard separators so a compound single task isn't torn apart.
-      const rawList = Array.isArray(args.tasks)
-        ? (args.tasks as unknown[]).map((t) => String(t ?? "").trim()).filter(Boolean)
-        : [];
-      const blob = typeof args.text === "string" ? args.text.trim() : "";
-      let entries = rawList;
-      if (!entries.length && blob) {
-        entries = blob
-          .split(/\n|;/)
-          .map((s) => s.trim())
-          .filter(Boolean);
-        if (!entries.length) entries = [blob];
-      }
+      const entries = splitTaskEntries(args); // shared with voice — tasks/create-task-core.ts
       if (!entries.length) {
         const error = "create_huddle_tasks requires a non-empty `tasks` array (or `text`)";
         recordToolUse(winner.id, "create_huddle_tasks", "batch task creation failed", false, error);
@@ -2744,16 +2996,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       const skipped: Array<{ title: string; reason: string }> = [];
       const deferred: Array<{ title: string; handedTo?: string; reason: string }> = [];
       for (const entry of entries) {
-        const titleOwner = capabilityOwnerFor(entry);
+        const titleOwner = screenCapabilityMetaTask(entry, winner.id);
         if (titleOwner) {
-          const isSelf = titleOwner.agent.id === winner.id;
-          deferred.push({
-            title: entry,
-            handedTo: isSelf ? undefined : titleOwner.agent.id,
-            reason: isSelf
-              ? `${titleOwner.cap.label} is your own job to perform, not a card`
-              : `${titleOwner.cap.label} belongs to ${titleOwner.agent.name}`,
-          });
+          deferred.push({ title: entry, handedTo: titleOwner.handedTo, reason: titleOwner.reason });
           continue;
         }
         const key = entry.trim().toLowerCase();
@@ -2780,11 +3025,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       if (agentBackend.journey?.enabled && data.caller?.entra_email) {
         try {
           const { invokeJourneyTool } = await import("./journey/proxy.functions");
-          const rawDate = typeof args.date === "string" ? args.date.trim().toLowerCase() : "";
-          const target_date =
-            rawDate === "today" || rawDate === "tomorrow" || /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
-              ? rawDate
-              : undefined;
+          const target_date = normalizeJourneyDate(args.date);
           const r = await invokeJourneyTool({
             toolName: "parse_and_create_tasks",
             args: {
@@ -2987,7 +3228,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const effectiveInstructions = overrideInstructions || snapshotInstructions;
         fromSnapshot = !overrideInstructions && !!snapshotInstructions;
         const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
-        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT } = await import("./tasks/tools");
+        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT } = await import(
+          "./tasks/tools"
+        );
         // Grooming is now gated on the data-driven capability (agents.ts), with the legacy
         // id/special check kept as a non-destructive fallback so nothing regresses.
         const ownsGrooming =
@@ -3037,6 +3280,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           PRIORITIZE_SYSTEM_HINT +
           "\n\n" +
           CHECKLIST_SYSTEM_HINT +
+          // Same slot as CHECKLIST_SYSTEM_HINT directly above and for the same reason: the widget
+          // tools are offered in `mergedTools` below, so the model needs the hint that says WHEN to
+          // prefer an interactive card over a prose answer. Additive -- nothing above is altered.
+          "\n\n" +
+          WIDGET_SYSTEM_HINT +
           groomHint +
           "\n\n" +
           REMINDER_SYSTEM_HINT;
@@ -3158,35 +3406,53 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const { emailFromOptions, graphEmailConfigured } =
           await import("./email/graph-email.server");
         const emailTools: unknown[] = [];
+        // D4b: this boolean now answers "may the send_email TOOL be offered", NOT "may mail be sent".
+        // Recipients are unknown at assembly time, so the real authorisation moved to the send path
+        // (sendOrDraftEmail -> the three-tier recipient gate). The tool is offered when the GLOBAL
+        // D4a flag is on OR the caller has any self address that could ever send. The variable keeps
+        // its D4a name deliberately: voice-toolset-hidden.test.ts asserts the literal line
+        // `if (emailSendEnabled) {` and that guard is mutation-proved (M4) -- renaming it for
+        // cosmetics would break a proven guard and invalidate recorded evidence.
+        // Fails CLOSED to false (tool withheld) on any error — see canOfferSendEmailTool's contract.
+        const { canOfferSendEmailTool } = await import("./identity/agent-workflow-config.server");
+        const emailSendEnabled = await canOfferSendEmailTool(await resolveCallerEmail(), winner.id);
         if (graphEmailConfigured()) {
           const fromOpts = emailFromOptions();
-          emailTools.push({
-            type: "function" as const,
-            name: "send_email",
-            description:
-              `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
-              `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
-              `Requires a recipient (to), a subject, and a body. Use this whenever the user asks to email someone.`,
-            parameters: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                to: {
-                  type: "string",
-                  description: "Recipient email address. Comma-separate multiple recipients.",
+          // EMAIL SEND GATE (2026-09-07). `send_email` is offered to the model ONLY when the owner has
+          // flipped identity.agent_workflow_config.email_send_enabled on. A tool the model cannot SEE
+          // cannot be mis-picked, so this — not the dispatch check below — is the primary gate.
+          // `create_email_draft` is offered unconditionally: drafting is always allowed.
+          if (emailSendEnabled) {
+            emailTools.push({
+              type: "function" as const,
+              name: "send_email",
+              description:
+                `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
+                `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
+                `Requires a recipient (to), a subject, and a body. Use this whenever the user asks to email someone. ` +
+                `Mail addressed only to the user's own address is sent; any other recipient is saved as a DRAFT ` +
+                `instead and the result says so — when that happens, tell them it was saved to drafts, never that it was sent.`,
+              parameters: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  to: {
+                    type: "string",
+                    description: "Recipient email address. Comma-separate multiple recipients.",
+                  },
+                  subject: { type: "string", description: "Email subject line." },
+                  body: { type: "string", description: "Email body (plain text)." },
+                  from: {
+                    type: "string",
+                    description: `Optional sender mailbox. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.`,
+                  },
+                  cc: { type: "string", description: "Optional CC address(es), comma-separated." },
                 },
-                subject: { type: "string", description: "Email subject line." },
-                body: { type: "string", description: "Email body (plain text)." },
-                from: {
-                  type: "string",
-                  description: `Optional sender mailbox. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.`,
-                },
-                cc: { type: "string", description: "Optional CC address(es), comma-separated." },
+                required: ["to", "subject", "body"],
               },
-              required: ["to", "subject", "body"],
-            },
-            strict: false,
-          });
+              strict: false,
+            });
+          }
           emailTools.push({
             type: "function" as const,
             name: "create_email_draft",
@@ -3218,24 +3484,42 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           emailTools.push(GET_EXTERNAL_CALENDAR_EVENTS_TOOL);
         }
 
-        const { PRIORITIZE_TOOL, CHECKLIST_TOOL } = await import("./tasks/tools");
+        const { PRIORITIZE_TOOL, CHECKLIST_TOOL, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL } =
+          await import("./tasks/tools");
         // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
         const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
         const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
+        // Direction 1 of the cross-app bridge: READ the owner's live Nexus coursework. Empty array
+        // when Nexus is unconfigured, so an unconfigured environment shows the model no tool rather
+        // than one that exists and fails.
+        const { nexusReadTools } = await import("./nexus/nexus.server");
+        const nexusTools = nexusReadTools() as { type: "function"; name: string }[];
         const mergedTools = [
           createHuddleTaskTool,
           createHuddleTasksTool,
           CREATE_ARTIFACT_TOOL,
+          // B-OPS-2 -- read back what the agents already produced. The write half
+          // (CREATE_ARTIFACT_TOOL) has been here since the artifact store shipped; nothing could
+          // LIST them, so an agent could save a document and then had no way to see it or a
+          // teammate's again.
+          LIST_ARTIFACTS_TOOL,
           DELEGATE_TO_SPECIALIST_TOOL,
           FLAG_BLOCKER_TOOL,
           CONFIRM_TASK_INTENT_TOOL,
           PROPOSE_TASK_INTENT_TOOL,
           PROPOSE_APPROACH_TOOL,
+          REQUEST_APPROACH_OVERRIDE_TOOL,
+          OVERRIDE_APPROACH_GATE_TOOL,
           ASK_CLARIFYING_QUESTION_TOOL,
           RESOLVE_CLARIFYING_QUESTION_TOOL,
           SCHEDULE_REMINDER_TOOL,
           PRIORITIZE_TOOL,
           CHECKLIST_TOOL,
+          // The two in-chat journey widgets. Ungated, exactly like CHECKLIST_TOOL above: whichever
+          // agent is answering is the one the user asked, so gating these to a single agent would
+          // make the widget reachable only by talking to that agent.
+          PRIORITIES_WIDGET_TOOL,
+          SCHEDULE_WIDGET_TOOL,
           GET_CALENDAR_EVENTS_TOOL, // calendar-framed alias → combined schedule (always available)
           ...groomTools,
           ...emailTools,
@@ -3243,6 +3527,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           ...ragTools,
           ...journeyTools,
           ...webSearchTools,
+          ...nexusTools,
         ];
         toolTypes = mergedTools
           .map((t) => {
@@ -3275,6 +3560,15 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
           if (c.name === "delegate_to_specialist") {
             return await dispatchDelegate(c.arguments);
+          }
+          if (c.name === "list_artifacts") {
+            // Read-only, so no ledger claim (claimAction guards MUTATING actions). The executor is
+            // shared with the voice path -- see listArtifactsForTool's header for why it is not
+            // duplicated per surface. The caller's email is resolved inside it and is never an arg.
+            const { listArtifactsForTool } = await import("./artifacts/artifacts.server");
+            return JSON.stringify(
+              await listArtifactsForTool(data.caller, c.arguments as Record<string, unknown>),
+            );
           }
           if (c.name === "create_artifact") {
             const a = c.arguments as Record<string, unknown>;
@@ -3463,8 +3757,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+              // REMIND mode carries the proposed date+time structurally so the model-free Confirm
+              // button can schedule from it. Validated here rather than trusted: a malformed or
+              // already-past timestamp drops to null, degrading to "confirmed but nothing scheduled"
+              // (reported to the user) instead of persisting an instant that silently never fires.
+              const rawWhen = typeof a.reminder_at === "string" ? a.reminder_at.trim() : "";
+              let reminderAt: string | null = null;
+              if (rawWhen) {
+                const whenMs = Date.parse(rawWhen);
+                if (Number.isFinite(whenMs) && whenMs > Date.now()) reminderAt = new Date(whenMs).toISOString();
+              }
               const { proposeTaskDod } = await import("./tasks/tasks.server");
-              await proposeTaskDod(taskId, email, dod);
+              await proposeTaskDod(taskId, email, dod, reminderAt);
               // Encoded as JSON in `detail` (a plain string field) so the reply-assembly step below can
               // recover structured {taskId, taskTitle, proposedDod} the same way replyArtifacts recovers
               // an artifact id from create_artifact's detail — this is what drives the confirm-ask
@@ -3541,6 +3845,115 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               return JSON.stringify({ ok: false, error: msg });
             }
           }
+          if (c.name === "request_approach_override") {
+            const a = c.arguments as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const reason = String(a.reason ?? "").trim();
+            if (!taskId) return JSON.stringify({ ok: false, error: "task_id is required" });
+            try {
+              const email =
+                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                data.caller?.entra_email;
+              if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+              const { requestApproachOverride } = await import("./tasks/confirm-ask.functions");
+              // NOTHING ON THIS SIDE OF THE CALL CAN GRANT AN OVERRIDE, and that is structural rather
+              // than a matter of care here: `requestApproachOverride` does not call
+              // `overrideApproachGate` at all. It used to — via a `source:{via:"quote"}` arm carrying
+              // model-supplied text that the server tried to read as the owner's consent — and three
+              // independent adversarial passes broke that reading with ordinary English. The only
+              // grant is the owner's tap on the row attached below.
+              const r = await requestApproachOverride({
+                taskId,
+                email,
+                requestedByAgent: winner.id,
+                reason,
+              });
+              // EXTEND the existing confirm-row channel rather than building a second one: the same
+              // map `propose_approach` writes when a gate escalates, read at the reply-assembly site
+              // into `replies[].overrideAsk` -> OverrideAskRow's "Approve anyway". The board card chip
+              // (driven by approach_status='escalated') is the durable half and needs no change.
+              if (r.ok && r.awaitingUserTap) {
+                const title = r.title ?? (await (await import("./tasks/tasks.server")).getTaskTitle(taskId));
+                escalatedApproachByAgent.set(winner.id, { taskId, taskTitle: title, note: reason });
+                // Away-notification ONLY on the first ask of this escalation episode, and only when the
+                // owner is not already in this conversation — the row above is the surface when they
+                // are. Rides the existing durable-turn path (send_push), never a new sender.
+                if (r.fresh && data.internal) void deliverOverrideRequestNotice(winner.id, taskId, title, reason);
+              }
+              recordToolUse(
+                winner.id,
+                "request_approach_override",
+                r.ok
+                  ? r.alreadyDone
+                    ? "already unblocked"
+                    : r.alreadyRequested
+                      ? "already waiting on the user's approval"
+                      : "asked the user to approve it"
+                  : `request refused — ${r.error ?? ""}`.slice(0, 160),
+                r.ok,
+                r.ok ? undefined : r.error,
+              );
+              return JSON.stringify(
+                r.ok
+                  ? {
+                      ok: true,
+                      task_id: taskId,
+                      applied: false,
+                      approach_status: r.alreadyDone ? "approved" : "escalated",
+                      awaiting_user_tap: !!r.awaitingUserTap,
+                      already_requested: !!r.alreadyRequested,
+                      note: r.alreadyDone
+                        ? "Already approved — nothing to wait for."
+                        : "NOT approved. The user has been shown an Approve anyway button; the task stays escalated until they tap it.",
+                    }
+                  : { ok: false, applied: false, error: r.error },
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "request_approach_override", "request failed", false, msg);
+              return JSON.stringify({ ok: false, applied: false, error: msg });
+            }
+          }
+          if (c.name === "override_approach_gate") {
+            const a = c.arguments as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const ownerTurnArg = String(a.owner_turn_id ?? "").trim() || null;
+            const agentTurnArg = String(a.agent_turn_id ?? "").trim() || null;
+            if (!taskId) return JSON.stringify({ ok: false, applied: false, error: "task_id is required" });
+            try {
+              const r = await relayApproachOverride(taskId, ownerTurnArg, agentTurnArg);
+              recordToolUse(
+                winner.id,
+                "override_approach_gate",
+                r.applied
+                  ? "the user's authorisation checked out — approach approved"
+                  : `not approved — ${r.error ?? "the exchange did not authorise it"}`.slice(0, 160),
+                r.applied,
+                r.applied ? undefined : r.error,
+              );
+              return JSON.stringify(
+                r.applied
+                  ? {
+                      ok: true,
+                      task_id: taskId,
+                      applied: true,
+                      approach_status: "approved",
+                      note: "Approved on the user's own authorisation. You may proceed.",
+                    }
+                  : {
+                      ok: false,
+                      applied: false,
+                      approach_status: "escalated",
+                      error: r.error,
+                      note: "STILL BLOCKED. Do not proceed and do not tell the user it is unblocked — say what is missing, or ask them to use the Approve anyway button.",
+                    },
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "override_approach_gate", "override check failed", false, msg);
+              return JSON.stringify({ ok: false, applied: false, error: msg });
+            }
+          }
           if (c.name === "propose_approach") {
             const a = c.arguments as Record<string, unknown>;
             const taskId = String(a.task_id ?? "").trim();
@@ -3563,6 +3976,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 approach,
                 claim: claimAction,
               });
+              // An escalation is the ONE gate outcome the user has to act on, so it is the one that
+              // gets a chip. Recorded here rather than derived from the tool-use detail (the way
+              // confirmAsk is) because that detail is human prose shown in the tool chip's tooltip —
+              // turning it into JSON to carry a payload would degrade a surface the owner reads.
+              if (gate.escalated) {
+                escalatedApproachByAgent.set(winner.id, { taskId, taskTitle: title, note: gate.note });
+              }
               recordToolUse(
                 winner.id,
                 "propose_approach",
@@ -3725,6 +4145,62 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             recordToolUse(winner.id, "build_checklist", ok ? "checklist rendered" : "checklist -- failed", ok, detail);
             return out;
           }
+          // show_priorities_widget / show_schedule_widget -- the two in-chat journey widgets. Each
+          // mirrors build_checklist directly above, point for point: its OWN ledger key (so a
+          // priorities widget and a schedule widget can both render in one turn, but neither twice),
+          // the caller's resolved email, and the FULL dispatcher JSON carried back in `detail`, which
+          // is the only channel the reply-assembly has to recover the payload.
+          if (c.name === "show_priorities_widget" || c.name === "show_schedule_widget") {
+            const isPriorities = c.name === "show_priorities_widget";
+            const label = isPriorities ? "priorities widget" : "schedule widget";
+            if (!claimAction(c.name)) {
+              const dupe = JSON.stringify({
+                error: "already_rendered",
+                message: `A ${label} was already rendered this turn; refer to it instead of rendering another.`,
+              });
+              recordToolUse(winner.id, c.name, `${label} -- already rendered`, true);
+              return dupe;
+            }
+            const { dispatchPrioritiesWidget, dispatchScheduleWidget } = await import("./tasks/tools");
+            const ident = await (
+              await import("./journey/identity")
+            ).resolveJourneyIdentity(data.caller, data.timeZone);
+            const email = ident.email ?? data.caller?.entra_email;
+            const tz = ident.timeZone || data.timeZone || "UTC";
+            const args = (c.arguments ?? {}) as Record<string, unknown>;
+            const out = isPriorities
+              ? await dispatchPrioritiesWidget(email, args, tz)
+              : await dispatchScheduleWidget(email, args, tz);
+            let ok = true;
+            let detail = "";
+            try {
+              const parsed = JSON.parse(out) as { error?: string };
+              ok = !parsed.error;
+              detail = ok ? out : (parsed.error ?? "");
+            } catch {
+              ok = false;
+            }
+            recordToolUse(winner.id, c.name, ok ? `${label} rendered` : `${label} -- failed`, ok, detail);
+            return out;
+          }
+          const nexusMod = await import("./nexus/nexus.server");
+          if (nexusMod.NEXUS_TOOL_NAMES.has(c.name)) {
+            const out = await nexusMod.executeNexusTool(
+              c.name,
+              (c.arguments ?? {}) as Record<string, unknown>,
+              data.timeZone || "UTC",
+            );
+            const o = out as { ok?: boolean; count?: number; error?: unknown };
+            const okFlag = o?.ok === true;
+            recordToolUse(
+              winner.id,
+              c.name,
+              okFlag ? `${o.count ?? "ok"} row(s) from Nexus` : "Nexus read failed",
+              okFlag,
+              okFlag ? undefined : String(o?.error ?? "failed"),
+            );
+            return JSON.stringify(out);
+          }
           if (c.name === "schedule_and_priorities" || c.name === "get_calendar_events") {
             const { dispatchPrioritize } = await import("./tasks/tools");
             // One resolution gives BOTH the canonical email (to scope the read) and the canonical
@@ -3793,18 +4269,29 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               });
             }
             try {
-              const { sendGraphEmail } = await import("./email/graph-email.server");
-              const r = await sendGraphEmail({
+              const { sendOrDraftEmail } = await import("./email/graph-email.server");
+              const r = await sendOrDraftEmail({
                 to: String(a.to ?? ""),
                 subject: String(a.subject ?? ""),
                 body: String(a.body ?? ""),
                 from: a.from ? String(a.from) : undefined,
                 cc: a.cc ? String(a.cc) : undefined,
+                bcc: a.bcc ? String(a.bcc) : undefined,
+                // For the send gate's dispatch backstop only (never sent to Graph).
+                callerEmail: await resolveCallerEmail(),
+                callerAgentId: winner.id,
+                // D4b: frozen at the top of the turn, so a later `data.text` reassignment cannot
+                // change who this message is allowed to reach.
+                ownerTurnText,
               });
               recordToolUse(
                 winner.id,
                 "send_email",
-                r.ok ? `sent from ${r.from} → ${(r.to ?? []).join(", ")}` : `send failed`,
+                r.ok
+                  ? `sent from ${r.from} → ${(r.to ?? []).join(", ")}`
+                  : r.drafted
+                    ? `saved to drafts (blocked: ${(r.blockedRecipients ?? []).join(", ") || "no recipient"})`
+                    : `send failed`,
                 r.ok,
                 r.ok ? undefined : r.error,
               );
@@ -4529,6 +5016,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             task_id: z.string(),
             task_title: z.string(),
             definition_of_done: z.string(),
+            // REMIND mode only — see PROPOSE_TASK_INTENT_TOOL. Optional so produce/assist are unaffected.
+            reminder_at: z.string().optional(),
           }),
           execute: async (args) => {
             const a = args as Record<string, unknown>;
@@ -4545,8 +5034,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+              // REMIND mode carries the proposed date+time structurally so the model-free Confirm
+              // button can schedule from it. Validated here rather than trusted: a malformed or
+              // already-past timestamp drops to null, degrading to "confirmed but nothing scheduled"
+              // (reported to the user) instead of persisting an instant that silently never fires.
+              const rawWhen = typeof a.reminder_at === "string" ? a.reminder_at.trim() : "";
+              let reminderAt: string | null = null;
+              if (rawWhen) {
+                const whenMs = Date.parse(rawWhen);
+                if (Number.isFinite(whenMs) && whenMs > Date.now()) reminderAt = new Date(whenMs).toISOString();
+              }
               const { proposeTaskDod } = await import("./tasks/tasks.server");
-              await proposeTaskDod(taskId, email, dod);
+              await proposeTaskDod(taskId, email, dod, reminderAt);
               recordToolUse(
                 winner.id,
                 "propose_task_intent",
@@ -4620,6 +5119,120 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           },
         });
 
+        // request_approach_override — the agent ASKS the owner to unstick an escalated approach
+        // (mirrors the OpenAI path). It cannot apply the override; only the owner's tap can.
+        lovableTools.request_approach_override = tool({
+          description: REQUEST_APPROACH_OVERRIDE_TOOL.description,
+          inputSchema: z.object({ task_id: z.string(), reason: z.string() }),
+          execute: async (args) => {
+            const a = args as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const reason = String(a.reason ?? "").trim();
+            if (!taskId) return JSON.stringify({ ok: false, error: "task_id is required" });
+            try {
+              const email =
+                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                data.caller?.entra_email;
+              if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+              const { requestApproachOverride } = await import("./tasks/confirm-ask.functions");
+              const r = await requestApproachOverride({
+                taskId,
+                email,
+                requestedByAgent: winner.id,
+                reason,
+              });
+              if (r.ok && r.awaitingUserTap) {
+                const title = r.title ?? (await (await import("./tasks/tasks.server")).getTaskTitle(taskId));
+                escalatedApproachByAgent.set(winner.id, { taskId, taskTitle: title, note: reason });
+                if (r.fresh && data.internal) void deliverOverrideRequestNotice(winner.id, taskId, title, reason);
+              }
+              recordToolUse(
+                winner.id,
+                "request_approach_override",
+                r.ok
+                  ? r.alreadyDone
+                    ? "already unblocked"
+                    : r.alreadyRequested
+                      ? "already waiting on the user's approval"
+                      : "asked the user to approve it"
+                  : `request refused — ${r.error ?? ""}`.slice(0, 160),
+                r.ok,
+                r.ok ? undefined : r.error,
+              );
+              return JSON.stringify(
+                r.ok
+                  ? {
+                      ok: true,
+                      task_id: taskId,
+                      applied: false,
+                      approach_status: r.alreadyDone ? "approved" : "escalated",
+                      awaiting_user_tap: !!r.awaitingUserTap,
+                      already_requested: !!r.alreadyRequested,
+                      note: r.alreadyDone
+                        ? "Already approved — nothing to wait for."
+                        : "NOT approved. The user has been shown an Approve anyway button; the task stays escalated until they tap it.",
+                    }
+                  : { ok: false, applied: false, error: r.error },
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "request_approach_override", "request failed", false, msg);
+              return JSON.stringify({ ok: false, applied: false, error: msg });
+            }
+          },
+        });
+
+        // override_approach_gate — the agent RELAYS an authorisation the user just gave, by turn
+        // reference (mirrors the OpenAI path). Nothing it passes is text; the server fetches the pair.
+        lovableTools.override_approach_gate = tool({
+          description: OVERRIDE_APPROACH_GATE_TOOL.description,
+          inputSchema: z.object({
+            task_id: z.string(),
+            owner_turn_id: z.string().optional(),
+            agent_turn_id: z.string().optional(),
+          }),
+          execute: async (args) => {
+            const a = args as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const ownerTurnArg = String(a.owner_turn_id ?? "").trim() || null;
+            const agentTurnArg = String(a.agent_turn_id ?? "").trim() || null;
+            if (!taskId) return JSON.stringify({ ok: false, applied: false, error: "task_id is required" });
+            try {
+              const r = await relayApproachOverride(taskId, ownerTurnArg, agentTurnArg);
+              recordToolUse(
+                winner.id,
+                "override_approach_gate",
+                r.applied
+                  ? "the user's authorisation checked out — approach approved"
+                  : `not approved — ${r.error ?? "the exchange did not authorise it"}`.slice(0, 160),
+                r.applied,
+                r.applied ? undefined : r.error,
+              );
+              return JSON.stringify(
+                r.applied
+                  ? {
+                      ok: true,
+                      task_id: taskId,
+                      applied: true,
+                      approach_status: "approved",
+                      note: "Approved on the user's own authorisation. You may proceed.",
+                    }
+                  : {
+                      ok: false,
+                      applied: false,
+                      approach_status: "escalated",
+                      error: r.error,
+                      note: "STILL BLOCKED. Do not proceed and do not tell the user it is unblocked — say what is missing, or ask them to use the Approve anyway button.",
+                    },
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "override_approach_gate", "override check failed", false, msg);
+              return JSON.stringify({ ok: false, applied: false, error: msg });
+            }
+          },
+        });
+
         // propose_approach — pre-work approach gate (mirrors the OpenAI path).
         lovableTools.propose_approach = tool({
           description: PROPOSE_APPROACH_TOOL.description,
@@ -4646,6 +5259,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 approach,
                 claim: claimAction,
               });
+              // An escalation is the ONE gate outcome the user has to act on, so it is the one that
+              // gets a chip. Recorded here rather than derived from the tool-use detail (the way
+              // confirmAsk is) because that detail is human prose shown in the tool chip's tooltip —
+              // turning it into JSON to carry a payload would degrade a surface the owner reads.
+              if (gate.escalated) {
+                escalatedApproachByAgent.set(winner.id, { taskId, taskTitle: title, note: gate.note });
+              }
               recordToolUse(
                 winner.id,
                 "propose_approach",
@@ -4876,6 +5496,75 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           });
         }
 
+        // show_priorities_widget / show_schedule_widget — the in-chat journey widgets, present here
+        // for exactly the reason the checklist block above gives: WIDGET_SYSTEM_HINT is appended to
+        // BOTH backends' instructions, so omitting them here would tell this backend to call tools it
+        // was never offered. Same ledger keys as the OpenAI path, so a turn that somehow crossed
+        // backends still renders each widget at most once.
+        //
+        // These DO call recordToolUse, which the checklist block above does not. That is not a
+        // deviation from the pattern for its own sake: the reply-assembly recovers a widget payload
+        // ONLY from a toolUse's `detail`, so without this call the tool would fire on this backend
+        // and render nothing — the precise failure this wiring exists to fix. (The checklist has the
+        // same gap on this path; fixing it is a change to the checklist's own wiring, which this lane
+        // is not allowed to make. Recorded in docs/LANE-D-widget-tool-wiring.md.)
+        {
+          // The descriptions are reused from the tool definitions rather than retyped, so the two
+          // backends can never drift into describing the same tool differently.
+          const {
+            dispatchPrioritiesWidget,
+            dispatchScheduleWidget,
+            PRIORITIES_WIDGET_TOOL,
+            SCHEDULE_WIDGET_TOOL,
+          } = await import("./tasks/tools");
+          const runWidget = async (
+            name: "show_priorities_widget" | "show_schedule_widget",
+            args: Record<string, unknown>,
+          ) => {
+            const isPriorities = name === "show_priorities_widget";
+            const label = isPriorities ? "priorities widget" : "schedule widget";
+            if (!claimAction(name)) {
+              recordToolUse(winner.id, name, `${label} -- already rendered`, true);
+              return JSON.stringify({
+                error: "already_rendered",
+                message: `A ${label} was already rendered this turn; refer to it instead of rendering another.`,
+              });
+            }
+            const ident = await (
+              await import("./journey/identity")
+            ).resolveJourneyIdentity(data.caller, data.timeZone);
+            const email = ident.email ?? data.caller?.entra_email;
+            const tz = ident.timeZone || data.timeZone || "UTC";
+            const out = isPriorities
+              ? await dispatchPrioritiesWidget(email, args, tz)
+              : await dispatchScheduleWidget(email, args, tz);
+            let ok = true;
+            let detail = "";
+            try {
+              const parsed = JSON.parse(out) as { error?: string };
+              ok = !parsed.error;
+              detail = ok ? out : (parsed.error ?? "");
+            } catch {
+              ok = false;
+            }
+            recordToolUse(winner.id, name, ok ? `${label} rendered` : `${label} -- failed`, ok, detail);
+            return out;
+          };
+          lovableTools.show_priorities_widget = tool({
+            description: PRIORITIES_WIDGET_TOOL.description,
+            // `title` is optional on the OpenAI schema; this backend's schema mirrors that with an
+            // `.optional()` rather than the checklist's required-string, so an agent calling it with
+            // no arguments is valid here too.
+            inputSchema: z.object({ title: z.string().optional() }),
+            execute: async (args) => runWidget("show_priorities_widget", (args ?? {}) as Record<string, unknown>),
+          });
+          lovableTools.show_schedule_widget = tool({
+            description: SCHEDULE_WIDGET_TOOL.description,
+            inputSchema: z.object({}),
+            execute: async () => runWidget("show_schedule_widget", {}),
+          });
+        }
+
         // groom_backlog — gated on the data-driven grooming capability (agents.ts), with the
         // legacy id/special check kept as a non-destructive fallback (mirrors the OpenAI path).
         if (
@@ -4900,53 +5589,83 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         {
           const { emailFromOptions, graphEmailConfigured } =
             await import("./email/graph-email.server");
+          // D4b: same meaning change as the OpenAI path above - "may the TOOL be offered", not "may
+          // mail be sent". Both surfaces MUST move together; gating one and not the other is the exact
+          // defect that produced the duplicate send_email.
+          // Fails CLOSED to false (tool withheld) on any error - see canOfferSendEmailTool's contract.
+          const { canOfferSendEmailTool: canOfferSendEmailToolLovable } = await import(
+            "./identity/agent-workflow-config.server",
+          );
+          const lovableEmailSendEnabled = await canOfferSendEmailToolLovable(
+            await resolveCallerEmail(),
+            winner.id,
+          );
           if (graphEmailConfigured()) {
             const fromOpts = emailFromOptions();
-            lovableTools.send_email = tool({
-              description:
-                `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
-                `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
-                `Requires to, subject, and body. Use whenever the user asks to email someone.`,
-              inputSchema: z.object({
-                to: z.string(),
-                subject: z.string(),
-                body: z.string(),
-                from: z.string().optional(),
-                cc: z.string().optional(),
-              }),
-              execute: async (args) => {
-                const a = args as Record<string, unknown>;
-                if (!claimAction(`send_email:${a.to ?? ""}:${a.subject ?? ""}`)) {
+            // EMAIL SEND GATE (2026-09-07) - same gate as the OpenAI path above. When the owner has not
+            // flipped identity.agent_workflow_config.email_send_enabled on, `send_email` is never handed
+            // to the model on this surface either. `create_email_draft` below stays unconditional.
+            // Gating one surface and not the other is exactly the defect that produced the duplicate
+            // send_email (FIX-send-email-collision.md) - both are gated, together.
+            if (lovableEmailSendEnabled) {
+              lovableTools.send_email = tool({
+                description:
+                  `Send an email via Microsoft (Outlook/Office 365). Sends from ${fromOpts[0]} by default; ` +
+                  `set "from" to one of: ${fromOpts.join(", ")} to send from a different mailbox. ` +
+                  `Requires to, subject, and body. Use whenever the user asks to email someone. ` +
+                  `Mail addressed only to the user's own address is sent; any other recipient is saved as a DRAFT ` +
+                  `instead and the result says so — when that happens, say it was saved to drafts, never that it was sent.`,
+                inputSchema: z.object({
+                  to: z.string(),
+                  subject: z.string(),
+                  body: z.string(),
+                  from: z.string().optional(),
+                  cc: z.string().optional(),
+                }),
+                execute: async (args) => {
+                  const a = args as Record<string, unknown>;
+                  if (!claimAction(`send_email:${a.to ?? ""}:${a.subject ?? ""}`)) {
+                    recordToolUse(
+                      winner.id,
+                      "send_email",
+                      "already sent this turn — skipped duplicate",
+                      true,
+                    );
+                    return JSON.stringify({
+                      ok: true,
+                      deduped: true,
+                      message: "That email was already sent this turn.",
+                    });
+                  }
+                  const { sendOrDraftEmail } = await import("./email/graph-email.server");
+                  const r = await sendOrDraftEmail({
+                    to: String(a.to ?? ""),
+                    subject: String(a.subject ?? ""),
+                    body: String(a.body ?? ""),
+                    from: a.from ? String(a.from) : undefined,
+                    cc: a.cc ? String(a.cc) : undefined,
+                    bcc: a.bcc ? String(a.bcc) : undefined,
+                    // For the send gate's dispatch backstop only (never sent to Graph).
+                    callerEmail: await resolveCallerEmail(),
+                    callerAgentId: winner.id,
+                    // D4b: frozen at the top of the turn (see ownerTurnText's declaration).
+                    ownerTurnText,
+                  });
                   recordToolUse(
                     winner.id,
                     "send_email",
-                    "already sent this turn — skipped duplicate",
-                    true,
+                    r.ok
+                      ? `sent from ${r.from} → ${(r.to ?? []).join(", ")}`
+                      : r.drafted
+                        ? `saved to drafts (blocked: ${(r.blockedRecipients ?? []).join(", ") || "no recipient"})`
+                        : "send failed",
+                    r.ok,
+                    r.ok ? undefined : r.error,
                   );
-                  return JSON.stringify({
-                    ok: true,
-                    deduped: true,
-                    message: "That email was already sent this turn.",
-                  });
-                }
-                const { sendGraphEmail } = await import("./email/graph-email.server");
-                const r = await sendGraphEmail({
-                  to: String(a.to ?? ""),
-                  subject: String(a.subject ?? ""),
-                  body: String(a.body ?? ""),
-                  from: a.from ? String(a.from) : undefined,
-                  cc: a.cc ? String(a.cc) : undefined,
-                });
-                recordToolUse(
-                  winner.id,
-                  "send_email",
-                  r.ok ? `sent from ${r.from} → ${(r.to ?? []).join(", ")}` : "send failed",
-                  r.ok,
-                  r.ok ? undefined : r.error,
-                );
-                return JSON.stringify(r);
-              },
-            });
+                  return JSON.stringify(r);
+                },
+              });
+            }
             lovableTools.create_email_draft = tool({
               description:
                 `Save a REAL draft email to the ${fromOpts[0]} mailbox's Drafts folder (does NOT send it). ` +
@@ -5231,7 +5950,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         }
 
         {
-          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT } = await import("./tasks/tools");
+          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT } = await import(
+            "./tasks/tools"
+          );
           usedInstructions =
             appSystem +
             ragInstructions +
@@ -5240,6 +5961,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             PRIORITIZE_SYSTEM_HINT +
             "\n\n" +
             CHECKLIST_SYSTEM_HINT +
+            // Matches the OpenAI branch: both backends are offered the widget tools, so both are told
+            // when to prefer one over a prose answer.
+            "\n\n" +
+            WIDGET_SYSTEM_HINT +
             groundingBlock(!!agentBackend.webSearch);
         }
 
@@ -5554,13 +6279,60 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         console.warn("[checklist] build_checklist detail was not valid JSON; no widget rendered");
       }
     }
+    // The two in-chat widgets, recovered exactly as the checklist above is: the dispatcher put its
+    // whole JSON result in the toolUse's `detail`, so the payload comes back with no second read.
+    //
+    // Unlike the checklist, these are NOT re-mapped field by field. The payload is Lane B's own
+    // `PrioritiesWidgetData`/`ScheduleWidgetData`, composed by `buildPrioritiesBand` /
+    // `buildScheduleSections` and consumed verbatim by the same `PrioritiesWidget`/`ScheduleWidget`
+    // components the docked copies use — so a re-map here would be a SECOND definition of that
+    // contract, and any field Lane B adds would be silently dropped by this function rather than
+    // reaching the card. What is checked is only what makes the payload renderable at all: it parsed,
+    // `ok` is true, and the section the card is built from is an array. An empty array is a VALID
+    // result (the widgets render their own labelled empty states), so emptiness is NOT a rejection —
+    // that is the one place this differs from the checklist, which suppresses a zero-row card.
+    let replyPriorities: PrioritiesWidgetData | undefined;
+    let replySchedule: ScheduleWidgetData | undefined;
+    const widgetDetail = (name: string): unknown => {
+      const use = r.toolUses.find((t) => t.tool === name && t.ok && typeof t.detail === "string");
+      if (!use) return undefined;
+      try {
+        return JSON.parse(use.detail as string) as unknown;
+      } catch {
+        console.warn(`[widget] ${name} detail was not valid JSON; no widget rendered`);
+        return undefined;
+      }
+    };
+    {
+      const parsed = widgetDetail("show_priorities_widget") as { priorities?: unknown } | undefined;
+      const p = parsed?.priorities as PrioritiesWidgetData | undefined;
+      if (parsed) {
+        if (p && p.ok === true && Array.isArray(p.band)) replyPriorities = p;
+        else console.warn("[widget] show_priorities_widget returned an unexpected shape; no widget rendered");
+      }
+    }
+    {
+      const parsed = widgetDetail("show_schedule_widget") as { schedule?: unknown } | undefined;
+      const s = parsed?.schedule as ScheduleWidgetData | undefined;
+      if (parsed) {
+        if (s && s.ok === true && Array.isArray(s.todaySchedule)) replySchedule = s;
+        else console.warn("[widget] show_schedule_widget returned an unexpected shape; no widget rendered");
+      }
+    }
+    // An approach this agent proposed THIS turn was escalated — attach the "Approve anyway" row to its
+    // own reply, the same scoping rule confirmAsk uses: the ask belongs to the agent whose turn raised
+    // it, so it is keyed by that agent rather than broadcast to whoever happens to speak next.
+    const replyOverrideAsk = escalatedApproachByAgent.get(nextId);
     replies.push({
       agentId: nextId,
       text: safeText,
       fallbackNotes: outcome.perAgentFallbacks.length > 0 ? outcome.perAgentFallbacks : undefined,
       artifacts: replyArtifacts.length ? replyArtifacts : undefined,
       confirmAsk: replyConfirmAsk,
+      overrideAsk: replyOverrideAsk,
       checklist: replyChecklist,
+      priorities: replyPriorities,
+      schedule: replySchedule,
     });
     spoken.add(nextId);
 
@@ -6549,9 +7321,33 @@ async function executeClaimedTurn(record: {
  * heartbeat finishes it — either way the result lands in the durable store and is delivered on
  * return. Returns the result when the fast path completes; the client also polls `getTurnUpdates`.
  */
-export const enqueueHuddleTurn = createServerFn({ method: "POST" })
-  .inputValidator((raw: unknown) => EnqueueTurnInput.parse(raw))
-  .handler(async ({ data }) => {
+/**
+ * THE DURABLE TURN PATH, as a plain function -- persist to `chat.pending_turns`, claim it, run it.
+ *
+ * Extracted from `enqueueHuddleTurn`'s handler (its behaviour is unchanged; the server fn now calls
+ * this) so a SECOND entrypoint can reach the same path without going through a TanStack server
+ * function. The cross-app HTTP route (`/api/public/run-agent-turn`) is that second entrypoint: it
+ * called `runHuddleTurn` DIRECTLY, so a forwarded turn ran to completion and left NO row in
+ * `chat.pending_turns` -- invisible in the Huddle UI, absent from `getTurnUpdates`, and not counted
+ * alongside the turns the owner typed (AC B1-B4).
+ *
+ * `sendHuddleMessage` is NOT the model to copy here, despite being the other "client" entrypoint:
+ * it also calls `runHuddleTurn` directly and is just as store-blind. `enqueueHuddleTurn` is what
+ * `HuddleView.tsx` (the text UI), `useVoiceCallRealtime.ts` and `MeetingBar.tsx` actually use.
+ *
+ * `notify` rides on the payload rather than through `Input`: `executeClaimedTurn` reads it off the
+ * stored `record.payload`, which is exactly how `autowork.server.ts` sets "batch" today. It is not
+ * in the zod schema, so it is passed through here explicitly instead of being silently stripped.
+ */
+export async function runDurableHuddleTurn(
+  data: z.infer<typeof EnqueueTurnInput> & { notify?: "push" | "batch" | "silent" },
+): Promise<{
+  turnId: string;
+  status: string;
+  result: HuddleTurnResult | null;
+  error: string | null;
+}> {
+  {
     const { turnId, ...turnData } = data;
     // Resolve the sign-in email (possibly an alias) to the canonical journey email for push targeting.
     let email: string | null = null;
@@ -6603,7 +7399,7 @@ export const enqueueHuddleTurn = createServerFn({ method: "POST" })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(
-        `[enqueueHuddleTurn] unhandled error (turn ${turnId}, huddle ${data.huddleId}):`,
+        `[runDurableHuddleTurn] unhandled error (turn ${turnId}, huddle ${data.huddleId}):`,
         err,
       );
       return {
@@ -6613,7 +7409,12 @@ export const enqueueHuddleTurn = createServerFn({ method: "POST" })
         error: message,
       };
     }
-  });
+  }
+}
+
+export const enqueueHuddleTurn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => EnqueueTurnInput.parse(raw))
+  .handler(async ({ data }) => runDurableHuddleTurn(data));
 
 /** The public VAPID key the browser needs to create a push subscription (null if push isn't set up). */
 export const getPushConfig = createServerFn({ method: "GET" }).handler(async () => {
@@ -6643,7 +7444,10 @@ type TurnUpdateDTO = {
     text: string;
     artifacts?: { id: string; name: string }[];
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+    overrideAsk?: { taskId: string; taskTitle: string; note?: string };
     checklist?: ChecklistPayload;
+    priorities?: PrioritiesWidgetData;
+    schedule?: ScheduleWidgetData;
   }[];
   result: HuddleTurnResult | null;
 };
@@ -6666,10 +7470,15 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
         error: t.error,
         updated_ms: t.updated_ms,
         seq: t.seq,
-        // ONLY for genuine user turns. submit() ids every user turn `u-<ms>`; every agent-INITIATED
-        // turn (autowork/standup/groom/followup) uses a semantic prefix and stores its INTERNAL
-        // DIRECTIVE in payload.text — surfacing that would render the directive as a "You" message.
-        userText: (/^u-\d+$/.test(t.id) ? ((t.payload as { text?: string } | null)?.text ?? null) : null) as
+        // ONLY for genuine user turns, and `isUserTurn` owns that rule for all three call sites.
+        // TWO shapes qualify: submit()'s `u-<ms>` for an interactively-typed turn, and `xapp-<sha>`
+        // for one forwarded from another app's front door -- also the user talking. The second was
+        // nulled here until 2026-09-08, which is exactly why a Nexus exchange rendered in the Huddle
+        // 1:1 as Elle's replies with nothing said to her: one side of the conversation.
+        // Every agent-INITIATED turn (autowork/standup/groom/followup) uses a different semantic
+        // prefix and stores its INTERNAL DIRECTIVE in payload.text -- surfacing that would render the
+        // directive as a "You" message, so those still resolve to null. That guard is unchanged.
+        userText: (isUserTurn(t.id) ? ((t.payload as { text?: string } | null)?.text ?? null) : null) as
           | string
           | null,
         replies: (t.replies ?? []) as {
@@ -6677,7 +7486,10 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
           text: string;
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+          overrideAsk?: { taskId: string; taskTitle: string; note?: string };
           checklist?: ChecklistPayload;
+          priorities?: PrioritiesWidgetData;
+          schedule?: ScheduleWidgetData;
         }[],
         result: (t.result ?? null) as HuddleTurnResult | null,
       }));
@@ -6742,7 +7554,10 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         text: string;
         artifacts?: { id: string; name: string }[];
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+        overrideAsk?: { taskId: string; taskTitle: string; note?: string };
         checklist?: ChecklistPayload;
+        priorities?: PrioritiesWidgetData;
+        schedule?: ScheduleWidgetData;
       }[];
       // Tool-use breadcrumbs for away/cross-device turns — the client filters per agent + drops tool_catalog.
       toolUses?: import("../data/seed").ToolUseEvent[];
@@ -6778,7 +7593,10 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         text: string;
         artifacts?: { id: string; name: string }[];
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+        overrideAsk?: { taskId: string; taskTitle: string; note?: string };
         checklist?: ChecklistPayload;
+        priorities?: PrioritiesWidgetData;
+        schedule?: ScheduleWidgetData;
       }[],
       toolUses: ((t.result as { toolUses?: unknown } | null)?.toolUses ?? undefined) as
         | import("../data/seed").ToolUseEvent[]

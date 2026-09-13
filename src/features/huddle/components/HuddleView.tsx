@@ -23,11 +23,21 @@ import {
   Pause,
   CircleStop,
   ListChecks,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
-import { breadcrumbToolsFor, type ChecklistPayload, type Huddle, type HuddleMessage, type ToolUseEvent } from "../data/seed";
+import {
+  breadcrumbToolsFor,
+  type ChecklistPayload,
+  type Huddle,
+  type HuddleMessage,
+  type ToolUseEvent,
+} from "../data/seed";
+// The widget payload contract is Lane B's (lib/tasks/widgets.server.ts). Type-only import — that
+// module is deliberately dependency-free, so nothing server-side reaches the client bundle.
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
 import {
   enqueueHuddleTurn,
   getTurnUpdates,
@@ -35,10 +45,17 @@ import {
   listCeremonyRuns,
 } from "../lib/huddle.functions";
 import { uploadChatAttachmentFn } from "../lib/artifacts/attachments.functions";
+import { userTurnTs } from "../lib/turn-identity";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
-import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind } from "../store";
+import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind, type View } from "../store";
+import {
+  DockedJourneyWidgets,
+  PrioritiesWidget,
+  ScheduleWidget,
+  WIDGET_DOCK_HUDDLE_ID,
+} from "./JourneyWidgets";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useDictation } from "../hooks/useDictation";
 import { usePush } from "../hooks/usePush";
@@ -46,11 +63,13 @@ import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useAuth } from "@/hooks/useAuth";
 import {
   confirmTaskFromButtonFn,
+  overrideApproachFromButtonFn,
   backlogTaskFromButtonFn,
   parkTaskFromButtonFn,
 } from "../lib/tasks/confirm-ask.functions";
 
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
+import { ViewSwitcher } from "./ViewSwitcher";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -69,29 +88,21 @@ export function HuddleView() {
     () => allMessages.filter((m) => m.huddleId === activeId),
     [allMessages, activeId],
   );
-  const view = useHuddleStore((s) => s.view);
-  const setView = useHuddleStore((s) => s.setView);
-
   if (!huddle) return null;
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <HuddleHeader huddle={huddle} view={view} setView={setView} />
+      <HuddleHeader huddle={huddle} />
       <Transcript messages={messages} huddle={huddle} />
       <Composer huddle={huddle} />
     </section>
   );
 }
 
-function HuddleHeader({
-  huddle,
-  view,
-  setView,
-}: {
-  huddle: Huddle;
-  view: "huddle" | "board" | "artifacts";
-  setView: (v: "huddle" | "board" | "artifacts") => void;
-}) {
+// `view`/`setView` used to be threaded down here as props for the inline switcher. ViewSwitcher
+// reads them from the store itself, the same way Rail does, so the plumbing is gone rather than
+// left dangling.
+function HuddleHeader({ huddle }: { huddle: Huddle }) {
   const startMeeting = useHuddleStore((s) => s.startMeeting);
   const patchMeeting = useHuddleStore((s) => s.patchMeeting);
   const { user } = useAuth();
@@ -167,23 +178,11 @@ function HuddleHeader({
       </div>
 
       <div className="ml-auto flex items-center gap-2">
-        <div className="inline-flex rounded-lg border border-hairline bg-surface p-0.5">
-          {(["huddle", "board", "artifacts"] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setView(v)}
-              className={cn(
-                "rounded-md px-3 py-1 text-xs font-medium capitalize transition",
-                view === v
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {v === "huddle" ? "Huddle" : v === "board" ? "Board" : "Files"}
-            </button>
-          ))}
-        </div>
+        {/* The incumbent switcher, extended from three entries to five and lifted into ViewSwitcher
+            so the header and the phone's bottom bar cannot drift apart. Hidden below `md`, which is
+            exactly where the bottom bar takes over (HuddleApp) — the two are complementary, so
+            precisely one is on screen at any width. They used to BOTH render at 390px, stacked. */}
+        <ViewSwitcher variant="inline" className="app-hidden md:inline-flex" />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -317,6 +316,15 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
             {dayLabel}
           </span>
         </div>
+
+        {/* DOCKED journey widgets — Iris's 1:1 only. Rendered here, INSIDE the scrolling transcript
+            but OUTSIDE `messages`, which is the whole point: `history` (and so every turn's model
+            payload) and the unread watermark are both built from `messages`, so a "pinned message"
+            would have leaked a widget payload into every prompt and into the scrollback the user
+            reads. This is present whether or not a tool ever fired, scrolls away with the history
+            like a channel header, and costs the conversation nothing.
+            See docs/LANE-C-widget-ui.md → "Docking interpretation". */}
+        {huddle.id === WIDGET_DOCK_HUDDLE_ID && <DockedJourneyWidgets />}
 
         {messages.map((m) => (
           <MessageRow key={m.id} m={m} huddle={huddle} />
@@ -703,6 +711,86 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
   );
 }
 
+/**
+ * The "Approve anyway" row — the owner's way out of an escalated approach gate, in the thread where
+ * they were told about it.
+ *
+ * This row is the whole answer to the owner's actual complaint ("I cannot unstick a task"). The server
+ * fn behind it existed nowhere the owner could reach before: escalation reached ZERO components, so a
+ * task could be permanently stuck with the only signal being an agent saying so in prose. Modelled on
+ * ConfirmAskRow above, deliberately — same button styling, same resolved badge, same model-free path.
+ *
+ * NO QUOTE IS ASKED FOR HERE. A click is already a user act: it carries an authenticated session no
+ * model can forge. The transcript-quote check exists for the TOOL, where the caller is a model.
+ */
+function OverrideAskRow({ m }: { m: HuddleMessage }) {
+  const { user } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const ask = m.overrideAsk;
+  if (!ask) return null;
+  if (ask.resolved) {
+    return (
+      <div className={cn(CONFIRM_ASK_BTN, "mt-2 text-muted-foreground")}>
+        <Check size={12} /> Approved — they'll pick it back up
+      </div>
+    );
+  }
+  const caller = user
+    ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+    : undefined;
+  async function approveAnyway() {
+    setBusy(true);
+    try {
+      const res = await overrideApproachFromButtonFn({ data: { caller, taskId: ask!.taskId } });
+      if (res.ok) {
+        useHuddleStore.getState().resolveOverrideAsk(m.id);
+        if (!res.alreadyDone) toast.success("Approved — the team can run with it");
+      } else {
+        // Never a silent failure: telling the owner "unstuck" about a task that is still stuck is the
+        // one outcome worse than the error itself.
+        toast.error(res.error ?? "Couldn't approve that.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2">
+      <div className="flex items-start gap-1.5 text-xs text-foreground">
+        <AlertTriangle size={12} className="mt-0.5 shrink-0 text-destructive" />
+        <span className="min-w-0">
+          <span className="font-semibold">Stuck on your call.</span>{" "}
+          {ask.taskTitle ? <span className="italic">“{ask.taskTitle}”</span> : "This task"} didn't get
+          past the approach review, so nobody is working it until you say so.
+        </span>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={approveAnyway}
+          className={cn(CONFIRM_ASK_BTN, "font-semibold")}
+        >
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} style={{ color: "var(--ai)" }} />}
+          Approve anyway
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            useHuddleStore
+              .getState()
+              .setDraftPrefill(`Here's what you were missing on "${ask.taskTitle}": `)
+          }
+          className={CONFIRM_ASK_BTN}
+        >
+          Give them what's missing
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
   if (m.author.kind === "user") {
     return (
@@ -826,7 +914,20 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
           </div>
         )}
         {m.checklist && <ChecklistCard m={m} />}
+        {/* In-chat widget cards, rendered from the message's own SNAPSHOT payload (the docked copy
+            above reads live instead). Same placement and same conditional shape as the checklist. */}
+        {m.priorities && (
+          <div className="mt-2">
+            <PrioritiesWidget data={m.priorities} />
+          </div>
+        )}
+        {m.schedule && (
+          <div className="mt-2">
+            <ScheduleWidget data={m.schedule} />
+          </div>
+        )}
         {m.confirmAsk && <ConfirmAskRow m={m} />}
+        {m.overrideAsk && <OverrideAskRow m={m} />}
       </div>
     </div>
   );
@@ -1012,12 +1113,20 @@ function Composer({ huddle }: { huddle: Huddle }) {
           text: string;
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+          overrideAsk?: { taskId: string; taskTitle: string; note?: string };
           checklist?: ChecklistPayload;
+          // MUST be declared here AND at HuddleApp's copy of this DTO. This shape is re-declared
+          // inline at both mapping sites and an undeclared field is dropped SILENTLY — no error, no
+          // crash — so a widget would decay into plain text after a reload with nothing to blame.
+          priorities?: PrioritiesWidgetData;
+          schedule?: ScheduleWidgetData;
         }[]
       | undefined,
     result: TurnResult,
     final: boolean,
     userText?: string | null,
+    /** Server-supplied timestamp, for a turn id that does not embed one (cross-app). */
+    updatedMs?: number,
   ) {
     const state = useHuddleStore.getState();
     // Re-add the user's OWN message for this turn from the durable store. The turn (chat.pending_turns)
@@ -1030,8 +1139,13 @@ function Composer({ huddle }: { huddle: Huddle }) {
     // agent-INITIATED turn (autowork/standup/groom/followup) stores its internal directive in the same
     // payload field — surfacing it would render the directive as a "You" bubble. The server already nulls
     // userText for those; this is defense-in-depth in case a stale server build still sends it.
-    const um = /^u-(\d+)$/.exec(turnId);
-    const ut = um ? (userText ?? "").trim() : "";
+    // `userTurnTs` replaces the inline `/^u-(\d+)$/` this used to run. That regex answered TWO
+    // questions at once -- "is this the user talking" and "at what time" -- and both answers were
+    // wrong for a turn forwarded from another app: its id is `xapp-<sha>`, so the user's half was
+    // dropped and, had the shape check alone been widened, the message would have rendered at NaN.
+    // Agent-initiated turns still return null and still never render as "You".
+    const uts = userTurnTs(turnId, updatedMs ?? 0);
+    const ut = uts !== null ? (userText ?? "").trim() : "";
     if (ut) {
       const existing = state.messages.find((m) => m.id === turnId);
       if (!existing || existing.text !== ut) {
@@ -1040,7 +1154,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
           huddleId: huddle.id,
           author: { kind: "user" },
           text: ut,
-          ts: existing?.ts ?? Number(um![1]),
+          ts: existing?.ts ?? uts!,
         });
       }
     }
@@ -1069,7 +1183,10 @@ function Composer({ huddle }: { huddle: Huddle }) {
         artifacts: reply.artifacts,
         toolUses: crumbs,
         confirmAsk: reply.confirmAsk,
+        overrideAsk: reply.overrideAsk,
         checklist: reply.checklist,
+        priorities: reply.priorities,
+        schedule: reply.schedule,
       });
     });
 
@@ -1356,7 +1473,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
         for (const t of turns) {
           cursor = Math.max(cursor, t.updated_ms);
           if (t.status === "done") {
-            applyTurnStream(t.id, t.replies, t.result as TurnResult, true, t.userText);
+            applyTurnStream(t.id, t.replies, t.result as TurnResult, true, t.userText, t.updated_ms);
             clearPendingFor(t.id);
           } else if (t.status === "error") {
             toast.error((t.error as string) || "That turn hit an error.");
@@ -1364,7 +1481,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
           } else {
             // 'partial' | 'running' — stream the replies produced so far and KEEP the typing indicator
             // up (do NOT clear pending) until the turn reaches 'done'/'error'.
-            applyTurnStream(t.id, t.replies, null, false, t.userText);
+            applyTurnStream(t.id, t.replies, null, false, t.userText, t.updated_ms);
           }
         }
       } catch {

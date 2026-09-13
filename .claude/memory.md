@@ -1,7 +1,43 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-08-25
+Last updated: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
+Previous: 2026-09-08 — **the assignment-widget spec's action registry is BUILT in nexus** (see
+`docs/specs/assignment-widget.md` §5.2b, huddle PR #53): the spec PROPOSED
+`nexus-hub/api/src/shared/assignmentActions.ts` and nexus-hub PR #87 built it there, closing the
+"who builds the registry" split the owner named. What shipped is the COVERAGE half (id, endpoint,
+gate, plus chainsTo/chainGateSetting/requires/produces, and a 39-check parity test that fails the
+build when nexus grows an action with no row). What did NOT ship is the EXECUTION half —
+`uiLabel`/`modelDescription`, typed `args`, and `mutating` — so §5.3's "both surfaces render FROM
+it" is **not yet true**. Two nexus facts the widget's gate design must absorb: the owner chose
+**option C** (nexus requirement rows unscope from `workflow_type`, so a widget section keyed on a
+workflow type is keyed on something going away), and a **live note-misattribution defect** was
+proven on his own assignment `5785e241` — per-question notes keyed by ARRAY INDEX resolve to a
+different requirement under a different lane, so **the widget must never key anything on an array
+index into a requirement list**.
+
+(previous header) Last updated: 2026-08-25
 
 ## Hardening — the phase-tag gate was GREEN while 67% of output was non-compliant (2026-08-25)
+
+- [2026-09-02] **Hardening — I rebuilt a system that already existed, because I trusted a LOCAL clone.**
+  Asked to cut token usage, I hand-wrote a bounded multi-repo SessionStart brief script. `setup.sh`
+  **already had one** (`eds-session-memory.py`, v30) and better — it also fixed a bug I never found
+  (`||` binds to a PIPELINE whose exit status is always `head`'s, so one fallback had **never once
+  fired**). Root cause: this session was pinned at hook **v16** while upstream was **v30**, *and* the
+  local `eds-claude-skills` clone was ALSO v16 — so both I and the AC subagent I spawned reasoned from a
+  14-version-old baseline, and two of that review's headline findings were **already fixed upstream**.
+  **The guard: before building ANY shared-tooling improvement, run `sync-setup-script` and compare
+  `CURRENT_VERSION` in `/workspace/eds-claude-skills` against the installed `_eds_version`.** A local
+  clone is not evidence of what the org has — this is the "answered from a proxy, not ground truth"
+  failure applied to tooling instead of data. Cost: ~25k tokens of duplicated work in one turn, on a
+  task whose entire purpose was to REDUCE token use.
+  **What actually fixed the problem was running the existing skill**: the brief went from
+  *98,897 bytes OR silently empty depending on cwd* → a bounded, correct **27,352 bytes**.
+  **Second lesson, for the next efficiency pass:** the largest single item measured all day was ONE MCP
+  tool result at **~24.5k tokens** — bigger than the entire Huddle `CLAUDE.md` I was proposing to split.
+  Tool-result hygiene (`minimal_output`, `tail_lines`, psql `-t -A`) may dominate instruction-file size
+  entirely. Measure the tool results before restructuring the instruction files.
+  Brief for an independent second opinion: `docs/CONTEXT-EFFICIENCY-BRIEF.md` (`738c8b5`); 3 owner
+  decisions open — see ACT-huddle-70.
 
 - [2026-08-26] **Memory dedup cleanup — 137 duplicate `rag_chunks` removed (owner-authorised, one transaction).**
   Before: 716 rows / 579 distinct / **137 exact duplicates** (`"let's run the daily stand-up"` ×36, `"Hey, Sam."` ×11).
@@ -70,6 +106,31 @@ Last updated: 2026-08-25
   RANKS on `created_at`; `searchChunks` orders purely by vector distance and only displays it. Same-looking
   field, different load-bearing status — copying the chunks decision across would have made a fact the user
   keeps re-asserting rank as the stalest thing in the store.
+
+- [2026-08-26] **Hardening — a correct-looking READ narrowing promoted a latent WRITE bug into a real one
+  (`5002158`).** The verifier demonstrated it: the supersede `UPDATE` keyed on `(scope, subject,
+  predicate)` while the dedup index keys on `(scope, coalesce(agent_id,''), …)`. Under `scope='agent'`
+  that mismatch let ONE agent's write supersede a DIFFERENT agent's fact, and `huddle.functions.ts` calls
+  `writeTriples` once per `privateAgents` member. Pre-existing — but **adding `excludeSuperseded` to
+  `lookup_facts` amplified it**: previously the wrongly-superseded row was still returned, so the owning
+  agent could still see its fact; after that change it became permanently invisible.
+  **Two generalisable rules, both earned here:**
+  1. **Any predicate that decides WHICH ROWS A WRITE MAY TOUCH must use the SAME key as the index that
+     defines "the same row".** When they disagree, the disagreement is silent.
+  2. **A change that hides rows needs a check of what else decides which rows get hidden.** Narrowing a
+     read is where latent write bugs stop being latent.
+  **Blast radius measured before claiming anything (run `32998817997`, marker-matched):
+  `agent_scoped_triples = 0`** — the store holds NO `scope='agent'` triples, and
+  `superseded_agent_rows_with_a_live_twin_under_a_different_agent = 0`. So the bug never fired on real
+  data; it was latent on an empty path. Fixed anyway, since private-mode writes would have hit it.
+  **Also open, low priority:** superseded duplicates still accrue (**7 groups / 18 excess rows**) and,
+  after `1cbb976`, **nothing in `src/` reads them** — both `lookupTriples` call sites now exclude them.
+  Dead weight, not a correctness issue.
+  **C3 stands UNPROVEN by design and I am not going to dress it up:** the cleanup's merge (max-confidence
+  / authors into each survivor) cannot be re-verified, because the 35 sibling rows it merged from are
+  gone. The `ROLLBACK` rehearsal showing 24/24 is the strongest evidence that exists and it is NOT proof
+  of the committed run. **Lesson for the next destructive migration: capture the pre-state into a table
+  inside the same transaction, so the claim stays falsifiable afterwards.**
 
 - [2026-08-26] **APPLIED to production (run `32997278076`, COMMIT).** `rag_triples` **500 → 465 total,
   435 → 400 live**; `DELETE 35`; `live_dup_groups_remaining 0`; `rag_triples_dedup_idx` created. Both
@@ -1357,6 +1418,36 @@ it does not reflect the user. Accurate harness: `e2e/realtime-speak-multiturn.e2
   can kill a genuine BARGE-IN reply. FIX: drop the manual response.cancel (let interrupt_response handle
   barge); test the barge-in variant (phrase 2 over the still-playing turn-1 reply) to nail it.
 
+## The approach gate's `escalated` is a TERMINAL state — read this before touching the gates (2026-09-12)
+
+Diagnosed from Cole Blake's live transcript; NO code changed yet, fork awaiting the owner.
+
+`approach_status` is `pending|approved|escalated`. Three rejected approach revisions writes `'escalated'`,
+and **`approach-gate.server.ts:65-66` returns on `escalated` BEFORE calling the grader** — so a
+resubmitted approach is never re-graded. The task is stuck permanently.
+
+**And there is no user override anywhere in the product.** Swept the whole agent tool surface (ten tools:
+ask_clarifying_question, build_checklist, confirm_task_intent, flag_blocker, groom_backlog,
+propose_approach, propose_task_intent, resolve_clarifying_question, schedule_and_priorities,
+schedule_reminder) — none encodes "the user said proceed anyway." The only thing that clears `escalated`
+is `resetEngagementOnReassignment()`, which fires solely on a grooming reassignment to a DIFFERENT agent.
+
+**The cruel detail worth remembering:** the gate's own note reads *"already escalated to the user —
+address it with them directly"* — it instructs a conversation with the user that is given no power to
+change the state. The agent does exactly as told and the user is still stuck, which is precisely how the
+owner experienced it: *"I have no way of telling it to tell the reviewer I said it can override."*
+
+**This is the fail-CLOSED family and it must stay fail-closed** (see the 2026-08-05 leak below) — the fix
+is an EXPLICIT, RECORDED override, never loosening the grader.
+
+## The produce-vs-quick prompt is a hardcoded literal, not agent speech (2026-09-12)
+
+`huddle.functions.ts:1624`. One string in the SHARED turn path, fired on `routed.difficulty >= 3`:
+*"That's a meaty one. Want me to produce it … or would a quick take right here do for now?"*
+It bypasses the persona layer, so EVERY agent says it identically — which is why the owner read it as
+hard-headed. When a canned line is reported as "the agents sound robotic", check for a literal in the
+shared path before touching any prompt: the snapshot layer is not always the source of an agent's words.
+
 ## Active work — 1:1 VOICE latency (journey-speed) — plan + premise CONFIRMED, build next (2026-08-01)
 User complaint: "the delay for my convo with Flex to SPEAK takes way too long, much longer than journey."
 It's a VOICE latency ask (not text). Today's 1:1 voice is SLOW because Realtime is ears-only
@@ -1481,6 +1572,87 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+**ACT-65 — grooming FORCES an agent owner on every task; that one line causes the overreach (2026-08-26).**
+Read before touching task assignment, grooming, or the confirm-intent gate.
+`groom.ts:122-127` instructs *"assign it to exactly ONE agent… Include every task id exactly once"* with
+a schema requiring `assigned_agent`. There is no "this stays with the user" outcome, so an errand like
+"Order replacement tire" MUST get an owner; auto-work then picks it up *because it is assigned*, and the
+agent invents a deliverable for work it cannot do. This is the upstream cause of: agents proposing
+impossible work, 34 tasks frozen at `confirm_status='asked'` (oldest 21 days), and the user's
+*"it's still me doing the work."* The downstream half already behaves: `autowork.server.ts:540` and
+`:370` both skip a task with no `assigned_agent`, and unassigned is already representable in the data.
+
+**The fix is a `reminder` TAG, not a new mode or a new lane** — the user's design, chosen over mine:
+tags already exist, grooming already writes them, they render on the card, they are correctable and
+queryable. Same shape as the documented parking-lot precedent. The tag FEEDS `classifyTaskMode`
+(which already reads tags); it does not bypass it. **The processing window is the pending
+`chat.reminders` row — NOT a dated tag string.** Encoding an expiry into a TEXT[] would mean parsing
+dates out of strings and would drift from the real reminder; the row is the single source of truth
+(needs only an additive `task_id` column).
+**Two constraints that are easy to lose:** a reminder task must NOT occupy a WIP/UP_NEXT slot (17 of
+them would starve real work out of the lane), and the reminder FIRING must ask "did this happen?" —
+without it these silently re-accumulate in BACKLOG, which is the same silent-pile failure in a new column.
+
+**ACT-64 — confirm-ask visibility: buttons, re-ask, and a lying standup (2026-08-26, IN PROGRESS).**
+Read this before touching the confirm-intent gate, the standup, or `artifacts.items` reads.
+
+**The three facts that took two wrong answers to reach:**
+1. **The 4 confirm buttons ARE deployed and ARE conditional on the MODEL.** `ConfirmAskRow`
+   (Confirm/Revise/Backlog/Archive) renders only when a reply carries `confirmAsk`, which comes ONLY from the
+   agent calling `propose_task_intent`. `confirmIntentDirective` just asks for that in prose. Prose-only
+   reach-out ⇒ no buttons. Do NOT diagnose this as "not deployed" — `claude/confirm-ask-buttons` is merged.
+2. **The re-ask was SPECCED, never built** (`docs/plan-wip-confirm-review-gate.md` #6). `markConfirmAsked` is
+   one-way awaiting→asked; `autowork.server.ts:701` literally says *"already sent … nothing to do this pass"*;
+   `reArmConfirmAskAt` matches only `WHERE confirm_status='awaiting'` so it can never touch an asked row.
+   34 OPEN tasks are stuck, oldest 21 days. Absence verified by an ALL-BRANCH sweep, not a single-file grep.
+3. **The standup reports the USER'S OWN chat uploads as agent-completed work.** `listArtifacts(email)` is
+   called with NO folder/status filter; chat attachments are written `agentId`=addressed agent,
+   `folder:"Uploads"`, `status:"approved"` ("an input, not a deliverable to review"). Live: 0 tasks IN_REVIEW,
+   29 Uploads/approved rows. **There is NO confirm-gate leak** — that worry is retired.
+
+**HARD-WON PROCESS LESSON (cost two wrong answers in one turn):** the user asked "did you read the transcript?"
+and the answer was no — I had asserted what an agent SAID from the ABSENCE of a task row. `chat.pending_turns`
+`payload->>'text'` is the DIRECTIVE (system-authored); the agent's actual words are in `replies` /
+`result->'replies'`. **Reading the directive is not reading the transcript.** Separately, I reported a query's
+`LIMIT 25` as a count. Both are the same failure: answering from a proxy. The user's own observation ("the board
+shows nothing in review") is what cracked finding 3 — treat their observation as the fact to EXPLAIN, never to
+contradict.
+
+**REVISED SCOPE (user, 2026-08-26) — supersedes the earlier "re-ask backfill + roll-up" plan. FOUR items:**
+1. **Assist-mode tasks must propose an agent-EXECUTED slice, never a plan for the user to follow.** User:
+   *"they keep getting assigned tasks they can't achieve, like go to the bank, and instead of it being treated
+   as a support vs do task as we designed it gives me a plan to do it. id expect most tickets to be research
+   tickets or the plan they are communicating being a portion they can actually do to help me… whether it's
+   remind me, find store hours, research, plan, outline, draft etc."*
+   **Diagnosis (read before editing): `classifyTaskMode` is CORRECT** — "Go to the bank" matches `ASSIST_VERBS`
+   on `go` → assist. The defect is `modeProposalHint`'s ASSIST branch (`lib/tasks/workability.ts`): it states
+   what NOT to do ("not a document about it") with vague examples ("prep the options they'll choose from") and
+   **never says the deliverable must be something the AGENT performs**. So the model returns a to-do plan.
+   Fix direction: demand a concrete agent-executed deliverable, explicitly ban "step-by-step instructions for
+   the user" as an assist outcome, and ground the menu in the agent's REAL tools so it scales per agent
+   (repo rule: systematic capability, never a hardcoded example list).
+2. **Re-ask cadence = every 24 HOURS** (not "a few days").
+3. **Reset the jam by RE-GROOMING, not by back-filling re-asks** — stuck tasks back to BACKLOG, confirm state
+   cleared, then run grooming. Bulk LIVE-BOARD mutation: capture prior state, show the user the scope, then execute.
+4. Standup must stop crediting the user's own uploads to agents (unchanged).
+
+**AC pass result — INTERRUPTED, but 262 lines survived** (`.claude/AC-confirm-ask-fixes.md`): feasibility
+table, both blockers, and all of Fix A. Fix B/C ACs were never written. It survived ONLY because the brief
+required incremental file writes — keep that pattern on every spawn.
+**TWO BLOCKERS that still bind under the revised scope:**
+- **A-blocker:** `confirmTaskFromButtonFn` (`confirm-ask.functions.ts:36-39`) rejects an empty `proposed_dod`
+  with *"No proposed plan found for this reach-out — it may be stale."* `proposed_dod` is written ONLY by
+  `propose_task_intent`. So forcing the buttons to always render WITHOUT making the DoD deterministic yields a
+  Confirm that reliably FAILS on exactly the reach-outs the fix exists to rescue. (Item 1 helps here: a concrete
+  assist DoD is what makes Confirm worth having.)
+- **B-blocker:** `fireDueConfirmAsks` enqueues `autowork-confirm-${task_id}` with NO run id; `enqueueTurn` is
+  `ON CONFLICT (id) DO NOTHING`; and the call site IGNORES the returned boolean and increments `fired++` anyway.
+  A re-ask on that path **inserts nothing, reaches the user never, and reports success.** The other site
+  (`autowork.server.ts:735`) uses a per-pass-unique id — so the two paths differ and testing only the cadence
+  path hides it. Any 24h re-ask MUST fix the id + honour the boolean.
+**Status: no code touched yet.** Open, uninvestigated: ~86 artifacts sit at `status='review'` while ZERO tasks
+are `IN_REVIEW` — a possible second reason Files and Board disagree.
+
 **ACT-63 — the away-gate asks the wrong question at the wrong TIME (2026-08-25).** Read this before
 touching notification delivery. The reply push gate lived on `payload.foreground`, a **send-time**
 snapshot of "was this huddle on screen when they hit send". A turn runs 19-24s, so send-and-walk-away
@@ -2522,6 +2694,506 @@ and reversible (email columns retained; dual-read still honors un-migrated rows)
   append vanished and `git status` came back clean at the last pushed commit. Pushed code was safe.
   Reinforces: commit + push docs IMMEDIATELY, and re-check `git log origin/<branch>` after any gap.
 
+## 2026-09-08 — DIRECTION 1 BUILT: a Huddle agent can now READ Nexus coursework
+Three tools — `get_nexus_assignments`, `get_nexus_courses`, `get_nexus_class_schedule` — in
+`lib/nexus/nexus.server.ts`, wired into BOTH surfaces from the first commit. Enabled by
+`NEXUS_API_URL` + `NEXUS_OWNER_ID`, synced in `deploy-swa.yml`.
+**This replaces a silently-wrong answer, not a missing one.** journey's `list_pending_assignments`
+reads a STALE FORK: 469 rows, newest created 2026-04-06, against Nexus's 534 of which 241 are newer.
+The tool descriptions steer the model to the live source; retiring journey's copy is a separate
+journey-side step, so until then do NOT leave two answers standing silently.
+**The owner id is server-config, never a tool argument** — Nexus authorises these reads from an
+`?owner=<uuid>` it does not verify, so an agent-supplied id would let any prompt read any user's
+coursework by guessing a UUID. Mutation-proved on the voice surface (M1/M2/M3 all FIRED), because
+that file already records NINE native tools that exist on text and are silently absent when spoken.
+
+## Cross-app bridge (Nexus -> Huddle), Huddle side — measured 2026-09-08
+
+**The defect, now observed rather than read.** `buildTurnInput` (`cross-app/turn-gate.ts`) never set
+`data.agents`, so BOTH the memory write gate (`huddle.functions.ts` near `ragAgents`/`anyShared`)
+and auto-retrieval (near `ragCfg`) evaluated false on the cross-app path. A forward that returned
+`HTTP 200` with Elle Rowan replying and `tool_catalog` called left **0** rows carrying its marker in
+`chat.pending_turns` and **0** in `public.rag_chunks` (`azure-pg-query` run 34192165151 against
+probe run 34191804298). **That, alone, is why the Huddle agent had no idea about a Nexus
+conversation** — not retrieval, not threading; nothing was written.
+
+**Corollary to keep:** row counts discriminate NOTHING here. They read identically whether the
+bridge is perfect or dead. Only a caller-supplied marker, attached to a forward independently known
+to have succeeded, distinguishes them.
+
+**Fix lane `claude/fix-turn-is-real`** (pushed to this repo and nexus-hub, NOT merged, NOT deployed):
+route goes through the durable path so turns reach `chat.pending_turns`; `crossAppAgentBackends`
+supplies per-member RAG config so both gates open; `owner_entra_oid` resolved via the existing
+`resolveObjectIdByEmail` and carried in the INSERT **and** in `ON CONFLICT DO UPDATE` — the dedup
+path being the documented trap where an INSERT-only fix leaves every deduped row NULL.
+
+### Hardening — a mutation can match the WRONG statement and report a real guard as inert
+
+That lane's first `H12` matched a substring the *triples* INSERT also satisfies, so deleting
+`owner_entra_oid` from `writeChunk`'s column list left the suite green: a guard reported as
+protecting nothing when the mutation had simply landed elsewhere. Rewritten to parse the two column
+lists separately, both then FIRED. **An anchor that is not unique to the statement under test makes
+the mutation result meaningless in the alarming direction.**
+
+### The forwarded turn was persisted, remembered and attributed — then rendered as half a conversation
+
+**Live, measured 2026-09-08 after the four-PR merge** (huddle `932c9b4`, nexus `ece6e71`, both deploys
+green). Probe run `34222975557` pushed a marked turn through the deployed bridge; `db-query`
+`34223230387` found it: `pending_turns` **1**, `rag_chunks` **1**, `owner_entra_oid` set **1**. B1, C1
+and D1 confirmed in production, which is what the owner meant by "memory now works".
+
+**The next defect was in the same feature and had no test that could catch it.** The owner: *"the
+huddle chat only has her messages from nexus not my messages ... it's only one side of the
+conversation."*
+
+Three copies of `/^u-(\d+)$/` — `getTurnUpdates`, `HuddleView.applyTurnStream`, `HuddleApp`'s poll —
+decided whether a durable turn carries a genuine user utterance. **The id SHAPE was standing in for
+"is this the user talking"**, which held only while every user turn came from `submit()`. A forwarded
+turn is the user talking and its id is `xapp-<sha>`, so all three nulled it.
+
+The id was doing a **second** job nobody had separated out: `Number(um[1])` was the display
+timestamp. An `xapp-` id embeds none, so widening the shape check alone would have rendered the
+message at `NaN`. `lib/turn-identity.ts` now owns both jobs, takes no node import (two callers are
+browser bundles), and `cross-app/turn-gate.ts` re-exports its prefix rather than holding a second
+spelling.
+
+### Hardening — a PROXY for identity survives exactly as long as there is one front door
+
+The regex was correct when written and correct for its stated purpose: keeping an agent-initiated
+turn's INTERNAL DIRECTIVE ("This task is on the board for you: ... confirm with the user") out of the
+owner's mouth. It broke because a second, legitimate producer of user utterances appeared, and the
+rule keyed on where turns came FROM rather than on what they ARE.
+
+**Rule: when a check asks "is this X" but tests an id shape, a prefix, or a source, it is a proxy —
+and it will break the day a second producer of genuine X appears.** The cost is asymmetric and that
+is why it went unseen: the false-negative direction (drop the user's words) is silent, while the
+false-positive direction (render a directive as "You") is loud. Both are asserted now, five
+agent-initiated prefixes among them, and all three mutations FIRED.
+
+Same shape as the `data.agents` gate two defects earlier: both were server logic that quietly did
+nothing on a path its author never had. **The generalisation: adding a second front door invalidates
+every rule that was allowed to assume one.**
+
+### Can Elle draft a coursework assignment? The capability, read from the deployed code (2026-09-08)
+
+Owner asked, after the cross-app integration shipped: *"so I can now ask Elle to generate a draft for
+the introduction discussion assignment?"* Answered from `origin/main` at `fe59daa` and the deploy
+workflow, not from what was built.
+
+**Confirmed present and live:**
+
+| piece | evidence |
+|---|---|
+| `get_nexus_assignments` / `_courses` / `_class_schedule` | `lib/nexus/nexus.server.ts:101,125,139`, on main |
+| wired to BOTH surfaces | text `huddle.functions.ts:3230`; voice `realtime-tools.server.ts:172` + `NEXUS_TOOL_NAMES` at `:472` |
+| `NEXUS_API_URL` / `NEXUS_OWNER_ID` on the live SWA | `deploy-swa.yml:434-435`, with hard defaults so they are set even when the secrets are unset |
+| `create_artifact` in the agent toolset | `huddle.functions.ts:3235` |
+
+**Two limits that decide how to ask, and they are properties of the TOOL, not of the agent:**
+
+1. **`get_nexus_assignments` has no title filter.** Its parameters are `due_within_days`, `status`,
+   `course_id`. Combined with the measured fact that ~every assignment's due date is in the past, a
+   date-bounded ask returns empty and a title-only ask makes the model scan. **Give the COURSE.**
+2. **Reading an assignment is not the same as being able to write it.** Nexus already has a
+   purpose-built writer — `extract → outline → writer ↔ reviewer`, captured phase by phase in
+   `content.conversation_messages`. Elle drafting via `create_artifact` is a DIFFERENT, one-pass
+   path. The integration bought cross-app AWARENESS and continuity, not a second writer.
+
+### Hardening — "can it do X now" is a TOOL-SURFACE question, not a capability question
+
+The instinct after shipping an integration is to answer "yes, that's what we built". The useful
+answer is narrower and comes from four separate reads: is the tool on main, is it wired to the
+surface the owner will actually use, are its settings synced by the deploy, and **do its PARAMETERS
+admit the question the owner will ask**. The fourth is the one that gets skipped, and it is where
+this one bit: three tools deployed and configured perfectly, and the natural phrasing of the ask
+("the introduction discussion assignment") matches no filter the tool exposes.
+
+**Rule: before answering "can it do X", read the tool's PARAMETER LIST against the sentence the
+owner would actually type.** A tool that can reach the data but cannot be aimed at it makes the
+model improvise — which is the exact failure the integration existed to remove.
+
+
+### RESULTS — the assignment IS readable, and one earlier "measured" fact has EXPIRED (2026-09-08)
+
+`db-query` run **34232249111** against `nexus_hub`, 15 rows matching `introduc%`/`discussion%`:
+
+| title | status | due | `desc_len` | has the prompt text |
+|---|---|---|---|---|
+| **Discussion Board 1 - Introduce Yourself and Start Building a Literatur…** | active | **2026-09-07** | **5282** | **YES** |
+| Introductions | active | **2026-09-10** | 451 | no |
+| 13 others (Forum 3.4 x6, Case READ x3, Discussion 2, Economics x3) | mixed | 2025-10 → 2026-02 | **0** | no |
+
+**So the answer is yes**: the introduction discussion carries **5,282 characters** of instructions in
+`description`, and it matches on both "prompt 1" and "introduce yourself". Elle can read what it
+actually asks for, not merely that it exists.
+
+**And a fact this file previously carried as MEASURED is now stale, which matters more than the
+answer.** The `AC-turn-is-real` baseline recorded *"534 assignments, 504 with due dates, and ZERO due
+in the future"*, and that was used to justify the standing advice that `due_within_days` is
+unfalsifiable and "what's due this week" always returns empty. **Two assignments are now due in the
+future** (2026-09-07 and 2026-09-10). The date filter works today; the advice built on that number
+does not.
+
+**Hardening — a measured number about LIVE DATA has a shelf life, and nothing was stamping it.**
+Structural facts (a gate exists, a column is keyed on X) stay true until code changes. A COUNT of
+rows in a moving dataset is true only on the day it was taken, and this one was quoted back three
+times across a week as though it were structural. **Rule: when recording a measured count of live
+data, record the DATE IN THE SENTENCE and state what would make it change** — here, "the owner
+imports a new term." A count with no expiry becomes a false constraint on advice.
+
+### `get_nexus_assignments` takes a TITLE, and asks which course when several match (2026-09-08)
+
+Owner: *"if there are multiple, I'd expect it to clarify for which course before executing and if it
+needs a title filter why not provide it now?"* Both shipped in `22de99d`.
+
+- **`title` → `ilike.%…%`, server-side.** `ilike` was ALREADY whitelisted in Nexus's own operator
+  table (`api/src/functions/d1.ts:461`), so this was never a new capability — only an unexposed one.
+  Check the far side's operator support before concluding a filter "isn't available".
+- **`%` and `_` are stripped from the input.** An unstripped wildcard widens the search back to
+  everything and returns a confident, plausible, wrong set — a working-looking search is worse than
+  a failing one.
+- **Several matches → `needs_disambiguation` + a directive naming COURSE.** Picking between two
+  courses' assignments and then drafting against the wrong one wastes the turn AND looks like the
+  tool worked. Ambiguity is a question, never a guess.
+
+**Two copies of an EXPIRED count deleted, not restated** — `"534 assignments, 504 with a due date, 0
+in the future, latest 2026-08-18"` was baked into `nexus.server.ts` and `nexus-read-tools.test.ts`
+as though structural, and quoted to the owner twice as the reason the date filter could not be
+tested. Two were due in the future on 2026-09-08.
+
+### Hardening — the accuracy log is PER-REPO and the work is CROSS-REPO, so themes do not reach the session that needs them
+
+Asked whether the log's themes were being applied, the answer was no, and not because of
+forgetfulness. `nexus-hub`'s log carried the *count-over-the-wrong-population* theme (three
+instances, 2026-09-06) and the *absence-asserted-about-data-in-hand* theme (five instances,
+2026-09-08 morning). **Both recurred today while I was reasoning from the huddle side, where a
+different, 2-week-stale log lives.** This repo's log had not been touched since 2026-08-24.
+
+The Stop gate cannot close this: clauses (l)/(m) judge whether a log was **updated**, not whether one
+was **read**, and updating either repo's log satisfies them.
+
+**The check, cheap enough to actually run, before answering any is-X-true question in cross-repo
+work — grep for the SHAPE of the claim, not its subject:**
+
+```
+grep -hiE "zero|absent|never|no rows|not stored|deferred" /home/user/*/.claude/accuracy-log.md
+```
+
+All three of today's misses would have been caught by that one command. Full entry with the theme
+table in `.claude/accuracy-log.md`.
+
+## Multi-step projects: order EXISTS, pointers are DEAD schema, hierarchy is ABSENT (2026-09-12)
+
+Read this before anyone concludes again that "the board can't do projects."
+
+- **`public.tasks.priority_rank int` is the ordering system and it is fully wired** — grooming
+  writes a dense normalised 1..N (`groom.ts:206-232`); the board sort, the scorer, auto-work's slice
+  ordering and the stand-up all read it. 139 of 412 live journey tasks carry one. Ordering is NOT
+  missing.
+- **`public.tasks.blocked_by uuid[]` exists on the canonical table, correctly typed, and is dead.**
+  0 of 412 rows populate it; ZERO grep hits in `huddle-extension-app/src`; it is not in the mirror
+  DDL (`tasks.server.ts:39`), not in the sync upsert, never read. This is the cheapest available
+  route to "do this after that" — reviving it is not a new system.
+- **A parent pointer genuinely does not exist** (no `parent_task_id`, and no `epic`/`subtask`
+  anything). Grooming's ranking is FLAT — it cannot express "these five belong together and keep
+  their relative order."
+- **Why ChatGPT holds a chunked plan and Huddle drops it:** ChatGPT never represents the plan — the
+  transcript IS the state, re-read whole on every turn. Huddle's turns are independent and answered
+  by different agents, so state must live in COLUMNS; anything without a column ceases to exist
+  between turns. The trade is real in both directions (ChatGPT's plan dies with the thread and no
+  agent owns it, nothing schedules or reminds it).
+- Full table + the three mutually-exclusive schema options: `docs/feasibility-epics-tasks-subtasks.md`.
+
+**The mistake to not repeat:** this was first reported as "all absent" from a grep for the NAMES
+`parent_task|subtask|epic|depends_on|sequence|project_id`. Two of three capabilities were sitting
+there under different names. Sweep by CAPABILITY (who writes it, who reads it), never by name.
+
+## The approach gate: what actually clears `escalated`, and a fail-open that LIES (2026-09-12)
+
+Independently verified (`.claude/VERIFY-escalated-dead-end-1.md`, 5 claims, 3 CONFIRMED 2 REFUTED).
+Read this before anyone says again that an escalated task has no way out.
+
+**TWO ways out already exist. Both are blunt; neither is per-task.**
+1. **Settings has a per-agent kill switch.** `AgentWorkflowPanel.tsx`, mounted at
+   `SettingsSheet.tsx:157` under "Confirm-intent & review gate". Off = the gate is bypassed for
+   EVERY task that agent owns. Both consumers miss the escalated state entirely:
+   `approach-gate.server.ts:51-52` returns `approved:true` BEFORE the escalated check at :65, and
+   `autowork.server.ts:686-688` promotes to DOING in a branch that never reaches the :697 test.
+   Nothing caches the config — next pass, no deploy.
+2. **ANY reassignment clears it.** `resetEngagementOnReassignment` is called from
+   `tasks.server.ts:296` inside `upsertJourneyTask` — the GENERIC mirror writer, not a grooming
+   path. journey's `execute-tool` writes `assigned_agent` from `update_task` (`index.ts:906-908`)
+   and `batch_update_tasks` (`:971`). It also wipes `confirmed_dod` and the clarify state, which is
+   why reassigning the Trinnex row needed a restore afterwards.
+
+**LIVE DEFECT, still open on main: `approach-gate.server.ts:121-127` fails open into STORED STATE.**
+On a grader throw it calls `approveApproach`, so a task is permanently marked approved that no
+grader ever read. One transient 429 — recurring in this repo — approves it forever, indistinguishably.
+The REVIEW gate's equivalent returns `proceed:true` and **writes nothing**; that is the correct
+shape. **Fail open in the RETURN, never in the STORED STATE.** The override work hardened the
+errored RE-GRADE path to stay escalated and deliberately left this fresh path alone.
+
+**`approveApproach` (`tasks.server.ts:1023-1036`) is an UNGUARDED upsert** — no `WHERE` on current
+status, so it moves any status to `approved`. Not a bypass today, but any new caller silently voids
+an escalation. New callers must be status-guarded `UPDATE`s.
+
+**Escalated is invisible in every deterministic surface** — no query selects it, no UI rendered it,
+`review-digest` and `standup` never read `approach_status`. The only notification was a PROMPT
+DIRECTIVE (`autowork.server.ts:159`) asking the model to mention it — a prose-only step, exactly the
+failure these gates were hardened against.
+
+**The "meaty" produce-vs-quick ask has TWO causes, and only one is fixed.** Trigger is seven
+conjuncts (1:1 only, difficulty >= 3, no pending row, ...). (a) the produce patterns were anchored
+`^(`, so `"Okay knock it out"` classified as `unrelated` — FIXED. (b) the pending row is
+`PRIMARY KEY (user_email, huddle_id)` and EVERY verdict deletes it, so a prior "produce" does NOT
+suppress the next difficulty>=3 ask — **still open**. Only `data.modelEscalate` suppresses, per-request.
+
+### Liveness: a stale transcript mtime is NOT proof a subagent died
+This verifier delivered at ~7 hours and was reported to the owner as dead at hour 6, on the strength
+of its `.output` file not having grown — while `ListAgents` said `running` the whole time. The JSONL
+is appended per assistant MESSAGE; an agent deep in a read/grep chain legitimately writes nothing for
+hours. **Only `ListAgents` plus the agent's own artifact file are valid liveness reads.** Same class
+as the org-wide rule about a verifier declared dead 14 seconds before delivering 9/9.
+
+## A task handed DIRECTLY to an agent lands with NO assignee — the owner is chosen, then discarded (2026-09-12)
+
+Traced end to end across both repos. Do not re-derive; verify the line numbers still match, then act.
+
+```
+owner asks an agent in a 1:1 to do X
+   -> createSuggestedTaskFromTool (huddle.functions.ts ~:2649)
+        ownerId: resolveTaskOwner(args.ownerId ?? args.owner ?? args.assignee)
+        ... an owner IS resolved, and is used ONLY for the local UI card draft
+   -> the CANONICAL journey write, ~20 lines later:
+        invokeJourneyTool({toolName:"quick_create_task", args:{title} | {title,date}})
+        ... no assignee. NOT dropped by a bug -- there is nowhere to put one.
+   -> journey quickCreateTask (journey-voice execute-tool/index.ts, case ~:432)
+        accepts ONLY title / date / auto_schedule, forwards to parseAndCreateTasks
+   -> public.tasks row created with assigned_agent = NULL
+   -> mirror row NULL (pg_net, 1-3s)
+   -> autowork.server.ts:370   if (!row.assigned_agent) continue;
+   -> INERT. No confirm ask, no promotion, no work, no reach-out, until GROOMING assigns it.
+```
+
+**So a task the owner hands to a named agent behaves exactly like an unassigned one.** Observed on
+the Trinnex row, whose `assigned_agent` read genuinely NULL in journey.
+
+**The write path already exists — do NOT add one.** journey's `update_task` writes `assigned_agent`
+(`execute-tool/index.ts` ~:906-908), as does `batch_update_tasks` (`:971`); the board drag already
+uses it via `board.functions.ts`. The fix is a best-effort follow-up `update_task` after create — no
+journey deploy, and its failure mode degrades to exactly today's behaviour.
+
+**WHO to assign is the only real decision, and it is decided:** 1:1 -> the responding agent; GROUP ->
+only when the agent explicitly named an owner. Not the lead: `huddle.functions.ts` ~:2221 makes the
+lead capture items across EVERY lane, so defaulting to it would assign other lanes' work wrongly.
+
+**Full diagnosis + the rejected alternative:** `.claude/actions.md`, `ACT:assign-on-direct-ask`.
+
+## Active work — journey PRIORITIES + SCHEDULE widgets as in-chat widgets (2026-09-13, NOT verified)
+Branch `claude/journey-widgets-in-chat` in BOTH repos. Nothing on `main`, nothing deployed.
+
+**Three lanes, all committed and pushed:**
+- **Lane A (journey-voice `ec508a5`)** — `get_task_topics` registered in `_shared/tool-definitions.ts`
+  (26→27 tools) + handler in `execute-tool/index.ts`. `huddle-proxy` needed NO change (it re-serves
+  `/definitions` verbatim). No new secret — `JOURNEY_PROXY_TOKEN` reused. **NOT deployed** —
+  `deploy-supabase-functions.yml` with `function_name=execute-tool` is the owner's call.
+  Non-obvious: `task_topic_index` IS the topics table (no separate topics table). A category badge is
+  the SUM of its topics' subtree counts, NOT the denormalized `stored_task_count` column (which read
+  15 where the truth was 1). Two topics naming each other as parent produced a CYCLIC object graph
+  that `JSON.stringify` throws on — would have 500'd the whole tool; fixed with `wouldCycle()`.
+- **Lane B (`54639aa`)** — `widgets.server.ts` + `widgets.functions.ts`: `getScheduleWidget`,
+  `getPrioritiesWidget`, `updateWidgetTask` (`start|done|pause|today|untoday`). None ever throws;
+  failures return `ok:false`. **No migration needed** — every column already exists in the mirror DDL.
+  Found by reading, not assuming: `getBoardTasks` did NOT select `start_time`/`end_time`/`is_scheduled`,
+  so TODAY'S SCHEDULE was unreachable — that one read was EXTENDED (additive, optional fields), not
+  duplicated. `updateWidgetTask` gates on the existing `getOwnedTaskForConfirmAsk` before any write.
+- **Lane C (`4c68ff2`, `3ead8e6`, `59afbbb`)** — `JourneyWidgets.tsx`, docked in Iris's 1:1 above the
+  transcript; Rail + HuddleApp view registry + mobile switcher.
+
+**Pre-existing bug this work had to step around:** `Rail.tsx:39/45` marks Memory active when
+`view==='huddle'` and maps it to `'huddle'` — clicking Memory silently renders Huddles. It is
+decorative today. Adding two views to that three-way ternary compounds it, so the registry becomes a
+VIEW MAP keyed by id, which fixes Memory in the same change.
+
+**Status: `npx tsc --noEmit` exit 0 on the branch. NO verifier has run, NO live check, NOT deployed.**
+Prototype canvas (where everything lands, incl. mobile):
+https://claude.ai/code/artifact/da7013d0-2fff-4942-ae91-2a69dbd0cda3
+
+## Hardening — a container restore killed all three lanes mid-flight (2026-09-13)
+All three agents died with the container (15h gap). NO notification fired — silence is the designed
+behaviour. Every lane's work survived ONLY because each brief named a file and each lane committed as
+it went; Lane C's last two commits sat UNPUSHED in the container and were recovered by comparing local
+HEAD to origin on the next turn, exactly as the re-sync rule prescribes. `ListAgents` after the restore
+showed zero agents, which is the only ground truth that they are gone.
+
+## Hardening — the checklist widget renders NOTHING on the Lovable path (found 2026-09-13, NOT fixed)
+Found while wiring the two journey widgets, in the existing feature they were modelled on.
+`lovableTools.build_checklist` (`huddle.functions.ts:5472`) never calls `recordToolUse`, and
+reply-assembly recovers a rendered payload ONLY from a toolUse's `detail`. So on the Lovable backend
+the checklist tool fires, does its work, and the card never reaches the client. The OpenAI path is
+fine — it records, so its payload rides back.
+**The two new widgets do NOT inherit this**: their Lovable dispatch calls `recordToolUse` explicitly.
+The checklist itself is UNFIXED — fixing it means editing that feature's own wiring, which is outside
+what the owner asked for. Reported to the owner; his call whether to widen.
+**The general lesson: on this codebase a tool that renders a card must call `recordToolUse` on BOTH
+dispatch paths, or it is silently inert on one of them.** Symmetry between the two paths is not
+enforced anywhere — nothing fails, nothing logs, the card just never appears.
+
+## Active work — journey widgets: wiring landed, verification loop 2 in flight (2026-09-13)
+Branch `claude/journey-widgets-in-chat` @ `b56907e`. Nothing on `main`, nothing deployed.
+
+**Since the last entry:**
+- **Pause defect FIXED (`966bd2f`).** `ACTION_STATUS.pause` was `UP_NEXT` — the lane
+  `autowork.server.ts` promotes from — while ⏸ emptied the DOING slot in the same write, so a paused
+  task was a promotion candidate at the next 9/13/17 tick and the confirm-intent gate passed it
+  through (a task that had reached DOING was already confirmed). Now `BACKLOG` + the `parking-lot`
+  tag auto-work already filters on. journey's `update_task` REPLACES the tag array, so the UNION is
+  sent — parking must never wipe a task's other labels. Un-ticking ✓ was split onto a new `reopen`
+  action so that gesture does not inherit the park.
+  `scripts/widget-park.test.ts` (`npm run test:widget-park`) 10/10; mutation-proved **FIRED** via
+  `mutate.sh` with `pause: "UP_NEXT"` reinstated.
+- **Widget tools WIRED (`b56907e`).** `show_priorities_widget` / `show_schedule_widget` existed fully
+  written in `tasks/tools.ts` but were registered NOWHERE — the render branches in `HuddleView.tsx`
+  were live but unreachable, so no agent could ever surface them. That was the "like the checklists
+  widget" half of the request, and it was the +160 unexplained lines on the branch. Now registered in
+  `mergedTools`, dispatched on BOTH paths with per-widget `claimAction` keys, `WIDGET_SYSTEM_HINT` on
+  both instruction branches, and the payload recovered from `detail` at all six reply-DTO sites.
+- **Rail Memory entry de-highlighted** (`Rail.tsx` `neverActive` flag) so two items no longer
+  highlight at once. Whether Memory is REMOVED or WIRED is still the owner's open decision.
+
+**Status: `tsc` exit 0; `test:widget-park` 10/10; `test:router` 20/20. NOT deployed, NOT observed in a
+browser — type agreement is not a rendered card.** Loop-2 verification running; `huddle.functions.ts`
+and `Rail.tsx` were moving targets during it and are DEFERRED TO LOOP 3.
+
+## Feature status — journey PRIORITIES + SCHEDULE widgets: LIVE (2026-09-13)
+**Merged to `main` as `125409d` and DEPLOYED.** `deploy-swa.yml` run 34757153463 → `success`, head_sha
+`125409d`. The deploy's DB-pin line read **`Assembled AZURE_PG_URL for eds-postgresql/RAG_AI_Agents`**
+— the canonical server, NOT the `ux-design-pg` discovery drift this repo was bitten by before. Both
+widget bundles are in the build output (`widgets.functions-*.mjs`, `widgets.server-*.mjs`).
+Live: https://icy-flower-0f415200f.7.azurestaticapps.net
+
+**What shipped:** both widgets docked in Iris's 1:1 **stacked at full column width** (never side by
+side — the owner's phone is the primary surface and a two-up never fit 390px), a full-page view each
+on the rail, and `show_priorities_widget` / `show_schedule_widget` registered so any agent can surface
+them on request — the "like the checklists widget" half, which existed as written-but-unregistered
+tools until `b56907e`.
+
+**Still NOT true, and the one thing nobody has done:** no one has seen any of this render in a
+browser. Three verification loops were source-and-execution only — no live DB from the session, no
+deploy until now. Per the repo's own rule, status is **mechanism verified + deployed, NOT
+user-confirmed**; the owner looking at it live is the verdict.
+
+**Blocked on an owner action:** journey's `get_task_topics` is committed (journey-voice `ec508a5`)
+but **NOT deployed**, so the topic tree — roughly 60% of the Priorities screenshot — renders its
+labelled empty state while the task band works fully. Deploying `execute-tool` is what lights it up.
+
+### Why journey and the Android widget HAVE topics and Huddle does not (owner's question, 2026-09-13)
+**OBSERVATION, from the two call sites.** journey's web app reads the table directly —
+`supabase.from('task_topic_index').select('*').eq('user_id', user.id)` (`src/pages/Priorities.tsx:222`)
+— and the Android bridge widget runs the identical read over PostgREST,
+`GET /rest/v1/task_topic_index?select=id,topic_name,position,category_affinity,parent_topic_id,window_affinity&user_id=eq.$userId`
+(`android-bridge-template SupabaseTaskClient.kt:219`). **Both hold the USER's Supabase session**, so
+RLS scopes the read to their own rows. Huddle holds only `JOURNEY_PROXY_TOKEN` and no user session,
+so it can reach nothing but named `execute-tool` tools. **The data was never missing — Huddle's ROUTE
+to it was.** Saying "topics aren't available" without that clause read as "the data isn't there",
+which the owner's screenshot disproved.
+
+**`get_tasks` already returns SOME topic data today, deployed.** `enrichTasksWithTopics` attaches a
+`topic_groups` array to `get_tasks`/`get_today_tasks`. It is **not** a substitute for the tree and
+`get_task_topics` is **not** a duplicate of it: `getTopicGroupsManual` ends in
+`return results.slice(0, 5)` and selects no `id` and no `category_affinity` — it is a top-5 voice
+briefing, not a tree. Worth knowing before writing anything else that wants topics.
+
+### journey's PRIORITIES VIEW RUNS AN UNMERGED BRANCH — `origin/main` is NOT what the owner sees
+**The live view is `claude/priority-widget-nesting-1jtwa9`** (journey-voice, commits `f0ab561` +
+`532da6b`, Jun 29). Proof it is the live one rather than `main`: `main` renders one row per raw
+config key (six rows, no Family); the branch declares
+`DISPLAY_CATEGORIES = ['LIFE','CAREER','VENTURES','EDUCATION','FAMILY']` — **exactly the five rows in
+the owner's screenshot** — and FAMILY holds no rows in `task_topic_index`, which is why that row
+carries no count. journey's clone has a **truncated history** (`origin/main...<branch>` reports *no
+merge base*), so `git log origin/main` **cannot** be used to argue a thing was never shipped there.
+
+What the branch establishes, and what Huddle must port:
+- **Four levels: `category > group > sub-group > task`** (f0ab561's own subject line). Category sits
+  ABOVE `parent_topic_id` nesting; the two COMPOSE. This is the "sub-tasks and epics" hierarchy work
+  the owner flagged — journey is building toward populated `parent_topic_id`, so *"some topics nest,
+  others do not"* is the state to survive, not an edge case.
+- **Six raw keys merge into five display rows**: `PERSONAL → LIFE` (label **"Life & Personal"**),
+  `PROF_EDUCATION → EDUCATION` (label **"Education"**), plus **FAMILY** as a fifth. Known categories
+  render in `DISPLAY_CATEGORIES` order; unknown keys pass through and append alphabetically
+  (`532da6b`, "hybrid dynamic category detection" — they are NOT dropped).
+- A topic's category is a **majority vote over its tasks' categories**, falling back to
+  `category_affinity`, then `window_affinity[0]`; children inherit the parent's. Huddle is handed
+  topics without their tasks, so it uses the fallbacks only — an honest subset, not the vote.
+
+**Separately — TASK hierarchy (epic → task → subtask) is a DIFFERENT thing and is ABSENT.** See
+`docs/feasibility-epics-tasks-subtasks.md` (2026-09-12): ordering EXISTS (`tasks.priority_rank`),
+inter-task pointers EXIST-BUT-DEAD (`tasks.blocked_by`, 0 of 412 rows, never written/mirrored/read),
+parent pointer ABSENT (no `parent_task_id` column). Different table, different code path from the
+topic tree. Do not conflate the two when either comes up.
+
+### `parent_topic_id` IS NULL ON EVERY ROW *TODAY* — a dated measurement, not the shape
+    select count(*), count(parent_topic_id), count(distinct category_affinity)
+      from public.task_topic_index;          -- journey wwxgajrtmslzklnyplah, 2026-09-13
+    -> 158 topics, 0 with a parent, 5 categories
+
+journey groups by `category_affinity` FIRST (`Priorities.tsx:284`, `categoryKeys.map`) and only then
+nests by parent — which currently never fires. Category keys come from user config
+(`user_scheduling_prefs.config.categoryMappings`): LIFE, CAREER, PERSONAL, VENTURES, EDUCATION,
+PROF_EDUCATION. The numbers on a category row are OPEN TASK COUNTS — the owner's screenshot reads
+Ventures 40 and open non-test `category = VENTURES` tasks measured exactly 40.
+
+Huddle's `buildTopicTree` nested on `parent_topic_id` alone, so the live payload would have rendered
+**158 flat rows**, never the five collapsible category rows. Fixed in `bc515d2` by `groupByCategory`
+(a no-op when real nesting exists, so journey populating parents later still wins), guarded by
+`scripts/widget-topic-tree.test.ts` — 12 assertions, mutation-proved **FIRED**. This is the first
+coverage `buildTopicTree` has ever had; every earlier fixture invented a `parent_topic_id` the real
+table has never contained, which is exactly why 67 green assertions never saw it.
+
+## The Memory rail entry — intent and current state (answered 2026-09-13, post-deploy as asked)
+**OBSERVATION.** Added 2026-08-16 in `9a77207`, a commit titled *"fix(routing): deterministic
+multi-lane detection turns off solo…"* — it arrived as a side-car in an unrelated routing fix, not as
+its own feature. The SAME diff that adds the entry also adds `(it.id === "memory" && view === "huddle")`,
+so it has pointed at Huddles since the instant it existed. There is no `MemoryView` component in the
+tree and the view registry has never carried a `memory` key.
+**CAVEAT — do not over-read that.** `origin/main` has **3 parentless roots**; history is truncated, so
+git cannot prove a Memory view never existed, only that none survives in reachable history.
+**INTERPRETATION (inference, not proven):** placeholder chrome staged ahead of a view nobody built.
+No commit message states an intent.
+**WHERE MEMORY ACTUALLY LIVES TODAY:** `MemoryDbPanel`, mounted in Settings (global: Diagnose /
+Bootstrap / Round-trip / Provision + schema status) and in the per-agent settings drawer. It is an
+**operator/diagnostic surface** — there is NO way to browse or search the stored `rag_chunks` /
+`rag_triples` content from the UI at all. That absence is the real gap the rail entry gestures at.
+**Current state after this work:** de-highlighted via a `neverActive` flag so it no longer lights up
+alongside Huddles — the minimal fix, deliberately not a removal. Whether it is removed or backed by a
+real "browse my memory" view is the owner's open decision.
+
+## Feature status — journey widgets: LIVE and VISUALLY VERIFIED at phone width (2026-09-13)
+`main` @ `8ede4e0`; the widget+colour work deployed as `ea3c898` (deploy run 34757153463 / 34763…,
+DB pin `eds-postgresql/RAG_AI_Agents` confirmed in the log both times).
+
+**This is the first claim in this feature backed by a RENDERED SCREEN, not a passing suite.**
+`verify-uat.yml` + `widget-ui-checks.mjs`, 390×844, run **34763566801** against production, running
+as the owner (`entra-auth.ts` maps the UAT bypass to `von.ellis@enterpriseds.io`, and the shots show
+his real tasks): **5 of 6 PASS** — one switcher (was 2), nav at **796px of 844** (was 60px), band
+**hue 92 cream** with no pink, no console errors, no failed requests. The 6th was a false negative in
+the check, disproved by its own screenshot.
+
+**BOTH colour bugs were one class.** `--surface` is `oklch(1 0 0)` — white with an EXPLICIT hue of 0
+— and a polar space interpolates toward it:
+  `--warning 9%  + --surface` → hue 55 → **4.95**  (band shipped PINK)
+  `--success 72% + --surface` → hue 155 → **111.6** (▶ button shipped YELLOW-GREEN)
+Both are now literals (`--band-cream`, `--success-soft`) at the intended hue, per theme. The other
+four `color-mix` calls mix with `transparent`, where premultiplied alpha cannot move a hue — safe.
+`scripts/no-achromatic-color-mix.test.ts` fails the build on the construct repo-wide.
+
+**THE LESSON, and it is about the checks, not the app.** Three separate times a check reported a
+defect that did not exist: a colour verdict rendered from a loading screen; the PREVIOUS run's
+results read as this run's; a selector matching nothing reported as "0% of viewport". Every one was
+the same shape — **a measurement that did not happen, presented as a measurement that failed.** Each
+is now gated to report NOT MEASURED / UNPROVEN instead, and `uat-shots` commits stamp their run id so
+provenance is checkable. A check that cannot distinguish "I found nothing" from "there is nothing" is
+worse than no check, because the alarming reading is the one that gets acted on.
 
 ## Active work — 2026-09-13: three-digest delivery (daily brief / meetings / stand-up)
 

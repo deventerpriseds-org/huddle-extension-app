@@ -455,3 +455,241 @@ Not a UI change; no route rendering is affected. Checked the equivalents that ma
 
 Not blocking: C10-4 (latent, 0 rows affected), C10-7 (`tripleCount` label), C10-8 (panel row
 disappears instead of showing unknown).
+
+---
+
+# Loop 2
+
+Independent re-verification. Baseline established first, because a status answer from a stale
+working tree is invalid by default:
+
+- `git fetch origin` → `origin/main` = **4dd92ad**; local `HEAD` = **308587d**.
+- Local HEAD is an **ancestor** of `origin/main` (behind, not diverged).
+- `5002158` (the `agent_id` supersede fix) **is an ancestor of both**.
+- `git diff HEAD origin/main -- src/features/huddle/lib/rag/azure-pg.server.ts` → **empty**, and
+  `git status --porcelain` on that path → **empty**. The file under test is byte-identical on the
+  working tree and `origin/main`, so reading it locally is sound. Every code verdict below is
+  therefore a verdict about `origin/main`.
+
+SQL evidence comes from `azure-pg-query.yml` run identified **by the in-band marker
+`VERIFY-L2-8842`**, never by recency (a parallel session dispatches the same workflow).
+
+## Loop 2 — verdicts
+
+### C9 — typecheck clean — CONFIRMED
+`npx tsc --noEmit -p tsconfig.json` → **exit 0, no output**. Re-run this loop.
+
+### C6 — `lookup_facts` excludes superseded; one write site — CONFIRMED
+- `src/features/huddle/lib/rag/tools.ts:138` → `excludeSuperseded: true` (the `lookup_facts` tool).
+- `src/features/huddle/lib/huddle.functions.ts:2305` → `excludeSuperseded: true` (auto-retrieval).
+- `src/features/huddle/lib/rag/types.ts:76` declares it optional.
+- `azure-pg.server.ts:800-802` is the only consumer: `if (input.excludeSuperseded) where += " AND superseded_at IS NULL"`.
+- `grep -rn "superseded_at" src/` → **8 hits total**, of which exactly **one** is a write:
+  `azure-pg.server.ts:651` `UPDATE rag_triples SET superseded_at = now()`. No other statement
+  anywhere in `src/` sets the column.
+
+### C7 — bootstrap / diagnose / panel all report index presence — CONFIRMED
+Three call sites read, not inferred:
+- `runBootstrap` declares `indexes: { rag_chunks_dedup: boolean; rag_triples_dedup: boolean }`
+  (azure-pg.server.ts:237), queries `pg_indexes` (:266) and populates it (:276); both error returns
+  (:247, :293) set both to `false`.
+- `diagnoseAzurePg` declares `indexes?` on `result.server` (:322), queries `pg_indexes` filtered to
+  `('rag_chunks_dedup_idx','rag_triples_dedup_idx')` (:455-458) and assigns `result.server.indexes` (:460).
+- `MemoryDbPanel.tsx:252,310-318` reads `diag.server.indexes` and renders a **"Dedup indexes"** row,
+  `ok` only when BOTH are true, else `rag_chunks=…, rag_triples=MISSING`.
+
+Carried forward unchanged from loop 1: the panel guards on `{indexes && (…)}`, so when the field is
+absent the row **disappears** rather than reporting unknown. Still a cosmetic gap, still not blocking.
+
+### C8 — `created_at` divergence between triples and chunks is deliberate — CONFIRMED
+- `lookupTriples` (azure-pg.server.ts:808): `ORDER BY confidence DESC, created_at DESC` — `created_at`
+  is load-bearing ranking input.
+- `searchChunks` (azure-pg.server.ts:749): `ORDER BY embedding::halfvec(...) <=> ($1::vector)::halfvec(...)`
+  — pure vector distance, `created_at` appears only in the SELECT list as display metadata.
+This is exactly the asymmetry that justifies `created_at = now()` in the triples `DO UPDATE` and its
+absence in the chunks one.
+
+### C1 — dedup index shapes — CONFIRMED
+`pg_indexes.indexdef`, read live (run `33634666876`, job `100262406044`, marker `VERIFY-L2-8842`):
+
+```
+rag_chunks_dedup_idx  | CREATE UNIQUE INDEX rag_chunks_dedup_idx ON public.rag_chunks USING btree
+                      |   (scope, COALESCE(agent_id, ''::text), COALESCE(source, ''::text), md5(text), length(text))
+rag_triples_dedup_idx | CREATE UNIQUE INDEX rag_triples_dedup_idx ON public.rag_triples USING btree
+                      |   (scope, COALESCE(agent_id, ''::text), lower(subject), lower(predicate),
+                      |    md5(lower(object)), length(object)) WHERE (superseded_at IS NULL)
+```
+
+Both match their source constants character-for-character — `CHUNK_DEDUP_KEY` (azure-pg.server.ts:87)
+and `TRIPLE_DEDUP_KEY` + `TRIPLE_DEDUP_PRED` (:106-107). The triples index is PARTIAL, the chunks
+index is not; that asymmetry is correct — there is no `CHUNK_DEDUP_PRED`, chunks have no supersession.
+
+### C2 — row counts and zero duplicates — PARTIAL (property holds, the stated FIGURES are stale)
+
+The substantive claim **holds**; the specific numbers carried into this loop **do not reproduce**.
+
+| metric | loop 1 stated | observed now | delta |
+|---|---|---|---|
+| `rag_triples` total | 465 | **475** | +10 |
+| `rag_triples` live | 400 | **406** | +6 |
+| `rag_triples` superseded | 65 | **69** | +4 |
+| `rag_chunks` total | 579 | **603** | +24 |
+| live triple duplicate groups | 0 | **0** | — |
+| chunk duplicate groups | 0 | **0** | — |
+
+Duplicate groups were counted by GROUP BY on the exact index key expressions, not a proxy.
+
+**This delta is the most valuable single result of the loop, and it is good news.** Loop 1 closed with
+C10-9 open: *"nothing has written a triple since the deploy, so the status is mechanism verified against
+the live database, NOT yet confirmed on live traffic."* Between then and now production wrote **+10
+triples and +24 chunks, and fired the supersede path 4 times** — and live duplicate groups are **still
+zero**. The dedup indexes and the supersede path are now confirmed holding on real traffic, not only on
+probes. **C10-9 can be closed.**
+
+Anyone carrying forward the old figures (465/400/579) should stop; they are a week stale.
+
+### RADIUS / blast-radius — `agent_scoped_triples = 0` — CONFIRMED, and stronger than claimed
+```
+ RADIUS scope x agent_id | scope  | agent_id_is_null |  n
+-------------------------+--------+------------------+-----
+                         | global | t                | 475
+```
+**One row.** Every one of the 475 triples is `scope='global'` with `agent_id IS NULL`. So:
+1. `agent_scoped_triples = 0` — **the `agent_id` defect never fired on real data.** Independently
+   re-derived, not inherited from loop 1.
+2. I also tested the inverse risk the brief did not list — that adding `coalesce(agent_id,'') =
+   coalesce($5,'')` could *narrow* supersede and orphan stale global facts. It cannot: no global row
+   carries a non-null `agent_id`, and the global write path (`huddle.functions.ts:958`,
+   `writes.push({ chunk, scope: "global", authors })`) passes **no `agentId` at all** → `t.agentId ?? null`
+   → `coalesce(null,'') = ''`, which matches every existing row. **The fix is a provable no-op on 100%
+   of current production data** and changes behaviour only on the `scope='agent'` path, which is empty.
+
+### C10-2 — the supersede `agent_id` fix — CONFIRMED (re-derived from scratch)
+
+**Step 1 — the statement, read at `azure-pg.server.ts:651-657`:**
+```sql
+UPDATE rag_triples SET superseded_at = now()
+ WHERE scope = $1 AND lower(subject) = lower($2) AND lower(predicate) = lower($3)
+   AND coalesce(agent_id, '') = coalesce($5, '')
+   AND lower(object) <> lower($4)
+   AND superseded_at IS NULL
+```
+```ts
+[t.scope, t.subject, t.predicate, t.object, t.agentId ?? null],
+```
+
+**Step 2 — placeholder/parameter alignment, checked one by one** (an off-by-one here is silent and
+catastrophic, so this was walked rather than skimmed):
+
+| ph | used in | array slot | binds |
+|---|---|---|---|
+| `$1` | `scope = $1` | 0 | `t.scope` |
+| `$2` | `lower(subject) = lower($2)` | 1 | `t.subject` |
+| `$3` | `lower(predicate) = lower($3)` | 2 | `t.predicate` |
+| `$4` | `lower(object) <> lower($4)` | 3 | `t.object` |
+| `$5` | `coalesce(agent_id,'') = coalesce($5,'')` | 4 | `t.agentId ?? null` |
+
+Exact match, no off-by-one. Note `$5` is used **out of source order** (it appears in the SQL text before
+`$4`) — precisely the shape that hides an off-by-one — and it is still correct: the binding is positional,
+and slot 4 holds `agentId`. The UPDATE's key is now the index key minus the object component, which is
+the intended difference (supersede = same identity, *changed* value).
+
+**Step 3 — behaviour proven live inside `BEGIN … ROLLBACK`.** Seeded three `Test-`-prefixed rows sharing
+subject+predicate: `agent`/`Test-agent-alpha`, `agent`/`Test-agent-beta`, and `global`/NULL.
+
+| probe | what it asserts | n_touched | rows touched | verdict |
+|---|---|---|---|---|
+| **P1** | beta writes a CHANGED object → must supersede ONLY beta | **1** | `Test-agent-beta/Test-object-BETA` | PASS |
+| **P2** | alpha re-asserts its IDENTICAL object → must supersede NOTHING (C5 object-guard) | **0** | — | PASS |
+| **P3** | alpha writes a CHANGED object → must still supersede alpha | **1** | `Test-agent-alpha/Test-object-ALPHA` | PASS |
+
+State after P1 — the falsification that matters:
+```
+ P1_state | (null)           | Test-object-GLOBAL | live=t
+ P1_state | Test-agent-alpha | Test-object-ALPHA  | live=t   <-- NOT superseded by beta's write
+ P1_state | Test-agent-beta  | Test-object-BETA   | live=f
+```
+Pre-fix, the predicate was `scope AND subject AND predicate AND object<>` with no `agent_id` term, so
+alpha and beta both matched and `n_touched` would have been **2**, burying alpha. Observed **1**. The
+cross-agent data-loss path is closed. P3 then confirms the fix did not over-correct into never
+superseding: same `agent_id`, changed object, still supersedes.
+
+### C4 — ON CONFLICT collapse semantics — CONFIRMED
+Ran the app's exact `ON CONFLICT (…) WHERE superseded_at IS NULL DO UPDATE …` against the seeded global
+row, re-asserting an identical object with a LOWER confidence (0.5 vs 0.9) and a new author:
+```
+ P4_global_id_before | b657d63c-50a2-433f-81a3-29f57721ff29 | 0.9 | g
+ P4_returned_id      | b657d63c-50a2-433f-81a3-29f57721ff29 | 0.9 | g,g2
+ P4_global_rowcount  | 1
+```
+Same `id` returned (so `RETURNING` yields a row on the conflict path — the `DO UPDATE`-not-`DO NOTHING`
+reasoning is real), row count unchanged at 1, `greatest()` **kept 0.9** rather than downgrading to 0.5,
+and authors merged `g` → `g,g2` via the `<@` guard. The conflict target inferred the partial index
+successfully, which independently re-proves C1's shape.
+
+### C3 — the cleanup migration preserved max-confidence/authors — STILL UNFALSIFIABLE (refusal upheld)
+P4 proves those merge semantics **for the live statement**. It says nothing about what the one-off
+cleanup did to rows it collapsed weeks ago: the pre-cleanup rows are gone, no before-image was kept, and
+no run id was recorded. Loop 1 was right to refuse this, and P4 does not change that. Do not let P4 be
+read as evidence for C3.
+
+### Deployment — the fix is LIVE — CONFIRMED
+- `deploy-swa.yml` run **32998813640**, `head_sha` **5002158b**, conclusion **success**.
+- A later deploy, run **33068532624**, `head_sha` **b6eb695b**, conclusion **success** — so the fix
+  survived a subsequent deploy rather than only having shipped once.
+- Proven at the file level, not inferred: `git show b6eb695b:…/azure-pg.server.ts` contains
+  `AND coalesce(agent_id, '') = coalesce($5, '')` (line 653) and the 5-element param array (line 656),
+  and that copy is **byte-identical** to `origin/main`'s.
+- Housekeeping note, outside the radius: `origin/main` tip is **4dd92ad**, one commit ahead of the last
+  deployed SHA `b6eb695b`. That commit is `test(uat): …` and does not touch this file, so nothing here
+  is un-deployed — but the tip of `main` currently has no deploy run of its own.
+
+### Probe safety — CONFIRMED
+All writes ran inside `BEGIN … ROLLBACK` under `psql -c` with `ON_ERROR_STOP=1`, all seeded text was
+`Test-` prefixed, and the post-rollback re-read matches the pre-probe read exactly:
+```
+ VERIFY-L2-8842 POST_ROLLBACK | triples_total 475 | triples_live 406 | chunks_total 603 | leftover_test_rows 0
+```
+
+## Loop 2 — radius challenge (I was asked to push back; here is the result)
+
+The brief flagged that it might be wrong to treat C6, C7 and C8 as untouched by `5002158`. **It was not
+wrong, and this is now settled from the diff rather than assumed.** `git show --stat 5002158` touches two
+files: `docs/VERIFY-triples-dedup.md` and `azure-pg.server.ts`. Filtering that diff to changed code lines
+in `src/` yields **exactly two functional changes** — the added `AND coalesce(agent_id, '') = coalesce($5, '')`
+and the param array gaining `t.agentId ?? null`. Everything else added is comment. C6 (`tools.ts`,
+`huddle.functions.ts`), C7 (`runBootstrap`/`diagnoseAzurePg`/`MemoryDbPanel.tsx`) and C8 (the two ORDER BY
+clauses) are in files or functions the commit never opened. The exclusion was correct.
+
+I did find one radius item the brief **understated**: the fix's effect on the `scope='global'` path was
+untested, and a `coalesce`-narrowing regression there would have been silent. I tested it (see RADIUS
+above) and it is clean.
+
+## Loop 2 — verdict
+
+| claim | verdict |
+|---|---|
+| C1 index shapes | CONFIRMED |
+| C2 row counts / zero duplicates | **PARTIAL** — zero-duplicates CONFIRMED; the stated figures are stale (465/400/579 → 475/406/603) |
+| C3 cleanup preserved confidence/authors | UNFALSIFIABLE (refusal upheld) |
+| C4 ON CONFLICT collapse semantics | CONFIRMED |
+| C5 supersede object-guard | CONFIRMED (P2, 0 rows touched) |
+| C6 excludeSuperseded + single write site | CONFIRMED |
+| C7 bootstrap/diagnose/panel reporting | CONFIRMED |
+| C8 created_at divergence deliberate | CONFIRMED |
+| C9 typecheck | CONFIRMED (exit 0) |
+| C10-2 supersede agent_id fix | CONFIRMED — re-derived from scratch, params walked, behaviour proven (P1/P2/P3) |
+| blast radius `agent_scoped_triples = 0` | CONFIRMED, and the global path proven unaffected too |
+| fix deployed | CONFIRMED (runs 32998813640, 33068532624; fix present in the deployed SHA) |
+
+**No new defect found this loop.** Two things changed status rather than being defects: C2's figures are
+stale, and C10-9 ("not yet confirmed on live traffic") can now be **closed** — production wrote 10 triples
+and 24 chunks and fired supersede 4 times since loop 1, with live duplicate groups still at zero.
+
+Carried forward, unchanged and still not blocking: C10-1 (migration run id never recorded), C10-3
+(69 superseded rows retained, nothing reads them, no compaction policy written down), C10-4 (the
+migration's `'|'`-concatenated `k`, latent), C10-7 (`tripleCount` label), C10-8 (panel row disappears
+instead of reporting unknown). One new non-blocking note: `rag_triples_live_key_idx` is
+`(scope, lower(subject), lower(predicate)) WHERE superseded_at IS NULL` and does **not** include
+`agent_id`, so the supersede UPDATE now filters that column after the index scan. Irrelevant at 475 rows;
+worth remembering if the table ever grows.
