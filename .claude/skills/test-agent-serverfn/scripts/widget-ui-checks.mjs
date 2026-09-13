@@ -180,12 +180,25 @@ export const checks = [
     }
     const ratio = await page.evaluate(() => {
       const vh = window.innerHeight;
-      const blocks = [...document.querySelectorAll("main *, [role=main] *")]
+      // FALSE NEGATIVE FIXED (2026-09-13, run 34763566801): this queried `main *, [role=main] *`,
+      // this app renders no <main> landmark, so it matched NOTHING and reported 0% — i.e. "the view
+      // is a tiny card" — while the screenshot from that very run shows the view filling the panel
+      // edge to edge. A selector that matches nothing must never be read as a measurement of zero.
+      const scope = document.querySelector("main, [role=main]") || document.body;
+      const blocks = [...scope.querySelectorAll("*")]
         .map((e) => e.getBoundingClientRect())
         .filter((r) => r.width > 240 && r.height > 100);
-      if (!blocks.length) return 0;
+      if (!blocks.length) return -1; // -1 = NOT MEASURED, distinct from a real 0%
       return Math.max(...blocks.map((r) => r.height)) / vh;
     });
+    if (ratio < 0) {
+      check(
+        "the Schedule view FILLS its panel rather than floating a small card in it",
+        false,
+        "NOT MEASURED — no content blocks matched, so there is no ratio. Treat as UNPROVEN, not as a layout verdict.",
+      );
+      return;
+    }
     check(
       "the Schedule view FILLS its panel rather than floating a small card in it",
       ratio >= 0.5,
