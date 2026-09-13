@@ -104,3 +104,109 @@ Two further incompatibilities the implementer did not claim: `priority: string |
 `TaskPriority`, and `is_priority: boolean | null` vs `boolean` — `scoreTask` reads
 `PRIORITY_WEIGHT[task.priority]`, which is `undefined` for a null. The producer swap was
 **necessary scope, not over-reach**.
+
+## Claim 3 — `dispatchPrioritize` and every other `rankTasks` caller behaviourally unchanged — **CONFIRMED (for the branch's own base) — see FINDING 1**
+
+```
+$ git diff origin/main...HEAD -- src/features/huddle/lib/tasks/tools.ts
+[no output]
+$ git diff origin/main...HEAD -- src/features/huddle/lib/tasks/scoring.ts
+[no output]
+```
+
+`grep -rn "rankTasks" src/ scripts/` shows exactly two non-comment call sites: `tools.ts:246`
+(`dispatchPrioritize`, untouched) and the new `standup.server.ts:50`. Nothing else calls it.
+`scoring.ts` is byte-identical to the merge-base, so no caller can have changed behaviour.
+
+## Claim 4 — the parked task is in NEITHER surface now, and WAS first before — **CONFIRMED, independently reconstructed**
+
+New code, `bun scripts/standup-ranking.test.ts`:
+
+```
+prioritize: ["Real priority","Non-priority with rank 1","Same Title Task","Plain work item"]
+standup:    ["Real priority","Non-priority with rank 1","Same Title Task","Plain work item"]
+```
+
+`Prepare investor pitch` (tags `["parking-lot"]`, `priority_rank: 1`, `is_priority: true`,
+`priority: "URGENT"`) is absent from both.
+
+I did **not** trust the note for the "did appear first" half. I copied origin/main's removed hunk
+verbatim into a standalone script over the identical fixture
+(`scratchpad/old-sort.ts`) and ran it:
+
+```
+$ bun /tmp/.../scratchpad/old-sort.ts
+OLD standup priorities: ["Prepare investor pitch","Non-priority with rank 1","Real priority","Same Title Task","same title task  "]
+parked task index under OLD code: 0
+```
+
+The parked task was **index 0** — the first thing the owner was told to work on. The same run also
+shows the old code independently violated AC-SU-4 (`Real priority` at index 2, not 0) and AC-SU-5
+(both `Same Title Task` duplicates listed). The leak was real and three-way.
+
+## Claim 7 — `buildBrief` signature + downstream path reconcile — **CONFIRMED**
+
+`git diff origin/main...HEAD -- standup.server.ts` contains **no hunk touching `buildBrief`**; the
+only three hunks are the `import`, the new `selectStandupPriorities`, the destructure line, and the
+`priorities` block. The call site is unchanged:
+
+```
+  await surfaceDigest({ email, tz, caller, brief: buildBrief(produced, movedToReview, blocked, priorities), runId });
+```
+
+`priorities` is still `{ title, agent }[]` — `selectStandupPriorities` returns exactly
+`{ title: string; agent: string | null }[]`. `scripts/blocked-line.test.mjs` imports `buildBrief`
+with the same 4-arg shape and is unaffected. Downstream, `surfaceDigest` receives `brief` as a
+string, so `enqueueTurn → runTurnById` is untouched.
+
+---
+
+# FINDING 1 (material, not in the implementer's account) — the branch is **219 commits behind `origin/main`**, and `rankTasks` has ALREADY grown a third parameter there
+
+```
+$ git rev-list --left-right --count origin/main...HEAD
+219	5
+$ git merge-base origin/main HEAD
+5002158bfc85c8ee95f4fa69545c5f555dd02635
+```
+
+Every claim above was verified against the **merge-base**, which is the right frame for "did this
+change duplicate anything". But `origin/main` has since changed the very function this lane
+single-sources on:
+
+```
+$ git diff origin/main HEAD -- src/features/huddle/lib/tasks/scoring.ts
+-export function rankTasks(tasks: ScorableTask[], limit = 25, excludeIds?: ReadonlySet<string>): RankedTask[] {
++export function rankTasks(tasks: ScorableTask[], limit = 25): RankedTask[] {
+```
+
+(direction is origin/main → branch, i.e. **main has `excludeIds`; the branch's base does not**),
+and `dispatchPrioritize` on main already passes it:
+
+```
+$ git show origin/main:src/features/huddle/lib/tasks/tools.ts | grep -n "rankTasks("
+410:    const ranked = rankTasks(inView, limit, await taskIdsInReminderWindow(userEmail));
+```
+
+`selectStandupPriorities` calls `rankTasks(filtered, limit)` — **two arguments**. `excludeIds` is
+optional, so nothing fails to compile. The consequence is behavioural and is exactly the defect
+class this lane exists to close:
+
+> **On merge, a `reminder`-tagged task inside its reminder window will be DROPPED by `prioritize`
+> and still SURFACE in the stand-up.** AC-SU-3 ("the two title lists are identical and in the same
+> order") is reopened by the merge itself.
+
+The committed guard does not protect against this quietly: after merge, `dispatchPrioritize` would
+call `taskIdsInReminderWindow`, which the test's `mock.module` replaces away (the stub exports only
+`getTasksForUser`), so the suite would throw rather than pass — loud, but it means the guard must be
+re-authored at merge time, and the obvious "fix" (stub it to an empty set) would make the divergence
+invisible again.
+
+**Smallest change that would fix it:** give `selectStandupPriorities` an `excludeIds` parameter and
+forward it, and have `runScheduledStandup` pass `await taskIdsInReminderWindow(email)` — the same
+value `dispatchPrioritize` passes. To be done as part of merging `origin/main` into the branch,
+which has to happen anyway.
+
+`origin/main`'s `standup.server.ts` still carries the raw sort at line 165, so the branch is not
+racing another fix — but it is also missing 219 commits of main, including an `artifacts` "Uploads"
+discrimination filter in this same function that the branch's base predates.
