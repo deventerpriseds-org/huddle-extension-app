@@ -440,3 +440,83 @@ itself invented**. With the spec's four hues (70 / 150 / 250 / 300) the closest 
 So `scripts/widget-colors.test.ts` does not merely fail to catch the CAREER/VENTURES defect; it
 would **block the fix**. Whoever corrects those two values must also relax or re-justify that
 floor — it is an invented constraint that the design it is supposed to protect does not satisfy.
+
+---
+
+## THE TEN PREVIOUSLY-CONFIRMED ITEMS — re-checked at reduced depth, one command each
+
+| # | claim | evidence this session | verdict |
+|---|---|---|---|
+| 1 | Dock scoped to `dm-iris-chase`, single site | `WIDGET_DOCK_HUDDLE_ID = "dm-iris-chase"` (`JourneyWidgets.tsx:68`); one render site, `HuddleView.tsx:348` `{huddle.id === WIDGET_DOCK_HUDDLE_ID && <DockedJourneyWidgets />}` | **CONFIRMED** |
+| 2 | No second writer to `tasks.journey_tasks` | `grep -rn "tasks.journey_tasks" src/` + insert/update/delete filter → only `tasks.server.ts:333` (the sync webhook upsert) and `:373` (delete). **Nothing in `widgets.*`** — every widget write goes out via `invokeJourneyTool` | **CONFIRMED** |
+| 3 | Ownership gate precedes every write in `updateWidgetTask` | gate `getOwnedTaskForConfirmAsk` at `widgets.functions.ts:264` + `if (!owned) return fail(…)` at `:265`; the function's **only** `invokeJourneyTool(` call is at `:304` | **CONFIRMED** |
+| 4 | No migration needed | `git diff --name-only origin/main...HEAD \| grep -iE "\.sql$\|migration\|schema"` → **empty**. 37 files on the branch, not one of them SQL | **CONFIRMED** |
+| 5 | `getBoardTasks` extended, not duplicated | exactly one definition: `tasks.server.ts:1601` | **CONFIRMED** |
+| 6 | journey tool count 26 → 27, huddle-proxy unchanged | `grep -c 'name: "'` on `_shared/tool-definitions.ts` = **27**; at `ec508a5^` = **26**. `git show --name-only ec508a5` touches 3 files, none of them huddle-proxy | **CONFIRMED** |
+| 7 | Write path matches journey's real schemas | `widgets.functions.ts` emits only `move_task_to_day` (`:280`), `unschedule_task` (`:283`), `update_task` (`:293`, `:300`) — and the `tags` union feeding `:295` is the measured table above | **CONFIRMED** |
+| 8 | Degrades rather than blanking | `TopicsEmpty` (`:620`, rendered `:693`), `"Nothing in progress"` (`:786`), `WidgetUnreachable` on a null payload (`:953`, `:962`) | **CONFIRMED** |
+| 9 | `npx tsc --noEmit` exits 0 | run standalone, not through a pipe: `TSC_EXIT=0` | **CONFIRMED** |
+| 10 | A parked task cannot re-enter DOING by any path | `ACTION_STATUS.pause = "BACKLOG"` (`widgets.server.ts`), and the tag is filtered at all three automation entry points: `autowork.server.ts:533`, `groom.ts:121`, `scoring.ts:137` — plus `groom.ts:225` keeps `parking-lot` in `CONTROL_TAGS` so a groom cannot strip it | **CONFIRMED** |
+
+N-1 (the docblock) is **CONFIRMED** from `git show 1bd280c`: `⏸ pause → update_task status=UP_NEXT`
+is replaced by `BACKLOG *plus* the parking-lot tag`, and the missing `↺ reopen` row is added.
+
+---
+
+## PHONE WIDTH (~390px) — **no regression is possible from this change, by construction**
+
+The removed class was `lg:grid-cols-2` (`git show 9a8bbde^` → `:934`
+`<div className="grid gap-3 px-2 pb-2 lg:grid-cols-2">`). `lg:` is Tailwind's **1024px**
+breakpoint (no `screens` override in this repo's Tailwind config), so **below 1024px that class
+never applied**. The old element was `display:grid` with no explicit columns — a single stretched
+column with a `gap-3`. The new element is `flex flex-col gap-3` — also a single stretched column
+with a `gap-3`. At 390px the two are equivalent; the change is a desktop-only change.
+
+Structural scan for anything that could force a horizontal scrollbar: the only fixed width in the
+whole file is `w-[3px]` (the topic rail bar, `:578`). Every title cell is `min-w-0 flex-1 truncate`
+(`:550, :592, :654, :710, :728`) and every control is `shrink-0` — the two properties that make a
+flex row shrink instead of overflow. No `min-w-[…]`, no `overflow-x`, no `whitespace-nowrap` on a
+long string.
+
+**Stated limit:** this is a source-level structural check. There is no browser here, so **no layout
+was measured**. Status: *structurally sound at phone width, NOT observed.*
+
+---
+
+## LINT — no increase
+
+`npx eslint src/features/huddle/components/JourneyWidgets.tsx` → **36 problems (36 errors, 0
+warnings)**, all `prettier/prettier`-class and all `--fix`-able. LANE-E measured **36** at the
+branch base `a772e42` and **36** after its fixes; I measure **36** now. **Net contribution: zero.**
+Pre-existing repo-wide lint failure is not reported as a finding, per the brief.
+
+---
+
+## DEFECTS, RANKED
+
+| # | severity | defect | evidence |
+|---|---|---|---|
+| **D-1** | **MODERATE** | **`CATEGORY_HUES` gives CAREER and VENTURES the wrong colour family — effectively swapped against the spec.** Spec (measured from `spec-priorities-widget.jpg` pixels): Career **149°** green, Ventures **303°** purple. Code: `CAREER 340` magenta, `VENTURES 160` teal — **151°** and **143°** off. The code's VENTURES sits 11° from the spec's CAREER. | `widget-colors.ts:32-37`; JPEG pixel scan pasted above |
+| **D-2** | **MODERATE** | **`scripts/widget-colors.test.ts` would BLOCK the fix for D-1.** Its invented ≥60° pairwise floor rejects the spec's own four hues (closest pair `LIFE/VENTURES` = 50°). Mutation run: substituting the measured spec values makes `every pair … is visually distinct` FAIL. | mutation output pasted above |
+| **D-3** | LOW–MOD | **N-3 is only partly fixed: three implementations of the park-tag union remain**, not one. `HuddleView.tsx:566` (chat checklist, own `PARKING_LOT_TAG` const at `:389`) and `BoardView.tsx:750` (bare literal) both still build it inline, and neither normalizes case — so both still carry the exact N-2 bug the helper just fixed. Pre-existing, outside the radius, but the claim "one implementation now" is false. | `grep -rn "parking-lot\|PARKING_LOT_TAG" src/` |
+| **D-4** | LOW | **`lovableTools.build_checklist` never calls `recordToolUse`**, and reply-assembly recovers the checklist payload only from a toolUse `detail` — so the CHECKLIST renders nothing on the Lovable backend. **Pre-existing**, correctly flagged and correctly not fixed by the wiring lane. Independently confirmed, including a failed falsification attempt for a generic step recorder. | `huddle.functions.ts:5472-5496`, `:6254-6256` |
+| **D-5** | LOW | **Reader/writer case asymmetry inside `widgets.server.ts`**: `isParked` (`:245`) is case-insensitive, `withParkingLotTag` (`:263`) is case-exact. A task tagged `Parking-Lot` ends up carrying BOTH tags after one park, and `BoardView.tsx:794` renders both as chips. Deliberate and beneficial (the automation filter is exact-match) but undocumented. | execution table pasted above |
+| **D-6** | LOW | **The N-7 empty-state buttons render at 50 % opacity** (`CTRL_BASE` carries `disabled:opacity-50`), where the spec draws them at full saturation. A consequence of reusing `CTRL_BASE`; an owner decision, not a bug. | rendered DOM pasted above |
+
+### Nothing new found in
+
+Items 1, 3, 5, 7, 9, 10 of the previously-confirmed list; the end-to-end tool wiring; `Rail.tsx`;
+the stacked dock; the in-JSX comment; N-1, N-8, N-9; the confirm-ask path (bit-identical);
+migrations (none); lint (no increase).
+
+### What could NOT be verified here, and why
+
+- **No browser, so no rendered widget, no layout, no visual fidelity beyond the DOM string.** The
+  branch is not deployed and there is no Playwright run in this pass.
+- **No live DB** (TCP 5432 blocked, no PG credentials), so `getBoardTasks` was never executed and
+  no real board row ever reached a widget.
+- **journey's `get_task_topics` is not deployed** — `topics` is hard-coded to
+  `{ ok:false, roots:[], reason:"ok" }` by both dispatchers (`tools.ts:297`), so the topic rail
+  (and therefore the CAREER/VENTURES colours of D-1) has never rendered with real data.
+- **No agent has been observed choosing to call either widget tool**, on either backend.
+- **The Lovable backend was not exercised at all.**
