@@ -3972,3 +3972,31 @@ hand it strictly less.
 **Tier 2** (ordinary logic — no gate, no score, no accusation). Implement + build + mutation-prove any
 new guard; batch a verifier after both lanes land. **Status: IN FLIGHT — nothing verified, nothing
 deployed, and nothing here may be written as "fixed" until the owner sees it in his own app.**
+
+## ACT:no-pr-ci — huddle has NO pull-request CI; the only gate before prod is the author's local build
+
+**Found 2026-09-13** while checking PR #62 for the drive-to-green posture. Measured, not inferred:
+- `grep -ln "pull_request" .github/workflows/*.yml` → **no files**.
+- GitHub check-runs API for the PR head `dce32da` → **`check_runs: 0`**.
+
+**Why it matters:** `deploy-swa.yml` auto-deploys on every push to `main` (deliberate, owner-requested
+2026-08-06). Combined with no PR CI, the complete chain from a commit to production is:
+
+```
+feature branch -> (nothing runs) -> merge to main -> deploy-swa.yml -> PROD
+                       ^
+                  the ONLY gate is whatever the author happened to run locally
+```
+
+A typecheck or build error reaches production if the author skipped `tsc`/`npm run build`, and the
+first signal is the deploy itself. This is also why the "poll the deploy run's `head_sha`" discipline
+in CLAUDE.md carries so much weight here — it is the sole automated check in the funnel.
+
+**NOT fixed, and deliberately not fixed in-flight:** adding CI is scope the owner has not asked for,
+and standing it up mid-change would collide with two running lanes. Surfaced for a decision, not
+actioned. If taken up, the cheap version is a `pull_request` workflow running the same typecheck +
+production build the deploy already runs — no new secrets, no new infrastructure.
+
+**Consequence for ACT:artifact-rich-formats:** PR #62 will never go green or red on its own. Its gate
+is the lanes' local typecheck + build, reported in their evidence files — there is no CI verdict to
+wait for and none to read.
