@@ -376,14 +376,105 @@ only missing affordance I found across both specs.
 
 ---
 
+## Lane C: `store.ts` + the second render path (HuddleView) — loop 1 NOT REACHED, reached here
+
+### store.ts — EXTENDS, does not duplicate. CONFIRMED
+
+`git show 4c68ff2 -- src/features/huddle/store.ts` (44 lines changed, no new map):
+- `View` became `export type View = "huddle"|"board"|"artifacts"|"priorities"|"schedule"` — exported
+  so the header switcher and the mobile switcher stop re-declaring the union by hand
+- `ChecklistRowState` gained one optional field, `today?: boolean`, correctly OPTIONAL so a checklist
+  seed (which has no Today notion) cannot masquerade as an authoritative "not today" (`:343` spreads
+  the key only when defined)
+- **no second state map** — the widgets reuse `checklistState`, keyed by journey taskId
+
+That last point is the right call and it is what makes N-8 below possible; the two are the same
+design decision seen from its two sides.
+
+### The second render path — CONFIRMED, three surfaces, one component
+
+| surface | site | data source |
+|---|---|---|
+| docked pair in Iris's 1:1 | `HuddleView.tsx:348` `{huddle.id === WIDGET_DOCK_HUDDLE_ID && <DockedJourneyWidgets />}` | LIVE (`getScheduleWidget`/`getPrioritiesWidget` in a `useEffect`, `JourneyWidgets.tsx:760`, `:782`) |
+| in-chat message cards | `HuddleView.tsx:939-948` `{m.priorities && <PrioritiesWidget data={m.priorities} />}` | the message's own frozen SNAPSHOT |
+| full-page side-menu views | `JourneyWidgets.tsx:890`, `:898` | LIVE |
+
+The dock is rendered ABOVE the message list and is NOT a message, so it never enters `history`, the
+turn payload, or the unread watermark (`:817-822`) — a pinned message would have leaked a widget
+payload into every prompt. That reasoning checks out against the repo's own memory architecture.
+
+---
+
+## N-8 (MODERATE) — a stale in-chat snapshot can pin a wrong status onto the LIVE docked widget, for the whole session
+
+This is the best finding of the loop and it falls out of the shared-map design confirmed above.
+
+**The mechanism, as a chain:**
+
+1. `useSeededRows` (`JourneyWidgets.tsx:215-225`) is the ONLY thing all three surfaces use to
+   populate the row map, and it calls `seedChecklistRows`.
+2. `seedChecklistRows` (`store.ts:333-347`) **skips any row already tracked** — `:340`
+   `if (next[r.taskId]) continue;`. First writer wins, permanently.
+3. An in-chat card renders from `m.priorities` **synchronously on mount**, so its seed lands
+   immediately. The docked/full-page copies fetch **asynchronously** (`:760-772`) and only render —
+   and only seed — once the promise resolves, hundreds of ms later.
+4. By then step 2 skips every task the stale snapshot already claimed.
+5. `useRowState` (`:161-169`) prefers the map (`live?.status ?? rowStatus(row)`), so **both** the
+   in-chat card and the live docked widget now display the stale value.
+
+**The repo already solved this, and the widgets declined the solution.** The chat checklist does it
+in two stages — `HuddleView.tsx:436` seeds from the snapshot for an instant paint, then `:453`
+`refreshChecklistRows(fresh)` overwrites with server truth. `refreshChecklistRows` exists, is
+documented "Overwrite rows with fresh SERVER truth (mount refresh)", and is used by exactly one
+caller. `grep` across `src/`: the widgets never call it.
+
+**The stated reason for omitting it does not survive contact with the function.**
+`JourneyWidgets.tsx:211-214` says:
+
+> *"unlike the chat checklist, there is no second reconcile read here … A refetch immediately after
+> a write would hand back the PRE-write value (~1-3s propagation) and visibly undo the user's tap."*
+
+That hazard is real, and `refreshChecklistRows` **already guards exactly it** — `store.ts:354`
+`if (next[r.taskId]?.busy) continue;`, whose own comment reads *"A row mid-write is the ONE case
+server truth must not win: the write has not landed yet, so the server would hand back the pre-click
+value and visibly undo the user's tap."* The two comments describe the same hazard; one of them is
+the guard against it. The widgets reasoned their way out of using the function that solves their
+stated problem.
+
+**Observation vs interpretation, kept separate:** what I have PROVEN is the code path — seed-only,
+skip-if-present, async live read, shared map, and `refreshChecklistRows` unused by the widgets
+(all file:line above, all read this session). What I have NOT done is observe the wrong status on
+screen: that needs a live mount with a real stale message, and the branch is not deployed. The
+ordering in step 3 follows from a synchronous render versus a promise, which I consider solid, but
+it is inference from the code rather than a measurement.
+
+**One-line fix:** give `useSeededRows` a `live` flag — snapshot surfaces keep `seedChecklistRows`,
+the two live surfaces call `refreshChecklistRows`, which is already busy-guarded.
+
+## N-9 (LOW) — the double-tap guard is inoperative on an unseeded row
+
+`runAction` (`JourneyWidgets.tsx:181-189`) guards re-entry with `if (before.busy) return;` and then
+records `busy: true` via `setChecklistRow`. But `setChecklistRow` (`store.ts:364-368`) opens with
+`if (!cur) return {};` — **it is a silent no-op for a row not already in the map.** So for an
+unseeded row: the optimistic paint does nothing, `busy` is never recorded, a second tap also passes
+the guard, and two concurrent writes go to journey for the same task.
+
+`runAction:182` anticipates the unseeded case (`store.checklistState[row.id] ?? {…}` builds a
+fallback), so the author knew the row might be absent — the asymmetry is that `rollbackChecklistRow`
+(`:370-371`) replaces unconditionally and would CREATE a row that never existed, while
+`setChecklistRow` refuses to. Trigger is narrow (a tap between mount and the seed effect flushing),
+which is why this is LOW, not MODERATE — but it disables precisely the race the guard exists for.
+
+---
+
 ## NOT VERIFIED THIS LOOP
 
 - `huddle.functions.ts`, `Rail.tsx`, `docs/LANE-D-widget-tool-wiring.md` — **DEFERRED TO LOOP 3**.
   A concurrent agent owns them; both files were dirty in the working tree during this pass, so
   anything observed there would be mid-edit and worthless as evidence.
 
-- **store.ts / data/seed.ts Lane C changes** — NOT REACHED (budget).
-- **The second widget render path at HuddleView.tsx:938** — NOT REACHED (budget).
+- **`data/seed.ts` Lane C changes** — NOT REACHED (budget). `store.ts` and the second render path
+  were reached; see below.
 - **Handler-body runtime behaviour** (`getScheduleWidget` / `getPrioritiesWidget` /
   `updateWidgetTask` executed end to end) — UNVERIFIABLE HERE. Each handler's first act is a
   dynamic `import("./tasks.server")` → `getPool()` against Azure PG; TCP 5432 is blocked from this
@@ -396,12 +487,14 @@ only missing affordance I found across both specs.
 
 | # | severity | defect | status |
 |---|---|---|---|
+| N-8 | **MODERATE** | a stale in-chat widget snapshot seeds the shared row map first and permanently, so the LIVE docked widget displays the stale status; `refreshChecklistRows` (which the chat checklist uses, and which already busy-guards the hazard the widgets cite for skipping it) is never called by the widgets | open |
 | N-5 | **MODERATE** | `LIFE` and `EDUCATION` chips render as near-identical greens (hue 108 vs 128); the comment claims spec colours (blue/amber) the hash cannot produce | open |
 | N-6 | LOW–MODERATE | the stated "topic and category of the same name agree in colour" invariant is false 5/5 — case-sensitive hash vs upper-snake categories | open |
 | N-1 | LOW–MODERATE | `updateWidgetTask` docblock still documents `⏸ pause → status=UP_NEXT`, the exact defect 966bd2f fixed, and omits `reopen` | open |
 | N-2 | LOW | pause dedups case-insensitively, auto-work filters case-sensitively — a pre-existing mixed-case `Parking-Lot` tag would read as parked while staying an automation candidate | open |
 | N-3 | LOW | the park tag-union is duplicated between `confirm-ask.functions.ts:648-654` and `widgets.functions.ts:291-297`, with divergent case semantics (the source of N-2) | open |
 | N-7 | LOW | CURRENTLY DOING drops the spec's ✓/⏸ in the empty state — owner's call, not clearly a bug | open |
+| N-9 | LOW | the double-tap guard in `runAction` is inoperative on an unseeded row, because `setChecklistRow` silently no-ops when the row is absent — two concurrent writes can reach journey | open |
 | N-4 | INFO | journey's `updateTask` has no ownership predicate; Huddle's gate is the only control on this path (pre-existing, out of radius) | noted |
 
 **No HIGH defects found this loop.** All three loop-1 defects are closed, each re-derived from
