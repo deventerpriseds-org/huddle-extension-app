@@ -33,7 +33,8 @@
     "test:widget-band-color": "bun scripts/widget-band-color.test.ts",
     "test:widget-topics": "bun scripts/widget-topic-tree.test.ts",
     "test:viewport-height": "bun scripts/app-viewport-height.test.ts",
-    "test:artifact-preview": "bun scripts/artifact-preview.test.ts"
+    "test:artifact-preview": "bun scripts/artifact-preview.test.ts",
+    "test:artifact-render": "bun scripts/artifact-render.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
