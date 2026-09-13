@@ -206,22 +206,36 @@ async function runAction(
   }
 }
 
-/** Seed the shared row map from a payload. Never overwrites a row the user already acted on
- *  (`seedChecklistRows`' own guarantee), so re-rendering a snapshot cannot revert an action.
- *  NOTE: unlike the chat checklist, there is no second reconcile read here — these payloads already
- *  come from a live Lane-B read on mount (docked/full-page) or are the message's own snapshot, and
- *  the optimistic overlay is what covers the mirror lag. A refetch immediately after a write would
- *  hand back the PRE-write value (~1-3s propagation) and visibly undo the user's tap. */
-function useSeededRows(rows: WidgetTaskRow[]) {
+/** Populate the shared row map from a payload, in the SAME two stages the chat checklist uses
+ *  (HuddleView.tsx: `seedChecklistRows` from the snapshot for an instant paint, then
+ *  `refreshChecklistRows` with server truth).
+ *
+ *  WHY TWO STAGES AND NOT ONE SEED. `seedChecklistRows` skips any row it already tracks, so the
+ *  FIRST payload to reach the map wins permanently. An in-chat card renders its frozen snapshot
+ *  SYNCHRONOUSLY on mount; the docked and full-page copies read Lane B asynchronously and seed
+ *  hundreds of ms later, by which time every row they share with the stale card is skipped. Both
+ *  surfaces then render the stale value, because `useRowState` prefers the map. So the LIVE
+ *  surfaces must overwrite, not seed.
+ *
+ *  THE HAZARD THAT USED TO JUSTIFY SEEDING ONLY is already guarded inside the function we now call:
+ *  a refetch right after a write would hand back the PRE-write value (~1-3s mirror propagation) and
+ *  visibly undo the user's tap — and `refreshChecklistRows` (store.ts) skips any row with
+ *  `busy: true` for exactly that reason. The optimistic overlay still covers the write window.
+ *
+ *  @param live `true` for a surface whose rows came from a Lane-B read this mount (docked /
+ *  full-page). A message snapshot passes nothing and keeps seed-only semantics, so a re-rendered
+ *  old card can never stomp a newer value. */
+function useSeededRows(rows: WidgetTaskRow[], live?: boolean) {
   const seedChecklistRows = useHuddleStore((s) => s.seedChecklistRows);
+  const refreshChecklistRows = useHuddleStore((s) => s.refreshChecklistRows);
   const key = useMemo(() => rows.map((r) => `${r.id}:${r.isToday ? 1 : 0}`).join(","), [rows]);
   useEffect(() => {
     if (!rows.length) return;
-    seedChecklistRows(
-      rows.map((r) => ({ taskId: r.id, status: rowStatus(r), tags: r.tags, today: r.isToday })),
-    );
+    const mapped = rows.map((r) => ({ taskId: r.id, status: rowStatus(r), tags: r.tags, today: r.isToday }));
+    if (live) refreshChecklistRows(mapped);
+    else seedChecklistRows(mapped);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, seedChecklistRows]);
+  }, [key, live, seedChecklistRows, refreshChecklistRows]);
 }
 
 /* ── Controls ────────────────────────────────────────────────────────────────────────────────────
@@ -575,15 +589,19 @@ export function PrioritiesWidget({
   full,
   title,
   onSettings,
+  live,
 }: {
   data: PrioritiesWidgetData;
   full?: boolean;
   /** Optional heading override (an agent can scope the card, e.g. "Career priorities"). */
   title?: string;
   onSettings?: () => void;
+  /** `data` came from a Lane-B read this mount, so it is server truth and must beat any stale
+   *  snapshot already in the shared row map. See `useSeededRows`. */
+  live?: boolean;
 }) {
   const caller = useCaller();
-  useSeededRows(data.band);
+  useSeededRows(data.band, live);
 
   return (
     <div className="overflow-hidden rounded-xl border border-hairline bg-surface shadow-soft">
@@ -670,7 +688,16 @@ function UpNextRowItem({ row, caller }: { row: WidgetTaskRow; caller: Caller }) 
   );
 }
 
-export function ScheduleWidget({ data, full }: { data: ScheduleWidgetData; full?: boolean }) {
+export function ScheduleWidget({
+  data,
+  full,
+  live,
+}: {
+  data: ScheduleWidgetData;
+  full?: boolean;
+  /** See `PrioritiesWidget.live` / `useSeededRows` — live server truth overwrites a stale snapshot. */
+  live?: boolean;
+}) {
   const caller = useCaller();
   // ONE seed pass over every row in the widget, so a task that Lane B legitimately places in two
   // sections is tracked once and agrees with itself. (Lane B de-dupes `upNext` against the other
@@ -679,7 +706,7 @@ export function ScheduleWidget({ data, full }: { data: ScheduleWidgetData; full?
     () => [...data.todaySchedule, ...data.currentlyDoing, ...data.upNext],
     [data.todaySchedule, data.currentlyDoing, data.upNext],
   );
-  useSeededRows(allRows);
+  useSeededRows(allRows, live);
   const doing = data.currentlyDoing[0];
 
   return (
@@ -860,14 +887,17 @@ function LivePrioritiesWidget({ full }: { full?: boolean }) {
   const { loading, data } = usePrioritiesData();
   if (loading) return <WidgetPlaceholder label="Loading your priorities…" />;
   if (!data) return <WidgetUnreachable label="your priorities" />;
-  return <PrioritiesWidget data={data} full={full} />;
+  // `live` — this payload IS the Lane-B read, so it must overwrite any stale in-chat snapshot that
+  // seeded the shared row map first (see useSeededRows).
+  return <PrioritiesWidget data={data} full={full} live />;
 }
 
 function LiveScheduleWidget({ full }: { full?: boolean }) {
   const { loading, data } = useScheduleData();
   if (loading) return <WidgetPlaceholder label="Loading your schedule…" />;
   if (!data) return <WidgetUnreachable label="your schedule" />;
-  return <ScheduleWidget data={data} full={full} />;
+  // `live` — same reason as LivePrioritiesWidget.
+  return <ScheduleWidget data={data} full={full} live />;
 }
 
 /* ── Full-page views (side menu) ─────────────────────────────────────────────────────────────────── */

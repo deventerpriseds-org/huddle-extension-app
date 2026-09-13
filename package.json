@@ -24,7 +24,8 @@
     "test:green-light": "bun scripts/green-light.test.ts",
     "test:assign-on-create": "bun scripts/assign-on-create.test.ts",
     "test:verdict-memory": "bun scripts/verdict-memory.test.ts",
-    "test:widget-park": "bun scripts/widget-park.test.ts"
+    "test:widget-park": "bun scripts/widget-park.test.ts",
+    "test:widget-live": "bun scripts/widget-live-refresh.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
