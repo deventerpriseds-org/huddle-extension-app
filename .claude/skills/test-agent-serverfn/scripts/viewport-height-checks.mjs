@@ -163,6 +163,7 @@ async function c3SimulatedShrink({ page, check, screenshot }) {
   }
 
   const TARGET_VISUAL = 500; // ~344px of "keyboard" on an 844px-tall phone
+  state.target = TARGET_VISUAL;
   const attempts = [];
 
   // Attempt 1 — Emulation.setVisibleSize: the only CDP call that shrinks the VISUAL viewport while
@@ -193,8 +194,29 @@ async function c3SimulatedShrink({ page, check, screenshot }) {
     } catch (e) { a2.error = String(e.message || e); }
     attempts.push(a2);
     if (a2.after && a2.after.vvHeight != null && Math.abs(a2.after.vvHeight - before.vvHeight) > 5) chosen = a2;
+
+    if (!chosen) {
+      // Attempt 3 — Playwright's own page.setViewportSize. Same limitation as attempt 2 (it moves the
+      // layout viewport too) but it is Playwright-MANAGED, so it survives a page.screenshot(); a raw
+      // CDP override does not, which produced a false-pass C4 on run 34783668711.
+      let a3 = { api: "page.setViewportSize", error: null, after: null };
+      try {
+        await page.setViewportSize({ width: 390, height: TARGET_VISUAL });
+        await page.waitForTimeout(600);
+        a3.after = await probe(page);
+      } catch (e) { a3.error = String(e.message || e); }
+      attempts.push(a3);
+      if (a3.after && a3.after.vvHeight != null && Math.abs(a3.after.vvHeight - before.vvHeight) > 5) chosen = a3;
+    }
   }
 
+  // Whatever produced the shrink, RE-ASSERT it through Playwright so it survives the screenshot the
+  // next line takes and the one C4 takes after it. Run 34783668711: C3 measured 500px, then
+  // page.screenshot() cleared the CDP override, and C4 measured 844px while believing it was still
+  // shrunk — a check reporting a number from a state that no longer existed.
+  await client.send("Emulation.clearDeviceMetricsOverride").catch(() => {});
+  await page.setViewportSize({ width: 390, height: TARGET_VISUAL }).catch(() => {});
+  await page.waitForTimeout(400);
   await screenshot("c3-after-shrink");
 
   const tried = attempts
@@ -235,6 +257,16 @@ async function c4NavStaysAtBottom({ page, check, screenshot }) {
       `NOT MEASURED: ${NAV} not present after the shrink (at md+ widths it is hidden by design; this run is 390px wide, so absence here would itself be notable). shell found=${p.shellFound}`);
     return;
   }
+  // STATE GUARD. The shrink must still be in effect AT PROBE TIME. On run 34783668711 it was not —
+  // page.screenshot() had cleared the CDP override — and this check happily reported a 0.0px gap
+  // measured at the FULL 844px height while its name claimed "after shrink". A number from a state
+  // that no longer exists is worse than no number, so refuse to grade rather than report that again.
+  if (p.vvExpected == null || Math.abs(p.vvExpected - state.target) > 5) {
+    check("C4 bottom nav stays within the visible region after shrink", false,
+      `NOT MEASURED: the shrink was not in effect when this check probed — visible height=${p.vvExpected}px, expected ~${state.target}px. The state reverted between C3 and C4, so no post-shrink nav position was measured. Not a product verdict.`);
+    return;
+  }
+
   const visible = p.vvExpected ?? p.layoutClientHeight;
   const gap = visible - p.navRect.bottom;
   const withinFold = p.navRect.bottom <= visible + 1;
@@ -257,11 +289,9 @@ async function c6NoErrors({ check }) {
 /** C5a — runtime fallback: strip --app-h and the shell must fall back to 100dvh, still non-zero.
  *  No auth risk, so it runs before the reload variant and is the corroborator if C5b cannot run. */
 async function c5aRuntimeFallback({ page, check, screenshot }) {
-  if (state.cdp) {
-    await state.cdp.send("Emulation.clearDeviceMetricsOverride").catch(() => {});
-    await state.cdp.send("Emulation.setVisibleSize", { width: 390, height: 844 }).catch(() => {});
-    await page.waitForTimeout(500);
-  }
+  if (state.cdp) await state.cdp.send("Emulation.clearDeviceMetricsOverride").catch(() => {});
+  await page.setViewportSize({ width: 390, height: 844 }).catch(() => {});
+  await page.waitForTimeout(500);
   const res = await page.evaluate(() => {
     const root = document.documentElement;
     const saved = root.style.getPropertyValue("--app-h");
@@ -283,6 +313,7 @@ async function c5aRuntimeFallback({ page, check, screenshot }) {
  *  LAST, because the UAT token is single-use and the reload navigates without it. If the app comes
  *  back unauthenticated, that is a HARNESS limit and is reported as NOT PROVEN, never as REFUTED. */
 async function c5bDegradeOnLoad({ page, check, screenshot }) {
+  const errorsBefore = mine.consoleErrors.length;
   await page.context().addInitScript(() => {
     try {
       Object.defineProperty(window, "visualViewport", { get: () => undefined, configurable: true });
@@ -313,9 +344,11 @@ async function c5bDegradeOnLoad({ page, check, screenshot }) {
       `NOT PROVEN: the init script did not take — window.visualViewport is still present after reload. Page text: "${res.bodyText}"`);
     return;
   }
+  const newErrors = mine.consoleErrors.slice(errorsBefore);
   if (!res.shellFound && !res.navFound) {
     check("C5b shell renders with visualViewport undefined (pre-load)", false,
-      `NOT PROVEN (harness limit, not a product verdict): after the reload the app rendered neither the shell nor the nav — the single-use UAT token was spent on the first load, so this is most likely an unauthenticated render. Page text: "${res.bodyText}". C5a covers the same fallback without a reload.`);
+      `NOT PROVEN (harness limit, not a product verdict): after the reload the app rendered neither the shell nor the nav — the single-use UAT token was spent on the first load, so this is an unauthenticated render. Page text: "${res.bodyText}". ` +
+      `PARTIAL EVIDENCE that does hold: the app booted with visualViewport undefined and threw ${newErrors.length} new console/page error(s) — ${newErrors.slice(0, 5).join(" | ") || "none"} — so the hook's no-visualViewport path does not crash the bundle. C5a covers the shell fallback itself without a reload.`);
     return;
   }
   const h = px(res.shellHeight);
