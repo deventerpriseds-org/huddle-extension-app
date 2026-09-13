@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, Menu, PanelRight, Settings } from "lucide-react";
+import {
+  CalendarDays,
+  ChevronLeft,
+  FolderOpen,
+  LayoutGrid,
+  ListChecks,
+  Menu,
+  MessageSquare,
+  PanelRight,
+  Settings,
+} from "lucide-react";
 import { BoardView } from "./BoardView";
 import { ArtifactsView } from "./ArtifactsView";
 import { ContextPanel } from "./ContextPanel";
@@ -10,10 +20,13 @@ import { Sidebar } from "./Sidebar";
 import { SettingsSheet } from "./SettingsSheet";
 import { AgentSettingsDrawer } from "./AgentSettingsDrawer";
 import { FallbackBanner } from "./FallbackBanner";
-import { isWorkspaceHydrated, setDeepLinkTarget, useHuddleStore, useVisibleHuddles } from "../store";
+import { isWorkspaceHydrated, setDeepLinkTarget, useHuddleStore, useVisibleHuddles, type View } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
 import { breadcrumbToolsFor, type ChecklistPayload, type ToolUseEvent } from "../data/seed";
+// Lane B's widget payload contract. Type-only import (that module is dependency-free).
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
+import { PrioritiesView, ScheduleView } from "./JourneyWidgets";
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
 import { useAuth } from "@/hooks/useAuth";
 import { getAllTurnUpdates } from "../lib/huddle.functions";
@@ -25,6 +38,38 @@ import { useAgentPanelStore } from "../lib/agent-panel-store";
  *  than imported because that module is server-only — changing one without the other silently either
  *  buzzes a present user or, worse, silences an absent one. */
 const PRESENCE_BEAT_MS = 5_000;
+
+/** THE SIDE-MENU VIEW REGISTRY. Was a nested ternary (`huddle ? … : board ? … : <ArtifactsView/>`),
+ *  which had a silent trap: its final `else` rendered Artifacts for ANY unrecognised view, so adding
+ *  a view and forgetting to wire it here showed the WRONG screen with no error. Keyed by the store's
+ *  `View` union, TypeScript now fails the build until every view has an entry.
+ *  These are element descriptors, not rendered components — nothing here mounts until it is selected.
+ *  Labels live in NAV_LABELS below so the mobile switcher and this list cannot drift apart. */
+const VIEWS: Record<View, React.ReactNode> = {
+  huddle: <HuddleView />,
+  board: <BoardView />,
+  artifacts: <ArtifactsView />,
+  priorities: <PrioritiesView />,
+  schedule: <ScheduleView />,
+};
+
+/** Mobile switcher entries, in order. "Files" is Artifacts' user-facing name (kept from the previous
+ *  hardcoded list); the two widget views get their spec names. Icons match `Rail.tsx`'s, so the same
+ *  view reads the same on both surfaces.
+ *
+ *  ICON-OVER-LABEL, not a row of bare labels. Five entries do not fit a 390px phone as text — the
+ *  design prototype names this exact constraint and this exact answer
+ *  (docs/widgets/prototype/canvas.json, annotation `phone-note`: "The mobile switcher in HuddleApp
+ *  is currently a 3-entry row of labels. Six entries means icon-over-label"). An earlier version of
+ *  this made the label row scroll horizontally instead, which hides entries behind a gesture with
+ *  nothing on screen saying so. */
+const NAV_LABELS: { id: View; label: string; icon: typeof MessageSquare }[] = [
+  { id: "huddle", label: "Huddle", icon: MessageSquare },
+  { id: "board", label: "Board", icon: LayoutGrid },
+  { id: "priorities", label: "Priorities", icon: ListChecks },
+  { id: "schedule", label: "Schedule", icon: CalendarDays },
+  { id: "artifacts", label: "Files", icon: FolderOpen },
+];
 
 export function HuddleApp() {
   useWorkspaceSync();
@@ -151,6 +196,11 @@ export function HuddleApp() {
           // undeclared field is dropped silently -- no error, no crash -- so a checklist would decay
           // into plain text after a reload with nothing to attribute it to.
           checklist?: ChecklistPayload;
+          // Same rule as `checklist` directly above, and the same cost if omitted: this DTO is
+          // re-declared inline at BOTH mapping sites (the other is HuddleView's applyTurnStream) and
+          // an undeclared field is dropped silently, so a back-filled widget would arrive as text.
+          priorities?: PrioritiesWidgetData;
+          schedule?: ScheduleWidgetData;
         }[];
         toolUses?: ToolUseEvent[];
       }[]) {
@@ -191,6 +241,8 @@ export function HuddleApp() {
             confirmAsk: reply.confirmAsk,
             overrideAsk: reply.overrideAsk,
             checklist: reply.checklist,
+            priorities: reply.priorities,
+            schedule: reply.schedule,
             toolUses: t.toolUses ? breadcrumbToolsFor(reply.agentId, t.toolUses) : undefined,
           });
         });
@@ -355,29 +407,36 @@ export function HuddleApp() {
             Huddle/Board/Files toggle inside HuddleView's header unmounts the moment you leave the
             huddle view, which stranded users on Board/Files with no way back). Kept always-mounted
             here so it works from every view. */}
-        <div className="flex items-center justify-center border-b border-hairline bg-surface px-3 py-1.5 md:app-hidden">
-          <div className="inline-flex rounded-lg border border-hairline bg-background p-0.5">
-            {(["huddle", "board", "artifacts"] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => setView(v)}
-                className={
-                  "rounded-md px-4 py-1 text-xs font-medium transition " +
-                  (view === v
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground hover:text-foreground")
-                }
-              >
-                {v === "huddle" ? "Huddle" : v === "board" ? "Board" : "Files"}
-              </button>
-            ))}
+        {/* Icon-over-label, five equal columns — see NAV_LABELS. Every entry stays visible and
+            tappable at 390px without a scroll gesture, and each column is a ≥44px touch target. */}
+        <div className="border-b border-hairline bg-surface px-2 py-1 md:app-hidden">
+          <div className="grid grid-cols-5 gap-0.5 rounded-lg border border-hairline bg-background p-0.5">
+            {NAV_LABELS.map((v) => {
+              const Icon = v.icon;
+              return (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => setView(v.id)}
+                  aria-current={view === v.id ? "page" : undefined}
+                  className={
+                    "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-[10px] font-medium leading-none transition " +
+                    (view === v.id
+                      ? "bg-muted text-foreground"
+                      : "text-muted-foreground hover:text-foreground")
+                  }
+                >
+                  <Icon size={16} strokeWidth={1.8} aria-hidden />
+                  <span className="w-full truncate text-center">{v.label}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
         <FallbackBanner />
 
-        {view === "huddle" ? <HuddleView /> : view === "board" ? <BoardView /> : <ArtifactsView />}
+        {VIEWS[view]}
       </div>
 
 

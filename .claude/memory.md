@@ -2988,3 +2988,79 @@ only when the agent explicitly named an owner. Not the lead: `huddle.functions.t
 lead capture items across EVERY lane, so defaulting to it would assign other lanes' work wrongly.
 
 **Full diagnosis + the rejected alternative:** `.claude/actions.md`, `ACT:assign-on-direct-ask`.
+
+## Active work — journey PRIORITIES + SCHEDULE widgets as in-chat widgets (2026-09-13, NOT verified)
+Branch `claude/journey-widgets-in-chat` in BOTH repos. Nothing on `main`, nothing deployed.
+
+**Three lanes, all committed and pushed:**
+- **Lane A (journey-voice `ec508a5`)** — `get_task_topics` registered in `_shared/tool-definitions.ts`
+  (26→27 tools) + handler in `execute-tool/index.ts`. `huddle-proxy` needed NO change (it re-serves
+  `/definitions` verbatim). No new secret — `JOURNEY_PROXY_TOKEN` reused. **NOT deployed** —
+  `deploy-supabase-functions.yml` with `function_name=execute-tool` is the owner's call.
+  Non-obvious: `task_topic_index` IS the topics table (no separate topics table). A category badge is
+  the SUM of its topics' subtree counts, NOT the denormalized `stored_task_count` column (which read
+  15 where the truth was 1). Two topics naming each other as parent produced a CYCLIC object graph
+  that `JSON.stringify` throws on — would have 500'd the whole tool; fixed with `wouldCycle()`.
+- **Lane B (`54639aa`)** — `widgets.server.ts` + `widgets.functions.ts`: `getScheduleWidget`,
+  `getPrioritiesWidget`, `updateWidgetTask` (`start|done|pause|today|untoday`). None ever throws;
+  failures return `ok:false`. **No migration needed** — every column already exists in the mirror DDL.
+  Found by reading, not assuming: `getBoardTasks` did NOT select `start_time`/`end_time`/`is_scheduled`,
+  so TODAY'S SCHEDULE was unreachable — that one read was EXTENDED (additive, optional fields), not
+  duplicated. `updateWidgetTask` gates on the existing `getOwnedTaskForConfirmAsk` before any write.
+- **Lane C (`4c68ff2`, `3ead8e6`, `59afbbb`)** — `JourneyWidgets.tsx`, docked in Iris's 1:1 above the
+  transcript; Rail + HuddleApp view registry + mobile switcher.
+
+**Pre-existing bug this work had to step around:** `Rail.tsx:39/45` marks Memory active when
+`view==='huddle'` and maps it to `'huddle'` — clicking Memory silently renders Huddles. It is
+decorative today. Adding two views to that three-way ternary compounds it, so the registry becomes a
+VIEW MAP keyed by id, which fixes Memory in the same change.
+
+**Status: `npx tsc --noEmit` exit 0 on the branch. NO verifier has run, NO live check, NOT deployed.**
+Prototype canvas (where everything lands, incl. mobile):
+https://claude.ai/code/artifact/da7013d0-2fff-4942-ae91-2a69dbd0cda3
+
+## Hardening — a container restore killed all three lanes mid-flight (2026-09-13)
+All three agents died with the container (15h gap). NO notification fired — silence is the designed
+behaviour. Every lane's work survived ONLY because each brief named a file and each lane committed as
+it went; Lane C's last two commits sat UNPUSHED in the container and were recovered by comparing local
+HEAD to origin on the next turn, exactly as the re-sync rule prescribes. `ListAgents` after the restore
+showed zero agents, which is the only ground truth that they are gone.
+
+## Hardening — the checklist widget renders NOTHING on the Lovable path (found 2026-09-13, NOT fixed)
+Found while wiring the two journey widgets, in the existing feature they were modelled on.
+`lovableTools.build_checklist` (`huddle.functions.ts:5472`) never calls `recordToolUse`, and
+reply-assembly recovers a rendered payload ONLY from a toolUse's `detail`. So on the Lovable backend
+the checklist tool fires, does its work, and the card never reaches the client. The OpenAI path is
+fine — it records, so its payload rides back.
+**The two new widgets do NOT inherit this**: their Lovable dispatch calls `recordToolUse` explicitly.
+The checklist itself is UNFIXED — fixing it means editing that feature's own wiring, which is outside
+what the owner asked for. Reported to the owner; his call whether to widen.
+**The general lesson: on this codebase a tool that renders a card must call `recordToolUse` on BOTH
+dispatch paths, or it is silently inert on one of them.** Symmetry between the two paths is not
+enforced anywhere — nothing fails, nothing logs, the card just never appears.
+
+## Active work — journey widgets: wiring landed, verification loop 2 in flight (2026-09-13)
+Branch `claude/journey-widgets-in-chat` @ `b56907e`. Nothing on `main`, nothing deployed.
+
+**Since the last entry:**
+- **Pause defect FIXED (`966bd2f`).** `ACTION_STATUS.pause` was `UP_NEXT` — the lane
+  `autowork.server.ts` promotes from — while ⏸ emptied the DOING slot in the same write, so a paused
+  task was a promotion candidate at the next 9/13/17 tick and the confirm-intent gate passed it
+  through (a task that had reached DOING was already confirmed). Now `BACKLOG` + the `parking-lot`
+  tag auto-work already filters on. journey's `update_task` REPLACES the tag array, so the UNION is
+  sent — parking must never wipe a task's other labels. Un-ticking ✓ was split onto a new `reopen`
+  action so that gesture does not inherit the park.
+  `scripts/widget-park.test.ts` (`npm run test:widget-park`) 10/10; mutation-proved **FIRED** via
+  `mutate.sh` with `pause: "UP_NEXT"` reinstated.
+- **Widget tools WIRED (`b56907e`).** `show_priorities_widget` / `show_schedule_widget` existed fully
+  written in `tasks/tools.ts` but were registered NOWHERE — the render branches in `HuddleView.tsx`
+  were live but unreachable, so no agent could ever surface them. That was the "like the checklists
+  widget" half of the request, and it was the +160 unexplained lines on the branch. Now registered in
+  `mergedTools`, dispatched on BOTH paths with per-widget `claimAction` keys, `WIDGET_SYSTEM_HINT` on
+  both instruction branches, and the payload recovered from `detail` at all six reply-DTO sites.
+- **Rail Memory entry de-highlighted** (`Rail.tsx` `neverActive` flag) so two items no longer
+  highlight at once. Whether Memory is REMOVED or WIRED is still the owner's open decision.
+
+**Status: `tsc` exit 0; `test:widget-park` 10/10; `test:router` 20/20. NOT deployed, NOT observed in a
+browser — type agreement is not a rendered card.** Loop-2 verification running; `huddle.functions.ts`
+and `Rail.tsx` were moving targets during it and are DEFERRED TO LOOP 3.

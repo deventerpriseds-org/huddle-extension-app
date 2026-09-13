@@ -3663,3 +3663,71 @@ Entra token / `x-ms-client-principal` rather than trusting the body) and is an a
 touching every server function. Scoping it into this branch would be exactly the "widen the PR"
 failure. It needs its own AC pass, because every UAT harness in this repo depends on the current
 behaviour and would break.
+
+## ACT:journey-widgets-in-chat — dock journey's PRIORITIES + SCHEDULE widgets in Iris's chat + side menu
+**Asked (2026-09-12):** *"run the eds sync skill including checking on a fresh clone and then I want to
+add these two external journey widgets as an internal chat widget like the checklists widget. these two
+need to be docked in irises chat and we views on the side menu."* + *"you also need to show prototypes of
+where these things will end up."*
+
+- [x] eds sync — hooks v30 → **v58** (13 hooks); re-confirmed 2026-09-13 against a FRESH clone of
+      `eds-claude-skills` (`CURRENT_VERSION = 58` == installed `_eds_version` 58). All clones current.
+- [x] Spec of record committed — `docs/widgets/spec-priorities-widget.jpg`, `spec-schedule-widget.jpg` (`3223bf3`).
+- [x] **Prototypes** — 4 artboards (desktop docked, Priorities view, Schedule view, phone) built from the
+      REAL design system (tokens from `src/styles.css`, rail geometry from `Rail.tsx`, registry from
+      `HuddleApp.tsx:380`). Published: https://claude.ai/code/artifact/da7013d0-2fff-4942-ae91-2a69dbd0cda3
+      Source in `docs/widgets/prototype/`.
+- [x] Lane A — journey `get_task_topics` proxy tool (journey-voice `ec508a5`, pushed, **not deployed**).
+- [x] Lane B — Huddle server fns + payload contract (`54639aa`, pushed).
+- [x] Lane C — Huddle chat cards, Iris docking, side-menu views (`4c68ff2`/`3ead8e6`/`59afbbb`, pushed).
+- [x] `npx tsc --noEmit` exit 0 on `claude/journey-widgets-in-chat`.
+- [ ] **Independent verifier** — NOT yet run (all three lanes died with a container restore).
+- [ ] Deploy journey `execute-tool` (owner's call) — until then the topic tree returns empty with a
+      `reason`, and the priorities band still renders.
+- [ ] Merge to `main` (auto-deploys).
+
+### ACT:journey-widgets-in-chat — progress 2026-09-13
+- [x] Loop-1 verification (`docs/VERIFY-journey-widgets-1.md`) — 9 CONFIRMED, 2 REFUTED, 1 partial.
+- [x] Independent ACs written cold (`docs/AC-journey-widgets.md`, 51 criteria + 7 gaps).
+- [x] **Defect 1 (HIGH) FIXED** — ⏸ pause un-paused itself. `966bd2f`, test + mutation proof FIRED.
+- [x] **GAP-1 FIXED** — widget tools registered nowhere; now wired both paths. `b56907e`.
+- [x] Rail Memory de-highlighted (minimal, reversible).
+- [ ] **OWNER DECISION — the Memory rail entry:** remove it (recommended), wire it to a real view, or
+      leave it decorative. Broken before this work; two new neighbours make it conspicuous.
+- [ ] **OWNER ACTION — deploy journey `execute-tool`** so `get_task_topics` exists. Until then the
+      topic tree (~60% of the Priorities screenshot) is a labelled empty state; the band works.
+- [ ] Loop-2 verification in flight; loop 3 must cover `huddle.functions.ts` + `Rail.tsx`.
+- [ ] **Spec-screenshot fidelity still unchecked** — missing affordances remain unknown.
+- [ ] NOT observed rendering in a browser. Not deployed. Not merged.
+- [ ] **Separate pre-existing bug, NOT fixed:** the checklist widget renders nothing on the Lovable
+      path (`huddle.functions.ts:5472` omits `recordToolUse`). Owner's call whether to widen scope.
+
+### ACT:journey-widgets-in-chat — owner instructions 2026-09-13 (second batch)
+Owner: *"I like the idea of them having their own view not side by side and the location in the menu
+is good for now... just remember I use this on the phone. go ahead and add them as seen in the images
+attached."* + *"should this be added as a skill or prototype more in eds skills repo?"* + *"after the
+two widgets are deployed, I need to know what the original intent was for the memory view and where it
+sits today."* + *"I also didn't know where you got the 9/13/17 tick idea."*
+
+- [x] **Stacked, not side by side** (`9a8bbde`). `lg:grid-cols-2` removed; each widget renders at full
+      column width. The phone never received the two-up, which is what identified it as desktop-only
+      divergence from the spec screenshots. Menu location left as-is, per "good for now".
+- [x] **Eight loop-2 defects fixed** (`587bc38`..`37f25ea`), incl. stale-snapshot status (N-8) and the
+      LIFE/EDUCATION near-identical greens (N-5). Three mutation proofs, all FIRED.
+- [x] **The 9/13/17 challenge — owner was right.** See `.claude/accuracy-log.md` 2026-09-13 and the
+      corrected CLAUDE.md block. Short version: the autowork PASS is still [9,13,17], but the
+      confirm-ask REACH-OUT never rides that tick — `CONFIRM_JITTER` no longer exists; asks fall in
+      fan windows 9–18 / 20–22 with a 45–90 min gap. Other jobs ARE more frequent (`reviewDigest`
+      5×/day). `identity.scheduling_config` queried live: **0 rows**, so defaults are what runs.
+- [x] **Skill shipped** — `prototype-in-app-skin` captures the METHOD (lift the real skin before
+      drawing), not the artboards. `deventerpriseds-org/eds-claude-skills` **PR #83, CI green,
+      mergeable clean — awaiting the owner's merge.** Its first CI run failed a real guard
+      (every skill must be named in `bootstrap.md`); reproduced locally, fixed, re-verified 12/12.
+- [ ] Loop-3 verification in flight — first loop to cover the tool wiring + `Rail.tsx`.
+- [ ] **OWNER ACTION — deploy journey `execute-tool`.** Blocks the topic tree only; band works.
+- [ ] **OWNER DECISION deferred by the owner to post-deploy:** Memory view — original intent + where
+      it sits today. Do NOT remove the rail entry before answering that; it is de-highlighted only.
+- [ ] Never observed rendering in a browser. Not deployed. Not merged to `main`.
+- [ ] Pre-existing, NOT this PR's: `check-skill-app-neutral.sh` fails on 3 older eds skills naming
+      `boost-application-packet-platform` outside a citation — fails identically on `origin/main`,
+      and is not wired into the `guards` workflow. Separate cleanup.

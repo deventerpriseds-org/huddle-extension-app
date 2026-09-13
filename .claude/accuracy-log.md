@@ -141,3 +141,96 @@ a measured COUNT of live data expires; a structural fact does not. Two copies of
 `nexus-read-tools.test.ts` as though structural, and were quoted back to the owner twice as a reason
 the date filter could not be tested. **Both are now deleted rather than restated** — a count with no
 date and no expiry condition becomes a false constraint on advice.
+
+## 2026-09-13 — "the next 9/13/17 tick" quoted as the confirm-ask cadence
+**Claim I made:** a parked task "was a promotion candidate at the very next 9/13/17 tick, and the
+confirm-intent gate waved it through" — stated repeatedly while explaining the pause defect.
+**Ground truth (read this session):** `lib/identity/scheduling-config.server.ts` +
+`identity.scheduling_config` (queried live via `azure-pg-query.yml`, marker `CADENCE-PROBE-0913`).
+- `autowork.hours = [9,13,17]` IS still the live default — that half was right.
+- **`CONFIRM_JITTER_MIN/MAX_MS` no longer exists in `src/` at all.** The confirm-ask reach-out is
+  scheduled inside `CONFIRM_FAN_WINDOWS_DEFAULT` (9–18, 20–22) with a random 45–90 min gap. So the
+  ASK does not ride the 9/13/17 tick, and my sentence welded two different clocks together.
+- Other jobs are more frequent (`reviewDigest` 5×/day), which is what the owner was reacting to.
+- The table had **0 rows**, so no per-user override was in play — but I did not know that when I
+  asserted it; I asserted a default as though it were the effective value.
+**Single source that would have settled it up front:** `scheduling-config.server.ts` itself, plus one
+query of `identity.scheduling_config`. Both cheap. I quoted CLAUDE.md instead.
+**Root-cause pattern:** quoting a LITERAL out of documentation rather than reading the code it
+describes — the same failure as "never type a literal that must exist in something you have not read",
+applied to a doc instead of a file. Docs rot; the owner noticed before I did.
+**Guard implied (done):** CLAUDE.md's cadence block rewritten to name the real path, split the two
+clocks, record that `CONFIRM_JITTER` is gone, and instruct re-querying the overrides table rather than
+quoting defaults as fact. **The doc was the error's source, so the doc is where the guard goes.**
+
+## 2026-09-13 — THREE corrections in one cluster: values INVENTED to fill a gap, then defended by a test
+All three shipped into `ec46286`, all three reached the owner as "fixed and pushed", and all three
+share ONE root cause. Logged separately because each needs its own guard, then the class at the end.
+
+### (1) Career and Ventures hues — invented, and effectively SWAPPED
+**Claim:** `CATEGORY_HUES` = `CAREER: 340` (magenta), `VENTURES: 160` (teal), with a docblock
+asserting the spec "names exactly two" colours (Life blue, Education amber) and that the other two
+were therefore free to be "the two remaining quadrants, as far apart as the wheel allows".
+**Ground truth:** the spec draws a coloured spine for EVERY top-level topic. Measured off
+`docs/widgets/spec-priorities-widget.jpg`'s own pixels: **Career 149° green, Ventures 303° purple** —
+151° and 143° from the invented values, and near enough to each other's TRUE hues that the two
+categories rendered as swapped.
+**Single source that would have settled it:** the JPEG itself — and, cheaper still,
+`docs/AC-journey-widgets.md:51-52`, which had **already recorded all five** ("green (Career), purple
+(Ventures), orange (Education), blue (Life), grey (Family)"). The code contradicted its own
+acceptance criteria, written by an independent pass, days before.
+**Root-cause pattern:** an aesthetic rule was invented to fill a gap that only LOOKED like a gap. The
+premise ("the spec names two") was never checked against the spec.
+**Guard (shipped, mutation-proved FIRED):** `scripts/widget-colors.test.ts` now asserts a hue BAND
+for all four categories against the spec, not just the two that happened to be documented. Guarding
+only the documented subset is precisely what let the other two drift.
+
+### (2) The 60° separation floor — invented, and it REJECTED the spec's own palette
+**Claim:** `MIN_GAP = 60`, described as the threshold under which two hues "read as the same colour".
+**Ground truth:** the spec's real four have a closest pair of **~53°** (Life 250 / Ventures 303). The
+floor therefore failed the very design the file exists to reproduce — a fourth mutation showed it
+would have **blocked the fix for (1)**.
+**Single source:** computing the pairwise gaps of the spec's measured hues — four numbers, which the
+test file itself already had the helper (`hueGap`) to do.
+**Root-cause pattern:** THE SAME invention, one layer up. A plausible-sounding number was written
+into an assertion, which converted a guess into something believed and enforced. A test that fails
+the ground truth is not strict, it is wrong, and it is worse than no test.
+**Guard (shipped):** the floor is now DERIVED — 45°, stated in-file as "below the spec's own
+minimum", with the reasoning and the measured 53° recorded beside it so the next person cannot
+re-tighten it without meeting the spec first.
+
+### (3) Family — a hue where the spec wanted GREY, colliding with Ventures
+**Claim:** leaving `FAMILY` out of the seeded map was neutral, because the hash would give it "a
+stable, distinct colour".
+**Ground truth:** the hash puts FAMILY at **300°, three degrees from Ventures' 303°** — the two
+render as the same purple, in the one tree that shows them together. The spec draws Family GREY, and
+grey is not a hue at any value; it is a **chroma of zero**.
+**Single source:** running `categoryHue("FAMILY")` — one line, which the suite was already importing.
+**Root-cause pattern:** "the fallback handles it" asserted without executing the fallback. Same
+family as (1) and (2): a property assumed rather than measured.
+**Guard (shipped, mutation-proved FIRED):** `categoryChromaScale()` scales the caller's chroma to 0
+for grey categories, and the suite asserts the FAMILY/VENTURES hue collision is rendered harmless —
+asserting the collision exists and is neutralised, rather than pretending the hues differ.
+
+### The CLASS, and why prose cannot hold it
+One pattern, three instances, one session: **a value that must match an external artifact was
+invented from a plausible-sounding rule, and no one executed or measured the artifact.** Prose
+("read the spec") does not bind — the docblock asserting "the spec names exactly two" was itself
+written by someone who had the spec open.
+**Structural mitigation, and it is the one that actually fires:** every value that must match the
+spec is now asserted against a measured band in an executable test, and each assertion was
+mutation-proved. A future invented value FAILS `npm run test:widget-colors`; it does not merely
+contradict a comment.
+
+### (4) A guard that was INERT because I appended it after `process.exit()`
+**Claim (to myself, mid-task):** the new Family tests were added to the suite.
+**Ground truth:** they sat BELOW `console.log(summary)` + `process.exit(...)` at the end of the file,
+so they never executed. The suite kept reporting **18 passed** while looking seven assertions longer.
+**Single source:** the printed pass COUNT — 18, not 25. It was on screen and I read past it.
+**Root-cause pattern:** appending to a file without reading how the file ENDS. A script with a
+terminal `process.exit` has no "end of file" to append to.
+**Guard implied, NOT yet built:** nothing structurally stops the next append-after-exit. The honest
+status is that this one was caught by looking at the count, which is exactly the kind of vigilance
+this log exists to stop relying on. Candidate: a lint rule or a suite-level assertion that the
+reported total matches the number of `check(` calls in the file. **Not built — do not record this row
+as mitigated.**

@@ -4,6 +4,10 @@ import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { isUserTurn } from "./turn-identity";
 import type { ChecklistPayload, HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
+// The two in-chat widget payloads ride back on a reply exactly as `checklist` does, so they are
+// declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
+// and the reply DTOs are shared with the client bundle.
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "./tasks/widgets.server";
 import {
   parseMentions,
   routeMessage,
@@ -546,6 +550,8 @@ type TurnResumeState = {
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
     overrideAsk?: { taskId: string; taskTitle: string; note?: string };
     checklist?: ChecklistPayload;
+    priorities?: PrioritiesWidgetData;
+    schedule?: ScheduleWidgetData;
   }[];
   journeyTaskUpdates: import("./journey/types").JourneyTask[];
   suggestedTasks: SuggestedTaskDraft[];
@@ -826,6 +832,8 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
     overrideAsk?: { taskId: string; taskTitle: string; note?: string };
     checklist?: ChecklistPayload;
+    priorities?: PrioritiesWidgetData;
+    schedule?: ScheduleWidgetData;
   };
 
   // Journey-voice mirror: any task rows that journey returns from a tool call
@@ -3220,7 +3228,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const effectiveInstructions = overrideInstructions || snapshotInstructions;
         fromSnapshot = !overrideInstructions && !!snapshotInstructions;
         const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
-        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT } = await import("./tasks/tools");
+        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT } = await import(
+          "./tasks/tools"
+        );
         // Grooming is now gated on the data-driven capability (agents.ts), with the legacy
         // id/special check kept as a non-destructive fallback so nothing regresses.
         const ownsGrooming =
@@ -3270,6 +3280,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           PRIORITIZE_SYSTEM_HINT +
           "\n\n" +
           CHECKLIST_SYSTEM_HINT +
+          // Same slot as CHECKLIST_SYSTEM_HINT directly above and for the same reason: the widget
+          // tools are offered in `mergedTools` below, so the model needs the hint that says WHEN to
+          // prefer an interactive card over a prose answer. Additive -- nothing above is altered.
+          "\n\n" +
+          WIDGET_SYSTEM_HINT +
           groomHint +
           "\n\n" +
           REMINDER_SYSTEM_HINT;
@@ -3469,7 +3484,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           emailTools.push(GET_EXTERNAL_CALENDAR_EVENTS_TOOL);
         }
 
-        const { PRIORITIZE_TOOL, CHECKLIST_TOOL } = await import("./tasks/tools");
+        const { PRIORITIZE_TOOL, CHECKLIST_TOOL, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL } =
+          await import("./tasks/tools");
         // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
         const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
         const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
@@ -3499,6 +3515,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           SCHEDULE_REMINDER_TOOL,
           PRIORITIZE_TOOL,
           CHECKLIST_TOOL,
+          // The two in-chat journey widgets. Ungated, exactly like CHECKLIST_TOOL above: whichever
+          // agent is answering is the one the user asked, so gating these to a single agent would
+          // make the widget reachable only by talking to that agent.
+          PRIORITIES_WIDGET_TOOL,
+          SCHEDULE_WIDGET_TOOL,
           GET_CALENDAR_EVENTS_TOOL, // calendar-framed alias → combined schedule (always available)
           ...groomTools,
           ...emailTools,
@@ -4122,6 +4143,44 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               ok = false;
             }
             recordToolUse(winner.id, "build_checklist", ok ? "checklist rendered" : "checklist -- failed", ok, detail);
+            return out;
+          }
+          // show_priorities_widget / show_schedule_widget -- the two in-chat journey widgets. Each
+          // mirrors build_checklist directly above, point for point: its OWN ledger key (so a
+          // priorities widget and a schedule widget can both render in one turn, but neither twice),
+          // the caller's resolved email, and the FULL dispatcher JSON carried back in `detail`, which
+          // is the only channel the reply-assembly has to recover the payload.
+          if (c.name === "show_priorities_widget" || c.name === "show_schedule_widget") {
+            const isPriorities = c.name === "show_priorities_widget";
+            const label = isPriorities ? "priorities widget" : "schedule widget";
+            if (!claimAction(c.name)) {
+              const dupe = JSON.stringify({
+                error: "already_rendered",
+                message: `A ${label} was already rendered this turn; refer to it instead of rendering another.`,
+              });
+              recordToolUse(winner.id, c.name, `${label} -- already rendered`, true);
+              return dupe;
+            }
+            const { dispatchPrioritiesWidget, dispatchScheduleWidget } = await import("./tasks/tools");
+            const ident = await (
+              await import("./journey/identity")
+            ).resolveJourneyIdentity(data.caller, data.timeZone);
+            const email = ident.email ?? data.caller?.entra_email;
+            const tz = ident.timeZone || data.timeZone || "UTC";
+            const args = (c.arguments ?? {}) as Record<string, unknown>;
+            const out = isPriorities
+              ? await dispatchPrioritiesWidget(email, args, tz)
+              : await dispatchScheduleWidget(email, args, tz);
+            let ok = true;
+            let detail = "";
+            try {
+              const parsed = JSON.parse(out) as { error?: string };
+              ok = !parsed.error;
+              detail = ok ? out : (parsed.error ?? "");
+            } catch {
+              ok = false;
+            }
+            recordToolUse(winner.id, c.name, ok ? `${label} rendered` : `${label} -- failed`, ok, detail);
             return out;
           }
           const nexusMod = await import("./nexus/nexus.server");
@@ -5437,6 +5496,75 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           });
         }
 
+        // show_priorities_widget / show_schedule_widget — the in-chat journey widgets, present here
+        // for exactly the reason the checklist block above gives: WIDGET_SYSTEM_HINT is appended to
+        // BOTH backends' instructions, so omitting them here would tell this backend to call tools it
+        // was never offered. Same ledger keys as the OpenAI path, so a turn that somehow crossed
+        // backends still renders each widget at most once.
+        //
+        // These DO call recordToolUse, which the checklist block above does not. That is not a
+        // deviation from the pattern for its own sake: the reply-assembly recovers a widget payload
+        // ONLY from a toolUse's `detail`, so without this call the tool would fire on this backend
+        // and render nothing — the precise failure this wiring exists to fix. (The checklist has the
+        // same gap on this path; fixing it is a change to the checklist's own wiring, which this lane
+        // is not allowed to make. Recorded in docs/LANE-D-widget-tool-wiring.md.)
+        {
+          // The descriptions are reused from the tool definitions rather than retyped, so the two
+          // backends can never drift into describing the same tool differently.
+          const {
+            dispatchPrioritiesWidget,
+            dispatchScheduleWidget,
+            PRIORITIES_WIDGET_TOOL,
+            SCHEDULE_WIDGET_TOOL,
+          } = await import("./tasks/tools");
+          const runWidget = async (
+            name: "show_priorities_widget" | "show_schedule_widget",
+            args: Record<string, unknown>,
+          ) => {
+            const isPriorities = name === "show_priorities_widget";
+            const label = isPriorities ? "priorities widget" : "schedule widget";
+            if (!claimAction(name)) {
+              recordToolUse(winner.id, name, `${label} -- already rendered`, true);
+              return JSON.stringify({
+                error: "already_rendered",
+                message: `A ${label} was already rendered this turn; refer to it instead of rendering another.`,
+              });
+            }
+            const ident = await (
+              await import("./journey/identity")
+            ).resolveJourneyIdentity(data.caller, data.timeZone);
+            const email = ident.email ?? data.caller?.entra_email;
+            const tz = ident.timeZone || data.timeZone || "UTC";
+            const out = isPriorities
+              ? await dispatchPrioritiesWidget(email, args, tz)
+              : await dispatchScheduleWidget(email, args, tz);
+            let ok = true;
+            let detail = "";
+            try {
+              const parsed = JSON.parse(out) as { error?: string };
+              ok = !parsed.error;
+              detail = ok ? out : (parsed.error ?? "");
+            } catch {
+              ok = false;
+            }
+            recordToolUse(winner.id, name, ok ? `${label} rendered` : `${label} -- failed`, ok, detail);
+            return out;
+          };
+          lovableTools.show_priorities_widget = tool({
+            description: PRIORITIES_WIDGET_TOOL.description,
+            // `title` is optional on the OpenAI schema; this backend's schema mirrors that with an
+            // `.optional()` rather than the checklist's required-string, so an agent calling it with
+            // no arguments is valid here too.
+            inputSchema: z.object({ title: z.string().optional() }),
+            execute: async (args) => runWidget("show_priorities_widget", (args ?? {}) as Record<string, unknown>),
+          });
+          lovableTools.show_schedule_widget = tool({
+            description: SCHEDULE_WIDGET_TOOL.description,
+            inputSchema: z.object({}),
+            execute: async () => runWidget("show_schedule_widget", {}),
+          });
+        }
+
         // groom_backlog — gated on the data-driven grooming capability (agents.ts), with the
         // legacy id/special check kept as a non-destructive fallback (mirrors the OpenAI path).
         if (
@@ -5822,7 +5950,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         }
 
         {
-          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT } = await import("./tasks/tools");
+          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT } = await import(
+            "./tasks/tools"
+          );
           usedInstructions =
             appSystem +
             ragInstructions +
@@ -5831,6 +5961,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             PRIORITIZE_SYSTEM_HINT +
             "\n\n" +
             CHECKLIST_SYSTEM_HINT +
+            // Matches the OpenAI branch: both backends are offered the widget tools, so both are told
+            // when to prefer one over a prose answer.
+            "\n\n" +
+            WIDGET_SYSTEM_HINT +
             groundingBlock(!!agentBackend.webSearch);
         }
 
@@ -6145,6 +6279,46 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         console.warn("[checklist] build_checklist detail was not valid JSON; no widget rendered");
       }
     }
+    // The two in-chat widgets, recovered exactly as the checklist above is: the dispatcher put its
+    // whole JSON result in the toolUse's `detail`, so the payload comes back with no second read.
+    //
+    // Unlike the checklist, these are NOT re-mapped field by field. The payload is Lane B's own
+    // `PrioritiesWidgetData`/`ScheduleWidgetData`, composed by `buildPrioritiesBand` /
+    // `buildScheduleSections` and consumed verbatim by the same `PrioritiesWidget`/`ScheduleWidget`
+    // components the docked copies use — so a re-map here would be a SECOND definition of that
+    // contract, and any field Lane B adds would be silently dropped by this function rather than
+    // reaching the card. What is checked is only what makes the payload renderable at all: it parsed,
+    // `ok` is true, and the section the card is built from is an array. An empty array is a VALID
+    // result (the widgets render their own labelled empty states), so emptiness is NOT a rejection —
+    // that is the one place this differs from the checklist, which suppresses a zero-row card.
+    let replyPriorities: PrioritiesWidgetData | undefined;
+    let replySchedule: ScheduleWidgetData | undefined;
+    const widgetDetail = (name: string): unknown => {
+      const use = r.toolUses.find((t) => t.tool === name && t.ok && typeof t.detail === "string");
+      if (!use) return undefined;
+      try {
+        return JSON.parse(use.detail as string) as unknown;
+      } catch {
+        console.warn(`[widget] ${name} detail was not valid JSON; no widget rendered`);
+        return undefined;
+      }
+    };
+    {
+      const parsed = widgetDetail("show_priorities_widget") as { priorities?: unknown } | undefined;
+      const p = parsed?.priorities as PrioritiesWidgetData | undefined;
+      if (parsed) {
+        if (p && p.ok === true && Array.isArray(p.band)) replyPriorities = p;
+        else console.warn("[widget] show_priorities_widget returned an unexpected shape; no widget rendered");
+      }
+    }
+    {
+      const parsed = widgetDetail("show_schedule_widget") as { schedule?: unknown } | undefined;
+      const s = parsed?.schedule as ScheduleWidgetData | undefined;
+      if (parsed) {
+        if (s && s.ok === true && Array.isArray(s.todaySchedule)) replySchedule = s;
+        else console.warn("[widget] show_schedule_widget returned an unexpected shape; no widget rendered");
+      }
+    }
     // An approach this agent proposed THIS turn was escalated — attach the "Approve anyway" row to its
     // own reply, the same scoping rule confirmAsk uses: the ask belongs to the agent whose turn raised
     // it, so it is keyed by that agent rather than broadcast to whoever happens to speak next.
@@ -6157,6 +6331,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       confirmAsk: replyConfirmAsk,
       overrideAsk: replyOverrideAsk,
       checklist: replyChecklist,
+      priorities: replyPriorities,
+      schedule: replySchedule,
     });
     spoken.add(nextId);
 
@@ -7270,6 +7446,8 @@ type TurnUpdateDTO = {
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
     overrideAsk?: { taskId: string; taskTitle: string; note?: string };
     checklist?: ChecklistPayload;
+    priorities?: PrioritiesWidgetData;
+    schedule?: ScheduleWidgetData;
   }[];
   result: HuddleTurnResult | null;
 };
@@ -7310,6 +7488,8 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
           overrideAsk?: { taskId: string; taskTitle: string; note?: string };
           checklist?: ChecklistPayload;
+          priorities?: PrioritiesWidgetData;
+          schedule?: ScheduleWidgetData;
         }[],
         result: (t.result ?? null) as HuddleTurnResult | null,
       }));
@@ -7376,6 +7556,8 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
         overrideAsk?: { taskId: string; taskTitle: string; note?: string };
         checklist?: ChecklistPayload;
+        priorities?: PrioritiesWidgetData;
+        schedule?: ScheduleWidgetData;
       }[];
       // Tool-use breadcrumbs for away/cross-device turns — the client filters per agent + drops tool_catalog.
       toolUses?: import("../data/seed").ToolUseEvent[];
@@ -7413,6 +7595,8 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
         overrideAsk?: { taskId: string; taskTitle: string; note?: string };
         checklist?: ChecklistPayload;
+        priorities?: PrioritiesWidgetData;
+        schedule?: ScheduleWidgetData;
       }[],
       toolUses: ((t.result as { toolUses?: unknown } | null)?.toolUses ?? undefined) as
         | import("../data/seed").ToolUseEvent[]
