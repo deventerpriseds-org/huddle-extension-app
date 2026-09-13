@@ -931,7 +931,14 @@ export function DockedJourneyWidgets() {
       </button>
       {/* Mounted only while open, so the two Lane-B reads do not fire for a user who folds it away. */}
       {open && (
-        <div className="grid gap-3 px-2 pb-2 lg:grid-cols-2">
+        // STACKED, never side by side (owner, 2026-09-13: "I like the idea of them having their own
+        // view not side by side... just remember I use this on the phone"). The `lg:grid-cols-2` that
+        // was here split the chat column in two on desktop, which halves every task title in a column
+        // that is already narrow — and the phone, which is the owner's actual daily surface, never got
+        // that layout anyway, so the two-up was desktop-only divergence from the spec screenshots.
+        // Each widget now renders at full column width, one above the other, the way each screenshot
+        // draws it.
+        <div className="flex flex-col gap-3 px-2 pb-2">
           <LivePrioritiesWidget />
           <LiveScheduleWidget />
         </div>
