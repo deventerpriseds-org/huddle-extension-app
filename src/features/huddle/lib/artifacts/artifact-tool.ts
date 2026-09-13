@@ -7,10 +7,16 @@ export const CREATE_ARTIFACT_TOOL = {
   type: "function",
   name: "create_artifact",
   description:
-    "Save your finished work — research findings, a written document, a roadmap, an analysis — as a " +
-    "reviewable artifact the user can open and approve. Call this AFTER you've actually done the work. " +
-    "Put the FULL, detailed write-up in `content` as markdown — not a summary; the document is the durable " +
-    "record. Give it the executive-grade STRUCTURE: (1) an Executive conclusion up top, (2) Key findings, " +
+    "Save your finished work — research findings, a written document, a deck, a diagram, a data " +
+    "visualisation — as a reviewable artifact the user can open and approve. Call this AFTER you've " +
+    "actually done the work. " +
+    "YOU ARE NOT LIMITED TO MARKDOWN: set `format` to 'docx' for a real Word document, 'pptx' for a " +
+    "PowerPoint deck, 'mermaid' for a diagram, 'html' for an interactive/D3 visualisation, 'svg' for a " +
+    "vector image. Match the format to what the user asked for — if they say Word, deck, slides, chart " +
+    "or diagram, produce THAT, not a markdown file describing it. For 'docx' and 'pptx' you still write " +
+    "markdown in `content`; the server renders the real Office file. " +
+    "Put the FULL, detailed write-up in `content` — not a summary; the document is the durable " +
+    "record. Give prose documents the executive-grade STRUCTURE: (1) an Executive conclusion up top, (2) Key findings, " +
     "each with the evidence/source behind it and your confidence, (3) Analysis — why it matters, causes, " +
     "implications, (4) Recommendations — prioritized, each with owner, timing, and risk, split into immediate " +
     "vs near-term vs strategic and flagging anything that needs the user's approval, (5) Risks & assumptions, " +
@@ -20,13 +26,53 @@ export const CREATE_ARTIFACT_TOOL = {
   parameters: {
     type: "object",
     properties: {
-      name: { type: "string", description: "Short file name with extension, e.g. 'market-research.md'." },
-      content: { type: "string", description: "The FULL document in markdown — detailed, well-organized, with sources and a recommendation." },
+      name: {
+        type: "string",
+        description:
+          "Short file name. The extension is corrected to match `format`, so 'market-research' is fine.",
+      },
+      format: {
+        type: "string",
+        enum: ["md", "docx", "pptx", "html", "mermaid", "svg"],
+        description:
+          "What kind of document to produce. DEFAULT 'md'. Choose by what the user asked for and what " +
+          "suits the content — you are NOT limited to markdown:\n" +
+          "• 'docx' — a Word document. Use when the user says Word, .docx, 'a document to send', or wants " +
+          "something they will print, edit or share outside the app. You still WRITE MARKDOWN in `content`; " +
+          "it is converted to a real Word file with headings, lists and tables.\n" +
+          "• 'pptx' — a PowerPoint deck. Use when the user says slides, deck, presentation, PowerPoint. " +
+          "Write markdown in `content` (each top-level heading starts a new slide), or use `document` for " +
+          "precise slide layout.\n" +
+          "• 'html' — an interactive page. Use for a D3 or chart visualisation, or any layout markdown " +
+          "cannot express. It renders live, sandboxed, in the artifact viewer.\n" +
+          "• 'mermaid' — a diagram (flowchart, sequence, gantt, ER). Put ONLY the mermaid source in " +
+          "`content`. It renders as a picture, not as code.\n" +
+          "• 'svg' — a hand-authored vector image.\n" +
+          "• 'md' — plain prose with no layout or diagram requirement. Still the right default.",
+      },
+      content: {
+        type: "string",
+        description:
+          "The FULL document. For 'md', 'docx' and 'pptx' write MARKDOWN — headings, lists, tables, code " +
+          "fences all convert. For 'html', 'mermaid' and 'svg' write that format's source directly. " +
+          "Detailed and well-organized, with sources and a recommendation — never a summary.",
+      },
+      document: {
+        type: "object",
+        description:
+          "OPTIONAL, and only for 'docx'/'pptx' when LAYOUT MATTERS more than prose — a deck where you " +
+          "need control over what lands on which slide. Supply the structure instead of `content`. " +
+          "Prefer `content` markdown unless you specifically need the control; it is less to get wrong.",
+      },
       folder: { type: "string", description: "Lane/category folder, e.g. 'Ventures', 'Finance', 'Research'." },
       task_id: { type: "string", description: "The id of the task this artifact is for, if applicable." },
-      mime: { type: "string", description: "Content type; defaults to text/markdown." },
+      mime: {
+        type: "string",
+        description:
+          "Rarely needed — `format` sets this. Only pass it to store a type `format` does not cover.",
+      },
     },
-    required: ["name", "content"],
+    required: ["name"],
   },
 } as const;
 
