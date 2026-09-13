@@ -595,11 +595,23 @@ function PriorityRow({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
 /** One topic and its sub-topics. Expansion is LOCAL component state, not store state: it is per-view
  *  chrome with no consequence if it resets, and putting it in the store would make two mounted copies
  *  of the widget (a chat card and the docked pair) fight over one expanded set. */
-function TopicRow({ node, depth }: { node: TopicNode; depth: number }) {
+function TopicRow({
+  node,
+  depth,
+  defaultOpen = false,
+}: {
+  node: TopicNode;
+  depth: number;
+  defaultOpen?: boolean;
+}) {
   const hasChildren = node.children.length > 0;
-  // Top level starts expanded (the spec shows Career open with its children visible); deeper levels
-  // start closed so a large tree does not arrive as a wall of rows.
-  const [open, setOpen] = useState(depth === 0 && hasChildren);
+  // ONE row starts open — the first — exactly as the spec draws it (Career expanded, the other four
+  // categories closed). This was `depth === 0`, i.e. EVERY top-level row expanded, which was fine
+  // while a top-level row was a topic with a handful of children. It is not fine now that a
+  // top-level row is a CATEGORY: journey's live data is 158 topics across 5 categories, so
+  // expand-all would open the rail as a 163-row wall on a phone. See groupByCategory in
+  // widgets.server.ts for why the top level became categories.
+  const [open, setOpen] = useState(defaultOpen && hasChildren);
   // The coloured left rail, one hue per top-level topic — the SAME `categoryHue` the chips use, and
   // it normalizes to upper-snake before looking up, so a topic and a category of the same name DO
   // now agree in colour (topic "Life" and category "LIFE" both resolve to the seeded blue). Before
@@ -734,8 +746,8 @@ export function PrioritiesWidget({
       {data.topics.roots.length > 0 ? (
         <ScrollBand full={full}>
           <ul className="border-t border-hairline py-1">
-            {data.topics.roots.map((t) => (
-              <TopicRow key={t.id} node={t} depth={0} />
+            {data.topics.roots.map((t, i) => (
+              <TopicRow key={t.id} node={t} depth={0} defaultOpen={i === 0} />
             ))}
           </ul>
         </ScrollBand>

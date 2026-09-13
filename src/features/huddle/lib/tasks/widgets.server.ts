@@ -448,6 +448,109 @@ function toTopicNode(raw: unknown, depth: number): TopicNode | null {
 }
 
 /**
+ * Display names for journey's `category_affinity` keys, lifted from journey's own UI
+ * (`journey-voice/src/components/KanbanBoard.tsx:57` — `PROF_EDUCATION: 'Prof. Education'`), so the
+ * two apps read identically.
+ *
+ * THIS MAP IS A LABEL LOOKUP, NOT AN ALLOW-LIST. A key that is not in it still renders, humanized —
+ * journey's category set is user config (`user_scheduling_prefs.config.categoryMappings`), so a
+ * category added there must appear in Huddle the same day, with no code change here. Hardcoding the
+ * set is exactly the "systematic capability, never a patch" failure the repo rules name.
+ */
+const CATEGORY_LABELS: Record<string, string> = {
+  LIFE: "Life",
+  CAREER: "Career",
+  VENTURES: "Ventures",
+  EDUCATION: "Education",
+  PROF_EDUCATION: "Prof. Education",
+  PERSONAL: "Personal",
+};
+
+/** `PROF_EDUCATION` → `Prof. Education`; an unknown `SIDE_HUSTLE` → `Side Hustle`. */
+export function categoryLabel(key: string): string {
+  const known = CATEGORY_LABELS[key.toUpperCase()];
+  if (known) return known;
+  return key
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+/** Synthetic category roots are ids, not topics — prefixed so they can never collide with a
+ *  journey topic uuid, and so a click handler can tell them apart. */
+export const CATEGORY_ROOT_PREFIX = "category:";
+
+/**
+ * Group a FLAT topic list under synthetic CATEGORY roots.
+ *
+ * WHY THIS EXISTS — measured, not assumed (2026-09-13, journey project wwxgajrtmslzklnyplah):
+ *
+ *     select count(*), count(parent_topic_id), count(distinct category_affinity)
+ *       from public.task_topic_index;
+ *     -> 158 topics, 0 with a parent, 5 distinct categories
+ *
+ * `parent_topic_id` is NULL on EVERY row. The two-level tree in journey's own Priorities view is
+ * `category → topic`, NOT `topic → sub-topic`: journey groups by `category_affinity`
+ * (`journey-voice/src/pages/Priorities.tsx:284`, `categoryKeys.map(...)`) and only THEN nests by
+ * parent. Confirmed against the counts on the owner's screenshot — its Ventures row reads 40, and
+ * open non-test tasks with `category = VENTURES` measured exactly 40.
+ *
+ * Without this, `buildTopicTree` — which nested on `parent_topic_id` alone — would have rendered
+ * 158 FLAT ROWS the moment journey deployed the topic read. Every unit test passed, because every
+ * fixture invented a `parent_topic_id` the real table has never contained. That is the same defect
+ * class as the pink band: proven logic over a shape nobody had looked at.
+ *
+ * Deliberately a NO-OP when the producer already nested its payload, or when no node carries a
+ * category — journey may start populating `parent_topic_id` later, and real nesting must win.
+ * A topic with no category stays a top-level row rather than being dropped or bucketed as "Other".
+ */
+function groupByCategory(roots: TopicNode[]): TopicNode[] {
+  if (roots.some((n) => n.children.length > 0)) return roots; // real nesting already present
+  if (!roots.some((n) => n.categoryAffinity)) return roots; // nothing to group on
+
+  const byCat = new Map<string, TopicNode>();
+  const out: TopicNode[] = [];
+
+  for (const n of roots) {
+    const cat = n.categoryAffinity;
+    if (!cat) {
+      out.push(n); // uncategorised topic — a top-level row of its own, never silently dropped
+      continue;
+    }
+    let parent = byCat.get(cat);
+    if (!parent) {
+      parent = {
+        id: `${CATEGORY_ROOT_PREFIX}${cat}`,
+        name: categoryLabel(cat),
+        parentId: null,
+        categoryAffinity: cat,
+        position: n.position,
+        count: null,
+        children: [],
+      };
+      byCat.set(cat, parent);
+      out.push(parent);
+    }
+    // A category sorts where its earliest topic sorts, so journey's own ordering still drives the rail.
+    if (parent.position === null || (n.position !== null && n.position < parent.position)) {
+      parent.position = n.position;
+    }
+    parent.children.push(n);
+  }
+
+  // The category's count is the sum of its topics' counts — and stays NULL when not one of them
+  // reports a count, because the spec draws a BLANK there, never a "0" (the owner's screenshot has
+  // a category row with no number at all).
+  for (const parent of byCat.values()) {
+    const counted = parent.children.filter((c) => c.count !== null);
+    parent.count = counted.length ? counted.reduce((sum, c) => sum + (c.count ?? 0), 0) : null;
+  }
+
+  return out;
+}
+
+/**
  * Would attaching `n` to its declared parent close a loop? Walks the ancestor chain looking for
  * `n` itself (or any repeat).
  *
@@ -481,12 +584,17 @@ function sortNodes(nodes: TopicNode[]): TopicNode[] {
 /**
  * Normalize journey's topic payload into nested roots.
  *
- * Handles both shapes without knowing which Lane A ships: a tree that already nests its children,
- * and the FLAT `task_topic_index` shape Lane A proved it reads (`parent_topic_id` null = top-level),
- * which is nested here by parent id. A node whose declared parent is missing from the payload is
- * promoted to a root rather than dropped, so a partial page can never silently lose topics.
- * Cycle-safe: a node whose parent chain loops back to it is promoted to a root (see
- * hasAncestorCycle) — an earlier version returned an EMPTY tree for that input, losing both nodes.
+ * Three shapes, in precedence order — the payload decides, this function never assumes:
+ *   1. Already nested by the producer  → trusted and merely ordered.
+ *   2. Flat with real `parent_topic_id` → nested by parent id (cycle-safe; see hasAncestorCycle,
+ *      which promotes a looping node to a root rather than returning an EMPTY tree and losing it).
+ *   3. Flat with NO parent anywhere but a `category_affinity` → grouped under synthetic CATEGORY
+ *      roots by `groupByCategory`. **This is what journey's live data actually is** — 158 topics,
+ *      `parent_topic_id` NULL on all of them, 5 categories (measured 2026-09-13). Case 2 alone
+ *      rendered that as 158 flat rows.
+ *
+ * A node whose declared parent is missing from the payload is promoted to a root rather than
+ * dropped, so a partial page can never silently lose topics.
  */
 export function buildTopicTree(payload: unknown): TopicNode[] {
   const arr = findTopicArray(payload);
@@ -514,7 +622,7 @@ export function buildTopicTree(payload: unknown): TopicNode[] {
       roots.push(n);
     }
   }
-  return sortNodes(roots);
+  return sortNodes(groupByCategory(roots));
 }
 
 // ---------------------------------------------------------------------------
