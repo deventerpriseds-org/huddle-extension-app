@@ -47,6 +47,31 @@ type WindowLike = {
 type RootLike = {
   style: { setProperty: (k: string, v: string) => void; removeProperty: (k: string) => void };
 };
+type LockableLike = { classList: { add: (c: string) => void; remove: (c: string) => void } };
+
+/** The class that stops the DOCUMENT panning — see `@utility app-locked` in styles.css. */
+export const APP_LOCK_CLASS = "app-locked";
+
+/**
+ * Lock `<html>` and `<body>` so the document cannot be panned, and return the unlock.
+ *
+ * SEPARATE FROM THE HEIGHT, AND BOTH ARE NEEDED. Sizing the shell to the visible height stops the
+ * nav being pushed BELOW the fold; this stops the whole app being DRAGGED up. The owner hit the
+ * second one after the first was fixed: *"if I swipe up on the button row at the bottom the entire
+ * app slides up leaving white space still."* The bottom nav is the only region that is not its own
+ * scroll container, so a drag there chains to the document.
+ *
+ * Scoped to the app shell's lifetime ON PURPOSE: `/auth` and the error routes use `min-h-screen`
+ * and need ordinary page scrolling. A global rule in the stylesheet would break them.
+ */
+export function lockDocumentScroll(root: LockableLike | undefined, body: LockableLike | undefined): () => void {
+  root?.classList.add(APP_LOCK_CLASS);
+  body?.classList.add(APP_LOCK_CLASS);
+  return () => {
+    root?.classList.remove(APP_LOCK_CLASS);
+    body?.classList.remove(APP_LOCK_CLASS);
+  };
+}
 
 /**
  * Subscribe `root`'s `--app-h` to `win`'s visual viewport. Returns a teardown, or **null when there
@@ -78,13 +103,27 @@ export function attachAppViewportHeight(win: WindowLike | undefined, root: RootL
   };
 }
 
-/** Publishes the visible height as `--app-h` on `<html>` for as long as the app is mounted. */
+/**
+ * For as long as the app shell is mounted: publish `--app-h` (so the shell ends where the keyboard
+ * begins) AND lock the document (so the shell cannot be dragged around). Two distinct defects, both
+ * owner-reported, both required — see each function's own note.
+ */
 export function useAppViewportHeight(): void {
   useEffect(() => {
     if (typeof window === "undefined") return;
-    return attachAppViewportHeight(
+    const unlock = lockDocumentScroll(
+      document.documentElement as unknown as LockableLike,
+      document.body as unknown as LockableLike,
+    );
+    const detach = attachAppViewportHeight(
       window as unknown as WindowLike,
       document.documentElement as unknown as RootLike,
-    ) ?? undefined;
+    );
+    return () => {
+      detach?.();
+      // Unlock LAST and ALWAYS — even if the height subscription never attached. Leaving the
+      // document fixed after unmount would strand `/auth` and the error routes unscrollable.
+      unlock();
+    };
   }, []);
 }

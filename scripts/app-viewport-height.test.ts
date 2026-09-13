@@ -19,7 +19,12 @@
 // reports a shrunken height; they do NOT prove the owner's phone behaves that way. Status stays
 // MECHANISM ONLY until he looks at it.
 
-import { attachAppViewportHeight, visibleHeightPx } from "../src/features/huddle/hooks/useAppViewportHeight";
+import {
+  attachAppViewportHeight,
+  lockDocumentScroll,
+  visibleHeightPx,
+  APP_LOCK_CLASS,
+} from "../src/features/huddle/hooks/useAppViewportHeight";
 
 let pass = 0,
   fail = 0;
@@ -140,6 +145,50 @@ check(
   visibleHeightPx({ height: 843.6667, offsetTop: 0 }) === 844,
   `-> ${visibleHeightPx({ height: 843.6667, offsetTop: 0 })}px`,
 );
+
+// ── THE SECOND DEFECT: the DOCUMENT must not pan. Owner, after the height fix shipped: "if I swipe
+//    up on the button row at the bottom the entire app slides up leaving white space still."
+//    The bottom nav is the only region that is not its own scroll container, so a drag there chains
+//    to the document — and html/body carried no height, no overflow and no overscroll-behavior.
+{
+  const classes = (): { el: { classList: { add: (c: string) => void; remove: (c: string) => void } }; has: () => boolean } => {
+    const s = new Set<string>();
+    return {
+      el: { classList: { add: (c: string) => s.add(c), remove: (c: string) => s.delete(c) } },
+      has: () => s.has(APP_LOCK_CLASS),
+    };
+  };
+  const root = classes();
+  const body = classes();
+  const unlock = lockDocumentScroll(root.el, body.el);
+  check(
+    "the lock is applied to BOTH html and body — one alone still lets the document pan",
+    root.has() && body.has(),
+    `html=${root.has()} body=${body.has()}`,
+  );
+  unlock();
+  check(
+    "unlocking removes it from BOTH — a stranded lock leaves /auth and the error routes unscrollable",
+    !root.has() && !body.has(),
+    `html=${root.has()} body=${body.has()}`,
+  );
+}
+{
+  // SSR / a missing body must not throw, and must still hand back a callable unlock.
+  let threw = false;
+  let unlock: (() => void) | null = null;
+  try {
+    unlock = lockDocumentScroll(undefined, undefined);
+    unlock();
+  } catch {
+    threw = true;
+  }
+  check(
+    "no document (SSR) is a no-op that still returns a usable unlock, never a crash",
+    !threw && typeof unlock === "function",
+    `threw=${threw}, unlock=${typeof unlock}`,
+  );
+}
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);
 process.exit(fail === 0 ? 0 : 1);
