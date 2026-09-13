@@ -76,6 +76,15 @@ jobs:
           git config user.name "gha-uat"
           git checkout --orphan uat-shots
           git reset >/dev/null 2>&1 || true
+          # A run that produced NOTHING must not leave the previous run's shots standing on the
+          # branch: that is how run 34761827362's results were nearly read as run 34763366985's.
+          # Fail soft here, and always stamp the run id in the commit so provenance is checkable.
+          shopt -s nullglob
+          shots=(uat-shots/*.png)
+          if [ ${#shots[@]} -eq 0 ]; then
+            echo "::warning::this run produced NO screenshots -- leaving uat-shots untouched. Do NOT read that branch as this run's output."
+            exit 0
+          fi
           git add -f uat-shots/*.png uat-shots/results.json
           git commit -q -m "uat shots — run ${{ github.run_id }}" || { echo "no shots to commit"; exit 0; }
           git push -f origin uat-shots
