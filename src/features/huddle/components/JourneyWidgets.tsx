@@ -301,9 +301,11 @@ function TodayButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
   );
 }
 
-/** ▶ start → DOING. The spec pairs a LIGHTER teal ▶ beside a DARKER green ✓; both are expressed as
- *  mixes of the theme's own `--success` so the pair stays distinguishable in dark mode too, instead
- *  of the lighter one washing out to a pale blob on a dark card. */
+/** ▶ start → DOING. The spec pairs a LIGHTER teal ▶ beside a DARKER green ✓.
+ *  This was a color-mix of `--success` against `--surface`, which is oklch(1 0 0) — white with an
+ *  EXPLICIT hue of 0 — so it dragged hue 155 to 111.6 and rendered YELLOW-GREEN, not a lighter teal.
+ *  Identical defect to the pink band (D-1), found by sweeping every color-mix in the repo.
+ *  `--success-soft` is a literal at the SAME hue, lit per theme. */
 function StartButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
   const { status, busy } = useRowState(row);
   const doing = status === "DOING";
@@ -315,7 +317,7 @@ function StartButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
       aria-label={doing ? `"${row.title}" is already in progress` : `Start "${row.title}"`}
       className={cn(CTRL_BASE, "-my-2 min-h-11 w-10")}
       style={{
-        backgroundColor: "color-mix(in oklch, var(--success) 72%, var(--surface))",
+        backgroundColor: "var(--success-soft)",
         color: "var(--success-foreground)",
       }}
     >
