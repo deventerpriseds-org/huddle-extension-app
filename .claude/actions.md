@@ -3934,3 +3934,41 @@ beneath it, keyboard below that.
 - [ ] **OWNER — live re-test, and this is the verdict.** A sandbox cannot open a soft keyboard, so
       nothing here proves the phone is fixed. Open a 1:1, tap the composer, confirm the dock stays put.
       Status stays **MECHANISM ONLY, NOT USER-CONFIRMED** until then.
+
+## ACT:artifact-rich-formats — agents can only emit .md; ChatGPT-parity formats are missing
+
+**Asked (2026-09-13):** *"why is it saying we are limited to .me [.md] when full document, mermaid, d3
+abilities etc were early requirements for the artifact library? this needs to be fixed right away…
+if these are both using full openai agent capabilities, why can chatgpt generate these things with
+access to tools that this agent behaves like it's stripped back? it seems like an implimentatiom flaw"*
+Three screenshots of Cole Blake in the live app declining to generate an image and declining Word/PowerPoint.
+
+**Owner's read is correct — it is an implementation flaw, and it is ours, not OpenAI's.** Ground
+truth read at `origin/main` (merged locally at `79bfce3`):
+
+| Layer | Accepts | Evidence |
+|---|---|---|
+| Blob store | any bytes, any mime | `artifacts.server.ts:128-131` — `input.bytes` → Buffer → `putArtifactBlob(path, data, input.mime)` |
+| `artifacts.items` row | any mime | stores `mime`/`size_bytes`/`blob_path` verbatim |
+| **`create_artifact` tool** | **a markdown STRING only** | `artifact-tool.ts:24` `content: {type:"string", …"in markdown"}`; `mime` defaults `text/markdown`; no bytes/file parameter |
+| Tools handed to the model | **`function` + `file_search` only** | `mergedTools` `huddle.functions.ts:3497` is 100% custom functions; `snapshotResponsesTools` `openai-assistants.server.ts:32` doc-comment says *"Drops `code_interpreter`"* and does |
+
+Sweep of all `src/`: `image_generation` **0 hits**; `dall-e` / `gpt-image` / `images/generations`
+**0 hits**; `code_interpreter` 7 hits, **every one either the snapshot JSON declaring it or the code
+stripping it out**. So the agent's ".md only" reply is an accurate report of the toolset it was
+handed — not a hallucinated limit. Same account, same Responses API, same models as ChatGPT; we
+hand it strictly less.
+
+**Three gaps, none conflicting — all three in flight (fanned out 2026-09-13):**
+1. **Mermaid / D3** — these are TEXT, so the generator was never the blocker. `TEXT_PREVIEW_MIME`
+   (`artifacts.server.ts:183`) previews them as raw source. Fix is the VIEWER. → LANE B.
+2. **.docx/.pptx/.xlsx** — `code_interpreter` stripped; no path pulls a generated container file
+   into the blob store. → LANE A.
+3. **Images** — `image_generation` never added to `mergedTools`. → LANE A.
+
+- Lane A → `docs/qc-evidence/LANE-A-builtin-tools.md` (built-in tools + file output → `createArtifact`)
+- Lane B → `docs/qc-evidence/LANE-B-artifact-viewer.md` (mermaid render, sandboxed HTML, binary affordance)
+
+**Tier 2** (ordinary logic — no gate, no score, no accusation). Implement + build + mutation-prove any
+new guard; batch a verifier after both lanes land. **Status: IN FLIGHT — nothing verified, nothing
+deployed, and nothing here may be written as "fixed" until the owner sees it in his own app.**
