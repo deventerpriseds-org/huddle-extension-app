@@ -310,5 +310,34 @@ This is the `git add -A` sweep hazard my brief named ("this has swept the wrong 
 this branch") — worth noting that it bites even when the lane being swept staged narrowly and
 correctly, because the sweeper is a different process.
 
+### …and then the sweep was rewritten away, taking this lane's code with it
+
+Minutes later `710e3ff` became **unreachable**: the same session reset and re-committed its own file
+as `15806a4`, dropping my five source files from history.
+
+```
+$ git merge-base --is-ancestor 710e3ff HEAD ; echo $?
+1                                     # NO -- 710e3ff is dangling
+$ git show HEAD:src/features/huddle/lib/openai-builtin-tools.ts
+fatal: path ... does not exist        # the code was gone from HEAD
+$ git status --porcelain              # but the reset was --mixed, so the WORKTREE still had it
+ M src/features/huddle/lib/huddle.functions.ts
+ M src/features/huddle/lib/identity/agent-workflow-config.functions.ts
+ M src/features/huddle/lib/identity/agent-workflow-config.server.ts
+ M src/features/huddle/lib/openai-responses.server.ts
+?? src/features/huddle/lib/openai-builtin-tools.ts
+```
+
+Re-committed as `f36f678`. Verified present in HEAD afterwards (`13` and `10` grep hits for the new
+identifiers in `openai-responses.server.ts` and `huddle.functions.ts`).
+
+**The lesson, and it generalises past this branch:** on a branch with two live sessions, "I committed
+it" is not proof the work is safe — only `git show HEAD:<path>` is, checked AFTER the commit. Nothing
+was lost here purely because their reset happened to be `--mixed`; a `--hard` would have destroyed
+five files of work that had already been committed once. **The branch is still unpushed**, which means
+this work currently exists in exactly one container. Pushing the feature branch (not `main` — nothing
+deploys from a feature branch) is the only thing that makes it survivable, and it is being held back
+only by the standing "do not push" instruction.
+
 
 
