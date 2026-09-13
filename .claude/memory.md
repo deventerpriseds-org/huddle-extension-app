@@ -1572,6 +1572,36 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+**THE APP SHELL IS SIZED BY `--app-h`, NOT `h-dvh` — `dvh` DOES NOT SHRINK FOR THE KEYBOARD (2026-09-13).**
+Owner, on his phone: *"why isn't the bottom [dock] staying at the bottom of my device instead of being
+able to be scrolled up?"* Screenshot: the nav bar floated to ~45% of screen height, a blank strip
+beneath it, keyboard below that.
+
+**The page never scrolled — the WINDOW slid.** `dvh` tracks the **layout** viewport (it shrinks when
+the URL bar retracts); a soft keyboard shrinks only the **visual** viewport. So the `h-dvh` column
+stayed full height, its last flex child (the bottom nav) fell below the fold under the keyboard, and
+the browser panned the visible region over the taller layout viewport to follow the caret. That pan
+reads as scrolling. **Do not "fix" this by making the nav `position: fixed`** — a fixed element
+anchors to the same layout viewport and lands in the same place, behind the keyboard.
+
+**`interactive-widget=resizes-content` (`routes/__root.tsx:83`) was ALREADY SET and is the correct
+declaration — it is CHROME-ON-ANDROID ONLY.** Firefox, Samsung Internet and most WebViews ignore it,
+so on those the layout was always going to break. It stays; the fix layers over it rather than
+replacing it. This is why the layout was correct on paper and broken on the owner's device.
+
+- `hooks/useAppViewportHeight.ts` publishes `--app-h` from `window.visualViewport` — the one
+  mechanism every modern browser implements. Subscribed ONCE on the shell (`HuddleApp.tsx`), so every
+  view inherits it; never per-view.
+- It subtracts `offsetTop`, not just `height`. `offsetTop` is how far the browser has ALREADY panned —
+  reading `height` alone leaves the bar drifting in exactly the state the screenshot captured.
+- **Degrading is the design:** no `visualViewport` (or SSR) sets NOTHING and `var(--app-h, 100dvh)`
+  keeps today's behaviour. The variable is only ever a real measured number, never a guess, so this is
+  neutral-or-better everywhere and cannot regress a browser that already worked.
+- Guard: `scripts/app-viewport-height.test.ts`, 9 assertions, **two mutation proofs FIRED**
+  (offsetTop subtraction; the degrade path). Commit `725e8ff`.
+- **NOT USER-CONFIRMED.** A sandbox cannot open a soft keyboard — this proves the mechanism, not the
+  owner's device. Perceptual/device UAT rule applies: his word is the verdict.
+
 **ACT-65 — grooming FORCES an agent owner on every task; that one line causes the overreach (2026-08-26).**
 Read before touching task assignment, grooming, or the confirm-intent gate.
 `groom.ts:122-127` instructs *"assign it to exactly ONE agent… Include every task id exactly once"* with
@@ -1879,6 +1909,33 @@ user to test in the deployed app. NOT calling fixed until user confirms AC-12 li
 **Also: main's `94cfc02` (ACT-huddle-4 server-side kickNextChunk retry) and this session's WebRTC client-side pipeline are COMPLEMENTARY, not conflicting. Both belong in main.**
 
 ## Hardening (append)
+
+### 2026-09-13 — a mutation harness said "NOTHING IS PROVEN" and I nearly read it as a bad guard
+**Mistake:** `mutate.sh` returned *"the harness prints a format this script cannot read… NOTHING IS
+PROVEN"* on the first proof of the viewport fix. The guard was fine. **My invocation was wrong:**
+`mutate.sh:133` does `grep -qF "FAIL ${name_n}"` — it prepends `FAIL ` itself — and I passed the
+pattern as `"FAIL <test name>"`, so it searched for `FAIL FAIL <test name>`.
+**Root cause:** I typed a literal (`"FAIL …"`) that had to line up with a matcher I had not read —
+the exact failure the org rule *"never type a literal that must exist in something you have not
+read"* names. One `grep -n` of the script settled it.
+**Guardrail:** the **must-fail-pattern argument is the BARE TEST NAME**, never prefixed with `FAIL`.
+And the wider lesson the harness itself was built for held: it reported **NOT-APPLIED**, not a false
+INERT, so the wrong answer was *"I did nothing"* rather than *"your guard is worthless."* That
+distinction is what made this recoverable in one command — do not "simplify" it away.
+
+### 2026-09-13 — `dvh` looked like the modern, correct answer and is wrong for keyboards
+**Mistake:** the app shell used `h-dvh` and the bottom nav could be scrolled away on the owner's
+phone. `dvh` reads as the sophisticated choice (it handles the retracting URL bar), which is exactly
+why nobody questioned it.
+**Root cause:** `dvh` tracks the **layout** viewport; a soft keyboard shrinks only the **visual**
+viewport. Two different viewports, one of which no CSS length unit exposes.
+**Second root cause, the more useful one:** the declarative fix (`interactive-widget=resizes-content`)
+was **already present and correct**, so the layout was right on paper and broken on the device —
+because that flag is **Chrome-on-Android only**. *A correct declaration is not a working one until
+you know which engines implement it.*
+**Guardrail:** `scripts/app-viewport-height.test.ts` + `--app-h` from `visualViewport`, the one
+universal mechanism. Mutation-proved. **And never reach for `position: fixed` here** — a fixed
+element anchors to the same layout viewport and lands in the same place, behind the keyboard.
 
 ### 2026-08-25 — parked approved, verified work instead of shipping it (ACT-63)
 **Mistake:** the user reported two bugs, approved both fixes explicitly ("approved in both"), and the

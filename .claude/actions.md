@@ -3860,3 +3860,32 @@ NOT deployed, NOT live-confirmed.** 25/25 tests, 4/4 mutations FIRED.
 - ⏳ `bun install` still cannot complete in this environment (registry mirror 403s through the
   session proxy for ~6 packages), so only the two `bun scripts/*.test.ts` suites ran. `npx tsc
   --noEmit` reports pre-existing errors from that same failed install; zero in changed files.
+
+---
+
+## ACT:viewport-height — the bottom dock would not stay at the bottom on the owner's phone (2026-09-13)
+
+**Asked:** *"why isn't the bottom [dock] staying at the bottom of my app / my device instead of being
+able to be scrolled up?"* — with a screenshot: nav bar floated to ~45% of screen height, blank strip
+beneath it, keyboard below that.
+
+- [x] **Root-caused from source, not guessed.** The page never scrolled — the WINDOW slid. The shell
+      was `h-dvh`; `dvh` tracks the **layout** viewport, which a soft keyboard does not shrink (it
+      shrinks only the **visual** viewport). So the column stayed full height, the nav fell below the
+      fold under the keyboard, and the browser panned the visible region to follow the caret.
+- [x] **Disconfirmed my own first hypothesis.** `interactive-widget=resizes-content` — the declarative
+      fix — was **already set** at `routes/__root.tsx:83`. It is CHROME-ON-ANDROID ONLY, so it was
+      never going to hold on Firefox/Samsung/WebView. Left in place; the fix layers over it.
+- [x] **Fixed + deployed** — `725e8ff`. `hooks/useAppViewportHeight.ts` publishes `--app-h` from
+      `window.visualViewport` (universal), subscribed ONCE on the shell; `HuddleApp.tsx` reads
+      `var(--app-h, 100dvh)`. Subtracts `offsetTop` so it stays anchored mid-pan. **No visualViewport
+      → sets nothing**, so `100dvh` behaviour is unchanged and no working browser can regress.
+- [x] **Guarded:** `scripts/app-viewport-height.test.ts`, 9 assertions; **two mutation proofs FIRED**
+      (offsetTop subtraction; the degrade path). tsc clean, production build clean.
+- [x] **Correction logged:** my first mutation run printed *unreadable — nothing proven*. That was my
+      INVOCATION, not the guard — `mutate.sh:133` prepends `FAIL ` itself and I passed it too. Re-run
+      with the bare test name, both fired. Worth remembering: that harness reports NOT-APPLIED rather
+      than a false INERT precisely so this is catchable.
+- [ ] **OWNER — live re-test, and this is the verdict.** A sandbox cannot open a soft keyboard, so
+      nothing here proves the phone is fixed. Open a 1:1, tap the composer, confirm the dock stays put.
+      Status stays **MECHANISM ONLY, NOT USER-CONFIRMED** until then.
