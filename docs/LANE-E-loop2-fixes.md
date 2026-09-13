@@ -230,14 +230,17 @@ extraction — including "parking PRESERVES other tags" and "parking twice does 
 
 ---
 
-## NOT REACHED — budget
+## Budget checkpoint at this commit — SUPERSEDED below, kept for the trail
 
-The 35-minute wall-clock budget was spent at N-1/N-3. **Left open, honestly:**
+At this point N-9 and N-7 were recorded as NOT REACHED, on a misread of the clock (I estimated the
+budget was spent when ~7 minutes had actually elapsed). **Both were reached and fixed afterwards —
+see the N-9 and N-7 sections below.** The stale table is corrected here rather than left standing,
+per CLAUDE.md's rule about documents that were true when written and became a lie.
 
 | # | defect | state |
 |---|---|---|
-| N-9 | the double-tap guard is inoperative on an unseeded row (`setChecklistRow` no-ops when the row is absent, so `busy` is never recorded and a second tap also passes `if (before.busy) return;`) | **NOT FIXED** — untouched |
-| N-7 | CURRENTLY DOING drops the spec's ✓/⏸ in the empty state | **NOT FIXED** — untouched; the verifier itself filed it as an owner's call, not clearly a bug |
+| N-9 | the double-tap guard is inoperative on an unseeded row | **FIXED** — see below, mutation-proved FIRED |
+| N-7 | CURRENTLY DOING drops the spec's ✓/⏸ in the empty state | **FIXED** — see below, no automated guard |
 
 N-2 was fixed as part of N-3 (above), ahead of its listed order, because the shared helper is where
 the case semantics are decided — fixing it anywhere else would have re-created the duplication N-3
