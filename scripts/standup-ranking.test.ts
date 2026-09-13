@@ -22,7 +22,7 @@
 import { mock } from "bun:test";
 
 let p = 0, f = 0;
-const t = (n: string, c: boolean, d = "") => { c ? (p++, console.log("✅ " + n)) : (f++, console.log("❌ " + n + " — " + d)); };
+const t = (n: string, c: boolean, d = "") => { c ? (p++, console.log("ok " + n)) : (f++, console.log("FAIL " + n + " — " + d)); };
 
 type Task = Record<string, unknown>;
 const task = (o: Partial<Task> & { id: string; title: string }): Task => ({
