@@ -216,7 +216,10 @@ export const getPrioritiesWidget = createServerFn({ method: "POST" })
  *
  *   ▶ start   → update_task status=DOING
  *   ✓ done    → update_task status=DONE
- *   ⏸ pause   → update_task status=UP_NEXT
+ *   ⏸ pause   → update_task status=BACKLOG *plus* the `parking-lot` tag (a PARK, not a hand-back —
+ *               UP_NEXT is the lane auto-work promotes from, so pause used to resume within hours;
+ *               see ACTION_STATUS's "PAUSE IS A PARK" note and commit 966bd2f)
+ *   ↺ reopen  → update_task status=BACKLOG, tags untouched (un-ticking ✓ is NOT parking)
  *   ▲ Today   → move_task_to_day {date: today in the user's tz}   (journey picks the time)
  *   ✓ Today   → unschedule_task                                    (toggling today OFF)
  *
@@ -261,7 +264,7 @@ export const updateWidgetTask = createServerFn({ method: "POST" })
       const owned = await getOwnedTaskForConfirmAsk(data.taskId, email);
       if (!owned) return fail("Task not found.");
 
-      const { ACTION_STATUS, PARKING_LOT_TAG, safeTimeZone, localDateKey } = await import("./widgets.server");
+      const { ACTION_STATUS, safeTimeZone, localDateKey, withParkingLotTag } = await import("./widgets.server");
       const { invokeJourneyTool } = await import("../journey/proxy.functions");
 
       let toolName: string;
@@ -288,13 +291,8 @@ export const updateWidgetTask = createServerFn({ method: "POST" })
         // would silently wipe every other label the task carries (blocked, reminder, quick-win…).
         status = ACTION_STATUS[action];
         toolName = "update_task";
-        const existing = (owned.tags ?? []).map((t) => String(t));
-        const parked = existing.some((t) => t.toLowerCase() === PARKING_LOT_TAG);
-        args = {
-          task_id: data.taskId,
-          status,
-          tags: parked ? existing : [...existing, PARKING_LOT_TAG],
-        };
+        // ONE union, shared with confirm-ask's Park button — `withParkingLotTag` (widgets.server.ts).
+        args = { task_id: data.taskId, status, tags: withParkingLotTag(owned.tags) };
       } else {
         // start / done / reopen — status only, tags untouched. `reopen` deliberately does NOT add or
         // remove the parking-lot tag: un-ticking ✓ means "not actually done", never "park it".

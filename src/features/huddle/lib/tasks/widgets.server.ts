@@ -245,6 +245,26 @@ export function isParked(row: BoardTaskRow): boolean {
   return (row.tags ?? []).some((t) => String(t).toLowerCase() === PARKING_LOT_TAG);
 }
 
+/**
+ * THE ONE park-tag union. journey's `update_task` REPLACES the tag array ("Replaces existing tags."
+ * — journey-voice `_shared/tool-definitions.ts`), so every parking write must send existing + the
+ * tag, or it silently wipes every other label the task carries (blocked, reminder, quick-win…).
+ *
+ * Both park paths call this: `confirm-ask.functions.ts`'s Park button (the original implementation,
+ * which this is extracted from) and `widgets.functions.ts`'s ⏸ pause. Two inline copies had already
+ * drifted apart on case handling (VERIFY-journey-widgets-2.md N-3, and N-2 which fell out of it).
+ *
+ * IT APPENDS THE EXACT LOWERCASE TAG even when a differently-cased one is present. That looks like a
+ * duplicate and is not: `autowork.server.ts:533`, `groom.ts:121` and `scoring.ts:137` all filter with
+ * an EXACT `.includes("parking-lot")`, so a task carrying only `Parking-Lot` reads as parked in the
+ * UI while remaining an automation candidate — N-2. Writing the canonical form is what actually
+ * parks it; the odd-cased tag is left untouched because it is the user's data, not ours to rewrite.
+ */
+export function withParkingLotTag(existing: readonly unknown[] | null | undefined): string[] {
+  const tags = (existing ?? []).map((t) => String(t));
+  return tags.includes(PARKING_LOT_TAG) ? tags : [...tags, PARKING_LOT_TAG];
+}
+
 /** Open = not completed and not DONE. (BLOCKED stays visible — a blocked item is still live work
  *  the user may want to see; the board and standup both keep it.) */
 export function isOpen(row: BoardTaskRow): boolean {

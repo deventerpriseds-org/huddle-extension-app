@@ -649,9 +649,10 @@ export const parkTaskFromButtonFn = createServerFn({ method: "POST" })
       if (alreadyParked) return { ok: true, alreadyDone: true };
       // update_task REPLACES the tags array (board.functions.ts's updateBoardTask comment), so this must
       // send the FULL desired set (existing + parking-lot), never just the one tag being added.
-      const tags = existingTags.includes("parking-lot")
-        ? existingTags
-        : [...existingTags, "parking-lot"];
+      // THE union lives in widgets.server.ts — the widget ⏸ pause path calls the same helper, so the
+      // two cannot drift apart again (VERIFY-journey-widgets-2.md N-3).
+      const { withParkingLotTag } = await import("./widgets.server");
+      const tags = withParkingLotTag(existingTags);
       const { invokeJourneyTool } = await import("../journey/proxy.functions");
       const r = await invokeJourneyTool({
         toolName: "update_task",

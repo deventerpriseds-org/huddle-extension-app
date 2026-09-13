@@ -167,3 +167,78 @@ npm run test:router        ->  20 passed, 0 failed
 npm run test:widget-live   ->   9 passed, 0 failed
 npm run test:widget-colors ->  16 passed, 0 failed
 ```
+
+### N-5/N-6 mutation proof — **FIRED**
+
+Anchor uniqueness checked first: `grep -c "return CATEGORY_HUES\[key\] ?? hashHue(key);"` → **1**.
+Anchor and replacement supplied as FILES.
+
+```
+mutate.sh src/features/huddle/lib/tasks/widget-colors.ts n5-anchor.txt n5-repl.txt \
+          "npm run test:widget-colors" "LIFE and EDUCATION are no longer near-identical (the N-5 collision)"
+
+FIRED: 'LIFE and EDUCATION are no longer near-identical (the N-5 collision)' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/tasks/widget-colors.ts matches HEAD
+tree clean: 'LIFE and EDUCATION are no longer near-identical (the N-5 collision)' passes again on the restored tree (build output regenerated)
+```
+
+The mutation reinstated the original defect exactly — the bare, case-sensitive hash with no seed
+table. Not INERT, not NOT-APPLIED.
+
+---
+
+## N-3 (LOW–MOD) — the park tag-union was duplicated; now ONE helper, both call sites
+
+**Confirmed before changing.** `confirm-ask.functions.ts:648-654` already implemented the union;
+`widgets.functions.ts:291-297` re-implemented it inline with different case semantics. Two copies is
+how the two sides drift — and N-2 is the drift they had already produced.
+
+`withParkingLotTag(existing)` now lives in `widgets.server.ts`, directly beside `PARKING_LOT_TAG` and
+`isParked`, and **both** call sites use it (`widgets.functions.ts` ⏸ pause; `confirm-ask.functions.ts`
+Park button, via the dynamic import that file already uses for server-only modules). No third copy
+was created — the helper is an extraction of the existing confirm-ask implementation, per
+CLAUDE.md's "extend, don't duplicate".
+
+### N-2 (LOW) fixed as a consequence, not left as drift
+
+The extracted helper matches the tag **exactly** (`tags.includes(PARKING_LOT_TAG)`), not
+case-insensitively. That is the deliberate resolution of N-2: `autowork.server.ts:533`, `groom.ts:121`
+and `scoring.ts:137` all filter with an exact `.includes("parking-lot")`, so a task carrying only a
+mixed-case `Parking-Lot` used to read as parked in the widget while staying an automation candidate.
+Writing the canonical lowercase tag is what actually parks it. The odd-cased tag is preserved rather
+than rewritten — it is the user's data.
+
+## N-1 (LOW–MOD) — the docblock documented the bug that 966bd2f fixed
+
+`updateWidgetTask`'s header said `⏸ pause → update_task status=UP_NEXT`. The code writes BACKLOG plus
+the `parking-lot` tag. Corrected, with the reason recorded inline (UP_NEXT is the lane auto-work
+promotes from, so pause resumed the task within hours), and `↺ reopen` — missing entirely from the
+five-button list against a six-button reality — added.
+
+### Checks at this commit
+
+```
+=== EXIT tsc: 0 ===
+npm run test:widget-park   ->  10 passed, 0 failed
+npm run test:router        ->  20 passed, 0 failed
+npm run test:widget-live   ->   9 passed, 0 failed
+npm run test:widget-colors ->  16 passed, 0 failed
+```
+
+`test:widget-park` is the guard on the union's behaviour and it still passes 10/10 through the
+extraction — including "parking PRESERVES other tags" and "parking twice does not duplicate the tag".
+
+---
+
+## NOT REACHED — budget
+
+The 35-minute wall-clock budget was spent at N-1/N-3. **Left open, honestly:**
+
+| # | defect | state |
+|---|---|---|
+| N-9 | the double-tap guard is inoperative on an unseeded row (`setChecklistRow` no-ops when the row is absent, so `busy` is never recorded and a second tap also passes `if (before.busy) return;`) | **NOT FIXED** — untouched |
+| N-7 | CURRENTLY DOING drops the spec's ✓/⏸ in the empty state | **NOT FIXED** — untouched; the verifier itself filed it as an owner's call, not clearly a bug |
+
+N-2 was fixed as part of N-3 (above), ahead of its listed order, because the shared helper is where
+the case semantics are decided — fixing it anywhere else would have re-created the duplication N-3
+exists to remove.
