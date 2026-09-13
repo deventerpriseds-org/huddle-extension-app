@@ -128,3 +128,76 @@ and authenticated-without-DB) returned `result: undefined` with no error — bec
 `await options.serverFn?.(ctx)` (`createServerFn.js`, `serverFnBaseToMiddleware`) short-circuits.
 The Vite plugin supplies the second arg in a real build. So this harness proves the VALIDATOR
 behaviour only; the handler bodies' own never-throw behaviour is tested separately in F-08.
+---
+
+### F-07 — Attack 1, the docking claim: "docked in Iris Chase's 1:1" — **CONFIRMED SCOPED. No leak.**
+
+There is exactly ONE dock render site, and it is a strict equality on the huddle id:
+
+`HuddleView.tsx:348`
+```tsx
+{huddle.id === WIDGET_DOCK_HUDDLE_ID && <DockedJourneyWidgets />}
+```
+`JourneyWidgets.tsx:67` — `export const WIDGET_DOCK_HUDDLE_ID = "dm-iris-chase";`
+
+The id is the right one, proved from the two primary sources rather than assumed:
+- `data/agents.ts:110` — Iris's agent `id: "iris-chase"`.
+- `data/seed.ts:244` — every 1:1 huddle is built as `` id: `dm-${a.id}` ``, so Iris's DM is
+  literally `dm-iris-chase`.
+
+`grep -rn WIDGET_DOCK_HUDDLE_ID src/` returns 4 hits total (definition, the export, the one render
+site, and one `setActive` in `JourneyWidgets.tsx:373`). Group rooms (`all-members`, `daily`) and
+every other DM (`dm-<other>`) fail the equality, so the dock cannot appear in them.
+
+---
+
+### F-08 — Attack 4, the single-writer mirror rule: **CONFIRMED — no second writer**
+
+```
+$ git diff 3223bf3..HEAD --unified=0 -- src/ | grep -E "^\+" \
+    | grep -iE "INSERT INTO|UPDATE tasks|DELETE FROM|journey_tasks|getPool\("
++//             dependency already exists — the Azure mirror `tasks.journey_tasks` for the task
++//     `tasks.journey_tasks`. So every read here goes to the mirror and every WRITE goes to
++//     `tasks.journey_tasks`. Building a SECOND query layer for them would fork
+```
+All three hits are COMMENTS. Across the entire branch's `src/` diff there is no added
+`INSERT`/`UPDATE`/`DELETE` against `tasks.*` and no added `getPool()` call. Neither
+`widgets.server.ts`, `widgets.functions.ts` nor `JourneyWidgets.tsx` references `getPool` at all.
+Every mutation routes through `invokeJourneyTool` to journey's canonical `public.tasks`
+(`widgets.functions.ts:288`), leaving the sync trigger as the mirror's only writer.
+
+---
+
+### F-09 — Attack 2, the Memory-registry bug: **PARTLY FIXED — the map landed, Memory is still decorative, and it still double-highlights**
+
+**The map: CONFIRMED built.** The three-way ternary is gone. `HuddleApp.tsx:48-54`:
+```tsx
+const VIEWS: Record<View, React.ReactNode> = {
+  huddle: <HuddleView />, board: <BoardView />, artifacts: <ArtifactsView />,
+  priorities: <PrioritiesView />, schedule: <ScheduleView />,
+};
+```
+rendered at `HuddleApp.tsx:439` as `{VIEWS[view]}`. Because it is typed `Record<View, …>`, adding a
+member to the `View` union without adding a map entry is now a COMPILE error, not a silent
+fall-through to Huddles. That is the structural fix the lane was asked for.
+
+**The two NEW entries resolve for real: CONFIRMED.** `store.ts:26` —
+`export type View = "huddle" | "board" | "artifacts" | "priorities" | "schedule";` — and both
+`priorities` and `schedule` appear in `VIEWS` (`:52-53`), in `Rail.tsx`'s `items`, and in
+`NAV_LABELS` (`:69-70`). The chain is complete on all three surfaces.
+
+**Memory: still decorative — NOT fixed, and self-declared as such.** `Rail.tsx:19`:
+```ts
+{ id: "memory", label: "Memory", icon: Compass, view: "huddle" },
+```
+with the file's own comment: *"`memory` keeps pointing at `huddle` deliberately … changing it is
+not this lane's job."* So clicking Memory still renders Huddles. Defensible as scope, but the
+original bug ("offered a Memory item that silently rendered Huddles") is NOT resolved.
+
+**A consequence the lane did not state — TWO rail buttons light up at once.** `Rail.tsx:43` is
+`const active = view === it.view;`. With `view === "huddle"`, BOTH the `huddle` item and the
+`memory` item satisfy it, so Huddles and Memory are rendered in the active style simultaneously,
+and clicking Memory lights Huddles too. This is pre-existing behaviour (the old line-39 check had
+the same effect), so it is NOT a regression — but the refactor moved the two drifting chains onto
+one field without noticing that the one field makes the collision explicit. Severity: LOW (cosmetic),
+but it is a visible wrong-state in the primary navigation.
