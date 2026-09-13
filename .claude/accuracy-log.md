@@ -141,3 +141,24 @@ a measured COUNT of live data expires; a structural fact does not. Two copies of
 `nexus-read-tools.test.ts` as though structural, and were quoted back to the owner twice as a reason
 the date filter could not be tested. **Both are now deleted rather than restated** — a count with no
 date and no expiry condition becomes a false constraint on advice.
+
+## 2026-09-13 — "the next 9/13/17 tick" quoted as the confirm-ask cadence
+**Claim I made:** a parked task "was a promotion candidate at the very next 9/13/17 tick, and the
+confirm-intent gate waved it through" — stated repeatedly while explaining the pause defect.
+**Ground truth (read this session):** `lib/identity/scheduling-config.server.ts` +
+`identity.scheduling_config` (queried live via `azure-pg-query.yml`, marker `CADENCE-PROBE-0913`).
+- `autowork.hours = [9,13,17]` IS still the live default — that half was right.
+- **`CONFIRM_JITTER_MIN/MAX_MS` no longer exists in `src/` at all.** The confirm-ask reach-out is
+  scheduled inside `CONFIRM_FAN_WINDOWS_DEFAULT` (9–18, 20–22) with a random 45–90 min gap. So the
+  ASK does not ride the 9/13/17 tick, and my sentence welded two different clocks together.
+- Other jobs are more frequent (`reviewDigest` 5×/day), which is what the owner was reacting to.
+- The table had **0 rows**, so no per-user override was in play — but I did not know that when I
+  asserted it; I asserted a default as though it were the effective value.
+**Single source that would have settled it up front:** `scheduling-config.server.ts` itself, plus one
+query of `identity.scheduling_config`. Both cheap. I quoted CLAUDE.md instead.
+**Root-cause pattern:** quoting a LITERAL out of documentation rather than reading the code it
+describes — the same failure as "never type a literal that must exist in something you have not read",
+applied to a doc instead of a file. Docs rot; the owner noticed before I did.
+**Guard implied (done):** CLAUDE.md's cadence block rewritten to name the real path, split the two
+clocks, record that `CONFIRM_JITTER` is gone, and instruct re-querying the overrides table rather than
+quoting defaults as fact. **The doc was the error's source, so the doc is where the guard goes.**
