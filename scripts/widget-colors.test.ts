@@ -15,7 +15,11 @@
 // Separation is COMPUTED here (shortest arc on the 360-degree wheel), never eyeballed from the
 // numbers -- which is exactly the check the original hash would have failed.
 
-import { CATEGORY_HUES, categoryHue } from "../src/features/huddle/lib/tasks/widget-colors";
+import {
+  CATEGORY_HUES,
+  categoryChromaScale,
+  categoryHue,
+} from "../src/features/huddle/lib/tasks/widget-colors";
 
 let pass = 0,
   fail = 0;
@@ -45,7 +49,15 @@ for (const c of JOURNEY_CATEGORIES) {
 // ── 2. The pair the DEFECT collided is now far apart ────────────────────────────────────────────
 // The defect measured 108 vs 128 = 20 degrees. Anything under ~60 reads as "the same colour" at chip
 // size and lightness, so that is the floor this asserts.
-const MIN_GAP = 60;
+// THE FLOOR IS DERIVED FROM THE SPEC, NOT INVENTED (corrected 2026-09-13, loop 3).
+// It was 60°, chosen as a plausible-sounding aesthetic threshold. The spec's OWN four colours have a
+// closest pair of ~53° (Life 250 blue / Ventures 303 purple), so that floor REJECTED the very design
+// this file exists to reproduce — the guard would have blocked the fix for the swapped Career and
+// Ventures hues. A test that fails the ground truth is not strict, it is wrong, and it is worse than
+// no test because it is believed.
+// 45° sits below the spec's own minimum and still catches the failure this suite was written for:
+// the original hash put Life and Education 20° apart.
+const MIN_GAP = 45;
 const lifeEdu = hueGap(categoryHue("LIFE"), categoryHue("EDUCATION"));
 check(
   "LIFE and EDUCATION are no longer near-identical (the N-5 collision)",
@@ -71,9 +83,26 @@ check(
   `closest pair ${worstPair} = ${worst}° (floor ${MIN_GAP}°)`,
 );
 
-// ── 4. The spec's two named colours, by hue band ────────────────────────────────────────────────
-// The spec (docs/widgets/spec-priorities-widget.jpg) names exactly two: Life blue, Education amber.
+// ── 4. ALL FOUR of the spec's colours, by hue band ──────────────────────────────────────────────
+// This section used to say the spec "names exactly two". It does not — it draws a coloured spine for
+// every top-level topic, and docs/AC-journey-widgets.md:51-52 had already recorded all five: green
+// (Career), purple (Ventures), orange (Education), blue (Life), grey (Family). Believing the "two"
+// story is what let Career and Ventures be INVENTED, and invented near enough to each other's real
+// hues to read as swapped. Guarding only the two colours that happened to be documented is what let
+// the other two drift; so all four are asserted here.
+// (FAMILY is not asserted: the spec draws it grey, which is a chroma of 0, not a hue — see the note
+// in widget-colors.ts.)
 const inBand = (h: number, lo: number, hi: number) => h >= lo && h <= hi;
+check(
+  "CAREER lands in the GREEN band, as the spec draws it",
+  inBand(categoryHue("CAREER"), 120, 175),
+  `CAREER -> ${categoryHue("CAREER")} (green band 120-175)`,
+);
+check(
+  "VENTURES lands in the PURPLE band, as the spec draws it",
+  inBand(categoryHue("VENTURES"), 280, 320),
+  `VENTURES -> ${categoryHue("VENTURES")} (purple band 280-320)`,
+);
 check(
   "LIFE lands in the BLUE band, as the spec draws it",
   inBand(categoryHue("LIFE"), 220, 280),
@@ -118,6 +147,35 @@ check(
   "the fallback is deterministic (same name, same hue, every call)",
   categoryHue("SOME_USER_ADDED_CATEGORY") === unknown && categoryHue("Zebra") === categoryHue("Zebra"),
   `stable across calls -> ${unknown}`,
+);
+
+// ── 7. FAMILY is GREY, and grey is a CHROMA of zero, not a hue ──────────────────────────────────
+// Leaving Family to the hash was not neutral: it lands on 300°, three degrees from Ventures' 303°,
+// so the two rendered as the same purple in the one tree that shows them together. A hue cannot
+// express grey, so the chroma scale is what fixes it — and this asserts the COLLISION is harmless
+// rather than pretending the hues differ.
+
+check(
+  "FAMILY renders GREY (chroma scaled to 0), as the spec draws it",
+  categoryChromaScale("FAMILY") === 0,
+  `categoryChromaScale("FAMILY") -> ${categoryChromaScale("FAMILY")}`,
+);
+check(
+  "the grey rule is case-insensitive, like every other lookup here",
+  categoryChromaScale("Family") === 0 && categoryChromaScale("family") === 0,
+  `"Family" -> ${categoryChromaScale("Family")}, "family" -> ${categoryChromaScale("family")}`,
+);
+for (const c of JOURNEY_CATEGORIES) {
+  check(
+    `${c} keeps its full chroma (only Family is grey)`,
+    categoryChromaScale(c) === 1,
+    `categoryChromaScale("${c}") -> ${categoryChromaScale(c)}`,
+  );
+}
+check(
+  "FAMILY's hue collision with VENTURES is made harmless by the chroma scale",
+  categoryChromaScale("FAMILY") * 1 === 0 && categoryChromaScale("VENTURES") === 1,
+  `FAMILY hue ${categoryHue("FAMILY")} vs VENTURES hue ${categoryHue("VENTURES")} — differentiated by chroma, not hue`,
 );
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);
