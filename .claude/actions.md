@@ -3701,3 +3701,33 @@ where these things will end up."*
 - [ ] NOT observed rendering in a browser. Not deployed. Not merged.
 - [ ] **Separate pre-existing bug, NOT fixed:** the checklist widget renders nothing on the Lovable
       path (`huddle.functions.ts:5472` omits `recordToolUse`). Owner's call whether to widen scope.
+
+### ACT:journey-widgets-in-chat — owner instructions 2026-09-13 (second batch)
+Owner: *"I like the idea of them having their own view not side by side and the location in the menu
+is good for now... just remember I use this on the phone. go ahead and add them as seen in the images
+attached."* + *"should this be added as a skill or prototype more in eds skills repo?"* + *"after the
+two widgets are deployed, I need to know what the original intent was for the memory view and where it
+sits today."* + *"I also didn't know where you got the 9/13/17 tick idea."*
+
+- [x] **Stacked, not side by side** (`9a8bbde`). `lg:grid-cols-2` removed; each widget renders at full
+      column width. The phone never received the two-up, which is what identified it as desktop-only
+      divergence from the spec screenshots. Menu location left as-is, per "good for now".
+- [x] **Eight loop-2 defects fixed** (`587bc38`..`37f25ea`), incl. stale-snapshot status (N-8) and the
+      LIFE/EDUCATION near-identical greens (N-5). Three mutation proofs, all FIRED.
+- [x] **The 9/13/17 challenge — owner was right.** See `.claude/accuracy-log.md` 2026-09-13 and the
+      corrected CLAUDE.md block. Short version: the autowork PASS is still [9,13,17], but the
+      confirm-ask REACH-OUT never rides that tick — `CONFIRM_JITTER` no longer exists; asks fall in
+      fan windows 9–18 / 20–22 with a 45–90 min gap. Other jobs ARE more frequent (`reviewDigest`
+      5×/day). `identity.scheduling_config` queried live: **0 rows**, so defaults are what runs.
+- [x] **Skill shipped** — `prototype-in-app-skin` captures the METHOD (lift the real skin before
+      drawing), not the artboards. `deventerpriseds-org/eds-claude-skills` **PR #83, CI green,
+      mergeable clean — awaiting the owner's merge.** Its first CI run failed a real guard
+      (every skill must be named in `bootstrap.md`); reproduced locally, fixed, re-verified 12/12.
+- [ ] Loop-3 verification in flight — first loop to cover the tool wiring + `Rail.tsx`.
+- [ ] **OWNER ACTION — deploy journey `execute-tool`.** Blocks the topic tree only; band works.
+- [ ] **OWNER DECISION deferred by the owner to post-deploy:** Memory view — original intent + where
+      it sits today. Do NOT remove the rail entry before answering that; it is de-highlighted only.
+- [ ] Never observed rendering in a browser. Not deployed. Not merged to `main`.
+- [ ] Pre-existing, NOT this PR's: `check-skill-app-neutral.sh` fails on 3 older eds skills naming
+      `boost-application-packet-platform` outside a citation — fails identically on `origin/main`,
+      and is not wired into the `guards` workflow. Separate cleanup.
