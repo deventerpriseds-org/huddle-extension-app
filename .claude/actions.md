@@ -3698,7 +3698,7 @@ where these things will end up."*
       topic tree (~60% of the Priorities screenshot) is a labelled empty state; the band works.
 - [ ] Loop-2 verification in flight; loop 3 must cover `huddle.functions.ts` + `Rail.tsx`.
 - [ ] **Spec-screenshot fidelity still unchecked** — missing affordances remain unknown.
-- [ ] NOT observed rendering in a browser. Not deployed. Not merged.
+- [x] MERGED + DEPLOYED 2026-09-13 (`125409d`). Still NOT observed rendering in a browser.
 - [ ] **Separate pre-existing bug, NOT fixed:** the checklist widget renders nothing on the Lovable
       path (`huddle.functions.ts:5472` omits `recordToolUse`). Owner's call whether to widen scope.
 
@@ -3727,7 +3727,29 @@ sits today."* + *"I also didn't know where you got the 9/13/17 tick idea."*
 - [ ] **OWNER ACTION — deploy journey `execute-tool`.** Blocks the topic tree only; band works.
 - [ ] **OWNER DECISION deferred by the owner to post-deploy:** Memory view — original intent + where
       it sits today. Do NOT remove the rail entry before answering that; it is de-highlighted only.
-- [ ] Never observed rendering in a browser. Not deployed. Not merged to `main`.
+- [x] MERGED + DEPLOYED 2026-09-13 (`125409d`). Never observed rendering in a browser — the one
+      remaining unknown; a live look is the owner's check.
 - [ ] Pre-existing, NOT this PR's: `check-skill-app-neutral.sh` fails on 3 older eds skills naming
       `boost-application-packet-platform` outside a citation — fails identically on `origin/main`,
       and is not wired into the `guards` workflow. Separate cleanup.
+
+### ACT:journey-widgets-in-chat — SHIPPED 2026-09-13
+- [x] **Merged to `main` (`125409d`) and DEPLOYED.** `deploy-swa.yml` run 34757153463 = success on
+      that exact head_sha; DB pin verified in the log as `eds-postgresql/RAG_AI_Agents`.
+      Live: https://icy-flower-0f415200f.7.azurestaticapps.net
+- [x] Pre-merge gate: `tsc` exit 0, and 67 assertions green (park 10, colours 25, live-refresh 12,
+      router 20). Post-merge `tsc` re-run on the merge commit: exit 0.
+- [x] **Memory view question ANSWERED** (owner asked for it post-deploy) — see `.claude/memory.md`.
+      Short form: added 2026-08-16 as a side-car in a routing commit, born pointing at Huddles, no
+      view ever in the registry; today memory is only an operator panel in Settings, with no way to
+      browse stored chunks/triples. Truncated history means "never existed" is unprovable.
+- [ ] **OWNER — deploy journey `execute-tool`** so `get_task_topics` exists; topic tree is an empty
+      state until then.
+- [ ] **OWNER — merge eds-skills PR #83** (`prototype-in-app-skin`), CI green, mergeable clean.
+- [ ] **OWNER DECISION — the Memory rail entry:** remove it, or scope a real browse-my-memory view.
+      Recommendation on record: remove now, scope the view separately; it is the more valuable of the
+      two and should not be back-filled to justify a placeholder.
+- [ ] **NOT user-confirmed live.** Nobody has seen the widgets render in a browser.
+- [ ] Known, not fixed (loop 3): three park-tag union copies remain (`HuddleView.tsx:566`,
+      `BoardView.tsx:750`, neither case-normalizing); the Lovable-path checklist renders nothing
+      (pre-existing, owner's call); empty-state buttons at 50% opacity vs the spec's full saturation.

@@ -3064,3 +3064,43 @@ Branch `claude/journey-widgets-in-chat` @ `b56907e`. Nothing on `main`, nothing 
 **Status: `tsc` exit 0; `test:widget-park` 10/10; `test:router` 20/20. NOT deployed, NOT observed in a
 browser — type agreement is not a rendered card.** Loop-2 verification running; `huddle.functions.ts`
 and `Rail.tsx` were moving targets during it and are DEFERRED TO LOOP 3.
+
+## Feature status — journey PRIORITIES + SCHEDULE widgets: LIVE (2026-09-13)
+**Merged to `main` as `125409d` and DEPLOYED.** `deploy-swa.yml` run 34757153463 → `success`, head_sha
+`125409d`. The deploy's DB-pin line read **`Assembled AZURE_PG_URL for eds-postgresql/RAG_AI_Agents`**
+— the canonical server, NOT the `ux-design-pg` discovery drift this repo was bitten by before. Both
+widget bundles are in the build output (`widgets.functions-*.mjs`, `widgets.server-*.mjs`).
+Live: https://icy-flower-0f415200f.7.azurestaticapps.net
+
+**What shipped:** both widgets docked in Iris's 1:1 **stacked at full column width** (never side by
+side — the owner's phone is the primary surface and a two-up never fit 390px), a full-page view each
+on the rail, and `show_priorities_widget` / `show_schedule_widget` registered so any agent can surface
+them on request — the "like the checklists widget" half, which existed as written-but-unregistered
+tools until `b56907e`.
+
+**Still NOT true, and the one thing nobody has done:** no one has seen any of this render in a
+browser. Three verification loops were source-and-execution only — no live DB from the session, no
+deploy until now. Per the repo's own rule, status is **mechanism verified + deployed, NOT
+user-confirmed**; the owner looking at it live is the verdict.
+
+**Blocked on an owner action:** journey's `get_task_topics` is committed (journey-voice `ec508a5`)
+but **NOT deployed**, so the topic tree — roughly 60% of the Priorities screenshot — renders its
+labelled empty state while the task band works fully. Deploying `execute-tool` is what lights it up.
+
+## The Memory rail entry — intent and current state (answered 2026-09-13, post-deploy as asked)
+**OBSERVATION.** Added 2026-08-16 in `9a77207`, a commit titled *"fix(routing): deterministic
+multi-lane detection turns off solo…"* — it arrived as a side-car in an unrelated routing fix, not as
+its own feature. The SAME diff that adds the entry also adds `(it.id === "memory" && view === "huddle")`,
+so it has pointed at Huddles since the instant it existed. There is no `MemoryView` component in the
+tree and the view registry has never carried a `memory` key.
+**CAVEAT — do not over-read that.** `origin/main` has **3 parentless roots**; history is truncated, so
+git cannot prove a Memory view never existed, only that none survives in reachable history.
+**INTERPRETATION (inference, not proven):** placeholder chrome staged ahead of a view nobody built.
+No commit message states an intent.
+**WHERE MEMORY ACTUALLY LIVES TODAY:** `MemoryDbPanel`, mounted in Settings (global: Diagnose /
+Bootstrap / Round-trip / Provision + schema status) and in the per-agent settings drawer. It is an
+**operator/diagnostic surface** — there is NO way to browse or search the stored `rag_chunks` /
+`rag_triples` content from the UI at all. That absence is the real gap the rail entry gestures at.
+**Current state after this work:** de-highlighted via a `neverActive` flag so it no longer lights up
+alongside Huddles — the minimal fix, deliberately not a removal. Whether it is removed or backed by a
+real "browse my memory" view is the owner's open decision.
