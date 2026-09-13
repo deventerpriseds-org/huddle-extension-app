@@ -80,7 +80,30 @@ check(
   `today -> ${String(useHuddleStore.getState().checklistState[TASK]?.today)}`,
 );
 
-// ── 5. Component wiring, re-derived from source (not from memory) ───────────────────────────────
+// ── 5. N-9: the double-tap guard must be operative on an UNSEEDED row ──────────────────────────
+// `runAction` guards re-entry with `if (before.busy) return;` and records `busy` via
+// `setChecklistRow` — which silently no-ops for a row not already in the map. So on an untracked row
+// (tapped between mount and the seed effect flushing) busy was never recorded and a second tap also
+// passed the guard: two concurrent writes to journey for one task.
+reset();
+s().setChecklistRow(TASK, { status: "DOING", busy: true }); // untracked row — the DEFECT mechanism
+check(
+  "setChecklistRow is a silent no-op on an untracked row (why runAction must seed first)",
+  useHuddleStore.getState().checklistState[TASK] === undefined,
+  `untracked row after setChecklistRow -> ${JSON.stringify(useHuddleStore.getState().checklistState[TASK])}`,
+);
+
+reset();
+// What runAction now does: seed the fallback row, THEN patch it.
+s().seedChecklistRows([{ taskId: TASK, status: "BACKLOG", tags: [] }]);
+s().setChecklistRow(TASK, { status: "DOING", busy: true });
+check(
+  "seed-then-patch DOES record busy, so the second tap is refused",
+  useHuddleStore.getState().checklistState[TASK]?.busy === true,
+  `busy -> ${String(useHuddleStore.getState().checklistState[TASK]?.busy)}`,
+);
+
+// ── 6. Component wiring, re-derived from source (not from memory) ───────────────────────────────
 const widgets = readFileSync("src/features/huddle/components/JourneyWidgets.tsx", "utf8");
 
 check(
@@ -92,6 +115,11 @@ check(
   "useSeededRows still SEEDS a snapshot payload (a stale card cannot stomp a user action)",
   /else seedChecklistRows\(mapped\);/.test(widgets),
   "JourneyWidgets.tsx useSeededRows snapshot branch",
+);
+check(
+  "runAction seeds an untracked row BEFORE patching it, so `busy` is actually recorded (N-9)",
+  /if \(!tracked\) \{\s*\n\s*store\.seedChecklistRows\(\[/.test(widgets),
+  "JourneyWidgets.tsx runAction untracked-row branch",
 );
 check(
   "LivePrioritiesWidget passes `live`",

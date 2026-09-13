@@ -176,8 +176,21 @@ async function runAction(
   optimistic: { status?: string; today?: boolean; prevStatus?: string },
 ): Promise<void> {
   const store = useHuddleStore.getState();
-  const before = store.checklistState[row.id] ?? { status: rowStatus(row), tags: row.tags, today: row.isToday };
+  const tracked = store.checklistState[row.id];
+  const before = tracked ?? { status: rowStatus(row), tags: row.tags, today: row.isToday };
   if (before.busy) return; // one in-flight write per row; a double-tap must not race itself
+  // THE GUARD ABOVE IS INOPERATIVE UNLESS THE ROW IS IN THE MAP. `setChecklistRow` opens with
+  // `if (!cur) return {};` (store.ts) — a silent no-op for an untracked row — so `busy: true` was
+  // never recorded, a second tap also passed the guard, and two concurrent writes reached journey
+  // for the same task. The window is real: a tap between mount and the seed effect flushing.
+  // Seeding first makes the row exist, so the optimistic paint and the busy flag both land.
+  // (VERIFY-journey-widgets-2.md N-9. `seedChecklistRows` is skip-if-present, so this cannot stomp
+  // a row that IS tracked — it is a no-op in the common case.)
+  if (!tracked) {
+    store.seedChecklistRows([
+      { taskId: row.id, status: before.status, tags: before.tags, ...(before.today !== undefined ? { today: before.today } : {}) },
+    ]);
+  }
   store.setChecklistRow(row.id, {
     ...(optimistic.status !== undefined ? { status: optimistic.status } : {}),
     ...(optimistic.today !== undefined ? { today: optimistic.today } : {}),

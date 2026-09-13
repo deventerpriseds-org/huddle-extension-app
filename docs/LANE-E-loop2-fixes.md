@@ -242,3 +242,41 @@ The 35-minute wall-clock budget was spent at N-1/N-3. **Left open, honestly:**
 N-2 was fixed as part of N-3 (above), ahead of its listed order, because the shared helper is where
 the case semantics are decided — fixing it anywhere else would have re-created the duplication N-3
 exists to remove.
+
+---
+
+## N-9 (LOW) — the double-tap guard was inoperative on an unseeded row
+
+**Confirmed before changing.** `runAction` (`JourneyWidgets.tsx:181-189`) guards re-entry with
+`if (before.busy) return;` and records `busy: true` through `setChecklistRow` — which opens with
+`if (!cur) return {};` (`store.ts:364-368`), a **silent no-op for a row not in the map**. So on an
+untracked row (tapped between mount and the seed effect flushing) the optimistic paint did nothing,
+`busy` was never recorded, a second tap also passed the guard, and two concurrent writes reached
+journey for the same task.
+
+**The fix:** `runAction` seeds the fallback row through the existing `seedChecklistRows` before
+patching it, so the row exists and both the optimistic paint and the busy flag land. No store
+contract change — `seedChecklistRows` is skip-if-present, so this is a no-op in the common case
+where the row is already tracked, and the chat checklist's use of `setChecklistRow` is untouched.
+
+Two store-level assertions were added to `widget-live-refresh.test.ts`: one pins the DEFECT mechanism
+(`setChecklistRow` no-ops on an untracked row — the reason the seed is required), one proves
+seed-then-patch records `busy`. A third re-derives the `runAction` branch from source.
+
+```
+  PASS setChecklistRow is a silent no-op on an untracked row (why runAction must seed first) — untracked row after setChecklistRow -> undefined
+  PASS seed-then-patch DOES record busy, so the second tap is refused — busy -> true
+  PASS runAction seeds an untracked row BEFORE patching it, so `busy` is actually recorded (N-9) — JourneyWidgets.tsx runAction untracked-row branch
+
+==================== 12 passed, 0 failed ====================
+```
+
+### Checks at this commit
+
+```
+=== EXIT tsc: 0 ===
+npm run test:widget-park   ->  10 passed, 0 failed
+npm run test:router        ->  20 passed, 0 failed
+npm run test:widget-live   ->  12 passed, 0 failed
+npm run test:widget-colors ->  16 passed, 0 failed
+```
