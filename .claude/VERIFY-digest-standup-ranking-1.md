@@ -376,3 +376,32 @@ so the line that connects the producer to the seam —
 somewhere in the file" and "hand-rolls no `priority_rank` sort". Someone could reroute `priorities`
 to a different producer, or drop the `selectStandupPriorities` call entirely, and both regexes would
 still pass. The mutation proof is real but it mutates *inside* the seam, so it does not close this.
+
+---
+
+# VERDICT — 8 of 8 claims CONFIRMED; 2 side claims not
+
+| # | Claim | Verdict |
+|---|---|---|
+| 1 | standup gets priorities via `rankTasks`, not a raw sort | **CONFIRMED** |
+| 2 | `rankTasks` unmodified, no filter copied — extended not duplicated | **CONFIRMED** |
+| 3 | `dispatchPrioritize` and all other `rankTasks` callers unchanged | **CONFIRMED** (see FINDING 1) |
+| 4 | parked task in neither surface now, WAS first before | **CONFIRMED** (old sort reconstructed and run) |
+| 5 | 10/10, both production entry points, one fixture | **CONFIRMED** (see FINDING 2) |
+| 6 | four mutations FIRED | **CONFIRMED** (re-run: 4× FIRED, 0 INERT, 0 NOT-APPLIED) |
+| 7 | `buildBrief` signature + downstream path reconcile | **CONFIRMED** |
+| 8 | `BoardTaskRow` cannot be a `ScorableTask` | **CONFIRMED** (type *and* SQL) |
+
+**NOT CONFIRMED (side claims in the IMPL doc, not in the numbered list):**
+- *"`npx tsc --noEmit` reports **one** error, TS2688"* — **REFUTED**: 408 errors, TS2688 absent.
+  The load-bearing part ("zero in files this change touched") holds.
+- *Suite reproducibility* — **NOT reproducible from a clean checkout in this container**: it
+  requires the uncommitted, gitignored `@fontsource/inter` stub. The result is not an artifact of it.
+
+**NOT REACHED:** AC-SU-6 (the implementer flagged it out of scope; still unguarded). Live
+verification against the deployed SWA — nothing here observed the digest running on real data, so
+this is *mutation-proven offline, NOT confirmed live*.
+
+**Blocking before merge:** FINDING 1. The branch is 219 commits behind `origin/main`, where
+`rankTasks` already takes `excludeIds` and `dispatchPrioritize` already passes
+`taskIdsInReminderWindow`. Merging as-is reopens AC-SU-3 for reminder-window tasks.
