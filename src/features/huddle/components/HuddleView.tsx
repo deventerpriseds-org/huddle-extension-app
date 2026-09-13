@@ -69,6 +69,7 @@ import {
 } from "../lib/tasks/confirm-ask.functions";
 
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
+import { ViewSwitcher } from "./ViewSwitcher";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -87,31 +88,21 @@ export function HuddleView() {
     () => allMessages.filter((m) => m.huddleId === activeId),
     [allMessages, activeId],
   );
-  const view = useHuddleStore((s) => s.view);
-  const setView = useHuddleStore((s) => s.setView);
-
   if (!huddle) return null;
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <HuddleHeader huddle={huddle} view={view} setView={setView} />
+      <HuddleHeader huddle={huddle} />
       <Transcript messages={messages} huddle={huddle} />
       <Composer huddle={huddle} />
     </section>
   );
 }
 
-function HuddleHeader({
-  huddle,
-  view,
-  setView,
-}: {
-  huddle: Huddle;
-  // The store's exported View union, NOT a re-typed literal list. These props used to spell the union
-  // out by hand, so adding a view broke the typecheck here rather than simply working.
-  view: View;
-  setView: (v: View) => void;
-}) {
+// `view`/`setView` used to be threaded down here as props for the inline switcher. ViewSwitcher
+// reads them from the store itself, the same way Rail does, so the plumbing is gone rather than
+// left dangling.
+function HuddleHeader({ huddle }: { huddle: Huddle }) {
   const startMeeting = useHuddleStore((s) => s.startMeeting);
   const patchMeeting = useHuddleStore((s) => s.patchMeeting);
   const { user } = useAuth();
@@ -187,23 +178,11 @@ function HuddleHeader({
       </div>
 
       <div className="ml-auto flex items-center gap-2">
-        <div className="inline-flex rounded-lg border border-hairline bg-surface p-0.5">
-          {(["huddle", "board", "artifacts"] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setView(v)}
-              className={cn(
-                "rounded-md px-3 py-1 text-xs font-medium capitalize transition",
-                view === v
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {v === "huddle" ? "Huddle" : v === "board" ? "Board" : "Files"}
-            </button>
-          ))}
-        </div>
+        {/* The incumbent switcher, extended from three entries to five and lifted into ViewSwitcher
+            so the header and the phone's bottom bar cannot drift apart. Hidden below `md`, which is
+            exactly where the bottom bar takes over (HuddleApp) — the two are complementary, so
+            precisely one is on screen at any width. They used to BOTH render at 390px, stacked. */}
+        <ViewSwitcher variant="inline" className="app-hidden md:inline-flex" />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
