@@ -184,3 +184,22 @@ Before it was unwound, on the tree that contained it:
   independently contains the same `codeOnly()` precaution, with the same reasoning written above it.
 
 None of that makes the parallel implementation worth keeping. Discarding it is the correct outcome.
+
+---
+
+## 7. Incident worth recording: `git add <path>` is not enough when lanes share a container
+
+My first attempt to commit this file alone still swept **seven** files, including all of LANE A's
+in-flight work, into a commit with my message. I did not use `git add -A` — I named exactly one
+path. The cause is that LANE A is a sibling agent in the SAME container and therefore the SAME git
+index: it staged its own files in the window between my `git add` and my `git commit`, and
+`git commit` commits the whole index, not the paths you last added.
+
+Nothing was lost (their content was committed, not destroyed) and it was split apart with
+`git reset --soft` + `git restore --staged` on their paths only, which leaves their worktree
+untouched. But the branch's standing "this has swept the wrong files four times" note has a sharper
+form than "don't use `git add -A`":
+
+> **With parallel lanes in one container, commit with `git commit --only <paths>` (`-o`).** It
+> commits exactly those paths whatever else is in the shared index. `git add <path>` followed by a
+> bare `git commit` is a race, and the other lane wins it silently.
