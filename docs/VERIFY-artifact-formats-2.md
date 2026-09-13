@@ -1,4 +1,16 @@
-# VERIFY — artifact-formats — loop 1
+## VERIFY LOOP
+work: artifact-formats
+loop: 2
+Wall-clock budget - AT THE BUDGET: 30 minutes from your start. Deliver what is proven, mark every unreached claim NOT REACHED, stop.
+Incremental artifact - COMMIT AND PUSH PER CLAIM: docs/VERIFY-artifact-formats-2.md
+
+## PRIOR STATE (loop 1)
+Previously CONFIRMED - RE-CHECKED THIS LOOP: NONE. Loop 1 ran the identical brief and was stopped by its parent before its first push. It produced ZERO durable evidence -- no VERIFY-artifact-formats-1.md exists on origin/main or on disk. Its transcript reported C3 as holding; that verdict was never written down and is treated as UNPROVEN, not as prior art. Nothing is carried forward and nothing is checked at reduced depth.
+Previously REFUTED / now fixed - FULL RE-DERIVATION: none.
+Blast radius of the fix: not applicable -- no fix was made between loops. No code changed since c6299cc; HEAD is 79af620 (docs only). So DEPTH is spread evenly across all ten claims rather than concentrated.
+CHALLENGE THE RADIUS: with no fix between loops there is no radius to narrow. This verifier claims NO reduced depth on any claim -- all ten are derived from scratch in this loop.
+
+# VERIFY -- artifact-formats -- loop 2
 
 <!--
 WHAT:       Independent adversarial verification of the artifact multi-format work (md/docx/pptx/html/mermaid/svg).
