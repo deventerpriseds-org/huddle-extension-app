@@ -3698,7 +3698,7 @@ where these things will end up."*
       topic tree (~60% of the Priorities screenshot) is a labelled empty state; the band works.
 - [ ] Loop-2 verification in flight; loop 3 must cover `huddle.functions.ts` + `Rail.tsx`.
 - [ ] **Spec-screenshot fidelity still unchecked** — missing affordances remain unknown.
-- [ ] NOT observed rendering in a browser. Not deployed. Not merged.
+- [x] MERGED + DEPLOYED 2026-09-13 (`125409d`). Still NOT observed rendering in a browser.
 - [ ] **Separate pre-existing bug, NOT fixed:** the checklist widget renders nothing on the Lovable
       path (`huddle.functions.ts:5472` omits `recordToolUse`). Owner's call whether to widen scope.
 
@@ -3727,7 +3727,8 @@ sits today."* + *"I also didn't know where you got the 9/13/17 tick idea."*
 - [ ] **OWNER ACTION — deploy journey `execute-tool`.** Blocks the topic tree only; band works.
 - [ ] **OWNER DECISION deferred by the owner to post-deploy:** Memory view — original intent + where
       it sits today. Do NOT remove the rail entry before answering that; it is de-highlighted only.
-- [ ] Never observed rendering in a browser. Not deployed. Not merged to `main`.
+- [x] MERGED + DEPLOYED 2026-09-13 (`125409d`). Never observed rendering in a browser — the one
+      remaining unknown; a live look is the owner's check.
 - [ ] Pre-existing, NOT this PR's: `check-skill-app-neutral.sh` fails on 3 older eds skills naming
       `boost-application-packet-platform` outside a citation — fails identically on `origin/main`,
       and is not wired into the `guards` workflow. Separate cleanup.
