@@ -10,13 +10,19 @@ import { SettingsSheet } from "./SettingsSheet";
 // up looking wired while doing nothing. `view: View` makes both read the same field.
 // "memory" keeps pointing at "huddle" deliberately: that is its existing behaviour (there is no
 // separate memory view — memory lives in the context panel) and changing it is not this lane's job.
-const items: { id: string; label: string; icon: typeof MessageSquare; view: View }[] = [
+// `neverActive` exists because "memory" SHARES the "huddle" view. Active state is `view === it.view`,
+// so with two entries pointing at "huddle" the rail highlighted BOTH of them at once — harmless when
+// Memory sat next to Huddles alone, visibly wrong now that Priorities and Schedule are also here.
+// This flag is the minimal de-highlight and nothing more: Memory still renders, and still opens the
+// huddle view on click. Whether it should instead get its own view or be removed is the owner's call,
+// asked separately — deliberately NOT decided here.
+const items: { id: string; label: string; icon: typeof MessageSquare; view: View; neverActive?: boolean }[] = [
   { id: "huddle", label: "Huddles", icon: MessageSquare, view: "huddle" },
   { id: "board", label: "Board", icon: LayoutGrid, view: "board" },
   { id: "priorities", label: "Priorities", icon: ListChecks, view: "priorities" },
   { id: "schedule", label: "Schedule", icon: CalendarDays, view: "schedule" },
   { id: "artifacts", label: "Artifacts", icon: FolderOpen, view: "artifacts" },
-  { id: "memory", label: "Memory", icon: Compass, view: "huddle" },
+  { id: "memory", label: "Memory", icon: Compass, view: "huddle", neverActive: true },
 ];
 
 export function Rail() {
@@ -40,7 +46,7 @@ export function Rail() {
           H
         </button>
         {items.map((it) => {
-          const active = view === it.view;
+          const active = !it.neverActive && view === it.view;
           const Icon = it.icon;
           return (
             <button
