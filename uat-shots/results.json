@@ -1,0 +1,50 @@
+{
+  "results": [
+    {
+      "name": "C1 --app-h equals the visible viewport height",
+      "pass": true,
+      "detail": "--app-h=844px ; round(vv.height 844 - offsetTop 0)=844px ; layout clientHeight=844px ; innerHeight=844px [shot 01-c1-loaded-390x844.png]"
+    },
+    {
+      "name": "C2 shell height equals --app-h",
+      "pass": true,
+      "detail": "shell identified by: ancestor of nav[aria-label=\"Primary\"] whose inline style contains \"height: var(--app-h\" -> <div class=\"flex w-full overflow-hidden bg-background text-foreground\"> | computed height=844px, rect height=844px, --app-h=844px, layout clientHeight=844px"
+    },
+    {
+      "name": "C3 --app-h shrinks with the visual viewport (CDP)",
+      "pass": true,
+      "detail": "via Emulation.setDeviceMetricsOverride. --app-h 844px -> 500px (expected 500px = round(vv.height 500 - offsetTop 0)); shell computed height -> 500px; layout clientHeight -> 500px. layout/visual divergence reproduced: NO — this API shrinks BOTH viewports, so it proves the hook republishes on resize but does NOT reproduce the real keyboard case where layout stays tall and only visual shrinks. All attempts — Emulation.setVisibleSize: vv.height 844 -> 844, layout clientHeight 844 -> 844 ; Emulation.setDeviceMetricsOverride: vv.height 844 -> 500, layout clientHeight 844 -> 500. [shot 03-c3-after-shrink.png]"
+    },
+    {
+      "name": "C4 bottom nav stays within the visible region after shrink",
+      "pass": true,
+      "detail": "visible height=500px; nav rect top=447.0 bottom=500.0 height=53.0; gap below nav=0.0px (tolerance 20px); document scrollTop=0. [shot 04-c4-nav-after-shrink.png]"
+    },
+    {
+      "name": "C6 no console errors / failed requests on the normal path",
+      "pass": true,
+      "detail": "console errors (0): none ;; failed/4xx/5xx requests (0): none. Measured from the start of C1 to before the C5 reload; the runner's own two final checks cover the first load as well."
+    },
+    {
+      "name": "C5a shell falls back to 100dvh when --app-h is removed at runtime",
+      "pass": true,
+      "detail": "with --app-h removed: shell computed height=844px (rect 844), layout clientHeight=844px, nav present=true. A non-zero height equal to the layout viewport is the 100dvh fallback resolving. [shot 05-c5a-fallback-runtime.png]"
+    },
+    {
+      "name": "C5b shell renders with visualViewport undefined (pre-load)",
+      "pass": false,
+      "detail": "NOT PROVEN (harness limit, not a product verdict): after the reload the app rendered neither the shell nor the nav — the single-use UAT token was spent on the first load, so this is an unauthenticated render. Page text: \"Huddle Chat, huddle, and run a team of AI agents SIGN IN Continue with Microsoft Secured by Microsoft Entra External ID. Auth trace: boo\". PARTIAL EVIDENCE that does hold: the app booted with visualViewport undefined and threw 0 new console/page error(s) — none — so the hook's no-visualViewport path does not crash the bundle. C5a covers the shell fallback itself without a reload."
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
