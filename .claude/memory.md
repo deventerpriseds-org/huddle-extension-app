@@ -3344,3 +3344,26 @@ that omission compile cleanly. Both mutation-proved FIRED.
 **Assert on side effects the STUBS recorded, not on what the test computes.** `standup-deliver-mode`
 counts `enqueueTurn` / `setLastStandupAt` calls; that is what makes "a content pull posts nothing"
 a real assertion rather than a restatement of the code.
+
+## Artifact preview renders markup — in a sandboxed frame, never in the app document (2026-09-13)
+
+- **`lib/artifacts/preview.ts` owns the choice of renderer**, and it is PURE — `detectPreviewKind`
+  (mime + extension + content) → `markdown | mermaid | html | svg | image | pdf | text | none`,
+  `sandboxFor(kind)`, `buildSrcDoc(kind, content)`. `ArtifactsView.tsx` stays thin and just consumes
+  them, so the logic is testable without a browser (`npm run test:artifact-preview`).
+- **The sandbox string is the whole security boundary.** `allow-scripts` WITHOUT `allow-same-origin`
+  = opaque origin; the two together would disable the sandbox entirely. SVG gets `sandbox=""`. Three
+  mutation proofs FIRED on exactly these lines, including one that widens the sandbox — if a future
+  edit reintroduces `allow-same-origin` or `dangerouslySetInnerHTML` on a CODE line of either file,
+  the suite fails. (The guards strip COMMENT lines first, because both files discuss those keywords.)
+- **A markdown artifact containing a ```mermaid fence renders the diagram** — the fence is extracted,
+  the surrounding prose rides along HTML-escaped. Plain markdown is untouched: still the `<pre>`.
+- **There is NO Content-Security-Policy anywhere in this repo** — no `staticwebapp.config.json`, no
+  `http-equiv` in `src/`, and the built `.output/public/_headers` carries only cache-control. So the
+  pinned CDN `<script>` tags inside the srcdoc are not blocked by app config. This matters because a
+  `srcdoc` frame INHERITS the embedding document's CSP: the day a CSP is added, mermaid/d3 need
+  `script-src https://cdn.jsdelivr.net` or the diagrams silently stop drawing.
+- **`TEXT_PREVIEW_MIME` (artifacts.server.ts:183) is the upstream gate and it is narrower than the
+  viewer.** `text/html` and `text/vnd.mermaid` pass it; **`image/svg+xml` does not**, so an SVG
+  artifact reaches the client with `text: null` and can only degrade to the `<img>` path. The viewer
+  cannot render what the server never sends.

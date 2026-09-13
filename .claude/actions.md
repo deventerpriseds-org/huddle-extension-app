@@ -3889,3 +3889,35 @@ beneath it, keyboard below that.
 - [ ] **OWNER — live re-test, and this is the verdict.** A sandbox cannot open a soft keyboard, so
       nothing here proves the phone is fixed. Open a 1:1, tap the composer, confirm the dock stays put.
       Status stays **MECHANISM ONLY, NOT USER-CONFIRMED** until then.
+
+---
+
+## ACT:artifact-preview-render — the viewer showed raw SOURCE for mermaid, D3 and HTML artifacts (2026-09-13)
+
+**Asked:** make the artifact viewer render what agents can already save — full documents, mermaid
+diagrams and D3 visualisations were early requirements; the store takes any mime, the VIEWER did not.
+
+- [x] **Root cause, read not guessed.** Two gates, both plain-text-only: `artifacts.server.ts:183`
+      `TEXT_PREVIEW_MIME = /^(text\/|application\/json|application\/csv)/` decides whether the server
+      even returns a body, and `ArtifactsView.tsx` rendered whatever came back in a `<pre>`.
+- [x] **Renders now:** mermaid (`.mmd`, `text/vnd.mermaid`, **and a ```mermaid fence inside a
+      markdown artifact**), HTML/D3 (`text/html`, `.html`), SVG (`image/svg+xml`, `.svg`). Markdown,
+      raster images and PDFs keep their existing paths; an unknown mime still falls back to the `<pre>`.
+- [x] **Untrusted by construction.** Artifact bodies are MODEL-AUTHORED. Nothing is injected into the
+      app's document — no `dangerouslySetInnerHTML`, no parent `<script>`. Markup renders in an iframe
+      `srcdoc` with **`sandbox="allow-scripts"` and deliberately NO `allow-same-origin`** (opaque
+      origin: d3/mermaid run, the frame cannot reach the app's DOM, cookies, storage or same-origin
+      network). SVG gets `sandbox=""` — it needs no script at all. mermaid 11.4.1 / d3 7.9.0 load from
+      pinned CDN tags INSIDE the frame; mermaid runs `securityLevel:'strict'`.
+- [x] **Guarded:** `scripts/artifact-preview.test.ts` (`npm run test:artifact-preview`), 28/28, and
+      **three mutation proofs FIRED** — (1) widening the sandbox to `allow-scripts allow-same-origin`,
+      (2) dropping `escapeHtml` from the mermaid block, (3) swapping `srcDoc` for
+      `dangerouslySetInnerHTML`. tsc clean in the changed files; production build clean.
+- [ ] **BLOCKED ON ANOTHER LANE — `TEXT_PREVIEW_MIME` (artifacts.server.ts:183) still excludes
+      `image/svg+xml`.** `text/html` and `text/vnd.mermaid` pass it (`^text/`), so those render today;
+      an SVG artifact returns `text: null` and degrades to the `<img src={sas}>` path instead of the
+      sandboxed frame. A `.mmd` saved as `application/octet-stream` is likewise starved. Add
+      `image/svg+xml` (and any non-`text/` mermaid mime) to that regex — NOT edited here, that file
+      belongs to the artifacts.server lane.
+- [ ] **OWNER — live re-test is the verdict.** A sandbox cannot prove the CDN loads from the deployed
+      origin. Open a mermaid or D3 artifact in the viewer. Status: **MECHANISM ONLY, NOT USER-CONFIRMED**.
