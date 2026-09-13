@@ -179,6 +179,61 @@ const LIVE_SHAPE = {
   );
 }
 
+// ── EVERY PARSED TOPIC IS EMITTED EXACTLY ONCE. A malformed row may cost its own NESTING; it must
+//    never cost its EXISTENCE. Both cases below were found by an INDEPENDENT VERIFIER running real
+//    inputs through the real function — not by any test here — after `byId` was used both as the
+//    parent lookup AND as the emit list, so an id collision silently deleted a topic.
+{
+  const roots = buildTopicTree({
+    topics: [
+      { id: "dup", topic_name: "First", parent_topic_id: null, category_affinity: "LIFE" },
+      { id: "dup", topic_name: "Second", parent_topic_id: null, category_affinity: "LIFE" },
+      { id: "ok", topic_name: "Third", parent_topic_id: null, category_affinity: "LIFE" },
+    ],
+  });
+  const flat = (ns: { name: string; children: any[] }[]): string[] =>
+    ns.flatMap((n) => [n.name, ...flat(n.children)]);
+  const leaves = flat(roots).filter((n) => n !== "Life & Personal");
+  check(
+    "two topics sharing an id BOTH survive — a collision costs nesting, never existence",
+    leaves.length === 3 && leaves.includes("Second"),
+    `3 topics in, ${leaves.length} out: [${leaves.join(", ")}] — the old code emitted 2 and dropped "Second"`,
+  );
+}
+{
+  // The REALISTIC form: journey's envelope is unpublished, so toTopicNode falls back to id = name.
+  // Two same-named topics in different categories then collide, and one category row vanishes whole.
+  const roots = buildTopicTree({
+    topics: [
+      { topic_name: "Admin", category_affinity: "LIFE", task_count: 7 },
+      { topic_name: "Admin", category_affinity: "CAREER", task_count: 9 },
+    ],
+  });
+  check(
+    "same-named topics in DIFFERENT categories keep both category rows (no id in the payload)",
+    roots.length === 2 && roots.some((r) => r.categoryAffinity === "CAREER" && r.count === 9),
+    `rows: [${roots.map((r) => `${r.categoryAffinity}=${r.count}`).join(", ")}] — the old code returned only LIFE=7`,
+  );
+}
+{
+  // MIXED payload: one entry pre-nested, another declaring parent_topic_id. An early return on
+  // "anything is pre-nested" skipped the parent pass entirely and rendered C as B's SIBLING.
+  const roots = buildTopicTree({
+    topics: [
+      { id: "a", topic_name: "A", category_affinity: "LIFE", children: [{ id: "a1", topic_name: "A-sub" }] },
+      { id: "b", topic_name: "B", category_affinity: "LIFE" },
+      { id: "c", topic_name: "C", parent_topic_id: "b", category_affinity: "LIFE" },
+    ],
+  });
+  const life = roots.find((r) => r.categoryAffinity === "LIFE");
+  const b = life?.children.find((n) => n.id === "b");
+  check(
+    "a MIXED payload nests both ways — producer nesting kept AND parent_topic_id still applied",
+    life?.children.length === 2 && b?.children[0]?.id === "c",
+    `LIFE holds ${life?.children.length} groups; B's children = [${b?.children.map((c) => c.id).join(", ")}] — the old code left C a sibling of B`,
+  );
+}
+
 // ── journey MERGES six raw keys into five display rows (f0ab561 CATEGORY_DISPLAY_MAP). ───────────
 //    An earlier version of this file rendered one row per raw key — a separate "Personal" and a
 //    separate "Prof. Education". That is what journey's `main` does and it is NOT what the owner

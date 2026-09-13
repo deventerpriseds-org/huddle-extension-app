@@ -652,10 +652,14 @@ function sortNodes(nodes: TopicNode[]): TopicNode[] {
  * journey's shape is FOUR levels — `category > group > sub-group > task` (journey-voice `f0ab561`).
  * Huddle is handed the top three. They are built in two INDEPENDENT, COMPOSING steps:
  *
- *   STEP 1 — nesting (group → sub-group), from whatever the payload carries:
- *     · already nested by the producer → trusted as sent;
+ *   STEP 1 — nesting (group → sub-group), from whatever the payload carries. The two sources COMPOSE
+ *     in ONE pass rather than one short-circuiting the other:
+ *     · already nested by the producer → that nesting is kept as sent;
  *     · flat with real `parent_topic_id` → nested by parent id. Cycle-safe: see hasAncestorCycle,
  *       which promotes a looping node to a root rather than returning an EMPTY tree and losing both.
+ *     An earlier version RETURNED EARLY the instant any entry arrived pre-nested, so a MIXED payload
+ *     — some entries nested, others declaring `parent_topic_id` — left the flat ones unnested and
+ *     rendered a child as its parent's sibling. No data lost, wrong tree.
  *     · flat with no parent at all → one level, which is journey's data TODAY (158 topics, all
  *       parentless, measured 2026-09-13). journey is actively working toward populated parents, so
  *       treat that as a dated measurement, never as the shape.
@@ -678,19 +682,35 @@ export function buildTopicTree(payload: unknown): TopicNode[] {
   }
   if (!flat.length) return [];
 
-  // Already nested by the producer — trust its nesting, but still place it under categories, because
-  // category is a level ABOVE the nesting journey sends, never an alternative to it.
-  if (flat.some((n) => n.children.length > 0)) return sortNodes(groupByCategory(flat));
-
+  // `byId` is a LOOKUP TABLE FOR RESOLVING PARENTS — it is NOT the list of nodes to emit.
+  //
+  // IT USED TO BE BOTH, AND THAT SILENTLY DELETED TOPICS. The loop below iterated `byId.values()`,
+  // so when two entries shared an id the second never reached `roots` at all. Measured:
+  //
+  //   in  [{topic_name:"Admin", category_affinity:"LIFE",   task_count:7},
+  //        {topic_name:"Admin", category_affinity:"CAREER", task_count:9}]
+  //   out one row — LIFE/7. The CAREER topic and its whole category row were gone.
+  //
+  // That input is not contrived. `toTopicNode` falls back to `id = name` when the payload carries no
+  // id (see its `firstString(o, ["id","topic_id","topicId"]) ?? name`), which this parser tolerates
+  // ON PURPOSE because journey's envelope is unpublished — so any two same-named topics collide, and
+  // a duplicate name is ordinary in a 158-topic tree. Found by an independent verifier, not a test.
+  //
+  // The invariant, and the reason this reads from `flat`: EVERY parsed node is emitted exactly once,
+  // as a child or as a root. A malformed row may cost its own NESTING; it must never cost its
+  // EXISTENCE. That is the same rule `hasAncestorCycle` exists to uphold for cycles — the cycle case
+  // was fixed and this one was not, because both were reasoned about rather than executed.
   const byId = new Map<string, TopicNode>();
   for (const n of flat) if (!byId.has(n.id)) byId.set(n.id, n);
   const roots: TopicNode[] = [];
-  const attached = new Set<string>();
-  for (const n of byId.values()) {
+  // Keyed by NODE, never by id: with colliding ids an id-keyed set would re-create the same bug in a
+  // second place, letting only one of two same-id nodes ever attach.
+  const attached = new Set<TopicNode>();
+  for (const n of flat) {
     const parent = n.parentId ? byId.get(n.parentId) : undefined;
-    if (parent && parent !== n && !attached.has(n.id) && !hasAncestorCycle(n, byId)) {
+    if (parent && parent !== n && !attached.has(n) && !hasAncestorCycle(n, byId)) {
       parent.children.push(n);
-      attached.add(n.id);
+      attached.add(n);
     } else {
       roots.push(n);
     }
