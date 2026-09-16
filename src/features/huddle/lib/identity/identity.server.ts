@@ -340,6 +340,41 @@ export async function getEmailsForObjectId(oid: string | undefined | null): Prom
 }
 
 /**
+ * The caller's OWN identity.profile_emails rows (address + source), for the D4b self-send gate.
+ *
+ * WHY THIS EXISTS RATHER THAN REUSING `resolveScopeByEmail`. That function floors its result with the
+ * passed-in email even when no profile resolves (`if (!emails.includes(e)) emails.push(e)`), which is
+ * right for read/write scoping and WRONG for an authorisation set: an unrecognised caller string would
+ * yield a one-element "self set" containing itself, so an unresolvable caller could self-send out of
+ * the tenant mailbox. Reusing it here is failure mode #4 in AC-email-self-send.md.
+ *
+ * So this reads profile_emails DIRECTLY and floors NOTHING. Every failure -- no email passed, no
+ * profile linked, DB unavailable -- returns [], and an empty self set drafts every recipient (AC-6,
+ * AC-30). The `source` is returned because the tier default derives from it: 'entra' is the sign-in
+ * primary and is AUTO; anything else is ON-REQUEST.
+ */
+export async function getSelfEmailRows(
+  email: string | undefined | null,
+): Promise<Array<{ email: string; source: string }>> {
+  const e = (email ?? "").trim();
+  if (!e) return [];
+  try {
+    await ensureBootstrapped();
+    const r = await getPool().query<{ email: string; source: string }>(
+      `SELECT lower(sib.email) AS email, sib.source AS source
+         FROM identity.profile_emails self
+         JOIN identity.profile_emails sib ON sib.entra_object_id = self.entra_object_id
+        WHERE lower(self.email) = lower($1)
+        ORDER BY sib.added_at ASC`,
+      [e],
+    );
+    return r.rows.map((x) => ({ email: x.email, source: x.source }));
+  } catch {
+    return []; // identity DB unavailable -- fail closed: an empty self set drafts everything
+  }
+}
+
+/**
  * The unified read/write SCOPE for an email — the store-layer counterpart of journey/identity's
  * resolveUserScope, but keyed off the email a store already holds (no `caller` needed). Returns the stable
  * `userId` (entra_object_id via profile_emails — the SAME id for either of a user's emails) plus every email

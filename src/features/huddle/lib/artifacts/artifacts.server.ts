@@ -149,6 +149,145 @@ export async function createArtifact(input: CreateArtifactInput): Promise<{ id: 
   return { id, deepLink: `/artifacts/${id}` };
 }
 
+/**
+ * Strip any path out of a model-supplied artifact name, leaving a bare filename.
+ *
+ * THIS IS A PATH-TRAVERSAL FIX, NOT TIDYING. `slug()` protected the BLOB path but nothing sanitised
+ * `artifacts.items.name`, and the OneDrive mirror builds its upload path from that name with
+ * `encodeURIComponent` per segment — which does NOT encode `.` — so a name of `../../etc/passwd`
+ * escaped the "Huddle Artifacts" folder on mirror. Outward-facing, on a real user's drive, driven by
+ * model output. Found by the verifier (onedrive.server.ts:21).
+ *
+ * Keeps only the last path segment, drops `..`, and refuses a name that is nothing but an extension
+ * (".docx" → "artifact.docx") so the file is always addressable.
+ */
+export function safeArtifactName(name: string): string {
+  const raw = String(name ?? "").replace(/\\/g, "/");
+  const last = raw.split("/").filter((seg) => seg && seg !== "." && seg !== "..").pop() ?? "";
+  // Control characters and the characters Windows/OneDrive reject outright.
+  const cleaned = last.replace(/[\u0000-\u001f<>:"|?*]/g, "").trim();
+  if (!cleaned || cleaned === "." || cleaned === "..") return "artifact";
+  // A bare extension (".docx") has no stem to address — give it one.
+  return cleaned.startsWith(".") ? `artifact${cleaned}` : cleaned;
+}
+
+/** Give `name` this exact extension, replacing a document extension it already carries rather than
+ *  appending to it — "flow.md" + ".mmd" is "flow.mmd", never "flow.md.mmd". Mirrors the rule in
+ *  render.server's `ensureExtension`, which cannot be reused here because it keys off a FORMAT it
+ *  knows and these two extensions belong to the tool's vocabulary instead. */
+export function withExtension(name: string, ext: string): string {
+  const base = String(name ?? "").trim() || "artifact";
+  if (base.toLowerCase().endsWith(ext)) return base;
+  const replaceable = [".md", ".markdown", ".txt", ".html", ".htm", ".docx", ".pptx", ".mmd", ".svg"];
+  for (const r of replaceable) {
+    if (base.toLowerCase().endsWith(r)) return base.slice(0, base.length - r.length) + ext;
+  }
+  return base + ext;
+}
+
+/**
+ * THE ONE PLACE a `create_artifact` tool call becomes a stored artifact.
+ *
+ * WHY THIS EXISTS RATHER THAN FOUR COPIES: the same six lines were repeated at four dispatch sites
+ * (huddle.functions.ts x3 — the OpenAI path, the Lovable path and the durable-turn path — plus
+ * voice/realtime-tools.server.ts), each hardcoding `Buffer.from(content, "utf8")` and
+ * `mime ?? "text/markdown"`. Adding Word/PowerPoint by editing all four is how one path silently
+ * keeps producing markdown forever. Every site now calls THIS, so a new format is one edit.
+ *
+ * Renders first (`format` decides), then stores. `renderArtifact` never throws: a malformed
+ * structure or unparseable markdown degrades to a valid document carrying the raw text plus a
+ * warning, so an agent's mistake costs fidelity, never the user's work.
+ */
+export async function createArtifactFromAgent(input: {
+  userEmail: string;
+  agentId?: string | null;
+  taskId?: string | null;
+  folder: string;
+  name: string;
+  /** Raw tool arguments, unvalidated — this is model output. */
+  args: { format?: unknown; content?: unknown; document?: unknown; mime?: unknown };
+}): Promise<{ id: string; deepLink: string; name: string; mime: string; warnings: string[] }> {
+  const { renderArtifact } = await import("./render.server");
+  const a = input.args;
+  // Trim whitespace and casing before matching: the verifier landed `" DOCX "` here.
+  const format = typeof a.format === "string" ? a.format.trim().toLowerCase() : "md";
+  // Sanitise ONCE, at the choke point, so every downstream consumer (blob path, DB row, OneDrive
+  // mirror) gets the same safe name. See safeArtifactName — this is the path-traversal fix.
+  const safeName = safeArtifactName(input.name);
+
+  // FORMATS THE TOOL OFFERS THAT THE RENDERER DOES NOT KNOW.
+  // `render.server` handles md | html | docx | pptx and degrades anything else to markdown — correct
+  // for it, wrong here: `create_artifact` also offers `mermaid` and `svg`, and an end-to-end check
+  // caught both arriving as `name.md` + text/markdown, which the viewer can never render as a
+  // diagram or a vector. They are PASSTHROUGH TEXT like html, so they need no renderer — only the
+  // right extension and mime, which is a dispatch concern, not a rendering one. Keeping this at the
+  // boundary is also what stops the renderer growing a case per tool vocabulary word.
+  const PASSTHROUGH: Record<string, { ext: string; mime: string }> = {
+    mermaid: { ext: ".mmd", mime: "text/vnd.mermaid; charset=utf-8" },
+    svg: { ext: ".svg", mime: "image/svg+xml; charset=utf-8" },
+  };
+  const passthrough = PASSTHROUGH[format];
+  if (passthrough) {
+    const body = typeof a.content === "string" ? a.content : "";
+    // NOT render.server's `ensureExtension` — that takes a FORMAT and looks it up in its own
+    // EXTENSION_BY_FORMAT, which has no entry for mermaid or svg, so it returned `name + undefined`
+    // ("security-optionsundefined"). Caught by the dispatch suite the moment it was written. These
+    // two extensions belong to the TOOL's vocabulary, not the renderer's, so they are resolved here.
+    const outName = withExtension(safeName, passthrough.ext);
+    const { id, deepLink } = await createArtifact({
+      userEmail: input.userEmail,
+      agentId: input.agentId ?? null,
+      taskId: input.taskId ?? null,
+      folder: input.folder,
+      name: outName,
+      mime: passthrough.mime,
+      bytes: Buffer.from(body, "utf8"),
+    });
+    return {
+      id,
+      deepLink,
+      name: outName,
+      mime: passthrough.mime,
+      warnings: body.trim() ? [] : [`Empty ${format} content — the artifact will render blank.`],
+    };
+  }
+
+  const rendered = await renderArtifact({
+    format,
+    content: typeof a.content === "string" ? a.content : undefined,
+    document: a.document,
+    name: safeName,
+  });
+
+  // An explicit `mime` is the documented escape hatch for a type `format` does not cover — but it
+  // must never make an artifact LIE ABOUT ITSELF, in either direction.
+  //
+  // The first version of this guard only checked the direction I had thought of: it tested
+  // `rendered.mime` to stop a real docx being labelled text/markdown (that works). The verifier
+  // found the REVERSE wide open — `{format:"md", mime:"…wordprocessingml.document"}` stored three
+  // bytes of markdown (`23 20 52`, not the `50 4b 03 04` of a ZIP) under the Word mime, so the user
+  // downloads "report.docx" and Word refuses to open it. A one-sided guard on a two-sided problem.
+  //
+  // So: an override is honoured only when BOTH sides are non-package types. Claiming to be an Office
+  // document is reserved for bytes that actually are one.
+  const rawMime = typeof a.mime === "string" && a.mime.trim() ? a.mime.trim() : null;
+  const isPackageMime = (m: string) =>
+    /officedocument|application\/zip|application\/pdf|^application\/octet-stream/i.test(m);
+  const mime =
+    rawMime && !isPackageMime(rendered.mime) && !isPackageMime(rawMime) ? rawMime : rendered.mime;
+
+  const { id, deepLink } = await createArtifact({
+    userEmail: input.userEmail,
+    agentId: input.agentId ?? null,
+    taskId: input.taskId ?? null,
+    folder: input.folder,
+    name: rendered.name,
+    mime,
+    bytes: rendered.bytes,
+  });
+  return { id, deepLink, name: rendered.name, mime, warnings: rendered.warnings ?? [] };
+}
+
 export interface ArtifactFilters {
   folder?: string;
   status?: ArtifactStatus;
@@ -180,7 +319,20 @@ export async function listArtifacts(userEmail: string, f: ArtifactFilters = {}):
 }
 
 // Mime families the preview pane renders as text. Kept in sync with ArtifactsView.tsx's preview branch.
-const TEXT_PREVIEW_MIME = /^(text\/|application\/json|application\/csv)/;
+/** Which mimes get their BYTES returned for in-app preview.
+ *
+ *  THE VIEWER CANNOT RENDER WHAT THE SERVER NEVER SENDS. `text/html` and `text/vnd.mermaid` already
+ *  passed on `^text/`, so those render; **`image/svg+xml` did not**, so an SVG artifact came back
+ *  with `text: null` and fell through to the raster `<img>` path instead of the sandboxed frame.
+ *  Same for a mermaid file stored under a non-`text/` mime. Found by the viewer lane, which could
+ *  not fix it — it owns the component, this file is the gate.
+ *
+ *  DELIBERATELY NOT `/^image\//` — that would start streaming PNG and JPEG bytes through the text
+ *  preview path for no reason. SVG is here because it is TEXT that happens to carry an image mime,
+ *  which is exactly why it slipped through the original `^text/` rule.
+ *  `TEXT_PREVIEW_MAX_BYTES` still caps every one of these. */
+const TEXT_PREVIEW_MIME =
+  /^(text\/|application\/json|application\/csv|image\/svg\+xml|application\/vnd\.mermaid|application\/xhtml\+xml)/;
 // Above this, skip the server-side text read (still get a working download link) — a preview pane
 // isn't the place to pull multi-MB files into memory on every open.
 const TEXT_PREVIEW_MAX_BYTES = 2_000_000;
@@ -379,4 +531,107 @@ export async function mirrorArtifactToOneDrive(userEmail: string, id: string): P
   if (!r.ok) return { ok: false, error: r.error, needsConsent: r.needsConsent };
   await getPool().query(`UPDATE artifacts.items SET onedrive_url = $2, updated_at = now() WHERE id = $1`, [id, r.webUrl ?? null]);
   return { ok: true, onedrive_url: r.webUrl ?? null };
+}
+
+// B-OPS-2 -- ONE executor for the `list_artifacts` agent tool, called by BOTH surfaces.
+//
+// The text and voice paths each carry their OWN copy of the create_artifact dispatch, and
+// realtime-tools.server.ts's own header records what that costs: NINE native tools that exist when
+// typed and are silently absent when spoken, create_artifact among them until it was retro-fitted.
+// A second tool with two copies of its dispatch would be the tenth. So the logic lives here once
+// and each surface only routes the name to it -- the same shape as executeNexusTool.
+//
+// THE EMAIL COMES FROM THE SIGNED-IN CALLER AND IS NEVER A TOOL ARGUMENT. listArtifacts scopes
+// every row by it, so an argument would be a read of another user's documents. `list_artifacts`
+// exposes no email/user parameter and this function does not accept one.
+export async function listArtifactsForTool(
+  caller: { entra_object_id?: string; entra_email?: string } | undefined,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const { resolveTaskEmail } = await import("../journey/identity");
+  const email = (await resolveTaskEmail(caller ?? {})) ?? caller?.entra_email;
+  if (!email) return { ok: false, error: "sign_in_required" };
+
+  const s = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+  const n = (v: unknown): number | undefined => {
+    if (typeof v === "number" && Number.isFinite(v)) return Math.trunc(v);
+    if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Math.trunc(Number(v));
+    return undefined;
+  };
+
+  // An unrecognised status is DROPPED, not passed through: listArtifacts would append
+  // `AND status = 'finished'`, match nothing, and the empty result would read as "no artifacts"
+  // rather than as "that is not a status". Same rule as the library tool's `kind`.
+  const statusRaw = s(args.status);
+  const status = (ARTIFACT_STATUSES as readonly string[]).includes(statusRaw)
+    ? (statusRaw as ArtifactStatus)
+    : undefined;
+  const limit = Math.max(1, Math.min(n(args.limit) ?? 50, 200));
+  const days = n(args.days);
+
+  let rows: ArtifactRow[];
+  try {
+    rows = await listArtifacts(email, {
+      folder: s(args.folder) || undefined,
+      status,
+      agentId: s(args.agent_id) || undefined,
+      taskId: s(args.task_id) || undefined,
+    });
+  } catch {
+    // Reported as a failed READ, never as an empty shelf. A broken query and a user with no
+    // artifacts return the same thing otherwise, and "your agents haven't produced anything" is the
+    // confidently-wrong answer this whole bridge exists to remove.
+    return { ok: false, error: "artifact_store_unavailable" };
+  }
+
+  // `days` IS A CLIENT-SIDE WINDOW BECAUSE THE STORE HAS NO DATE FILTER. listArtifacts takes only
+  // folder/status/agentId/taskId and then `ORDER BY updated_at DESC LIMIT 500`. Filtering here is
+  // therefore over the newest 500, which is stated in the result rather than assumed away.
+  let windowed = rows;
+  let since: string | undefined;
+  if (days !== undefined && days > 0) {
+    const cutoff = Date.now() - days * 86_400_000;
+    since = new Date(cutoff).toISOString();
+    windowed = rows.filter((r) => {
+      const t = Date.parse(String(r.updated_at ?? r.created_at ?? ""));
+      return Number.isFinite(t) ? t >= cutoff : false;
+    });
+  }
+
+  const artifacts = windowed.slice(0, limit).map((r) => ({
+    id: r.id,
+    name: r.name,
+    folder: r.folder,
+    status: r.status,
+    agent_id: r.agent_id,
+    task_id: r.task_id,
+    mime: r.mime,
+    size_bytes: r.size_bytes,
+    version: r.version,
+    review_note: r.review_note,
+    reviewed_at: r.reviewed_at,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+    // Mirror state as a BOOLEAN, not a URL. A OneDrive/Drive link read aloud or pasted into a reply
+    // is a live credentialed location; the model only needs to know whether it landed.
+    mirrored: !!(r.onedrive_url || r.gdrive_url),
+  }));
+  // `blob_path` and `user_email` are deliberately not projected -- an internal storage key and the
+  // caller's own address, neither of which the model needs and both of which it would repeat.
+
+  return {
+    ok: true,
+    count: artifacts.length,
+    total_matched: windowed.length,
+    since,
+    truncated: windowed.length > artifacts.length || undefined,
+    store_scan_capped: rows.length >= 500 || undefined,
+    artifacts,
+    note:
+      artifacts.length === 0
+        ? days !== undefined
+          ? `No artifacts were saved or updated in the last ${days} days. Say that, WITH the window used, and offer to look further back — do not tell the user his agents have produced nothing.`
+          : "No artifacts matched those filters. Report it as 'nothing matched' and state the filters — do not report that the user has no documents unless an unfiltered read also returns nothing."
+        : undefined,
+  };
 }

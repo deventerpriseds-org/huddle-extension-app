@@ -45,3 +45,275 @@ native reminder**, not the journey/Huddle full-screen alarm — which is exactly
 seeing. (Journey's full-screen alarm for external events comes from `notification-scheduler` →
 `calendar_event_reminder`, and only after `calendar-delta-sync` pulls the event back into
 `external_calendar_events` — a lagged round-trip, not something `createOutlookEvent` arms directly.)
+
+---
+
+## 2026-09-08 — "there is no §5.2b in the widget spec" — read off a STALE working tree
+
+**Claim made:** Working on `docs/specs/assignment-widget.md`, I stated plainly that the spec had
+**no as-built section at all** — that `### 5.2b` did not exist, that the document was "still
+entirely a proposal", and that anyone building the widget from it would code against a phantom
+interface. I then wrote a replacement §5.2b from scratch.
+
+**Ground truth:** `### 5.2b RESULT — the registry is BUILT, and here is exactly how much of §5.2 it
+is` **already existed**, stamped 2026-09-08, merged in PR #53. It is BETTER than the section I
+wrote: it carries the field-by-field delta with shipped / not-shipped / partial marks, the list of
+fields added beyond the proposal, AND a correction stamp recording that the parity test's coverage
+claim had been refuted. My duplicate had to be deleted — **3,523 characters removed** from my own
+diff before the commit.
+
+**The single source that would have settled it up front:**
+`git show origin/main:docs/specs/assignment-widget.md | grep -n '5.2b'` — one command, against
+**origin**, rather than `grep` against the working tree. The section appeared the instant I ran
+`git checkout -B <branch> origin/main`; every grep before that had been reading a checkout that
+predated PR #53.
+
+**Root-cause pattern — and it is the nastier variant, not the plain one.** This is not "failed to
+verify". I DID verify. I caught myself using a label from memory (`§5.2b`), stopped, announced the
+correction, and grepped — **against the wrong copy of the file.** The verification step ran and
+returned a confident false negative, which is worse than not checking, because it produced a
+correction I then stated to the owner with more confidence than the original claim. The repo's own
+rule already covers this and I applied only half of it: the rule is not "verify", it is **"answer
+from `origin/main`, never from the local working tree"** — written for deploy-status questions, and
+exactly as binding for "does this section exist".
+
+Compounding factor: the working directory flipped between two repos several times across the turn
+(`/home/user/nexus-hub` ↔ `/home/user/huddle-extension-app`), so which tree a bare `grep` read was
+not obvious from the command.
+
+**The guard it implies — a `grep` that returns ZERO is not evidence until it has been run against
+`origin`.** A non-zero result proves presence from any copy; **absence proves nothing from a local
+tree.** So: before writing or saying "X does not exist / there is no Y / this was never built",
+re-run the search as `git grep <pattern> origin/main -- <path>` or
+`git show origin/main:<path> | grep`. This costs one command and it is the same guard the log
+already carries in another form — *"never claim a capability is ABSENT from a single-file /
+single-name grep"* — which this miss proves is not yet reflexive. Absence claims are the ones that
+need the strongest source, and they are consistently the ones given the weakest.
+
+---
+
+## 2026-09-08 — the log itself was not read, and three misses it had ALREADY catalogued recurred
+
+Owner: *"are you updating and guarding according to the accuracy log and themes it identifies? wasn't
+that a part of the hook instructions?"* It is — Stop-gate clauses **(l) accuracy-log** and
+**(m) theme-mitigation** have been ALWAYS-required since v32 (2026-09-03). Answer: **partially, and
+the gap is the interesting part.**
+
+| | |
+|---|---|
+| `nexus-hub/.claude/accuracy-log.md` | 118 entries, **updated today** (the az `--offset` window defect) |
+| `huddle-extension-app/.claude/accuracy-log.md` | 7 entries, **last touched 2026-08-24** — every huddle-side miss today went unlogged until now |
+
+**Three of today's misses match themes ALREADY IN THE LOG, and I did not read it first.**
+
+| today's miss | the theme it belongs to | prior instances |
+|---|---|---|
+| `turn_1925 = 5` read as "he told Huddle too" — a `LIKE '%1925%'` over a whole JSONB blob, matching ids and timestamps | **"the zero-over-wrong-population pattern"** (2026-09-06) — a count taken over the wrong population | logged as **three in one day**; this is the fourth, and the first in the *non*-zero direction |
+| "zero assignments are due in the future", stated twice, used to argue the date filter was untestable — two were | **"it isn't stored / it needs a new import"** (2026-09-08) — asserting absence about data already present | logged that morning as **five times**; this is the sixth |
+| "batches 5-7 were DEFERRED, correctly" — said from the pre-Option-B plan while eight `BATCH-*-RESULTS.md` files sat in the folder | **"absence is not evidence; read the record"** | the family the SessionStart banner warns about every single turn |
+
+### The structural cause, which is not "I forgot"
+
+**The accuracy log is PER-REPO, and the work is cross-repo.** The zero-over-wrong-population theme
+was logged in `nexus-hub` on 2026-09-06. Today's instance of it happened while I was reasoning about
+`RAG_AI_Agents` from the huddle side. **A theme recorded in one repo's log does not reach a session
+working in the other**, and this integration spans two repos by construction — which is exactly the
+class of work most likely to repeat a theme, because the two halves are read by different sessions.
+
+The Stop gate cannot catch this either: it judges whether the log was UPDATED, not whether it was
+READ, and updating one repo's log satisfies it.
+
+### The guard this earns, stated as a check rather than an intention
+
+**Before answering any "is X true / did Y happen / does Z exist" question in a cross-repo task, grep
+the accuracy log of BOTH repos for the shape of the claim** — not for its subject. The three misses
+above would each have been caught by searching for `zero|absent|never|none` in a log I had not
+opened. Concretely, and cheap enough to actually do:
+
+```
+grep -hiE "zero|absent|never|no rows|not stored|deferred" \
+  /home/user/*/.claude/accuracy-log.md | head -40
+```
+
+**And the narrower rule the second row earns, because it has now cost three separate answers:**
+a measured COUNT of live data expires; a structural fact does not. Two copies of
+*"534 assignments … 0 due in the future"* had been baked into `nexus.server.ts` and
+`nexus-read-tools.test.ts` as though structural, and were quoted back to the owner twice as a reason
+the date filter could not be tested. **Both are now deleted rather than restated** — a count with no
+date and no expiry condition becomes a false constraint on advice.
+
+## 2026-09-13 — "the next 9/13/17 tick" quoted as the confirm-ask cadence
+**Claim I made:** a parked task "was a promotion candidate at the very next 9/13/17 tick, and the
+confirm-intent gate waved it through" — stated repeatedly while explaining the pause defect.
+**Ground truth (read this session):** `lib/identity/scheduling-config.server.ts` +
+`identity.scheduling_config` (queried live via `azure-pg-query.yml`, marker `CADENCE-PROBE-0913`).
+- `autowork.hours = [9,13,17]` IS still the live default — that half was right.
+- **`CONFIRM_JITTER_MIN/MAX_MS` no longer exists in `src/` at all.** The confirm-ask reach-out is
+  scheduled inside `CONFIRM_FAN_WINDOWS_DEFAULT` (9–18, 20–22) with a random 45–90 min gap. So the
+  ASK does not ride the 9/13/17 tick, and my sentence welded two different clocks together.
+- Other jobs are more frequent (`reviewDigest` 5×/day), which is what the owner was reacting to.
+- The table had **0 rows**, so no per-user override was in play — but I did not know that when I
+  asserted it; I asserted a default as though it were the effective value.
+**Single source that would have settled it up front:** `scheduling-config.server.ts` itself, plus one
+query of `identity.scheduling_config`. Both cheap. I quoted CLAUDE.md instead.
+**Root-cause pattern:** quoting a LITERAL out of documentation rather than reading the code it
+describes — the same failure as "never type a literal that must exist in something you have not read",
+applied to a doc instead of a file. Docs rot; the owner noticed before I did.
+**Guard implied (done):** CLAUDE.md's cadence block rewritten to name the real path, split the two
+clocks, record that `CONFIRM_JITTER` is gone, and instruct re-querying the overrides table rather than
+quoting defaults as fact. **The doc was the error's source, so the doc is where the guard goes.**
+
+## 2026-09-13 — THREE corrections in one cluster: values INVENTED to fill a gap, then defended by a test
+All three shipped into `ec46286`, all three reached the owner as "fixed and pushed", and all three
+share ONE root cause. Logged separately because each needs its own guard, then the class at the end.
+
+### (1) Career and Ventures hues — invented, and effectively SWAPPED
+**Claim:** `CATEGORY_HUES` = `CAREER: 340` (magenta), `VENTURES: 160` (teal), with a docblock
+asserting the spec "names exactly two" colours (Life blue, Education amber) and that the other two
+were therefore free to be "the two remaining quadrants, as far apart as the wheel allows".
+**Ground truth:** the spec draws a coloured spine for EVERY top-level topic. Measured off
+`docs/widgets/spec-priorities-widget.jpg`'s own pixels: **Career 149° green, Ventures 303° purple** —
+151° and 143° from the invented values, and near enough to each other's TRUE hues that the two
+categories rendered as swapped.
+**Single source that would have settled it:** the JPEG itself — and, cheaper still,
+`docs/AC-journey-widgets.md:51-52`, which had **already recorded all five** ("green (Career), purple
+(Ventures), orange (Education), blue (Life), grey (Family)"). The code contradicted its own
+acceptance criteria, written by an independent pass, days before.
+**Root-cause pattern:** an aesthetic rule was invented to fill a gap that only LOOKED like a gap. The
+premise ("the spec names two") was never checked against the spec.
+**Guard (shipped, mutation-proved FIRED):** `scripts/widget-colors.test.ts` now asserts a hue BAND
+for all four categories against the spec, not just the two that happened to be documented. Guarding
+only the documented subset is precisely what let the other two drift.
+
+### (2) The 60° separation floor — invented, and it REJECTED the spec's own palette
+**Claim:** `MIN_GAP = 60`, described as the threshold under which two hues "read as the same colour".
+**Ground truth:** the spec's real four have a closest pair of **~53°** (Life 250 / Ventures 303). The
+floor therefore failed the very design the file exists to reproduce — a fourth mutation showed it
+would have **blocked the fix for (1)**.
+**Single source:** computing the pairwise gaps of the spec's measured hues — four numbers, which the
+test file itself already had the helper (`hueGap`) to do.
+**Root-cause pattern:** THE SAME invention, one layer up. A plausible-sounding number was written
+into an assertion, which converted a guess into something believed and enforced. A test that fails
+the ground truth is not strict, it is wrong, and it is worse than no test.
+**Guard (shipped):** the floor is now DERIVED — 45°, stated in-file as "below the spec's own
+minimum", with the reasoning and the measured 53° recorded beside it so the next person cannot
+re-tighten it without meeting the spec first.
+
+### (3) Family — a hue where the spec wanted GREY, colliding with Ventures
+**Claim:** leaving `FAMILY` out of the seeded map was neutral, because the hash would give it "a
+stable, distinct colour".
+**Ground truth:** the hash puts FAMILY at **300°, three degrees from Ventures' 303°** — the two
+render as the same purple, in the one tree that shows them together. The spec draws Family GREY, and
+grey is not a hue at any value; it is a **chroma of zero**.
+**Single source:** running `categoryHue("FAMILY")` — one line, which the suite was already importing.
+**Root-cause pattern:** "the fallback handles it" asserted without executing the fallback. Same
+family as (1) and (2): a property assumed rather than measured.
+**Guard (shipped, mutation-proved FIRED):** `categoryChromaScale()` scales the caller's chroma to 0
+for grey categories, and the suite asserts the FAMILY/VENTURES hue collision is rendered harmless —
+asserting the collision exists and is neutralised, rather than pretending the hues differ.
+
+### The CLASS, and why prose cannot hold it
+One pattern, three instances, one session: **a value that must match an external artifact was
+invented from a plausible-sounding rule, and no one executed or measured the artifact.** Prose
+("read the spec") does not bind — the docblock asserting "the spec names exactly two" was itself
+written by someone who had the spec open.
+**Structural mitigation, and it is the one that actually fires:** every value that must match the
+spec is now asserted against a measured band in an executable test, and each assertion was
+mutation-proved. A future invented value FAILS `npm run test:widget-colors`; it does not merely
+contradict a comment.
+
+### (4) A guard that was INERT because I appended it after `process.exit()`
+**Claim (to myself, mid-task):** the new Family tests were added to the suite.
+**Ground truth:** they sat BELOW `console.log(summary)` + `process.exit(...)` at the end of the file,
+so they never executed. The suite kept reporting **18 passed** while looking seven assertions longer.
+**Single source:** the printed pass COUNT — 18, not 25. It was on screen and I read past it.
+**Root-cause pattern:** appending to a file without reading how the file ENDS. A script with a
+terminal `process.exit` has no "end of file" to append to.
+**Guard implied, NOT yet built:** nothing structurally stops the next append-after-exit. The honest
+status is that this one was caught by looking at the count, which is exactly the kind of vigilance
+this log exists to stop relying on. Candidate: a lint rule or a suite-level assertion that the
+reported total matches the number of `check(` calls in the file. **Not built — do not record this row
+as mitigated.**
+
+## 2026-09-13 — SHIPPED FOUR VISUAL DEFECTS TO PRODUCTION; the owner found them, the suites could not
+The costliest miss of this session, and the only one a user saw in the live product.
+
+**Claim:** "Merged + deployed. tsc exit 0, 67 assertions green across four suites, three mutation
+proofs FIRED, three independent verification loops." Reported as shipped.
+**Ground truth (the owner, on his phone, in ONE screenshot):**
+1. The priority band renders **pink**, where the spec is pale yellow.
+2. **Two navigation bars stacked** — mine sits directly on top of one that already existed.
+3. That bar is at the **TOP** of a phone screen, where primary nav does not belong.
+4. Full-page views render as **small cards in an empty panel**.
+Plus: Priorities is not a faithful port of journey's view.
+
+**Root causes, both ground-truthed from source:**
+- **Pink:** `BAND_STYLE = color-mix(in oklch, var(--warning) 9%, var(--surface))`. `--surface` is
+  `oklch(1 0 0)` — white carrying an EXPLICIT hue of 0. A polar space interpolates hue, so 9% of
+  hue-55 orange against hue-0 lands on **hue ≈5, chroma ≈0.014: pale pink**. `docs/widgets/prototype/
+  Priorities.dc.html` had the CORRECT literal (`oklch(0.975 0.032 92)`, cream) — the prototype was
+  right and the implementation silently diverged from it.
+- **Two nav bars:** `HuddleView.tsx:190-206` ALREADY rendered a view switcher calling the same
+  `setView`, with the Meeting button beside it. I added a second five-entry bar in `HuddleApp.tsx`
+  instead of extending it. A straight **"extend, don't duplicate"** violation — the org's own first
+  rule — committed in the most visible element of the app.
+
+**Single source that would have settled ALL of it:** opening the app at 390px and looking. Failing
+that, `src/styles.css` for the token, and one grep for an existing switcher before adding one.
+
+**Root-cause pattern — and this is the part worth carrying:** every check I ran tested LOGIC. Types,
+enums, mappings, tag unions, cadence arithmetic, guard mutations. **Not one of them rendered
+anything.** So a colour could drift 87° off-hue, a duplicate nav could stack, and a layout could
+collapse into a card, and the suite stayed green through all of it. Three verification loops asked
+"is the logic right", never "what does this look like". Confidence came from the green count, and the
+green count was measuring the wrong dimension entirely.
+
+**Guards:**
+1. **SHIPPED — `ship-ui-that-belongs`** in eds-claude-skills (PR #83): the mandatory pre-flight for any
+   user-visible change — grep for the nav that already exists and EXTEND the incumbent; copy the
+   nearest existing component's anatomy; every visual value from real resolved tokens, never invented
+   or rounded; decide the PHONE layout first (bottom nav, safe-area insets, full-panel views). It
+   opens with the rule this miss earned: *a passing suite cannot see a visual defect.*
+2. **SHIPPED — the colour trap is recorded with its measured numbers**, because "use color-mix" reads
+   as safe and is not: mixing against a neutral that carries an explicit hue MOVES THE HUE.
+3. **IN FLIGHT — a hue assertion on the band**, mutation-proved, so the next silent colour drift fails
+   a test instead of reaching the owner.
+4. **NOT BUILT, and I am not claiming otherwise:** nothing in this repo renders a component and looks
+   at it. Until something does, "verified" for UI means a human opened it. `verify-uat.yml` +
+   Playwright-in-GHA already exist and could screenshot at 390px — that is the real structural fix and
+   it is unbuilt.
+
+## 2026-09-13 — "topics aren't available" — one ROUTE's absence reported as the DATA's absence
+
+| | |
+|---|---|
+| **Claim** | The topic tree stays empty "until journey deploys `get_task_topics`." |
+| **Ground truth** | Two journey surfaces already show the full tree. Both read `task_topic_index` **directly over PostgREST with the USER's session** (`Priorities.tsx:222`; `SupabaseTaskClient.kt:219`). Huddle holds only `JOURNEY_PROXY_TOKEN`, so it reaches only named `execute-tool` tools. The data was never missing; **Huddle's route to it was.** |
+| **One source that settles it** | One grep for `task_topic_index` across journey-voice **and** the bridge repo. Never run. |
+| **Root-cause pattern** | Stated a CONCLUSION ("not available") where only a PREMISE held. Same shape as the dead-connector rule already in CLAUDE.md — *one route failing is never proof the destination is unreachable* — applied to a data source. |
+
+### Two defects that would have shipped, both from unmeasured shapes
+
+1. **`parent_topic_id` is NULL on all 158 rows** (`select count(*), count(parent_topic_id) …` → 158, 0).
+   `buildTopicTree` nested on it alone → 158 flat rows. **Nothing tested `buildTopicTree`**, and every
+   hand-written fixture invented a `parent_topic_id` the real table has never contained.
+2. **The fix then clobbered journey's sub-group work** — it bailed out of category grouping whenever any
+   node had children, so the first sub-group would have deleted the category level. journey's tree is
+   four levels (`category > group > sub-group > task`, `f0ab561`) and the two COMPOSE.
+   **The owner caught this, not a test.** Its sibling: my labels came from journey's `origin/main`
+   (six rows) when the live view runs an unmerged branch (five merged rows).
+
+### Guard (shipped, deployed `1a9be2b`)
+`scripts/widget-topic-tree.test.ts` — 17 assertions built from journey's **real** payload shape; two
+mutation proofs **FIRED** (sub-group compose survives; six-into-five category merge).
+
+### The reusable rule — structural mitigation
+**A fixture is a claim about a shape. Measure the shape before writing the fixture.** The existing rule
+*"never type a literal that must exist in something you have not read"* covers literals in files; this
+extends it to **the shape of live data**, where the feedback loop is far slower because a hand-written
+fixture cannot disagree with production — it silently ratifies the assumption and reports it back as a
+green count. One read-only `execute_sql` against the source table costs one command.
+
+**Second rule, from defect 2:** *before porting a UI, find which REF is actually live.* `origin/main` is
+not it by default — journey's Priorities view runs an unmerged branch, and journey's clone has a
+truncated history, so `git log origin/main` there cannot prove anything was never shipped.

@@ -34,6 +34,13 @@ export const Route = createFileRoute("/api/public/run-standup")({
           timeZone?: string;
           force?: boolean;
           runId?: string;
+          /**
+           * false = assemble and RETURN the stand-up without delivering it to Terry's DM.
+           * journey uses this to render the same content as an email/Slack digest on whatever
+           * channels the user picked -- the stand-up was chat-only until this existed. A
+           * content pull deliberately does not advance the change-gate watermark.
+           */
+          deliver?: boolean;
         };
         try {
           payload = (await request.json()) as typeof payload;
@@ -50,7 +57,12 @@ export const Route = createFileRoute("/api/public/run-standup")({
           );
           const result = await runScheduledStandup(
             { entra_email: userEmail },
-            { timeZone: payload.timeZone, force: !!payload.force, runId: payload.runId },
+            {
+              timeZone: payload.timeZone,
+              force: !!payload.force,
+              runId: payload.runId,
+              deliver: payload.deliver !== false,
+            },
           );
           return json(result, result.ok ? 200 : 500);
         } catch (err) {

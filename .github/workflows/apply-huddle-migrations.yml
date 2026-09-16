@@ -1,0 +1,149 @@
+# WHAT:       Applies every committed migration under sql/rag_ai_agents/*.sql (sorted) to the
+#             RAG_AI_Agents database on eds-postgresql. The reviewable, versioned, re-runnable
+#             schema path for the Huddle side.
+# WHY:        Until now the Huddle side had NO such path. FINDING-chunks-and-ddl.md JOB 1 found three
+#             vehicles that can run DDL against RAG_AI_Agents -- azure-pg-query.yml, nexus-hub's
+#             db-query.yml, and migrate-huddle-db.yml -- but the first two are ad-hoc "paste some SQL"
+#             escape hatches with no review and no record, and the third is a ONE-SHOT split-brain
+#             consolidation that never touches rag_chunks. So every Huddle schema change was landing
+#             (or not landing) with nothing committed to say what was applied. That is how journey
+#             production ended up running `undo_dedup`, a function that exists in NO git branch.
+# SUPERSEDES: nothing. It deliberately does NOT replace migrate-huddle-db.yml -- that file is a
+#             one-shot with a `push:` trigger ON ITS OWN PATH, so editing it RE-RUNS the migration.
+#             Leave it alone.
+# SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   mirrors nexus-hub/.github/workflows/migrate-nexus-db.yml, the proven pattern on the
+#             Nexus side (same temp-firewall + psql + ON_ERROR_STOP + --single-transaction shape).
+#
+# ADDITIVE-ONLY, and enforced rather than requested: scripts/check-migrations-additive.sh runs BEFORE
+# psql opens a connection, and a DROP/TRUNCATE/DELETE in any file fails the job with nothing applied.
+# public.rag_chunks is the only copy of agent memory that exists.
+name: Apply Huddle migrations (RAG_AI_Agents)
+
+on:
+  workflow_dispatch:
+    inputs:
+      db:
+        description: 'Target database'
+        required: false
+        default: RAG_AI_Agents
+
+env:
+  RG: EnterpriseDS_ResourceGRP
+  PG_SERVER: eds-postgresql
+  PG_HOST: eds-postgresql.postgres.database.azure.com
+  PG_ADMIN: Admin_eds
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # BEFORE Azure login, before the firewall opens, before psql exists in the picture.
+      # A destructive file must never get as far as a database connection.
+      - name: Refuse destructive migrations
+        run: bash scripts/check-migrations-additive.sh sql/rag_ai_agents
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+
+      - name: Open temp firewall rule
+        run: |
+          set -euo pipefail
+          RUNNER_IP=$(curl -s https://api.ipify.org)
+          RULE="gha-huddlemig-${{ github.run_id }}"
+          echo "PG_FW_RULE=$RULE" >> "$GITHUB_ENV"
+          az postgres flexible-server firewall-rule create \
+            --resource-group "$RG" --server-name "$PG_SERVER" --name "$RULE" \
+            --start-ip-address "$RUNNER_IP" --end-ip-address "$RUNNER_IP" >/dev/null
+
+      # NOTHING WE DO SHOULD EVER BE IRREVERSIBLE (owner, 2026-09-07). Two independent nets, because
+      # each covers what the other cannot:
+      #   1. Azure's own point-in-time restore on the flexible server -- reported here rather than
+      #      assumed, so a run's log says what the recovery window actually was at that moment.
+      #   2. A snapshot of the rows this runner can reach, taken BEFORE any migration executes and
+      #      kept as a workflow artifact. PITR restores a whole server to a moment; the snapshot
+      #      restores these specific rows without touching anything else.
+      # The embedding column is excluded from the CSV on purpose: it is ~3072 floats a row and is
+      # never what a schema migration changes. Row identity, ownership and content are.
+      - name: Snapshot before applying
+        env:
+          PGPASSWORD: ${{ secrets.Azure_admin_pw }}
+          PGSSLMODE: require
+          DB_NAME: ${{ github.event.inputs.db || 'RAG_AI_Agents' }}
+        run: |
+          set -euo pipefail
+          mkdir -p snapshot
+          echo "----- AZURE POINT-IN-TIME RESTORE WINDOW -----"
+          az postgres flexible-server show \
+            --resource-group "$RG" --name "$PG_SERVER" \
+            --query "{retentionDays:backup.backupRetentionDays, geoRedundant:backup.geoRedundantBackup, earliestRestore:backup.earliestRestoreDate}" \
+            -o table || echo "(could not read backup config -- snapshot below still applies)"
+          echo "----- ROW SNAPSHOT (pre-migration) -----"
+          for t in rag_chunks rag_triples; do
+            cols=$(psql -h "$PG_HOST" -p 5432 -U "$PG_ADMIN" -d "$DB_NAME" -tAc \
+              "SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position)
+                 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='$t' AND column_name <> 'embedding';")
+            psql -h "$PG_HOST" -p 5432 -U "$PG_ADMIN" -d "$DB_NAME" -v ON_ERROR_STOP=1 \
+              -c "\copy (SELECT $cols FROM public.$t) TO 'snapshot/${t}.csv' WITH CSV HEADER"
+            echo "  $t: $(( $(wc -l < snapshot/${t}.csv) - 1 )) rows -> snapshot/${t}.csv"
+          done
+          psql -h "$PG_HOST" -p 5432 -U "$PG_ADMIN" -d "$DB_NAME" -tAc \
+            "SELECT table_name||': '||string_agg(column_name, ', ' ORDER BY ordinal_position)
+               FROM information_schema.columns
+              WHERE table_schema='public' AND table_name IN ('rag_chunks','rag_triples')
+              GROUP BY table_name;" > snapshot/schema-before.txt
+          cat snapshot/schema-before.txt
+
+      - name: Keep the snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: pre-migration-snapshot-${{ github.run_id }}
+          path: snapshot/
+          retention-days: 90
+
+      - name: Apply migrations
+        env:
+          PGPASSWORD: ${{ secrets.Azure_admin_pw }}
+          PGSSLMODE: require
+          DB_NAME: ${{ github.event.inputs.db || 'RAG_AI_Agents' }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(sql/rag_ai_agents/*.sql)
+          if [ ${#files[@]} -eq 0 ]; then echo "No migration files found"; exit 1; fi
+          for f in $(printf '%s\n' "${files[@]}" | sort); do
+            echo "----- APPLYING $f -----"
+            psql -h "$PG_HOST" -p 5432 -U "$PG_ADMIN" -d "$DB_NAME" \
+              -v ON_ERROR_STOP=1 --single-transaction -f "$f"
+          done
+          echo "----- MIGRATIONS APPLIED -----"
+
+      - name: Verify memory-store shape
+        env:
+          PGPASSWORD: ${{ secrets.Azure_admin_pw }}
+          PGSSLMODE: require
+          DB_NAME: ${{ github.event.inputs.db || 'RAG_AI_Agents' }}
+        run: |
+          echo "----- MEMORY STORE SHAPE -----"
+          psql -h "$PG_HOST" -p 5432 -U "$PG_ADMIN" -d "$DB_NAME" -v ON_ERROR_STOP=1 -c "
+            SELECT table_name, column_name, data_type
+              FROM information_schema.columns
+             WHERE table_schema='public' AND table_name IN ('rag_chunks','rag_triples')
+             ORDER BY table_name, ordinal_position;"
+          echo "----- OWNER ATTRIBUTION COVERAGE -----"
+          psql -h "$PG_HOST" -p 5432 -U "$PG_ADMIN" -d "$DB_NAME" -v ON_ERROR_STOP=1 -c "
+            SELECT 'rag_chunks' AS t, count(*) AS rows,
+                   count(*) FILTER (WHERE owner_entra_oid IS NOT NULL) AS owned
+              FROM public.rag_chunks;"
+          echo "----- END -----"
+
+      - name: Close temp firewall rule
+        if: always() && env.PG_FW_RULE != ''
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            --resource-group "$RG" --server-name "$PG_SERVER" --name "$PG_FW_RULE" --yes || true

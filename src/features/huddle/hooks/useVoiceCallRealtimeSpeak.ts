@@ -495,6 +495,10 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
                   name, args, agentId: aId, caller: callerFor(),
                   huddleId: `dm-${aId}`,
                   timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                  // Same run id the spoken turns are persisted under (see `persist` above), so the
+                  // tool-telemetry row lands in the SAME ceremony_transcript run — "said it" and
+                  // "did it" reviewable side by side.
+                  runId: callIdRef.current,
                 },
               })
                 .then((r) => {

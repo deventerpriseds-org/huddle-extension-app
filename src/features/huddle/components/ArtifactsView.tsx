@@ -10,6 +10,7 @@ import {
   listArtifactsFn, getArtifactFn, reviewArtifactFn, createArtifactFn, mirrorArtifactFn, deleteArtifactFn,
 } from "../lib/artifacts/artifacts.functions";
 import type { ArtifactRow } from "../lib/artifacts/artifacts.server";
+import { buildSrcDoc, detectPreviewKind, rendersInIframe, sandboxFor } from "../lib/artifacts/preview";
 import { useHuddleStore, useVisibleHuddles } from "../store";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -463,8 +464,10 @@ function ArtifactPreview({
   const k = fileKind(sel.name, sel.mime);
   const g = sel.agent_id ? AGENT_BY_ID[sel.agent_id as AgentId] : undefined;
   const sm = STATUS_META[sel.status];
-  const isImg = sel.mime.startsWith("image/");
-  const isPdf = sel.mime.includes("pdf");
+  // Which renderer this artifact gets (markdown / mermaid / html+d3 / svg / image / pdf / plain
+  // text). Artifact bodies are MODEL-AUTHORED and untrusted, so anything markup-shaped is drawn in
+  // a sandboxed iframe (see preview.ts) — never via dangerouslySetInnerHTML.
+  const kind = detectPreviewKind({ name: sel.name, mime: sel.mime, text, url: sel.url });
   return (
     <div className="flex h-full flex-col">
       <div className="border-b p-4">
@@ -490,10 +493,23 @@ function ArtifactPreview({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {isImg && sel.url ? (
+        {kind === "image" && sel.url ? (
           <img src={sel.url} alt={sel.name} className="max-h-72 w-full rounded-md border object-contain" />
-        ) : isPdf && sel.url ? (
+        ) : kind === "pdf" && sel.url ? (
           <iframe src={sel.url} title={sel.name} className="h-72 w-full rounded-md border" />
+        ) : rendersInIframe(kind) && text != null ? (
+          // SANDBOXED: `allow-scripts` with NO `allow-same-origin` ⇒ opaque origin. Scripts inside
+          // the artifact (d3, mermaid) run, but cannot touch the app's DOM, cookies, storage or
+          // same-origin network. SVG gets sandbox="" (no script at all). Fixed height + the frame's
+          // own scrolling, so artifact content can never resize the app shell.
+          <iframe
+            key={`${sel.id}:${kind}`}
+            title={sel.name}
+            sandbox={sandboxFor(kind)}
+            srcDoc={buildSrcDoc(kind, text)}
+            referrerPolicy="no-referrer"
+            className="h-80 w-full rounded-md border bg-white"
+          />
         ) : text != null ? (
           <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">{text}</pre>
         ) : (

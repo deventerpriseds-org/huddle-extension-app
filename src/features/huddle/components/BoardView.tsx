@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck, X, Plus, PauseCircle, FileText } from "lucide-react";
+import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck, X, Plus, PauseCircle, FileText, AlertTriangle, Check } from "lucide-react";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
+import {
+  getEscalatedApproachTasksFn,
+  overrideApproachFromButtonFn,
+} from "../lib/tasks/confirm-ask.functions";
 import type { BoardTaskRow } from "../lib/tasks/tasks.server";
 import { readBoolPref, writeBoolPref, useHuddleStore } from "../store";
 import { useAuth } from "@/hooks/useAuth";
@@ -86,6 +90,11 @@ export function BoardView() {
   const [tasks, setTasks] = useState<BoardTaskRow[]>([]);
   const [debug, setDebug] = useState<{ login?: string; resolved?: string; mirror?: string } | undefined>();
   const [loading, setLoading] = useState(true);
+  // Task ids whose approach gate is ESCALATED — i.e. stuck waiting on the owner's call. The board is
+  // the durable half of that discovery: the in-thread row only exists in the turn where the escalation
+  // happened, so a task that escalated during an autowork run the owner never opened would otherwise
+  // still be invisible. (Before this, `escalated` reached zero components anywhere in the app.)
+  const [escalated, setEscalated] = useState<Set<string>>(new Set());
   const [groupBy, setGroupBy] = useState<GroupBy>("assignee");
   const [assigneeFilter, setAssigneeFilter] = useState<Set<string>>(new Set());
   const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
@@ -121,6 +130,15 @@ export function BoardView() {
       setDebug(res.debug);
     } catch {
       /* keep prior */
+    }
+    // Which tasks are STUCK waiting on the owner. A separate, independently-failing read on purpose:
+    // engagement state is a different store from the mirror, and a board that renders every card
+    // without chips is far better than a board that renders nothing because one extra read failed.
+    try {
+      const esc = await getEscalatedApproachTasksFn({ data: { caller } });
+      setEscalated(new Set(esc.taskIds));
+    } catch {
+      /* no chips this pass */
     }
     setLoading(false);
   }, [caller]);
@@ -493,6 +511,14 @@ export function BoardView() {
                                   <BoardCard
                                     key={t.id}
                                     task={t}
+                                    escalated={escalated.has(t.id)}
+                                    onOverridden={(id) =>
+                                      setEscalated((prev) => {
+                                        const n = new Set(prev);
+                                        n.delete(id);
+                                        return n;
+                                      })
+                                    }
                                     onDragStart={() => setDragId(t.id)}
                                     onDragEnd={() => setDragId(null)}
                                     onStatus={(id, s) => applyMove(id, { status: s })}
@@ -558,6 +584,14 @@ export function BoardView() {
                             <BoardCard
                               key={t.id}
                               task={t}
+                              escalated={escalated.has(t.id)}
+                              onOverridden={(id) =>
+                                setEscalated((prev) => {
+                                  const n = new Set(prev);
+                                  n.delete(id);
+                                  return n;
+                                })
+                              }
                               fullWidth
                               onMove={applyMove}
                               onStatus={(id, s) => applyMove(id, { status: s })}
@@ -585,6 +619,8 @@ export function BoardView() {
 
 function BoardCard({
   task,
+  escalated,
+  onOverridden,
   onDragStart,
   onDragEnd,
   fullWidth,
@@ -592,6 +628,9 @@ function BoardCard({
   onStatus,
 }: {
   task: BoardTaskRow;
+  /** The approach gate escalated on this task — nobody is working it until the owner decides. */
+  escalated?: boolean;
+  onOverridden?: (id: string) => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
   fullWidth?: boolean;
@@ -617,6 +656,28 @@ function BoardCard({
   };
   const removeTag = (t: string) => onMove?.(task.id, { tags: tags.filter((x) => x !== t) });
   const parked = tags.includes("parking-lot");
+  // The override, model-free and identical to the in-thread row's: same server fn, same ownership
+  // check, same audit record. `onOverridden` clears the chip locally so the card settles immediately
+  // rather than waiting for the next board poll.
+  const { user: boardUser } = useAuth();
+  const [overriding, setOverriding] = useState(false);
+  const approveAnyway = async () => {
+    const caller = boardUser
+      ? { entra_object_id: boardUser.localAccountId ?? boardUser.homeAccountId, entra_email: boardUser.username }
+      : undefined;
+    setOverriding(true);
+    try {
+      const res = await overrideApproachFromButtonFn({ data: { caller, taskId: task.id } });
+      if (res.ok) {
+        onOverridden?.(task.id);
+        if (!res.alreadyDone) toast.success("Approved — the team can run with it");
+      } else {
+        toast.error(res.error ?? "Couldn't approve that.");
+      }
+    } finally {
+      setOverriding(false);
+    }
+  };
   // Current column, for the status pill. Derived from COLUMNS so a column added there (e.g. "Ready
   // for review") shows up in the dropdown automatically — no per-status code here.
   const curColKey = columnKeyFor(task.status);
@@ -693,6 +754,26 @@ function BoardCard({
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+            </div>
+          )}
+          {/* STUCK ON THE OWNER. The board is where they already look for "what needs me", and it is the
+              only surface that still works for a task that escalated during an autowork run nobody was
+              watching — the in-thread row lives only in the turn that raised it. */}
+          {escalated && (
+            <div className="mb-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-1.5 py-1">
+              <div className="flex items-center gap-1 text-[10px] font-semibold text-destructive">
+                <AlertTriangle size={10} className="shrink-0" />
+                Needs your call — approach not approved
+              </div>
+              <button
+                type="button"
+                disabled={overriding}
+                onClick={approveAnyway}
+                className="mt-1 inline-flex items-center gap-1 rounded border border-hairline bg-surface px-1.5 py-0.5 text-[10px] font-semibold text-foreground hover:bg-muted disabled:opacity-60"
+              >
+                {overriding ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} style={{ color: "var(--ai)" }} />}
+                Approve anyway
+              </button>
             </div>
           )}
           <div className={cn("flex items-start gap-1 text-[13px] font-medium leading-snug", onMove && "pr-6")}>

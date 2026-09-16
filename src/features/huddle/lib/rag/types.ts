@@ -37,6 +37,11 @@ export interface WriteChunkInput {
   authorAgentIds?: string[];
   /** Reuse an existing embedding rather than re-embedding `text`. */
   embedding?: number[];
+  /** WHOSE memory this row is: the acting person's stable `identity.profiles.entra_object_id`.
+   *  RESOLVED by the caller (identity.server `resolveObjectIdByEmail`), never guessed, and NULL when
+   *  the acting subject is not in `identity.profile_emails` -- NULL is the honest value and the
+   *  001_memory_owner_attribution migration deliberately has no FK so a write can never throw on it. */
+  ownerEntraOid?: string | null;
 }
 
 export interface WriteTripleInput {
@@ -51,6 +56,8 @@ export interface WriteTripleInput {
   /** "researched" mode only: mark prior triples with the same (scope, subject, predicate) superseded
    *  before inserting this one, so retrieval returns the LATEST value. Legacy modes never set this. */
   supersede?: boolean;
+  /** WHOSE fact this is -- same resolved `entra_object_id` as WriteChunkInput.ownerEntraOid. */
+  ownerEntraOid?: string | null;
 }
 
 export interface SearchChunksInput {

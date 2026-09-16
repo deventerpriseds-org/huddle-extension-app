@@ -56,6 +56,11 @@ ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS tool_name  TEXT;
 ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS tool_args  JSONB;
 ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS tool_ok    BOOLEAN;
 ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS tool_error TEXT;
+-- Tool DURATION (added 2026-09-03, for voice-surface telemetry): how long the tool actually took.
+-- "Which tool ran and did it work" was already answerable; "was it slow" was not, and on a live
+-- voice call latency IS the defect the user feels. Additive, same ADD COLUMN IF NOT EXISTS pattern;
+-- NULL on every pre-existing row and on any caller that does not measure it.
+ALTER TABLE chat.ceremony_transcript ADD COLUMN IF NOT EXISTS tool_ms INT;
 -- Identity unification: key on the stable user_id (entra_object_id) with user_email retained as a
 -- fallback + display. Resolved in-store from the passed email via resolveScopeByEmail, so both of a
 -- user's emails converge to one transcript regardless of which email a caller presents.
@@ -181,6 +186,8 @@ export interface CeremonyToolCallInput {
   ok: boolean;
   error?: string | null;
   summary?: string | null;
+  /** Elapsed ms for the tool call, when the caller measured it. NULL when it did not. */
+  ms?: number | null;
   ts?: number | null; // epoch ms
 }
 
@@ -201,10 +208,10 @@ export async function appendCeremonyToolCall(
     await getPool().query(
       `INSERT INTO chat.ceremony_transcript
          (run_id, huddle_id, user_email, user_id, seq, speaker, agent_id, text, kind, ts,
-          tool_name, tool_args, tool_ok, tool_error)
+          tool_name, tool_args, tool_ok, tool_error, tool_ms)
        SELECT $1, $2, $3, $11,
               COALESCE((SELECT MAX(seq) FROM chat.ceremony_transcript WHERE run_id = $1 AND user_email = $3), 0) + 1,
-              'agent', $4, $5, 'tool', $6, $7, $8, $9, $10`,
+              'agent', $4, $5, 'tool', $6, $7, $8, $9, $10, $12`,
       [
         runId,
         huddleId,
@@ -217,6 +224,7 @@ export async function appendCeremonyToolCall(
         call.ok,
         call.error ?? null,
         userId,
+        call.ms ?? null,
       ],
     );
     return { ok: true };
