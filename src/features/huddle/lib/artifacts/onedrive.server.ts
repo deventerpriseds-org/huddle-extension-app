@@ -48,7 +48,15 @@ export async function uploadArtifactToOneDrive(opts: {
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Graph token error" };
   }
-  const drivePath = `Huddle Artifacts/${opts.lane}/${opts.name}`;
+  // LAST LINE OF DEFENCE, deliberately duplicating the choke-point sanitisation in artifacts.server.
+  // That one fixes what is STORED; this one fixes what is SENT, which also covers rows written before
+  // the folder half was sanitised — an existing row carrying `folder = "../.."` would otherwise still
+  // escape on its next mirror. `encodePath` maps encodeURIComponent over the segments and that does
+  // NOT encode ".", so a surviving ".." reaches Graph intact and walks out of Huddle Artifacts.
+  // Kept here rather than only upstream because this is the outward-facing boundary: it writes to a
+  // real person's drive. See VERIFY-artifact-formats-3.md R2.
+  const { safeArtifactName, safeArtifactFolder } = await import("./artifacts.server");
+  const drivePath = `Huddle Artifacts/${safeArtifactFolder(opts.lane)}/${safeArtifactName(opts.name)}`;
   const rootPrefix = `${GRAPH}/users/${encodeURIComponent(opts.mailbox)}/drive/root:/${encodePath(drivePath)}:`;
   // Small artifacts: one simple PUT. Large ones: a resumable upload session (chunked). Both are
   // path-keyed with replace semantics, so re-mirroring overwrites the same item — never a duplicate.

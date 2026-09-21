@@ -171,6 +171,25 @@ export function safeArtifactName(name: string): string {
   return cleaned.startsWith(".") ? `artifact${cleaned}` : cleaned;
 }
 
+/**
+ * The LANE half of the same traversal fix. `safeArtifactName` closed `{name}` in
+ * `Huddle Artifacts/{lane}/{name}` and left `{lane}` open — and `folder` is just as model-driven as
+ * `name` was, so `create_artifact({folder:"../../../Documents"})` reproduced the identical escape on
+ * a real user's OneDrive. `encodeURIComponent` does not encode ".", so `..` segments survive into the
+ * Graph URL. Found by the independent verifier (VERIFY-artifact-formats-3.md, R2).
+ *
+ * A lane is ONE segment by construction, so this collapses to the last real segment and drops any
+ * `.`/`..`. Falls back to "Personal" — the same default the `artifacts.items` DDL uses — so an
+ * artifact is never stranded in an unaddressable folder.
+ */
+export function safeArtifactFolder(folder: string): string {
+  const raw = String(folder ?? "").replace(/\\/g, "/");
+  const last = raw.split("/").filter((seg) => seg && seg !== "." && seg !== "..").pop() ?? "";
+  const cleaned = last.replace(/[\u0000-\u001f<>:"|?*]/g, "").trim();
+  if (!cleaned || cleaned === "." || cleaned === "..") return "Personal";
+  return cleaned;
+}
+
 /** Give `name` this exact extension, replacing a document extension it already carries rather than
  *  appending to it — "flow.md" + ".mmd" is "flow.mmd", never "flow.md.mmd". Mirrors the rule in
  *  render.server's `ensureExtension`, which cannot be reused here because it keys off a FORMAT it
@@ -214,6 +233,8 @@ export async function createArtifactFromAgent(input: {
   // Sanitise ONCE, at the choke point, so every downstream consumer (blob path, DB row, OneDrive
   // mirror) gets the same safe name. See safeArtifactName — this is the path-traversal fix.
   const safeName = safeArtifactName(input.name);
+  // Same reasoning, the other half of the mirror path — see safeArtifactFolder.
+  const safeFolder = safeArtifactFolder(input.folder);
 
   // FORMATS THE TOOL OFFERS THAT THE RENDERER DOES NOT KNOW.
   // `render.server` handles md | html | docx | pptx and degrades anything else to markdown — correct
@@ -238,7 +259,7 @@ export async function createArtifactFromAgent(input: {
       userEmail: input.userEmail,
       agentId: input.agentId ?? null,
       taskId: input.taskId ?? null,
-      folder: input.folder,
+      folder: safeFolder,
       name: outName,
       mime: passthrough.mime,
       bytes: Buffer.from(body, "utf8"),
@@ -280,7 +301,7 @@ export async function createArtifactFromAgent(input: {
     userEmail: input.userEmail,
     agentId: input.agentId ?? null,
     taskId: input.taskId ?? null,
-    folder: input.folder,
+    folder: safeFolder,
     name: rendered.name,
     mime,
     bytes: rendered.bytes,

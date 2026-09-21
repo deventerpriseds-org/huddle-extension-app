@@ -7136,7 +7136,12 @@ async function runWorkerTurn(record: {
         const a = c.arguments;
         const name = String(a.name ?? "").trim();
         const content = String(a.content ?? "");
-        if (!name || !content)
+        // Accept a structured `document` with no `content` — CREATE_ARTIFACT_TOOL's `required` is
+        // ["name"] and its `document` description says "Supply the structure instead of `content`",
+        // so the old `!content` guard made the schema lie to the worker: a worker that followed its
+        // own tool description into a slide layout was rejected outright. Matches the OpenAI and
+        // Lovable guards; found by the independent verifier (VERIFY-artifact-formats-3.md, R1).
+        if (!name || (!content && !a.document))
           return JSON.stringify({ ok: false, error: "name and content are required" });
         if (artifactId) return JSON.stringify({ ok: true, deduped: true, id: artifactId });
         if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
