@@ -32,7 +32,10 @@
     "test:color-mix": "bun scripts/no-achromatic-color-mix.test.ts",
     "test:widget-band-color": "bun scripts/widget-band-color.test.ts",
     "test:widget-topics": "bun scripts/widget-topic-tree.test.ts",
-    "test:viewport-height": "bun scripts/app-viewport-height.test.ts"
+    "test:viewport-height": "bun scripts/app-viewport-height.test.ts",
+    "test:artifact-preview": "bun scripts/artifact-preview.test.ts",
+    "test:artifact-render": "bun scripts/artifact-render.test.ts",
+    "test:artifact-format": "bun scripts/artifact-format-dispatch.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
@@ -77,11 +80,13 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
+    "docx": "^9.7.1",
     "embla-carousel-react": "^8.6.0",
     "input-otp": "^1.4.2",
     "jose": "^6.2.3",
     "lucide-react": "^0.575.0",
     "pg": "^8.22.0",
+    "pptxgenjs": "^4.0.1",
     "react": "^19.2.0",
     "react-day-picker": "^9.14.0",
     "react-dom": "^19.2.0",

@@ -317,3 +317,73 @@ green count. One read-only `execute_sql` against the source table costs one comm
 **Second rule, from defect 2:** *before porting a UI, find which REF is actually live.* `origin/main` is
 not it by default — journey's Priorities view runs an unmerged branch, and journey's clone has a
 truncated history, so `git log origin/main` there cannot prove anything was never shipped.
+
+## 2026-09-13 — FOUR corrections on the artifact-format work, ALL found by an independent verifier
+`docs/VERIFY-artifact-formats-2.md` — **8 CONFIRMED, 2 REFUTED**. Every one of these got past the
+implementing lanes' own suites (52 + 28 + 21 green assertions) and past me. Fixed in `b043afb`,
+deployed. Logged separately because each earns its own guard; the class is at the end.
+
+### (1) "All four dispatch sites are rewired" — I VERIFIED THE WIRING AND CALLED IT THE CAPABILITY
+| | |
+|---|---|
+| **Claim** | Reported to the owner: four dispatch sites rewired to `createArtifactFromAgent`, so `format` works everywhere. |
+| **Ground truth** | The *call sites* were all rewired. But **two of the four declare their own tool schema and neither had `format`.** Lovable (`huddle.functions.ts` ~4829) borrowed `CREATE_ARTIFACT_TOOL.description` — the text reading *"YOU ARE NOT LIMITED TO MARKDOWN: set `format` to 'docx'"* — while its zod `inputSchema` silently STRIPPED the field. Voice (`realtime-tools.server.ts` ~287) had `additionalProperties: false` with no `format`, so the model could not emit one even in principle. **The owner's original bug was still live on two of four paths after I reported it fixed.** |
+| **Single source** | The `inputSchema` / `parameters` block at each dispatch site — not the `createArtifact(` grep I actually ran. |
+| **Root-cause pattern** | Checked the PROXY (does the call site call the new function?) instead of the GROUND TRUTH (can the model emit the field?). The same "answered from a proxy" shape as every other entry in this log, applied to a tool schema. A borrowed description is worse than none: it promises a field the schema removes. |
+| **Guard** | `artifact-format-dispatch.test.ts` + an in-file rule at both sites: *if you add a field to `CREATE_ARTIFACT_TOOL`, add it here or this path quietly lies.* **Still prose at the two sites** — the real structural fix is for every path to derive its schema FROM `CREATE_ARTIFACT_TOOL` instead of hand-writing one. Not built; recorded as the open item, not as mitigated. |
+
+### (2) PATH TRAVERSAL reaching the user's real OneDrive
+| | |
+|---|---|
+| **Claim** | Implicit: artifact names are safe because `slug()` sanitises. |
+| **Ground truth** | `slug()` protects the **blob path** only. Nothing sanitised `artifacts.items.name`, and `onedrive.server.ts:21` encodes per segment with `encodeURIComponent`, **which does not encode `.`** — so a name of `../../etc/passwd` escaped the "Huddle Artifacts" folder on a real user's drive. Model-authored, outward-facing. |
+| **Single source** | `onedrive.server.ts:21` — reading how the upload path is actually built, rather than assuming the blob-path sanitiser covered every consumer. |
+| **Root-cause pattern** | Assumed one sanitiser at one layer covered every downstream consumer of the same value. Two consumers, one guarded. |
+| **Guard** | `safeArtifactName()` applied ONCE at the choke point so blob path, DB row and mirror all receive the same value. Six traversal payloads asserted, plus an assertion that it does NOT eat legitimate dots/digits/spaces. **Mutation-proved FIRED.** |
+
+### (3) The mime override lied in the direction I did not think of
+| | |
+|---|---|
+| **Claim** | "An explicit `mime` cannot make an artifact misrepresent itself." |
+| **Ground truth** | The guard tested `rendered.mime`, which blocks a real `.docx` labelled `text/markdown` — and left the reverse wide open. `{format:"md", mime:"…wordprocessingml.document"}` stored three bytes of markdown (`23 20 52`, not a ZIP's `50 4b 03 04`) under the Word mime: `report.docx` downloads and Word refuses to open it. |
+| **Single source** | Running the guard against BOTH orderings. I only ever ran the one I had in mind. |
+| **Root-cause pattern** | **A one-sided guard on a two-sided problem.** I tested the failure I imagined, then stopped. Same family as the invented 60° hue floor earlier today: an assertion written from the hypothesis rather than from the space of inputs. |
+| **Guard** | Both sides must be non-package types. All three directions asserted, including that the legitimate text→text escape hatch still works. |
+
+### (4) `" DOCX "` degraded silently to markdown
+| | |
+|---|---|
+| **Claim** | `format` matching handles what the model sends. |
+| **Ground truth** | Only exact lowercase matched; stray casing or whitespace fell through to the markdown default with no warning. |
+| **Single source** | Calling it with `" DOCX "`. |
+| **Root-cause pattern** | Trusted model output to be normalised. Model output is never normalised. |
+| **Guard** | `.trim().toLowerCase()` at the choke point, asserted. |
+
+### Caught by me, not the verifier — and it nearly broke every filename
+The control-character class landed in source as **literal NUL and 0x1F bytes** rather than ` `/``
+escapes. Functionally the same range, so it worked — but raw control bytes in source get mangled
+silently by diffs and editors, and had they been re-read as the printable range `space`→`<` the class
+would have stripped **dots and digits out of every filename**. Found by reading `od -c` of the line
+after the file-change notice rendered it as `[ -<>:"|?*]`. **Rule: when a rendered line disagrees with
+what you wrote, check the bytes, not the render.** File now asserted to contain zero raw control bytes.
+
+### The CLASS, and the one structural change it actually earns
+Three of these four are the same error: **I verified the thing I could see from where I was standing.**
+The call site, not the schema. The one mime direction I imagined, not both. Exact-match format, not the
+input space. The implementing lanes' suites were green on all of it, because each lane tested its own
+half and nothing tested the SEAM.
+
+**What genuinely mitigates this is not another assertion — it is that an independent pass ran at all.**
+Loop 2 found four defects that 101 green assertions did not, and it found them in under 30 minutes by
+reading the code cold and trying to break it. The structural conclusion: for work assembled from
+parallel lanes, an independent cross-lane verification is not ceremony, it is the only thing that
+looks at the joins. **A single lane cannot verify a seam it is one side of.**
+
+### Process note, honestly stated
+Loop 2's brief was declared as `loop: 1`. Loop 1 had run the identical brief and been killed before
+its first push, leaving zero durable evidence — so I mis-numbered the re-run as a first pass. Corrected
+mid-run by message (the artifact is `VERIFY-artifact-formats-2.md` with a truthful empty PRIOR STATE),
+but the declared brief text was already wrong. **The next verification of `artifact-formats` is loop 3.**
+Related: I also reported loop 1's C3 as "banked" when it had never been pushed — a partial result read
+off an agent's status line and treated as durable evidence, which is precisely what the per-claim push
+rule exists to prevent.

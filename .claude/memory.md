@@ -1,5 +1,15 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
+Last updated: 2026-09-21 (PR triage pass, 4 open PRs: merged #39 — docs-only spec research,
+re-verified its two load-bearing technical claims against live code before merging (see
+ACT:pr-triage-2026-09-21 in actions.md). Its finding worth carrying: `eds-claude-skills/CLAUDE.md`'s
+"Realtime AS EAR ONLY (Huddle `useVoiceCallRealtime`)" line is STALE — Huddle's current default 1:1
+voice path runs Realtime AS BRAIN (`create_response:true`, `voice/realtime.functions.ts:115`), not
+ears-only; `MeetingBar.tsx`'s `VOICE_1ON1_BACKEND` is hardcoded `"openai"` with no reassignment
+site, so ElevenLabs ConvAI is unreachable dead code in Huddle specifically (not a claim about ConvAI
+elsewhere). Closed #11, #62 as superseded (content already live on main a different way). Left #14
+(agent knowledge library) OPEN — this repo's own memory already ruled it a distinct capability from
+ACT-61's memory-intake system, not for merging as-is nor closing; still needs the user's call.)
+Previous: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
 Previous: 2026-09-08 — **the assignment-widget spec's action registry is BUILT in nexus** (see
 `docs/specs/assignment-widget.md` §5.2b, huddle PR #53): the spec PROPOSED
 `nexus-hub/api/src/shared/assignmentActions.ts` and nexus-hub PR #87 built it there, closing the
@@ -1510,6 +1520,9 @@ never clutters the user's task board. TanStack Start + React 19 + Vite + Nitro �
 ## Feature status
 | Feature | Status | Notes |
 |---|---|---|
+| Artifact formats (docx/pptx/mermaid/html/svg) | **deployed `b043afb`, independently verified, NOT user-confirmed** | Verifier loop 2 (`docs/VERIFY-artifact-formats-2.md`) = **8 CONFIRMED, 2 REFUTED**; all four findings fixed in `b043afb`. Office packages proven genuinely openable (`testzip()` clean, well-formed XML). Sandbox held under ten escape attempts in real Chromium. **Open:** no one has asked an agent for a Word doc / deck / diagram on the live app. **Next verification of `artifact-formats` is LOOP 3.** |
+| Phone shell: `--app-h` height + `app-locked` document | deployed `725e8ff` / `c6299cc`, **NOT user-confirmed** | Two separate defects (keyboard pushes nav below the fold; swipe drags the whole app). Playwright loop 1 = 5 CONFIRMED / 1 NOT PROVEN, but `Emulation.setVisibleSize` is inert in that Chromium so the real layout-tall/visual-short state was never reproduced. **Mechanism only — the owner's Samsung Internet is the verdict.** |
+| eds-skills PR #83 (`prototype-in-app-skin`, `ship-ui-that-belongs`) | **merged 2026-09-21** | Was an open owner action; closed. Session auto-unsubscribed from the PR. |
 | 1:1 capability defer (grooming→Terry) | done (verified live) | Iris defers by NAME, no @, no task — harness observed |
 | ACT-huddle-3: intent-classification false-positive fix | deployed (PR #20), AC-12 awaiting live user confirmation | `classifyTurnIntent(text):TurnIntent` in `capabilities.ts` — trait-driven, zero per-capability config — gates both `laneDirective` and the back-channel (`capabilityOwnerFor`/`laneOwnerFor`) via `turnIntent === "perform"` checks in `runAgentTurn`. `TURN_INTENT_CLASSIFICATION` feature flag for instant rollback. 14/15 ACs pass statically (verifier confirmed); AC-12 (Iris handles "Mark that done" without deferring) requires live LLM turn to confirm. |
 | 1:1 domain lane handoff (budget→Finn) | done (verified live) | `laneOwnerFor`; AC-1/2/3 PASS observed |
@@ -1572,7 +1585,47 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+**ARTIFACTS ARE NOT MARKDOWN-ONLY — `create_artifact` takes a `format` (2026-09-13).**
+Owner: *"why is it saying we are limited to .md when full document, mermaid, d3 abilities etc were
+early requirements for the artifact library?"* The agent was right about its own contract: four of
+the five fields said markdown. **The STORE was never the limit** — `artifacts.items.mime` is free
+text and the blob takes arbitrary bytes, so a mermaid or HTML artifact was always storable.
+
+- **`createArtifactFromAgent()` (artifacts.server.ts) is THE ONE PATH** from a tool call to a stored
+  artifact. Four sites used to call `createArtifact` directly with `Buffer.from(content,"utf8")` and
+  `mime ?? "text/markdown"` hardcoded — huddle.functions.ts ×3 plus voice/realtime-tools.server.ts.
+  **Add a format HERE, never at a call site**; four copies is how voice silently keeps emitting
+  markdown while text does not.
+- `format`: `md | docx | pptx | html | mermaid | svg`. docx/pptx go through `render.server.ts`
+  (markdown in, real Office package out; `#` or `---` starts a new slide). **mermaid and svg are
+  PASSTHROUGH and resolved in the dispatch layer, not the renderer** — the renderer knows only
+  md|html|docx|pptx and degrades everything else to markdown, which silently produced `name.md` for
+  both until an end-to-end run caught it.
+- **`render.server.ts`'s `ensureExtension(name, FORMAT)` takes a FORMAT, not an extension** — it
+  looks up its own `EXTENSION_BY_FORMAT`. Passing `".mmd"` yields `name + undefined`. Use
+  `withExtension(name, ext)` in artifacts.server.ts for tool-vocabulary extensions.
+- **Viewer renders mermaid/HTML/D3/SVG in a SANDBOXED iframe: `allow-scripts` with NO
+  `allow-same-origin`.** Adding `allow-same-origin` alongside `allow-scripts` disables the sandbox
+  entirely — artifact content is model-authored and untrusted. SVG gets `sandbox=""` (no scripts at
+  all) because an SVG can carry `<script>`/`onerror`.
+- `TEXT_PREVIEW_MIME` (artifacts.server.ts) gates whether bytes come back for preview at all. **The
+  viewer cannot render what the server never sends** — SVG was excluded and silently fell through to
+  the raster `<img>` path.
+- **No CSP exists in this repo**, so the pinned mermaid/d3 CDN tags load. A `srcdoc` iframe inherits
+  the embedder's CSP, so one added at the Azure layer later needs `script-src https://cdn.jsdelivr.net`
+  or diagrams stop drawing with no error.
+- Guards: `test:artifact-render` (52), `test:artifact-preview` (28), `test:artifact-format` (21 — the
+  SEAM between the tool's enum and the renderer's).
+
 **THE APP SHELL IS SIZED BY `--app-h`, NOT `h-dvh` — `dvh` DOES NOT SHRINK FOR THE KEYBOARD (2026-09-13).**
+**AND THE DOCUMENT IS LOCKED (`app-locked` on html+body) SO IT CANNOT BE DRAGGED.** Two separate
+defects, both owner-reported, both required. The second only became visible after the first was
+fixed: while the shell was `100dvh` it filled the layout viewport, so a pan still showed app content;
+once the shell became the VISUAL height it occupies only the top of a still-tall layout viewport and
+the pan reveals white. `position: fixed` is the load-bearing declaration — a mobile browser will
+still slide an `overflow:hidden` body without it. The lock is scoped to the shell's lifetime because
+`/auth` and the error routes use `min-h-screen` and need real page scrolling.
+
 Owner, on his phone: *"why isn't the bottom [dock] staying at the bottom of my device instead of being
 able to be scrolled up?"* Screenshot: the nav bar floated to ~45% of screen height, a blank strip
 beneath it, keyboard below that.
@@ -3377,3 +3430,25 @@ source. That one is viewer-side only. Do not "fix" it in the model layer.
 Tracked as `ACT:artifact-rich-formats`; PR #62. Built-in tools bill per session — gate them the way
 `emailTools` / `webSearchTools` / `nexusTools` are already conditionally spread into `mergedTools`,
 not unconditionally per turn.
+## Artifact preview renders markup — in a sandboxed frame, never in the app document (2026-09-13)
+
+- **`lib/artifacts/preview.ts` owns the choice of renderer**, and it is PURE — `detectPreviewKind`
+  (mime + extension + content) → `markdown | mermaid | html | svg | image | pdf | text | none`,
+  `sandboxFor(kind)`, `buildSrcDoc(kind, content)`. `ArtifactsView.tsx` stays thin and just consumes
+  them, so the logic is testable without a browser (`npm run test:artifact-preview`).
+- **The sandbox string is the whole security boundary.** `allow-scripts` WITHOUT `allow-same-origin`
+  = opaque origin; the two together would disable the sandbox entirely. SVG gets `sandbox=""`. Three
+  mutation proofs FIRED on exactly these lines, including one that widens the sandbox — if a future
+  edit reintroduces `allow-same-origin` or `dangerouslySetInnerHTML` on a CODE line of either file,
+  the suite fails. (The guards strip COMMENT lines first, because both files discuss those keywords.)
+- **A markdown artifact containing a ```mermaid fence renders the diagram** — the fence is extracted,
+  the surrounding prose rides along HTML-escaped. Plain markdown is untouched: still the `<pre>`.
+- **There is NO Content-Security-Policy anywhere in this repo** — no `staticwebapp.config.json`, no
+  `http-equiv` in `src/`, and the built `.output/public/_headers` carries only cache-control. So the
+  pinned CDN `<script>` tags inside the srcdoc are not blocked by app config. This matters because a
+  `srcdoc` frame INHERITS the embedding document's CSP: the day a CSP is added, mermaid/d3 need
+  `script-src https://cdn.jsdelivr.net` or the diagrams silently stop drawing.
+- **`TEXT_PREVIEW_MIME` (artifacts.server.ts:183) is the upstream gate and it is narrower than the
+  viewer.** `text/html` and `text/vnd.mermaid` pass it; **`image/svg+xml` does not**, so an SVG
+  artifact reaches the client with `text: null` and can only degrade to the `<img>` path. The viewer
+  cannot render what the server never sends.

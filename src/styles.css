@@ -222,6 +222,36 @@
   }
 }
 
+/* THE DOCUMENT MUST NOT PAN. Applied to <html> and <body> only while the app shell is mounted
+ * (useAppViewportHeight adds/removes it), so `/auth` and the error routes keep normal page
+ * scrolling — they use `min-h-screen` and genuinely need it.
+ *
+ * WHY, owner-reported 2026-09-13: "if I swipe up on the button row at the bottom the entire app
+ * slides up leaving white space still." The bottom nav is the one region that is NOT its own
+ * scroll container, so a drag there CHAINS to the document — and nothing constrained the document.
+ * html/body carried no height, no overflow and no overscroll-behavior at all.
+ *
+ * SIZING THE SHELL DID NOT FIX THIS, AND MADE IT EASIER TO SEE. While the shell was `100dvh` it
+ * filled the layout viewport, so a pan still showed app content. Once the shell became the VISUAL
+ * height (--app-h, correctly), it occupies only the top of a still-tall layout viewport and the
+ * pan reveals the page beneath. Both changes are needed; neither alone is enough.
+ *
+ * Each declaration does a DIFFERENT job — do not trim one as redundant:
+ *   position: fixed   the document cannot be panned at all. The single load-bearing line; mobile
+ *                     browsers will still slide an `overflow:hidden` body without it.
+ *   overflow: hidden  no scrollable overflow to drag in the first place.
+ *   overscroll-behavior: none   kills scroll-chaining and the pull-to-refresh/bounce glow, which
+ *                     are a separate mechanism from scrolling and survive `overflow:hidden`.
+ *   height/width 100% + inset 0   a fixed body collapses without an explicit box. */
+@utility app-locked {
+  position: fixed;
+  inset: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 @utility hair {
   box-shadow: inset 0 0 0 1px var(--hairline);
 }

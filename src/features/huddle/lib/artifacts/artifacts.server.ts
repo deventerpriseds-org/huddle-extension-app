@@ -149,6 +149,145 @@ export async function createArtifact(input: CreateArtifactInput): Promise<{ id: 
   return { id, deepLink: `/artifacts/${id}` };
 }
 
+/**
+ * Strip any path out of a model-supplied artifact name, leaving a bare filename.
+ *
+ * THIS IS A PATH-TRAVERSAL FIX, NOT TIDYING. `slug()` protected the BLOB path but nothing sanitised
+ * `artifacts.items.name`, and the OneDrive mirror builds its upload path from that name with
+ * `encodeURIComponent` per segment — which does NOT encode `.` — so a name of `../../etc/passwd`
+ * escaped the "Huddle Artifacts" folder on mirror. Outward-facing, on a real user's drive, driven by
+ * model output. Found by the verifier (onedrive.server.ts:21).
+ *
+ * Keeps only the last path segment, drops `..`, and refuses a name that is nothing but an extension
+ * (".docx" → "artifact.docx") so the file is always addressable.
+ */
+export function safeArtifactName(name: string): string {
+  const raw = String(name ?? "").replace(/\\/g, "/");
+  const last = raw.split("/").filter((seg) => seg && seg !== "." && seg !== "..").pop() ?? "";
+  // Control characters and the characters Windows/OneDrive reject outright.
+  const cleaned = last.replace(/[\u0000-\u001f<>:"|?*]/g, "").trim();
+  if (!cleaned || cleaned === "." || cleaned === "..") return "artifact";
+  // A bare extension (".docx") has no stem to address — give it one.
+  return cleaned.startsWith(".") ? `artifact${cleaned}` : cleaned;
+}
+
+/** Give `name` this exact extension, replacing a document extension it already carries rather than
+ *  appending to it — "flow.md" + ".mmd" is "flow.mmd", never "flow.md.mmd". Mirrors the rule in
+ *  render.server's `ensureExtension`, which cannot be reused here because it keys off a FORMAT it
+ *  knows and these two extensions belong to the tool's vocabulary instead. */
+export function withExtension(name: string, ext: string): string {
+  const base = String(name ?? "").trim() || "artifact";
+  if (base.toLowerCase().endsWith(ext)) return base;
+  const replaceable = [".md", ".markdown", ".txt", ".html", ".htm", ".docx", ".pptx", ".mmd", ".svg"];
+  for (const r of replaceable) {
+    if (base.toLowerCase().endsWith(r)) return base.slice(0, base.length - r.length) + ext;
+  }
+  return base + ext;
+}
+
+/**
+ * THE ONE PLACE a `create_artifact` tool call becomes a stored artifact.
+ *
+ * WHY THIS EXISTS RATHER THAN FOUR COPIES: the same six lines were repeated at four dispatch sites
+ * (huddle.functions.ts x3 — the OpenAI path, the Lovable path and the durable-turn path — plus
+ * voice/realtime-tools.server.ts), each hardcoding `Buffer.from(content, "utf8")` and
+ * `mime ?? "text/markdown"`. Adding Word/PowerPoint by editing all four is how one path silently
+ * keeps producing markdown forever. Every site now calls THIS, so a new format is one edit.
+ *
+ * Renders first (`format` decides), then stores. `renderArtifact` never throws: a malformed
+ * structure or unparseable markdown degrades to a valid document carrying the raw text plus a
+ * warning, so an agent's mistake costs fidelity, never the user's work.
+ */
+export async function createArtifactFromAgent(input: {
+  userEmail: string;
+  agentId?: string | null;
+  taskId?: string | null;
+  folder: string;
+  name: string;
+  /** Raw tool arguments, unvalidated — this is model output. */
+  args: { format?: unknown; content?: unknown; document?: unknown; mime?: unknown };
+}): Promise<{ id: string; deepLink: string; name: string; mime: string; warnings: string[] }> {
+  const { renderArtifact } = await import("./render.server");
+  const a = input.args;
+  // Trim whitespace and casing before matching: the verifier landed `" DOCX "` here.
+  const format = typeof a.format === "string" ? a.format.trim().toLowerCase() : "md";
+  // Sanitise ONCE, at the choke point, so every downstream consumer (blob path, DB row, OneDrive
+  // mirror) gets the same safe name. See safeArtifactName — this is the path-traversal fix.
+  const safeName = safeArtifactName(input.name);
+
+  // FORMATS THE TOOL OFFERS THAT THE RENDERER DOES NOT KNOW.
+  // `render.server` handles md | html | docx | pptx and degrades anything else to markdown — correct
+  // for it, wrong here: `create_artifact` also offers `mermaid` and `svg`, and an end-to-end check
+  // caught both arriving as `name.md` + text/markdown, which the viewer can never render as a
+  // diagram or a vector. They are PASSTHROUGH TEXT like html, so they need no renderer — only the
+  // right extension and mime, which is a dispatch concern, not a rendering one. Keeping this at the
+  // boundary is also what stops the renderer growing a case per tool vocabulary word.
+  const PASSTHROUGH: Record<string, { ext: string; mime: string }> = {
+    mermaid: { ext: ".mmd", mime: "text/vnd.mermaid; charset=utf-8" },
+    svg: { ext: ".svg", mime: "image/svg+xml; charset=utf-8" },
+  };
+  const passthrough = PASSTHROUGH[format];
+  if (passthrough) {
+    const body = typeof a.content === "string" ? a.content : "";
+    // NOT render.server's `ensureExtension` — that takes a FORMAT and looks it up in its own
+    // EXTENSION_BY_FORMAT, which has no entry for mermaid or svg, so it returned `name + undefined`
+    // ("security-optionsundefined"). Caught by the dispatch suite the moment it was written. These
+    // two extensions belong to the TOOL's vocabulary, not the renderer's, so they are resolved here.
+    const outName = withExtension(safeName, passthrough.ext);
+    const { id, deepLink } = await createArtifact({
+      userEmail: input.userEmail,
+      agentId: input.agentId ?? null,
+      taskId: input.taskId ?? null,
+      folder: input.folder,
+      name: outName,
+      mime: passthrough.mime,
+      bytes: Buffer.from(body, "utf8"),
+    });
+    return {
+      id,
+      deepLink,
+      name: outName,
+      mime: passthrough.mime,
+      warnings: body.trim() ? [] : [`Empty ${format} content — the artifact will render blank.`],
+    };
+  }
+
+  const rendered = await renderArtifact({
+    format,
+    content: typeof a.content === "string" ? a.content : undefined,
+    document: a.document,
+    name: safeName,
+  });
+
+  // An explicit `mime` is the documented escape hatch for a type `format` does not cover — but it
+  // must never make an artifact LIE ABOUT ITSELF, in either direction.
+  //
+  // The first version of this guard only checked the direction I had thought of: it tested
+  // `rendered.mime` to stop a real docx being labelled text/markdown (that works). The verifier
+  // found the REVERSE wide open — `{format:"md", mime:"…wordprocessingml.document"}` stored three
+  // bytes of markdown (`23 20 52`, not the `50 4b 03 04` of a ZIP) under the Word mime, so the user
+  // downloads "report.docx" and Word refuses to open it. A one-sided guard on a two-sided problem.
+  //
+  // So: an override is honoured only when BOTH sides are non-package types. Claiming to be an Office
+  // document is reserved for bytes that actually are one.
+  const rawMime = typeof a.mime === "string" && a.mime.trim() ? a.mime.trim() : null;
+  const isPackageMime = (m: string) =>
+    /officedocument|application\/zip|application\/pdf|^application\/octet-stream/i.test(m);
+  const mime =
+    rawMime && !isPackageMime(rendered.mime) && !isPackageMime(rawMime) ? rawMime : rendered.mime;
+
+  const { id, deepLink } = await createArtifact({
+    userEmail: input.userEmail,
+    agentId: input.agentId ?? null,
+    taskId: input.taskId ?? null,
+    folder: input.folder,
+    name: rendered.name,
+    mime,
+    bytes: rendered.bytes,
+  });
+  return { id, deepLink, name: rendered.name, mime, warnings: rendered.warnings ?? [] };
+}
+
 export interface ArtifactFilters {
   folder?: string;
   status?: ArtifactStatus;
@@ -180,7 +319,20 @@ export async function listArtifacts(userEmail: string, f: ArtifactFilters = {}):
 }
 
 // Mime families the preview pane renders as text. Kept in sync with ArtifactsView.tsx's preview branch.
-const TEXT_PREVIEW_MIME = /^(text\/|application\/json|application\/csv)/;
+/** Which mimes get their BYTES returned for in-app preview.
+ *
+ *  THE VIEWER CANNOT RENDER WHAT THE SERVER NEVER SENDS. `text/html` and `text/vnd.mermaid` already
+ *  passed on `^text/`, so those render; **`image/svg+xml` did not**, so an SVG artifact came back
+ *  with `text: null` and fell through to the raster `<img>` path instead of the sandboxed frame.
+ *  Same for a mermaid file stored under a non-`text/` mime. Found by the viewer lane, which could
+ *  not fix it — it owns the component, this file is the gate.
+ *
+ *  DELIBERATELY NOT `/^image\//` — that would start streaming PNG and JPEG bytes through the text
+ *  preview path for no reason. SVG is here because it is TEXT that happens to carry an image mime,
+ *  which is exactly why it slipped through the original `^text/` rule.
+ *  `TEXT_PREVIEW_MAX_BYTES` still caps every one of these. */
+const TEXT_PREVIEW_MIME =
+  /^(text\/|application\/json|application\/csv|image\/svg\+xml|application\/vnd\.mermaid|application\/xhtml\+xml)/;
 // Above this, skip the server-side text read (still get a working download link) — a preview pane
 // isn't the place to pull multi-MB files into memory on every open.
 const TEXT_PREVIEW_MAX_BYTES = 2_000_000;

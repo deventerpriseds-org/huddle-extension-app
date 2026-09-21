@@ -3615,8 +3615,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             const name = String(a.name ?? "").trim();
             const content = String(a.content ?? "");
             const taskIdRaw = a.task_id ? String(a.task_id) : "";
-            if (!name || !content)
-              return JSON.stringify({ ok: false, error: "name and content are required" });
+            // `content` is no longer unconditionally required: a structured `document` (a deck with
+            // real slide layout) can stand alone. Requiring both rejected every structured call.
+            if (!name || (!content && !a.document))
+              return JSON.stringify({ ok: false, error: "name plus content or document are required" });
             // Include the task's current revision_count in the dedup key so a revise-and-resave
             // (same task+name, after the review gate below sends it back) isn't blocked as "already
             // saved this turn" — only a TRUE repeat at the same revision is deduped.
@@ -3644,15 +3646,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
-              const { createArtifact } = await import("./artifacts/artifacts.server");
-              const { id, deepLink } = await createArtifact({
+              // ONE renderer for every dispatch path — see createArtifactFromAgent. `format` decides
+              // whether this becomes markdown, a real .docx/.pptx, a mermaid diagram or a D3 page.
+              const { createArtifactFromAgent } = await import("./artifacts/artifacts.server");
+              const { id, deepLink } = await createArtifactFromAgent({
                 userEmail: email,
                 agentId: winner.id,
                 taskId: taskIdRaw || null,
                 folder: String(a.folder ?? "Research"),
                 name,
-                mime: String(a.mime ?? "text/markdown"),
-                bytes: Buffer.from(content, "utf8"),
+                args: { format: a.format, content, document: a.document, mime: a.mime },
               });
               let reviewSuffix = "";
               let review:
@@ -4934,9 +4937,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // create_artifact — save the agent's own finished work as a reviewable artifact (mirrors OpenAI path).
         lovableTools.create_artifact = tool({
           description: CREATE_ARTIFACT_TOOL.description,
+          // `format`/`document` MUST be here even though this schema is hand-written. It borrows
+          // CREATE_ARTIFACT_TOOL.description above — the text that says "YOU ARE NOT LIMITED TO
+          // MARKDOWN: set `format` to 'docx'" — so a schema without the field promised a capability
+          // and then STRIPPED it: zod drops unknown keys silently, so the model emitted `format`
+          // and `.parse()` returned an object without it. Proven by the verifier, not assumed.
+          // If you add a field to CREATE_ARTIFACT_TOOL, add it here too or this path quietly lies.
           inputSchema: z.object({
             name: z.string(),
-            content: z.string(),
+            content: z.string().optional(),
+            format: z.string().optional(),
+            document: z.unknown().optional(),
             folder: z.string().optional(),
             task_id: z.string().optional(),
             mime: z.string().optional(),
@@ -4946,8 +4957,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             const name = String(a.name ?? "").trim();
             const content = String(a.content ?? "");
             const taskIdRaw = a.task_id ? String(a.task_id) : "";
-            if (!name || !content)
-              return JSON.stringify({ ok: false, error: "name and content are required" });
+            // `content` is no longer unconditionally required: a structured `document` (a deck with
+            // real slide layout) can stand alone. Requiring both rejected every structured call.
+            if (!name || (!content && !a.document))
+              return JSON.stringify({ ok: false, error: "name plus content or document are required" });
             let revisionCountForClaim = 0;
             if (taskIdRaw) {
               try {
@@ -4972,15 +4985,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
-              const { createArtifact } = await import("./artifacts/artifacts.server");
-              const { id, deepLink } = await createArtifact({
+              // ONE renderer for every dispatch path — see createArtifactFromAgent. `format` decides
+              // whether this becomes markdown, a real .docx/.pptx, a mermaid diagram or a D3 page.
+              const { createArtifactFromAgent } = await import("./artifacts/artifacts.server");
+              const { id, deepLink } = await createArtifactFromAgent({
                 userEmail: email,
                 agentId: winner.id,
                 taskId: taskIdRaw || null,
                 folder: String(a.folder ?? "Research"),
                 name,
-                mime: String(a.mime ?? "text/markdown"),
-                bytes: Buffer.from(content, "utf8"),
+                args: { format: a.format, content, document: a.document, mime: a.mime },
               });
               let reviewSuffix = "";
               let review:
@@ -7127,15 +7141,14 @@ async function runWorkerTurn(record: {
         if (artifactId) return JSON.stringify({ ok: true, deduped: true, id: artifactId });
         if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
         try {
-          const { createArtifact } = await import("./artifacts/artifacts.server");
-          const { id, deepLink } = await createArtifact({
+          const { createArtifactFromAgent } = await import("./artifacts/artifacts.server");
+          const { id, deepLink } = await createArtifactFromAgent({
             userEmail: email,
             agentId: w.personaId ?? null, // attribute to the accountable persona
             taskId: a.task_id ? String(a.task_id) : null,
             folder: String(a.folder ?? worker.role),
             name,
-            mime: String(a.mime ?? "text/markdown"),
-            bytes: Buffer.from(content, "utf8"),
+            args: { format: a.format, content, document: a.document, mime: a.mime },
           });
           artifactId = id;
           artifactName = name;
