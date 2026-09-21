@@ -431,3 +431,35 @@ Suggested: disambiguate the mirror path with the artifact id (as the blob path a
 **R13 VERDICT: two robustness defects found (no length cap; a new sanitisation-induced collision on
 the path-keyed OneDrive mirror), no safety defect.** I could not make `safeArtifactName` emit a path
 separator or a `..` segment on any of the 36 inputs tried.
+
+---
+
+## Summary
+
+| # | claim | verdict |
+|---|---|---|
+| R1 | C4 — `format` reaches all four dispatch schemas | **REFUTED (partial)** — `format` reachable on all four (the loop-2 finding IS closed), but the `!content` guard was relaxed at only 2 of 4; the **worker** site's schema and handler now contradict each other |
+| R2 | C9a — traversal neutralised on every path to a filename | **REFUTED** — `safeArtifactName` is sound and correctly at the choke point, but `folder` reaches `Huddle Artifacts/{lane}/{name}` unsanitised and reopens the identical OneDrive escape |
+| R3 | C9b — mime cannot misrepresent bytes in either direction | **CONFIRMED** — all four quadrants honest |
+| R4 | C9c — `format` casing/whitespace resolves | **CONFIRMED** — `" DOCX "`/`"PPTX"`/`"MerMaid"` all resolve; md default unchanged |
+| R5 | C1 tool advertises six formats | **CONFIRMED** |
+| R6 | C2 each format produces the promised artifact | **CONFIRMED** |
+| R7 | C3 docx/pptx are real Office packages | **CONFIRMED** — `[Content_Types].xml` in both |
+| R8 | C5 sandboxed opaque-origin frame | **CONFIRMED** — `allow-scripts` with no `allow-same-origin`; `""` for SVG |
+| R9 | C6 `TEXT_PREVIEW_MIME` admits svg, excludes png/jpeg/pdf/Office | **CONFIRMED** |
+| R10 | C7 markdown unregressed | **CONFIRMED** |
+| R11 | C8 `renderArtifact` never throws | **CONFIRMED** — 6 hostile, 0 threw |
+| R12 | C10 `tsc --noEmit` clean | **CONFIRMED** — `TSC_EXIT=0` |
+| R13 | adversarial on the new code | **DEFECTS FOUND** — no length cap; sanitisation-induced collision on the path-keyed OneDrive mirror. No safety defect. |
+
+### Must fix before this is done
+1. **R1 / worker path** — `huddle.functions.ts:7029`: `if (!name || (!content && !a.document))`. Today a
+   worker emitting the `document` its own tool description tells it to emit is rejected.
+2. **R2 / folder traversal** — sanitise `folder` before it reaches `Huddle Artifacts/{lane}/{name}`
+   (`onedrive.server.ts:51`, fed by `artifacts.server.ts:530 lane: row.folder`). The name half is fixed;
+   the lane half is the same bug, still open, still model-driven, still on a real user's drive.
+3. **R13 / mirror collision** — key the mirror path by artifact id, as the blob path already is.
+4. **R13 / length cap** — cap the sanitised name (~120 chars, keep the extension).
+
+### VERDICT
+**REFUTED overall — 10 CONFIRMED, 2 REFUTED (R1, R2), 0 NOT PROVEN, 0 NOT REACHED, plus 2 robustness defects from R13: `b043afb` genuinely closed the mime lie (R3), the format normalisation (R4) and the filename half of the traversal, but `folder` reopens the identical OneDrive escape and the worker dispatch site still rejects the structured `document` its own schema advertises.**
