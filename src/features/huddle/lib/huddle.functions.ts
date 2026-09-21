@@ -7136,11 +7136,20 @@ async function runWorkerTurn(record: {
         const a = c.arguments;
         const name = String(a.name ?? "").trim();
         const content = String(a.content ?? "");
-        // `content` is no longer unconditionally required: a structured `document` (a deck with real
-        // slide layout) can stand alone. The two chat dispatch paths were relaxed for this; THIS one
-        // and the voice one were not, because I checked the sites I had edited rather than every site
-        // that carries the rule — so the durable-turn worker still rejected every structured call
-        // while I reported the format work done. Found by verifier loop 3.
+        // Accept a structured `document` with no `content` — CREATE_ARTIFACT_TOOL's `required` is
+        // ["name"] and its `document` description says "Supply the structure instead of `content`",
+        // so the old `!content` guard made the schema lie to the worker: a worker that followed its
+        // own tool description into a slide layout was rejected outright. Matches the OpenAI and
+        // Lovable guards; found by the independent verifier (VERIFY-artifact-formats-3.md, R1).
+        //
+        // Two lanes fixed this line independently and the merge kept both reasons, because they are
+        // different lessons: the paragraph above is WHY the guard was wrong (the schema promised
+        // something the executor refused); the reason it SURVIVED loop 2 is that the two chat paths
+        // were relaxed and this one and the voice one were not — the sites that had been edited got
+        // checked, the sites that carried the same rule did not.
+        //
+        // The error text is part of the fix, not cosmetics: "name and content are required" was
+        // still telling a caller to send `content` when `document` alone is now valid.
         if (!name || (!content && !a.document))
           return JSON.stringify({ ok: false, error: "name plus content or document are required" });
         if (artifactId) return JSON.stringify({ ok: true, deduped: true, id: artifactId });

@@ -189,13 +189,16 @@ check(
 // R2 — THE OTHER HALF OF THE TRAVERSAL. `Huddle Artifacts/{lane}/{name}` is built from TWO
 // model-controlled values. Loop 2 sanitised `name`; `folder` went into the INSERT raw, so
 // `folder: "../../../Documents"` escaped by the identical mechanism.
+// Two lanes wrote `safeArtifactFolder` independently off this finding; the surviving body takes the
+// LAST real segment and falls back to "Personal" (the artifacts.items DDL default). The expectations
+// below are that body's, not the other one's — a merge that keeps a function has to keep its tests.
 for (const [input, want] of [
   ["../../../Documents", "Documents"],
   ["..\\..\\Windows", "Windows"],
-  ["Research/../../etc", "Research-etc"],
-  ["..", "Research"],
-  ["", "Research"],
-  [".", "Research"],
+  ["Research/../../etc", "etc"],
+  ["..", "Personal"],
+  ["", "Personal"],
+  [".", "Personal"],
 ] as [string, string][]) {
   check(
     `a model-supplied FOLDER cannot escape its lane: ${JSON.stringify(input)}`,
@@ -266,12 +269,18 @@ check(
 // R1 — THE GUARD THAT WAS NEVER RELAXED. Two of four dispatch paths were fixed to accept a
 // structured `document`; the durable-turn worker and the VOICE path still demanded `content`, so
 // "make me a deck" spoken out loud was rejected outright while the format work was reported done.
-check(
-  "every create_artifact dispatch guard accepts a document-only call — all FOUR, not the two that were edited",
-  (ALL_GUARD_SRC.match(/name plus content or document are required/g) ?? []).length === 4 &&
-    !/name and content are required/.test(ALL_GUARD_SRC),
-  `found ${(ALL_GUARD_SRC.match(/name plus content or document are required/g) ?? []).length} relaxed guards, 0 old ones`,
-);
+// Match the RETURNED error, not any mention of the phrase: the first version of this assertion keyed
+// on the bare string and was tripped by a code COMMENT quoting the old text to explain why it went.
+// A guard that fires on prose about itself is noise, and noise is what gets assertions deleted.
+{
+  const relaxed = (ALL_GUARD_SRC.match(/error: "name plus content or document are required"/g) ?? []).length;
+  const stale = (ALL_GUARD_SRC.match(/error: "name and content are required"/g) ?? []).length;
+  check(
+    "every create_artifact dispatch guard accepts a document-only call — all FOUR, not the two that were edited",
+    relaxed === 4 && stale === 0,
+    `${relaxed} relaxed guards (want 4), ${stale} still returning the old error (want 0)`,
+  );
+}
 check(
   "the VOICE schema can actually emit a document — relaxing its executor alone changed nothing",
   /document: \{\s*type: "object"/.test(VOICE_SRC) && !/required: \["name", "content"\]/.test(VOICE_SRC),
