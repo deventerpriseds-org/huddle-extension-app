@@ -40,8 +40,11 @@ const REACT_LOOP =
 
 // The one hard duty shared by every worker: actually SAVE the work.
 const SAVE_DUTY =
-  "You MUST call create_artifact exactly once to save your full, detailed write-up as a markdown " +
-  "document (the durable record the user reviews) — give it the full executive structure. Then return a " +
+  "You MUST call create_artifact exactly once to save your full, detailed write-up as a document " +
+  "(the durable record the user reviews) — give it the full executive structure. Choose the `format` " +
+  "that actually fits the deliverable rather than defaulting blindly: 'md' for plain prose (still the " +
+  "right default), 'docx' when the user will send or print it, 'pptx' for a deck, and 'mermaid'/'html'/" +
+  "'svg' when the finding is a diagram or a visual. Then return a " +
   "substantive summary of your findings and recommendation as your final message (not just \"see the " +
   "doc\"). Do not claim you did anything you did not actually do with a tool this turn.";
 
