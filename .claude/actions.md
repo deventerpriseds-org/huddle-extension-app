@@ -1,5 +1,25 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-09-12 (ACT:escalated-dead-end -- approach gate's `escalated` is terminal with NO user override, diagnosed from Cole Blake's live transcript, fork awaiting owner choice; ACT:meaty-literal -- the produce-vs-quick prompt is one hardcoded string bypassing every persona)
+Last updated: 2026-09-21
+
+## ACT:pr-triage-2026-09-21 — 4 open PRs, read-evidence triage
+
+**Asked (2026-09-21, owner):** "go ahead with the triage pass" (cross-repo request also covering
+journey-voice, eds-claude-skills, android-bridge-template).
+
+**Status: DONE for 3/4 PRs, 1 left open for the owner's call.**
+
+Evidence: `.claude/pr-triage-2026-09-21.md`. Merged `956ea1b` (#39, docs-only spec research —
+re-verified its two load-bearing claims against current main before merging, not just trusted the
+PR's own description). Closed #11 (per-card status dropdown — same capability already live on main
+via a different implementation) and #62 (rich-artifact-formats plan — the actual fix already shipped
+via separate commits + two independent-verifier loops; this PR was tracking docs only, GitHub itself
+reported it `mergeable_state: dirty`). Left **#14** (agent knowledge library, 15 `KnowledgePack`
+files + wiring into live prompt assembly) OPEN — this repo's own memory.md already investigated this
+exact branch for ACT-61 and ruled it a distinct, still-valuable capability that shouldn't be merged
+as-is (better fits the now-built memory-intake path) nor closed. Touches live agent prompt assembly
+(`huddle.functions.ts`), so needs the owner's explicit call per CLAUDE.md's prompt-change rule.
+
+Previous: 2026-09-12 (ACT:escalated-dead-end -- approach gate's `escalated` is terminal with NO user override, diagnosed from Cole Blake's live transcript, fork awaiting owner choice; ACT:meaty-literal -- the produce-vs-quick prompt is one hardcoded string bypassing every persona)
 Previous: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
 Previous: 2026-08-26 (ACT-64 confirm-ask/assist scope revised, no code yet; ACT-63 notification bugs DEPLOYED 6dccf41, Bug 2 user-confirmed live; ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
 

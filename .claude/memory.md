@@ -1,5 +1,15 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
+Last updated: 2026-09-21 (PR triage pass, 4 open PRs: merged #39 — docs-only spec research,
+re-verified its two load-bearing technical claims against live code before merging (see
+ACT:pr-triage-2026-09-21 in actions.md). Its finding worth carrying: `eds-claude-skills/CLAUDE.md`'s
+"Realtime AS EAR ONLY (Huddle `useVoiceCallRealtime`)" line is STALE — Huddle's current default 1:1
+voice path runs Realtime AS BRAIN (`create_response:true`, `voice/realtime.functions.ts:115`), not
+ears-only; `MeetingBar.tsx`'s `VOICE_1ON1_BACKEND` is hardcoded `"openai"` with no reassignment
+site, so ElevenLabs ConvAI is unreachable dead code in Huddle specifically (not a claim about ConvAI
+elsewhere). Closed #11, #62 as superseded (content already live on main a different way). Left #14
+(agent knowledge library) OPEN — this repo's own memory already ruled it a distinct capability from
+ACT-61's memory-intake system, not for merging as-is nor closing; still needs the user's call.)
+Previous: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
 Previous: 2026-09-08 — **the assignment-widget spec's action registry is BUILT in nexus** (see
 `docs/specs/assignment-widget.md` §5.2b, huddle PR #53): the spec PROPOSED
 `nexus-hub/api/src/shared/assignmentActions.ts` and nexus-hub PR #87 built it there, closing the
