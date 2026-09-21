@@ -4089,3 +4089,53 @@ were early requirements for the artifact library? this needs to be fixed right a
       nothing in `_headers`), so the pinned mermaid/d3 CDN tags load today. A CSP added at the Azure
       layer later would silently stop diagrams drawing — a `srcdoc` iframe inherits the embedder's
       CSP and would need `script-src https://cdn.jsdelivr.net`.
+
+## ACT:artifact-rich-formats — CLOSED IN CODE, deployed; NOT yet owner-confirmed (2026-09-21)
+
+**Deployed.** `main` `88f2226`, `deploy-swa.yml` run **35642540791**, `conclusion: success`, matched
+on `head_sha` — not on "the latest run".
+
+**What shipped today, and why it was still broken after the earlier work.** Another session had
+already landed the `format` contract (`md|docx|pptx|html|mermaid|svg`), the server-side docx/pptx
+renderer, the sandboxed-iframe viewer and the voice surface. Three things were still open, all
+verified absent on `origin/main` before this change and present after:
+
+| Gap | Before | After (verified on deployed `origin/main`) |
+|---|---|---|
+| Images | `image_generation` **0 hits in all of `src/`** | present in 4 modules (`openai-builtin-tools.ts`, `openai-responses.server.ts`, `huddle.functions.ts`, `agent-workflow-config.server.ts`) |
+| Autonomous WIP path | `autowork.server.ts:64` *"detailed markdown"* | 0 occurrences; now names the `format` enum |
+| Delegated workers | `workers.ts:43` *"as a markdown"* | 0 occurrences; now names the `format` enum |
+
+**Why the two prompt sites mattered more than they looked.** The capability was live while the
+instructions driving it were not. `autowork.server.ts` is the AUTONOMOUS path — it produces artifacts
+on the cadence with no user in the loop — so background work kept emitting `.md` and the whole fix
+read as not working when judged by what the team produced overnight.
+
+**Both prompt edits are ADDITIVE** per this repo's prompt rule: the executive-structure guidance, the
+do-not-invent-a-link guidance and the summary duty are untouched. Neither hardcodes a per-agent file
+list; both point at the tool's own `format` enum and keep `'md'` named as the right default for prose
+— so adding a format to the tool covers every agent with no prompt change (systematic-capability rule).
+
+**The image work was NOT written this session.** `f36f678` was produced by a subagent on 2026-09-13
+that died in a container restore before it could reconcile; the commit sat unpushed on this branch for
+eight days and **PR #62 was closed unmerged on 2026-09-21**, which is why images stayed broken in the
+live app. Recovered, rebased onto current `main`, rebuilt and shipped.
+
+**Gate design, deliberate and worth not "fixing" later:** `canOfferBuiltInTools`
+(`agent-workflow-config.server.ts`) defaults **ON and fails OPEN**, unlike the email resolvers beside
+it which fail closed. The asymmetry is reasoned in its own doc comment: email leaving the tenant is
+irreversible, whereas this gate protects a few cents of container/image spend — and a transient pool
+throw silently downgrading every agent to markdown-only would reproduce the ORIGINAL bug with no error
+anywhere to explain it. Per-user + per-agent overrides live in `identity.agent_workflow_config`
+(`builtin_tools_enabled`, `builtin_tools_agent_overrides`).
+
+**Evidence:** `tsc --noEmit` 0 errors; `vite build` exit 0; `test:artifact-preview`,
+`test:artifact-render`, `test:artifact-format`, `test:voice-tools` all pass.
+
+**STATUS: implemented, mechanism verified, deployed — NOT confirmed live by the owner.** A sandbox
+cannot call OpenAI, so nothing here proves a real image or `.docx` comes back from the live model.
+Nothing may be written as "fixed" until he re-tests in his own app.
+
+**Open, deliberately not done:** `builtin_tools_enabled` is reachable through the config functions but
+I did not confirm a Settings UI toggle renders for it. Per the no-hardcoded-config rule that toggle
+should exist; flagged, not built, because it is outside what was asked.

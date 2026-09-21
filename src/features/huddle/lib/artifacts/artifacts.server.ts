@@ -157,43 +157,10 @@ export async function createArtifact(input: CreateArtifactInput): Promise<{ id: 
   return { id, deepLink: `/artifacts/${id}` };
 }
 
-/**
- * Strip any path out of a model-supplied artifact name, leaving a bare filename.
- *
- * THIS IS A PATH-TRAVERSAL FIX, NOT TIDYING. `slug()` protected the BLOB path but nothing sanitised
- * `artifacts.items.name`, and the OneDrive mirror builds its upload path from that name with
- * `encodeURIComponent` per segment — which does NOT encode `.` — so a name of `../../etc/passwd`
- * escaped the "Huddle Artifacts" folder on mirror. Outward-facing, on a real user's drive, driven by
- * model output. Found by the verifier (onedrive.server.ts:21).
- *
- * Keeps only the last path segment, drops `..`, and refuses a name that is nothing but an extension
- * (".docx" → "artifact.docx") so the file is always addressable.
- */
-/**
- * Sanitise a FOLDER/lane name — the OTHER model-controlled segment of the mirror path.
- *
- * THE FIRST FIX CLOSED HALF THE HOLE. `onedrive.server.ts:51` builds
- * `Huddle Artifacts/${opts.lane}/${opts.name}` from TWO model-controlled values. I sanitised `name`
- * and never asked what else feeds that path — so `folder: "../../../Documents"`, inserted raw at the
- * INSERT below, escaped by the identical mechanism (`encodeURIComponent` does not encode `.`).
- * Found by verifier loop 3, after loop 2 found the `name` half. Fixing the input that was named
- * instead of the class is exactly what this repo's "systematic capability, never a patch" rule warns
- * about, and it cost a whole loop to learn twice.
- *
- * A folder is one flat segment by design — there is no nested-lane feature — so anything that could
- * traverse is simply not a folder name.
- */
-export function safeArtifactFolder(folder: string): string {
-  const raw = String(folder ?? "").replace(/\\/g, "/");
-  const flat = raw.split("/").filter((s) => s && s !== "." && s !== "..").join("-");
-  const cleaned = flat.replace(/[\u0000-\u001f<>:"|?*]/g, "").trim().slice(0, 60);
-  return cleaned && cleaned !== "." && cleaned !== ".." ? cleaned : "Research";
-}
-
 /** Longest filename we will store. SharePoint/OneDrive reject a full path over ~400 characters, and
  *  the mirror path already spends some of that on "Huddle Artifacts/{lane}/". A 5005-character name
- *  passed through this function untouched before the cap — found by verifier loop 3, which also noted
- *  that a name too long to mirror fails at Graph, far from where it was accepted. */
+ *  passed through `safeArtifactName` untouched before this cap — found by verifier loop 3, which also
+ *  noted that a name too long to mirror fails at Graph, far from where it was accepted. */
 const MAX_ARTIFACT_NAME = 120;
 
 /** Truncate the STEM, never the extension — "…verylong.docx" must stay openable as a Word file. */
@@ -206,6 +173,18 @@ function capLength(name: string, max: number): string {
   return stem.slice(0, Math.max(1, max - ext.length)) + ext;
 }
 
+/**
+ * Strip any path out of a model-supplied artifact name, leaving a bare filename.
+ *
+ * THIS IS A PATH-TRAVERSAL FIX, NOT TIDYING. `slug()` protected the BLOB path but nothing sanitised
+ * `artifacts.items.name`, and the OneDrive mirror builds its upload path from that name with
+ * `encodeURIComponent` per segment — which does NOT encode `.` — so a name of `../../etc/passwd`
+ * escaped the "Huddle Artifacts" folder on mirror. Outward-facing, on a real user's drive, driven by
+ * model output. Found by the verifier (onedrive.server.ts:21).
+ *
+ * Keeps only the last path segment, drops `..`, and refuses a name that is nothing but an extension
+ * (".docx" → "artifact.docx") so the file is always addressable.
+ */
 export function safeArtifactName(name: string): string {
   const raw = String(name ?? "").replace(/\\/g, "/");
   const last = raw.split("/").filter((seg) => seg && seg !== "." && seg !== "..").pop() ?? "";
@@ -239,6 +218,35 @@ export function mirrorFileName(id: string, name: string): string {
   const stem = ext ? safe.slice(0, dot) : safe;
   const suffix = ` (${short})`;
   return capLength(stem, MAX_ARTIFACT_NAME - suffix.length - ext.length) + suffix + ext;
+}
+
+/**
+ * The LANE half of the same traversal fix. `safeArtifactName` closed `{name}` in
+ * `Huddle Artifacts/{lane}/{name}` and left `{lane}` open — and `folder` is just as model-driven as
+ * `name` was, so `create_artifact({folder:"../../../Documents"})` reproduced the identical escape on
+ * a real user's OneDrive. `encodeURIComponent` does not encode ".", so `..` segments survive into the
+ * Graph URL. Found by the independent verifier (VERIFY-artifact-formats-3.md, R2).
+ *
+ * A lane is ONE segment by construction, so this collapses to the last real segment and drops any
+ * `.`/`..`. Falls back to "Personal" — the same default the `artifacts.items` DDL uses — so an
+ * artifact is never stranded in an unaddressable folder.
+ *
+ * TWO LANES WROTE THIS FUNCTION INDEPENDENTLY off the same verifier finding, and git auto-merged
+ * both into this module with NO conflict — a duplicate `export function` that only `tsc` would have
+ * caught. This body is the survivor because its fallback is grounded in the DDL default above rather
+ * than picked; the other collapsed nested segments with a dash instead of taking the last, which is
+ * a coin-flip either way. Worth remembering that a clean auto-merge is not a correct merge.
+ *
+ * The lesson the finding itself carries: loop 2 sanitised `name` and never asked what ELSE feeds
+ * that path. Fixing the input that was named instead of the class is what this repo's "systematic
+ * capability, never a patch" rule warns about, and it cost a whole verification loop.
+ */
+export function safeArtifactFolder(folder: string): string {
+  const raw = String(folder ?? "").replace(/\\/g, "/");
+  const last = raw.split("/").filter((seg) => seg && seg !== "." && seg !== "..").pop() ?? "";
+  const cleaned = last.replace(/[\u0000-\u001f<>:"|?*]/g, "").trim();
+  if (!cleaned || cleaned === "." || cleaned === "..") return "Personal";
+  return cleaned;
 }
 
 /** Give `name` this exact extension, replacing a document extension it already carries rather than
@@ -284,6 +292,8 @@ export async function createArtifactFromAgent(input: {
   // Sanitise ONCE, at the choke point, so every downstream consumer (blob path, DB row, OneDrive
   // mirror) gets the same safe name. See safeArtifactName — this is the path-traversal fix.
   const safeName = safeArtifactName(input.name);
+  // Same reasoning, the other half of the mirror path — see safeArtifactFolder.
+  const safeFolder = safeArtifactFolder(input.folder);
 
   // FORMATS THE TOOL OFFERS THAT THE RENDERER DOES NOT KNOW.
   // `render.server` handles md | html | docx | pptx and degrades anything else to markdown — correct
@@ -308,7 +318,7 @@ export async function createArtifactFromAgent(input: {
       userEmail: input.userEmail,
       agentId: input.agentId ?? null,
       taskId: input.taskId ?? null,
-      folder: input.folder,
+      folder: safeFolder,
       name: outName,
       mime: passthrough.mime,
       bytes: Buffer.from(body, "utf8"),
@@ -350,7 +360,7 @@ export async function createArtifactFromAgent(input: {
     userEmail: input.userEmail,
     agentId: input.agentId ?? null,
     taskId: input.taskId ?? null,
-    folder: input.folder,
+    folder: safeFolder,
     name: rendered.name,
     mime,
     bytes: rendered.bytes,
