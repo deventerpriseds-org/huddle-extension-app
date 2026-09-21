@@ -144,3 +144,119 @@ refutation is closed and I could not break it. But the companion `!name || !cont
 applied to only two of four handlers, and at the **worker** site the advertised schema and the handler
 now contradict each other, so a structured `document` call from a worker agent fails.
 Required fix: `huddle.functions.ts:7029` → `if (!name || (!content && !a.document))`.
+
+---
+
+## R2 — C9a re-derivation: does `safeArtifactName` actually neutralise traversal, at the choke point?
+
+### The choke point — call ORDER read, not assumed
+
+`artifacts.server.ts:216` computes `const safeName = safeArtifactName(input.name)` **before** either
+branch, and both branches consume it:
+
+* passthrough (mermaid/svg): `:236` `const outName = withExtension(safeName, passthrough.ext)` →
+  `createArtifact({ name: outName })`
+* rendered (md/html/docx/pptx): `:259` `renderArtifact({ …, name: safeName })` → `rendered.name` →
+  `:283` `createArtifact({ name: rendered.name })`
+
+`createArtifact` (`:123`) writes that one value to **both** consumers: the blob path
+(`:129 slug(input.name)`) and the DB row (`:140 input.name`). The OneDrive mirror reads the DB row
+(`:530 name: row.name`). So the sanitised value does reach all three. **Choke point CONFIRMED.**
+
+**Radius challenge answered — `withExtension` vs `render.server`'s `ensureExtension` do NOT collide.**
+They are on mutually exclusive branches (`withExtension` only for mermaid/svg, `ensureExtension` only
+inside `renderArtifact`), both run strictly *after* `safeArtifactName`, and neither can reintroduce a
+separator — `ensureExtension` (`render.server.ts:132-141`) only trims and appends/replaces a suffix.
+
+### `safeArtifactName` executed on the real export — 36 inputs
+
+Imported the actual symbol from `artifacts.server.ts` (not a copy). Every traversal input collapses to
+a bare filename; **no output contains `/` or `\`, and none is `..`**:
+
+```
+"../../etc/passwd"                    -> "passwd"
+"..\\..\\windows\\system32\\cfg.ini"  -> "cfg.ini"
+"Huddle/../../../secret.docx"         -> "secret.docx"
+".docx"                               -> "artifact.docx"
+".."                                  -> "artifact"
+"."                                   -> "artifact"
+""                                    -> "artifact"
+"   "                                 -> "artifact"
+"....//....//etc/passwd"              -> "passwd"
+"%2e%2e/%2e%2e/etc/passwd"            -> "passwd"
+"..%2f..%2fetc"                       -> "artifact..%2f..%2fetc"   (no real separator; see note)
+"a/../b.md"                           -> "b.md"
+"/etc/passwd"                         -> "passwd"
+"C:\\Users\\x\\a.docx"                -> "a.docx"
+"\u0000evil.md"                       -> "evil.md"
+"n\u001fame.md"                       -> "name.md"
+"report<v2>.docx" -> "reportv2.docx"   'quote".md' -> "quote.md"
+"pipe|x.md" -> "pipex.md"   "q?.md" -> "q.md"   "star*.md" -> "star.md"
+null -> "artifact"   undefined -> "artifact"   12345 -> "12345"
+```
+
+The URL-encoded attempt `"..%2f..%2fetc"` keeps its literal `%2f`, which is correct: it is not a path
+separator at this layer, and `encodePath` (`onedrive.server.ts:20`) then encodes the `%` to `%25`, so
+it cannot decode back into a separator downstream.
+
+**Legitimate names are NOT damaged** — dots, digits, spaces and unicode all survive byte-for-byte:
+
+```
+"Q3 review v1.2 final.docx"  -> "Q3 review v1.2 final.docx"
+"ünïcödé-räpport.md"         -> "ünïcödé-räpport.md"
+"2026-09-21_budget.xlsx"     -> "2026-09-21_budget.xlsx"
+"my.file.with.dots.pptx"     -> "my.file.with.dots.pptx"
+"日本語メモ.md"               -> "日本語メモ.md"
+"a b  c.md"                  -> "a b  c.md"
+```
+
+Unicode separator homoglyphs (`U+2044 ⁄`, `U+FF0F ／`, `U+2215 ∕`) are passed through as ordinary
+characters. That is safe here — `encodePath` percent-encodes them, and Graph/Windows do not treat them
+as separators.
+
+### THE NAME HALF IS FIXED. THE OTHER HALF OF THE SAME PATH IS NOT.
+
+`onedrive.server.ts:51` builds the upload path from **two** model-controlled segments:
+
+```ts
+const drivePath = `Huddle Artifacts/${opts.lane}/${opts.name}`;
+```
+
+`opts.lane` is `row.folder` (`artifacts.server.ts:530`). `folder` is written to the DB **raw** —
+`artifacts.server.ts:140` inserts `input.folder` with no sanitiser — and it is model output at every
+one of the four dispatch sites (`String(a.folder ?? "Research")`, e.g.
+`huddle.functions.ts:7039`, `realtime-tools.server.ts:604`). Only the **blob** path slugs it
+(`:129 slug(input.folder)`); the mirror does not.
+
+Executed with `encodePath` and the `drivePath` template copied verbatim from `onedrive.server.ts`:
+
+```
+contained  lane="Research"            name="../../etc/passwd"
+           drivePath = Huddle Artifacts/Research/passwd
+ESCAPES    lane="../../../Documents"  name="report.docx"
+           drivePath = Huddle Artifacts/../../../Documents/report.docx
+           URL = …/drive/root:/Huddle%20Artifacts/../../../Documents/report.docx:/content
+ESCAPES    lane=".."                  name="a.md"
+           drivePath = Huddle Artifacts/../a.md
+ESCAPES    lane="Research/../../.."   name="a.md"
+           drivePath = Huddle Artifacts/Research/../../../a.md
+```
+
+`encodeURIComponent` does not encode `.`, so the `..` segments survive into the Graph URL — **the
+identical mechanism, on the identical path, that loop 2 refuted.** The fix closed the `{name}` half and
+left the `{lane}` half open, and `lane` is just as model-driven as `name` was.
+
+### R2 VERDICT
+
+**REFUTED.** `safeArtifactName` itself is sound — it neutralised all 20 traversal inputs I threw at it,
+is correctly applied once at the choke point so blob/DB/mirror all receive it, and damages no
+legitimate name. But C9a as a whole ("`..` can no longer escape the Huddle Artifacts folder") is **not**
+closed: `folder` reaches `Huddle Artifacts/{lane}/{name}` unsanitised and reproduces the escape.
+
+Concrete failing input:
+`create_artifact({ name: "report.docx", folder: "../../../Documents", content: "#x" })` →
+mirror PUTs to `…/drive/root:/Huddle%20Artifacts/../../../Documents/report.docx:/content`.
+
+Required fix: sanitise `folder` on the same choke point (or in `uploadArtifactToOneDrive`, which is the
+one single place both segments meet) — e.g. apply `safeArtifactName` to each `lane` segment, or slug it
+as the blob path already does.
