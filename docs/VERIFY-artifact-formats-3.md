@@ -329,3 +329,137 @@ unchanged. The only behaviour change is that strings which previously fell throu
 *accident* now resolve, which is the fix.
 
 **R4 VERDICT: CONFIRMED.**
+
+---
+
+## R5–R12 — the eight previously-CONFIRMED claims, re-checked at reduced depth
+
+| # | claim | re-check performed | verdict |
+|---|---|---|---|
+| R5 (C1) | tool advertises the six formats | read `artifact-tool.ts:6` in full — `enum: ["md","docx","pptx","html","mermaid","svg"]`, `required:["name"]` | **CONFIRMED** |
+| R6 (C2) | each format produces the promised artifact | `renderArtifact` called for real per format; suites 52/28/32 green | **CONFIRMED** |
+| R7 (C3) | docx/pptx are genuinely openable Office packages | rendered + unzipped, below | **CONFIRMED** |
+| R8 (C5) | markup renders only in a sandboxed opaque-origin frame | sandbox attribute read, below | **CONFIRMED** |
+| R9 (C6) | `TEXT_PREVIEW_MIME` admits svg, excludes png/jpeg/pdf/Office | regex read, below | **CONFIRMED** |
+| R10 (C7) | markdown unregressed | see R4b — default and bytes unchanged | **CONFIRMED** |
+| R11 (C8) | `renderArtifact` never throws | 6 hostile inputs, below | **CONFIRMED** |
+| R12 (C10) | `tsc --noEmit` clean | `npx tsc --noEmit; echo TSC_EXIT=$?` → **`TSC_EXIT=0`**, zero `error TS` lines | **CONFIRMED** |
+
+### R7 — real packages, unzipped
+
+```
+docx name= r.docx  mime= …wordprocessingml.document  bytes= 8669   magic= 50 4b 03 04
+pptx name= r.pptx  mime= …presentationml.presentation bytes= 51313  magic= 50 4b 03 04
+
+$ unzip -l /tmp/v3.docx
+   3324  word/document.xml
+   2104  [Content_Types].xml
+   1057  word/_rels/document.xml.rels
+$ unzip -l /tmp/v3.pptx
+   2886  [Content_Types].xml
+   3294  ppt/presentation.xml
+   1260  ppt/_rels/presentation.xml.rels
+```
+
+Both carry `[Content_Types].xml` and their part-specific root. **The choke-point sanitisation does NOT
+change what C2/C3 produce** (radius challenge answered): it only rewrites `name`, and the bytes are
+produced by `renderArtifact` from `content`/`document`, which sanitisation never touches.
+
+### R8 — the sandbox attribute string
+
+`preview.ts:34` `SANDBOX_SCRIPTS = "allow-scripts"`, `preview.ts:36` `SANDBOX_NONE = ""`,
+`preview.ts:125-127` `sandboxFor(kind) => kind === "svg" ? SANDBOX_NONE : SANDBOX_SCRIPTS`, consumed at
+`ArtifactsView.tsx:508` `sandbox={sandboxFor(kind)}`. `allow-scripts` **without** `allow-same-origin`
+is an opaque origin — scripts run but can reach nothing of the parent; SVG gets no scripting at all.
+Unchanged by `b043afb` (which touched no preview file), so the ten browser attacks were not re-run.
+
+### R9 — `TEXT_PREVIEW_MIME`, `artifacts.server.ts:334`
+
+```
+/^(text\/|application\/json|application\/csv|image\/svg\+xml|application\/vnd\.mermaid|application\/xhtml\+xml)/
+```
+
+Admits `image/svg+xml`; `image/png`, `image/jpeg`, `application/pdf` and every
+`application/vnd.openxmlformats-officedocument…` fail the anchor. The mermaid passthrough mime
+(`text/vnd.mermaid; charset=utf-8`) matches via `^text/`.
+
+### R11 — 6 hostile inputs to `renderArtifact`
+
+`{format:"docx",content:null}`, `{format:"pptx",document:{slides:"notanarray"}}`,
+`{format:"pptx",document:{slides:[{title:{},bullets:7}]}}`, `{format:"docx",content:"#"×50000}`,
+`{format:"html",content:undefined,name:null}`, `{format:"md",content:{toString(){throw}}}` →
+**`hostile inputs: 6  threw: 0`**.
+
+---
+
+## R13 — ADVERSARIAL: trying to break `safeArtifactName` and `withExtension`
+
+All run against the real exports.
+
+| attack | result | assessment |
+|---|---|---|
+| name that is only dots — `"."`, `".."`, `"...."`, `"....."` | `"artifact"`, `"artifact"`, `"artifact...."`, `"artifact....."` | safe (no separator, never `..`), but see note 1 |
+| 5000-character name | in 5005 chars → out **5005 chars**, `.docx` preserved | **no length cap — note 2** |
+| unicode separators `U+2044 ⁄`, `U+FF0F ／`, `U+2215 ∕` | passed through as ordinary characters | safe — not separators to Graph/Windows, and `encodePath` percent-encodes them |
+| multiple extensions `"my.file.with.dots.pptx"` | unchanged | correct |
+| `withExtension("x.md.md", ".mmd")` | `"x.md.mmd"` | strips one replaceable extension only — correct per its doc |
+| `withExtension("deck.PPTX", ".pptx")` | `"deck.PPTX"` | case-insensitive match, no double extension |
+| `withExtension("..", ".md")` | `"...md"` | ugly, but **unreachable**: `safeArtifactName` runs first and `".."` is already `"artifact"` |
+| `safeArtifactName(null / undefined / 12345)` | `"artifact"`, `"artifact"`, `"12345"` | no throw on non-string |
+| NUL and `0x1f` in the name | stripped | matches the commit's claim that the control class is `\u` escapes |
+
+**Note 1 — cosmetic only.** `"...."` → `"artifact...."` because the leading-dot branch prefixes a stem
+rather than stripping the dots. Not a traversal (no separator survives) and not misleading, just untidy.
+
+**Note 2 — NO LENGTH CAP, and it collides with the outward-facing path.** `safeArtifactName` never
+truncates. `artifacts.items.name` is `TEXT` so the DB accepts it, and the blob path is safe because it
+uses `slug(name)` which does `.slice(0, 60)`. But the OneDrive mirror uses the **raw** name, and
+SharePoint/OneDrive reject a path over ~400 characters — so a long model-supplied name produces a
+mirror failure rather than a mirrored file. Non-fatal (the mirror is in a try/catch and the approve
+always succeeds), so this is a **defect of robustness, not of safety**. Suggested: cap at ~120
+characters, preserving the extension.
+
+**Note 3 — SANITISATION INTRODUCES A NEW COLLISION on the mirror.** `safeArtifactName` keeps only the
+last path segment, so two previously-distinct names now collapse to one:
+`"reports/q3.docx"` → `"q3.docx"` and `"drafts/q3.docx"` → `"q3.docx"`.
+In the DB and in blob storage this is harmless (rows are `id`-keyed, the blob path is
+`{id}-{slug(name)}`). On OneDrive it is not: `uploadArtifactToOneDrive` is deliberately **path-keyed**
+so re-mirroring overwrites, so two different artifacts in the same folder now **overwrite each other**
+on the user's drive, silently, with no version kept. Low likelihood, outward-facing consequence.
+Suggested: disambiguate the mirror path with the artifact id (as the blob path already does).
+
+**R13 VERDICT: two robustness defects found (no length cap; a new sanitisation-induced collision on
+the path-keyed OneDrive mirror), no safety defect.** I could not make `safeArtifactName` emit a path
+separator or a `..` segment on any of the 36 inputs tried.
+
+---
+
+## Summary
+
+| # | claim | verdict |
+|---|---|---|
+| R1 | C4 — `format` reaches all four dispatch schemas | **REFUTED (partial)** — `format` reachable on all four (the loop-2 finding IS closed), but the `!content` guard was relaxed at only 2 of 4; the **worker** site's schema and handler now contradict each other |
+| R2 | C9a — traversal neutralised on every path to a filename | **REFUTED** — `safeArtifactName` is sound and correctly at the choke point, but `folder` reaches `Huddle Artifacts/{lane}/{name}` unsanitised and reopens the identical OneDrive escape |
+| R3 | C9b — mime cannot misrepresent bytes in either direction | **CONFIRMED** — all four quadrants honest |
+| R4 | C9c — `format` casing/whitespace resolves | **CONFIRMED** — `" DOCX "`/`"PPTX"`/`"MerMaid"` all resolve; md default unchanged |
+| R5 | C1 tool advertises six formats | **CONFIRMED** |
+| R6 | C2 each format produces the promised artifact | **CONFIRMED** |
+| R7 | C3 docx/pptx are real Office packages | **CONFIRMED** — `[Content_Types].xml` in both |
+| R8 | C5 sandboxed opaque-origin frame | **CONFIRMED** — `allow-scripts` with no `allow-same-origin`; `""` for SVG |
+| R9 | C6 `TEXT_PREVIEW_MIME` admits svg, excludes png/jpeg/pdf/Office | **CONFIRMED** |
+| R10 | C7 markdown unregressed | **CONFIRMED** |
+| R11 | C8 `renderArtifact` never throws | **CONFIRMED** — 6 hostile, 0 threw |
+| R12 | C10 `tsc --noEmit` clean | **CONFIRMED** — `TSC_EXIT=0` |
+| R13 | adversarial on the new code | **DEFECTS FOUND** — no length cap; sanitisation-induced collision on the path-keyed OneDrive mirror. No safety defect. |
+
+### Must fix before this is done
+1. **R1 / worker path** — `huddle.functions.ts:7029`: `if (!name || (!content && !a.document))`. Today a
+   worker emitting the `document` its own tool description tells it to emit is rejected.
+2. **R2 / folder traversal** — sanitise `folder` before it reaches `Huddle Artifacts/{lane}/{name}`
+   (`onedrive.server.ts:51`, fed by `artifacts.server.ts:530 lane: row.folder`). The name half is fixed;
+   the lane half is the same bug, still open, still model-driven, still on a real user's drive.
+3. **R13 / mirror collision** — key the mirror path by artifact id, as the blob path already is.
+4. **R13 / length cap** — cap the sanitised name (~120 chars, keep the extension).
+
+### VERDICT
+**REFUTED overall — 10 CONFIRMED, 2 REFUTED (R1, R2), 0 NOT PROVEN, 0 NOT REACHED, plus 2 robustness defects from R13: `b043afb` genuinely closed the mime lie (R3), the format normalisation (R4) and the filename half of the traversal, but `folder` reopens the identical OneDrive escape and the worker dispatch site still rejects the structured `document` its own schema advertises.**
