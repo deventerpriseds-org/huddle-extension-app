@@ -260,3 +260,72 @@ mirror PUTs to `…/drive/root:/Huddle%20Artifacts/../../../Documents/report.doc
 Required fix: sanitise `folder` on the same choke point (or in `uploadArtifactToOneDrive`, which is the
 one single place both segments meet) — e.g. apply `safeArtifactName` to each `lane` segment, or slug it
 as the blob path already does.
+
+---
+
+## R3 — C9b re-derivation: can an artifact misrepresent itself in EITHER direction?
+
+### The exact guard expression tested
+
+Copied verbatim from `artifacts.server.ts:274-278`:
+
+```ts
+const isPackageMime = (m: string) =>
+  /officedocument|application\/zip|application\/pdf|^application\/octet-stream/i.test(m);
+const mime =
+  rawMime && !isPackageMime(rendered.mime) && !isPackageMime(rawMime) ? rawMime : rendered.mime;
+```
+
+### All four quadrants, with real `renderArtifact` bytes
+
+`renderArtifact` was called for real (no DB, no blob) and the guard applied to its actual output.
+"LIES" = ZIP bytes stored under a non-package mime, or text bytes stored under a package mime.
+
+| quadrant | first 4 bytes | rendered mime | override offered | **stored mime** | verdict |
+|---|---|---|---|---|---|
+| package bytes / package mime | `50 4b 03 04` (ZIP) | …wordprocessingml.document | …presentationml.presentation | …**wordprocessingml.document** | honest — override refused |
+| package bytes / text mime | `50 4b 03 04` (ZIP) | …wordprocessingml.document | `text/markdown` | …**wordprocessingml.document** | honest — override refused |
+| **text bytes / package mime** | `23 20 52 65` (`# Re`) | `text/markdown; charset=utf-8` | …wordprocessingml.document | **`text/markdown; charset=utf-8`** | honest — **the refuted direction, now closed** |
+| text bytes / text mime | `23 20 52 65` | `text/markdown; charset=utf-8` | `text/csv` | **`text/csv`** | honest — escape hatch survives |
+| text bytes / no override | `23 20 52 65` | `text/markdown; charset=utf-8` | `null` | `text/markdown; charset=utf-8` | honest |
+
+`50 4b 03 04` is the ZIP local-file-header magic; `23 20 52 65` is `# Re`. The loop-2 failing input
+`{format:"md", mime:"…wordprocessingml.document"}` now stores `text/markdown; charset=utf-8`, so
+"report.docx" can no longer download as three bytes of markdown that Word refuses.
+
+Note quadrant 1 is stricter than strictly necessary and that is the right call: a docx offered a pptx
+mime keeps its docx mime rather than being relabelled as a different package type.
+
+**R3 VERDICT: CONFIRMED.** I could not construct an input that stores bytes under a mime that
+misrepresents them, in either direction.
+
+---
+
+## R4 — C9c: `format` with stray casing/whitespace
+
+Normalisation expression from `artifacts.server.ts:214`, run verbatim:
+
+```
+" DOCX "   -> "docx"     renderer
+"PPTX"     -> "pptx"     renderer
+"MerMaid"  -> "mermaid"  passthrough (.mmd)
+"  md"     -> "md"       renderer
+"HTML"     -> "html"     renderer
+"SVG"      -> "svg"      passthrough (.svg)
+"\tdocx\n" -> "docx"     renderer
+"Docx "    -> "docx"     renderer
+undefined  -> "md"       renderer  (the default)
+5          -> "md"       renderer  (non-string falls back)
+"pdf"      -> "pdf"      UNKNOWN -> degrades to markdown (correct: not an offered format)
+```
+
+All three named cases (`" DOCX "`, `"PPTX"`, `"MerMaid"`) resolve to their real format instead of
+degrading. Tabs and newlines are covered too, since `.trim()` is not space-only.
+
+**Radius challenge answered — the trim/lowercase does NOT alter C7's markdown default.** `undefined`
+and any non-string still yield `"md"`, and `renderArtifact({format:"md"})` produces
+`name="n.md"`, `mime="text/markdown; charset=utf-8"`, bytes `"# T\n\nx"` — the content byte-for-byte,
+unchanged. The only behaviour change is that strings which previously fell through to markdown by
+*accident* now resolve, which is the fix.
+
+**R4 VERDICT: CONFIRMED.**
