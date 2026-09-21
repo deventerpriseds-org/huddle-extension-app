@@ -7136,8 +7136,13 @@ async function runWorkerTurn(record: {
         const a = c.arguments;
         const name = String(a.name ?? "").trim();
         const content = String(a.content ?? "");
-        if (!name || !content)
-          return JSON.stringify({ ok: false, error: "name and content are required" });
+        // `content` is no longer unconditionally required: a structured `document` (a deck with real
+        // slide layout) can stand alone. The two chat dispatch paths were relaxed for this; THIS one
+        // and the voice one were not, because I checked the sites I had edited rather than every site
+        // that carries the rule — so the durable-turn worker still rejected every structured call
+        // while I reported the format work done. Found by verifier loop 3.
+        if (!name || (!content && !a.document))
+          return JSON.stringify({ ok: false, error: "name plus content or document are required" });
         if (artifactId) return JSON.stringify({ ok: true, deduped: true, id: artifactId });
         if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
         try {

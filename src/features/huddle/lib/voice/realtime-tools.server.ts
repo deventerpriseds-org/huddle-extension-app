@@ -310,10 +310,20 @@ export async function buildRealtimeToolset(
             "top-level heading starts each slide), 'mermaid' = diagram source, 'html' = interactive page, " +
             "'svg' = vector image.",
         },
+        document: {
+          type: "object",
+          description:
+            "OPTIONAL, and only for 'docx'/'pptx' when LAYOUT MATTERS more than prose — supply the " +
+            "structure instead of `content`. Prefer `content` markdown unless you need the control.",
+        },
         folder: { type: "string", description: "Optional folder/category, e.g. Finance, Research, Ventures. Default Research." },
         mime: { type: "string", description: "Rarely needed — `format` sets this." },
       },
-      required: ["name", "content"],
+      // `content` is NOT required: a structured `document` stands alone. Relaxing the executor without
+      // this line would have changed nothing — `additionalProperties:false` plus a required `content`
+      // makes a document-only call unemittable, so the guard below would never have seen one. Same
+      // class of miss as `format` being absent here: the call site was checked, the schema was not.
+      required: ["name"],
     },
   });
 
@@ -589,7 +599,12 @@ export async function executeRealtimeTool(
     if (name === "create_artifact") {
       const artName = String(args.name ?? "").trim();
       const content = String(args.content ?? "");
-      if (!artName || !content) return done(JSON.stringify({ ok: false, error: "name and content are required" }));
+      // A structured `document` stands alone — requiring `content` too rejected every structured call.
+      // Voice is the path that most needs this: "make me a deck" spoken out loud is exactly the call
+      // that arrives as a document with no markdown body. This guard was missed when the chat paths
+      // were relaxed, so voice silently stayed markdown-only. Found by verifier loop 3.
+      if (!artName || (!content && !args.document))
+        return done(JSON.stringify({ ok: false, error: "name plus content or document are required" }));
       const { resolveTaskEmail } = await import("../journey/identity");
       const email = (await resolveTaskEmail(ctx.caller ?? {})) ?? ctx.caller?.entra_email;
       if (!email) return done(JSON.stringify({ ok: false, error: "sign-in required" }));
