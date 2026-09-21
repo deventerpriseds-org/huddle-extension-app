@@ -4139,3 +4139,59 @@ Nothing may be written as "fixed" until he re-tests in his own app.
 **Open, deliberately not done:** `builtin_tools_enabled` is reachable through the config functions but
 I did not confirm a Settings UI toggle renders for it. Per the no-hardcoded-config rule that toggle
 should exist; flagged, not built, because it is outside what was asked.
+
+## ACT:verifier-loop3-refutations — R1 + R2 fixed and deployed (2026-09-21)
+
+**Deployed.** `main` `d21c5e9`, `deploy-swa.yml` run **35643422988**, `conclusion: success`, matched
+on `head_sha`.
+
+A parallel session's independent verifier returned **10 CONFIRMED / 2 REFUTED** on the multi-format
+artifact work (`docs/VERIFY-artifact-formats-3.md`). Both refutations were live on `main` and
+deployed. Acted on both — a firing trap is signal.
+
+**R1 — the worker dispatch guard contradicted its own schema.** `b043afb` relaxed `!name || !content`
+at the OpenAI and Lovable sites and left the **worker** site alone; loop 2 had not named it.
+`CREATE_ARTIFACT_TOOL.required` is `["name"]` and its `document` description says *"Supply the
+structure instead of `content`"*, so a worker following its own tool description into a slide layout
+got `{"ok":false,"error":"name and content are required"}`. **Made reachable by my own change earlier
+the same day** — I had just instructed workers to choose `docx`/`pptx`. Fixed to match the other two.
+The VOICE site is correctly stricter and was left alone: its schema has `required:["name","content"]`
+and no `document` property, so its guard matches what its model can emit.
+
+**R2 — path traversal, outward-facing, on a real user's OneDrive.** `safeArtifactName` closed the
+`{name}` half of `Huddle Artifacts/{lane}/{name}` and left `{lane}` open. `folder` is just as
+model-driven as `name` was, and `encodeURIComponent` does not encode `"."`, so the `..` segments
+survive into the Graph URL:
+`create_artifact({name:"report.docx", folder:"../../../Documents"})` →
+`…/drive/root:/Huddle%20Artifacts/../../../Documents/report.docx:/content`.
+
+Fixed at **both** ends deliberately, which is the part worth not "simplifying" later:
+- `safeArtifactFolder` at the `createArtifactFromAgent` choke point fixes what is **stored**;
+- the same sanitisation at the `uploadArtifactToOneDrive` boundary fixes what is **sent**, and that
+  is the half that covers rows written BEFORE this commit — their stored `folder` is still
+  unsanitised and would otherwise escape on their next mirror.
+
+**Guard + mutation proof.** `scripts/artifact-traversal-guard.test.ts` (`npm run
+test:artifact-traversal`), 15 assertions carrying the verifier's four failing inputs verbatim, plus
+legitimate-lane cases so the guard cannot pass by mangling everything. Both halves mutation-proved
+with `mutate.sh`:
+
+| mutation | result |
+|---|---|
+| `safeArtifactFolder` → passthrough | **FIRED** (`backslash traversal is neutralised`) |
+| worker guard → `if (!name \|\| !content)` | **FIRED** (`no dispatch site still requires content`) |
+
+**Correction worth keeping.** The R1 half of the guard originally RESTATED the guard expression and
+asserted against its own restatement — mutating the real source left it green, i.e. it proved
+nothing. Rewritten as a structural source assertion (comments stripped first, so a guard quoted in
+prose cannot satisfy the count) because all three guards live inside `runHuddleTurn`/the worker
+sub-turn, are unexported, and are unreachable without standing up a whole turn. Separately, my first
+`mutate.sh` invocation returned **UNDETERMINED** because I passed `"FAIL"` as the marker — the script
+prepends `FAIL ` itself and wants the bare test name. **That exact mistake is already recorded in
+this file from 2026-09-13 and I repeated it.**
+
+**Evidence:** `tsc --noEmit` 0 errors; `vite build` exit 0; `test:artifact-traversal`,
+`test:artifact-preview`, `test:artifact-render`, `test:artifact-format`, `test:voice-tools` all pass.
+
+**STATUS: implemented, mutation-proved, deployed — NOT owner-confirmed.** R2 in particular is proved
+only against a reproduction of the Graph path template; nothing here observed a real OneDrive mirror.
