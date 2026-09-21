@@ -14,6 +14,7 @@
 //
 // Run: bun scripts/artifact-traversal-guard.test.ts   (npm run test:artifact-traversal)
 
+import { readFileSync } from "node:fs";
 import { safeArtifactFolder, safeArtifactName } from "../src/features/huddle/lib/artifacts/artifacts.server";
 
 let pass = 0;
@@ -75,20 +76,36 @@ check(
   `got ${drivePath("..\\..\\Documents", "a.md")}`,
 );
 
-console.log("\nR1 — the worker guard accepts a structured document with no content");
+console.log("\nR1 — every create_artifact dispatch guard accepts a structured document with no content");
 
-// The worker guard, reproduced as the expression the handler evaluates. The verifier's failing input
-// was { name: "q3-review", format: "pptx", document: { slides: [{ title: "Q3" }] } }.
-const workerGuardRejects = (name: string, content: string, document: unknown) => !name || (!content && !document);
-
-check(
-  "structured document, no content -> ACCEPTED (the verifier's exact failing input)",
-  workerGuardRejects("q3-review", "", { slides: [{ title: "Q3" }] }) === false,
-  "guard still rejects a document-only worker call",
+// STRUCTURAL, not behavioural, and deliberately so. The three guards live inside `runHuddleTurn` and
+// the worker sub-turn — neither is exported and neither is reachable without standing up a whole turn
+// (pg pool, OpenAI client, caller identity), so a runtime test cannot express "all three dispatch
+// sites agree". An earlier draft of this file RESTATED the guard expression and asserted against the
+// restatement, which proves nothing: mutating the real source left it green. This reads the source.
+const SRC = readFileSync(
+  new URL("../src/features/huddle/lib/huddle.functions.ts", import.meta.url),
+  "utf8",
 );
-check("content, no document -> ACCEPTED", workerGuardRejects("brief", "# hi", undefined) === false, "rejected a normal call");
-check("neither content nor document -> REJECTED", workerGuardRejects("x", "", undefined) === true, "accepted an empty call");
-check("no name -> REJECTED", workerGuardRejects("", "", { slides: [] }) === true, "accepted a nameless call");
+
+// Comments are stripped first so a guard quoted in prose cannot satisfy the count.
+const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+const relaxed = (CODE.match(/if \(!name \|\| \(!content && !a\.document\)\)/g) ?? []).length;
+const legacy = (CODE.match(/if \(!name \|\| !content\)/g) ?? []).length;
+
+// OpenAI, Lovable, worker. The voice site has its own schema with required:["name","content"] and no
+// `document` property, so its stricter guard matches what its model can emit and is NOT counted here.
+check(
+  `all 3 dispatch guards accept a document-only call (found ${relaxed})`,
+  relaxed === 3,
+  `expected 3 relaxed guards in huddle.functions.ts, found ${relaxed}`,
+);
+check(
+  `no dispatch site still requires content (found ${legacy})`,
+  legacy === 0,
+  `found ${legacy} guard(s) still spelled "if (!name || !content)" — the worker site was exactly this`,
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
