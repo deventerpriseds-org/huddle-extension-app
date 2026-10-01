@@ -4195,3 +4195,39 @@ this file from 2026-09-13 and I repeated it.**
 
 **STATUS: implemented, mutation-proved, deployed — NOT owner-confirmed.** R2 in particular is proved
 only against a reproduction of the Graph path template; nothing here observed a real OneDrive mirror.
+
+## ACT:no-daily-schedule-alerts — no calendar or coursework alert has ever existed (2026-10-01)
+
+**Asked:** *"I need to know why i am not reciving daily alerts of what meetings i have on my calendar
+nor courses I have to attend that night."* Then, on the fork: *"I want seperate alerts (8am and 8pm).
+for the evening before looking at the day after and the morning of looking at the current day and
+iris should have a task of reminding me 60 minutes before any as well."*
+
+**Diagnosis — not broken, never built.** Read on `origin/main`:
+
+| Claim | Evidence |
+|---|---|
+| No calendar or coursework job exists | `scheduling-config.server.ts:58` — `JobTypeKey = "groom" \| "autowork" \| "standup" \| "reviewDigest" \| "reviewRecheck"`. A **closed union**. |
+| The only daily push reads the board alone | `standup.server.ts` `surfaceDigest()` — durable turn in `dm-terry-locke`, `notify:"push"`. Grep for `calendar` in that file returns **nothing**. Its directive covers what the team did, what's in review, what's blocked, today's priorities. |
+| Calendar is pull-only | every caller of `getGraphCalendarEvents` is a TOOL DISPATCH site (`huddle.functions.ts`, `voice/realtime-tools.server.ts`) — no scheduled caller |
+| Coursework is pull-only | `nexus/nexus.server.ts` `get_nexus_assignments` — real EMBA assignments with due dates, reachable only when the model calls the tool |
+
+So the agent answers correctly when asked and never volunteers — there is no push path carrying
+either dataset.
+
+**Spec agreed:** 20:00 = tomorrow's meetings + classes; 08:00 = today's; T−60min per item, owned by Iris.
+
+**Two design hazards flagged into the AC brief rather than discovered mid-build:**
+1. **A class may have no START TIME.** Nexus assignments carry DUE DATES. A T−60 reminder needs a
+   start instant; a due date is not one. If the Nexus shape has no meeting time, the T−60 covers
+   Outlook meetings and **cannot** cover courses from that source — the AC must say so, not paper over it.
+2. **T−60 is a different SHAPE from the two digests.** The scheduler wakes on whole hours
+   (`hours: number[]`), which fits 08:00/20:00 exactly and does not fit an offset from an arbitrary
+   14:37 meeting. `lib/tasks/reminders.ts` already schedules an arbitrary future instant — the build
+   is "the morning job schedules a reminder per event", EXTENDING that, not a second scheduler.
+
+Also required into the brief: the 8am/8pm hours and the 60-minute lead time must be **user-settable**
+(extend `SCHEDULING_DEFAULTS` + `identity.scheduling_config`), never constants.
+
+**Status: AC pass IN FLIGHT** (cold `ac-writer`, no shared context) → `docs/qc-evidence/AC-daily-schedule-alerts.md`.
+Nothing implemented, nothing deployed.
