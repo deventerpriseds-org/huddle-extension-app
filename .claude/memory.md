@@ -3452,3 +3452,52 @@ not unconditionally per turn.
   viewer.** `text/html` and `text/vnd.mermaid` pass it; **`image/svg+xml` does not**, so an SVG
   artifact reaches the client with `text: null` and can only degrade to the `<img>` path. The viewer
   cannot render what the server never sends.
+
+## This container's setup script NEVER RAN — and the marker file is the only reason anyone knew (2026-10-01)
+
+`cat /var/log/eds-setup-result` → **`CLONE_FAILED attempts=5`**. Neither
+`/home/user/.claude/settings.json` nor `/root/.claude/settings.json` existed, so **ZERO eds hooks
+were bound** for this session's entire life until the sync skill was run by hand: no Stop gate, no
+git-drift detector, no autosave, no phase-tag or empty-promise checker.
+
+**Why this is the important half:** per Anthropic's own docs the environment setup script runs
+**exactly once per environment, ever** (until the field is edited or the ~7-day cache expires). A
+failure on that one run is invisible forever afterwards — nothing re-checks it. Every later session
+in this environment silently inherits the uninstalled snapshot and *looks* completely normal.
+
+**The three checks, in the order that actually settles it:**
+1. `cat /var/log/eds-setup-result` — absent entirely means this script has never run here at all.
+2. Read the hooks back out of the project settings file; an EMPTY result is an ERROR, never an answer.
+3. **A hook PRESENT proves nothing — the tell is a hook FIRING.** After an edit,
+   `git ls-remote origin 'refs/heads/eds-wip/<branch>'`. Measured this session: ref present, **28
+   seconds old**, and it contained the untracked file an agent was mid-write on. That is the only
+   check that distinguishes "installed" from "bound".
+
+**Also found, and it is the hazard the sync skill exists for:** `/home/user/eds-claude-skills` sat on
+`claude/iris-huddle-interaction-baj51c` with **no upstream, 47 behind origin/main, 0 ahead**.
+`eds-sync-clones.sh` refuses to touch a no-upstream clone and says so loudly. 0 ahead means nothing
+unmerged, so a fast-forward was safe — **check the ahead count before choosing the recovery**, since
+behind-only and diverged look identical and need opposite commands. A push from a clone 47 behind
+would have reverted 47 commits of org-wide rules for every session.
+
+After the sync: 13 hooks at `_eds_version: 60`, matching `CURRENT_VERSION = 60`; all clones at
+`origin/main` `3583b93`.
+
+## Daily schedule alerts: the dataset exists, the PUSH PATH does not (2026-10-01)
+
+Do not re-derive this, and do not report the alerts as broken — nothing is broken.
+
+- **`JobTypeKey` is a CLOSED UNION of five** (`scheduling-config.server.ts:58`):
+  `groom | autowork | standup | reviewDigest | reviewRecheck`. No calendar job, no coursework job.
+- **The 08:00 standup is the ONLY daily push** and reads the **task board alone** —
+  `standup.server.ts` `surfaceDigest()`, durable turn in `dm-terry-locke` with `notify:"push"`.
+  Grepping that file for `calendar` returns nothing.
+- **Both datasets are PULL-ONLY.** Every caller of `getGraphCalendarEvents` and of
+  `get_nexus_assignments` is a tool dispatch site. The agent answers when asked and never volunteers.
+- **A class may have a DUE DATE and no START TIME.** A "60 minutes before" reminder needs a start
+  instant. If Nexus carries no meeting time, a T−60 reminder is expressible for Outlook meetings and
+  NOT for courses from that source — check the shape before promising it.
+- **T−60 is a different shape from a digest.** The scheduler wakes on whole hours; an offset from an
+  arbitrary meeting time does not fit it. `lib/tasks/reminders.ts` already schedules an arbitrary
+  future instant — EXTEND it ("the morning job schedules a reminder per event"), never add a second
+  scheduler.
