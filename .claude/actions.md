@@ -4231,3 +4231,43 @@ Also required into the brief: the 8am/8pm hours and the 60-minute lead time must
 
 **Status: AC pass IN FLIGHT** (cold `ac-writer`, no shared context) → `docs/qc-evidence/AC-daily-schedule-alerts.md`.
 Nothing implemented, nothing deployed.
+
+## ACT:class-schedules-empty — the table meant to hold class meeting times has ZERO rows (2026-10-02)
+
+**Asked:** *"can you tell me the scheudel for all 3 programs in the dba path?"* — and, earlier,
+*"maybe it's that the scheudle needs to be stored better for the digest to work"*.
+
+**The owner's hunch was right and the measurement is blunt.** `db-query.yml` on `nexus_hub`
+(run **36954088373**, conclusion success):
+
+```
+program                                    | courses | class_sessions
+ Doctorate - DBA at University of Michigan |       3 |              0
+ Executive MBA                             |      22 |              0
+ MIT Chief Technology Officer Program      |       5 |              0
+```
+
+**30 courses across three programs; `content.class_schedules` holds ZERO rows.** The DBA schedule
+cannot be reported because the system does not have it.
+
+**CORRECTION TO MY OWN EARLIER CLAIM, and it is the lesson here.** On 2026-10-01 I told the owner
+the course half was unblocked because `content.class_schedules.start_time` is a real `timestamptz`.
+I had read the **column definition** in `sql/nexus_hub/002_app_tables.sql` and treated the SCHEMA as
+evidence the DATA existed. It is the same wrong-proxy error as reading a comment instead of the
+code: a correctly-shaped empty table proves only that someone intended to fill it.
+
+**The writer EXISTS, so "nothing was built" is also wrong:**
+- `api/src/functions/extractSchedule.ts:380` — `INSERT INTO content.class_schedules (...)`
+- `api/src/functions/fetchSchedulePdf.ts` — fetches the schedule PDF that feeds it
+
+So the pipeline is built and the table is empty: it has either never been run, or it runs and fails.
+Row counts across the whole `content` schema dispatched to settle which.
+
+**Why this reorders the whole thread.** The UMich OAuth hunt, the ICS proposal and the Google-project
+search were all in service of getting class times into the system. The table meant to hold them was
+never filled, so none of that was the blocker for classes.
+
+**Open question only the owner can answer:** do the DBA syllabi actually CONTAIN meeting dates/times?
+If not, extraction has nothing to extract and a connected calendar is genuinely the only source.
+
+**Status: measured, root cause not yet isolated. Nothing implemented, nothing deployed.**
