@@ -5507,8 +5507,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             description: RTOOL.description,
             inputSchema: z.object({
               text: z.string(),
+              // Was missing here, so the Lovable path silently dropped kind and always set an alarm.
+              kind: z.enum(["reminder", "alarm"]).optional(),
               delay_minutes: z.number().optional(),
               at_time: z.string().optional(),
+              task_id: z.string().optional(),
             }),
             execute: async (args) => {
               const a = args as Record<string, unknown>;

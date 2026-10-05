@@ -445,6 +445,21 @@ export async function getTaskTags(id: string): Promise<string[]> {
   return r.rows[0]?.tags ?? [];
 }
 
+/**
+ * Current status of a mirrored journey task (e.g. "DONE"), or null when it isn't in the mirror.
+ * Used to skip firing an alarm for a task that's already finished.
+ */
+export async function getTaskStatus(id: string): Promise<string | null> {
+  if (!id) return null;
+  try {
+    await ensureBootstrapped();
+    const r = await getPool().query<{ status: string | null }>(`SELECT status FROM tasks.journey_tasks WHERE id = $1`, [id]);
+    return r.rows[0]?.status ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function getTaskTitle(id: string): Promise<string> {
   if (!id) return "";
   try {
