@@ -82,6 +82,37 @@ const AUTOWORK_DEADLINE_MS = 15000; // hard cap on the chained auto-work pass so
  */
 const PRIORITY_LANE_MAX = 20;
 
+/**
+ * Decide each task's priority-lane field for one groom pass. EXPORTED AND PURE so the test exercises
+ * THIS function rather than a copy of the rule.
+ *
+ * That distinction is not pedantic: the first version of the test reimplemented this logic inline,
+ * so mutating the real cap left the suite green and the mutation reported INERT — a guard that
+ * proved nothing. A rule worth protecting has to be imported, not restated.
+ *
+ * Three outcomes:
+ *   in the lane     -> { rank }       journey sets is_priority = true + priority_rank
+ *   user-pinned     -> { }            journey touches NEITHER field; the user's own star survives
+ *   everything else -> { unset_rank } journey clears is_priority + priority_rank
+ */
+export function laneFieldFor(
+  taskId: string,
+  rankById: ReadonlyMap<string, number>,
+  userPinned: ReadonlySet<string>,
+): { rank: number } | { unset_rank: true } | Record<string, never> {
+  const rank = rankById.get(taskId);
+  if (rank) return { rank };
+  if (userPinned.has(taskId)) return {};
+  return { unset_rank: true };
+}
+
+/** The dense 1..N map for one pass, capped at `max`. Pure; `sortedIds` must already be in lane order. */
+export function laneRanks(sortedIds: readonly string[], max: number = PRIORITY_LANE_MAX): Map<string, number> {
+  const m = new Map<string, number>();
+  sortedIds.slice(0, max).forEach((id, i) => m.set(id, i + 1));
+  return m;
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     p,
@@ -240,8 +271,7 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     const ranked = assignments
       .filter((a) => typeof a.rank === "number")
       .sort((x, y) => (x.rank as number) - (y.rank as number));
-    const rankById = new Map<string, number>();
-    ranked.slice(0, PRIORITY_LANE_MAX).forEach((a, i) => rankById.set(a.id, i + 1));
+    const rankById = laneRanks(ranked.map((a) => a.id));
 
     // THE USER'S OWN "This Week" IS NOT GROOMING'S TO CLEAR. `tasks.week_order` holds the ids the
     // user explicitly placed (star / reorder in the priorities widget). Those are left ENTIRELY
@@ -275,16 +305,7 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
       const llmTags = Array.isArray(a.tags) ? a.tags.map((t) => String(t).toLowerCase()) : [];
       const preserved = (tagsById.get(a.id) ?? []).filter((t) => CONTROL_TAGS.has(t));
       const tags = Array.from(new Set([...llmTags, ...preserved])).slice(0, 5);
-      const rank = rankById.get(a.id);
-      // Three cases, and the third is what protects the user:
-      //   in the lane      -> send `rank`      (journey sets is_priority = true + priority_rank)
-      //   user-pinned      -> send NEITHER     (journey touches neither field; their star survives)
-      //   everything else  -> send `unset_rank` (journey clears is_priority + priority_rank)
-      const laneField = rank
-        ? { rank }
-        : userPinned.has(a.id)
-          ? {}
-          : { unset_rank: true };
+      const laneField = laneFieldFor(a.id, rankById, userPinned);
       return { task_id: a.id, assigned_agent: a.assigned_agent, tags, priority: a.priority, ...laneField };
     });
 

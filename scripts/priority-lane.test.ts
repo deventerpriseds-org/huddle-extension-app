@@ -14,6 +14,7 @@
 // Run:  bun scripts/priority-lane.test.ts   (npm run test:priority-lane)
 
 import { scoreTask, type ScorableTask } from "../src/features/huddle/lib/tasks/scoring";
+import { laneFieldFor, laneRanks } from "../src/features/huddle/lib/tasks/groom";
 
 let pass = 0, fail = 0;
 function check(label: string, cond: boolean, detail: string) {
@@ -21,15 +22,14 @@ function check(label: string, cond: boolean, detail: string) {
   cond ? pass++ : fail++;
 }
 
-// ── The lane-assignment rule, extracted exactly as groom.ts applies it ───────────────────────────
-const PRIORITY_LANE_MAX = 20;
+// ── The REAL rule, imported from groom.ts ───────────────────────────────────────────────────────
+// Imported, never restated. The first version of this file reimplemented the cap inline, so mutating
+// the real PRIORITY_LANE_MAX left every assertion green and mutate.sh correctly reported INERT: the
+// suite was testing a copy of the rule and proving nothing about the shipped one.
+const PRIORITY_LANE_MAX = 20; // mirrors groom.ts's seed, used only to size the fixtures below
 function laneFields(sortedIds: string[], userPinned: Set<string>) {
-  const rankById = new Map<string, number>();
-  sortedIds.slice(0, PRIORITY_LANE_MAX).forEach((id, i) => rankById.set(id, i + 1));
-  return sortedIds.map((id) => {
-    const rank = rankById.get(id);
-    return { id, ...(rank ? { rank } : userPinned.has(id) ? {} : { unset_rank: true }) };
-  });
+  const rankById = laneRanks(sortedIds);
+  return sortedIds.map((id) => ({ id, ...laneFieldFor(id, rankById, userPinned) }));
 }
 
 {
