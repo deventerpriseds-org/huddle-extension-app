@@ -279,12 +279,15 @@ export async function dispatchPrioritiesWidget(
   }
   const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : "Priorities";
   try {
-    const { getBoardTasks } = await import("./tasks.server");
+    const { getBoardTasks, getWeekOrder } = await import("./tasks.server");
     const { safeTimeZone, localDateKey, buildPrioritiesBand } = await import("./widgets.server");
     const tz = safeTimeZone(timeZone);
     const nowMs = Date.now();
     const rows = await getBoardTasks(userEmail);
-    const band = buildPrioritiesBand(rows, tz, nowMs);
+    // Same ordering the docked widget and the Settings view use — an agent-surfaced card must not
+    // show a different order from the one the user arranged. Degrades to [] rather than failing.
+    const order = await getWeekOrder(userEmail).catch(() => [] as string[]);
+    const band = buildPrioritiesBand(rows, tz, nowMs, order);
     // ANNOTATED, not an inline literal: the result of this function is a JSON *string*, so tsc
     // cannot check the payload once it is stringified. Building it as a typed value first is what
     // makes a drift in Lane B's contract a compile error here instead of a widget that renders blank.

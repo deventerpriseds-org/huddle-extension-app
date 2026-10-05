@@ -34,6 +34,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Loader2,
   Mic,
   Pause,
@@ -575,11 +576,58 @@ function ReadError({ error }: { error?: string }) {
 
 /* ── PRIORITIES ─────────────────────────────────────────────────────────────────────────────────── */
 
-function PriorityRow({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
+/**
+ * One row of the This Week band.
+ *
+ * The ✓/⏸ buttons are mounted HERE as well as on the schedule widget. They always worked server-side
+ * — `updateWidgetTask` has accepted `done` and `pause` (which parks: BACKLOG + the parking-lot tag
+ * union) since it was written — but they had only ever been rendered on the schedule widget's rows,
+ * so from the priorities band the owner could not complete or park anything. Mounting, not wiring.
+ *
+ * Reordering is exposed as ▲/▼ buttons rather than drag alone, deliberately: this widget's primary
+ * surface is a phone, and the repo's only existing drag (BoardView) is native HTML5 DnD, which does
+ * not fire on touch at all. Buttons work on touch, with a keyboard, and with a screen reader; drag
+ * is layered on top for mouse users rather than being the only way in.
+ */
+function PriorityRow({
+  row,
+  caller,
+  onMove,
+  canMoveUp,
+  canMoveDown,
+}: {
+  row: WidgetTaskRow;
+  caller: Caller;
+  onMove?: (taskId: string, dir: -1 | 1) => void;
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
+}) {
   const { status } = useRowState(row);
   const done = status === "DONE";
   return (
     <li className="flex items-center gap-2 border-b border-hairline px-3 py-2 last:border-b-0">
+      {onMove && (
+        <span className="flex shrink-0 flex-col">
+          <button
+            type="button"
+            aria-label={`Move “${row.title}” up`}
+            disabled={!canMoveUp}
+            onClick={() => onMove(row.id, -1)}
+            className="flex h-4 w-5 items-center justify-center text-muted-foreground disabled:opacity-25 hover:text-foreground"
+          >
+            <ChevronUp className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            aria-label={`Move “${row.title}” down`}
+            disabled={!canMoveDown}
+            onClick={() => onMove(row.id, 1)}
+            className="flex h-4 w-5 items-center justify-center text-muted-foreground disabled:opacity-25 hover:text-foreground"
+          >
+            <ChevronDown className="h-3 w-3" />
+          </button>
+        </span>
+      )}
       <span
         className={cn("min-w-0 flex-1 truncate text-[13px] leading-snug", done ? "text-muted-foreground line-through" : "text-foreground")}
         title={row.title}
@@ -588,6 +636,8 @@ function PriorityRow({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
       </span>
       <CategoryChip category={row.category} />
       <TodayButton row={row} caller={caller} />
+      <DoneButton row={row} caller={caller} />
+      <PauseButton row={row} caller={caller} />
     </li>
   );
 }
@@ -710,6 +760,51 @@ export function PrioritiesWidget({
   const caller = useCaller();
   useSeededRows(data.band, live);
 
+  // The user's This Week ordering, applied optimistically on top of the server's.
+  //
+  // REORDER IS ENABLED ONLY ON A `live` WIDGET. A per-reply chat card is a FROZEN SNAPSHOT of the
+  // band as it was when that message was sent (see the `live` prop) — letting someone drag rows in
+  // a three-day-old card would persist an ordering built from a list that no longer exists.
+  const [override, setOverride] = useState<string[] | null>(null);
+  const canReorder = live === true && data.ok && data.band.length > 1;
+
+  const shown = useMemo(() => {
+    if (!override) return data.band;
+    // Map preserves insertion order, so whatever the override does not name keeps the server's
+    // order underneath — the same sparse-pin semantics `applyWeekOrder` uses on the server.
+    const rest = new Map(data.band.map((r) => [r.id, r] as const));
+    const out: typeof data.band = [];
+    for (const id of override) {
+      const r = rest.get(id);
+      if (r) {
+        out.push(r);
+        rest.delete(id);
+      }
+    }
+    return [...out, ...rest.values()];
+  }, [data.band, override]);
+
+  const onMove = useCallback(
+    (taskId: string, dir: -1 | 1) => {
+      const ids = shown.map((r) => r.id);
+      const from = ids.indexOf(taskId);
+      const to = from + dir;
+      if (from < 0 || to < 0 || to >= ids.length) return;
+      [ids[from], ids[to]] = [ids[to], ids[from]];
+      setOverride(ids); // paint immediately; the write below is what makes it survive a reload
+      void (async () => {
+        try {
+          const { reorderWidgetBand } = await import("@/features/huddle/lib/tasks/widgets.functions");
+          const res = await reorderWidgetBand({ data: { caller, taskIds: ids } });
+          if (!res?.ok) setOverride(null); // roll back to server order rather than lying
+        } catch {
+          setOverride(null);
+        }
+      })();
+    },
+    [shown, caller],
+  );
+
   return (
     <div className={widgetShell(chrome)}>
       <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
@@ -734,8 +829,15 @@ export function PrioritiesWidget({
       ) : data.band.length > 0 ? (
         <ScrollBand band full={full}>
           <ul>
-            {data.band.map((row) => (
-              <PriorityRow key={row.id} row={row} caller={caller} />
+            {shown.map((row, i) => (
+              <PriorityRow
+                key={row.id}
+                row={row}
+                caller={caller}
+                onMove={canReorder ? onMove : undefined}
+                canMoveUp={i > 0}
+                canMoveDown={i < shown.length - 1}
+              />
             ))}
           </ul>
         </ScrollBand>

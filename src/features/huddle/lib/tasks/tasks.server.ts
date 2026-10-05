@@ -266,6 +266,28 @@ ALTER TABLE tasks.scheduled_jobs        ADD COLUMN IF NOT EXISTS user_id TEXT;
 CREATE INDEX IF NOT EXISTS scheduled_jobs_userid_idx        ON tasks.scheduled_jobs(user_id);
 ALTER TABLE tasks.router_config         ADD COLUMN IF NOT EXISTS user_id TEXT;
 CREATE INDEX IF NOT EXISTS router_config_userid_idx         ON tasks.router_config(user_id);
+
+-- The user's explicit "This Week" ordering for the priorities widget.
+--
+-- WHY ITS OWN TABLE, and not priority_rank / a tag / workspace_state:
+--   * priority_rank is REWRITTEN WHOLESALE by grooming every Monday (groom.ts:206 normalizes a
+--     dense 1..N over every task, capped at SCHEDULED_MAX=80 — which is exactly the max measured on
+--     live data). An order stored there survives until the next groom and no longer.
+--   * Tags are no safer: groom.ts:225 replaces the tag array, preserving only CONTROL_TAGS.
+--   * identity.workspace_state is the CLIENT's blob — useWorkspaceSync debounces and saves the
+--     whole zustand payload, so a server-written key there is wiped on the next client sync. It is
+--     also keyed on entra_object_id while every task store here is keyed on email.
+-- So the ordering lives where only Huddle writes it and grooming cannot reach it.
+--
+-- SPARSE: holds only the ids the user explicitly placed. Everything else keeps journey's computed
+-- order underneath (see applyWeekOrder). Ids that leave the band just stop matching — no pruning.
+CREATE TABLE IF NOT EXISTS tasks.week_order (
+  user_email TEXT PRIMARY KEY,
+  task_ids   TEXT[]      NOT NULL DEFAULT '{}',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE tasks.week_order            ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS week_order_userid_idx            ON tasks.week_order(user_id);
 `;
 
 // NOTE: the hand-written "capability prompt" was removed. Capability is DATA — the tools each agent is
@@ -679,6 +701,41 @@ export async function setAutoWorkSignature(userEmail: string, signature: string)
 }
 
 /** The previous standup run's instant (null if never run), for the "moved to review since" bucket. */
+/**
+ * The user's explicit "This Week" ordering — a SPARSE list of task ids, most-important first.
+ * Only ids the user actually placed are stored; everything else keeps journey's computed order.
+ * See `tasks.week_order`'s DDL comment for why this is not `priority_rank`, a tag, or workspace_state.
+ */
+export async function getWeekOrder(userEmail: string): Promise<string[]> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
+  const { rows } = await getPool().query<{ task_ids: string[] }>(
+    userId
+      ? `SELECT task_ids FROM tasks.week_order
+          WHERE user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2))
+          ORDER BY (user_id IS NOT NULL) DESC, updated_at DESC LIMIT 1`
+      : `SELECT task_ids FROM tasks.week_order WHERE lower(user_email) = $1 LIMIT 1`,
+    userId ? [userId, emails] : [userEmail.toLowerCase()],
+  );
+  return rows[0]?.task_ids ?? [];
+}
+
+/** Replace the ordering wholesale. A reorder IS a whole-list operation, so one atomic write beats
+ *  N rank updates with gap management — and there is no partial-reorder state to recover from. */
+export async function setWeekOrder(userEmail: string, taskIds: readonly string[]): Promise<void> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
+  await getPool().query(
+    `INSERT INTO tasks.week_order (user_email, task_ids, user_id, updated_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (user_email) DO UPDATE
+       SET task_ids = EXCLUDED.task_ids, user_id = COALESCE(EXCLUDED.user_id, tasks.week_order.user_id), updated_at = now()`,
+    [userEmail.toLowerCase(), [...taskIds], userId ?? null],
+  );
+}
+
 export async function getLastStandupAt(userEmail: string): Promise<string | null> {
   await ensureBootstrapped();
   const { resolveScopeByEmail } = await import("../identity/identity.server");

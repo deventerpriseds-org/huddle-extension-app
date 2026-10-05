@@ -387,3 +387,59 @@ but the declared brief text was already wrong. **The next verification of `artif
 Related: I also reported loop 1's C3 as "banked" when it had never been pushed — a partial result read
 off an agent's status line and treated as durable evidence, which is precisely what the per-claim push
 rule exists to prevent.
+
+---
+
+## 2026-09-21 — verifier loop 3 on `artifact-formats`: the SAME class, twice in a row
+
+Loop 3 returned **10 CONFIRMED, 2 REFUTED, + 2 robustness defects** — after loop 2 had already named
+the class in the section directly above this one. Fixed and deployed at `500bbf9`.
+
+| # | What I claimed / shipped | Ground truth | The single source that would have settled it |
+|---|---|---|---|
+| R1 | "all four dispatch paths accept a structured `document`" | **Two** did. The durable-turn worker (`huddle.functions.ts:7140`) and the VOICE path (`realtime-tools.server.ts:592`) still demanded `content` | `grep "name and content are required" src/` — one command, four hits, two of them unfixed |
+| R2 | "path traversal is closed" | Closed for `{name}`. `Huddle Artifacts/{lane}/{name}` has **two** model-controlled segments; `folder` went into the INSERT raw | Reading the line I had just fixed: the path I was protecting was right there, with the other half in it |
+| Rob-1 | — | A **5005-character** name passed through untruncated and fails at SharePoint's ~400-char path limit, far from where it was accepted | any length probe of `safeArtifactName` |
+| Rob-2 | — | The traversal fix **CREATED** a collision: `reports/q3.docx` and `drafts/q3.docx` now both sanitise to `q3.docx`, and the mirror is path-keyed with replace semantics, so one silently overwrote the other on a real drive | asking "what does this fix change downstream" — the mirror's own comment says it overwrites by path |
+
+**Rob-2 is the one worth carrying.** A security fix that collapses an input space can destroy data
+through the very mechanism that made it safe. *Ask what a sanitiser makes IDENTICAL, not only what it
+makes safe* — then check whether anything downstream keys on that value being distinct.
+
+### The class, restated because naming it did not stop it
+Loop 2's lesson was "I verified the thing I could see from where I was standing." Loop 3 is the same
+error one level up: **I fixed the instance that was named instead of the class it belongs to.** Told
+"`name` traverses", I fixed `name`. Told "two paths reject `document`", I fixed those two. In both
+cases the sibling was in the same expression or the same grep.
+
+**Guard, structural rather than prose:** three assertions in `artifact-format-dispatch.test.ts` now
+read SOURCE TEXT — guard present at all four dispatch sites, voice schema able to emit `document`,
+both path segments sanitised at `createArtifact`. These are properties a behavioural test of the sites
+you already edited can never see, and that blindness is precisely what cost loops 2 and 3. All six
+mutations FIRED.
+
+### Three new failure modes caught this turn
+1. **A clean `git auto-merge` is not a correct merge.** A second lane fixed R1 and R2 independently;
+   git merged `artifacts.server.ts` with NO conflict and produced **two `export function
+   safeArtifactFolder`** in one module. Only `tsc` would have caught it. *After any merge touching a
+   file both sides edited, grep for duplicate top-level declarations — the absence of a conflict
+   marker is not evidence.*
+2. **An assertion keyed on a bare string fires on prose about itself.** My guard for "no site returns
+   the old error" matched a code COMMENT that quoted the old error to explain why it went. Re-keyed to
+   the returned expression (`error: "…"`). A guard that fires on documentation of itself is noise, and
+   noise is what gets assertions deleted.
+3. **The voice fix was almost inert.** Relaxing the voice executor's guard changed nothing on its own:
+   the voice schema had `additionalProperties: false` with `required: ["name", "content"]`, so a
+   document-only spoken call was **unemittable**. Same shape as the `format` miss in loop 2 — the call
+   site was checked, the schema was not. *Whenever you relax an executor, read the schema that feeds it.*
+
+### A container reclaim then proved the push-per-claim rule, live
+Mid-turn the container was restored and the local tree rewound **129 commits** to a clean `bd1033f`.
+Everything already pushed (`d695360`, `500bbf9`, the deploy) was untouched on origin; the only thing
+lost was this very section, written but not yet committed. Recovery was the measured direction check —
+`git rev-list --left-right --count origin/main...HEAD` read `129  0`, so `ahead` was 0 and
+`reset --hard origin/main` was the correct command rather than the destructive one.
+
+### Status
+Mechanism-verified and deployed; **NOT user-confirmed.** The next verification of `artifact-formats`
+is **loop 4**.
