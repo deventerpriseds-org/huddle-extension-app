@@ -4139,3 +4139,48 @@ Nothing may be written as "fixed" until he re-tests in his own app.
 **Open, deliberately not done:** `builtin_tools_enabled` is reachable through the config functions but
 I did not confirm a Settings UI toggle renders for it. Per the no-hardcoded-config rule that toggle
 should exist; flagged, not built, because it is outside what was asked.
+
+---
+
+## ACT:artifact-formats — verifier loop 3 closed; deployed; NOT owner-confirmed (2026-09-21)
+
+**Deployed.** `main` `500bbf9`, `deploy-swa.yml` run **35644105251**, `conclusion: success`, matched
+on `head_sha` — not on "the latest run".
+
+**Loop 3 verdict** (`docs/VERIFY-artifact-formats-3.md`): **10 CONFIRMED, 2 REFUTED, + 2 robustness
+defects.** All four are the same root cause and it is the second loop running: the loop-2 fix closed
+the site it was pointed at and left every sibling site open.
+
+| Finding | What was actually wrong | Fix |
+|---|---|---|
+| **R1** worker + voice guard | Two of four dispatch paths were relaxed to accept a structured `document`; the durable-turn worker and the VOICE path still demanded `content`, so a spoken "make me a deck" was rejected outright while I reported the format work done | all four guards relaxed, and the error text corrected — `"name and content are required"` was still telling callers to send `content` |
+| **R1b** (found while fixing R1) | The voice fix was nearly INERT: the voice schema had `additionalProperties:false` with `required:["name","content"]`, so a document-only spoken call was **unemittable** regardless of the executor | `document` added to the voice schema; `required` → `["name"]` |
+| **R2** folder traversal | `Huddle Artifacts/{lane}/{name}` is built from **two** model-controlled values. Loop 2 sanitised `name`; `folder` went into the INSERT raw, so `folder:"../../../Documents"` escaped by the identical mechanism (`encodeURIComponent` does not encode `.`) | `safeArtifactFolder` + sanitising in **`createArtifact`**, the LAST gate before persistence — it has five callers including USER-uploaded chat attachments, four the agent-level choke point never covered |
+| **Rob-1** | A **5005-character** name passed through untruncated and would be rejected by SharePoint's ~400-char path limit, far from where it was accepted | 120-char cap, truncating the stem and keeping the extension |
+| **Rob-2** | The traversal fix **CREATED** a data-loss path: `reports/q3.docx` and `drafts/q3.docx` both sanitise to `q3.docx`, and the mirror is deliberately path-keyed with replace semantics, so one silently overwrote the other on the owner's real drive | `mirrorFileName` suffixes the stem with the artifact id's short form — unique per artifact, stable across re-mirrors, still readable (`Q3 plan (1a2b3c4d).docx`) |
+
+**TWO LANES FIXED R1 AND R2 INDEPENDENTLY, and the merge is the part to remember.** A parallel session
+landed its own fixes for the same two findings while this work was in flight. `git merge` reported
+**no conflict** on `artifacts.server.ts` and produced **two `export function safeArtifactFolder`** in
+one module — only `tsc` would have caught it. The merge kept the union, deliberately:
+
+- **from the other lane:** `safeArtifactFolder`'s body (last real segment, fallback `"Personal"` — the
+  `artifacts.items` DDL default, grounded where this lane's `"Research"` was picked); the
+  last-line-of-defence sanitise inside `onedrive.server` at the outward-facing boundary, which also
+  covers rows written BEFORE the folder half was sanitised; `artifact-traversal-guard.test.ts` (15).
+- **from this lane:** the `createArtifact` gate; the length cap; `mirrorFileName`; the voice path
+  entirely (neither its guard nor its schema was touched by the other lane); the corrected error text.
+
+**Guards.** `artifact-format-dispatch.test.ts` 27 → **48** assertions. Three read SOURCE TEXT on
+purpose — "is the guard at all four dispatch sites", "can the voice schema emit `document`", "are both
+path segments sanitised at `createArtifact`". Those are properties a behavioural test of the sites you
+already edited can never see, and that blindness is exactly what cost loops 2 and 3.
+
+**Mutation-proved 6/6 FIRED**, tree clean after each: folder guard, mirror lane, mirror name, length
+cap, worker guard, voice schema. Evidence: `tsc` clean, build clean, **195 assertions green across 7
+suites** (artifact-render 52, artifact-format-dispatch 48, artifact-preview 28, artifact-traversal-guard
+15, widget-topic-tree 20, app-viewport-height 12, router-winners 20).
+
+**STATUS: mechanism-verified and deployed, NOT owner-confirmed.** What the owner needs to try, and the
+second half matters because it was the silently-broken path: produce a **Word doc, a deck and a mermaid
+diagram — BY VOICE as well as typed.** Next verification of `artifact-formats` is **loop 4**.
