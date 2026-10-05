@@ -3501,3 +3501,60 @@ Do not re-derive this, and do not report the alerts as broken — nothing is bro
   arbitrary meeting time does not fit it. `lib/tasks/reminders.ts` already schedules an arbitrary
   future instant — EXTEND it ("the morning job schedules a reminder per event"), never add a second
   scheduler.
+## Feature status — artifact rich formats: deployed through verifier loop 3; NOT owner-confirmed (2026-09-21)
+
+Deployed at `main` `500bbf9` (`deploy-swa.yml` run 35644105251, success, matched on `head_sha`).
+Three verification loops in; **the owner has not confirmed any of it live.** Say "mechanism-verified,
+not user-confirmed" until he has produced a Word doc, a deck and a mermaid diagram himself — **by
+voice as well as typed**, because voice was the silently-broken path twice running.
+
+**Four facts about this subsystem that were expensive to learn and are easy to re-break:**
+
+1. **`createArtifactFromAgent` is the agent choke point; `createArtifact` is the LAST GATE.** They are
+   not the same thing and the difference is a security boundary. `createArtifact` has **five** callers
+   — the agent tool, the durable-turn worker, the artifacts panel, `artifacts.functions`, and
+   **USER-UPLOADED chat attachments** (`attachments.functions.ts`), whose filename is exactly as
+   untrusted as model output. Sanitising only in `createArtifactFromAgent` left four of them open.
+   Both `safeArtifactFolder(input.folder)` and `safeArtifactName(input.name)` now run in
+   `createArtifact` itself; both are idempotent, so the upstream call (which needs the safe name to
+   resolve an extension) still works.
+
+2. **The OneDrive mirror path is built from TWO model-controlled values**, and `encodeURIComponent`
+   **does not encode `.`** — so a `..` segment in EITHER `{lane}` or `{name}` walks out of
+   `Huddle Artifacts/` on the owner's real drive. Loop 2 fixed `name`; loop 3 found `folder`. There is
+   now defence in depth on purpose: sanitised at `createArtifact` (what is STORED) **and** inside
+   `onedrive.server` (what is SENT, which also covers rows written before either fix).
+
+3. **The mirror is deliberately path-keyed with replace semantics** — that is what makes re-mirroring
+   idempotent instead of piling up duplicates. It also means the path must be unique PER ARTIFACT, and
+   the traversal fix broke that: `reports/q3.docx` and `drafts/q3.docx` both sanitise to `q3.docx`, so
+   one silently overwrote the other. `mirrorFileName(id, name)` suffixes the stem with the id's short
+   form. **Do not "tidy" that suffix away** — it is the only thing preventing data loss here.
+   *The general lesson: a sanitiser that COLLAPSES an input space can destroy data through the very
+   mechanism that made it safe. Ask what it makes IDENTICAL, not only what it makes safe.*
+
+4. **A tool has FOUR dispatch sites and THREE schemas, and they drift independently.** Sites:
+   OpenAI Responses + Lovable (both in `huddle.functions.ts`), the durable-turn worker
+   (`runWorkerTurn`), and voice (`realtime-tools.server.ts`). Schemas: `CREATE_ARTIFACT_TOOL`
+   (shared), the Lovable zod object, and voice's own raw schema. **The voice schema is the trap** —
+   `additionalProperties: false` means an omitted field is UNREACHABLE, not merely undocumented, so
+   relaxing the voice EXECUTOR while its schema still said `required: ["name","content"]` would have
+   changed nothing. This bit twice: `format` missing from that schema in loop 2, `document` in loop 3.
+   **Whenever you relax an executor, read the schema that feeds it.**
+
+## Hardening — 2026-09-21 (artifact-formats loop 3)
+
+- **Two lanes fixed the same two findings independently, and `git merge` reported NO conflict while
+  producing two `export function safeArtifactFolder` in one module.** Only `tsc` caught it. **After
+  any merge touching a file both sides edited, grep for duplicate top-level declarations — the absence
+  of a conflict marker is not evidence of a correct merge.** Resolution kept the union and recorded
+  both lanes' reasoning in the surviving comments, because they are different lessons (why the guard
+  was wrong vs. why it survived a verification loop).
+- **A container reclaim rewound this tree 129 commits mid-turn** (`/root/.claude/CLAUDE.md` vanished,
+  working directory reset, date jumped). Everything pushed survived on origin; the only loss was one
+  uncommitted ledger section. The direction check is what made recovery safe —
+  `git rev-list --left-right --count origin/main...HEAD` read `129  0`, so `ahead` was 0 and
+  `reset --hard origin/main` was correct rather than destructive. **Measure before you recover.**
+- **An assertion keyed on a bare string fires on prose about itself.** A guard asserting "no site
+  returns the old error" matched a code COMMENT that quoted the old error to explain why it went.
+  Key source-text guards to the returned expression (`error: "…"`), not the bare phrase.

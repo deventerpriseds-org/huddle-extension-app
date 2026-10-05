@@ -126,7 +126,15 @@ export async function createArtifact(input: CreateArtifactInput): Promise<{ id: 
   const { userId } = await resolveScopeByEmail(input.userEmail);
   const id = `art-${randomUUID()}`;
   const data = Buffer.isBuffer(input.bytes) ? input.bytes : Buffer.from(input.bytes);
-  const blobPath = `${slug(input.userEmail)}/${slug(input.folder)}/${id}-${slug(input.name)}`;
+  // SANITISE HERE, not only at the agent choke point. `createArtifact` is the LAST gate before
+  // anything is persisted, and it has five callers — the agent tool, the durable-turn path, the
+  // artifacts panel, and USER-UPLOADED chat attachments, whose filename is just as untrusted as model
+  // output. Both helpers are idempotent, so the upstream call in createArtifactFromAgent (which needs
+  // the safe name to resolve an extension) is unaffected. Loop 2 fixed `name` at one site and left
+  // `folder` and four other callers open; putting it here is what makes it a guard rather than a patch.
+  const folder = safeArtifactFolder(input.folder);
+  const name = safeArtifactName(input.name);
+  const blobPath = `${slug(input.userEmail)}/${slug(folder)}/${id}-${slug(name)}`;
   // Blob first: if the upload fails we never leave a metadata row pointing at nothing.
   await putArtifactBlob(blobPath, data, input.mime);
   await getPool().query(
@@ -137,8 +145,8 @@ export async function createArtifact(input: CreateArtifactInput): Promise<{ id: 
       input.userEmail.toLowerCase(),
       input.agentId ?? null,
       input.taskId ?? null,
-      input.folder,
-      input.name,
+      folder,
+      name,
       input.mime,
       data.length,
       blobPath,
@@ -147,6 +155,22 @@ export async function createArtifact(input: CreateArtifactInput): Promise<{ id: 
     ],
   );
   return { id, deepLink: `/artifacts/${id}` };
+}
+
+/** Longest filename we will store. SharePoint/OneDrive reject a full path over ~400 characters, and
+ *  the mirror path already spends some of that on "Huddle Artifacts/{lane}/". A 5005-character name
+ *  passed through `safeArtifactName` untouched before this cap — found by verifier loop 3, which also
+ *  noted that a name too long to mirror fails at Graph, far from where it was accepted. */
+const MAX_ARTIFACT_NAME = 120;
+
+/** Truncate the STEM, never the extension — "…verylong.docx" must stay openable as a Word file. */
+function capLength(name: string, max: number): string {
+  if (name.length <= max) return name;
+  const dot = name.lastIndexOf(".");
+  // Only treat a trailing dot-segment as an extension when it looks like one (short, no spaces).
+  const ext = dot > 0 && name.length - dot <= 10 && !/\s/.test(name.slice(dot)) ? name.slice(dot) : "";
+  const stem = ext ? name.slice(0, dot) : name;
+  return stem.slice(0, Math.max(1, max - ext.length)) + ext;
 }
 
 /**
@@ -168,7 +192,32 @@ export function safeArtifactName(name: string): string {
   const cleaned = last.replace(/[\u0000-\u001f<>:"|?*]/g, "").trim();
   if (!cleaned || cleaned === "." || cleaned === "..") return "artifact";
   // A bare extension (".docx") has no stem to address — give it one.
-  return cleaned.startsWith(".") ? `artifact${cleaned}` : cleaned;
+  return capLength(cleaned.startsWith(".") ? `artifact${cleaned}` : cleaned, MAX_ARTIFACT_NAME);
+}
+
+/**
+ * The filename this artifact takes in the owner's OneDrive.
+ *
+ * WHY IT IS NOT JUST `name`. The mirror is deliberately path-keyed — `Huddle Artifacts/{lane}/{name}`
+ * with replace semantics — so re-mirroring the SAME artifact overwrites its own item instead of
+ * piling up duplicates. That property depends on the path being unique PER ARTIFACT, and
+ * `safeArtifactName` broke it in a way that only shows up after the traversal fix: `reports/q3.docx`
+ * and `drafts/q3.docx` are two different artifacts that now both sanitise to `q3.docx`, land in the
+ * same lane, and silently overwrite each other on the user's real drive. Losing an approved
+ * deliverable to a name collision is worse than the traversal it came from.
+ *
+ * So the stem carries the artifact id's short suffix: unique per artifact, STABLE across re-mirrors
+ * (the id never changes), and still readable — `Q3 plan (1a2b3c4d).docx`.
+ */
+export function mirrorFileName(id: string, name: string): string {
+  const safe = safeArtifactName(name);
+  const short = String(id ?? "").replace(/^art-/, "").replace(/-/g, "").slice(0, 8) || "unknown";
+  if (safe.includes(`(${short})`)) return safe;
+  const dot = safe.lastIndexOf(".");
+  const ext = dot > 0 && safe.length - dot <= 10 && !/\s/.test(safe.slice(dot)) ? safe.slice(dot) : "";
+  const stem = ext ? safe.slice(0, dot) : safe;
+  const suffix = ` (${short})`;
+  return capLength(stem, MAX_ARTIFACT_NAME - suffix.length - ext.length) + suffix + ext;
 }
 
 /**
@@ -181,6 +230,16 @@ export function safeArtifactName(name: string): string {
  * A lane is ONE segment by construction, so this collapses to the last real segment and drops any
  * `.`/`..`. Falls back to "Personal" — the same default the `artifacts.items` DDL uses — so an
  * artifact is never stranded in an unaddressable folder.
+ *
+ * TWO LANES WROTE THIS FUNCTION INDEPENDENTLY off the same verifier finding, and git auto-merged
+ * both into this module with NO conflict — a duplicate `export function` that only `tsc` would have
+ * caught. This body is the survivor because its fallback is grounded in the DDL default above rather
+ * than picked; the other collapsed nested segments with a dash instead of taking the last, which is
+ * a coin-flip either way. Worth remembering that a clean auto-merge is not a correct merge.
+ *
+ * The lesson the finding itself carries: loop 2 sanitised `name` and never asked what ELSE feeds
+ * that path. Fixing the input that was named instead of the class is what this repo's "systematic
+ * capability, never a patch" rule warns about, and it cost a whole verification loop.
  */
 export function safeArtifactFolder(folder: string): string {
   const raw = String(folder ?? "").replace(/\\/g, "/");
@@ -548,7 +607,17 @@ export async function mirrorArtifactToOneDrive(userEmail: string, id: string): P
   const bytes = await getArtifactBlobBytes(row.blob_path);
   if (!bytes) return { ok: false, error: "Artifact bytes not found in storage." };
   const { uploadArtifactToOneDrive } = await import("./onedrive.server");
-  const r = await uploadArtifactToOneDrive({ mailbox: row.user_email, lane: row.folder, name: row.name, bytes, mime: row.mime });
+  // Both segments are sanitised again here rather than trusted from the row: rows written before the
+  // traversal fix landed still hold whatever the model sent, and this is the call that puts them on a
+  // real drive. `mirrorFileName` also disambiguates two artifacts whose names sanitise to the same
+  // string — see its header; without it the path-keyed overwrite eats one of them.
+  const r = await uploadArtifactToOneDrive({
+    mailbox: row.user_email,
+    lane: safeArtifactFolder(row.folder),
+    name: mirrorFileName(row.id, row.name),
+    bytes,
+    mime: row.mime,
+  });
   if (!r.ok) return { ok: false, error: r.error, needsConsent: r.needsConsent };
   await getPool().query(`UPDATE artifacts.items SET onedrive_url = $2, updated_at = now() WHERE id = $1`, [id, r.webUrl ?? null]);
   return { ok: true, onedrive_url: r.webUrl ?? null };

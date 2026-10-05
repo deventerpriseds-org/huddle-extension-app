@@ -7141,8 +7141,17 @@ async function runWorkerTurn(record: {
         // so the old `!content` guard made the schema lie to the worker: a worker that followed its
         // own tool description into a slide layout was rejected outright. Matches the OpenAI and
         // Lovable guards; found by the independent verifier (VERIFY-artifact-formats-3.md, R1).
+        //
+        // Two lanes fixed this line independently and the merge kept both reasons, because they are
+        // different lessons: the paragraph above is WHY the guard was wrong (the schema promised
+        // something the executor refused); the reason it SURVIVED loop 2 is that the two chat paths
+        // were relaxed and this one and the voice one were not — the sites that had been edited got
+        // checked, the sites that carried the same rule did not.
+        //
+        // The error text is part of the fix, not cosmetics: "name and content are required" was
+        // still telling a caller to send `content` when `document` alone is now valid.
         if (!name || (!content && !a.document))
-          return JSON.stringify({ ok: false, error: "name and content are required" });
+          return JSON.stringify({ ok: false, error: "name plus content or document are required" });
         if (artifactId) return JSON.stringify({ ok: true, deduped: true, id: artifactId });
         if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
         try {

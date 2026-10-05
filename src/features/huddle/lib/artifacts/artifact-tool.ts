@@ -78,7 +78,11 @@ export const CREATE_ARTIFACT_TOOL = {
 
 export interface CreateArtifactToolArgs {
   name?: unknown;
+  /** Must stay in step with the `format` enum above — a caller typing this shape should see every
+   *  field the tool actually accepts, or it will reach for `content` when `document` is the answer. */
+  format?: unknown;
   content?: unknown;
+  document?: unknown;
   folder?: unknown;
   task_id?: unknown;
   mime?: unknown;

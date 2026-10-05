@@ -17,7 +17,25 @@
 // but the system cannot PRODUCE is worse than no format, because the agent will confidently offer it.
 
 import { renderArtifact } from "../src/features/huddle/lib/artifacts/render.server";
-import { withExtension, safeArtifactName } from "../src/features/huddle/lib/artifacts/artifacts.server";
+import {
+  withExtension,
+  safeArtifactName,
+  safeArtifactFolder,
+  mirrorFileName,
+} from "../src/features/huddle/lib/artifacts/artifacts.server";
+import { readFileSync } from "node:fs";
+
+// SOURCE-TEXT ASSERTIONS, and why they are the RIGHT tool for three of the loop-3 findings rather
+// than a shortcut. "Is the guard present at every dispatch site" and "can the voice schema emit this
+// field at all" are properties of code that cannot be exercised offline — the voice schema is handed
+// to OpenAI's Realtime session, and the durable-turn worker needs a live turn. The defect in both
+// cases was that a site EXISTED and was never edited, which is exactly what reading the file proves
+// and what a behavioural test of the sites you did edit can never see. That blindness is what cost
+// loop 3. Where behaviour IS reachable (sanitisers, mirror names) the checks below call the function.
+const SRC = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
+const ARTIFACTS_SRC = SRC("../src/features/huddle/lib/artifacts/artifacts.server.ts");
+const VOICE_SRC = SRC("../src/features/huddle/lib/voice/realtime-tools.server.ts");
+const ALL_GUARD_SRC = SRC("../src/features/huddle/lib/huddle.functions.ts") + VOICE_SRC;
 
 let pass = 0,
   fail = 0;
@@ -162,6 +180,111 @@ check(
   'a format of " DOCX " normalises rather than silently degrading',
   " DOCX ".trim().toLowerCase() === "docx",
   `" DOCX " -> "${" DOCX ".trim().toLowerCase()}"`,
+);
+
+// ── VERIFIER LOOP 3 REFUTATIONS + robustness. docs/VERIFY-artifact-formats-3.md —
+//    10 CONFIRMED, 2 REFUTED, 2 robustness defects. Every one of the four is the SAME root cause:
+//    the loop-2 fix closed the instance that was named and left the class open.
+
+// R2 — THE OTHER HALF OF THE TRAVERSAL. `Huddle Artifacts/{lane}/{name}` is built from TWO
+// model-controlled values. Loop 2 sanitised `name`; `folder` went into the INSERT raw, so
+// `folder: "../../../Documents"` escaped by the identical mechanism.
+// Two lanes wrote `safeArtifactFolder` independently off this finding; the surviving body takes the
+// LAST real segment and falls back to "Personal" (the artifacts.items DDL default). The expectations
+// below are that body's, not the other one's — a merge that keeps a function has to keep its tests.
+for (const [input, want] of [
+  ["../../../Documents", "Documents"],
+  ["..\\..\\Windows", "Windows"],
+  ["Research/../../etc", "etc"],
+  ["..", "Personal"],
+  ["", "Personal"],
+  [".", "Personal"],
+] as [string, string][]) {
+  check(
+    `a model-supplied FOLDER cannot escape its lane: ${JSON.stringify(input)}`,
+    safeArtifactFolder(input) === want,
+    `-> ${JSON.stringify(safeArtifactFolder(input))}, want ${JSON.stringify(want)}`,
+  );
+}
+check(
+  "sanitising a folder leaves an ordinary lane name alone",
+  safeArtifactFolder("Ventures") === "Ventures" && safeArtifactFolder("Finance & Ops") === "Finance & Ops",
+  `"Finance & Ops" -> ${JSON.stringify(safeArtifactFolder("Finance & Ops"))}`,
+);
+check(
+  "both path segments are sanitised at createArtifact — the LAST gate, not just the agent choke point",
+  /const folder = safeArtifactFolder\(input\.folder\);/.test(ARTIFACTS_SRC) &&
+    /const name = safeArtifactName\(input\.name\);/.test(ARTIFACTS_SRC) &&
+    /\$\{slug\(folder\)\}\/\$\{id\}-\$\{slug\(name\)\}/.test(ARTIFACTS_SRC),
+  "createArtifact has five callers including USER-uploaded chat attachments; sanitising only inside createArtifactFromAgent left four of them open",
+);
+
+// ROBUSTNESS 1 — a 5005-character name passed through untruncated and would be rejected by
+// SharePoint's ~400-char path limit, far from where it was accepted.
+{
+  const long = "a".repeat(5005) + ".docx";
+  const out = safeArtifactName(long);
+  check(
+    "an absurdly long name is capped, and the cap keeps the EXTENSION",
+    out.length <= 120 && out.endsWith(".docx"),
+    `5005 chars -> ${out.length} chars, ends ${JSON.stringify(out.slice(-6))}`,
+  );
+  check(
+    "a name at the limit is not truncated for its own sake",
+    safeArtifactName("b".repeat(100) + ".md") === "b".repeat(100) + ".md",
+    `103 chars survives intact`,
+  );
+}
+
+// ROBUSTNESS 2 — THE COLLISION THE TRAVERSAL FIX CREATED. `reports/q3.docx` and `drafts/q3.docx`
+// are two artifacts that now BOTH sanitise to `q3.docx`; the OneDrive mirror is deliberately
+// path-keyed with replace semantics, so one silently overwrote the other on a real drive.
+{
+  const a = mirrorFileName("art-1a2b3c4d-0000-0000-0000-000000000000", "reports/q3.docx");
+  const b = mirrorFileName("art-9f8e7d6c-0000-0000-0000-000000000000", "drafts/q3.docx");
+  check(
+    "two artifacts whose names collide after sanitising get DIFFERENT mirror paths",
+    a !== b && a.endsWith(".docx") && b.endsWith(".docx"),
+    `${a} vs ${b} — both were "q3.docx" before this guard, and the mirror overwrites by path`,
+  );
+  check(
+    "the same artifact mirrors to the SAME path every time — idempotency is the point of path-keying",
+    mirrorFileName("art-1a2b3c4d-0000-0000-0000-000000000000", "reports/q3.docx") === a &&
+      mirrorFileName("art-1a2b3c4d-0000-0000-0000-000000000000", a) === a,
+    `re-mirroring gives ${a} again, and re-applying to an already-suffixed name does not stack suffixes`,
+  );
+  check(
+    "the mirror name stays under the cap even when the source name is enormous",
+    mirrorFileName("art-1a2b3c4d", "z".repeat(5005) + ".pptx").length <= 120,
+    `-> ${mirrorFileName("art-1a2b3c4d", "z".repeat(5005) + ".pptx").length} chars`,
+  );
+  check(
+    "the mirror call passes the sanitised lane and the id-keyed name, not the raw row",
+    /lane: safeArtifactFolder\(row\.folder\)/.test(ARTIFACTS_SRC) &&
+      /name: mirrorFileName\(row\.id, row\.name\)/.test(ARTIFACTS_SRC),
+    "rows written before the traversal fix still hold raw model output; this call is what puts them on a real drive",
+  );
+}
+
+// R1 — THE GUARD THAT WAS NEVER RELAXED. Two of four dispatch paths were fixed to accept a
+// structured `document`; the durable-turn worker and the VOICE path still demanded `content`, so
+// "make me a deck" spoken out loud was rejected outright while the format work was reported done.
+// Match the RETURNED error, not any mention of the phrase: the first version of this assertion keyed
+// on the bare string and was tripped by a code COMMENT quoting the old text to explain why it went.
+// A guard that fires on prose about itself is noise, and noise is what gets assertions deleted.
+{
+  const relaxed = (ALL_GUARD_SRC.match(/error: "name plus content or document are required"/g) ?? []).length;
+  const stale = (ALL_GUARD_SRC.match(/error: "name and content are required"/g) ?? []).length;
+  check(
+    "every create_artifact dispatch guard accepts a document-only call — all FOUR, not the two that were edited",
+    relaxed === 4 && stale === 0,
+    `${relaxed} relaxed guards (want 4), ${stale} still returning the old error (want 0)`,
+  );
+}
+check(
+  "the VOICE schema can actually emit a document — relaxing its executor alone changed nothing",
+  /document: \{\s*type: "object"/.test(VOICE_SRC) && !/required: \["name", "content"\]/.test(VOICE_SRC),
+  'additionalProperties:false + required ["name","content"] made a document-only voice call unemittable',
 );
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);
