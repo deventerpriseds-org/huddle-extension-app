@@ -37,7 +37,8 @@
     "test:artifact-render": "bun scripts/artifact-render.test.ts",
     "test:artifact-format": "bun scripts/artifact-format-dispatch.test.ts",
     "test:artifact-traversal": "bun scripts/artifact-traversal-guard.test.ts",
-    "test:week-order": "bun scripts/week-order.test.ts"
+    "test:week-order": "bun scripts/week-order.test.ts",
+    "test:priority-lane": "bun scripts/priority-lane.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

@@ -72,7 +72,22 @@ export function scoreTask(task: ScorableTask, targetDate: Date = new Date()): nu
     if (dueDate > twoDaysOut && dueDate <= sevenDaysOut) score += 3;
     // Keep important-but-old work competitive so it isn't buried below the view limit — mirrors
     // journey's scheduler/explain. Priority-lane and HIGH/URGENT skip the staleness penalty.
-    const isImportant = task.is_priority || task.priority === "HIGH" || task.priority === "URGENT";
+    //
+    // `is_scheduled` JOINED THIS LIST WHEN THE PRIORITY LANE WAS CAPPED. Until then the lane held
+    // ~91 of 115 open tasks, so `is_priority` was a blanket shield and almost nothing was ever
+    // judged stale. Capping the lane (groom.ts PRIORITY_LANE_MAX) is correct, but it would have
+    // exposed a large set of tasks to −10/−3 overnight — and every dated open task on the owner's
+    // board is already overdue (Aug/Sep), so the penalty would have applied to most of them at once
+    // and silently sunk work he had actively planned.
+    //
+    // A task the user has PUT ON THEIR CALENDAR is not stale work nobody cares about, whatever its
+    // due_date says — the schedule is a more recent and more deliberate signal than the due date it
+    // overrides. So it earns the same exemption the lane used to grant for free.
+    const isImportant =
+      task.is_priority ||
+      task.priority === "HIGH" ||
+      task.priority === "URGENT" ||
+      task.is_scheduled === true;
     if (!isImportant) {
       if (dueDate < thirtyDaysAgo) score -= 10;
       else if (dueDate < fourteenDaysAgo) score -= 3;

@@ -65,6 +65,23 @@ const WRITE_DEADLINE_MS = 18000; // hard cap on the single batch write so the tu
 const MIRROR_SYNC_WAIT_MS = 2500; // let journey's async mirror sync land the fresh ranks before auto-work reads them
 const AUTOWORK_DEADLINE_MS = 15000; // hard cap on the chained auto-work pass so grooming never hangs on it
 
+/**
+ * How many tasks the priority lane may hold — the SEED value, deliberately generous.
+ *
+ * journey sets `is_priority = true` for any task given a rank, and both the Huddle widget band and
+ * the Android home widget read that star as "This Week". Ranking the whole backlog therefore
+ * rendered a 91-row "This Week" on the owner's phone. 20 is a first value, not a law: it is big
+ * enough that nothing important falls out of the lane on the first capped pass, and the spec's own
+ * screenshot shows roughly five. Tune it down once the first pass is confirmed.
+ *
+ * CONFIG DEBT, STATED RATHER THAN HIDDEN: per this repo's config-centric rule this belongs in
+ * Settings next to the scheduling cadences, not in code. It is a constant today because the user
+ * asked for the lane fixed now and a settings surface is its own change. Surfacing it is the
+ * follow-on; the value is safe to change here in the meantime because the lane is recomputed from
+ * scratch on every groom.
+ */
+const PRIORITY_LANE_MAX = 20;
+
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     p,
@@ -204,11 +221,41 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     }
 
     // Normalize ranks to a dense 1..N ordering (1 = do first) for the priority lane.
+    //
+    // THE LANE IS CAPPED, AND THAT CAP IS THE POINT. Grooming used to rank EVERY task it assigned —
+    // "include every task id exactly once", a dense 1..80. journey's `batch_update_tasks` sets
+    // `is_priority = true` whenever a rank is supplied (execute-tool/index.ts:981), so ranking
+    // everything STARRED everything: measured 91 of 115 open tasks on the owner's live mirror. The
+    // widget band and the Android home widget both read that star as "This Week", so a dense
+    // backlog ordering was being rendered as a 91-row "This Week" in Huddle AND on his phone.
+    // A priority lane that contains the whole backlog is not a lane.
+    //
+    // Everything outside the cap is explicitly UNSET (`unset_rank`, the inverse branch at :982),
+    // not merely omitted — omitting the field leaves journey's existing values untouched, so a task
+    // ranked by a previous pass would stay starred forever.
+    //
+    // NOTHING DURABLE IS LOST. This ordering is recomputed from scratch every pass, so the cap is
+    // tunable: change it, re-groom, the state rebuilds. That is why this is a safe change to make
+    // on a live board.
     const ranked = assignments
       .filter((a) => typeof a.rank === "number")
       .sort((x, y) => (x.rank as number) - (y.rank as number));
     const rankById = new Map<string, number>();
-    ranked.forEach((a, i) => rankById.set(a.id, i + 1));
+    ranked.slice(0, PRIORITY_LANE_MAX).forEach((a, i) => rankById.set(a.id, i + 1));
+
+    // THE USER'S OWN "This Week" IS NOT GROOMING'S TO CLEAR. `tasks.week_order` holds the ids the
+    // user explicitly placed (star / reorder in the priorities widget). Those are left ENTIRELY
+    // alone below — no `rank`, no `unset_rank` — so journey touches neither field and a deliberate
+    // star survives the next Monday pass. Without this, the cap would quietly un-star the user's own
+    // choices once a week, which is the exact "automation clobbers a user's deliberate control
+    // state" failure the CONTROL_TAGS block below exists to prevent.
+    let userPinned = new Set<string>();
+    try {
+      const { getWeekOrder } = await import("./tasks.server");
+      userPinned = new Set(await getWeekOrder(email));
+    } catch {
+      /* ordering store unavailable — fall through with an empty set rather than failing the groom */
+    }
 
     // Compute everything Huddle-side, then push ALL updates to journey in ONE batch call
     // (not N per-task round-trips). Bounded by a timeout so the turn never hangs. Grooming only
@@ -229,7 +276,16 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
       const preserved = (tagsById.get(a.id) ?? []).filter((t) => CONTROL_TAGS.has(t));
       const tags = Array.from(new Set([...llmTags, ...preserved])).slice(0, 5);
       const rank = rankById.get(a.id);
-      return { task_id: a.id, assigned_agent: a.assigned_agent, tags, priority: a.priority, ...(rank ? { rank } : {}) };
+      // Three cases, and the third is what protects the user:
+      //   in the lane      -> send `rank`      (journey sets is_priority = true + priority_rank)
+      //   user-pinned      -> send NEITHER     (journey touches neither field; their star survives)
+      //   everything else  -> send `unset_rank` (journey clears is_priority + priority_rank)
+      const laneField = rank
+        ? { rank }
+        : userPinned.has(a.id)
+          ? {}
+          : { unset_rank: true };
+      return { task_id: a.id, assigned_agent: a.assigned_agent, tags, priority: a.priority, ...laneField };
     });
 
     let written = 0;
