@@ -548,10 +548,32 @@ free. The feature = (a) an agent action "parking lot this" → `update_task(stat
 'parking-lot')`, (b) exclude `'parking-lot' = ANY(tags)` from `autowork.server.ts` candidate selection
 + journey's nightly planner. Backlog is the home lane — do NOT build a new lane.
 
-## Waiting on deploys/CI: poll for the terminal state, never blind-sleep (user preference)
-The user dislikes fixed wait timers — they over-wait and are inefficient. Do NOT `sleep 300` then check.
-Instead detect completion the INSTANT it happens with a tight poll that exits on the terminal state, so
-the notification fires right away:
+## Waiting on deploys/CI: FIRST ask whether to wait at all; never blind-sleep (user preference)
+
+**ASK THIS BEFORE ANYTHING BELOW: does the answer change what I do next?** If not, do not watch it —
+push and move on, and read the state once later if it ever matters. The rest of this section is how to
+wait *when waiting is warranted*, not a standing instruction to watch every run.
+
+Three cases where the answer is **don't watch**, and the first two are the common ones:
+- **The diff cannot affect the deploy.** A `.claude/*.md`, `docs/`, or comment-only push still fires
+  `deploy-swa.yml` (the trigger has no path filter), and its outcome tells you nothing about the change
+  in it. **Zero checks is the correct number.**
+- **Nothing is blocked on the result.** You are about to report and end the turn anyway — the run's
+  conclusion will be readable in one call next turn, for free.
+- **A push signal already covers it.** On a PR, `subscribe_pr_activity` delivers CI failures and review
+  comments with no waiting. Prefer it; it does not apply to a bare `main` push, which is the only reason
+  a manual read is ever needed here.
+   *(2026-09-21: an earlier version of this heading read "poll for the terminal state" with the loop
+   below spelled out, and was followed literally into a 20-second-interval watch on a LEDGER-ONLY push —
+   a build whose result could not matter. The owner stopped it: "why are you polling? i have a rule not
+   to poll rather than set a subscription etc to know exactly when done without wasteful waiting." The
+   intent was always "don't `sleep 300` blindly"; the wording had inverted into "always watch". The
+   org-wide rule — prefer event-driven signals, size any fallback to how fast the state actually
+   changes, and prefer checking sooner or not at all over idling — governs.)*
+
+**When you HAVE established that something is genuinely blocked on the outcome:** do NOT `sleep 300`
+then check. Detect completion the instant it happens with a tight poll that exits on the terminal
+state, and match it to the SHA you pushed, not to "the latest run":
 - **GitHub Actions is directly pollable from bash** — `GITHUB_TOKEN`/`GH_TOKEN` are in the env, so hit
   the REST API (no `gh` CLI needed): `curl -s -H "Authorization: Bearer $GH_TOKEN" .../actions/runs?per_page=1&branch=<b>` and read `status`/`conclusion`. Wrap it in a background `until`/`while` loop that
   `sleep 15-20` between checks and `break`s on `status=completed` — ONE notification, the moment it lands.
