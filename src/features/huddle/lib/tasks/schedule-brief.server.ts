@@ -91,6 +91,19 @@ export function localDate(nowMs: number, tz: string, addDays = 0): string {
   }
 }
 
+/**
+ * The local date an edition is ABOUT: morning = today, evening = tomorrow.
+ *
+ * EXTRACTED SO IT CAN BE PROVEN. This was an inline `edition === "evening" ? 1 : 0` inside
+ * buildScheduleBrief, and a mutation flipping it to `: 0 : 0` — which makes the evening brief
+ * describe the day just finished, the single worst defect this feature can have — came back INERT,
+ * because the suite exercised `localDate` directly and never the line that CHOOSES the offset.
+ * A guard that cannot see its most important line is believed and protects nothing.
+ */
+export function dateForEdition(nowMs: number, tz: string, edition: BriefEdition): string {
+  return localDate(nowMs, tz, edition === "evening" ? 1 : 0);
+}
+
 /** The local hour (0-23) at `nowMs` in `tz`. */
 export function localHour(nowMs: number, tz: string): number {
   try {
@@ -219,8 +232,9 @@ export async function buildScheduleBrief(opts: {
 }): Promise<ScheduleBrief> {
   const tz = opts.cadence?.tz || DEFAULT_TZ;
   const edition = opts.edition ?? editionForHour(localHour(opts.nowMs, tz));
-  // morning = today; evening = tomorrow. This single line is the whole "two shapes of window".
-  const forDate = localDate(opts.nowMs, tz, edition === "evening" ? 1 : 0);
+  // morning = today; evening = tomorrow — the whole "two shapes of window", via the extracted
+  // helper so the choice itself is covered by a mutation rather than only its inputs.
+  const forDate = dateForEdition(opts.nowMs, tz, edition);
   const errors: string[] = [];
 
   const codes = opts.programCodes?.length ? opts.programCodes : SCHEDULE_BRIEF_PROGRAM_CODES_DEFAULT;
