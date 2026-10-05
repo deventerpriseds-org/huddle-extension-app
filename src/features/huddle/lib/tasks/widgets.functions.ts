@@ -187,11 +187,13 @@ export const getPrioritiesWidget = createServerFn({ method: "POST" })
       const { safeTimeZone, localDateKey, buildPrioritiesBand } = await import("./widgets.server");
       const timeZone = safeTimeZone(await resolveTimeZone(data.caller, data.timeZone));
       if (!email) return empty(timeZone, "Could not resolve your account.");
-      const { getBoardTasks } = await import("./tasks.server");
-      // The band read and the topic passthrough are independent, so run them together rather than
-      // making the widget wait for journey's round-trip before it can show anything.
-      const [rows, topics] = await Promise.all([
+      const { getBoardTasks, getWeekOrder } = await import("./tasks.server");
+      // The band read, the user's ordering and the topic passthrough are independent, so run them
+      // together rather than making the widget wait for journey's round-trip before it can show
+      // anything. getWeekOrder degrades to [] — an ordering read must never block the band.
+      const [rows, order, topics] = await Promise.all([
         getBoardTasks(email),
+        getWeekOrder(email).catch(() => [] as string[]),
         wantTopics ? fetchTopicTree(data.caller) : Promise.resolve(noTopics),
       ]);
       const nowMs = Date.now();
@@ -199,7 +201,7 @@ export const getPrioritiesWidget = createServerFn({ method: "POST" })
         ok: true,
         timeZone,
         todayKey: localDateKey(nowMs, timeZone) ?? new Date(nowMs).toISOString().slice(0, 10),
-        band: buildPrioritiesBand(rows, timeZone, nowMs),
+        band: buildPrioritiesBand(rows, timeZone, nowMs, order),
         topics,
       };
     } catch (err) {
@@ -317,5 +319,58 @@ export const updateWidgetTask = createServerFn({ method: "POST" })
       };
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err));
+    }
+  });
+
+/**
+ * Persist the user's explicit "This Week" ordering — the drag/move-up/move-down write.
+ *
+ * WHY THIS IS NOT A `WidgetTaskAction`. Every member of that union acts on ONE task id and writes
+ * to JOURNEY (`update_task` / `move_task_to_day`). A reorder acts on the whole list and writes to
+ * HUDDLE's own store, because journey has nowhere to put it that grooming would not overwrite —
+ * see `tasks.week_order`'s DDL comment. Forcing it into `updateWidgetTask` would mean one function
+ * with two unrelated contracts and two different destinations.
+ *
+ * The list is SPARSE and REPLACED WHOLESALE: a reorder is inherently a whole-list operation, so one
+ * atomic write beats N rank updates with gap management, and there is no partial state to recover.
+ *
+ * OWNERSHIP IS CHECKED PER ID, not once for the caller. Without that, a caller could persist an
+ * ordering containing another user's task ids — harmless to read (they never appear in that user's
+ * band) but it would store foreign ids under this user's row. Unowned ids are DROPPED rather than
+ * failing the whole call, so one stale id in a drag payload cannot block a legitimate reorder.
+ */
+export const reorderWidgetBand = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({
+        caller: Caller,
+        // Cap matches nothing in particular except sanity: a band this long is already a defect,
+        // and an unbounded array here is an unbounded write.
+        taskIds: z.array(z.string().min(1)).max(500),
+      })
+      .parse(raw),
+  )
+  .handler(async ({ data }): Promise<{ ok: boolean; error?: string; taskIds: string[] }> => {
+    if (!data.caller?.entra_email) return { ok: false, error: "Sign-in required.", taskIds: [] };
+    try {
+      const email = await resolveCallerEmail(data.caller);
+      if (!email) return { ok: false, error: "Could not resolve your account.", taskIds: [] };
+
+      const { getOwnedTaskForConfirmAsk, setWeekOrder } = await import("./tasks.server");
+
+      // De-dupe first: a drag payload that repeats an id would otherwise cost two ownership reads
+      // and store a contradictory order.
+      const seen = new Set<string>();
+      const unique = data.taskIds.filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
+
+      const owned: string[] = [];
+      for (const id of unique) {
+        if (await getOwnedTaskForConfirmAsk(id, email)) owned.push(id);
+      }
+
+      await setWeekOrder(email, owned);
+      return { ok: true, taskIds: owned };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err), taskIds: [] };
     }
   });

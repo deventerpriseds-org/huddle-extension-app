@@ -355,15 +355,53 @@ export function buildScheduleSections(
   return { todayKey, weekStartKey, weekEndKey, todaySchedule, currentlyDoing, upNext };
 }
 
-/** The PRIORITIES widget's task band: open priority-lane tasks, journey's own ordering. */
-export function buildPrioritiesBand(rows: BoardTaskRow[], timeZone: string, nowMs: number): WidgetTaskRow[] {
+/**
+ * Apply the user's explicit This Week ordering on top of journey's computed one.
+ *
+ * WHY A SEPARATE LIST RATHER THAN WRITING `priority_rank`. `priority_rank` is the obvious place to
+ * put "the order", and it is the wrong place: grooming REWRITES it wholesale every Monday
+ * (`groom.ts:206` — "Normalize ranks to a dense 1..N ordering… include every task id exactly once",
+ * capped at `SCHEDULED_MAX = 80`, which is exactly the `max(priority_rank)` measured on live data).
+ * An order stored there is erased weekly. Tags are no safer: `groom.ts:225` replaces the tag array
+ * and preserves only `CONTROL_TAGS`. So the user's ordering lives in a Huddle-owned list that
+ * grooming cannot reach.
+ *
+ * SPARSE BY DESIGN. `pinned` holds only the ids the user has explicitly placed. Anything not in it
+ * keeps journey's ordering underneath, so a fresh user sees the computed order and only the rows
+ * they actually moved are pinned. Ids that have since left the band (unstarred, closed, parked) are
+ * simply absent from `rows` and drop out here — no pruning pass, no stale-id handling.
+ */
+export function applyWeekOrder(rows: WidgetTaskRow[], pinned: readonly string[]): WidgetTaskRow[] {
+  if (!pinned.length) return rows;
+  const rank = new Map<string, number>();
+  pinned.forEach((id, i) => {
+    if (id && !rank.has(id)) rank.set(id, i);
+  });
+  // Stable: equal keys keep their incoming (byPriorityThenDue) order, so unpinned rows are not
+  // reshuffled among themselves.
+  return rows
+    .map((row, i) => ({ row, i, pin: rank.get(row.id) ?? Number.POSITIVE_INFINITY }))
+    .sort((a, b) => (a.pin !== b.pin ? a.pin - b.pin : a.i - b.i))
+    .map((e) => e.row);
+}
+
+/** The PRIORITIES widget's task band: open priority-lane tasks, journey's own ordering, with the
+ *  user's explicit This Week order applied on top. `order` is the sparse pin list — see
+ *  `applyWeekOrder` for why it is not `priority_rank`. */
+export function buildPrioritiesBand(
+  rows: BoardTaskRow[],
+  timeZone: string,
+  nowMs: number,
+  order: readonly string[] = [],
+): WidgetTaskRow[] {
   const tz = safeTimeZone(timeZone);
   const todayKey = localDateKey(nowMs, tz) ?? new Date(nowMs).toISOString().slice(0, 10);
-  return rows
+  const band = rows
     .filter((r) => isOpen(r) && !isParked(r))
     .filter((r) => r.is_priority === true || r.priority_rank !== null)
     .map((r) => toWidgetRow(r, tz, todayKey))
     .sort(byPriorityThenDue);
+  return applyWeekOrder(band, order);
 }
 
 // ---------------------------------------------------------------------------
