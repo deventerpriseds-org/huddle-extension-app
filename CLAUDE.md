@@ -555,9 +555,14 @@ push and move on, and read the state once later if it ever matters. The rest of 
 wait *when waiting is warranted*, not a standing instruction to watch every run.
 
 Three cases where the answer is **don't watch**, and the first two are the common ones:
-- **The diff cannot affect the deploy.** A `.claude/*.md`, `docs/`, or comment-only push still fires
-  `deploy-swa.yml` (the trigger has no path filter), and its outcome tells you nothing about the change
-  in it. **Zero checks is the correct number.**
+- **The diff cannot affect the deploy — and will not even START one.** `deploy-swa.yml`'s `push`
+  trigger carries **`paths-ignore: ['.github/**', '.claude/**', '**/*.md']`**, so a ledger, doc, or
+  workflow-only push to `main` fires **no run at all**. **Zero checks is the correct number, and
+  watching for a run is watching for something that will never exist** — verified by reading the
+  workflow and by `GET /actions/runs?head_sha=…` returning `total_count: 0` for two such commits.
+  Corollary for any "is it deployed?" answer: the newest `deploy-swa.yml` run legitimately lags
+  `origin/main` whenever the commits in between are docs. **That gap is correct, not a failed deploy** —
+  compare the deployed SHA against the last commit that touched `src/`, not against `HEAD`.
 - **Nothing is blocked on the result.** You are about to report and end the turn anyway — the run's
   conclusion will be readable in one call next turn, for free.
 - **A push signal already covers it.** On a PR, `subscribe_pr_activity` delivers CI failures and review
