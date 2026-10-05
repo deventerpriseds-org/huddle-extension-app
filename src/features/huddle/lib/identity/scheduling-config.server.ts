@@ -55,7 +55,18 @@ export interface JobCadence {
   daysOfWeek?: number[];
 }
 
-export type JobTypeKey = "groom" | "autowork" | "standup" | "reviewDigest" | "reviewRecheck";
+export type JobTypeKey =
+  | "groom"
+  | "autowork"
+  | "standup"
+  | "reviewDigest"
+  | "reviewRecheck"
+  /** The schedule brief: the user's meetings and classes. TWO fires a day, and which EDITION runs is
+   *  derived from the local hour rather than stored, so a user who moves the hours keeps both:
+   *  before noon = the MORNING edition (today), after = the EVENING edition (tomorrow). Asked for
+   *  2026-10-01: "I want seperate alerts (8am and 8pm). for the evening before looking at the day
+   *  after and the morning of looking at the current day". */
+  | "scheduleBrief";
 
 export const DEFAULT_TZ = "America/New_York";
 
@@ -68,7 +79,22 @@ export const SCHEDULING_DEFAULTS: Record<JobTypeKey, JobCadence> = {
   standup: { tz: DEFAULT_TZ, hours: [8] },
   reviewDigest: { tz: DEFAULT_TZ, hours: [8, 11, 13, 16, 19] },
   reviewRecheck: { tz: DEFAULT_TZ, hours: [10, 16] },
+  // 8am and 8pm, exactly as asked. A DEFAULT, not a constant: `identity.scheduling_config`
+  // overrides it per user like every row above, so the hours are changeable without a deploy.
+  scheduleBrief: { tz: DEFAULT_TZ, hours: [8, 20] },
 };
+
+/** Minutes before a session to fire its own reminder. The user's ask was 60 ("iris should have a
+ *  task of reminding me 60 minutes before any as well"); it is a DEFAULT and is overridden per user
+ *  from `identity.scheduling_config.lead_minutes`, never a literal in the seeding code. */
+export const SCHEDULE_REMINDER_LEAD_MINUTES_DEFAULT = 60;
+
+/** Which PROGRAMMES the schedule brief covers, by `content.programs.code` — not by id. The code is
+ *  stable and human-meaningful; a uuid in here would be an un-editable literal and would silently
+ *  break if a programme were ever re-created. Scoped to DBA on the owner's instruction (2026-10-05:
+ *  "Let's focus on DBA program", "Ignore EMBA and mit"). Overridable per user, so widening it back
+ *  to EMBA/MIT is a settings change rather than a deploy. */
+export const SCHEDULE_BRIEF_PROGRAM_CODES_DEFAULT = ["DBA"];
 
 export interface SchedulingConfig {
   overrides: Partial<Record<JobTypeKey, JobCadence>>;

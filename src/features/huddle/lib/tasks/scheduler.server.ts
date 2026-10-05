@@ -92,6 +92,7 @@ const JOB_ROWS: { key: JobTypeKey; idPrefix: string; jobType: string }[] = [
   { key: "standup", idPrefix: "standup", jobType: "standup-digest" },
   { key: "reviewDigest", idPrefix: "review-digest", jobType: "review-digest" },
   { key: "reviewRecheck", idPrefix: "review-recheck", jobType: "review-recheck" },
+  { key: "scheduleBrief", idPrefix: "schedule-brief", jobType: "schedule-brief" },
 ];
 
 /** Reverse lookup: the `job_type` string stored on a row -> the JobTypeKey scheduling-config knows it
@@ -165,6 +166,13 @@ async function fireJob(job: ScheduledJob, slotId: string): Promise<void> {
   } else if (job.job_type === "review-recheck") {
     // No force: a cadence fire is a no-op when no IN_REVIEW task's 48h ping is due yet.
     await post("/api/public/run-review-recheck");
+  } else if (job.job_type === "schedule-brief") {
+    // No force, same as every row above: an edition with nothing on it does not send.
+    // WHICH EDITION is not in this body and is deliberately not stored on the job row — the route
+    // derives it from the local hour (before noon = today's, after = tomorrow's). Storing it would
+    // mean a user who edits `scheduleBrief.hours` gets whichever edition was frozen in at write
+    // time, which is the stale-cadence trap the JOB_TYPE_KEY comment above already describes.
+    await post("/api/public/run-schedule-brief");
   }
   // Future: else if (job.job_type === "ceremony") { ... POST run-ceremony ... }
 }
