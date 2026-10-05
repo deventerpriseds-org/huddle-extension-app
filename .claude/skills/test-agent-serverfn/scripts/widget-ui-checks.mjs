@@ -86,7 +86,105 @@ async function waitForWidgetData(page, { timeout = 20000 } = {}) {
   return sawLoading ? "still-loading" : "absent";
 }
 
+/** Open Iris Chase's 1:1 — the ONE huddle the widgets are docked in (WIDGET_DOCK_HUDDLE_ID =
+ *  "dm-iris-chase"). Goes through Huddles and clicks the Iris entry by accessible name, so it
+ *  follows the app's real navigation rather than a private test hook. Returns true when the dock
+ *  strip ("Docked in this huddle") is actually on screen afterwards. */
+async function openIrisDm(page) {
+  await openView(page, "Huddles");
+  const iris = page.getByText(/Iris Chase/i).first();
+  if (await iris.count()) {
+    await iris.click().catch(() => {});
+    await page.waitForTimeout(900);
+  }
+  return page.evaluate(() => /Docked in this huddle/i.test(document.body.innerText || ""));
+}
+
+/** The element that actually scrolls the transcript, and its scrollable overflow. A dock check is
+ *  meaningless if the transcript cannot scroll at all (a short thread), so this is what lets the
+ *  check report NOT MEASURED instead of a false pass. */
+async function transcriptScroller(page) {
+  return page.evaluate(() => {
+    const els = [...document.querySelectorAll("div,section")].filter((e) => {
+      const s = getComputedStyle(e);
+      return /auto|scroll/.test(s.overflowY) && e.scrollHeight - e.clientHeight > 40;
+    });
+    if (!els.length) return null;
+    // The transcript is the tallest scrollable region on screen.
+    const el = els.sort((a, b) => b.clientHeight - a.clientHeight)[0];
+    el.setAttribute("data-uat-scroller", "1");
+    return { overflow: el.scrollHeight - el.clientHeight, clientHeight: el.clientHeight };
+  });
+}
+
 export const checks = [
+  // ── D-6: the docked widgets STAY PUT while the transcript scrolls.
+  // Owner, 2026-10-05: "the priority widget isnt truly docked, i have to scroll all the way to the
+  // top to find it. use playwright to see that it scrolls away when scrolling to more recent
+  // messages instead of staying docked in place."
+  // The shipped code renders <DockedJourneyWidgets/> INSIDE the transcript's own overflow-y-auto
+  // container (HuddleView.tsx), and its comment says so outright: "scrolls away with the history
+  // like a channel header". So this check is expected to FAIL against the deploy that has that
+  // code — that failure IS the repro — and to pass once the dock is lifted out of the scroller.
+  async ({ page, check, screenshot }) => {
+    const onScreen = await openIrisDm(page);
+    if (!onScreen) {
+      check(
+        "the docked widgets stay in place when the transcript is scrolled to the newest messages",
+        false,
+        "NOT MEASURED — could not reach Iris Chase's 1:1, or no 'Docked in this huddle' strip was " +
+          "rendered there. This is not a docking verdict; treat as UNPROVEN.",
+      );
+      return;
+    }
+    const scroller = await transcriptScroller(page);
+    if (!scroller) {
+      check(
+        "the docked widgets stay in place when the transcript is scrolled to the newest messages",
+        false,
+        "NOT MEASURED — the transcript has no scrollable overflow in this viewport, so nothing " +
+          "could scroll away. A short thread cannot prove docking either way. UNPROVEN.",
+      );
+      return;
+    }
+    const before = await page.evaluate(() => {
+      const el = [...document.querySelectorAll("*")].find((e) =>
+        /^Docked in this huddle$/i.test((e.textContent || "").trim()));
+      return el ? el.getBoundingClientRect().top : null;
+    });
+    await screenshot("dock-before-scroll");
+    // Scroll the transcript to the newest messages, which is the gesture the owner described.
+    await page.evaluate(() => {
+      const el = document.querySelector('[data-uat-scroller="1"]');
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+    await page.waitForTimeout(600);
+    const after = await page.evaluate(() => {
+      const el = [...document.querySelectorAll("*")].find((e) =>
+        /^Docked in this huddle$/i.test((e.textContent || "").trim()));
+      if (!el) return { top: null, visible: false };
+      const r = el.getBoundingClientRect();
+      return { top: r.top, visible: r.bottom > 0 && r.top < window.innerHeight };
+    });
+    await screenshot("dock-after-scroll");
+    if (before === null) {
+      check(
+        "the docked widgets stay in place when the transcript is scrolled to the newest messages",
+        false,
+        "NOT MEASURED — the dock strip was not locatable before scrolling. UNPROVEN.",
+      );
+      return;
+    }
+    const moved = after.top === null ? Infinity : Math.abs(after.top - before);
+    check(
+      "the docked widgets stay in place when the transcript is scrolled to the newest messages",
+      after.visible && moved <= 8,
+      `dock strip top ${Math.round(before)}px -> ${after.top === null ? "GONE (unmounted/off-DOM)" : `${Math.round(after.top)}px`}; ` +
+        `moved ${moved === Infinity ? "off-DOM" : `${Math.round(moved)}px`}; still visible: ${after.visible}; ` +
+        `transcript overflow was ${scroller.overflow}px`,
+    );
+  },
+
   // ── D-2: exactly ONE primary view switcher. The defect was a second bar stacked on the incumbent.
   async ({ page, check, screenshot }) => {
     await page.waitForTimeout(800);
