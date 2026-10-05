@@ -17,6 +17,7 @@
 // dry-run against the deployed route, which is a different kind of evidence and is not faked here.
 
 import {
+  dateForEdition,
   editionForHour,
   localDate,
   localHour,
@@ -67,18 +68,26 @@ const eveningMs = Date.parse("2026-10-06T00:00:00Z");
 t("B0 the evening slot really is 20:00 local (fixture sanity)", localHour(eveningMs, TZ), 20);
 t("B0b the morning slot really is 08:00 local (fixture sanity)", localHour(morningMs, TZ), 8);
 
-t("B1 the MORNING edition covers TODAY", localDate(morningMs, TZ, 0), "2026-10-05");
-t("B2 the EVENING edition covers TOMORROW", localDate(eveningMs, TZ, 1), "2026-10-06");
+// B1/B2 go through dateForEdition -- the function that CHOOSES the offset -- not through
+// localDate with the offset handed to it. Calling localDate(ms, TZ, 1) directly proves only that
+// localDate can add a day; it leaves the `evening ? 1 : 0` decision completely uncovered, which is
+// exactly what a mutation of that line proved (INERT) before this was fixed.
+t("B1 the MORNING edition covers TODAY", dateForEdition(morningMs, TZ, "morning"), "2026-10-05");
+t("B2 the EVENING edition covers TOMORROW", dateForEdition(eveningMs, TZ, "evening"), "2026-10-06");
+t("B2b the MORNING edition at the evening instant still covers that same day",
+  dateForEdition(eveningMs, TZ, "morning"), "2026-10-05");
 
 // B3 — the defect this catches: an evening brief that covers today is a brief about the day he has
 // just lived through. `addDays` of 0 vs 1 is one character in the source.
 t("B3 the evening edition does NOT cover the day just finished",
-  localDate(eveningMs, TZ, 1) !== localDate(eveningMs, TZ, 0), "true");
+  dateForEdition(eveningMs, TZ, "evening") !== dateForEdition(eveningMs, TZ, "morning"), "true");
 
 // B4 — at 20:00 ET the UTC date has already rolled over. A UTC-based `toISOString().slice(0,10)`
 // would say 2026-10-06 for "today" and 2026-10-07 for "tomorrow": both off by one.
 t("B4 zone-aware, not UTC-aware (20:00 ET is already the next UTC day)",
   localDate(eveningMs, TZ, 0), "2026-10-05");
+t("B4b and the evening edition lands on the NEXT local day, not the next UTC one",
+  dateForEdition(eveningMs, TZ, "evening"), "2026-10-06");
 
 console.log("C. WHETHER ANYTHING IS SENT AT ALL");
 
