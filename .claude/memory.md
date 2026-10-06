@@ -3510,3 +3510,31 @@ voice as well as typed**, because voice was the silently-broken path twice runni
 - **An assertion keyed on a bare string fires on prose about itself.** A guard asserting "no site
   returns the old error" matched a code COMMENT that quoted the old error to explain why it went.
   Key source-text guards to the returned expression (`error: "…"`), not the bare phrase.
+
+## The schedule brief (2026-10-05) — read before touching scheduled jobs or the calendar readers
+
+**Adding a recurring job is DATA, not plumbing.** `scheduler.server.ts` `JOB_ROWS[]` is a table;
+`JobTypeKey` + `SCHEDULING_DEFAULTS` is a table. One row in each plus one `fireJob` branch, and the
+every-minute scheduler picks it up. **No new cron exists or is needed** — and note that NO workflow
+in this repo carries a `schedule: cron` trigger, so a job that is not in `JOB_ROWS` does not run.
+
+**`SchedulingPanel.tsx` enforces exhaustiveness over `JobTypeKey`.** A new job type will not compile
+until it has a Settings label — which is the config-centric rule enforced by the type system rather
+than by anyone remembering it. Treat that error as the feature working.
+
+**`CalendarEvent` now carries Graph's `id`** (added here). Anything keying per-event state — a
+reminder, a dedup, a seen-marker — must use it. Subject+start is NOT a key: it changes when a
+meeting is moved or renamed, which mints a duplicate rather than updating one.
+
+**`chat.reminders` has NO dedup of any kind.** `createReminder` is a plain INSERT with a
+time-derived id; there is no `external_event_id`, no `ON CONFLICT`, and the claim query is simply
+`due_at <= now()` with no lookahead window. So anything that SEEDS reminders on a cadence must
+supply its own idempotent id, or it creates a fresh alarm on every run. (An earlier note in this
+session claimed the opposite — a dedup keyed on `external_event_id` and a hardcoded `+5` scan
+window. Neither is in this codebase; that belonged to journey's reminder system and was repeated
+here as fact three times before being checked.)
+
+**Two facts about the brief's own rules, so they are not "simplified" away:**
+- An empty day sends NOTHING. A nightly "you have nothing tomorrow" push is how an alert gets muted.
+- An empty day WITH a read failure is a DIFFERENT fact: `ok:false` plus the reason. "You have
+  nothing" and "we could not look" must never collapse into the same silence.

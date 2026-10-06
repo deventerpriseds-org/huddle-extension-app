@@ -178,6 +178,11 @@ export async function createGraphDraft(input: SendEmailInput): Promise<DraftEmai
 }
 
 export interface CalendarEvent {
+  /** Graph's stable event id. Added 2026-10-05 for the schedule brief's T-60 reminders: a
+   *  reminder seeded per event needs an IDEMPOTENT key, and deriving one from subject+start
+   *  would mint a second alarm the moment a meeting is moved or renamed. Additive -- every
+   *  existing caller ignores it. */
+  id: string;
   subject: string;
   start: string | null;
   end: string | null;
@@ -217,7 +222,7 @@ export async function getGraphCalendarEvents(input: {
     const qs =
       `startDateTime=${encodeURIComponent(input.startISO)}` +
       `&endDateTime=${encodeURIComponent(input.endISO)}` +
-      `&$select=${encodeURIComponent("subject,start,end,location,isAllDay,organizer")}` +
+      `&$select=${encodeURIComponent("id,subject,start,end,location,isAllDay,organizer")}` +
       `&$orderby=${encodeURIComponent("start/dateTime")}` +
       `&$top=${top}`;
     const res = await fetch(`${GRAPH}/users/${encodeURIComponent(mailbox)}/calendarView?${qs}`, {
@@ -239,6 +244,7 @@ export async function getGraphCalendarEvents(input: {
     }
     const j = (await res.json()) as {
       value?: Array<{
+        id?: string;
         subject?: string;
         start?: { dateTime?: string };
         end?: { dateTime?: string };
@@ -248,6 +254,7 @@ export async function getGraphCalendarEvents(input: {
       }>;
     };
     const events: CalendarEvent[] = (j.value ?? []).map((e) => ({
+      id: e.id ?? "",
       subject: e.subject?.trim() || "(no subject)",
       start: e.start?.dateTime ?? null,
       end: e.end?.dateTime ?? null,

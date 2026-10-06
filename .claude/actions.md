@@ -4184,3 +4184,59 @@ suites** (artifact-render 52, artifact-format-dispatch 48, artifact-preview 28, 
 **STATUS: mechanism-verified and deployed, NOT owner-confirmed.** What the owner needs to try, and the
 second half matters because it was the silently-broken path: produce a **Word doc, a deck and a mermaid
 diagram — BY VOICE as well as typed.** Next verification of `artifact-formats` is **loop 4**.
+
+## ACT:schedule-brief — the 8am/8pm meetings+classes alerts (2026-10-05)
+
+**Asked** (2026-10-01): *"why i am not reciving daily alerts of what meetings i have on my calendar
+nor courses I have to attend that night"*, then *"I want seperate alerts (8am and 8pm). for the
+evening before looking at the day after and the morning of looking at the current day and iris
+should have a task of reminding me 60 minutes before any as well."* Scoped 2026-10-05:
+*"Let's focus on DBA program and everything with a date of September and going forward"*, then
+*"Ignore EMBA and mit"*.
+
+**PROVED ABSENT BEFORE BUILDING** — 5 REFUTED / 1 partial, re-run twice against fresh remotes:
+
+| claim | evidence |
+|---|---|
+| no calendar/coursework job exists | `JobTypeKey` was a CLOSED union: groom / autowork / standup / reviewDigest / reviewRecheck |
+| nothing wakes at 8pm | no default cadence contained hour 20 |
+| not scheduled outside the registry | **no workflow carried a `schedule: cron` trigger at all** |
+| no scheduled sender reads it | `standup.server.ts` and `review-digest.server.ts`: **0** refs to `getGraphCalendarEvents` / `calendarView` / `class_schedules` / `get_nexus_assignments` |
+| not switched on live | `identity.scheduling_config`: **0 rows** |
+| journey has a daily_brief | present in the PRE-migration repo at hour 8; **no evening variant anywhere**, lead time 15 not 60 |
+
+**EXTEND, NOT NEW — 8 files, 7 of them extensions.** `scheduler.server.ts`'s own comment states the
+recipe (*"one more entry here + a default in SCHEDULING_DEFAULTS + one more `fireJob` case — no new
+cron"*) and that is what it took. The one new thing is that **nothing in Huddle had ever called a
+read on a clock**; every calendar/coursework read was a model-elected tool dispatch.
+
+Three additive extensions were required:
+- `graph-email.server.ts` selects Graph's stable event `id` — `CalendarEvent` had **none**, and a
+  T-60 keyed on subject+start mints a second alarm the moment a meeting moves or is renamed.
+- `get_nexus_class_schedule` takes an optional `program_id` — d1's **own** allow-list already names
+  it for this table (`nexus-hub api/src/functions/d1.ts:376`), so Nexus needed no change.
+- `SchedulingPanel.tsx` gains a row, which **TypeScript required** — so 8/20 are editable in
+  Settings on arrival rather than as a follow-up.
+
+**Scope is DBA-only, held as programme CODES** (`SCHEDULE_BRIEF_PROGRAM_CODES_DEFAULT`) resolved to
+ids at runtime — a uuid would be an un-editable literal. **Only expressible because
+`class_schedules.program_id` was backfilled the same day** (ACT:schedule-program-id, nexus-hub).
+
+**TWO DEFECTS THE GUARD CAUGHT THAT WOULD OTHERWISE HAVE SHIPPED:**
+1. `editionForHour` used `< 12` while the paragraph directly above it said 12:00 is the MORNING
+   edition. Both operators look equally plausible in a diff.
+2. The day-offset mutation came back **INERT** — B1/B2 called `localDate(ms, TZ, 1)` directly, which
+   proves `localDate` can add a day and leaves the decision that PICKS 1 vs 0 uncovered. That
+   decision is what makes the evening brief describe the day just finished. Extracted as
+   `dateForEdition` and re-proved: **FIRED**.
+   A third was caught by `mutate.sh` itself: the first anchor matched the comment as well as the
+   code and it reported **NOT-APPLIED** rather than a false INERT.
+
+**Verification:** `tsc rc=0`; `bun scripts/schedule-brief.test.ts` **21 passed, 0 failed**;
+2 mutations **FIRED**. All MECHANISM — nothing has run against the live calendar or Nexus.
+
+**Status: built on `claude_schedule-alerts` (`ae627df`). NOT merged, NOT deployed, NOT
+owner-confirmed. Step 5 (the T-60 seeding) NOT started, deliberately — `chat.reminders` has NO
+dedup, so a seeder would duplicate an alarm on every run, and that risk is kept out of the digest
+work. Open question to the owner: did MGT-701 end on Sep 30 (5 weekly Wednesdays then nothing, term
+`202712` vs `202711`)?**

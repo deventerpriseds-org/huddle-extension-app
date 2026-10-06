@@ -29,6 +29,13 @@ const JOB_LABELS: Record<JobTypeKey, { label: string; hint: string }> = {
     label: "Standup digest",
     hint: "Summarizes the prior day's autonomous work and blockers.",
   },
+  scheduleBrief: {
+    label: "Schedule brief",
+    hint:
+      "Iris sends your meetings and classes. Which EDITION each hour sends is derived from the hour " +
+      "itself — before noon covers today, after noon covers tomorrow — so the shipped 8 and 20 give " +
+      "you a morning and an evening brief. Nothing is sent on a day with nothing on it.",
+  },
   reviewDigest: {
     label: "Review digest",
     hint: "Iris's nudge on what's waiting in Ready for review.",

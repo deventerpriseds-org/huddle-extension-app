@@ -305,6 +305,11 @@ export const GET_NEXUS_CLASS_SCHEDULE_TOOL = {
     properties: {
       from: { type: "string", description: "Start date, yyyy-mm-dd. Defaults to today." },
       to: { type: "string", description: "End date, yyyy-mm-dd. Defaults to 60 days out." },
+      program_id: {
+        type: "string",
+        description:
+          "Optional: restrict to one programme's sessions (a programme id from get_nexus_courses). Omit for every programme. Note that residency entries with no linked course carry no programme and are excluded when this is set.",
+      },
     },
     required: [] as string[],
   },
@@ -700,7 +705,17 @@ export async function executeNexusTool(
   if (name === "get_nexus_class_schedule") {
     const from = typeof args.from === "string" && args.from.trim() ? args.from.trim().slice(0, 10) : dayIn(timeZone);
     const to = typeof args.to === "string" && args.to.trim() ? args.to.trim().slice(0, 10) : dayIn(timeZone, 60);
-    const r = await nexusGet("class-schedules", [["date", `gte.${from}`], ["date", `lte.${to}`]]);
+    const filters: [string, string][] = [["date", `gte.${from}`], ["date", `lte.${to}`]];
+    // OPTIONAL programme scope. `program_id` is already in d1's own allow-list for this table
+    // (nexus-hub api/src/functions/d1.ts:376 `filters: [... 'program_id' ...]`), so this needed no
+    // change on the Nexus side -- it rides the filter array that was always there. Added
+    // 2026-10-05 for the schedule brief, which the owner scoped to the DBA programme; omitting it
+    // keeps the previous behaviour exactly (every programme), so no existing caller changes.
+    // NOTE it only selects rows whose program_id is POPULATED -- 91 of 132 rows are unlinked
+    // residency entries (Lunch, dinners, PODs Formation) that carry no course and no programme.
+    const programId = typeof args.program_id === "string" ? args.program_id.trim() : "";
+    if (programId) filters.push(["program_id", `eq.${programId}`]);
+    const r = await nexusGet("class-schedules", filters);
     if (!r.ok) return { ok: false, error: r.error };
     const sessions = [...r.rows].sort((a, b) =>
       String(a.date ?? "").localeCompare(String(b.date ?? "")),
