@@ -261,6 +261,20 @@ Huddle's own Web Push (`push/push.server.ts`, VAPID) is an OPTIONAL browser-only
 Huddle VAPID keys are set) — journey's path is what covers the phone, so new away-comms should reuse
 `send_push`, not add another sender.
 
+**Phone alarms are per app, never duplicated (verified 2026-10-08).** Both Android apps (Journey Voice
+and Huddle) are built from the same android-bridge-template code, so both have the full-screen alarm —
+Huddle's config has had the `calendar_events` channel since its first build (2026-07-26). Routing keeps
+them apart: `send-push-notification` sends a push carrying `app:"huddle"` ONLY to `fcm:app:huddle:%`
+tokens, and a journey-native push to everything EXCEPT `fcm:app:%`. So journey task-start alarms ring
+only in Journey Voice; Huddle `schedule_reminder` alarms ring only in Huddle. Known overlap, left as is
+by the user's choice ("I'll see if it's an annoyance first"): a Huddle alarm set on a task journey already
+alarms for rings in both apps. The alarm's "Open task" follows the push's own `deepLink`, so a Huddle
+alarm opens the agent's 1:1 (`/?huddle=dm-<agent>`), not journey's `/calendar`.
+**Known gap — Huddle-only (no journey) has NO phone push at all.** Every phone push, alarm included,
+goes through journey's `send_push` and needs the Huddle device registered in journey
+(`register_push_token`); alarm task buttons act on journey `public.tasks`. Deferred by the user
+(2026-10-08) — don't build a Huddle-native sender without asking.
+
 ## The canonical Azure DB is PINNED — do not let deploy discovery drift (relearned expensively)
 Huddle's Azure Postgres is **`eds-postgresql` / database `RAG_AI_Agents`** (PG 17), in RG
 `EnterpriseDS_ResourceGRP`. It holds everything: `public.rag_chunks`/`rag_triples` (memory),
