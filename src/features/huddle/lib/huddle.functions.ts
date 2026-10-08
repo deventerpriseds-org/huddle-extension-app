@@ -2910,6 +2910,23 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               note: [outcomeNote, assignment?.note].filter(Boolean).join(" ") || undefined,
             };
           }
+          // LOG THE REAL REASON SERVER-SIDE. `recordFallback`'s `reason` carries journey's actual
+          // error (status code + body prefix) but ONLY `ev.inline` is persisted -- `fallbackNotes:
+          // [ev.inline]` -- so the detail is built and then dropped at turn end. Measured
+          // 2026-10-06: a task-create failure the owner reported took an hour to root-cause because
+          // the turn record held only "journey task create failed" while the status code and body
+          // that would have named it in one read had already been discarded. The user-facing text
+          // is deliberately unchanged -- a raw upstream error does not belong in a chat reply --
+          // but it now reaches the app log, where the next diagnosis can start.
+          console.error(
+            "[create_huddle_task] journey refused the write:",
+            JSON.stringify({
+              title: task.title,
+              huddleId: data.huddleId,
+              agentId: winner.id,
+              journeyError: r.error ?? "unknown",
+            }),
+          );
           const ev = recordFallback(
             "tool",
             `${winner.name}: could NOT save “${task.title}” to your board — journey create failed — ${r.error ?? "unknown"}`,
