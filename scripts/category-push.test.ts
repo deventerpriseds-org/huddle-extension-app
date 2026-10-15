@@ -224,6 +224,11 @@ check("star rank is 0 — ahead of every other star in journey's 1am placement (
   check("CAS: the active-task update only moves FROM the expected value, and refill stops when it loses",
     /SET active_task_id = \$4[\s\S]{0,200}active_task_id IS NOT DISTINCT FROM \$3/.test(store) && /if \(!won\) return "lost-race";/.test(push),
     "UPDATE ... WHERE active_task_id IS NOT DISTINCT FROM $3; refill returns on !won");
+  // D1: every priority_push read is ALIAS-SET scoped (= ANY), never a single email.
+  const pushSql = [...store.matchAll(/`[^`]*tasks\.priority_push[^`]*`/g)].map((m) => m[0]);
+  const single = pushSql.filter((q) => /lower\(user_email\)\s*=\s*\$\d/.test(q));
+  check("D1: no priority_push query matches a single email — the alias set, like every other push read",
+    pushSql.length >= 5 && single.length === 0, `${pushSql.length} queries; single-email: ${single.length}`);
   check("D5: after starring, refill re-reads the push and un-stars if it was stopped meanwhile",
     /still\.active_task_id !== next\.id\)[\s\S]{0,80}unstar\(caller, next\.id\)/.test(push), "orphan-star guard present");
 }
