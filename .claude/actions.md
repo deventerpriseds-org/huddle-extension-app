@@ -4328,3 +4328,7 @@ own slot id → standup / review digest / review recheck / auto-work / groom ran
 `<job>-u-<user_id>` (`scheduledJobId`), and `retireDuplicateScheduledJobs` sets `enabled=false` on the
 user's other rows of that job type (reversible, never deleted). Runner email unchanged (dev@).
 **Evidence:** `bun scripts/scheduler-one-user.test.ts` 7/7; tsc 0.
+**DEPLOYED + LIVE-CHECKED (2026-10-15):** #68 merged `c1c9e32`, deploy success 16:09:22Z. First scheduler
+tick 16:09:03Z: `tasks.scheduled_jobs` holds exactly ONE enabled row per job type for user `a89e3652…`
+(`<job>-u-a89e3652…`, 7 types); every `von.ellis@`/`dev@` row `enabled=false`; next_run_at values carried
+over. **Status: mechanism verified live; owner confirmation (no doubled digest/standup after 1pm ET) pending.**
