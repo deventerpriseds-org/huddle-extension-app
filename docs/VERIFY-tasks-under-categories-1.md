@@ -457,3 +457,207 @@ direct-child `span[title]`, and the corrected run returns `12/12, 10/10, 56/56, 
 arithmetic coincidence is what exposed it — had the band been empty, the bad classifier would have
 passed and nobody would have known it was broken.
 
+### V-10 — AC-37 reconciliation against the REAL mirror: **R === T, exactly**
+
+The Huddle PG connector returned "needs you to sign in again", so per the org rule a dead connector
+is a detour, not a blocker: routed through `azure-pg-query.yml` instead (runs `38767541608`,
+`38767685374`, `38767906188`). First finding: the mirror holds **one** user and it is **not** the
+email in the brief —
+
+```
+          em          | rows_all | live_rows
+ dev@enterpriseds.io  |      366 |        98
+```
+
+(`von.ellis@enterpriseds.io` returns 0 rows; the UAT identity resolves onto the `dev@` alias through
+`resolveScopeByEmail`. Worth knowing before anyone else writes a query against this mirror.)
+
+Then, applying Huddle's OWN liveness rule in SQL (`completed_at IS NULL`, `status <> 'DONE'`, no
+case-insensitive `parking-lot` tag) and Huddle's own category folding (`PERSONAL→LIFE`,
+`PROF_EDUCATION→EDUCATION`):
+
+| display category | DB live_tasks | **DOM badge** | **DOM rendered rows** | DB in_band | DB blocked |
+|---|---|---|---|---|---|
+| LIFE | **12** | 12 | 12 | 2 | 0 |
+| CAREER | **10** | 10 | 10 | 4 | 1 |
+| VENTURES | **56** | 56 | 56 | 15 | 0 |
+| EDUCATION | **5** | 5 | 5 | 1 | 1 |
+| **TOTAL LIVE UNPARKED** | **83** | — | **83 task rows** | **22** | **2** |
+| (parked, live) | 15 | — | **0 rendered** | — | — |
+
+**`R === T` with R = T = 83.** AC-37 — *"the single most likely wrong-but-running outcome of this
+feature"* — **PASSES on the owner's real data**, not on a fixture.
+
+- **CLAIM 1 — CONFIRMED ON REAL DATA.** 83 live unparked tasks in the mirror, 83 rendered, each
+  under the category its own column names, none twice. The 15 parked live rows are correctly absent.
+  The **2 BLOCKED rows are present** (they are inside the 83) — Huddle's `isOpen` rule, not
+  journey's.
+- **CLAIM 8 band figure cross-checks too:** DB `in_band = 22` (`is_priority OR priority_rank`),
+  DOM band = 22 rows, DOM starred tree rows = 22.
+- **No Uncategorised row appears live because no live task lacks a category** (0 of 83). The
+  bucket is proven by fixture and mutation (M1 FIRED), not by the live board.
+- Screenshot `01-priorities-view.png` (desktop run) shows it: `Life & Personal  12` expanded, star
+  on `Get a haircut` and `Go to church`, `Get a haircut` also in the This Week band above, and the
+  honest sub-themes banner across the bottom.
+
+### V-11 — **D-1 is NOT theoretical: the tie exists on the owner's live board right now**
+
+The non-total comparator (D-1) needs two live tasks identical on `is_priority`, `priority_rank`,
+`due_date` AND `title`. I asked the mirror whether any such pair exists:
+
+```
+                     title                      | n | distinct_sort_keys
+------------------------------------------------+---+--------------------
+ Prepare my office camera quality               | 2 |                  1
+ Research someone to install brakes and rotors  | 2 |                  1
+```
+
+Two pairs, each with **`distinct_sort_keys = 1`** — i.e. both rows of each pair agree on every key
+`byPriorityThenDue` looks at, and on the title. `byPriorityThenDue` returns `0` for them, so their
+rendered order is whatever `getBoardTasks`' `ORDER BY t.updated_at DESC` produced, and **it flips
+whenever either row is touched** — with no change the user made. `Prepare my office camera quality`
+is visible in the desktop screenshot, in the Life & Personal list.
+
+**So D-1 is a live defect on the owner's board, not a hypothetical.** It is one clause to fix:
+
+```ts
+// widgets.server.ts:331 — byPriorityThenDue
+-  return a.title.localeCompare(b.title);
++  return a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
+```
+
+It is a one-line change to a PRE-EXISTING comparator shared with the This Week band, so it is the
+owner's call whether it ships here or on its own — but the claim "deterministic, a pure function of
+the data" is false until it does.
+
+### V-12 — two further findings from reading, now confirmed against the live DOM
+
+**D-4 — `count` and the rendered rows agree TODAY, but the invariant is narrower than claim 2.**
+A node's `count` is its OWN `tasks.length`. Live, journey supplies no topics, so every category's
+only descendants are its own tasks and badge == rows exactly (V-L6). **The moment `get_task_topics`
+is deployed**, a category will carry topic children whose tasks journey does not send
+(`toTopicNode` sets `tasks: []`) while those children DO carry a journey `count` — so a topic row
+will render a count of e.g. 7 with zero rows beneath it, which is precisely the
+`PrioritiesWidgetFactory.grpTaskCount` defect the commit message says it avoids. **Not a defect
+today; a landmine for the next change.** AC-6's stronger "N distinct task ids beneath a row
+showing N" does not hold for a journey-supplied topic node.
+
+**D-6 — the ACs' own observation hooks do not exist.** AC-4, AC-5, AC-6 and AC-34 all specify
+`li[data-task-id]` / `li[data-topic-id]`. `grep -n "data-task-id\|data-topic-id\|data-testid"` over
+`JourneyWidgets.tsx` → **zero hits.** My checks had to classify rows structurally
+(`li > div > button > span[title]` vs `li > span[title]`), and that is exactly how I produced the
+false RED in V-9. Two attributes would make every future DOM assertion about this widget direct and
+unbreakable. **Recommended, cheap, and it is the AC file's own stated method.**
+
+**CLAIM 7 — CONFIRMED.** `grep -n "updateWidgetTask(\|invokeJourneyTool(" JourneyWidgets.tsx`
+returns **exactly one line**: `222: const r = await updateWidgetTask(...)`, inside `runAction`.
+Zero `invokeJourneyTool` calls in the component. `TopicTaskRow` renders `TodayButton` / `DoneButton`
+/ `PauseButton` verbatim — the same components the band uses — and `runAction` self-seeds an
+untracked row before setting `busy`, so the double-tap guard works for a tree row that the band
+never seeded. **No second write path was introduced.** Live-confirmed in shape: 105 Today buttons
+= 22 band + 83 tree, all the same component.
+
+**One honest caveat on CLAIM 7, and on AC-66/67:** `useSeededRows(data.band, live)` seeds **only
+the band rows**. A tree-only task enters the store lazily, via `runAction`'s self-seed, and is
+therefore never covered by the `refreshChecklistRows` live refresh on later payloads. Harmless for
+done/park (the row leaves the tree), but a tree-only `today`/`untoday` overlay is not refreshed
+from the server again. Mechanism read from source; **not exercised**, because exercising it means
+writing to the owner's real board (see below).
+
+---
+
+## The eight claims — verdicts
+
+| # | claim | verdict | the evidence that settles it |
+|---|---|---|---|
+| 1 | every live (not DONE, not completed, not parked) task reaches the tree exactly once, under the right category; BLOCKED kept | **CONFIRMED** | 400-row fixture: 210 expected / 210 got / 210 distinct / 0 misplacements (V-2). **And on the real board: DB 83 live unparked == 83 rendered rows, per-category exact, 15 parked excluded, 2 BLOCKED present** (V-10) |
+| 2 | `count` can never disagree with the rows beneath it | **CONFIRMED as stated** | every node of a 400-row tree (V-2 I-1f); mutation M2 FIRED; **live: 12/12, 10/10, 56/56, 5/5** (V-L6) — but see **D-4** for the post-`get_task_topics` case |
+| 3 | null/blank category → an "Uncategorised" row that sorts last | **CONFIRMED (fixture + mutation)** | null, `""` and `"   "` all bucket; sorts after known AND dynamic categories; M1 FIRED. **Not live-observed — 0 of 83 live tasks lack a category** |
+| 4 | `mergeTopicTree` loses nothing and does not mutate its inputs | **HALF DISPROVED** | loses nothing: CONFIRMED (9/9 nodes, M5 + M7 FIRED). **Mutates inputs: DISPROVED — grandchild arrays are sorted in place (D-2)**; the implementer's own assertion checks only a length on the one level that IS copied |
+| 5 | ordering is deterministic and a pure function of the data, not of row arrival order | **DISPROVED** | true for rows with distinct keys (50 shuffles → 1 order). **False on ties: 6 permutations → 6 orders (D-1), and two such pairs exist on the live board right now (V-11)** |
+| 6 | `topics.ok` / `topics.reason` still report the JOURNEY passthrough, and the UI surfaces it when the tree is non-empty | **CONFIRMED** | `{...topics, roots: …}` overrides only `roots`; `reason !== "ok"` gates `TopicsEmpty` inside the non-empty branch. **Live: the "Sub-themes … aren't available yet" banner is on screen beside a 4-category, 83-row tree** (V-L11, and visible in the screenshot) |
+| 7 | no second write path | **CONFIRMED** | exactly ONE `updateWidgetTask(` in the component (line 222, inside `runAction`); zero `invokeJourneyTool(`; buttons reused verbatim. Caveat on seeding in V-12 |
+| 8 | nothing regressed in This Week, its controls, or topic-tree parsing | **CONFIRMED** | 11 suites green (V-6), `tsc` 0, build 0. **Live: 22 band rows, 44 ▲/▼ buttons, 105 Today buttons, 0 console errors, 0 failed requests**, at BOTH 390×844 and 1440×900 |
+
+## The adversarial angles in the brief — each one settled
+
+| angle | verdict |
+|---|---|
+| consts declared BELOW their user — TDZ in the built bundle? | **NO PROBLEM. Executed**, not reasoned: the bundler emits `var` at byte 25202, the use is at 24385, and `node` running the built chunk returns the correct tree (V-4) |
+| did a VALUE import of a server module leak into the client? | **NO.** 0 hits for every new symbol across 58 client files; **the `widgets.server` client chunk is byte-identical (md5 `973e7911…`) on base and branch** (V-3). Nothing was missed |
+| render cap of 8 / "+N more" — true total? every task reachable? | **The cap is GONE** (`ac43446`, after AC-journey-widgets AC-10 forbade it by name). Live: no `+N more` anywhere, and **all 56 Ventures rows render** (V-L7, V-L6) |
+| `useState` in `TopicRow` — does expansion leak between the two mounted copies? | **NO — but only partly observed.** `showAllTasks` no longer exists; `open` is plain local `useState` with no store involvement (grep-proven). Live run had **one** copy mounted, so the two-copy case was **not** observed (V-L13) |
+| band + tree duplicate — does acting in one update the other? | **Duplicate confirmed live: 22 band rows, all 22 present in the tree, all 22 starred** (V-L12/12b). Both go through `useRowState` keyed on `row.id`, so propagation is mechanical — **but NOT exercised**, because it needs a write to a real task |
+| can an EMPTY category row appear? | **NO from the mirror** — a category exists only because live tasks are in it; all-DONE → `tree.length=0` (V-2 I-2). A journey topic root for an empty category still creates one, by design |
+| can `displayCategory` folding produce two rows with the same id? | **NO.** The fold happens before a `Map` key, so `PERSONAL`/`LIFE` and `PROF_EDUCATION`/`EDUCATION` collapse to one node; 7 roots / 7 distinct ids over 400 rows; `mergeTopicTree` folds a duplicate journey `category:` id into one row (I-5a). Two notes: a journey root whose id is a **bare duplicate** does pass through twice (I-5c), and a task whose category string is literally `"UNCATEGORISED"` is indistinguishable from the null bucket (I-6) — neither is reachable today |
+
+## Open defects, in priority order
+
+| id | severity | what | fix |
+|---|---|---|---|
+| **D-1** | **HIGH — live on the owner's board** | `byPriorityThenDue` is not a total order; two real task pairs tie on every key, so their order follows `updated_at DESC` and flips on any touch. Breaks the determinism the feature is sold on | one clause: `|| a.id.localeCompare(b.id)` |
+| **D-2** | MEDIUM — latent | `mergeTopicTree` sorts the caller's grandchild arrays in place; its "does not mutate" test is a false positive | deep-copy in the merge, or make `sortNodes` non-mutating; and widen the assertion to depth ≥ 2 |
+| **D-5** | MEDIUM — test quality | the "Uncategorised sorts last" assertion is **INERT** (its `SIDE_HUSTLE` fixture cannot see the `+ 1` disappear). AC-65 requires FIRED | change the fixture's dynamic category to one whose LABEL sorts after "Uncategorised" (`ZZ_TOP` makes it FIRE) |
+| **D-4** | MEDIUM — landmine | once `get_task_topics` deploys, topic rows will show a journey `count` with zero rows beneath — the exact Android defect the commit claims to avoid | decide now: derive topic counts too, or render `count: null` for a node whose tasks were not supplied |
+| **D-6** | LOW — testability | no `data-task-id` / `data-topic-id`, which AC-4/5/6/34 name as their observation method; it caused a false RED in this very pass | add the two attributes |
+| **D-3** | DECISION, not a bug | AC-13 (HIGH not below MEDIUM) and AC-14 (the exact comparator that ignores `priority`) **contradict each other**. As built, an URGENT task can be returned second to an agent asked "what's next in Career?" | withdraw AC-13, or add `priority` to the comparator — which changes This Week's order too |
+| — | HOUSEKEEPING | `scripts/_verify-cat-tree-independent.test.ts` (my throwaway) was committed in `ac43446` and is **permanently RED** (3 failures = D-1/D-2/D-3) | give it a `test:` script and treat it as the open-defect tracker, or delete it when they close |
+
+## ACs that are OUT-OF-SCOPE (untouched), not failed
+
+The owner deferred category-level drag. These were written for the larger scope and **this change
+does not attempt them** — reporting them as failures would misattribute a deliberate deferral:
+
+- **Drag, every level:** AC-17, 18, 19, 20, 21, 42. `grep -n "onDrag|draggable|dataTransfer|onDrop"`
+  on `JourneyWidgets.tsx` still returns **0 hits**, exactly as the AC file's F-7 recorded before the
+  work started. The ▲/▼ buttons are untouched and still work (V-L18: 44 of them live).
+- **Persisted cross-level ordering:** AC-22, 23, 24, 25, 26, 27, 49, 50, 51, 52, 53, 54. No new
+  store, no new write, no migration — so none of these is exercised. `week_order` is read by
+  `getWeekOrder`/`applyWeekOrder` unchanged (`test:week-order` 9/9).
+- **A new journey tool / topic source:** AC-10, 31, 35, 36, 36b, 40. The source decision was to use
+  the mirror and add **no** journey call, so these do not apply. AC-45's ≤2 journey round-trips is
+  satisfied trivially: the count is **1** and unchanged.
+- **`nextInCategory` as one shared function for UI and agent:** AC-15, 16, 68. Not built. The data is
+  now in the payload in rendered order, which is the precondition — the shared accessor is not.
+- **Empty FAMILY row:** AC-41. Partly addressed in the opposite direction — a category now exists
+  because TASKS are in it, so FAMILY appears when it has work and is absent when it has none. The
+  live board has no FAMILY tasks and **no FAMILY row rendered**, which is NOT the Android behaviour
+  AC-41 asked for. **Call this OPEN, not passed**: G-5 in the AC file flagged it as needing the
+  owner's confirmation and it has not been settled.
+
+## What NO harness in this pass can settle — MECHANISM-ONLY, and why
+
+1. **AC-67 — acting on a task in the tree updating its This Week copy without a refetch.** Both rows
+   read `useRowState(row.id)`, so it is mechanical; proving it requires **clicking ✓ on a real task
+   on the owner's live board**. I did not, and my checks module is read-only by construction.
+   *Vehicle:* seed a `Test-` task in journey (`wwxgajrtmslzklnyplah`), wait out the 1–3 s `pg_net`
+   mirror lag, drive the click, then delete by marker. **No `Test-` task was created in this pass,
+   so there is nothing to clean up.**
+2. **AC-62 — expansion state across two mounted copies.** Needs a surface carrying BOTH a frozen
+   in-chat snapshot card and the docked widget. The Priorities tab mounts one (`mounted copies = 1`).
+   *Vehicle:* a UAT check that first posts a message rendering a priorities snapshot card, then
+   opens the dock in the same huddle.
+3. **Real drag on a phone.** Not built, and per this repo's own rule a synthetic pointer sequence
+   would be a smoke test, never proof. *Verdict belongs to the owner, on his device.*
+4. **AC-24 — order surviving a Monday grooming pass.** No new order store exists, so there is
+   nothing to survive; if one is added, `run-grooming.yml` + an `azure-pg-query.yml` read is the
+   vehicle.
+5. **AC-47 — absolute timing / payload size on the live server.** Not instrumented. The payload now
+   carries 83 task rows it did not before; nobody has measured the serialized size or the server
+   time. *Vehicle:* a timed server-fn call logging `JSON.stringify(payload).length`.
+
+## Verdict
+
+**CONFIRMED: claims 1, 2, 3, 6, 7, 8.  DISPROVED: claim 5.  HALF DISPROVED: claim 4.**
+
+The feature does the thing it was built to do, and that is established on the owner's real data and
+his real screen, not on a fixture: a tree that had **never populated in production** now renders
+**83 live tasks across 4 categories**, count badges that match the rendered rows exactly at both
+390×844 and 1440×900, no truncation, the This Week band and all its controls intact, and zero
+console errors or failed requests.
+
+**It should not be called finished while D-1 stands.** The owner's stated payoff — *"so if an agent
+in the future is asked to autopull one or two FROM THE CATEGORIES it knows whats next"* — rests on a
+deterministic order, and two real task pairs on his board are ordered by `updated_at`, not by the
+data. One clause fixes it.
+
