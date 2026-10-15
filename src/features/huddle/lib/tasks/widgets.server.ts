@@ -630,9 +630,9 @@ export function categoryLabel(key: string): string {
     .join(" ");
 }
 
-/** Synthetic category roots are ids, not topics — prefixed so they can never collide with a
- *  journey topic uuid, and so a click handler can tell them apart. */
-export const CATEGORY_ROOT_PREFIX = "category:";
+// Synthetic category-root prefix: defined in widget-ids.ts (client-safe), re-exported here.
+import { CATEGORY_ROOT_PREFIX, UNCATEGORISED_CATEGORY } from "./widget-ids";
+export { CATEGORY_ROOT_PREFIX, UNCATEGORISED_CATEGORY };
 
 /**
  * Wrap already-nested topic roots in synthetic CATEGORY roots.
@@ -936,9 +936,7 @@ export function buildCategoryTaskTree(
   return sortNodes(out);
 }
 
-/** Bucket for a live task whose `category` is null/blank. Not a journey value — a Huddle-side
- *  holding row, so an unmapped task is visible instead of silently absent. */
-export const UNCATEGORISED_CATEGORY = "UNCATEGORISED";
+// UNCATEGORISED_CATEGORY: see widget-ids.ts (imported and re-exported above).
 const UNCATEGORISED_LABEL = "Uncategorised";
 
 /**

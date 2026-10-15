@@ -30,7 +30,11 @@
 // include all that comes back from the query no matter how long that is"). Sections scroll instead.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
+  ArrowDown,
+  ArrowUp,
+  Ban,
   Check,
   ChevronDown,
   ChevronRight,
@@ -40,14 +44,18 @@ import {
   Pause,
   Play,
   Send,
+  MoreVertical,
   Settings,
   Star,
+  StarOff,
   Triangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
+import { CATEGORY_ROOT_PREFIX, UNCATEGORISED_CATEGORY } from "../lib/tasks/widget-ids";
 import type {
+  PushView,
   PrioritiesWidgetData,
   ScheduleWidgetData,
   TopicNode,
@@ -579,184 +587,398 @@ function ReadError({ error }: { error?: string }) {
 
 /* ── PRIORITIES ─────────────────────────────────────────────────────────────────────────────────── */
 
+/* ── The ⋮ action menu ─────────────────────────────────────────────────────────────────────────────
+ * Owner, 2026-10-15, approved from the prototype (artifact 2dnuJJaYUMGqhxUysapcJ6): "what if on mobile,
+ * a context menu popped up from clicking the action menu to the left … and the left text wrapped".
+ * Every row's actions live behind ONE 44px ⋮ button on its left, so the title takes the rest of the
+ * width and wraps instead of being cut off. The old inline Today / ✓ / ⏸ / ▲▼ strip is gone from these
+ * rows (Today removed entirely — "i only see today under task which i dont like").
+ *
+ * PORTALLED AND FIXED-POSITIONED, not absolute inside the row: the tree and band sit in
+ * `overflow-y-auto` ScrollBands, which would clip an absolutely-positioned menu near their bottom edge.
+ * The menu opens below the button, or ABOVE it when there is not room below. Any scroll closes it — a
+ * fixed menu left behind by a scrolling list would point at the wrong row. */
+
+type MenuItem = { key: string; label: string; sub?: string; icon: React.ReactNode; onSelect: () => void };
+
+const MENU_WIDTH = 272;
+const MENU_ROOM = 300;
+
+function RowMenu({ label, heading, items }: { label: string; heading: string; items: MenuItem[] }) {
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const close = useCallback(() => setAnchor(null), []);
+  useEffect(() => {
+    if (!anchor) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [anchor, close]);
+  const open = anchor !== null;
+  let pos: React.CSSProperties = {};
+  if (anchor && typeof window !== "undefined") {
+    const left = Math.max(8, Math.min(anchor.left, window.innerWidth - MENU_WIDTH - 8));
+    pos =
+      window.innerHeight - anchor.bottom >= MENU_ROOM
+        ? { left, top: anchor.bottom + 4 }
+        : { left, bottom: window.innerHeight - anchor.top + 4 };
+  }
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={(e) => setAnchor(open ? null : e.currentTarget.getBoundingClientRect())}
+        className={cn(
+          "-my-1 flex h-11 w-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition hover:text-foreground",
+          open && "bg-accent text-accent-foreground",
+        )}
+      >
+        <MoreVertical size={17} aria-hidden />
+      </button>
+      {open &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <>
+            <button
+              type="button"
+              aria-label="Close menu"
+              onClick={close}
+              className="fixed inset-0 z-[90] cursor-default bg-foreground/10"
+            />
+            <div
+              role="menu"
+              aria-label={label}
+              style={{ ...pos, width: MENU_WIDTH }}
+              className="fixed z-[91] overflow-hidden rounded-xl bg-card shadow-xl ring-1 ring-hairline"
+            >
+              <div className="border-b border-hairline px-3.5 pb-2 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {heading}
+              </div>
+              {items.map((it) => (
+                <button
+                  key={it.key}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    close();
+                    it.onSelect();
+                  }}
+                  className="flex min-h-12 w-full items-start gap-3 border-t border-hairline/60 px-3.5 py-3 text-left first-of-type:border-t-0 hover:bg-muted"
+                >
+                  <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center text-primary">{it.icon}</span>
+                  <span className="flex min-w-0 flex-col gap-0.5">
+                    <span className="text-[14px] font-medium text-foreground">{it.label}</span>
+                    {it.sub && <span className="text-[12px] leading-snug text-muted-foreground">{it.sub}</span>}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+const STAR_FILLED = <Star size={17} className="fill-amber-500 text-amber-500" aria-hidden />;
+
+/** Context every priorities row needs to act: who is acting, whether this card is the LIVE widget (a
+ *  frozen in-chat snapshot never pushes — its ids could be days old), what is pushed, and how to
+ *  re-read the widget after a push lands. */
+type PushCtx = {
+  caller: Caller;
+  live: boolean;
+  pushes: PushView[];
+  onChanged?: () => void;
+};
+
+/** One push/un-push call → toast → re-read the widget (now, and again once the ~1-3s mirror sync has
+ *  caught up, so the new star shows without a manual refresh). */
+async function runPush(
+  ctx: PushCtx,
+  call: "task" | "unstar" | "node" | "unpush",
+  args: { taskId?: string; nodeId?: string; nodeName?: string },
+): Promise<void> {
+  try {
+    const fns = await import("../lib/tasks/widgets.functions");
+    const caller = ctx.caller;
+    const r =
+      call === "task"
+        ? await fns.pushWidgetTask({ data: { caller, taskId: args.taskId! } })
+        : call === "unstar"
+          ? await fns.unstarWidgetTask({ data: { caller, taskId: args.taskId! } })
+          : call === "node"
+            ? await fns.pushWidgetNode({ data: { caller, nodeId: args.nodeId!, nodeName: args.nodeName } })
+            : await fns.unpushWidgetNode({ data: { caller, nodeId: args.nodeId! } });
+    if (!r.ok) {
+      toast.error(r.error || "Couldn't update This Week.");
+      return;
+    }
+    if (call === "task") toast.success(r.applied ? "Pushed to This Week." : (r.message ?? "Already in This Week."));
+    else if (call === "unstar") toast.success("Removed from This Week.");
+    else if (call === "node")
+      toast.success(
+        r.task
+          ? `${r.applied ? "Pushed" : "Already pushed"} ${args.nodeName ?? ""} — starred: ${r.task.title}`
+          : (r.message ?? "Pushed — the next task that lands there gets starred."),
+      );
+    else toast.success(`Stopped pushing ${args.nodeName ?? ""}.`);
+    ctx.onChanged?.();
+    setTimeout(() => ctx.onChanged?.(), 2500);
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : "Couldn't update This Week.");
+  }
+}
+
+/** The task actions every task row shares: Start, Mark done, Park — the SAME runAction write path the
+ *  schedule widget's buttons use (one writer into journey, optimistic with visible rollback). */
+function taskActionItems(row: WidgetTaskRow, caller: Caller, status: string, viaName?: string | null): MenuItem[] {
+  const items: MenuItem[] = [];
+  if (status !== "DOING") {
+    items.push({
+      key: "start",
+      label: "Start",
+      sub: "Moves it to Doing",
+      icon: <Play size={15} className="fill-current" aria-hidden />,
+      onSelect: () => void runAction(row, caller, "start", { status: "DOING", prevStatus: status }),
+    });
+  }
+  items.push({
+    key: "done",
+    label: "Mark done",
+    sub: viaName ? `The next task from ${viaName} takes its place` : undefined,
+    icon: <Check size={17} strokeWidth={3} className="text-emerald-600" aria-hidden />,
+    onSelect: () => void runAction(row, caller, "done", { status: "DONE", prevStatus: status }),
+  });
+  items.push({
+    key: "park",
+    label: "Park",
+    sub: "Out of all automation until you bring it back",
+    icon: <Pause size={15} className="fill-current" aria-hidden />,
+    onSelect: () => void runAction(row, caller, "pause", { status: "BACKLOG", prevStatus: status }),
+  });
+  return items;
+}
+
+/** A task title with the star docked to its LEFT and the meta line (date, chip, via) lined up under the
+ *  TITLE, not under the star (owner comment on the prototype). */
+function TaskTitle({
+  row,
+  done,
+  starred,
+  chip,
+  muted,
+}: {
+  row: WidgetTaskRow;
+  done: boolean;
+  starred: boolean;
+  chip?: boolean;
+  muted?: boolean;
+}) {
+  const due = row.dueDate ? shortDate(row.dueDate) : null;
+  const hasMeta = (chip && !!row.category) || !!due || !!row.pushedVia;
+  return (
+    <div className="min-w-0 flex-1 py-2">
+      <div className="flex items-start gap-1.5">
+        {starred && <Star aria-label="In This Week" className="mt-[3px] h-3.5 w-3.5 shrink-0 fill-amber-500 text-amber-500" />}
+        <span
+          className={cn(
+            "min-w-0 break-words text-[13.5px] leading-snug",
+            done ? "text-muted-foreground line-through" : muted ? "text-foreground/85" : "text-foreground",
+          )}
+        >
+          {row.title}
+        </span>
+      </div>
+      {hasMeta && (
+        <div className={cn("mt-1 flex flex-wrap items-center gap-1.5", starred && "pl-5")}>
+          {chip && <CategoryChip category={row.category} />}
+          {due && <span className="text-[11.5px] text-muted-foreground">Due {due}</span>}
+          {row.pushedVia && <span className="text-[11.5px] text-muted-foreground">via {row.pushedVia}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "2026-10-16…" → "Oct 16". Date-only strings are read as calendar dates, never shifted by timezone. */
+function shortDate(iso: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return null;
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[Number(m[2]) - 1]} ${Number(m[3])}`;
+}
+
 /**
- * One row of the This Week band.
+ * One row of the This Week band: ⋮ on the left, the title wrapping across the rest.
  *
- * The ✓/⏸ buttons are mounted HERE as well as on the schedule widget. They always worked server-side
- * — `updateWidgetTask` has accepted `done` and `pause` (which parks: BACKLOG + the parking-lot tag
- * union) since it was written — but they had only ever been rendered on the schedule widget's rows,
- * so from the priorities band the owner could not complete or park anything. Mounting, not wiring.
- *
- * Reordering is exposed as ▲/▼ buttons rather than drag alone, deliberately: this widget's primary
- * surface is a phone, and the repo's only existing drag (BoardView) is native HTML5 DnD, which does
- * not fire on touch at all. Buttons work on touch, with a keyboard, and with a screen reader; drag
- * is layered on top for mouse users rather than being the only way in.
+ * Done and Park go through `runAction` exactly as before (they were mounted here for the owner's
+ * "i also cant mark something cmplete or parking lot it"); reordering moved from the ▲▼ pair into the
+ * menu as Move up / Move down, and still writes through `reorderWidgetBand`. Removing a row takes its
+ * star off in journey, so it leaves This Week on the phone too.
  */
 function PriorityRow({
   row,
-  caller,
+  ctx,
   onMove,
   canMoveUp,
   canMoveDown,
 }: {
   row: WidgetTaskRow;
-  caller: Caller;
+  ctx: PushCtx;
   onMove?: (taskId: string, dir: -1 | 1) => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
 }) {
   const { status } = useRowState(row);
   const done = status === "DONE";
+  const items = taskActionItems(row, ctx.caller, status, row.pushedVia).filter((i) => i.key !== "start");
+  if (ctx.live) {
+    items.push({
+      key: "unstar",
+      label: "Remove from This Week",
+      icon: <StarOff size={17} aria-hidden />,
+      onSelect: () => void runPush(ctx, "unstar", { taskId: row.id }),
+    });
+  }
+  if (onMove && canMoveUp) {
+    items.push({ key: "up", label: "Move up", icon: <ArrowUp size={17} aria-hidden />, onSelect: () => onMove(row.id, -1) });
+  }
+  if (onMove && canMoveDown) {
+    items.push({ key: "down", label: "Move down", icon: <ArrowDown size={17} aria-hidden />, onSelect: () => onMove(row.id, 1) });
+  }
   return (
-    <li className="flex items-start gap-1.5 border-b border-hairline px-2 py-2 last:border-b-0">
-      {onMove && (
-        <span className="flex shrink-0 flex-col pt-0.5">
-          <button
-            type="button"
-            aria-label={`Move “${row.title}” up`}
-            disabled={!canMoveUp}
-            onClick={() => onMove(row.id, -1)}
-            className="flex h-4 w-5 items-center justify-center text-muted-foreground disabled:opacity-25 hover:text-foreground"
-          >
-            <ChevronUp className="h-3 w-3" />
-          </button>
-          <button
-            type="button"
-            aria-label={`Move “${row.title}” down`}
-            disabled={!canMoveDown}
-            onClick={() => onMove(row.id, 1)}
-            className="flex h-4 w-5 items-center justify-center text-muted-foreground disabled:opacity-25 hover:text-foreground"
-          >
-            <ChevronDown className="h-3 w-3" />
-          </button>
-        </span>
-      )}
-      {/* TWO LINES OF LAYOUT: the title gets the WHOLE row width and is never clamped, and the
-          controls sit on their own row underneath. Owner, 2026-10-15: "i still cannot see enough text
-          before being cutoff, so it seems the action buttons should be on a row below rather than
-          beside". A side-by-side strip of four 44px controls leaves a phone title ~120px; wrapping
-          to two lines (the previous fix) still cut long titles off. */}
-      <div className="min-w-0 flex-1">
-        <span
-          className={cn(
-            "block text-[13px] leading-snug break-words",
-            done ? "text-muted-foreground line-through" : "text-foreground",
-          )}
-        >
-          {row.title}
-        </span>
-        <div className="mt-1 flex items-center gap-1">
-          <CategoryChip category={row.category} />
-          <span className="flex-1" />
-          <TodayButton row={row} caller={caller} />
-          <DoneButton row={row} caller={caller} />
-          <PauseButton row={row} caller={caller} />
-        </div>
-      </div>
+    <li className="flex items-start gap-1 border-b border-hairline px-1.5 py-0.5 last:border-b-0">
+      <RowMenu label={`Actions for “${row.title}”`} heading="This week" items={items} />
+      <TaskTitle row={row} done={done} starred={row.isPriority} chip />
     </li>
   );
 }
 
-/** One topic and its sub-topics. Expansion is LOCAL component state, not store state: it is per-view
- *  chrome with no consequence if it resets, and putting it in the store would make two mounted copies
- *  of the widget (a chat card and the docked pair) fight over one expanded set. */
+/** One category or topic and its children. ⋮ on the left pushes / stops pushing it; the arrow on the
+ *  RIGHT opens it, so the two controls can never be confused. A pushed node shows a star right after its
+ *  name — filled while it has a task starred, outlined while it waits for one. Expansion is local state:
+ *  per-view chrome, no consequence if it resets. */
 function TopicRow({
   node,
   depth,
-  caller,
+  ctx,
   defaultOpen = false,
 }: {
   node: TopicNode;
   depth: number;
-  caller: Caller;
+  ctx: PushCtx;
   defaultOpen?: boolean;
 }) {
-  // A row is expandable when it has sub-topics OR TASKS. It used to be children-only, which is why
-  // a category carrying 25 tasks and no sub-topic rendered as a dead, unclickable count — the
-  // owner's "currently it populates this week with tasks when i should be able to drag a topic
-  // theme/grouping or the task itself": there was nothing under a category to act on.
+  // Expandable when it has sub-topics OR tasks — a category of tasks with no sub-topic is still a
+  // working surface, never a dead count.
   const hasChildren = node.children.length > 0;
   const hasTasks = node.tasks.length > 0;
   const hasContent = hasChildren || hasTasks;
-  // NO ROW CAP, NO "+N more" — AC-journey-widgets AC-10, in the owner's own words: "it should
-  // include all that comes back from the query no matter how long that is". An earlier draft of
-  // this row capped at 8 behind a "+N more" button, which is the exact pattern that AC rejects by
-  // name. Height is handled by the enclosing ScrollBand and by categories being collapsed by
-  // default, not by hiding rows.
-  // ONE row starts open — the first — exactly as the spec draws it (Career expanded, the other four
-  // categories closed). This was `depth === 0`, i.e. EVERY top-level row expanded, which was fine
-  // while a top-level row was a topic with a handful of children. It is not fine now that a
-  // top-level row is a CATEGORY: journey's live data is 158 topics across 5 categories, so
-  // expand-all would open the rail as a 163-row wall on a phone. See groupByCategory in
-  // widgets.server.ts for why the top level became categories.
+  // NO ROW CAP (AC-journey-widgets AC-10). ONE row starts open — the first, as the spec draws it.
   const [open, setOpen] = useState(defaultOpen && hasContent);
-  // The coloured left rail, one hue per top-level topic — the SAME `categoryHue` the chips use, and
-  // it normalizes to upper-snake before looking up, so a topic and a category of the same name DO
-  // now agree in colour (topic "Life" and category "LIFE" both resolve to the seeded blue). Before
-  // normalization the case-sensitive hash made them disagree 5/5 — N-6.
   const rail =
     depth === 0
       ? `oklch(0.62 ${0.16 * categoryChromaScale(node.name)} ${categoryHue(node.name)})`
       : undefined;
+  const pushable = ctx.live && node.id !== `${CATEGORY_ROOT_PREFIX}${UNCATEGORISED_CATEGORY}`;
+  const push = ctx.pushes.find((p) => p.nodeId === node.id);
+  const kind = node.id.startsWith(CATEGORY_ROOT_PREFIX) ? "Category" : "Topic";
+  const items: MenuItem[] = push
+    ? [
+        {
+          key: "unpush",
+          label: `Stop pushing ${node.name}`,
+          sub: "Takes the star off the task this push starred",
+          icon: <Ban size={17} aria-hidden />,
+          onSelect: () => void runPush(ctx, "unpush", { nodeId: node.id, nodeName: node.name }),
+        },
+      ]
+    : [
+        {
+          key: "push",
+          label: `Push ${node.name}`,
+          sub: hasContent
+            ? "Huddle stars its best task now, and the next one when you finish"
+            : "Nothing here yet — the next task that lands gets starred",
+          icon: STAR_FILLED,
+          onSelect: () => void runPush(ctx, "node", { nodeId: node.id, nodeName: node.name }),
+        },
+      ];
   return (
-    <li>
+    <li className={cn("border-t", depth === 0 ? "border-hairline" : "border-hairline/50")}>
       <div className="flex items-stretch">
         {depth === 0 && (
-          <span aria-hidden className="mr-1.5 w-[3px] shrink-0 rounded-full" style={{ backgroundColor: rail }} />
+          <span aria-hidden className="mr-0.5 w-[3px] shrink-0 rounded-full" style={{ backgroundColor: rail }} />
         )}
-        <button
-          type="button"
-          disabled={!hasContent}
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={hasContent ? open : undefined}
-          className="-my-1.5 flex min-h-11 min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-3 text-left disabled:cursor-default"
-          style={{ paddingLeft: `${depth === 0 ? 0 : depth * 0.875 + 0.75}rem` }}
+        <div
+          className="flex min-w-0 flex-1 items-start gap-1 pr-1"
+          style={{ paddingLeft: `${depth === 0 ? 0.125 : depth * 0.875 + 0.125}rem` }}
         >
-          <span className="w-3 shrink-0 text-muted-foreground">
-            {/* D-5 #12: the spec uses FILLED TRIANGLES here, not stroked chevrons, and the same
-                triangle family as the Today button's ▲ — so within the spec the two marks rhyme.
-                A rotated filled Triangle is that mark; `Triangle` is already imported. */}
-            {hasContent ? (
-              <Triangle
-                size={8}
-                strokeWidth={0}
-                className={cn("fill-current transition-transform", open ? "rotate-180" : "rotate-90")}
-                aria-hidden
+          {pushable ? (
+            <RowMenu label={`Actions for ${node.name}`} heading={`${kind} · ${node.name}`} items={items} />
+          ) : (
+            <span className="w-10 shrink-0" aria-hidden />
+          )}
+          <span className="flex min-w-0 flex-1 items-start gap-1.5 py-2.5">
+            {/* Grey when there is nothing under it — category or topic (owner: "there currently is
+                nothing to do if pushing it"). */}
+            <span
+              className={cn(
+                "min-w-0 break-words text-[13.5px] leading-snug",
+                depth === 0 && "font-semibold",
+                !hasContent ? "text-muted-foreground" : depth === 0 ? "text-foreground" : "text-foreground/85",
+              )}
+            >
+              {node.name}
+            </span>
+            {push && (
+              <Star
+                aria-label={push.activeTaskId ? "Pushed — one task starred" : "Pushed — waiting for a task"}
+                className={cn(
+                  "mt-[2px] h-3.5 w-3.5 shrink-0 text-amber-500",
+                  push.activeTaskId && "fill-amber-500",
+                )}
               />
-            ) : null}
-          </span>
-          {/* A row with nothing under it is GREY. Owner, 2026-10-15: "Topics with no tasks should use
-              grey text instead of black to show there currently is nothing to do if pushing it." That
-              now includes a CATEGORY row: the five known categories always render (withKnownCategories,
-              the phone's rule), so an empty one — Family, today — is drawn, and greyed for the same reason. */}
-          <span
-            className={cn(
-              "min-w-0 flex-1 truncate text-[13px]",
-              !hasContent ? "text-muted-foreground" : depth === 0 ? "text-foreground" : "text-foreground/85",
             )}
-            title={node.name}
-          >
-            {node.name}
           </span>
-          {/* `count: null` is a REAL state in Lane B's contract, and the spec renders it BLANK — never
-              "0" (Family, Grooming Management and several other sub-topics carry no number at all).
-              A zero count is treated the same way, for the same visual reason. */}
+          {/* `count: null` renders BLANK, never "0" — as the spec draws empty rows. */}
           {node.count ? (
-            <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground">{node.count}</span>
+            <span className="shrink-0 pt-2.5 text-[12px] tabular-nums text-muted-foreground">{node.count}</span>
           ) : null}
-        </button>
+          {hasContent ? (
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
+              aria-expanded={open}
+              aria-label={`${open ? "Collapse" : "Expand"} ${node.name}`}
+              className="-my-0.5 flex h-11 w-9 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+            >
+              <ChevronRight size={16} className={cn("transition-transform", open && "rotate-90")} aria-hidden />
+            </button>
+          ) : (
+            <span className="w-3 shrink-0" aria-hidden />
+          )}
+        </div>
       </div>
       {hasContent && open && (
         <ul>
-          {/* Sub-topics first, then this node's own tasks — the Android widget's order
-              (CategoryHeader -> GroupRow -> TaskRow, PrioritiesWidgetFactory.rebuildItems). Unlike
-              that factory, a node's own directly-held tasks are rendered AND counted: its
-              `grpTaskCount` sums only sub-groups, so a group's number disagrees with its rows. */}
+          {/* Sub-topics first, then this node's own tasks — the Android widget's order. */}
           {node.children.map((c) => (
-            <TopicRow key={c.id} node={c} depth={depth + 1} caller={caller} />
+            <TopicRow key={c.id} node={c} depth={depth + 1} ctx={ctx} />
           ))}
           {node.tasks.map((row) => (
-            <TopicTaskRow key={row.id} row={row} depth={depth + 1} caller={caller} />
+            <TopicTaskRow key={row.id} row={row} depth={depth + 1} ctx={ctx} />
           ))}
         </ul>
       )}
@@ -764,45 +986,38 @@ function TopicRow({
   );
 }
 
-/**
- * One task inside the category/topic tree.
- *
- * Deliberately reuses `TodayButton`/`DoneButton`/`PauseButton` verbatim: they take `{row, caller}`
- * and nothing else, `useRowState` keys purely off `row.id`, and `runAction` self-seeds a row it has
- * not seen — so a task acted on here goes through the SAME single write path as the band above
- * (journey via `invokeJourneyTool`, mirror updated by the sync trigger). No new action code, no
- * second writer.
- *
- * The star is shown, not editable, and that is on purpose: `is_priority` is the This Week
- * membership bit, and journey couples it to `priority_rank` (`batch_update_tasks` sets
- * `is_priority = true` for any task given a rank), so a promote control here belongs with the
- * This Week ordering work rather than bolted onto a tree row.
- */
-function TopicTaskRow({ row, depth, caller }: { row: WidgetTaskRow; depth: number; caller: Caller }) {
+/** One task inside the category/topic tree: ⋮ on the left (Push to This Week / Remove, Start, Mark
+ *  done, Park), the title wrapping across the rest. Same single write paths as the band. */
+function TopicTaskRow({ row, depth, ctx }: { row: WidgetTaskRow; depth: number; ctx: PushCtx }) {
   const { status } = useRowState(row);
   const done = status === "DONE";
+  const items: MenuItem[] = [];
+  if (ctx.live) {
+    items.push(
+      row.isPriority
+        ? {
+            key: "unstar",
+            label: "Remove from This Week",
+            icon: <StarOff size={17} aria-hidden />,
+            onSelect: () => void runPush(ctx, "unstar", { taskId: row.id }),
+          }
+        : {
+            key: "push",
+            label: "Push to This Week",
+            sub: "You choose — it goes first in tonight's scheduling",
+            icon: STAR_FILLED,
+            onSelect: () => void runPush(ctx, "task", { taskId: row.id }),
+          },
+    );
+  }
+  items.push(...taskActionItems(row, ctx.caller, status));
   return (
-    <li className="py-1.5 pr-2" style={{ paddingLeft: `${depth * 0.875 + 0.75}rem` }}>
-      {/* Title on its own full-width line, controls on the row below — same layout as the band's
-          PriorityRow, for the same reason (owner 2026-10-15: titles were being cut off). */}
-      <div className="flex items-start gap-1.5">
-        {row.isPriority && (
-          <Star aria-label="In This Week" className="mt-0.5 h-3 w-3 shrink-0 fill-current text-amber-500" />
-        )}
-        <span
-          className={cn(
-            "min-w-0 flex-1 text-[13px] leading-snug break-words",
-            done ? "text-muted-foreground line-through" : "text-foreground/85",
-          )}
-        >
-          {row.title}
-        </span>
-      </div>
-      <div className="mt-1 flex items-center justify-end gap-1">
-        <TodayButton row={row} caller={caller} />
-        <DoneButton row={row} caller={caller} />
-        <PauseButton row={row} caller={caller} />
-      </div>
+    <li
+      className="flex items-start gap-1 border-t border-hairline/40 pr-2"
+      style={{ paddingLeft: `${depth * 0.875 + 0.125}rem` }}
+    >
+      <RowMenu label={`Actions for “${row.title}”`} heading="Task" items={items} />
+      <TaskTitle row={row} done={done} starred={row.isPriority} muted />
     </li>
   );
 }
@@ -830,6 +1045,7 @@ export function PrioritiesWidget({
   onSettings,
   live,
   chrome = "card",
+  onChanged,
 }: {
   data: PrioritiesWidgetData;
   full?: boolean;
@@ -841,9 +1057,15 @@ export function PrioritiesWidget({
   live?: boolean;
   /** Outer chrome. Defaults to the chat-stream card; see `widgetShell`. */
   chrome?: "card" | "page" | "bare";
+  /** Re-read the widget — the live widget passes it so a push shows without a manual refresh. */
+  onChanged?: () => void;
 }) {
   const caller = useCaller();
   useSeededRows(data.band, live);
+  const pushCtx: PushCtx = useMemo(
+    () => ({ caller, live: live === true && data.ok, pushes: data.pushes ?? [], onChanged }),
+    [caller, live, data.ok, data.pushes, onChanged],
+  );
 
   // The user's This Week ordering, applied optimistically on top of the server's.
   //
@@ -918,7 +1140,7 @@ export function PrioritiesWidget({
               <PriorityRow
                 key={row.id}
                 row={row}
-                caller={caller}
+                ctx={pushCtx}
                 onMove={canReorder ? onMove : undefined}
                 canMoveUp={i > 0}
                 canMoveDown={i < shown.length - 1}
@@ -927,7 +1149,7 @@ export function PrioritiesWidget({
           </ul>
         </ScrollBand>
       ) : (
-        <EmptyLine band>No priorities right now.</EmptyLine>
+        <EmptyLine band>Nothing in This Week yet. Tap ⋮ on a task, topic or category below to push it here.</EmptyLine>
       )}
 
       {data.topics.roots.length > 0 ? (
@@ -935,7 +1157,7 @@ export function PrioritiesWidget({
           <ScrollBand full={full}>
             <ul className="border-t border-hairline py-1">
               {data.topics.roots.map((t, i) => (
-                <TopicRow key={t.id} node={t} depth={0} caller={caller} defaultOpen={i === 0} />
+                <TopicRow key={t.id} node={t} depth={0} ctx={pushCtx} defaultOpen={i === 0} />
               ))}
             </ul>
           </ScrollBand>
@@ -1116,12 +1338,16 @@ function useScheduleData(): { loading: boolean; data: ScheduleWidgetData | null 
   return state;
 }
 
-function usePrioritiesData(): { loading: boolean; data: PrioritiesWidgetData | null } {
+function usePrioritiesData(): { loading: boolean; data: PrioritiesWidgetData | null; reload: () => void } {
   const caller = useCaller();
   const [state, setState] = useState<{ loading: boolean; data: PrioritiesWidgetData | null }>({
     loading: true,
     data: null,
   });
+  // Bumped by `reload` — a push re-reads the widget so the new star, the "via" line and the pushed
+  // node's star appear without a manual refresh. The previous payload stays on screen meanwhile.
+  const [nonce, setNonce] = useState(0);
+  const reload = useCallback(() => setNonce((n) => n + 1), []);
   useEffect(() => {
     let cancelled = false;
     void getPrioritiesWidget({ data: { caller, timeZone: TIME_ZONE } })
@@ -1129,13 +1355,14 @@ function usePrioritiesData(): { loading: boolean; data: PrioritiesWidgetData | n
         if (!cancelled) setState({ loading: false, data: d });
       })
       .catch(() => {
-        if (!cancelled) setState({ loading: false, data: null });
+        // Keep what is on screen if a RE-read fails; only the first read may land on "unreachable".
+        if (!cancelled) setState((prev) => ({ loading: false, data: prev.data }));
       });
     return () => {
       cancelled = true;
     };
-  }, [caller]);
-  return state;
+  }, [caller, nonce]);
+  return { ...state, reload };
 }
 
 function WidgetPlaceholder({ label }: { label: string }) {
@@ -1216,12 +1443,12 @@ function LivePrioritiesWidget({
   full?: boolean;
   chrome?: "card" | "page" | "bare";
 }) {
-  const { loading, data } = usePrioritiesData();
+  const { loading, data, reload } = usePrioritiesData();
   if (loading) return <WidgetPlaceholder label="Loading your priorities…" />;
   if (!data) return <WidgetUnreachable label="your priorities" />;
   // `live` — this payload IS the Lane-B read, so it must overwrite any stale in-chat snapshot that
   // seeded the shared row map first (see useSeededRows).
-  return <PrioritiesWidget data={data} full={full} live chrome={chrome} />;
+  return <PrioritiesWidget data={data} full={full} live chrome={chrome} onChanged={reload} />;
 }
 
 function LiveScheduleWidget({

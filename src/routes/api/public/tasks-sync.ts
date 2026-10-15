@@ -49,9 +49,8 @@ export const Route = createFileRoute("/api/public/tasks-sync")({
         if (!id) return json({ ok: false, error: "missing_task_id" }, 400);
 
         try {
-          const { upsertJourneyTask, deleteJourneyTask } = await import(
-            "@/features/huddle/lib/tasks/tasks.server"
-          );
+          const { upsertJourneyTask, deleteJourneyTask } =
+            await import("@/features/huddle/lib/tasks/tasks.server");
           if (op === "DELETE") {
             await deleteJourneyTask(id);
           } else {
@@ -71,7 +70,11 @@ export const Route = createFileRoute("/api/public/tasks-sync")({
         // mirror write, and it never throws — a refill problem must not make journey's sync look failed
         // (a 500 here is what journey's own logging reads). The 9/13/17 reconcile retries anything missed.
         const { onMirrorEvent } = await import("@/features/huddle/lib/tasks/push.server");
-        await onMirrorEvent(op, task, payload.user_email ?? (task?.user_email as string | undefined) ?? null);
+        await onMirrorEvent(
+          op,
+          task,
+          payload.user_email ?? (task?.user_email as string | undefined) ?? null,
+        );
 
         return json({ ok: true, operation: op, id });
       },

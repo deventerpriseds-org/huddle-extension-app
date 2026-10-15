@@ -57,7 +57,10 @@ function isParkedRow(row: { tags?: string[] | null }): boolean {
  * reopened tasks that kept one), not parked, not waiting on a scheduled reminder — and NOT ALREADY
  * STARRED (a push never adopts or rewrites someone else's star).
  */
-export function isPushEligible(row: PushCandidateRow, inReminderWindow: ReadonlySet<string> = new Set()): boolean {
+export function isPushEligible(
+  row: PushCandidateRow,
+  inReminderWindow: ReadonlySet<string> = new Set(),
+): boolean {
   const s = upper(row.status);
   if (s === "DONE" || s === "BLOCKED") return false;
   if (row.completed_at) return false;
@@ -69,7 +72,11 @@ export function isPushEligible(row: PushCandidateRow, inReminderWindow: Readonly
 
 /** Does `row` belong to `node`? Category: the task's OWN category (display-folded, so PERSONAL counts
  *  as LIFE) — that is the category whose hours journey will schedule it in. Topic: its mapping. */
-export function inNode(row: PushCandidateRow, node: PushNode, topicTaskIds?: ReadonlySet<string>): boolean {
+export function inNode(
+  row: PushCandidateRow,
+  node: PushNode,
+  topicTaskIds?: ReadonlySet<string>,
+): boolean {
   if (node.kind === "category") return !!row.category && displayCategory(row.category) === node.key;
   return !!topicTaskIds?.has(row.id);
 }
@@ -82,7 +89,12 @@ export function inNode(row: PushCandidateRow, node: PushNode, topicTaskIds?: Rea
 export function pickForNode(
   rows: readonly PushCandidateRow[],
   node: PushNode,
-  opts: { topicTaskIds?: ReadonlySet<string>; inReminderWindow?: ReadonlySet<string>; skip?: string | null; now?: Date } = {},
+  opts: {
+    topicTaskIds?: ReadonlySet<string>;
+    inReminderWindow?: ReadonlySet<string>;
+    skip?: string | null;
+    now?: Date;
+  } = {},
 ): PushCandidateRow | null {
   const eligible = rows
     .filter((r) => r.id !== opts.skip)
@@ -102,12 +114,17 @@ export type ActiveEvent = "refill" | "unpush" | "none";
  *            with this push, so nothing is re-starred.
  *   none   — anything else, including Huddle's own star write echoing back (it is still starred).
  */
-export function classifyActiveEvent(op: string, row: PushCandidateRow | null, node: PushNode): ActiveEvent {
+export function classifyActiveEvent(
+  op: string,
+  row: PushCandidateRow | null,
+  node: PushNode,
+): ActiveEvent {
   if (upper(op) === "DELETE" || !row) return "refill";
   const s = upper(row.status);
   if (s === "DONE" || s === "BLOCKED" || row.completed_at) return "refill";
   if (isParkedRow(row)) return "refill";
-  if (node.kind === "category" && !(row.category && displayCategory(row.category) === node.key)) return "refill";
+  if (node.kind === "category" && !(row.category && displayCategory(row.category) === node.key))
+    return "refill";
   if (row.is_priority === false) return "unpush";
   return "none";
 }
@@ -169,7 +186,12 @@ async function pickContext(email: string, caller: Caller, node: PushNode) {
     taskIdsInReminderWindow(email).catch(() => new Set<string>()),
     node.kind === "topic" ? topicTaskIds(caller, node.topicId) : Promise.resolve(undefined),
   ]);
-  return { rows, inReminderWindow, topicTaskIds: topicIds ?? undefined, topicUnavailable: topicIds === null };
+  return {
+    rows,
+    inReminderWindow,
+    topicTaskIds: topicIds ?? undefined,
+    topicUnavailable: topicIds === null,
+  };
 }
 
 /** Push ONE task ("I choose"). Ownership-checked; a task that is already starred is left exactly as is. */
@@ -183,9 +205,17 @@ export async function pushTask(email: string, caller: Caller, taskId: string): P
   const s = upper(row.status);
   if (s === "DONE") return { ok: false, applied: false, error: "That task is already done." };
   if (s === "BLOCKED") return { ok: false, applied: false, error: "That task is blocked." };
-  if (row.completed_at) return { ok: false, applied: false, error: "That task is marked complete." };
-  if (isParkedRow(row)) return { ok: false, applied: false, error: "That task is parked — bring it back first." };
-  if (row.is_priority) return { ok: true, applied: false, task: { id: row.id, title: row.title }, message: "Already in This Week." };
+  if (row.completed_at)
+    return { ok: false, applied: false, error: "That task is marked complete." };
+  if (isParkedRow(row))
+    return { ok: false, applied: false, error: "That task is parked — bring it back first." };
+  if (row.is_priority)
+    return {
+      ok: true,
+      applied: false,
+      task: { id: row.id, title: row.title },
+      message: "Already in This Week.",
+    };
   const r = await star(caller, taskId);
   if (!r.ok) return { ok: false, applied: false, error: r.error };
   return { ok: true, applied: true, task: { id: row.id, title: row.title } };
@@ -193,8 +223,13 @@ export async function pushTask(email: string, caller: Caller, taskId: string): P
 
 /** Take a task out of This Week. If a node push had starred it, that push ends too (nothing refills —
  *  the user removed it on purpose). */
-export async function unstarTask(email: string, caller: Caller, taskId: string): Promise<PushResult> {
-  const { getOwnedTaskForConfirmAsk, getPriorityPushes, deletePriorityPush } = await import("./tasks.server");
+export async function unstarTask(
+  email: string,
+  caller: Caller,
+  taskId: string,
+): Promise<PushResult> {
+  const { getOwnedTaskForConfirmAsk, getPriorityPushes, deletePriorityPush } =
+    await import("./tasks.server");
   const owned = await getOwnedTaskForConfirmAsk(taskId, email);
   if (!owned) return { ok: false, applied: false, error: "Task not found." };
   const r = await unstar(caller, taskId);
@@ -207,25 +242,48 @@ export async function unstarTask(email: string, caller: Caller, taskId: string):
 
 /** Push a category or topic ("you choose"). Idempotent: a node already pushed with a live star reports
  *  that star and writes nothing. A node with nothing to pick stays pushed and WAITS for its next task. */
-export async function pushNode(email: string, caller: Caller, nodeId: string, nodeName: string | null): Promise<PushResult> {
+export async function pushNode(
+  email: string,
+  caller: Caller,
+  nodeId: string,
+  nodeName: string | null,
+): Promise<PushResult> {
   const node = parseNodeId(nodeId);
   if (!node) return { ok: false, applied: false, error: "That row can't be pushed." };
-  const { getPriorityPushes, upsertPriorityPush, deletePriorityPush, getPushCandidates } = await import("./tasks.server");
+  const { getPriorityPushes, upsertPriorityPush, deletePriorityPush, getPushCandidates } =
+    await import("./tasks.server");
   const existing = (await getPriorityPushes(email)).find((p) => p.node_id === nodeId);
   if (existing) {
     const active = existing.active_task_id
       ? (await getPushCandidates(email)).find((r) => r.id === existing.active_task_id)
       : null;
-    return { ok: true, applied: false, task: active ? { id: active.id, title: active.title } : null, message: "Already pushed." };
+    return {
+      ok: true,
+      applied: false,
+      task: active ? { id: active.id, title: active.title } : null,
+      message: "Already pushed.",
+    };
   }
   const ctx = await pickContext(email, caller, node);
   if (ctx.topicUnavailable) {
-    return { ok: false, applied: false, error: "Couldn't read this topic's tasks from journey just now — try again." };
+    return {
+      ok: false,
+      applied: false,
+      error: "Couldn't read this topic's tasks from journey just now — try again.",
+    };
   }
-  const pick = pickForNode(ctx.rows, node, { topicTaskIds: ctx.topicTaskIds, inReminderWindow: ctx.inReminderWindow });
+  const pick = pickForNode(ctx.rows, node, {
+    topicTaskIds: ctx.topicTaskIds,
+    inReminderWindow: ctx.inReminderWindow,
+  });
   await upsertPriorityPush(email, nodeId, nodeName, pick?.id ?? null);
   if (!pick) {
-    return { ok: true, applied: true, task: null, message: `Nothing to pick in ${nodeName ?? "this"} yet — the next task that lands there gets starred.` };
+    return {
+      ok: true,
+      applied: true,
+      task: null,
+      message: `Nothing to pick in ${nodeName ?? "this"} yet — the next task that lands there gets starred.`,
+    };
   }
   const r = await star(caller, pick.id);
   if (!r.ok) {
@@ -236,8 +294,13 @@ export async function pushNode(email: string, caller: Caller, nodeId: string, no
 }
 
 /** Stop pushing a node. Un-stars only the task THIS push starred, and only while it is still open. */
-export async function unpushNode(email: string, caller: Caller, nodeId: string): Promise<PushResult> {
-  const { getPriorityPushes, deletePriorityPush, getPushCandidates } = await import("./tasks.server");
+export async function unpushNode(
+  email: string,
+  caller: Caller,
+  nodeId: string,
+): Promise<PushResult> {
+  const { getPriorityPushes, deletePriorityPush, getPushCandidates } =
+    await import("./tasks.server");
   const existing = (await getPriorityPushes(email)).find((p) => p.node_id === nodeId);
   if (!existing) return { ok: true, applied: false };
   await deletePriorityPush(email, nodeId);
@@ -257,7 +320,10 @@ export async function unpushNode(email: string, caller: Caller, nodeId: string):
  * record first does the star write; a racing webhook delivery or reconcile tick finds the record already
  * moved and does nothing. If journey refuses the star, the record is put BACK so the next reconcile retries.
  */
-async function refill(push: PriorityPushRow, finishedId: string | null): Promise<"refilled" | "waiting" | "lost-race" | "error"> {
+async function refill(
+  push: PriorityPushRow,
+  finishedId: string | null,
+): Promise<"refilled" | "waiting" | "lost-race" | "error"> {
   const email = push.user_email;
   const caller: Caller = { entra_email: email };
   const node = parseNodeId(push.node_id);
@@ -286,11 +352,16 @@ async function refill(push: PriorityPushRow, finishedId: string | null): Promise
  * failure must not turn the webhook into a 500 (that would make journey's sync look broken), and the
  * next reconcile tick retries anything missed.
  */
-export async function onMirrorEvent(op: string, task: Record<string, unknown> | undefined, ownerEmail: string | null): Promise<void> {
+export async function onMirrorEvent(
+  op: string,
+  task: Record<string, unknown> | undefined,
+  ownerEmail: string | null,
+): Promise<void> {
   try {
     const id = task?.id != null ? String(task.id) : null;
     if (!id) return;
-    const { getPushesByActiveTask, getPriorityPushes, hasWaitingPushes } = await import("./tasks.server");
+    const { getPushesByActiveTask, getPriorityPushes, hasWaitingPushes } =
+      await import("./tasks.server");
     const row = upper(op) === "DELETE" ? null : (task as unknown as PushCandidateRow);
 
     // 1. This task was some push's active task.
@@ -323,13 +394,22 @@ export async function onMirrorEvent(op: string, task: Record<string, unknown> | 
 }
 
 /** journey's own view of one task, read by id (user-scoped `explain_task_score`). null = not found. */
-async function journeyTaskState(caller: Caller, taskId: string): Promise<{ status: string; isPriority: boolean } | null | "unknown"> {
+async function journeyTaskState(
+  caller: Caller,
+  taskId: string,
+): Promise<{ status: string; isPriority: boolean } | null | "unknown"> {
   const { invokeJourneyTool } = await import("../journey/proxy.functions");
-  const r = await invokeJourneyTool({ toolName: "explain_task_score", args: { task_id: taskId }, caller, context: { source: "huddle" } });
+  const r = await invokeJourneyTool({
+    toolName: "explain_task_score",
+    args: { task_id: taskId },
+    caller,
+    context: { source: "huddle" },
+  });
   if (!r.ok) return /not found/i.test(`${r.error ?? ""} ${r.output ?? ""}`) ? null : "unknown";
   try {
     const p = JSON.parse(r.output || "{}") as Record<string, unknown>;
-    const t = (p.task ?? (p.result as Record<string, unknown> | undefined)?.task) as Record<string, unknown> | undefined;
+    const t = (p.task ?? (p.result as Record<string, unknown> | undefined)?.task) as
+      Record<string, unknown> | undefined;
     if (!t) return "unknown";
     return { status: upper(String(t.status ?? "")), isPriority: t.is_priority === true };
   } catch {
@@ -343,7 +423,9 @@ async function journeyTaskState(caller: Caller, taskId: string): Promise<{ statu
  * what is stale then. So each active task's state is read from JOURNEY (one read per pushed node, never
  * per backlog task). Waiting pushes get another pick.
  */
-export async function reconcilePushes(email: string): Promise<{ checked: number; refilled: number; unpushed: number }> {
+export async function reconcilePushes(
+  email: string,
+): Promise<{ checked: number; refilled: number; unpushed: number }> {
   const out = { checked: 0, refilled: 0, unpushed: 0 };
   try {
     const { getPriorityPushes, deletePriorityPush } = await import("./tasks.server");
