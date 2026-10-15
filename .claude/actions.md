@@ -4543,3 +4543,12 @@ its twin). There is no detector for this drift today; compare.ts found it by acc
 - **Shipped:** topics with tasks now order most-recent date first — huddle #79 `34ec33c` (FIRED).
 - **Prototype (not built):** https://claude.ai/artifact/2dnuJJaYUMGqhxUysapcJ6 — ⋮ on the left of every row (task, topic, category, This Week); title wraps across the rest; menu = Push / Remove, Done, Park, Start, Move up/down; topics and categories get "Push"; no Today button. Real topic/task names from journey.
 - **Status:** awaiting owner sign-off on the prototype before the real UI + category-push (ACT:category-push) are built.
+
+## ACT:category-push — BUILT (2026-10-15): push task/topic/category, groom stops starring (A), ⋮ menu
+- **Owner:** "approved, build it and go with A for the groom".
+- **Groom (A):** `GROOM_WRITES_STARS=false` (groom.ts) — no rank / unset_rank ever. Agents' work order: `orderForAutowork` (scoring.ts), journey's keys.
+- **Push:** `push.server.ts` — star via `set_priority_rank` rank 0; node push picks by scorer (category = task's own category, topic = journey mappings); `tasks.priority_push` (003) + CAS refill; webhook hook after mirror write; `reconcilePushes` on run-autowork reads JOURNEY (`explain_task_score`).
+- **UI:** left ⋮ RowMenu (portal, flips up), star after pushed node name, meta under title, Today removed from priorities rows.
+- **Evidence:** `scripts/category-push.test.ts` 20/20; 9 mutations FIRED (eligibility starred/completed_at, skip, unpush, PUSH_RANK, id-sort determinism, scorer pick, star-first, GROOM_WRITES_STARS); all existing widget suites green; `vite build` rc=0.
+- **Status:** implemented on branch, verifier pending, NOT deployed, NOT owner-confirmed.
+
