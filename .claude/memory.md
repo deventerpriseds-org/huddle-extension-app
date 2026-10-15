@@ -3720,3 +3720,9 @@ here as fact three times before being checked.)
 - **Gotcha (verifier loop 1 caught it):** the scheduler stamps every fire with a per-hour `runId`; folding it into the turn id (the priority-check shape) re-announces the same email every hour. The id is the message alone. Mutation-proved.
 - **Repo is PUBLIC → Actions logs public.** Run results carry sender DOMAINS + verdicts only; never print subjects/bodies.
 - **Open:** verifier loop on fixed head, merge, live dry run (trinnex.io must be kept), real run, owner confirms Iris's message + draft in Outlook. Follow-ups: Settings toggle for mode A/B/C (today: route/workflow `mode` only); plain-draft fallback lands in dev@ when the original isn't found.
+
+## STANDING RULE (owner, 2026-10-15): any action an agent OFFERS the owner is a BUTTON with its context baked in — never "reply yes"
+> *"similar to the wip confirmation widget this should have a yes or no button rather than depending on text so that if i scroll up and click yes two hours later, the context to execute is baked in and it is less likely to fail from my natural language."*
+- Pattern to copy: `confirmAsk` (HuddleView.tsx `ConfirmAskRow` ~612; field on HuddleMessage seed.ts:43; agent calls a tool → tool detail → `confirmAsk` set on the reply at huddle.functions.ts ~6484; buttons call `*FromButtonFn` in confirm-ask.functions.ts with ONLY an id; the server re-reads everything else from its own row and checks ownership; a second tap returns alreadyDone).
+- Applies first to new-email alerts (Save to Drafts / Dismiss), and to every future "want me to…?" offer.
+- Known gap in the pattern: `resolved` is client-only (store.ts:376); server row state is the truth. Read it, don't trust the card.
