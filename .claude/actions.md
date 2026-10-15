@@ -4522,3 +4522,10 @@ its twin). There is no detector for this drift today; compare.ts found it by acc
 - **Fix:** `withKnownCategories` in `widgets.server.ts`, applied on both `buildPrioritiesTree` paths; an empty row has `count: null` (blank) and renders grey (`JourneyWidgets.tsx` TopicRow). Only ADDS rows — dynamic categories and Uncategorised untouched.
 - **Evidence:** `scripts/category-tree.test.ts` 43/43 (4 new FAMILY checks), independent suite 25/25.
 - **Status:** implemented, tests green, NOT deployed, NOT owner-confirmed.
+
+## ACT:category-push — push a task or a category into This Week, option C with guardrails (2026-10-15)
+- **Owner decision:** "C with guardrails: Huddle stars the top task, pins it so Monday's groom can't clear it, and stars the next one as soon as you finish. Journey's 1am job puts it on your calendar inside that category's hours. No journey changes." + "yes" to: groom un-stars only the stars it set itself.
+- **Grounding:** star → calendar chain read in code (memory.md "The STAR" table). Live stars (azure-pg-query run 38787342521): 33 starred = 26 rank 1-20 + 7 rank >20 (old 80-rank groom leftovers); 0 null-rank, 0 rank-0; `tasks.week_order` empty.
+- **Process:** Tier-1-ish (writes the user's stars automatically) → independent AC writer → `docs/AC-category-push.md`, then build, then independent verifier.
+- **Also shipped this turn:** PR #76 (Family row) merged `6bb821c`, deploy in progress.
+- **Status:** ACs being written. Nothing built.
