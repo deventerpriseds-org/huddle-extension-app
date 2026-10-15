@@ -608,9 +608,9 @@ function PriorityRow({
   const { status } = useRowState(row);
   const done = status === "DONE";
   return (
-    <li className="flex items-center gap-1.5 border-b border-hairline px-2 py-2 last:border-b-0">
+    <li className="flex items-start gap-1.5 border-b border-hairline px-2 py-2 last:border-b-0">
       {onMove && (
-        <span className="flex shrink-0 flex-col">
+        <span className="flex shrink-0 flex-col pt-0.5">
           <button
             type="button"
             aria-label={`Move “${row.title}” up`}
@@ -631,23 +631,28 @@ function PriorityRow({
           </button>
         </span>
       )}
-      {/* WRAPS to two lines rather than truncating at one. The owner: "It also cuts off the text on
-          the left and is not utilizing all of the space available." A fixed-width control strip
-          cannot be out-competed horizontally on a phone, so the title takes the VERTICAL space that
-          is already there instead of losing the words. */}
-      <span
-        className={cn(
-          "min-w-0 flex-1 text-[13px] leading-snug [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden",
-          done ? "text-muted-foreground line-through" : "text-foreground",
-        )}
-        title={row.title}
-      >
-        {row.title}
-      </span>
-      <CategoryChip category={row.category} />
-      <TodayButton row={row} caller={caller} />
-      <DoneButton row={row} caller={caller} />
-      <PauseButton row={row} caller={caller} />
+      {/* TWO LINES OF LAYOUT: the title gets the WHOLE row width and is never clamped, and the
+          controls sit on their own row underneath. Owner, 2026-10-15: "i still cannot see enough text
+          before being cutoff, so it seems the action buttons should be on a row below rather than
+          beside". A side-by-side strip of four 44px controls leaves a phone title ~120px; wrapping
+          to two lines (the previous fix) still cut long titles off. */}
+      <div className="min-w-0 flex-1">
+        <span
+          className={cn(
+            "block text-[13px] leading-snug break-words",
+            done ? "text-muted-foreground line-through" : "text-foreground",
+          )}
+        >
+          {row.title}
+        </span>
+        <div className="mt-1 flex items-center gap-1">
+          <CategoryChip category={row.category} />
+          <span className="flex-1" />
+          <TodayButton row={row} caller={caller} />
+          <DoneButton row={row} caller={caller} />
+          <PauseButton row={row} caller={caller} />
+        </div>
+      </div>
     </li>
   );
 }
@@ -777,25 +782,27 @@ function TopicTaskRow({ row, depth, caller }: { row: WidgetTaskRow; depth: numbe
   const { status } = useRowState(row);
   const done = status === "DONE";
   return (
-    <li
-      className="flex items-center gap-1.5 py-1.5 pr-2"
-      style={{ paddingLeft: `${depth * 0.875 + 0.75}rem` }}
-    >
-      {row.isPriority && (
-        <Star aria-label="In This Week" className="h-3 w-3 shrink-0 fill-current text-amber-500" />
-      )}
-      <span
-        className={cn(
-          "min-w-0 flex-1 text-[13px] leading-snug [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden",
-          done ? "text-muted-foreground line-through" : "text-foreground/85",
+    <li className="py-1.5 pr-2" style={{ paddingLeft: `${depth * 0.875 + 0.75}rem` }}>
+      {/* Title on its own full-width line, controls on the row below — same layout as the band's
+          PriorityRow, for the same reason (owner 2026-10-15: titles were being cut off). */}
+      <div className="flex items-start gap-1.5">
+        {row.isPriority && (
+          <Star aria-label="In This Week" className="mt-0.5 h-3 w-3 shrink-0 fill-current text-amber-500" />
         )}
-        title={row.title}
-      >
-        {row.title}
-      </span>
-      <TodayButton row={row} caller={caller} />
-      <DoneButton row={row} caller={caller} />
-      <PauseButton row={row} caller={caller} />
+        <span
+          className={cn(
+            "min-w-0 flex-1 text-[13px] leading-snug break-words",
+            done ? "text-muted-foreground line-through" : "text-foreground/85",
+          )}
+        >
+          {row.title}
+        </span>
+      </div>
+      <div className="mt-1 flex items-center justify-end gap-1">
+        <TodayButton row={row} caller={caller} />
+        <DoneButton row={row} caller={caller} />
+        <PauseButton row={row} caller={caller} />
+      </div>
     </li>
   );
 }
