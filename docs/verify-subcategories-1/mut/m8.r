@@ -1,0 +1,1 @@
+        const absent = ["unsupported tool", "no such tool", "tool not found", "not implemented"]

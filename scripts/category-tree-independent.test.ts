@@ -113,7 +113,9 @@ const allTaskIds = (ns: readonly TopicNode[]) => { const o: string[] = []; walk(
 
 // ── I-2  no EMPTY category row can appear from the mirror ───────────────────────────────────────
 {
-  const rows = [row({ id:"d1", category:"CAREER", status:"DONE" }), row({ id:"d2", category:"CAREER", completed_at:"2026-01-01T00:00:00Z" })];
+  // d2 was `completed_at` with a LIVE status, which the old rule counted as done. Status decides now
+  // (journey keeps completed_at on a REOPENED task), so an all-DONE fixture has to say DONE.
+  const rows = [row({ id:"d1", category:"CAREER", status:"DONE" }), row({ id:"d2", category:"CAREER", status:"DONE", completed_at:"2026-01-01T00:00:00Z" })];
   const tree = buildCategoryTaskTree(rows, TZ, NOW);
   check("I-2 a category whose only tasks are all DONE produces NO row at all",
     tree.length === 0, `tree.length=${tree.length}`);

@@ -926,7 +926,7 @@ export function PrioritiesWidget({
             </ul>
           </ScrollBand>
           {/* The tree now renders from the MIRROR's categories, so it is populated even while
-              journey's topic tool is undeployed. That would otherwise HIDE the missing theme layer
+              journey's topic tool is unavailable. That would otherwise HIDE the missing theme layer
               entirely — the rows look complete, so nobody would know sub-themes are absent. Say so
               instead: `reason` still describes the journey passthrough, untouched by the merge. */}
           {data.topics.reason !== "ok" && <TopicsEmpty topics={data.topics} />}

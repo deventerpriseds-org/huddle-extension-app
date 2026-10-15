@@ -4430,3 +4430,33 @@ new case, the function, the owner-scoped join and the row-ceiling note. **NOT ye
 that the embedded-filter query returns the owner's links (and only his). The deployed code being
 present is not that proof. The verifier was handed the live check.
 **Still open for the owner:** push-a-category option A/B/C (recommended C); AC-41 empty FAMILY row.
+
+**VERIFIED LIVE (independent verifier, isolated worktree; report `docs/VERIFY-subcategories-1.md`).**
+- **The tool works at RUNTIME.** Supabase edge log 17:12:14Z: the owner-scoped join returned **200,
+  369 rows** of a 374-row table, so the other user's 5 links were excluded. 169 topics rendered. 385 ms in
+  execute-tool, 572 ms through the proxy. Live UAT at 390×844 (run 38775191326) and 1440×900 (run
+  38775779002): the "not available yet" banner is gone, 0 console errors, 0 failed requests, and the
+  DOM matched the offline prediction topic for topic.
+- **Career 8 matches the phone, across the same 13 topics. The OTHER categories do not:** Life 14 vs
+  18, Ventures 55 vs 66, Education 6 vs 6, no Family row. Every gap is traced. Career and Education
+  match only because differences cancel (Career Development 3 vs 2: a BLOCKED task kept; Fractional
+  CTO blank vs 1: a parked task excluded).
+- **FIXED in response:**
+  - `isOpen` hid any task with a `completed_at`. journey keeps that date when a task is REOPENED, so
+    6 live tasks were hidden from every widget section, including "Complete 2 MIT assignments"
+    (UP_NEXT), which is on his phone. Status now decides.
+  - Three of the verifier's mutations were INERT: tasks inside a topic were never asserted to be
+    sorted (m7), "Unknown tool" detection was untested (m8), and the duplication guard watched only
+    the band builder. All three are covered now, and their mutations FIRE.
+- **Differences that remain, intended:** BLOCKED kept, parking-lot excluded, tasks with no topic shown
+  under their own category, multi-topic placement deterministic, topic ties ordered by name (112 of
+  169 topics tie at position 0; the phone uses journey's unsorted row order).
+- **Found, NOT fixed (outside this change):**
+  - The mirror row "Accept my DBA financial aid" is DONE in journey but UP_NEXT in Huddle's copy, a
+    sync defect.
+  - 4 live tasks are filed by their TOPIC's category, not their own; 2 are starred and show a CAREER
+    chip in the band while the tree files them under Education/Life. The agent-facing JSON carries the
+    same contradiction.
+  - The timer-clear in fetchTopicPayload has no repo test (verifier m6).
+- **Not observed live:** Iris's in-chat card. It uses the same composer; the next 6am/8pm card is
+  the first real check.

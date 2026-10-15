@@ -20,6 +20,7 @@
 import {
   buildCategoryTaskTree,
   buildPrioritiesTree,
+  classifyTopicFailure,
   findTopicMappings,
   mergeTopicTree,
   UNCATEGORISED_CATEGORY,
@@ -99,14 +100,17 @@ const allTasks = (roots: TopicNode[]): string[] => {
   const rows = [
     row({ id: "open", category: "LIFE" }),
     row({ id: "done", category: "LIFE", status: "DONE" }),
-    row({ id: "completed", category: "LIFE", completed_at: "2026-10-01T00:00:00Z" }),
+    // REOPENED: a live status with an old completed_at. journey keeps the date when a task is brought
+    // back, so this is LIVE work. It used to be hidden, which is how "Complete 2 MIT assignments"
+    // (UP_NEXT) vanished from Huddle while the owner's phone showed it.
+    row({ id: "reopened", category: "LIFE", status: "UP_NEXT", completed_at: "2026-09-13T00:00:00Z" }),
     row({ id: "parked", category: "LIFE", tags: ["parking-lot"] }),
     row({ id: "blocked", category: "LIFE", status: "BLOCKED" }),
   ];
   const ids = allTasks(buildCategoryTaskTree(rows, TZ, NOW)).sort();
-  check("DONE, completed and parked tasks are excluded; BLOCKED is KEPT",
-    ids.join(",") === "blocked,open",
-    `[${ids.join(",")}] — journey's own get_tasks_by_topic drops BLOCKED, which is one reason the tree is not sourced from it`);
+  check("DONE and parked tasks are excluded; BLOCKED is KEPT; a REOPENED task (live status, old completed_at) is KEPT",
+    ids.join(",") === "blocked,open,reopened",
+    `[${ids.join(",")}] — STATUS decides, not completed_at. Measured: 6 of the owner's tasks are live with an old completion date`);
 }
 
 // ── The count is DERIVED, so it can never disagree with the rows ────────────────────────────────
@@ -369,6 +373,35 @@ const allTasks = (roots: TopicNode[]): string[] => {
 }
 
 {
+  // m7, INERT for the verifier: nothing asserted the ORDER of tasks inside a topic. That order is
+  // what "what's next in <topic>?" reads, so it gets the same total-order guarantee as a category.
+  const topics = [{ id: "ts", topic_name: "Sorted", category_affinity: "CAREER" }];
+  const rows = [
+    row({ id: "s-plain", category: "CAREER", title: "zzz" }),
+    row({ id: "s-rank2", category: "CAREER", is_priority: true, priority_rank: 2, title: "b" }),
+    row({ id: "s-rank1", category: "CAREER", is_priority: true, priority_rank: 1, title: "c" }),
+  ];
+  const mappings = rows.map((r) => ({ task_id: r.id, topic_id: "ts" }));
+  const order = (rs: any[]) =>
+    buildPrioritiesTree(rs, TZ, NOW, { topics, mappings })[0].children[0].tasks.map((t) => t.id).join(",");
+  check("SUB-CATEGORIES: tasks INSIDE a topic are ordered starred+ranked first, the same for any arrival order",
+    order(rows) === "s-rank1,s-rank2,s-plain" && order([...rows].reverse()) === "s-rank1,s-rank2,s-plain",
+    `${order(rows)} / reversed ${order([...rows].reverse())}`);
+}
+
+{
+  // m8, INERT for the verifier: deleting the "not deployed" detection failed no test.
+  check("SUB-CATEGORIES: journey's own 'Unknown tool' answer is read as tool-absent (a steady state), not an error",
+    classifyTopicFailure("Unknown tool: get_task_topics", null) === "tool-absent" &&
+      classifyTopicFailure(null, '{"error":"unknown tool"}') === "tool-absent",
+    "execute-tool's own wording; the UI explains tool-absent instead of showing an error");
+  check("SUB-CATEGORIES: any other failure is an error, shown with its text",
+    classifyTopicFailure("permission denied for table task_topic_mappings", null) === "error" &&
+      classifyTopicFailure(null, null) === "error",
+    "a real failure must never be disguised as 'not deployed yet'");
+}
+
+{
   // Degradation: journey's tool not deployed / timed out → exactly the category-only tree.
   const rows = [row({ id: "d1", category: "CAREER" }), row({ id: "d2", category: "LIFE" })];
   const shape = (ns: TopicNode[]) => JSON.stringify(ns);
@@ -418,20 +451,23 @@ const allTasks = (roots: TopicNode[]): string[] => {
     "src/features/huddle/lib/tasks/priority-check.server.ts",
   ]);
 
+  // Watches EVERY builder of the card's pieces, not just the band. The verifier found the
+  // original guard checked only buildPrioritiesBand, so a surface calling the tree builders
+  // directly would have rebuilt half a card unnoticed: the exact defect this guard exists for.
   const callers = walk("src")
-    .filter((f) => /buildPrioritiesBand\s*\(/.test(readFileSync(f, "utf8")))
+    .filter((f) => /\b(buildPrioritiesBand|buildPrioritiesTree|buildCategoryTaskTree)\s*\(/.test(readFileSync(f, "utf8")))
     .map((f) => f.replace(/\\/g, "/"))
     .sort();
   const rogue = callers.filter((f) => !ALLOWED.has(f));
   check(
-    "no surface builds its own priorities payload — every card goes through composePrioritiesWidget",
+    "no surface builds its own priorities payload (band OR tree) — every card goes through composePrioritiesWidget",
     rogue.length === 0,
     rogue.length
       ? `ROGUE: ${rogue.join(", ")} — use composePrioritiesWidget(email, tz) instead, or add it to ALLOWED with a reason`
       : `only ${callers.length} allowed caller(s): ${callers.map((f) => f.split("/").pop()).join(", ")}`,
   );
   check(
-    "the allowlist is not stale — every file on it still calls buildPrioritiesBand",
+    "the allowlist is not stale — every file on it still calls one of the builders",
     [...ALLOWED].every((f) => callers.includes(f)),
     "an allowlist entry that no longer calls it would silently permit a future rogue caller of the same name",
   );
