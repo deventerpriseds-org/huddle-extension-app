@@ -117,10 +117,13 @@ export function shortHash(s: string): string {
 }
 
 /** ONE announcement per message, ever: `enqueueTurn` treats a repeated id as not-fresh, so an
- *  overlapping fire or a 12h lookback that re-reads the same message sends nothing twice. The
- *  `inbound-email-` shape must not match `^u-\d+$` or `xapp-` (those render as a "You" bubble). */
-export function inboundEmailTurnId(messageId: string, runId?: string): string {
-  return `inbound-email-${shortHash(messageId)}${runId ? `-${runId}` : ""}`;
+ *  overlapping fire or a 12h lookback that re-reads the same message sends nothing twice. The id is
+ *  the message ALONE — deliberately no run id. The scheduler stamps every fire with a fresh per-hour
+ *  `runId`; folding it in (the priority-check shape) made each hourly fire a new id and re-announced
+ *  the same email up to 12 times (verifier loop 1, AC-2). The `inbound-email-` shape must not match
+ *  `^u-\d+$` or `xapp-` (those render as a "You" bubble). */
+export function inboundEmailTurnId(messageId: string): string {
+  return `inbound-email-${shortHash(messageId)}`;
 }
 
 const BODY_CAP = 3000;

@@ -106,7 +106,8 @@ export async function runInboundEmailWatch(
 
       const received = m.receivedDateTime ? fmt.format(new Date(m.receivedDateTime)) : "just now";
       const directive = inboundEmailDirective(m, received);
-      const turnId = inboundEmailTurnId(m.id, opts.runId);
+      // No opts.runId here, ever: see inboundEmailTurnId.
+      const turnId = inboundEmailTurnId(m.id);
       row.turnId = turnId;
       if (opts.dryRun || delivered >= MAX_PER_RUN) continue;
 

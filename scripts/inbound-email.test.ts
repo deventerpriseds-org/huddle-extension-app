@@ -120,6 +120,15 @@ check(
 // turn id: stable per message, distinct across messages, routine-safe shape
 const t1 = inboundEmailTurnId(amy.id);
 check("turn id stable for the same message", t1 === inboundEmailTurnId(amy.id));
+check(
+  "turn id ignores the scheduler's per-hour runId (announce once across hourly fires)",
+  (inboundEmailTurnId as (id: string, runId?: string) => string)(amy.id, "inbound-email-u-1-2026101514") ===
+    (inboundEmailTurnId as (id: string, runId?: string) => string)(amy.id, "inbound-email-u-1-2026101515"),
+);
+check(
+  "runner never passes a runId into the turn id",
+  /inboundEmailTurnId\(m\.id\)/.test(readFileSync("src/features/huddle/lib/email/inbound-email.server.ts", "utf8")),
+);
 check("turn id differs per message", t1 !== inboundEmailTurnId(ihg.id));
 check(
   "turn id shape is routine-safe",
