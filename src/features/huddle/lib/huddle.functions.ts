@@ -4433,7 +4433,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               const startISO = startRaw.length > 10 ? startRaw : `${startDay}T00:00:00`;
               const endISO = endRaw.length > 10 ? endRaw : `${endDay}T23:59:59`;
               const mailbox =
-                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
                 data.caller?.entra_email;
               const { getGraphCalendarEvents } = await import("./email/graph-email.server");
               const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
@@ -5873,7 +5873,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 const startISO = startRaw.length > 10 ? startRaw : `${startDay}T00:00:00`;
                 const endISO = endRaw.length > 10 ? endRaw : `${endDay}T23:59:59`;
                 const mailbox =
-                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
                   data.caller?.entra_email;
                 const { getGraphCalendarEvents } = await import("./email/graph-email.server");
                 const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });

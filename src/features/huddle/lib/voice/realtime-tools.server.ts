@@ -509,8 +509,8 @@ export async function executeRealtimeTool(
       return done(JSON.stringify(await executeNexusTool(name, args, ctx.timeZone || "UTC")));
     }
     if (name === "get_external_calendar_events") {
-      const { resolveTaskEmail } = await import("../journey/identity");
-      const mailbox = (await resolveTaskEmail(ctx.caller)) ?? ctx.caller?.entra_email;
+      const { resolveCalendarMailbox } = await import("../journey/identity");
+      const mailbox = (await resolveCalendarMailbox(ctx.caller)) ?? ctx.caller?.entra_email;
       const tz = ctx.timeZone || "UTC";
       const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz });
       const startRaw = typeof args.start === "string" && args.start.trim() ? args.start.trim() : todayStr;
