@@ -66,6 +66,21 @@ emails can pick the profile with zero tasks. (:1032, :1033, :2786)
 | **The owner's PHONE rule** (design truth) | `PrioritiesWidgetFactory.rebuildItems` | **categories = the CONFIGURED list** (`config.prioritiesWidget.categories`, default LIFE, CAREER, VENTURES, EDUCATION, FAMILY) — every one drawn even when empty, so Family shows (Huddle: `withKnownCategories`, 2026-10-15, owner: "show Family"); topic category = `category_affinity` **else `window_affinity[1]`**; tasks via mappings; Android drops DONE+BLOCKED and drops tasks with NO topic; category count = sum beneath. **Huddle now uses the same rule** (`buildPrioritiesTree`, PR #71) — measured to reproduce his phone's Career 8. Grouping by the TASK's own category gives Career 12 instead. |
 | `get_tasks_by_topic` | **deployed**, `_shared/tool-definitions.ts:62` | takes **one `topic_name` scalar** (no array, no ids, no depth), resolves with `ilike` + `maybeSingle()` → **duplicate topic names (two "Admin", LIFE and CAREER) return silently empty, not an error**. Orders `priority desc`. Omits `is_priority`/`priority_rank`/`tags`. ~`3+N` round-trips for N≈75 topics. |
 
+### The STAR (`is_priority`) — who writes it, and what turns it into calendar time (read 2026-10-15)
+
+| Actor | When | Star / rank | Calendar |
+|---|---|---|---|
+| journey `nightly-schedule-builder` | **05:00 UTC = 1am EDT** (`cron.alter_job(11,'0 5 * * *')`) | **reads only** — sorts Tier A/B assignments, then `is_priority`, then `priority_rank` (null=9999), then score (`index.ts:1099-1132`); score +10 +max(5-rank,0) | **the ONLY thing that turns a star into time**: clears + rebuilds the next 7 days of `start_time/end_time` inside each category's window (`_shared/scheduling-defaults.ts`); slots create the phone's start alarms |
+| Huddle Monday 8am groom | Mon 8 ET | ranks top 20 (`PRIORITY_LANE_MAX`), **`unset_rank` (un-stars) every other groomed task unless its id is in `tasks.week_order`** (`groom.ts` `laneFieldFor`) | none |
+| Huddle autowork | 9/13/17 ET | none — orders by `priority_rank` only, writes status | none |
+| Android star button | user tap | `is_priority=true`, **no rank** | none |
+| journey web Priorities page | user drag | rewrites lane ranks 0..N-1 | none |
+| `move_task_to_day` ("Today") | user tap | — | writes `start_time` + `due_date`, **no `end_time`**, bypasses windows — invisible to the nightly's capacity maths |
+
+- **Starring fires no reminder, no slot, no classification** — `schedule_task_reminders_trigger` watches status/due/start/end/reminder only.
+- **Known exposure (not fixed):** a star set on the phone or journey web, on a task the groom batch includes but does not rank top-20, is cleared by Monday's groom unless in `week_order`.
+- Phone's Schedule widget "This Week" = starred AND `start_time IS NULL`, limit 3 (`SupabaseTaskClient.kt:292`) — a starred task drops out of it once the nightly places it. The Priorities widget shows all stars.
+
 ### Chat / turns
 
 | Thing | Where | Notes |
