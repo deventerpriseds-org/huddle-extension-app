@@ -502,8 +502,10 @@ const allTasks = (roots: TopicNode[]): string[] => {
   const tree = buildPrioritiesTree([row({ id: "f1", category: "CAREER" })], TZ, NOW,
     { topics, mappings: [{ task_id: "f1", topic_id: "tc" }] });
   const order = tree.map((n) => n.categoryAffinity).join(",");
-  check("FAMILY: with topics, all five known categories render, in the phone's order",
-    order === "LIFE,CAREER,VENTURES,EDUCATION,FAMILY", order);
+  // Order superseded 2026-10-15 by the owner: "anything with items should be at the top". Career is
+  // the only category with a task here, so it leads; the four empty ones keep the phone's order below.
+  check("FAMILY: with topics, all five known categories render — those with tasks first, then the phone's order",
+    order === "CAREER,LIFE,VENTURES,EDUCATION,FAMILY", order);
   const fam = tree.find((n) => n.categoryAffinity === "FAMILY")!;
   check("FAMILY: an empty category is a real row with a BLANK count and nothing under it",
     !!fam && fam.name === "Family" && fam.count === null && fam.children.length === 0 && fam.tasks.length === 0,
@@ -514,9 +516,40 @@ const allTasks = (roots: TopicNode[]): string[] => {
   check("FAMILY: a category that HAS tasks is never duplicated by the empty-row fill",
     famRows.length === 1 && famRows[0].tasks.map((t) => t.id).join(",") === "f2",
     `${famRows.length} Family row(s), tasks=[${famRows.flatMap((n) => n.tasks.map((t) => t.id))}]`);
-  check("FAMILY: the fill only ADDS — a dynamic category is kept and Uncategorised stays last",
-    deg.some((n) => n.categoryAffinity === "SIDE_HUSTLE") && deg[deg.length - 1].categoryAffinity === UNCATEGORISED_CATEGORY,
+  check("FAMILY: the fill only ADDS — a dynamic category is kept, and Uncategorised is last of the rows WITH tasks",
+    deg.map((n) => n.categoryAffinity).join(",") === "FAMILY,SIDE_HUSTLE,UNCATEGORISED,LIFE,CAREER,VENTURES,EDUCATION",
     deg.map((n) => n.categoryAffinity).join(","));
+}
+
+{
+  // ORDER BY CONTENT — owner, 2026-10-15: "anything with items should be at the top grey empty topics
+  // should be below by date."
+  const topics = [
+    { id: "t-late", topic_name: "Late", category_affinity: "CAREER" },
+    { id: "t-soon", topic_name: "Soon", category_affinity: "CAREER" },
+    { id: "t-undated", topic_name: "Undated", category_affinity: "CAREER" },
+    { id: "t-old", topic_name: "Old empty", category_affinity: "CAREER", updated_at: "2026-01-01T00:00:00Z" },
+    { id: "t-new", topic_name: "New empty", category_affinity: "CAREER", updated_at: "2026-10-01T00:00:00Z" },
+    { id: "t-nodate", topic_name: "No-date empty", category_affinity: "CAREER" },
+  ];
+  const rows = [
+    row({ id: "late", category: "CAREER", due_date: "2026-12-01" }),
+    row({ id: "soon", category: "CAREER", due_date: "2026-10-20" }),
+    row({ id: "undated", category: "CAREER" }),
+  ];
+  const mappings = [
+    { task_id: "late", topic_id: "t-late" }, { task_id: "soon", topic_id: "t-soon" },
+    { task_id: "undated", topic_id: "t-undated" },
+  ];
+  const tree = buildPrioritiesTree(rows, TZ, NOW, { topics, mappings });
+  const career = tree.find((n) => n.categoryAffinity === "CAREER")!;
+  const names = career.children.map((c) => c.name).join(",");
+  check("ORDER: topics WITH tasks come first, soonest task date first, undated last",
+    names.startsWith("Soon,Late,Undated,"), names);
+  check("ORDER: EMPTY topics come after, most recently updated first, undated-topic last",
+    names.endsWith(",New empty,Old empty,No-date empty"), names);
+  check("ORDER: a category with tasks sorts above every empty category",
+    tree[0].categoryAffinity === "CAREER", tree.map((n) => n.categoryAffinity).join(","));
 }
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);

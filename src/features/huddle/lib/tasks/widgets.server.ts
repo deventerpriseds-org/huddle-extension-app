@@ -95,6 +95,9 @@ export interface TopicNode {
   /** Task count journey reports for this topic; null when it reports none (the spec shows
    *  sub-topics both with and without a count, so null is a real, renderable state). */
   count: number | null;
+  /** journey's `task_topic_index.updated_at`, when sent. Orders EMPTY topics (most recently touched
+   *  first) — see `orderByContent`. Optional: older journey deploys and synthetic rows carry none. */
+  updatedAt?: string | null;
   children: TopicNode[];
   /**
    * The tasks that belong to this node, already ordered (`byPriorityThenDue`) and already filtered
@@ -548,6 +551,7 @@ function toTopicNode(raw: unknown, depth: number): TopicNode | null {
       firstString(o, ["category_affinity", "categoryAffinity", "category"]) ?? firstWindowAffinity(o),
     position: firstNumber(o, ["position", "order", "sort_order"]),
     count: firstNumber(o, ["count", "task_count", "taskCount", "open_count", "openCount", "n", "total"]),
+    updatedAt: firstString(o, ["updated_at", "updatedAt"]),
     children,
     // journey's payload never carries a topic's tasks (see TopicNode.tasks). The mirror supplies
     // them, merged in by mergeTopicTree, so a parsed topic node starts empty rather than undefined.
@@ -1226,7 +1230,7 @@ export function buildPrioritiesTree(
   topicPayload?: unknown,
 ): TopicNode[] {
   const topicRoots = topicPayload === undefined ? [] : buildTopicTree(topicPayload);
-  if (!topicRoots.length) return withKnownCategories(buildCategoryTaskTree(rows, timeZone, nowMs));
+  if (!topicRoots.length) return orderByContent(withKnownCategories(buildCategoryTaskTree(rows, timeZone, nowMs)));
 
   const tz = safeTimeZone(timeZone);
   const todayKey = localDateKey(nowMs, tz) ?? new Date(nowMs).toISOString().slice(0, 10);
@@ -1258,7 +1262,66 @@ export function buildPrioritiesTree(
 
   // mergeTopicTree deep-clones, folds the topics into category roots, recounts every node from what
   // is beneath it, and sorts.
-  return withKnownCategories(mergeTopicTree(topicRoots, []));
+  return orderByContent(withKnownCategories(mergeTopicTree(topicRoots, [])));
+}
+
+/** Earliest date a task in this subtree is pinned to (start, else due), or null. */
+function earliestTaskMs(node: TopicNode): number | null {
+  let best: number | null = null;
+  const visit = (n: TopicNode) => {
+    for (const t of n.tasks) {
+      const iso = t.startTime ?? t.dueDate;
+      const ms = iso ? Date.parse(iso) : NaN;
+      if (Number.isFinite(ms) && (best === null || ms < best)) best = ms;
+    }
+    n.children.forEach(visit);
+  };
+  visit(node);
+  return best;
+}
+
+function subtreeHasTasks(node: TopicNode): boolean {
+  return node.tasks.length > 0 || node.children.some(subtreeHasTasks);
+}
+
+/**
+ * Rows WITH tasks first, grey EMPTY rows after — at every level. Owner, 2026-10-15: "anything with
+ * items should be at the top grey empty topics should be below by date."
+ *
+ * - Categories keep their fixed order (Life, Career, Ventures, Education, Family, then dynamic ones)
+ *   within each group; only "has tasks" moves a category, so an empty Family sinks to the bottom.
+ * - Topics WITH tasks: soonest task date first (start time, else due date; undated last).
+ * - EMPTY topics: most recently updated first (journey's `task_topic_index.updated_at`; topics
+ *   without one keep their previous order at the end of the empty group).
+ *
+ * Stable sorts throughout, so anything this rule does not distinguish keeps the order it had. Pure:
+ * returns new arrays, never reorders the caller's.
+ */
+export function orderByContent(nodes: readonly TopicNode[]): TopicNode[] {
+  const withIdx = nodes.map((n, i) => ({
+    n: { ...n, children: orderByContent(n.children) },
+    i,
+    full: subtreeHasTasks(n),
+    date: earliestTaskMs(n),
+    upd: n.updatedAt ? Date.parse(n.updatedAt) : NaN,
+  }));
+  const isCategory = (n: TopicNode) => n.id.startsWith(CATEGORY_ROOT_PREFIX);
+  withIdx.sort((a, b) => {
+    if (a.full !== b.full) return a.full ? -1 : 1;
+    if (!isCategory(a.n) && !isCategory(b.n)) {
+      if (a.full) {
+        const ad = a.date ?? Number.POSITIVE_INFINITY;
+        const bd = b.date ?? Number.POSITIVE_INFINITY;
+        if (ad !== bd) return ad - bd;
+      } else {
+        const au = Number.isFinite(a.upd) ? a.upd : Number.NEGATIVE_INFINITY;
+        const bu = Number.isFinite(b.upd) ? b.upd : Number.NEGATIVE_INFINITY;
+        if (au !== bu) return bu - au;
+      }
+    }
+    return a.i - b.i;
+  });
+  return withIdx.map((e) => e.n);
 }
 
 /**
