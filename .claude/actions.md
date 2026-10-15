@@ -4259,5 +4259,10 @@ in the widget. The 96 of 2026-10-05 had been cut down since. A row cap conflicts
 other session.
 
 **Evidence:** `bun scripts/priority-check.test.ts` 18/18; mutate.sh FIRED ×3 (P1, P5, P7); tsc 0; build ok.
+**Send now (2026-10-15, owner: "i would expect to be able to manually trigger it … in settings"):**
+Settings → Scheduling → Priority check → **Send now** (`runPriorityCheckNowFn`, same runner, fresh
+runId). Swept first: NO scheduled job had an in-app run-now before this — their manual triggers were
+GitHub workflows only. Also fixed the save validator (`scheduling-config.functions.ts` JOB_TYPE_KEYS)
+which rejected scheduleBrief/priorityCheck. Tests 20/20; P19 mutation FIRED.
 **Status:** built + mechanism-tested; live dry-run + real message after deploy via `run-priority-check.yml`.
 NOT owner-confirmed (push to phone unverified).

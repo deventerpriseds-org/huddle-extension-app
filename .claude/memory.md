@@ -3547,3 +3547,6 @@ here as fact three times before being checked.)
 - Scheduler targets the mirror's `user_email` = `dev@enterpriseds.io`.
 - Count in the message = the widget's own `buildPrioritiesBand` → never disagrees with the card.
 - Settings JOB_TYPE_KEYS must list EVERY JobTypeKey (scheduleBrief was missing after #63).
+- Settings → Scheduling → Priority check has **Send now** (`runPriorityCheckNowFn`). It is the ONLY
+  in-app run-now for any scheduled job; the others are triggered via their `run-*.yml` workflows.
+- The scheduling save validator (`scheduling-config.functions.ts` JOB_TYPE_KEYS) must list every key too.
