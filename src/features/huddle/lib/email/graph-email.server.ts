@@ -202,7 +202,7 @@ export async function listInboxMessagesSince(
       `&$orderby=${encodeURIComponent("receivedDateTime desc")}` +
       `&$top=${top}` +
       `&$select=${encodeURIComponent(
-        "id,subject,receivedDateTime,bodyPreview,body,from,inferenceClassification,internetMessageHeaders",
+        "id,subject,receivedDateTime,bodyPreview,body,from,inferenceClassification,internetMessageHeaders,conversationId",
       )}`;
     const res = await fetch(
       `${GRAPH}/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages?${qs}`,
@@ -223,6 +223,7 @@ export async function listInboxMessagesSince(
       from?: { emailAddress?: { address?: string; name?: string } };
       inferenceClassification?: string;
       internetMessageHeaders?: { name?: string; value?: string }[];
+      conversationId?: string;
     };
     const j = (await res.json()) as { value?: Raw[] };
     const messages = (j.value ?? []).map((r) => {
@@ -237,6 +238,7 @@ export async function listInboxMessagesSince(
         bodyText: r.body?.content ?? null,
         fromAddress: r.from?.emailAddress?.address ?? null,
         fromName: r.from?.emailAddress?.name ?? null,
+        conversationId: r.conversationId ?? null,
         inferenceClassification: r.inferenceClassification ?? null,
         headerNames: headers.map((h) => (h.name ?? "").toLowerCase()).filter(Boolean),
         precedence: val("precedence"),
@@ -322,6 +324,69 @@ export async function createReplyDraftInMailbox(input: {
     return { ok: true, from: mailbox, id: j.id, webLink: j.webLink };
   } catch (err) {
     return { ok: false, from: mailbox, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * A threaded reply draft on ONE known message, by its stored Graph id — what the email card's
+ * "Save to Drafts" button calls. No search: the email-replies row already holds the exact message, so
+ * a tap hours later replies to the right email even if the sender has written again since.
+ */
+export async function createReplyDraftForMessage(input: {
+  mailbox: string;
+  graphMessageId: string;
+  body: string;
+}): Promise<DraftEmailResult> {
+  const mailbox = input.mailbox.trim();
+  try {
+    const token = await getAppToken();
+    const res = await fetch(
+      `${GRAPH}/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(input.graphMessageId)}/createReply`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ comment: input.body ?? "" }),
+      },
+    );
+    if (res.status !== 201) {
+      return {
+        ok: false,
+        from: mailbox,
+        error: `Graph createReply failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+      };
+    }
+    const j = (await res.json()) as { id?: string; webLink?: string };
+    return { ok: true, from: mailbox, id: j.id, webLink: j.webLink };
+  } catch (err) {
+    return { ok: false, from: mailbox, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Has the owner SENT a message in this conversation after `afterIso`? Reads Sent Items filtered by
+ * conversationId (filter only — adding $orderby to a conversationId filter is the shape Graph rejects
+ * as InefficientFilter). true / false, or null when Graph could not answer (never settles on null).
+ */
+export async function hasSentReplyInConversation(
+  mailbox: string,
+  conversationId: string,
+  afterIso: string | null,
+): Promise<boolean | null> {
+  try {
+    const token = await getAppToken();
+    const qs =
+      `$filter=${encodeURIComponent(`conversationId eq '${conversationId.replace(/'/g, "''")}'`)}` +
+      `&$top=10&$select=${encodeURIComponent("sentDateTime")}`;
+    const res = await fetch(
+      `${GRAPH}/users/${encodeURIComponent(mailbox)}/mailFolders/sentitems/messages?${qs}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return null;
+    const j = (await res.json()) as { value?: { sentDateTime?: string }[] };
+    const after = afterIso ? Date.parse(afterIso) : 0;
+    return (j.value ?? []).some((m) => m.sentDateTime && Date.parse(m.sentDateTime) > after);
+  } catch {
+    return null;
   }
 }
 
