@@ -4529,3 +4529,11 @@ its twin). There is no detector for this drift today; compare.ts found it by acc
 - **Process:** Tier-1-ish (writes the user's stars automatically) → independent AC writer → `docs/AC-category-push.md`, then build, then independent verifier.
 - **Also shipped this turn:** PR #76 (Family row) merged `6bb821c`, deploy in progress.
 - **Status:** ACs being written. Nothing built.
+
+## ACT:this-week-clear + row layout + content-first order (2026-10-15, owner mid-turn)
+- **Ask:** "the this week section should be cleared because it is wrong. i still cannot see enough text before being cutoff, so it seems the action buttons should be on a row below … anything with items should be at the top grey empty topics should be below by date."
+- **This Week cleared:** 33 groom-set stars (journey `public.tasks`, owner auth id a3378f93…) set `is_priority=false, priority_rank=NULL` via Supabase MCP. Backup + undo SQL: `docs/qc-evidence/this-week-cleared-2026-10-15.md`. Mirror confirmed 0 starred / 103 open (azure-pg-query run 38789746847).
+- **Layout:** title full-width, actions on the row below (PriorityRow, TopicTaskRow).
+- **Order:** `orderByContent` — rows with tasks first at every level; topics with tasks by soonest task date; empty topics by journey `updated_at` desc (journey-voice #52 adds the field). FIRED ×3.
+- **Shipped:** huddle #77 `665e502` (deploy success), journey #52 `ca40eec` (deploy success). NOT owner-confirmed.
+- **Open:** Monday 8am groom will star its top 20 again unless told otherwise — owner decision pending.
