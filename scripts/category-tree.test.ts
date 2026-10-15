@@ -171,6 +171,18 @@ const allTasks = (roots: TopicNode[]): string[] => {
     career.count === 4,
     `count=${career.count} (2 own + 2 under "Presentation Development"); counting only its own tasks is the grpTaskCount defect arrived at from the other side`,
   );
+  // A category root journey supplied that the mirror has NO tasks for: its count must still roll up
+  // its children. With `node.tasks.length > 0` alone this branch never fires, which is why the
+  // earlier fixture (a root WITH its own tasks) reported EQUIVALENT.
+  const noOwnTasks = mergeTopicTree(
+    [node({ id: "category:LIFE", name: "Life & Personal", categoryAffinity: "LIFE",
+            children: [node({ id: "l1", name: "Admin", count: 3 }), node({ id: "l2", name: "Errands", count: 4 })] })],
+    []);
+  check(
+    "a category with NO tasks of its own still rolls up its nested topics' counts",
+    noOwnTasks.find((n) => n.id === "category:LIFE")?.count === 7,
+    `count=${noOwnTasks.find((n) => n.id === "category:LIFE")?.count} (3 + 4) — a root the mirror has no tasks for still cannot undercount`,
+  );
   const topicOnly = mergeTopicTree(
     [node({ id: "solo", name: "Solo topic", count: 7 })], []);
   check(
@@ -217,9 +229,15 @@ const allTasks = (roots: TopicNode[]): string[] => {
     ns.map((n) => `${n.id}(${n.tasks.map((t) => t.id).join("|")})[${shape(n.children)}]`).join(",");
   const beforeJourney = shape(journeyRoots);
   const beforeCategory = shape(categoryRoots);
+  // FOUR levels on purpose. `.map(cloneNode)` at the push site copies the arrays a SHALLOW clone
+  // would also reach, so a three-level fixture cannot tell a deep clone from a shallow one and
+  // mutate.sh correctly reported EQUIVALENT — "not proven", not "guard is broken". The reorder is
+  // only observable below that, which is where the real defect lived.
   const deep: TopicNode[] = [
     node({ id: "category:CAREER", name: "Career", categoryAffinity: "CAREER",
-           children: [node({ id: "g", name: "G", children: [node({ id: "gz", name: "zz" }), node({ id: "ga", name: "aa" })] })] }),
+           children: [node({ id: "g", name: "G", children: [
+             node({ id: "mid", name: "Mid", children: [node({ id: "gz", name: "zz" }), node({ id: "ga", name: "aa" })] }),
+           ] })] }),
   ];
   const deepBefore = shape(deep);
   mergeTopicTree(deep, categoryRoots);
