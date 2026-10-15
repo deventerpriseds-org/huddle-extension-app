@@ -4425,3 +4425,12 @@ independent, all widget/priority suites green, tsc 0, build ok, **5 mutations FI
 
 **Status: on PRs, NOT merged, NOT deployed, NOT owner-confirmed.** Needs BOTH #71 and journey#42 merged.
 **Still open for the owner:** push-a-category option A/B/C (recommended C); AC-41 empty FAMILY row.
+
+## ACT:schedule-brief-403 — Iris's 8am/8pm schedule brief cannot read Outlook (2026-10-15)
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | Brief never silent (schedule / nothing scheduled / read-error notice) | merged #73, deployed | dry run 38776403438 -> kind `read-error` |
+| 2 | Cause read, not guessed | `graph-permission-check.yml` (#74) | run 38779291624: app `enterpriseds-github-actions` (SP oid d562fd09-…) roles = Application.ReadWrite.All, Files.ReadWrite.All, Mail.*, MailboxSettings.ReadWrite — **no Calendars.Read**; calendarView 403 for dev@ and von.ellis@ |
+| 3 | Fix = owner's option A: Exchange RBAC for Applications, `Application Calendars.Read` scoped to the owner's mailbox(es); NO Entra Calendars.Read grant (Entra grants are tenant-wide and additive) | waiting on owner (admin action) | re-run graph-permission-check.yml after; expect calendarView 200 |
+
+Doubled review digests: fixed by #68 (one job row per user). Owner rejected switching the brief to journey's calendar (option C) — journey branch commit 9638f09 parked, unmerged.
