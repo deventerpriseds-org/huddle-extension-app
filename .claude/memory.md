@@ -117,6 +117,22 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Iris schedule brief = meetings + classes + TASKS, per day AND per journey window (2026-10-15, DEPLOYED, NOT owner-confirmed)
+- **Calendar mailbox is NOT the data-scope email.** Owner's Outlook meetings live in the journey-connected
+  account (Von.Ellis@, `calendar_connections.provider_account_email`); dev@'s calendar is empty. Every Graph
+  calendar read goes through `resolveCalendarMailbox` (journey `get_my_config` → fallback resolveTaskEmail). #78.
+- **Nexus d1 has no `eq.` operator** — `program_id=eq.<uuid>` 500s ("invalid input syntax for type uuid").
+  Send the BARE value for equality. #78.
+- Brief reads the owner's scheduled open tasks (`getScheduledTasksBetween`), kept OUT of `items` (items seed
+  T-60 reminders; journey already alarms tasks). #84.
+- **Window messages are triggered by JOURNEY** (notification-delivery → `/api/public/run-schedule-brief`
+  with `window`), because journey owns the window times. journey's 8am morning window is sent as the
+  morning edition and shares Huddle's 8am turn key → ONE 8am message. Turn key per window per day.
+- Evening "confirm priorities before the 1am planner" ALREADY EXISTS: `priorityCheck` (6am/8pm, #65).
+  Don't rebuild it — verify it reaches the owner.
+- Spoken style: "Hello Sir, just a reminder that today you have …, and on your task list …, and later in
+  the week …" (#80, #84). Owner approved the voice ("it was excellent").
+
 ## Hardening — the phase-tag gate was GREEN while 67% of output was non-compliant (2026-08-25)
 
 - [2026-09-02] **Hardening — I rebuilt a system that already existed, because I trusted a LOCAL clone.**
