@@ -325,7 +325,22 @@ function byPriorityThenDue(a: WidgetTaskRow, b: WidgetTaskRow): number {
   const ad = a.dueDate ? Date.parse(a.dueDate) : Number.POSITIVE_INFINITY;
   const bd = b.dueDate ? Date.parse(b.dueDate) : Number.POSITIVE_INFINITY;
   if (ad !== bd) return ad - bd;
-  return a.title.localeCompare(b.title);
+  // `|| id` makes this a TOTAL order. Without it the comparator returns 0 for two rows agreeing on
+  // star, rank, due date AND title, so their order falls through to `getBoardTasks`' own
+  // `ORDER BY updated_at DESC` and FLIPS whenever either row is touched.
+  //
+  // Not hypothetical — MEASURED on the owner's live mirror by an independent verifier, which asked
+  // the database directly whether any real pair ties:
+  //     Prepare my office camera quality              | n=2 | distinct_sort_keys=1
+  //     Research someone to install brakes and rotors | n=2 | distinct_sort_keys=1
+  // The first is visible in his Life & Personal list. Duplicate titles are ordinary on a board fed
+  // by an agent, so this is a steady-state condition, not an edge case.
+  //
+  // It matters most for the thing the tree is FOR: "so if an agent in the future is asked to
+  // autopull one or two from the categories it knows whats next." A next-up that reorders itself
+  // when an unrelated field is written is not an answer. `id` is the mirror's primary key, so it is
+  // unique by construction and the order is now stable across reads.
+  return a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
 }
 
 /**
@@ -893,7 +908,7 @@ export function mergeTopicTree(
   topicRoots: readonly TopicNode[],
   categoryRoots: readonly TopicNode[],
 ): TopicNode[] {
-  const out: TopicNode[] = categoryRoots.map((n) => ({ ...n, children: [...n.children] }));
+  const out: TopicNode[] = categoryRoots.map(cloneNode);
   const byId = new Map<string, TopicNode>(out.map((n) => [n.id, n]));
 
   for (const root of topicRoots) {
@@ -901,9 +916,9 @@ export function mergeTopicTree(
     if (root.id.startsWith(CATEGORY_ROOT_PREFIX)) {
       const mine = byId.get(root.id);
       if (mine) {
-        mine.children.push(...root.children);
+        mine.children.push(...root.children.map(cloneNode));
       } else {
-        const copy = { ...root, children: [...root.children] };
+        const copy = cloneNode(root);
         out.push(copy);
         byId.set(copy.id, copy);
       }
@@ -911,9 +926,53 @@ export function mergeTopicTree(
     }
     // A bare topic root (journey sent no category for it) — keep it top-level rather than
     // guessing a category for it.
-    out.push({ ...root, children: [...root.children] });
+    out.push(cloneNode(root));
   }
+  for (const root of out) recountSubtree(root);
   return sortNodes(out);
+}
+
+/**
+ * DEEP copy. A shallow `{...n, children: [...n.children]}` copies two levels and no further, and
+ * `sortNodes` then recurses and sorts the CALLER'S grandchild arrays in place — measured by an
+ * independent verifier: input `[gz, ga]` came back `[ga, gz]`.
+ *
+ * The test that was supposed to catch it asserted a `length` on the one level that IS copied, so it
+ * passed while the defect was live. A length assertion cannot see a reorder; that is the lesson,
+ * not the clone.
+ */
+function cloneNode(n: TopicNode): TopicNode {
+  return { ...n, children: n.children.map(cloneNode), tasks: [...n.tasks] };
+}
+
+/**
+ * Recompute every node's `count` from what is actually beneath it, bottom-up.
+ *
+ * WHY, and it only bites once journey's topic tool deploys: a category root built by
+ * `buildCategoryTaskTree` counts ITS OWN tasks. Nest journey's topics under it and that number
+ * silently UNDERCOUNTS — "Career 10" above a child "Presentation Development 2" with 12 tasks in
+ * the subtree. That is precisely the `PrioritiesWidgetFactory.grpTaskCount` defect this feature was
+ * written to avoid (its group count sums only sub-groups and omits the group's own tasks), arrived
+ * at from the other direction.
+ *
+ * A node with NOTHING beneath it keeps journey's own `count`. That is deliberate: journey's topic
+ * rows legitimately carry a number with no tasks attached — it is what the owner's spec screenshot
+ * draws ("Presentation Development 2", "Career Development 15") — and such a row is not expandable,
+ * so it never shows a count above an empty list. Only a node that HAS content gets its count
+ * derived from that content, so the number and the rows can never disagree.
+ */
+function recountSubtree(node: TopicNode): number {
+  let total = node.tasks.length;
+  let sawChildCount = false;
+  for (const child of node.children) {
+    const sub = recountSubtree(child);
+    if (sub !== null) {
+      total += sub;
+      sawChildCount = true;
+    }
+  }
+  if (node.tasks.length > 0 || sawChildCount) node.count = total;
+  return node.count ?? 0;
 }
 
 // ---------------------------------------------------------------------------

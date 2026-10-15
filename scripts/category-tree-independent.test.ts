@@ -1,3 +1,25 @@
+// WHAT:       An INDEPENDENT second suite over the priorities category tree, written cold by a
+//             verifier subagent that shared none of the implementer's context or fixtures.
+// WHY:        It caught three things the implementer's own suite did not: a comparator that was not
+//             a total order (live on the owner's board, two real pairs tying), mergeTopicTree
+//             mutating its caller's grandchild arrays in place (the implementer's assertion checked
+//             a LENGTH on the one level that IS copied, so it was a false positive), and a fixture
+//             whose category name sorted before "Uncategorised" and so masked the rank that forces
+//             that bucket last. Kept rather than deleted: a second author's fixtures are the asset.
+// SUPERSEDES: nothing
+// SUPERSEDED-BY: nothing -- current
+// EVIDENCE:   docs/VERIFY-tasks-under-categories-1.md (663 lines, same pass).
+//
+// EXPECT 24 PASS / 1 FAIL. The one failure, I-7, is an OPEN DECISION and not a code defect:
+// AC-13 ("a HIGH/URGENT task is not ranked below a LOW one") and AC-14 (order by
+// is_priority -> priority_rank -> due_date -> title, matching journey's own query) CONTRADICT each
+// other. The shipped code satisfies AC-14, so AC-13 fails by construction. `BoardTaskRow.priority`
+// is selected from the mirror and dropped by `toWidgetRow`, so honouring it is a small change --
+// but it changes what "what's next" MEANS, which is the owner's call, not a bug to quietly fix.
+// A red run of THIS file means that decision is still open. Close it and this goes green.
+//
+// Run:  bun scripts/category-tree-independent.test.ts   (npm run test:category-tree-independent)
+
 // VERIFIER-OWNED, throwaway. Independent adversarial checks on buildCategoryTaskTree/mergeTopicTree.
 // Not the implementer's suite — written without reading scripts/category-tree.test.ts assertions as
 // a template. Delete after the pass.
