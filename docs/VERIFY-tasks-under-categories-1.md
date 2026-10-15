@@ -204,3 +204,122 @@ selected by `getBoardTasks` (tasks.server.ts:1682) and IS dropped by `toWidgetRo
 either AC-13 is withdrawn, or `priority` is added to the comparator — which would change the
 existing This Week band's order too, so it is not a free change.
 
+---
+
+### V-3 — `npm run build`, and the "did a server module leak into the client bundle?" question
+
+The main working tree had a `git merge origin/main` IN PROGRESS (conflict in `.claude/actions.md`)
+while this pass ran, so every build below was done in an **isolated detached worktree** pinned to
+the commit under test, to keep the evidence uncontaminated:
+
+```
+$ git worktree add --detach <scratch>/wt-1bead4d 1bead4d     # feature
+$ git worktree add --detach <scratch>/wt-base    9d874f8     # base, for attribution
+$ npm run build   # in each
+EXIT=0   (both)
+```
+
+#### The adversarial angle, settled: the new symbols are NOT in the client bundle
+
+```
+$ grep -rl <symbol> .output/public | wc -l        # 58 client .js files, 5.4M
+  buildCategoryTaskTree      0
+  mergeTopicTree             0
+  UNCATEGORISED_CATEGORY     0
+  buildTopicTree             0
+  groupByCategory            0
+  CATEGORY_ROOT_PREFIX       0
+  withParkingLotTag          0
+```
+
+`JourneyWidgets.tsx:50-57` imports from `widgets.server` under `import type { … }` only — type-only,
+erased at compile. The colour helpers it DOES value-import come from a different module
+(`../lib/tasks/widget-colors`), and `CATEGORY_TASK_PREVIEW_MAX` was declared in the component. So
+**nothing was missed.**
+
+**The strongest form of that evidence — the content hash is unchanged:**
+
+```
+$ md5sum wt-1bead4d/.output/public/assets/widgets.server-DjJWCyWR.js \
+         wt-base/.output/public/assets/widgets.server-DjJWCyWR.js
+973e7911a3d5374b6b935ca8cad47ff1  wt-1bead4d/…/widgets.server-DjJWCyWR.js
+973e7911a3d5374b6b935ca8cad47ff1  wt-base/…/widgets.server-DjJWCyWR.js
+```
+
+Same filename, same hash, 2881 bytes, on BOTH commits. **This diff added zero bytes to the client's
+copy of `widgets.server`.**
+
+**Pre-existing observation, NOT this diff's doing, reported because I found it:** a client-served
+`.output/public/assets/widgets.server-*.js` chunk exists on BOTH commits, reached from
+`assets/tools-BvQdWw9X.js` (`lib/tasks/tools.ts` does a dynamic `import("./widgets.server")`). It
+exports `safeTimeZone, localDateKey, buildScheduleSections, buildPrioritiesBand` — pure functions,
+no `pg`, no connection string. 13 client chunks contain the literal **string** `AZURE_PG_URL` (e.g.
+`` `AZURE_PG_URL not configured` ``), i.e. the variable NAME in an error message, not a value; a
+`grep -rlE "postgres(ql)?://"` over `.output/public` matched only `esm-DvNGi1wG.js` (a driver's own
+regex, not a credential). **No secret leak observed.** Still: server modules being emitted into
+`public/` is a shape worth a separate look, and it is older than this change.
+
+---
+
+### V-4 — the declared-below-use question, EXECUTED in the built bundle (not reasoned about)
+
+`UNCATEGORISED_CATEGORY` / `UNCATEGORISED_LABEL` are declared at source line ~918, **below**
+`buildCategoryTaskTree` (line ~810) which reads them. What the bundler actually emitted:
+
+```
+$ grep -b "UNCATEGORISED" .output/server/_ssr/widgets.server-D24swPAC.mjs
+24385 : const cat = raw ? displayCategory(raw) : UNCATEGORISED_CATEGORY;     <- USE
+25202 : var UNCATEGORISED_CATEGORY = "UNCATEGORISED";                        <- DECL, 817 bytes LATER
+25248 : var UNCATEGORISED_LABEL = "Uncategorised";
+```
+
+The use is at byte 24385, the declaration at 25202 — the declaration really is below the use in the
+built output, and the bundler **rewrote `const` to `var`**. Executed rather than reasoned about:
+
+```
+$ node tdz.mjs .output/server/_ssr/widgets.server-D24swPAC.mjs
+exports present: buildCategoryTaskTree=function mergeTopicTree=function
+built-bundle result: [{"id":"category:CAREER","name":"Career","pos":1,"count":1,"tasks":["b"]},
+                      {"id":"category:UNCATEGORISED","name":"Uncategorised","pos":6,"count":2,"tasks":["a","c"]}]
+mergeTopicTree([],tree) roots: category:CAREER,category:UNCATEGORISED
+```
+
+**NO TDZ error, correct values, in the BUILT bundle under plain Node.** Reason: the declaration runs
+during module evaluation, which completes before any caller can invoke the function. **PASS — the
+angle is closed, and it is closed by execution, not by argument.** (One note: because the bundler
+emits `var`, a future refactor that called this function *during* module evaluation would get a
+silent `undefined` instead of a loud TDZ throw. Not reachable today.)
+
+---
+
+### V-5 — the 15 assertions are load-bearing: 7 independent mutations via `scripts/mutate.sh`
+
+Anchors written to FILES (not shell args), run in the isolated worktree, test command
+`bun scripts/category-tree.test.ts` (reads source — no build output to contaminate). Tree verified
+clean after all seven (`git status --porcelain` → empty).
+
+| # | defect reinstated | must-fail label | outcome |
+|---|---|---|---|
+| M1 | `if (!raw) continue` — drop null/blank-category tasks | `a task with a null OR blank category gets a real row` | **FIRED** |
+| M2 | `count: tasks.length + 1` — count no longer derived | `count equals the number of tasks actually carried` | **FIRED** |
+| M3 | remove `.filter(isOpen && !isParked)` | `DONE, completed and parked tasks are excluded` | **FIRED** |
+| M4 | remove `tasks.sort(byPriorityThenDue)` | `the order is a function of the DATA` | **FIRED** |
+| M5 | `mergeTopicTree` drops a journey category root the mirror lacks | `a journey category the mirror has no tasks for is still created` | **FIRED** |
+| M6 | remove the `+ 1` that forces Uncategorised last | `Uncategorised sorts last` | **INERT** |
+| M7 | `mergeTopicTree` drops a bare (uncategorised) journey topic root | `an uncategorised journey topic stays top-level` | **FIRED** |
+
+**6 of 7 FIRED. D-5 — M6 is INERT because the FIXTURE is too weak, and the `+ 1` IS load-bearing.**
+I proved that rather than leaving it ambiguous. The implementer's fixture uses `SIDE_HUSTLE`, whose
+label `"Side Hustle"` sorts BEFORE `"Uncategorised"`, so when both land on `position = 5` the
+`name.localeCompare` tiebreak in `sortNodes` still puts Uncategorised last — the mutation is
+behaviourally equivalent *for that one input*. With a dynamic category whose LABEL sorts AFTER it:
+
+```
+unmutated:  PASS … :: Zz Top(pos=5) > Uncategorised(pos=6)
+mutated  :  FIRED: 'Uncategorised sorts last even behind a dynamic category' failed … The guard is real.
+```
+
+So the code is RIGHT and the test is WEAK. **Fix: change the fixture's dynamic category from
+`SIDE_HUSTLE` to anything whose label sorts after "Uncategorised"** (e.g. `ZZ_TOP`), and M6 fires.
+Per AC-65 ("`FIRED` — never `INERT`"), this one assertion is currently **unproven**.
+
