@@ -31,3 +31,7 @@ staticwebapp.config.json
 *.njsproj
 *.sln
 *.sw?
+
+# Agent tool isolated worktrees (isolation:"worktree") live INSIDE the repo. Never commit them --
+# `git add -A` / `git add .claude` would otherwise record each one as an embedded repository.
+.claude/worktrees/

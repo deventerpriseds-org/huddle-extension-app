@@ -457,6 +457,13 @@ function firstNumber(o: Record<string, unknown>, keys: string[]): number | null 
   return null;
 }
 
+function firstWindowAffinity(o: Record<string, unknown>): string | null {
+  const w = o.window_affinity ?? o.windowAffinity;
+  if (!Array.isArray(w)) return null;
+  for (const v of w) if (typeof v === "string" && v.trim()) return v.trim();
+  return null;
+}
+
 function firstArray(o: Record<string, unknown>, keys: string[]): unknown[] | null {
   for (const k of keys) {
     const v = o[k];
@@ -508,7 +515,11 @@ function toTopicNode(raw: unknown, depth: number): TopicNode | null {
     id,
     name,
     parentId: firstString(o, ["parent_topic_id", "parentTopicId", "parent_id", "parentId"]),
-    categoryAffinity: firstString(o, ["category_affinity", "categoryAffinity", "category"]),
+    // The owner's Android widget rule, read from PrioritiesWidgetFactory.rebuildItems:
+    // `categoryAffinity ?: windowAffinity?.firstOrNull()`. Without the fallback, a topic placed by
+    // its window alone lands in no category here while his phone files it under one.
+    categoryAffinity:
+      firstString(o, ["category_affinity", "categoryAffinity", "category"]) ?? firstWindowAffinity(o),
     position: firstNumber(o, ["position", "order", "sort_order"]),
     count: firstNumber(o, ["count", "task_count", "taskCount", "open_count", "openCount", "n", "total"]),
     children,
@@ -1002,25 +1013,200 @@ function recountSubtree(node: TopicNode): number {
 export async function composePrioritiesWidget(
   email: string,
   timeZone: string,
-  opts: { nowMs?: number; journeyRoots?: readonly TopicNode[] } = {},
+  opts: { nowMs?: number; caller?: { entra_email?: string; entra_object_id?: string }; includeTopics?: boolean } = {},
 ): Promise<PrioritiesWidgetData> {
   const tz = safeTimeZone(timeZone);
   const nowMs = opts.nowMs ?? Date.now();
   const { getBoardTasks, getWeekOrder } = await import("./tasks.server");
-  const rows = await getBoardTasks(email);
-  // The user's explicit This Week order. Degrades to [] — an ordering read must never block a card.
-  const order = await getWeekOrder(email).catch(() => [] as string[]);
+  const wantTopics = opts.includeTopics !== false && !!opts.caller;
+  // The three reads are independent, so they run together. The journey read is the only remote
+  // one and it is BOUNDED (fetchTopicPayload) so it can never stall an agent's turn.
+  const [rows, order, topic] = await Promise.all([
+    getBoardTasks(email),
+    // The user's explicit This Week order. Degrades to [] — an ordering read must never block a card.
+    getWeekOrder(email).catch(() => [] as string[]),
+    wantTopics ? fetchTopicPayload(opts.caller!) : Promise.resolve(NOT_REQUESTED),
+  ]);
   return {
     ok: true,
     timeZone: tz,
     todayKey: localDateKey(nowMs, tz) ?? new Date(nowMs).toISOString().slice(0, 10),
     band: buildPrioritiesBand(rows, tz, nowMs, order),
     topics: {
-      ok: true,
-      reason: "ok",
-      roots: mergeTopicTree(opts.journeyRoots ?? [], buildCategoryTaskTree(rows, tz, nowMs)),
+      // `ok`/`reason` describe the JOURNEY read, so the UI can say when the sub-category layer is
+      // missing. The category rows render from the mirror either way.
+      ok: topic.ok,
+      reason: topic.reason,
+      ...(topic.error ? { error: topic.error } : {}),
+      roots: buildPrioritiesTree(rows, tz, nowMs, topic.ok ? topic.payload : undefined),
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Category -> Topic -> Task: the sub-category layer
+// ---------------------------------------------------------------------------
+
+interface TopicFetch {
+  ok: boolean;
+  reason: TopicTreeReason;
+  error?: string;
+  payload?: unknown;
+}
+
+/** Topics were not asked for (no caller, or `includeTopics:false`). Not a failure, so no banner. */
+const NOT_REQUESTED: TopicFetch = { ok: true, reason: "ok" };
+
+/**
+ * How long a card waits for journey's topic tree before rendering the category-only tree instead.
+ *
+ * The agent-tool path deliberately skipped this call before, so a slow journey could not stall an
+ * agent mid-reply ("a tool call already inside an agent's turn is the worst place to spend that
+ * latency"). The owner now needs the sub-category layer on exactly that card, so the call happens
+ * there too, under a ceiling. A timeout degrades to the category tree, never to an error card.
+ */
+export const TOPIC_FETCH_TIMEOUT_MS = 4000;
+
+/**
+ * Journey's `get_task_topics`, through the existing proxy passthrough. MUST DEGRADE, NEVER THROW:
+ *   not-configured -> no JOURNEY_PROXY_URL/TOKEN in this environment
+ *   tool-absent    -> journey answered but does not know the tool (not deployed yet)
+ *   error          -> network, non-JSON, timeout
+ */
+export async function fetchTopicPayload(
+  caller: { entra_email?: string; entra_object_id?: string },
+  timeoutMs: number = TOPIC_FETCH_TIMEOUT_MS,
+): Promise<TopicFetch> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<TopicFetch>((resolve) => {
+    timer = setTimeout(
+      () => resolve({ ok: false, reason: "error", error: `journey topic tree timed out after ${timeoutMs}ms` }),
+      timeoutMs,
+    );
+  });
+  const call = (async (): Promise<TopicFetch> => {
+    try {
+      const { invokeJourneyTool } = await import("../journey/proxy.functions");
+      const r = await invokeJourneyTool({
+        toolName: "get_task_topics",
+        args: {},
+        caller,
+        context: { source: "huddle" },
+      });
+      if (!r.ok) {
+        const detail = `${r.error ?? ""} ${r.output ?? ""}`.toLowerCase();
+        const absent = ["unknown tool", "unsupported tool", "no such tool", "tool not found", "not implemented"]
+          .some((p) => detail.includes(p));
+        return { ok: false, reason: absent ? "tool-absent" : "error", error: r.error ?? "journey returned ok=false" };
+      }
+      // The proxy always hands back `output` as a STRING (huddle-proxy JSON.stringifies the result).
+      let payload: unknown = r.output;
+      if (typeof r.output === "string") {
+        try {
+          payload = JSON.parse(r.output);
+        } catch {
+          return { ok: false, reason: "error", error: "journey returned non-JSON output" };
+        }
+      }
+      return { ok: true, reason: "ok", payload };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, reason: msg.toLowerCase().includes("not configured") ? "not-configured" : "error", error: msg };
+    }
+  })();
+  try {
+    return await Promise.race([call, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * `task_id -> topic_id` from journey's `mappings`, ONE topic per task.
+ *
+ * A task linked to two topics is placed once, under the topic with the smallest id, so counts never
+ * double and the placement is the same on every read. Measured on the owner's data: 1 such task of
+ * 369 links. (The Android widget keeps whichever mapping the database happened to return last,
+ * `topicByTask[task_id] = topic_id`, which is not stable across reads.)
+ */
+export function findTopicMappings(payload: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  const arr = (() => {
+    if (!payload || typeof payload !== "object") return null;
+    const o = payload as Record<string, unknown>;
+    if (Array.isArray(o.mappings)) return o.mappings;
+    for (const k of ["result", "data", "output", "payload"]) {
+      const v = o[k];
+      if (v && typeof v === "object" && Array.isArray((v as Record<string, unknown>).mappings)) {
+        return (v as Record<string, unknown>).mappings as unknown[];
+      }
+    }
+    return null;
+  })();
+  for (const m of arr ?? []) {
+    if (!m || typeof m !== "object") continue;
+    const r = m as Record<string, unknown>;
+    const taskId = typeof r.task_id === "string" ? r.task_id : typeof r.taskId === "string" ? r.taskId : null;
+    const topicId = typeof r.topic_id === "string" ? r.topic_id : typeof r.topicId === "string" ? r.topicId : null;
+    if (!taskId || !topicId) continue;
+    const prev = out.get(taskId);
+    if (prev === undefined || topicId < prev) out.set(taskId, topicId);
+  }
+  return out;
+}
+
+/**
+ * The whole tree the widget renders: Category -> Topic -> Task, matching the owner's Android widget.
+ *
+ * With journey's topic payload: every topic is a node under its category (category_affinity, else
+ * first window_affinity: the Android rule), each live task is attached under the topic it is linked
+ * to, and the category count is the sum beneath it. Measured: this reproduces his phone's "Career 8"
+ * exactly, across the same 13 topics.
+ *
+ * Tasks linked to NO topic are not dropped (the Android widget drops them): they sit directly under
+ * their own category, after its topics, so no live work is ever hidden.
+ *
+ * Without a payload (journey's tool not deployed, timed out, or not asked for): the category-only
+ * tree from the mirror, exactly as before. Pure: `nowMs` is passed in.
+ */
+export function buildPrioritiesTree(
+  rows: BoardTaskRow[],
+  timeZone: string,
+  nowMs: number,
+  topicPayload?: unknown,
+): TopicNode[] {
+  const topicRoots = topicPayload === undefined ? [] : buildTopicTree(topicPayload);
+  if (!topicRoots.length) return buildCategoryTaskTree(rows, timeZone, nowMs);
+
+  const tz = safeTimeZone(timeZone);
+  const todayKey = localDateKey(nowMs, tz) ?? new Date(nowMs).toISOString().slice(0, 10);
+  const mappings = findTopicMappings(topicPayload);
+
+  // First node wins per id. buildTopicTree deliberately emits same-id nodes rather than dropping
+  // one, and a task must still land in exactly one place.
+  const byId = new Map<string, TopicNode>();
+  const index = (ns: TopicNode[]) => {
+    for (const n of ns) {
+      if (!byId.has(n.id)) byId.set(n.id, n);
+      index(n.children);
+    }
+  };
+  index(topicRoots);
+
+  const unmapped: BoardTaskRow[] = [];
+  for (const r of rows) {
+    if (!isOpen(r) || isParked(r)) continue;
+    const topicId = mappings.get(r.id);
+    const node = topicId ? byId.get(topicId) : undefined;
+    // Never attach to a synthetic category root: a mapping names a TOPIC.
+    if (node && !node.id.startsWith(CATEGORY_ROOT_PREFIX)) node.tasks.push(toWidgetRow(r, tz, todayKey));
+    else unmapped.push(r);
+  }
+  for (const n of byId.values()) n.tasks.sort(byPriorityThenDue);
+
+  // mergeTopicTree deep-clones, folds topics into the matching category roots, recounts every node
+  // from what is beneath it, and sorts. The unmapped tasks' tree is the base it folds into.
+  return mergeTopicTree(topicRoots, buildCategoryTaskTree(unmapped, timeZone, nowMs));
 }
 
 // ---------------------------------------------------------------------------

@@ -19,6 +19,8 @@
 
 import {
   buildCategoryTaskTree,
+  buildPrioritiesTree,
+  findTopicMappings,
   mergeTopicTree,
   UNCATEGORISED_CATEGORY,
   type TopicNode,
@@ -272,6 +274,117 @@ const allTasks = (roots: TopicNode[]): string[] => {
   check("no live tasks and no journey topics → an empty tree, which the UI renders as its empty state",
     buildCategoryTaskTree([], TZ, NOW).length === 0 && mergeTopicTree([], []).length === 0,
     "never throws");
+}
+
+// ── SUB-CATEGORIES: Category -> Topic -> Task, matching the owner's phone ───────────────────────
+//
+// Owner, 2026-10-15, with a screenshot of his Android home widget: "we forgot to include
+// subcategories under a category like career before we get to tasks." The fixture below is his REAL
+// Career data, measured from journey that day with the Android rule (topic category =
+// category_affinity, else window_affinity[1]; tasks via task_topic_mappings): 13 topics whose open
+// task counts sum to the "Career 8" his phone displays.
+{
+  const CAREER_TOPICS: Array<[string, number]> = [
+    ["Career Development", 2], ["Debugging and Troubleshooting", 0], ["Grooming Management", 0],
+    ["Fractional CTO Services", 1], ["Career Review Management", 0], ["Design Resource Management", 1],
+    ["Software Development Lifecycle", 2], ["Presentation Development", 0], ["Career Development Tasks", 0],
+    ["Team Collaboration Tools", 0], ["Vendor Communication", 0], ["AI Workflow Management", 1],
+    ["Career Tools Integration", 1],
+  ];
+  const topics = CAREER_TOPICS.map(([name], i) => ({
+    id: `t${String(i).padStart(2, "0")}`, topic_name: name, position: i === 12 ? 1 : 0,
+    category_affinity: "CAREER", window_affinity: null, parent_topic_id: null,
+  }));
+  const rows: any[] = [];
+  const mappings: Array<{ task_id: string; topic_id: string }> = [];
+  CAREER_TOPICS.forEach(([, n], i) => {
+    for (let k = 0; k < n; k++) {
+      const id = `c${i}-${k}`;
+      // Deliberately NOT category CAREER on the task itself for one of them: placement follows the
+      // TOPIC's category (the Android rule), not the task's own column.
+      rows.push(row({ id, title: `${id}`, category: i === 0 && k === 0 ? "LIFE" : "CAREER" }));
+      mappings.push({ task_id: id, topic_id: `t${String(i).padStart(2, "0")}` });
+    }
+  });
+  const tree = buildPrioritiesTree(rows, TZ, NOW, { topics, mappings });
+  const career = tree.find((n) => n.categoryAffinity === "CAREER")!;
+  check("SUB-CATEGORIES: the owner's real Career data counts 8, exactly what his phone shows",
+    career?.count === 8, `count=${career?.count}`);
+  check("SUB-CATEGORIES: all 13 topics render as children of Career, including the ones with 0 tasks",
+    career.children.length === 13 && career.tasks.length === 0,
+    `${career.children.length} topic rows, ${career.tasks.length} loose tasks`);
+  const byName = new Map(career.children.map((c) => [c.name, c]));
+  check("SUB-CATEGORIES: each topic carries exactly its own tasks and counts them",
+    CAREER_TOPICS.every(([name, n]) => byName.get(name)!.tasks.length === n),
+    CAREER_TOPICS.map(([name, n]) => `${name}=${byName.get(name)!.tasks.length}/${n}`).join(" "));
+  check("SUB-CATEGORIES: a topic with 0 tasks has a BLANK count (null), as his phone draws it, not '0'",
+    byName.get("Grooming Management")!.count === null,
+    `count=${byName.get("Grooming Management")!.count}`);
+  check("SUB-CATEGORIES: placement follows the TOPIC's category, not the task's own (Android rule)",
+    byName.get("Career Development")!.tasks.some((t) => t.id === "c0-0") &&
+      !tree.some((n) => n.categoryAffinity === "LIFE"),
+    "a task whose own category is LIFE, linked to a Career topic, sits under Career");
+}
+
+{
+  // window_affinity fallback — the half of the Android rule the old parser lacked.
+  const tree = buildPrioritiesTree(
+    [row({ id: "w1", category: "CAREER" })], TZ, NOW,
+    { topics: [{ id: "tw", topic_name: "Evenings", category_affinity: null, window_affinity: ["LIFE"] }],
+      mappings: [{ task_id: "w1", topic_id: "tw" }] });
+  check("SUB-CATEGORIES: a topic with no category_affinity is filed by its first window_affinity",
+    tree.find((n) => n.categoryAffinity === "LIFE")?.children[0]?.tasks[0]?.id === "w1",
+    "Android: categoryAffinity ?: windowAffinity?.firstOrNull()");
+}
+
+{
+  // Nothing is ever dropped, and nothing is counted twice.
+  const topics = [
+    { id: "ta", topic_name: "A", category_affinity: "CAREER" },
+    { id: "tb", topic_name: "B", category_affinity: "CAREER" },
+  ];
+  const rows = [
+    row({ id: "loose", category: "VENTURES" }),                 // linked to no topic
+    row({ id: "ghost", category: "CAREER" }),                   // linked to a topic that doesn't exist
+    row({ id: "twice", category: "CAREER" }),                   // linked to two topics
+    row({ id: "done", category: "CAREER", status: "DONE" }),    // closed
+    row({ id: "parked", category: "CAREER", tags: ["parking-lot"] }),
+  ];
+  const mappings = [
+    { task_id: "ghost", topic_id: "t-missing" },
+    { task_id: "twice", topic_id: "tb" }, { task_id: "twice", topic_id: "ta" },
+    { task_id: "done", topic_id: "ta" }, { task_id: "parked", topic_id: "ta" },
+  ];
+  const tree = buildPrioritiesTree(rows, TZ, NOW, { topics, mappings });
+  const all = allTasks(tree).sort();
+  check("SUB-CATEGORIES: every live task appears exactly once — unlinked, dangling-link and multi-linked alike",
+    all.join(",") === "ghost,loose,twice", `[${all.join(",")}]`);
+  check("SUB-CATEGORIES: a task with NO topic sits directly under its own category (the phone drops it; we don't)",
+    tree.find((n) => n.categoryAffinity === "VENTURES")?.tasks.some((t) => t.id === "loose") === true,
+    "no live work is hidden");
+  const fwd = findTopicMappings({ mappings }).get("twice");
+  const rev = findTopicMappings({ mappings: [...mappings].reverse() }).get("twice");
+  check("SUB-CATEGORIES: a task linked to two topics lands under ONE, the same one on every read",
+    fwd === "ta" && rev === "ta", `${fwd} / ${rev} — the phone keeps whichever row came back last`);
+}
+
+{
+  // Degradation: journey's tool not deployed / timed out → exactly the category-only tree.
+  const rows = [row({ id: "d1", category: "CAREER" }), row({ id: "d2", category: "LIFE" })];
+  const shape = (ns: TopicNode[]) => JSON.stringify(ns);
+  check("SUB-CATEGORIES: with no topic payload the tree is IDENTICAL to the category-only tree",
+    shape(buildPrioritiesTree(rows, TZ, NOW, undefined)) === shape(buildCategoryTaskTree(rows, TZ, NOW)) &&
+      shape(buildPrioritiesTree(rows, TZ, NOW, { topics: [], mappings: [] })) === shape(buildCategoryTaskTree(rows, TZ, NOW)),
+    "a missing journey tool must never cost the owner his categories");
+}
+
+{
+  const payload = { topics: [{ id: "tp", topic_name: "P", category_affinity: "CAREER" }],
+                    mappings: [{ task_id: "p1", topic_id: "tp" }] };
+  const before = JSON.stringify(payload);
+  buildPrioritiesTree([row({ id: "p1", category: "CAREER" })], TZ, NOW, payload);
+  check("SUB-CATEGORIES: building the tree does not mutate journey's payload",
+    JSON.stringify(payload) === before, "the proxy response is read, never written");
 }
 
 // ── THE DUPLICATION GUARD — this is the defect that actually shipped ────────────────────────────

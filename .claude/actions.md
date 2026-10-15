@@ -4395,3 +4395,33 @@ empty. Not settled with the owner.
 **NOT BUILT, next:** push a task ("I choose") / push a category ("you choose").
 
 **Status: MERGED, DEPLOYED, NOT OWNER-CONFIRMED** on the agent-posted card specifically.
+
+---
+
+## ACT:subcategories — Category -> Topic -> Task, matching the owner's phone (2026-10-15)
+
+**Request (owner, with a screenshot of his Android home widget):** *"The logic is sound, but we forgot
+to include subcategories under a category like career before we get to tasks."*
+
+**Evidence:** huddle PR **#71** (`65005a1`) + journey-voice PR **#42** (`4dec778`). Verifier report:
+`docs/VERIFY-subcategories-1.md` on branch `verify/subcategories-1` (verifier spawned in an
+ISOLATED WORKTREE per eds-claude-skills#120).
+
+**The rule, read from the phone's source and reproduced on live data:** topic category =
+`category_affinity` else `window_affinity[1]`; tasks via `task_topic_mappings`; category count = sum
+beneath. Reproduces his phone's **Career 8** across the same 13 topics. Huddle had been grouping by the
+TASK's own category (**Career 12**); placement now follows the topic.
+
+**Two repos:** the links live only in journey → new internal tool `get_task_topics` (the name Huddle had
+called for weeks and always got "Unknown tool" for). Mappings scoped through the FK inner join rather
+than a 169-id URL. **Either merge order is safe**: until #42 deploys, Huddle renders exactly the
+category-only tree (asserted byte-identical).
+
+**Deliberate differences from the phone, tested:** unlinked tasks are SHOWN (phone drops them);
+multi-topic placement is deterministic (phone is last-row-wins).
+
+**Verification:** 34/34 category-tree (11 new, core fixture from his REAL Career data), 25/25
+independent, all widget/priority suites green, tsc 0, build ok, **5 mutations FIRED**.
+
+**Status: on PRs, NOT merged, NOT deployed, NOT owner-confirmed.** Needs BOTH #71 and journey#42 merged.
+**Still open for the owner:** push-a-category option A/B/C (recommended C); AC-41 empty FAMILY row.

@@ -10,13 +10,10 @@
 // SUPERSEDED-BY: nothing -- current
 // EVIDENCE:   docs/VERIFY-tasks-under-categories-1.md (663 lines, same pass).
 //
-// EXPECT 24 PASS / 1 FAIL. The one failure, I-7, is an OPEN DECISION and not a code defect:
-// AC-13 ("a HIGH/URGENT task is not ranked below a LOW one") and AC-14 (order by
-// is_priority -> priority_rank -> due_date -> title, matching journey's own query) CONTRADICT each
-// other. The shipped code satisfies AC-14, so AC-13 fails by construction. `BoardTaskRow.priority`
-// is selected from the mirror and dropped by `toWidgetRow`, so honouring it is a small change --
-// but it changes what "what's next" MEANS, which is the owner's call, not a bug to quietly fix.
-// A red run of THIS file means that decision is still open. Close it and this goes green.
+// EXPECT ALL GREEN. I-7 used to fail BY DESIGN while AC-13 and AC-14 contradicted each other. The
+// owner decided on 2026-10-15: "keep AC-14". So the user's star and rank outrank the HIGH/URGENT
+// label, and I-7 now asserts THAT. If it ever goes red, someone has made the label win again --
+// reverse that, or get the owner to reverse the decision; do not "fix" the test.
 //
 // Run:  bun scripts/category-tree-independent.test.ts   (npm run test:category-tree-independent)
 
@@ -227,15 +224,17 @@ const allTaskIds = (ns: readonly TopicNode[]) => { const o: string[] = []; walk(
     `${tree.length} row(s); the synthetic bucket key is a plain string with no namespace prefix`);
 }
 
-// ── I-7  the priority TEXT column is ignored by the ordering (AC-13) ───────────────────────────
+// ── I-7  the USER's star and rank outrank the HIGH/URGENT label (AC-14, owner decision) ────────
+// Was AC-13 ("URGENT is never below LOW"), which failed by design while AC-13 and AC-14 contradicted.
+// Owner, 2026-10-15: "keep AC-14". The label is advisory; the user's own pick wins.
 {
   const rows = [
-    row({ id:"urgent", title:"zzz last alphabetically", priority:"URGENT" }),
-    row({ id:"low",    title:"aaa first alphabetically", priority:"LOW" }),
+    row({ id:"urgent",  title:"aaa urgent but not chosen", priority:"URGENT" }),
+    row({ id:"starred", title:"zzz the one he picked",     priority:"LOW", is_priority:true, priority_rank:1 }),
   ];
   const order = buildCategoryTaskTree(rows, TZ, NOW)[0].tasks.map(t=>t.id);
-  check("I-7 AC-13: a HIGH/URGENT task is NOT ranked below a LOW one",
-    order[0]==="urgent", `order=[${order.join(",")}] — byPriorityThenDue reads is_priority/priority_rank/due_date/title and never the \`priority\` text column, which BoardTaskRow does carry`);
+  check("I-7 AC-14: a task the user STARRED outranks an URGENT label he did not choose",
+    order[0]==="starred", `order=[${order.join(",")}] — the label must not override his pick ("superspeed other items that may have scored higher")`);
 }
 
 console.log(`\n=========== INDEPENDENT: ${pass} passed, ${fail} failed ===========`);
