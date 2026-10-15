@@ -4431,6 +4431,15 @@ that the embedded-filter query returns the owner's links (and only his). The dep
 present is not that proof. The verifier was handed the live check.
 **Still open for the owner:** push-a-category option A/B/C (recommended C); AC-41 empty FAMILY row.
 
+## ACT:schedule-brief-403 — Iris's 8am/8pm schedule brief cannot read Outlook (2026-10-15)
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | Brief never silent (schedule / nothing scheduled / read-error notice) | merged #73, deployed | dry run 38776403438 -> kind `read-error` |
+| 2 | Cause read, not guessed | `graph-permission-check.yml` (#74) | run 38779291624: app `enterpriseds-github-actions` (SP oid d562fd09-…) roles = Application.ReadWrite.All, Files.ReadWrite.All, Mail.*, MailboxSettings.ReadWrite — **no Calendars.Read**; calendarView 403 for dev@ and von.ellis@ |
+| 3 | Fix = owner's option A: Exchange RBAC for Applications, `Application Calendars.Read` scoped to the owner's mailbox(es); NO Entra Calendars.Read grant (Entra grants are tenant-wide and additive) | waiting on owner (admin action) | re-run graph-permission-check.yml after; expect calendarView 200 |
+
+Doubled review digests: fixed by #68 (one job row per user). Owner rejected switching the brief to journey's calendar (option C) — journey branch commit 9638f09 parked, unmerged.
+
 **VERIFIED LIVE (independent verifier, isolated worktree; report `docs/VERIFY-subcategories-1.md`).**
 - **The tool works at RUNTIME.** Supabase edge log 17:12:14Z: the owner-scoped join returned **200,
   369 rows** of a 374-row table, so the other user's 5 links were excluded. 169 topics rendered. 385 ms in
