@@ -6336,6 +6336,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   // ran together this wave; a mid-reply @mention of a same-wave agent must NOT
   // re-enqueue it (it already ran once), mirroring the sequential queue.includes
   // guard for agents still pending in the queue.
+  // The email-reply card for `agentId`'s reply: from its own propose_email_reply (carries the body), else
+  // — on a new-email alert turn — from the payload's emailReplyRef. Used by EVERY path that pushes a
+  // reply (normal, hardReply, the zero-reply safety net): 2026-10-15 Amy's alert lost its buttons because
+  // Iris timed out after the tool call and the safety-net reply was built without the card.
+  const emailCardFor = (agentId: AgentId, uses: readonly AgentTurnResult["toolUses"][number][]): EmailReplyAsk | undefined => {
+    const use = [...uses].reverse().find((t) => t.agentId === agentId && t.tool === "propose_email_reply" && t.ok);
+    const fromTool = use ? emailReplyAskFromDetail(use.detail) : undefined;
+    if (fromTool) return fromTool;
+    if (data.emailReplyRef && agentId === data.targetAgentId) return { ...data.emailReplyRef, replyBody: "" };
+    return undefined;
+  };
   const mergeAgentResult = (nextId: AgentId, r: AgentTurnResult, waveIds: readonly AgentId[]) => {
     const winner = AGENT_BY_ID[nextId]!;
     // Append-only buffers merge deterministically (queue order via call order).
@@ -6362,7 +6373,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     }
     if (outcome.kind === "hardReply") {
       // Config/model-failure fallbacks: always emitted, no echo/PASS, no mentions.
-      replies.push(outcome.reply);
+      const card = emailCardFor(nextId, r.toolUses);
+      replies.push(card ? { ...outcome.reply, emailReply: card } : outcome.reply);
       spoken.add(nextId);
       return;
     }
@@ -6541,11 +6553,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // The email-reply card: from this agent's own propose_email_reply call (carries the body), else —
     // on a new-email alert turn — from the payload's emailReplyRef, so the buttons are there even when
     // the model skipped the tool (Save then explains there is no suggestion yet; Dismiss still works).
-    const emailUse = r.toolUses.find((t) => t.tool === "propose_email_reply" && t.ok);
-    let replyEmailReply: EmailReplyAsk | undefined = emailUse ? emailReplyAskFromDetail(emailUse.detail) : undefined;
-    if (!replyEmailReply && data.emailReplyRef && nextId === data.targetAgentId) {
-      replyEmailReply = { ...data.emailReplyRef, replyBody: "" };
-    }
+    const replyEmailReply = emailCardFor(nextId, r.toolUses);
     replies.push({
       agentId: nextId,
       text: safeText,
@@ -6758,11 +6766,15 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     if (replies.length > 0) return;
     const didWork = toolUses.find((t) => t.ok && t.tool !== "tool_catalog");
     if (!didWork) return;
+    const card = emailCardFor(didWork.agentId, toolUses);
     replies.push({
       agentId: didWork.agentId,
-      text:
-        `${didWork.summary} — I ran out of time to reply in full, but that went through. ` +
-        `Let me know if you want more detail.`,
+      text: card
+        ? `New email from ${card.fromName || card.fromAddress}${card.subject ? ` — "${card.subject}"` : ""}. ` +
+          `I ran out of time to write it all up, but my suggested reply is on the card below.`
+        : `${didWork.summary} — I ran out of time to reply in full, but that went through. ` +
+          `Let me know if you want more detail.`,
+      ...(card ? { emailReply: card } : {}),
     });
   };
 

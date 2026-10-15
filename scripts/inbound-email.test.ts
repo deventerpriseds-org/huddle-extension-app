@@ -224,7 +224,8 @@ check(
 const runner2 = readFileSync("src/features/huddle/lib/email/inbound-email.server.ts", "utf8");
 check(
   "loop1: the run result never carries the mailbox address",
-  !/\bmailbox\?: string/.test(resultTypeOf(runner2)) && !returnBlocksOf(runner2).some((b) => /\bmailbox\b(?!Resolved)/.test(b)),
+  !/\bmailbox\?: string/.test(resultTypeOf(runner2)) &&
+    !returnBlocksOf(runner2).some((b) => /\bmailbox\b(?!Resolved)/.test(b)),
 );
 const graph = readFileSync("src/features/huddle/lib/email/graph-email.server.ts", "utf8");
 check(
@@ -296,8 +297,27 @@ check(
   /Do NOT call any tool/.test(inboundEmailDirective(amy, "now")),
 );
 check(
-  "directive caps the body",
-  inboundEmailDirective({ ...amy, bodyText: "x".repeat(20_000) }, "now").length < 6000,
+  "directive always fits the turn's 4000-char text limit (huge body / subject / name)",
+  [
+    inboundEmailDirective({ ...amy, bodyText: "x".repeat(20_000) }, "now"),
+    inboundEmailDirective({ ...amy, bodyText: "x".repeat(20_000) }, "now", {
+      emailId: "f1922914b0509035",
+      owed: 12,
+      settledToday: 3,
+    }),
+    inboundEmailDirective(
+      { ...amy, subject: "s".repeat(5000), fromName: "n".repeat(5000), bodyText: "y".repeat(9000) },
+      "now",
+      { emailId: "e", owed: 1 },
+    ),
+  ].every((x) => x.length <= 4000),
+);
+check(
+  "a short body is never truncated",
+  !inboundEmailDirective(amy, "now", { emailId: "e", owed: 1 }).includes("[…email truncated]") &&
+    inboundEmailDirective(amy, "now", { emailId: "e", owed: 1 }).includes(
+      "Do you have time tomorrow",
+    ),
 );
 
 // wiring
@@ -358,7 +378,8 @@ check("Settings save validator accepts the job", fns.includes('"inboundEmail",')
 const runner = readFileSync("src/features/huddle/lib/email/inbound-email.server.ts", "utf8");
 check(
   "public-log safety: runner result has no subject field",
-  !/\bsubject\??:/.test(resultTypeOf(runner)) && !returnBlocksOf(runner).some((b) => /\bsubject\b/.test(b)),
+  !/\bsubject\??:/.test(resultTypeOf(runner)) &&
+    !returnBlocksOf(runner).some((b) => /\bsubject\b/.test(b)),
 );
 
 // email-reply card plumbing (each mapping site silently drops an undeclared field — memory.md)
@@ -410,6 +431,19 @@ check(
   check(
     "buttons send only the id",
     /saveEmailReplyDraftFn\(\{ data: \{ caller, emailId: ask!\.emailId \} \}\)/.test(view),
+  );
+}
+
+{
+  const fnsrc2 = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
+  check(
+    "every reply path attaches the card (normal, hardReply, zero-reply safety net)",
+    (fnsrc2.match(/emailCardFor\(/g) ?? []).length >= 3 && /emailReply: card/.test(fnsrc2),
+  );
+  const view2 = readFileSync("src/features/huddle/components/HuddleView.tsx", "utf8");
+  check(
+    "the card shows the exact reply Save will draft",
+    view2.includes('data-testid="email-reply-body"'),
   );
 }
 
