@@ -75,7 +75,8 @@ check(
 );
 check(
   "A: List-Unsubscribe alone skips a person-looking focused sender",
-  screenMessage({ ...amy, headerNames: ["from", "list-unsubscribe"] }, "needs-reply", MAILBOX).keep === false,
+  screenMessage({ ...amy, headerNames: ["from", "list-unsubscribe"] }, "needs-reply", MAILBOX)
+    .keep === false,
 );
 const eq = screenMessage(equifax, "needs-reply", MAILBOX);
 check(
@@ -117,17 +118,111 @@ check(
   screenMessage({ ...amy, fromAddress: "jane@gmail.com" }, "needs-reply", MAILBOX).keep === true,
 );
 
+// verifier loop 1 probes: real people the first screen wrongly dropped / kept
+const person = (fromAddress: string, bodyText: string, subject = "hi"): InboundMessage => ({
+  ...amy,
+  id: fromAddress + subject,
+  fromAddress,
+  subject,
+  bodyText,
+});
+for (const a of [
+  "hello@acme.io",
+  "info@acme.io",
+  "team@acme.io",
+  "support@acme.io",
+  "team.lead@acme.io",
+  "info.sarah@acme.io",
+  "news.anchor.jones@tv.com",
+  "jane+work@acme.io",
+]) {
+  check(
+    `loop1: a person at ${a} who asks is kept`,
+    screenMessage(person(a, "Can you call me?"), "needs-reply", MAILBOX).keep === true,
+  );
+}
+for (const a of [
+  "noreply-billing@x.com",
+  "no_reply.us@x.com",
+  "notifications@github.com",
+  "mailer-daemon@x.com",
+]) {
+  check(
+    `loop1: machine ${a} is dropped`,
+    screenMessage(person(a, "Can you call me?"), "people", MAILBOX).keep === false,
+  );
+}
+check(
+  "loop1: 'Send me the deck by Friday.' is an ask",
+  screenMessage(person("bo@x.io", "Send me the deck by Friday."), "needs-reply", MAILBOX).keep ===
+    true,
+);
+check(
+  "loop1: 'I need you to sign the form.' is an ask",
+  screenMessage(person("bo@x.io", "I need you to sign the form."), "needs-reply", MAILBOX).keep ===
+    true,
+);
+check(
+  "loop1: a meeting invite with no '?' is an ask",
+  screenMessage(
+    person("bo@x.io", "Agenda attached.", "Invitation: Kickoff @ Fri 10am"),
+    "needs-reply",
+    MAILBOX,
+  ).keep === true,
+);
+check(
+  "loop1: a 'thanks!' reply whose only '?' is quoted history is NOT an ask",
+  screenMessage(
+    person(
+      "bo@x.io",
+      "Thanks, got it.\n\nOn Thu, Oct 15, 2026 Von Ellis wrote:\n> Can you send the file?",
+      "Re: the file?",
+    ),
+    "needs-reply",
+    MAILBOX,
+  ).keep === false,
+);
+check(
+  "loop1: Outlook-style quoted header is history too",
+  screenMessage(
+    person(
+      "bo@x.io",
+      "Done.\n\nFrom: Von Ellis\nSent: Thursday\nTo: Bo\nSubject: x\n\nCould you do it?",
+    ),
+    "needs-reply",
+    MAILBOX,
+  ).keep === false,
+);
+const runner2 = readFileSync("src/features/huddle/lib/email/inbound-email.server.ts", "utf8");
+check(
+  "loop1: the run result never carries the mailbox address",
+  !/^\s*mailbox,\s*$/m.test(runner2) && !/\bmailbox\?: string/.test(runner2),
+);
+const graph = readFileSync("src/features/huddle/lib/email/graph-email.server.ts", "utf8");
+check(
+  "loop1: Graph queries are hand-built (no URLSearchParams with $-keys)",
+  !/URLSearchParams\(\{\s*\$filter/.test(graph),
+);
+
 // turn id: stable per message, distinct across messages, routine-safe shape
 const t1 = inboundEmailTurnId(amy.id);
 check("turn id stable for the same message", t1 === inboundEmailTurnId(amy.id));
 check(
   "turn id ignores the scheduler's per-hour runId (announce once across hourly fires)",
-  (inboundEmailTurnId as (id: string, runId?: string) => string)(amy.id, "inbound-email-u-1-2026101514") ===
-    (inboundEmailTurnId as (id: string, runId?: string) => string)(amy.id, "inbound-email-u-1-2026101515"),
+  (inboundEmailTurnId as (id: string, runId?: string) => string)(
+    amy.id,
+    "inbound-email-u-1-2026101514",
+  ) ===
+    (inboundEmailTurnId as (id: string, runId?: string) => string)(
+      amy.id,
+      "inbound-email-u-1-2026101515",
+    ),
 );
 check(
   "runner never passes a runId into the turn id",
-  /inboundEmailTurnId\(m\.id\)/.test(readFileSync("src/features/huddle/lib/email/inbound-email.server.ts", "utf8")),
+  /inboundEmailTurnId\(m\.id\)/.test(
+    readFileSync("src/features/huddle/lib/email/inbound-email.server.ts", "utf8"),
+  ),
 );
 check("turn id differs per message", t1 !== inboundEmailTurnId(ihg.id));
 check(

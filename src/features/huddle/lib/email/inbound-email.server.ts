@@ -29,7 +29,8 @@ const MAX_PER_RUN = 5;
 
 export interface InboundEmailRunResult {
   ok: boolean;
-  mailbox?: string;
+  /** True when the owner's Outlook mailbox resolved. The ADDRESS is never returned (public logs). */
+  mailboxResolved?: boolean;
   mode?: InboundEmailMode;
   since?: string;
   scanned?: number;
@@ -76,7 +77,18 @@ export async function runInboundEmailWatch(
 
     const { listInboxMessagesSince } = await import("./graph-email.server");
     const read = await listInboxMessagesSince(mailbox, since);
-    if (!read.ok) return { ok: false, mailbox, mode, since, error: read.error };
+    if (!read.ok) {
+      // The raw Graph text can echo the mailbox; log it server-side, return only the status code.
+      console.error("[inbound-email] inbox read failed", read.error);
+      const status = /\((\d{3})\)/.exec(read.error)?.[1];
+      return {
+        ok: false,
+        mailboxResolved: true,
+        mode,
+        since,
+        error: `inbox read failed${status ? ` (${status})` : ""}`,
+      };
+    }
 
     // Oldest first, so the owner hears about them in the order they arrived.
     const msgs = [...read.messages].sort((a, b) =>
@@ -143,7 +155,7 @@ export async function runInboundEmailWatch(
     }
     return {
       ok: true,
-      mailbox,
+      mailboxResolved: true,
       mode,
       since,
       scanned: msgs.length,
@@ -151,6 +163,7 @@ export async function runInboundEmailWatch(
       delivered,
     };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    console.error("[inbound-email] run failed", err instanceof Error ? err.message : err);
+    return { ok: false, error: "inbound email run failed" };
   }
 }

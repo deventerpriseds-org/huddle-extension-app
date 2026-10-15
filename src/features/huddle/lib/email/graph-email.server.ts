@@ -59,7 +59,9 @@ export async function getAppToken(): Promise<string> {
     }),
   });
   if (!res.ok) {
-    throw new Error(`Graph token request failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+    throw new Error(
+      `Graph token request failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
   }
   const json = (await res.json()) as { access_token?: string };
   if (!json.access_token) throw new Error("Graph token response had no access_token");
@@ -141,7 +143,10 @@ export async function createGraphDraft(input: SendEmailInput): Promise<DraftEmai
   const requested = (input.from ?? "").trim();
   const from = requested || options[0];
   if (!options.some((o) => o.toLowerCase() === from.toLowerCase())) {
-    return { ok: false, error: `"${from}" is not an allowed mailbox. Available: ${options.join(", ")}.` };
+    return {
+      ok: false,
+      error: `"${from}" is not an allowed mailbox. Available: ${options.join(", ")}.`,
+    };
   }
   const subject = String(input.subject ?? "").trim();
   if (!subject) return { ok: false, error: "A subject is required." };
@@ -186,22 +191,28 @@ export async function listInboxMessagesSince(
   mailbox: string,
   sinceIso: string,
   top = 25,
-): Promise<{ ok: true; messages: import("./inbound-email").InboundMessage[] } | { ok: false; error: string }> {
+): Promise<
+  { ok: true; messages: import("./inbound-email").InboundMessage[] } | { ok: false; error: string }
+> {
   try {
     const token = await getAppToken();
-    const qs = new URLSearchParams({
-      $filter: `receivedDateTime ge ${sinceIso}`,
-      $orderby: "receivedDateTime desc",
-      $top: String(top),
-      $select:
+    // Built by hand like calendarView's: URLSearchParams would write "%24filter" and "+" for spaces.
+    const qs =
+      `$filter=${encodeURIComponent(`receivedDateTime ge ${sinceIso}`)}` +
+      `&$orderby=${encodeURIComponent("receivedDateTime desc")}` +
+      `&$top=${top}` +
+      `&$select=${encodeURIComponent(
         "id,subject,receivedDateTime,bodyPreview,body,from,inferenceClassification,internetMessageHeaders",
-    });
+      )}`;
     const res = await fetch(
       `${GRAPH}/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages?${qs}`,
       { headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="text"' } },
     );
     if (!res.ok) {
-      return { ok: false, error: `Graph inbox read failed (${res.status}): ${(await res.text()).slice(0, 200)}` };
+      return {
+        ok: false,
+        error: `Graph inbox read failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+      };
     }
     type Raw = {
       id: string;
@@ -216,7 +227,8 @@ export async function listInboxMessagesSince(
     const j = (await res.json()) as { value?: Raw[] };
     const messages = (j.value ?? []).map((r) => {
       const headers = r.internetMessageHeaders ?? [];
-      const val = (n: string) => headers.find((h) => (h.name ?? "").toLowerCase() === n)?.value ?? null;
+      const val = (n: string) =>
+        headers.find((h) => (h.name ?? "").toLowerCase() === n)?.value ?? null;
       return {
         id: r.id,
         subject: r.subject ?? null,
@@ -258,22 +270,41 @@ export async function createReplyDraftInMailbox(input: {
     const token = await getAppToken();
     const auth = { Authorization: `Bearer ${token}` };
     const base = `${GRAPH}/users/${encodeURIComponent(mailbox)}`;
-    const qs = new URLSearchParams({
-      $filter: `from/emailAddress/address eq '${sender.replace(/'/g, "''")}'`,
-      $top: "10",
-      $select: "id,subject,receivedDateTime",
-    });
+    const qs =
+      `$filter=${encodeURIComponent(`from/emailAddress/address eq '${sender.replace(/'/g, "''")}'`)}` +
+      `&$top=10&$select=${encodeURIComponent("id,subject,receivedDateTime")}`;
     const find = await fetch(`${base}/mailFolders/inbox/messages?${qs}`, { headers: auth });
     if (!find.ok) {
-      return { ok: false, from: mailbox, error: `Graph find-original failed (${find.status}): ${(await find.text()).slice(0, 200)}` };
+      return {
+        ok: false,
+        from: mailbox,
+        error: `Graph find-original failed (${find.status}): ${(await find.text()).slice(0, 200)}`,
+      };
     }
-    const hits = (((await find.json()) as { value?: { id: string; subject?: string; receivedDateTime?: string }[] }).value ?? [])
-      .sort((a, b) => String(b.receivedDateTime ?? "").localeCompare(String(a.receivedDateTime ?? "")));
+    const hits = (
+      (
+        (await find.json()) as {
+          value?: { id: string; subject?: string; receivedDateTime?: string }[];
+        }
+      ).value ?? []
+    ).sort((a, b) =>
+      String(b.receivedDateTime ?? "").localeCompare(String(a.receivedDateTime ?? "")),
+    );
     // Prefer the message whose subject the model named; else the newest from that sender.
-    const hint = String(input.subjectHint ?? "").replace(/^\s*(re|fw|fwd)\s*:\s*/i, "").trim().toLowerCase();
+    const hint = String(input.subjectHint ?? "")
+      .replace(/^\s*(re|fw|fwd)\s*:\s*/i, "")
+      .trim()
+      .toLowerCase();
     const original =
-      (hint && hits.find((h) => String(h.subject ?? "").toLowerCase().includes(hint))) || hits[0];
-    if (!original) return { ok: false, from: mailbox, error: `No Inbox message from ${sender} to reply to.` };
+      (hint &&
+        hits.find((h) =>
+          String(h.subject ?? "")
+            .toLowerCase()
+            .includes(hint),
+        )) ||
+      hits[0];
+    if (!original)
+      return { ok: false, from: mailbox, error: `No Inbox message from ${sender} to reply to.` };
 
     const created = await fetch(`${base}/messages/${encodeURIComponent(original.id)}/createReply`, {
       method: "POST",
@@ -281,10 +312,47 @@ export async function createReplyDraftInMailbox(input: {
       body: JSON.stringify({ comment: input.body ?? "" }),
     });
     if (created.status !== 201) {
-      return { ok: false, from: mailbox, error: `Graph createReply failed (${created.status}): ${(await created.text()).slice(0, 200)}` };
+      return {
+        ok: false,
+        from: mailbox,
+        error: `Graph createReply failed (${created.status}): ${(await created.text()).slice(0, 200)}`,
+      };
     }
     const j = (await created.json()) as { id?: string; webLink?: string };
     return { ok: true, from: mailbox, id: j.id, webLink: j.webLink };
+  } catch (err) {
+    return { ok: false, from: mailbox, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** A plain (unthreaded) draft in a mailbox resolved from the owner's identity — the reply fallback. */
+async function createPlainDraftInMailbox(
+  mailbox: string,
+  input: SendEmailInput,
+): Promise<DraftEmailResult> {
+  const subject = String(input.subject ?? "").trim();
+  if (!subject) return { ok: false, from: mailbox, error: "A subject is required." };
+  try {
+    const token = await getAppToken();
+    const res = await fetch(`${GRAPH}/users/${encodeURIComponent(mailbox)}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subject,
+        body: { contentType: "Text", content: input.body ?? "" },
+        toRecipients: toRecipients(input.to),
+        ccRecipients: toRecipients(input.cc),
+      }),
+    });
+    if (res.status === 201) {
+      const j = (await res.json()) as { id?: string; webLink?: string };
+      return { ok: true, from: mailbox, id: j.id, webLink: j.webLink };
+    }
+    return {
+      ok: false,
+      from: mailbox,
+      error: `Graph create-draft failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    };
   } catch (err) {
     return { ok: false, from: mailbox, error: err instanceof Error ? err.message : String(err) };
   }
@@ -317,8 +385,9 @@ export async function createDraftForTool(
         subjectHint: String(input.subject ?? ""),
       });
       if (r.ok) return { ...r, reply: true };
-      // Fall through to a plain draft so the owner still gets one, and say why.
-      const plain = await createGraphDraft({ ...input, to: input.to || replyTo });
+      // No original to thread onto: still a draft in the OWNER's mailbox (as the tool promises),
+      // never the default sending mailbox, and say why.
+      const plain = await createPlainDraftInMailbox(mailbox, { ...input, to: input.to || replyTo });
       return { ...plain, reply: false, replyFallback: r.error };
     }
   }
@@ -453,7 +522,11 @@ async function resolveRecipientScope(input: SendEmailInput): Promise<{
       "[resolveRecipientScope] recipient-scope resolution failed; failing CLOSED (draft):",
       err instanceof Error ? err.message : err,
     );
-    return { decision: "draft", blocked: [], reason: "Saved to drafts instead of sending: the recipient check could not be completed." };
+    return {
+      decision: "draft",
+      blocked: [],
+      reason: "Saved to drafts instead of sending: the recipient check could not be completed.",
+    };
   }
 }
 
@@ -466,42 +539,42 @@ export async function sendGraphEmail(input: SendEmailInput): Promise<SendEmailRe
   const scope = await resolveRecipientScope(input);
   const selfOnly = scope.decision === "send";
   if (!selfOnly) {
-  // EMAIL SEND GATE - BACKSTOP (2026-09-07). The PRIMARY gate is at tool assembly: when sending is
-  // disabled, `send_email` is never offered to the model on either surface (huddle.functions.ts for
-  // text, voice/realtime-tools.server.ts for the Realtime session). This is belt and braces for the
-  // case the primary gate is bypassed - a stale minted toolset still held by a live voice session, a
-  // cached tool definition, or a future call site that forgets the gate. It is the LAST thing between
-  // an agent and real mail leaving the tenant, so it fails CLOSED in every direction: no callerEmail,
-  // a config-read error, or an explicit false all refuse. The error names the exact setting to flip.
-  {
-    // Even LOADING the config module is inside the try: a module-resolution failure must fail CLOSED
-    // (drafts only) and never throw out of a tool call. `false` is the only safe value here.
-    const allowed = await (async () => {
-      try {
-        const { isEmailSendEnabled } = await import("../identity/agent-workflow-config.server");
-        return await isEmailSendEnabled(input.callerEmail, input.callerAgentId);
-      } catch (err) {
-        console.error(
-          "[sendGraphEmail] email-send-gate resolution failed; failing CLOSED (drafts only):",
-          err instanceof Error ? err.message : err,
-        );
-        return false;
+    // EMAIL SEND GATE - BACKSTOP (2026-09-07). The PRIMARY gate is at tool assembly: when sending is
+    // disabled, `send_email` is never offered to the model on either surface (huddle.functions.ts for
+    // text, voice/realtime-tools.server.ts for the Realtime session). This is belt and braces for the
+    // case the primary gate is bypassed - a stale minted toolset still held by a live voice session, a
+    // cached tool definition, or a future call site that forgets the gate. It is the LAST thing between
+    // an agent and real mail leaving the tenant, so it fails CLOSED in every direction: no callerEmail,
+    // a config-read error, or an explicit false all refuse. The error names the exact setting to flip.
+    {
+      // Even LOADING the config module is inside the try: a module-resolution failure must fail CLOSED
+      // (drafts only) and never throw out of a tool call. `false` is the only safe value here.
+      const allowed = await (async () => {
+        try {
+          const { isEmailSendEnabled } = await import("../identity/agent-workflow-config.server");
+          return await isEmailSendEnabled(input.callerEmail, input.callerAgentId);
+        } catch (err) {
+          console.error(
+            "[sendGraphEmail] email-send-gate resolution failed; failing CLOSED (drafts only):",
+            err instanceof Error ? err.message : err,
+          );
+          return false;
+        }
+      })();
+      if (!allowed) {
+        return {
+          ok: false,
+          // Structural marker so sendOrDraftEmail can tell "the GATE refused" from "Graph failed".
+          // Sniffing the message text for that distinction would break the moment the wording changed.
+          gateRefused: true,
+          error:
+            "Sending email is currently disabled - agents may only prepare drafts. Use create_email_draft " +
+            "instead; the draft lands in the mailbox's Drafts folder ready to review and send by hand. " +
+            "(To re-enable sending, set identity.agent_workflow_config.email_send_enabled = true for this " +
+            "user; it takes effect on the next turn, no redeploy needed.)",
+        };
       }
-    })();
-    if (!allowed) {
-      return {
-        ok: false,
-        // Structural marker so sendOrDraftEmail can tell "the GATE refused" from "Graph failed".
-        // Sniffing the message text for that distinction would break the moment the wording changed.
-        gateRefused: true,
-        error:
-          "Sending email is currently disabled - agents may only prepare drafts. Use create_email_draft " +
-          "instead; the draft lands in the mailbox's Drafts folder ready to review and send by hand. " +
-          "(To re-enable sending, set identity.agent_workflow_config.email_send_enabled = true for this " +
-          "user; it takes effect on the next turn, no redeploy needed.)",
-      };
     }
-  }
   }
   const options = emailFromOptions();
   const requested = (input.from ?? "").trim();
@@ -596,7 +669,8 @@ export async function sendOrDraftEmail(input: SendEmailInput): Promise<SendEmail
   const why =
     scope.decision === "no-recipients"
       ? "Saved to drafts instead of sending: no recipient was given."
-      : scope.reason || "Saved to drafts instead of sending: a recipient is not one of your own addresses.";
+      : scope.reason ||
+        "Saved to drafts instead of sending: a recipient is not one of your own addresses.";
   if (!draft.ok) {
     return {
       ok: false,

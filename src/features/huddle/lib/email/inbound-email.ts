@@ -52,27 +52,57 @@ export type ScreenVerdict =
       reason: "self" | "automated-sender" | "bulk-header" | "other-folder" | "no-ask";
     };
 
-/** Local parts that are machines, not people. Matched against the part before "@" only, so a person
- *  whose company domain happens to contain "mail" is never caught. */
+/** Local parts that are machines, not people. Matched against the WHOLE part before "@" (a +tag is
+ *  stripped first), so `team.lead@`, `info.sarah@` or a domain containing "mail" are never caught.
+ *  Role words real people answer from (hello@, info@, team@, support@) are deliberately NOT here —
+ *  bulk mail from those is caught by its headers / Outlook's "Other" instead (verifier loop 1). Only
+ *  the no-reply family may carry a suffix (`noreply-billing@`, `no_reply.us@`). */
 const AUTOMATED_LOCAL =
-  /^(no-?reply|do-?not-?reply|donotreply|noreply[-_.\w]*|notifications?|notify|mailer(-daemon)?|postmaster|newsletters?|news|marketing|promo(tions)?|offers?|deals|info|alerts?|support|billing|invoices?|receipts?|updates?|hello|team|accounts?|security|bounce[s]?)([-_.+].*)?$/i;
+  /^(?:(?:no[-_]?reply|do[-_]?not[-_]?reply|donotreply)(?:[-_.].*)?|notifications?|notify|mailer-daemon|mailer|postmaster|newsletters?|marketing|promo(?:tions)?|offers|deals|alerts?|billing|invoices?|receipts?|updates|bounces?)$/i;
 
 /** Phrases that mean the sender wants something back from the owner. A "?" anywhere also counts. */
 const ASK =
-  /\b(let me know|please|pls|plz|can you|could you|would you|will you|are you (free|available)|do you have (time|a minute|a moment)|when (are|is|would|can)|what time|rsvp|confirm|get back to me|your thoughts|thoughts\?|touch base|reply|respond)\b/i;
+  /\b(let me know|please|pls|plz|can you|could you|would you|will you|can we|could we|shall we|are you (free|available)|do you have (time|a minute|a moment)|when (are|is|would|can)|what time|rsvp|confirm|get back to me|your thoughts|touch base|reply|respond|send me|need you to|i need|we need|waiting (on|for) you|by (mon|tues|wednes|thurs|fri|satur|sun)day|by (tomorrow|today|eod|end of day)|sign|review|approve)\b/i;
+
+/** A meeting invite from a person always wants an answer (accept/decline), "?" or not. */
+const INVITE_SUBJECT = /^\s*(invitation|updated invitation|meeting request)\b|\binvite\b/i;
+
+/** Only the sender's NEW text: drop quoted history ("> " lines and everything from an
+ *  "On … wrote:" / "-----Original Message-----" / Outlook "From:…Sent:" header down), so an old
+ *  question in the thread does not make a "thanks!" reply look like an ask (verifier loop 1). */
+export function newTextOnly(body: string): string {
+  const lines = body.replace(/\r/g, "").split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^\s*On .+wrote:\s*$/i.test(l) || /^-{2,}\s*Original Message\s*-{2,}/i.test(l)) break;
+    if (
+      /^\s*From:\s/i.test(l) &&
+      lines.slice(i + 1, i + 5).some((n) => /^\s*(Sent|Date):\s/i.test(n))
+    )
+      break;
+    if (/^\s*>/.test(l)) continue;
+    out.push(l);
+  }
+  return out.join("\n");
+}
 
 export function isAutomatedAddress(address: string | null | undefined): boolean {
   const a = String(address ?? "")
     .trim()
     .toLowerCase();
-  const local = a.split("@")[0] ?? "";
+  const local = (a.split("@")[0] ?? "").replace(/\+.*$/, "");
   return !local || AUTOMATED_LOCAL.test(local);
 }
 
 export function asksSomething(
   m: Pick<InboundMessage, "subject" | "bodyText" | "bodyPreview">,
 ): boolean {
-  const text = `${m.subject ?? ""}\n${(m.bodyText ?? m.bodyPreview ?? "").slice(0, 4000)}`;
+  const subject = String(m.subject ?? "");
+  if (INVITE_SUBJECT.test(subject)) return true;
+  // The subject of a reply ("Re: …?") is history too, so only an original subject counts.
+  const ownSubject = /^\s*(re|fw|fwd)\s*:/i.test(subject) ? "" : subject;
+  const text = `${ownSubject}\n${newTextOnly(m.bodyText ?? m.bodyPreview ?? "").slice(0, 4000)}`;
   return text.includes("?") || ASK.test(text);
 }
 
