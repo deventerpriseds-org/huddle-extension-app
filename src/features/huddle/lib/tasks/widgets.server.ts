@@ -96,6 +96,21 @@ export interface TopicNode {
    *  sub-topics both with and without a count, so null is a real, renderable state). */
   count: number | null;
   children: TopicNode[];
+  /**
+   * The tasks that belong to this node, already ordered (`byPriorityThenDue`) and already filtered
+   * to live, unparked work. **Always present — `[]`, never undefined** — so the renderer needs no
+   * guard and a node that simply holds no tasks is indistinguishable from one built before this
+   * field existed.
+   *
+   * WHY THIS IS NOT journey's: journey exposes no tool that returns a topic's tasks within a usable
+   * budget. `get_task_topics` is not deployed (not on `main`, not in any open PR, commit `ec508a5`
+   * unreachable); `get_tasks` caps at `.limit(50)` of 101 open tasks; `get_tasks_by_topic` costs one
+   * call per topic (~75), orders by the `priority` TEXT column descending (so MEDIUM sorts above
+   * HIGH), has no tiebreak, drops BLOCKED which Huddle's own `isOpen` deliberately keeps, and
+   * answers `success:true, count:0` when a topic NAME is duplicated. So the tasks come from the
+   * mirror Huddle already reads — see `buildCategoryTaskTree`.
+   */
+  tasks: WidgetTaskRow[];
 }
 
 /**
@@ -482,6 +497,9 @@ function toTopicNode(raw: unknown, depth: number): TopicNode | null {
     position: firstNumber(o, ["position", "order", "sort_order"]),
     count: firstNumber(o, ["count", "task_count", "taskCount", "open_count", "openCount", "n", "total"]),
     children,
+    // journey's payload never carries a topic's tasks (see TopicNode.tasks). The mirror supplies
+    // them, merged in by mergeTopicTree, so a parsed topic node starts empty rather than undefined.
+    tasks: [],
   };
 }
 
@@ -616,6 +634,7 @@ function groupByCategory(roots: TopicNode[]): TopicNode[] {
         position: null,
         count: null,
         children: [],
+        tasks: [],
       };
       byCat.set(cat, parent);
       out.push(parent);
@@ -754,6 +773,147 @@ export function buildTopicTree(payload: unknown): TopicNode[] {
     }
   }
   return sortNodes(groupByCategory(roots));
+}
+
+// ---------------------------------------------------------------------------
+// Tasks under categories (the mirror-sourced half of the tree)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the category tree FROM THE MIRROR, with each category's tasks attached.
+ *
+ * This is the source decision this feature turns on, so it is recorded here rather than in a PR
+ * body that nobody greps. Four candidate sources; three rejected:
+ *
+ *  · `get_task_topics` (a new journey tool) — REJECTED as unavailable, not as wrong. It is the only
+ *    source that yields real topic/theme nodes, and it is what `fetchTopicTree` already calls, but
+ *    it is not on journey's `main`, not in any open PR, and commit `ec508a5` is unreachable in this
+ *    clone. It cannot be deployed, only written — a change plus a live deploy in another repo.
+ *  · `get_tasks` once — REJECTED: `.limit(50)` (execute-tool/index.ts:707) against 101 open tasks,
+ *    with no status filter and ordered `start_time asc nullsFirst:false`, so it returns half the
+ *    board, silently, skewed toward scheduled rows.
+ *  · `get_tasks_by_topic` per topic — REJECTED: ~75 round-trips per render, and three defects
+ *    (text-column ordering, no tiebreak, drops BLOCKED, `success:true count:0` on a duplicate
+ *    topic name).
+ *  · a new mirror column — REJECTED: needs the same journey-side change, and `category` is already
+ *    synced on every row.
+ *
+ * So: `tasks.journey_tasks.category`, which Huddle already reads for the band in the SAME
+ * `getBoardTasks` call. Uncapped, complete, zero extra round-trips, no journey dependency.
+ *
+ * WHAT THIS DELIVERS AND WHAT IT DOES NOT: categories with their tasks — which is the payoff the
+ * owner named ("so if an agent in the future is asked to autopull one or two FROM THE CATEGORIES it
+ * knows whats next"). It does NOT invent topic/theme sub-nodes; the mirror has no topic column
+ * (topics live in journey's `task_topic_mappings`, which no deployed tool exposes affordably).
+ * `mergeTopicTree` nests real topics under these roots the moment a topic source answers.
+ *
+ * Note it does what the comment in `groupByCategory` says Huddle could not: that code takes "the
+ * first category found beneath" a topic because "Huddle is handed topics, not their tasks". Here
+ * Huddle IS handed the tasks, so the category comes from the task's own `category` column — no
+ * inference at all.
+ *
+ * Pure: `nowMs` is passed in, so the result is deterministic and testable.
+ */
+export function buildCategoryTaskTree(
+  rows: BoardTaskRow[],
+  timeZone: string,
+  nowMs: number,
+): TopicNode[] {
+  const tz = safeTimeZone(timeZone);
+  const todayKey = localDateKey(nowMs, tz) ?? new Date(nowMs).toISOString().slice(0, 10);
+
+  // Same liveness rule as every other widget section — closed and parked work never surfaces.
+  // BLOCKED stays (isOpen keeps it on purpose); journey's own topic tool drops it, which is one
+  // of the reasons this is not sourced from there.
+  const live = rows.filter((r) => isOpen(r) && !isParked(r)).map((r) => toWidgetRow(r, tz, todayKey));
+
+  const byCat = new Map<string, WidgetTaskRow[]>();
+  for (const row of live) {
+    // A task with no category is NOT dropped — it gets its own bucket, the same way an
+    // uncategorised topic stays a top-level row rather than disappearing. 3 of the owner's 101
+    // open tasks are unmapped, and silently losing them is the failure mode this project keeps
+    // hitting (see buildTopicTree's duplicate-id note).
+    const raw = (row.category ?? "").trim();
+    const cat = raw ? displayCategory(raw) : UNCATEGORISED_CATEGORY;
+    const list = byCat.get(cat);
+    if (list) list.push(row);
+    else byCat.set(cat, [row]);
+  }
+
+  const out: TopicNode[] = [];
+  for (const [cat, tasks] of byCat) {
+    tasks.sort(byPriorityThenDue);
+    const rank = DISPLAY_CATEGORY_ORDER.indexOf(cat as (typeof DISPLAY_CATEGORY_ORDER)[number]);
+    out.push({
+      id: `${CATEGORY_ROOT_PREFIX}${cat}`,
+      name: cat === UNCATEGORISED_CATEGORY ? UNCATEGORISED_LABEL : categoryLabel(cat),
+      parentId: null,
+      categoryAffinity: cat,
+      position:
+        cat === UNCATEGORISED_CATEGORY
+          ? DISPLAY_CATEGORY_ORDER.length + 1 // always last, after any dynamic category
+          : rank >= 0
+            ? rank
+            : DISPLAY_CATEGORY_ORDER.length,
+      // DERIVED from the tasks, never passed through from journey's `task_count`. That is the
+      // Android widget's own rule (`tasksByTopic[grp.id]?.size`) and it is why the count can never
+      // disagree with the rows underneath it — the defect found in PrioritiesWidgetFactory, where a
+      // group's count sums only its sub-groups and omits its own directly-mapped tasks.
+      count: tasks.length,
+      children: [],
+      tasks,
+    });
+  }
+  return sortNodes(out);
+}
+
+/** Bucket for a live task whose `category` is null/blank. Not a journey value — a Huddle-side
+ *  holding row, so an unmapped task is visible instead of silently absent. */
+export const UNCATEGORISED_CATEGORY = "UNCATEGORISED";
+const UNCATEGORISED_LABEL = "Uncategorised";
+
+/**
+ * Merge journey's topic tree INTO the mirror-sourced category tree.
+ *
+ * The mirror is the BASE, not the overlay, and that ordering is the whole point: today
+ * `fetchTopicTree` returns `roots: []` (`reason:"tool-absent"`), so an overlay design would render
+ * nothing — which is exactly the live defect, a tree that has never populated in production.
+ * Basing on the mirror means the categories and their tasks render NOW, and real topics appear as
+ * children the moment any topic source answers.
+ *
+ * It also fixes a divergence from the owner's phone: `groupByCategory` only creates a category root
+ * when some TOPIC claims that category, so FAMILY — which holds no `task_topic_index` rows — is
+ * absent in Huddle while the Android widget draws it. Here a category exists because TASKS are in
+ * it, so it renders whether or not a topic ever claims it.
+ *
+ * Nothing is ever dropped: a journey topic root whose category has no mirror tasks still gets its
+ * category row created, and an uncategorised topic root stays top-level.
+ */
+export function mergeTopicTree(
+  topicRoots: readonly TopicNode[],
+  categoryRoots: readonly TopicNode[],
+): TopicNode[] {
+  const out: TopicNode[] = categoryRoots.map((n) => ({ ...n, children: [...n.children] }));
+  const byId = new Map<string, TopicNode>(out.map((n) => [n.id, n]));
+
+  for (const root of topicRoots) {
+    // Category roots journey's own grouping produced: fold their children into ours by id.
+    if (root.id.startsWith(CATEGORY_ROOT_PREFIX)) {
+      const mine = byId.get(root.id);
+      if (mine) {
+        mine.children.push(...root.children);
+      } else {
+        const copy = { ...root, children: [...root.children] };
+        out.push(copy);
+        byId.set(copy.id, copy);
+      }
+      continue;
+    }
+    // A bare topic root (journey sent no category for it) — keep it top-level rather than
+    // guessing a category for it.
+    out.push({ ...root, children: [...root.children] });
+  }
+  return sortNodes(out);
 }
 
 // ---------------------------------------------------------------------------
