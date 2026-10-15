@@ -95,6 +95,7 @@ const JOB_ROWS: { key: JobTypeKey; idPrefix: string; jobType: string }[] = [
   { key: "reviewRecheck", idPrefix: "review-recheck", jobType: "review-recheck" },
   { key: "scheduleBrief", idPrefix: "schedule-brief", jobType: "schedule-brief" },
   { key: "priorityCheck", idPrefix: "priority-check", jobType: "priority-check" },
+  { key: "inboundEmail", idPrefix: "inbound-email", jobType: "inbound-email" },
 ];
 
 /** Reverse lookup: the `job_type` string stored on a row -> the JobTypeKey scheduling-config knows it
@@ -206,6 +207,10 @@ async function fireJob(job: ScheduledJob, slotId: string): Promise<void> {
     // No force: an empty priority band sends nothing. The edition (morning/evening) is derived from
     // the local hour in the route, for the same stale-cadence reason as schedule-brief above.
     await post("/api/public/run-priority-check");
+  } else if (job.job_type === "inbound-email") {
+    // No force: a run with no new email from a person sends nothing, and each message is announced
+    // once ever (its turn id), so overlapping fires and the 12h lookback never double-notify.
+    await post("/api/public/run-inbound-email");
   }
   // Future: else if (job.job_type === "ceremony") { ... POST run-ceremony ... }
 }

@@ -1,0 +1,62 @@
+name: Run inbound email watch (manual/on-demand)
+
+# WHAT:       Fires one pass of the INBOUND EMAIL WATCH on demand — Iris reads the owner's recent
+#             Outlook Inbox and tells him about new email from a person, with a suggested reply.
+# WHY:        The scheduled path is the Huddle every-minute scheduler POSTing /api/public/run-inbound-email
+#             hourly 7-22 local; a session holds no JOURNEY_PROXY_TOKEN, so this is how the route is
+#             exercised live. Mirrors run-priority-check.yml.
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/actions.md ACT:inbound-email-watch; src/features/huddle/lib/email/inbound-email*.ts
+#
+# dryRun:true screens and RETURNS the decisions — no turn, no push. The response holds sender DOMAINS
+# and verdicts only, never subjects or bodies: THIS REPO IS PUBLIC and so are these logs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Board owner email (the scheduler targets the mirror's user_email)."
+        required: true
+        default: "dev@enterpriseds.io"
+      mode:
+        description: "needs-reply | people | all (blank = the default, needs-reply)"
+        required: false
+        default: ""
+      lookbackHours:
+        description: "How far back to look (1-72)."
+        required: false
+        default: "12"
+      dryRun:
+        description: "true = return what WOULD be announced, deliver nothing."
+        required: false
+        default: "true"
+      timeZone:
+        description: "IANA time zone."
+        required: false
+        default: "America/New_York"
+
+jobs:
+  run-inbound-email:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/public/run-inbound-email
+        env:
+          SECRET: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          EMAIL: ${{ inputs.email }}
+          MODE: ${{ inputs.mode }}
+          LOOKBACK: ${{ inputs.lookbackHours }}
+          DRY: ${{ inputs.dryRun }}
+          TZ_INPUT: ${{ inputs.timeZone }}
+        run: |
+          if [ -z "$SECRET" ]; then echo "JOURNEY_PROXY_TOKEN secret not set"; exit 1; fi
+          BODY=$(jq -cn --arg e "$EMAIL" --arg m "$MODE" --arg tz "$TZ_INPUT" \
+            --argjson lb "$LOOKBACK" --argjson dry "$DRY" \
+            '{caller:{entra_email:$e}, timeZone:$tz, dryRun:$dry, lookbackHours:$lb} + (if $m == "" then {} else {mode:$m} end)')
+          echo "Body: $BODY"
+          HTTP=$(curl -s -o /tmp/ie.out -w "%{http_code}" -X POST \
+            -H "content-type: application/json" -H "x-webhook-secret: $SECRET" \
+            -d "$BODY" "$BASE/api/public/run-inbound-email")
+          echo "HTTP $HTTP"
+          echo "--- response ---"; jq . /tmp/ie.out 2>/dev/null || cat /tmp/ie.out; echo
+          if [ "$HTTP" != "200" ]; then echo "run-inbound-email failed"; exit 1; fi

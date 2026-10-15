@@ -404,6 +404,7 @@ export async function buildRealtimeToolset(
               to: { type: "string", description: "Optional recipient address(es), comma-separated." },
               from: { type: "string", description: `Optional mailbox to draft in. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.` },
               cc: { type: "string", description: "Optional CC address(es), comma-separated." },
+              reply_to: { type: "string", description: "If this is a REPLY to an email the owner received, the sender's email address. The draft is then saved in the OWNER's own Outlook Drafts as a threaded reply to that sender's latest email (from is ignored)." },
             },
             required: ["subject", "body"],
           },
@@ -580,14 +581,18 @@ export async function executeRealtimeTool(
       return done(JSON.stringify(r));
     }
     if (name === "create_email_draft") {
-      const { createGraphDraft } = await import("../email/graph-email.server");
-      const r = await createGraphDraft({
-        to: String(args.to ?? ""),
-        subject: String(args.subject ?? ""),
-        body: String(args.body ?? ""),
-        from: args.from ? String(args.from) : undefined,
-        cc: args.cc ? String(args.cc) : undefined,
-      });
+      const { createDraftForTool } = await import("../email/graph-email.server");
+      const r = await createDraftForTool(
+        {
+          to: String(args.to ?? ""),
+          subject: String(args.subject ?? ""),
+          body: String(args.body ?? ""),
+          from: args.from ? String(args.from) : undefined,
+          cc: args.cc ? String(args.cc) : undefined,
+          replyTo: args.reply_to ? String(args.reply_to) : undefined,
+        },
+        ctx.caller,
+      );
       return done(JSON.stringify(r));
     }
     if (name === "list_artifacts") {

@@ -177,6 +177,154 @@ export async function createGraphDraft(input: SendEmailInput): Promise<DraftEmai
   }
 }
 
+/**
+ * Read the newest Inbox messages received at or after `sinceIso`, app-only (Mail.Read), for the
+ * inbound email watch (inbound-email.server.ts). Bodies come back as plain text. Proven against the
+ * owner's mailbox by graph-permission-check.yml section 4 (run 38799786649, HTTP 200).
+ */
+export async function listInboxMessagesSince(
+  mailbox: string,
+  sinceIso: string,
+  top = 25,
+): Promise<{ ok: true; messages: import("./inbound-email").InboundMessage[] } | { ok: false; error: string }> {
+  try {
+    const token = await getAppToken();
+    const qs = new URLSearchParams({
+      $filter: `receivedDateTime ge ${sinceIso}`,
+      $orderby: "receivedDateTime desc",
+      $top: String(top),
+      $select:
+        "id,subject,receivedDateTime,bodyPreview,body,from,inferenceClassification,internetMessageHeaders",
+    });
+    const res = await fetch(
+      `${GRAPH}/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages?${qs}`,
+      { headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="text"' } },
+    );
+    if (!res.ok) {
+      return { ok: false, error: `Graph inbox read failed (${res.status}): ${(await res.text()).slice(0, 200)}` };
+    }
+    type Raw = {
+      id: string;
+      subject?: string;
+      receivedDateTime?: string;
+      bodyPreview?: string;
+      body?: { content?: string };
+      from?: { emailAddress?: { address?: string; name?: string } };
+      inferenceClassification?: string;
+      internetMessageHeaders?: { name?: string; value?: string }[];
+    };
+    const j = (await res.json()) as { value?: Raw[] };
+    const messages = (j.value ?? []).map((r) => {
+      const headers = r.internetMessageHeaders ?? [];
+      const val = (n: string) => headers.find((h) => (h.name ?? "").toLowerCase() === n)?.value ?? null;
+      return {
+        id: r.id,
+        subject: r.subject ?? null,
+        receivedDateTime: r.receivedDateTime ?? null,
+        bodyPreview: r.bodyPreview ?? null,
+        bodyText: r.body?.content ?? null,
+        fromAddress: r.from?.emailAddress?.address ?? null,
+        fromName: r.from?.emailAddress?.name ?? null,
+        inferenceClassification: r.inferenceClassification ?? null,
+        headerNames: headers.map((h) => (h.name ?? "").toLowerCase()).filter(Boolean),
+        precedence: val("precedence"),
+        autoSubmitted: val("auto-submitted"),
+      };
+    });
+    return { ok: true, messages };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Save a REPLY draft in the OWNER's own mailbox, threaded onto the newest Inbox message from
+ * `replyTo` (Graph createReply keeps the conversation, recipients and quoted original). The mailbox is
+ * resolved by the caller from the owner's identity — never chosen by the model — so this is not
+ * subject to the HUDDLE_EMAIL_FROM allow-list (that list governs which mailbox Huddle SENDS from).
+ * Drafting only: nothing is sent. Falls back to { ok:false } when no message from that sender is found,
+ * and the tool caller then drafts a fresh message instead.
+ */
+export async function createReplyDraftInMailbox(input: {
+  mailbox: string;
+  replyTo: string;
+  body: string;
+  subjectHint?: string;
+}): Promise<DraftEmailResult> {
+  const mailbox = input.mailbox.trim();
+  const sender = input.replyTo.trim().toLowerCase();
+  if (!mailbox || !sender) return { ok: false, error: "mailbox and reply_to are required" };
+  try {
+    const token = await getAppToken();
+    const auth = { Authorization: `Bearer ${token}` };
+    const base = `${GRAPH}/users/${encodeURIComponent(mailbox)}`;
+    const qs = new URLSearchParams({
+      $filter: `from/emailAddress/address eq '${sender.replace(/'/g, "''")}'`,
+      $top: "10",
+      $select: "id,subject,receivedDateTime",
+    });
+    const find = await fetch(`${base}/mailFolders/inbox/messages?${qs}`, { headers: auth });
+    if (!find.ok) {
+      return { ok: false, from: mailbox, error: `Graph find-original failed (${find.status}): ${(await find.text()).slice(0, 200)}` };
+    }
+    const hits = (((await find.json()) as { value?: { id: string; subject?: string; receivedDateTime?: string }[] }).value ?? [])
+      .sort((a, b) => String(b.receivedDateTime ?? "").localeCompare(String(a.receivedDateTime ?? "")));
+    // Prefer the message whose subject the model named; else the newest from that sender.
+    const hint = String(input.subjectHint ?? "").replace(/^\s*(re|fw|fwd)\s*:\s*/i, "").trim().toLowerCase();
+    const original =
+      (hint && hits.find((h) => String(h.subject ?? "").toLowerCase().includes(hint))) || hits[0];
+    if (!original) return { ok: false, from: mailbox, error: `No Inbox message from ${sender} to reply to.` };
+
+    const created = await fetch(`${base}/messages/${encodeURIComponent(original.id)}/createReply`, {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ comment: input.body ?? "" }),
+    });
+    if (created.status !== 201) {
+      return { ok: false, from: mailbox, error: `Graph createReply failed (${created.status}): ${(await created.text()).slice(0, 200)}` };
+    }
+    const j = (await created.json()) as { id?: string; webLink?: string };
+    return { ok: true, from: mailbox, id: j.id, webLink: j.webLink };
+  } catch (err) {
+    return { ok: false, from: mailbox, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * The ONE entry point every create_email_draft dispatch site calls (chat, Lovable, voice), so a reply
+ * draft behaves the same on every surface. With `replyTo`, the draft is a threaded reply in the
+ * OWNER's mailbox (resolved from `caller` exactly as the calendar read does); without it, or when no
+ * original is found, it is the existing createGraphDraft.
+ */
+export async function createDraftForTool(
+  input: SendEmailInput & { replyTo?: string },
+  caller: { entra_object_id?: string; entra_email?: string } | undefined,
+): Promise<DraftEmailResult & { reply?: boolean; replyFallback?: string }> {
+  const replyTo = String(input.replyTo ?? "").trim();
+  if (replyTo) {
+    let mailbox: string | undefined;
+    try {
+      const { resolveCalendarMailbox } = await import("../journey/identity");
+      mailbox = await resolveCalendarMailbox(caller);
+    } catch {
+      mailbox = caller?.entra_email;
+    }
+    if (mailbox) {
+      const r = await createReplyDraftInMailbox({
+        mailbox,
+        replyTo,
+        body: String(input.body ?? ""),
+        subjectHint: String(input.subject ?? ""),
+      });
+      if (r.ok) return { ...r, reply: true };
+      // Fall through to a plain draft so the owner still gets one, and say why.
+      const plain = await createGraphDraft({ ...input, to: input.to || replyTo });
+      return { ...plain, reply: false, replyFallback: r.error };
+    }
+  }
+  return createGraphDraft(input);
+}
+
 export interface CalendarEvent {
   /** Graph's stable event id. Added 2026-10-05 for the schedule brief's T-60 reminders: a
    *  reminder seeded per event needs an IDEMPOTENT key, and deriving one from subject+start

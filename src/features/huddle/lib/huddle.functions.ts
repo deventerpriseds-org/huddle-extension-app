@@ -3532,6 +3532,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   description: `Optional mailbox to draft in. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.`,
                 },
                 cc: { type: "string", description: "Optional CC address(es), comma-separated." },
+                reply_to: { type: "string", description: "If this is a REPLY to an email the owner received, the sender's email address. The draft is then saved in the OWNER's own Outlook Drafts as a threaded reply to that sender's latest email (from is ignored)." },
               },
               required: ["subject", "body"],
             },
@@ -4387,14 +4388,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               });
             }
             try {
-              const { createGraphDraft } = await import("./email/graph-email.server");
-              const r = await createGraphDraft({
-                to: String(a.to ?? ""),
-                subject: String(a.subject ?? ""),
-                body: String(a.body ?? ""),
-                from: a.from ? String(a.from) : undefined,
-                cc: a.cc ? String(a.cc) : undefined,
-              });
+              const { createDraftForTool } = await import("./email/graph-email.server");
+              const r = await createDraftForTool(
+                {
+                  to: String(a.to ?? ""),
+                  subject: String(a.subject ?? ""),
+                  body: String(a.body ?? ""),
+                  from: a.from ? String(a.from) : undefined,
+                  cc: a.cc ? String(a.cc) : undefined,
+                  replyTo: a.reply_to ? String(a.reply_to) : undefined,
+                },
+                data.caller,
+              );
               recordToolUse(
                 winner.id,
                 "create_email_draft",
@@ -5820,6 +5825,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 to: z.string().optional(),
                 from: z.string().optional(),
                 cc: z.string().optional(),
+                reply_to: z.string().optional().describe("If this is a REPLY to an email the owner received, the sender's email address. The draft is then saved in the OWNER's own Outlook Drafts as a threaded reply to that sender's latest email (from is ignored)."),
               }),
               execute: async (args) => {
                 const a = args as Record<string, unknown>;
@@ -5836,14 +5842,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                     message: "That draft was already created this turn.",
                   });
                 }
-                const { createGraphDraft } = await import("./email/graph-email.server");
-                const r = await createGraphDraft({
-                  to: String(a.to ?? ""),
-                  subject: String(a.subject ?? ""),
-                  body: String(a.body ?? ""),
-                  from: a.from ? String(a.from) : undefined,
-                  cc: a.cc ? String(a.cc) : undefined,
-                });
+                const { createDraftForTool } = await import("./email/graph-email.server");
+                const r = await createDraftForTool(
+                  {
+                    to: String(a.to ?? ""),
+                    subject: String(a.subject ?? ""),
+                    body: String(a.body ?? ""),
+                    from: a.from ? String(a.from) : undefined,
+                    cc: a.cc ? String(a.cc) : undefined,
+                    replyTo: a.reply_to ? String(a.reply_to) : undefined,
+                  },
+                  data.caller,
+                );
                 recordToolUse(
                   winner.id,
                   "create_email_draft",

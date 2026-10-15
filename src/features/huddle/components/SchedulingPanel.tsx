@@ -44,6 +44,13 @@ const JOB_LABELS: Record<JobTypeKey, { label: string; hint: string }> = {
       "before the jobs that use them — the shipped 6 is before the 8am grooming, the 20 is before " +
       "the 1am nightly scheduler. Nothing is sent when you have no priorities.",
   },
+  inboundEmail: {
+    label: "New email alerts",
+    hint:
+      "Iris checks your Outlook inbox at these hours and tells you about new email from a real person " +
+      "that asks you something, with a suggested reply she can save to your Drafts when you say so. " +
+      "Each email is only ever mentioned once; newsletters and no-reply senders are skipped.",
+  },
   reviewDigest: {
     label: "Review digest",
     hint: "Iris's nudge on what's waiting in Ready for review.",
@@ -63,6 +70,7 @@ const JOB_TYPE_KEYS: JobTypeKey[] = [
   "standup",
   "scheduleBrief",
   "priorityCheck",
+  "inboundEmail",
   "reviewDigest",
   "reviewRecheck",
 ];
