@@ -144,12 +144,20 @@ check("star rank is 0 — ahead of every other star in journey's 1am placement (
 
 // ── agents' work order (decision A) ──────────────────────────────────────────────────────────────
 {
+  // The star must win ON ITS OWN, not only through scoreTask's +15. "urgent" below out-scores a NULL-rank
+  // (phone-style) star — URGENT 4 + due within 48h 5 + payment keyword 5 + created yesterday 2 + UP_NEXT 1
+  // + pushed once 1 = 18 vs the star's LOW 1 + 15 = 16 — so only the explicit star key keeps it first.
+  // (With a fixture the score alone decides, a mutation dropping that key was INERT.) Real-clock dates,
+  // because scoreTask reads Date.now() for "due soon" and "recently created".
+  const day = 24 * 60 * 60 * 1000;
+  const tomorrow = new Date(Date.now() + day).toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - day).toISOString();
   const rows = [
     row({ id: "recent-low", priority: "LOW" }),
-    row({ id: "urgent", priority: "URGENT", due_date: "2026-10-16" }),
-    row({ id: "starred", priority: "LOW", is_priority: true }),
+    row({ id: "urgent", title: "Pay the invoice", priority: "URGENT", due_date: tomorrow, status: "UP_NEXT", pushed_count: 1, created_at: yesterday }),
+    row({ id: "starred", priority: "LOW", is_priority: true, priority_rank: null }),
   ];
-  const order = orderForAutowork(rows, NOW).map((r) => r.id).join(",");
+  const order = orderForAutowork(rows).map((r) => r.id).join(",");
   check("work order: the user's star first, then the score — not 'most recently updated'",
     order === "starred,urgent,recent-low", order);
   const ties = [row({ id: "first" }), row({ id: "second" })];
