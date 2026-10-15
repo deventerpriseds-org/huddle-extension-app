@@ -775,19 +775,24 @@ export async function getOpenAssignedTasks(userEmail: string, limit = 200): Prom
   await ensureBootstrapped();
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { emails } = await resolveScopeByEmail(userEmail);
-  const { rows } = await getPool().query<BoardTaskRow>(
-    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done
+  const { rows } = await getPool().query<BoardTaskRow & { pushed_count: number | null; created_at: string | null }>(
+    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done,
+            pushed_count,created_at
        FROM tasks.journey_tasks t
       WHERE lower(user_email) = ANY($1)
         AND completed_at IS NULL
         AND (status IS NULL OR status NOT IN ('DONE','BLOCKED'))
         AND assigned_agent IS NOT NULL
         AND NOT EXISTS (SELECT 1 FROM tasks.task_blockers b WHERE b.task_id = t.id)
-      ORDER BY priority_rank NULLS LAST, updated_at DESC
+      ORDER BY updated_at DESC
       LIMIT $2`,
     [emails, limit],
   );
-  return rows;
+  // Priority order comes from the SCORER, not `priority_rank`: the groom no longer writes ranks (owner
+  // decision "A", 2026-10-15), so a rank-only ORDER BY would tie every task. `updated_at DESC` above is
+  // only the stable tiebreak orderForAutowork keeps.
+  const { orderForAutowork } = await import("./scoring");
+  return orderForAutowork(rows);
 }
 
 /** The WIP confirm-intent + review gate's per-task bookkeeping (docs/plan-wip-confirm-review-gate.md). */
