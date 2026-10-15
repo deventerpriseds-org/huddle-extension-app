@@ -53,16 +53,24 @@ function isParkedRow(row: { tags?: string[] | null }): boolean {
 
 /**
  * Can a push star this task? Every exclusion journey's own nightly scheduler would apply, so a star
- * is never a promise the 1am job cannot keep: open (not DONE/BLOCKED), no `completed_at` (journey skips
- * reopened tasks that kept one), not parked, not waiting on a scheduled reminder — and NOT ALREADY
- * STARRED (a push never adopts or rewrites someone else's star).
+ * is never a promise the 1am job cannot keep:
+ *   - status one the scheduler actually places — READY, UP_NEXT, TODO, BACKLOG. Its unmapped-task pool
+ *     takes exactly those (nightly-schedule-builder ~969-998); DOING / IN_REVIEW / PLANNING are never
+ *     placed from it, so a push picking one starred work that never reached the calendar
+ *     (VERIFY-category-push-1 D3);
+ *   - no `completed_at` (journey skips reopened tasks that kept one); not parked; not waiting on a
+ *     scheduled reminder; title not matching the scheduler's own "Test Task" exclusion;
+ *   - and NOT ALREADY STARRED (a push never adopts or rewrites someone else's star).
  */
+export const SCHEDULABLE_STATUSES: ReadonlySet<string> = new Set(["READY", "UP_NEXT", "TODO", "BACKLOG"]);
+
 export function isPushEligible(
   row: PushCandidateRow,
   inReminderWindow: ReadonlySet<string> = new Set(),
 ): boolean {
   const s = upper(row.status);
-  if (s === "DONE" || s === "BLOCKED") return false;
+  if (s && !SCHEDULABLE_STATUSES.has(s)) return false;
+  if (/test task/i.test(row.title ?? "")) return false;
   if (row.completed_at) return false;
   if (isParkedRow(row)) return false;
   if (inReminderWindow.has(row.id)) return false;
@@ -118,6 +126,7 @@ export function classifyActiveEvent(
   op: string,
   row: PushCandidateRow | null,
   node: PushNode,
+  pushSince?: string | null,
 ): ActiveEvent {
   if (upper(op) === "DELETE" || !row) return "refill";
   const s = upper(row.status);
@@ -125,7 +134,15 @@ export function classifyActiveEvent(
   if (isParkedRow(row)) return "refill";
   if (node.kind === "category" && !(row.category && displayCategory(row.category) === node.key))
     return "refill";
-  if (row.is_priority === false) return "unpush";
+  if (row.is_priority === false) {
+    // A STALE "not starred" — an edit made BEFORE this push starred the task, delivered late (pg_net
+    // does not order deliveries) — must not end the push. Only an un-star at or after the moment the push
+    // took this task counts as the user removing it (VERIFY-category-push-1 D2).
+    const at = row.updated_at ? Date.parse(row.updated_at) : NaN;
+    const since = pushSince ? Date.parse(pushSince) : NaN;
+    if (Number.isFinite(at) && Number.isFinite(since) && at <= since) return "none";
+    return "unpush";
+  }
   return "none";
 }
 
@@ -199,8 +216,8 @@ export async function pushTask(email: string, caller: Caller, taskId: string): P
   const { getOwnedTaskForConfirmAsk } = await import("./tasks.server");
   const owned = await getOwnedTaskForConfirmAsk(taskId, email);
   if (!owned) return { ok: false, applied: false, error: "Task not found." };
-  const { getPushCandidates } = await import("./tasks.server");
-  const row = (await getPushCandidates(email)).find((r) => r.id === taskId);
+  const { getPushCandidate } = await import("./tasks.server");
+  const row = await getPushCandidate(email, taskId);
   if (!row) return { ok: false, applied: false, error: "Task not found." };
   const s = upper(row.status);
   if (s === "DONE") return { ok: false, applied: false, error: "That task is already done." };
@@ -250,12 +267,19 @@ export async function pushNode(
 ): Promise<PushResult> {
   const node = parseNodeId(nodeId);
   if (!node) return { ok: false, applied: false, error: "That row can't be pushed." };
-  const { getPriorityPushes, upsertPriorityPush, deletePriorityPush, getPushCandidates } =
+  const { getPriorityPushes, upsertPriorityPush, deletePriorityPush, getPushCandidate } =
     await import("./tasks.server");
   const existing = (await getPriorityPushes(email)).find((p) => p.node_id === nodeId);
   if (existing) {
+    // Pushed and WAITING: re-pushing is the user asking again — try a fresh pick now rather than only
+    // reporting "already pushed" (VERIFY-category-push-1 D10).
+    if (!existing.active_task_id && (await refill(existing, null)) === "refilled") {
+      const now = (await getPriorityPushes(email)).find((p) => p.node_id === nodeId);
+      const t = now?.active_task_id ? await getPushCandidate(email, now.active_task_id) : null;
+      return { ok: true, applied: true, task: t ? { id: t.id, title: t.title } : null };
+    }
     const active = existing.active_task_id
-      ? (await getPushCandidates(email)).find((r) => r.id === existing.active_task_id)
+      ? await getPushCandidate(email, existing.active_task_id)
       : null;
     return {
       ok: true,
@@ -299,13 +323,13 @@ export async function unpushNode(
   caller: Caller,
   nodeId: string,
 ): Promise<PushResult> {
-  const { getPriorityPushes, deletePriorityPush, getPushCandidates } =
+  const { getPriorityPushes, deletePriorityPush, getPushCandidate } =
     await import("./tasks.server");
   const existing = (await getPriorityPushes(email)).find((p) => p.node_id === nodeId);
   if (!existing) return { ok: true, applied: false };
   await deletePriorityPush(email, nodeId);
   if (existing.active_task_id) {
-    const row = (await getPushCandidates(email)).find((r) => r.id === existing.active_task_id);
+    const row = await getPushCandidate(email, existing.active_task_id);
     const open = row && !["DONE", "BLOCKED"].includes(upper(row.status)) && !row.completed_at;
     if (open) {
       const r = await unstar(caller, existing.active_task_id);
@@ -328,7 +352,7 @@ async function refill(
   const caller: Caller = { entra_email: email };
   const node = parseNodeId(push.node_id);
   if (!node) return "error";
-  const { casPriorityPushActive } = await import("./tasks.server");
+  const { casPriorityPushActive, getPriorityPushes } = await import("./tasks.server");
   const ctx = await pickContext(email, caller, node);
   if (ctx.topicUnavailable) return "error"; // journey's topic list unreadable — leave it for the next tick
   const next = pickForNode(ctx.rows, node, {
@@ -343,6 +367,14 @@ async function refill(
   if (!r.ok) {
     await casPriorityPushActive(email, push.node_id, next.id, finishedId);
     return "error";
+  }
+  // "Stop pushing" may have landed WHILE the star call was in flight: the push row is gone (or moved),
+  // so this star has no push behind it. Take it back off rather than leave an orphan star in This Week
+  // (VERIFY-category-push-1 D5).
+  const still = (await getPriorityPushes(email)).find((p) => p.node_id === push.node_id);
+  if (!still || still.active_task_id !== next.id) {
+    await unstar(caller, next.id);
+    return "lost-race";
   }
   return "refilled";
 }
@@ -368,7 +400,7 @@ export async function onMirrorEvent(
     for (const push of await getPushesByActiveTask(id)) {
       const node = parseNodeId(push.node_id);
       if (!node) continue;
-      const ev = classifyActiveEvent(op, row, node);
+      const ev = classifyActiveEvent(op, row, node, push.updated_at ?? null);
       if (ev === "refill") await refill(push, id);
       else if (ev === "unpush") {
         const { deletePriorityPush } = await import("./tasks.server");
@@ -393,11 +425,12 @@ export async function onMirrorEvent(
   }
 }
 
-/** journey's own view of one task, read by id (user-scoped `explain_task_score`). null = not found. */
+/** journey's own row for one task, read by id (user-scoped `explain_task_score`, which selects `*`).
+ *  null = journey says it does not exist; "unknown" = could not tell (left for the next tick). */
 async function journeyTaskState(
   caller: Caller,
   taskId: string,
-): Promise<{ status: string; isPriority: boolean } | null | "unknown"> {
+): Promise<PushCandidateRow | null | "unknown"> {
   const { invokeJourneyTool } = await import("../journey/proxy.functions");
   const r = await invokeJourneyTool({
     toolName: "explain_task_score",
@@ -410,8 +443,8 @@ async function journeyTaskState(
     const p = JSON.parse(r.output || "{}") as Record<string, unknown>;
     const t = (p.task ?? (p.result as Record<string, unknown> | undefined)?.task) as
       Record<string, unknown> | undefined;
-    if (!t) return "unknown";
-    return { status: upper(String(t.status ?? "")), isPriority: t.is_priority === true };
+    if (!t || t.id == null) return "unknown";
+    return t as unknown as PushCandidateRow;
   } catch {
     return "unknown";
   }
@@ -438,9 +471,15 @@ export async function reconcilePushes(
       }
       const state = await journeyTaskState(caller, push.active_task_id);
       if (state === "unknown") continue;
-      if (state === null || state.status === "DONE" || state.status === "BLOCKED") {
+      const node = parseNodeId(push.node_id);
+      if (!node) continue;
+      // The SAME classification the webhook uses, on journey's CURRENT row — so a lost "parked", "moved
+      // to another category" or "un-starred" is caught here too, not only a lost "done"
+      // (VERIFY-category-push-1 D10). journey's row is current, so no staleness cut-off applies.
+      const ev = classifyActiveEvent(state === null ? "DELETE" : "UPDATE", state, node);
+      if (ev === "refill") {
         if ((await refill(push, push.active_task_id)) === "refilled") out.refilled++;
-      } else if (!state.isPriority) {
+      } else if (ev === "unpush") {
         await deletePriorityPush(push.user_email, push.node_id);
         out.unpushed++;
       }

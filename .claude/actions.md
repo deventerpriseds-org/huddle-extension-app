@@ -4552,3 +4552,8 @@ its twin). There is no detector for this drift today; compare.ts found it by acc
 - **Evidence:** `scripts/category-push.test.ts` 20/20; 9 mutations FIRED (eligibility starred/completed_at, skip, unpush, PUSH_RANK, id-sort determinism, scorer pick, star-first, GROOM_WRITES_STARS); all existing widget suites green; `vite build` rc=0.
 - **Status:** implemented on branch, verifier pending, NOT deployed, NOT owner-confirmed.
 
+
+## BACKLOG: two pre-existing red suites (found 2026-10-15, not caused by ACT:category-push)
+- `scripts/memory-mode.test.ts` — expects default memoryMode `reconstruction` / version 4; source says `researched` / 8. Fails without the push changes.
+- `scripts/model-policy.test.ts` — "diff 3 (sol-ceiling agent) → sol/high + needsConfirm (got gpt-5.6-sol/high, confirm=false)". Fails without the push changes.
+- `scripts/cross-app-turn-gate.test.ts` G7 requires every public route file byte-identical to origin/main — red on ANY branch that edits a route (here tasks-sync/run-autowork), green after merge. Scope-frozen guard from another feature.

@@ -214,6 +214,7 @@ export interface AutoworkOrderable {
   created_at?: string | null;
   completed_at?: string | null;
   tags?: string[] | null;
+  is_scheduled?: boolean | null;
 }
 
 export function orderForAutowork<T extends AutoworkOrderable>(rows: readonly T[], now: Date = new Date()): T[] {
@@ -236,6 +237,8 @@ export function orderForAutowork<T extends AutoworkOrderable>(rows: readonly T[]
         created_at: t.created_at ?? now.toISOString(),
         completed_at: t.completed_at ?? null,
         tags: t.tags ?? null,
+        // A calendared task keeps its staleness exemption (VERIFY-category-push-1 D9).
+        is_scheduled: t.is_scheduled ?? null,
       },
       now,
     ),

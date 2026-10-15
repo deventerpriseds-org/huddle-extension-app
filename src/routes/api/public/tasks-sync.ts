@@ -69,12 +69,17 @@ export const Route = createFileRoute("/api/public/tasks-sync")({
         // just finished, star the next one; if a push was waiting for a task, this may be it. AFTER the
         // mirror write, and it never throws — a refill problem must not make journey's sync look failed
         // (a 500 here is what journey's own logging reads). The 9/13/17 reconcile retries anything missed.
-        const { onMirrorEvent } = await import("@/features/huddle/lib/tasks/push.server");
-        await onMirrorEvent(
-          op,
-          task,
-          payload.user_email ?? (task?.user_email as string | undefined) ?? null,
-        );
+        try {
+          const { onMirrorEvent } = await import("@/features/huddle/lib/tasks/push.server");
+          await onMirrorEvent(
+            op,
+            task,
+            payload.user_email ?? (task?.user_email as string | undefined) ?? null,
+          );
+        } catch (err) {
+          // Even the module load sits inside the guard (VERIFY-category-push-1 D8).
+          console.error("[tasks-sync] push hook failed", err instanceof Error ? err.message : err);
+        }
 
         return json({ ok: true, operation: op, id });
       },

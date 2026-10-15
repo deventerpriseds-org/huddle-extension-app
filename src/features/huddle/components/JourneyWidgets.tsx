@@ -29,7 +29,7 @@
 // NO ROW CAP anywhere, deliberately: the owner rejected exactly that on the checklist ("it should
 // include all that comes back from the query no matter how long that is"). Sections scroll instead.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowDown,
@@ -606,18 +606,48 @@ const MENU_ROOM = 300;
 
 function RowMenu({ label, heading, items }: { label: string; heading: string; items: MenuItem[] }) {
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
-  const close = useCallback(() => setAnchor(null), []);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  // Keyboard: focus moves INTO the menu on open, ↑/↓ (and Home/End) walk its items, Escape closes and
+  // hands focus back to the ⋮ that opened it (VERIFY-category-push-1 D7).
+  const close = useCallback((restoreFocus = false) => {
+    setAnchor(null);
+    if (restoreFocus) buttonRef.current?.focus();
+  }, []);
   useEffect(() => {
     if (!anchor) return;
+    menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close(true);
+        return;
+      }
+      const its = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
+      if (!its.length) return;
+      const at = its.indexOf(document.activeElement as HTMLButtonElement);
+      const go = (i: number) => its[(i + its.length) % its.length]?.focus();
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        go(at + 1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        go(at - 1);
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        go(0);
+      } else if (e.key === "End") {
+        e.preventDefault();
+        go(its.length - 1);
+      }
     };
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
+    const dismiss = () => close();
+    window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("resize", dismiss);
     window.addEventListener("keydown", onKey);
     return () => {
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("resize", dismiss);
       window.removeEventListener("keydown", onKey);
     };
   }, [anchor, close]);
@@ -633,13 +663,14 @@ function RowMenu({ label, heading, items }: { label: string; heading: string; it
   return (
     <>
       <button
+        ref={buttonRef}
         type="button"
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={(e) => setAnchor(open ? null : e.currentTarget.getBoundingClientRect())}
         className={cn(
-          "-my-1 flex h-11 w-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition hover:text-foreground",
+          "-my-1 flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition hover:text-foreground",
           open && "bg-accent text-accent-foreground",
         )}
       >
@@ -652,10 +683,11 @@ function RowMenu({ label, heading, items }: { label: string; heading: string; it
             <button
               type="button"
               aria-label="Close menu"
-              onClick={close}
+              onClick={() => close(true)}
               className="fixed inset-0 z-[90] cursor-default bg-foreground/10"
             />
             <div
+              ref={menuRef}
               role="menu"
               aria-label={label}
               style={{ ...pos, width: MENU_WIDTH }}
@@ -928,7 +960,7 @@ function TopicRow({
           {pushable ? (
             <RowMenu label={`Actions for ${node.name}`} heading={`${kind} · ${node.name}`} items={items} />
           ) : (
-            <span className="w-10 shrink-0" aria-hidden />
+            <span className="w-11 shrink-0" aria-hidden />
           )}
           <span className="flex min-w-0 flex-1 items-start gap-1.5 py-2.5">
             {/* Grey when there is nothing under it — category or topic (owner: "there currently is
@@ -962,7 +994,7 @@ function TopicRow({
               onClick={() => setOpen((v) => !v)}
               aria-expanded={open}
               aria-label={`${open ? "Collapse" : "Expand"} ${node.name}`}
-              className="-my-0.5 flex h-11 w-9 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+              className="-my-0.5 flex size-11 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
             >
               <ChevronRight size={16} className={cn("transition-transform", open && "rotate-90")} aria-hidden />
             </button>

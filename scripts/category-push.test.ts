@@ -73,6 +73,33 @@ const LIFE: PushNode = { kind: "category", key: "LIFE" };
     !isPushEligible(row({ id: "r" }), window), "reminder-window id excluded");
 }
 
+// ── VERIFY-category-push-1 fixes ─────────────────────────────────────────────────────────────────
+{
+  // D3: only statuses journey's 1am scheduler places, and never its own "Test Task" exclusion.
+  const ok = ["READY", "UP_NEXT", "TODO", "BACKLOG"].every((st) => isPushEligible(row({ id: st, status: st })));
+  const no = ["DOING", "IN_REVIEW", "PLANNING"].filter((st) => isPushEligible(row({ id: st, status: st })));
+  check("D3: eligible only in a status the 1am scheduler places (READY/UP_NEXT/TODO/BACKLOG)",
+    ok && no.length === 0, no.length ? `wrongly eligible: ${no.join(",")}` : "4 placeable, DOING/IN_REVIEW/PLANNING excluded");
+  check("D3: a 'Test Task' title is never starred (journey's scheduler drops it)",
+    !isPushEligible(row({ id: "tt", title: "Test Task foo" })), "excluded");
+  const mix = [
+    row({ id: "rev", status: "IN_REVIEW", priority: "URGENT" }),
+    row({ id: "doing", status: "DOING", priority: "HIGH" }),
+    row({ id: "tt", title: "Test Task foo", priority: "URGENT" }),
+    row({ id: "back", status: "BACKLOG", priority: "LOW" }),
+  ];
+  check("D3: the verifier's failing input now picks the BACKLOG task",
+    pickForNode(mix, CAREER, { now: NOW })?.id === "back", `picked ${pickForNode(mix, CAREER, { now: NOW })?.id}`);
+
+  // D2: a stale "not starred" delivered late must not cancel the push; a fresh un-star still does.
+  const since = "2026-10-15T15:00:00Z";
+  const stale = row({ id: "a", is_priority: false, updated_at: "2026-10-15T14:59:00Z" });
+  const fresh = row({ id: "a", is_priority: false, updated_at: "2026-10-15T15:01:00Z" });
+  check("D2: an un-star event OLDER than the push is ignored; a newer one ends the push",
+    classifyActiveEvent("UPDATE", stale, CAREER, since) === "none" && classifyActiveEvent("UPDATE", fresh, CAREER, since) === "unpush",
+    `stale -> ${classifyActiveEvent("UPDATE", stale, CAREER, since)}, fresh -> ${classifyActiveEvent("UPDATE", fresh, CAREER, since)}`);
+}
+
 // ── picking (AC-C3, C5, C7, C10, C11) ────────────────────────────────────────────────────────────
 {
   // Alphabetical order and score order DISAGREE: "aaa" sorts first by title, "zzz" is URGENT + due soon.
@@ -181,6 +208,24 @@ check("star rank is 0 — ahead of every other star in journey's 1am placement (
   const aw = readFileSync("src/routes/api/public/run-autowork.ts", "utf8");
   check("the reconcile runs BEFORE auto-work (so its early exits cannot skip it)",
     aw.indexOf("reconcilePushes(") > 0 && aw.indexOf("reconcilePushes(") < aw.indexOf("runScheduledAutoWork("), "order in run-autowork.ts");
+}
+
+{
+  // D6: the groom's write must go through groomLaneField. A revert to laneFieldFor at the call site
+  // restores the Monday stars — and the pure groomLaneField test alone could not see that.
+  const groom = readFileSync("src/features/huddle/lib/tasks/groom.ts", "utf8").replace(/\/\/.*$/gm, "");
+  const calls = [...groom.matchAll(/\blaneFieldFor\(/g)].length;
+  check("D6: the groom's update payload uses groomLaneField; laneFieldFor is only called from inside it",
+    /const laneField = groomLaneField\(/.test(groom) && calls === 2, `laneFieldFor( occurrences (definition + groomLaneField): ${calls}`);
+
+  // The compare-and-set is what makes a refill single-shot (verifier harness: 3 concurrent DONEs -> 1 star).
+  const store = readFileSync("src/features/huddle/lib/tasks/tasks.server.ts", "utf8");
+  const push = readFileSync("src/features/huddle/lib/tasks/push.server.ts", "utf8");
+  check("CAS: the active-task update only moves FROM the expected value, and refill stops when it loses",
+    /SET active_task_id = \$4[\s\S]{0,200}active_task_id IS NOT DISTINCT FROM \$3/.test(store) && /if \(!won\) return "lost-race";/.test(push),
+    "UPDATE ... WHERE active_task_id IS NOT DISTINCT FROM $3; refill returns on !won");
+  check("D5: after starring, refill re-reads the push and un-stars if it was stopped meanwhile",
+    /still\.active_task_id !== next\.id\)[\s\S]{0,80}unstar\(caller, next\.id\)/.test(push), "orphan-star guard present");
 }
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);
