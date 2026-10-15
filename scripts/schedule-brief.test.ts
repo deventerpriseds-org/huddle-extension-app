@@ -19,12 +19,14 @@
 import {
   dateForEdition,
   editionForHour,
+  graphUtcToIso,
   localDate,
+  localDayBoundsUtc,
   localHour,
   type BriefItem,
   type ScheduleBrief,
 } from "../src/features/huddle/lib/tasks/schedule-brief.server";
-import { briefLines } from "../src/features/huddle/lib/tasks/schedule-brief-run.server";
+import { briefDeliveryPlan, briefLines } from "../src/features/huddle/lib/tasks/schedule-brief-run.server";
 
 let pass = 0,
   fail = 0;
@@ -110,9 +112,9 @@ const mk = (over: Partial<ScheduleBrief> = {}): ScheduleBrief => ({
   ...over,
 });
 
-// C1 — an empty day is SILENT. A nightly "you have nothing tomorrow" push is how a useful alert
-// becomes a muted one.
-t("C1 an empty edition carries no lines to send", briefLines(mk({ items: [] }), TZ).length, 0);
+// C1 — an empty day carries no item LINES. (It is no longer silent — section E: the owner asked
+// 2026-10-15 for a short "nothing scheduled" message every edition, so silence never needs decoding.)
+t("C1 an empty edition carries no item lines", briefLines(mk({ items: [] }), TZ).length, 0);
 
 // C2 — but an empty edition WITH a read error is not the same fact, and the brief says so. This is
 // the "you have nothing" vs "we could not look" distinction, and conflating them is the lie.
@@ -134,6 +136,52 @@ t("D2 an item with no start renders 'all day', never a guessed midnight", allDay
 const located = briefLines(mk({ items: [item({ location: "Van Munching Hall" })] }), TZ);
 t("D3 a location is appended when present", located[0].endsWith("· Van Munching Hall"), true);
 t("D3b and nothing dangles when absent", lines[0].includes("·"), false);
+
+console.log("E. EVERY EDITION SENDS SOMETHING — and a read failure is never silence (2026-10-15)");
+
+// E1 — the bug: an empty edition WITH errors used to return before enqueueTurn, so a failed calendar
+// read looked exactly like an empty day. It must now deliver a notice carrying the error text.
+const errPlan = briefDeliveryPlan(failed, TZ);
+t("E1 no items + errors -> a READ-ERROR notice is delivered", errPlan.kind, "read-error");
+t("E1b and it quotes the error text so it can be fixed", errPlan.directive.includes("meetings: Graph 403"), true);
+t("E1c and it tells Iris NOT to claim the calendar is empty", /do NOT say or imply their calendar is empty/.test(errPlan.directive), true);
+
+// E2 — a genuinely empty day (no errors) still gets a short "nothing scheduled" message.
+const emptyPlan = briefDeliveryPlan(mk({ items: [] }), TZ);
+t("E2 no items, no errors -> 'nothing scheduled' is delivered", emptyPlan.kind, "nothing-scheduled");
+t("E2b morning wording says today", /nothing scheduled today/.test(emptyPlan.directive), true);
+const emptyEve = briefDeliveryPlan(mk({ items: [], edition: "evening", forDate: "2026-10-06" }), TZ);
+t("E2c evening wording says tomorrow", /nothing scheduled tomorrow/.test(emptyEve.directive), true);
+
+// E3 — items -> the normal brief, lines included.
+const itemsPlan = briefDeliveryPlan(mk(), TZ);
+t("E3 items -> normal brief", itemsPlan.kind, "items");
+t("E3b and the line is in the directive", itemsPlan.directive.includes("7:00PM–10:00PM — MGT-782-W1 (class)"), true);
+t("E3c no 'incomplete' note when nothing failed", itemsPlan.directive.includes("could not be read"), false);
+// E4 — items + a partial failure: still the normal brief, with the gap flagged.
+const partial = briefDeliveryPlan(mk({ errors: ["meetings: Graph 403"] }), TZ);
+t("E4 items + one failed source -> normal brief flagged incomplete",
+  `${partial.kind}/${partial.directive.includes("could not be read (meetings: Graph 403)")}`, "items/true");
+
+console.log("F. GRAPH WINDOW + TIMES — the local day, in instants");
+
+// F1 — the window Graph is asked for must be the LOCAL day as UTC instants. The old code sent
+// `2026-10-15T00:00:00` with no offset, which calendarView reads as UTC (= 20:00 the evening before in
+// New York) and so dropped every evening meeting.
+const b = localDayBoundsUtc("2026-10-15", TZ);
+t("F1 local midnight EDT is 04:00Z", b.startIso, "2026-10-15T04:00:00.000Z");
+t("F1b the window ends at the NEXT local midnight", b.endIso, "2026-10-16T04:00:00.000Z");
+// F2 — DST: on 2026-11-01 New York falls back, so that day is 25h long.
+const dst = localDayBoundsUtc("2026-11-01", TZ);
+t("F2 the fall-back day starts 04:00Z (EDT)", dst.startIso, "2026-11-01T04:00:00.000Z");
+t("F2b and ends 05:00Z next day (EST)", dst.endIso, "2026-11-02T05:00:00.000Z");
+// F3 — Graph's zone-less UTC string is pinned as UTC, so a 13:00Z meeting renders 9:00AM in New York.
+const g = graphUtcToIso("2026-10-15T13:00:00.0000000");
+t("F3 Graph's 7-digit zone-less time is pinned to UTC", g, "2026-10-15T13:00:00.000Z");
+const gLine = briefLines(mk({ items: [item({ kind: "meeting", title: "1:1", startIso: g, endIso: graphUtcToIso("2026-10-15T13:30:00.0000000") })] }), TZ);
+t("F3b and renders in the owner's zone, not 4h early", gLine[0], "9:00AM–9:30AM — 1:1 (meeting)");
+t("F3c a value that already has an offset is left alone", graphUtcToIso("2026-10-15T13:00:00Z"), "2026-10-15T13:00:00Z");
+t("F3d null stays null", graphUtcToIso(null), null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
