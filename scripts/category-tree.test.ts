@@ -163,6 +163,27 @@ const allTasks = (roots: TopicNode[]): string[] => {
     "callers hold their own arrays");
 }
 
+// ── AC-10: NO ROW CAP anywhere in the data path ─────────────────────────────────────────────────
+{
+  // The owner explicitly rejected a row cap — "it should include all that comes back from the query
+  // no matter how long that is" (AC-journey-widgets AC-10, which names "+N more" truncation as the
+  // thing to avoid). A first draft of the renderer capped a category at 8 behind a "+N more"
+  // button; that is removed. This pins the DATA half so the server can never reintroduce one.
+  //
+  // NOTE ON WHAT THIS DOES AND DOES NOT COVER: the cap that existed was in the COMPONENT, so no
+  // offline assertion here could have caught it. AC-10 states its own observation method — compare
+  // the rendered `li` count against the payload's length — which needs a DOM. That check is
+  // BLOCKED-ON-DEPLOY via verify-uat.yml, and is recorded as such rather than claimed here.
+  const many = Array.from({ length: 60 }, (_, i) => row({ id: `m${i}`, category: "VENTURES" }));
+  const [ventures] = buildCategoryTaskTree(many, TZ, NOW);
+  check("a category carrying 60 tasks returns all 60 — the data path never truncates",
+    ventures.tasks.length === 60 && ventures.count === 60,
+    `tasks=${ventures.tasks.length}, count=${ventures.count}`);
+  check("the count and the carried rows agree at scale, so a UI cap could never be hidden by the number",
+    ventures.count === ventures.tasks.length,
+    "count is derived, not independent");
+}
+
 // ── An empty board is an empty tree, not a crash ────────────────────────────────────────────────
 {
   check("no live tasks and no journey topics → an empty tree, which the UI renders as its empty state",

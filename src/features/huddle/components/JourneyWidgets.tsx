@@ -161,16 +161,6 @@ function rowStatus(row: WidgetTaskRow): string {
  *  covers the first paint before the seed effect runs. That is what makes a stale snapshot harmless,
  *  and it is also what covers the mirror's ~1-3s lag after a write — the overlay holds the new value
  *  while journey → pg_net → webhook → mirror catches up. */
-/**
- * How many tasks a category/topic row PAINTS before it collapses the rest behind "+N more".
- *
- * Purely presentational, which is why it lives here and not in `widgets.server.ts`: the server
- * returns every task and a truthful `count`, so this caps the card's height without ever hiding
- * work from the number beside the row, and expanding costs no round-trip. 101 open tasks across
- * five categories would otherwise make the widget taller than the conversation it docks above.
- */
-const CATEGORY_TASK_PREVIEW_MAX = 8;
-
 function useRowState(row: WidgetTaskRow) {
   const live = useHuddleStore((s) => s.checklistState[row.id]);
   return {
@@ -673,9 +663,11 @@ function TopicRow({
   const hasChildren = node.children.length > 0;
   const hasTasks = node.tasks.length > 0;
   const hasContent = hasChildren || hasTasks;
-  const [showAllTasks, setShowAllTasks] = useState(false);
-  const visibleTasks = showAllTasks ? node.tasks : node.tasks.slice(0, CATEGORY_TASK_PREVIEW_MAX);
-  const hiddenTaskCount = node.tasks.length - visibleTasks.length;
+  // NO ROW CAP, NO "+N more" — AC-journey-widgets AC-10, in the owner's own words: "it should
+  // include all that comes back from the query no matter how long that is". An earlier draft of
+  // this row capped at 8 behind a "+N more" button, which is the exact pattern that AC rejects by
+  // name. Height is handled by the enclosing ScrollBand and by categories being collapsed by
+  // default, not by hiding rows.
   // ONE row starts open — the first — exactly as the spec draws it (Career expanded, the other four
   // categories closed). This was `depth === 0`, i.e. EVERY top-level row expanded, which was fine
   // while a top-level row was a topic with a handful of children. It is not fine now that a
@@ -741,21 +733,9 @@ function TopicRow({
           {node.children.map((c) => (
             <TopicRow key={c.id} node={c} depth={depth + 1} caller={caller} />
           ))}
-          {visibleTasks.map((row) => (
+          {node.tasks.map((row) => (
             <TopicTaskRow key={row.id} row={row} depth={depth + 1} caller={caller} />
           ))}
-          {hiddenTaskCount > 0 && (
-            <li>
-              <button
-                type="button"
-                onClick={() => setShowAllTasks(true)}
-                className="flex min-h-9 w-full items-center text-left text-[12px] text-muted-foreground hover:text-foreground"
-                style={{ paddingLeft: `${(depth + 1) * 0.875 + 0.75}rem` }}
-              >
-                +{hiddenTaskCount} more
-              </button>
-            </li>
-          )}
         </ul>
       )}
     </li>
