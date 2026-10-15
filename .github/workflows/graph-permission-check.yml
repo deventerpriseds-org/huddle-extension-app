@@ -8,6 +8,8 @@ name: Graph permission check (read-only)
 #             was never granted Calendars.Read, or an Exchange access policy / RBAC scope excludes
 #             the mailbox — and the fix differs. This reads the grants instead of guessing, and is
 #             re-runnable to prove the fix after an admin grants access.
+#             Section 4 (2026-10-15) also probes app-only Inbox read + Drafts folder access, the
+#             premise of an inbound-email watcher (Iris missed Amy Corriveau's email: nothing reads mail).
 # SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 # EVIDENCE:   .claude/evidence/schedule-brief-fix.md; deploy-swa.yml "Ensure Graph Mail.Send" step
 #             (grants Mail.Send only).
@@ -75,3 +77,21 @@ jobs:
             echo "$m | user lookup HTTP $U -> $UID_ | calendarView HTTP $C ${ERR}"
           done
           echo "(user lookup 403 just means the app lacks User.Read.All; it does not affect the calendar read)"
+
+          # 4. Inbox read + Drafts folder access per mailbox — the calls an inbound-email watcher
+          #    would make (ACT:inbound-email-watch). Prints status + counts only, never mail bodies.
+          echo "=== 4. App-only Inbox read + Drafts folder access per mailbox ==="
+          for m in "${MBX[@]}"; do
+            m=$(echo "$m" | xargs)
+            I=$(curl -s -o /tmp/i.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+              "https://graph.microsoft.com/v1.0/users/$m/mailFolders/inbox/messages?\$top=25&\$orderby=receivedDateTime%20desc&\$select=receivedDateTime,from,isRead")
+            ISUM=$(python3 -c '
+          import json
+          d=json.load(open("/tmp/i.json")); v=d.get("value") or []
+          e=(d.get("error") or {}).get("code","")
+          hit=[x["receivedDateTime"] for x in v if "trinnex" in str(((x.get("from") or {}).get("emailAddress") or {}).get("address","")).lower()]
+          print(len(v), "newest read", e, "| trinnex.io sender among them:", hit if hit else "none")' 2>/dev/null || echo "-")
+            D=$(curl -s -o /tmp/d.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+              "https://graph.microsoft.com/v1.0/users/$m/mailFolders/drafts?\$select=displayName,totalItemCount")
+            echo "$m | inbox HTTP $I -> $ISUM | drafts folder HTTP $D"
+          done
