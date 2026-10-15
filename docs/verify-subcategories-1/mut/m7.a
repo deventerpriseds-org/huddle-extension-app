@@ -1,0 +1,1 @@
+  for (const n of byId.values()) n.tasks.sort(byPriorityThenDue);

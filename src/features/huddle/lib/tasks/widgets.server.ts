@@ -102,25 +102,25 @@ export interface TopicNode {
    * guard and a node that simply holds no tasks is indistinguishable from one built before this
    * field existed.
    *
-   * WHY THIS IS NOT journey's: journey exposes no tool that returns a topic's tasks within a usable
-   * budget. `get_task_topics` is not deployed (not on `main`, not in any open PR, commit `ec508a5`
-   * unreachable); `get_tasks` caps at `.limit(50)` of 101 open tasks; `get_tasks_by_topic` costs one
-   * call per topic (~75), orders by the `priority` TEXT column descending (so MEDIUM sorts above
-   * HIGH), has no tiebreak, drops BLOCKED which Huddle's own `isOpen` deliberately keeps, and
-   * answers `success:true, count:0` when a topic NAME is duplicated. So the tasks come from the
-   * mirror Huddle already reads — see `buildCategoryTaskTree`.
+   * The TASKS always come from the mirror Huddle already reads, never from journey: journey's
+   * `get_task_topics` (deployed 2026-10-15, journey-voice#42) returns only topics and task->topic
+   * LINKS, and `buildPrioritiesTree` hangs the mirror's rows on them. The read paths that DO return
+   * tasks were rejected on measurement: `get_tasks` caps at `.limit(50)` of 101 open tasks, and
+   * `get_tasks_by_topic` costs one call per topic, orders by the `priority` TEXT column (MEDIUM above
+   * HIGH), drops BLOCKED, and answers `success:true, count:0` for a duplicated topic name.
    */
   tasks: WidgetTaskRow[];
 }
 
 /**
- * Why a topic tree is empty. The tree is the half of the PRIORITIES widget that depends on
- * journey deploying Lane A's `get_task_topics`, so every failure mode is a RENDERABLE EMPTY
- * STATE, never an exception:
- *  - `ok`             — journey answered; `roots` is the real tree (possibly genuinely empty).
+ * The state of journey's topic read (`get_task_topics`, DEPLOYED 2026-10-15 via journey-voice#42).
+ * It decides only whether the SUB-CATEGORY layer appears: the category rows always render from the
+ * mirror. Every failure is a renderable degraded state, never an exception:
+ *  - `ok`             — journey answered; the tree has its topics.
  *  - `not-configured` — JOURNEY_PROXY_URL/TOKEN absent in this environment.
- *  - `tool-absent`    — the proxy answered but does not know the tool yet (not deployed).
- *  - `error`          — anything else (network, non-JSON, unparseable payload).
+ *  - `tool-absent`    — the proxy answered but does not know the tool (a journey rollback, or an
+ *                       environment pointed at a journey without #42).
+ *  - `error`          — anything else (network, non-JSON, timeout).
  */
 export type TopicTreeReason = "ok" | "not-configured" | "tool-absent" | "error";
 
@@ -280,11 +280,38 @@ export function withParkingLotTag(existing: readonly unknown[] | null | undefine
   return tags.includes(PARKING_LOT_TAG) ? tags : [...tags, PARKING_LOT_TAG];
 }
 
-/** Open = not completed and not DONE. (BLOCKED stays visible — a blocked item is still live work
- *  the user may want to see; the board and standup both keep it.) */
+/**
+ * Open = the STATUS is not closed. (BLOCKED stays visible: a blocked item is still live work the user
+ * may want to see, and the board and standup both keep it.)
+ *
+ * STATUS IS THE SOURCE OF TRUTH; `completed_at` IS NOT. This used to return false for any row that
+ * had a `completed_at`. journey keeps that date when a task is REOPENED, so a task the owner had
+ * finished and then brought back stayed hidden from every widget section while his phone showed it.
+ * Measured on his journey board, 2026-10-15: 6 tasks have a live status (UP_NEXT or BACKLOG) and an
+ * old completed_at, among them "Complete 2 MIT assignments" (UP_NEXT), which his phone widget
+ * shows. Found by an independent verifier comparing Huddle's tree with the phone, category by
+ * category. Completing a task sets status DONE, which CLOSED_STATUSES still excludes.
+ */
 export function isOpen(row: BoardTaskRow): boolean {
-  if (row.completed_at) return false;
   return !CLOSED_STATUSES.has(upper(row.status));
+}
+
+/**
+ * Is this task shown in the CATEGORY / TOPIC TREE? The owner's phone's rule, exactly:
+ * `status=not.in.(DONE,BLOCKED)` (SupabaseTaskClient.getTasksForTopics), with no parking filter.
+ *
+ * DELIBERATELY DIFFERENT FROM `isOpen`, which the This Week band and the schedule use. Owner,
+ * 2026-10-15, after the tree's counts were compared with his Android widget and did not match (Life
+ * 15 vs 18, Ventures 57 vs 66): "why dont life and ventures line up and why are you pushing past it
+ * instead of fixing it?" The three differences were ones I had chosen, not ones he asked for:
+ *   - PARKED tasks: the phone shows them, and the tree hid them. 15 of the 21 missing tasks.
+ *   - BLOCKED tasks: the phone hides them, and the tree showed them.
+ *   - Tasks linked to NO topic: the phone hides them (see buildPrioritiesTree), and the tree showed them.
+ * Measured with docs/verify-subcategories-1/compare.ts on his real data before and after.
+ */
+export function isTreeLive(row: BoardTaskRow): boolean {
+  const s = upper(row.status);
+  return s !== "DONE" && s !== "BLOCKED";
 }
 
 /** Project one mirror board row into the widget row shape, resolving `isToday` in `timeZone`. */
@@ -473,11 +500,10 @@ function firstArray(o: Record<string, unknown>, keys: string[]): unknown[] | nul
 }
 
 /**
- * Find the topic array inside whatever journey returns. The tool's exact envelope is NOT yet
- * published (Lane A's doc records the TABLES and COLUMNS it reads, but its "implement + register"
- * step was still open when this was written — see docs/LANE-B-widget-data.md), so this accepts an
- * array at the top level or under any of the usual wrapper keys, one level of nesting deep.
- * Anything it cannot find becomes an empty tree with a reason, never a throw.
+ * Find the topic array inside whatever journey returns. `get_task_topics` returns
+ * `{topics, mappings}` (journey-voice#42), which the `topics` key below matches directly. The wider
+ * set of keys and the one level of nesting predate that tool and are kept, because a tolerant reader
+ * costs nothing. Anything it cannot find becomes an empty tree with a reason, never a throw.
  */
 export function findTopicArray(payload: unknown): unknown[] | null {
   if (Array.isArray(payload)) return payload;
@@ -830,8 +856,9 @@ export function buildTopicTree(payload: unknown): TopicNode[] {
  * WHAT THIS DELIVERS AND WHAT IT DOES NOT: categories with their tasks — which is the payoff the
  * owner named ("so if an agent in the future is asked to autopull one or two FROM THE CATEGORIES it
  * knows whats next"). It does NOT invent topic/theme sub-nodes; the mirror has no topic column
- * (topics live in journey's `task_topic_mappings`, which no deployed tool exposes affordably).
- * `mergeTopicTree` nests real topics under these roots the moment a topic source answers.
+ * (topics live in journey's `task_topic_mappings`). That layer is `buildPrioritiesTree`'s job: it
+ * calls this for the tasks linked to NO topic, and for the whole tree when journey's topics are
+ * unavailable.
  *
  * Note it does what the comment in `groupByCategory` says Huddle could not: that code takes "the
  * first category found beneath" a topic because "Huddle is handed topics, not their tasks". Here
@@ -848,10 +875,8 @@ export function buildCategoryTaskTree(
   const tz = safeTimeZone(timeZone);
   const todayKey = localDateKey(nowMs, tz) ?? new Date(nowMs).toISOString().slice(0, 10);
 
-  // Same liveness rule as every other widget section — closed and parked work never surfaces.
-  // BLOCKED stays (isOpen keeps it on purpose); journey's own topic tool drops it, which is one
-  // of the reasons this is not sourced from there.
-  const live = rows.filter((r) => isOpen(r) && !isParked(r)).map((r) => toWidgetRow(r, tz, todayKey));
+  // The TREE's liveness rule, which is the owner's phone's rule (isTreeLive), not the band's.
+  const live = rows.filter(isTreeLive).map((r) => toWidgetRow(r, tz, todayKey));
 
   const byCat = new Map<string, WidgetTaskRow[]>();
   for (const row of live) {
@@ -901,11 +926,10 @@ const UNCATEGORISED_LABEL = "Uncategorised";
 /**
  * Merge journey's topic tree INTO the mirror-sourced category tree.
  *
- * The mirror is the BASE, not the overlay, and that ordering is the whole point: today
- * `fetchTopicTree` returns `roots: []` (`reason:"tool-absent"`), so an overlay design would render
- * nothing — which is exactly the live defect, a tree that has never populated in production.
- * Basing on the mirror means the categories and their tasks render NOW, and real topics appear as
- * children the moment any topic source answers.
+ * The mirror is the BASE, not the overlay. Before journey-voice#42 deployed `get_task_topics`
+ * (2026-10-15), journey answered `tool-absent` and an overlay design rendered nothing: the tree had
+ * never populated in production. Basing on the mirror means the categories and their tasks render
+ * whatever journey does, and topics fold in as children whenever it answers.
  *
  * It also fixes a divergence from the owner's phone: `groupByCategory` only creates a category root
  * when some TOPIC claims that category, so FAMILY — which holds no `task_topic_index` rows — is
@@ -1094,10 +1118,7 @@ export async function fetchTopicPayload(
         context: { source: "huddle" },
       });
       if (!r.ok) {
-        const detail = `${r.error ?? ""} ${r.output ?? ""}`.toLowerCase();
-        const absent = ["unknown tool", "unsupported tool", "no such tool", "tool not found", "not implemented"]
-          .some((p) => detail.includes(p));
-        return { ok: false, reason: absent ? "tool-absent" : "error", error: r.error ?? "journey returned ok=false" };
+        return { ok: false, reason: classifyTopicFailure(r.error, r.output), error: r.error ?? "journey returned ok=false" };
       }
       // The proxy always hands back `output` as a STRING (huddle-proxy JSON.stringifies the result).
       let payload: unknown = r.output;
@@ -1122,12 +1143,32 @@ export async function fetchTopicPayload(
 }
 
 /**
+ * Why journey's topic call failed: the tool not being deployed is a steady state the UI explains
+ * ("Sub-themes … aren't available yet"), anything else is an error worth showing. Pure so it can be
+ * tested: an independent verifier deleted this detection and no test failed (INERT, 2026-10-15).
+ * execute-tool's own wording is "Unknown tool: <name>".
+ */
+export function classifyTopicFailure(error?: string | null, output?: string | null): TopicTreeReason {
+  const detail = `${error ?? ""} ${output ?? ""}`.toLowerCase();
+  return ["unknown tool", "unsupported tool", "no such tool", "tool not found", "not implemented"].some((p) =>
+    detail.includes(p),
+  )
+    ? "tool-absent"
+    : "error";
+}
+
+/**
  * `task_id -> topic_id` from journey's `mappings`, ONE topic per task.
  *
- * A task linked to two topics is placed once, under the topic with the smallest id, so counts never
- * double and the placement is the same on every read. Measured on the owner's data: 1 such task of
- * 369 links. (The Android widget keeps whichever mapping the database happened to return last,
- * `topicByTask[task_id] = topic_id`, which is not stable across reads.)
+ * A task linked to two topics is placed ONCE, under its NEWEST link (`created_at`), so counts never
+ * double and the placement matches the owner's phone. The phone keeps the last link the database
+ * returns (`topicByTask[task_id] = topic_id`), and the table returns links in insertion order, so
+ * "last" is "newest". Measured 2026-10-15 on the one such task: "Prepare an inspections records
+ * database" is linked to Database Management (13:06:59.099) and Inspection Records Management
+ * (13:06:59.191), and his phone files it under the second. Unlike the phone, this does not depend on
+ * row order: it reads the timestamp. Ties, and links that arrive without a timestamp (a journey
+ * before `created_at` was added to get_task_topics), fall back to the smallest topic id, so the
+ * result is the same on every read.
  */
 export function findTopicMappings(payload: unknown): Map<string, string> {
   const out = new Map<string, string>();
@@ -1143,14 +1184,23 @@ export function findTopicMappings(payload: unknown): Map<string, string> {
     }
     return null;
   })();
+  const chosenAt = new Map<string, number>(); // task -> created_at (ms) of the link currently chosen
   for (const m of arr ?? []) {
     if (!m || typeof m !== "object") continue;
     const r = m as Record<string, unknown>;
     const taskId = typeof r.task_id === "string" ? r.task_id : typeof r.taskId === "string" ? r.taskId : null;
     const topicId = typeof r.topic_id === "string" ? r.topic_id : typeof r.topicId === "string" ? r.topicId : null;
     if (!taskId || !topicId) continue;
+    const rawAt = r.created_at ?? r.createdAt;
+    const parsed = typeof rawAt === "string" ? Date.parse(rawAt) : NaN;
+    const at = Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
     const prev = out.get(taskId);
-    if (prev === undefined || topicId < prev) out.set(taskId, topicId);
+    const prevAt = chosenAt.get(taskId) ?? Number.NEGATIVE_INFINITY;
+    // Newest link wins; equal timestamps (or none) fall back to the smallest topic id.
+    if (prev === undefined || at > prevAt || (at === prevAt && topicId < prev)) {
+      out.set(taskId, topicId);
+      chosenAt.set(taskId, at);
+    }
   }
   return out;
 }
@@ -1193,20 +1243,22 @@ export function buildPrioritiesTree(
   };
   index(topicRoots);
 
-  const unmapped: BoardTaskRow[] = [];
   for (const r of rows) {
-    if (!isOpen(r) || isParked(r)) continue;
+    if (!isTreeLive(r)) continue;
     const topicId = mappings.get(r.id);
     const node = topicId ? byId.get(topicId) : undefined;
     // Never attach to a synthetic category root: a mapping names a TOPIC.
     if (node && !node.id.startsWith(CATEGORY_ROOT_PREFIX)) node.tasks.push(toWidgetRow(r, tz, todayKey));
-    else unmapped.push(r);
+    // A task linked to NO topic is NOT shown in the tree when topics are available — the phone's
+    // rule (SupabaseTaskClient.getTasksForTopics only fetches tasks reached through a mapping). It
+    // stays on the board, and in This Week if starred. The degraded path above is different on
+    // purpose: with NO topics at all, every task is "unlinked", and hiding them would empty the tree.
   }
   for (const n of byId.values()) n.tasks.sort(byPriorityThenDue);
 
-  // mergeTopicTree deep-clones, folds topics into the matching category roots, recounts every node
-  // from what is beneath it, and sorts. The unmapped tasks' tree is the base it folds into.
-  return mergeTopicTree(topicRoots, buildCategoryTaskTree(unmapped, timeZone, nowMs));
+  // mergeTopicTree deep-clones, folds the topics into category roots, recounts every node from what
+  // is beneath it, and sorts.
+  return mergeTopicTree(topicRoots, []);
 }
 
 // ---------------------------------------------------------------------------

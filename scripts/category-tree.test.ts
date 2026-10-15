@@ -19,7 +19,9 @@
 
 import {
   buildCategoryTaskTree,
+  buildPrioritiesBand,
   buildPrioritiesTree,
+  classifyTopicFailure,
   findTopicMappings,
   mergeTopicTree,
   UNCATEGORISED_CATEGORY,
@@ -99,14 +101,25 @@ const allTasks = (roots: TopicNode[]): string[] => {
   const rows = [
     row({ id: "open", category: "LIFE" }),
     row({ id: "done", category: "LIFE", status: "DONE" }),
-    row({ id: "completed", category: "LIFE", completed_at: "2026-10-01T00:00:00Z" }),
+    // REOPENED: a live status with an old completed_at. journey keeps the date when a task is brought
+    // back, so this is LIVE work. It used to be hidden, which is how "Complete 2 MIT assignments"
+    // (UP_NEXT) vanished from Huddle while the owner's phone showed it.
+    row({ id: "reopened", category: "LIFE", status: "UP_NEXT", completed_at: "2026-09-13T00:00:00Z" }),
     row({ id: "parked", category: "LIFE", tags: ["parking-lot"] }),
     row({ id: "blocked", category: "LIFE", status: "BLOCKED" }),
   ];
   const ids = allTasks(buildCategoryTaskTree(rows, TZ, NOW)).sort();
-  check("DONE, completed and parked tasks are excluded; BLOCKED is KEPT",
-    ids.join(",") === "blocked,open",
-    `[${ids.join(",")}] — journey's own get_tasks_by_topic drops BLOCKED, which is one reason the tree is not sourced from it`);
+  // The TREE follows the owner's phone (isTreeLive): status not DONE and not BLOCKED, parked SHOWN.
+  // These were my own rules until 2026-10-15 ("why dont life and ventures line up"): parked hidden
+  // and BLOCKED kept. Parked tasks alone were 15 of the 21 tasks Huddle was missing.
+  check("TREE = the phone's rule: DONE and BLOCKED hidden; PARKED shown; a REOPENED task (live status, old completed_at) shown",
+    ids.join(",") === "open,parked,reopened",
+    `[${ids.join(",")}] — SupabaseTaskClient: status=not.in.(DONE,BLOCKED), no parking filter`);
+  // ...and the This Week BAND is deliberately NOT changed: it keeps the band's rule (isOpen && not
+  // parked). A different rule on a different surface is a documented decision, not an accident.
+  const band = buildPrioritiesBand(rows.map((r) => ({ ...r, is_priority: true })), TZ, NOW).map((r) => r.id).sort();
+  check("the This Week BAND keeps its own rule: parked hidden, BLOCKED kept",
+    band.join(",") === "blocked,open,reopened", `[${band.join(",")}]`);
 }
 
 // ── The count is DERIVED, so it can never disagree with the rows ────────────────────────────────
@@ -357,15 +370,55 @@ const allTasks = (roots: TopicNode[]): string[] => {
   ];
   const tree = buildPrioritiesTree(rows, TZ, NOW, { topics, mappings });
   const all = allTasks(tree).sort();
-  check("SUB-CATEGORIES: every live task appears exactly once — unlinked, dangling-link and multi-linked alike",
-    all.join(",") === "ghost,loose,twice", `[${all.join(",")}]`);
-  check("SUB-CATEGORIES: a task with NO topic sits directly under its own category (the phone drops it; we don't)",
-    tree.find((n) => n.categoryAffinity === "VENTURES")?.tasks.some((t) => t.id === "loose") === true,
-    "no live work is hidden");
+  check("SUB-CATEGORIES: the tree shows exactly what the phone shows — linked + live (parked included), each once",
+    all.join(",") === "parked,twice", `[${all.join(",")}] — loose/ghost have no reachable topic, done is closed`);
+  check("SUB-CATEGORIES: a task with NO topic is NOT in the tree when topics are available — the phone's rule",
+    !all.includes("loose") && !all.includes("ghost") && !tree.some((n) => n.categoryAffinity === "VENTURES"),
+    "SupabaseTaskClient only reaches tasks through a mapping; the task stays on the board and in This Week");
   const fwd = findTopicMappings({ mappings }).get("twice");
   const rev = findTopicMappings({ mappings: [...mappings].reverse() }).get("twice");
-  check("SUB-CATEGORIES: a task linked to two topics lands under ONE, the same one on every read",
-    fwd === "ta" && rev === "ta", `${fwd} / ${rev} — the phone keeps whichever row came back last`);
+  check("SUB-CATEGORIES: without timestamps, a task linked to two topics lands under ONE, the same on every read",
+    fwd === "ta" && rev === "ta", `${fwd} / ${rev} — smallest topic id, the fallback for a journey that sends no created_at`);
+  // With timestamps: the NEWEST link wins, which is what the owner's phone shows. Real values from
+  // his board: "Prepare an inspections records database" -> Database Management at 13:06:59.099 and
+  // Inspection Records Management at 13:06:59.191; his phone files it under the second.
+  const timed = [
+    { task_id: "insp", topic_id: "65784e06-db", created_at: "2026-09-21T13:06:59.099348+00:00" },
+    { task_id: "insp", topic_id: "6658cd7e-ir", created_at: "2026-09-21T13:06:59.19153+00:00" },
+  ];
+  const nf = findTopicMappings({ mappings: timed }).get("insp");
+  const nr = findTopicMappings({ mappings: [...timed].reverse() }).get("insp");
+  check("SUB-CATEGORIES: with timestamps, the NEWEST link wins, matching the phone, in any row order",
+    nf === "6658cd7e-ir" && nr === "6658cd7e-ir", `${nf} / ${nr} — the phone files it under Inspection Records Management`);
+}
+
+{
+  // m7, INERT for the verifier: nothing asserted the ORDER of tasks inside a topic. That order is
+  // what "what's next in <topic>?" reads, so it gets the same total-order guarantee as a category.
+  const topics = [{ id: "ts", topic_name: "Sorted", category_affinity: "CAREER" }];
+  const rows = [
+    row({ id: "s-plain", category: "CAREER", title: "zzz" }),
+    row({ id: "s-rank2", category: "CAREER", is_priority: true, priority_rank: 2, title: "b" }),
+    row({ id: "s-rank1", category: "CAREER", is_priority: true, priority_rank: 1, title: "c" }),
+  ];
+  const mappings = rows.map((r) => ({ task_id: r.id, topic_id: "ts" }));
+  const order = (rs: any[]) =>
+    buildPrioritiesTree(rs, TZ, NOW, { topics, mappings })[0].children[0].tasks.map((t) => t.id).join(",");
+  check("SUB-CATEGORIES: tasks INSIDE a topic are ordered starred+ranked first, the same for any arrival order",
+    order(rows) === "s-rank1,s-rank2,s-plain" && order([...rows].reverse()) === "s-rank1,s-rank2,s-plain",
+    `${order(rows)} / reversed ${order([...rows].reverse())}`);
+}
+
+{
+  // m8, INERT for the verifier: deleting the "not deployed" detection failed no test.
+  check("SUB-CATEGORIES: journey's own 'Unknown tool' answer is read as tool-absent (a steady state), not an error",
+    classifyTopicFailure("Unknown tool: get_task_topics", null) === "tool-absent" &&
+      classifyTopicFailure(null, '{"error":"unknown tool"}') === "tool-absent",
+    "execute-tool's own wording; the UI explains tool-absent instead of showing an error");
+  check("SUB-CATEGORIES: any other failure is an error, shown with its text",
+    classifyTopicFailure("permission denied for table task_topic_mappings", null) === "error" &&
+      classifyTopicFailure(null, null) === "error",
+    "a real failure must never be disguised as 'not deployed yet'");
 }
 
 {
@@ -418,20 +471,23 @@ const allTasks = (roots: TopicNode[]): string[] => {
     "src/features/huddle/lib/tasks/priority-check.server.ts",
   ]);
 
+  // Watches EVERY builder of the card's pieces, not just the band. The verifier found the
+  // original guard checked only buildPrioritiesBand, so a surface calling the tree builders
+  // directly would have rebuilt half a card unnoticed: the exact defect this guard exists for.
   const callers = walk("src")
-    .filter((f) => /buildPrioritiesBand\s*\(/.test(readFileSync(f, "utf8")))
+    .filter((f) => /\b(buildPrioritiesBand|buildPrioritiesTree|buildCategoryTaskTree)\s*\(/.test(readFileSync(f, "utf8")))
     .map((f) => f.replace(/\\/g, "/"))
     .sort();
   const rogue = callers.filter((f) => !ALLOWED.has(f));
   check(
-    "no surface builds its own priorities payload — every card goes through composePrioritiesWidget",
+    "no surface builds its own priorities payload (band OR tree) — every card goes through composePrioritiesWidget",
     rogue.length === 0,
     rogue.length
       ? `ROGUE: ${rogue.join(", ")} — use composePrioritiesWidget(email, tz) instead, or add it to ALLOWED with a reason`
       : `only ${callers.length} allowed caller(s): ${callers.map((f) => f.split("/").pop()).join(", ")}`,
   );
   check(
-    "the allowlist is not stale — every file on it still calls buildPrioritiesBand",
+    "the allowlist is not stale — every file on it still calls one of the builders",
     [...ALLOWED].every((f) => callers.includes(f)),
     "an allowlist entry that no longer calls it would silently permit a future rogue caller of the same name",
   );

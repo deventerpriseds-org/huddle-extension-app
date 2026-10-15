@@ -1,0 +1,1 @@
+    if (node) node.tasks.push(toWidgetRow(r, tz, todayKey));

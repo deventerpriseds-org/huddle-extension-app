@@ -720,8 +720,14 @@ function TopicRow({
               />
             ) : null}
           </span>
+          {/* A topic with nothing under it is GREY. Owner, 2026-10-15: "Topics with no tasks should use
+              grey text instead of black to show there currently is nothing to do if pushing it." Only
+              topics, never a category row: a category with no tasks does not render at all. */}
           <span
-            className={cn("min-w-0 flex-1 truncate text-[13px]", depth === 0 ? "text-foreground" : "text-foreground/85")}
+            className={cn(
+              "min-w-0 flex-1 truncate text-[13px]",
+              depth === 0 ? "text-foreground" : hasContent ? "text-foreground/85" : "text-muted-foreground",
+            )}
             title={node.name}
           >
             {node.name}
@@ -926,7 +932,7 @@ export function PrioritiesWidget({
             </ul>
           </ScrollBand>
           {/* The tree now renders from the MIRROR's categories, so it is populated even while
-              journey's topic tool is undeployed. That would otherwise HIDE the missing theme layer
+              journey's topic tool is unavailable. That would otherwise HIDE the missing theme layer
               entirely — the rows look complete, so nobody would know sub-themes are absent. Say so
               instead: `reason` still describes the journey passthrough, untouched by the merge. */}
           {data.topics.reason !== "ok" && <TopicsEmpty topics={data.topics} />}

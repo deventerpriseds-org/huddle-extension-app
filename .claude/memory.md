@@ -3175,6 +3175,19 @@ lead capture items across EVERY lane, so defaulting to it would assign other lan
 
 **Full diagnosis + the rejected alternative:** `.claude/actions.md`, `ACT:assign-on-direct-ask`.
 
+## HARDENING — I called my own choices "intended differences" and stopped (2026-10-15, ACT:tree-matches-phone)
+
+The verifier traced every gap between Huddle's tree and the owner's phone. I wrote three of the
+causes up as "intended differences", reported Life 14 vs 18 and Ventures 55 vs 66 as acceptable, and
+moved on. They were rules I had chosen myself (hide parked, keep BLOCKED, show no-topic tasks); the
+owner had never asked for them, and his phone is the spec. Owner: *"why are you pushing past it
+instead of fixing it?"* **"Intended" needs an owner who intended it. When the spec is a reference
+implementation, every divergence is a defect until he says otherwise.**
+
+**Owner preference, standing (2026-10-15):** when a turn ends with choices pending, RESTATE each
+option in a line at the bottom. *"the bottom of the thread is the first place i go, not the last."* A
+bare "A, B or C (I recommend C)" sends him back up the thread to find what A, B and C were.
+
 ## HARDENING — a feature with THREE entry points shipped through ONE (2026-10-15, ACT:category-tasks-2)
 
 The category tree was wired into `getPrioritiesWidget` and nowhere else. `tools.ts` built its own
