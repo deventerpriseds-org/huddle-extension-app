@@ -14,7 +14,7 @@
 // Run:  bun scripts/priority-lane.test.ts   (npm run test:priority-lane)
 
 import { scoreTask, type ScorableTask } from "../src/features/huddle/lib/tasks/scoring";
-import { laneFieldFor, laneRanks } from "../src/features/huddle/lib/tasks/groom";
+import { groomLaneField, GROOM_WRITES_STARS, laneFieldFor, laneRanks } from "../src/features/huddle/lib/tasks/groom";
 
 let pass = 0, fail = 0;
 function check(label: string, cond: boolean, detail: string) {
@@ -97,6 +97,18 @@ const LONG_AGO = new Date(Date.now() - 60 * 864e5).toISOString();
     scoreTask(task({ due_date: LONG_AGO, priority: "HIGH" })) > scoreTask(task({ due_date: LONG_AGO, priority: "MEDIUM" })),
     "unchanged behaviour",
   );
+}
+
+{
+  // OWNER DECISION "A" (2026-10-15): the groom no longer stars or un-stars anything. The capped-lane
+  // rule above is kept for the day the switch is flipped back; the groom itself writes neither field.
+  const ids = Array.from({ length: 30 }, (_, i) => `g${i + 1}`);
+  const rankById = laneRanks(ids);
+  const pinned = new Set(["g25"]);
+  const fields = ids.map((id) => groomLaneField(id, rankById, pinned));
+  check("A: the groom writes NO rank and NO unset_rank for any task — ranked, unranked or pinned",
+    !GROOM_WRITES_STARS && fields.every((f) => !("rank" in f) && !("unset_rank" in f)),
+    `GROOM_WRITES_STARS=${GROOM_WRITES_STARS}; fields with a lane key: ${fields.filter((f) => Object.keys(f).length).length}`);
 }
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);

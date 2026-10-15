@@ -3713,3 +3713,10 @@ here as fact three times before being checked.)
 - Before this, two emails of one user = two rows = every job fired twice (von.ellis@ + dev@ pairs).
 - Live since 2026-10-15 16:09Z (#68, `c1c9e32`): 7 enabled `<job>-u-<user_id>` rows; the old email rows
   are disabled, not deleted — re-enable one with `UPDATE tasks.scheduled_jobs SET enabled=true WHERE id=…`.
+
+## Active work — inbound email watch: Iris tells the owner about new email + offers a reply draft (2026-10-15, ACT:inbound-email-watch, PR #82, NOT LIVE, NOT user-confirmed)
+- **Root cause of "Iris never told me Amy (Trinnex) emailed":** nothing read incoming mail — Huddle had send/draft/calendar only; journey's 127 edge fns have no mail reader; `mail-and-appointments` is on-request only. Graph app already holds Mail.Read/Mail.ReadWrite; app-only Inbox + Drafts read of von.ellis@ = HTTP 200 (graph-permission-check.yml §4, run 38799786649).
+- **Built (PR #82):** job type `inbound-email` on the EXISTING scheduler (hourly 7–22 ET, Settings "New email alerts"), `lib/email/inbound-email.ts` (pure screen, default `needs-reply`) + `.server.ts` (reads owner Outlook via resolveCalendarMailbox, one durable Iris DM turn + push per kept email, max 5/run), route `/api/public/run-inbound-email`, `run-inbound-email.yml`. `create_email_draft` gained `reply_to` on all 3 surfaces via `createDraftForTool` → threaded reply in the OWNER's Drafts (Graph createReply). Never sends.
+- **Gotcha (verifier loop 1 caught it):** the scheduler stamps every fire with a per-hour `runId`; folding it into the turn id (the priority-check shape) re-announces the same email every hour. The id is the message alone. Mutation-proved.
+- **Repo is PUBLIC → Actions logs public.** Run results carry sender DOMAINS + verdicts only; never print subjects/bodies.
+- **Open:** verifier loop on fixed head, merge, live dry run (trinnex.io must be kept), real run, owner confirms Iris's message + draft in Outlook. Follow-ups: Settings toggle for mode A/B/C (today: route/workflow `mode` only); plain-draft fallback lands in dev@ when the original isn't found.

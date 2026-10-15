@@ -23,6 +23,7 @@ const JOB_TYPE_KEYS = [
   "reviewRecheck",
   "scheduleBrief",
   "priorityCheck",
+  "inboundEmail",
 ] as const;
 
 const CadenceInput = z.object({

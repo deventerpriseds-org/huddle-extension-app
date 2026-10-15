@@ -21,6 +21,7 @@ import { Route as ApiPublicRunScheduleBriefRouteImport } from './routes/api/publ
 import { Route as ApiPublicRunReviewRecheckRouteImport } from './routes/api/public/run-review-recheck'
 import { Route as ApiPublicRunReviewDigestRouteImport } from './routes/api/public/run-review-digest'
 import { Route as ApiPublicRunPriorityCheckRouteImport } from './routes/api/public/run-priority-check'
+import { Route as ApiPublicRunInboundEmailRouteImport } from './routes/api/public/run-inbound-email'
 import { Route as ApiPublicRunGroomingRouteImport } from './routes/api/public/run-grooming'
 import { Route as ApiPublicRunCeremonyRouteImport } from './routes/api/public/run-ceremony'
 import { Route as ApiPublicRunAutoworkRouteImport } from './routes/api/public/run-autowork'
@@ -90,6 +91,12 @@ const ApiPublicRunPriorityCheckRoute =
     path: '/api/public/run-priority-check',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicRunInboundEmailRoute =
+  ApiPublicRunInboundEmailRouteImport.update({
+    id: '/api/public/run-inbound-email',
+    path: '/api/public/run-inbound-email',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicRunGroomingRoute = ApiPublicRunGroomingRouteImport.update({
   id: '/api/public/run-grooming',
   path: '/api/public/run-grooming',
@@ -125,6 +132,7 @@ export interface FileRoutesByFullPath {
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-inbound-email': typeof ApiPublicRunInboundEmailRoute
   '/api/public/run-priority-check': typeof ApiPublicRunPriorityCheckRoute
   '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
   '/api/public/run-review-recheck': typeof ApiPublicRunReviewRecheckRoute
@@ -143,6 +151,7 @@ export interface FileRoutesByTo {
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-inbound-email': typeof ApiPublicRunInboundEmailRoute
   '/api/public/run-priority-check': typeof ApiPublicRunPriorityCheckRoute
   '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
   '/api/public/run-review-recheck': typeof ApiPublicRunReviewRecheckRoute
@@ -163,6 +172,7 @@ export interface FileRoutesById {
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-inbound-email': typeof ApiPublicRunInboundEmailRoute
   '/api/public/run-priority-check': typeof ApiPublicRunPriorityCheckRoute
   '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
   '/api/public/run-review-recheck': typeof ApiPublicRunReviewRecheckRoute
@@ -183,6 +193,7 @@ export interface FileRouteTypes {
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-inbound-email'
     | '/api/public/run-priority-check'
     | '/api/public/run-review-digest'
     | '/api/public/run-review-recheck'
@@ -201,6 +212,7 @@ export interface FileRouteTypes {
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-inbound-email'
     | '/api/public/run-priority-check'
     | '/api/public/run-review-digest'
     | '/api/public/run-review-recheck'
@@ -220,6 +232,7 @@ export interface FileRouteTypes {
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-inbound-email'
     | '/api/public/run-priority-check'
     | '/api/public/run-review-digest'
     | '/api/public/run-review-recheck'
@@ -239,6 +252,7 @@ export interface RootRouteChildren {
   ApiPublicRunAutoworkRoute: typeof ApiPublicRunAutoworkRoute
   ApiPublicRunCeremonyRoute: typeof ApiPublicRunCeremonyRoute
   ApiPublicRunGroomingRoute: typeof ApiPublicRunGroomingRoute
+  ApiPublicRunInboundEmailRoute: typeof ApiPublicRunInboundEmailRoute
   ApiPublicRunPriorityCheckRoute: typeof ApiPublicRunPriorityCheckRoute
   ApiPublicRunReviewDigestRoute: typeof ApiPublicRunReviewDigestRoute
   ApiPublicRunReviewRecheckRoute: typeof ApiPublicRunReviewRecheckRoute
@@ -335,6 +349,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicRunPriorityCheckRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/run-inbound-email': {
+      id: '/api/public/run-inbound-email'
+      path: '/api/public/run-inbound-email'
+      fullPath: '/api/public/run-inbound-email'
+      preLoaderRoute: typeof ApiPublicRunInboundEmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/run-grooming': {
       id: '/api/public/run-grooming'
       path: '/api/public/run-grooming'
@@ -394,6 +415,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicRunAutoworkRoute: ApiPublicRunAutoworkRoute,
   ApiPublicRunCeremonyRoute: ApiPublicRunCeremonyRoute,
   ApiPublicRunGroomingRoute: ApiPublicRunGroomingRoute,
+  ApiPublicRunInboundEmailRoute: ApiPublicRunInboundEmailRoute,
   ApiPublicRunPriorityCheckRoute: ApiPublicRunPriorityCheckRoute,
   ApiPublicRunReviewDigestRoute: ApiPublicRunReviewDigestRoute,
   ApiPublicRunReviewRecheckRoute: ApiPublicRunReviewRecheckRoute,

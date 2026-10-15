@@ -4543,3 +4543,35 @@ its twin). There is no detector for this drift today; compare.ts found it by acc
 - **Order:** `orderByContent` — rows with tasks first at every level; topics with tasks by soonest task date; empty topics by journey `updated_at` desc (journey-voice #52 adds the field). FIRED ×3.
 - **Shipped:** huddle #77 `665e502` (deploy success), journey #52 `ca40eec` (deploy success). NOT owner-confirmed.
 - **Open:** Monday 8am groom will star its top 20 again unless told otherwise — owner decision pending.
+
+## ACT:inbound-email-watch — Iris never flagged Amy Corriveau's (Trinnex) email or offered a draft (2026-10-15)
+- **Status:** BUILT, IN REVIEW — [PR #82](https://github.com/deventerpriseds-org/huddle-extension-app/pull/82). Default mode A (needs-reply) taken as the reversible default; B/C available via `mode`. NOT live, NOT owner-confirmed.
+- **Evidence:** `bun scripts/inbound-email.test.ts` 29/29; mutation FIRED on ask check, automated sender, List-Unsubscribe, self, and runId-in-turn-id; priority-check 20, schedule-brief 54, scheduler-one-user 7, email-self-send 73, voice-toolset-hidden 36; vite build OK; tsc 0 errors.
+- **Verifier loop 1:** REFUTED AC-2 (per-hour runId in the turn id → re-announce hourly). Fixed + mutation-proved; loop on the fixed head pending.
+- **Next:** merge → live dry run (trinnex.io kept) → real run → owner confirms Iris's DM + Outlook draft. Follow-up rows: Settings toggle for mode; plain-draft fallback mailbox.
+- **Root cause (observed):** nothing reads incoming mail. Huddle `origin/main` c197516 has send/draft/calendar only; journey's 127 edge fns + tables have no mail reader; `mail-and-appointments` is on-request with a user token, no schedule.
+- **Premise proven (run 38799786649, branch commit 2514262):** app-only `von.ellis@enterpriseds.io` Inbox read HTTP 200 (Amy's mail at 2026-10-15T19:38:31Z visible, 4 earlier trinnex.io mails since 10-13), Drafts folder HTTP 200. App holds Mail.Read/Mail.ReadWrite — no admin grant needed.
+- **Second gap:** `createGraphDraft` defaults to dev@enterpriseds.io, so "push to my drafts" would land in the wrong mailbox; must target the owner's Outlook (`pickOutlookMailbox`).
+- **Proposed plan:** scheduled job on the existing run-* pattern (~15 min) → Inbox-only new mail → screen → Iris 1:1 DM + push with summary + suggested reply → on "yes" save draft to owner's Drafts. Never auto-send. Dedupe per message id.
+
+## ACT:row-action-menu — prototype for a left-side action menu (2026-10-15)
+- **Ask (owner):** "items should be ordered descending by date for the most recent … I also dont see a star for pushing a topic or sub topic or task. i only see today under task which i dont like. what if on mobile, a context menu popped up from clicking the action menu to the left … let me see a photorealistic prototype".
+- **Shipped:** topics with tasks now order most-recent date first — huddle #79 `34ec33c` (FIRED).
+- **Prototype (not built):** https://claude.ai/artifact/2dnuJJaYUMGqhxUysapcJ6 — ⋮ on the left of every row (task, topic, category, This Week); title wraps across the rest; menu = Push / Remove, Done, Park, Start, Move up/down; topics and categories get "Push"; no Today button. Real topic/task names from journey.
+- **Status:** awaiting owner sign-off on the prototype before the real UI + category-push (ACT:category-push) are built.
+
+## ACT:category-push — BUILT (2026-10-15): push task/topic/category, groom stops starring (A), ⋮ menu
+- **Owner:** "approved, build it and go with A for the groom".
+- **Groom (A):** `GROOM_WRITES_STARS=false` (groom.ts) — no rank / unset_rank ever. Agents' work order: `orderForAutowork` (scoring.ts), journey's keys.
+- **Push:** `push.server.ts` — star via `set_priority_rank` rank 0; node push picks by scorer (category = task's own category, topic = journey mappings); `tasks.priority_push` (003) + CAS refill; webhook hook after mirror write; `reconcilePushes` on run-autowork reads JOURNEY (`explain_task_score`).
+- **UI:** left ⋮ RowMenu (portal, flips up), star after pushed node name, meta under title, Today removed from priorities rows.
+- **Evidence:** `scripts/category-push.test.ts` 20/20; 9 mutations FIRED (eligibility starred/completed_at, skip, unpush, PUSH_RANK, id-sort determinism, scorer pick, star-first, GROOM_WRITES_STARS); all existing widget suites green; `vite build` rc=0.
+- **Verification:** 3 independent verifier rounds (`docs/VERIFY-category-push-1..3.md`). R1: D1-D10 fixed (4c53e20, 69f94b6). R2: N1 HIGH (reconcile refilled every tick — explain_task_score has no category) + N2 fixed (036b13f). R3: SHIP; N3 (reconcile mid-star race) + L3 fixed (4ce5bdf). `category-push.test.ts` 35/35; every new guard FIRED under mutate.sh.
+- **Known, not fixed:** a lost "park" webhook is undetectable by the reconcile (journey's read returns no tags) — harmless (no write), the next webhook catches it.
+- **Status:** shipping; NOT owner-confirmed.
+
+
+## BACKLOG: two pre-existing red suites (found 2026-10-15, not caused by ACT:category-push)
+- `scripts/memory-mode.test.ts` — expects default memoryMode `reconstruction` / version 4; source says `researched` / 8. Fails without the push changes.
+- `scripts/model-policy.test.ts` — "diff 3 (sol-ceiling agent) → sol/high + needsConfirm (got gpt-5.6-sol/high, confirm=false)". Fails without the push changes.
+- `scripts/cross-app-turn-gate.test.ts` G7 requires every public route file byte-identical to origin/main — red on ANY branch that edits a route (here tasks-sync/run-autowork), green after merge. Scope-frozen guard from another feature.
