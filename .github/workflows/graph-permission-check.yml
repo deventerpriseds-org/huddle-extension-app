@@ -1,0 +1,77 @@
+name: Graph permission check (read-only)
+
+# WHAT:       Lists every Microsoft Graph APPLICATION permission Huddle's app holds, and tries the
+#             exact calendar read the schedule brief makes (app-only calendarView) for each mailbox
+#             given — printing the HTTP status per mailbox. Changes nothing.
+# WHY:        The 8am/8pm schedule brief gets "Graph calendarView failed (403): Access is denied"
+#             (live dry run, run 38776403438, 2026-10-15). A 403 has two possible causes — the app
+#             was never granted Calendars.Read, or an Exchange access policy / RBAC scope excludes
+#             the mailbox — and the fix differs. This reads the grants instead of guessing, and is
+#             re-runnable to prove the fix after an admin grants access.
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/evidence/schedule-brief-fix.md; deploy-swa.yml "Ensure Graph Mail.Send" step
+#             (grants Mail.Send only).
+#
+# Uses the SAME credential the running app uses (AZURE_CLIENT_ID / AZURE_CLIENT_SECRET /
+# AZURE_TENANT_ID — deploy-swa.yml syncs exactly these; graph-email.server.ts getAppToken).
+
+on:
+  workflow_dispatch:
+    inputs:
+      mailboxes:
+        description: "Comma-separated mailboxes to test the calendar read against."
+        required: true
+        default: "dev@enterpriseds.io,von.ellis@enterpriseds.io"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read grants + probe calendar access
+        env:
+          TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          MAILBOXES: ${{ inputs.mailboxes }}
+        run: |
+          set -uo pipefail
+          for v in TENANT CLIENT_ID CLIENT_SECRET; do
+            if [ -z "${!v}" ]; then echo "::error::$v secret is empty"; exit 1; fi
+          done
+          echo "App (client) id in use: $CLIENT_ID"
+
+          TOKEN=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" \
+            -d "client_id=$CLIENT_ID" --data-urlencode "client_secret=$CLIENT_SECRET" \
+            -d "scope=https://graph.microsoft.com/.default" -d "grant_type=client_credentials" \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
+          if [ -z "$TOKEN" ]; then echo "::error::could not get an app-only Graph token"; exit 1; fi
+
+          echo "=== 1. Graph application permissions IN THE TOKEN (what Graph will honour) ==="
+          python3 - "$TOKEN" <<'PY'
+          import sys, json, base64
+          p = sys.argv[1].split(".")[1]; p += "=" * (-len(p) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(p))
+          roles = sorted(claims.get("roles", []))
+          print("roles:", ", ".join(roles) if roles else "(none)")
+          print("Calendars.Read granted:", any(r in ("Calendars.Read", "Calendars.ReadBasic.All", "Calendars.ReadWrite") for r in roles))
+          print("app display name:", claims.get("app_displayname"), "| service principal oid:", claims.get("oid"))
+          PY
+
+          echo "=== 2. Mailbox identity (are these one mailbox or two?) ==="
+          echo "=== 3. App-only calendar read per mailbox (the schedule brief's exact call) ==="
+          START=$(date -u +%Y-%m-%dT00:00:00Z); END=$(date -u -d '+1 day' +%Y-%m-%dT00:00:00Z)
+          IFS=',' read -ra MBX <<< "$MAILBOXES"
+          for m in "${MBX[@]}"; do
+            m=$(echo "$m" | xargs)
+            U=$(curl -s -o /tmp/u.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+              "https://graph.microsoft.com/v1.0/users/$m?\$select=id,mail,userPrincipalName")
+            UID_=$(python3 -c 'import json;d=json.load(open("/tmp/u.json"));print(d.get("id","-"),d.get("userPrincipalName","-"))' 2>/dev/null || echo "-")
+            C=$(curl -s -o /tmp/c.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+              "https://graph.microsoft.com/v1.0/users/$m/calendarView?startDateTime=$START&endDateTime=$END&\$top=1&\$select=subject")
+            ERR=$(python3 -c 'import json;d=json.load(open("/tmp/c.json"));e=d.get("error") or {};print(e.get("code",""),"-",(e.get("message") or "")[:160])' 2>/dev/null || true)
+            echo "$m | user lookup HTTP $U -> $UID_ | calendarView HTTP $C ${ERR}"
+          done
+          echo "(user lookup 403 just means the app lacks User.Read.All; it does not affect the calendar read)"
