@@ -4556,7 +4556,9 @@ its twin). There is no detector for this drift today; compare.ts found it by acc
 - **Push:** `push.server.ts` — star via `set_priority_rank` rank 0; node push picks by scorer (category = task's own category, topic = journey mappings); `tasks.priority_push` (003) + CAS refill; webhook hook after mirror write; `reconcilePushes` on run-autowork reads JOURNEY (`explain_task_score`).
 - **UI:** left ⋮ RowMenu (portal, flips up), star after pushed node name, meta under title, Today removed from priorities rows.
 - **Evidence:** `scripts/category-push.test.ts` 20/20; 9 mutations FIRED (eligibility starred/completed_at, skip, unpush, PUSH_RANK, id-sort determinism, scorer pick, star-first, GROOM_WRITES_STARS); all existing widget suites green; `vite build` rc=0.
-- **Status:** implemented on branch, verifier pending, NOT deployed, NOT owner-confirmed.
+- **Verification:** 3 independent verifier rounds (`docs/VERIFY-category-push-1..3.md`). R1: D1-D10 fixed (4c53e20, 69f94b6). R2: N1 HIGH (reconcile refilled every tick — explain_task_score has no category) + N2 fixed (036b13f). R3: SHIP; N3 (reconcile mid-star race) + L3 fixed (4ce5bdf). `category-push.test.ts` 35/35; every new guard FIRED under mutate.sh.
+- **Known, not fixed:** a lost "park" webhook is undetectable by the reconcile (journey's read returns no tags) — harmless (no write), the next webhook catches it.
+- **Status:** shipping; NOT owner-confirmed.
 
 
 ## BACKLOG: two pre-existing red suites (found 2026-10-15, not caused by ACT:category-push)
