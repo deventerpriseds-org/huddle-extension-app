@@ -65,19 +65,48 @@ const PAGE_OVERFLOW = () => ({
 // screenshots of that run came back BYTE-IDENTICAL (63907 bytes), which is how the no-op was
 // caught. The "Priorities" tab renders PrioritiesView -> LivePrioritiesWidget full, which is the
 // SAME widget as the dock and is the surface the owner actually uses on a phone.
+// NAVIGATION — third iteration. Runs 38765949907 and 38766417095 both produced three
+// BYTE-IDENTICAL screenshots, which is the tell that the click never landed: `.catch(() => {})`
+// swallowed the Playwright error and the run then reported "no tree rendered", a FALSE RED about
+// the feature. So: never swallow a navigation error — surface it — and escalate through
+// normal click -> force click -> a raw DOM click, asserting arrival by the page heading.
 async function gotoPriorities({ page, check, screenshot }) {
-  const navTexts = await page.locator("nav button, footer button, button").allInnerTexts();
+  const attempts = [];
   const tab = page.locator("button", { hasText: /^Priorities$/ }).first();
   const haveTab = await tab.count();
-  if (haveTab) await tab.click({ timeout: 10000 }).catch(() => {});
-  check("Nav: the Priorities tab exists and was clicked", haveTab > 0,
-    `tab count=${haveTab}; nav texts=${JSON.stringify(navTexts.filter(Boolean).slice(0, 20))}`);
-  await page.waitForTimeout(1500);
-  // Wait for the live Lane-B read to land and paint the tree.
+  attempts.push(`tabCount=${haveTab}`);
+  const arrived = async () =>
+    (await page.locator('h1:has-text("Priorities"), h2:has-text("Priorities")').count()) > 0 ||
+    (await page.locator("ul.border-t.border-hairline.py-1").count()) > 0;
+
+  if (haveTab) {
+    try { await tab.click({ timeout: 8000 }); attempts.push("plain-click=ok"); }
+    catch (e) { attempts.push(`plain-click THREW: ${String(e.message).split("\n")[0].slice(0, 160)}`); }
+    await page.waitForTimeout(1200);
+    if (!(await arrived())) {
+      try { await tab.click({ timeout: 8000, force: true }); attempts.push("force-click=ok"); }
+      catch (e) { attempts.push(`force-click THREW: ${String(e.message).split("\n")[0].slice(0, 160)}`); }
+      await page.waitForTimeout(1200);
+    }
+    if (!(await arrived())) {
+      const n = await page.evaluate(() => {
+        const bs = [...document.querySelectorAll("button")].filter((b) => b.textContent.trim() === "Priorities");
+        bs.forEach((b) => b.click());
+        return bs.length;
+      });
+      attempts.push(`raw-dom-click on ${n} button(s)`);
+      await page.waitForTimeout(1500);
+    }
+  }
   await page
     .waitForFunction(() => document.querySelectorAll("ul.border-t.border-hairline.py-1").length > 0, null, { timeout: 45000 })
-    .catch(() => {});
+    .catch(() => attempts.push("tree UL never appeared within 45s"));
   await page.waitForTimeout(1200);
+  const here = await arrived();
+  check("Nav: reached the Priorities view", here, attempts.join(" | "));
+  // Dump what IS on screen, so a failure says what the page actually was rather than nothing.
+  const visible = (await page.locator("h1, h2, button").allInnerTexts()).filter(Boolean).slice(0, 25);
+  check("Nav: page content snapshot (diagnostic, always passes)", true, JSON.stringify(visible));
   await screenshot("priorities-view");
 }
 
