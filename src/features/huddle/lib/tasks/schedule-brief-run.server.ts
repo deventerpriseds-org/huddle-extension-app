@@ -16,7 +16,12 @@
 
 import type { AgentId } from "../../data/agents";
 import { DEFAULT_TZ } from "../identity/scheduling-config.server";
-import { buildScheduleBrief, type BriefEdition, type ScheduleBrief } from "./schedule-brief.server";
+import {
+  addDays,
+  buildScheduleBrief,
+  type BriefEdition,
+  type ScheduleBrief,
+} from "./schedule-brief.server";
 
 /** Iris Chase owns this brief — the owner named her, and her DM already carries the docked
  *  schedule + priorities widgets, so "what's on today" is already her thread. */
@@ -73,6 +78,32 @@ export function briefLines(brief: ScheduleBrief, tz: string): string[] {
   });
 }
 
+/**
+ * LATER THIS WEEK, grouped under a spoken day label: "tomorrow (Friday, Oct 16)" for the day after
+ * a MORNING edition's date, otherwise the weekday. Empty when nothing is on (or nothing was read).
+ */
+export function upcomingLines(brief: ScheduleBrief, tz: string): string[] {
+  const out: string[] = [];
+  let last = "";
+  for (const i of brief.upcoming ?? []) {
+    const day = i.day ?? (i.startIso ? new Date(i.startIso).toISOString().slice(0, 10) : "");
+    if (!day) continue;
+    if (day !== last) {
+      const name = new Date(`${day}T12:00:00Z`).toLocaleDateString("en-US", {
+        weekday: "long", month: "short", day: "numeric", timeZone: "UTC",
+      });
+      const tomorrow = brief.edition === "morning" && day === addDays(brief.forDate, 1);
+      out.push(tomorrow ? `Tomorrow (${name}):` : `${name}:`);
+      last = day;
+    }
+    const t = clock(i.startIso, tz);
+    const end = clock(i.endIso, tz);
+    const when = t ? (end ? `${t}–${end}` : t) : "all day";
+    out.push(`  ${when} — ${i.title} (${i.kind})${i.location ? ` · ${i.location}` : ""}`);
+  }
+  return out;
+}
+
 export type BriefDeliveryKind = "items" | "read-error" | "nothing-scheduled";
 
 /**
@@ -93,6 +124,22 @@ export function briefDeliveryPlan(
 ): { kind: BriefDeliveryKind; directive: string } {
   const day =
     brief.edition === "evening" ? `Tomorrow (${brief.forDate})` : `Today (${brief.forDate})`;
+  // Owner, 2026-10-15: "Why didn't iris say something like, hello Sir, just a reminder that today you
+  // have x and y, and later in the week you have a tomorrow, b the next day etc etc?" The old
+  // directive asked for "ONE short heads-up ... lead with the first thing", and the brief only ever
+  // read ONE day, so there was no week to mention. Both are fixed here and in buildScheduleBrief.
+  const week = upcomingLines(brief, tz);
+  const weekBlock =
+    `LATER THIS WEEK:\n${week.length ? week.join("\n") : "(nothing scheduled)"}` +
+    (brief.upcomingErrors?.length ? `\n(lookahead partly unread: ${brief.upcomingErrors.join("; ")})` : "");
+  const when = brief.edition === "evening" ? "tomorrow" : "today";
+  const spoken =
+    `Write it as ONE warm message in your own voice, phrased the way a personal assistant would say it ` +
+    `out loud — natural sentences, NO bullet points, NO headings. `;
+  const weekAsk = week.length
+    ? `Then continue with "and later in the week you have …", naming each LATER THIS WEEK item by its day ` +
+      `(say "tomorrow" where it is labelled Tomorrow, otherwise the weekday) and its time. `
+    : `There is nothing later in the week, so do not mention the rest of the week. `;
   const reportOnly =
     `This is a REPORT-ONLY turn — everything above is already known, so do NOT call any tool, do not ` +
     `invent anything that is not listed, and do not paste raw JSON. Keep it skimmable.`;
@@ -130,9 +177,13 @@ export function briefDeliveryPlan(
     return {
       kind: "nothing-scheduled",
       directive:
-        `${day} — nothing is on the calendar: no meetings and no classes were found.\n\n` +
-        `Write ONE short, warm line in your own voice saying there is nothing scheduled ` +
-        `${brief.edition === "evening" ? "tomorrow" : "today"}. ` +
+        `${day} — nothing is on the calendar: no meetings and no classes were found.\n${weekBlock}\n\n` +
+        spoken +
+        `Open with "Hello Sir," and say there is nothing on the calendar ${when}. ` +
+        (week.length
+          ? `Then add "but later in the week you have …", naming each LATER THIS WEEK item by its day ` +
+            `(say "tomorrow" where it is labelled Tomorrow, otherwise the weekday) and its time. `
+          : `Keep it to one or two sentences. `) +
         reportOnly,
     };
   }
@@ -141,9 +192,11 @@ export function briefDeliveryPlan(
   return {
     kind: "items",
     directive:
-      `${day} — here is what is on:\n${lines.join("\n")}\n\n` +
-      `Write ONE short, warm heads-up in your own voice covering exactly these items, earliest first. ` +
-      `Lead with the first thing and its time. Mention the location only when one is given. ` +
+      `${day} — here is what is on:\n${lines.join("\n")}\n${weekBlock}\n\n` +
+      spoken +
+      `Open with "Hello Sir," then say "just a reminder that ${when} you have …", naming exactly the ` +
+      `items listed for ${when}, earliest first, each with its time. Mention a location only when one is given. ` +
+      weekAsk +
       `${brief.errors.length ? `Say plainly that one source could not be read (${brief.errors.join("; ")}), so this may be incomplete. ` : ""}` +
       reportOnly,
   };
