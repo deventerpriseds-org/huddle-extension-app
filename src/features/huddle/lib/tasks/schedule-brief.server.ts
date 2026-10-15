@@ -42,6 +42,8 @@ export interface BriefItem {
   startIso: string | null;
   endIso: string | null;
   location: string | null;
+  /** The item's LOCAL date (yyyy-mm-dd) — set on lookahead items so an all-day one keeps its day. */
+  day?: string;
 }
 
 export interface ScheduleBrief {
@@ -52,6 +54,19 @@ export interface ScheduleBrief {
   items: BriefItem[];
   /** Populated when a source failed. An empty brief with an error is NOT "you have nothing". */
   errors: string[];
+  /**
+   * LATER THIS WEEK: the 6 days after `forDate` (owner, 2026-10-15: "...and later in the week you
+   * have a tomorrow, b the next day"). Briefed only -- the T-60 seeder reads `items`, never this.
+   */
+  upcoming?: BriefItem[];
+  /** A failed lookahead read. Never turns the edition into a read-error; it is mentioned softly. */
+  upcomingErrors?: string[];
+}
+
+/** yyyy-mm-dd plus N calendar days (pure date math on the local date, DST-proof). */
+export function addDays(date: string, n: number): string {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n, 12)).toISOString().slice(0, 10);
 }
 
 /**
@@ -158,13 +173,14 @@ export async function classesForDate(
   forDate: string,
   programIds: string[],
   tz: string,
+  toDate: string = forDate,
 ): Promise<{ items: BriefItem[]; error?: string }> {
   const { executeNexusTool } = await import("../nexus/nexus.server");
   const items: BriefItem[] = [];
   for (const programId of programIds) {
     const r = (await executeNexusTool(
       "get_nexus_class_schedule",
-      { from: forDate, to: forDate, program_id: programId },
+      { from: forDate, to: toDate, program_id: programId },
       tz,
     )) as { ok?: boolean; error?: string; sessions?: Record<string, unknown>[] };
     if (!r?.ok) return { items, error: r?.error || "class schedule read failed" };
@@ -262,6 +278,7 @@ export async function meetingsForDate(
   forDate: string,
   tz: string,
   mailbox: string,
+  toDate: string = forDate,
 ): Promise<{ items: BriefItem[]; error?: string }> {
   const { getGraphCalendarEvents, graphEmailConfigured } =
     await import("../email/graph-email.server");
@@ -270,7 +287,9 @@ export async function meetingsForDate(
     return { items: [], error: "Microsoft Graph is not configured, so meetings were not read" };
   }
   try {
-    const { startIso, endIso } = localDayBoundsUtc(forDate, tz);
+    // One Graph read covering forDate..toDate (inclusive) — a single day unless a range is asked for.
+    const { startIso } = localDayBoundsUtc(forDate, tz);
+    const { endIso } = localDayBoundsUtc(toDate, tz);
     const r = await getGraphCalendarEvents({
       mailbox,
       startISO: startIso,
@@ -290,6 +309,13 @@ export async function meetingsForDate(
         startIso: e.isAllDay ? null : graphUtcToIso(e.start),
         endIso: e.isAllDay ? null : graphUtcToIso(e.end),
         location: e.location,
+        // All-day: Graph's start IS the date. Timed: the instant's local date.
+        day: e.isAllDay
+          ? String(e.start ?? "").slice(0, 10) || undefined
+          : (() => {
+              const iso = graphUtcToIso(e.start);
+              return iso ? localDate(Date.parse(iso), tz) : undefined;
+            })(),
       });
     }
     return { items };
@@ -342,7 +368,31 @@ export async function buildScheduleBrief(opts: {
     return at === bt ? a.title.localeCompare(b.title) : at - bt;
   });
 
+  // LATER THIS WEEK — the 6 days after forDate, both sources, one read each. Best-effort: a failure
+  // here is reported softly and never turns today's brief into a read-error.
+  const from = addDays(forDate, 1);
+  const to = addDays(forDate, 6);
+  let upcoming: BriefItem[] = [];
+  const upcomingErrors: string[] = [];
+  if (prog.ok) {
+    const c = await classesForDate(from, prog.ids, tz, to);
+    if (c.error) upcomingErrors.push(`classes: ${c.error}`);
+    upcoming = upcoming.concat(
+      c.items.map((i) => ({ ...i, day: i.startIso ? localDate(Date.parse(i.startIso), tz) : undefined })),
+    );
+  }
+  const um = await meetingsForDate(from, tz, opts.mailbox, to);
+  if (um.error) upcomingErrors.push(`meetings: ${um.error}`);
+  upcoming = upcoming.concat(um.items);
+  upcoming.sort((a, b) => {
+    const ad = a.day ?? "", bd = b.day ?? "";
+    if (ad !== bd) return ad.localeCompare(bd);
+    const at = a.startIso ? Date.parse(a.startIso) : Number.NEGATIVE_INFINITY; // all-day first in a day
+    const bt = b.startIso ? Date.parse(b.startIso) : Number.NEGATIVE_INFINITY;
+    return at - bt;
+  });
+
   // ok:false ONLY when EVERY source failed. One source failing with the other returning rows is a
   // partial brief that still says something true, and the error rides along so the gap is visible.
-  return { ok: errors.length < 2, edition, forDate, items, errors };
+  return { ok: errors.length < 2, edition, forDate, items, errors, upcoming, upcomingErrors };
 }

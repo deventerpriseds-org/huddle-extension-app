@@ -17,6 +17,7 @@
 // dry-run against the deployed route, which is a different kind of evidence and is not faked here.
 
 import {
+  addDays,
   dateForEdition,
   editionForHour,
   graphUtcToIso,
@@ -30,6 +31,7 @@ import { pickOutlookMailbox } from "../src/features/huddle/lib/journey/calendar-
 import {
   briefDeliveryPlan,
   briefLines,
+  upcomingLines,
 } from "../src/features/huddle/lib/tasks/schedule-brief-run.server";
 
 let pass = 0,
@@ -208,12 +210,12 @@ t(
   emptyPlan.kind,
   "nothing-scheduled",
 );
-t("E2b morning wording says today", /nothing scheduled today/.test(emptyPlan.directive), true);
+t("E2b morning wording says today", /nothing on the calendar today/.test(emptyPlan.directive), true);
 const emptyEve = briefDeliveryPlan(
   mk({ items: [], edition: "evening", forDate: "2026-10-06" }),
   TZ,
 );
-t("E2c evening wording says tomorrow", /nothing scheduled tomorrow/.test(emptyEve.directive), true);
+t("E2c evening wording says tomorrow", /nothing on the calendar tomorrow/.test(emptyEve.directive), true);
 
 // E3 — items -> the normal brief, lines included.
 const itemsPlan = briefDeliveryPlan(mk(), TZ);
@@ -289,6 +291,30 @@ console.log("G. WHICH CALENDAR — the connected Outlook account, not the data-s
     undefined,
   );
   t("G3 unparseable output -> undefined, never a throw", pickOutlookMailbox("not json"), undefined);
+}
+
+console.log("H. IRIS'S VOICE + LATER THIS WEEK (owner 2026-10-15: 'hello Sir, just a reminder that today you have x and y, and later in the week...')");
+{
+  const wk = (over: Partial<BriefItem>) => item({ sourceId: Math.random().toString(36), ...over });
+  const withWeek = mk({
+    forDate: "2026-10-15",
+    upcoming: [
+      wk({ title: "Client sync", kind: "meeting", startIso: "2026-10-16T14:00:00Z", endIso: "2026-10-16T14:30:00Z", day: "2026-10-16" }),
+      wk({ title: "Board review", kind: "meeting", startIso: "2026-10-19T15:00:00Z", endIso: "2026-10-19T16:00:00Z", day: "2026-10-19" }),
+    ],
+  });
+  const plan = briefDeliveryPlan(withWeek, TZ);
+  t("H1 opens with Hello Sir and 'just a reminder that today you have'", /Open with "Hello Sir," then say "just a reminder that today you have/.test(plan.directive), true);
+  t("H2 asks for natural spoken sentences, not bullets", /NO bullet points/.test(plan.directive), true);
+  t("H3 the week is listed, day after a morning edition labelled Tomorrow", /LATER THIS WEEK:\nTomorrow \(Friday, Oct 16\):\n  10:00AM–10:30AM — Client sync \(meeting\)\nMonday, Oct 19:/.test(plan.directive.replace(/\u202f/g, "")), true);
+  t("H4 and Iris is asked to continue 'and later in the week you have'", /and later in the week you have/.test(plan.directive), true);
+  const noWeek = briefDeliveryPlan(mk({ upcoming: [] }), TZ);
+  t("H5 an empty week is not mentioned", /do not mention the rest of the week/.test(noWeek.directive), true);
+  const eve = upcomingLines(mk({ edition: "evening", forDate: "2026-10-16", upcoming: [wk({ startIso: "2026-10-17T14:00:00Z", day: "2026-10-17" })] }), TZ);
+  t("H6 on an EVENING edition the next day is a weekday, not 'Tomorrow'", eve[0], "Saturday, Oct 17:");
+  const emptyToday = briefDeliveryPlan(mk({ items: [], upcoming: withWeek.upcoming }), TZ);
+  t("H7 nothing today but a busy week still mentions the week", /but later in the week you have/.test(emptyToday.directive), true);
+  t("H8 addDays crosses a month boundary", addDays("2026-10-30", 3), "2026-11-02");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
