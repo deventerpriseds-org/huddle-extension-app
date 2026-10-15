@@ -4537,3 +4537,10 @@ its twin). There is no detector for this drift today; compare.ts found it by acc
 - **Order:** `orderByContent` — rows with tasks first at every level; topics with tasks by soonest task date; empty topics by journey `updated_at` desc (journey-voice #52 adds the field). FIRED ×3.
 - **Shipped:** huddle #77 `665e502` (deploy success), journey #52 `ca40eec` (deploy success). NOT owner-confirmed.
 - **Open:** Monday 8am groom will star its top 20 again unless told otherwise — owner decision pending.
+
+## ACT:inbound-email-watch — Iris never flagged Amy Corriveau's (Trinnex) email or offered a draft (2026-10-15)
+- **Status:** OPEN — root cause found; build awaiting owner go-ahead + noise-level choice (A real-people-needing-reply / B any real person / C every inbox email).
+- **Root cause (observed):** nothing reads incoming mail. Huddle `origin/main` c197516 has send/draft/calendar only; journey's 127 edge fns + tables have no mail reader; `mail-and-appointments` is on-request with a user token, no schedule.
+- **Premise proven (run 38799786649, branch commit 2514262):** app-only `von.ellis@enterpriseds.io` Inbox read HTTP 200 (Amy's mail at 2026-10-15T19:38:31Z visible, 4 earlier trinnex.io mails since 10-13), Drafts folder HTTP 200. App holds Mail.Read/Mail.ReadWrite — no admin grant needed.
+- **Second gap:** `createGraphDraft` defaults to dev@enterpriseds.io, so "push to my drafts" would land in the wrong mailbox; must target the owner's Outlook (`pickOutlookMailbox`).
+- **Proposed plan:** scheduled job on the existing run-* pattern (~15 min) → Inbox-only new mail → screen → Iris 1:1 DM + push with summary + suggested reply → on "yes" save draft to owner's Drafts. Never auto-send. Dedupe per message id.
