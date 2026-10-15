@@ -4311,3 +4311,20 @@ desktop width hid every one last time). **Not merged at the time of writing.**
 `task_topic_mappings` affordably) and category-level drag — the owner deferred that himself
 (*"that can be done later but anything in this week needs to be shiftable now"*, which shipped in
 `9a0fc06`).
+
+**LIVE PROOF (2026-10-15, after #65 deployed `10c9d86`):** dry run HTTP 200 (22 priorities: 13 overdue,
+2 blocked, 2 unscheduled). Scheduler registered `priority-check-dev@…` 15:55:03Z on its first tick.
+Row armed to now+5 → claimed 16:00:04Z, turn `priority-check-morning-2026-10-15-…` done 16:00:11Z, no
+error, Iris: "Are these 22 priorities still right? You have 13 overdue, 2 blocked, and 2 unscheduled…",
+`priorities` widget attached; next_run reset to 00:00Z (8pm ET). Push-to-phone NOT owner-confirmed yet.
+
+## ACT:scheduler-one-user — one scheduled-job row per USER, not per email (2026-10-15)
+
+**Asked:** owner, 2026-10-15: *"they should be pointing to the single user not the two emails owned by
+the one user"*. **Measured:** every job had `<job>-von.ellis@…` AND `<job>-dev@…`, same user_id
+`a89e3652…`, identical last_run_at to the microsecond → both claimed in one tick, each fired under its
+own slot id → standup / review digest / review recheck / auto-work / groom ran TWICE.
+**Fix:** `ensureGroomJobs` collapses backlog emails to one per user (`oneEmailPerUser`), ids become
+`<job>-u-<user_id>` (`scheduledJobId`), and `retireDuplicateScheduledJobs` sets `enabled=false` on the
+user's other rows of that job type (reversible, never deleted). Runner email unchanged (dev@).
+**Evidence:** `bun scripts/scheduler-one-user.test.ts` 7/7; tsc 0.

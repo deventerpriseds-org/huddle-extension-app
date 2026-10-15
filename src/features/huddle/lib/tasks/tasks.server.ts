@@ -1607,6 +1607,22 @@ export async function claimDueScheduledJobs(limit = 20): Promise<ScheduledJob[]>
   return rows;
 }
 
+/** Switch OFF every other row of `jobType` that belongs to the same user as `keepId`. Disabled, not
+ *  deleted, so it is reversible and the row's history stays readable. Returns how many were retired.
+ *  This is what turns "one row per EMAIL" into "one row per USER": a user who signs in under two
+ *  aliases resolved to the same `user_id` used to get both rows claimed in the same tick, and each
+ *  fired under its own slot id, so every job ran twice (measured 2026-10-15: every von.ellis@/dev@
+ *  pair carried an identical last_run_at to the microsecond). */
+export async function retireDuplicateScheduledJobs(jobType: string, userId: string, keepId: string): Promise<number> {
+  await ensureBootstrapped();
+  const r = await getPool().query(
+    `UPDATE tasks.scheduled_jobs SET enabled = false, updated_at = now()
+      WHERE job_type = $1 AND user_id = $2 AND id <> $3 AND enabled`,
+    [jobType, userId, keepId],
+  );
+  return r.rowCount ?? 0;
+}
+
 /** Write a job's real next fire time (computed by the dispatcher with DST-correct local-time logic).
  * Optionally also self-heals the stored `cadence` column to the freshly-resolved value the dispatcher
  * just used, so a direct DB read reflects reality even if ensureGroomJobs hasn't touched this row. */
