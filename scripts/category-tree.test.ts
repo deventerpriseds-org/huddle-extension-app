@@ -1,0 +1,174 @@
+// WHAT:       Proves the PRIORITIES widget's category tree carries every live task, under the right
+//             category, in a deterministic order, with a count that cannot disagree with the rows —
+//             and that merging journey's topic tree into it never drops a node from either side.
+// WHY:        2026-10-15. The widget's tree rendered names + counts and no tasks, so neither the
+//             owner nor a future agent could answer "what's next in Career?" from it. An independent
+//             AC pass measured why the obvious sources cannot supply the data (get_task_topics is
+//             not deployed; get_tasks caps at .limit(50) of 101 open tasks; get_tasks_by_topic costs
+//             ~75 calls and orders by the `priority` TEXT column descending, putting MEDIUM above
+//             HIGH) and found three ways this class of code has already silently lost rows:
+//             buildTopicTree's duplicate-id collision, Android's grpTaskCount omitting a group's own
+//             tasks, and Huddle dropping FAMILY entirely because only a TOPIC could create a
+//             category root.
+// SUPERSEDES: nothing
+// SUPERSEDED-BY: nothing -- current
+// EVIDENCE:   journey-voice execute-tool/index.ts:707 (.limit(50)), :2199-2205 (text-column order),
+//             :981-982 (rank => star); docs/AC-tasks-under-categories.md.
+//
+// Run:  bun scripts/category-tree.test.ts   (npm run test:category-tree)
+
+import {
+  buildCategoryTaskTree,
+  mergeTopicTree,
+  UNCATEGORISED_CATEGORY,
+  type TopicNode,
+} from "../src/features/huddle/lib/tasks/widgets.server";
+
+let pass = 0, fail = 0;
+function check(label: string, cond: boolean, detail: string) {
+  console.log(`  ${cond ? "PASS" : "FAIL"} ${label} — ${detail}`);
+  cond ? pass++ : fail++;
+}
+
+const TZ = "America/New_York";
+const NOW = Date.parse("2026-10-15T15:00:00Z");
+
+// Minimal board row — only the fields the tree reads. `as any` keeps the fixture honest about that
+// rather than inventing values for 20 columns the code never touches.
+const row = (over: Record<string, unknown>) =>
+  ({
+    id: "id", title: "t", status: "TODO", category: "CAREER", is_priority: false,
+    priority_rank: null, due_date: null, start_time: null, end_time: null, is_scheduled: false,
+    tags: [], assigned_agent: null, completed_at: null, ...over,
+  }) as any;
+
+const node = (over: Partial<TopicNode>): TopicNode => ({
+  id: "n", name: "n", parentId: null, categoryAffinity: null, position: null, count: null,
+  children: [], tasks: [], ...over,
+});
+
+const allTasks = (roots: TopicNode[]): string[] => {
+  const out: string[] = [];
+  const walk = (ns: TopicNode[]) => { for (const n of ns) { out.push(...n.tasks.map((t) => t.id)); walk(n.children); } };
+  walk(roots);
+  return out;
+};
+
+// ── Every live task reaches the tree exactly once ───────────────────────────────────────────────
+{
+  const rows = [
+    row({ id: "a", category: "CAREER" }),
+    row({ id: "b", category: "VENTURES" }),
+    row({ id: "c", category: null }),          // unmapped — 3 of the owner's 101 are
+    row({ id: "d", category: "  " }),          // blank, not null
+    row({ id: "e", category: "PROF_EDUCATION" }), // folds into EDUCATION
+    row({ id: "f", category: "PERSONAL" }),       // folds into LIFE
+    row({ id: "g", category: "SIDE_HUSTLE" }),    // unknown key — must pass through, not drop
+  ];
+  const tree = buildCategoryTaskTree(rows, TZ, NOW);
+  const ids = allTasks(tree).sort();
+  check("every live task appears exactly once, whatever its category",
+    ids.join(",") === "a,b,c,d,e,f,g",
+    `${ids.length} of 7 — [${ids.join(",")}]`);
+  const uncat = tree.find((n) => n.categoryAffinity === UNCATEGORISED_CATEGORY);
+  check("a task with a null OR blank category gets a real row, never silent omission",
+    !!uncat && uncat.tasks.length === 2,
+    `Uncategorised holds ${uncat?.tasks.length ?? 0} (null + blank)`);
+  check("PROF_EDUCATION folds into EDUCATION and PERSONAL into LIFE — journey's own merge",
+    !!tree.find((n) => n.categoryAffinity === "EDUCATION" && n.tasks.some((t) => t.id === "e")) &&
+    !!tree.find((n) => n.categoryAffinity === "LIFE" && n.tasks.some((t) => t.id === "f")),
+    "one row each, not separate Prof. Education / Personal rows");
+  check("an UNKNOWN category key passes through as its own row rather than being dropped",
+    !!tree.find((n) => n.categoryAffinity === "SIDE_HUSTLE"),
+    "ordering is not an allow-list");
+  check("Uncategorised sorts last, after every known AND dynamic category",
+    tree[tree.length - 1].categoryAffinity === UNCATEGORISED_CATEGORY,
+    `last row is ${tree[tree.length - 1].categoryAffinity}`);
+}
+
+// ── Closed / parked work never surfaces, BLOCKED does ───────────────────────────────────────────
+{
+  const rows = [
+    row({ id: "open", category: "LIFE" }),
+    row({ id: "done", category: "LIFE", status: "DONE" }),
+    row({ id: "completed", category: "LIFE", completed_at: "2026-10-01T00:00:00Z" }),
+    row({ id: "parked", category: "LIFE", tags: ["parking-lot"] }),
+    row({ id: "blocked", category: "LIFE", status: "BLOCKED" }),
+  ];
+  const ids = allTasks(buildCategoryTaskTree(rows, TZ, NOW)).sort();
+  check("DONE, completed and parked tasks are excluded; BLOCKED is KEPT",
+    ids.join(",") === "blocked,open",
+    `[${ids.join(",")}] — journey's own get_tasks_by_topic drops BLOCKED, which is one reason the tree is not sourced from it`);
+}
+
+// ── The count is DERIVED, so it can never disagree with the rows ────────────────────────────────
+{
+  const rows = Array.from({ length: 25 }, (_, i) => row({ id: `t${i}`, category: "CAREER" }));
+  const [career] = buildCategoryTaskTree(rows, TZ, NOW);
+  check("count equals the number of tasks actually carried, not a passed-through task_count",
+    career.count === career.tasks.length && career.count === 25,
+    `count=${career.count}, tasks=${career.tasks.length} — the Android factory's grpTaskCount sums only sub-groups and so disagrees with its own rows`);
+}
+
+// ── Deterministic order: the agent-autopull payoff ──────────────────────────────────────────────
+{
+  const rows = [
+    row({ id: "plain", category: "CAREER", title: "zzz" }),
+    row({ id: "ranked2", category: "CAREER", is_priority: true, priority_rank: 2, title: "b" }),
+    row({ id: "ranked1", category: "CAREER", is_priority: true, priority_rank: 1, title: "c" }),
+    row({ id: "due", category: "CAREER", due_date: "2026-10-16T00:00:00Z", title: "a" }),
+  ];
+  const first = buildCategoryTaskTree(rows, TZ, NOW)[0].tasks.map((t) => t.id);
+  check("starred-and-ranked first in rank order, then soonest due, then title — a stable answer to 'what's next in Career?'",
+    first.join(",") === "ranked1,ranked2,due,plain",
+    `[${first.join(",")}]`);
+  // Re-run on a shuffled input: the order must come from the comparator, not from input order.
+  const shuffled = buildCategoryTaskTree([rows[3], rows[0], rows[1], rows[2]], TZ, NOW)[0].tasks.map((t) => t.id);
+  check("the order is a function of the DATA, not of row arrival order",
+    shuffled.join(",") === first.join(","),
+    `shuffled input gave [${shuffled.join(",")}]`);
+}
+
+// ── A category exists because TASKS are in it (the FAMILY divergence) ───────────────────────────
+{
+  const tree = buildCategoryTaskTree([row({ id: "f1", category: "FAMILY" })], TZ, NOW);
+  check("a category with tasks but NO topics still renders — the gap that hid FAMILY from Huddle while his phone drew it",
+    tree.length === 1 && tree[0].categoryAffinity === "FAMILY" && tree[0].tasks.length === 1,
+    "groupByCategory only creates a root when a TOPIC claims the category");
+}
+
+// ── mergeTopicTree loses nothing from either side ───────────────────────────────────────────────
+{
+  const categoryRoots = buildCategoryTaskTree([row({ id: "c1", category: "CAREER" })], TZ, NOW);
+  const journeyRoots: TopicNode[] = [
+    node({ id: "category:CAREER", name: "Career", categoryAffinity: "CAREER",
+           children: [node({ id: "topic-1", name: "Presentation Development", count: 2 })] }),
+    node({ id: "category:LIFE", name: "Life & Personal", categoryAffinity: "LIFE",
+           children: [node({ id: "topic-2", name: "Admin", count: 7 })] }),
+    node({ id: "orphan", name: "Uncategorised topic" }),
+  ];
+  const merged = mergeTopicTree(journeyRoots, categoryRoots);
+  const career = merged.find((n) => n.id === "category:CAREER")!;
+  check("journey's topics nest INTO the mirror's category row, keeping that row's tasks",
+    career.children.some((c) => c.id === "topic-1") && career.tasks.some((t) => t.id === "c1"),
+    `${career.children.length} child, ${career.tasks.length} task — the mirror is the base, so the tree renders before journey deploys anything`);
+  check("a journey category the mirror has no tasks for is still created, never dropped",
+    !!merged.find((n) => n.id === "category:LIFE"),
+    "nothing from journey is lost");
+  check("an uncategorised journey topic stays top-level rather than being guessed into a category",
+    !!merged.find((n) => n.id === "orphan"),
+    "no inference");
+  check("merging does not MUTATE the inputs",
+    categoryRoots[0].children.length === 0 && journeyRoots[0].children.length === 1,
+    "callers hold their own arrays");
+}
+
+// ── An empty board is an empty tree, not a crash ────────────────────────────────────────────────
+{
+  check("no live tasks and no journey topics → an empty tree, which the UI renders as its empty state",
+    buildCategoryTaskTree([], TZ, NOW).length === 0 && mergeTopicTree([], []).length === 0,
+    "never throws");
+}
+
+console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);
+process.exit(fail === 0 ? 0 : 1);

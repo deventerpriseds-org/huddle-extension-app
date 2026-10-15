@@ -184,7 +184,8 @@ export const getPrioritiesWidget = createServerFn({ method: "POST" })
     try {
       const email = await resolveCallerEmail(data.caller);
       const { resolveTimeZone } = await import("../journey/identity");
-      const { safeTimeZone, localDateKey, buildPrioritiesBand } = await import("./widgets.server");
+      const { safeTimeZone, localDateKey, buildPrioritiesBand, buildCategoryTaskTree, mergeTopicTree } =
+        await import("./widgets.server");
       const timeZone = safeTimeZone(await resolveTimeZone(data.caller, data.timeZone));
       if (!email) return empty(timeZone, "Could not resolve your account.");
       const { getBoardTasks, getWeekOrder } = await import("./tasks.server");
@@ -197,12 +198,22 @@ export const getPrioritiesWidget = createServerFn({ method: "POST" })
         wantTopics ? fetchTopicTree(data.caller) : Promise.resolve(noTopics),
       ]);
       const nowMs = Date.now();
+      // The tree the UI renders is the MIRROR's categories (with their tasks) as the base, with
+      // whatever journey's topic tool returned nested into it. Today that tool is not deployed, so
+      // `topics.roots` is `[]` and this is the ONLY thing that makes the tree non-empty — which is
+      // the point: the tree has never populated in production (reason:"tool-absent").
+      //
+      // `reason` and `ok` are deliberately left as journey reported them. They describe the JOURNEY
+      // passthrough, and the UI uses them to say whether the topic/theme layer is available; the
+      // category rows render from `roots` regardless. Overwriting `reason` to "ok" here would hide
+      // the undeployed tool and make a real gap undiagnosable.
+      const categoryRoots = buildCategoryTaskTree(rows, timeZone, nowMs);
       return {
         ok: true,
         timeZone,
         todayKey: localDateKey(nowMs, timeZone) ?? new Date(nowMs).toISOString().slice(0, 10),
         band: buildPrioritiesBand(rows, timeZone, nowMs, order),
-        topics,
+        topics: { ...topics, roots: mergeTopicTree(topics.roots, categoryRoots) },
       };
     } catch (err) {
       return empty(data.timeZone ?? "UTC", err instanceof Error ? err.message : String(err));

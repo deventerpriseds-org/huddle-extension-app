@@ -38,6 +38,7 @@
     "test:artifact-format": "bun scripts/artifact-format-dispatch.test.ts",
     "test:artifact-traversal": "bun scripts/artifact-traversal-guard.test.ts",
     "test:week-order": "bun scripts/week-order.test.ts",
+    "test:category-tree": "bun scripts/category-tree.test.ts",
     "test:priority-lane": "bun scripts/priority-lane.test.ts",
     "test:schedule-brief": "bun scripts/schedule-brief.test.ts"
   },

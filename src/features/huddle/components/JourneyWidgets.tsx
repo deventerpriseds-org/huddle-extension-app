@@ -161,6 +161,16 @@ function rowStatus(row: WidgetTaskRow): string {
  *  covers the first paint before the seed effect runs. That is what makes a stale snapshot harmless,
  *  and it is also what covers the mirror's ~1-3s lag after a write — the overlay holds the new value
  *  while journey → pg_net → webhook → mirror catches up. */
+/**
+ * How many tasks a category/topic row PAINTS before it collapses the rest behind "+N more".
+ *
+ * Purely presentational, which is why it lives here and not in `widgets.server.ts`: the server
+ * returns every task and a truthful `count`, so this caps the card's height without ever hiding
+ * work from the number beside the row, and expanding costs no round-trip. 101 open tasks across
+ * five categories would otherwise make the widget taller than the conversation it docks above.
+ */
+const CATEGORY_TASK_PREVIEW_MAX = 8;
+
 function useRowState(row: WidgetTaskRow) {
   const live = useHuddleStore((s) => s.checklistState[row.id]);
   return {
@@ -648,20 +658,31 @@ function PriorityRow({
 function TopicRow({
   node,
   depth,
+  caller,
   defaultOpen = false,
 }: {
   node: TopicNode;
   depth: number;
+  caller: Caller;
   defaultOpen?: boolean;
 }) {
+  // A row is expandable when it has sub-topics OR TASKS. It used to be children-only, which is why
+  // a category carrying 25 tasks and no sub-topic rendered as a dead, unclickable count — the
+  // owner's "currently it populates this week with tasks when i should be able to drag a topic
+  // theme/grouping or the task itself": there was nothing under a category to act on.
   const hasChildren = node.children.length > 0;
+  const hasTasks = node.tasks.length > 0;
+  const hasContent = hasChildren || hasTasks;
+  const [showAllTasks, setShowAllTasks] = useState(false);
+  const visibleTasks = showAllTasks ? node.tasks : node.tasks.slice(0, CATEGORY_TASK_PREVIEW_MAX);
+  const hiddenTaskCount = node.tasks.length - visibleTasks.length;
   // ONE row starts open — the first — exactly as the spec draws it (Career expanded, the other four
   // categories closed). This was `depth === 0`, i.e. EVERY top-level row expanded, which was fine
   // while a top-level row was a topic with a handful of children. It is not fine now that a
   // top-level row is a CATEGORY: journey's live data is 158 topics across 5 categories, so
   // expand-all would open the rail as a 163-row wall on a phone. See groupByCategory in
   // widgets.server.ts for why the top level became categories.
-  const [open, setOpen] = useState(defaultOpen && hasChildren);
+  const [open, setOpen] = useState(defaultOpen && hasContent);
   // The coloured left rail, one hue per top-level topic — the SAME `categoryHue` the chips use, and
   // it normalizes to upper-snake before looking up, so a topic and a category of the same name DO
   // now agree in colour (topic "Life" and category "LIFE" both resolve to the seeded blue). Before
@@ -678,9 +699,9 @@ function TopicRow({
         )}
         <button
           type="button"
-          disabled={!hasChildren}
+          disabled={!hasContent}
           onClick={() => setOpen((v) => !v)}
-          aria-expanded={hasChildren ? open : undefined}
+          aria-expanded={hasContent ? open : undefined}
           className="-my-1.5 flex min-h-11 min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-3 text-left disabled:cursor-default"
           style={{ paddingLeft: `${depth === 0 ? 0 : depth * 0.875 + 0.75}rem` }}
         >
@@ -688,7 +709,7 @@ function TopicRow({
             {/* D-5 #12: the spec uses FILLED TRIANGLES here, not stroked chevrons, and the same
                 triangle family as the Today button's ▲ — so within the spec the two marks rhyme.
                 A rotated filled Triangle is that mark; `Triangle` is already imported. */}
-            {hasChildren ? (
+            {hasContent ? (
               <Triangle
                 size={8}
                 strokeWidth={0}
@@ -711,13 +732,73 @@ function TopicRow({
           ) : null}
         </button>
       </div>
-      {hasChildren && open && (
+      {hasContent && open && (
         <ul>
+          {/* Sub-topics first, then this node's own tasks — the Android widget's order
+              (CategoryHeader -> GroupRow -> TaskRow, PrioritiesWidgetFactory.rebuildItems). Unlike
+              that factory, a node's own directly-held tasks are rendered AND counted: its
+              `grpTaskCount` sums only sub-groups, so a group's number disagrees with its rows. */}
           {node.children.map((c) => (
-            <TopicRow key={c.id} node={c} depth={depth + 1} />
+            <TopicRow key={c.id} node={c} depth={depth + 1} caller={caller} />
           ))}
+          {visibleTasks.map((row) => (
+            <TopicTaskRow key={row.id} row={row} depth={depth + 1} caller={caller} />
+          ))}
+          {hiddenTaskCount > 0 && (
+            <li>
+              <button
+                type="button"
+                onClick={() => setShowAllTasks(true)}
+                className="flex min-h-9 w-full items-center text-left text-[12px] text-muted-foreground hover:text-foreground"
+                style={{ paddingLeft: `${(depth + 1) * 0.875 + 0.75}rem` }}
+              >
+                +{hiddenTaskCount} more
+              </button>
+            </li>
+          )}
         </ul>
       )}
+    </li>
+  );
+}
+
+/**
+ * One task inside the category/topic tree.
+ *
+ * Deliberately reuses `TodayButton`/`DoneButton`/`PauseButton` verbatim: they take `{row, caller}`
+ * and nothing else, `useRowState` keys purely off `row.id`, and `runAction` self-seeds a row it has
+ * not seen — so a task acted on here goes through the SAME single write path as the band above
+ * (journey via `invokeJourneyTool`, mirror updated by the sync trigger). No new action code, no
+ * second writer.
+ *
+ * The star is shown, not editable, and that is on purpose: `is_priority` is the This Week
+ * membership bit, and journey couples it to `priority_rank` (`batch_update_tasks` sets
+ * `is_priority = true` for any task given a rank), so a promote control here belongs with the
+ * This Week ordering work rather than bolted onto a tree row.
+ */
+function TopicTaskRow({ row, depth, caller }: { row: WidgetTaskRow; depth: number; caller: Caller }) {
+  const { status } = useRowState(row);
+  const done = status === "DONE";
+  return (
+    <li
+      className="flex items-center gap-2 py-1.5 pr-3"
+      style={{ paddingLeft: `${depth * 0.875 + 0.75}rem` }}
+    >
+      {row.isPriority && (
+        <Star aria-label="In This Week" className="h-3 w-3 shrink-0 fill-current text-amber-500" />
+      )}
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate text-[13px] leading-snug",
+          done ? "text-muted-foreground line-through" : "text-foreground/85",
+        )}
+        title={row.title}
+      >
+        {row.title}
+      </span>
+      <TodayButton row={row} caller={caller} />
+      <DoneButton row={row} caller={caller} />
+      <PauseButton row={row} caller={caller} />
     </li>
   );
 }
@@ -729,7 +810,7 @@ function TopicRow({
 function TopicsEmpty({ topics }: { topics: TopicTreeResult }) {
   const copy =
     topics.reason === "tool-absent"
-      ? "Topic breakdown isn’t available yet — journey hasn’t deployed its topic list. Everything above is live."
+      ? "Sub-themes within each category aren’t available yet — journey hasn’t deployed its topic list. Everything above is live."
       : topics.reason === "not-configured"
         ? "Topic breakdown isn’t configured in this environment. Everything above is live."
         : topics.reason === "error"
@@ -846,13 +927,20 @@ export function PrioritiesWidget({
       )}
 
       {data.topics.roots.length > 0 ? (
-        <ScrollBand full={full}>
-          <ul className="border-t border-hairline py-1">
-            {data.topics.roots.map((t, i) => (
-              <TopicRow key={t.id} node={t} depth={0} defaultOpen={i === 0} />
-            ))}
-          </ul>
-        </ScrollBand>
+        <>
+          <ScrollBand full={full}>
+            <ul className="border-t border-hairline py-1">
+              {data.topics.roots.map((t, i) => (
+                <TopicRow key={t.id} node={t} depth={0} caller={caller} defaultOpen={i === 0} />
+              ))}
+            </ul>
+          </ScrollBand>
+          {/* The tree now renders from the MIRROR's categories, so it is populated even while
+              journey's topic tool is undeployed. That would otherwise HIDE the missing theme layer
+              entirely — the rows look complete, so nobody would know sub-themes are absent. Say so
+              instead: `reason` still describes the journey passthrough, untouched by the merge. */}
+          {data.topics.reason !== "ok" && <TopicsEmpty topics={data.topics} />}
+        </>
       ) : (
         <TopicsEmpty topics={data.topics} />
       )}
