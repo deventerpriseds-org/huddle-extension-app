@@ -137,3 +137,41 @@ Every run reported `restored: … matches HEAD` and `tree clean`.
 
 Phone screenshots: `uat-shots` adc42c3 `01-priorities-view.png`, `02-tree-expanded.png`. The first category (Life & Personal) opens by default and shows 53 topic rows, most of them blank, before Career is reached. That is a UX observation, not a defect versus the AC.
 
+**verify-uat.yml run 38775779002 (1440x900 desktop; `uat-shots` commit 583ebc0):** results identical to the phone run. Banners absent; Career 8 with the same 13 topics; Life 14, Ventures 55, Education 6; identical per-topic non-zero counts; getPrioritiesWidget 200 / 115 116 bytes; 0 console errors; 0 failed requests. Screenshot `02-tree-expanded.png` shows Life & Personal 14 expanded under the This Week band.
+
+**AC-37 reconciliation on real data:** T (mirror rows `isOpen && !isParked`) = 83. R (distinct task ids in the real tree) = 83, with 83 rendered task rows. Live DOM sum 14+8+55+6 = 83. No task is silently dropped.
+
+## Acceptance criteria (docs/AC-tasks-under-categories.md, topic-related)
+
+| AC | Verdict | Evidence |
+|---|---|---|
+| AC-3 node carries its tasks, in order | PASS (presence) / **order UNGUARDED** | category-tree "each topic carries exactly its own tasks"; live DOM shows tasks under topics. Mutation m7 (remove the per-topic sort) is INERT, so no test guards the within-topic order. |
+| AC-4 expanding a topic shows its N task li's nested inside it | PASS (structural) | Live scrape: task rows are `li > span[title]` children of the topic's own `<ul>`. The DOM has no `data-task-id`/`data-topic-id` attributes, so the AC's literal selector cannot be used. |
+| AC-5 a category's immediate children are topics, zero task rows | PASS for Career/Education; **by design not for Life/Ventures** | Live: Life holds 1 and Ventures 1 direct (unlinked) task alongside their topics. This conflicts with AC-38, which requires exactly that; the implementation follows AC-38. |
+| AC-6 badge N equals the rows beneath | PASS live | Every non-zero topic badge equals its rendered task count (no mismatch annotation in either run). Category badges equal topic tasks plus direct tasks (14 = 13+1, 55 = 54+1). |
+| AC-7 multi-topic task counted once | PASS | Test "every live task appears exactly once"; real data has 1 multi-topic task, counted once (R = T = 83). |
+| AC-8 DONE / completed_at / parked excluded | PASS | isOpen and isParked are reused (widgets.server.ts:1198); m5 FIRED. **Note:** this AC MANDATES dropping `completed_at` rows, which is finding F1's divergence from the phone. So F1 is required by an AC, but the brief's list of intended differences does not include it. |
+| AC-9 BLOCKED present AND the PR names the divergence | **FAIL (second half)** | BLOCKED is present (live: Career Development 3, Educational Resource Mgmt 1). PR #71's body names only "two deliberate differences" (unlinked shown, deterministic multi-topic). It does not mention BLOCKED, parking-lot or completed_at; `grep -i "blocked\|parking\|completed_at"` on the body returns 0 lines. |
+| AC-10 window_affinity fallback | PASS (mechanism) | Test plus m2 FIRED. Real data: 0 topics depend on it (`category_affinity` is non-null on all 169). |
+| AC-33 / AC-34 duplicate topic names | PASS by data / mechanism | DB constraint `UNIQUE (user_id, topic_name)`, so a duplicate name cannot occur within one user; ids are uuids; React keys use `t.id`. The production build emits no React key warnings, so AC-34's console half is not observable live. |
+| AC-35 / AC-36 / AC-36b | N/A | `get_tasks_by_topic` was not chosen. |
+| AC-37 R === T | PASS | 83 = 83 (above). |
+| AC-38 unlinked task under its own category | PASS live | "Test task #1" sits directly under Life; "Test cross-app memory…" directly under Ventures. |
+| AC-39 neither category nor topic -> Uncategorised | PASS (mechanism) | `UNCATEGORISED_CATEGORY` bucket in buildCategoryTaskTree. No such row exists in the real data. |
+| AC-40 multi-topic: under both, or the PR states "one only" | PASS (alternate branch) | The PR and commit state "one topic per task … smallest topic id"; m3 FIRED. |
+| Drag / persisted ordering ACs (17-27, 42, 49-54) | OUT OF SCOPE | Not built. |
+
+## VERDICT
+
+| # | Claim | Result |
+|---|---|---|
+| 1 | Huddle's tree matches the phone for EVERY category | **FAIL as stated.** Life 14 vs 18, Ventures 55 vs 66. Career 8 = 8 and Education 6 = 6 only through cancelling per-topic differences. Every divergence is explained: 0 unexplained. Beyond the 3 intended differences: F1 completed_at (AC-8-mandated), F3 mirror status drift, F4 multi-topic placement, F5 topic order, F6 Family absent. |
+| 2 | journey tool returns `{topics, mappings}` scoped to the caller | **PASS, live.** edge_logs show the embedded `!inner` query returning 200 with content_range 0-368/* (369 rows = the owner's links, 5 of the other user's excluded); 169 topics rendered. CI parse check: success. |
+| 3 | Before the journey deploy, Huddle renders exactly what it rendered before | **PARTIAL FAIL.** Roots byte-identical and the docked widget identical. The agent-tool (Iris) card gained the "not available yet" banner it never showed before. Moot now that journey#42 is deployed. |
+| 4 | fetchTopicPayload is bounded and never throws | **PASS** (timeout, timer clear and rejection all observed). Gaps: the timer clear and tool-absent classification have no repo test (m6 and m8 INERT in the suite); the request is not aborted after the ceiling; a contrived non-Error throw escapes but is caught by callers. Runtime: 572 ms through the proxy. |
+| 5 | No duplicate payload builders; `fetchTopicTree` has no caller | **PASS.** Guard m1 FIRED. Gap: the guard keys only on `buildPrioritiesBand`, not on the tree builders. Stale comments at widgets.server.ts:106, 118, 814-816, 905. |
+| 6 | No regressions | **PASS.** 15 suites green, tsc 0, build ok. |
+
+**MECHANISM-ONLY items:** none of the core claims remain mechanism-only. The sub-category layer was observed LIVE at 390x844 and 1440x900 after journey#42 (678f80c) and huddle#71 (21e907b) were deployed. Still unobserved live: the agent-tool (Iris chat card) path. It shares `composePrioritiesWidget` but no card was rendered through it during this pass.
+
+No task was created or modified on the owner's board; the UAT clicked expand/collapse only.
