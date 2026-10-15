@@ -26,6 +26,7 @@ import {
   type BriefItem,
   type ScheduleBrief,
 } from "../src/features/huddle/lib/tasks/schedule-brief.server";
+import { pickOutlookMailbox } from "../src/features/huddle/lib/journey/calendar-mailbox";
 import {
   briefDeliveryPlan,
   briefLines,
@@ -186,10 +187,19 @@ t(
   true,
 );
 t(
-  "E1c and it tells Iris NOT to claim the calendar is empty",
-  /do NOT say or imply their calendar is empty/.test(errPlan.directive),
+  "E1c and it tells Iris NOT to claim the failed source is empty",
+  /Do NOT say or imply the meetings or classes are empty/.test(errPlan.directive),
   true,
 );
+
+// E1d — owner 2026-10-15: "she said she couldnt pull the meetings and classes with a 500 error".
+// Only classes had failed; the meetings read worked. Iris must name ONLY the failed source.
+const classOnly = briefDeliveryPlan(mk({ items: [], errors: ["classes: http_500"] }), TZ);
+t("E1d a classes-only failure names classes as failed", /could NOT read: classes\./.test(classOnly.directive), true);
+t("E1e and does NOT tell Iris she couldn't pull meetings", /couldn't pull today's meetings/.test(classOnly.directive), false);
+t("E1f and says meetings came back clear", /meetings WERE read successfully/.test(classOnly.directive), true);
+const both = briefDeliveryPlan(mk({ items: [], errors: ["classes: http_500", "meetings: Graph 403"] }), TZ);
+t("E1g both failing names both", /could NOT read: meetings and classes\./.test(both.directive), true);
 
 // E2 — a genuinely empty day (no errors) still gets a short "nothing scheduled" message.
 const emptyPlan = briefDeliveryPlan(mk({ items: [] }), TZ);
@@ -261,6 +271,25 @@ t(
   "2026-10-15T13:00:00Z",
 );
 t("F3d null stays null", graphUtcToIso(null), null);
+
+console.log("G. WHICH CALENDAR — the connected Outlook account, not the data-scope email (2026-10-15)");
+{
+  const conns = (c: unknown[]) => JSON.stringify({ calendar_connections: c });
+  t(
+    "G1 the active office365 account is chosen (lower-cased), not a google one listed first",
+    pickOutlookMailbox(conns([
+      { provider: "google", provider_account_email: "x@gmail.com", is_active: true },
+      { provider: "office365", provider_account_email: "Von.Ellis@EnterpriseDS.io", is_active: true },
+    ])),
+    "von.ellis@enterpriseds.io",
+  );
+  t(
+    "G2 an inactive connection is skipped -> undefined (caller falls back)",
+    pickOutlookMailbox(conns([{ provider: "office365", provider_account_email: "a@b.c", is_active: false }])),
+    undefined,
+  );
+  t("G3 unparseable output -> undefined, never a throw", pickOutlookMailbox("not json"), undefined);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

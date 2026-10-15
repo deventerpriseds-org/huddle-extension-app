@@ -714,7 +714,10 @@ export async function executeNexusTool(
     // NOTE it only selects rows whose program_id is POPULATED -- 91 of 132 rows are unlinked
     // residency entries (Lunch, dinners, PODs Formation) that carry no course and no programme.
     const programId = typeof args.program_id === "string" ? args.program_id.trim() : "";
-    if (programId) filters.push(["program_id", `eq.${programId}`]);
+    // A BARE value, never `eq.<id>`: Nexus's d1 operator map has no `eq`, so `eq.<uuid>` reached
+    // Postgres as a literal and 500'd ("invalid input syntax for type uuid"), measured via
+    // nexus-hub api-test 2026-10-15. A bare value is d1's documented equality path.
+    if (programId) filters.push(["program_id", programId]);
     const r = await nexusGet("class-schedules", filters);
     if (!r.ok) return { ok: false, error: r.error };
     const sessions = [...r.rows].sort((a, b) =>

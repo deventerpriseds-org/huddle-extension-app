@@ -98,14 +98,30 @@ export function briefDeliveryPlan(
     `invent anything that is not listed, and do not paste raw JSON. Keep it skimmable.`;
 
   if (!brief.items.length && brief.errors.length) {
+    // Name ONLY the sources that failed. Owner, 2026-10-15: Iris said she "couldn't pull the meetings
+    // and classes" when only classes had failed (classes: http_500) and the meetings read had worked
+    // -- blaming both sent the diagnosis to the wrong place. An error with no recognised source prefix
+    // (e.g. a programme-lookup failure) counts against classes, which is the read it blocks.
+    const failed = new Set<string>();
+    for (const e of brief.errors) {
+      const src = e.split(":")[0].trim().toLowerCase();
+      failed.add(src === "meetings" ? "meetings" : "classes");
+    }
+    const failedNames = (["meetings", "classes"] as const).filter((s) => failed.has(s));
+    const readFine = (["meetings", "classes"] as const).filter((s) => !failed.has(s));
+    const when = brief.edition === "evening" ? "tomorrow's" : "today's";
     return {
       kind: "read-error",
       directive:
-        `${day} — the schedule brief could NOT read the calendar, so there is no list to give.\n` +
-        `Errors: ${brief.errors.join("; ")}\n\n` +
-        `Write ONE short message in your own voice telling the user you couldn't pull ` +
-        `${brief.edition === "evening" ? "tomorrow's" : "today's"} meetings and classes, quote the error text ` +
-        `above briefly so it can be fixed, and do NOT say or imply their calendar is empty — you do not know that. ` +
+        `${day} — the schedule brief could NOT read: ${failedNames.join(" and ")}.\n` +
+        `Errors: ${brief.errors.join("; ")}\n` +
+        (readFine.length
+          ? `${readFine.join(" and ")} WERE read successfully and nothing is scheduled there.\n\n`
+          : `\n`) +
+        `Write ONE short message in your own voice telling the user you couldn't pull ${when} ` +
+        `${failedNames.join(" and ")}, quote the error text above briefly so it can be fixed` +
+        (readFine.length ? `, and say ${readFine.join(" and ")} came back clear` : ``) +
+        `. Do NOT say or imply the ${failedNames.join(" or ")} ${failedNames.length > 1 ? "are" : "is"} empty — you do not know that. ` +
         reportOnly,
     };
   }
@@ -159,8 +175,10 @@ export async function runScheduleBrief(
   // tool can never read two different calendars again.
   let mailbox = caller.entra_email;
   try {
-    const { resolveTaskEmail } = await import("../journey/identity");
-    mailbox = (await resolveTaskEmail(caller)) ?? caller.entra_email;
+    // resolveCalendarMailbox = journey's connected Outlook account (Von.Ellis@), not the data-scope
+    // email (dev@) -- reading dev@ found 0 meetings with no error on 2026-10-15.
+    const { resolveCalendarMailbox } = await import("../journey/identity");
+    mailbox = (await resolveCalendarMailbox(caller)) ?? caller.entra_email;
   } catch {
     /* identity lookup is best-effort — fall back to the login rather than to the sending mailbox */
   }
