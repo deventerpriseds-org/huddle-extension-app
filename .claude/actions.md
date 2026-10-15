@@ -4360,3 +4360,38 @@ priority-lane 9, router 20, priority-check 20, schedule-brief 21) · `tsc` 0 err
 **Status: MERGED, DEPLOYED, NOT OWNER-CONFIRMED.** Nobody has seen it in a browser. Independent
 verifier still running with the deploy-blocked criteria now unblocked —
 `docs/VERIFY-tasks-under-categories-1.md`.
+
+---
+
+## ACT:category-tasks-2 — the agent-posted card shipped an EMPTY tree; verifier disproved my ordering claim (2026-10-15)
+
+**Reported by the owner from his phone**, not caught by any test: Iris's 6am/8pm check card read
+**"No topics yet."**, titles truncated to ~99px (*"It also cuts off the text on the left and is not
+utilizing all of the space available"*).
+
+**Evidence:** PR **#67** merged as **`83db049`**; `deploy-swa.yml` run **38769262406** success.
+Verifier report `docs/VERIFY-tasks-under-categories-1.md` (663 lines).
+
+**Root cause — three doors, one opened.** `PrioritiesWidgetData` had THREE constructions; #66 wired the
+tree into `getPrioritiesWidget` only, and `tools.ts` (`show_priorities_widget`, the path every
+agent-posted card takes) shipped a hardcoded `topics: {ok:false, roots:[], reason:"ok"}`. Now one
+`composePrioritiesWidget()`, guarded STRUCTURALLY: `category-tree.test.ts` pins which files may call
+`buildPrioritiesBand`; a fourth surface fails the suite. Mutation FIRED.
+
+**Verifier verdict: CONFIRMED 6 of 8, DISPROVED 1, HALF-DISPROVED 1** — live on the owner's real data,
+83 tasks / 4 categories, badge==rows at 390x844 and 1440x900, 0 console errors. Fixed in #67:
+- **D-1 (HIGH, live):** the comparator was not a total order — two REAL pairs tie on every key (e.g.
+  "Prepare my office camera quality"), so order fell to `updated_at` and flipped on any write. `|| id`.
+- **D-2:** `mergeTopicTree` sorted the caller's grandchildren in place; my test checked a LENGTH.
+- **D-4:** a merged category undercounted its nested topics. `recountSubtree`.
+- **D-5:** a mutation read INERT because my fixture (`SIDE_HUSTLE`) sorted before "Uncategorised".
+Two of my fixes then read **EQUIVALENT** — fixtures too shallow. Deepened; all FIRED.
+
+**OPEN — owner decision (not a bug):** AC-13 vs AC-14 contradict. Shipped = AC-14 (star → rank → due →
+title); an URGENT task can therefore rank second. Recommended keeping AC-14. `test:category-tree-
+independent` runs 24/1 by design until decided.
+**OPEN — AC-41:** FAMILY now appears when it has tasks and not otherwise; the Android widget draws it
+empty. Not settled with the owner.
+**NOT BUILT, next:** push a task ("I choose") / push a category ("you choose").
+
+**Status: MERGED, DEPLOYED, NOT OWNER-CONFIRMED** on the agent-posted card specifically.

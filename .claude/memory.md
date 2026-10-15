@@ -3174,6 +3174,20 @@ lead capture items across EVERY lane, so defaulting to it would assign other lan
 
 **Full diagnosis + the rejected alternative:** `.claude/actions.md`, `ACT:assign-on-direct-ask`.
 
+## HARDENING — a feature with THREE entry points shipped through ONE (2026-10-15, ACT:category-tasks-2)
+
+The category tree was wired into `getPrioritiesWidget` and nowhere else. `tools.ts` built its own
+`PrioritiesWidgetData` with a hardcoded empty tree — and the surface the owner actually reads (a
+scheduled card, posted by an agent) goes through `tools.ts`. He saw "No topics yet." on a feature
+reported as deployed. **My own plan said "extract the composition once and repoint all three sites"
+and I skipped it.** The guard is structural (an allowlist test over `buildPrioritiesBand` callers),
+because this repo's prose rule AND a comment at `huddle.functions.ts:6429` naming this exact hazard
+were both already in place and neither stopped it.
+
+**Two testing lessons from the verifier, both of which produced a false pass:** a LENGTH assertion
+cannot see a REORDER; and a fixture whose name sorts the right way by accident makes a rank
+invisible. When `mutate.sh` says EQUIVALENT, deepen the fixture — never accept it.
+
 ## Active work — the priorities tree renders each category's TASKS (2026-10-15, ACT:category-tasks, PR #66, MECHANISM ONLY)
 
 `9252a1b`. The tree drew names + counts and no tasks, so the owner could not pull work out of a
