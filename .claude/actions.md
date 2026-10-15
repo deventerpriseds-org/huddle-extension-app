@@ -4332,3 +4332,31 @@ user's other rows of that job type (reversible, never deleted). Runner email unc
 tick 16:09:03Z: `tasks.scheduled_jobs` holds exactly ONE enabled row per job type for user `a89e3652…`
 (`<job>-u-a89e3652…`, 7 types); every `von.ellis@`/`dev@` row `enabled=false`; next_run_at values carried
 over. **Status: mechanism verified live; owner confirmation (no doubled digest/standup after 1pm ET) pending.**
+
+**MERGED + DEPLOYED (owner: "go ahead and merge").** PR #66 merged as **`ca0d7d1`**;
+`deploy-swa.yml` run **38764997134** conclusion **success**. Merge was NOT clean on the first
+attempt — `main` had moved to `10c9d86` (PR #65, the priority-check routine, a parallel session)
+while #66 waited, leaving #66 `dirty`. `main` was merged into the branch and `.claude/actions.md`
+resolved by keeping BOTH session's entries. `memory.md` and `package.json` auto-merged (both npm
+scripts survived: `test:category-tree` and `test:priority-check`).
+
+**THE ROW CAP WAS A REAL DEFECT, CAUGHT BY THE OTHER SESSION'S LEDGER ENTRY** (`ac43446`). The first
+draft capped each category at 8 tasks behind a "+N more" button. `docs/AC-journey-widgets.md`
+**AC-10 forbids that by name** — *"no row cap, no '+N more' truncation"* — quoting the owner: *"it
+should include all that comes back from the query no matter how long that is"*. PR #65's entry cited
+AC-10 in passing, which is the only reason it was read. **Writing a cap at all means that AC was not
+consulted before building a renderer it governs.** Removed; two assertions added pinning the DATA
+path at 60 rows, and a 4th mutation FIRED. Note what the test can and cannot do: the cap lived in
+the COMPONENT, so no offline assertion could ever have caught it — AC-10's own observation method
+(rendered `li` count vs payload length) needs a DOM.
+
+**Final evidence:** 184 assertions green across 11 suites (category-tree 17, widget-topics 20,
+widget-park 10, widget-live 12, widget-band-color 21, widget-colors 25, week-order 9,
+priority-lane 9, router 20, priority-check 20, schedule-brief 21) · `tsc` 0 errors ·
+`npm run build` ok · **no server-module leak into the client bundle** (grep of
+`.output/public/_build/assets/*.js` finds no `buildCategoryTaskTree`/`mergeTopicTree`/
+`AZURE_PG_URL`/`pg.Pool`/`getBoardTasks`) · **4 mutations FIRED**.
+
+**Status: MERGED, DEPLOYED, NOT OWNER-CONFIRMED.** Nobody has seen it in a browser. Independent
+verifier still running with the deploy-blocked criteria now unblocked —
+`docs/VERIFY-tasks-under-categories-1.md`.

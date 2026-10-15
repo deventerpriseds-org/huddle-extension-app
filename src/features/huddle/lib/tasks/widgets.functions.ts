@@ -184,36 +184,25 @@ export const getPrioritiesWidget = createServerFn({ method: "POST" })
     try {
       const email = await resolveCallerEmail(data.caller);
       const { resolveTimeZone } = await import("../journey/identity");
-      const { safeTimeZone, localDateKey, buildPrioritiesBand, buildCategoryTaskTree, mergeTopicTree } =
-        await import("./widgets.server");
+      const { safeTimeZone, composePrioritiesWidget } = await import("./widgets.server");
       const timeZone = safeTimeZone(await resolveTimeZone(data.caller, data.timeZone));
       if (!email) return empty(timeZone, "Could not resolve your account.");
-      const { getBoardTasks, getWeekOrder } = await import("./tasks.server");
-      // The band read, the user's ordering and the topic passthrough are independent, so run them
-      // together rather than making the widget wait for journey's round-trip before it can show
-      // anything. getWeekOrder degrades to [] — an ordering read must never block the band.
-      const [rows, order, topics] = await Promise.all([
-        getBoardTasks(email),
-        getWeekOrder(email).catch(() => [] as string[]),
+      // The card and journey's topic passthrough are independent, so run them together rather than
+      // making the widget wait for journey's round-trip before it can show anything.
+      const nowMs = Date.now();
+      const [composed, topics] = await Promise.all([
+        composePrioritiesWidget(email, timeZone, { nowMs }),
         wantTopics ? fetchTopicTree(data.caller) : Promise.resolve(noTopics),
       ]);
-      const nowMs = Date.now();
-      // The tree the UI renders is the MIRROR's categories (with their tasks) as the base, with
-      // whatever journey's topic tool returned nested into it. Today that tool is not deployed, so
-      // `topics.roots` is `[]` and this is the ONLY thing that makes the tree non-empty — which is
-      // the point: the tree has never populated in production (reason:"tool-absent").
-      //
-      // `reason` and `ok` are deliberately left as journey reported them. They describe the JOURNEY
-      // passthrough, and the UI uses them to say whether the topic/theme layer is available; the
-      // category rows render from `roots` regardless. Overwriting `reason` to "ok" here would hide
-      // the undeployed tool and make a real gap undiagnosable.
-      const categoryRoots = buildCategoryTaskTree(rows, timeZone, nowMs);
+      // Re-compose with journey's roots nested into the mirror's categories. `reason` and `ok` are
+      // deliberately left as JOURNEY reported them: they describe the passthrough, and the UI uses
+      // them to say whether the topic/theme layer is available. Overwriting `reason` to "ok" would
+      // hide the undeployed `get_task_topics` and make a real gap undiagnosable. The category rows
+      // render from `roots` either way — this is the only surface that has journey's roots at all.
+      const { mergeTopicTree } = await import("./widgets.server");
       return {
-        ok: true,
-        timeZone,
-        todayKey: localDateKey(nowMs, timeZone) ?? new Date(nowMs).toISOString().slice(0, 10),
-        band: buildPrioritiesBand(rows, timeZone, nowMs, order),
-        topics: { ...topics, roots: mergeTopicTree(topics.roots, categoryRoots) },
+        ...composed,
+        topics: { ...topics, roots: mergeTopicTree(topics.roots, composed.topics.roots) },
       };
     } catch (err) {
       return empty(data.timeZone ?? "UTC", err instanceof Error ? err.message : String(err));

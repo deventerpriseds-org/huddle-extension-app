@@ -279,27 +279,19 @@ export async function dispatchPrioritiesWidget(
   }
   const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : "Priorities";
   try {
-    const { getBoardTasks, getWeekOrder } = await import("./tasks.server");
-    const { safeTimeZone, localDateKey, buildPrioritiesBand } = await import("./widgets.server");
+    const { safeTimeZone, composePrioritiesWidget } = await import("./widgets.server");
     const tz = safeTimeZone(timeZone);
-    const nowMs = Date.now();
-    const rows = await getBoardTasks(userEmail);
-    // Same ordering the docked widget and the Settings view use — an agent-surfaced card must not
-    // show a different order from the one the user arranged. Degrades to [] rather than failing.
-    const order = await getWeekOrder(userEmail).catch(() => [] as string[]);
-    const band = buildPrioritiesBand(rows, tz, nowMs, order);
-    // ANNOTATED, not an inline literal: the result of this function is a JSON *string*, so tsc
-    // cannot check the payload once it is stringified. Building it as a typed value first is what
-    // makes a drift in Lane B's contract a compile error here instead of a widget that renders blank.
-    const priorities: PrioritiesWidgetData = {
-      ok: true,
-      timeZone: tz,
-      todayKey: localDateKey(nowMs, tz) ?? new Date(nowMs).toISOString().slice(0, 10),
-      band,
-      // reason 'ok' with no roots is the contract's "journey answered, nothing to show" state; the
-      // client's TopicsEmpty renders "No topics yet." for it rather than claiming a failure.
-      topics: { ok: false, roots: [], reason: "ok" },
-    };
+    // THE ONE composition — same band, same ordering and the SAME CATEGORY TREE the docked widget
+    // and the Settings view render. This used to build its own payload with a hardcoded
+    // `topics: {ok:false, roots:[], reason:"ok"}`, so an agent-surfaced card showed "No topics yet."
+    // while the identical data rendered a full tree on the other surfaces. Measured on the owner's
+    // own 6am/8pm check card, 2026-10-15.
+    //
+    // ANNOTATED, not inferred: the result of this function is a JSON *string*, so tsc cannot check
+    // the payload once stringified. Naming the type here is what makes a contract drift a compile
+    // error instead of a widget that renders blank.
+    const priorities: PrioritiesWidgetData = await composePrioritiesWidget(userEmail, tz);
+    const band = priorities.band;
     console.info(`[priorities-widget] rendered title=${JSON.stringify(title)} band=${band.length} tz=${tz}`);
     return JSON.stringify({
       rendered: true,

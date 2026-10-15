@@ -63,7 +63,7 @@ const allTasks = (roots: TopicNode[]): string[] => {
     row({ id: "d", category: "  " }),          // blank, not null
     row({ id: "e", category: "PROF_EDUCATION" }), // folds into EDUCATION
     row({ id: "f", category: "PERSONAL" }),       // folds into LIFE
-    row({ id: "g", category: "SIDE_HUSTLE" }),    // unknown key — must pass through, not drop
+    row({ id: "g", category: "ZZ_TOP" }),          // unknown key — must pass through, not drop
   ];
   const tree = buildCategoryTaskTree(rows, TZ, NOW);
   const ids = allTasks(tree).sort();
@@ -79,11 +79,17 @@ const allTasks = (roots: TopicNode[]): string[] => {
     !!tree.find((n) => n.categoryAffinity === "LIFE" && n.tasks.some((t) => t.id === "f")),
     "one row each, not separate Prof. Education / Personal rows");
   check("an UNKNOWN category key passes through as its own row rather than being dropped",
-    !!tree.find((n) => n.categoryAffinity === "SIDE_HUSTLE"),
+    !!tree.find((n) => n.categoryAffinity === "ZZ_TOP"),
     "ordering is not an allow-list");
+  // The fixture category is deliberately ZZ_TOP, not SIDE_HUSTLE. "Side Hustle" sorts BEFORE
+  // "Uncategorised" under sortNodes' localeCompare tiebreak, so with that name this assertion
+  // passed whether or not the `+1` that forces Uncategorised past every dynamic category was
+  // present — an independent verifier mutated the `+1` away and the suite came back INERT. A name
+  // that sorts AFTER "Uncategorised" is what makes the position, not the alphabet, the thing
+  // under test.
   check("Uncategorised sorts last, after every known AND dynamic category",
     tree[tree.length - 1].categoryAffinity === UNCATEGORISED_CATEGORY,
-    `last row is ${tree[tree.length - 1].categoryAffinity}`);
+    `last row is ${tree[tree.length - 1].categoryAffinity} (fixture sorts ZZ_TOP after it alphabetically, so only the rank forces this)`);
 }
 
 // ── Closed / parked work never surfaces, BLOCKED does ───────────────────────────────────────────
@@ -129,6 +135,63 @@ const allTasks = (roots: TopicNode[]): string[] => {
     `shuffled input gave [${shuffled.join(",")}]`);
 }
 
+// ── D-1: the comparator must be a TOTAL order (this claim was DISPROVED on the live board) ──────
+{
+  // An independent verifier asked the owner's mirror whether any real pair ties on every sort key
+  // and found two, e.g. "Prepare my office camera quality" (n=2, distinct_sort_keys=1) — visible in
+  // his Life & Personal list. With a comparator returning 0 their order fell through to
+  // getBoardTasks' `ORDER BY updated_at DESC` and FLIPPED whenever either row was touched.
+  // Duplicate titles are ordinary on an agent-fed board, so this is steady state, not an edge case.
+  const twins = [
+    row({ id: "zzz", title: "Prepare my office camera quality", category: "LIFE" }),
+    row({ id: "aaa", title: "Prepare my office camera quality", category: "LIFE" }),
+  ];
+  const fwd = buildCategoryTaskTree(twins, TZ, NOW)[0].tasks.map((t) => t.id);
+  const rev = buildCategoryTaskTree([twins[1], twins[0]], TZ, NOW)[0].tasks.map((t) => t.id);
+  check(
+    "two tasks identical on star, rank, due date AND title still get ONE stable order",
+    fwd.join(",") === rev.join(",") && fwd.join(",") === "aaa,zzz",
+    `${fwd.join(",")} vs ${rev.join(",")} — a next-up that reorders when an unrelated field is written is not an answer to "what's next in Career?"`,
+  );
+}
+
+// ── D-4: a merged category's count must cover its whole subtree ─────────────────────────────────
+{
+  const categoryRoots = buildCategoryTaskTree(
+    [row({ id: "c1", category: "CAREER" }), row({ id: "c2", category: "CAREER" })], TZ, NOW);
+  const journeyRoots: TopicNode[] = [
+    node({ id: "category:CAREER", name: "Career", categoryAffinity: "CAREER",
+           children: [node({ id: "t1", name: "Presentation Development", count: 2,
+                             tasks: [] as never[] })] }),
+  ];
+  const merged = mergeTopicTree(journeyRoots, categoryRoots);
+  const career = merged.find((n) => n.id === "category:CAREER")!;
+  check(
+    "a category's count covers its OWN tasks PLUS its nested topics — it cannot undercount",
+    career.count === 4,
+    `count=${career.count} (2 own + 2 under "Presentation Development"); counting only its own tasks is the grpTaskCount defect arrived at from the other side`,
+  );
+  // A category root journey supplied that the mirror has NO tasks for: its count must still roll up
+  // its children. With `node.tasks.length > 0` alone this branch never fires, which is why the
+  // earlier fixture (a root WITH its own tasks) reported EQUIVALENT.
+  const noOwnTasks = mergeTopicTree(
+    [node({ id: "category:LIFE", name: "Life & Personal", categoryAffinity: "LIFE",
+            children: [node({ id: "l1", name: "Admin", count: 3 }), node({ id: "l2", name: "Errands", count: 4 })] })],
+    []);
+  check(
+    "a category with NO tasks of its own still rolls up its nested topics' counts",
+    noOwnTasks.find((n) => n.id === "category:LIFE")?.count === 7,
+    `count=${noOwnTasks.find((n) => n.id === "category:LIFE")?.count} (3 + 4) — a root the mirror has no tasks for still cannot undercount`,
+  );
+  const topicOnly = mergeTopicTree(
+    [node({ id: "solo", name: "Solo topic", count: 7 })], []);
+  check(
+    "a journey topic with a count and NOTHING beneath it keeps journey's number",
+    topicOnly[0].count === 7,
+    "the spec screenshot draws exactly these rows (\"Career Development 15\"); such a row is not expandable, so a count never sits above an empty list",
+  );
+}
+
 // ── A category exists because TASKS are in it (the FAMILY divergence) ───────────────────────────
 {
   const tree = buildCategoryTaskTree([row({ id: "f1", category: "FAMILY" })], TZ, NOW);
@@ -158,9 +221,29 @@ const allTasks = (roots: TopicNode[]): string[] => {
   check("an uncategorised journey topic stays top-level rather than being guessed into a category",
     !!merged.find((n) => n.id === "orphan"),
     "no inference");
-  check("merging does not MUTATE the inputs",
-    categoryRoots[0].children.length === 0 && journeyRoots[0].children.length === 1,
-    "callers hold their own arrays");
+  // A LENGTH assertion cannot see a REORDER, and that is exactly how this passed while the defect
+  // was live: mergeTopicTree copied two levels, then sortNodes recursed and sorted the CALLER'S
+  // grandchild arrays in place. Found by an independent verifier, not here. Snapshot the full
+  // nested shape and compare it, so a reorder at ANY depth fails.
+  const shape = (ns: readonly TopicNode[]): string =>
+    ns.map((n) => `${n.id}(${n.tasks.map((t) => t.id).join("|")})[${shape(n.children)}]`).join(",");
+  const beforeJourney = shape(journeyRoots);
+  const beforeCategory = shape(categoryRoots);
+  // FOUR levels on purpose. `.map(cloneNode)` at the push site copies the arrays a SHALLOW clone
+  // would also reach, so a three-level fixture cannot tell a deep clone from a shallow one and
+  // mutate.sh correctly reported EQUIVALENT — "not proven", not "guard is broken". The reorder is
+  // only observable below that, which is where the real defect lived.
+  const deep: TopicNode[] = [
+    node({ id: "category:CAREER", name: "Career", categoryAffinity: "CAREER",
+           children: [node({ id: "g", name: "G", children: [
+             node({ id: "mid", name: "Mid", children: [node({ id: "gz", name: "zz" }), node({ id: "ga", name: "aa" })] }),
+           ] })] }),
+  ];
+  const deepBefore = shape(deep);
+  mergeTopicTree(deep, categoryRoots);
+  check("merging does not MUTATE the inputs, at ANY depth — not even a reorder of grandchildren",
+    shape(journeyRoots) === beforeJourney && shape(categoryRoots) === beforeCategory && shape(deep) === deepBefore,
+    shape(deep) === deepBefore ? "callers hold their own arrays, nested" : `grandchildren reordered: ${deepBefore} -> ${shape(deep)}`);
 }
 
 // ── AC-10: NO ROW CAP anywhere in the data path ─────────────────────────────────────────────────
@@ -189,6 +272,56 @@ const allTasks = (roots: TopicNode[]): string[] => {
   check("no live tasks and no journey topics → an empty tree, which the UI renders as its empty state",
     buildCategoryTaskTree([], TZ, NOW).length === 0 && mergeTopicTree([], []).length === 0,
     "never throws");
+}
+
+// ── THE DUPLICATION GUARD — this is the defect that actually shipped ────────────────────────────
+//
+// 2026-10-15, found by the owner, not by any test: the category tree was wired into
+// `getPrioritiesWidget` only. `tools.ts` (`show_priorities_widget` — the path a scheduled 6am/8pm
+// card goes through) built its OWN payload with a hardcoded `topics: {ok:false, roots:[],
+// reason:"ok"}`. So Iris posted a card reading "No topics yet." while the identical data rendered a
+// full tree on the docked widget. The feature looked unbuilt because two of its three doors were
+// never opened.
+//
+// Prose would not have caught it and did not: this repo's own "extend, don't duplicate" rule and a
+// comment at huddle.functions.ts:6429 BOTH warned about a second construction of this payload. So
+// the guard is structural — the set of files allowed to call `buildPrioritiesBand` directly is
+// pinned. A fourth surface that builds its own card fails this test and has to either use
+// `composePrioritiesWidget` or come here and justify itself.
+{
+  const { readFileSync, readdirSync, statSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const walk = (dir: string): string[] =>
+    readdirSync(dir).flatMap((e) => {
+      const full = join(dir, e);
+      return statSync(full).isDirectory() ? walk(full) : /\.tsx?$/.test(full) ? [full] : [];
+    });
+
+  const ALLOWED = new Set([
+    // defines it, and defines the one composition every surface is meant to use
+    "src/features/huddle/lib/tasks/widgets.server.ts",
+    // band-only, by design: it needs the COUNTS for its message, never a card. Documented at its
+    // call site. If this ever renders a widget, it must switch to composePrioritiesWidget.
+    "src/features/huddle/lib/tasks/priority-check.server.ts",
+  ]);
+
+  const callers = walk("src")
+    .filter((f) => /buildPrioritiesBand\s*\(/.test(readFileSync(f, "utf8")))
+    .map((f) => f.replace(/\\/g, "/"))
+    .sort();
+  const rogue = callers.filter((f) => !ALLOWED.has(f));
+  check(
+    "no surface builds its own priorities payload — every card goes through composePrioritiesWidget",
+    rogue.length === 0,
+    rogue.length
+      ? `ROGUE: ${rogue.join(", ")} — use composePrioritiesWidget(email, tz) instead, or add it to ALLOWED with a reason`
+      : `only ${callers.length} allowed caller(s): ${callers.map((f) => f.split("/").pop()).join(", ")}`,
+  );
+  check(
+    "the allowlist is not stale — every file on it still calls buildPrioritiesBand",
+    [...ALLOWED].every((f) => callers.includes(f)),
+    "an allowlist entry that no longer calls it would silently permit a future rogue caller of the same name",
+  );
 }
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);
