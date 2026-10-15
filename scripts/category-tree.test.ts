@@ -544,8 +544,8 @@ const allTasks = (roots: TopicNode[]): string[] => {
   const tree = buildPrioritiesTree(rows, TZ, NOW, { topics, mappings });
   const career = tree.find((n) => n.categoryAffinity === "CAREER")!;
   const names = career.children.map((c) => c.name).join(",");
-  check("ORDER: topics WITH tasks come first, soonest task date first, undated last",
-    names.startsWith("Soon,Late,Undated,"), names);
+  check("ORDER: topics WITH tasks come first, MOST RECENT task date first, undated last",
+    names.startsWith("Late,Soon,Undated,"), names);
   check("ORDER: EMPTY topics come after, most recently updated first, undated-topic last",
     names.endsWith(",New empty,Old empty,No-date empty"), names);
   check("ORDER: a category with tasks sorts above every empty category",

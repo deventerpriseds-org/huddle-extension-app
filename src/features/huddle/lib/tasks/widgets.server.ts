@@ -1265,14 +1265,14 @@ export function buildPrioritiesTree(
   return orderByContent(withKnownCategories(mergeTopicTree(topicRoots, [])));
 }
 
-/** Earliest date a task in this subtree is pinned to (start, else due), or null. */
-function earliestTaskMs(node: TopicNode): number | null {
+/** Most recent date a task in this subtree is pinned to (start, else due), or null. */
+function latestTaskMs(node: TopicNode): number | null {
   let best: number | null = null;
   const visit = (n: TopicNode) => {
     for (const t of n.tasks) {
       const iso = t.startTime ?? t.dueDate;
       const ms = iso ? Date.parse(iso) : NaN;
-      if (Number.isFinite(ms) && (best === null || ms < best)) best = ms;
+      if (Number.isFinite(ms) && (best === null || ms > best)) best = ms;
     }
     n.children.forEach(visit);
   };
@@ -1290,7 +1290,8 @@ function subtreeHasTasks(node: TopicNode): boolean {
  *
  * - Categories keep their fixed order (Life, Career, Ventures, Education, Family, then dynamic ones)
  *   within each group; only "has tasks" moves a category, so an empty Family sinks to the bottom.
- * - Topics WITH tasks: soonest task date first (start time, else due date; undated last).
+ * - Topics WITH tasks: MOST RECENT task date first (start time, else due date; undated last).
+ *   Owner, 2026-10-15: "items should be ordered descending by date for the most recent".
  * - EMPTY topics: most recently updated first (journey's `task_topic_index.updated_at`; topics
  *   without one keep their previous order at the end of the empty group).
  *
@@ -1302,7 +1303,7 @@ export function orderByContent(nodes: readonly TopicNode[]): TopicNode[] {
     n: { ...n, children: orderByContent(n.children) },
     i,
     full: subtreeHasTasks(n),
-    date: earliestTaskMs(n),
+    date: latestTaskMs(n),
     upd: n.updatedAt ? Date.parse(n.updatedAt) : NaN,
   }));
   const isCategory = (n: TopicNode) => n.id.startsWith(CATEGORY_ROOT_PREFIX);
@@ -1310,9 +1311,9 @@ export function orderByContent(nodes: readonly TopicNode[]): TopicNode[] {
     if (a.full !== b.full) return a.full ? -1 : 1;
     if (!isCategory(a.n) && !isCategory(b.n)) {
       if (a.full) {
-        const ad = a.date ?? Number.POSITIVE_INFINITY;
-        const bd = b.date ?? Number.POSITIVE_INFINITY;
-        if (ad !== bd) return ad - bd;
+        const ad = a.date ?? Number.NEGATIVE_INFINITY;
+        const bd = b.date ?? Number.NEGATIVE_INFINITY;
+        if (ad !== bd) return bd - ad;
       } else {
         const au = Number.isFinite(a.upd) ? a.upd : Number.NEGATIVE_INFINITY;
         const bu = Number.isFinite(b.upd) ? b.upd : Number.NEGATIVE_INFINITY;
