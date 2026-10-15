@@ -96,67 +96,6 @@ export const getScheduleWidget = createServerFn({ method: "POST" })
 // Widget 2 — PRIORITIES
 // ---------------------------------------------------------------------------
 
-/**
- * Journey's priorities TOPIC TREE, via the existing `invokeJourneyTool` passthrough.
- *
- * THIS MUST DEGRADE, NEVER THROW. The tool (`get_task_topics`) is Lane A's and may not be
- * deployed yet; the band half of the widget has to work regardless. Every failure becomes
- * `{ok:false, roots:[], reason}` that the UI renders as an empty state:
- *   not-configured → this environment has no JOURNEY_PROXY_URL/TOKEN
- *   tool-absent    → journey answered but doesn't know the tool yet
- *   error          → network / non-JSON / unparseable payload
- *
- * The response SHAPE is not yet pinned by Lane A (its doc records the tables and columns it reads
- * — `task_topic_index.{id,topic_name,position,category_affinity,parent_topic_id}` — but its
- * register step was still open when this was written), so `buildTopicTree` accepts either a
- * pre-nested tree or the flat parent_topic_id shape. See docs/LANE-B-widget-data.md.
- */
-async function fetchTopicTree(caller: z.infer<typeof Caller>): Promise<TopicTreeResult> {
-  const { buildTopicTree } = await import("./widgets.server");
-  try {
-    const { invokeJourneyTool } = await import("../journey/proxy.functions");
-    const r = await invokeJourneyTool({
-      toolName: "get_task_topics",
-      args: {},
-      caller: caller ?? {},
-      context: { source: "huddle" },
-    });
-    if (!r.ok) {
-      const detail = `${r.error ?? ""} ${r.output ?? ""}`.toLowerCase();
-      // execute-tool reports an unregistered tool in its own words; treat any of these as
-      // "not deployed yet" rather than a fault, because that is the pre-deploy steady state.
-      const absent =
-        detail.includes("unknown tool") ||
-        detail.includes("unsupported tool") ||
-        detail.includes("no such tool") ||
-        detail.includes("tool not found") ||
-        detail.includes("not implemented");
-      return {
-        ok: false,
-        roots: [],
-        reason: absent ? "tool-absent" : "error",
-        error: r.error ?? "journey returned ok=false",
-      };
-    }
-    // The proxy always hands back `output` as a STRING (it JSON.stringifies a non-string result —
-    // huddle-proxy/index.ts), so parse it before normalizing. A plain-string message is not a tree.
-    let payload: unknown = r.output;
-    if (typeof r.output === "string") {
-      try {
-        payload = JSON.parse(r.output);
-      } catch {
-        return { ok: false, roots: [], reason: "error", error: "journey returned non-JSON output" };
-      }
-    }
-    const roots = buildTopicTree(payload);
-    return { ok: true, roots, reason: "ok" };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    // journeyFetch throws this exact phrase when the env vars are missing.
-    const unconfigured = msg.toLowerCase().includes("not configured");
-    return { ok: false, roots: [], reason: unconfigured ? "not-configured" : "error", error: msg };
-  }
-}
 
 /**
  * Data for the PRIORITIES widget: the task band (from the mirror) + journey's topic tree.
@@ -187,23 +126,14 @@ export const getPrioritiesWidget = createServerFn({ method: "POST" })
       const { safeTimeZone, composePrioritiesWidget } = await import("./widgets.server");
       const timeZone = safeTimeZone(await resolveTimeZone(data.caller, data.timeZone));
       if (!email) return empty(timeZone, "Could not resolve your account.");
-      // The card and journey's topic passthrough are independent, so run them together rather than
-      // making the widget wait for journey's round-trip before it can show anything.
-      const nowMs = Date.now();
-      const [composed, topics] = await Promise.all([
-        composePrioritiesWidget(email, timeZone, { nowMs }),
-        wantTopics ? fetchTopicTree(data.caller) : Promise.resolve(noTopics),
-      ]);
-      // Re-compose with journey's roots nested into the mirror's categories. `reason` and `ok` are
-      // deliberately left as JOURNEY reported them: they describe the passthrough, and the UI uses
-      // them to say whether the topic/theme layer is available. Overwriting `reason` to "ok" would
-      // hide the undeployed `get_task_topics` and make a real gap undiagnosable. The category rows
-      // render from `roots` either way — this is the only surface that has journey's roots at all.
-      const { mergeTopicTree } = await import("./widgets.server");
-      return {
-        ...composed,
-        topics: { ...topics, roots: mergeTopicTree(topics.roots, composed.topics.roots) },
-      };
+      // ONE composition for every surface, journey's topic tree included. This used to fetch the
+      // topics separately and merge them in AFTER composing, which put topic nodes in the tree with
+      // NO tasks under them (the links were never read); the composer now attaches each task to its
+      // topic itself. `topics.ok`/`reason` still describe the journey read, untouched.
+      return await composePrioritiesWidget(email, timeZone, {
+        caller: data.caller,
+        includeTopics: wantTopics,
+      });
     } catch (err) {
       return empty(data.timeZone ?? "UTC", err instanceof Error ? err.message : String(err));
     }

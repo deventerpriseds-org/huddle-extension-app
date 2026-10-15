@@ -260,11 +260,12 @@ export const WIDGET_SYSTEM_HINT =
  * Ownership works exactly as it does for the checklist: the rows come from the caller's OWN
  * email-scoped mirror read, so a task belonging to someone else simply is not there to render.
  *
- * The topic tree is NOT fetched here. It is a journey round-trip through the proxy (Lane A's
- * `get_task_topics`, not deployed yet), and a tool call already inside an agent's turn is the worst
- * place to spend that latency — so the payload ships with an empty tree and the CLIENT renders the
- * labelled empty state, which is the same thing it renders when journey answers `tool-absent`. The
- * band, which is the half the user acts on, is fully live.
+ * The topic tree IS fetched here now, BOUNDED. This used to skip it, on the sound reasoning that a
+ * tool call inside an agent's turn is the worst place to spend journey latency. But this is the card
+ * the owner actually reads (a scheduled 6am/8pm check is posted through this path), and he needs
+ * the Category -> Topic -> Task layer on it. So the call happens with a ceiling
+ * (TOPIC_FETCH_TIMEOUT_MS): a slow or missing journey degrades the card to the category-only tree,
+ * never to an error and never to a stalled reply.
  */
 export async function dispatchPrioritiesWidget(
   userEmail: string | undefined,
@@ -290,7 +291,9 @@ export async function dispatchPrioritiesWidget(
     // ANNOTATED, not inferred: the result of this function is a JSON *string*, so tsc cannot check
     // the payload once stringified. Naming the type here is what makes a contract drift a compile
     // error instead of a widget that renders blank.
-    const priorities: PrioritiesWidgetData = await composePrioritiesWidget(userEmail, tz);
+    const priorities: PrioritiesWidgetData = await composePrioritiesWidget(userEmail, tz, {
+      caller: { entra_email: userEmail },
+    });
     const band = priorities.band;
     console.info(`[priorities-widget] rendered title=${JSON.stringify(title)} band=${band.length} tz=${tz}`);
     return JSON.stringify({
