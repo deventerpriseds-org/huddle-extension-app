@@ -20,6 +20,7 @@ import {
   addDays,
   buildScheduleBrief,
   type BriefEdition,
+  type BriefWindow,
   type ScheduleBrief,
 } from "./schedule-brief.server";
 
@@ -122,29 +123,57 @@ export function briefDeliveryPlan(
   brief: ScheduleBrief,
   tz: string,
 ): { kind: BriefDeliveryKind; directive: string } {
-  const day =
-    brief.edition === "evening" ? `Tomorrow (${brief.forDate})` : `Today (${brief.forDate})`;
+  // A WINDOW message (owner, 2026-10-15: "...and for each window as they pop up") covers only what
+  // is still ahead in that window; the day/evening editions cover the whole day.
+  const w = brief.window;
+  const hr = (h: number) => `${((h + 11) % 12) + 1} ${h < 12 ? "AM" : "PM"}`;
+  const winName = w ? `${w.name.replace(/_/g, " ")} window (${hr(w.start)}–${hr(w.end)})` : "";
+  const day = w
+    ? `Today (${brief.forDate}), the ${winName} — what is still ahead`
+    : brief.edition === "evening"
+      ? `Tomorrow (${brief.forDate})`
+      : `Today (${brief.forDate})`;
+  // TASKS (owner: "i have tasks everyday and i do want a similar message"). Listed separately from
+  // meetings/classes, and named after them, so neither is lost in the other.
+  const taskLines = (brief.tasks ?? []).map(
+    (t) => `${clock(t.startIso, tz) ?? "any time"} — ${t.title} (task)`,
+  );
+  const taskBlock =
+    brief.tasks !== undefined
+      ? `\nTASKS:\n${taskLines.length ? taskLines.join("\n") : "(no tasks scheduled)"}`
+      : brief.tasksError
+        ? `\nTASKS: could not be read (${brief.tasksError}) — say so; do not claim there are none.`
+        : "";
+  const hasAny = brief.items.length > 0 || taskLines.length > 0;
   // Owner, 2026-10-15: "Why didn't iris say something like, hello Sir, just a reminder that today you
   // have x and y, and later in the week you have a tomorrow, b the next day etc etc?" The old
   // directive asked for "ONE short heads-up ... lead with the first thing", and the brief only ever
   // read ONE day, so there was no week to mention. Both are fixed here and in buildScheduleBrief.
-  const week = upcomingLines(brief, tz);
-  const weekBlock =
+  const week = w ? [] : upcomingLines(brief, tz);
+  const weekBlock = w ? "" :
     `LATER THIS WEEK:\n${week.length ? week.join("\n") : "(nothing scheduled)"}` +
     (brief.upcomingErrors?.length ? `\n(lookahead partly unread: ${brief.upcomingErrors.join("; ")})` : "");
-  const when = brief.edition === "evening" ? "tomorrow" : "today";
+  const when = w ? `for the rest of the ${winName}` : brief.edition === "evening" ? "tomorrow" : "today";
+  const tasksAsk = taskLines.length
+    ? `After the meetings and classes, continue with "and on your task list …", naming each TASK with its ` +
+      `time, earliest first. `
+    : brief.tasks !== undefined
+      ? `There are no tasks scheduled ${when}; say so in a few words. `
+      : "";
   const spoken =
     `Write it as ONE warm message in your own voice, phrased the way a personal assistant would say it ` +
     `out loud — natural sentences, NO bullet points, NO headings. `;
   const weekAsk = week.length
     ? `Then continue with "and later in the week you have …", naming each LATER THIS WEEK item by its day ` +
       `(say "tomorrow" where it is labelled Tomorrow, otherwise the weekday) and its time. `
-    : `There is nothing later in the week, so do not mention the rest of the week. `;
+    : w
+      ? ``
+      : `There is nothing later in the week, so do not mention the rest of the week. `;
   const reportOnly =
     `This is a REPORT-ONLY turn — everything above is already known, so do NOT call any tool, do not ` +
     `invent anything that is not listed, and do not paste raw JSON. Keep it skimmable.`;
 
-  if (!brief.items.length && brief.errors.length) {
+  if (!hasAny && brief.errors.length) {
     // Name ONLY the sources that failed. Owner, 2026-10-15: Iris said she "couldn't pull the meetings
     // and classes" when only classes had failed (classes: http_500) and the meetings read had worked
     // -- blaming both sent the diagnosis to the wrong place. An error with no recognised source prefix
@@ -160,7 +189,7 @@ export function briefDeliveryPlan(
     return {
       kind: "read-error",
       directive:
-        `${day} — the schedule brief could NOT read: ${failedNames.join(" and ")}.\n` +
+        `${day} — the schedule brief could NOT read: ${failedNames.join(" and ")}.${taskBlock}\n` +
         `Errors: ${brief.errors.join("; ")}\n` +
         (readFine.length
           ? `${readFine.join(" and ")} WERE read successfully and nothing is scheduled there.\n\n`
@@ -173,13 +202,14 @@ export function briefDeliveryPlan(
     };
   }
 
-  if (!brief.items.length) {
+  if (!hasAny) {
     return {
       kind: "nothing-scheduled",
       directive:
-        `${day} — nothing is on the calendar: no meetings and no classes were found.\n${weekBlock}\n\n` +
+        `${day} — nothing is on the calendar: no meetings and no classes were found.${taskBlock}\n${weekBlock}\n\n` +
         spoken +
-        `Open with "Hello Sir," and say there is nothing on the calendar ${when}. ` +
+        `Open with "Hello Sir," and say there is nothing on the calendar ${when}` +
+        (brief.tasks !== undefined ? ` and no tasks scheduled` : ``) + `. ` +
         (week.length
           ? `Then add "but later in the week you have …", naming each LATER THIS WEEK item by its day ` +
             `(say "tomorrow" where it is labelled Tomorrow, otherwise the weekday) and its time. `
@@ -192,10 +222,12 @@ export function briefDeliveryPlan(
   return {
     kind: "items",
     directive:
-      `${day} — here is what is on:\n${lines.join("\n")}\n${weekBlock}\n\n` +
+      `${day} — here is what is on:\n${lines.length ? lines.join("\n") : "(no meetings or classes)"}${taskBlock}\n${weekBlock}\n\n` +
       spoken +
       `Open with "Hello Sir," then say "just a reminder that ${when} you have …", naming exactly the ` +
-      `items listed for ${when}, earliest first, each with its time. Mention a location only when one is given. ` +
+      `meetings and classes listed, earliest first, each with its time (if there are none, say there are no ` +
+      `meetings). Mention a location only when one is given. ` +
+      tasksAsk +
       weekAsk +
       `${brief.errors.length ? `Say plainly that one source could not be read (${brief.errors.join("; ")}), so this may be incomplete. ` : ""}` +
       reportOnly,
@@ -217,6 +249,8 @@ export async function runScheduleBrief(
     runId?: string;
     /** Injectable clock, so a test pins the edition instead of waiting for 8pm. */
     nowMs?: number;
+    /** A journey WINDOW message (sent when journey's window call fires): what is still ahead in it. */
+    window?: BriefWindow;
   } = {},
 ): Promise<ScheduleBriefResult> {
   const tz = opts.timeZone?.trim() || DEFAULT_TZ;
@@ -238,7 +272,15 @@ export async function runScheduleBrief(
 
   let brief: ScheduleBrief;
   try {
-    brief = await buildScheduleBrief({ nowMs, cadence: { tz }, edition: opts.edition, mailbox });
+    brief = await buildScheduleBrief({
+      nowMs,
+      cadence: { tz },
+      edition: opts.window ? "morning" : opts.edition, // a window is always TODAY
+      mailbox,
+      // The task mirror is keyed by the login email; getScheduledTasksBetween widens to every alias.
+      taskEmail: caller.entra_email,
+      window: opts.window,
+    });
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "brief build failed" };
   }
@@ -260,7 +302,11 @@ export async function runScheduleBrief(
   // fires twice in one slot (a retry, an overlapping tick), `enqueueTurn` sees the same id and
   // returns not-fresh, so the owner gets ONE push rather than two. `runId` only disambiguates a
   // deliberate manual re-run.
-  const turnId = `schedule-brief-${brief.edition}-${brief.forDate}${opts.runId ? `-${opts.runId}` : ""}`;
+  // A window gets its own key per day, so 11am/5pm/7pm each send once. journey's 8am MORNING window is
+  // sent WITHOUT a window (as the morning edition), so it shares this key with Huddle's own 8am brief
+  // and the owner gets ONE 8am message whichever fires first.
+  const slot = opts.window ? `window-${opts.window.name}` : brief.edition;
+  const turnId = `schedule-brief-${slot}-${brief.forDate}${opts.runId ? `-${opts.runId}` : ""}`;
 
   const payload = {
     text: directive,
