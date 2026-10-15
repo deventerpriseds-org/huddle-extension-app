@@ -296,6 +296,24 @@ export function isOpen(row: BoardTaskRow): boolean {
   return !CLOSED_STATUSES.has(upper(row.status));
 }
 
+/**
+ * Is this task shown in the CATEGORY / TOPIC TREE? The owner's phone's rule, exactly:
+ * `status=not.in.(DONE,BLOCKED)` (SupabaseTaskClient.getTasksForTopics), with no parking filter.
+ *
+ * DELIBERATELY DIFFERENT FROM `isOpen`, which the This Week band and the schedule use. Owner,
+ * 2026-10-15, after the tree's counts were compared with his Android widget and did not match (Life
+ * 15 vs 18, Ventures 57 vs 66): "why dont life and ventures line up and why are you pushing past it
+ * instead of fixing it?" The three differences were ones I had chosen, not ones he asked for:
+ *   - PARKED tasks: the phone shows them, and the tree hid them. 15 of the 21 missing tasks.
+ *   - BLOCKED tasks: the phone hides them, and the tree showed them.
+ *   - Tasks linked to NO topic: the phone hides them (see buildPrioritiesTree), and the tree showed them.
+ * Measured with docs/verify-subcategories-1/compare.ts on his real data before and after.
+ */
+export function isTreeLive(row: BoardTaskRow): boolean {
+  const s = upper(row.status);
+  return s !== "DONE" && s !== "BLOCKED";
+}
+
 /** Project one mirror board row into the widget row shape, resolving `isToday` in `timeZone`. */
 export function toWidgetRow(row: BoardTaskRow, timeZone: string, todayKey: string): WidgetTaskRow {
   const startTime = row.start_time ?? null;
@@ -857,10 +875,8 @@ export function buildCategoryTaskTree(
   const tz = safeTimeZone(timeZone);
   const todayKey = localDateKey(nowMs, tz) ?? new Date(nowMs).toISOString().slice(0, 10);
 
-  // Same liveness rule as every other widget section — closed and parked work never surfaces.
-  // BLOCKED stays (isOpen keeps it on purpose); journey's own topic tool drops it, which is one
-  // of the reasons this is not sourced from there.
-  const live = rows.filter((r) => isOpen(r) && !isParked(r)).map((r) => toWidgetRow(r, tz, todayKey));
+  // The TREE's liveness rule, which is the owner's phone's rule (isTreeLive), not the band's.
+  const live = rows.filter(isTreeLive).map((r) => toWidgetRow(r, tz, todayKey));
 
   const byCat = new Map<string, WidgetTaskRow[]>();
   for (const row of live) {
@@ -1144,10 +1160,15 @@ export function classifyTopicFailure(error?: string | null, output?: string | nu
 /**
  * `task_id -> topic_id` from journey's `mappings`, ONE topic per task.
  *
- * A task linked to two topics is placed once, under the topic with the smallest id, so counts never
- * double and the placement is the same on every read. Measured on the owner's data: 1 such task of
- * 369 links. (The Android widget keeps whichever mapping the database happened to return last,
- * `topicByTask[task_id] = topic_id`, which is not stable across reads.)
+ * A task linked to two topics is placed ONCE, under its NEWEST link (`created_at`), so counts never
+ * double and the placement matches the owner's phone. The phone keeps the last link the database
+ * returns (`topicByTask[task_id] = topic_id`), and the table returns links in insertion order, so
+ * "last" is "newest". Measured 2026-10-15 on the one such task: "Prepare an inspections records
+ * database" is linked to Database Management (13:06:59.099) and Inspection Records Management
+ * (13:06:59.191), and his phone files it under the second. Unlike the phone, this does not depend on
+ * row order: it reads the timestamp. Ties, and links that arrive without a timestamp (a journey
+ * before `created_at` was added to get_task_topics), fall back to the smallest topic id, so the
+ * result is the same on every read.
  */
 export function findTopicMappings(payload: unknown): Map<string, string> {
   const out = new Map<string, string>();
@@ -1163,14 +1184,23 @@ export function findTopicMappings(payload: unknown): Map<string, string> {
     }
     return null;
   })();
+  const chosenAt = new Map<string, number>(); // task -> created_at (ms) of the link currently chosen
   for (const m of arr ?? []) {
     if (!m || typeof m !== "object") continue;
     const r = m as Record<string, unknown>;
     const taskId = typeof r.task_id === "string" ? r.task_id : typeof r.taskId === "string" ? r.taskId : null;
     const topicId = typeof r.topic_id === "string" ? r.topic_id : typeof r.topicId === "string" ? r.topicId : null;
     if (!taskId || !topicId) continue;
+    const rawAt = r.created_at ?? r.createdAt;
+    const parsed = typeof rawAt === "string" ? Date.parse(rawAt) : NaN;
+    const at = Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
     const prev = out.get(taskId);
-    if (prev === undefined || topicId < prev) out.set(taskId, topicId);
+    const prevAt = chosenAt.get(taskId) ?? Number.NEGATIVE_INFINITY;
+    // Newest link wins; equal timestamps (or none) fall back to the smallest topic id.
+    if (prev === undefined || at > prevAt || (at === prevAt && topicId < prev)) {
+      out.set(taskId, topicId);
+      chosenAt.set(taskId, at);
+    }
   }
   return out;
 }
@@ -1213,20 +1243,22 @@ export function buildPrioritiesTree(
   };
   index(topicRoots);
 
-  const unmapped: BoardTaskRow[] = [];
   for (const r of rows) {
-    if (!isOpen(r) || isParked(r)) continue;
+    if (!isTreeLive(r)) continue;
     const topicId = mappings.get(r.id);
     const node = topicId ? byId.get(topicId) : undefined;
     // Never attach to a synthetic category root: a mapping names a TOPIC.
     if (node && !node.id.startsWith(CATEGORY_ROOT_PREFIX)) node.tasks.push(toWidgetRow(r, tz, todayKey));
-    else unmapped.push(r);
+    // A task linked to NO topic is NOT shown in the tree when topics are available — the phone's
+    // rule (SupabaseTaskClient.getTasksForTopics only fetches tasks reached through a mapping). It
+    // stays on the board, and in This Week if starred. The degraded path above is different on
+    // purpose: with NO topics at all, every task is "unlinked", and hiding them would empty the tree.
   }
   for (const n of byId.values()) n.tasks.sort(byPriorityThenDue);
 
-  // mergeTopicTree deep-clones, folds topics into the matching category roots, recounts every node
-  // from what is beneath it, and sorts. The unmapped tasks' tree is the base it folds into.
-  return mergeTopicTree(topicRoots, buildCategoryTaskTree(unmapped, timeZone, nowMs));
+  // mergeTopicTree deep-clones, folds the topics into category roots, recounts every node from what
+  // is beneath it, and sorts.
+  return mergeTopicTree(topicRoots, []);
 }
 
 // ---------------------------------------------------------------------------

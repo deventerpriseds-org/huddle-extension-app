@@ -4460,3 +4460,49 @@ present is not that proof. The verifier was handed the live check.
   - The timer-clear in fetchTopicPayload has no repo test (verifier m6).
 - **Not observed live:** Iris's in-chat card. It uses the same composer; the next 6am/8pm card is
   the first real check.
+
+---
+
+## ACT:tree-matches-phone — Life and Ventures now line up with the phone (2026-10-15)
+
+**Owner:** *"why dont life and ventures line up and why are you pushing past it instead of fixing
+it?"* He is right. I had reported the gaps as "intended differences", but they were three rules I had
+chosen myself and he had never approved. His phone is the spec he gave.
+
+**Measured cause, per task** (`docs/verify-subcategories-1/compare.ts`, his real data):
+| | phone | before | after |
+|---|---|---|---|
+| Life | 18 | 15 | **18** |
+| Career | 8 | 8 (cancelling errors) | **8** |
+| Ventures | 66 | 57 | **66** |
+| Education | 6 | 8 | **6** |
+- **PARKED tasks: 15 of the 21 missing.** The phone shows them and the tree hid them.
+- BLOCKED: the phone hides them and the tree showed them.
+- Tasks with NO topic: the phone hides them and the tree showed them.
+- 1 out-of-sync mirror row (below).
+
+**Fixed (huddle PR #72):** the tree's own rule, `isTreeLive`, is the phone's: status not DONE and not
+BLOCKED, parked included, and no-topic tasks hidden whenever topics are available. **The This Week band
+is deliberately unchanged** (`isOpen && !isParked`), pinned by a test so the difference is on record.
+When there are no topics at all, the fallback tree still shows every task: hiding "no-topic" tasks
+there would empty it.
+- **Multi-topic placement now matches the phone: the NEWEST link wins.** The phone keeps the last row
+  returned, and rows come back in insertion order. Real case: "Prepare an inspections records
+  database" goes under Inspection Records Management, which is newer by 0.09 s. Needs journey-voice
+  to return `created_at` (separate journey PR). Until it does, Huddle falls back to the smallest id,
+  so either deploy order is safe.
+- **Topics with no tasks render GREY** (owner request).
+- Four mutations FIRED (parked shown, BLOCKED hidden, no-topic hidden, newest link wins).
+
+**Data repair, done with the scope stated beforehand:** one no-op `UPDATE` on journey row `ee2ad17a`
+("Accept my DBA financial aid"). It was DONE in journey and UP_NEXT in Huddle's mirror. Every trigger
+on `public.tasks` was read first: the no-op re-fires the Huddle sync, writes one audit-log row and bumps
+`updated_at`; reminders and topic re-classification do NOT fire. `net._http_response` 17:47:38: 200, and
+Huddle's webhook answered `{"ok":true,"operation":"UPDATE","id":"ee2ad17a…"}`. The mirror was not read
+back directly, because the Huddle PG connector needs re-auth.
+
+**BACKLOG ROW, not fixed:** the journey → Huddle sync is fire-and-forget (`pg_net`), and a failed call
+is **never retried**. That is how ee2ad17a's Sep 7 update was lost (it was completed in the same batch as
+its twin). There is no detector for this drift today; compare.ts found it by accident.
+
+**Status: on PR #72, NOT merged, NOT deployed, NOT owner-confirmed.**

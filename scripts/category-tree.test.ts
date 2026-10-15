@@ -19,6 +19,7 @@
 
 import {
   buildCategoryTaskTree,
+  buildPrioritiesBand,
   buildPrioritiesTree,
   classifyTopicFailure,
   findTopicMappings,
@@ -108,9 +109,17 @@ const allTasks = (roots: TopicNode[]): string[] => {
     row({ id: "blocked", category: "LIFE", status: "BLOCKED" }),
   ];
   const ids = allTasks(buildCategoryTaskTree(rows, TZ, NOW)).sort();
-  check("DONE and parked tasks are excluded; BLOCKED is KEPT; a REOPENED task (live status, old completed_at) is KEPT",
-    ids.join(",") === "blocked,open,reopened",
-    `[${ids.join(",")}] — STATUS decides, not completed_at. Measured: 6 of the owner's tasks are live with an old completion date`);
+  // The TREE follows the owner's phone (isTreeLive): status not DONE and not BLOCKED, parked SHOWN.
+  // These were my own rules until 2026-10-15 ("why dont life and ventures line up"): parked hidden
+  // and BLOCKED kept. Parked tasks alone were 15 of the 21 tasks Huddle was missing.
+  check("TREE = the phone's rule: DONE and BLOCKED hidden; PARKED shown; a REOPENED task (live status, old completed_at) shown",
+    ids.join(",") === "open,parked,reopened",
+    `[${ids.join(",")}] — SupabaseTaskClient: status=not.in.(DONE,BLOCKED), no parking filter`);
+  // ...and the This Week BAND is deliberately NOT changed: it keeps the band's rule (isOpen && not
+  // parked). A different rule on a different surface is a documented decision, not an accident.
+  const band = buildPrioritiesBand(rows.map((r) => ({ ...r, is_priority: true })), TZ, NOW).map((r) => r.id).sort();
+  check("the This Week BAND keeps its own rule: parked hidden, BLOCKED kept",
+    band.join(",") === "blocked,open,reopened", `[${band.join(",")}]`);
 }
 
 // ── The count is DERIVED, so it can never disagree with the rows ────────────────────────────────
@@ -361,15 +370,26 @@ const allTasks = (roots: TopicNode[]): string[] => {
   ];
   const tree = buildPrioritiesTree(rows, TZ, NOW, { topics, mappings });
   const all = allTasks(tree).sort();
-  check("SUB-CATEGORIES: every live task appears exactly once — unlinked, dangling-link and multi-linked alike",
-    all.join(",") === "ghost,loose,twice", `[${all.join(",")}]`);
-  check("SUB-CATEGORIES: a task with NO topic sits directly under its own category (the phone drops it; we don't)",
-    tree.find((n) => n.categoryAffinity === "VENTURES")?.tasks.some((t) => t.id === "loose") === true,
-    "no live work is hidden");
+  check("SUB-CATEGORIES: the tree shows exactly what the phone shows — linked + live (parked included), each once",
+    all.join(",") === "parked,twice", `[${all.join(",")}] — loose/ghost have no reachable topic, done is closed`);
+  check("SUB-CATEGORIES: a task with NO topic is NOT in the tree when topics are available — the phone's rule",
+    !all.includes("loose") && !all.includes("ghost") && !tree.some((n) => n.categoryAffinity === "VENTURES"),
+    "SupabaseTaskClient only reaches tasks through a mapping; the task stays on the board and in This Week");
   const fwd = findTopicMappings({ mappings }).get("twice");
   const rev = findTopicMappings({ mappings: [...mappings].reverse() }).get("twice");
-  check("SUB-CATEGORIES: a task linked to two topics lands under ONE, the same one on every read",
-    fwd === "ta" && rev === "ta", `${fwd} / ${rev} — the phone keeps whichever row came back last`);
+  check("SUB-CATEGORIES: without timestamps, a task linked to two topics lands under ONE, the same on every read",
+    fwd === "ta" && rev === "ta", `${fwd} / ${rev} — smallest topic id, the fallback for a journey that sends no created_at`);
+  // With timestamps: the NEWEST link wins, which is what the owner's phone shows. Real values from
+  // his board: "Prepare an inspections records database" -> Database Management at 13:06:59.099 and
+  // Inspection Records Management at 13:06:59.191; his phone files it under the second.
+  const timed = [
+    { task_id: "insp", topic_id: "65784e06-db", created_at: "2026-09-21T13:06:59.099348+00:00" },
+    { task_id: "insp", topic_id: "6658cd7e-ir", created_at: "2026-09-21T13:06:59.19153+00:00" },
+  ];
+  const nf = findTopicMappings({ mappings: timed }).get("insp");
+  const nr = findTopicMappings({ mappings: [...timed].reverse() }).get("insp");
+  check("SUB-CATEGORIES: with timestamps, the NEWEST link wins, matching the phone, in any row order",
+    nf === "6658cd7e-ir" && nr === "6658cd7e-ir", `${nf} / ${nr} — the phone files it under Inspection Records Management`);
 }
 
 {

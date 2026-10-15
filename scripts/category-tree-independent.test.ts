@@ -26,6 +26,7 @@ import {
   UNCATEGORISED_CATEGORY,
   isOpen,
   isParked,
+  isTreeLive,
   type TopicNode,
 } from "../src/features/huddle/lib/tasks/widgets.server";
 
@@ -68,11 +69,13 @@ const allTaskIds = (ns: readonly TopicNode[]) => { const o: string[] = []; walk(
     priority_rank: rnd() < 0.2 ? Math.floor(rnd() * 5) : null,
     due_date: rnd() < 0.3 ? `2026-1${Math.floor(rnd()*2)}-0${1+Math.floor(rnd()*8)}T00:00:00Z` : null,
   }));
-  const expected = rows.filter((r) => isOpen(r) && !isParked(r)).map((r) => r.id).sort();
+  // The TREE's rule is the owner's phone's (isTreeLive): DONE and BLOCKED hidden, PARKED shown.
+  // Owner-directed 2026-10-15; until then this asserted the band's rule (isOpen && !isParked).
+  const expected = rows.filter((r) => isTreeLive(r)).map((r) => r.id).sort();
   const tree = buildCategoryTaskTree(rows, TZ, NOW);
   const got = allTaskIds(tree);
   const gotSorted = [...got].sort();
-  check("I-1a every live+unparked task reaches the tree",
+  check("I-1a every task the phone would show (not DONE, not BLOCKED; parked included) reaches the tree",
     gotSorted.join(",") === expected.join(","),
     `expected ${expected.length} live of 400, got ${got.length}; missing=[${expected.filter(e=>!got.includes(e)).slice(0,5)}] extra=[${got.filter(g=>!expected.includes(g)).slice(0,5)}]`);
   check("I-1b and EXACTLY ONCE — no id appears under two categories",
@@ -81,10 +84,11 @@ const allTaskIds = (ns: readonly TopicNode[]) => { const o: string[] = []; walk(
   const closed = rows.filter((r) => !isOpen(r)).map(r=>r.id);
   const parked = rows.filter((r) => isParked(r)).map(r=>r.id);
   check("I-1c no closed task leaked in", !closed.some(id=>got.includes(id)), `${closed.length} closed rows, 0 present`);
-  check("I-1d no parked task leaked in (incl. odd-cased 'Parking-Lot')",
-    !parked.some(id=>got.includes(id)), `${parked.length} parked rows (isParked is case-insensitive), 0 present`);
-  const blocked = rows.filter((r) => r.status === "BLOCKED" && isOpen(r) && !isParked(r)).map(r=>r.id);
-  check("I-1e BLOCKED is KEPT", blocked.length>0 && blocked.every(id=>got.includes(id)), `${blocked.length} blocked live rows, all present`);
+  const parkedLive = rows.filter((r) => isParked(r) && isTreeLive(r)).map(r=>r.id);
+  check("I-1d every PARKED task the phone would show IS in the tree (incl. odd-cased 'Parking-Lot')",
+    parkedLive.length>0 && parkedLive.every(id=>got.includes(id)), `${parkedLive.length} parked live rows, all present`);
+  const blocked = rows.filter((r) => String(r.status).toUpperCase() === "BLOCKED").map(r=>r.id);
+  check("I-1e BLOCKED is HIDDEN from the tree, as on the phone", blocked.length>0 && !blocked.some(id=>got.includes(id)), `${blocked.length} blocked rows, 0 present`);
   // count integrity over every node
   let bad: string[] = [];
   walk(tree, (n) => { if (n.count !== n.tasks.length) bad.push(`${n.id}: count=${n.count} tasks=${n.tasks.length}`); });
