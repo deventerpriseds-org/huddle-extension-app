@@ -30,6 +30,8 @@ const CadenceInput = z.object({
   tz: z.string(),
   hours: z.array(z.number().int().min(0).max(23)),
   daysOfWeek: z.array(z.number().int().min(0).max(6)).optional(),
+  // Without this the validator would STRIP it on every save and silently revert a minute job to hourly.
+  everyMinutes: z.number().int().min(1).max(60).optional(),
 });
 
 const OverridesInput = z.record(z.enum(JOB_TYPE_KEYS), CadenceInput.optional());
