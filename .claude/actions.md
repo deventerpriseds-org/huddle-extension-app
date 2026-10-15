@@ -4423,5 +4423,10 @@ multi-topic placement is deterministic (phone is last-row-wins).
 **Verification:** 34/34 category-tree (11 new, core fixture from his REAL Career data), 25/25
 independent, all widget/priority suites green, tsc 0, build ok, **5 mutations FIRED**.
 
-**Status: on PRs, NOT merged, NOT deployed, NOT owner-confirmed.** Needs BOTH #71 and journey#42 merged.
+**Status: MERGED + DEPLOYED (owner: "go ahead"), NOT owner-confirmed.** huddle#71 → `21e907b`, deploy-swa
+run `38774494451` success. journey#42 → `678f80c`, deploy-supabase-functions run `38774490679` success;
+Supabase lists `execute-tool` **v477 @ 17:07:56Z**, and the DEPLOYED source was pulled and contains the
+new case, the function, the owner-scoped join and the row-ceiling note. **NOT yet proven at RUNTIME:**
+that the embedded-filter query returns the owner's links (and only his). The deployed code being
+present is not that proof. The verifier was handed the live check.
 **Still open for the owner:** push-a-category option A/B/C (recommended C); AC-41 empty FAMILY row.
