@@ -72,7 +72,11 @@ export type JobTypeKey =
    *  2026-09-10 (8pm: "current priorities ... likely to be scheduled vs not") and reframed
    *  2026-10-05 from a digest into a freshness gate, morning moved 8am -> 6am. Spec:
    *  docs/plan-agent-routines.md. */
-  | "priorityCheck";
+  | "priorityCheck"
+  /** The inbound email watch: Iris tells the owner about new email from a real person that asks
+   *  something of him, with a suggested reply she can save to his Drafts. Asked 2026-10-15 after she
+   *  stayed silent on Amy Corriveau's (Trinnex) email. Hourly through the waking day by default. */
+  | "inboundEmail";
 
 export const DEFAULT_TZ = "America/New_York";
 
@@ -92,6 +96,10 @@ export const SCHEDULING_DEFAULTS: Record<JobTypeKey, JobCadence> = {
   // nightly-schedule-builder (cron '0 5 * * *' UTC = 1am ET), so tonight's plan is built from
   // priorities the owner has just looked at. COUPLED to those jobs: if they move, move this too.
   priorityCheck: { tz: DEFAULT_TZ, hours: [6, 20] },
+  // Every hour 7am-10pm. The scheduler is hour-granular, so this is the tightest cadence it can express
+  // today; each run looks back 12h (INBOUND_EMAIL_LOOKBACK_HOURS_DEFAULT) so the overnight gap loses
+  // nothing, and a message is only ever announced once.
+  inboundEmail: { tz: DEFAULT_TZ, hours: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22] },
 };
 
 /** Minutes before a session to fire its own reminder. The user's ask was 60 ("iris should have a
