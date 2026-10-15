@@ -4515,3 +4515,10 @@ is **never retried**. That is how ee2ad17a's Sep 7 update was lost (it was compl
 its twin). There is no detector for this drift today; compare.ts found it by accident.
 
 **Status: on PR #72, NOT merged, NOT deployed, NOT owner-confirmed.**
+
+## ACT:family-row — Family renders as an empty grey row, like the phone (2026-10-15)
+- **Ask (owner):** "go ahead and merge all three, show Family". Merged huddle #72 (`b286694`), journey #47 (`76b16b6`), eds #122 (`1a86d3e`).
+- **Cause:** Huddle built category rows from topics (or tasks); the phone loops its CONFIGURED category list (`PrioritiesWidgetFactory.kt:428-429`, default includes FAMILY) and draws each even when empty. FAMILY has no topics and no tasks, so Huddle never drew it.
+- **Fix:** `withKnownCategories` in `widgets.server.ts`, applied on both `buildPrioritiesTree` paths; an empty row has `count: null` (blank) and renders grey (`JourneyWidgets.tsx` TopicRow). Only ADDS rows — dynamic categories and Uncategorised untouched.
+- **Evidence:** `scripts/category-tree.test.ts` 43/43 (4 new FAMILY checks), independent suite 25/25.
+- **Status:** implemented, tests green, NOT deployed, NOT owner-confirmed.

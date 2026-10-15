@@ -1226,7 +1226,7 @@ export function buildPrioritiesTree(
   topicPayload?: unknown,
 ): TopicNode[] {
   const topicRoots = topicPayload === undefined ? [] : buildTopicTree(topicPayload);
-  if (!topicRoots.length) return buildCategoryTaskTree(rows, timeZone, nowMs);
+  if (!topicRoots.length) return withKnownCategories(buildCategoryTaskTree(rows, timeZone, nowMs));
 
   const tz = safeTimeZone(timeZone);
   const todayKey = localDateKey(nowMs, tz) ?? new Date(nowMs).toISOString().slice(0, 10);
@@ -1258,7 +1258,40 @@ export function buildPrioritiesTree(
 
   // mergeTopicTree deep-clones, folds the topics into category roots, recounts every node from what
   // is beneath it, and sorts.
-  return mergeTopicTree(topicRoots, []);
+  return withKnownCategories(mergeTopicTree(topicRoots, []));
+}
+
+/**
+ * Every one of the five known categories gets a row, EVEN WITH NOTHING IN IT — the phone's rule.
+ *
+ * `PrioritiesWidgetFactory.rebuildItems` loops over the CONFIGURED category list
+ * (`config.prioritiesWidget.categories`, default `LIFE, CAREER, VENTURES, EDUCATION, FAMILY`) and
+ * draws a `CategoryHeader` for each one whether or not a topic claims it. Huddle built its category
+ * rows from topics (or, without topics, from tasks), so a category with neither — FAMILY, today —
+ * simply did not exist here while the phone drew it. Owner, 2026-10-15: show Family.
+ *
+ * An empty category is `count: null` (rendered blank, never "0", as the spec draws Family) and is
+ * greyed by the renderer, the same "nothing to do here yet" signal as an empty topic. Dynamic
+ * categories and the Uncategorised bucket are untouched: this ADDS the known five, it never filters.
+ */
+export function withKnownCategories(roots: TopicNode[]): TopicNode[] {
+  const present = new Set(roots.map((n) => n.id));
+  const out = [...roots];
+  DISPLAY_CATEGORY_ORDER.forEach((cat, rank) => {
+    const id = `${CATEGORY_ROOT_PREFIX}${cat}`;
+    if (present.has(id)) return;
+    out.push({
+      id,
+      name: categoryLabel(cat),
+      parentId: null,
+      categoryAffinity: cat,
+      position: rank,
+      count: null,
+      children: [],
+      tasks: [],
+    });
+  });
+  return sortNodes(out);
 }
 
 // ---------------------------------------------------------------------------

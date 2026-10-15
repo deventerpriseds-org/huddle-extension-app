@@ -25,6 +25,7 @@ import {
   findTopicMappings,
   mergeTopicTree,
   UNCATEGORISED_CATEGORY,
+  withKnownCategories,
   type TopicNode,
 } from "../src/features/huddle/lib/tasks/widgets.server";
 
@@ -335,7 +336,7 @@ const allTasks = (roots: TopicNode[]): string[] => {
     `count=${byName.get("Grooming Management")!.count}`);
   check("SUB-CATEGORIES: placement follows the TOPIC's category, not the task's own (Android rule)",
     byName.get("Career Development")!.tasks.some((t) => t.id === "c0-0") &&
-      !tree.some((n) => n.categoryAffinity === "LIFE"),
+      allTasks(tree.filter((n) => n.categoryAffinity === "LIFE")).length === 0,
     "a task whose own category is LIFE, linked to a Career topic, sits under Career");
 }
 
@@ -373,7 +374,7 @@ const allTasks = (roots: TopicNode[]): string[] => {
   check("SUB-CATEGORIES: the tree shows exactly what the phone shows — linked + live (parked included), each once",
     all.join(",") === "parked,twice", `[${all.join(",")}] — loose/ghost have no reachable topic, done is closed`);
   check("SUB-CATEGORIES: a task with NO topic is NOT in the tree when topics are available — the phone's rule",
-    !all.includes("loose") && !all.includes("ghost") && !tree.some((n) => n.categoryAffinity === "VENTURES"),
+    !all.includes("loose") && !all.includes("ghost") && allTasks(tree.filter((n) => n.categoryAffinity === "VENTURES")).length === 0,
     "SupabaseTaskClient only reaches tasks through a mapping; the task stays on the board and in This Week");
   const fwd = findTopicMappings({ mappings }).get("twice");
   const rev = findTopicMappings({ mappings: [...mappings].reverse() }).get("twice");
@@ -403,7 +404,8 @@ const allTasks = (roots: TopicNode[]): string[] => {
   ];
   const mappings = rows.map((r) => ({ task_id: r.id, topic_id: "ts" }));
   const order = (rs: any[]) =>
-    buildPrioritiesTree(rs, TZ, NOW, { topics, mappings })[0].children[0].tasks.map((t) => t.id).join(",");
+    buildPrioritiesTree(rs, TZ, NOW, { topics, mappings })
+      .find((n) => n.categoryAffinity === "CAREER")!.children[0].tasks.map((t) => t.id).join(",");
   check("SUB-CATEGORIES: tasks INSIDE a topic are ordered starred+ranked first, the same for any arrival order",
     order(rows) === "s-rank1,s-rank2,s-plain" && order([...rows].reverse()) === "s-rank1,s-rank2,s-plain",
     `${order(rows)} / reversed ${order([...rows].reverse())}`);
@@ -426,8 +428,8 @@ const allTasks = (roots: TopicNode[]): string[] => {
   const rows = [row({ id: "d1", category: "CAREER" }), row({ id: "d2", category: "LIFE" })];
   const shape = (ns: TopicNode[]) => JSON.stringify(ns);
   check("SUB-CATEGORIES: with no topic payload the tree is IDENTICAL to the category-only tree",
-    shape(buildPrioritiesTree(rows, TZ, NOW, undefined)) === shape(buildCategoryTaskTree(rows, TZ, NOW)) &&
-      shape(buildPrioritiesTree(rows, TZ, NOW, { topics: [], mappings: [] })) === shape(buildCategoryTaskTree(rows, TZ, NOW)),
+    shape(buildPrioritiesTree(rows, TZ, NOW, undefined)) === shape(withKnownCategories(buildCategoryTaskTree(rows, TZ, NOW))) &&
+      shape(buildPrioritiesTree(rows, TZ, NOW, { topics: [], mappings: [] })) === shape(withKnownCategories(buildCategoryTaskTree(rows, TZ, NOW))),
     "a missing journey tool must never cost the owner his categories");
 }
 
@@ -491,6 +493,30 @@ const allTasks = (roots: TopicNode[]): string[] => {
     [...ALLOWED].every((f) => callers.includes(f)),
     "an allowlist entry that no longer calls it would silently permit a future rogue caller of the same name",
   );
+}
+
+{
+  // FAMILY — the phone draws every configured category (default LIFE, CAREER, VENTURES, EDUCATION,
+  // FAMILY) whether or not a topic claims it. Owner, 2026-10-15: "show Family".
+  const topics = [{ id: "tc", topic_name: "Career Development", category_affinity: "CAREER" }];
+  const tree = buildPrioritiesTree([row({ id: "f1", category: "CAREER" })], TZ, NOW,
+    { topics, mappings: [{ task_id: "f1", topic_id: "tc" }] });
+  const order = tree.map((n) => n.categoryAffinity).join(",");
+  check("FAMILY: with topics, all five known categories render, in the phone's order",
+    order === "LIFE,CAREER,VENTURES,EDUCATION,FAMILY", order);
+  const fam = tree.find((n) => n.categoryAffinity === "FAMILY")!;
+  check("FAMILY: an empty category is a real row with a BLANK count and nothing under it",
+    !!fam && fam.name === "Family" && fam.count === null && fam.children.length === 0 && fam.tasks.length === 0,
+    JSON.stringify(fam && { name: fam.name, count: fam.count, kids: fam.children.length, tasks: fam.tasks.length }));
+  const deg = buildPrioritiesTree([row({ id: "f2", category: "FAMILY" }), row({ id: "f3", category: null }),
+    row({ id: "f4", category: "SIDE_HUSTLE" })], TZ, NOW, undefined);
+  const famRows = deg.filter((n) => n.categoryAffinity === "FAMILY");
+  check("FAMILY: a category that HAS tasks is never duplicated by the empty-row fill",
+    famRows.length === 1 && famRows[0].tasks.map((t) => t.id).join(",") === "f2",
+    `${famRows.length} Family row(s), tasks=[${famRows.flatMap((n) => n.tasks.map((t) => t.id))}]`);
+  check("FAMILY: the fill only ADDS — a dynamic category is kept and Uncategorised stays last",
+    deg.some((n) => n.categoryAffinity === "SIDE_HUSTLE") && deg[deg.length - 1].categoryAffinity === UNCATEGORISED_CATEGORY,
+    deg.map((n) => n.categoryAffinity).join(","));
 }
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);
