@@ -145,7 +145,10 @@ export async function resolveProgramIds(
     if (code && want.has(code) && typeof p.id === "string") ids.push(p.id);
   }
   if (!ids.length) {
-    return { ok: false, error: `no programme matched ${[...want].join(", ") || "(none configured)"}` };
+    return {
+      ok: false,
+      error: `no programme matched ${[...want].join(", ") || "(none configured)"}`,
+    };
   }
   return { ok: true, ids };
 }
@@ -181,23 +184,98 @@ export async function classesForDate(
   return { items };
 }
 
-/** One day's MEETINGS from Microsoft Graph. */
+/** Offset (ms) of `tz` from UTC at instant `at` — positive east of UTC. */
+function tzOffsetMs(tz: string, at: Date): number {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).formatToParts(at);
+    const g = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+    const asUtc = Date.UTC(
+      g("year"),
+      g("month") - 1,
+      g("day"),
+      g("hour") % 24,
+      g("minute"),
+      g("second"),
+    );
+    return asUtc - at.getTime();
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * The UTC INSTANTS bounding one LOCAL day in `tz`: [local 00:00, next local 00:00).
+ *
+ * WHY (2026-10-15): the brief used to hand Graph `${date}T00:00:00`..`T23:59:59` with no offset.
+ * calendarView reads an offset-less startDateTime/endDateTime as UTC — the Prefer `outlook.timezone`
+ * header only changes how the RESPONSE is rendered — so the "day" queried in New York was 20:00 the
+ * previous evening to 20:00 that evening, dropping every evening meeting. DST-correct: the offset is
+ * measured at each boundary instead of assumed.
+ */
+export function localDayBoundsUtc(
+  forDate: string,
+  tz: string,
+): { startIso: string; endIso: string } {
+  const [y, m, d] = forDate.split("-").map(Number);
+  const at = (day: number) => {
+    const guess = Date.UTC(y, m - 1, day, 0, 0, 0);
+    // Two passes so a boundary near a DST change resolves to the offset in force AT that boundary.
+    let t = guess - tzOffsetMs(tz, new Date(guess));
+    t = guess - tzOffsetMs(tz, new Date(t));
+    return new Date(t).toISOString();
+  };
+  return { startIso: at(d), endIso: at(d + 1) };
+}
+
+/**
+ * Graph renders `start.dateTime` with NO offset (e.g. `2026-10-15T13:00:00.0000000`) in whatever zone
+ * the Prefer header named. meetingsForDate asks for UTC, so this pins the value as UTC and trims the
+ * 7-digit fraction JS cannot portably parse. Before this, `new Date()` on the server read a NEW YORK
+ * wall time as UTC and printed every meeting 4-5 hours early.
+ */
+export function graphUtcToIso(dt: string | null | undefined): string | null {
+  if (!dt) return null;
+  if (/(?:[zZ]|[+-]\d{2}:\d{2})$/.test(dt)) return dt; // already carries an offset
+  const iso = `${dt.replace(/(\.\d{3})\d+$/, "$1")}Z`;
+  return Number.isNaN(Date.parse(iso)) ? null : iso;
+}
+
+/**
+ * One day's MEETINGS from Microsoft Graph, read from the OWNER's mailbox.
+ *
+ * `mailbox` is REQUIRED on purpose. Root cause of "the 8am brief never arrives" (2026-10-15): this
+ * call passed no mailbox, so getGraphCalendarEvents fell back to defaultFrom() — the first
+ * HUDDLE_EMAIL_FROM entry, the app's SENDING mailbox — and read that calendar instead of the owner's.
+ * The working agent tool (`get_external_calendar_events`) resolves the mailbox with
+ * resolveTaskEmail(caller); runScheduleBrief now does the same and passes it down to here.
+ */
 export async function meetingsForDate(
   forDate: string,
   tz: string,
+  mailbox: string,
 ): Promise<{ items: BriefItem[]; error?: string }> {
-  const { getGraphCalendarEvents, graphEmailConfigured } = await import("../email/graph-email.server");
+  const { getGraphCalendarEvents, graphEmailConfigured } =
+    await import("../email/graph-email.server");
   if (!graphEmailConfigured()) {
     // Honest absence: say the source is off rather than reporting an empty calendar.
     return { items: [], error: "Microsoft Graph is not configured, so meetings were not read" };
   }
   try {
-    // calendarView takes INSTANTS, not dates. The window is the whole local day: [00:00, 24:00) in
-    // `tz`, expressed as the local wall times Graph is told to interpret via its Prefer header.
+    const { startIso, endIso } = localDayBoundsUtc(forDate, tz);
     const r = await getGraphCalendarEvents({
-      startISO: `${forDate}T00:00:00`,
-      endISO: `${forDate}T23:59:59`,
-      timeZone: tz,
+      mailbox,
+      startISO: startIso,
+      endISO: endIso,
+      timeZone: "UTC", // response rendered in UTC so graphUtcToIso can pin it unambiguously
     });
     if (!r.ok) return { items: [], error: r.error || "calendar read failed" };
     const items: BriefItem[] = [];
@@ -208,8 +286,9 @@ export async function meetingsForDate(
         sourceId: e.id || "",
         kind: "meeting",
         title: e.subject?.trim() || "Meeting",
-        startIso: e.start,
-        endIso: e.end,
+        // An all-day event's start is a midnight, not a time — render it "all day" (startIso null).
+        startIso: e.isAllDay ? null : graphUtcToIso(e.start),
+        endIso: e.isAllDay ? null : graphUtcToIso(e.end),
         location: e.location,
       });
     }
@@ -229,6 +308,8 @@ export async function buildScheduleBrief(opts: {
   programCodes?: string[];
   /** Force an edition instead of deriving it (the manual/test path). */
   edition?: BriefEdition;
+  /** The OWNER's Graph mailbox (resolveTaskEmail(caller)). Required — see meetingsForDate. */
+  mailbox: string;
 }): Promise<ScheduleBrief> {
   const tz = opts.cadence?.tz || DEFAULT_TZ;
   const edition = opts.edition ?? editionForHour(localHour(opts.nowMs, tz));
@@ -237,7 +318,9 @@ export async function buildScheduleBrief(opts: {
   const forDate = dateForEdition(opts.nowMs, tz, edition);
   const errors: string[] = [];
 
-  const codes = opts.programCodes?.length ? opts.programCodes : SCHEDULE_BRIEF_PROGRAM_CODES_DEFAULT;
+  const codes = opts.programCodes?.length
+    ? opts.programCodes
+    : SCHEDULE_BRIEF_PROGRAM_CODES_DEFAULT;
   const prog = await resolveProgramIds(codes);
   let items: BriefItem[] = [];
   if (!prog.ok) {
@@ -248,7 +331,7 @@ export async function buildScheduleBrief(opts: {
     items = items.concat(cls.items);
   }
 
-  const mtg = await meetingsForDate(forDate, tz);
+  const mtg = await meetingsForDate(forDate, tz, opts.mailbox);
   if (mtg.error) errors.push(`meetings: ${mtg.error}`);
   items = items.concat(mtg.items);
 
