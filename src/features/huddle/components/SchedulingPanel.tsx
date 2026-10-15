@@ -36,6 +36,13 @@ const JOB_LABELS: Record<JobTypeKey, { label: string; hint: string }> = {
       "itself — before noon covers today, after noon covers tomorrow — so the shipped 8 and 20 give " +
       "you a morning and an evening brief. Nothing is sent on a day with nothing on it.",
   },
+  priorityCheck: {
+    label: "Priority check",
+    hint:
+      "Iris asks whether your priorities are still right and shows the priorities widget, timed " +
+      "before the jobs that use them — the shipped 6 is before the 8am grooming, the 20 is before " +
+      "the 1am nightly scheduler. Nothing is sent when you have no priorities.",
+  },
   reviewDigest: {
     label: "Review digest",
     hint: "Iris's nudge on what's waiting in Ready for review.",
@@ -47,7 +54,17 @@ const JOB_LABELS: Record<JobTypeKey, { label: string; hint: string }> = {
 };
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const JOB_TYPE_KEYS: JobTypeKey[] = ["groom", "autowork", "standup", "reviewDigest", "reviewRecheck"];
+// Every JobTypeKey, so a new job is editable the day it ships. `scheduleBrief` was missing here when
+// it shipped (#63), which left its 8/20 cadence un-editable despite the label existing above.
+const JOB_TYPE_KEYS: JobTypeKey[] = [
+  "groom",
+  "autowork",
+  "standup",
+  "scheduleBrief",
+  "priorityCheck",
+  "reviewDigest",
+  "reviewRecheck",
+];
 
 function parseHours(text: string): number[] {
   return [...new Set(text.split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isInteger(n) && n >= 0 && n <= 23))].sort(
