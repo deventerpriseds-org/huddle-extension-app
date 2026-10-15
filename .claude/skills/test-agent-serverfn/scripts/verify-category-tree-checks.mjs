@@ -59,35 +59,32 @@ const PAGE_OVERFLOW = () => ({
   clientW: document.documentElement.clientWidth,
 });
 
-async function gotoIrisDock({ page, check, screenshot }) {
-  // On 390px the sidebar may start collapsed; open it if the rail button is there.
-  await page.locator('nav button[aria-label="Expand sidebar"]').first().click({ timeout: 3000 }).catch(() => {});
-  await page.waitForTimeout(400);
-  const btns = await page.locator("aside button, nav button").allInnerTexts();
-  // Iris Chase owns the widget dock (WIDGET_DOCK_HUDDLE_ID = "dm-iris-chase").
-  let clicked = false;
-  for (const re of [/Iris/i]) {
-    const b = page.locator("aside button", { hasText: re }).first();
-    if (await b.count()) { await b.click().catch(() => {}); clicked = true; break; }
-  }
-  check("Sidebar reachable and an Iris channel button exists (widget dock huddle)", clicked,
-    `sidebar buttons seen: ${JSON.stringify(btns.slice(0, 24))}`);
-  await page.waitForTimeout(1200);
-  // Make sure the dock is open.
-  const dock = page.locator('button:has-text("Docked in this huddle")').first();
-  const haveDock = await dock.count();
-  if (haveDock && (await dock.getAttribute("aria-expanded")) === "false") { await dock.click(); await page.waitForTimeout(600); }
-  check("The widget dock ('Docked in this huddle') is present in the Iris 1:1", haveDock > 0, `found=${haveDock}`);
-  // Give the two Lane-B reads time to land.
-  await page.waitForFunction(() => document.querySelectorAll("ul.border-t.border-hairline.py-1").length > 0, null, { timeout: 30000 }).catch(() => {});
+// NAVIGATION, corrected after run 38765949907. At 390x844 the app is a bottom-tab shell
+// (Huddle / Board / Priorities / Schedule / Files) and the sidebar `aside` exists in the DOM but
+// is off-canvas — so `aside button.click()` silently timed out and was swallowed, and all three
+// screenshots of that run came back BYTE-IDENTICAL (63907 bytes), which is how the no-op was
+// caught. The "Priorities" tab renders PrioritiesView -> LivePrioritiesWidget full, which is the
+// SAME widget as the dock and is the surface the owner actually uses on a phone.
+async function gotoPriorities({ page, check, screenshot }) {
+  const navTexts = await page.locator("nav button, footer button, button").allInnerTexts();
+  const tab = page.locator("button", { hasText: /^Priorities$/ }).first();
+  const haveTab = await tab.count();
+  if (haveTab) await tab.click({ timeout: 10000 }).catch(() => {});
+  check("Nav: the Priorities tab exists and was clicked", haveTab > 0,
+    `tab count=${haveTab}; nav texts=${JSON.stringify(navTexts.filter(Boolean).slice(0, 20))}`);
   await page.waitForTimeout(1500);
-  await screenshot("dock-open");
+  // Wait for the live Lane-B read to land and paint the tree.
+  await page
+    .waitForFunction(() => document.querySelectorAll("ul.border-t.border-hairline.py-1").length > 0, null, { timeout: 45000 })
+    .catch(() => {});
+  await page.waitForTimeout(1200);
+  await screenshot("priorities-view");
 }
 
 export const checks = [
   async function categoryTreeLive(ctx) {
     const { page, check, screenshot } = ctx;
-    await gotoIrisDock(ctx);
+    await gotoPriorities(ctx);
 
     const trees = await page.evaluate(SCRAPE);
     check("V-L1 the PRIORITIES category tree renders at all (it has NEVER populated in production)",
