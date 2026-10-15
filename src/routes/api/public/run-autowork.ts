@@ -45,14 +45,18 @@ export const Route = createFileRoute("/api/public/run-autowork")({
         if (!userEmail) return json({ ok: false, error: "missing_caller_email" }, 400);
 
         try {
-          const { runScheduledAutoWork } = await import(
-            "@/features/huddle/lib/tasks/autowork.server"
-          );
+          const { runScheduledAutoWork } =
+            await import("@/features/huddle/lib/tasks/autowork.server");
+          // PUSH SAFETY NET first, and unconditionally: it must run even when auto-work takes one of its
+          // early exits (nothing assigned, unchanged backlog). It reads journey, not the mirror, so it
+          // catches a "done" the fire-and-forget sync lost. Never throws.
+          const { reconcilePushes } = await import("@/features/huddle/lib/tasks/push.server");
+          const pushReconcile = await reconcilePushes(userEmail);
           const result = await runScheduledAutoWork(
             { entra_email: userEmail },
             { timeZone: payload.timeZone, force: !!payload.force, runId: payload.runId },
           );
-          return json(result, result.ok ? 200 : 500);
+          return json({ ...result, pushReconcile }, result.ok ? 200 : 500);
         } catch (err) {
           console.error("[run-autowork] failed", err instanceof Error ? err.message : err);
           return json({ ok: false, error: "autowork_failed" }, 500);
