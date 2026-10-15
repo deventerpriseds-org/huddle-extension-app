@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import {
   classifyActiveEvent,
   inNode,
+  mergeJourneyRow,
   isPushEligible,
   parseNodeId,
   pickForNode,
@@ -98,6 +99,30 @@ const LIFE: PushNode = { kind: "category", key: "LIFE" };
   check("D2: an un-star event OLDER than the push is ignored; a newer one ends the push",
     classifyActiveEvent("UPDATE", stale, CAREER, since) === "none" && classifyActiveEvent("UPDATE", fresh, CAREER, since) === "unpush",
     `stale -> ${classifyActiveEvent("UPDATE", stale, CAREER, since)}, fresh -> ${classifyActiveEvent("UPDATE", fresh, CAREER, since)}`);
+}
+
+// ── VERIFY-category-push-2 fixes ─────────────────────────────────────────────────────────────────
+{
+  // N1: journey's single-task read returns NO category / tags / completed_at. Classifying that bare row
+  // made every category push look "moved category" and refill every tick (3 ticks -> T,U,V starred).
+  const mirror = row({ id: "T", category: "CAREER", is_priority: true, priority_rank: 0 });
+  const journeyBare = { id: "T", title: "T", priority: "MEDIUM", due_date: null, status: "TODO", is_priority: true, priority_rank: 0, pushed_count: 0 };
+  const steady = mergeJourneyRow(mirror, journeyBare);
+  check("N1: a steady-state category push reconciles to NO write (category comes from the mirror)",
+    classifyActiveEvent("UPDATE", steady, CAREER) === "none", `-> ${classifyActiveEvent("UPDATE", steady, CAREER)} (category ${steady.category})`);
+  check("N1: the bare journey row ALONE would have refilled — the defect this guards",
+    classifyActiveEvent("UPDATE", journeyBare as unknown as PushCandidateRow, CAREER) === "refill", "bare row has no category");
+  const lostDone = mergeJourneyRow(mirror, { ...journeyBare, status: "DONE" });
+  const lostUnstar = mergeJourneyRow(mirror, { ...journeyBare, is_priority: false });
+  check("N1: a lost 'done' or 'un-star' is still caught — status and star come from JOURNEY",
+    classifyActiveEvent("UPDATE", lostDone, CAREER) === "refill" && classifyActiveEvent("UPDATE", lostUnstar, CAREER) === "unpush",
+    `done -> ${classifyActiveEvent("UPDATE", lostDone, CAREER)}, unstar -> ${classifyActiveEvent("UPDATE", lostUnstar, CAREER)}`);
+
+  // N2: node-postgres hands priority_push.updated_at back as a Date; Date.parse(Date) drops milliseconds.
+  const since = new Date("2026-10-15T20:00:00.900Z");
+  const sameSecondStale = row({ id: "a", is_priority: false, updated_at: "2026-10-15T20:00:00.500123+00:00" });
+  check("N2: a same-second stale un-star is ignored when `since` is a real Date with milliseconds",
+    classifyActiveEvent("UPDATE", sameSecondStale, CAREER, since) === "none", `-> ${classifyActiveEvent("UPDATE", sameSecondStale, CAREER, since)}`);
 }
 
 // ── picking (AC-C3, C5, C7, C10, C11) ────────────────────────────────────────────────────────────
@@ -229,6 +254,9 @@ check("star rank is 0 — ahead of every other star in journey's 1am placement (
   const single = pushSql.filter((q) => /lower\(user_email\)\s*=\s*\$\d/.test(q));
   check("D1: no priority_push query matches a single email — the alias set, like every other push read",
     pushSql.length >= 5 && single.length === 0, `${pushSql.length} queries; single-email: ${single.length}`);
+  check("N1: reconcile classifies the MERGED row (mirror + journey), never journey's bare row",
+    /classifyActiveEvent\(state === null \? "DELETE" : "UPDATE", merged, node\)/.test(push) && /mergeJourneyRow\(await getPushCandidate\(/.test(push),
+    "reconcile -> mergeJourneyRow(getPushCandidate(...), state) -> classifyActiveEvent(..., merged, ...)");
   check("D5: after starring, refill re-reads the push and un-stars if it was stopped meanwhile",
     /still\.active_task_id !== next\.id\)[\s\S]{0,80}unstar\(caller, next\.id\)/.test(push), "orphan-star guard present");
 }

@@ -114,6 +114,45 @@ export function pickForNode(
 
 export type ActiveEvent = "refill" | "unpush" | "none";
 
+/** Milliseconds from an ISO string OR a Date. node-postgres hands TIMESTAMPTZ back as a Date, and
+ *  `Date.parse(date)` stringifies it first and DROPS the milliseconds — which let a same-second stale
+ *  event cancel a push (VERIFY-category-push-2 N2). */
+export function toMs(v: string | Date | null | undefined): number {
+  if (v == null) return NaN;
+  return v instanceof Date ? v.getTime() : new Date(v).getTime();
+}
+
+/**
+ * The row the reconcile classifies: the MIRROR row for what journey's single-task read does not return,
+ * overlaid with the fields journey DOES return (status, is_priority, priority_rank — plus anything else
+ * it happens to send). `explain_task_score` reads `*` but returns only id/title/priority/due_date/status/
+ * is_priority/priority_rank/pushed_count (execute-tool ~2686) — no category, tags or completed_at. Using
+ * that bare row made EVERY category push look "moved to another category" and refill on every tick,
+ * starring one more task each time (VERIFY-category-push-2 N1). journey's status/star are what a lost
+ * webhook leaves stale in the mirror, so those come from journey; category and tags come from the mirror.
+ */
+export function mergeJourneyRow(
+  mirror: PushCandidateRow | null,
+  journey: Partial<PushCandidateRow> & { id: string },
+): PushCandidateRow {
+  const base: PushCandidateRow = mirror ?? {
+    id: journey.id,
+    title: journey.title ?? "",
+    status: null,
+    priority: null,
+    category: null,
+    is_priority: null,
+    priority_rank: null,
+    due_date: null,
+    pushed_count: null,
+    created_at: null,
+    completed_at: null,
+    tags: null,
+  };
+  const defined = Object.fromEntries(Object.entries(journey).filter(([, v]) => v !== undefined));
+  return { ...base, ...defined } as PushCandidateRow;
+}
+
 /**
  * What a mirror change to a push's ACTIVE task means for that push.
  *   refill — it is finished or can no longer be done in this node: DONE (from any surface, including
@@ -126,7 +165,7 @@ export function classifyActiveEvent(
   op: string,
   row: PushCandidateRow | null,
   node: PushNode,
-  pushSince?: string | null,
+  pushSince?: string | Date | null,
 ): ActiveEvent {
   if (upper(op) === "DELETE" || !row) return "refill";
   const s = upper(row.status);
@@ -138,8 +177,8 @@ export function classifyActiveEvent(
     // A STALE "not starred" — an edit made BEFORE this push starred the task, delivered late (pg_net
     // does not order deliveries) — must not end the push. Only an un-star at or after the moment the push
     // took this task counts as the user removing it (VERIFY-category-push-1 D2).
-    const at = row.updated_at ? Date.parse(row.updated_at) : NaN;
-    const since = pushSince ? Date.parse(pushSince) : NaN;
+    const at = toMs(row.updated_at);
+    const since = toMs(pushSince);
     if (Number.isFinite(at) && Number.isFinite(since) && at <= since) return "none";
     return "unpush";
   }
@@ -473,10 +512,15 @@ export async function reconcilePushes(
       if (state === "unknown") continue;
       const node = parseNodeId(push.node_id);
       if (!node) continue;
+      const { getPushCandidate } = await import("./tasks.server");
+      const merged =
+        state === null
+          ? null
+          : mergeJourneyRow(await getPushCandidate(push.user_email, push.active_task_id), state);
       // The SAME classification the webhook uses, on journey's CURRENT row — so a lost "parked", "moved
       // to another category" or "un-starred" is caught here too, not only a lost "done"
       // (VERIFY-category-push-1 D10). journey's row is current, so no staleness cut-off applies.
-      const ev = classifyActiveEvent(state === null ? "DELETE" : "UPDATE", state, node);
+      const ev = classifyActiveEvent(state === null ? "DELETE" : "UPDATE", merged, node);
       if (ev === "refill") {
         if ((await refill(push, push.active_task_id)) === "refilled") out.refilled++;
       } else if (ev === "unpush") {

@@ -1814,8 +1814,9 @@ export interface PriorityPushRow {
   node_id: string;
   node_name: string | null;
   active_task_id: string | null;
-  /** When the active task last changed — a webhook event OLDER than this is stale (VERIFY D2). */
-  updated_at?: string | null;
+  /** When the active task last changed — a webhook event OLDER than this is stale (VERIFY D2).
+   *  node-postgres returns TIMESTAMPTZ as a Date, so the type says so (VERIFY N2). */
+  updated_at?: string | Date | null;
 }
 
 /** Every push the user (any alias) has, oldest first. */

@@ -623,6 +623,11 @@ function RowMenu({ label, heading, items }: { label: string; heading: string; it
         close(true);
         return;
       }
+      // Tabbing away closes the menu, so its arrow keys can never capture another field (VERIFY N L2).
+      if (e.key === "Tab") {
+        close(true);
+        return;
+      }
       const its = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
       if (!its.length) return;
       const at = its.indexOf(document.activeElement as HTMLButtonElement);
@@ -702,7 +707,7 @@ function RowMenu({ label, heading, items }: { label: string; heading: string; it
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    close();
+                    close(true); // focus back on ⋮, not lost to <body> (VERIFY-category-push-2 L1)
                     it.onSelect();
                   }}
                   className="flex min-h-12 w-full items-start gap-3 border-t border-hairline/60 px-3.5 py-3 text-left first-of-type:border-t-0 hover:bg-muted"
