@@ -323,3 +323,74 @@ So the code is RIGHT and the test is WEAK. **Fix: change the fixture's dynamic c
 `SIDE_HUSTLE` to anything whose label sorts after "Uncategorised"** (e.g. `ZZ_TOP`), and M6 fires.
 Per AC-65 ("`FIRED` — never `INERT`"), this one assertion is currently **unproven**.
 
+---
+
+## PART 2 — re-verified against the MERGED, DEPLOYED code (`ca0d7d1`)
+
+Mid-pass the change moved: the row cap was removed (`ac43446`), `origin/main` was merged in, PR #66
+merged as `ca0d7d1`, and `deploy-swa.yml` run `38764997134` on `ca0d7d1` completed SUCCESS. So the
+BLOCKED-ON-DEPLOY items in Part 1 are now observable, and everything below is against `ca0d7d1`.
+
+```
+$ git fetch origin && git log --oneline -1 origin/main
+ca0d7d1 feat(widgets): render each category's tasks in the priorities tree (#66)
+$ grep -n "CATEGORY_TASK_PREVIEW_MAX\|showAllTasks\|visibleTasks\|hiddenTaskCount" src/.../JourneyWidgets.tsx
+  (only two COMMENT lines naming the removed pattern — no code)
+```
+
+### V-6 — every suite re-run on `ca0d7d1`, and my 3 disproofs RE-CONFIRMED
+
+```
+$ bun scripts/_verify-cat-tree-independent.test.ts
+  FAIL I-3b rows TYING on every key … 6 distinct orders from 6 permutations
+  FAIL I-4e DEEP: a GRANDCHILD array of the input IS re-sorted in place … [gz,ga] -> [ga,gz]
+  FAIL I-7 AC-13: a HIGH/URGENT task IS ranked below a LOW one … order=[low,urgent]
+  =========== INDEPENDENT: 22 passed, 3 failed ===========
+```
+
+**D-1, D-2 and D-3 all still hold on the merged, deployed code.** None was fixed by `ac43446` or
+the merge.
+
+Independent confirmation of the numbers the implementer reported (every one re-run here, not taken
+on their word):
+
+| suite | implementer said | I measured |
+|---|---|---|
+| `test:category-tree` | 17 | **17 passed, 0 failed** |
+| `test:widget-topics` | 20 | 20 passed, 0 failed |
+| `test:widget-park` | 10 | 10 passed, 0 failed |
+| `test:widget-live` | 12 | 12 passed, 0 failed |
+| `test:widget-colors` | 25 | 25 passed, 0 failed |
+| `test:widget-band-color` | 21 | 21 passed, 0 failed |
+| `test:week-order` | 9 | 9 passed, 0 failed |
+| `test:priority-lane` | 9 | 9 passed, 0 failed |
+| `test:router` | 20 | 20 passed, 0 failed |
+| `test:priority-check` (PR #65, merged in) | 20 | 20 passed, 0 failed |
+| `test:schedule-brief` | 21 | 21 passed, 0 failed |
+
+All eleven confirmed. `npx tsc --noEmit` → EXIT=0. `npm run build` → EXIT=0.
+
+**A note on the cap-removal commit:** `ac43446` also committed MY throwaway file
+`scripts/_verify-cat-tree-independent.test.ts` into the repo. It is a verifier artifact, not a
+project suite, and it is **currently RED by design** (3 failures = the 3 open defects). If it stays
+in the tree it should either get a `test:` script of its own and be treated as the open-defect
+tracker it is, or be deleted once D-1/D-2/D-3 are resolved — a permanently-red file in `scripts/`
+is the kind of thing a later session reads as "the suite is broken".
+
+### V-7 — live DOM: vehicle and method
+
+`verify-uat.yml` dispatched against a verifier branch carrying **my own** checks module
+(`.claude/skills/test-agent-serverfn/scripts/verify-category-tree-checks.mjs`, branch
+`verify/category-tree-uat-1792080280`, commit `9aefe3b`) rather than the default
+`huddle-checks.mjs` (which runs the ceremony/barge suite — irrelevant here and expensive).
+
+**The module is READ-ONLY by construction: it never clicks ✓ / ⏸ / Today**, because those write to
+the owner's REAL journey board. Expand/collapse is local component state and writes nothing. That
+is a deliberate limit on what this pass can settle — see the "not settleable" list at the end.
+
+Method for the count-vs-rows criterion, which is AC-10's own: the count badge beside a category is
+`node.count`, which the server derives as `node.tasks.length` (mutation-proved, M2 FIRED above), so
+**badge vs rendered task rows IS payload-length vs rendered-`li`** and can be read from the DOM
+alone. Rows are told apart structurally — a category/topic row is `li > div > button > span[title]`,
+a task row is `li > span[title]` — because **neither carries a `data-*` hook** (see D-6).
+

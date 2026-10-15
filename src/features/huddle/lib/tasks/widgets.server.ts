@@ -917,6 +917,54 @@ export function mergeTopicTree(
 }
 
 // ---------------------------------------------------------------------------
+// THE ONE priorities composition
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a complete `PrioritiesWidgetData` for one user. **Every surface that shows a priorities
+ * card must call this.**
+ *
+ * WHY THIS EXISTS, measured 2026-10-15: there were THREE independent constructions of this payload
+ * — the server fn (`getPrioritiesWidget`), the agent tool (`tools.ts` `show_priorities_widget`) and
+ * the scheduled check (`priority-check.server.ts`). The category tree was wired into the server fn
+ * ONLY, and `tools.ts` shipped a hardcoded `topics: {ok:false, roots:[], reason:"ok"}`. So the card
+ * the owner actually saw — posted by Iris from the 6am/8pm check, which goes through the agent tool
+ * — rendered **"No topics yet."** while the same data rendered a full tree elsewhere. The feature
+ * looked unbuilt because two of its three doors were never opened.
+ *
+ * That is the duplication this repo's own rule forbids ("extend, don't duplicate"), and the comment
+ * at `huddle.functions.ts:6429` had already warned that a second construction of this payload was
+ * the hazard. One function now; a fourth surface gets the tree for free.
+ *
+ * `journeyRoots` is journey's topic tree when the caller has one (only the server fn fetches it —
+ * the agent-tool and scheduled paths must not pay a journey round-trip to render a card). Omitted,
+ * the tree is the mirror's categories alone, which is the complete, uncapped set either way.
+ */
+export async function composePrioritiesWidget(
+  email: string,
+  timeZone: string,
+  opts: { nowMs?: number; journeyRoots?: readonly TopicNode[] } = {},
+): Promise<PrioritiesWidgetData> {
+  const tz = safeTimeZone(timeZone);
+  const nowMs = opts.nowMs ?? Date.now();
+  const { getBoardTasks, getWeekOrder } = await import("./tasks.server");
+  const rows = await getBoardTasks(email);
+  // The user's explicit This Week order. Degrades to [] — an ordering read must never block a card.
+  const order = await getWeekOrder(email).catch(() => [] as string[]);
+  return {
+    ok: true,
+    timeZone: tz,
+    todayKey: localDateKey(nowMs, tz) ?? new Date(nowMs).toISOString().slice(0, 10),
+    band: buildPrioritiesBand(rows, tz, nowMs, order),
+    topics: {
+      ok: true,
+      reason: "ok",
+      roots: mergeTopicTree(opts.journeyRoots ?? [], buildCategoryTaskTree(rows, tz, nowMs)),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Action → journey tool mapping
 // ---------------------------------------------------------------------------
 

@@ -191,5 +191,55 @@ const allTasks = (roots: TopicNode[]): string[] => {
     "never throws");
 }
 
+// ── THE DUPLICATION GUARD — this is the defect that actually shipped ────────────────────────────
+//
+// 2026-10-15, found by the owner, not by any test: the category tree was wired into
+// `getPrioritiesWidget` only. `tools.ts` (`show_priorities_widget` — the path a scheduled 6am/8pm
+// card goes through) built its OWN payload with a hardcoded `topics: {ok:false, roots:[],
+// reason:"ok"}`. So Iris posted a card reading "No topics yet." while the identical data rendered a
+// full tree on the docked widget. The feature looked unbuilt because two of its three doors were
+// never opened.
+//
+// Prose would not have caught it and did not: this repo's own "extend, don't duplicate" rule and a
+// comment at huddle.functions.ts:6429 BOTH warned about a second construction of this payload. So
+// the guard is structural — the set of files allowed to call `buildPrioritiesBand` directly is
+// pinned. A fourth surface that builds its own card fails this test and has to either use
+// `composePrioritiesWidget` or come here and justify itself.
+{
+  const { readFileSync, readdirSync, statSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const walk = (dir: string): string[] =>
+    readdirSync(dir).flatMap((e) => {
+      const full = join(dir, e);
+      return statSync(full).isDirectory() ? walk(full) : /\.tsx?$/.test(full) ? [full] : [];
+    });
+
+  const ALLOWED = new Set([
+    // defines it, and defines the one composition every surface is meant to use
+    "src/features/huddle/lib/tasks/widgets.server.ts",
+    // band-only, by design: it needs the COUNTS for its message, never a card. Documented at its
+    // call site. If this ever renders a widget, it must switch to composePrioritiesWidget.
+    "src/features/huddle/lib/tasks/priority-check.server.ts",
+  ]);
+
+  const callers = walk("src")
+    .filter((f) => /buildPrioritiesBand\s*\(/.test(readFileSync(f, "utf8")))
+    .map((f) => f.replace(/\\/g, "/"))
+    .sort();
+  const rogue = callers.filter((f) => !ALLOWED.has(f));
+  check(
+    "no surface builds its own priorities payload — every card goes through composePrioritiesWidget",
+    rogue.length === 0,
+    rogue.length
+      ? `ROGUE: ${rogue.join(", ")} — use composePrioritiesWidget(email, tz) instead, or add it to ALLOWED with a reason`
+      : `only ${callers.length} allowed caller(s): ${callers.map((f) => f.split("/").pop()).join(", ")}`,
+  );
+  check(
+    "the allowlist is not stale — every file on it still calls buildPrioritiesBand",
+    [...ALLOWED].every((f) => callers.includes(f)),
+    "an allowlist entry that no longer calls it would silently permit a future rogue caller of the same name",
+  );
+}
+
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);
 process.exit(fail === 0 ? 0 : 1);

@@ -124,7 +124,10 @@ function CategoryChip({ category }: { category: string | null }) {
     .replace(/\b\w/g, (c) => c.toUpperCase());
   return (
     <span
-      className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none"
+      // `max-w` + truncate, NOT shrink-0: measured on the owner's 390px screen a row spent ~291px
+      // on this chip, the three controls and the gaps, leaving the TITLE ~99px ("Fix the Nexus...").
+      // The title is the content; the chip is only its label, so the label is what yields.
+      className="max-w-[4.5rem] shrink truncate rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none"
       style={{
         backgroundColor: `oklch(0.95 ${0.05 * cs} ${h} / 0.55)`,
         color: `oklch(0.42 ${0.13 * cs} ${h})`,
@@ -282,7 +285,7 @@ function TodayButton({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
       }
       aria-pressed={on}
       aria-label={on ? `"${row.title}" is on today — take it off` : `Put "${row.title}" on today`}
-      className={cn(CTRL_BASE, "-my-2 min-h-11 px-2")}
+      className={cn(CTRL_BASE, "-my-2 min-h-11 px-1.5")}
       style={
         on
           ? { backgroundColor: "var(--success)", color: "var(--success-foreground)" }
@@ -605,7 +608,7 @@ function PriorityRow({
   const { status } = useRowState(row);
   const done = status === "DONE";
   return (
-    <li className="flex items-center gap-2 border-b border-hairline px-3 py-2 last:border-b-0">
+    <li className="flex items-center gap-1.5 border-b border-hairline px-2 py-2 last:border-b-0">
       {onMove && (
         <span className="flex shrink-0 flex-col">
           <button
@@ -628,8 +631,15 @@ function PriorityRow({
           </button>
         </span>
       )}
+      {/* WRAPS to two lines rather than truncating at one. The owner: "It also cuts off the text on
+          the left and is not utilizing all of the space available." A fixed-width control strip
+          cannot be out-competed horizontally on a phone, so the title takes the VERTICAL space that
+          is already there instead of losing the words. */}
       <span
-        className={cn("min-w-0 flex-1 truncate text-[13px] leading-snug", done ? "text-muted-foreground line-through" : "text-foreground")}
+        className={cn(
+          "min-w-0 flex-1 text-[13px] leading-snug [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden",
+          done ? "text-muted-foreground line-through" : "text-foreground",
+        )}
         title={row.title}
       >
         {row.title}
@@ -761,7 +771,7 @@ function TopicTaskRow({ row, depth, caller }: { row: WidgetTaskRow; depth: numbe
   const done = status === "DONE";
   return (
     <li
-      className="flex items-center gap-2 py-1.5 pr-3"
+      className="flex items-center gap-1.5 py-1.5 pr-2"
       style={{ paddingLeft: `${depth * 0.875 + 0.75}rem` }}
     >
       {row.isPriority && (
@@ -769,7 +779,7 @@ function TopicTaskRow({ row, depth, caller }: { row: WidgetTaskRow; depth: numbe
       )}
       <span
         className={cn(
-          "min-w-0 flex-1 truncate text-[13px] leading-snug",
+          "min-w-0 flex-1 text-[13px] leading-snug [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden",
           done ? "text-muted-foreground line-through" : "text-foreground/85",
         )}
         title={row.title}
