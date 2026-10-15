@@ -29,8 +29,10 @@ export interface ScheduleBriefResult {
   /** How many items the edition carried. 0 with ok:true is a legitimate "nothing on". */
   count?: number;
   delivered?: boolean;
-  /** Why nothing was sent, when nothing was. Never conflated with a failure. */
-  skipped?: "empty";
+  /** Which message shape was (or on a dryRun, would be) sent — see briefDeliveryPlan. */
+  kind?: BriefDeliveryKind;
+  /** On a dryRun, the exact directive Iris would be handed. */
+  directive?: string;
   /** Present on a dryRun, so a verification pass can read exactly what WOULD have been sent. */
   brief?: ScheduleBrief;
   error?: string;
@@ -71,6 +73,66 @@ export function briefLines(brief: ScheduleBrief, tz: string): string[] {
   });
 }
 
+export type BriefDeliveryKind = "items" | "read-error" | "nothing-scheduled";
+
+/**
+ * Decide WHAT Iris is told for an edition. PURE, so the three outcomes are unit-testable.
+ *
+ * EVERY EDITION NOW SENDS SOMETHING (owner-directed 2026-10-15). It used to be "nothing on = nothing
+ * sent", and the same `!items.length` return also swallowed an edition whose sources FAILED — so a
+ * broken calendar read (wrong mailbox, see meetingsForDate) was indistinguishable from an empty day
+ * and the brief was silent for ten days with nobody able to tell why. Now:
+ *   items              -> the normal brief (with an "incomplete" note if one source failed)
+ *   no items + errors  -> a short notice that the calendar could NOT be read, with the error text
+ *   no items, no errors-> a short "nothing on your calendar" message — the owner wants one every
+ *                         morning and evening so silence never has to be interpreted.
+ */
+export function briefDeliveryPlan(
+  brief: ScheduleBrief,
+  tz: string,
+): { kind: BriefDeliveryKind; directive: string } {
+  const day =
+    brief.edition === "evening" ? `Tomorrow (${brief.forDate})` : `Today (${brief.forDate})`;
+  const reportOnly =
+    `This is a REPORT-ONLY turn — everything above is already known, so do NOT call any tool, do not ` +
+    `invent anything that is not listed, and do not paste raw JSON. Keep it skimmable.`;
+
+  if (!brief.items.length && brief.errors.length) {
+    return {
+      kind: "read-error",
+      directive:
+        `${day} — the schedule brief could NOT read the calendar, so there is no list to give.\n` +
+        `Errors: ${brief.errors.join("; ")}\n\n` +
+        `Write ONE short message in your own voice telling the user you couldn't pull ` +
+        `${brief.edition === "evening" ? "tomorrow's" : "today's"} meetings and classes, quote the error text ` +
+        `above briefly so it can be fixed, and do NOT say or imply their calendar is empty — you do not know that. ` +
+        reportOnly,
+    };
+  }
+
+  if (!brief.items.length) {
+    return {
+      kind: "nothing-scheduled",
+      directive:
+        `${day} — nothing is on the calendar: no meetings and no classes were found.\n\n` +
+        `Write ONE short, warm line in your own voice saying there is nothing scheduled ` +
+        `${brief.edition === "evening" ? "tomorrow" : "today"}. ` +
+        reportOnly,
+    };
+  }
+
+  const lines = briefLines(brief, tz);
+  return {
+    kind: "items",
+    directive:
+      `${day} — here is what is on:\n${lines.join("\n")}\n\n` +
+      `Write ONE short, warm heads-up in your own voice covering exactly these items, earliest first. ` +
+      `Lead with the first thing and its time. Mention the location only when one is given. ` +
+      `${brief.errors.length ? `Say plainly that one source could not be read (${brief.errors.join("; ")}), so this may be incomplete. ` : ""}` +
+      reportOnly,
+  };
+}
+
 /**
  * Run one edition for one user and deliver it.
  *
@@ -91,9 +153,21 @@ export async function runScheduleBrief(
   const tz = opts.timeZone?.trim() || DEFAULT_TZ;
   const nowMs = opts.nowMs ?? Date.now();
 
+  // The calendar lives in the OWNER's canonical mailbox, which is not necessarily the login the
+  // scheduler posts (the job targets dev@, the meetings live under the resolved identity). Resolve it
+  // EXACTLY the way the working `get_external_calendar_events` agent tool does, so the brief and the
+  // tool can never read two different calendars again.
+  let mailbox = caller.entra_email;
+  try {
+    const { resolveTaskEmail } = await import("../journey/identity");
+    mailbox = (await resolveTaskEmail(caller)) ?? caller.entra_email;
+  } catch {
+    /* identity lookup is best-effort — fall back to the login rather than to the sending mailbox */
+  }
+
   let brief: ScheduleBrief;
   try {
-    brief = await buildScheduleBrief({ nowMs, cadence: { tz }, edition: opts.edition });
+    brief = await buildScheduleBrief({ nowMs, cadence: { tz }, edition: opts.edition, mailbox });
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "brief build failed" };
   }
@@ -106,26 +180,10 @@ export async function runScheduleBrief(
     ...(brief.errors.length ? { errors: brief.errors } : {}),
   };
 
-  if (opts.dryRun) return { ...base, delivered: false, brief };
-
-  // NOTHING ON = NOTHING SENT. "No force" is the rule every other job in JOB_ROWS follows, and a
-  // 20:00 push saying "you have nothing tomorrow" every single night is how a useful alert becomes
-  // one the owner mutes. An empty edition with READ ERRORS is a different thing and still reports
-  // ok:false above — silence there would be the "you have nothing" lie the brief exists to avoid.
-  if (!brief.items.length) return { ...base, delivered: false, skipped: "empty" };
-
-  const lines = briefLines(brief, tz);
-  const heading =
-    brief.edition === "evening"
-      ? `Tomorrow (${brief.forDate}) — here is what is on:`
-      : `Today (${brief.forDate}) — here is what is on:`;
-  const directive =
-    `${heading}\n${lines.join("\n")}\n\n` +
-    `Write ONE short, warm heads-up in your own voice covering exactly these items, earliest first. ` +
-    `Lead with the first thing and its time. Mention the location only when one is given. ` +
-    `${brief.errors.length ? `Say plainly that one source could not be read (${brief.errors.join("; ")}), so this may be incomplete. ` : ""}` +
-    `This is a REPORT-ONLY turn — everything above is already known, so do NOT call any tool, do not ` +
-    `invent anything that is not listed, and do not paste raw JSON. Keep it skimmable.`;
+  const plan = briefDeliveryPlan(brief, tz);
+  if (opts.dryRun)
+    return { ...base, delivered: false, kind: plan.kind, directive: plan.directive, brief };
+  const directive = plan.directive;
 
   // The run id is keyed on the EDITION AND THE DATE IT COVERS, not on a timestamp: if the scheduler
   // fires twice in one slot (a retry, an overlapping tick), `enqueueTurn` sees the same id and
@@ -155,8 +213,13 @@ export async function runScheduleBrief(
       const { runTurnById } = await import("../huddle.functions");
       await runTurnById(turnId);
     }
-    return { ...base, delivered: !!fresh };
+    return { ...base, kind: plan.kind, delivered: !!fresh };
   } catch (err) {
-    return { ...base, ok: false, delivered: false, error: err instanceof Error ? err.message : String(err) };
+    return {
+      ...base,
+      ok: false,
+      delivered: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }

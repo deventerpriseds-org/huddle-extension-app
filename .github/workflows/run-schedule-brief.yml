@@ -1,0 +1,61 @@
+name: Run schedule brief (manual/on-demand)
+
+# WHAT:       Fires Iris's SCHEDULE BRIEF on demand (meetings + DBA classes for today/tomorrow).
+# WHY:        The brief never delivered (0 schedule-brief-% turns ever, 2026-10-15) and a failed
+#             calendar read was indistinguishable from an empty day. A session holds no
+#             JOURNEY_PROXY_TOKEN, so this is how the route is observed live. Mirrors
+#             run-priority-check.yml exactly.
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/evidence/schedule-brief-fix.md; src/features/huddle/lib/tasks/schedule-brief*.ts
+#
+# dryRun:true builds the brief and RETURNS it (items, errors, the directive Iris would get, and the
+# message kind) — no turn, no push. dryRun:false sends the real message (one per edition per date; a
+# manual runId makes a fresh one).
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Owner login email (the scheduler targets the job row's target_email)."
+        required: true
+        default: "dev@enterpriseds.io"
+      edition:
+        description: "morning | evening | (blank = derived from the current local hour)"
+        required: false
+        default: ""
+      dryRun:
+        description: "true = return what WOULD be sent, deliver nothing."
+        required: false
+        default: "true"
+      timeZone:
+        description: "IANA time zone."
+        required: false
+        default: "America/New_York"
+
+jobs:
+  run-schedule-brief:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/public/run-schedule-brief
+        env:
+          SECRET: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          EMAIL: ${{ inputs.email }}
+          EDITION: ${{ inputs.edition }}
+          DRY: ${{ inputs.dryRun }}
+          TZ_INPUT: ${{ inputs.timeZone }}
+        run: |
+          if [ -z "$SECRET" ]; then echo "JOURNEY_PROXY_TOKEN secret not set"; exit 1; fi
+          RUN_ID="manual-$(date -u +%Y%m%d%H%M%S)"
+          BODY=$(jq -cn --arg e "$EMAIL" --arg ed "$EDITION" --arg tz "$TZ_INPUT" --arg r "$RUN_ID" \
+            --argjson dry "$DRY" \
+            '{caller:{entra_email:$e}, timeZone:$tz, dryRun:$dry, runId:$r} + (if $ed == "" then {} else {edition:$ed} end)')
+          echo "Body: $BODY"
+          HTTP=$(curl -s -o /tmp/sb.out -w "%{http_code}" -X POST \
+            -H "content-type: application/json" -H "x-webhook-secret: $SECRET" \
+            -d "$BODY" "$BASE/api/public/run-schedule-brief")
+          echo "HTTP $HTTP"
+          echo "--- response ---"; cat /tmp/sb.out; echo
+          # 500 with a body is the route reporting ok:false (a source failed) — the body above is the
+          # diagnosis, so only a non-JSON/transport failure fails the job.
+          if [ "$HTTP" != "200" ] && [ "$HTTP" != "500" ]; then echo "run-schedule-brief failed"; exit 1; fi
