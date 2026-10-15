@@ -3198,8 +3198,19 @@ ever answers.
 **Three defects found by the cold AC read, not by me:** FAMILY absent in Huddle though the Android
 widget draws it; a tasks-only category row unexpandable; counts passed through rather than derived.
 
-Status: `tsc` clean, 15/15 new assertions, **3 mutations FIRED**, 126 regression assertions green —
-and **NOT user-confirmed, no browser has rendered it.** Independent verifier in flight.
+**MERGED `ca0d7d1`, DEPLOYED (run 38764997134 success), NOT OWNER-CONFIRMED** — nobody has seen it
+in a browser. 184 assertions green across 11 suites, `tsc` 0, build ok, **4 mutations FIRED**, and no
+server-module leak into the client bundle.
+
+**HARDENING — I built a row cap that an existing AC forbids BY NAME.** The first draft capped each
+category at 8 tasks behind "+N more". `docs/AC-journey-widgets.md` AC-10: *"no row cap, no '+N more'
+truncation"*, quoting the owner — *"it should include all that comes back from the query no matter
+how long that is"*. It was caught only because a PARALLEL session's ledger entry (PR #65) cited
+AC-10 for an unrelated reason. **The guard this implies is not "re-read the ACs": it is that an AC
+file governing a surface must be read BEFORE writing a renderer for that surface, the same way the
+data model index now gets read before writing a query.** Removed in `ac43446`. And note the limit of
+the fix: the cap lived in the COMPONENT, so no offline test could have caught it — AC-10 states its
+own DOM-level observation method, which is why that AC exists in that form.
 
 ## Active work — journey PRIORITIES + SCHEDULE widgets as in-chat widgets (2026-09-13, NOT verified)
 Branch `claude/journey-widgets-in-chat` in BOTH repos. Nothing on `main`, nothing deployed.
