@@ -4545,7 +4545,10 @@ its twin). There is no detector for this drift today; compare.ts found it by acc
 - **Open:** Monday 8am groom will star its top 20 again unless told otherwise — owner decision pending.
 
 ## ACT:inbound-email-watch — Iris never flagged Amy Corriveau's (Trinnex) email or offered a draft (2026-10-15)
-- **Status:** OPEN — root cause found; build awaiting owner go-ahead + noise-level choice (A real-people-needing-reply / B any real person / C every inbox email).
+- **Status:** BUILT, IN REVIEW — [PR #82](https://github.com/deventerpriseds-org/huddle-extension-app/pull/82). Default mode A (needs-reply) taken as the reversible default; B/C available via `mode`. NOT live, NOT owner-confirmed.
+- **Evidence:** `bun scripts/inbound-email.test.ts` 29/29; mutation FIRED on ask check, automated sender, List-Unsubscribe, self, and runId-in-turn-id; priority-check 20, schedule-brief 54, scheduler-one-user 7, email-self-send 73, voice-toolset-hidden 36; vite build OK; tsc 0 errors.
+- **Verifier loop 1:** REFUTED AC-2 (per-hour runId in the turn id → re-announce hourly). Fixed + mutation-proved; loop on the fixed head pending.
+- **Next:** merge → live dry run (trinnex.io kept) → real run → owner confirms Iris's DM + Outlook draft. Follow-up rows: Settings toggle for mode; plain-draft fallback mailbox.
 - **Root cause (observed):** nothing reads incoming mail. Huddle `origin/main` c197516 has send/draft/calendar only; journey's 127 edge fns + tables have no mail reader; `mail-and-appointments` is on-request with a user token, no schedule.
 - **Premise proven (run 38799786649, branch commit 2514262):** app-only `von.ellis@enterpriseds.io` Inbox read HTTP 200 (Amy's mail at 2026-10-15T19:38:31Z visible, 4 earlier trinnex.io mails since 10-13), Drafts folder HTTP 200. App holds Mail.Read/Mail.ReadWrite — no admin grant needed.
 - **Second gap:** `createGraphDraft` defaults to dev@enterpriseds.io, so "push to my drafts" would land in the wrong mailbox; must target the owner's Outlook (`pickOutlookMailbox`).
