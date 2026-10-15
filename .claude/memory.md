@@ -3538,3 +3538,15 @@ here as fact three times before being checked.)
 - An empty day sends NOTHING. A nightly "you have nothing tomorrow" push is how an alert gets muted.
 - An empty day WITH a read failure is a DIFFERENT fact: `ok:false` plus the reason. "You have
   nothing" and "we could not look" must never collapse into the same silence.
+
+## Priority check (6am/8pm freshness gate) — 2026-10-15
+- Job `priorityCheck` (default [6, 20] ET), route `/api/public/run-priority-check`, runner
+  `lib/tasks/priority-check.server.ts`, manual trigger `run-priority-check.yml` (dryRun default true).
+- Coupled timing: 6am precedes groom (8, Mon) + autowork (9); 8pm precedes journey
+  `nightly-schedule-builder` (cron `0 5 * * *` UTC = 1am ET). Move together.
+- Scheduler targets the mirror's `user_email` = `dev@enterpriseds.io`.
+- Count in the message = the widget's own `buildPrioritiesBand` → never disagrees with the card.
+- Settings JOB_TYPE_KEYS must list EVERY JobTypeKey (scheduleBrief was missing after #63).
+- Settings → Scheduling → Priority check has **Send now** (`runPriorityCheckNowFn`). It is the ONLY
+  in-app run-now for any scheduled job; the others are triggered via their `run-*.yml` workflows.
+- The scheduling save validator (`scheduling-config.functions.ts` JOB_TYPE_KEYS) must list every key too.

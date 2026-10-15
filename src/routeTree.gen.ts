@@ -20,6 +20,7 @@ import { Route as ApiPublicRunStandupRouteImport } from './routes/api/public/run
 import { Route as ApiPublicRunScheduleBriefRouteImport } from './routes/api/public/run-schedule-brief'
 import { Route as ApiPublicRunReviewRecheckRouteImport } from './routes/api/public/run-review-recheck'
 import { Route as ApiPublicRunReviewDigestRouteImport } from './routes/api/public/run-review-digest'
+import { Route as ApiPublicRunPriorityCheckRouteImport } from './routes/api/public/run-priority-check'
 import { Route as ApiPublicRunGroomingRouteImport } from './routes/api/public/run-grooming'
 import { Route as ApiPublicRunCeremonyRouteImport } from './routes/api/public/run-ceremony'
 import { Route as ApiPublicRunAutoworkRouteImport } from './routes/api/public/run-autowork'
@@ -83,6 +84,12 @@ const ApiPublicRunReviewDigestRoute =
     path: '/api/public/run-review-digest',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicRunPriorityCheckRoute =
+  ApiPublicRunPriorityCheckRouteImport.update({
+    id: '/api/public/run-priority-check',
+    path: '/api/public/run-priority-check',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicRunGroomingRoute = ApiPublicRunGroomingRouteImport.update({
   id: '/api/public/run-grooming',
   path: '/api/public/run-grooming',
@@ -118,6 +125,7 @@ export interface FileRoutesByFullPath {
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-priority-check': typeof ApiPublicRunPriorityCheckRoute
   '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
   '/api/public/run-review-recheck': typeof ApiPublicRunReviewRecheckRoute
   '/api/public/run-schedule-brief': typeof ApiPublicRunScheduleBriefRoute
@@ -135,6 +143,7 @@ export interface FileRoutesByTo {
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-priority-check': typeof ApiPublicRunPriorityCheckRoute
   '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
   '/api/public/run-review-recheck': typeof ApiPublicRunReviewRecheckRoute
   '/api/public/run-schedule-brief': typeof ApiPublicRunScheduleBriefRoute
@@ -154,6 +163,7 @@ export interface FileRoutesById {
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
+  '/api/public/run-priority-check': typeof ApiPublicRunPriorityCheckRoute
   '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
   '/api/public/run-review-recheck': typeof ApiPublicRunReviewRecheckRoute
   '/api/public/run-schedule-brief': typeof ApiPublicRunScheduleBriefRoute
@@ -173,6 +183,7 @@ export interface FileRouteTypes {
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-priority-check'
     | '/api/public/run-review-digest'
     | '/api/public/run-review-recheck'
     | '/api/public/run-schedule-brief'
@@ -190,6 +201,7 @@ export interface FileRouteTypes {
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-priority-check'
     | '/api/public/run-review-digest'
     | '/api/public/run-review-recheck'
     | '/api/public/run-schedule-brief'
@@ -208,6 +220,7 @@ export interface FileRouteTypes {
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
+    | '/api/public/run-priority-check'
     | '/api/public/run-review-digest'
     | '/api/public/run-review-recheck'
     | '/api/public/run-schedule-brief'
@@ -226,6 +239,7 @@ export interface RootRouteChildren {
   ApiPublicRunAutoworkRoute: typeof ApiPublicRunAutoworkRoute
   ApiPublicRunCeremonyRoute: typeof ApiPublicRunCeremonyRoute
   ApiPublicRunGroomingRoute: typeof ApiPublicRunGroomingRoute
+  ApiPublicRunPriorityCheckRoute: typeof ApiPublicRunPriorityCheckRoute
   ApiPublicRunReviewDigestRoute: typeof ApiPublicRunReviewDigestRoute
   ApiPublicRunReviewRecheckRoute: typeof ApiPublicRunReviewRecheckRoute
   ApiPublicRunScheduleBriefRoute: typeof ApiPublicRunScheduleBriefRoute
@@ -314,6 +328,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicRunReviewDigestRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/run-priority-check': {
+      id: '/api/public/run-priority-check'
+      path: '/api/public/run-priority-check'
+      fullPath: '/api/public/run-priority-check'
+      preLoaderRoute: typeof ApiPublicRunPriorityCheckRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/run-grooming': {
       id: '/api/public/run-grooming'
       path: '/api/public/run-grooming'
@@ -373,6 +394,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicRunAutoworkRoute: ApiPublicRunAutoworkRoute,
   ApiPublicRunCeremonyRoute: ApiPublicRunCeremonyRoute,
   ApiPublicRunGroomingRoute: ApiPublicRunGroomingRoute,
+  ApiPublicRunPriorityCheckRoute: ApiPublicRunPriorityCheckRoute,
   ApiPublicRunReviewDigestRoute: ApiPublicRunReviewDigestRoute,
   ApiPublicRunReviewRecheckRoute: ApiPublicRunReviewRecheckRoute,
   ApiPublicRunScheduleBriefRoute: ApiPublicRunScheduleBriefRoute,

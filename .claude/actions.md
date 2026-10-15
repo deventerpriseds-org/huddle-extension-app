@@ -4240,3 +4240,29 @@ owner-confirmed. Step 5 (the T-60 seeding) NOT started, deliberately — `chat.r
 dedup, so a seeder would duplicate an alarm on every run, and that risk is kept out of the digest
 work. Open question to the owner: did MGT-701 end on Sep 30 (5 weekly Wednesdays then nothing, term
 `202712` vs `202711`)?**
+
+## ACT:priority-check — 6am/8pm "are your priorities still right?" freshness gate (2026-10-15)
+
+**Asked:** 2026-09-10 (Tess, twice: 8pm "current priorities … likely to be scheduled vs not"), reframed
+2026-10-05 into a freshness gate (morning → 6am), built on owner go-ahead 2026-10-15: *"Yes, i need it
+built and tested to prove"*. Spec + Phase 0 live proof: `docs/plan-agent-routines.md`.
+
+**Built (PR #65, `claude_priority-routine`):** job `priorityCheck` [6, 20] → `run-priority-check` →
+`priority-check.server.ts` → durable turn in `dm-iris-chase`, notify:"push", widget call forced by the
+directive. Extends the schedule-brief path; zero widget files touched (another session owns the widget).
+Also: `scheduleBrief` added to Settings' `JOB_TYPE_KEYS` — #63 shipped it un-editable.
+
+**Widget "93 rows" — re-measured 2026-10-15, NOT 93:** mirror `tasks.journey_tasks` for
+`dev@enterpriseds.io` has 33 open prioritised tasks (starred == ranked, all 33), 9 parked → **24 rows**
+in the widget. The 96 of 2026-10-05 had been cut down since. A row cap conflicts with the owner's own
+"no row cap" rule (AC-journey-widgets AC-10) — open question to the owner; widget code left to the
+other session.
+
+**Evidence:** `bun scripts/priority-check.test.ts` 18/18; mutate.sh FIRED ×3 (P1, P5, P7); tsc 0; build ok.
+**Send now (2026-10-15, owner: "i would expect to be able to manually trigger it … in settings"):**
+Settings → Scheduling → Priority check → **Send now** (`runPriorityCheckNowFn`, same runner, fresh
+runId). Swept first: NO scheduled job had an in-app run-now before this — their manual triggers were
+GitHub workflows only. Also fixed the save validator (`scheduling-config.functions.ts` JOB_TYPE_KEYS)
+which rejected scheduleBrief/priorityCheck. Tests 20/20; P19 mutation FIRED.
+**Status:** built + mechanism-tested; live dry-run + real message after deploy via `run-priority-check.yml`.
+NOT owner-confirmed (push to phone unverified).

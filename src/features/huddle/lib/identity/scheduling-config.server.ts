@@ -66,7 +66,13 @@ export type JobTypeKey =
    *  before noon = the MORNING edition (today), after = the EVENING edition (tomorrow). Asked for
    *  2026-10-01: "I want seperate alerts (8am and 8pm). for the evening before looking at the day
    *  after and the morning of looking at the current day". */
-  | "scheduleBrief";
+  | "scheduleBrief"
+  /** The priority check: Iris asks "are these priorities still right?" and shows the priorities
+   *  widget, timed AHEAD of the jobs that consume the board, so they never rank stale data. Asked
+   *  2026-09-10 (8pm: "current priorities ... likely to be scheduled vs not") and reframed
+   *  2026-10-05 from a digest into a freshness gate, morning moved 8am -> 6am. Spec:
+   *  docs/plan-agent-routines.md. */
+  | "priorityCheck";
 
 export const DEFAULT_TZ = "America/New_York";
 
@@ -82,6 +88,10 @@ export const SCHEDULING_DEFAULTS: Record<JobTypeKey, JobCadence> = {
   // 8am and 8pm, exactly as asked. A DEFAULT, not a constant: `identity.scheduling_config`
   // overrides it per user like every row above, so the hours are changeable without a deploy.
   scheduleBrief: { tz: DEFAULT_TZ, hours: [8, 20] },
+  // 6am = before the 8am groom and the 9am auto-work pass; 8pm = before journey's
+  // nightly-schedule-builder (cron '0 5 * * *' UTC = 1am ET), so tonight's plan is built from
+  // priorities the owner has just looked at. COUPLED to those jobs: if they move, move this too.
+  priorityCheck: { tz: DEFAULT_TZ, hours: [6, 20] },
 };
 
 /** Minutes before a session to fire its own reminder. The user's ask was 60 ("iris should have a

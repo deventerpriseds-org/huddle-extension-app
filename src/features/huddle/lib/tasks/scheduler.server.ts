@@ -93,6 +93,7 @@ const JOB_ROWS: { key: JobTypeKey; idPrefix: string; jobType: string }[] = [
   { key: "reviewDigest", idPrefix: "review-digest", jobType: "review-digest" },
   { key: "reviewRecheck", idPrefix: "review-recheck", jobType: "review-recheck" },
   { key: "scheduleBrief", idPrefix: "schedule-brief", jobType: "schedule-brief" },
+  { key: "priorityCheck", idPrefix: "priority-check", jobType: "priority-check" },
 ];
 
 /** Reverse lookup: the `job_type` string stored on a row -> the JobTypeKey scheduling-config knows it
@@ -173,6 +174,10 @@ async function fireJob(job: ScheduledJob, slotId: string): Promise<void> {
     // mean a user who edits `scheduleBrief.hours` gets whichever edition was frozen in at write
     // time, which is the stale-cadence trap the JOB_TYPE_KEY comment above already describes.
     await post("/api/public/run-schedule-brief");
+  } else if (job.job_type === "priority-check") {
+    // No force: an empty priority band sends nothing. The edition (morning/evening) is derived from
+    // the local hour in the route, for the same stale-cadence reason as schedule-brief above.
+    await post("/api/public/run-priority-check");
   }
   // Future: else if (job.job_type === "ceremony") { ... POST run-ceremony ... }
 }
