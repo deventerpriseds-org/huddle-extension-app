@@ -4436,7 +4436,12 @@ present is not that proof. The verifier was handed the live check.
 |---|---|---|---|
 | 1 | Brief never silent (schedule / nothing scheduled / read-error notice) | merged #73, deployed | dry run 38776403438 -> kind `read-error` |
 | 2 | Cause read, not guessed | `graph-permission-check.yml` (#74) | run 38779291624: app `enterpriseds-github-actions` (SP oid d562fd09-…) roles = Application.ReadWrite.All, Files.ReadWrite.All, Mail.*, MailboxSettings.ReadWrite — **no Calendars.Read**; calendarView 403 for dev@ and von.ellis@ |
-| 3 | Fix = owner's option A: Exchange RBAC for Applications, `Application Calendars.Read` scoped to the owner's mailbox(es); NO Entra Calendars.Read grant (Entra grants are tenant-wide and additive) | waiting on owner (admin action) | re-run graph-permission-check.yml after; expect calendarView 200 |
+| 3 | Fix = owner's option A: Exchange RBAC for Applications, `Application Calendars.Read` scoped to the owner's mailbox(es); NO Entra Calendars.Read grant (Entra grants are tenant-wide and additive) | DONE by owner | re-run graph-permission-check.yml after; expect calendarView 200 |
+| 4 | Permission confirmed | live | graph-permission-check run 38789997041: roles now include Calendars.ReadWrite(.All); calendarView **200** for dev@ and von.ellis@ |
+| 5 | Live brief still said "couldn't pull meetings and classes" (owner) — run 38790511069: `count:0, errors:[classes: http_500]` | root-caused ×3 | (a) classes: `program_id=eq.<uuid>` — Nexus d1 has no `eq` op → Postgres 500 `invalid input syntax for type uuid` (nexus api-test run 38791422004; no filter → 200). (b) meetings: read dev@'s calendar; owner's meetings are in the journey-connected Outlook account Von.Ellis@ (journey `calendar_connections`). (c) directive blamed both sources |
+| 6 | Fix: bare program_id; `resolveCalendarMailbox` (journey get_my_config → connected Outlook, fallback resolveTaskEmail) on all 4 Graph calendar reads; read-error names only the failed source | merged #78 (61f97ba), deployed in SWA 34ec33c | 46/46; E1e/E1f/G1 mutations FIRED; **live run 38793544872 → `count:2, kind:items`, no errors, delivered** |
+
+**Live-tested 2026-10-15 3:24 PM ET; owner to confirm Iris's message lists Haircut + Test Event 1.**
 
 Doubled review digests: fixed by #68 (one job row per user). Owner rejected switching the brief to journey's calendar (option C) — journey branch commit 9638f09 parked, unmerged.
 
