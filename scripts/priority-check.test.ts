@@ -93,5 +93,13 @@ const panel = readFileSync("src/features/huddle/components/SchedulingPanel.tsx",
 const keys = panel.match(/const JOB_TYPE_KEYS: JobTypeKey\[\] = \[([\s\S]*?)\]/)?.[1] ?? "";
 check("P18 Settings lists priorityCheck AND scheduleBrief", /"priorityCheck"/.test(keys) && /"scheduleBrief"/.test(keys), keys);
 
+// P19..P20 — Settings can SAVE both new rows (server validator) and SEND the check on demand.
+const fns = readFileSync("src/features/huddle/lib/identity/scheduling-config.functions.ts", "utf8");
+const serverKeys = fns.match(/const JOB_TYPE_KEYS = \[([\s\S]*?)\] as const/)?.[1] ?? "";
+check("P19 save validator accepts priorityCheck AND scheduleBrief", /"priorityCheck"/.test(serverKeys) && /"scheduleBrief"/.test(serverKeys), serverKeys);
+check("P20 Send now calls the scheduler's own runner with a fresh runId",
+  /runPriorityCheck\(\{ entra_email: email \}, \{ timeZone: tz, runId: `manual-\$\{Date\.now\(\)\}` \}\)/.test(fns) &&
+  /runPriorityCheckNowFn\(/.test(panel) && /key === "priorityCheck"/.test(panel));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

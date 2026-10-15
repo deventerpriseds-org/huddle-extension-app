@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import {
   getMySchedulingConfigFn,
+  runPriorityCheckNowFn,
   setMySchedulingConfigFn,
 } from "../lib/identity/scheduling-config.functions";
 import type { JobCadence, JobTypeKey } from "../lib/identity/scheduling-config.server";
@@ -83,6 +84,24 @@ export function SchedulingPanel() {
   const [hoursText, setHoursText] = useState<Record<JobTypeKey, string>>({} as Record<JobTypeKey, string>);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState<JobTypeKey | null>(null);
+  const [sending, setSending] = useState(false);
+
+  // "Send now" — runs the priority check immediately through the same runner the scheduler uses.
+  const sendPriorityCheckNow = useCallback(async () => {
+    if (!caller || sending) return;
+    setSending(true);
+    try {
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const r = await runPriorityCheckNowFn({ data: { caller, timeZone } });
+      if (r.delivered) toast.success(`Sent — Iris is asking about ${r.count ?? 0} priorities in her 1:1.`);
+      else if (r.skipped === "empty") toast.info("Nothing sent — you have no open priorities.");
+      else toast.error(`Couldn't send the priority check${r.error ? `: ${r.error}` : "."}`);
+    } catch {
+      toast.error("Couldn't send the priority check.");
+    } finally {
+      setSending(false);
+    }
+  }, [caller, sending]);
 
   useEffect(() => {
     if (!caller) return;
@@ -234,6 +253,18 @@ export function SchedulingPanel() {
                   placeholder="e.g. 8 or 9,13,17"
                 />
                 <span className="text-[11px] text-muted-foreground">local hour(s), 0-23</span>
+                {key === "priorityCheck" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="ml-auto h-7 text-xs"
+                    disabled={!ready || sending}
+                    onClick={() => void sendPriorityCheckNow()}
+                    data-testid="priority-check-send-now"
+                  >
+                    {sending ? "Sending…" : "Send now"}
+                  </Button>
+                )}
               </div>
             </div>
           );
