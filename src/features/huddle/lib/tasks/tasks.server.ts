@@ -531,6 +531,34 @@ export async function getStandupTasks(userEmail: string, windowHours = 36): Prom
   return rows;
 }
 
+/**
+ * The owner's SCHEDULED, still-open tasks whose start falls in [startIso, endIso) — what Iris names in
+ * the morning brief and each window message (owner, 2026-10-15: "i have tasks everyday and i do want a
+ * similar message for day in the morning and for each window as they pop up"). Same alias-set match and
+ * parking-lot exclusion as getStandupTasks; DONE/BLOCKED dropped like getTasksForUser.
+ */
+export async function getScheduledTasksBetween(
+  userEmail: string,
+  startIso: string,
+  endIso: string,
+): Promise<{ id: string; title: string; start_time: string | null; status: string | null }[]> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
+  const { rows } = await getPool().query<{ id: string; title: string; start_time: string | null; status: string | null }>(
+    `SELECT id, title, start_time, status
+       FROM tasks.journey_tasks
+      WHERE lower(user_email) = ANY($1)
+        AND start_time >= $2 AND start_time < $3
+        AND completed_at IS NULL AND (status IS NULL OR status NOT IN ('DONE','BLOCKED'))
+        AND NOT ('parking-lot' = ANY(tags))
+      ORDER BY start_time
+      LIMIT 200`,
+    [emails, startIso, endIso],
+  );
+  return rows;
+}
+
 /** Open tasks for a user (by email), optionally filtered to one category, for the scorer. */
 export async function getTasksForUser(userEmail: string, category?: string): Promise<ScorableTask[]> {
   await ensureBootstrapped();

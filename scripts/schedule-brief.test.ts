@@ -19,6 +19,7 @@
 import {
   addDays,
   dateForEdition,
+  inWindow,
   editionForHour,
   graphUtcToIso,
   localDate,
@@ -315,6 +316,30 @@ console.log("H. IRIS'S VOICE + LATER THIS WEEK (owner 2026-10-15: 'hello Sir, ju
   const emptyToday = briefDeliveryPlan(mk({ items: [], upcoming: withWeek.upcoming }), TZ);
   t("H7 nothing today but a busy week still mentions the week", /but later in the week you have/.test(emptyToday.directive), true);
   t("H8 addDays crosses a month boundary", addDays("2026-10-30", 3), "2026-11-02");
+}
+
+console.log("I. TASKS + WINDOWS (owner 2026-10-15: 'i have tasks everyday ... a similar message for day in the morning and for each window as they pop up')");
+{
+  const tk = (title: string, startIso: string) => ({ id: title, title, startIso });
+  const withTasks = mk({ tasks: [tk("Find a low-interest credit card", "2026-10-15T13:00:00Z"), tk("Debug autowork", "2026-10-15T14:30:00Z")] });
+  const p1 = briefDeliveryPlan(withTasks, TZ);
+  t("I1 tasks are listed under TASKS", /TASKS:\n9:00\s?AM — Find a low-interest credit card \(task\)\n10:30\s?AM — Debug autowork \(task\)/.test(p1.directive.replace(/\u202f/g, " ")), true);
+  t("I1b and Iris is asked to name them after the meetings", /and on your task list/.test(p1.directive), true);
+  const tasksOnly = briefDeliveryPlan(mk({ items: [], tasks: withTasks.tasks }), TZ);
+  t("I2 a day with tasks but no meetings is a real brief, not 'nothing scheduled'", tasksOnly.kind, "items");
+  const empty = briefDeliveryPlan(mk({ items: [], tasks: [] }), TZ);
+  t("I3 no meetings and no tasks says both", /nothing on the calendar today and no tasks scheduled/.test(empty.directive), true);
+  const failedTasks = briefDeliveryPlan(mk({ tasksError: "pg down" }), TZ);
+  t("I4 a failed task read says so and never claims none", /TASKS: could not be read \(pg down\)/.test(failedTasks.directive) && !/no tasks scheduled/.test(failedTasks.directive), true);
+  const win = { name: "business_hours", start: 9, end: 17 };
+  const wp = briefDeliveryPlan(mk({ window: win, tasks: withTasks.tasks, upcoming: [item({ day: "2026-10-16" })] }), TZ);
+  t("I5 a window message is framed as the rest of that window", /the business hours window \(9 AM–5 PM\)/.test(wp.directive), true);
+  t("I5b and carries no week lookahead", /LATER THIS WEEK/.test(wp.directive), false);
+  const now = Date.parse("2026-10-15T15:00:00Z"); // 11:00 AM ET
+  t("I6 inWindow: later in the window -> in", inWindow("2026-10-15T18:00:00Z", win, TZ, now), true);
+  t("I6b already started -> out", inWindow("2026-10-15T14:00:00Z", win, TZ, now), false);
+  t("I6c after the window ends (5 PM) -> out", inWindow("2026-10-15T21:00:00Z", win, TZ, now), false);
+  t("I6d undated -> out", inWindow(null, win, TZ, now), false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

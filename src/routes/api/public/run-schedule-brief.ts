@@ -10,7 +10,8 @@ import type {} from "@tanstack/react-start";
 // makes the pair survive a user editing `scheduleBrief.hours` away from the shipped [8, 20].
 // `edition` in the body is an override for the manual/test path only.
 //
-// Body: { caller:{ entra_email }, timeZone?, edition?, force?, runId? }.
+// Body: { caller:{ entra_email }, timeZone?, edition?, force?, runId?, window?:{name,start,end} }.
+// `window` is sent by journey's notification-delivery when a window call fires (11am/5pm/7pm/weekend).
 
 const MAX_BODY_BYTES = 16_000;
 
@@ -43,6 +44,8 @@ export const Route = createFileRoute("/api/public/run-schedule-brief")({
            *  read exactly what WOULD be sent without putting a push on the owner's phone. */
           dryRun?: boolean;
           runId?: string;
+          /** journey's window call fired: brief what is still ahead in this window (local hours). */
+          window?: { name?: string; start?: number; end?: number } | null;
         };
         try {
           payload = (await request.json()) as typeof payload;
@@ -55,6 +58,13 @@ export const Route = createFileRoute("/api/public/run-schedule-brief")({
 
         const edition =
           payload.edition === "morning" || payload.edition === "evening" ? payload.edition : undefined;
+        const win = payload.window;
+        const window =
+          win && typeof win.name === "string" && /^[a-z_]{1,32}$/.test(win.name) &&
+          Number.isInteger(win.start) && Number.isInteger(win.end) &&
+          (win.start as number) >= 0 && (win.end as number) <= 24 && (win.start as number) < (win.end as number)
+            ? { name: win.name, start: win.start as number, end: win.end as number }
+            : undefined;
 
         try {
           const { runScheduleBrief } = await import(
@@ -67,6 +77,7 @@ export const Route = createFileRoute("/api/public/run-schedule-brief")({
               edition,
               dryRun: !!payload.dryRun,
               runId: payload.runId,
+              window,
             },
           );
           return json(result, result.ok ? 200 : 500);

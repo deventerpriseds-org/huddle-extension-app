@@ -46,6 +46,20 @@ export interface BriefItem {
   day?: string;
 }
 
+/** A scheduled journey task, as Iris names it. Never fed to the T-60 seeder (journey alarms tasks). */
+export interface BriefTask {
+  id: string;
+  title: string;
+  startIso: string | null;
+}
+
+/** A journey time window in LOCAL hours, e.g. { name: "business_hours", start: 9, end: 17 }. */
+export interface BriefWindow {
+  name: string;
+  start: number;
+  end: number;
+}
+
 export interface ScheduleBrief {
   ok: boolean;
   edition: BriefEdition;
@@ -61,6 +75,25 @@ export interface ScheduleBrief {
   upcoming?: BriefItem[];
   /** A failed lookahead read. Never turns the edition into a read-error; it is mentioned softly. */
   upcomingErrors?: string[];
+  /** The day's (or the window's) scheduled, open tasks. undefined = not read (no task email). */
+  tasks?: BriefTask[];
+  /** The task read failed — said plainly rather than implying the task list is empty. */
+  tasksError?: string;
+  /** Set for a WINDOW message: items and tasks are narrowed to what is still ahead in it. */
+  window?: BriefWindow;
+}
+
+/**
+ * Narrow to what is STILL AHEAD inside a window: start at/after `nowMs` and the local start hour in
+ * [window.start, window.end). Undated items (all-day meetings) are dropped — they belong to the day,
+ * not to a window. Pure, so the boundary rules are unit-tested.
+ */
+export function inWindow(startIso: string | null, w: BriefWindow, tz: string, nowMs: number): boolean {
+  if (!startIso) return false;
+  const t = Date.parse(startIso);
+  if (!Number.isFinite(t) || t < nowMs) return false;
+  const h = localHour(t, tz);
+  return h >= w.start && h < w.end;
 }
 
 /** yyyy-mm-dd plus N calendar days (pure date math on the local date, DST-proof). */
@@ -336,6 +369,10 @@ export async function buildScheduleBrief(opts: {
   edition?: BriefEdition;
   /** The OWNER's Graph mailbox (resolveTaskEmail(caller)). Required — see meetingsForDate. */
   mailbox: string;
+  /** The email the task mirror is keyed by. Omitted -> tasks are not read (legacy callers). */
+  taskEmail?: string;
+  /** A window message: narrow to what is still ahead in this window; no week lookahead. */
+  window?: BriefWindow;
 }): Promise<ScheduleBrief> {
   const tz = opts.cadence?.tz || DEFAULT_TZ;
   const edition = opts.edition ?? editionForHour(localHour(opts.nowMs, tz));
@@ -368,6 +405,37 @@ export async function buildScheduleBrief(opts: {
     return at === bt ? a.title.localeCompare(b.title) : at - bt;
   });
 
+  // TASKS for the day — the owner's own list (owner, 2026-10-15: "i have tasks everyday"). Separate
+  // from `items` on purpose: items also seed the T-60 reminders, and journey already alarms tasks.
+  let tasks: BriefTask[] | undefined;
+  let tasksError: string | undefined;
+  if (opts.taskEmail) {
+    try {
+      const { getScheduledTasksBetween } = await import("./tasks.server");
+      const { startIso, endIso } = localDayBoundsUtc(forDate, tz);
+      const rows = await getScheduledTasksBetween(opts.taskEmail, startIso, endIso);
+      tasks = rows.map((r) => ({
+        id: r.id,
+        title: String(r.title ?? "").trim() || "(untitled)",
+        startIso: r.start_time ? new Date(r.start_time).toISOString() : null,
+      }));
+    } catch (err) {
+      tasksError = err instanceof Error ? err.message : "task read failed";
+    }
+  }
+
+  // A WINDOW message: only what is still ahead in that window, and no week lookahead — the morning
+  // message (and the email) already carry the wider view.
+  if (opts.window) {
+    const w = opts.window;
+    items = items.filter((i) => inWindow(i.startIso, w, tz, opts.nowMs));
+    if (tasks) tasks = tasks.filter((t) => inWindow(t.startIso, w, tz, opts.nowMs));
+    return {
+      ok: errors.length < 2, edition, forDate, items, errors, upcoming: [], upcomingErrors: [],
+      ...(tasks ? { tasks } : {}), ...(tasksError ? { tasksError } : {}), window: w,
+    };
+  }
+
   // LATER THIS WEEK — the 6 days after forDate, both sources, one read each. Best-effort: a failure
   // here is reported softly and never turns today's brief into a read-error.
   const from = addDays(forDate, 1);
@@ -394,5 +462,8 @@ export async function buildScheduleBrief(opts: {
 
   // ok:false ONLY when EVERY source failed. One source failing with the other returning rows is a
   // partial brief that still says something true, and the error rides along so the gap is visible.
-  return { ok: errors.length < 2, edition, forDate, items, errors, upcoming, upcomingErrors };
+  return {
+    ok: errors.length < 2, edition, forDate, items, errors, upcoming, upcomingErrors,
+    ...(tasks ? { tasks } : {}), ...(tasksError ? { tasksError } : {}),
+  };
 }
