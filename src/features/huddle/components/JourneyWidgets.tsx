@@ -720,13 +720,14 @@ function TopicRow({
               />
             ) : null}
           </span>
-          {/* A topic with nothing under it is GREY. Owner, 2026-10-15: "Topics with no tasks should use
-              grey text instead of black to show there currently is nothing to do if pushing it." Only
-              topics, never a category row: a category with no tasks does not render at all. */}
+          {/* A row with nothing under it is GREY. Owner, 2026-10-15: "Topics with no tasks should use
+              grey text instead of black to show there currently is nothing to do if pushing it." That
+              now includes a CATEGORY row: the five known categories always render (withKnownCategories,
+              the phone's rule), so an empty one — Family, today — is drawn, and greyed for the same reason. */}
           <span
             className={cn(
               "min-w-0 flex-1 truncate text-[13px]",
-              depth === 0 ? "text-foreground" : hasContent ? "text-foreground/85" : "text-muted-foreground",
+              !hasContent ? "text-muted-foreground" : depth === 0 ? "text-foreground" : "text-foreground/85",
             )}
             title={node.name}
           >
