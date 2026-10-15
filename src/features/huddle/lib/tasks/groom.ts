@@ -106,6 +106,34 @@ export function laneFieldFor(
   return { unset_rank: true };
 }
 
+/**
+ * THE GROOM DOES NOT STAR ANYTHING (owner decision "A", 2026-10-15).
+ *
+ * journey's `batch_update_tasks` sets `is_priority = true` whenever it is given a `rank`, and clears it
+ * on `unset_rank` (execute-tool/index.ts:987-988). So any rank the groom writes IS a star, and This Week
+ * — in Huddle AND on the owner's phone — filled up with the groom's picks every Monday. He cleared it
+ * ("the this week section should be cleared because it is wrong") and chose: This Week holds only what
+ * HE pushes. So the groom writes neither field: it can no longer add a star, and it can no longer remove
+ * one the owner set on any surface.
+ *
+ * The ordering the groom used to express through `priority_rank` now comes from the scorer the agents'
+ * work order reads (`orderForAutowork`, scoring.ts), which mirrors journey's own scoring.
+ *
+ * Flipping this back to `true` restores the capped top-`PRIORITY_LANE_MAX` lane exactly as it was —
+ * `laneFieldFor` is kept, unchanged, for that reason.
+ */
+export const GROOM_WRITES_STARS = false;
+
+/** The lane fields one groom update carries. With `GROOM_WRITES_STARS` off: none, for every task. */
+export function groomLaneField(
+  taskId: string,
+  rankById: ReadonlyMap<string, number>,
+  userPinned: ReadonlySet<string>,
+): { rank: number } | { unset_rank: true } | Record<string, never> {
+  if (!GROOM_WRITES_STARS) return {};
+  return laneFieldFor(taskId, rankById, userPinned);
+}
+
 /** The dense 1..N map for one pass, capped at `max`. Pure; `sortedIds` must already be in lane order. */
 export function laneRanks(sortedIds: readonly string[], max: number = PRIORITY_LANE_MAX): Map<string, number> {
   const m = new Map<string, number>();
@@ -305,7 +333,7 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
       const llmTags = Array.isArray(a.tags) ? a.tags.map((t) => String(t).toLowerCase()) : [];
       const preserved = (tagsById.get(a.id) ?? []).filter((t) => CONTROL_TAGS.has(t));
       const tags = Array.from(new Set([...llmTags, ...preserved])).slice(0, 5);
-      const laneField = laneFieldFor(a.id, rankById, userPinned);
+      const laneField = groomLaneField(a.id, rankById, userPinned);
       return { task_id: a.id, assigned_agent: a.assigned_agent, tags, priority: a.priority, ...laneField };
     });
 

@@ -60,7 +60,9 @@ async function resolveCallerEmail(caller: z.infer<typeof Caller>): Promise<strin
  * `currentlyDoing: []` is a NORMAL result, not an error: the spec renders "Nothing in progress".
  */
 export const getScheduleWidget = createServerFn({ method: "POST" })
-  .inputValidator((raw: unknown) => z.object({ caller: Caller, timeZone: TimeZoneInput }).parse(raw))
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, timeZone: TimeZoneInput }).parse(raw),
+  )
   .handler(async ({ data }): Promise<ScheduleWidgetData> => {
     const empty = (ok: boolean, timeZone: string, error?: string): ScheduleWidgetData => {
       const todayKey = new Date().toISOString().slice(0, 10);
@@ -96,7 +98,6 @@ export const getScheduleWidget = createServerFn({ method: "POST" })
 // Widget 2 — PRIORITIES
 // ---------------------------------------------------------------------------
 
-
 /**
  * Data for the PRIORITIES widget: the task band (from the mirror) + journey's topic tree.
  *
@@ -106,7 +107,9 @@ export const getScheduleWidget = createServerFn({ method: "POST" })
  */
 export const getPrioritiesWidget = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) =>
-    z.object({ caller: Caller, timeZone: TimeZoneInput, includeTopics: z.boolean().optional() }).parse(raw),
+    z
+      .object({ caller: Caller, timeZone: TimeZoneInput, includeTopics: z.boolean().optional() })
+      .parse(raw),
   )
   .handler(async ({ data }): Promise<PrioritiesWidgetData> => {
     const noTopics: TopicTreeResult = { ok: false, roots: [], reason: "ok" };
@@ -196,7 +199,8 @@ export const updateWidgetTask = createServerFn({ method: "POST" })
       const owned = await getOwnedTaskForConfirmAsk(data.taskId, email);
       if (!owned) return fail("Task not found.");
 
-      const { ACTION_STATUS, safeTimeZone, localDateKey, withParkingLotTag } = await import("./widgets.server");
+      const { ACTION_STATUS, safeTimeZone, localDateKey, withParkingLotTag } =
+        await import("./widgets.server");
       const { invokeJourneyTool } = await import("../journey/proxy.functions");
 
       let toolName: string;
@@ -304,3 +308,83 @@ export const reorderWidgetBand = createServerFn({ method: "POST" })
       return { ok: false, error: err instanceof Error ? err.message : String(err), taskIds: [] };
     }
   });
+
+// ---------------------------------------------------------------------------
+// PUSH into This Week — the ⋮ menu's star actions (push.server.ts holds the logic and the rationale)
+// ---------------------------------------------------------------------------
+
+type PushFnResult = {
+  ok: boolean;
+  error?: string;
+  applied: boolean;
+  task?: { id: string; title: string } | null;
+  message?: string;
+};
+
+async function withPushCaller(
+  caller: z.infer<typeof Caller>,
+  run: (email: string) => Promise<PushFnResult>,
+): Promise<PushFnResult> {
+  if (!caller?.entra_email) return { ok: false, applied: false, error: "Sign-in required." };
+  try {
+    const email = await resolveCallerEmail(caller);
+    if (!email) return { ok: false, applied: false, error: "Could not resolve your account." };
+    return await run(email);
+  } catch (err) {
+    return { ok: false, applied: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** ⋮ → "Push to This Week" on a task. */
+export const pushWidgetTask = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, taskId: z.string().min(1).max(200) }).parse(raw),
+  )
+  .handler(async ({ data }) =>
+    withPushCaller(data.caller, async (email) => {
+      const { pushTask } = await import("./push.server");
+      return pushTask(email, data.caller ?? {}, data.taskId);
+    }),
+  );
+
+/** ⋮ → "Remove from This Week". */
+export const unstarWidgetTask = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, taskId: z.string().min(1).max(200) }).parse(raw),
+  )
+  .handler(async ({ data }) =>
+    withPushCaller(data.caller, async (email) => {
+      const { unstarTask } = await import("./push.server");
+      return unstarTask(email, data.caller ?? {}, data.taskId);
+    }),
+  );
+
+/** ⋮ → "Push <category or topic>". `nodeId` is the tree node's own id. */
+export const pushWidgetNode = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({
+        caller: Caller,
+        nodeId: z.string().min(1).max(200),
+        nodeName: z.string().max(200).optional(),
+      })
+      .parse(raw),
+  )
+  .handler(async ({ data }) =>
+    withPushCaller(data.caller, async (email) => {
+      const { pushNode } = await import("./push.server");
+      return pushNode(email, data.caller ?? {}, data.nodeId, data.nodeName ?? null);
+    }),
+  );
+
+/** ⋮ → "Stop pushing". */
+export const unpushWidgetNode = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, nodeId: z.string().min(1).max(200) }).parse(raw),
+  )
+  .handler(async ({ data }) =>
+    withPushCaller(data.caller, async (email) => {
+      const { unpushNode } = await import("./push.server");
+      return unpushNode(email, data.caller ?? {}, data.nodeId);
+    }),
+  );

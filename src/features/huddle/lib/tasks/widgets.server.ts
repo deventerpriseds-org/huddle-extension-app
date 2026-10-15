@@ -52,6 +52,8 @@ export interface WidgetTaskRow {
    * `✓ Today` (green, already today) vs `▲ Today` (grey, tap to move it to today).
    */
   isToday: boolean;
+  /** Set on a This Week row that a category/topic PUSH starred: that node's name, shown as "via …". */
+  pushedVia?: string | null;
 }
 
 /** The SCHEDULE widget's payload — the three sections in the spec, top to bottom. */
@@ -148,6 +150,18 @@ export interface PrioritiesWidgetData {
   band: WidgetTaskRow[];
   /** Journey's topic tree via the proxy. Degrades to `{roots: [], reason}` — never throws. */
   topics: TopicTreeResult;
+  /**
+   * The categories / topics the user has PUSHED (push.server.ts), keyed by the tree node's own id, with
+   * the task each push currently has starred (null while it waits for one). Optional: in-chat cards
+   * saved before pushes existed carry none, and the renderer treats absent as "nothing pushed".
+   */
+  pushes?: PushView[];
+}
+
+export interface PushView {
+  nodeId: string;
+  nodeName: string | null;
+  activeTaskId: string | null;
 }
 
 /** The five widget buttons, as one closed set. */
@@ -616,9 +630,9 @@ export function categoryLabel(key: string): string {
     .join(" ");
 }
 
-/** Synthetic category roots are ids, not topics — prefixed so they can never collide with a
- *  journey topic uuid, and so a click handler can tell them apart. */
-export const CATEGORY_ROOT_PREFIX = "category:";
+// Synthetic category-root prefix: defined in widget-ids.ts (client-safe), re-exported here.
+import { CATEGORY_ROOT_PREFIX, UNCATEGORISED_CATEGORY } from "./widget-ids";
+export { CATEGORY_ROOT_PREFIX, UNCATEGORISED_CATEGORY };
 
 /**
  * Wrap already-nested topic roots in synthetic CATEGORY roots.
@@ -922,9 +936,7 @@ export function buildCategoryTaskTree(
   return sortNodes(out);
 }
 
-/** Bucket for a live task whose `category` is null/blank. Not a journey value — a Huddle-side
- *  holding row, so an unmapped task is visible instead of silently absent. */
-export const UNCATEGORISED_CATEGORY = "UNCATEGORISED";
+// UNCATEGORISED_CATEGORY: see widget-ids.ts (imported and re-exported above).
 const UNCATEGORISED_LABEL = "Uncategorised";
 
 /**
@@ -1045,21 +1057,29 @@ export async function composePrioritiesWidget(
 ): Promise<PrioritiesWidgetData> {
   const tz = safeTimeZone(timeZone);
   const nowMs = opts.nowMs ?? Date.now();
-  const { getBoardTasks, getWeekOrder } = await import("./tasks.server");
+  const { getBoardTasks, getWeekOrder, getPriorityPushes } = await import("./tasks.server");
   const wantTopics = opts.includeTopics !== false && !!opts.caller;
-  // The three reads are independent, so they run together. The journey read is the only remote
+  // The reads are independent, so they run together. The journey read is the only remote
   // one and it is BOUNDED (fetchTopicPayload) so it can never stall an agent's turn.
-  const [rows, order, topic] = await Promise.all([
+  const [rows, order, topic, pushRows] = await Promise.all([
     getBoardTasks(email),
     // The user's explicit This Week order. Degrades to [] — an ordering read must never block a card.
     getWeekOrder(email).catch(() => [] as string[]),
     wantTopics ? fetchTopicPayload(opts.caller!) : Promise.resolve(NOT_REQUESTED),
+    // Same rule: a push read failing must never cost the card. Degrades to "nothing pushed".
+    getPriorityPushes(email).catch(() => []),
   ]);
+  const pushes: PushView[] = pushRows.map((p) => ({ nodeId: p.node_id, nodeName: p.node_name, activeTaskId: p.active_task_id }));
+  const viaByTask = new Map(pushes.filter((p) => p.activeTaskId).map((p) => [p.activeTaskId as string, p.nodeName]));
+  const band = buildPrioritiesBand(rows, tz, nowMs, order).map((r) =>
+    viaByTask.has(r.id) ? { ...r, pushedVia: viaByTask.get(r.id) ?? null } : r,
+  );
   return {
     ok: true,
     timeZone: tz,
     todayKey: localDateKey(nowMs, tz) ?? new Date(nowMs).toISOString().slice(0, 10),
-    band: buildPrioritiesBand(rows, tz, nowMs, order),
+    pushes,
+    band,
     topics: {
       // `ok`/`reason` describe the JOURNEY read, so the UI can say when the sub-category layer is
       // missing. The category rows render from the mirror either way.

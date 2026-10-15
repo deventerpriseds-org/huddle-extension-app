@@ -189,3 +189,63 @@ export function rankTasks(tasks: ScorableTask[], limit = 25, excludeIds?: Readon
       why: explainScore(t),
     }));
 }
+
+/**
+ * The agents' work order (auto-work's backlog → Up next → Doing), now that the groom no longer writes
+ * `priority_rank` (owner decision "A", 2026-10-15 — see GROOM_WRITES_STARS in groom.ts). Before, this
+ * order WAS the groom's rank (`ORDER BY priority_rank NULLS LAST`), so without a rank every task tied and
+ * fell back to "most recently updated", which is not a priority at all.
+ *
+ * Same keys as journey's own nightly sort and `rankTasks`: the user's stars first (a task he pushed is
+ * the one he wants worked), then any surviving rank, then the score, then due date. Unlike `rankTasks`
+ * it FILTERS NOTHING and DEDUPS NOTHING — the caller has already chosen the candidates; this only orders
+ * them. Stable: full ties keep the caller's order.
+ */
+export interface AutoworkOrderable {
+  id: string;
+  title?: string | null;
+  status?: string | null;
+  priority?: string | null;
+  category?: string | null;
+  is_priority?: boolean | null;
+  priority_rank?: number | null;
+  due_date?: string | null;
+  pushed_count?: number | null;
+  created_at?: string | null;
+  completed_at?: string | null;
+  tags?: string[] | null;
+  is_scheduled?: boolean | null;
+}
+
+export function orderForAutowork<T extends AutoworkOrderable>(rows: readonly T[], now: Date = new Date()): T[] {
+  const keyed = rows.map((t, i) => ({
+    t,
+    i,
+    pri: t.is_priority ? 1 : 0,
+    rank: t.priority_rank ?? 9999,
+    score: scoreTask(
+      {
+        id: t.id,
+        title: t.title ?? "",
+        status: t.status ?? null,
+        priority: (t.priority ?? "MEDIUM") as TaskPriority,
+        category: t.category ?? null,
+        is_priority: !!t.is_priority,
+        priority_rank: t.priority_rank ?? null,
+        due_date: t.due_date ?? null,
+        pushed_count: t.pushed_count ?? null,
+        created_at: t.created_at ?? now.toISOString(),
+        completed_at: t.completed_at ?? null,
+        tags: t.tags ?? null,
+        // A calendared task keeps its staleness exemption (VERIFY-category-push-1 D9).
+        is_scheduled: t.is_scheduled ?? null,
+      },
+      now,
+    ),
+    due: t.due_date ? new Date(t.due_date).getTime() : Number.POSITIVE_INFINITY,
+  }));
+  keyed.sort((a, b) =>
+    b.pri - a.pri || a.rank - b.rank || b.score - a.score || a.due - b.due || a.i - b.i,
+  );
+  return keyed.map((k) => k.t);
+}

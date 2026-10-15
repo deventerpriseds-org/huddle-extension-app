@@ -288,6 +288,21 @@ CREATE TABLE IF NOT EXISTS tasks.week_order (
 );
 ALTER TABLE tasks.week_order            ADD COLUMN IF NOT EXISTS user_id TEXT;
 CREATE INDEX IF NOT EXISTS week_order_userid_idx            ON tasks.week_order(user_id);
+
+-- Pushed categories / topics and the one task each push has starred. See
+-- sql/rag_ai_agents/003_priority_push.sql for the full rationale.
+CREATE TABLE IF NOT EXISTS tasks.priority_push (
+  user_email     TEXT        NOT NULL,
+  node_id        TEXT        NOT NULL,
+  node_name      TEXT,
+  active_task_id TEXT,
+  user_id        TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_email, node_id)
+);
+CREATE INDEX IF NOT EXISTS priority_push_active_idx ON tasks.priority_push(active_task_id);
+CREATE INDEX IF NOT EXISTS priority_push_userid_idx ON tasks.priority_push(user_id);
 `;
 
 // NOTE: the hand-written "capability prompt" was removed. Capability is DATA — the tools each agent is
@@ -775,19 +790,27 @@ export async function getOpenAssignedTasks(userEmail: string, limit = 200): Prom
   await ensureBootstrapped();
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { emails } = await resolveScopeByEmail(userEmail);
-  const { rows } = await getPool().query<BoardTaskRow>(
-    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done
+  const { rows } = await getPool().query<
+    BoardTaskRow & { pushed_count: number | null; created_at: string | null; is_scheduled: boolean | null }
+  >(
+    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,completed_at,assigned_agent,tags,definition_of_done,
+            pushed_count,created_at,is_scheduled
        FROM tasks.journey_tasks t
       WHERE lower(user_email) = ANY($1)
         AND completed_at IS NULL
         AND (status IS NULL OR status NOT IN ('DONE','BLOCKED'))
         AND assigned_agent IS NOT NULL
         AND NOT EXISTS (SELECT 1 FROM tasks.task_blockers b WHERE b.task_id = t.id)
-      ORDER BY priority_rank NULLS LAST, updated_at DESC
+      ORDER BY is_priority DESC NULLS LAST, priority_rank NULLS LAST, updated_at DESC
       LIMIT $2`,
     [emails, limit],
   );
-  return rows;
+  // The SQL order only decides what survives the LIMIT — stars and any surviving rank first, so a stale
+  // starred task can never be cut (VERIFY-category-push-1 D9). Priority order comes from the SCORER, not `priority_rank`: the groom no longer writes ranks (owner
+  // decision "A", 2026-10-15), so a rank-only ORDER BY would tie every task. `updated_at DESC` above is
+  // only the stable tiebreak orderForAutowork keeps.
+  const { orderForAutowork } = await import("./scoring");
+  return orderForAutowork(rows);
 }
 
 /** The WIP confirm-intent + review gate's per-task bookkeeping (docs/plan-wip-confirm-review-gate.md). */
@@ -1779,4 +1802,164 @@ export async function getCeremonyRuns(userEmail: string, limit = 20): Promise<Ce
     userId ? [userId, emails, limit] : [userEmail.toLowerCase(), limit],
   );
   return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Priority pushes (tasks.priority_push) — a pushed category/topic and the task it has starred.
+// Read with the same alias-set scoping as getWeekOrder, written keyed on the given email.
+// ---------------------------------------------------------------------------
+
+export interface PriorityPushRow {
+  user_email: string;
+  node_id: string;
+  node_name: string | null;
+  active_task_id: string | null;
+  /** When the active task last changed — a webhook event OLDER than this is stale (VERIFY D2).
+   *  node-postgres returns TIMESTAMPTZ as a Date, so the type says so (VERIFY N2). */
+  updated_at?: string | Date | null;
+}
+
+/** Every push the user (any alias) has, oldest first. */
+export async function getPriorityPushes(userEmail: string): Promise<PriorityPushRow[]> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
+  const { rows } = await getPool().query<PriorityPushRow>(
+    `SELECT user_email, node_id, node_name, active_task_id, updated_at FROM tasks.priority_push
+      WHERE lower(user_email) = ANY($1) ORDER BY created_at, node_id`,
+    [emails],
+  );
+  return rows;
+}
+
+/** Create or replace one push. */
+export async function upsertPriorityPush(
+  userEmail: string,
+  nodeId: string,
+  nodeName: string | null,
+  activeTaskId: string | null,
+): Promise<void> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
+  // One row per node per PERSON: drop any alias's row first so the alias set never holds two.
+  await getPool().query(
+    `DELETE FROM tasks.priority_push WHERE node_id = $1 AND lower(user_email) = ANY($2) AND lower(user_email) <> $3`,
+    [nodeId, emails, userEmail.toLowerCase()],
+  );
+  await getPool().query(
+    `INSERT INTO tasks.priority_push (user_email, node_id, node_name, active_task_id, user_id, updated_at)
+     VALUES ($1, $2, $3, $4, $5, now())
+     ON CONFLICT (user_email, node_id) DO UPDATE
+       SET node_name = EXCLUDED.node_name, active_task_id = EXCLUDED.active_task_id,
+           user_id = COALESCE(EXCLUDED.user_id, tasks.priority_push.user_id), updated_at = now()`,
+    [userEmail.toLowerCase(), nodeId, nodeName, activeTaskId, userId ?? null],
+  );
+}
+
+/**
+ * COMPARE-AND-SET the push's active task: only moves `expected` -> `next`. Returns true for the ONE
+ * caller that won. This is what stops the sync webhook and the 9/13/17 reconcile (or two webhook
+ * deliveries) from both refilling the same finished task — reading the mirror's star cannot, because
+ * the mirror lags journey by 1-3s.
+ */
+export async function casPriorityPushActive(
+  userEmail: string,
+  nodeId: string,
+  expected: string | null,
+  next: string | null,
+): Promise<boolean> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
+  const r = await getPool().query(
+    `UPDATE tasks.priority_push SET active_task_id = $4, updated_at = now()
+      WHERE node_id = $1 AND lower(user_email) = ANY($2) AND active_task_id IS NOT DISTINCT FROM $3`,
+    [nodeId, emails, expected, next],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** Remove one push (un-push). */
+export async function deletePriorityPush(userEmail: string, nodeId: string): Promise<void> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
+  await getPool().query(`DELETE FROM tasks.priority_push WHERE node_id = $1 AND lower(user_email) = ANY($2)`, [
+    nodeId,
+    emails,
+  ]);
+}
+
+/** Pushes whose active task is `taskId`, any user — the sync webhook's one indexed read. */
+export async function getPushesByActiveTask(taskId: string): Promise<PriorityPushRow[]> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<PriorityPushRow>(
+    `SELECT user_email, node_id, node_name, active_task_id, updated_at FROM tasks.priority_push WHERE active_task_id = $1`,
+    [taskId],
+  );
+  return rows;
+}
+
+/** Does this mirror owner have any push WAITING for a task (active_task_id IS NULL)? */
+export async function hasWaitingPushes(userEmail: string): Promise<boolean> {
+  await ensureBootstrapped();
+  // The ALIAS SET, like every other push read — a push saved under the login alias must still be found
+  // when the webhook names the mirror's owner email (VERIFY-category-push-1 D1).
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
+  const { rows } = await getPool().query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM tasks.priority_push WHERE active_task_id IS NULL AND lower(user_email) = ANY($1)`,
+    [emails],
+  );
+  return (rows[0]?.n ?? 0) > 0;
+}
+
+/** The mirror rows a push may pick from, with every field the scorer reads. Alias-set scoped. */
+export async function getPushCandidates(userEmail: string): Promise<PushCandidateRow[]> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
+  const { rows } = await getPool().query<PushCandidateRow>(
+    // OPEN tasks only, no row cap: a capped, unordered read let a user's done history crowd out the task
+    // being pushed (VERIFY-category-push-1 D4). Done/blocked/completed rows can never be picked anyway.
+    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,pushed_count,created_at,completed_at,tags,is_scheduled
+       FROM tasks.journey_tasks
+      WHERE lower(user_email) = ANY($1)
+        AND completed_at IS NULL
+        AND (status IS NULL OR upper(status) NOT IN ('DONE','BLOCKED'))`,
+    [emails],
+  );
+  return rows;
+}
+
+/** ONE of the user's mirror rows by id, whatever its state — for push/un-push of a specific task. */
+export async function getPushCandidate(userEmail: string, taskId: string): Promise<PushCandidateRow | null> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
+  const { rows } = await getPool().query<PushCandidateRow>(
+    `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,pushed_count,created_at,completed_at,tags,is_scheduled
+       FROM tasks.journey_tasks WHERE id = $1 AND lower(user_email) = ANY($2)`,
+    [taskId, emails],
+  );
+  return rows[0] ?? null;
+}
+
+export interface PushCandidateRow {
+  id: string;
+  title: string;
+  status: string | null;
+  priority: string | null;
+  category: string | null;
+  is_priority: boolean | null;
+  priority_rank: number | null;
+  due_date: string | null;
+  pushed_count: number | null;
+  created_at: string | null;
+  completed_at: string | null;
+  tags: string[] | null;
+  is_scheduled?: boolean | null;
+  /** journey's own updated_at — present on webhook payloads; used to drop stale events. */
+  updated_at?: string | null;
 }
