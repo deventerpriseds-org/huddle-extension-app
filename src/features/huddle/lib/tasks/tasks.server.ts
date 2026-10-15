@@ -1582,7 +1582,7 @@ export interface ScheduledJob {
   job_type: string;
   target_email: string;
   // daysOfWeek uses JS Date.getDay() convention: 0=Sun..6=Sat. Omitted/empty = every day.
-  cadence: { tz?: string; hours?: number[]; daysOfWeek?: number[] };
+  cadence: { tz?: string; hours?: number[]; daysOfWeek?: number[]; everyMinutes?: number };
   meta: Record<string, unknown>;
 }
 
@@ -1606,7 +1606,7 @@ export async function upsertScheduledJob(job: {
   id: string;
   jobType: string;
   targetEmail: string;
-  cadence: { tz?: string; hours?: number[]; daysOfWeek?: number[] };
+  cadence: { tz?: string; hours?: number[]; daysOfWeek?: number[]; everyMinutes?: number };
   nextRunAt: string;
   meta?: Record<string, unknown>;
 }): Promise<void> {
@@ -1680,7 +1680,7 @@ export async function retireDuplicateScheduledJobs(jobType: string, userId: stri
 export async function setScheduledJobNextRun(
   id: string,
   nextRunAtIso: string,
-  cadence?: { tz?: string; hours?: number[]; daysOfWeek?: number[] },
+  cadence?: { tz?: string; hours?: number[]; daysOfWeek?: number[]; everyMinutes?: number },
 ): Promise<void> {
   await ensureBootstrapped();
   if (cadence) {

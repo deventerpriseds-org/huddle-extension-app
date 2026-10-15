@@ -15,6 +15,7 @@ import {
   type InboundMessage,
 } from "../src/features/huddle/lib/email/inbound-email";
 import { SCHEDULING_DEFAULTS } from "../src/features/huddle/lib/identity/scheduling-config.server";
+import { computeNextRun } from "../src/features/huddle/lib/tasks/scheduler.server";
 import { readFileSync } from "node:fs";
 
 let pass = 0,
@@ -256,9 +257,45 @@ check(
 
 // wiring
 check(
-  "default cadence is hourly 7..22",
+  "default cadence: every 5 min across active hours 7..22",
   JSON.stringify(SCHEDULING_DEFAULTS.inboundEmail.hours) ===
-    JSON.stringify([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]),
+    JSON.stringify([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]) &&
+    SCHEDULING_DEFAULTS.inboundEmail.everyMinutes === 5,
+);
+// computeNextRun with everyMinutes (owner 2026-10-15: "hourly isn't good enough")
+{
+  const H = SCHEDULING_DEFAULTS.inboundEmail.hours;
+  const tz = "America/New_York";
+  // 2026-10-15 16:57 ET = 20:57Z (EDT, UTC-4)
+  const at = new Date("2026-10-15T20:57:00Z");
+  const n1 = computeNextRun(H, tz, at, undefined, 5);
+  check(
+    "minute job: next fire is 5 min later inside active hours",
+    n1.toISOString() === "2026-10-15T21:02:00.000Z",
+    n1.toISOString(),
+  );
+  // 22:58 ET -> +5 = 23:03 ET, outside 7..22 -> next active hour 7:00 ET = 11:00Z next day
+  const late = new Date("2026-10-16T02:58:00Z");
+  const n2 = computeNextRun(H, tz, late, undefined, 5);
+  check(
+    "minute job: after 10pm it sleeps until 7am",
+    n2.toISOString() === "2026-10-16T11:00:00.000Z",
+    n2.toISOString(),
+  );
+  const n3 = computeNextRun([8, 20], tz, at);
+  check(
+    "hourly jobs unchanged (no everyMinutes)",
+    n3.toISOString() === "2026-10-16T00:00:00.000Z",
+    n3.toISOString(),
+  );
+}
+const fnsSrc = readFileSync(
+  "src/features/huddle/lib/identity/scheduling-config.functions.ts",
+  "utf8",
+);
+check(
+  "save validator keeps everyMinutes (zod would strip it)",
+  /everyMinutes:\s*z\.number\(\)/.test(fnsSrc),
 );
 const sched = readFileSync("src/features/huddle/lib/tasks/scheduler.server.ts", "utf8");
 check(

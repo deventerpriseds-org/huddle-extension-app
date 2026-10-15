@@ -53,6 +53,10 @@ export interface JobCadence {
   tz: string;
   hours: number[];
   daysOfWeek?: number[];
+  /** Sub-hourly jobs only: fire every N minutes while the local hour is one of `hours` (the hours then
+   *  mean ACTIVE HOURS, not fire times). Omitted = fire once at the top of each listed hour, as every
+   *  job did before. Added 2026-10-15 for new-email alerts — owner: "hourly isn't good enough". */
+  everyMinutes?: number;
 }
 
 export type JobTypeKey =
@@ -96,10 +100,13 @@ export const SCHEDULING_DEFAULTS: Record<JobTypeKey, JobCadence> = {
   // nightly-schedule-builder (cron '0 5 * * *' UTC = 1am ET), so tonight's plan is built from
   // priorities the owner has just looked at. COUPLED to those jobs: if they move, move this too.
   priorityCheck: { tz: DEFAULT_TZ, hours: [6, 20] },
-  // Every hour 7am-10pm. The scheduler is hour-granular, so this is the tightest cadence it can express
-  // today; each run looks back 12h (INBOUND_EMAIL_LOOKBACK_HOURS_DEFAULT) so the overnight gap loses
-  // nothing, and a message is only ever announced once.
-  inboundEmail: { tz: DEFAULT_TZ, hours: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22] },
+  // Every 5 minutes, 7am-10pm. Owner 2026-10-15: "hourly isn't good enough, it gets messages
+  // throughout the day". One small Graph read per fire; each email is still announced only once.
+  inboundEmail: {
+    tz: DEFAULT_TZ,
+    hours: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
+    everyMinutes: 5,
+  },
 };
 
 /** Minutes before a session to fire its own reminder. The user's ask was 60 ("iris should have a

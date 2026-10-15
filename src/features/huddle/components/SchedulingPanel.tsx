@@ -47,7 +47,7 @@ const JOB_LABELS: Record<JobTypeKey, { label: string; hint: string }> = {
   inboundEmail: {
     label: "New email alerts",
     hint:
-      "Iris checks your Outlook inbox at these hours and tells you about new email from a real person " +
+      "Iris checks your Outlook inbox every few minutes during these hours and tells you about new email from a real person " +
       "that asks you something, with a suggested reply she can save to your Drafts when you say so. " +
       "Each email is only ever mentioned once; newsletters and no-reply senders are skipped.",
   },
@@ -260,7 +260,32 @@ export function SchedulingPanel() {
                   className="h-7 max-w-[160px] text-xs"
                   placeholder="e.g. 8 or 9,13,17"
                 />
-                <span className="text-[11px] text-muted-foreground">local hour(s), 0-23</span>
+                <span className="text-[11px] text-muted-foreground">
+                  {cadence.everyMinutes ? "active hours, 0-23" : "local hour(s), 0-23"}
+                </span>
+                {cadence.everyMinutes !== undefined && (
+                  <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                    every
+                    <Input
+                      type="number"
+                      min={1}
+                      max={59}
+                      defaultValue={cadence.everyMinutes}
+                      onBlur={(e) => {
+                        const n = parseInt(e.target.value, 10);
+                        if (!Number.isInteger(n) || n < 1 || n > 59) {
+                          toast.error("Minutes must be 1-59.");
+                          return;
+                        }
+                        if (n !== cadence.everyMinutes) void persist(key, { ...cadence, everyMinutes: n });
+                      }}
+                      disabled={!ready || saving === key}
+                      className="h-7 w-14 text-xs"
+                      data-testid={`every-minutes-${key}`}
+                    />
+                    min
+                  </span>
+                )}
                 {key === "priorityCheck" && (
                   <Button
                     size="sm"
