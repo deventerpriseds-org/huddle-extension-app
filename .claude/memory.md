@@ -3663,3 +3663,10 @@ here as fact three times before being checked.)
 - Settings → Scheduling → Priority check has **Send now** (`runPriorityCheckNowFn`). It is the ONLY
   in-app run-now for any scheduled job; the others are triggered via their `run-*.yml` workflows.
 - The scheduling save validator (`scheduling-config.functions.ts` JOB_TYPE_KEYS) must list every key too.
+
+## Scheduled jobs are ONE ROW PER USER (2026-10-15)
+- Ids are `<job>-u-<user_id>` (`scheduledJobId` in scheduler.server.ts); email ids are only for an
+  unlinked address. Each tick disables (`enabled=false`) any other row of that job for the same user.
+- Before this, two emails of one user = two rows = every job fired twice (von.ellis@ + dev@ pairs).
+- Live since 2026-10-15 16:09Z (#68, `c1c9e32`): 7 enabled `<job>-u-<user_id>` rows; the old email rows
+  are disabled, not deleted — re-enable one with `UPDATE tasks.scheduled_jobs SET enabled=true WHERE id=…`.

@@ -9,6 +9,7 @@
 import {
   claimDueScheduledJobs,
   getUsersWithOpenBacklog,
+  retireDuplicateScheduledJobs,
   setScheduledJobNextRun,
   upsertScheduledJob,
   type ScheduledJob,
@@ -103,25 +104,52 @@ const JOB_ROWS: { key: JobTypeKey; idPrefix: string; jobType: string }[] = [
  * backlog at every post-config-change tick would otherwise keep firing on a stale cadence forever). */
 const JOB_TYPE_KEY: Record<string, JobTypeKey> = Object.fromEntries(JOB_ROWS.map((r) => [r.jobType, r.key]));
 
+/** The scheduled-job id for one job type and one OWNER. Keyed on the user, never an email: one
+ *  person with two sign-in emails is one owner and must get ONE row per job type. Falls back to the
+ *  email only when no user id resolves (an unlinked address), which can only ever be one row. */
+export function scheduledJobId(idPrefix: string, email: string, userId: string | null): string {
+  return userId ? `${idPrefix}-u-${userId}` : `${idPrefix}-${email}`;
+}
+
+/** Collapse backlog emails to one entry per OWNER, keeping the first email seen for each user. */
+export function oneEmailPerUser(entries: { email: string; userId: string | null }[]): { email: string; userId: string | null }[] {
+  const seen = new Set<string>();
+  const out: { email: string; userId: string | null }[] = [];
+  for (const e of entries) {
+    const owner = e.userId ? `u:${e.userId}` : `e:${e.email}`;
+    if (seen.has(owner)) continue;
+    seen.add(owner);
+    out.push(e);
+  }
+  return out;
+}
+
 /**
- * Ensure every user with an open backlog has a row for every job type in JOB_ROWS (idempotent; only
- * new rows get a next_run seeded — an existing row's next_run_at is left alone so a pending fire
- * isn't disturbed, but `cadence` DOES refresh every tick, so a live Settings change to hours/days
- * takes effect on that job's next fire without needing to delete/recreate anything).
+ * Ensure every user with an open backlog has ONE row for every job type in JOB_ROWS (idempotent;
+ * only new rows get a next_run seeded — an existing row's next_run_at is left alone so a pending
+ * fire isn't disturbed, but `cadence` DOES refresh every tick, so a live Settings change to
+ * hours/days takes effect on that job's next fire without needing to delete/recreate anything).
+ * Any older row for the same user + job type (the pre-2026-10-15 per-EMAIL ids) is switched off.
  */
 async function ensureGroomJobs(now: Date): Promise<void> {
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
   const emails = await getUsersWithOpenBacklog();
-  for (const email of emails) {
+  const resolved = await Promise.all(
+    emails.map(async (email) => ({ email, userId: (await resolveScopeByEmail(email)).userId })),
+  );
+  for (const { email, userId } of oneEmailPerUser(resolved)) {
     for (const row of JOB_ROWS) {
       const cadence: JobCadence = await resolveJobCadence(email, row.key);
+      const id = scheduledJobId(row.idPrefix, email, userId);
       await upsertScheduledJob({
-        id: `${row.idPrefix}-${email}`,
+        id,
         jobType: row.jobType,
         targetEmail: email,
         cadence,
         nextRunAt: computeNextRun(cadence.hours, cadence.tz, now, cadence.daysOfWeek).toISOString(),
         meta: {},
       });
+      if (userId) await retireDuplicateScheduledJobs(row.jobType, userId, id);
     }
   }
 }
