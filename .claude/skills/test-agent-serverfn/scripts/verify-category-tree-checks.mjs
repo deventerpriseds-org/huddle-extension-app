@@ -27,8 +27,14 @@ const SCRAPE = () => {
     const countSpan = btn.querySelector("span.tabular-nums");
     const ul = li.querySelector(":scope > ul");
     const kids = ul ? [...ul.children].filter((c) => c.tagName === "LI") : [];
-    const taskKids = kids.filter((c) => c.firstElementChild && c.firstElementChild.tagName === "SPAN");
-    const topicKids = kids.filter((c) => c.firstElementChild && c.firstElementChild.tagName === "DIV");
+    // A TASK row has `span[title]` as a DIRECT child; a TOPIC row's title span is nested
+    // (li > div > button > span[title]). The first version of this keyed off
+    // firstElementChild.tagName === "SPAN", which MISSED every STARRED task row — TopicTaskRow
+    // renders a lucide <Star> SVG before the title when row.isPriority, so the first element child
+    // is an SVG. Run 38766826631 reported 22 "unaccounted" rows, exactly the 22 This Week rows:
+    // a false RED in the CHECK, not a defect in the app.
+    const topicKids = kids.filter((c) => !!(c.firstElementChild && c.firstElementChild.tagName === "DIV" && c.firstElementChild.querySelector(":scope > button")));
+    const taskKids = kids.filter((c) => !topicKids.includes(c) && !!c.querySelector(":scope > span[title]"));
     const otherKids = kids.length - taskKids.length - topicKids.length;
     return {
       name: nameSpan ? nameSpan.getAttribute("title") : null,
@@ -37,9 +43,10 @@ const SCRAPE = () => {
       disabled: btn.disabled,
       btnBox: (() => { const r = btn.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) }; })(),
       renderedTasks: taskKids.length,
-      taskTitles: taskKids.map((c) => { const s = c.querySelector("span[title]"); return s ? s.getAttribute("title") : null; }),
+      taskTitles: taskKids.map((c) => { const s = c.querySelector(":scope > span[title]"); return s ? s.getAttribute("title") : null; }),
+      starredTaskTitles: taskKids.filter((c) => c.querySelector('svg[aria-label="In This Week"], [aria-label="In This Week"]')).map((c) => { const s = c.querySelector(":scope > span[title]"); return s ? s.getAttribute("title") : null; }),
       taskButtonBoxes: taskKids.slice(0, 3).flatMap((c) => [...c.querySelectorAll("button")].map((b) => { const r = b.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) }; })),
-      taskStruck: taskKids.map((c) => { const s = c.querySelector("span[title]"); return !!(s && s.className.includes("line-through")); }),
+      taskStruck: taskKids.map((c) => { const s = c.querySelector(":scope > span[title]"); return !!(s && String(s.className).includes("line-through")); }),
       childTopics: topicKids.length,
       otherKids,
       childRows: topicKids.map(readRow).filter(Boolean),
@@ -182,9 +189,13 @@ export const checks = [
     const band = await page.evaluate(BAND);
     const treeTitles = open.flatMap((r) => r.taskTitles);
     const dupes = band.map((b) => b.title).filter((t) => treeTitles.includes(t));
-    check("V-L12 cross-surface: a This Week task ALSO appears under its category (same title, both rendered)",
-      true,
-      `band rows=${band.length}; titles also in the tree=${dupes.length} -> ${JSON.stringify(dupes.slice(0, 6))}`);
+    const starred = open.flatMap((r) => r.starredTaskTitles);
+    check("V-L12 cross-surface: every This Week task ALSO renders under its category (duplicate on one screen)",
+      band.length > 0 && dupes.length === band.length,
+      `band rows=${band.length}; band titles also present in the tree=${dupes.length}; tree rows carrying the 'In This Week' star=${starred.length}; sample=${JSON.stringify(dupes.slice(0, 4))}`);
+    check("V-L12b the tree marks those duplicates with the 'In This Week' star rather than hiding them",
+      starred.length === band.length,
+      `starred tree rows=${starred.length} vs band rows=${band.length}`);
 
     // Two mounted copies: expansion must be LOCAL state (AC-62).
     if (trees.length > 1) {
