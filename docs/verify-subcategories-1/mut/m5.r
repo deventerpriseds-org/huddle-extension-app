@@ -1,0 +1,1 @@
+    if (!isOpen(r)) continue;

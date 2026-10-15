@@ -1,0 +1,1 @@
+    if (node && !node.id.startsWith(CATEGORY_ROOT_PREFIX)) node.tasks.push(toWidgetRow(r, tz, todayKey));

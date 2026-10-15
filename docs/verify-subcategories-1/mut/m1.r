@@ -1,0 +1,1 @@
+    const band = priorities.band; void (await import("./widgets.server")).buildPrioritiesBand([], tz, 0, []);
