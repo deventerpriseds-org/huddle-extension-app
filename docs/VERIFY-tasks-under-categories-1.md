@@ -394,3 +394,66 @@ Method for the count-vs-rows criterion, which is AC-10's own: the count badge be
 alone. Rows are told apart structurally — a category/topic row is `li > div > button > span[title]`,
 a task row is `li > span[title]` — because **neither carries a `data-*` hook** (see D-6).
 
+### V-8 — LIVE DOM at 390×844, against the deployed SWA. **23/23 PASS**
+
+`verify-uat.yml` run **38767143745**, head `0c3358d` of `verify/category-tree-uat-1792080280`,
+`APP_URL=https://icy-flower-0f415200f.7.azurestaticapps.net`, viewport **390×844**, surface =
+the **Priorities** bottom tab (`PrioritiesView` → `LivePrioritiesWidget full`). Raw `results.json`
+off the `uat-shots` orphan branch.
+
+> **Three earlier runs had to be discarded, and WHY matters more than the result.** Runs
+> `38765949907` and `38766417095` both reported "the tree does not render" — and both were WRONG.
+> The tell was that all three screenshots of each run came back **byte-identical** (63907 and
+> 63835 bytes): the navigation click never landed (the `<aside>` is in the DOM but off-canvas at
+> 390px, and a `.catch(() => {})` swallowed the Playwright timeout), so the checks ran against the
+> chat screen. A fourth defect was in my own row classifier — see V-9. **A verifier reporting a
+> feature absent because its own harness never got there is the single worst failure available to
+> it; it is recorded here rather than quietly fixed.**
+
+| id | criterion | verdict | observed |
+|---|---|---|---|
+| V-L1 | the tree renders at all | **PASS** | `tree copies mounted=1; roots=4; names=["Life & Personal","Career","Ventures","Education"]` |
+| V-L2 | top level is CATEGORY rows | **PASS** | `["Life & Personal(12)","Career(10)","Ventures(56)","Education(5)"]` |
+| V-L3 | Uncategorised sorts last | **PASS (vacuous live)** | `order = Life & Personal > Career > Ventures > Education` — no Uncategorised row, because the live data has none (see V-10) |
+| V-L4 | every category row EXPANDABLE | **PASS** | all four `disabled:false`, `aria-expanded` present — the dead unclickable count is gone |
+| V-L5 | exactly ONE root starts open | **PASS** | `expanded = ["Life & Personal"]` |
+| **V-L6** | **AC-6 / AC-10: rendered rows == count badge** | **PASS** | `12/12, 10/10, 56/56, 5/5` — **exact on all four**, 83 rows |
+| V-L7 | AC-10: no "+N more" | **PASS** | `matches = 0` |
+| V-L8 | no DONE task rendered | **PASS** | `struck: 0` in every category |
+| V-L9 | every task row has a title | **PASS** | `83 task rows total; empties=0` |
+| V-L10 | nothing unaccounted under a category | **PASS** | `unaccounted: 0` ×4 |
+| **V-L11** | **claim 6: the journey `reason` is still surfaced** | **PASS** | `banner nodes = 1` — the "Sub-themes within each category aren't available yet" sentence renders BESIDE a populated tree |
+| V-L12 | cross-surface duplicate | **PASS** | `band rows=22; band titles also in the tree=22` |
+| V-L12b | duplicates carry the star | **PASS** | `starred tree rows=22 vs band rows=22` |
+| V-L14 | no horizontal overflow at 390 | **PASS** | `scrollWidth=390 clientWidth=390` |
+| V-L15 | 44px touch targets, task rows | **PASS** | `36 boxes sampled; under 44px high = 0` |
+| V-L16 | 44px tap target, category rows | **PASS** | all four `h: 44` |
+| V-L17 | **REGRESSION** This Week band renders | **PASS** | `22 band rows` |
+| V-L18 | **REGRESSION** band ▲/▼ still present | **PASS** | `Move up/down buttons = 44` (22 rows × 2) |
+| V-L19 | **REGRESSION** Today controls present | **PASS** | `Today buttons = 105` (22 band + 83 tree) |
+| — | console / page errors | **PASS** | `""` — **no React duplicate-key warning**, which is AC-34's observation method |
+| — | failed / 4xx / 5xx requests | **PASS** | `[]` |
+
+**This settles the headline claims that offline work could not:**
+- **CLAIM 2 — CONFIRMED LIVE.** The badge equals the rendered task rows exactly, on all four
+  categories, 83 rows. AC-6 and AC-journey-widgets AC-10 both **PASS**.
+- **CLAIM 6 — CONFIRMED LIVE.** `{...topics, roots: merge(...)}` spreads first and overrides only
+  `roots`, so `ok`/`reason` survive; the UI renders `TopicsEmpty` whenever `reason !== "ok"` even
+  with a non-empty tree, and run 38767143745 found that banner on screen. The undeployed
+  `get_task_topics` remains diagnosable.
+- **CLAIM 8 — CONFIRMED LIVE for the band.** 22 rows, 44 reorder buttons, Today controls, zero
+  console errors, zero failed requests.
+- **The feature does what it was built for.** The tree had **never populated in production**
+  (`reason:"tool-absent"` → empty). It now carries 83 live tasks under 4 categories.
+
+### V-9 — a FALSE RED I produced, and how it was caught (recorded, not hidden)
+
+Run `38766826631` reported V-L6 FAILING — `12→10, 10→6, 56→41, 5→4` — and V-L10 reporting
+`2, 4, 15, 1` rows "unaccounted". **Those two shortfalls are the same numbers: 2+4+15+1 = 22, and
+22 is exactly the This Week band size.** `TopicTaskRow` renders a lucide `<Star>` **SVG** before
+the title when `row.isPriority`, so a starred row's `firstElementChild` is an `SVG`, and my
+classifier keyed on `=== "SPAN"`. **The app was right; my check was wrong.** Fixed to classify on a
+direct-child `span[title]`, and the corrected run returns `12/12, 10/10, 56/56, 5/5`. The
+arithmetic coincidence is what exposed it — had the band been empty, the bad classifier would have
+passed and nobody would have known it was broken.
+
