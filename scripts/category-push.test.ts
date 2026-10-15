@@ -13,6 +13,8 @@ import {
   classifyActiveEvent,
   inNode,
   mergeJourneyRow,
+  reconcileMayUnpush,
+  RECONCILE_SETTLE_MS,
   isPushEligible,
   parseNodeId,
   pickForNode,
@@ -123,6 +125,17 @@ const LIFE: PushNode = { kind: "category", key: "LIFE" };
   const sameSecondStale = row({ id: "a", is_priority: false, updated_at: "2026-10-15T20:00:00.500123+00:00" });
   check("N2: a same-second stale un-star is ignored when `since` is a real Date with milliseconds",
     classifyActiveEvent("UPDATE", sameSecondStale, CAREER, since) === "none", `-> ${classifyActiveEvent("UPDATE", sameSecondStale, CAREER, since)}`);
+}
+
+// ── VERIFY-category-push-3 fixes ─────────────────────────────────────────────────────────────────
+{
+  // N3: a reconcile tick that reads journey while the star write is still in flight sees "not starred".
+  const now = Date.parse("2026-10-15T21:00:00Z");
+  const justMoved = new Date(now - 5_000);
+  const settled = new Date(now - RECONCILE_SETTLE_MS - 1);
+  check("N3: reconcile will not un-push a push that moved seconds ago (star may be in flight); it will once settled",
+    !reconcileMayUnpush(justMoved, now) && reconcileMayUnpush(settled, now),
+    `5s ago -> ${reconcileMayUnpush(justMoved, now)}, settled -> ${reconcileMayUnpush(settled, now)}`);
 }
 
 // ── picking (AC-C3, C5, C7, C10, C11) ────────────────────────────────────────────────────────────
@@ -255,8 +268,12 @@ check("star rank is 0 — ahead of every other star in journey's 1am placement (
   check("D1: no priority_push query matches a single email — the alias set, like every other push read",
     pushSql.length >= 5 && single.length === 0, `${pushSql.length} queries; single-email: ${single.length}`);
   check("N1: reconcile classifies the MERGED row (mirror + journey), never journey's bare row",
-    /classifyActiveEvent\(state === null \? "DELETE" : "UPDATE", merged, node\)/.test(push) && /mergeJourneyRow\(await getPushCandidate\(/.test(push),
+    /classifyActiveEvent\(state === null \? "DELETE" : "UPDATE", merged, node\)/.test(push) && /mirrorRow = state === null \? null : await getPushCandidate\(/.test(push) && /mergeJourneyRow\(mirrorRow, state\)/.test(push),
     "reconcile -> mergeJourneyRow(getPushCandidate(...), state) -> classifyActiveEvent(..., merged, ...)");
+  check("N3/L3: reconcile un-pushes only after the settle window, and skips a category push with no mirror row",
+    /ev === "unpush" && reconcileMayUnpush\(push\.updated_at, Date\.now\(\)\)/.test(push) &&
+      /!mirrorRow && node\.kind === "category"\) continue;/.test(push),
+    "both guards wired into reconcilePushes");
   check("D5: after starring, refill re-reads the push and un-stars if it was stopped meanwhile",
     /still\.active_task_id !== next\.id\)[\s\S]{0,80}unstar\(caller, next\.id\)/.test(push), "orphan-star guard present");
 }

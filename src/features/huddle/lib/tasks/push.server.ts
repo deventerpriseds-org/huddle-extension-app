@@ -114,6 +114,18 @@ export function pickForNode(
 
 export type ActiveEvent = "refill" | "unpush" | "none";
 
+/** How long after a push last moved (a pick or a refill) the reconcile will NOT read "not starred" as
+ *  the user removing it. journey's single-task read carries no `updated_at`, so the webhook's staleness
+ *  check cannot apply there; inside this window the star write may simply still be in flight
+ *  (VERIFY-category-push-3 N3). Two minutes is ~100 journey round trips; a real un-star is picked up by
+ *  the webhook immediately, or by the next tick. */
+export const RECONCILE_SETTLE_MS = 2 * 60 * 1000;
+
+export function reconcileMayUnpush(pushUpdatedAt: string | Date | null | undefined, nowMs: number): boolean {
+  const t = toMs(pushUpdatedAt);
+  return !Number.isFinite(t) || nowMs - t >= RECONCILE_SETTLE_MS;
+}
+
 /** Milliseconds from an ISO string OR a Date. node-postgres hands TIMESTAMPTZ back as a Date, and
  *  `Date.parse(date)` stringifies it first and DROPS the milliseconds — which let a same-second stale
  *  event cancel a push (VERIFY-category-push-2 N2). */
@@ -513,17 +525,18 @@ export async function reconcilePushes(
       const node = parseNodeId(push.node_id);
       if (!node) continue;
       const { getPushCandidate } = await import("./tasks.server");
-      const merged =
-        state === null
-          ? null
-          : mergeJourneyRow(await getPushCandidate(push.user_email, push.active_task_id), state);
+      const mirrorRow = state === null ? null : await getPushCandidate(push.user_email, push.active_task_id);
+      // No mirror row to take the category from: a category push cannot be judged — leave it for the
+      // webhook or the next tick rather than refill on journey's category-less row (VERIFY-3 L3).
+      if (state !== null && !mirrorRow && node.kind === "category") continue;
+      const merged = state === null ? null : mergeJourneyRow(mirrorRow, state);
       // The SAME classification the webhook uses, on journey's CURRENT row — so a lost "parked", "moved
       // to another category" or "un-starred" is caught here too, not only a lost "done"
       // (VERIFY-category-push-1 D10). journey's row is current, so no staleness cut-off applies.
       const ev = classifyActiveEvent(state === null ? "DELETE" : "UPDATE", merged, node);
       if (ev === "refill") {
         if ((await refill(push, push.active_task_id)) === "refilled") out.refilled++;
-      } else if (ev === "unpush") {
+      } else if (ev === "unpush" && reconcileMayUnpush(push.updated_at, Date.now())) {
         await deletePriorityPush(push.user_email, push.node_id);
         out.unpushed++;
       }
