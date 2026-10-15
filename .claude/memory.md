@@ -1,4 +1,79 @@
 # Project Memory — huddle-extension-app
+
+## ▶ DATA MODEL INDEX — READ THIS BEFORE QUERYING ANYTHING (added 2026-10-15, owner-directed)
+
+<!-- WHAT:       One lookup table for every id, ref, table and scoping key in this system.
+     WHY:        Owner, 2026-10-15: "why do you have to discover the data model/schema/mapping each
+                 time? Why isnt this documented in memory md?" Audited in response: every fact below
+                 ALREADY existed in this file (ref `wwxgajrtmslzklnyplah` in 10 places, the auth-id
+                 trap at :1032, `task_topic_index` at :3110, `get_task_topics`-not-deployed at :3196).
+                 The failure was RETRIEVAL, not documentation -- each fact sits inside a dated
+                 incident narrative about an unrelated bug, so it is findable only by someone who
+                 already knows which incident mentioned it. An archive is not a reference.
+     SUPERSEDES: nothing (it INDEXES the entries below; it never replaces them -- each row points at
+                 the narrative that proves it, so the proof stays where the measurement happened).
+     SUPERSEDED-BY: nothing -- current.
+     EVIDENCE:   line refs in the right-hand column; rows marked "measured 2026-10-15" were
+                 re-measured against the live DBs that day. -->
+
+**Rule: if you are about to run a query, write a SQL literal, or state "the schema is X", read this
+table first. If a fact you need is NOT here, add it here in the same commit that discovers it.**
+
+### The two databases
+
+| | journey (canonical) | Huddle (read-model + its own stores) |
+|---|---|---|
+| Engine | Supabase Postgres | Azure PG `eds-postgresql` / db `RAG_AI_Agents` (PG 17) |
+| **Project ref** | **`wwxgajrtmslzklnyplah`** | RG `EnterpriseDS_ResourceGRP` |
+| **Shown in `list_projects` as** | **`spbs_EMBA_Portal`** — NOT "journey", NOT "journey-voice". **This mismatch has caused a session to conclude journey was unreachable. It is the right project; the display name is from an unrelated EMBA build.** | n/a |
+| Reach it from CCR via | Supabase MCP (`mcp__Supabase__execute_sql`) — brokered, works | `azure-pg-query.yml` workflow, or the `huddle-pg-mcp-write` MCP server. **TCP 5432 is blocked by session egress — `psql`/`az login` from here is a dead end, do not retry it** (:938) |
+| Owns | `public.tasks` (the board), `task_topic_index`, `task_topic_mappings`, `profiles`, `user_email_aliases`, `push_subscriptions`, `activity_log` | `tasks.*` (mirror, scheduled_jobs, engagement), `chat.*` (pending_turns, ceremony_transcript), `identity.*`, `artifacts.*`, `public.rag_chunks`/`rag_triples` (memory) |
+
+### Identity — three ids for one human, and which one each table uses
+
+| Key | Value | Used by |
+|---|---|---|
+| Canonical scope **email** | **`dev@enterpriseds.io`** | everything Huddle-side (`resolveTaskEmail`), `tasks.journey_tasks.user_email` |
+| Alias email | `von.ellis@enterpriseds.io` | the sign-in / caller identity; an ALIAS row in journey `public.user_email_aliases`. journey's `resolveUserId` checks aliases BEFORE `profiles.email` (a guard added after a shadow profile hijacked resolution — :2316) |
+| **journey `auth.users.id`** | **`a3378f93-d655-4913-b2fa-ca5b1d8020f1`** | **`public.tasks.user_id`**, `push_subscriptions`, `task_topic_index.user_id` |
+| journey `profiles.id` | `113eec07-…` | `profiles` only |
+| Huddle profile id | `a89e3652-…` | Huddle identity store only |
+
+**THE TRAP, and it costs a loop every time:** `public.tasks.user_id` holds the **auth id**, not
+`profiles.id`. A `tasks JOIN profiles ON profiles.id = tasks.user_id` returns **NULL for every row** —
+which reads exactly like "this user has no tasks" and has been reported as such. Join through
+`auth.users`, or just filter `user_id = 'a3378f93-…'`. Also: a bare `LIMIT 1` over an OR of the two
+emails can pick the profile with zero tasks. (:1032, :1033, :2786)
+
+### Tasks
+
+| Thing | Where | Notes |
+|---|---|---|
+| **Canonical board** | journey `public.tasks` | `status` is a `task_status` **ENUM** — cast `::text` in Supabase-MCP SQL. Single writer: journey. |
+| Huddle **mirror** | `tasks.journey_tasks` (Azure) | single-writer read-model, upsert `ON CONFLICT (id)` on journey's task uuid. Fed by journey trigger → `pg_net` → edge fn → `POST /api/public/tasks-sync`. **Eventually consistent, ~1–3s** — poll, never assume synchronous. `user_id` here is journey's id space, un-rekeyed (:2785). |
+| **The star** | `tasks.is_priority` (bool) | **IS "This Week"** on both the Android home widget (`is_priority=eq.true`) and Huddle's band. |
+| Ordering | `tasks.priority_rank` | **COUPLED to the star by journey**: `batch_update_tasks` (journey-voice `execute-tool/index.ts:981-982`) does `if (typeof u.rank === "number") { is_priority = true; priority_rank = u.rank } else if (u.unset_rank) { is_priority = false; priority_rank = null }`. **There is no "rank without star."** Measured: `is_priority=true` → 91 rows, `priority_rank IS NOT NULL` → 91, union 91 — the SAME BIT, so no widget predicate can separate them. Huddle's grooming caps the lane at 20 since `67f6c34`. |
+| User's manual This Week order | Azure `tasks.week_order` (jsonb id list) | added `9a0fc06`/`sql/rag_ai_agents/002_week_order.sql`. Deliberately NOT `priority_rank` — grooming rewrites that every Monday and would erase it. |
+
+### Topics / categories (measured live 2026-10-15)
+
+| Thing | Where | Notes |
+|---|---|---|
+| **The topics table** | journey `public.task_topic_index` | **There is no separate "topics" table** (:3110). Columns: `id, topic_name, position, category_affinity, parent_topic_id, window_affinity, topic_summary, task_count, user_id`. `parent_topic_id` measured **NULL on every row** — nesting comes from `category_affinity`. |
+| **task ↔ topic join** | journey `public.task_topic_mappings` (`task_id, topic_id`) | the link Huddle has **no equivalent of**; the Android widget does a two-step through it (`SupabaseTaskClient.kt:232→248`). |
+| Measured shape | **101 open tasks, 98 of them mapped, across 75 topics** | VENTURES 55/67 · LIFE 9/18 · CAREER 6/8 · EDUCATION 2/3 · PROF_EDUCATION 3/3. Topics are fine-grained (~1.3 tasks each). FAMILY holds **no** `task_topic_index` rows, which is why that category renders bare (:3236). |
+| `get_task_topics` | **COMMITTED (journey-voice `ec508a5`) BUT NOT DEPLOYED** | repo-wide grep on journey-voice `main` = **0 hits**; `execute-tool/index.ts:458` answers `Unknown tool`, which Huddle maps to `reason:"tool-absent"` → the `TopicsEmpty` sentence. **So Huddle's category tree has never rendered in production.** Already recorded at :3196 as "blocked on an owner action". `docs/VERIFY-journey-widgets-1.md:212` wrongly asserts it is deployed — it confused it with the tool below. |
+| `get_tasks_by_topic` | **deployed**, `_shared/tool-definitions.ts:62` | takes **one `topic_name` scalar** (no array, no ids, no depth), resolves with `ilike` + `maybeSingle()` → **duplicate topic names (two "Admin", LIFE and CAREER) return silently empty, not an error**. Orders `priority desc`. Omits `is_priority`/`priority_rank`/`tags`. ~`3+N` round-trips for N≈75 topics. |
+
+### Chat / turns
+
+| Thing | Where | Notes |
+|---|---|---|
+| Durable turns | Azure `chat.pending_turns` | `huddle_id`: group = `all-members`/`daily`, 1:1 = `dm-<agentId>`. `payload->>'text'` = user msg; replies in `replies` (chunked) or `result->'replies'`. **No `run_at` column — the queue is run-immediately-only.** |
+| **Ceremony transcripts** | Azure `chat.ceremony_transcript` | ceremonies do **NOT** write `pending_turns`. Never conclude "not saved" from its absence there. |
+| Memory | Azure `public.rag_chunks` | every user msg auto-written `scope='global'`; retrieval filters scope/agent only, **no huddle filter** — this is the only cross-huddle bridge. Score floor **0.3** (`text-embedding-3-large` scores real hits 0.4–0.5). |
+| Fast read from CCR | `getTurnUpdates` server fn over HTTPS (~1s) | **but the deployed SWA host is frequently NOT in session egress** (measured 2026-10-15: curl → `CONNECT tunnel failed, 403`; node fetch → `ENOTFOUND`). When it is blocked, use `azure-pg-query.yml` or the pg MCP. |
+| Seroval CONST map | `0=null 1=undefined 2=true 3=false 4=-0 5=Infinity 6=-Infinity 7=NaN` | `huddle.mjs` ships a WRONG map that decodes `true` as `null`. |
 Last updated: 2026-09-21 (PR triage pass, 4 open PRs: merged #39 — docs-only spec research,
 re-verified its two load-bearing technical claims against live code before merging (see
 ACT:pr-triage-2026-09-21 in actions.md). Its finding worth carrying: `eds-claude-skills/CLAUDE.md`'s
