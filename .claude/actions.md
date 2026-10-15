@@ -4537,3 +4537,9 @@ its twin). There is no detector for this drift today; compare.ts found it by acc
 - **Order:** `orderByContent` — rows with tasks first at every level; topics with tasks by soonest task date; empty topics by journey `updated_at` desc (journey-voice #52 adds the field). FIRED ×3.
 - **Shipped:** huddle #77 `665e502` (deploy success), journey #52 `ca40eec` (deploy success). NOT owner-confirmed.
 - **Open:** Monday 8am groom will star its top 20 again unless told otherwise — owner decision pending.
+
+## ACT:row-action-menu — prototype for a left-side action menu (2026-10-15)
+- **Ask (owner):** "items should be ordered descending by date for the most recent … I also dont see a star for pushing a topic or sub topic or task. i only see today under task which i dont like. what if on mobile, a context menu popped up from clicking the action menu to the left … let me see a photorealistic prototype".
+- **Shipped:** topics with tasks now order most-recent date first — huddle #79 `34ec33c` (FIRED).
+- **Prototype (not built):** https://claude.ai/artifact/2dnuJJaYUMGqhxUysapcJ6 — ⋮ on the left of every row (task, topic, category, This Week); title wraps across the rest; menu = Push / Remove, Done, Park, Start, Move up/down; topics and categories get "Push"; no Today button. Real topic/task names from journey.
+- **Status:** awaiting owner sign-off on the prototype before the real UI + category-push (ACT:category-push) are built.
