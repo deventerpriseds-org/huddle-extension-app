@@ -216,6 +216,14 @@ Each item is binary. "Observed via" names the exact thing to look at.
     **Observed via:** unit test. This is the direct mutation of F-3: journey's
     `.order('priority',{ascending:false})` on a text column sorts `MEDIUM, LOW, HIGH`, so an
     implementation that passes journey's order through unchanged **fails this AC**.
+    > **RETIRED by owner decision, 2026-10-15 — AC-14 governs.** AC-13 and AC-14 contradict: AC-14
+    > orders by the user's star and rank, AC-13 would float a HIGH/URGENT label above them. The owner:
+    > *"keep AC-14"*. Reason given to him and accepted: he asked for his own pick to beat the score
+    > ("superspeed other items in that category that may have scored higher"), and letting a label
+    > override his star reintroduces exactly what he was overriding. So an URGENT task CAN rank below
+    > a task he starred or ranked; that is the intended behaviour, not a defect. Asserted by I-7 in
+    > `scripts/category-tree-independent.test.ts`.
+
 14. **Given** a topic's tasks, **when** they are ordered, **then** the sequence matches
     `is_priority desc, priority_rank asc nulls-last, due_date asc, title asc` — the existing
     `byPriorityThenDue` in `widgets.server.ts`, which is also what the Android truth asks Postgres
