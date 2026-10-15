@@ -4585,4 +4585,6 @@ Owner: *"i have tasks everyday and i do want a similar message for day in the mo
 | 2 | Window edition (window={name,start,end}, still-ahead only, key schedule-brief-window-<name>-<date>) | merged #84 | journey triggers it: journey-voice #57 (1d2dcf2), functions run 38807029267 |
 | 3 | Evening confirm-priorities ahead of the 1am planner | ALREADY EXISTED: priorityCheck (#65) at 6am/8pm, scheduler row enabled, next 2026-10-16 00:00 UTC | first scheduled evening run is tonight 8pm ET -- verify it reaches the owner |
 
+| 4 | Live end-to-end test | PASSED (mechanism) | journey Test-Daily Wrap-up 21:07:03 UTC -> journey log `Iris window brief (after_work): HTTP 200 ... delivered:true` -> turn schedule-brief-window-after_work-2026-10-15 done: "Hello Sir, just a reminder that for the rest of the after work window (5 PM–10 PM) you have no meetings or classes, and on your task list you have ... 6:00 PM, ... 7:00 PM, ... 9:00 PM." |
+
 **NOT yet confirmed by the owner.** Known overlap, left as is: the 5pm (after_work 17-22) and 7pm (evening 19-22) windows overlap, so the 7pm message can repeat 7-10pm items.
