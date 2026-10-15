@@ -30,6 +30,10 @@ on:
         description: "true = return what WOULD be announced, deliver nothing."
         required: false
         default: "true"
+      resendOwed:
+        description: "true = re-announce still-OWED emails once (e.g. to add buttons to an older alert)."
+        required: false
+        default: "false"
       timeZone:
         description: "IANA time zone."
         required: false
@@ -47,12 +51,14 @@ jobs:
           MODE: ${{ inputs.mode }}
           LOOKBACK: ${{ inputs.lookbackHours }}
           DRY: ${{ inputs.dryRun }}
+          RESEND: ${{ inputs.resendOwed }}
           TZ_INPUT: ${{ inputs.timeZone }}
         run: |
           if [ -z "$SECRET" ]; then echo "JOURNEY_PROXY_TOKEN secret not set"; exit 1; fi
           BODY=$(jq -cn --arg e "$EMAIL" --arg m "$MODE" --arg tz "$TZ_INPUT" \
-            --argjson lb "$LOOKBACK" --argjson dry "$DRY" \
-            '{caller:{entra_email:$e}, timeZone:$tz, dryRun:$dry, lookbackHours:$lb} + (if $m == "" then {} else {mode:$m} end)')
+            --argjson lb "$LOOKBACK" --argjson dry "$DRY" --argjson rs "$RESEND" \
+            --arg r "manual-$(date -u +%Y%m%d%H%M%S)" \
+            '{caller:{entra_email:$e}, timeZone:$tz, dryRun:$dry, lookbackHours:$lb, resendOwed:$rs, runId:$r} + (if $m == "" then {} else {mode:$m} end)')
           echo "Body: $BODY"
           HTTP=$(curl -s -o /tmp/ie.out -w "%{http_code}" -X POST \
             -H "content-type: application/json" -H "x-webhook-secret: $SECRET" \

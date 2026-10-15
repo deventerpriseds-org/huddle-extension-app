@@ -57,6 +57,10 @@ export async function runInboundEmailWatch(
     dryRun?: boolean;
     runId?: string;
     nowMs?: number;
+    /** MANUAL ONLY (run-inbound-email.yml): re-announce emails still OWED, with a fresh turn id, so
+     *  an alert sent before a change (e.g. before the reply buttons existed) can be re-sent once.
+     *  Never set by the scheduler — that path stays one-announcement-per-email. Needs runId. */
+    resendOwed?: boolean;
   } = {},
 ): Promise<InboundEmailRunResult> {
   try {
@@ -74,6 +78,12 @@ export async function runInboundEmailWatch(
     // (journey's connected Microsoft account), never the data-scope login (dev@).
     const { resolveCalendarMailbox } = await import("../journey/identity");
     const mailbox = (await resolveCalendarMailbox(caller)) ?? caller.entra_email;
+    // The ledger's owner key — the same resolution the board and every button use.
+    const { resolveTaskEmail } = await import("../journey/identity");
+    const ownerEmail = (await resolveTaskEmail(caller)) ?? caller.entra_email;
+    const ledger = await import("./email-replies.server");
+    // Settle anything he already answered from Outlook BEFORE counting / announcing.
+    if (!opts.dryRun) await ledger.reconcileRepliedFromSentItems(ownerEmail);
 
     const { listInboxMessagesSince } = await import("./graph-email.server");
     const read = await listInboxMessagesSince(mailbox, since);
@@ -117,11 +127,38 @@ export async function runInboundEmailWatch(
       if (!verdict.keep) continue;
 
       const received = m.receivedDateTime ? fmt.format(new Date(m.receivedDateTime)) : "just now";
-      const directive = inboundEmailDirective(m, received);
-      // No opts.runId here, ever: see inboundEmailTurnId.
-      const turnId = inboundEmailTurnId(m.id);
+      // No opts.runId here, ever (see inboundEmailTurnId) — except the manual resend below.
+      let turnId = inboundEmailTurnId(m.id);
+      const emailId = turnId.slice("inbound-email-".length);
       row.turnId = turnId;
       if (opts.dryRun || delivered >= MAX_PER_RUN) continue;
+
+      // Owed from the moment it is flagged. Idempotent: a settled row is never re-opened.
+      await ledger.recordOwedEmail({
+        id: emailId,
+        ownerEmail,
+        mailbox,
+        graphMessageId: m.id,
+        conversationId: m.conversationId ?? null,
+        fromAddress: m.fromAddress ?? null,
+        fromName: m.fromName ?? null,
+        subject: m.subject ?? null,
+        receivedAt: m.receivedDateTime ?? null,
+      });
+      const ledgerRow = await ledger.getOwnedEmailReply(emailId, ownerEmail);
+      if (opts.resendOwed && opts.runId) {
+        if (!ledgerRow || !ledger.OWED_STATUSES.includes(ledgerRow.status)) continue;
+        turnId = `${turnId}-${opts.runId}`;
+        row.turnId = turnId;
+      } else if (ledgerRow && !ledger.OWED_STATUSES.includes(ledgerRow.status)) {
+        continue; // already settled (answered from Outlook / dismissed) — nothing to announce
+      }
+      const counts = await ledger.getEmailReplyCounts(ownerEmail, tz);
+      const directive = inboundEmailDirective(m, received, {
+        emailId,
+        owed: counts.owed,
+        settledToday: counts.settledToday,
+      });
 
       const owner = INBOUND_EMAIL_OWNER;
       const payload = {
@@ -143,6 +180,12 @@ export async function runInboundEmailWatch(
         caller,
         notify: "push",
         internal: true,
+        emailReplyRef: {
+          emailId,
+          fromName: String(m.fromName ?? "").slice(0, 300),
+          fromAddress: String(m.fromAddress ?? "").slice(0, 320),
+          subject: String(m.subject ?? "").slice(0, 500),
+        },
       };
       const { enqueueTurn } = await import("../tasks/turns.server");
       const fresh = await enqueueTurn(turnId, `dm-${owner}`, caller.entra_email, payload);

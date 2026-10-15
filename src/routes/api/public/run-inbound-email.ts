@@ -40,6 +40,8 @@ export const Route = createFileRoute("/api/public/run-inbound-email")({
           /** true = screen and RETURN the decisions without delivering anything. */
           dryRun?: boolean;
           runId?: string;
+          /** Manual only: re-announce still-owed emails once (needs runId). */
+          resendOwed?: boolean;
         };
         try {
           payload = (await request.json()) as typeof payload;
@@ -64,6 +66,7 @@ export const Route = createFileRoute("/api/public/run-inbound-email")({
                 typeof payload.lookbackHours === "number" ? payload.lookbackHours : undefined,
               dryRun: !!payload.dryRun,
               runId: payload.runId,
+              resendOwed: payload.resendOwed === true,
             },
           );
           return json(result, result.ok ? 200 : 500);

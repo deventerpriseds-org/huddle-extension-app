@@ -99,6 +99,11 @@ import {
   ASK_CLARIFYING_QUESTION_TOOL,
   RESOLVE_CLARIFYING_QUESTION_TOOL,
 } from "./tasks/task-agent-tools";
+import {
+  PROPOSE_EMAIL_REPLY_TOOL,
+  emailReplyAskFromDetail,
+  type EmailReplyAsk,
+} from "./email/email-reply-ask";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
 import {
   assignCreatedJourneyTasks,
@@ -216,6 +221,17 @@ const Input = z.object({
   // and lane-deferral machinery must NOT run on it: doing so mis-reads the directive as "a user ask in
   // the wrong lane" and spawns follow-ups that re-trigger follow-ups (the notification-barrage loop).
   internal: z.boolean().optional(),
+  // A new-email alert turn (inbound-email.server.ts): the email this turn is ABOUT, so the reply card
+  // (Save to Drafts / Dismiss) is attached to the target agent's reply even if the model skips
+  // propose_email_reply. Display-only; every button re-reads chat.email_replies by emailId.
+  emailReplyRef: z
+    .object({
+      emailId: z.string().max(64),
+      fromName: z.string().max(300),
+      fromAddress: z.string().max(320),
+      subject: z.string().max(500),
+    })
+    .optional(),
   // A live-ceremony BARGE-IN answered synchronously (the client's runBargeSequence, not the durable
   // ceremony queue). When set on a group turn, the responder the router picks gets the existing
   // bargeDirective() layered onto its scene — "the user just cut into a live stand-up, address them
@@ -558,6 +574,7 @@ type TurnResumeState = {
     artifacts?: { id: string; name: string }[];
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
     overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
     checklist?: ChecklistPayload;
     priorities?: PrioritiesWidgetData;
     schedule?: ScheduleWidgetData;
@@ -840,6 +857,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // toolUse this turn — NOT injected from another turn/agent.
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
     overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
     checklist?: ChecklistPayload;
     priorities?: PrioritiesWidgetData;
     schedule?: ScheduleWidgetData;
@@ -3565,6 +3583,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           FLAG_BLOCKER_TOOL,
           CONFIRM_TASK_INTENT_TOOL,
           PROPOSE_TASK_INTENT_TOOL,
+          // New-email alerts: store the suggested reply so the card's Save-to-Drafts button acts on it.
+          PROPOSE_EMAIL_REPLY_TOOL,
           PROPOSE_APPROACH_TOOL,
           REQUEST_APPROACH_OVERRIDE_TOOL,
           OVERRIDE_APPROACH_GATE_TOOL,
@@ -3800,6 +3820,48 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
+              return JSON.stringify({ ok: false, error: msg });
+            }
+          }
+          if (c.name === "propose_email_reply") {
+            const a = c.arguments as Record<string, unknown>;
+            const givenId = String(a.email_id ?? "").trim();
+            const fromAddr = String(a.from_address ?? "").trim();
+            const body = String(a.reply_body ?? "").trim();
+            if ((!givenId && !fromAddr) || !body)
+              return JSON.stringify({ ok: false, error: "reply_body and email_id (or from_address) are required" });
+            try {
+              const owner =
+                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                data.caller?.entra_email;
+              if (!owner) return JSON.stringify({ ok: false, error: "sign-in required" });
+              const { getOwnedEmailReply, findOwedEmailReplyByFrom, setProposedReply } = await import(
+                "./email/email-replies.server"
+              );
+              const row = givenId
+                ? await getOwnedEmailReply(givenId, owner)
+                : await findOwedEmailReplyByFrom(owner, fromAddr);
+              if (!row) return JSON.stringify({ ok: false, error: "No owed email matches that." });
+              const emailId = row.id;
+              await setProposedReply(emailId, owner, body);
+              // Structured detail -> the reply card on THIS message (the confirmAsk derivation).
+              recordToolUse(
+                winner.id,
+                "propose_email_reply",
+                `Suggested a reply to ${row.from_name || row.from_address || "an email"}`,
+                true,
+                JSON.stringify({
+                  emailId,
+                  fromName: row.from_name ?? "",
+                  fromAddress: row.from_address ?? "",
+                  subject: row.subject ?? "",
+                  replyBody: body,
+                }),
+              );
+              return JSON.stringify({ ok: true, email_id: emailId });
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "propose_email_reply", "propose failed", false, msg);
               return JSON.stringify({ ok: false, error: msg });
             }
           }
@@ -6476,6 +6538,14 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // own reply, the same scoping rule confirmAsk uses: the ask belongs to the agent whose turn raised
     // it, so it is keyed by that agent rather than broadcast to whoever happens to speak next.
     const replyOverrideAsk = escalatedApproachByAgent.get(nextId);
+    // The email-reply card: from this agent's own propose_email_reply call (carries the body), else —
+    // on a new-email alert turn — from the payload's emailReplyRef, so the buttons are there even when
+    // the model skipped the tool (Save then explains there is no suggestion yet; Dismiss still works).
+    const emailUse = r.toolUses.find((t) => t.tool === "propose_email_reply" && t.ok);
+    let replyEmailReply: EmailReplyAsk | undefined = emailUse ? emailReplyAskFromDetail(emailUse.detail) : undefined;
+    if (!replyEmailReply && data.emailReplyRef && nextId === data.targetAgentId) {
+      replyEmailReply = { ...data.emailReplyRef, replyBody: "" };
+    }
     replies.push({
       agentId: nextId,
       text: safeText,
@@ -6483,6 +6553,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       artifacts: replyArtifacts.length ? replyArtifacts : undefined,
       confirmAsk: replyConfirmAsk,
       overrideAsk: replyOverrideAsk,
+      emailReply: replyEmailReply,
       checklist: replyChecklist,
       priorities: replyPriorities,
       schedule: replySchedule,
@@ -7611,6 +7682,7 @@ type TurnUpdateDTO = {
     artifacts?: { id: string; name: string }[];
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
     overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
     checklist?: ChecklistPayload;
     priorities?: PrioritiesWidgetData;
     schedule?: ScheduleWidgetData;
@@ -7653,6 +7725,7 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
           overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
           checklist?: ChecklistPayload;
           priorities?: PrioritiesWidgetData;
           schedule?: ScheduleWidgetData;
@@ -7721,6 +7794,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         artifacts?: { id: string; name: string }[];
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
         overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
         checklist?: ChecklistPayload;
         priorities?: PrioritiesWidgetData;
         schedule?: ScheduleWidgetData;
@@ -7760,6 +7834,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         artifacts?: { id: string; name: string }[];
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
         overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
         checklist?: ChecklistPayload;
         priorities?: PrioritiesWidgetData;
         schedule?: ScheduleWidgetData;
