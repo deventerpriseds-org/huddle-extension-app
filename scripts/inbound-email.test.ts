@@ -73,6 +73,10 @@ check(
   "A: IHG promo (List-Unsubscribe) is skipped",
   screenMessage(ihg, "needs-reply", MAILBOX).keep === false,
 );
+check(
+  "A: List-Unsubscribe alone skips a person-looking focused sender",
+  screenMessage({ ...amy, headerNames: ["from", "list-unsubscribe"] }, "needs-reply", MAILBOX).keep === false,
+);
 const eq = screenMessage(equifax, "needs-reply", MAILBOX);
 check(
   "A: donotreply@ is skipped as automated",
