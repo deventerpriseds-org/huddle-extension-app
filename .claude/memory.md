@@ -3174,6 +3174,33 @@ lead capture items across EVERY lane, so defaulting to it would assign other lan
 
 **Full diagnosis + the rejected alternative:** `.claude/actions.md`, `ACT:assign-on-direct-ask`.
 
+## Active work — the priorities tree renders each category's TASKS (2026-10-15, ACT:category-tasks, PR #66, MECHANISM ONLY)
+
+`9252a1b`. The tree drew names + counts and no tasks, so the owner could not pull work out of a
+category and an agent could not answer "what's next in Career?" — the tasks were not in the payload.
+Each category now carries its live tasks, ordered `byPriorityThenDue`, with the existing
+Today/Done/Park buttons reused verbatim (no second write path).
+
+**THE FACT THAT DECIDED THE DESIGN, and the one that cost a wrong claim:** `get_tasks` is capped at
+**`.limit(50)`** (journey-voice `execute-tool/index.ts:707`). I asserted it returned the whole board
+"in one call" from a summary that said `select('*')` with no limit — it does not, and 101 open tasks
+means one call silently returns half, skewed to scheduled rows (`start_time asc nullsFirst:false`,
+no status filter). Read the line, never the recollection of the line.
+
+**`get_task_topics` CANNOT be deployed — only written.** Not on journey's `main`, not in ANY open PR
+(checked all 40), commit `ec508a5` unreachable in the clone. memory.md:3196's "blocked on an owner
+action" overstated it: there is no owner action available. So Huddle's topic/theme SUB-layer is
+still absent, and the UI now SAYS so instead of looking complete — `topics.reason` is left exactly
+as the journey passthrough reported it, because overwriting it to "ok" after the merge would hide the
+gap. The mirror is the tree's BASE and journey's topics nest in via `mergeTopicTree` if that source
+ever answers.
+
+**Three defects found by the cold AC read, not by me:** FAMILY absent in Huddle though the Android
+widget draws it; a tasks-only category row unexpandable; counts passed through rather than derived.
+
+Status: `tsc` clean, 15/15 new assertions, **3 mutations FIRED**, 126 regression assertions green —
+and **NOT user-confirmed, no browser has rendered it.** Independent verifier in flight.
+
 ## Active work — journey PRIORITIES + SCHEDULE widgets as in-chat widgets (2026-09-13, NOT verified)
 Branch `claude/journey-widgets-in-chat` in BOTH repos. Nothing on `main`, nothing deployed.
 

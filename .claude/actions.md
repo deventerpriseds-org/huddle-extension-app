@@ -4240,3 +4240,47 @@ owner-confirmed. Step 5 (the T-60 seeding) NOT started, deliberately — `chat.r
 dedup, so a seeder would duplicate an alarm on every run, and that risk is kept out of the digest
 work. Open question to the owner: did MGT-701 end on Sep 30 (5 weekly Wednesdays then nothing, term
 `202712` vs `202711`)?**
+
+---
+
+## ACT:category-tasks — the priorities tree now renders each category's TASKS (2026-10-15)
+
+**Request (owner):** *"what were we trying to achieve with tasks under categories? what is needed
+and what will be the outcome after updates?"* → *"go ahead and check what you need to check and do
+the update"*. Earlier framing: *"It should have the items for this week and below that the catagories
+and themes i can drag to the top"* and the payoff he named — *"so if an agent in the future is asked
+to autopull one or two **from the categories** it knows whats next"*.
+
+**Evidence:** PR **#66**, commit **`9252a1b`** · ACs `docs/AC-tasks-under-categories.md` (69
+criteria, written cold by an independent subagent BEFORE implementation) · verifier artifact
+`docs/VERIFY-tasks-under-categories-1.md`.
+
+**THE SOURCE DECISION — four candidates, three rejected on measurement.** Recorded in
+`widgets.server.ts`' `buildCategoryTaskTree` doc comment, not only in the PR:
+| candidate | verdict |
+|---|---|
+| `get_task_topics` (what `fetchTopicTree` already calls) | **unavailable, not wrong** — the only source yielding real topic/theme nodes, but NOT on journey's `main`, NOT in any open PR, commit `ec508a5` unreachable. Writable, not deployable. |
+| `get_tasks` once | **`.limit(50)`** (`execute-tool/index.ts:707`) of 101 open tasks, no status filter, `start_time asc nullsFirst:false` → half the board, silently, skewed to scheduled |
+| `get_tasks_by_topic` per topic | ~75 calls/render; orders by the `priority` **TEXT** column desc (MEDIUM above HIGH); no tiebreak; drops BLOCKED; `success:true count:0` on a duplicate topic name |
+| a new mirror column | same journey-side change, and `category` is already synced |
+→ **`tasks.journey_tasks.category`**, already read for the band in the SAME `getBoardTasks` call.
+
+**Three defects the cold AC read found, all fixed here:** FAMILY was **absent** in Huddle while the
+Android widget drew it (`groupByCategory` only makes a category root when a TOPIC claims it — now a
+category exists because TASKS are in it); a category row with tasks and no sub-topics was a dead
+unclickable count (expandability keyed off `children` only); counts are now **derived** from the
+tasks, so a count cannot disagree with its rows (the Android `grpTaskCount` sums only sub-groups).
+
+**Verification:** `tsc` clean · `test:category-tree` **15/15** · **3 mutations FIRED** (Uncategorised
+bucket, derived count, `mergeTopicTree` not dropping a journey root) · regressions green
+(widget-topics 20, widget-park 10, widget-live 12, widget-band-color 21, widget-colors 25,
+week-order 9, priority-lane 9, router 20).
+
+**Status: MECHANISM VERIFIED, NOT USER-CONFIRMED.** No browser has rendered it. Independent verifier
+in flight; DOM criteria need `verify-uat.yml` at **390×844** (these defects are width-dependent —
+desktop width hid every one last time). **Not merged at the time of writing.**
+
+**Deliberately NOT built:** topic/theme SUB-nodes (no deployed journey tool exposes
+`task_topic_mappings` affordably) and category-level drag — the owner deferred that himself
+(*"that can be done later but anything in this week needs to be shiftable now"*, which shipped in
+`9a0fc06`).
