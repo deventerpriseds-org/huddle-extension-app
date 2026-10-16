@@ -735,8 +735,13 @@ check(
   }),
 );
 
+// ADDITIVE-ONLY, not byte-identical (2026-10-16). Byte identity was a claim about the change that wrote
+// this check; once merged it went red on every LATER, legitimate optional field (navLink, the priority
+// check's "Open Priorities" button) — the same false-alarm shape the D4 note below corrects. What the
+// cross-app gate depends on is that no EXISTING field is removed or altered, so: every line of the base
+// schema must still appear, in order, in the current one. Additions are allowed.
 check(
-  "G8 REGRESSION: huddle.functions.ts `Input` schema is byte-identical to origin/main",
+  "G8 REGRESSION: huddle.functions.ts `Input` schema keeps every origin/main line (additive-only)",
   (() => {
     const slice = (s: string) => {
       const start = s.indexOf("const Input = z.object({");
@@ -748,7 +753,15 @@ check(
     const now = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
     const a = base && slice(base);
     const b = slice(now);
-    return !!a && !!b && a === b;
+    if (!a || !b) return false;
+    const cur = b.split("\n");
+    let j = 0;
+    for (const line of a.split("\n")) {
+      while (j < cur.length && cur[j] !== line) j++;
+      if (j === cur.length) return false;
+      j++;
+    }
+    return true;
   })(),
 );
 

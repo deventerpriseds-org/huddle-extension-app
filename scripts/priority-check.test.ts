@@ -70,7 +70,7 @@ check("P7 unscheduled excludes scheduled and DOING", s.unscheduled === 3, JSON.s
 
 // P8..P10 — the directive.
 const d = priorityCheckDirective(s);
-check("P8 directive forces the widget call", /Call show_priorities_widget now/.test(d) && /do not skip/.test(d), d);
+check("P8 directive no longer calls the widget; it points at the button", !/show_priorities_widget/.test(d) && /"Open Priorities" button/.test(d) && /Do NOT call any tool/.test(d), d);
 check("P9 evening edition names tonight's scheduler", /Tonight's scheduler/.test(d), d);
 check("P10 morning edition names grooming",
   /Grooming/.test(priorityCheckDirective({ ...s, edition: "morning" })));
@@ -108,9 +108,38 @@ check("P20 Send now calls the scheduler's own runner with a fresh runId",
   const ed = priorityCheckDirective(empty);
   check("P-EMPTY1 an empty evening band still has a directive that says no priorities are set", /NO priorities set/.test(ed), ed);
   check("P-EMPTY2 and names the consequence for tomorrow's plan", /builds tomorrow's plan/.test(ed) && /its own scoring/.test(ed), ed);
-  check("P-EMPTY3 and still presents the widget", /Call show_priorities_widget now/.test(ed), ed);
+  check("P-EMPTY3 and points at the button, not the widget", /"Open Priorities" button/.test(ed) && !/show_priorities_widget/.test(ed), ed);
   const src = readFileSync("src/features/huddle/lib/tasks/priority-check.server.ts", "utf8");
   check("P-EMPTY4 runPriorityCheck no longer skips an empty band", !/if \(!band\.length\) return/.test(src));
+}
+
+// P-NAV — owner 2026-10-16: "she can do so with a button that deep links to the priority tab in the app
+// instead of embedded priority widget".
+{
+  const named = summarizeBand(
+    [row({ title: "Alpha" }), row({ title: "Bravo" }), row({ title: "Charlie" }), row({ title: "Delta" }), row({ title: "Echo" })],
+    "morning", today, dueKey);
+  check("P-NAV1 summary carries the first three titles in band order", JSON.stringify(named.top) === '["Alpha","Bravo","Charlie"]', JSON.stringify(named));
+  const nd = priorityCheckDirective(named);
+  check("P-NAV2 directive names them and says how many more", /"Alpha", "Bravo", "Charlie", and 2 more/.test(nd), nd);
+  check("P-NAV3 spoken opening", /starting "Hello Sir,"/.test(nd), nd);
+  const src = readFileSync("src/features/huddle/lib/tasks/priority-check.server.ts", "utf8");
+  check("P-NAV4 the payload carries the navLink", /navLink: PRIORITY_CHECK_NAV_LINK,/.test(src));
+  check("P-NAV5 the link targets the priorities view", /view: "priorities" as const/.test(src));
+  const hf = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
+  check("P-NAV6 the turn runner attaches navLink to the target agent's reply only",
+    /navLink: data\.navLink && nextId === data\.targetAgentId \? data\.navLink : undefined,/.test(hf));
+  check("P-NAV7 the payload schema accepts navLink", /navLink: z\s*\.object\(\{\s*view: z\.enum\(\["priorities"/.test(hf));
+  const hv = readFileSync("src/features/huddle/components/HuddleView.tsx", "utf8");
+  check("P-NAV8 the message renders the button, which switches the view",
+    /\{m\.navLink && <NavLinkButton link=\{m\.navLink\} \/>\}/.test(hv) && /onClick=\{\(\) => setView\(link\.view\)\}/.test(hv));
+  check("P-NAV10 a turn with a navLink always ends with it: attached to the target's reply, or a fallback reply",
+    /const ensureNavLinkDelivered = \(\) => \{[\s\S]{0,400}if \(!replies\[i\]\.navLink\) replies\[i\] = \{ \.\.\.replies\[i\], navLink: link \};[\s\S]{0,300}replies\.push\(\{\s*agentId: target,/.test(hf));
+  check("P-NAV11 the guarantee runs at BOTH turn endings (chunked and sync)",
+    (hf.match(/ensureNotSilentOnRealWork\(\);\s*ensureNavLinkDelivered\(\);/g) ?? []).length === 2);
+  const app = readFileSync("src/features/huddle/components/HuddleApp.tsx", "utf8");
+  check("P-NAV9 both delivery paths map navLink onto the message",
+    /navLink: reply\.navLink,/.test(app) && /navLink: reply\.navLink,/.test(hv));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
