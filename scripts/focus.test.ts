@@ -48,6 +48,9 @@ check("F5 exact title (case/punctuation-insensitive)", matchOne("gym!", rows).ta
 check("F6 phrase inside one title", matchOne("trinnex interview", rows).taskId === "t2", JSON.stringify(matchOne("trinnex interview", rows)));
 check("F7 every meaningful word present in exactly one title", matchOne("Stitch Fix video", rows).taskId === "t4", JSON.stringify(matchOne("Stitch Fix video", rows)));
 check("F8 a TIE is no match (two 'upload video' tasks) -> created, never guessed", matchOne("upload video", rows).taskId === null, JSON.stringify(matchOne("upload video", rows)));
+check("F8b a tie on ALL-WORDS (reversed order, no phrase hit) is also no match", matchOne("video upload", rows).taskId === null, JSON.stringify(matchOne("video upload", rows)));
+check("F5b two open tasks with the SAME title -> no match (never guess which)",
+  matchOne("gym", [...rows, { id: "t7", title: "Gym", status: "TODO" }]).taskId === null);
 check("F9 a DONE task is never matched (no reopening finished work)", matchOne("Write the deck", rows).taskId === null);
 check("F10 a shared single word alone does not match ('trinnex' is in two titles)", matchOne("trinnex", rows).taskId === null);
 check("F11 unrelated item -> no match (it will be created)", matchOne("call the dentist", rows).taskId === null);
