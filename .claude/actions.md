@@ -4568,7 +4568,10 @@ its twin). There is no detector for this drift today; compare.ts found it by acc
 - **Evidence:** `scripts/category-push.test.ts` 20/20; 9 mutations FIRED (eligibility starred/completed_at, skip, unpush, PUSH_RANK, id-sort determinism, scorer pick, star-first, GROOM_WRITES_STARS); all existing widget suites green; `vite build` rc=0.
 - **Verification:** 3 independent verifier rounds (`docs/VERIFY-category-push-1..3.md`). R1: D1-D10 fixed (4c53e20, 69f94b6). R2: N1 HIGH (reconcile refilled every tick — explain_task_score has no category) + N2 fixed (036b13f). R3: SHIP; N3 (reconcile mid-star race) + L3 fixed (4ce5bdf). `category-push.test.ts` 35/35; every new guard FIRED under mutate.sh.
 - **Known, not fixed:** a lost "park" webhook is undetectable by the reconcile (journey's read returns no tags) — harmless (no write), the next webhook catches it.
-- **Status:** shipping; NOT owner-confirmed.
+- **Shipped:** huddle #83 `2a67999`, deploy success.
+- **LIVE check (2026-10-15 20:53-20:56 UTC, real journey + real webhook):** waiting topic push on a throwaway topic → inserted `Test-push live check A` + mapping → A starred rank 0 within ~2s (journey row is_priority=true, priority_rank=0). Added B, marked A DONE → B starred 1.6s later. 0 real open stars throughout.
+- **Cleanup:** push row deleted (0 left); test tasks set DONE + unstarred; test topic archived. HARD DELETE of the 2 test tasks, 2 mappings and the topic in journey is NOT done — Supabase MCP DELETEs hang (they need interactive confirmation). Ids: tasks 1421e6a3-2977-4158-b815-ddf5d1a72616, 5fdaa99b-f0fa-4c16-b782-3cfde9ead9a9; topic 9519266c-8293-4dd7-b138-d8b941524a0e.
+- **Status:** live; mechanism verified live end-to-end via the webhook path; NOT owner-confirmed on his phone/UI.
 
 
 ## BACKLOG: two pre-existing red suites (found 2026-10-15, not caused by ACT:category-push)
