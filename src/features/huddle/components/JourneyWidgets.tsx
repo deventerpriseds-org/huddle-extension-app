@@ -65,6 +65,7 @@ import type {
 } from "../lib/tasks/widgets.server";
 import { categoryChromaScale, categoryHue } from "../lib/tasks/widget-colors";
 import {
+  focusWidgetItems,
   getPrioritiesWidget,
   getScheduleWidget,
   updateWidgetTask,
@@ -433,9 +434,27 @@ function EmptyDoingControl({ kind }: { kind: "done" | "pause" }) {
  * hands the text to the path that ALREADY creates tasks: it prefills the chat composer (the same
  * `draftPrefill` bridge the checklist's Revise button uses) in Iris's 1:1, where
  * `create_huddle_task`/`quick_create_task` do the create. The user also sees exactly what will be
- * sent before it is sent, which a blind widget-side create would not give them. */
-function WidgetComposeRow({ placeholder, prefix }: { placeholder: string; prefix?: string }) {
+ * sent before it is sent, which a blind widget-side create would not give them.
+ *
+ * EXCEPT `focus` (the Priorities widget, owner 2026-10-16): "currently typing in the priorities tab
+ * switches views to iris 1:1 but i wont always be going there". Send then STAYS PUT and runs the same
+ * "focus on these" core the `focus_on` agent tool uses (focus.server.ts): existing tasks are started,
+ * missing ones created then started, the result toasted and the widget re-read — journey's Focus view
+ * behaviour. Still journey-canonical: every write goes through journey's own tools. */
+function WidgetComposeRow({
+  placeholder,
+  prefix,
+  focus,
+  onDone,
+}: {
+  placeholder: string;
+  prefix?: string;
+  focus?: boolean;
+  onDone?: () => void;
+}) {
   const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const caller = useCaller();
   const dictation = useDictation();
   const view = useHuddleStore((s) => s.view);
   const activeHuddleId = useHuddleStore((s) => s.activeHuddleId);
@@ -444,14 +463,30 @@ function WidgetComposeRow({ placeholder, prefix }: { placeholder: string; prefix
 
   const submit = useCallback(() => {
     const t = text.trim();
-    if (!t) return;
+    if (!t || busy) return;
+    if (focus) {
+      setBusy(true);
+      void focusWidgetItems({ data: { caller, text: t } })
+        .then((r) => {
+          if (r.ok) {
+            setText("");
+            toast.success(r.summary);
+          } else toast.error(r.summary || r.error || "Couldn't start those.");
+          onDone?.();
+          // journey → mirror sync lags 1-3s; re-read again once it has landed.
+          setTimeout(() => onDone?.(), 2500);
+        })
+        .catch((e) => toast.error(e instanceof Error ? e.message : "Couldn't start those."))
+        .finally(() => setBusy(false));
+      return;
+    }
     // Only relocate when there is no composer on screen to receive the text (a full-page widget view,
     // or some other huddle). Typing into the docked widget while already in a chat should not yank
     // the user out of the conversation they are in.
     if (view !== "huddle" || activeHuddleId !== WIDGET_DOCK_HUDDLE_ID) setActive(WIDGET_DOCK_HUDDLE_ID);
     setDraftPrefill(prefix ? `${prefix}${t}` : t);
     setText("");
-  }, [text, view, activeHuddleId, setActive, setDraftPrefill, prefix]);
+  }, [text, busy, focus, caller, onDone, view, activeHuddleId, setActive, setDraftPrefill, prefix]);
 
   async function dictate() {
     if (dictation.recording) {
@@ -477,6 +512,7 @@ function WidgetComposeRow({ placeholder, prefix }: { placeholder: string; prefix
         }}
         placeholder={placeholder}
         aria-label={placeholder}
+        disabled={busy}
         className="min-w-0 flex-1 bg-transparent py-1.5 text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
       />
       {dictation.supported && (
@@ -501,12 +537,12 @@ function WidgetComposeRow({ placeholder, prefix }: { placeholder: string; prefix
       <button
         type="button"
         onClick={submit}
-        disabled={!text.trim()}
-        aria-label="Send to Iris"
+        disabled={!text.trim() || busy}
+        aria-label={focus ? "Start these" : "Send to Iris"}
         className="-my-2 -mr-1 inline-flex size-11 shrink-0 items-center justify-center rounded-full transition disabled:opacity-40"
         style={{ color: "var(--ai)" }}
       >
-        <Send size={15} className="fill-current" />
+        {busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} className="fill-current" />}
       </button>
     </div>
   );
@@ -1165,7 +1201,7 @@ export function PrioritiesWidget({
       </div>
 
       <div className="px-3 py-2">
-        <WidgetComposeRow placeholder="Add a priority…" prefix="Add a priority: " />
+        <WidgetComposeRow placeholder="What do you want to work on? (comma-separated)" focus onDone={onChanged} />
       </div>
 
       {!data.ok ? (

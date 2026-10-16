@@ -45,7 +45,7 @@ import {
   toResponsesTool,
   invokeJourneyTool,
 } from "../journey/proxy.functions";
-import { PRIORITIZE_TOOL } from "../tasks/tools";
+import { FOCUS_TOOL, PRIORITIZE_TOOL } from "../tasks/tools";
 import { SCHEDULE_REMINDER_TOOL } from "../tasks/reminders";
 import { GROOM_BACKLOG_TOOL } from "../tasks/groom";
 import { TAVILY_WEB_SEARCH_TOOL, tavilySearch, type TavilySearchArgs } from "../tavily-search.functions";
@@ -170,7 +170,8 @@ export async function buildRealtimeToolset(
   } = {},
 ): Promise<{ tools: unknown[]; journeyNames: Set<string> }> {
   const agent = AGENT_BY_ID[agentId];
-  const raw: unknown[] = [PRIORITIZE_TOOL, SCHEDULE_REMINDER_TOOL, GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL, ...nexusReadTools()];
+  // FOCUS_TOOL: "start these" by voice — the same core as the Priorities tab input (focus.server.ts).
+  const raw: unknown[] = [PRIORITIZE_TOOL, FOCUS_TOOL, SCHEDULE_REMINDER_TOOL, GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL, ...nexusReadTools()];
 
   if (opts.webSearch !== false) raw.push(TAVILY_WEB_SEARCH_TOOL);
   if (agentOwnsCapability(agent, "backlog-grooming")) raw.push(GROOM_BACKLOG_TOOL);
@@ -521,6 +522,10 @@ export async function executeRealtimeTool(
       const { getGraphCalendarEvents } = await import("../email/graph-email.server");
       const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
       return done(JSON.stringify(r));
+    }
+    if (name === "focus_on") {
+      const { dispatchFocusOn } = await import("../tasks/tools");
+      return done(await dispatchFocusOn(ctx.caller, args));
     }
     if (name === "schedule_and_priorities" || name === "get_calendar_events") {
       const { dispatchPrioritize } = await import("../tasks/tools");

@@ -257,6 +257,20 @@ export const updateWidgetTask = createServerFn({ method: "POST" })
   });
 
 /**
+ * The Priorities tab's input: "what do you want to work on". Starts what exists, creates and starts
+ * what doesn't, and stays on the tab — like journey's Focus view. One implementation, shared with the
+ * `focus_on` agent tool: `focus.server.ts`.
+ */
+export const focusWidgetItems = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, text: z.string().min(1).max(2000) }).parse(raw),
+  )
+  .handler(async ({ data }) => {
+    const { focusOn } = await import("./focus.server");
+    return focusOn(data.caller ?? {}, { text: data.text });
+  });
+
+/**
  * Persist the user's explicit "This Week" ordering — the drag/move-up/move-down write.
  *
  * WHY THIS IS NOT A `WidgetTaskAction`. Every member of that union acts on ONE task id and writes

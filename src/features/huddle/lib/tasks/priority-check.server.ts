@@ -78,6 +78,9 @@ export function summarizeBand(
  *  Priorities" BUTTON (attached from the payload's navLink, so it is there whatever the model does),
  *  and Iris names the top few priorities in her own spoken voice. */
 const BUTTON_LINE = `An "${PRIORITY_CHECK_NAV_LINK.label}" button appears under your message and takes him straight to the Priorities tab.`;
+/** Owner, 2026-10-16: "i should be able to reply to the priority message question with a list of items i
+ *  want to work on" — the reply is handled by `focus_on` (focus.server.ts), so Iris says he can. */
+const REPLY_LINE = `He can also just reply to you with what he wants to work on (e.g. "the deck, interview prep, gym") and you will start those — creating any that don't exist yet. Say that in a few words.`;
 export function priorityCheckDirective(s: PriorityCheckSummary): string {
   // EMPTY BAND STILL SENDS (owner, 2026-10-15: "...and to confirm prioritization ahead of scheduling
   // the next day's build"). The 8pm run on 2026-10-15 found 0 priorities and sent NOTHING, so the
@@ -89,7 +92,7 @@ export function priorityCheckDirective(s: PriorityCheckSummary): string {
         : "Grooming and the team's work today will pick from their own scoring, with nothing prioritised.";
     return (
       `SCHEDULED PRIORITY CHECK (${s.edition}). The owner has NO priorities set right now. ${consequence}\n\n` +
-      `${BUTTON_LINE}\n\n` +
+      `${BUTTON_LINE} ${REPLY_LINE}\n\n` +
       `Write TWO or THREE short spoken lines, starting "Hello Sir,": say there are no priorities set, what ` +
       `that means for ${s.edition === "evening" ? "tomorrow's plan" : "today"}, and ask whether there is anything ` +
       `he wants prioritised — he can set it with the button below. ` +
@@ -113,7 +116,7 @@ export function priorityCheckDirective(s: PriorityCheckSummary): string {
   return (
     `SCHEDULED PRIORITY CHECK (${s.edition}). The owner has ${s.count} open priorit${s.count === 1 ? "y" : "ies"}` +
     `${flags.length ? ` — ${flags.join(", ")}` : ""}. ${when}${named ? ` ${named}` : ""}\n\n` +
-    `${BUTTON_LINE}\n\n` +
+    `${BUTTON_LINE} ${REPLY_LINE}\n\n` +
     `Write TWO or THREE short spoken lines, starting "Hello Sir,": name the top priorities above in plain ` +
     `words${more > 0 ? " and say how many more there are" : ""}, ask whether they are still right, and say ` +
     `he can confirm, reorder or fix anything stale with the button below. ` +

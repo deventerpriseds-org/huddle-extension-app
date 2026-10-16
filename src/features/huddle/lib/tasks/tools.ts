@@ -439,3 +439,64 @@ export async function dispatchPrioritize(
     });
   }
 }
+
+// ---------------------------------------------------------------------------
+// focus_on — "start these" (owner 2026-10-16). The agent-facing door to the SAME core the Priorities
+// tab's input uses (focus.server.ts): existing tasks are started, missing ones created then started.
+// ---------------------------------------------------------------------------
+
+export const FOCUS_TOOL = {
+  type: "function",
+  name: "focus_on",
+  description:
+    "START the things the user says they want to work on — now. Pass each item; for each one the app finds the user's existing open task and starts it (moves it to Doing and puts it at the top of This Week), and if no such task exists it CREATES the task first and then starts it. Call this whenever the user lists what they want to work on / focus on / get done (including a reply to a priority check like 'the deck, interview prep, gym'), or says 'start X'. Pass the user's own wording as `title`; pass `task_id` only when a schedule_and_priorities result in this same turn gave you that task's id. Do NOT also call create_huddle_task for these — this tool already creates what is missing. Report what it says it started and created, nothing more.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      items: {
+        type: "array",
+        description: "What to start, in the order the user gave them (most important first).",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            title: { type: "string", description: "The item in the user's own words." },
+            task_id: { type: "string", description: "Only when a tool result this turn gave you the exact task id." },
+          },
+          required: ["title"],
+        },
+      },
+    },
+    required: ["items"],
+  },
+  strict: false,
+} as const;
+
+export const FOCUS_SYSTEM_HINT =
+  "When the user tells you what they want to work on or focus on — a list, or 'start X' — including when they answer a priority check — call `focus_on` with those items. It starts the ones that already exist and creates-then-starts the ones that don't, in one step; do not create them separately first and do not ask for confirmation. Then say in one or two lines what it started and what it newly created.";
+
+/** Execute `focus_on`. Returns JSON the model reads verbatim. */
+export async function dispatchFocusOn(
+  caller: { entra_object_id?: string; entra_email?: string } | undefined,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const raw = Array.isArray(args.items) ? (args.items as unknown[]) : [];
+  const items = raw
+    .map((i) => (typeof i === "string" ? { title: i } : (i as { title?: unknown; task_id?: unknown })))
+    .map((i) => ({
+      title: typeof i?.title === "string" ? i.title : "",
+      task_id: typeof i?.task_id === "string" ? i.task_id : null,
+    }))
+    .filter((i) => i.title.trim() || i.task_id);
+  const text = typeof args.text === "string" ? args.text : undefined;
+  const { focusOn } = await import("./focus.server");
+  const out = await focusOn(caller ?? {}, items.length ? { items } : { text });
+  return JSON.stringify({
+    ok: out.ok,
+    summary: out.summary,
+    started: out.results.filter((r) => r.started).map((r) => ({ title: r.title, created: r.created })),
+    failed: out.results.filter((r) => !r.started).map((r) => ({ title: r.title, error: r.error ?? "not started" })),
+    ...(out.error ? { error: out.error } : {}),
+  });
+}
