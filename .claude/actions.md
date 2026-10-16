@@ -4593,6 +4593,8 @@ Owner: *"i have tasks everyday and i do want a similar message for day in the mo
 | 5 | 7pm evening-window message + 8pm evening brief delivered 2026-10-15 | DELIVERED (mechanism) | owner: "I recieved everything and it was excellent" |
 | 6 | 8pm priority check sent NOTHING | ROOT-CAUSED + FIXED: runPriorityCheck returned skipped:"empty" on a 0-row band. Live journey (2026-10-16): 0 of 97 open tasks starred/ranked; all 102 starred tasks DONE (owner completed them Oct 8-13); no automatic unstar path (only Priorities.tsx + execute-tool unset_rank). Owner: "There is no scenario or excuse for priority message not being produced". Empty band now sends a "no priorities set" check + widget | merged #88 (fa7fae8); 24/24; P-EMPTY1 FIRED |
 
+| 7 | "Open Priorities" BUTTON instead of the embedded widget (owner 2026-10-16: "a button that deep links to the priority tab in the app instead of embedded priority widget") | merged #91 (465323b). Message.navLink -> NavLinkButton -> setView("priorities"); Iris names top 3 ("and N more") in "Hello Sir," voice, no tool call; ensureNavLinkDelivered guarantees the button (and a fallback reply if the model is silent) at both turn endings | 35/35 + G8 83/83; P-NAV1/4/8/10/11 FIRED. G8 widened byte-identical -> additive-only (still fails on an altered field) |
+
 **NOT yet confirmed by the owner.** Known overlap, left as is: the 5pm (after_work 17-22) and 7pm (evening 19-22) windows overlap, so the 7pm message can repeat 7-10pm items.
 
 ## ACT:inbound-email-watch — update 2026-10-15 late (owner asks: 5-min cadence, owed/settled tracking, buttons)
