@@ -3,7 +3,7 @@ import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { isUserTurn } from "./turn-identity";
-import type { ChecklistPayload, HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
+import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, TaskLane } from "../data/seed";
 // The two in-chat widget payloads ride back on a reply exactly as `checklist` does, so they are
 // declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
 // and the reply DTOs are shared with the client bundle.
@@ -230,6 +230,14 @@ const Input = z.object({
       fromName: z.string().max(300),
       fromAddress: z.string().max(320),
       subject: z.string().max(500),
+    })
+    .optional(),
+  // A tab-switch button attached to the TARGET agent's reply (the priority check: "Open Priorities").
+  // Attached from the payload, like emailReplyRef, so it is there whatever the model does.
+  navLink: z
+    .object({
+      view: z.enum(["priorities", "schedule", "board", "artifacts"]),
+      label: z.string().min(1).max(60),
     })
     .optional(),
   // A live-ceremony BARGE-IN answered synchronously (the client's runBargeSequence, not the durable
@@ -577,6 +585,7 @@ type TurnResumeState = {
     emailReply?: EmailReplyAsk;
     checklist?: ChecklistPayload;
     priorities?: PrioritiesWidgetData;
+    navLink?: NavLink;
     schedule?: ScheduleWidgetData;
   }[];
   journeyTaskUpdates: import("./journey/types").JourneyTask[];
@@ -860,6 +869,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     emailReply?: EmailReplyAsk;
     checklist?: ChecklistPayload;
     priorities?: PrioritiesWidgetData;
+    navLink?: NavLink;
     schedule?: ScheduleWidgetData;
   };
 
@@ -6565,6 +6575,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       checklist: replyChecklist,
       priorities: replyPriorities,
       schedule: replySchedule,
+      navLink: data.navLink && nextId === data.targetAgentId ? data.navLink : undefined,
     });
     spoken.add(nextId);
 
@@ -6775,6 +6786,26 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         : `${didWork.summary} — I ran out of time to reply in full, but that went through. ` +
           `Let me know if you want more detail.`,
       ...(card ? { emailReply: card } : {}),
+    });
+  };
+
+  // A turn whose payload carries a navLink (the scheduled priority check) MUST end with that button in
+  // front of the owner. Owner, 2026-10-16: "There is no scenario or excuse for priority message not being
+  // produced". The target agent's reply gets the button wherever it was built (normal, hardReply); if the
+  // model produced nothing at all (timeout, empty completion), a short deterministic reply carries it.
+  const ensureNavLinkDelivered = () => {
+    const link = data.navLink;
+    const target = data.targetAgentId;
+    if (!link || !target) return;
+    const i = replies.findIndex((r) => r.agentId === target);
+    if (i >= 0) {
+      if (!replies[i].navLink) replies[i] = { ...replies[i], navLink: link };
+      return;
+    }
+    replies.push({
+      agentId: target,
+      text: `Hello Sir, I couldn't finish writing this one up just now — the "${link.label}" button below takes you straight there.`,
+      navLink: link,
     });
   };
 
@@ -7017,6 +7048,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       return { ...finalResult(), partial: true };
     }
     ensureNotSilentOnRealWork();
+    ensureNavLinkDelivered();
     try {
       await turnStore.saveTurnChunk(turnId, replies, null, true, finalResult());
     } catch (e) {
@@ -7027,6 +7059,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   }
 
   ensureNotSilentOnRealWork();
+  ensureNavLinkDelivered();
   persistResearchedMemory();
   return finalResult();
 }
@@ -7697,6 +7730,7 @@ type TurnUpdateDTO = {
     emailReply?: EmailReplyAsk;
     checklist?: ChecklistPayload;
     priorities?: PrioritiesWidgetData;
+    navLink?: NavLink;
     schedule?: ScheduleWidgetData;
   }[];
   result: HuddleTurnResult | null;
@@ -7740,6 +7774,7 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
     emailReply?: EmailReplyAsk;
           checklist?: ChecklistPayload;
           priorities?: PrioritiesWidgetData;
+          navLink?: NavLink;
           schedule?: ScheduleWidgetData;
         }[],
         result: (t.result ?? null) as HuddleTurnResult | null,
@@ -7809,6 +7844,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
     emailReply?: EmailReplyAsk;
         checklist?: ChecklistPayload;
         priorities?: PrioritiesWidgetData;
+        navLink?: NavLink;
         schedule?: ScheduleWidgetData;
       }[];
       // Tool-use breadcrumbs for away/cross-device turns — the client filters per agent + drops tool_catalog.
@@ -7849,6 +7885,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
     emailReply?: EmailReplyAsk;
         checklist?: ChecklistPayload;
         priorities?: PrioritiesWidgetData;
+        navLink?: NavLink;
         schedule?: ScheduleWidgetData;
       }[],
       toolUses: ((t.result as { toolUses?: unknown } | null)?.toolUses ?? undefined) as

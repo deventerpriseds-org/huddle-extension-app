@@ -23,7 +23,7 @@ import type { AgentId } from "../../data/agents";
 import type { WidgetTaskRow } from "./widgets.server";
 import type { BriefEdition } from "./schedule-brief.server";
 
-/** Iris owns this — her DM already carries the docked priorities widget. */
+/** Iris owns this. Her message carries an "Open Priorities" button (PRIORITY_CHECK_NAV_LINK). */
 export const PRIORITY_CHECK_OWNER: AgentId = "iris-chase";
 
 /** MORNING = ahead of grooming / auto-work; EVENING = ahead of the nightly scheduler. Picked by the
@@ -41,7 +41,17 @@ export interface PriorityCheckSummary {
   /** Open, prioritised, and NOT started or scheduled — the "likely not to be scheduled" half of
    *  the owner's 2026-09-10 ask. */
   unscheduled: number;
+  /** Titles of the first few rows, in the band's own order, so Iris can name them out loud (the
+   *  message carries a button to the Priorities tab now, not the widget — owner, 2026-10-16). */
+  top?: string[];
 }
+
+/** How many priorities Iris names before "and N more". */
+export const PRIORITY_CHECK_NAMED = 3;
+
+/** The button under Iris's message. Owner, 2026-10-16: "she can do so with a button that deep links
+ *  to the priority tab in the app instead of embedded priority widget". */
+export const PRIORITY_CHECK_NAV_LINK = { view: "priorities" as const, label: "Open Priorities" };
 
 /** Count what the directive mentions. `todayKey` is yyyy-mm-dd in the user's zone; a row's due date
  *  is compared on its LOCAL date, via the same `localDateKey` the widget uses. */
@@ -60,12 +70,14 @@ export function summarizeBand(
     if ((r.status ?? "").toUpperCase() === "BLOCKED") blocked++;
     if (!r.isScheduled && (r.status ?? "").toUpperCase() !== "DOING") unscheduled++;
   }
-  return { edition, count: band.length, overdue, blocked, unscheduled };
+  const top = band.slice(0, PRIORITY_CHECK_NAMED).map((r) => r.title.trim()).filter(Boolean);
+  return { edition, count: band.length, overdue, blocked, unscheduled, top };
 }
 
-/** The instruction Iris is handed. Facts are counts only; the widget carries the rows, so the model
- *  is told NOT to list them (the WIDGET_SYSTEM_HINT rule) and MUST call the tool — Phase 0 proved a
- *  directive saying so overrides the don't-volunteer rule at tools.ts. */
+/** The instruction Iris is handed. No widget and no tool call: the message ends with an "Open
+ *  Priorities" BUTTON (attached from the payload's navLink, so it is there whatever the model does),
+ *  and Iris names the top few priorities in her own spoken voice. */
+const BUTTON_LINE = `An "${PRIORITY_CHECK_NAV_LINK.label}" button appears under your message and takes him straight to the Priorities tab.`;
 export function priorityCheckDirective(s: PriorityCheckSummary): string {
   // EMPTY BAND STILL SENDS (owner, 2026-10-15: "...and to confirm prioritization ahead of scheduling
   // the next day's build"). The 8pm run on 2026-10-15 found 0 priorities and sent NOTHING, so the
@@ -77,11 +89,11 @@ export function priorityCheckDirective(s: PriorityCheckSummary): string {
         : "Grooming and the team's work today will pick from their own scoring, with nothing prioritised.";
     return (
       `SCHEDULED PRIORITY CHECK (${s.edition}). The owner has NO priorities set right now. ${consequence}\n\n` +
-      `Call show_priorities_widget now — presenting the widget IS the point of this message, do not skip ` +
-      `the tool call. Then write ONE or TWO short lines in your own voice saying there are no priorities set, ` +
-      `what that means for ${s.edition === "evening" ? "tomorrow's plan" : "today"}, and asking whether there is ` +
-      `anything he wants prioritised — he can add it right there from the card. ` +
-      `Do not call any other tool, and do not invent anything not stated here.`
+      `${BUTTON_LINE}\n\n` +
+      `Write TWO or THREE short spoken lines, starting "Hello Sir,": say there are no priorities set, what ` +
+      `that means for ${s.edition === "evening" ? "tomorrow's plan" : "today"}, and ask whether there is anything ` +
+      `he wants prioritised — he can set it with the button below. ` +
+      `Do NOT call any tool, and do not invent anything not stated here.`
     );
   }
   const when =
@@ -92,14 +104,21 @@ export function priorityCheckDirective(s: PriorityCheckSummary): string {
   if (s.overdue) flags.push(`${s.overdue} past their due date`);
   if (s.blocked) flags.push(`${s.blocked} blocked`);
   if (s.unscheduled) flags.push(`${s.unscheduled} not yet scheduled`);
+  const top = (s.top ?? []).slice(0, PRIORITY_CHECK_NAMED);
+  const more = s.count - top.length;
+  const named = top.length
+    ? `Top ${top.length === 1 ? "priority" : `${top.length} in order`}: ${top.map((t) => `"${t}"`).join(", ")}` +
+      `${more > 0 ? `, and ${more} more` : ""}.`
+    : "";
   return (
     `SCHEDULED PRIORITY CHECK (${s.edition}). The owner has ${s.count} open priorit${s.count === 1 ? "y" : "ies"}` +
-    `${flags.length ? ` — ${flags.join(", ")}` : ""}. ${when}\n\n` +
-    `Call show_priorities_widget now — presenting the widget IS the point of this message, do not skip ` +
-    `the tool call. Then write ONE or TWO short lines in your own voice asking whether these are still ` +
-    `right, and that anything stale can be fixed right there on the card (done, park, move to today). ` +
+    `${flags.length ? ` — ${flags.join(", ")}` : ""}. ${when}${named ? ` ${named}` : ""}\n\n` +
+    `${BUTTON_LINE}\n\n` +
+    `Write TWO or THREE short spoken lines, starting "Hello Sir,": name the top priorities above in plain ` +
+    `words${more > 0 ? " and say how many more there are" : ""}, ask whether they are still right, and say ` +
+    `he can confirm, reorder or fix anything stale with the button below. ` +
     `${flags.length ? "Mention the flagged counts above in a few words. " : ""}` +
-    `Do NOT list the tasks in text, do not call any other tool, and do not invent anything not stated here.`
+    `Do NOT call any tool, do not list anything beyond the names given, and do not invent anything not stated here.`
   );
 }
 
@@ -173,6 +192,8 @@ export async function runPriorityCheck(
       caller,
       notify: "push",
       internal: true,
+      // The "Open Priorities" button, attached to Iris's reply by the turn runner (not by the model).
+      navLink: PRIORITY_CHECK_NAV_LINK,
     };
     const { enqueueTurn } = await import("./turns.server");
     const fresh = await enqueueTurn(turnId, `dm-${owner}`, caller.entra_email, payload);

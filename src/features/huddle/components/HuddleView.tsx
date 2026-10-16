@@ -34,6 +34,7 @@ import {
   type ChecklistPayload,
   type Huddle,
   type HuddleMessage,
+  type NavLink,
   type ToolUseEvent,
 } from "../data/seed";
 // The widget payload contract is Lane B's (lib/tasks/widgets.server.ts). Type-only import — that
@@ -730,6 +731,28 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
  * NO QUOTE IS ASKED FOR HERE. A click is already a user act: it carries an authenticated session no
  * model can forge. The transcript-quote check exists for the TOOL, where the caller is a model.
  */
+/**
+ * A button under an agent message that switches the app to one of its tabs. Owner, 2026-10-16: "she
+ * can do so with a button that deep links to the priority tab in the app instead of embedded priority
+ * widget". Pure navigation — no server call, nothing to resolve, so it works however old the message.
+ */
+const NAV_VIEWS: readonly NavLink["view"][] = ["priorities", "schedule", "board", "artifacts"];
+function NavLinkButton({ link }: { link: NavLink }) {
+  const setView = useHuddleStore((s) => s.setView);
+  if (!NAV_VIEWS.includes(link.view)) return null;
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setView(link.view)}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-hairline bg-surface px-3 py-1.5 text-xs font-medium hover:bg-muted"
+      >
+        {link.label}
+      </button>
+    </div>
+  );
+}
+
 function OverrideAskRow({ m }: { m: HuddleMessage }) {
   const { user } = useAuth();
   const [busy, setBusy] = useState(false);
@@ -1074,6 +1097,7 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
         {m.confirmAsk && <ConfirmAskRow m={m} />}
         {m.overrideAsk && <OverrideAskRow m={m} />}
         {m.emailReply && <EmailReplyRow m={m} />}
+        {m.navLink && <NavLinkButton link={m.navLink} />}
       </div>
     </div>
   );
@@ -1266,6 +1290,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
           // inline at both mapping sites and an undeclared field is dropped SILENTLY — no error, no
           // crash — so a widget would decay into plain text after a reload with nothing to blame.
           priorities?: PrioritiesWidgetData;
+          navLink?: NavLink;
           schedule?: ScheduleWidgetData;
         }[]
       | undefined,
@@ -1334,6 +1359,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
         emailReply: reply.emailReply,
         checklist: reply.checklist,
         priorities: reply.priorities,
+        navLink: reply.navLink,
         schedule: reply.schedule,
       });
     });

@@ -332,6 +332,7 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
         // would NOT protect it: `??` guards against the incoming field being ABSENT, while the real
         // exposure is a PRESENT-but-stale server copy overwriting rows the user just changed.
         checklist: m.checklist ?? next[i].checklist,
+        navLink: m.navLink ?? next[i].navLink,
       };
       return { messages: next };
     }),
