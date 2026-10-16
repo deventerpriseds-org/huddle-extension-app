@@ -3742,3 +3742,8 @@ here as fact three times before being checked.)
 - Pattern to copy: `confirmAsk` (HuddleView.tsx `ConfirmAskRow` ~612; field on HuddleMessage seed.ts:43; agent calls a tool → tool detail → `confirmAsk` set on the reply at huddle.functions.ts ~6484; buttons call `*FromButtonFn` in confirm-ask.functions.ts with ONLY an id; the server re-reads everything else from its own row and checks ownership; a second tap returns alreadyDone).
 - Applies first to new-email alerts (Save to Drafts / Dismiss), and to every future "want me to…?" offer.
 - Known gap in the pattern: `resolved` is client-only (store.ts:376); server row state is the truth. Read it, don't trust the card.
+
+## Inbound email watch — what is TRUE now (2026-10-15 late)
+- Live: every 5 min 7–22 ET; `chat.email_replies` ledger (owed→drafted→replied|dismissed); Iris's alert carries a card (Save to Drafts / Edit first / No reply needed, "N owed · M settled today").
+- **Every reply path must attach a widget, not just the normal one.** Amy's alert lost its card because Iris timed out after the tool call and `ensureNotSilentOnRealWork` / `hardReply` built a bare reply. Wire any reply-borne widget through one helper used by all three paths (`emailCardFor`).
+- **Durable turn `text` is `.max(4000)`** (huddle.functions.ts input schema) — an over-long directive fails the WHOLE turn as `status=error`. Cap any directive that embeds outside content.
