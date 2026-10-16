@@ -881,6 +881,20 @@ function EmailReplyRow({ m }: { m: HuddleMessage }) {
           {ask.subject ? <span className="text-muted-foreground"> — “{ask.subject}”</span> : null}
         </span>
       </div>
+      {/* The exact text Save puts in Drafts — visible on the card itself, so the tap never depends on
+          Iris's prose having arrived (2026-10-15: her reply timed out and only the card survived). */}
+      {ask.replyBody ? (
+        <blockquote
+          className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap border-l-2 pl-2 text-xs text-muted-foreground"
+          data-testid="email-reply-body"
+        >
+          {ask.replyBody}
+        </blockquote>
+      ) : (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          No suggested reply yet — tap Edit first to tell Iris what to say.
+        </p>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <button
           type="button"
