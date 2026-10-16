@@ -4587,4 +4587,7 @@ Owner: *"i have tasks everyday and i do want a similar message for day in the mo
 
 | 4 | Live end-to-end test | PASSED (mechanism) | journey Test-Daily Wrap-up 21:07:03 UTC -> journey log `Iris window brief (after_work): HTTP 200 ... delivered:true` -> turn schedule-brief-window-after_work-2026-10-15 done: "Hello Sir, just a reminder that for the rest of the after work window (5 PM–10 PM) you have no meetings or classes, and on your task list you have ... 6:00 PM, ... 7:00 PM, ... 9:00 PM." |
 
+| 5 | 7pm evening-window message + 8pm evening brief delivered 2026-10-15 | DELIVERED (mechanism) | owner: "I recieved everything and it was excellent" |
+| 6 | 8pm priority check sent NOTHING | ROOT-CAUSED + FIXED: runPriorityCheck returned skipped:"empty" on a 0-row band. Live journey (2026-10-16): 0 of 97 open tasks starred/ranked; all 102 starred tasks DONE (owner completed them Oct 8-13); no automatic unstar path (only Priorities.tsx + execute-tool unset_rank). Owner: "There is no scenario or excuse for priority message not being produced". Empty band now sends a "no priorities set" check + widget | merged #88 (fa7fae8); 24/24; P-EMPTY1 FIRED |
+
 **NOT yet confirmed by the owner.** Known overlap, left as is: the 5pm (after_work 17-22) and 7pm (evening 19-22) windows overlap, so the 7pm message can repeat 7-10pm items.
