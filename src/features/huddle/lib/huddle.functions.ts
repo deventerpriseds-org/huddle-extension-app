@@ -3282,7 +3282,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const effectiveInstructions = overrideInstructions || snapshotInstructions;
         fromSnapshot = !overrideInstructions && !!snapshotInstructions;
         const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
-        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT } = await import(
+        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT } = await import(
           "./tasks/tools"
         );
         // Grooming is now gated on the data-driven capability (agents.ts), with the legacy
@@ -3351,6 +3351,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // prefer an interactive card over a prose answer. Additive -- nothing above is altered.
           "\n\n" +
           WIDGET_SYSTEM_HINT +
+          "\n\n" +
+          FOCUS_SYSTEM_HINT +
           // Same slot and same rule as the hints above: the built-in tools are offered in
           // `mergedTools` below ONLY when builtInToolsAllowed, so the hint that says the capability
           // exists is added under exactly the same condition. Purely ADDITIVE — it takes nothing away
@@ -3570,7 +3572,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           emailTools.push(GET_EXTERNAL_CALENDAR_EVENTS_TOOL);
         }
 
-        const { PRIORITIZE_TOOL, CHECKLIST_TOOL, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL } =
+        const { PRIORITIZE_TOOL, CHECKLIST_TOOL, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL, FOCUS_TOOL } =
           await import("./tasks/tools");
         // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
         const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
@@ -3608,6 +3610,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // make the widget reachable only by talking to that agent.
           PRIORITIES_WIDGET_TOOL,
           SCHEDULE_WIDGET_TOOL,
+          // "start these": starts existing tasks, creates-then-starts missing ones (focus.server.ts).
+          FOCUS_TOOL,
           GET_CALENDAR_EVENTS_TOOL, // calendar-framed alias → combined schedule (always available)
           ...groomTools,
           ...emailTools,
@@ -4283,6 +4287,26 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // priorities widget and a schedule widget can both render in one turn, but neither twice),
           // the caller's resolved email, and the FULL dispatcher JSON carried back in `detail`, which
           // is the only channel the reply-assembly has to recover the payload.
+          if (c.name === "focus_on") {
+            // Mutating: one per turn, so two group responders cannot start the same list twice.
+            if (!claimAction("focus_on")) {
+              recordToolUse(winner.id, c.name, "focus_on -- already done this turn", true);
+              return JSON.stringify({ error: "already_done", message: "Those were already started this turn; refer to that result." });
+            }
+            const { dispatchFocusOn } = await import("./tasks/tools");
+            const out = await dispatchFocusOn(data.caller, c.arguments);
+            let ok = false,
+              summary = "focus_on";
+            try {
+              const p = JSON.parse(out) as { ok?: boolean; summary?: string };
+              ok = p.ok === true;
+              summary = p.summary ?? summary;
+            } catch {
+              /* keep defaults */
+            }
+            recordToolUse(winner.id, c.name, summary.slice(0, 200), ok, ok ? undefined : summary);
+            return out;
+          }
           if (c.name === "show_priorities_widget" || c.name === "show_schedule_widget") {
             const isPriorities = c.name === "show_priorities_widget";
             const label = isPriorities ? "priorities widget" : "schedule widget";
@@ -5684,6 +5708,35 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           });
         }
 
+        // focus_on — mirrors the OpenAI path (FOCUS_SYSTEM_HINT is appended to both backends).
+        {
+          const { dispatchFocusOn } = await import("./tasks/tools");
+          lovableTools.focus_on = tool({
+            description:
+              "START what the user says they want to work on: existing tasks are started (Doing, top of This Week); missing ones are created first, then started. Use for a list of things to work on or 'start X', including a reply to a priority check.",
+            inputSchema: z.object({
+              items: z.array(z.object({ title: z.string(), task_id: z.string().optional() })),
+            }),
+            execute: async (args) => {
+              if (!claimAction("focus_on")) {
+                return JSON.stringify({ error: "already_done", message: "Those were already started this turn." });
+              }
+              const out = await dispatchFocusOn(data.caller, args as Record<string, unknown>);
+              let ok = false;
+              let summary = "focus_on";
+              try {
+                const p = JSON.parse(out) as { ok?: boolean; summary?: string };
+                ok = p.ok === true;
+                summary = p.summary ?? summary;
+              } catch {
+                /* keep defaults */
+              }
+              recordToolUse(winner.id, "focus_on", summary.slice(0, 200), ok, ok ? undefined : summary);
+              return out;
+            },
+          });
+        }
+
         // build_checklist — the in-chat checklist widget. MUST exist here as well as in the OpenAI
         // tools array: CHECKLIST_SYSTEM_HINT is appended to BOTH backends' instructions, so omitting
         // it here told this backend to call a tool it was never offered.
@@ -6175,7 +6228,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         }
 
         {
-          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT } = await import(
+          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT } = await import(
             "./tasks/tools"
           );
           usedInstructions =
@@ -6190,6 +6243,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             // when to prefer one over a prose answer.
             "\n\n" +
             WIDGET_SYSTEM_HINT +
+            "\n\n" +
+            FOCUS_SYSTEM_HINT +
             groundingBlock(!!agentBackend.webSearch);
         }
 
