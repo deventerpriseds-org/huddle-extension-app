@@ -4591,3 +4591,10 @@ Owner: *"i have tasks everyday and i do want a similar message for day in the mo
 | 4 | Live end-to-end test | PASSED (mechanism) | journey Test-Daily Wrap-up 21:07:03 UTC -> journey log `Iris window brief (after_work): HTTP 200 ... delivered:true` -> turn schedule-brief-window-after_work-2026-10-15 done: "Hello Sir, just a reminder that for the rest of the after work window (5 PM–10 PM) you have no meetings or classes, and on your task list you have ... 6:00 PM, ... 7:00 PM, ... 9:00 PM." |
 
 **NOT yet confirmed by the owner.** Known overlap, left as is: the 5pm (after_work 17-22) and 7pm (evening 19-22) windows overlap, so the 7pm message can repeat 7-10pm items.
+
+## ACT:inbound-email-watch — update 2026-10-15 late (owner asks: 5-min cadence, owed/settled tracking, buttons)
+- **#82** merged + deployed (run 38805585530); live dry run kept trinnex.io; real run delivered 2 alerts.
+- **#85** every-5-min cadence (`JobCadence.everyMinutes`), merged feab09b.
+- **#87** reply buttons (Save to Drafts / No reply needed) + `chat.email_replies` owed/settled ledger, merged 17d0837, deploy 38812815410 success. Live: owner tapped "No reply needed" on the Equifax card → row `dismissed` (buttons work end to end).
+- **Live defects found (this push):** Amy's resent alert had no card — Iris timed out after `propose_email_reply` and the zero-reply safety net built a bare reply; a long emailrelay.com email exceeded the turn's `text.max(4000)` → turn `error`. Fixed: `emailCardFor()` on all 3 reply paths, card shows the reply body, directive capped ≤3900. 69/69 tests, tsc 0.
+- **Status:** OPEN until owner confirms a card + Save to Drafts lands in Outlook. Follow-ups: Settings toggle for mode A/B/C; plain-draft fallback mailbox.
