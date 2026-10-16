@@ -101,5 +101,17 @@ check("P20 Send now calls the scheduler's own runner with a fresh runId",
   /runPriorityCheck\(\{ entra_email: email \}, \{ timeZone: tz, runId: `manual-\$\{Date\.now\(\)\}` \}\)/.test(fns) &&
   /runPriorityCheckNowFn\(/.test(panel) && /key === "priorityCheck"/.test(panel));
 
+// P-EMPTY — owner 2026-10-15: "...to confirm prioritization ahead of scheduling the next day's build".
+// The 8pm run that night found 0 priorities and sent NOTHING. An empty band must still produce a check.
+{
+  const empty = summarizeBand([], "evening", today, dueKey);
+  const ed = priorityCheckDirective(empty);
+  check("P-EMPTY1 an empty evening band still has a directive that says no priorities are set", /NO priorities set/.test(ed), ed);
+  check("P-EMPTY2 and names the consequence for tomorrow's plan", /builds tomorrow's plan/.test(ed) && /its own scoring/.test(ed), ed);
+  check("P-EMPTY3 and still presents the widget", /Call show_priorities_widget now/.test(ed), ed);
+  const src = readFileSync("src/features/huddle/lib/tasks/priority-check.server.ts", "utf8");
+  check("P-EMPTY4 runPriorityCheck no longer skips an empty band", !/if \(!band\.length\) return/.test(src));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

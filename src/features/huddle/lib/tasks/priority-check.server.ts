@@ -67,6 +67,23 @@ export function summarizeBand(
  *  is told NOT to list them (the WIDGET_SYSTEM_HINT rule) and MUST call the tool — Phase 0 proved a
  *  directive saying so overrides the don't-volunteer rule at tools.ts. */
 export function priorityCheckDirective(s: PriorityCheckSummary): string {
+  // EMPTY BAND STILL SENDS (owner, 2026-10-15: "...and to confirm prioritization ahead of scheduling
+  // the next day's build"). The 8pm run on 2026-10-15 found 0 priorities and sent NOTHING, so the
+  // planner built tomorrow from its own scoring with no chance to confirm. Saying so IS the check.
+  if (s.count === 0) {
+    const consequence =
+      s.edition === "evening"
+        ? "Tonight's scheduler builds tomorrow's plan in a few hours, and with nothing prioritised it will pick from its own scoring."
+        : "Grooming and the team's work today will pick from their own scoring, with nothing prioritised.";
+    return (
+      `SCHEDULED PRIORITY CHECK (${s.edition}). The owner has NO priorities set right now. ${consequence}\n\n` +
+      `Call show_priorities_widget now — presenting the widget IS the point of this message, do not skip ` +
+      `the tool call. Then write ONE or TWO short lines in your own voice saying there are no priorities set, ` +
+      `what that means for ${s.edition === "evening" ? "tomorrow's plan" : "today"}, and asking whether there is ` +
+      `anything he wants prioritised — he can add it right there from the card. ` +
+      `Do not call any other tool, and do not invent anything not stated here.`
+    );
+  }
   const when =
     s.edition === "evening"
       ? "Tonight's scheduler builds tomorrow's plan from these priorities in a few hours."
@@ -100,7 +117,8 @@ export interface PriorityCheckResult {
   todayKey?: string;
   summary?: PriorityCheckSummary;
   delivered?: boolean;
-  /** "empty" = no priorities, so nothing was sent. Never conflated with a failure. */
+  /** No longer produced: an empty band is sent as an "no priorities set" check (2026-10-15).
+   *  Kept so existing callers that read the field still type-check. */
   skipped?: "empty";
   turnId?: string;
   directive?: string;
@@ -136,8 +154,8 @@ export async function runPriorityCheck(
     const base: PriorityCheckResult = { ok: true, edition, todayKey, summary, turnId };
 
     if (opts.dryRun) return { ...base, delivered: false, directive };
-    // Nothing prioritised = nothing to check = nothing sent.
-    if (!band.length) return { ...base, delivered: false, skipped: "empty" };
+    // An EMPTY band is still sent (see priorityCheckDirective): "nothing prioritised" is exactly the
+    // thing the owner needs to hear before the planner runs. It used to return skipped:"empty" here.
 
     const owner = PRIORITY_CHECK_OWNER;
     const payload = {
