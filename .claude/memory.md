@@ -3712,6 +3712,7 @@ here as fact three times before being checked.)
   nothing" and "we could not look" must never collapse into the same silence.
 
 ## Priority check (6am/8pm freshness gate) — 2026-10-15
+- **"Start these" = ONE core, `focusOn` (lib/tasks/focus.server.ts, #94).** The Priorities tab input (`focusWidgetItems`) and the `focus_on` tool (both text backends + voice) call it. Matching is conservative on purpose: a wrong match STARTS the wrong task; a miss only creates. Writes go through journey tools only (quick_create_task / set_priority_rank / update_task). Extend it, don't add a second "start/create" path.
 - **Message buttons that switch tabs = `Message.navLink {view,label}` (#91).** Put `navLink` in a turn payload and the runner attaches it to the TARGET agent's reply; `ensureNavLinkDelivered` guarantees it (fallback reply if the model is silent). The priority check uses it ("Open Priorities") instead of `show_priorities_widget`. Reuse it for any "go look at tab X" ping rather than embedding a widget.
 - **The priority check ALWAYS sends (2026-10-16, #88).** An empty band (0 starred/ranked open tasks) used to return skipped:"empty" and send nothing; owner ruled there is no case where it may stay silent. Empty now = "no priorities set" + widget. A 0 count is usually REAL (starred tasks get completed), not data loss -- check journey `public.tasks` is_priority/priority_rank on open rows before suspecting a sync bug.
 - Job `priorityCheck` (default [6, 20] ET), route `/api/public/run-priority-check`, runner

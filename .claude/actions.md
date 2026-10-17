@@ -4605,3 +4605,16 @@ Owner: *"i have tasks everyday and i do want a similar message for day in the mo
 - **Live defects found (this push):** Amy's resent alert had no card — Iris timed out after `propose_email_reply` and the zero-reply safety net built a bare reply; a long emailrelay.com email exceeded the turn's `text.max(4000)` → turn `error`. Fixed: `emailCardFor()` on all 3 reply paths, card shows the reply body, directive capped ≤3900. 69/69 tests, tsc 0.
 - **Status:** OPEN until owner confirms a card + Save to Drafts lands in Outlook. Follow-ups: Settings toggle for mode A/B/C; plain-draft fallback mailbox.
 - **2026-10-16 01:47Z live evidence (after #90, deploy 38836561690):** `chat.email_replies` — Amy (trinnex.io) `replied` at 22:00Z, auto-settled from Sent Items (owner replied in Outlook); Equifax `dismissed` (owner tapped the card); emailrelay.com `owed`, its resend turn `done` WITH card + reply body. Remaining owner check: tap Save to Drafts and confirm the threaded draft appears in Outlook Drafts.
+
+## ACT:focus-list — reply with what to work on; start existing, create-then-start missing (2026-10-16)
+Owner: *"i should be able to reply to the priority message question with a list of items i want to work on and if they exist, it should start them, but if they dont, it should create the tasks first then start them. this needs to be a streamlined ability if i ask iris or if i type in the text input section of the priorities tab. currently typing in the priorities tab switches views to iris 1:1 ... look at how the focus view works in journey"*
+
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | One core `focusOn` (lib/tasks/focus.server.ts + pure focus.ts): explicit id → exact/phrase/all-words match (ties + DONE never match) → one gpt-4o-mini match (ids validated) → create missing (quick_create_task) → star (set_priority_rank 0) + start (update_task DOING, un-park) → front of This Week | merged #94 (063c31f), deployed SWA run 38846939002 | focus.test 25/25; mutate F1/F8b/F9/F12/F17 FIRED; exact- and phrase-tie lines behaviourally equivalent (not provable) |
+| 2 | Priorities tab input stays on the tab (journey Focus view), toast + widget re-read | merged #94 | F19/F20 |
+| 3 | `focus_on` tool for Iris (both text backends + voice); priority check says "just reply with what you want to work on" | merged #94 | F21-F23 |
+| 4 | Live UAT through Iris | PASSED (mechanism): agent-serverfn-uat run 38847128639 (branch claude_focus-uat) — focus_on "Started 2 ... (1 new)"; journey: seeded "Test-focus existing quarterly deck" → DOING+starred, NOT duplicated; "Test-focus brand new item" created → DOING+starred. Script exit 1 is the decoder's known true→null constant bug, not the product | test rows set DONE+unstarred (delete needs an interactive confirm this session can't give) |
+
+**NOT yet confirmed by the owner** in the app (Priorities tab input + a real reply to Iris). Choice taken, reversible: "start" = journey's Start (DOING) + star into This Week, matching the Focus view's Start button.
+
