@@ -4643,3 +4643,18 @@ All starred rows `priority_rank = 0`. Every row last written 2026-10-16 01:00 ET
 6. **Possibly no Saturday 1am rebuild** (rows untouched since Fri 01:00). NOT confirmed — the cron run-history
    query was declined by the owner.
 **Status:** reported to owner; no fix started (journey-side; needs go-ahead + owner's window values).
+
+**CORRECTION (same session, owner: "Today is Friday not Saturday"):** the session's "today" (2026-10-17) was
+UTC; in ET it was **Friday 2026-10-16 20:23**. The table above is TOMORROW's (Saturday's) plan, and finding 6
+("no Saturday 1am rebuild") is **WITHDRAWN** — Saturday's 1am run had not happened yet.
+**Friday 2026-10-16 as placed (all 11 rows written 10-16 01:00 ET, i.e. by Friday's own 1am run ✅):**
+09–10 Fix Nexus assignments (CAREER★0) · 10–11 Debug WIP autowork (CAREER) · 11–14:15 five LIFE rows in
+daytime (Ghost cord; brakes/rotors ×2 near-duplicates "Merced"/"Mercedes"; find + apply low-interest card) ·
+14:15–16:15 Update confirmation workflow (CAREER) · 17–18 DBA payment plan (VENTURES★0) · 18–19 Research
+Slack AI Agents (VENTURES★0, due 06-19) · 19–22 Nexus Career-Playbook template (VENTURES★0, 3h).
+**Friday-specific findings:** ~12¼h scheduled 09:00–22:00 with one 45-min gap (no cap exists); ALL 11 due dates
+already past (oldest 06-19), none flagged; LIFE in business hours = code default `flexible` — the owner's lost
+config had excluded business hours for LIFE; "payment plan" placed at 17:00 because keyword rules
+(`contextRules.keywords`, e.g. payment→business_hours) are read ONLY from user config, which is wiped;
+"Apply for the low-interest credit card selected for the Platinum Card" is now unparked (mirror showed it
+`parking-lot` on 10-15) — cause not established.

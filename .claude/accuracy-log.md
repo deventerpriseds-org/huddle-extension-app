@@ -443,3 +443,14 @@ lost was this very section, written but not yet committed. Recovery was the meas
 ### Status
 Mechanism-verified and deployed; **NOT user-confirmed.** The next verification of `artifact-formats`
 is **loop 4**.
+
+
+## 2026-10-16 — "Today is Saturday" (it was Friday)
+
+| field | value |
+|---|---|
+| Claim | Analysed "today's schedule" as Saturday 2026-10-17 |
+| Ground truth | Owner in ET; it was **Friday 2026-10-16 20:23 ET** (00:23 UTC on the 17th) |
+| Source that would have settled it | `TZ=America/New_York date` — one command, before the first query |
+| Root cause | Took the harness's "today" (a UTC date) as the owner's local day; journey's own rule is "never toISOString for today, use the user's tz" |
+| Guard implied | Any "today/tonight/this morning" question: resolve the date in the owner's tz (`user_scheduling_prefs.timezone`) first and state it ("Friday 16 Oct, ET") in the first line |
