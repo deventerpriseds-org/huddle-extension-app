@@ -4618,3 +4618,28 @@ Owner: *"i should be able to reply to the priority message question with a list 
 
 **NOT yet confirmed by the owner** in the app (Priorities tab input + a real reply to Iris). Choice taken, reversible: "start" = journey's Start (DOING) + star into This Week, matching the Focus view's Start button.
 
+
+## ACT:schedule-audit-2026-10-17 — today's schedule vs the design (fact-finding, no code changed)
+
+**Asked:** owner 2026-10-17: *"Look at the schedule today. What about it matches vs doesn't match the way the
+system was designed to work including the settings, windows, priorities etc"*. Saturday.
+**Read (journey `public.tasks`, owner `a3378f93…`):** 7 blocks 10:00–19:00 ET — Start AI certification course
+(PROF_ED, pushed ×24), Research CTO Playbooks (VENTURES, due 09-01), Subscribe to Aha! (due 09-11), Sign up for
+Esri developer account ×2 (duplicate titles, one starred one not, due 09-22), Winston AI research, Geo-AI app.
+All starred rows `priority_rank = 0`. Every row last written 2026-10-16 01:00 ET (Friday's 1am run).
+**Findings:**
+1. **Owner's custom scheduling config is gone.** `user_scheduling_prefs.config` for the owner = only
+   `customAIInstructions` (updated 2026-09-13 16:12Z); no `timeWindows` / `categoryMappings` / `contextRules`, so
+   the nightly builder runs on code DEFAULTS. Mechanism read in journey code: `VoiceAssistantSettings.tsx`
+   handleSave → `saveUserSchedulingConfig` → `config: restConfig` UPSERT replaces the whole jsonb. The 08-11
+   handoff recorded a rich custom config (LIFE→morning/after_work/evening/weekends, after_work 17–19) — lost.
+   Inference (code proves mechanism; the 09-13 timestamp is consistent); not confirmed from a write log.
+2. **Rank 0 is by design** (Huddle push/focus, `push.server.ts` PUSH_RANK) — but with 6 stars all at 0 the
+   rank tiebreak is inert and each gets the max +15 bonus; order among them falls to score.
+3. **Placement matches the default windows:** Saturday → VENTURES/PROF_ED only `weekends` 10–20; PROF_ED 1 ≤ cap 2.
+4. **No daily-hours cap / breaks exist in the builder** (no `maxDailyHours`/`breakMinutes` read) → 9h back to back
+   is "as built", not as the handoff's target design (capacity guard, never built).
+5. **Overdue items (09-01/09-11/09-22) placed with no warning; the Esri near-duplicate placed twice** (dedup is by id).
+6. **Possibly no Saturday 1am rebuild** (rows untouched since Fri 01:00). NOT confirmed — the cron run-history
+   query was declined by the owner.
+**Status:** reported to owner; no fix started (journey-side; needs go-ahead + owner's window values).
