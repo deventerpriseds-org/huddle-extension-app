@@ -4658,3 +4658,23 @@ config had excluded business hours for LIFE; "payment plan" placed at 17:00 beca
 (`contextRules.keywords`, e.g. payment→business_hours) are read ONLY from user config, which is wiped;
 "Apply for the low-interest credit card selected for the Platinum Card" is now unparked (mirror showed it
 `parking-lot` on 10-15) — cause not established.
+
+## ACT:remove-docked-widgets — drop the "docked" priorities/schedule pair from Iris's 1:1 (2026-10-18)
+Owner: *"The docked priority and schedule widgets are not actually docked so they can be removed from the 1:1 thread stream given we already have tabs at the bottom for me to get to them."*
+
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | Remove the mount + `DockedJourneyWidgets` | merged #98 (c0e188d) | no-docked-widgets.test 3/3; D1 FIRED |
+
+**NOT yet confirmed by the owner** on his phone.
+
+## ACT:bridge-vs-web-differences — what the Android app shows differently from the browser (2026-10-18)
+Owner: *"the web version has updates like the chat options / buttons that don't exist in the mobile bridge app ... I wonder what other differences there are."*
+Observed (read from code, not a device): the app loads the SAME live URL (`bridge.config.json` baseUrl = icy-flower SWA, `cacheMode LOAD_DEFAULT`), so it runs the same build. Differences come from what Android's WebView supports:
+
+| Difference | Cause | Status |
+|---|---|---|
+| Bell (notify-me) button missing in the app | composer shows it only when `PushManager`/`serviceWorker` exist (usePush.ts); WebView has neither. The app gets pushes via FCM instead | by design — no action |
+| Paperclip (attach) likely does nothing when tapped | `BridgeWebChromeClient` has no `onShowFileChooser`, which WebView needs to open a file picker for `<input type=file>` | INFERENCE — awaiting owner's one-tap check; fix is an android-bridge-template change + APK reinstall |
+| Location requests always denied | `onGeolocationPermissionsShowPrompt` → false | no feature uses it |
+| Links to other sites open the phone browser | `shouldOverrideUrlLoading` sends non-trusted hosts to ACTION_VIEW | by design |
