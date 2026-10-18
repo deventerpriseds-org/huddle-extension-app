@@ -59,10 +59,8 @@ import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind, type View } from "../store";
 import {
-  DockedJourneyWidgets,
   PrioritiesWidget,
   ScheduleWidget,
-  WIDGET_DOCK_HUDDLE_ID,
 } from "./JourneyWidgets";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useDictation } from "../hooks/useDictation";
@@ -324,15 +322,6 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
             {dayLabel}
           </span>
         </div>
-
-        {/* DOCKED journey widgets — Iris's 1:1 only. Rendered here, INSIDE the scrolling transcript
-            but OUTSIDE `messages`, which is the whole point: `history` (and so every turn's model
-            payload) and the unread watermark are both built from `messages`, so a "pinned message"
-            would have leaked a widget payload into every prompt and into the scrollback the user
-            reads. This is present whether or not a tool ever fired, scrolls away with the history
-            like a channel header, and costs the conversation nothing.
-            See docs/LANE-C-widget-ui.md → "Docking interpretation". */}
-        {huddle.id === WIDGET_DOCK_HUDDLE_ID && <DockedJourneyWidgets />}
 
         {messages.map((m) => (
           <MessageRow key={m.id} m={m} huddle={huddle} />
