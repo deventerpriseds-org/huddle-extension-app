@@ -36,7 +36,6 @@ import {
   ArrowUp,
   Ban,
   Check,
-  ChevronDown,
   ChevronRight,
   ChevronUp,
   Loader2,
@@ -1457,57 +1456,10 @@ function WidgetUnreachable({ label }: { label: string }) {
   );
 }
 
-/* ── Docked pair (Iris's 1:1) ────────────────────────────────────────────────────────────────────
- * "Docked" = persistently present in that huddle, NOT a message. Rendered by Transcript above the
- * message list, so it is there whether or not a tool ever fired, and — critically — it is NOT in
- * `messages`, which is what `history` (and therefore the turn payload sent to the model, and the
- * unread watermark) is built from. A pinned MESSAGE would have leaked a widget payload into every
- * turn's prompt and into the scrollback the user reads; this cannot.
- *
- * EXPANDED by default, and the strip is labelled "Docked in this huddle" — both taken from the
- * design prototype committed alongside the spec (docs/widgets/prototype/canvas.json, annotation
- * `docked-placement`: "Both widgets sit in a two-up grid under a 'Docked in this huddle' strip,
- * ABOVE the transcript, inside Iris's 1:1 only. They are pinned furniture, not chat messages").
- * An earlier version of this collapsed by default to avoid burying the conversation; the prototype
- * is the design intent, so it wins — the disclosure is kept so the user can still fold it away. */
-export function DockedJourneyWidgets() {
-  const [open, setOpen] = useState(true);
-  return (
-    <div className="rounded-xl border border-hairline bg-surface-2/60">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left"
-      >
-        {open ? (
-          <ChevronDown size={13} className="shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
-        )}
-        <span className="text-[12px] font-semibold text-foreground">Docked in this huddle</span>
-        <span className="text-[11px] text-muted-foreground">· priorities &amp; schedule</span>
-      </button>
-      {/* Mounted only while open, so the two Lane-B reads do not fire for a user who folds it away. */}
-      {open && (
-        // STACKED, never side by side (owner, 2026-09-13: "I like the idea of them having their own
-        // view not side by side... just remember I use this on the phone"). The `lg:grid-cols-2` that
-        // was here split the chat column in two on desktop, which halves every task title in a column
-        // that is already narrow — and the phone, which is the owner's actual daily surface, never got
-        // that layout anyway, so the two-up was desktop-only divergence from the spec screenshots.
-        // Each widget now renders at full column width, one above the other, the way each screenshot
-        // draws it.
-        // `chrome="bare"` — D-4. Each widget used to draw its own rounded, bordered, shadowed card
-        // INSIDE this already-bordered dock shell: a box in a box. The dock is the container; the
-        // two widgets are sections of it, divided by a hairline rather than by two more borders.
-        <div className="flex flex-col divide-y divide-hairline border-t border-hairline">
-          <LivePrioritiesWidget chrome="bare" />
-          <LiveScheduleWidget chrome="bare" />
-        </div>
-      )}
-    </div>
-  );
-}
+/* ── Docked pair (Iris's 1:1) — REMOVED 2026-10-18 ─────────────────────────────────────────────
+ * Owner: "The docked priority and schedule widgets are not actually docked so they can be removed
+ * from the 1:1 thread stream given we already have tabs at the bottom for me to get to them."
+ * The Priorities and Schedule tabs (PrioritiesView / ScheduleView below) are the home for both. */
 
 function LivePrioritiesWidget({
   full,
