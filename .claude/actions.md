@@ -4674,7 +4674,7 @@ Observed (read from code, not a device): the app loads the SAME live URL (`bridg
 
 | Difference | Cause | Status |
 |---|---|---|
-| Bell (notify-me) button missing in the app | composer shows it only when `PushManager`/`serviceWorker` exist (usePush.ts); WebView has neither. The app gets pushes via FCM instead | by design — no action |
+| Bell (notify-me) button missing in the app — AND inert on the web too: deploy run 39153591279 logs `VAPID_PUBLIC_KEY: not set (Web Push disabled)` and `VAPID_PRIVATE_KEY: not set`, so push.server never sends a browser push (owner 2026-10-18: "I don't understand what the bell icon does in the web app"). Proposed: remove the button; awaiting owner | composer shows it only when `PushManager`/`serviceWorker` exist (usePush.ts); WebView has neither. The app gets pushes via FCM instead | by design — no action |
 | Paperclip (attach) likely does nothing when tapped | `BridgeWebChromeClient` has no `onShowFileChooser`, which WebView needs to open a file picker for `<input type=file>` | INFERENCE — awaiting owner's one-tap check; fix is an android-bridge-template change + APK reinstall |
 | Location requests always denied | `onGeolocationPermissionsShowPrompt` → false | no feature uses it |
 | Links to other sites open the phone browser | `shouldOverrideUrlLoading` sends non-trusted hosts to ACTION_VIEW | by design |
