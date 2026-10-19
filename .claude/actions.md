@@ -4686,3 +4686,15 @@ owner's changes (Prof. education/Education → evening+weekends, Ventures → we
 after_work 17–19, keywords minus bill/business/project/startup), and removed keywords kept off the Settings screen in
 deventerprisesds/journey-voice#61. Full table, backup and readback: journey-voice `.claude/actions.md` ACT:scheduling-config-restore.
 **Status:** written + read back. NOT yet confirmed by the owner in the app or in a nightly run (first run on it: 1am ET 2026-10-20).
+
+## ACT:desktop-web-push — turn the composer bell ON (owner chose option B, 2026-10-19)
+Owner: *"Option b as I use desktop a lot. Just be sure you are updating the basic keys and not expecting me to."*
+
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | VAPID key pair generated + stored as repo secrets by `vapid-keys.yml` (GHUB_KEY; CCR proxy 403s `/actions/secrets`) | DONE | run 39296679793: "stored: VAPID_PUBLIC_KEY (87 chars) and VAPID_PRIVATE_KEY"; private key masked |
+| 2 | Redeploy picks them up | DONE | deploy-swa run 39296703234: `VAPID_PUBLIC_KEY: present`, `VAPID_PRIVATE_KEY: present` |
+| 3 | Browser that granted permission with no subscription now subscribes on load | merged #102 (a3b20df) | push-heal.test 5/5; B1 FIRED |
+
+**NOT yet confirmed by the owner** — needs one desktop test: open the web app, tap the bell (or just reload if it already shows as on), allow notifications, then get a reply while the tab is closed.
+
