@@ -4678,3 +4678,11 @@ Observed (read from code, not a device): the app loads the SAME live URL (`bridg
 | Paperclip (attach) likely does nothing when tapped | `BridgeWebChromeClient` has no `onShowFileChooser`, which WebView needs to open a file picker for `<input type=file>` | INFERENCE — awaiting owner's one-tap check; fix is an android-bridge-template change + APK reinstall |
 | Location requests always denied | `onGeolocationPermissionsShowPrompt` → false | no feature uses it |
 | Links to other sites open the phone browser | `shouldOverrideUrlLoading` sends non-trusted hosts to ACTION_VIEW | by design |
+
+## ACT:scheduling-config-restore (2026-10-19) — owner's journey scheduling settings RESTORED (follows ACT:schedule-audit-2026-10-17)
+Finding 1 of the audit (config wiped 2026-09-13 16:12Z) is fixed in journey: the wipe bug in deventerprisesds/journey-voice#59,
+the September settings rebuilt from 172 nightly-run logs + the 08-26 direct read and written 2026-10-19 16:27Z with the
+owner's changes (Prof. education/Education → evening+weekends, Ventures → weekends, Personal = Life → after_work+weekends,
+after_work 17–19, keywords minus bill/business/project/startup), and removed keywords kept off the Settings screen in
+deventerprisesds/journey-voice#61. Full table, backup and readback: journey-voice `.claude/actions.md` ACT:scheduling-config-restore.
+**Status:** written + read back. NOT yet confirmed by the owner in the app or in a nightly run (first run on it: 1am ET 2026-10-20).
