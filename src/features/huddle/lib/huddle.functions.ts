@@ -3,7 +3,7 @@ import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { isUserTurn } from "./turn-identity";
-import type { ChecklistPayload, HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
+import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, TaskLane } from "../data/seed";
 // The two in-chat widget payloads ride back on a reply exactly as `checklist` does, so they are
 // declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
 // and the reply DTOs are shared with the client bundle.
@@ -99,6 +99,11 @@ import {
   ASK_CLARIFYING_QUESTION_TOOL,
   RESOLVE_CLARIFYING_QUESTION_TOOL,
 } from "./tasks/task-agent-tools";
+import {
+  PROPOSE_EMAIL_REPLY_TOOL,
+  emailReplyAskFromDetail,
+  type EmailReplyAsk,
+} from "./email/email-reply-ask";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
 import {
   assignCreatedJourneyTasks,
@@ -216,6 +221,25 @@ const Input = z.object({
   // and lane-deferral machinery must NOT run on it: doing so mis-reads the directive as "a user ask in
   // the wrong lane" and spawns follow-ups that re-trigger follow-ups (the notification-barrage loop).
   internal: z.boolean().optional(),
+  // A new-email alert turn (inbound-email.server.ts): the email this turn is ABOUT, so the reply card
+  // (Save to Drafts / Dismiss) is attached to the target agent's reply even if the model skips
+  // propose_email_reply. Display-only; every button re-reads chat.email_replies by emailId.
+  emailReplyRef: z
+    .object({
+      emailId: z.string().max(64),
+      fromName: z.string().max(300),
+      fromAddress: z.string().max(320),
+      subject: z.string().max(500),
+    })
+    .optional(),
+  // A tab-switch button attached to the TARGET agent's reply (the priority check: "Open Priorities").
+  // Attached from the payload, like emailReplyRef, so it is there whatever the model does.
+  navLink: z
+    .object({
+      view: z.enum(["priorities", "schedule", "board", "artifacts"]),
+      label: z.string().min(1).max(60),
+    })
+    .optional(),
   // A live-ceremony BARGE-IN answered synchronously (the client's runBargeSequence, not the durable
   // ceremony queue). When set on a group turn, the responder the router picks gets the existing
   // bargeDirective() layered onto its scene — "the user just cut into a live stand-up, address them
@@ -558,8 +582,10 @@ type TurnResumeState = {
     artifacts?: { id: string; name: string }[];
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
     overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
     checklist?: ChecklistPayload;
     priorities?: PrioritiesWidgetData;
+    navLink?: NavLink;
     schedule?: ScheduleWidgetData;
   }[];
   journeyTaskUpdates: import("./journey/types").JourneyTask[];
@@ -840,8 +866,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // toolUse this turn — NOT injected from another turn/agent.
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
     overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
     checklist?: ChecklistPayload;
     priorities?: PrioritiesWidgetData;
+    navLink?: NavLink;
     schedule?: ScheduleWidgetData;
   };
 
@@ -2910,6 +2938,23 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               note: [outcomeNote, assignment?.note].filter(Boolean).join(" ") || undefined,
             };
           }
+          // LOG THE REAL REASON SERVER-SIDE. `recordFallback`'s `reason` carries journey's actual
+          // error (status code + body prefix) but ONLY `ev.inline` is persisted -- `fallbackNotes:
+          // [ev.inline]` -- so the detail is built and then dropped at turn end. Measured
+          // 2026-10-06: a task-create failure the owner reported took an hour to root-cause because
+          // the turn record held only "journey task create failed" while the status code and body
+          // that would have named it in one read had already been discarded. The user-facing text
+          // is deliberately unchanged -- a raw upstream error does not belong in a chat reply --
+          // but it now reaches the app log, where the next diagnosis can start.
+          console.error(
+            "[create_huddle_task] journey refused the write:",
+            JSON.stringify({
+              title: task.title,
+              huddleId: data.huddleId,
+              agentId: winner.id,
+              journeyError: r.error ?? "unknown",
+            }),
+          );
           const ev = recordFallback(
             "tool",
             `${winner.name}: could NOT save “${task.title}” to your board — journey create failed — ${r.error ?? "unknown"}`,
@@ -3237,7 +3282,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const effectiveInstructions = overrideInstructions || snapshotInstructions;
         fromSnapshot = !overrideInstructions && !!snapshotInstructions;
         const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
-        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT } = await import(
+        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT } = await import(
           "./tasks/tools"
         );
         // Grooming is now gated on the data-driven capability (agents.ts), with the legacy
@@ -3306,6 +3351,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // prefer an interactive card over a prose answer. Additive -- nothing above is altered.
           "\n\n" +
           WIDGET_SYSTEM_HINT +
+          "\n\n" +
+          FOCUS_SYSTEM_HINT +
           // Same slot and same rule as the hints above: the built-in tools are offered in
           // `mergedTools` below ONLY when builtInToolsAllowed, so the hint that says the capability
           // exists is added under exactly the same condition. Purely ADDITIVE — it takes nothing away
@@ -3515,6 +3562,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   description: `Optional mailbox to draft in. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.`,
                 },
                 cc: { type: "string", description: "Optional CC address(es), comma-separated." },
+                reply_to: { type: "string", description: "If this is a REPLY to an email the owner received, the sender's email address. The draft is then saved in the OWNER's own Outlook Drafts as a threaded reply to that sender's latest email (from is ignored)." },
               },
               required: ["subject", "body"],
             },
@@ -3524,7 +3572,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           emailTools.push(GET_EXTERNAL_CALENDAR_EVENTS_TOOL);
         }
 
-        const { PRIORITIZE_TOOL, CHECKLIST_TOOL, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL } =
+        const { PRIORITIZE_TOOL, CHECKLIST_TOOL, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL, FOCUS_TOOL } =
           await import("./tasks/tools");
         // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
         const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
@@ -3547,6 +3595,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           FLAG_BLOCKER_TOOL,
           CONFIRM_TASK_INTENT_TOOL,
           PROPOSE_TASK_INTENT_TOOL,
+          // New-email alerts: store the suggested reply so the card's Save-to-Drafts button acts on it.
+          PROPOSE_EMAIL_REPLY_TOOL,
           PROPOSE_APPROACH_TOOL,
           REQUEST_APPROACH_OVERRIDE_TOOL,
           OVERRIDE_APPROACH_GATE_TOOL,
@@ -3560,6 +3610,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // make the widget reachable only by talking to that agent.
           PRIORITIES_WIDGET_TOOL,
           SCHEDULE_WIDGET_TOOL,
+          // "start these": starts existing tasks, creates-then-starts missing ones (focus.server.ts).
+          FOCUS_TOOL,
           GET_CALENDAR_EVENTS_TOOL, // calendar-framed alias → combined schedule (always available)
           ...groomTools,
           ...emailTools,
@@ -3782,6 +3834,48 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               recordToolUse(winner.id, "flag_blocker", "flag failed", false, msg);
+              return JSON.stringify({ ok: false, error: msg });
+            }
+          }
+          if (c.name === "propose_email_reply") {
+            const a = c.arguments as Record<string, unknown>;
+            const givenId = String(a.email_id ?? "").trim();
+            const fromAddr = String(a.from_address ?? "").trim();
+            const body = String(a.reply_body ?? "").trim();
+            if ((!givenId && !fromAddr) || !body)
+              return JSON.stringify({ ok: false, error: "reply_body and email_id (or from_address) are required" });
+            try {
+              const owner =
+                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                data.caller?.entra_email;
+              if (!owner) return JSON.stringify({ ok: false, error: "sign-in required" });
+              const { getOwnedEmailReply, findOwedEmailReplyByFrom, setProposedReply } = await import(
+                "./email/email-replies.server"
+              );
+              const row = givenId
+                ? await getOwnedEmailReply(givenId, owner)
+                : await findOwedEmailReplyByFrom(owner, fromAddr);
+              if (!row) return JSON.stringify({ ok: false, error: "No owed email matches that." });
+              const emailId = row.id;
+              await setProposedReply(emailId, owner, body);
+              // Structured detail -> the reply card on THIS message (the confirmAsk derivation).
+              recordToolUse(
+                winner.id,
+                "propose_email_reply",
+                `Suggested a reply to ${row.from_name || row.from_address || "an email"}`,
+                true,
+                JSON.stringify({
+                  emailId,
+                  fromName: row.from_name ?? "",
+                  fromAddress: row.from_address ?? "",
+                  subject: row.subject ?? "",
+                  replyBody: body,
+                }),
+              );
+              return JSON.stringify({ ok: true, email_id: emailId });
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "propose_email_reply", "propose failed", false, msg);
               return JSON.stringify({ ok: false, error: msg });
             }
           }
@@ -4193,6 +4287,26 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // priorities widget and a schedule widget can both render in one turn, but neither twice),
           // the caller's resolved email, and the FULL dispatcher JSON carried back in `detail`, which
           // is the only channel the reply-assembly has to recover the payload.
+          if (c.name === "focus_on") {
+            // Mutating: one per turn, so two group responders cannot start the same list twice.
+            if (!claimAction("focus_on")) {
+              recordToolUse(winner.id, c.name, "focus_on -- already done this turn", true);
+              return JSON.stringify({ error: "already_done", message: "Those were already started this turn; refer to that result." });
+            }
+            const { dispatchFocusOn } = await import("./tasks/tools");
+            const out = await dispatchFocusOn(data.caller, c.arguments);
+            let ok = false,
+              summary = "focus_on";
+            try {
+              const p = JSON.parse(out) as { ok?: boolean; summary?: string };
+              ok = p.ok === true;
+              summary = p.summary ?? summary;
+            } catch {
+              /* keep defaults */
+            }
+            recordToolUse(winner.id, c.name, summary.slice(0, 200), ok, ok ? undefined : summary);
+            return out;
+          }
           if (c.name === "show_priorities_widget" || c.name === "show_schedule_widget") {
             const isPriorities = c.name === "show_priorities_widget";
             const label = isPriorities ? "priorities widget" : "schedule widget";
@@ -4370,14 +4484,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               });
             }
             try {
-              const { createGraphDraft } = await import("./email/graph-email.server");
-              const r = await createGraphDraft({
-                to: String(a.to ?? ""),
-                subject: String(a.subject ?? ""),
-                body: String(a.body ?? ""),
-                from: a.from ? String(a.from) : undefined,
-                cc: a.cc ? String(a.cc) : undefined,
-              });
+              const { createDraftForTool } = await import("./email/graph-email.server");
+              const r = await createDraftForTool(
+                {
+                  to: String(a.to ?? ""),
+                  subject: String(a.subject ?? ""),
+                  body: String(a.body ?? ""),
+                  from: a.from ? String(a.from) : undefined,
+                  cc: a.cc ? String(a.cc) : undefined,
+                  replyTo: a.reply_to ? String(a.reply_to) : undefined,
+                },
+                data.caller,
+              );
               recordToolUse(
                 winner.id,
                 "create_email_draft",
@@ -4416,7 +4534,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               const startISO = startRaw.length > 10 ? startRaw : `${startDay}T00:00:00`;
               const endISO = endRaw.length > 10 ? endRaw : `${endDay}T23:59:59`;
               const mailbox =
-                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
                 data.caller?.entra_email;
               const { getGraphCalendarEvents } = await import("./email/graph-email.server");
               const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
@@ -5507,8 +5625,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             description: RTOOL.description,
             inputSchema: z.object({
               text: z.string(),
+              // Was missing here, so the Lovable path silently dropped kind and always set an alarm.
+              kind: z.enum(["reminder", "alarm"]).optional(),
               delay_minutes: z.number().optional(),
               at_time: z.string().optional(),
+              task_id: z.string().optional(),
             }),
             execute: async (args) => {
               const a = args as Record<string, unknown>;
@@ -5583,6 +5704,35 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 { view: "scheduled", ...(args as Record<string, unknown>) },
                 ident.timeZone || data.timeZone || "UTC",
               );
+            },
+          });
+        }
+
+        // focus_on — mirrors the OpenAI path (FOCUS_SYSTEM_HINT is appended to both backends).
+        {
+          const { dispatchFocusOn } = await import("./tasks/tools");
+          lovableTools.focus_on = tool({
+            description:
+              "START what the user says they want to work on: existing tasks are started (Doing, top of This Week); missing ones are created first, then started. Use for a list of things to work on or 'start X', including a reply to a priority check.",
+            inputSchema: z.object({
+              items: z.array(z.object({ title: z.string(), task_id: z.string().optional() })),
+            }),
+            execute: async (args) => {
+              if (!claimAction("focus_on")) {
+                return JSON.stringify({ error: "already_done", message: "Those were already started this turn." });
+              }
+              const out = await dispatchFocusOn(data.caller, args as Record<string, unknown>);
+              let ok = false;
+              let summary = "focus_on";
+              try {
+                const p = JSON.parse(out) as { ok?: boolean; summary?: string };
+                ok = p.ok === true;
+                summary = p.summary ?? summary;
+              } catch {
+                /* keep defaults */
+              }
+              recordToolUse(winner.id, "focus_on", summary.slice(0, 200), ok, ok ? undefined : summary);
+              return out;
             },
           });
         }
@@ -5800,6 +5950,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 to: z.string().optional(),
                 from: z.string().optional(),
                 cc: z.string().optional(),
+                reply_to: z.string().optional().describe("If this is a REPLY to an email the owner received, the sender's email address. The draft is then saved in the OWNER's own Outlook Drafts as a threaded reply to that sender's latest email (from is ignored)."),
               }),
               execute: async (args) => {
                 const a = args as Record<string, unknown>;
@@ -5816,14 +5967,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                     message: "That draft was already created this turn.",
                   });
                 }
-                const { createGraphDraft } = await import("./email/graph-email.server");
-                const r = await createGraphDraft({
-                  to: String(a.to ?? ""),
-                  subject: String(a.subject ?? ""),
-                  body: String(a.body ?? ""),
-                  from: a.from ? String(a.from) : undefined,
-                  cc: a.cc ? String(a.cc) : undefined,
-                });
+                const { createDraftForTool } = await import("./email/graph-email.server");
+                const r = await createDraftForTool(
+                  {
+                    to: String(a.to ?? ""),
+                    subject: String(a.subject ?? ""),
+                    body: String(a.body ?? ""),
+                    from: a.from ? String(a.from) : undefined,
+                    cc: a.cc ? String(a.cc) : undefined,
+                    replyTo: a.reply_to ? String(a.reply_to) : undefined,
+                  },
+                  data.caller,
+                );
                 recordToolUse(
                   winner.id,
                   "create_email_draft",
@@ -5853,7 +6008,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 const startISO = startRaw.length > 10 ? startRaw : `${startDay}T00:00:00`;
                 const endISO = endRaw.length > 10 ? endRaw : `${endDay}T23:59:59`;
                 const mailbox =
-                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
                   data.caller?.entra_email;
                 const { getGraphCalendarEvents } = await import("./email/graph-email.server");
                 const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
@@ -6073,7 +6228,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         }
 
         {
-          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT } = await import(
+          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT } = await import(
             "./tasks/tools"
           );
           usedInstructions =
@@ -6088,6 +6243,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             // when to prefer one over a prose answer.
             "\n\n" +
             WIDGET_SYSTEM_HINT +
+            "\n\n" +
+            FOCUS_SYSTEM_HINT +
             groundingBlock(!!agentBackend.webSearch);
         }
 
@@ -6244,6 +6401,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   // ran together this wave; a mid-reply @mention of a same-wave agent must NOT
   // re-enqueue it (it already ran once), mirroring the sequential queue.includes
   // guard for agents still pending in the queue.
+  // The email-reply card for `agentId`'s reply: from its own propose_email_reply (carries the body), else
+  // — on a new-email alert turn — from the payload's emailReplyRef. Used by EVERY path that pushes a
+  // reply (normal, hardReply, the zero-reply safety net): 2026-10-15 Amy's alert lost its buttons because
+  // Iris timed out after the tool call and the safety-net reply was built without the card.
+  const emailCardFor = (agentId: AgentId, uses: readonly AgentTurnResult["toolUses"][number][]): EmailReplyAsk | undefined => {
+    const use = [...uses].reverse().find((t) => t.agentId === agentId && t.tool === "propose_email_reply" && t.ok);
+    const fromTool = use ? emailReplyAskFromDetail(use.detail) : undefined;
+    if (fromTool) return fromTool;
+    if (data.emailReplyRef && agentId === data.targetAgentId) return { ...data.emailReplyRef, replyBody: "" };
+    return undefined;
+  };
   const mergeAgentResult = (nextId: AgentId, r: AgentTurnResult, waveIds: readonly AgentId[]) => {
     const winner = AGENT_BY_ID[nextId]!;
     // Append-only buffers merge deterministically (queue order via call order).
@@ -6270,7 +6438,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     }
     if (outcome.kind === "hardReply") {
       // Config/model-failure fallbacks: always emitted, no echo/PASS, no mentions.
-      replies.push(outcome.reply);
+      const card = emailCardFor(nextId, r.toolUses);
+      replies.push(card ? { ...outcome.reply, emailReply: card } : outcome.reply);
       spoken.add(nextId);
       return;
     }
@@ -6446,6 +6615,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // own reply, the same scoping rule confirmAsk uses: the ask belongs to the agent whose turn raised
     // it, so it is keyed by that agent rather than broadcast to whoever happens to speak next.
     const replyOverrideAsk = escalatedApproachByAgent.get(nextId);
+    // The email-reply card: from this agent's own propose_email_reply call (carries the body), else —
+    // on a new-email alert turn — from the payload's emailReplyRef, so the buttons are there even when
+    // the model skipped the tool (Save then explains there is no suggestion yet; Dismiss still works).
+    const replyEmailReply = emailCardFor(nextId, r.toolUses);
     replies.push({
       agentId: nextId,
       text: safeText,
@@ -6453,9 +6626,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       artifacts: replyArtifacts.length ? replyArtifacts : undefined,
       confirmAsk: replyConfirmAsk,
       overrideAsk: replyOverrideAsk,
+      emailReply: replyEmailReply,
       checklist: replyChecklist,
       priorities: replyPriorities,
       schedule: replySchedule,
+      navLink: data.navLink && nextId === data.targetAgentId ? data.navLink : undefined,
     });
     spoken.add(nextId);
 
@@ -6657,11 +6832,35 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     if (replies.length > 0) return;
     const didWork = toolUses.find((t) => t.ok && t.tool !== "tool_catalog");
     if (!didWork) return;
+    const card = emailCardFor(didWork.agentId, toolUses);
     replies.push({
       agentId: didWork.agentId,
-      text:
-        `${didWork.summary} — I ran out of time to reply in full, but that went through. ` +
-        `Let me know if you want more detail.`,
+      text: card
+        ? `New email from ${card.fromName || card.fromAddress}${card.subject ? ` — "${card.subject}"` : ""}. ` +
+          `I ran out of time to write it all up, but my suggested reply is on the card below.`
+        : `${didWork.summary} — I ran out of time to reply in full, but that went through. ` +
+          `Let me know if you want more detail.`,
+      ...(card ? { emailReply: card } : {}),
+    });
+  };
+
+  // A turn whose payload carries a navLink (the scheduled priority check) MUST end with that button in
+  // front of the owner. Owner, 2026-10-16: "There is no scenario or excuse for priority message not being
+  // produced". The target agent's reply gets the button wherever it was built (normal, hardReply); if the
+  // model produced nothing at all (timeout, empty completion), a short deterministic reply carries it.
+  const ensureNavLinkDelivered = () => {
+    const link = data.navLink;
+    const target = data.targetAgentId;
+    if (!link || !target) return;
+    const i = replies.findIndex((r) => r.agentId === target);
+    if (i >= 0) {
+      if (!replies[i].navLink) replies[i] = { ...replies[i], navLink: link };
+      return;
+    }
+    replies.push({
+      agentId: target,
+      text: `Hello Sir, I couldn't finish writing this one up just now — the "${link.label}" button below takes you straight there.`,
+      navLink: link,
     });
   };
 
@@ -6904,6 +7103,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       return { ...finalResult(), partial: true };
     }
     ensureNotSilentOnRealWork();
+    ensureNavLinkDelivered();
     try {
       await turnStore.saveTurnChunk(turnId, replies, null, true, finalResult());
     } catch (e) {
@@ -6914,6 +7114,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   }
 
   ensureNotSilentOnRealWork();
+  ensureNavLinkDelivered();
   persistResearchedMemory();
   return finalResult();
 }
@@ -7581,8 +7782,10 @@ type TurnUpdateDTO = {
     artifacts?: { id: string; name: string }[];
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
     overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
     checklist?: ChecklistPayload;
     priorities?: PrioritiesWidgetData;
+    navLink?: NavLink;
     schedule?: ScheduleWidgetData;
   }[];
   result: HuddleTurnResult | null;
@@ -7623,8 +7826,10 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
           overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
           checklist?: ChecklistPayload;
           priorities?: PrioritiesWidgetData;
+          navLink?: NavLink;
           schedule?: ScheduleWidgetData;
         }[],
         result: (t.result ?? null) as HuddleTurnResult | null,
@@ -7691,8 +7896,10 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         artifacts?: { id: string; name: string }[];
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
         overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
         checklist?: ChecklistPayload;
         priorities?: PrioritiesWidgetData;
+        navLink?: NavLink;
         schedule?: ScheduleWidgetData;
       }[];
       // Tool-use breadcrumbs for away/cross-device turns — the client filters per agent + drops tool_catalog.
@@ -7730,8 +7937,10 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         artifacts?: { id: string; name: string }[];
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
         overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
         checklist?: ChecklistPayload;
         priorities?: PrioritiesWidgetData;
+        navLink?: NavLink;
         schedule?: ScheduleWidgetData;
       }[],
       toolUses: ((t.result as { toolUses?: unknown } | null)?.toolUses ?? undefined) as

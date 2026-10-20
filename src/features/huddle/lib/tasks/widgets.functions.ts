@@ -60,7 +60,9 @@ async function resolveCallerEmail(caller: z.infer<typeof Caller>): Promise<strin
  * `currentlyDoing: []` is a NORMAL result, not an error: the spec renders "Nothing in progress".
  */
 export const getScheduleWidget = createServerFn({ method: "POST" })
-  .inputValidator((raw: unknown) => z.object({ caller: Caller, timeZone: TimeZoneInput }).parse(raw))
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, timeZone: TimeZoneInput }).parse(raw),
+  )
   .handler(async ({ data }): Promise<ScheduleWidgetData> => {
     const empty = (ok: boolean, timeZone: string, error?: string): ScheduleWidgetData => {
       const todayKey = new Date().toISOString().slice(0, 10);
@@ -97,68 +99,6 @@ export const getScheduleWidget = createServerFn({ method: "POST" })
 // ---------------------------------------------------------------------------
 
 /**
- * Journey's priorities TOPIC TREE, via the existing `invokeJourneyTool` passthrough.
- *
- * THIS MUST DEGRADE, NEVER THROW. The tool (`get_task_topics`) is Lane A's and may not be
- * deployed yet; the band half of the widget has to work regardless. Every failure becomes
- * `{ok:false, roots:[], reason}` that the UI renders as an empty state:
- *   not-configured → this environment has no JOURNEY_PROXY_URL/TOKEN
- *   tool-absent    → journey answered but doesn't know the tool yet
- *   error          → network / non-JSON / unparseable payload
- *
- * The response SHAPE is not yet pinned by Lane A (its doc records the tables and columns it reads
- * — `task_topic_index.{id,topic_name,position,category_affinity,parent_topic_id}` — but its
- * register step was still open when this was written), so `buildTopicTree` accepts either a
- * pre-nested tree or the flat parent_topic_id shape. See docs/LANE-B-widget-data.md.
- */
-async function fetchTopicTree(caller: z.infer<typeof Caller>): Promise<TopicTreeResult> {
-  const { buildTopicTree } = await import("./widgets.server");
-  try {
-    const { invokeJourneyTool } = await import("../journey/proxy.functions");
-    const r = await invokeJourneyTool({
-      toolName: "get_task_topics",
-      args: {},
-      caller: caller ?? {},
-      context: { source: "huddle" },
-    });
-    if (!r.ok) {
-      const detail = `${r.error ?? ""} ${r.output ?? ""}`.toLowerCase();
-      // execute-tool reports an unregistered tool in its own words; treat any of these as
-      // "not deployed yet" rather than a fault, because that is the pre-deploy steady state.
-      const absent =
-        detail.includes("unknown tool") ||
-        detail.includes("unsupported tool") ||
-        detail.includes("no such tool") ||
-        detail.includes("tool not found") ||
-        detail.includes("not implemented");
-      return {
-        ok: false,
-        roots: [],
-        reason: absent ? "tool-absent" : "error",
-        error: r.error ?? "journey returned ok=false",
-      };
-    }
-    // The proxy always hands back `output` as a STRING (it JSON.stringifies a non-string result —
-    // huddle-proxy/index.ts), so parse it before normalizing. A plain-string message is not a tree.
-    let payload: unknown = r.output;
-    if (typeof r.output === "string") {
-      try {
-        payload = JSON.parse(r.output);
-      } catch {
-        return { ok: false, roots: [], reason: "error", error: "journey returned non-JSON output" };
-      }
-    }
-    const roots = buildTopicTree(payload);
-    return { ok: true, roots, reason: "ok" };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    // journeyFetch throws this exact phrase when the env vars are missing.
-    const unconfigured = msg.toLowerCase().includes("not configured");
-    return { ok: false, roots: [], reason: unconfigured ? "not-configured" : "error", error: msg };
-  }
-}
-
-/**
  * Data for the PRIORITIES widget: the task band (from the mirror) + journey's topic tree.
  *
  * The two halves are INDEPENDENT by design. A topic-tree failure leaves `ok:true` and a populated
@@ -167,7 +107,9 @@ async function fetchTopicTree(caller: z.infer<typeof Caller>): Promise<TopicTree
  */
 export const getPrioritiesWidget = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) =>
-    z.object({ caller: Caller, timeZone: TimeZoneInput, includeTopics: z.boolean().optional() }).parse(raw),
+    z
+      .object({ caller: Caller, timeZone: TimeZoneInput, includeTopics: z.boolean().optional() })
+      .parse(raw),
   )
   .handler(async ({ data }): Promise<PrioritiesWidgetData> => {
     const noTopics: TopicTreeResult = { ok: false, roots: [], reason: "ok" };
@@ -184,24 +126,17 @@ export const getPrioritiesWidget = createServerFn({ method: "POST" })
     try {
       const email = await resolveCallerEmail(data.caller);
       const { resolveTimeZone } = await import("../journey/identity");
-      const { safeTimeZone, localDateKey, buildPrioritiesBand } = await import("./widgets.server");
+      const { safeTimeZone, composePrioritiesWidget } = await import("./widgets.server");
       const timeZone = safeTimeZone(await resolveTimeZone(data.caller, data.timeZone));
       if (!email) return empty(timeZone, "Could not resolve your account.");
-      const { getBoardTasks } = await import("./tasks.server");
-      // The band read and the topic passthrough are independent, so run them together rather than
-      // making the widget wait for journey's round-trip before it can show anything.
-      const [rows, topics] = await Promise.all([
-        getBoardTasks(email),
-        wantTopics ? fetchTopicTree(data.caller) : Promise.resolve(noTopics),
-      ]);
-      const nowMs = Date.now();
-      return {
-        ok: true,
-        timeZone,
-        todayKey: localDateKey(nowMs, timeZone) ?? new Date(nowMs).toISOString().slice(0, 10),
-        band: buildPrioritiesBand(rows, timeZone, nowMs),
-        topics,
-      };
+      // ONE composition for every surface, journey's topic tree included. This used to fetch the
+      // topics separately and merge them in AFTER composing, which put topic nodes in the tree with
+      // NO tasks under them (the links were never read); the composer now attaches each task to its
+      // topic itself. `topics.ok`/`reason` still describe the journey read, untouched.
+      return await composePrioritiesWidget(email, timeZone, {
+        caller: data.caller,
+        includeTopics: wantTopics,
+      });
     } catch (err) {
       return empty(data.timeZone ?? "UTC", err instanceof Error ? err.message : String(err));
     }
@@ -264,7 +199,8 @@ export const updateWidgetTask = createServerFn({ method: "POST" })
       const owned = await getOwnedTaskForConfirmAsk(data.taskId, email);
       if (!owned) return fail("Task not found.");
 
-      const { ACTION_STATUS, safeTimeZone, localDateKey, withParkingLotTag } = await import("./widgets.server");
+      const { ACTION_STATUS, safeTimeZone, localDateKey, withParkingLotTag } =
+        await import("./widgets.server");
       const { invokeJourneyTool } = await import("../journey/proxy.functions");
 
       let toolName: string;
@@ -319,3 +255,150 @@ export const updateWidgetTask = createServerFn({ method: "POST" })
       return fail(err instanceof Error ? err.message : String(err));
     }
   });
+
+/**
+ * The Priorities tab's input: "what do you want to work on". Starts what exists, creates and starts
+ * what doesn't, and stays on the tab — like journey's Focus view. One implementation, shared with the
+ * `focus_on` agent tool: `focus.server.ts`.
+ */
+export const focusWidgetItems = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, text: z.string().min(1).max(2000) }).parse(raw),
+  )
+  .handler(async ({ data }) => {
+    const { focusOn } = await import("./focus.server");
+    return focusOn(data.caller ?? {}, { text: data.text });
+  });
+
+/**
+ * Persist the user's explicit "This Week" ordering — the drag/move-up/move-down write.
+ *
+ * WHY THIS IS NOT A `WidgetTaskAction`. Every member of that union acts on ONE task id and writes
+ * to JOURNEY (`update_task` / `move_task_to_day`). A reorder acts on the whole list and writes to
+ * HUDDLE's own store, because journey has nowhere to put it that grooming would not overwrite —
+ * see `tasks.week_order`'s DDL comment. Forcing it into `updateWidgetTask` would mean one function
+ * with two unrelated contracts and two different destinations.
+ *
+ * The list is SPARSE and REPLACED WHOLESALE: a reorder is inherently a whole-list operation, so one
+ * atomic write beats N rank updates with gap management, and there is no partial state to recover.
+ *
+ * OWNERSHIP IS CHECKED PER ID, not once for the caller. Without that, a caller could persist an
+ * ordering containing another user's task ids — harmless to read (they never appear in that user's
+ * band) but it would store foreign ids under this user's row. Unowned ids are DROPPED rather than
+ * failing the whole call, so one stale id in a drag payload cannot block a legitimate reorder.
+ */
+export const reorderWidgetBand = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({
+        caller: Caller,
+        // Cap matches nothing in particular except sanity: a band this long is already a defect,
+        // and an unbounded array here is an unbounded write.
+        taskIds: z.array(z.string().min(1)).max(500),
+      })
+      .parse(raw),
+  )
+  .handler(async ({ data }): Promise<{ ok: boolean; error?: string; taskIds: string[] }> => {
+    if (!data.caller?.entra_email) return { ok: false, error: "Sign-in required.", taskIds: [] };
+    try {
+      const email = await resolveCallerEmail(data.caller);
+      if (!email) return { ok: false, error: "Could not resolve your account.", taskIds: [] };
+
+      const { getOwnedTaskForConfirmAsk, setWeekOrder } = await import("./tasks.server");
+
+      // De-dupe first: a drag payload that repeats an id would otherwise cost two ownership reads
+      // and store a contradictory order.
+      const seen = new Set<string>();
+      const unique = data.taskIds.filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
+
+      const owned: string[] = [];
+      for (const id of unique) {
+        if (await getOwnedTaskForConfirmAsk(id, email)) owned.push(id);
+      }
+
+      await setWeekOrder(email, owned);
+      return { ok: true, taskIds: owned };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err), taskIds: [] };
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// PUSH into This Week — the ⋮ menu's star actions (push.server.ts holds the logic and the rationale)
+// ---------------------------------------------------------------------------
+
+type PushFnResult = {
+  ok: boolean;
+  error?: string;
+  applied: boolean;
+  task?: { id: string; title: string } | null;
+  message?: string;
+};
+
+async function withPushCaller(
+  caller: z.infer<typeof Caller>,
+  run: (email: string) => Promise<PushFnResult>,
+): Promise<PushFnResult> {
+  if (!caller?.entra_email) return { ok: false, applied: false, error: "Sign-in required." };
+  try {
+    const email = await resolveCallerEmail(caller);
+    if (!email) return { ok: false, applied: false, error: "Could not resolve your account." };
+    return await run(email);
+  } catch (err) {
+    return { ok: false, applied: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** ⋮ → "Push to This Week" on a task. */
+export const pushWidgetTask = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, taskId: z.string().min(1).max(200) }).parse(raw),
+  )
+  .handler(async ({ data }) =>
+    withPushCaller(data.caller, async (email) => {
+      const { pushTask } = await import("./push.server");
+      return pushTask(email, data.caller ?? {}, data.taskId);
+    }),
+  );
+
+/** ⋮ → "Remove from This Week". */
+export const unstarWidgetTask = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, taskId: z.string().min(1).max(200) }).parse(raw),
+  )
+  .handler(async ({ data }) =>
+    withPushCaller(data.caller, async (email) => {
+      const { unstarTask } = await import("./push.server");
+      return unstarTask(email, data.caller ?? {}, data.taskId);
+    }),
+  );
+
+/** ⋮ → "Push <category or topic>". `nodeId` is the tree node's own id. */
+export const pushWidgetNode = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({
+        caller: Caller,
+        nodeId: z.string().min(1).max(200),
+        nodeName: z.string().max(200).optional(),
+      })
+      .parse(raw),
+  )
+  .handler(async ({ data }) =>
+    withPushCaller(data.caller, async (email) => {
+      const { pushNode } = await import("./push.server");
+      return pushNode(email, data.caller ?? {}, data.nodeId, data.nodeName ?? null);
+    }),
+  );
+
+/** ⋮ → "Stop pushing". */
+export const unpushWidgetNode = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, nodeId: z.string().min(1).max(200) }).parse(raw),
+  )
+  .handler(async ({ data }) =>
+    withPushCaller(data.caller, async (email) => {
+      const { unpushNode } = await import("./push.server");
+      return unpushNode(email, data.caller ?? {}, data.nodeId);
+    }),
+  );

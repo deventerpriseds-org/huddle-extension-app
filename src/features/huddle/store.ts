@@ -164,6 +164,7 @@ interface HuddleState {
   upsertAgentMessage: (m: HuddleMessage) => void;
   resolveConfirmAsk: (messageId: string) => void;
   resolveOverrideAsk: (messageId: string) => void;
+  resolveEmailReply: (messageId: string, how: "drafted" | "dismissed") => void;
   /** Seed live state for rows not yet tracked. Never overwrites a row the user has already acted on.
    *  `today` is optional so the checklist (which has no Today control) can keep passing its own rows
    *  unchanged while the priorities/schedule widgets supply it. */
@@ -321,12 +322,17 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
         toolUses: m.toolUses ?? next[i].toolUses,
         confirmAsk: m.confirmAsk ?? next[i].confirmAsk,
         overrideAsk: m.overrideAsk ?? next[i].overrideAsk,
+        // Keep a client-side `resolved` when a later poll re-delivers the same reply without it.
+        emailReply: m.emailReply
+          ? { ...m.emailReply, resolved: m.emailReply.resolved ?? next[i].emailReply?.resolved }
+          : next[i].emailReply,
         // Same `??` shape as the others, and for the same reason: a later partial doesn't re-supply it.
         // NOTE this is only safe because the checklist message body is a SNAPSHOT — all mutable per-row
         // state lives in `checklistState` keyed by taskId. If live state were stored here instead, `??`
         // would NOT protect it: `??` guards against the incoming field being ABSENT, while the real
         // exposure is a PRESENT-but-stale server copy overwriting rows the user just changed.
         checklist: m.checklist ?? next[i].checklist,
+        navLink: m.navLink ?? next[i].navLink,
       };
       return { messages: next };
     }),
@@ -384,6 +390,12 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
   // The same swap for the "Approve anyway" row, and scoped by messageId for the same reason: a task
   // can escalate, be overridden, be reassigned and escalate AGAIN, and resolving by taskId would blank
   // the live row on the new escalation as well as the old one.
+  resolveEmailReply: (messageId, how) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.id === messageId && m.emailReply ? { ...m, emailReply: { ...m.emailReply, resolved: how } } : m,
+      ),
+    })),
   resolveOverrideAsk: (messageId) =>
     set((s) => ({
       messages: s.messages.map((m) =>

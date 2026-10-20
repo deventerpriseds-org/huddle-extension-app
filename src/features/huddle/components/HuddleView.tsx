@@ -24,6 +24,7 @@ import {
   CircleStop,
   ListChecks,
   AlertTriangle,
+  Mail,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -33,11 +34,18 @@ import {
   type ChecklistPayload,
   type Huddle,
   type HuddleMessage,
+  type NavLink,
   type ToolUseEvent,
 } from "../data/seed";
 // The widget payload contract is Lane B's (lib/tasks/widgets.server.ts). Type-only import — that
 // module is deliberately dependency-free, so nothing server-side reaches the client bundle.
 import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
+import type { EmailReplyAsk } from "../lib/email/email-reply-ask";
+import {
+  dismissEmailReplyFn,
+  getEmailReplyCountsFn,
+  saveEmailReplyDraftFn,
+} from "../lib/email/email-replies.functions";
 import {
   enqueueHuddleTurn,
   getTurnUpdates,
@@ -51,10 +59,8 @@ import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind, type View } from "../store";
 import {
-  DockedJourneyWidgets,
   PrioritiesWidget,
   ScheduleWidget,
-  WIDGET_DOCK_HUDDLE_ID,
 } from "./JourneyWidgets";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useDictation } from "../hooks/useDictation";
@@ -316,15 +322,6 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
             {dayLabel}
           </span>
         </div>
-
-        {/* DOCKED journey widgets — Iris's 1:1 only. Rendered here, INSIDE the scrolling transcript
-            but OUTSIDE `messages`, which is the whole point: `history` (and so every turn's model
-            payload) and the unread watermark are both built from `messages`, so a "pinned message"
-            would have leaked a widget payload into every prompt and into the scrollback the user
-            reads. This is present whether or not a tool ever fired, scrolls away with the history
-            like a channel header, and costs the conversation nothing.
-            See docs/LANE-C-widget-ui.md → "Docking interpretation". */}
-        {huddle.id === WIDGET_DOCK_HUDDLE_ID && <DockedJourneyWidgets />}
 
         {messages.map((m) => (
           <MessageRow key={m.id} m={m} huddle={huddle} />
@@ -723,6 +720,28 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
  * NO QUOTE IS ASKED FOR HERE. A click is already a user act: it carries an authenticated session no
  * model can forge. The transcript-quote check exists for the TOOL, where the caller is a model.
  */
+/**
+ * A button under an agent message that switches the app to one of its tabs. Owner, 2026-10-16: "she
+ * can do so with a button that deep links to the priority tab in the app instead of embedded priority
+ * widget". Pure navigation — no server call, nothing to resolve, so it works however old the message.
+ */
+const NAV_VIEWS: readonly NavLink["view"][] = ["priorities", "schedule", "board", "artifacts"];
+function NavLinkButton({ link }: { link: NavLink }) {
+  const setView = useHuddleStore((s) => s.setView);
+  if (!NAV_VIEWS.includes(link.view)) return null;
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setView(link.view)}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-hairline bg-surface px-3 py-1.5 text-xs font-medium hover:bg-muted"
+      >
+        {link.label}
+      </button>
+    </div>
+  );
+}
+
 function OverrideAskRow({ m }: { m: HuddleMessage }) {
   const { user } = useAuth();
   const [busy, setBusy] = useState(false);
@@ -786,6 +805,144 @@ function OverrideAskRow({ m }: { m: HuddleMessage }) {
         >
           Give them what's missing
         </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The new-email reply card: Save to Drafts / Edit first / Dismiss, plus the owed-vs-settled tally.
+ *
+ * Owner, 2026-10-15: "this should have a yes or no button rather than depending on text so that if i
+ * scroll up and click yes two hours later, the context to execute is baked in". So the buttons send
+ * ONLY `emailId`; the server re-reads which message, which mailbox and which reply from
+ * chat.email_replies (ownership-checked). Modelled on ConfirmAskRow / OverrideAskRow. Nothing is sent —
+ * Save makes a threaded reply DRAFT in the owner's Outlook; the email stays owed until he sends it.
+ */
+function EmailReplyRow({ m }: { m: HuddleMessage }) {
+  const { user } = useAuth();
+  const [busy, setBusy] = useState<null | "save" | "dismiss">(null);
+  const [tally, setTally] = useState<{ owed: number; settledToday: number } | null>(null);
+  const ask = m.emailReply;
+  const caller = user
+    ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+    : undefined;
+  const resolved = ask?.resolved;
+  useEffect(() => {
+    if (!caller) return;
+    let alive = true;
+    getEmailReplyCountsFn({
+      data: { caller, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+    })
+      .then((r) => alive && r.ok && setTally({ owed: r.owed, settledToday: r.settledToday }))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // Re-read after an action so the tally reflects it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.username, resolved]);
+  if (!ask) return null;
+  const who = ask.fromName || ask.fromAddress || "this email";
+  async function save() {
+    setBusy("save");
+    try {
+      const res = await saveEmailReplyDraftFn({ data: { caller, emailId: ask!.emailId } });
+      if (res.ok) {
+        useHuddleStore.getState().resolveEmailReply(m.id, "drafted");
+        if (!res.alreadyDone) toast.success("Draft saved in your Outlook Drafts — send it from there");
+      } else {
+        toast.error(res.error ?? "Couldn't save the draft.");
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function dismiss() {
+    setBusy("dismiss");
+    try {
+      const res = await dismissEmailReplyFn({ data: { caller, emailId: ask!.emailId } });
+      if (res.ok) useHuddleStore.getState().resolveEmailReply(m.id, "dismissed");
+      else toast.error(res.error ?? "Couldn't dismiss that.");
+    } finally {
+      setBusy(null);
+    }
+  }
+  const tallyLine = tally ? (
+    <span className="text-[11px] text-muted-foreground" data-testid="email-reply-tally">
+      {tally.owed} owed · {tally.settledToday} settled today
+    </span>
+  ) : null;
+  if (resolved) {
+    return (
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <div className={cn(CONFIRM_ASK_BTN, "text-muted-foreground")}>
+          <Check size={12} />
+          {resolved === "drafted" ? "Draft saved in Outlook — still owed until you send it" : "Dismissed — no reply needed"}
+        </div>
+        {tallyLine}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-2 rounded-lg border p-2" data-testid="email-reply-card">
+      <div className="flex items-start gap-1.5 text-xs text-foreground">
+        <Mail size={12} className="mt-0.5 shrink-0" style={{ color: "var(--ai)" }} />
+        <span className="min-w-0">
+          Reply to <span className="font-semibold">{who}</span>
+          {ask.subject ? <span className="text-muted-foreground"> — “{ask.subject}”</span> : null}
+        </span>
+      </div>
+      {/* The exact text Save puts in Drafts — visible on the card itself, so the tap never depends on
+          Iris's prose having arrived (2026-10-15: her reply timed out and only the card survived). */}
+      {ask.replyBody ? (
+        <blockquote
+          className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap border-l-2 pl-2 text-xs text-muted-foreground"
+          data-testid="email-reply-body"
+        >
+          {ask.replyBody}
+        </blockquote>
+      ) : (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          No suggested reply yet — tap Edit first to tell Iris what to say.
+        </p>
+      )}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          disabled={!!busy}
+          onClick={save}
+          className={cn(CONFIRM_ASK_BTN, "font-semibold")}
+          data-testid="email-reply-save"
+        >
+          {busy === "save" ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} style={{ color: "var(--ai)" }} />}
+          Save to Drafts
+        </button>
+        <button
+          type="button"
+          disabled={!!busy}
+          onClick={() =>
+            useHuddleStore
+              .getState()
+              .setDraftPrefill(
+                `For the reply to ${who}${ask.fromAddress ? ` <${ask.fromAddress}>` : ""}${ask.subject ? ` ("${ask.subject}")` : ""}, change it to: `,
+              )
+          }
+          className={CONFIRM_ASK_BTN}
+        >
+          Edit first
+        </button>
+        <button
+          type="button"
+          disabled={!!busy}
+          onClick={dismiss}
+          className={CONFIRM_ASK_BTN}
+          data-testid="email-reply-dismiss"
+        >
+          {busy === "dismiss" ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />}
+          No reply needed
+        </button>
+        {tallyLine}
       </div>
     </div>
   );
@@ -928,6 +1085,8 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
         )}
         {m.confirmAsk && <ConfirmAskRow m={m} />}
         {m.overrideAsk && <OverrideAskRow m={m} />}
+        {m.emailReply && <EmailReplyRow m={m} />}
+        {m.navLink && <NavLinkButton link={m.navLink} />}
       </div>
     </div>
   );
@@ -1114,11 +1273,13 @@ function Composer({ huddle }: { huddle: Huddle }) {
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
           overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+          emailReply?: EmailReplyAsk;
           checklist?: ChecklistPayload;
           // MUST be declared here AND at HuddleApp's copy of this DTO. This shape is re-declared
           // inline at both mapping sites and an undeclared field is dropped SILENTLY — no error, no
           // crash — so a widget would decay into plain text after a reload with nothing to blame.
           priorities?: PrioritiesWidgetData;
+          navLink?: NavLink;
           schedule?: ScheduleWidgetData;
         }[]
       | undefined,
@@ -1184,8 +1345,10 @@ function Composer({ huddle }: { huddle: Huddle }) {
         toolUses: crumbs,
         confirmAsk: reply.confirmAsk,
         overrideAsk: reply.overrideAsk,
+        emailReply: reply.emailReply,
         checklist: reply.checklist,
         priorities: reply.priorities,
+        navLink: reply.navLink,
         schedule: reply.schedule,
       });
     });

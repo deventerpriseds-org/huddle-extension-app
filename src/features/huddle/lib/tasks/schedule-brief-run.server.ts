@@ -1,0 +1,342 @@
+// WHAT:       Delivers one edition of the schedule brief as a proactive push in Iris's 1:1.
+// WHY:        The owner asked for the brief to be IRIS's job ("iris should have a task of reminding
+//             me 60 minutes before any as well", 2026-10-01), and the schedule/priorities widgets
+//             are already docked in her DM — so her thread is where "what's on today" already
+//             lives. Splitting build from deliver keeps buildScheduleBrief pure and testable: this
+//             file is the only part that writes anything.
+// SUPERSEDES: nothing.
+// SUPERSEDED-BY: nothing -- current.
+// EVIDENCE:   .claude/actions.md ACT:schedule-brief.
+//
+// EXTENDS THE STANDUP'S DELIVERY PATH, byte for byte where it matters. `standup.server.ts` already
+// proved the shape: build a directive, enqueue a DURABLE TURN in the owner agent's DM with
+// `notify:"push"` and `internal:true`, then run it. Riding that path means the EXISTING
+// away-notification fires (send_push -> Android bridge) with no new sender and no new secret --
+// the standing rule in this repo's CLAUDE.md ("piggyback journey, don't build a parallel push").
+
+import type { AgentId } from "../../data/agents";
+import { DEFAULT_TZ } from "../identity/scheduling-config.server";
+import {
+  addDays,
+  buildScheduleBrief,
+  type BriefEdition,
+  type BriefWindow,
+  type ScheduleBrief,
+} from "./schedule-brief.server";
+
+/** Iris Chase owns this brief — the owner named her, and her DM already carries the docked
+ *  schedule + priorities widgets, so "what's on today" is already her thread. */
+const BRIEF_OWNER: AgentId = "iris-chase";
+
+export interface ScheduleBriefResult {
+  ok: boolean;
+  edition?: BriefEdition;
+  forDate?: string;
+  /** How many items the edition carried. 0 with ok:true is a legitimate "nothing on". */
+  count?: number;
+  delivered?: boolean;
+  /** Which message shape was (or on a dryRun, would be) sent — see briefDeliveryPlan. */
+  kind?: BriefDeliveryKind;
+  /** On a dryRun, the exact directive Iris would be handed. */
+  directive?: string;
+  /** Present on a dryRun, so a verification pass can read exactly what WOULD have been sent. */
+  brief?: ScheduleBrief;
+  error?: string;
+  errors?: string[];
+}
+
+/** `"7:00PM"` in the brief's zone. Returns null for an all-day item rather than inventing midnight. */
+function clock(iso: string | null, tz: string): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+      .format(d)
+      .replace(/\s?(AM|PM)$/i, (_m, p: string) => p.toUpperCase());
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The lines Iris is handed. FACTS ONLY — the model writes the prose around them, but every time,
+ * title and location here came from the source, so it has nothing to invent. An item with no start
+ * time is labelled "all day" rather than being given a guessed one.
+ */
+export function briefLines(brief: ScheduleBrief, tz: string): string[] {
+  return brief.items.map((i) => {
+    const t = clock(i.startIso, tz);
+    const end = clock(i.endIso, tz);
+    const when = t ? (end ? `${t}–${end}` : t) : "all day";
+    const where = i.location ? ` · ${i.location}` : "";
+    return `${when} — ${i.title} (${i.kind})${where}`;
+  });
+}
+
+/**
+ * LATER THIS WEEK, grouped under a spoken day label: "tomorrow (Friday, Oct 16)" for the day after
+ * a MORNING edition's date, otherwise the weekday. Empty when nothing is on (or nothing was read).
+ */
+export function upcomingLines(brief: ScheduleBrief, tz: string): string[] {
+  const out: string[] = [];
+  let last = "";
+  for (const i of brief.upcoming ?? []) {
+    const day = i.day ?? (i.startIso ? new Date(i.startIso).toISOString().slice(0, 10) : "");
+    if (!day) continue;
+    if (day !== last) {
+      const name = new Date(`${day}T12:00:00Z`).toLocaleDateString("en-US", {
+        weekday: "long", month: "short", day: "numeric", timeZone: "UTC",
+      });
+      const tomorrow = brief.edition === "morning" && day === addDays(brief.forDate, 1);
+      out.push(tomorrow ? `Tomorrow (${name}):` : `${name}:`);
+      last = day;
+    }
+    const t = clock(i.startIso, tz);
+    const end = clock(i.endIso, tz);
+    const when = t ? (end ? `${t}–${end}` : t) : "all day";
+    out.push(`  ${when} — ${i.title} (${i.kind})${i.location ? ` · ${i.location}` : ""}`);
+  }
+  return out;
+}
+
+export type BriefDeliveryKind = "items" | "read-error" | "nothing-scheduled";
+
+/**
+ * Decide WHAT Iris is told for an edition. PURE, so the three outcomes are unit-testable.
+ *
+ * EVERY EDITION NOW SENDS SOMETHING (owner-directed 2026-10-15). It used to be "nothing on = nothing
+ * sent", and the same `!items.length` return also swallowed an edition whose sources FAILED — so a
+ * broken calendar read (wrong mailbox, see meetingsForDate) was indistinguishable from an empty day
+ * and the brief was silent for ten days with nobody able to tell why. Now:
+ *   items              -> the normal brief (with an "incomplete" note if one source failed)
+ *   no items + errors  -> a short notice that the calendar could NOT be read, with the error text
+ *   no items, no errors-> a short "nothing on your calendar" message — the owner wants one every
+ *                         morning and evening so silence never has to be interpreted.
+ */
+export function briefDeliveryPlan(
+  brief: ScheduleBrief,
+  tz: string,
+): { kind: BriefDeliveryKind; directive: string } {
+  // A WINDOW message (owner, 2026-10-15: "...and for each window as they pop up") covers only what
+  // is still ahead in that window; the day/evening editions cover the whole day.
+  const w = brief.window;
+  const hr = (h: number) => `${((h + 11) % 12) + 1} ${h < 12 ? "AM" : "PM"}`;
+  const winName = w ? `${w.name.replace(/_/g, " ")} window (${hr(w.start)}–${hr(w.end)})` : "";
+  const day = w
+    ? `Today (${brief.forDate}), the ${winName} — what is still ahead`
+    : brief.edition === "evening"
+      ? `Tomorrow (${brief.forDate})`
+      : `Today (${brief.forDate})`;
+  // TASKS (owner: "i have tasks everyday and i do want a similar message"). Listed separately from
+  // meetings/classes, and named after them, so neither is lost in the other.
+  const taskLines = (brief.tasks ?? []).map(
+    (t) => `${clock(t.startIso, tz) ?? "any time"} — ${t.title} (task)`,
+  );
+  const taskBlock =
+    brief.tasks !== undefined
+      ? `\nTASKS:\n${taskLines.length ? taskLines.join("\n") : "(no tasks scheduled)"}`
+      : brief.tasksError
+        ? `\nTASKS: could not be read (${brief.tasksError}) — say so; do not claim there are none.`
+        : "";
+  const hasAny = brief.items.length > 0 || taskLines.length > 0;
+  // Owner, 2026-10-15: "Why didn't iris say something like, hello Sir, just a reminder that today you
+  // have x and y, and later in the week you have a tomorrow, b the next day etc etc?" The old
+  // directive asked for "ONE short heads-up ... lead with the first thing", and the brief only ever
+  // read ONE day, so there was no week to mention. Both are fixed here and in buildScheduleBrief.
+  const week = w ? [] : upcomingLines(brief, tz);
+  const weekBlock = w ? "" :
+    `LATER THIS WEEK:\n${week.length ? week.join("\n") : "(nothing scheduled)"}` +
+    (brief.upcomingErrors?.length ? `\n(lookahead partly unread: ${brief.upcomingErrors.join("; ")})` : "");
+  const when = w ? `for the rest of the ${winName}` : brief.edition === "evening" ? "tomorrow" : "today";
+  const tasksAsk = taskLines.length
+    ? `After the meetings and classes, continue with "and on your task list …", naming each TASK with its ` +
+      `time, earliest first. `
+    : brief.tasks !== undefined
+      ? `There are no tasks scheduled ${when}; say so in a few words. `
+      : "";
+  const spoken =
+    `Write it as ONE warm message in your own voice, phrased the way a personal assistant would say it ` +
+    `out loud — natural sentences, NO bullet points, NO headings. `;
+  const weekAsk = week.length
+    ? `Then continue with "and later in the week you have …", naming each LATER THIS WEEK item by its day ` +
+      `(say "tomorrow" where it is labelled Tomorrow, otherwise the weekday) and its time. `
+    : w
+      ? ``
+      : `There is nothing later in the week, so do not mention the rest of the week. `;
+  const reportOnly =
+    `This is a REPORT-ONLY turn — everything above is already known, so do NOT call any tool, do not ` +
+    `invent anything that is not listed, and do not paste raw JSON. Keep it skimmable.`;
+
+  if (!hasAny && brief.errors.length) {
+    // Name ONLY the sources that failed. Owner, 2026-10-15: Iris said she "couldn't pull the meetings
+    // and classes" when only classes had failed (classes: http_500) and the meetings read had worked
+    // -- blaming both sent the diagnosis to the wrong place. An error with no recognised source prefix
+    // (e.g. a programme-lookup failure) counts against classes, which is the read it blocks.
+    const failed = new Set<string>();
+    for (const e of brief.errors) {
+      const src = e.split(":")[0].trim().toLowerCase();
+      failed.add(src === "meetings" ? "meetings" : "classes");
+    }
+    const failedNames = (["meetings", "classes"] as const).filter((s) => failed.has(s));
+    const readFine = (["meetings", "classes"] as const).filter((s) => !failed.has(s));
+    const when = brief.edition === "evening" ? "tomorrow's" : "today's";
+    return {
+      kind: "read-error",
+      directive:
+        `${day} — the schedule brief could NOT read: ${failedNames.join(" and ")}.${taskBlock}\n` +
+        `Errors: ${brief.errors.join("; ")}\n` +
+        (readFine.length
+          ? `${readFine.join(" and ")} WERE read successfully and nothing is scheduled there.\n\n`
+          : `\n`) +
+        `Write ONE short message in your own voice telling the user you couldn't pull ${when} ` +
+        `${failedNames.join(" and ")}, quote the error text above briefly so it can be fixed` +
+        (readFine.length ? `, and say ${readFine.join(" and ")} came back clear` : ``) +
+        `. Do NOT say or imply the ${failedNames.join(" or ")} ${failedNames.length > 1 ? "are" : "is"} empty — you do not know that. ` +
+        reportOnly,
+    };
+  }
+
+  if (!hasAny) {
+    return {
+      kind: "nothing-scheduled",
+      directive:
+        `${day} — nothing is on the calendar: no meetings and no classes were found.${taskBlock}\n${weekBlock}\n\n` +
+        spoken +
+        `Open with "Hello Sir," and say there is nothing on the calendar ${when}` +
+        (brief.tasks !== undefined ? ` and no tasks scheduled` : ``) + `. ` +
+        (week.length
+          ? `Then add "but later in the week you have …", naming each LATER THIS WEEK item by its day ` +
+            `(say "tomorrow" where it is labelled Tomorrow, otherwise the weekday) and its time. `
+          : `Keep it to one or two sentences. `) +
+        reportOnly,
+    };
+  }
+
+  const lines = briefLines(brief, tz);
+  return {
+    kind: "items",
+    directive:
+      `${day} — here is what is on:\n${lines.length ? lines.join("\n") : "(no meetings or classes)"}${taskBlock}\n${weekBlock}\n\n` +
+      spoken +
+      `Open with "Hello Sir," then say "just a reminder that ${when} you have …", naming exactly the ` +
+      `meetings and classes listed, earliest first, each with its time (if there are none, say there are no ` +
+      `meetings). Mention a location only when one is given. ` +
+      tasksAsk +
+      weekAsk +
+      `${brief.errors.length ? `Say plainly that one source could not be read (${brief.errors.join("; ")}), so this may be incomplete. ` : ""}` +
+      reportOnly,
+  };
+}
+
+/**
+ * Run one edition for one user and deliver it.
+ *
+ * NEVER THROWS — every failure is a normal `ok:false` return, matching every other scheduled job
+ * here. A scheduler that throws loses the whole tick for every other job claimed in it.
+ */
+export async function runScheduleBrief(
+  caller: { entra_email: string },
+  opts: {
+    timeZone?: string;
+    edition?: BriefEdition;
+    dryRun?: boolean;
+    runId?: string;
+    /** Injectable clock, so a test pins the edition instead of waiting for 8pm. */
+    nowMs?: number;
+    /** A journey WINDOW message (sent when journey's window call fires): what is still ahead in it. */
+    window?: BriefWindow;
+  } = {},
+): Promise<ScheduleBriefResult> {
+  const tz = opts.timeZone?.trim() || DEFAULT_TZ;
+  const nowMs = opts.nowMs ?? Date.now();
+
+  // The calendar lives in the OWNER's canonical mailbox, which is not necessarily the login the
+  // scheduler posts (the job targets dev@, the meetings live under the resolved identity). Resolve it
+  // EXACTLY the way the working `get_external_calendar_events` agent tool does, so the brief and the
+  // tool can never read two different calendars again.
+  let mailbox = caller.entra_email;
+  try {
+    // resolveCalendarMailbox = journey's connected Outlook account (Von.Ellis@), not the data-scope
+    // email (dev@) -- reading dev@ found 0 meetings with no error on 2026-10-15.
+    const { resolveCalendarMailbox } = await import("../journey/identity");
+    mailbox = (await resolveCalendarMailbox(caller)) ?? caller.entra_email;
+  } catch {
+    /* identity lookup is best-effort — fall back to the login rather than to the sending mailbox */
+  }
+
+  let brief: ScheduleBrief;
+  try {
+    brief = await buildScheduleBrief({
+      nowMs,
+      cadence: { tz },
+      edition: opts.window ? "morning" : opts.edition, // a window is always TODAY
+      mailbox,
+      // The task mirror is keyed by the login email; getScheduledTasksBetween widens to every alias.
+      taskEmail: caller.entra_email,
+      window: opts.window,
+    });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "brief build failed" };
+  }
+
+  const base: ScheduleBriefResult = {
+    ok: brief.ok,
+    edition: brief.edition,
+    forDate: brief.forDate,
+    count: brief.items.length,
+    ...(brief.errors.length ? { errors: brief.errors } : {}),
+  };
+
+  const plan = briefDeliveryPlan(brief, tz);
+  if (opts.dryRun)
+    return { ...base, delivered: false, kind: plan.kind, directive: plan.directive, brief };
+  const directive = plan.directive;
+
+  // The run id is keyed on the EDITION AND THE DATE IT COVERS, not on a timestamp: if the scheduler
+  // fires twice in one slot (a retry, an overlapping tick), `enqueueTurn` sees the same id and
+  // returns not-fresh, so the owner gets ONE push rather than two. `runId` only disambiguates a
+  // deliberate manual re-run.
+  // A window gets its own key per day, so 11am/5pm/7pm each send once. journey's 8am MORNING window is
+  // sent WITHOUT a window (as the morning edition), so it shares this key with Huddle's own 8am brief
+  // and the owner gets ONE 8am message whichever fires first.
+  const slot = opts.window ? `window-${opts.window.name}` : brief.edition;
+  const turnId = `schedule-brief-${slot}-${brief.forDate}${opts.runId ? `-${opts.runId}` : ""}`;
+
+  const payload = {
+    text: directive,
+    huddleId: `dm-${BRIEF_OWNER}`,
+    scope: "one-to-one",
+    members: [BRIEF_OWNER],
+    targetAgentId: BRIEF_OWNER,
+    history: [],
+    router: { backend: "openai", model: "gpt-4o-mini", soloOnCoverage: true, interjections: false },
+    agents: { [BRIEF_OWNER]: { backend: "openai", journey: { enabled: false } } },
+    timeZone: tz,
+    caller,
+    notify: "push", // this IS the alert — the whole point is that it reaches the phone
+    internal: true, // system-originated digest — never pass along / defer
+  };
+
+  try {
+    const { enqueueTurn } = await import("./turns.server");
+    const fresh = await enqueueTurn(turnId, `dm-${BRIEF_OWNER}`, caller.entra_email, payload);
+    if (fresh) {
+      const { runTurnById } = await import("../huddle.functions");
+      await runTurnById(turnId);
+    }
+    return { ...base, kind: plan.kind, delivered: !!fresh };
+  } catch (err) {
+    return {
+      ...base,
+      ok: false,
+      delivered: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}

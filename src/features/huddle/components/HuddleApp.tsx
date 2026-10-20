@@ -14,9 +14,10 @@ import { FallbackBanner } from "./FallbackBanner";
 import { isWorkspaceHydrated, setDeepLinkTarget, useHuddleStore, useVisibleHuddles, type View } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
-import { breadcrumbToolsFor, type ChecklistPayload, type ToolUseEvent } from "../data/seed";
+import { breadcrumbToolsFor, type ChecklistPayload, type NavLink, type ToolUseEvent } from "../data/seed";
 // Lane B's widget payload contract. Type-only import (that module is dependency-free).
 import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
+import type { EmailReplyAsk } from "../lib/email/email-reply-ask";
 import { PrioritiesView, ScheduleView } from "./JourneyWidgets";
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
 import { useAppViewportHeight } from "../hooks/useAppViewportHeight";
@@ -169,6 +170,8 @@ export function HuddleApp() {
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
           overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+          // Same silent-drop rule as checklist below: undeclared here = no reply buttons after reload.
+          emailReply?: EmailReplyAsk;
           // MUST be declared here too. This DTO is re-declared inline at BOTH mapping sites, and an
           // undeclared field is dropped silently -- no error, no crash -- so a checklist would decay
           // into plain text after a reload with nothing to attribute it to.
@@ -177,6 +180,7 @@ export function HuddleApp() {
           // re-declared inline at BOTH mapping sites (the other is HuddleView's applyTurnStream) and
           // an undeclared field is dropped silently, so a back-filled widget would arrive as text.
           priorities?: PrioritiesWidgetData;
+          navLink?: NavLink;
           schedule?: ScheduleWidgetData;
         }[];
         toolUses?: ToolUseEvent[];
@@ -217,8 +221,10 @@ export function HuddleApp() {
             artifacts: reply.artifacts,
             confirmAsk: reply.confirmAsk,
             overrideAsk: reply.overrideAsk,
+            emailReply: reply.emailReply,
             checklist: reply.checklist,
             priorities: reply.priorities,
+            navLink: reply.navLink,
             schedule: reply.schedule,
             toolUses: t.toolUses ? breadcrumbToolsFor(reply.agentId, t.toolUses) : undefined,
           });

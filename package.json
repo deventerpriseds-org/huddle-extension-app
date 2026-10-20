@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test:router": "bun scripts/router-winners.test.ts",
+    "test:priority-check": "bun scripts/priority-check.test.ts",
     "test:blocked": "bun scripts/blocked-line.test.mjs",
     "test:standup-ranking": "bun scripts/standup-ranking.test.ts",
     "test:standup-deliver": "bun scripts/standup-deliver-mode.test.ts",
@@ -36,7 +37,12 @@
     "test:artifact-preview": "bun scripts/artifact-preview.test.ts",
     "test:artifact-render": "bun scripts/artifact-render.test.ts",
     "test:artifact-format": "bun scripts/artifact-format-dispatch.test.ts",
-    "test:artifact-traversal": "bun scripts/artifact-traversal-guard.test.ts"
+    "test:artifact-traversal": "bun scripts/artifact-traversal-guard.test.ts",
+    "test:week-order": "bun scripts/week-order.test.ts",
+    "test:category-tree": "bun scripts/category-tree.test.ts",
+    "test:category-tree-independent": "bun scripts/category-tree-independent.test.ts",
+    "test:priority-lane": "bun scripts/priority-lane.test.ts",
+    "test:schedule-brief": "bun scripts/schedule-brief.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

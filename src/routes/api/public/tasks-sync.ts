@@ -49,9 +49,8 @@ export const Route = createFileRoute("/api/public/tasks-sync")({
         if (!id) return json({ ok: false, error: "missing_task_id" }, 400);
 
         try {
-          const { upsertJourneyTask, deleteJourneyTask } = await import(
-            "@/features/huddle/lib/tasks/tasks.server"
-          );
+          const { upsertJourneyTask, deleteJourneyTask } =
+            await import("@/features/huddle/lib/tasks/tasks.server");
           if (op === "DELETE") {
             await deleteJourneyTask(id);
           } else {
@@ -64,6 +63,22 @@ export const Route = createFileRoute("/api/public/tasks-sync")({
           const detail = err instanceof Error ? err.message : String(err);
           console.error("[tasks-sync] mirror failed", detail);
           return json({ ok: false, error: "mirror_failed", detail: detail.slice(0, 300) }, 500);
+        }
+
+        // PUSH REFILL (push.server.ts): if this task was a pushed category/topic's starred task and it
+        // just finished, star the next one; if a push was waiting for a task, this may be it. AFTER the
+        // mirror write, and it never throws — a refill problem must not make journey's sync look failed
+        // (a 500 here is what journey's own logging reads). The 9/13/17 reconcile retries anything missed.
+        try {
+          const { onMirrorEvent } = await import("@/features/huddle/lib/tasks/push.server");
+          await onMirrorEvent(
+            op,
+            task,
+            payload.user_email ?? (task?.user_email as string | undefined) ?? null,
+          );
+        } catch (err) {
+          // Even the module load sits inside the guard (VERIFY-category-push-1 D8).
+          console.error("[tasks-sync] push hook failed", err instanceof Error ? err.message : err);
         }
 
         return json({ ok: true, operation: op, id });

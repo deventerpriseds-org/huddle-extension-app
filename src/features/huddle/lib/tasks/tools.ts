@@ -260,11 +260,12 @@ export const WIDGET_SYSTEM_HINT =
  * Ownership works exactly as it does for the checklist: the rows come from the caller's OWN
  * email-scoped mirror read, so a task belonging to someone else simply is not there to render.
  *
- * The topic tree is NOT fetched here. It is a journey round-trip through the proxy (Lane A's
- * `get_task_topics`, not deployed yet), and a tool call already inside an agent's turn is the worst
- * place to spend that latency — so the payload ships with an empty tree and the CLIENT renders the
- * labelled empty state, which is the same thing it renders when journey answers `tool-absent`. The
- * band, which is the half the user acts on, is fully live.
+ * The topic tree IS fetched here now, BOUNDED. This used to skip it, on the sound reasoning that a
+ * tool call inside an agent's turn is the worst place to spend journey latency. But this is the card
+ * the owner actually reads (a scheduled 6am/8pm check is posted through this path), and he needs
+ * the Category -> Topic -> Task layer on it. So the call happens with a ceiling
+ * (TOPIC_FETCH_TIMEOUT_MS): a slow or missing journey degrades the card to the category-only tree,
+ * never to an error and never to a stalled reply.
  */
 export async function dispatchPrioritiesWidget(
   userEmail: string | undefined,
@@ -279,24 +280,21 @@ export async function dispatchPrioritiesWidget(
   }
   const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : "Priorities";
   try {
-    const { getBoardTasks } = await import("./tasks.server");
-    const { safeTimeZone, localDateKey, buildPrioritiesBand } = await import("./widgets.server");
+    const { safeTimeZone, composePrioritiesWidget } = await import("./widgets.server");
     const tz = safeTimeZone(timeZone);
-    const nowMs = Date.now();
-    const rows = await getBoardTasks(userEmail);
-    const band = buildPrioritiesBand(rows, tz, nowMs);
-    // ANNOTATED, not an inline literal: the result of this function is a JSON *string*, so tsc
-    // cannot check the payload once it is stringified. Building it as a typed value first is what
-    // makes a drift in Lane B's contract a compile error here instead of a widget that renders blank.
-    const priorities: PrioritiesWidgetData = {
-      ok: true,
-      timeZone: tz,
-      todayKey: localDateKey(nowMs, tz) ?? new Date(nowMs).toISOString().slice(0, 10),
-      band,
-      // reason 'ok' with no roots is the contract's "journey answered, nothing to show" state; the
-      // client's TopicsEmpty renders "No topics yet." for it rather than claiming a failure.
-      topics: { ok: false, roots: [], reason: "ok" },
-    };
+    // THE ONE composition — same band, same ordering and the SAME CATEGORY TREE the docked widget
+    // and the Settings view render. This used to build its own payload with a hardcoded
+    // `topics: {ok:false, roots:[], reason:"ok"}`, so an agent-surfaced card showed "No topics yet."
+    // while the identical data rendered a full tree on the other surfaces. Measured on the owner's
+    // own 6am/8pm check card, 2026-10-15.
+    //
+    // ANNOTATED, not inferred: the result of this function is a JSON *string*, so tsc cannot check
+    // the payload once stringified. Naming the type here is what makes a contract drift a compile
+    // error instead of a widget that renders blank.
+    const priorities: PrioritiesWidgetData = await composePrioritiesWidget(userEmail, tz, {
+      caller: { entra_email: userEmail },
+    });
+    const band = priorities.band;
     console.info(`[priorities-widget] rendered title=${JSON.stringify(title)} band=${band.length} tz=${tz}`);
     return JSON.stringify({
       rendered: true,
@@ -440,4 +438,65 @@ export async function dispatchPrioritize(
       message: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// focus_on — "start these" (owner 2026-10-16). The agent-facing door to the SAME core the Priorities
+// tab's input uses (focus.server.ts): existing tasks are started, missing ones created then started.
+// ---------------------------------------------------------------------------
+
+export const FOCUS_TOOL = {
+  type: "function",
+  name: "focus_on",
+  description:
+    "START the things the user says they want to work on — now. Pass each item; for each one the app finds the user's existing open task and starts it (moves it to Doing and puts it at the top of This Week), and if no such task exists it CREATES the task first and then starts it. Call this whenever the user lists what they want to work on / focus on / get done (including a reply to a priority check like 'the deck, interview prep, gym'), or says 'start X'. Pass the user's own wording as `title`; pass `task_id` only when a schedule_and_priorities result in this same turn gave you that task's id. Do NOT also call create_huddle_task for these — this tool already creates what is missing. Report what it says it started and created, nothing more.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      items: {
+        type: "array",
+        description: "What to start, in the order the user gave them (most important first).",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            title: { type: "string", description: "The item in the user's own words." },
+            task_id: { type: "string", description: "Only when a tool result this turn gave you the exact task id." },
+          },
+          required: ["title"],
+        },
+      },
+    },
+    required: ["items"],
+  },
+  strict: false,
+} as const;
+
+export const FOCUS_SYSTEM_HINT =
+  "When the user tells you what they want to work on or focus on — a list, or 'start X' — including when they answer a priority check — call `focus_on` with those items. It starts the ones that already exist and creates-then-starts the ones that don't, in one step; do not create them separately first and do not ask for confirmation. Then say in one or two lines what it started and what it newly created.";
+
+/** Execute `focus_on`. Returns JSON the model reads verbatim. */
+export async function dispatchFocusOn(
+  caller: { entra_object_id?: string; entra_email?: string } | undefined,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const raw = Array.isArray(args.items) ? (args.items as unknown[]) : [];
+  const items = raw
+    .map((i) => (typeof i === "string" ? { title: i } : (i as { title?: unknown; task_id?: unknown })))
+    .map((i) => ({
+      title: typeof i?.title === "string" ? i.title : "",
+      task_id: typeof i?.task_id === "string" ? i.task_id : null,
+    }))
+    .filter((i) => i.title.trim() || i.task_id);
+  const text = typeof args.text === "string" ? args.text : undefined;
+  const { focusOn } = await import("./focus.server");
+  const out = await focusOn(caller ?? {}, items.length ? { items } : { text });
+  return JSON.stringify({
+    ok: out.ok,
+    summary: out.summary,
+    started: out.results.filter((r) => r.started).map((r) => ({ title: r.title, created: r.created })),
+    failed: out.results.filter((r) => !r.started).map((r) => ({ title: r.title, error: r.error ?? "not started" })),
+    ...(out.error ? { error: out.error } : {}),
+  });
 }

@@ -676,6 +676,16 @@ export async function claimDueReminders(max = 25): Promise<ReminderRecord[]> {
   return res.rows.map(mapReminder);
 }
 
+/** Mark a reminder cancelled (e.g. its task was already done when it came due). Best-effort. */
+export async function cancelReminder(id: string): Promise<void> {
+  try {
+    await ensureBootstrapped();
+    await getPool().query(`UPDATE chat.reminders SET status = 'cancelled' WHERE id = $1`, [id]);
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** Reminders that fired for a huddle after `sinceMs` — the client's in-chat delivery read. */
 export async function getFiredRemindersSince(huddleId: string, sinceMs: number): Promise<ReminderRecord[]> {
   await ensureBootstrapped();

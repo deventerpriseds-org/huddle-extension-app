@@ -48,8 +48,12 @@ export function usePush(caller: Caller) {
     (async () => {
       try {
         const reg = regRef.current ?? (await navigator.serviceWorker.ready);
-        const existing = await reg.pushManager.getSubscription();
-        if (existing && !cancelled) await persist(existing, caller);
+        // Permission granted but NO subscription is a real state, not an edge case: the bell asked
+        // for permission while the server had no VAPID keys (prod, until 2026-10-19), so the subscribe
+        // step bailed and nothing was ever saved. The bell then reads "on" while no push can arrive.
+        // Subscribe here so that state heals on the next load instead of needing another tap.
+        const sub = (await reg.pushManager.getSubscription()) ?? (await subscribeWithServerKey(reg));
+        if (sub && !cancelled) await persist(sub, caller);
       } catch {
         /* non-fatal */
       }
@@ -66,15 +70,9 @@ export function usePush(caller: Caller) {
       const perm = await Notification.requestPermission();
       setPermission(perm);
       if (perm !== "granted") return false;
-      const { vapidPublicKey } = await getPushConfig();
-      if (!vapidPublicKey) return false;
       const reg = regRef.current ?? (await navigator.serviceWorker.ready);
-      const sub =
-        (await reg.pushManager.getSubscription()) ??
-        (await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as BufferSource,
-        }));
+      const sub = (await reg.pushManager.getSubscription()) ?? (await subscribeWithServerKey(reg));
+      if (!sub) return false;
       await persist(sub, caller);
       return true;
     } catch {
@@ -85,6 +83,16 @@ export function usePush(caller: Caller) {
   }, [supported, busy, caller]);
 
   return { supported, permission, busy, enablePush };
+}
+
+/** Subscribe with the server's VAPID public key; null when the server has none configured. */
+async function subscribeWithServerKey(reg: ServiceWorkerRegistration): Promise<PushSubscription | null> {
+  const { vapidPublicKey } = await getPushConfig();
+  if (!vapidPublicKey) return null;
+  return reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as BufferSource,
+  });
 }
 
 async function persist(sub: PushSubscription, caller: Caller): Promise<void> {

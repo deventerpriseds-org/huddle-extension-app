@@ -45,7 +45,7 @@ import {
   toResponsesTool,
   invokeJourneyTool,
 } from "../journey/proxy.functions";
-import { PRIORITIZE_TOOL } from "../tasks/tools";
+import { FOCUS_TOOL, PRIORITIZE_TOOL } from "../tasks/tools";
 import { SCHEDULE_REMINDER_TOOL } from "../tasks/reminders";
 import { GROOM_BACKLOG_TOOL } from "../tasks/groom";
 import { TAVILY_WEB_SEARCH_TOOL, tavilySearch, type TavilySearchArgs } from "../tavily-search.functions";
@@ -170,7 +170,8 @@ export async function buildRealtimeToolset(
   } = {},
 ): Promise<{ tools: unknown[]; journeyNames: Set<string> }> {
   const agent = AGENT_BY_ID[agentId];
-  const raw: unknown[] = [PRIORITIZE_TOOL, SCHEDULE_REMINDER_TOOL, GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL, ...nexusReadTools()];
+  // FOCUS_TOOL: "start these" by voice — the same core as the Priorities tab input (focus.server.ts).
+  const raw: unknown[] = [PRIORITIZE_TOOL, FOCUS_TOOL, SCHEDULE_REMINDER_TOOL, GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL, ...nexusReadTools()];
 
   if (opts.webSearch !== false) raw.push(TAVILY_WEB_SEARCH_TOOL);
   if (agentOwnsCapability(agent, "backlog-grooming")) raw.push(GROOM_BACKLOG_TOOL);
@@ -404,6 +405,7 @@ export async function buildRealtimeToolset(
               to: { type: "string", description: "Optional recipient address(es), comma-separated." },
               from: { type: "string", description: `Optional mailbox to draft in. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.` },
               cc: { type: "string", description: "Optional CC address(es), comma-separated." },
+              reply_to: { type: "string", description: "If this is a REPLY to an email the owner received, the sender's email address. The draft is then saved in the OWNER's own Outlook Drafts as a threaded reply to that sender's latest email (from is ignored)." },
             },
             required: ["subject", "body"],
           },
@@ -509,8 +511,8 @@ export async function executeRealtimeTool(
       return done(JSON.stringify(await executeNexusTool(name, args, ctx.timeZone || "UTC")));
     }
     if (name === "get_external_calendar_events") {
-      const { resolveTaskEmail } = await import("../journey/identity");
-      const mailbox = (await resolveTaskEmail(ctx.caller)) ?? ctx.caller?.entra_email;
+      const { resolveCalendarMailbox } = await import("../journey/identity");
+      const mailbox = (await resolveCalendarMailbox(ctx.caller)) ?? ctx.caller?.entra_email;
       const tz = ctx.timeZone || "UTC";
       const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz });
       const startRaw = typeof args.start === "string" && args.start.trim() ? args.start.trim() : todayStr;
@@ -520,6 +522,10 @@ export async function executeRealtimeTool(
       const { getGraphCalendarEvents } = await import("../email/graph-email.server");
       const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
       return done(JSON.stringify(r));
+    }
+    if (name === "focus_on") {
+      const { dispatchFocusOn } = await import("../tasks/tools");
+      return done(await dispatchFocusOn(ctx.caller, args));
     }
     if (name === "schedule_and_priorities" || name === "get_calendar_events") {
       const { dispatchPrioritize } = await import("../tasks/tools");
@@ -580,14 +586,18 @@ export async function executeRealtimeTool(
       return done(JSON.stringify(r));
     }
     if (name === "create_email_draft") {
-      const { createGraphDraft } = await import("../email/graph-email.server");
-      const r = await createGraphDraft({
-        to: String(args.to ?? ""),
-        subject: String(args.subject ?? ""),
-        body: String(args.body ?? ""),
-        from: args.from ? String(args.from) : undefined,
-        cc: args.cc ? String(args.cc) : undefined,
-      });
+      const { createDraftForTool } = await import("../email/graph-email.server");
+      const r = await createDraftForTool(
+        {
+          to: String(args.to ?? ""),
+          subject: String(args.subject ?? ""),
+          body: String(args.body ?? ""),
+          from: args.from ? String(args.from) : undefined,
+          cc: args.cc ? String(args.cc) : undefined,
+          replyTo: args.reply_to ? String(args.reply_to) : undefined,
+        },
+        ctx.caller,
+      );
       return done(JSON.stringify(r));
     }
     if (name === "list_artifacts") {

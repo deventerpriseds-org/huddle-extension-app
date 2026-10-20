@@ -2,6 +2,15 @@ import { AGENTS, type AgentId } from "./agents";
 // Type-only: `widgets.server.ts` holds the widget payload contract (Lane B) and is deliberately
 // dependency-free, so this import is erased at compile time and pulls no server code into the client.
 import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
+import type { EmailReplyAsk } from "../lib/email/email-reply-ask";
+
+/** A button under an agent message that switches the app to one of its tabs (owner, 2026-10-16:
+ *  "she can do so with a button that deep links to the priority tab in the app instead of embedded
+ *  priority widget"). Only views the app actually has; the renderer ignores anything else. */
+export interface NavLink {
+  view: "priorities" | "schedule" | "board" | "artifacts";
+  label: string;
+}
 
 export type MessageAuthor =
   | { kind: "user" }
@@ -47,6 +56,10 @@ export interface HuddleMessage {
   // only signal that a task was permanently stuck was an agent mentioning it in prose. `resolved` is set
   // client-side once the override succeeds. Absent on every other message → no row.
   overrideAsk?: { taskId: string; taskTitle: string; note?: string; resolved?: boolean };
+  // A new-email alert's reply card (Save to Drafts / Dismiss). Carries display text only; the buttons
+  // send just `emailId` and the server re-reads chat.email_replies. Owner, 2026-10-15: a tap hours later
+  // must still work without re-reading the chat.
+  emailReply?: EmailReplyAsk;
   // An in-chat CHECKLIST an agent produced (the `build_checklist` tool). Rendered as a stable list of
   // tick-boxes with a per-row status pill. This is a SNAPSHOT of server truth at the moment the reply
   // was written — deliberately NOT the live state. Live per-row state lives in the store's
@@ -70,6 +83,8 @@ export interface HuddleMessage {
   // Absent on every message that isn't the relevant widget → no widget.
   priorities?: PrioritiesWidgetData;
   schedule?: ScheduleWidgetData;
+  // A tab-switch button under this message (see NavLink). Absent on every other message → no button.
+  navLink?: NavLink;
 }
 
 export interface ChecklistRow {

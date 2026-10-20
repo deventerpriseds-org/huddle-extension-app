@@ -1,0 +1,61 @@
+# WHAT:       Generates the Web Push (VAPID) key pair, stores it as this repo's VAPID_PUBLIC_KEY /
+#             VAPID_PRIVATE_KEY secrets, then redeploys so the app picks them up.
+# WHY:        Owner, 2026-10-19: chose to turn the composer bell ON ("I use desktop a lot. Just be sure
+#             you are updating the basic keys and not expecting me to"). The bell was inert: deploy run
+#             39153591279 logged "VAPID_PUBLIC_KEY: not set (Web Push disabled)". A CCR session cannot
+#             write secrets (the proxy 403s /actions/secrets), so this runs on GitHub with GHUB_KEY.
+# SAFETY:     Never prints the private key (masked). Refuses to ROTATE existing keys unless force=true,
+#             because new keys invalidate every browser already subscribed with the old public key.
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/actions.md ACT:bridge-vs-web-differences (bell row).
+name: VAPID keys (generate + store + redeploy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "true = replace existing keys (breaks current browser subscriptions)"
+        required: false
+        default: "false"
+
+jobs:
+  vapid-keys:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GHUB_KEY }}
+      REPO: ${{ github.repository }}
+      HAS_PUBLIC: ${{ secrets.VAPID_PUBLIC_KEY != '' }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Guard
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "::error::GHUB_KEY is empty for this repo (org secret not granted to it)"; exit 1; fi
+          if [ "$HAS_PUBLIC" = "true" ] && [ "${{ inputs.force }}" != "true" ]; then
+            echo "VAPID keys already exist; leaving them alone (pass force=true to rotate)."
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          fi
+      - name: Generate and store
+        if: env.SKIP != '1'
+        run: |
+          node -e '
+            const { generateKeyPairSync } = require("crypto");
+            const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+            const pub = publicKey.export({ format: "jwk" });
+            const priv = privateKey.export({ format: "jwk" });
+            const b = (s) => Buffer.from(s, "base64url");
+            const raw = Buffer.concat([Buffer.from([4]), b(pub.x), b(pub.y)]);
+            if (raw.length !== 65 || b(priv.d).length !== 32) { console.error("bad key length"); process.exit(1); }
+            require("fs").writeFileSync("/tmp/vapid_pub", raw.toString("base64url"));
+            require("fs").writeFileSync("/tmp/vapid_priv", priv.d);
+          '
+          echo "::add-mask::$(cat /tmp/vapid_priv)"
+          gh secret set VAPID_PUBLIC_KEY --repo "$REPO" < /tmp/vapid_pub
+          gh secret set VAPID_PRIVATE_KEY --repo "$REPO" < /tmp/vapid_priv
+          rm -f /tmp/vapid_priv
+          echo "stored: VAPID_PUBLIC_KEY ($(wc -c < /tmp/vapid_pub) chars) and VAPID_PRIVATE_KEY"
+      - name: Redeploy so the app reads the new keys
+        if: env.SKIP != '1'
+        run: gh workflow run deploy-swa.yml --repo "$REPO" --ref main && echo "deploy-swa dispatched"
