@@ -12,7 +12,6 @@ import {
   Plus,
   Users,
   Bell,
-  BellRing,
   FileText,
   Paperclip,
   X,
@@ -1249,6 +1248,22 @@ function Composer({ huddle }: { huddle: Huddle }) {
     };
   }, [pushCaller?.entra_email]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [notifyStripHidden, setNotifyStripHidden] = useState(() => {
+    try {
+      return localStorage.getItem("huddle.notifyStripHidden") === "1";
+    } catch {
+      return false;
+    }
+  });
+  function hideNotifyStrip() {
+    setNotifyStripHidden(true);
+    try {
+      localStorage.setItem("huddle.notifyStripHidden", "1");
+    } catch {
+      /* per-browser convenience only */
+    }
+  }
+
   async function toggleNotifications() {
     const ok = await push.enablePush();
     toast[ok ? "success" : "message"](
@@ -1759,6 +1774,33 @@ function Composer({ huddle }: { huddle: Huddle }) {
         {/* Full-width composer card (SMS/Teams/Slack-style): meta row, auto-growing textarea,
             then a docked action row so the input keeps the full width and the actions never
             crowd it. */}
+        {/* Reply notifications (owner 2026-10-20: a one-time strip instead of the composer bell). Shown only
+            where Web Push works (desktop browsers; the Android app gets FCM and never sees it) and only
+            while the browser has not been asked yet — it disappears once allowed, or if he blocks it. */}
+        {push.supported && push.permission === "default" && !notifyStripHidden && (
+          <div className="mb-2 flex items-center gap-2 rounded-xl border border-hairline bg-muted/60 px-3 py-2 text-xs">
+            <Bell size={14} className="shrink-0 text-muted-foreground" />
+            <span className="flex-1">Get reply notifications on this computer</span>
+            <button
+              type="button"
+              onClick={toggleNotifications}
+              disabled={push.busy}
+              className="inline-flex items-center gap-1 rounded-full bg-primary px-3 py-1 font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-50"
+            >
+              {push.busy && <Loader2 size={12} className="animate-spin" />}
+              Turn on
+            </button>
+            <button
+              type="button"
+              onClick={hideNotifyStrip}
+              className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Not now"
+              title="Not now"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
         <div className="rounded-2xl border border-border bg-background px-3 pt-2 pb-1.5 transition focus-within:border-ring focus-within:ring-2 focus-within:ring-ring">
           <div className="mb-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <span className="rounded bg-muted px-1.5 py-0.5 font-medium">
@@ -1842,27 +1884,6 @@ function Composer({ huddle }: { huddle: Huddle }) {
             >
               <Paperclip size={16} />
             </button>
-            {push.supported && push.permission !== "granted" && (
-              <button
-                type="button"
-                onClick={toggleNotifications}
-                disabled={push.busy}
-                className="inline-flex size-9 items-center justify-center rounded-full border border-hairline bg-surface text-muted-foreground transition hover:bg-muted disabled:opacity-50"
-                aria-label="Enable notifications for replies while you're away"
-                title="Notify me when a reply lands while I'm away"
-              >
-                {push.busy ? <Loader2 size={16} className="animate-spin" /> : <Bell size={16} />}
-              </button>
-            )}
-            {push.supported && push.permission === "granted" && (
-              <span
-                className="inline-flex size-9 items-center justify-center rounded-full border border-hairline bg-surface text-primary"
-                aria-label="Notifications on"
-                title="Notifications on — we'll ping you when a reply lands while you're away"
-              >
-                <BellRing size={16} />
-              </span>
-            )}
             <button
               type="button"
               onClick={startVoice}
