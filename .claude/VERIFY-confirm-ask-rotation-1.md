@@ -119,7 +119,16 @@ dedup there -- matches IMPL. Huddle's catalog names are journey's raw `t.name` (
 | 64 (fail-open, loud) | CONFIRMED for core + voice + produce; **UNPROVEN for the text-dispatch reporter** | M5 (implementer) was INERT: `reportDedupUnavailable` (huddle.functions.ts:2790) is pinned only by source strings. The behaviour exists in source; no test fails if it is silenced. |
 | 65 (one normalizer) | CONFIRMED | grep: exactly one `export function normalizeTaskTitle` (scoring.ts:45); create-task-core re-exports it |
 | 66 (D1-D3 regress) | CONFIRMED | voice-toolset-hidden 36/0 |
-| 67 (non-creates untouched) | CONFIRMED | `screenRawJourneyCreate` returns `pass` before any read for non-create names (create-task-core.ts:180) |
+| 67 (non-creates untouched) | CONFIRMED | `screenRawJourneyCreate` returns `pass` before any read for non-create names (create-task-core.ts:181) |
+
+## Summary
+- Gate integrity (priority 1): CONFIRMED. No path found that promotes or enqueues research for an item that is not confirmed + approved; 3 new gate mutations all FIRED.
+- Re-asks send, single sender (priority 2): CONFIRMED, with ONE defect: **double-send under app-ahead-of-DB clock skew (LOW)**, tasks.server.ts:1080.
+- Loop semantics (priority 3): **REFUTED against the owner's "no double cap" (MEDIUM)**: one-pending-per-agent + pass-only re-arming = max 3 re-asks per agent per day (measured 3/3/3/3/3/3/3 for a single 13-item lane; ~4.3 days per loop).
+- Schema (priority 4): CONFIRMED.
+- Dedup (priority 5): CONFIRMED except AC-64 text-dispatch reporter UNPROVEN (no behavioural guard; implementer's M5 INERT).
+- Doc drift (LOW): scheduler.server.ts:288 still cites the deleted `markConfirmAsked`.
+- NOT REACHED: nothing in A-D. Live/deployed verification was not in scope (branch not merged); no live DB query was made.
 Residual (LOW, pre-existing pattern, not a regression): a title is claimed in the per-turn ledger BEFORE journey answers, so if
 journey's create fails, a retry of the same title in the same turn is reported back as "deduped" although nothing was created.
 create_huddle_task already behaved this way.
