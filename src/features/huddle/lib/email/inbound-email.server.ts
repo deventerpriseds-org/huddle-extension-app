@@ -44,6 +44,8 @@ export interface InboundEmailRunResult {
     delivered?: boolean;
   }[];
   delivered?: number;
+  /** The instant-alert subscription upkeep this run did. Action + status code only (public logs). */
+  subscription?: { action: "create" | "renew" | "keep" | "skipped"; ok: boolean; status?: number };
   error?: string;
 }
 
@@ -84,6 +86,18 @@ export async function runInboundEmailWatch(
     const ledger = await import("./email-replies.server");
     // Settle anything he already answered from Outlook BEFORE counting / announcing.
     if (!opts.dryRun) await ledger.reconcileRepliedFromSentItems(ownerEmail);
+    // Keep the instant-alert subscription alive (created/renewed here, so no new cron). Never throws,
+    // and never blocks this run: the 5-minute check is the backstop for whatever it misses.
+    let subscription: InboundEmailRunResult["subscription"];
+    if (!opts.dryRun) {
+      const { ensureMailSubscription } = await import("./mail-subscription.server");
+      subscription = await ensureMailSubscription({
+        ownerEmail,
+        callerEmail: caller.entra_email,
+        mailbox,
+        nowMs,
+      });
+    }
 
     const { listInboxMessagesSince } = await import("./graph-email.server");
     const read = await listInboxMessagesSince(mailbox, since);
@@ -204,6 +218,7 @@ export async function runInboundEmailWatch(
       scanned: msgs.length,
       decisions,
       delivered,
+      subscription,
     };
   } catch (err) {
     console.error("[inbound-email] run failed", err instanceof Error ? err.message : err);

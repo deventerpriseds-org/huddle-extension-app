@@ -7588,7 +7588,13 @@ async function executeClaimedTurn(record: {
     const lead = result.replies?.[0];
     if (lead && wantsPush) {
       const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
-      const title = `${name} replied`;
+      // An email alert names the sender and stays until dismissed; every other turn is unchanged.
+      const { inboundEmailPush } = await import("./email/inbound-email");
+      const emailPush = inboundEmailPush(
+        (record.payload as { emailReplyRef?: { fromName?: string; fromAddress?: string } })
+          ?.emailReplyRef,
+      );
+      const title = emailPush?.title ?? `${name} replied`;
       const body = String(lead.text).replace(/\s+/g, " ").slice(0, 140);
       // Primary away-delivery: piggyback journey's push (web-push + FCM/Android bridge), the SAME
       // reliable path reminders/alarms use to reach the phone. No separate Huddle VAPID keys needed;
@@ -7622,6 +7628,9 @@ async function executeClaimedTurn(record: {
                 // one at a time. `notificationId` tags web-push the same way.
                 notificationId: record.id,
                 tag: record.id,
+                // journey forwards it to the Android bridge, which then keeps the notification
+                // when tapped (setAutoCancel(false)) — only Dismiss or a swipe clears it.
+                ...(emailPush?.sticky ? { sticky: "true" } : {}),
               },
             },
             caller: { entra_email: record.user_email },

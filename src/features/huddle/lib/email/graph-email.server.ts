@@ -6,7 +6,60 @@
 // permitted to (Mail.Send application permission). Default sender is
 // dev@enterpriseds.io; HUDDLE_EMAIL_FROM overrides the allow-list (first = default).
 
+import { insertReplyIntoBody, replyTextToHtml } from "./draft-html";
+
 const GRAPH = "https://graph.microsoft.com/v1.0";
+
+/**
+ * Create a threaded reply draft on `messageId` and write `bodyText` into it as formatted HTML.
+ * createReply is called EMPTY (no `comment`): a comment is inserted as one unstyled plain-text run,
+ * which is what made drafts arrive as a single block in a random font (2026-10-27). The draft Graph
+ * returns already holds the quoted original as HTML, so the reply is inserted above it and PATCHed.
+ */
+async function createFormattedReplyDraft(
+  base: string,
+  token: string,
+  messageId: string,
+  bodyText: string,
+): Promise<{ ok: true; id?: string; webLink?: string } | { ok: false; error: string }> {
+  const auth = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const created = await fetch(`${base}/messages/${encodeURIComponent(messageId)}/createReply`, {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({}),
+  });
+  if (created.status !== 201) {
+    return {
+      ok: false,
+      error: `Graph createReply failed (${created.status}): ${(await created.text()).slice(0, 200)}`,
+    };
+  }
+  const draft = (await created.json()) as {
+    id?: string;
+    webLink?: string;
+    body?: { contentType?: string; content?: string };
+  };
+  if (!draft.id) return { ok: false, error: "Graph createReply returned no draft id" };
+  const quoted =
+    String(draft.body?.contentType ?? "").toLowerCase() === "html" ? draft.body?.content : "";
+  const patched = await fetch(`${base}/messages/${encodeURIComponent(draft.id)}`, {
+    method: "PATCH",
+    headers: auth,
+    body: JSON.stringify({
+      body: {
+        contentType: "HTML",
+        content: insertReplyIntoBody(quoted, replyTextToHtml(bodyText)),
+      },
+    }),
+  });
+  if (!patched.ok) {
+    return {
+      ok: false,
+      error: `Graph draft body update failed (${patched.status}): ${(await patched.text()).slice(0, 200)}`,
+    };
+  }
+  return { ok: true, id: draft.id, webLink: draft.webLink };
+}
 
 function firstEnv(names: string[]): string | undefined {
   for (const n of names) {
@@ -308,20 +361,9 @@ export async function createReplyDraftInMailbox(input: {
     if (!original)
       return { ok: false, from: mailbox, error: `No Inbox message from ${sender} to reply to.` };
 
-    const created = await fetch(`${base}/messages/${encodeURIComponent(original.id)}/createReply`, {
-      method: "POST",
-      headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify({ comment: input.body ?? "" }),
-    });
-    if (created.status !== 201) {
-      return {
-        ok: false,
-        from: mailbox,
-        error: `Graph createReply failed (${created.status}): ${(await created.text()).slice(0, 200)}`,
-      };
-    }
-    const j = (await created.json()) as { id?: string; webLink?: string };
-    return { ok: true, from: mailbox, id: j.id, webLink: j.webLink };
+    const r = await createFormattedReplyDraft(base, token, original.id, input.body ?? "");
+    if (!r.ok) return { ok: false, from: mailbox, error: r.error };
+    return { ok: true, from: mailbox, id: r.id, webLink: r.webLink };
   } catch (err) {
     return { ok: false, from: mailbox, error: err instanceof Error ? err.message : String(err) };
   }
@@ -340,23 +382,14 @@ export async function createReplyDraftForMessage(input: {
   const mailbox = input.mailbox.trim();
   try {
     const token = await getAppToken();
-    const res = await fetch(
-      `${GRAPH}/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(input.graphMessageId)}/createReply`,
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ comment: input.body ?? "" }),
-      },
+    const r = await createFormattedReplyDraft(
+      `${GRAPH}/users/${encodeURIComponent(mailbox)}`,
+      token,
+      input.graphMessageId,
+      input.body ?? "",
     );
-    if (res.status !== 201) {
-      return {
-        ok: false,
-        from: mailbox,
-        error: `Graph createReply failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
-      };
-    }
-    const j = (await res.json()) as { id?: string; webLink?: string };
-    return { ok: true, from: mailbox, id: j.id, webLink: j.webLink };
+    if (!r.ok) return { ok: false, from: mailbox, error: r.error };
+    return { ok: true, from: mailbox, id: r.id, webLink: r.webLink };
   } catch (err) {
     return { ok: false, from: mailbox, error: err instanceof Error ? err.message : String(err) };
   }
@@ -404,7 +437,7 @@ async function createPlainDraftInMailbox(
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         subject,
-        body: { contentType: "Text", content: input.body ?? "" },
+        body: { contentType: "HTML", content: replyTextToHtml(input.body ?? "") },
         toRecipients: toRecipients(input.to),
         ccRecipients: toRecipients(input.cc),
       }),
