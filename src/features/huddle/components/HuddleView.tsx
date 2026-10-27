@@ -1232,8 +1232,12 @@ function Composer({ huddle }: { huddle: Huddle }) {
       if (token) {
         done = true;
         try {
+          // The server registers the device for the caller proven by this Entra ID token only.
+          const { getToken } = await import("@/lib/entra-auth");
+          const idToken = await getToken();
+          if (!idToken) return;
           const { registerBridgeFcmToken } = await import("../lib/huddle.functions");
-          await registerBridgeFcmToken({ data: { caller: pushCaller, token } });
+          await registerBridgeFcmToken({ data: { idToken, token } });
         } catch {
           /* non-fatal */
         }

@@ -4725,3 +4725,15 @@ all one block with no new line spacing and the font is random instead of being c
 
 **NOT yet confirmed by the owner** — needs: the next real email (instant alert, new title, stays until dismissed after
 the APK update) and one Save to Drafts tap (spacing + Calibri 11 in Outlook).
+
+## ACT:journey-tool-verified-caller (journey Option A, verify loop 1 C2-BYPASS1, 2026-10-27)
+
+`invokeJourneyToolDebug` and `registerBridgeFcmToken` took `caller.entra_email` from the POST body with no auth;
+huddle-proxy turns that into a service-role execute-tool call, so anyone could register their phone for any user.
+Both now resolve the caller from a verified Entra ID token (`verifyEntraIdToken`, same as profile/workspace fns).
+
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | `verified-caller.server.ts` + both server fns ignore the body caller, refuse without a verified idToken | on branch `claude_fcm-register-with-session`, not merged | `scripts/journey-verified-caller.test.ts` 12/12 |
+| 2 | HuddleView sends `idToken` (`getToken()`) for the Huddle app's FCM registration | on branch | — |
+| 3 | Other Huddle server fns that take `caller` from the body (sendHuddleMessage etc.) | **open, not in this fix** | — |

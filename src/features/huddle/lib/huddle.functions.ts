@@ -8003,7 +8003,11 @@ export const registerPushSubscription = createServerFn({ method: "POST" })
 // the caller to a journey user and calls execute-tool `register_push_token` — so the Huddle app's token
 // joins the SAME push_subscriptions store journey already delivers to. Reuse, not a new sender: this is
 // what lets a Huddle-agent push land on the Huddle app (and deep-link into the right channel).
+// The caller is resolved from a verified Entra ID token (`idToken`), never from the body (journey
+// VERIFY-phone-registration-a-1 C2-BYPASS1: a body-supplied email registered a device for any user).
 const BridgeFcmInput = z.object({
+  idToken: z.string().optional(),
+  // Accepted for backward compatibility and IGNORED.
   caller: z
     .object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() })
     .optional(),
@@ -8012,20 +8016,9 @@ const BridgeFcmInput = z.object({
 export const registerBridgeFcmToken = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => BridgeFcmInput.parse(raw))
   .handler(async ({ data }) => {
-    try {
-      const { invokeJourneyTool } = await import("./journey/proxy.functions");
-      const r = await invokeJourneyTool({
-        toolName: "register_push_token",
-        // `app:"huddle"` namespaces the endpoint as `fcm:app:huddle:<token>` so journey can target this
-        // app's device exclusively (and exclude it from journey-native pushes).
-        args: { fcm_token: data.token, app: "huddle" },
-        caller: data.caller ?? {},
-        context: { source: "huddle" },
-      });
-      return { ok: !!r.ok, error: r.ok ? undefined : String(r.error ?? "register_failed") };
-    } catch (e) {
-      return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
-    }
+    const { invokeJourneyTool } = await import("./journey/proxy.functions");
+    const { registerBridgeFcmTokenImpl } = await import("./journey/verified-caller.server");
+    return registerBridgeFcmTokenImpl(data, { invoke: invokeJourneyTool });
   });
 
 /**

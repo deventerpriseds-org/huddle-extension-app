@@ -194,17 +194,20 @@ export const checkJourneyHealth = createServerFn({ method: "GET" }).handler(
 );
 
 /**
- * Debug-only: manually invoke a journey tool with the caller's Entra identity.
+ * Debug-only: manually invoke a journey tool as the SIGNED-IN caller.
  * Not used in the hot path — the agent turn loop calls `invokeJourneyTool()`
  * directly. Kept so the settings drawer can smoke-test end-to-end.
+ * The caller is resolved from a verified Entra ID token (`idToken`), never from the body: a body-supplied
+ * email let anyone run any tool as any user (journey VERIFY-phone-registration-a-1 C2-BYPASS1).
  */
 const InvokeInput = z.object({
+  idToken: z.string().optional(),
   toolName: z.string().min(1),
   args: z.record(z.any()).default({}),
-  caller: z.object({
-    entra_object_id: z.string().optional(),
-    entra_email: z.string().optional(),
-  }),
+  // Accepted for backward compatibility and IGNORED.
+  caller: z
+    .object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() })
+    .optional(),
   agentId: z.string().optional(),
   huddleId: z.string().optional(),
 });
@@ -212,13 +215,8 @@ const InvokeInput = z.object({
 export const invokeJourneyToolDebug = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => InvokeInput.parse(raw))
   .handler(async ({ data }): Promise<JourneyToolInvocationResponse> => {
-    const caller: JourneyCallerIdentity = data.caller;
-    return invokeJourneyTool({
-      toolName: data.toolName,
-      args: data.args,
-      caller,
-      context: { source: "huddle", huddleId: data.huddleId, agentId: data.agentId },
-    });
+    const { invokeJourneyToolDebugImpl } = await import("./verified-caller.server");
+    return invokeJourneyToolDebugImpl(data, { invoke: invokeJourneyTool });
   });
 
 // Re-export for consumers that only need the type
