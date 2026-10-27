@@ -4723,5 +4723,9 @@ all one block with no new line spacing and the font is random instead of being c
 | B | Graph change notifications: `/api/public/graph-mail-notify` + `chat.graph_mail_subscriptions`; 5-min check creates/renews; poll stays as backstop; alert hours still apply | built | mail-subscription.test S1–S14, R1–R4; S3 FIRED |
 | D | Save to Drafts: createReply empty → PATCH HTML (Calibri 11pt, one `<p>` per line, blank lines kept) above the quoted original | built | draft-html.test D1–D11; D1, D4, D10 FIRED |
 
-**NOT yet confirmed by the owner** — needs: the next real email (instant alert, new title, stays until dismissed after
-the APK update) and one Save to Drafts tap (spacing + Calibri 11 in Outlook).
+**Shipped 2026-10-27:** huddle #105 (ebf801b, deploy-swa success), journey #69 (d7a9db2, edge deploy success),
+bridge #10 + #11 → Huddle APK v1.0.10 built (84f9813). Live: run 40575373656 → `subscription: {action:create, ok:true}`
+(Graph accepted our validation echo) and a real 20:04Z Trinnex email alerted with push title "New email from Elizabeth J.
+Plumley — draft reply ready", data.sticky "true", FCM 1 success (journey function_logs 20:08:53Z).
+**NOT yet confirmed by the owner** — needs: install v1.0.10; the next real email arriving within seconds; the push staying
+after a tap; one Save to Drafts tap (spacing + Calibri 11 in Outlook).
