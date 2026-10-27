@@ -418,6 +418,42 @@ await simulate(deployAt, deployAt + 7 * DAY);
 }
 
 // =====================================================================================================
+console.log("\nC1b. no per-agent daily cap: one agent's lane loops at the spacing chain's pace (owner 2026-10-27)");
+// VERIFY-confirm-ask-rotation-1 measured exactly 3 re-asks/day for tess alone: re-asks were re-armed only at the
+// 9/13/17 passes. The heartbeat now re-arms right after each send, so only the 45-90 min chain paces the loop.
+reset();
+for (let i = 0; i < 13; i++) {
+  const id = `t${i}`;
+  board.push(task(id, "tess-sutton"));
+  const sent = Date.parse("2026-08-25T14:00:00Z") + i * HOUR;
+  Object.assign(st(id), { confirm_status: "asked", confirm_ask_count: 1, confirm_last_sent_at: sent, confirm_ask_at: sent });
+}
+{
+  const from = Date.parse("2026-11-02T10:17:00-05:00");
+  await simulate(from, from + 7 * DAY);
+  const perDay = new Map<string, number>();
+  for (const p of pushes) perDay.set(localHM(p.at).day, (perDay.get(localHM(p.at).day) ?? 0) + 1);
+  const days = [...perDay.values()];
+  check("no hidden 3/day cap: a single agent's lane gets more than 3 re-asks on most days", days.filter((n) => n > 3).length >= 5, JSON.stringify(Object.fromEntries(perDay)));
+  let gap = Infinity;
+  for (let i = 1; i < pushes.length; i++) gap = Math.min(gap, pushes[i].at - pushes[i - 1].at);
+  check("...still >= 45 min between pushes", gap >= 45 * MIN, `${gap / MIN} min`);
+  const asked = new Map<string, number>();
+  for (const p of pushes) asked.set(p.taskId, (asked.get(p.taskId) ?? 0) + 1);
+  check("...and the whole 13-item lane is looped (every item asked at least once)", asked.size === 13, `${asked.size}/13`);
+  check("...never the same item twice inside the 24h per-item floor", (() => {
+    const last = new Map<string, number>();
+    for (const p of pushes) {
+      const prev = last.get(p.taskId);
+      if (prev !== undefined && p.at - prev < 24 * HOUR) return false;
+      last.set(p.taskId, p.at);
+    }
+    return true;
+  })());
+  console.log(`  tess-only pushes=${pushes.length} per-day=${JSON.stringify(Object.fromEntries(perDay))}`);
+}
+
+// =====================================================================================================
 console.log("\nC2. heartbeat cost and failure isolation (AC-52, AC-53)");
 reset();
 SIM = start;

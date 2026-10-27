@@ -285,7 +285,8 @@ export async function runDueScheduledJobs(): Promise<number> {
   }
   // Minute-granular confirm-intent delivery: fire each armed ask at ITS jittered instant (random fan-out
   // across the working day) instead of batching to the 3x/day auto-work pass. Arming stays on the
-  // auto-work/groom passes; markConfirmAsked is set-once so this never double-sends. Never throws.
+  // auto-work/groom passes (and right after each send); each send is a compare-and-set claim
+  // (claimConfirmAskSend) so this never double-sends. Never throws.
   try {
     const { fireDueConfirmAsks } = await import("./autowork.server");
     await fireDueConfirmAsks(now);

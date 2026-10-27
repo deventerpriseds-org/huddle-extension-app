@@ -160,6 +160,23 @@ try {
   const ls = await T.getLastConfirmSentAt(E);
   check("getLastConfirmSentAt returns the newest real send", !!ls && ls.toISOString() === c3?.sentAt, `${ls?.toISOString()} vs ${c3?.sentAt}`);
 
+  // ---- clock skew (VERIFY-confirm-ask-rotation-1): "due" is decided on the APP clock. When it runs ahead of the
+  // DB, an ask armed a few seconds in the DB's future is claimed; the stamp must still land past confirm_ask_at,
+  // or the row stays armed-unsent and is sent a second time.
+  await task("skew", "UP_NEXT", "flex-grimes");
+  await db.query(
+    `INSERT INTO tasks.task_engagement_state (task_id,user_email,confirm_status,confirm_ask_at) VALUES ('skew',$1,'awaiting', now() + interval '3 seconds')`,
+    [E],
+  );
+  const appAhead = new Date(Date.now() + 10_000).toISOString();
+  const skDue = (await T.getDueConfirmAsks(appAhead)).filter((r: { task_id: string }) => r.task_id === "skew");
+  check("skew: an ask armed in the DB's future is due on an app clock 10s ahead", skDue.length === 1);
+  const skClaim = await T.claimConfirmAskSend("skew", 0);
+  check("skew: the claim succeeds", skClaim?.count === 1, JSON.stringify(skClaim));
+  const skAgain = (await T.getDueConfirmAsks(appAhead)).filter((r: { task_id: string }) => r.task_id === "skew");
+  check("skew: after one send the ask is NOT still due (no double-send)", skAgain.length === 0, JSON.stringify(skAgain));
+  check("skew: and a second claim on the same attempt is refused", (await T.claimConfirmAskSend("skew", 1)) === null);
+
   // ---- AC-27: "yes" binds to the most recently SENT asked task, not the most recently WRITTEN ---------------
   await task("bind-A", "UP_NEXT", "cole-blake");
   await task("bind-B", "UP_NEXT", "cole-blake");

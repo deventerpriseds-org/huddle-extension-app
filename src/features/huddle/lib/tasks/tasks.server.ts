@@ -1067,7 +1067,9 @@ export async function armConfirmReAskAt(taskId: string, userEmail: string, askAt
  * the enqueue is refused or throws, call releaseConfirmAskSend — an ask that was not enqueued must never read
  * as sent (AC-23). Returns the claimed count + stamp, or null when someone else got there first / the row is
  * no longer armed-but-unsent (sent, confirmed, reassigned). The stamp is truncated to milliseconds so the
- * JS Date the driver hands back compares EQUAL to the stored value in releaseConfirmAskSend's guard.
+ * JS Date the driver hands back compares EQUAL to the stored value in releaseConfirmAskSend's guard, and is
+ * floored just past confirm_ask_at: "due" is decided on the APP clock, so if it runs ahead of the DB clock a bare
+ * now() could land BEFORE confirm_ask_at and leave the row still armed-unsent — sent twice (VERIFY loop 1).
  */
 export async function claimConfirmAskSend(
   taskId: string,
@@ -1077,7 +1079,8 @@ export async function claimConfirmAskSend(
   const { rows } = await getPool().query<{ confirm_ask_count: number; confirm_last_sent_at: Date | string }>(
     `UPDATE tasks.task_engagement_state es
         SET confirm_status = 'asked', confirm_ask_count = es.confirm_ask_count + 1,
-            confirm_last_sent_at = date_trunc('milliseconds', now()), updated_at = now()
+            confirm_last_sent_at = date_trunc('milliseconds', GREATEST(now(), es.confirm_ask_at + interval '1 millisecond')),
+            updated_at = now()
       WHERE es.task_id = $1 AND es.confirm_ask_count = $2 AND ${ARMED_UNSENT_SQL("es")}
       RETURNING es.confirm_ask_count, es.confirm_last_sent_at`,
     [taskId, expectedCount],

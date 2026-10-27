@@ -579,6 +579,9 @@ export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number
         // Whatever else was due this tick goes back on the chain AFTER the ask just sent, instead of firing a
         // minute later at the gap's exact minimum (which would turn a backlog into a metronome).
         if (sent && unsent.length) await reFan(unsent, now);
+        // Queue the NEXT ask the moment one goes out, so the loop through the lane is paced only by the spacing
+        // chain — not by waiting for the next 9/13/17 cadence pass (which made it ≤3 re-asks per agent per day).
+        if (sent) await runScheduledAutoWork({ entra_email: email }, { timeZone: tz, armOnly: true }).catch(() => {});
       } catch {
         /* one user's failure never blocks the rest */
       }
@@ -691,7 +694,7 @@ interface AgentBucket {
  */
 export async function runScheduledAutoWork(
   caller: Caller | undefined,
-  opts: { timeZone?: string; force?: boolean; runId?: string; promoteOnly?: boolean } = {},
+  opts: { timeZone?: string; force?: boolean; runId?: string; promoteOnly?: boolean; armOnly?: boolean } = {},
 ): Promise<AutoWorkRunResult> {
   const runId =
     opts.runId?.trim() || `autowork-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -728,6 +731,7 @@ export async function runScheduledAutoWork(
   const signature = backlogSignature(assigned);
 
   if (!assigned.length && !opts.force) {
+    if (opts.armOnly) return { ok: true, skipped: true, reason: "empty", enqueued: 0, promoted: 0, blocked: 0, remaining: 0, runId };
     await setAutoWorkSignature(email, signature);
     return { ok: true, skipped: true, reason: "empty", enqueued: 0, promoted: 0, blocked: 0, remaining: 0, runId };
   }
@@ -784,7 +788,8 @@ export async function runScheduledAutoWork(
       doingSlotCandidates.push({ agent, task: t, freshPromotion: false });
     }
     const frozen = bucket.inReview.length >= REVIEW_CAP;
-    const room = frozen ? 0 : Math.max(0, UP_NEXT_CAP - bucket.upNext.length);
+    // armOnly writes nothing, so it must not plan a top-up it will never make (or arm asks for backlog items).
+    const room = frozen || opts.armOnly ? 0 : Math.max(0, UP_NEXT_CAP - bucket.upNext.length);
     const toPromote = bucket.backlog.slice(0, room);
     for (const t of toPromote) promotions.push({ task_id: t.id, status: "UP_NEXT" });
     const upNextAfterTopUp = [...bucket.upNext, ...toPromote];
@@ -840,6 +845,21 @@ export async function runScheduledAutoWork(
     const plan = planConfirmArming({ lanes, states, required, now: Date.now(), reaskMinMs });
     await armConfirmAsksSpaced(plan, email, tz, windows);
   };
+
+  // armOnly (the heartbeat, right after it SENDS an ask): ONLY put the next asks on the spacing chain — no top-up,
+  // no promotion, no research turn, no signature write. Without this, a re-ask was re-armed only at the 9/13/17
+  // passes, and with one queued re-ask per agent that capped each agent at 3 re-asks a day on top of the 45–90 min
+  // spacing — a second cap the owner ruled out (2026-10-27, "no double capping"; VERIFY-confirm-ask-rotation-1).
+  if (opts.armOnly) {
+    if (lanes.length) {
+      try {
+        await armLanes(await getTaskEngagementStates(gateIds), await resolveRequired());
+      } catch {
+        /* best-effort — the next send or cadence pass re-arms */
+      }
+    }
+    return { ok: true, skipped: false, reason: "arm_only", enqueued: 0, promoted: 0, blocked: 0, remaining: 0, runId };
+  }
 
   // promoteOnly (the grooming→auto-work chain): ONLY top up UP_NEXT from the freshly-ranked backlog.
   // Do NOT promote to DOING, enqueue research turns, or flip anything to review — all of that belongs to
@@ -943,12 +963,13 @@ export async function runScheduledAutoWork(
           const s = engagementByTaskId.get(task.id)!;
           const caps = await getWorkflowCaps(email, agent);
           const n = s.approach_redrive_count ?? 0;
+          // Floor first: the agent gets the same full window after its LAST nudge before it is escalated.
+          const since = ms(s.approach_redrive_last_at) ?? ms(s.confirmed_at);
+          if (since !== null && nowMs - since < reaskMinMs) continue;
           if (n >= caps.approach) {
             await escalateApproach(task.id, email);
             continue;
           }
-          const since = ms(s.approach_redrive_last_at) ?? ms(s.confirmed_at);
-          if (since !== null && nowMs - since < reaskMinMs) continue;
           const claimed = await claimApproachRedrive(task.id, n);
           if (claimed === null) continue;
           let ok = false;
