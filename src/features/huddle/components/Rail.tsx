@@ -1,15 +1,29 @@
 import { useState } from "react";
-import { MessageSquare, LayoutGrid, FolderOpen, Compass, Settings } from "lucide-react";
+import { MessageSquare, LayoutGrid, FolderOpen, Compass, Settings, ListChecks, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useHuddleStore } from "../store";
+import { useHuddleStore, type View } from "../store";
 import { SettingsSheet } from "./SettingsSheet";
 
-const items = [
-  { id: "huddle", label: "Huddles", icon: MessageSquare },
-  { id: "board", label: "Board", icon: LayoutGrid },
-  { id: "artifacts", label: "Artifacts", icon: FolderOpen },
-  { id: "memory", label: "Memory", icon: Compass },
-] as const;
+// Each entry now declares the view it SELECTS, instead of the click handler and the active check each
+// re-deriving it from the id with their own chain of comparisons — those two chains had already
+// drifted (every unlisted id fell through to "huddle"), which is exactly how a new rail button ends
+// up looking wired while doing nothing. `view: View` makes both read the same field.
+// "memory" keeps pointing at "huddle" deliberately: that is its existing behaviour (there is no
+// separate memory view — memory lives in the context panel) and changing it is not this lane's job.
+// `neverActive` exists because "memory" SHARES the "huddle" view. Active state is `view === it.view`,
+// so with two entries pointing at "huddle" the rail highlighted BOTH of them at once — harmless when
+// Memory sat next to Huddles alone, visibly wrong now that Priorities and Schedule are also here.
+// This flag is the minimal de-highlight and nothing more: Memory still renders, and still opens the
+// huddle view on click. Whether it should instead get its own view or be removed is the owner's call,
+// asked separately — deliberately NOT decided here.
+const items: { id: string; label: string; icon: typeof MessageSquare; view: View; neverActive?: boolean }[] = [
+  { id: "huddle", label: "Huddles", icon: MessageSquare, view: "huddle" },
+  { id: "board", label: "Board", icon: LayoutGrid, view: "board" },
+  { id: "priorities", label: "Priorities", icon: ListChecks, view: "priorities" },
+  { id: "schedule", label: "Schedule", icon: CalendarDays, view: "schedule" },
+  { id: "artifacts", label: "Artifacts", icon: FolderOpen, view: "artifacts" },
+  { id: "memory", label: "Memory", icon: Compass, view: "huddle", neverActive: true },
+];
 
 export function Rail() {
   const view = useHuddleStore((s) => s.view);
@@ -32,17 +46,13 @@ export function Rail() {
           H
         </button>
         {items.map((it) => {
-          const active =
-            (it.id === "huddle" && view === "huddle") ||
-            (it.id === "board" && view === "board") ||
-            (it.id === "artifacts" && view === "artifacts") ||
-            (it.id === "memory" && view === "huddle");
+          const active = !it.neverActive && view === it.view;
           const Icon = it.icon;
           return (
             <button
               key={it.id}
               type="button"
-              onClick={() => setView(it.id === "board" ? "board" : it.id === "artifacts" ? "artifacts" : "huddle")}
+              onClick={() => setView(it.view)}
               className={cn(
                 "group relative flex size-10 items-center justify-center rounded-lg transition",
                 active

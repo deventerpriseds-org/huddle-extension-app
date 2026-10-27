@@ -1,0 +1,58 @@
+name: Run priority check (manual/on-demand)
+
+# WHAT:       Fires the scheduled PRIORITY CHECK on demand — Iris's "are these priorities still
+#             right?" message with the priorities widget — for testing or an ad-hoc nudge.
+# WHY:        The scheduled path is the Huddle every-minute scheduler POSTing
+#             /api/public/run-priority-check at 6/20 local; a session holds no JOURNEY_PROXY_TOKEN,
+#             so this is how the route is exercised live. Mirrors run-review-digest.yml.
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   docs/plan-agent-routines.md; src/features/huddle/lib/tasks/priority-check.server.ts
+#
+# dryRun:true computes the summary + directive and RETURNS it — no turn, no push. dryRun:false sends
+# the real message (one per edition per day; a manual runId makes a fresh one).
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Board owner email (the scheduler targets the mirror's user_email)."
+        required: true
+        default: "dev@enterpriseds.io"
+      edition:
+        description: "morning | evening | (blank = derived from the current local hour)"
+        required: false
+        default: ""
+      dryRun:
+        description: "true = return what WOULD be sent, deliver nothing."
+        required: false
+        default: "true"
+      timeZone:
+        description: "IANA time zone."
+        required: false
+        default: "America/New_York"
+
+jobs:
+  run-priority-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/public/run-priority-check
+        env:
+          SECRET: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          EMAIL: ${{ inputs.email }}
+          EDITION: ${{ inputs.edition }}
+          DRY: ${{ inputs.dryRun }}
+          TZ_INPUT: ${{ inputs.timeZone }}
+        run: |
+          if [ -z "$SECRET" ]; then echo "JOURNEY_PROXY_TOKEN secret not set"; exit 1; fi
+          RUN_ID="manual-$(date -u +%Y%m%d%H%M%S)"
+          BODY=$(jq -cn --arg e "$EMAIL" --arg ed "$EDITION" --arg tz "$TZ_INPUT" --arg r "$RUN_ID" \
+            --argjson dry "$DRY" \
+            '{caller:{entra_email:$e}, timeZone:$tz, dryRun:$dry, runId:$r} + (if $ed == "" then {} else {edition:$ed} end)')
+          echo "Body: $BODY"
+          HTTP=$(curl -s -o /tmp/pc.out -w "%{http_code}" -X POST \
+            -H "content-type: application/json" -H "x-webhook-secret: $SECRET" \
+            -d "$BODY" "$BASE/api/public/run-priority-check")
+          echo "HTTP $HTTP"
+          echo "--- response ---"; cat /tmp/pc.out; echo
+          if [ "$HTTP" != "200" ]; then echo "run-priority-check failed"; exit 1; fi

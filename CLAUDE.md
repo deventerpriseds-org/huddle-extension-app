@@ -261,6 +261,20 @@ Huddle's own Web Push (`push/push.server.ts`, VAPID) is an OPTIONAL browser-only
 Huddle VAPID keys are set) — journey's path is what covers the phone, so new away-comms should reuse
 `send_push`, not add another sender.
 
+**Phone alarms are per app, never duplicated (verified 2026-10-08).** Both Android apps (Journey Voice
+and Huddle) are built from the same android-bridge-template code, so both have the full-screen alarm —
+Huddle's config has had the `calendar_events` channel since its first build (2026-07-26). Routing keeps
+them apart: `send-push-notification` sends a push carrying `app:"huddle"` ONLY to `fcm:app:huddle:%`
+tokens, and a journey-native push to everything EXCEPT `fcm:app:%`. So journey task-start alarms ring
+only in Journey Voice; Huddle `schedule_reminder` alarms ring only in Huddle. Known overlap, left as is
+by the user's choice ("I'll see if it's an annoyance first"): a Huddle alarm set on a task journey already
+alarms for rings in both apps. The alarm's "Open task" follows the push's own `deepLink`, so a Huddle
+alarm opens the agent's 1:1 (`/?huddle=dm-<agent>`), not journey's `/calendar`.
+**Known gap — Huddle-only (no journey) has NO phone push at all.** Every phone push, alarm included,
+goes through journey's `send_push` and needs the Huddle device registered in journey
+(`register_push_token`); alarm task buttons act on journey `public.tasks`. Deferred by the user
+(2026-10-08) — don't build a Huddle-native sender without asking.
+
 ## The canonical Azure DB is PINNED — do not let deploy discovery drift (relearned expensively)
 Huddle's Azure Postgres is **`eds-postgresql` / database `RAG_AI_Agents`** (PG 17), in RG
 `EnterpriseDS_ResourceGRP`. It holds everything: `public.rag_chunks`/`rag_triples` (memory),
@@ -498,10 +512,23 @@ Agents do work FOR the user on a WIP-limited cadence; the confirm-intent/DoD gat
   (2) `ensureReviewFlip` flips ONLY on an **affirmative** `confirm_status==='confirmed'` (never "proceed
   unless proven required") and resolves the requirement even when `agentId` is null — never `if (agentId)`-skip
   the gate (the `w.personaId ?? null` worker path was a real null bypass).
-- **Reach-out cadence — jittered, thrice-daily, throttled.** Auto-work wakes at
-  `SCHEDULING_DEFAULTS.autowork.hours=[9,13,17]` ET (`scheduling-config.server.ts`, user-editable in Settings).
-  Each task needing confirmation gets a ONE-TIME **15min–4h** jitter (`CONFIRM_JITTER_MIN/MAX_MS`); its ask
-  fires at the next 9/13/17 check after that instant, exactly once (`markConfirmAsked`), as a DM + phone push.
+- **Reach-out cadence — TWO SEPARATE CLOCKS. Do not conflate them (corrected 2026-09-13 from source).**
+  The file is **`lib/identity/scheduling-config.server.ts`** — NOT `lib/tasks/`, where this doc used to
+  point. All cadences are DEFAULTS with per-user overrides in `identity.scheduling_config`; **that table
+  had 0 rows when last queried (2026-09-13), so the defaults below are what is actually live.** Always
+  re-query it rather than quoting the defaults as fact — `resolveJobCadence(email, key)` is what runs.
+  1. **The auto-work PASS** (top up UP_NEXT, promote to DOING) wakes at
+     `SCHEDULING_DEFAULTS.autowork.hours = [9,13,17]` ET. Still accurate.
+  2. **The confirm-ask REACH-OUT does NOT ride that tick.** `CONFIRM_JITTER_MIN/MAX_MS` **no longer
+     exists anywhere in `src/`** — the 15min–4h jitter this doc described is gone. Asks are scheduled at a
+     random instant inside `CONFIRM_FAN_WINDOWS_DEFAULT` (**9–18 and 20–22**, the 18–20 gap deliberately
+     protecting dinner), spaced by a random **45–90 min** gap, resolved via `resolveConfirmFanWindows`
+     in three places in `autowork.server.ts`. Still exactly once per task (`markConfirmAsked`), still a
+     DM + phone push.
+  **Other jobs are NOT on the auto-work cadence and several are more frequent** — quoting "9/13/17" as
+  though it governed the whole system is the error this correction exists to stop:
+  `reviewDigest [8,11,13,16,19]` (5×/day), `reviewRecheck [10,16]`, `standup [8]`, `groom [8] Mondays only`
+  (cut back 2026-07-31 after firing 6×/day).
   WIP caps (UP_NEXT≤3 / DOING≤1 / REVIEW≤2 per agent) throttle daily volume so it feels like a real team.
   **Grooming completion ALSO arms these reach-outs** (the `promoteOnly` chain schedules `confirm_ask_at` for
   freshly-staged items), so check-ins begin relative to the groom, not only the next cadence tick.
@@ -535,10 +562,37 @@ free. The feature = (a) an agent action "parking lot this" → `update_task(stat
 'parking-lot')`, (b) exclude `'parking-lot' = ANY(tags)` from `autowork.server.ts` candidate selection
 + journey's nightly planner. Backlog is the home lane — do NOT build a new lane.
 
-## Waiting on deploys/CI: poll for the terminal state, never blind-sleep (user preference)
-The user dislikes fixed wait timers — they over-wait and are inefficient. Do NOT `sleep 300` then check.
-Instead detect completion the INSTANT it happens with a tight poll that exits on the terminal state, so
-the notification fires right away:
+## Waiting on deploys/CI: FIRST ask whether to wait at all; never blind-sleep (user preference)
+
+**ASK THIS BEFORE ANYTHING BELOW: does the answer change what I do next?** If not, do not watch it —
+push and move on, and read the state once later if it ever matters. The rest of this section is how to
+wait *when waiting is warranted*, not a standing instruction to watch every run.
+
+Three cases where the answer is **don't watch**, and the first two are the common ones:
+- **The diff cannot affect the deploy — and will not even START one.** `deploy-swa.yml`'s `push`
+  trigger carries **`paths-ignore: ['.github/**', '.claude/**', '**/*.md']`**, so a ledger, doc, or
+  workflow-only push to `main` fires **no run at all**. **Zero checks is the correct number, and
+  watching for a run is watching for something that will never exist** — verified by reading the
+  workflow and by `GET /actions/runs?head_sha=…` returning `total_count: 0` for two such commits.
+  Corollary for any "is it deployed?" answer: the newest `deploy-swa.yml` run legitimately lags
+  `origin/main` whenever the commits in between are docs. **That gap is correct, not a failed deploy** —
+  compare the deployed SHA against the last commit that touched `src/`, not against `HEAD`.
+- **Nothing is blocked on the result.** You are about to report and end the turn anyway — the run's
+  conclusion will be readable in one call next turn, for free.
+- **A push signal already covers it.** On a PR, `subscribe_pr_activity` delivers CI failures and review
+  comments with no waiting. Prefer it; it does not apply to a bare `main` push, which is the only reason
+  a manual read is ever needed here.
+   *(2026-09-21: an earlier version of this heading read "poll for the terminal state" with the loop
+   below spelled out, and was followed literally into a 20-second-interval watch on a LEDGER-ONLY push —
+   a build whose result could not matter. The owner stopped it: "why are you polling? i have a rule not
+   to poll rather than set a subscription etc to know exactly when done without wasteful waiting." The
+   intent was always "don't `sleep 300` blindly"; the wording had inverted into "always watch". The
+   org-wide rule — prefer event-driven signals, size any fallback to how fast the state actually
+   changes, and prefer checking sooner or not at all over idling — governs.)*
+
+**When you HAVE established that something is genuinely blocked on the outcome:** do NOT `sleep 300`
+then check. Detect completion the instant it happens with a tight poll that exits on the terminal
+state, and match it to the SHA you pushed, not to "the latest run":
 - **GitHub Actions is directly pollable from bash** — `GITHUB_TOKEN`/`GH_TOKEN` are in the env, so hit
   the REST API (no `gh` CLI needed): `curl -s -H "Authorization: Bearer $GH_TOKEN" .../actions/runs?per_page=1&branch=<b>` and read `status`/`conclusion`. Wrap it in a background `until`/`while` loop that
   `sleep 15-20` between checks and `break`s on `status=completed` — ONE notification, the moment it lands.

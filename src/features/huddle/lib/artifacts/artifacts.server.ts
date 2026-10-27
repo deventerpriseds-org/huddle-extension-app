@@ -126,7 +126,15 @@ export async function createArtifact(input: CreateArtifactInput): Promise<{ id: 
   const { userId } = await resolveScopeByEmail(input.userEmail);
   const id = `art-${randomUUID()}`;
   const data = Buffer.isBuffer(input.bytes) ? input.bytes : Buffer.from(input.bytes);
-  const blobPath = `${slug(input.userEmail)}/${slug(input.folder)}/${id}-${slug(input.name)}`;
+  // SANITISE HERE, not only at the agent choke point. `createArtifact` is the LAST gate before
+  // anything is persisted, and it has five callers — the agent tool, the durable-turn path, the
+  // artifacts panel, and USER-UPLOADED chat attachments, whose filename is just as untrusted as model
+  // output. Both helpers are idempotent, so the upstream call in createArtifactFromAgent (which needs
+  // the safe name to resolve an extension) is unaffected. Loop 2 fixed `name` at one site and left
+  // `folder` and four other callers open; putting it here is what makes it a guard rather than a patch.
+  const folder = safeArtifactFolder(input.folder);
+  const name = safeArtifactName(input.name);
+  const blobPath = `${slug(input.userEmail)}/${slug(folder)}/${id}-${slug(name)}`;
   // Blob first: if the upload fails we never leave a metadata row pointing at nothing.
   await putArtifactBlob(blobPath, data, input.mime);
   await getPool().query(
@@ -137,8 +145,8 @@ export async function createArtifact(input: CreateArtifactInput): Promise<{ id: 
       input.userEmail.toLowerCase(),
       input.agentId ?? null,
       input.taskId ?? null,
-      input.folder,
-      input.name,
+      folder,
+      name,
       input.mime,
       data.length,
       blobPath,
@@ -147,6 +155,217 @@ export async function createArtifact(input: CreateArtifactInput): Promise<{ id: 
     ],
   );
   return { id, deepLink: `/artifacts/${id}` };
+}
+
+/** Longest filename we will store. SharePoint/OneDrive reject a full path over ~400 characters, and
+ *  the mirror path already spends some of that on "Huddle Artifacts/{lane}/". A 5005-character name
+ *  passed through `safeArtifactName` untouched before this cap — found by verifier loop 3, which also
+ *  noted that a name too long to mirror fails at Graph, far from where it was accepted. */
+const MAX_ARTIFACT_NAME = 120;
+
+/** Truncate the STEM, never the extension — "…verylong.docx" must stay openable as a Word file. */
+function capLength(name: string, max: number): string {
+  if (name.length <= max) return name;
+  const dot = name.lastIndexOf(".");
+  // Only treat a trailing dot-segment as an extension when it looks like one (short, no spaces).
+  const ext = dot > 0 && name.length - dot <= 10 && !/\s/.test(name.slice(dot)) ? name.slice(dot) : "";
+  const stem = ext ? name.slice(0, dot) : name;
+  return stem.slice(0, Math.max(1, max - ext.length)) + ext;
+}
+
+/**
+ * Strip any path out of a model-supplied artifact name, leaving a bare filename.
+ *
+ * THIS IS A PATH-TRAVERSAL FIX, NOT TIDYING. `slug()` protected the BLOB path but nothing sanitised
+ * `artifacts.items.name`, and the OneDrive mirror builds its upload path from that name with
+ * `encodeURIComponent` per segment — which does NOT encode `.` — so a name of `../../etc/passwd`
+ * escaped the "Huddle Artifacts" folder on mirror. Outward-facing, on a real user's drive, driven by
+ * model output. Found by the verifier (onedrive.server.ts:21).
+ *
+ * Keeps only the last path segment, drops `..`, and refuses a name that is nothing but an extension
+ * (".docx" → "artifact.docx") so the file is always addressable.
+ */
+export function safeArtifactName(name: string): string {
+  const raw = String(name ?? "").replace(/\\/g, "/");
+  const last = raw.split("/").filter((seg) => seg && seg !== "." && seg !== "..").pop() ?? "";
+  // Control characters and the characters Windows/OneDrive reject outright.
+  const cleaned = last.replace(/[\u0000-\u001f<>:"|?*]/g, "").trim();
+  if (!cleaned || cleaned === "." || cleaned === "..") return "artifact";
+  // A bare extension (".docx") has no stem to address — give it one.
+  return capLength(cleaned.startsWith(".") ? `artifact${cleaned}` : cleaned, MAX_ARTIFACT_NAME);
+}
+
+/**
+ * The filename this artifact takes in the owner's OneDrive.
+ *
+ * WHY IT IS NOT JUST `name`. The mirror is deliberately path-keyed — `Huddle Artifacts/{lane}/{name}`
+ * with replace semantics — so re-mirroring the SAME artifact overwrites its own item instead of
+ * piling up duplicates. That property depends on the path being unique PER ARTIFACT, and
+ * `safeArtifactName` broke it in a way that only shows up after the traversal fix: `reports/q3.docx`
+ * and `drafts/q3.docx` are two different artifacts that now both sanitise to `q3.docx`, land in the
+ * same lane, and silently overwrite each other on the user's real drive. Losing an approved
+ * deliverable to a name collision is worse than the traversal it came from.
+ *
+ * So the stem carries the artifact id's short suffix: unique per artifact, STABLE across re-mirrors
+ * (the id never changes), and still readable — `Q3 plan (1a2b3c4d).docx`.
+ */
+export function mirrorFileName(id: string, name: string): string {
+  const safe = safeArtifactName(name);
+  const short = String(id ?? "").replace(/^art-/, "").replace(/-/g, "").slice(0, 8) || "unknown";
+  if (safe.includes(`(${short})`)) return safe;
+  const dot = safe.lastIndexOf(".");
+  const ext = dot > 0 && safe.length - dot <= 10 && !/\s/.test(safe.slice(dot)) ? safe.slice(dot) : "";
+  const stem = ext ? safe.slice(0, dot) : safe;
+  const suffix = ` (${short})`;
+  return capLength(stem, MAX_ARTIFACT_NAME - suffix.length - ext.length) + suffix + ext;
+}
+
+/**
+ * The LANE half of the same traversal fix. `safeArtifactName` closed `{name}` in
+ * `Huddle Artifacts/{lane}/{name}` and left `{lane}` open — and `folder` is just as model-driven as
+ * `name` was, so `create_artifact({folder:"../../../Documents"})` reproduced the identical escape on
+ * a real user's OneDrive. `encodeURIComponent` does not encode ".", so `..` segments survive into the
+ * Graph URL. Found by the independent verifier (VERIFY-artifact-formats-3.md, R2).
+ *
+ * A lane is ONE segment by construction, so this collapses to the last real segment and drops any
+ * `.`/`..`. Falls back to "Personal" — the same default the `artifacts.items` DDL uses — so an
+ * artifact is never stranded in an unaddressable folder.
+ *
+ * TWO LANES WROTE THIS FUNCTION INDEPENDENTLY off the same verifier finding, and git auto-merged
+ * both into this module with NO conflict — a duplicate `export function` that only `tsc` would have
+ * caught. This body is the survivor because its fallback is grounded in the DDL default above rather
+ * than picked; the other collapsed nested segments with a dash instead of taking the last, which is
+ * a coin-flip either way. Worth remembering that a clean auto-merge is not a correct merge.
+ *
+ * The lesson the finding itself carries: loop 2 sanitised `name` and never asked what ELSE feeds
+ * that path. Fixing the input that was named instead of the class is what this repo's "systematic
+ * capability, never a patch" rule warns about, and it cost a whole verification loop.
+ */
+export function safeArtifactFolder(folder: string): string {
+  const raw = String(folder ?? "").replace(/\\/g, "/");
+  const last = raw.split("/").filter((seg) => seg && seg !== "." && seg !== "..").pop() ?? "";
+  const cleaned = last.replace(/[\u0000-\u001f<>:"|?*]/g, "").trim();
+  if (!cleaned || cleaned === "." || cleaned === "..") return "Personal";
+  return cleaned;
+}
+
+/** Give `name` this exact extension, replacing a document extension it already carries rather than
+ *  appending to it — "flow.md" + ".mmd" is "flow.mmd", never "flow.md.mmd". Mirrors the rule in
+ *  render.server's `ensureExtension`, which cannot be reused here because it keys off a FORMAT it
+ *  knows and these two extensions belong to the tool's vocabulary instead. */
+export function withExtension(name: string, ext: string): string {
+  const base = String(name ?? "").trim() || "artifact";
+  if (base.toLowerCase().endsWith(ext)) return base;
+  const replaceable = [".md", ".markdown", ".txt", ".html", ".htm", ".docx", ".pptx", ".mmd", ".svg"];
+  for (const r of replaceable) {
+    if (base.toLowerCase().endsWith(r)) return base.slice(0, base.length - r.length) + ext;
+  }
+  return base + ext;
+}
+
+/**
+ * THE ONE PLACE a `create_artifact` tool call becomes a stored artifact.
+ *
+ * WHY THIS EXISTS RATHER THAN FOUR COPIES: the same six lines were repeated at four dispatch sites
+ * (huddle.functions.ts x3 — the OpenAI path, the Lovable path and the durable-turn path — plus
+ * voice/realtime-tools.server.ts), each hardcoding `Buffer.from(content, "utf8")` and
+ * `mime ?? "text/markdown"`. Adding Word/PowerPoint by editing all four is how one path silently
+ * keeps producing markdown forever. Every site now calls THIS, so a new format is one edit.
+ *
+ * Renders first (`format` decides), then stores. `renderArtifact` never throws: a malformed
+ * structure or unparseable markdown degrades to a valid document carrying the raw text plus a
+ * warning, so an agent's mistake costs fidelity, never the user's work.
+ */
+export async function createArtifactFromAgent(input: {
+  userEmail: string;
+  agentId?: string | null;
+  taskId?: string | null;
+  folder: string;
+  name: string;
+  /** Raw tool arguments, unvalidated — this is model output. */
+  args: { format?: unknown; content?: unknown; document?: unknown; mime?: unknown };
+}): Promise<{ id: string; deepLink: string; name: string; mime: string; warnings: string[] }> {
+  const { renderArtifact } = await import("./render.server");
+  const a = input.args;
+  // Trim whitespace and casing before matching: the verifier landed `" DOCX "` here.
+  const format = typeof a.format === "string" ? a.format.trim().toLowerCase() : "md";
+  // Sanitise ONCE, at the choke point, so every downstream consumer (blob path, DB row, OneDrive
+  // mirror) gets the same safe name. See safeArtifactName — this is the path-traversal fix.
+  const safeName = safeArtifactName(input.name);
+  // Same reasoning, the other half of the mirror path — see safeArtifactFolder.
+  const safeFolder = safeArtifactFolder(input.folder);
+
+  // FORMATS THE TOOL OFFERS THAT THE RENDERER DOES NOT KNOW.
+  // `render.server` handles md | html | docx | pptx and degrades anything else to markdown — correct
+  // for it, wrong here: `create_artifact` also offers `mermaid` and `svg`, and an end-to-end check
+  // caught both arriving as `name.md` + text/markdown, which the viewer can never render as a
+  // diagram or a vector. They are PASSTHROUGH TEXT like html, so they need no renderer — only the
+  // right extension and mime, which is a dispatch concern, not a rendering one. Keeping this at the
+  // boundary is also what stops the renderer growing a case per tool vocabulary word.
+  const PASSTHROUGH: Record<string, { ext: string; mime: string }> = {
+    mermaid: { ext: ".mmd", mime: "text/vnd.mermaid; charset=utf-8" },
+    svg: { ext: ".svg", mime: "image/svg+xml; charset=utf-8" },
+  };
+  const passthrough = PASSTHROUGH[format];
+  if (passthrough) {
+    const body = typeof a.content === "string" ? a.content : "";
+    // NOT render.server's `ensureExtension` — that takes a FORMAT and looks it up in its own
+    // EXTENSION_BY_FORMAT, which has no entry for mermaid or svg, so it returned `name + undefined`
+    // ("security-optionsundefined"). Caught by the dispatch suite the moment it was written. These
+    // two extensions belong to the TOOL's vocabulary, not the renderer's, so they are resolved here.
+    const outName = withExtension(safeName, passthrough.ext);
+    const { id, deepLink } = await createArtifact({
+      userEmail: input.userEmail,
+      agentId: input.agentId ?? null,
+      taskId: input.taskId ?? null,
+      folder: safeFolder,
+      name: outName,
+      mime: passthrough.mime,
+      bytes: Buffer.from(body, "utf8"),
+    });
+    return {
+      id,
+      deepLink,
+      name: outName,
+      mime: passthrough.mime,
+      warnings: body.trim() ? [] : [`Empty ${format} content — the artifact will render blank.`],
+    };
+  }
+
+  const rendered = await renderArtifact({
+    format,
+    content: typeof a.content === "string" ? a.content : undefined,
+    document: a.document,
+    name: safeName,
+  });
+
+  // An explicit `mime` is the documented escape hatch for a type `format` does not cover — but it
+  // must never make an artifact LIE ABOUT ITSELF, in either direction.
+  //
+  // The first version of this guard only checked the direction I had thought of: it tested
+  // `rendered.mime` to stop a real docx being labelled text/markdown (that works). The verifier
+  // found the REVERSE wide open — `{format:"md", mime:"…wordprocessingml.document"}` stored three
+  // bytes of markdown (`23 20 52`, not the `50 4b 03 04` of a ZIP) under the Word mime, so the user
+  // downloads "report.docx" and Word refuses to open it. A one-sided guard on a two-sided problem.
+  //
+  // So: an override is honoured only when BOTH sides are non-package types. Claiming to be an Office
+  // document is reserved for bytes that actually are one.
+  const rawMime = typeof a.mime === "string" && a.mime.trim() ? a.mime.trim() : null;
+  const isPackageMime = (m: string) =>
+    /officedocument|application\/zip|application\/pdf|^application\/octet-stream/i.test(m);
+  const mime =
+    rawMime && !isPackageMime(rendered.mime) && !isPackageMime(rawMime) ? rawMime : rendered.mime;
+
+  const { id, deepLink } = await createArtifact({
+    userEmail: input.userEmail,
+    agentId: input.agentId ?? null,
+    taskId: input.taskId ?? null,
+    folder: safeFolder,
+    name: rendered.name,
+    mime,
+    bytes: rendered.bytes,
+  });
+  return { id, deepLink, name: rendered.name, mime, warnings: rendered.warnings ?? [] };
 }
 
 export interface ArtifactFilters {
@@ -180,7 +399,20 @@ export async function listArtifacts(userEmail: string, f: ArtifactFilters = {}):
 }
 
 // Mime families the preview pane renders as text. Kept in sync with ArtifactsView.tsx's preview branch.
-const TEXT_PREVIEW_MIME = /^(text\/|application\/json|application\/csv)/;
+/** Which mimes get their BYTES returned for in-app preview.
+ *
+ *  THE VIEWER CANNOT RENDER WHAT THE SERVER NEVER SENDS. `text/html` and `text/vnd.mermaid` already
+ *  passed on `^text/`, so those render; **`image/svg+xml` did not**, so an SVG artifact came back
+ *  with `text: null` and fell through to the raster `<img>` path instead of the sandboxed frame.
+ *  Same for a mermaid file stored under a non-`text/` mime. Found by the viewer lane, which could
+ *  not fix it — it owns the component, this file is the gate.
+ *
+ *  DELIBERATELY NOT `/^image\//` — that would start streaming PNG and JPEG bytes through the text
+ *  preview path for no reason. SVG is here because it is TEXT that happens to carry an image mime,
+ *  which is exactly why it slipped through the original `^text/` rule.
+ *  `TEXT_PREVIEW_MAX_BYTES` still caps every one of these. */
+const TEXT_PREVIEW_MIME =
+  /^(text\/|application\/json|application\/csv|image\/svg\+xml|application\/vnd\.mermaid|application\/xhtml\+xml)/;
 // Above this, skip the server-side text read (still get a working download link) — a preview pane
 // isn't the place to pull multi-MB files into memory on every open.
 const TEXT_PREVIEW_MAX_BYTES = 2_000_000;
@@ -375,7 +607,17 @@ export async function mirrorArtifactToOneDrive(userEmail: string, id: string): P
   const bytes = await getArtifactBlobBytes(row.blob_path);
   if (!bytes) return { ok: false, error: "Artifact bytes not found in storage." };
   const { uploadArtifactToOneDrive } = await import("./onedrive.server");
-  const r = await uploadArtifactToOneDrive({ mailbox: row.user_email, lane: row.folder, name: row.name, bytes, mime: row.mime });
+  // Both segments are sanitised again here rather than trusted from the row: rows written before the
+  // traversal fix landed still hold whatever the model sent, and this is the call that puts them on a
+  // real drive. `mirrorFileName` also disambiguates two artifacts whose names sanitise to the same
+  // string — see its header; without it the path-keyed overwrite eats one of them.
+  const r = await uploadArtifactToOneDrive({
+    mailbox: row.user_email,
+    lane: safeArtifactFolder(row.folder),
+    name: mirrorFileName(row.id, row.name),
+    bytes,
+    mime: row.mime,
+  });
   if (!r.ok) return { ok: false, error: r.error, needsConsent: r.needsConsent };
   await getPool().query(`UPDATE artifacts.items SET onedrive_url = $2, updated_at = now() WHERE id = $1`, [id, r.webUrl ?? null]);
   return { ok: true, onedrive_url: r.webUrl ?? null };

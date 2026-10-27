@@ -50,6 +50,8 @@
   --color-hairline: var(--hairline);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-band-cream: var(--band-cream);
+  --color-success-soft: var(--success-soft);
 
   --shadow-hair: 0 0 0 1px var(--hairline);
   --shadow-soft: 0 1px 2px oklch(0 0 0 / 0.04), 0 8px 24px -12px oklch(0 0 0 / 0.10);
@@ -100,6 +102,23 @@
   --input: oklch(0.92 0.008 220);
   --ring: oklch(0.55 0.05 200);
 
+  /* The cream/pale-yellow band behind the flagged rows in BOTH journey widgets
+   * (docs/widgets/spec-priorities-widget.jpg, spec-schedule-widget.jpg). It is an EXPLICIT literal,
+   * taken from the committed prototype (docs/widgets/prototype/Priorities.dc.html:155), and it must
+   * stay one — it was `color-mix(in oklch, var(--warning) 9%, var(--surface))`, and because
+   * `--surface` is `oklch(1 0 0)` (white with an EXPLICIT hue of ZERO, not a hueless white) oklch
+   * interpolated the hue 55 -> 0 and landed on hue ~5 at chroma ~0.014: PALE PINK, not cream. A
+   * mix against any neutral whose hue channel is written as 0 collapses the hue the same way, which
+   * is why this is a literal and not a derivation. Guarded by scripts/widget-band-color.test.ts. */
+  --band-cream: oklch(0.975 0.032 92);
+
+  /* The spec pairs a LIGHTER ▶ beside the DARKER ✓. This was
+   * `color-mix(in oklch, var(--success) 72%, var(--surface))`, and --surface is oklch(1 0 0) --
+   * white with an EXPLICIT hue of 0 -- so the mix dragged hue 155 to 111.6 and the START button
+   * rendered yellow-green instead of a lighter teal. Same defect as the pink band, same fix:
+   * a literal at the SAME hue, lit per theme, never a mix against a neutral. */
+  --success-soft: oklch(0.74 0.115 155);
+
   /* Agent color palette (per-agent tokens) */
   --agent-teal:    oklch(0.55 0.09 190);
   --agent-emerald: oklch(0.60 0.13 160);
@@ -146,6 +165,11 @@
   --hairline: oklch(1 0 0 / 0.09);
   --input: oklch(1 0 0 / 0.12);
   --ring: oklch(0.70 0.06 200);
+  /* Same ROLE, same hue 92, re-lit for dark: a warm band that lifts off `--surface` (L 0.20) by
+   * about as much as `--surface-2` (L 0.23) does, rather than a bright cream that would glare. */
+  --band-cream: oklch(0.255 0.030 92);
+  /* Dark: lighter than --success (L 0.70) so the pair still reads as soft-vs-solid on a dark card. */
+  --success-soft: oklch(0.78 0.11 155);
 }
 
 /*
@@ -175,6 +199,10 @@
   --hairline: oklch(1 0 0 / 0.09);
   --input: oklch(1 0 0 / 0.12);
   --ring: oklch(0.74 0.11 195);
+  /* The room is always dark regardless of app theme, so it needs its own copy — inheriting the light
+   * `:root` cream here would put a near-white band on the dark stage. */
+  --band-cream: oklch(0.25 0.030 92);
+  --success-soft: oklch(0.78 0.11 155);
   color: var(--foreground);
 }
 
@@ -192,6 +220,36 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
   }
+}
+
+/* THE DOCUMENT MUST NOT PAN. Applied to <html> and <body> only while the app shell is mounted
+ * (useAppViewportHeight adds/removes it), so `/auth` and the error routes keep normal page
+ * scrolling — they use `min-h-screen` and genuinely need it.
+ *
+ * WHY, owner-reported 2026-09-13: "if I swipe up on the button row at the bottom the entire app
+ * slides up leaving white space still." The bottom nav is the one region that is NOT its own
+ * scroll container, so a drag there CHAINS to the document — and nothing constrained the document.
+ * html/body carried no height, no overflow and no overscroll-behavior at all.
+ *
+ * SIZING THE SHELL DID NOT FIX THIS, AND MADE IT EASIER TO SEE. While the shell was `100dvh` it
+ * filled the layout viewport, so a pan still showed app content. Once the shell became the VISUAL
+ * height (--app-h, correctly), it occupies only the top of a still-tall layout viewport and the
+ * pan reveals the page beneath. Both changes are needed; neither alone is enough.
+ *
+ * Each declaration does a DIFFERENT job — do not trim one as redundant:
+ *   position: fixed   the document cannot be panned at all. The single load-bearing line; mobile
+ *                     browsers will still slide an `overflow:hidden` body without it.
+ *   overflow: hidden  no scrollable overflow to drag in the first place.
+ *   overscroll-behavior: none   kills scroll-chaining and the pull-to-refresh/bounce glow, which
+ *                     are a separate mechanism from scrolling and survive `overflow:hidden`.
+ *   height/width 100% + inset 0   a fixed body collapses without an explicit box. */
+@utility app-locked {
+  position: fixed;
+  inset: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 @utility hair {

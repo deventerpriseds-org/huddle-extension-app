@@ -1,5 +1,106 @@
 # Project Memory — huddle-extension-app
-Last updated: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
+
+## ▶ DATA MODEL INDEX — READ THIS BEFORE QUERYING ANYTHING (added 2026-10-15, owner-directed)
+
+<!-- WHAT:       One lookup table for every id, ref, table and scoping key in this system.
+     WHY:        Owner, 2026-10-15: "why do you have to discover the data model/schema/mapping each
+                 time? Why isnt this documented in memory md?" Audited in response: every fact below
+                 ALREADY existed in this file (ref `wwxgajrtmslzklnyplah` in 10 places, the auth-id
+                 trap at :1032, `task_topic_index` at :3110, `get_task_topics`-not-deployed at :3196).
+                 The failure was RETRIEVAL, not documentation -- each fact sits inside a dated
+                 incident narrative about an unrelated bug, so it is findable only by someone who
+                 already knows which incident mentioned it. An archive is not a reference.
+     SUPERSEDES: nothing (it INDEXES the entries below; it never replaces them -- each row points at
+                 the narrative that proves it, so the proof stays where the measurement happened).
+     SUPERSEDED-BY: nothing -- current.
+     EVIDENCE:   line refs in the right-hand column; rows marked "measured 2026-10-15" were
+                 re-measured against the live DBs that day. -->
+
+**Rule: if you are about to run a query, write a SQL literal, or state "the schema is X", read this
+table first. If a fact you need is NOT here, add it here in the same commit that discovers it.**
+
+### The two databases
+
+| | journey (canonical) | Huddle (read-model + its own stores) |
+|---|---|---|
+| Engine | Supabase Postgres | Azure PG `eds-postgresql` / db `RAG_AI_Agents` (PG 17) |
+| **Project ref** | **`wwxgajrtmslzklnyplah`** | RG `EnterpriseDS_ResourceGRP` |
+| **Shown in `list_projects` as** | **`spbs_EMBA_Portal`** — NOT "journey", NOT "journey-voice". **This mismatch has caused a session to conclude journey was unreachable. It is the right project; the display name is from an unrelated EMBA build.** | n/a |
+| Reach it from CCR via | Supabase MCP (`mcp__Supabase__execute_sql`) — brokered, works | `azure-pg-query.yml` workflow, or the `huddle-pg-mcp-write` MCP server. **TCP 5432 is blocked by session egress — `psql`/`az login` from here is a dead end, do not retry it** (:938) |
+| Owns | `public.tasks` (the board), `task_topic_index`, `task_topic_mappings`, `profiles`, `user_email_aliases`, `push_subscriptions`, `activity_log` | `tasks.*` (mirror, scheduled_jobs, engagement), `chat.*` (pending_turns, ceremony_transcript), `identity.*`, `artifacts.*`, `public.rag_chunks`/`rag_triples` (memory) |
+
+### Identity — three ids for one human, and which one each table uses
+
+| Key | Value | Used by |
+|---|---|---|
+| Canonical scope **email** | **`dev@enterpriseds.io`** | everything Huddle-side (`resolveTaskEmail`), `tasks.journey_tasks.user_email` |
+| Alias email | `von.ellis@enterpriseds.io` | the sign-in / caller identity; an ALIAS row in journey `public.user_email_aliases`. journey's `resolveUserId` checks aliases BEFORE `profiles.email` (a guard added after a shadow profile hijacked resolution — :2316) |
+| **journey `auth.users.id`** | **`a3378f93-d655-4913-b2fa-ca5b1d8020f1`** | **`public.tasks.user_id`**, `push_subscriptions`, `task_topic_index.user_id` |
+| journey `profiles.id` | `113eec07-…` | `profiles` only |
+| Huddle profile id | `a89e3652-…` | Huddle identity store only |
+
+**THE TRAP, and it costs a loop every time:** `public.tasks.user_id` holds the **auth id**, not
+`profiles.id`. A `tasks JOIN profiles ON profiles.id = tasks.user_id` returns **NULL for every row** —
+which reads exactly like "this user has no tasks" and has been reported as such. Join through
+`auth.users`, or just filter `user_id = 'a3378f93-…'`. Also: a bare `LIMIT 1` over an OR of the two
+emails can pick the profile with zero tasks. (:1032, :1033, :2786)
+
+### Tasks
+
+| Thing | Where | Notes |
+|---|---|---|
+| **Canonical board** | journey `public.tasks` | `status` is a `task_status` **ENUM** — cast `::text` in Supabase-MCP SQL. Single writer: journey. |
+| Huddle **mirror** | `tasks.journey_tasks` (Azure) | single-writer read-model, upsert `ON CONFLICT (id)` on journey's task uuid. Fed by journey trigger → `pg_net` → edge fn → `POST /api/public/tasks-sync`. **Eventually consistent, ~1–3s** — poll, never assume synchronous. `user_id` here is journey's id space, un-rekeyed (:2785). |
+| **The star** | `tasks.is_priority` (bool) | **IS "This Week"** on both the Android home widget (`is_priority=eq.true`) and Huddle's band. |
+| Ordering | `tasks.priority_rank` | **COUPLED to the star by journey**: `batch_update_tasks` (journey-voice `execute-tool/index.ts:981-982`) does `if (typeof u.rank === "number") { is_priority = true; priority_rank = u.rank } else if (u.unset_rank) { is_priority = false; priority_rank = null }`. **There is no "rank without star."** Measured: `is_priority=true` → 91 rows, `priority_rank IS NOT NULL` → 91, union 91 — the SAME BIT, so no widget predicate can separate them. Huddle's grooming caps the lane at 20 since `67f6c34`. |
+| User's manual This Week order | Azure `tasks.week_order` (jsonb id list) | added `9a0fc06`/`sql/rag_ai_agents/002_week_order.sql`. Deliberately NOT `priority_rank` — grooming rewrites that every Monday and would erase it. |
+
+### Topics / categories (measured live 2026-10-15)
+
+| Thing | Where | Notes |
+|---|---|---|
+| **The topics table** | journey `public.task_topic_index` | **There is no separate "topics" table** (:3110). Columns: `id, topic_name, position, category_affinity, parent_topic_id, window_affinity, topic_summary, task_count, user_id`. `parent_topic_id` measured **NULL on every row** — nesting comes from `category_affinity`. |
+| **task ↔ topic join** | journey `public.task_topic_mappings` (`task_id, topic_id`) | the link Huddle has **no equivalent of**; the Android widget does a two-step through it (`SupabaseTaskClient.kt:232→248`). |
+| Measured shape | **101 open tasks, 98 of them mapped, across 75 topics** | VENTURES 55/67 · LIFE 9/18 · CAREER 6/8 · EDUCATION 2/3 · PROF_EDUCATION 3/3. Topics are fine-grained (~1.3 tasks each). FAMILY holds **no** `task_topic_index` rows, which is why that category renders bare (:3236). |
+| `get_task_topics` | **WRITTEN 2026-10-15 in journey-voice PR #42 (`4dec778`)** — returns `{topics, mappings}`, mappings scoped via the FK inner join. The earlier `ec508a5` was never reachable (no branch, no PR). **Check #42 is merged and deployed before assuming it answers.** Previous state of this row: | repo-wide grep on journey-voice `main` = **0 hits**; `execute-tool/index.ts:458` answers `Unknown tool`, which Huddle maps to `reason:"tool-absent"` → the `TopicsEmpty` sentence. **So Huddle's category tree has never rendered in production.** Already recorded at :3196 as "blocked on an owner action". `docs/VERIFY-journey-widgets-1.md:212` wrongly asserts it is deployed — it confused it with the tool below. |
+| **The owner's PHONE rule** (design truth) | `PrioritiesWidgetFactory.rebuildItems` | **categories = the CONFIGURED list** (`config.prioritiesWidget.categories`, default LIFE, CAREER, VENTURES, EDUCATION, FAMILY) — every one drawn even when empty, so Family shows (Huddle: `withKnownCategories`, 2026-10-15, owner: "show Family"); topic category = `category_affinity` **else `window_affinity[1]`**; tasks via mappings; Android drops DONE+BLOCKED and drops tasks with NO topic; category count = sum beneath. **Huddle now uses the same rule** (`buildPrioritiesTree`, PR #71) — measured to reproduce his phone's Career 8. Grouping by the TASK's own category gives Career 12 instead. |
+| `get_tasks_by_topic` | **deployed**, `_shared/tool-definitions.ts:62` | takes **one `topic_name` scalar** (no array, no ids, no depth), resolves with `ilike` + `maybeSingle()` → **duplicate topic names (two "Admin", LIFE and CAREER) return silently empty, not an error**. Orders `priority desc`. Omits `is_priority`/`priority_rank`/`tags`. ~`3+N` round-trips for N≈75 topics. |
+
+### The STAR (`is_priority`) — who writes it, and what turns it into calendar time (read 2026-10-15)
+
+| Actor | When | Star / rank | Calendar |
+|---|---|---|---|
+| journey `nightly-schedule-builder` | **05:00 UTC = 1am EDT** (`cron.alter_job(11,'0 5 * * *')`) | **reads only** — sorts Tier A/B assignments, then `is_priority`, then `priority_rank` (null=9999), then score (`index.ts:1099-1132`); score +10 +max(5-rank,0) | **the ONLY thing that turns a star into time**: clears + rebuilds the next 7 days of `start_time/end_time` inside each category's window (`_shared/scheduling-defaults.ts`); slots create the phone's start alarms |
+| Huddle Monday 8am groom | Mon 8 ET | ranks top 20 (`PRIORITY_LANE_MAX`), **`unset_rank` (un-stars) every other groomed task unless its id is in `tasks.week_order`** (`groom.ts` `laneFieldFor`) | none |
+| Huddle autowork | 9/13/17 ET | none — orders by `priority_rank` only, writes status | none |
+| Android star button | user tap | `is_priority=true`, **no rank** | none |
+| journey web Priorities page | user drag | rewrites lane ranks 0..N-1 | none |
+| `move_task_to_day` ("Today") | user tap | — | writes `start_time` + `due_date`, **no `end_time`**, bypasses windows — invisible to the nightly's capacity maths |
+
+- **Starring fires no reminder, no slot, no classification** — `schedule_task_reminders_trigger` watches status/due/start/end/reminder only.
+- **Known exposure (not fixed):** a star set on the phone or journey web, on a task the groom batch includes but does not rank top-20, is cleared by Monday's groom unless in `week_order`.
+- Phone's Schedule widget "This Week" = starred AND `start_time IS NULL`, limit 3 (`SupabaseTaskClient.kt:292`) — a starred task drops out of it once the nightly places it. The Priorities widget shows all stars.
+
+### Chat / turns
+
+| Thing | Where | Notes |
+|---|---|---|
+| Durable turns | Azure `chat.pending_turns` | `huddle_id`: group = `all-members`/`daily`, 1:1 = `dm-<agentId>`. `payload->>'text'` = user msg; replies in `replies` (chunked) or `result->'replies'`. **No `run_at` column — the queue is run-immediately-only.** |
+| **Ceremony transcripts** | Azure `chat.ceremony_transcript` | ceremonies do **NOT** write `pending_turns`. Never conclude "not saved" from its absence there. |
+| Memory | Azure `public.rag_chunks` | every user msg auto-written `scope='global'`; retrieval filters scope/agent only, **no huddle filter** — this is the only cross-huddle bridge. Score floor **0.3** (`text-embedding-3-large` scores real hits 0.4–0.5). |
+| Fast read from CCR | `getTurnUpdates` server fn over HTTPS (~1s) | **but the deployed SWA host is frequently NOT in session egress** (measured 2026-10-15: curl → `CONNECT tunnel failed, 403`; node fetch → `ENOTFOUND`). When it is blocked, use `azure-pg-query.yml` or the pg MCP. |
+| Seroval CONST map | `0=null 1=undefined 2=true 3=false 4=-0 5=Infinity 6=-Infinity 7=NaN` | `huddle.mjs` ships a WRONG map that decodes `true` as `null`. |
+Last updated: 2026-09-21 (PR triage pass, 4 open PRs: merged #39 — docs-only spec research,
+re-verified its two load-bearing technical claims against live code before merging (see
+ACT:pr-triage-2026-09-21 in actions.md). Its finding worth carrying: `eds-claude-skills/CLAUDE.md`'s
+"Realtime AS EAR ONLY (Huddle `useVoiceCallRealtime`)" line is STALE — Huddle's current default 1:1
+voice path runs Realtime AS BRAIN (`create_response:true`, `voice/realtime.functions.ts:115`), not
+ears-only; `MeetingBar.tsx`'s `VOICE_1ON1_BACKEND` is hardcoded `"openai"` with no reassignment
+site, so ElevenLabs ConvAI is unreachable dead code in Huddle specifically (not a claim about ConvAI
+elsewhere). Closed #11, #62 as superseded (content already live on main a different way). Left #14
+(agent knowledge library) OPEN — this repo's own memory already ruled it a distinct capability from
+ACT-61's memory-intake system, not for merging as-is nor closing; still needs the user's call.)
+Previous: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
 Previous: 2026-09-08 — **the assignment-widget spec's action registry is BUILT in nexus** (see
 `docs/specs/assignment-widget.md` §5.2b, huddle PR #53): the spec PROPOSED
 `nexus-hub/api/src/shared/assignmentActions.ts` and nexus-hub PR #87 built it there, closing the
@@ -15,6 +116,33 @@ different requirement under a different lane, so **the widget must never key any
 index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
+
+## Chat transcript scroll: opens at the newest, follows only if YOU did not scroll up (2026-10-27, DEPLOYED 4332c41, NOT owner-confirmed)
+A push deep link (`?huddle=dm-<agent>`) switches threads BEFORE the workspace history downloads, so any
+"scroll to bottom on thread switch" fires on an empty thread. The old follow rule re-measured near-bottom
+after each update, which a bulk history load always fails (view at 0, list grew 27k px) — so it landed at
+the top. Rules now live in `lib/transcript-scroll.ts` (follow state from the reader's scrolls; newest 40
+rendered; older pages on scroll-up, anchored). **Testing trap, measured:** a harness that lets the dev
+bypass seed the workspace is NOT on the deep-linked thread (the `hydrateFromRemote(null)` seed path ignores
+`deepLinkTarget`), and Chromium scroll anchoring drags a view that starts scrolled-down to the bottom on its
+own — both made the pre-fix code PASS. `e2e/transcript-deeplink.e2e.mjs` asserts the precondition
+(1:1 active, empty, scrollTop 0) and refuses to run without it.
+
+## Iris schedule brief = meetings + classes + TASKS, per day AND per journey window (2026-10-15, DEPLOYED, NOT owner-confirmed)
+- **Calendar mailbox is NOT the data-scope email.** Owner's Outlook meetings live in the journey-connected
+  account (Von.Ellis@, `calendar_connections.provider_account_email`); dev@'s calendar is empty. Every Graph
+  calendar read goes through `resolveCalendarMailbox` (journey `get_my_config` → fallback resolveTaskEmail). #78.
+- **Nexus d1 has no `eq.` operator** — `program_id=eq.<uuid>` 500s ("invalid input syntax for type uuid").
+  Send the BARE value for equality. #78.
+- Brief reads the owner's scheduled open tasks (`getScheduledTasksBetween`), kept OUT of `items` (items seed
+  T-60 reminders; journey already alarms tasks). #84.
+- **Window messages are triggered by JOURNEY** (notification-delivery → `/api/public/run-schedule-brief`
+  with `window`), because journey owns the window times. journey's 8am morning window is sent as the
+  morning edition and shares Huddle's 8am turn key → ONE 8am message. Turn key per window per day.
+- Evening "confirm priorities before the 1am planner" ALREADY EXISTS: `priorityCheck` (6am/8pm, #65).
+  Don't rebuild it — verify it reaches the owner.
+- Spoken style: "Hello Sir, just a reminder that today you have …, and on your task list …, and later in
+  the week …" (#80, #84). Owner approved the voice ("it was excellent").
 
 ## Hardening — the phase-tag gate was GREEN while 67% of output was non-compliant (2026-08-25)
 
@@ -1418,6 +1546,36 @@ it does not reflect the user. Accurate harness: `e2e/realtime-speak-multiturn.e2
   can kill a genuine BARGE-IN reply. FIX: drop the manual response.cancel (let interrupt_response handle
   barge); test the barge-in variant (phrase 2 over the still-playing turn-1 reply) to nail it.
 
+## The approach gate's `escalated` is a TERMINAL state — read this before touching the gates (2026-09-12)
+
+Diagnosed from Cole Blake's live transcript; NO code changed yet, fork awaiting the owner.
+
+`approach_status` is `pending|approved|escalated`. Three rejected approach revisions writes `'escalated'`,
+and **`approach-gate.server.ts:65-66` returns on `escalated` BEFORE calling the grader** — so a
+resubmitted approach is never re-graded. The task is stuck permanently.
+
+**And there is no user override anywhere in the product.** Swept the whole agent tool surface (ten tools:
+ask_clarifying_question, build_checklist, confirm_task_intent, flag_blocker, groom_backlog,
+propose_approach, propose_task_intent, resolve_clarifying_question, schedule_and_priorities,
+schedule_reminder) — none encodes "the user said proceed anyway." The only thing that clears `escalated`
+is `resetEngagementOnReassignment()`, which fires solely on a grooming reassignment to a DIFFERENT agent.
+
+**The cruel detail worth remembering:** the gate's own note reads *"already escalated to the user —
+address it with them directly"* — it instructs a conversation with the user that is given no power to
+change the state. The agent does exactly as told and the user is still stuck, which is precisely how the
+owner experienced it: *"I have no way of telling it to tell the reviewer I said it can override."*
+
+**This is the fail-CLOSED family and it must stay fail-closed** (see the 2026-08-05 leak below) — the fix
+is an EXPLICIT, RECORDED override, never loosening the grader.
+
+## The produce-vs-quick prompt is a hardcoded literal, not agent speech (2026-09-12)
+
+`huddle.functions.ts:1624`. One string in the SHARED turn path, fired on `routed.difficulty >= 3`:
+*"That's a meaty one. Want me to produce it … or would a quick take right here do for now?"*
+It bypasses the persona layer, so EVERY agent says it identically — which is why the owner read it as
+hard-headed. When a canned line is reported as "the agents sound robotic", check for a literal in the
+shared path before touching any prompt: the snapshot layer is not always the source of an agent's words.
+
 ## Active work — 1:1 VOICE latency (journey-speed) — plan + premise CONFIRMED, build next (2026-08-01)
 User complaint: "the delay for my convo with Flex to SPEAK takes way too long, much longer than journey."
 It's a VOICE latency ask (not text). Today's 1:1 voice is SLOW because Realtime is ears-only
@@ -1480,6 +1638,9 @@ never clutters the user's task board. TanStack Start + React 19 + Vite + Nitro �
 ## Feature status
 | Feature | Status | Notes |
 |---|---|---|
+| Artifact formats (docx/pptx/mermaid/html/svg) | **deployed `b043afb`, independently verified, NOT user-confirmed** | Verifier loop 2 (`docs/VERIFY-artifact-formats-2.md`) = **8 CONFIRMED, 2 REFUTED**; all four findings fixed in `b043afb`. Office packages proven genuinely openable (`testzip()` clean, well-formed XML). Sandbox held under ten escape attempts in real Chromium. **Open:** no one has asked an agent for a Word doc / deck / diagram on the live app. **Next verification of `artifact-formats` is LOOP 3.** |
+| Phone shell: `--app-h` height + `app-locked` document | deployed `725e8ff` / `c6299cc`, **NOT user-confirmed** | Two separate defects (keyboard pushes nav below the fold; swipe drags the whole app). Playwright loop 1 = 5 CONFIRMED / 1 NOT PROVEN, but `Emulation.setVisibleSize` is inert in that Chromium so the real layout-tall/visual-short state was never reproduced. **Mechanism only — the owner's Samsung Internet is the verdict.** |
+| eds-skills PR #83 (`prototype-in-app-skin`, `ship-ui-that-belongs`) | **merged 2026-09-21** | Was an open owner action; closed. Session auto-unsubscribed from the PR. |
 | 1:1 capability defer (grooming→Terry) | done (verified live) | Iris defers by NAME, no @, no task — harness observed |
 | ACT-huddle-3: intent-classification false-positive fix | deployed (PR #20), AC-12 awaiting live user confirmation | `classifyTurnIntent(text):TurnIntent` in `capabilities.ts` — trait-driven, zero per-capability config — gates both `laneDirective` and the back-channel (`capabilityOwnerFor`/`laneOwnerFor`) via `turnIntent === "perform"` checks in `runAgentTurn`. `TURN_INTENT_CLASSIFICATION` feature flag for instant rollback. 14/15 ACs pass statically (verifier confirmed); AC-12 (Iris handles "Mark that done" without deferring) requires live LLM turn to confirm. |
 | 1:1 domain lane handoff (budget→Finn) | done (verified live) | `laneOwnerFor`; AC-1/2/3 PASS observed |
@@ -1542,6 +1703,76 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+**ARTIFACTS ARE NOT MARKDOWN-ONLY — `create_artifact` takes a `format` (2026-09-13).**
+Owner: *"why is it saying we are limited to .md when full document, mermaid, d3 abilities etc were
+early requirements for the artifact library?"* The agent was right about its own contract: four of
+the five fields said markdown. **The STORE was never the limit** — `artifacts.items.mime` is free
+text and the blob takes arbitrary bytes, so a mermaid or HTML artifact was always storable.
+
+- **`createArtifactFromAgent()` (artifacts.server.ts) is THE ONE PATH** from a tool call to a stored
+  artifact. Four sites used to call `createArtifact` directly with `Buffer.from(content,"utf8")` and
+  `mime ?? "text/markdown"` hardcoded — huddle.functions.ts ×3 plus voice/realtime-tools.server.ts.
+  **Add a format HERE, never at a call site**; four copies is how voice silently keeps emitting
+  markdown while text does not.
+- `format`: `md | docx | pptx | html | mermaid | svg`. docx/pptx go through `render.server.ts`
+  (markdown in, real Office package out; `#` or `---` starts a new slide). **mermaid and svg are
+  PASSTHROUGH and resolved in the dispatch layer, not the renderer** — the renderer knows only
+  md|html|docx|pptx and degrades everything else to markdown, which silently produced `name.md` for
+  both until an end-to-end run caught it.
+- **`render.server.ts`'s `ensureExtension(name, FORMAT)` takes a FORMAT, not an extension** — it
+  looks up its own `EXTENSION_BY_FORMAT`. Passing `".mmd"` yields `name + undefined`. Use
+  `withExtension(name, ext)` in artifacts.server.ts for tool-vocabulary extensions.
+- **Viewer renders mermaid/HTML/D3/SVG in a SANDBOXED iframe: `allow-scripts` with NO
+  `allow-same-origin`.** Adding `allow-same-origin` alongside `allow-scripts` disables the sandbox
+  entirely — artifact content is model-authored and untrusted. SVG gets `sandbox=""` (no scripts at
+  all) because an SVG can carry `<script>`/`onerror`.
+- `TEXT_PREVIEW_MIME` (artifacts.server.ts) gates whether bytes come back for preview at all. **The
+  viewer cannot render what the server never sends** — SVG was excluded and silently fell through to
+  the raster `<img>` path.
+- **No CSP exists in this repo**, so the pinned mermaid/d3 CDN tags load. A `srcdoc` iframe inherits
+  the embedder's CSP, so one added at the Azure layer later needs `script-src https://cdn.jsdelivr.net`
+  or diagrams stop drawing with no error.
+- Guards: `test:artifact-render` (52), `test:artifact-preview` (28), `test:artifact-format` (21 — the
+  SEAM between the tool's enum and the renderer's).
+
+**THE APP SHELL IS SIZED BY `--app-h`, NOT `h-dvh` — `dvh` DOES NOT SHRINK FOR THE KEYBOARD (2026-09-13).**
+**AND THE DOCUMENT IS LOCKED (`app-locked` on html+body) SO IT CANNOT BE DRAGGED.** Two separate
+defects, both owner-reported, both required. The second only became visible after the first was
+fixed: while the shell was `100dvh` it filled the layout viewport, so a pan still showed app content;
+once the shell became the VISUAL height it occupies only the top of a still-tall layout viewport and
+the pan reveals white. `position: fixed` is the load-bearing declaration — a mobile browser will
+still slide an `overflow:hidden` body without it. The lock is scoped to the shell's lifetime because
+`/auth` and the error routes use `min-h-screen` and need real page scrolling.
+
+Owner, on his phone: *"why isn't the bottom [dock] staying at the bottom of my device instead of being
+able to be scrolled up?"* Screenshot: the nav bar floated to ~45% of screen height, a blank strip
+beneath it, keyboard below that.
+
+**The page never scrolled — the WINDOW slid.** `dvh` tracks the **layout** viewport (it shrinks when
+the URL bar retracts); a soft keyboard shrinks only the **visual** viewport. So the `h-dvh` column
+stayed full height, its last flex child (the bottom nav) fell below the fold under the keyboard, and
+the browser panned the visible region over the taller layout viewport to follow the caret. That pan
+reads as scrolling. **Do not "fix" this by making the nav `position: fixed`** — a fixed element
+anchors to the same layout viewport and lands in the same place, behind the keyboard.
+
+**`interactive-widget=resizes-content` (`routes/__root.tsx:83`) was ALREADY SET and is the correct
+declaration — it is CHROME-ON-ANDROID ONLY.** Firefox, Samsung Internet and most WebViews ignore it,
+so on those the layout was always going to break. It stays; the fix layers over it rather than
+replacing it. This is why the layout was correct on paper and broken on the owner's device.
+
+- `hooks/useAppViewportHeight.ts` publishes `--app-h` from `window.visualViewport` — the one
+  mechanism every modern browser implements. Subscribed ONCE on the shell (`HuddleApp.tsx`), so every
+  view inherits it; never per-view.
+- It subtracts `offsetTop`, not just `height`. `offsetTop` is how far the browser has ALREADY panned —
+  reading `height` alone leaves the bar drifting in exactly the state the screenshot captured.
+- **Degrading is the design:** no `visualViewport` (or SSR) sets NOTHING and `var(--app-h, 100dvh)`
+  keeps today's behaviour. The variable is only ever a real measured number, never a guess, so this is
+  neutral-or-better everywhere and cannot regress a browser that already worked.
+- Guard: `scripts/app-viewport-height.test.ts`, 9 assertions, **two mutation proofs FIRED**
+  (offsetTop subtraction; the degrade path). Commit `725e8ff`.
+- **NOT USER-CONFIRMED.** A sandbox cannot open a soft keyboard — this proves the mechanism, not the
+  owner's device. Perceptual/device UAT rule applies: his word is the verdict.
+
 **ACT-65 — grooming FORCES an agent owner on every task; that one line causes the overreach (2026-08-26).**
 Read before touching task assignment, grooming, or the confirm-intent gate.
 `groom.ts:122-127` instructs *"assign it to exactly ONE agent… Include every task id exactly once"* with
@@ -1849,6 +2080,33 @@ user to test in the deployed app. NOT calling fixed until user confirms AC-12 li
 **Also: main's `94cfc02` (ACT-huddle-4 server-side kickNextChunk retry) and this session's WebRTC client-side pipeline are COMPLEMENTARY, not conflicting. Both belong in main.**
 
 ## Hardening (append)
+
+### 2026-09-13 — a mutation harness said "NOTHING IS PROVEN" and I nearly read it as a bad guard
+**Mistake:** `mutate.sh` returned *"the harness prints a format this script cannot read… NOTHING IS
+PROVEN"* on the first proof of the viewport fix. The guard was fine. **My invocation was wrong:**
+`mutate.sh:133` does `grep -qF "FAIL ${name_n}"` — it prepends `FAIL ` itself — and I passed the
+pattern as `"FAIL <test name>"`, so it searched for `FAIL FAIL <test name>`.
+**Root cause:** I typed a literal (`"FAIL …"`) that had to line up with a matcher I had not read —
+the exact failure the org rule *"never type a literal that must exist in something you have not
+read"* names. One `grep -n` of the script settled it.
+**Guardrail:** the **must-fail-pattern argument is the BARE TEST NAME**, never prefixed with `FAIL`.
+And the wider lesson the harness itself was built for held: it reported **NOT-APPLIED**, not a false
+INERT, so the wrong answer was *"I did nothing"* rather than *"your guard is worthless."* That
+distinction is what made this recoverable in one command — do not "simplify" it away.
+
+### 2026-09-13 — `dvh` looked like the modern, correct answer and is wrong for keyboards
+**Mistake:** the app shell used `h-dvh` and the bottom nav could be scrolled away on the owner's
+phone. `dvh` reads as the sophisticated choice (it handles the retracting URL bar), which is exactly
+why nobody questioned it.
+**Root cause:** `dvh` tracks the **layout** viewport; a soft keyboard shrinks only the **visual**
+viewport. Two different viewports, one of which no CSS length unit exposes.
+**Second root cause, the more useful one:** the declarative fix (`interactive-widget=resizes-content`)
+was **already present and correct**, so the layout was right on paper and broken on the device —
+because that flag is **Chrome-on-Android only**. *A correct declaration is not a working one until
+you know which engines implement it.*
+**Guardrail:** `scripts/app-viewport-height.test.ts` + `--app-h` from `visualViewport`, the one
+universal mechanism. Mutation-proved. **And never reach for `position: fixed` here** — a fixed
+element anchors to the same layout viewport and lands in the same place, behind the keyboard.
 
 ### 2026-08-25 — parked approved, verified work instead of shipping it (ACT-63)
 **Mistake:** the user reported two bugs, approved both fixes explicitly ("approved in both"), and the
@@ -2851,3 +3109,672 @@ grep -hiE "zero|absent|never|no rows|not stored|deferred" /home/user/*/.claude/a
 
 All three of today's misses would have been caught by that one command. Full entry with the theme
 table in `.claude/accuracy-log.md`.
+
+## Multi-step projects: order EXISTS, pointers are DEAD schema, hierarchy is ABSENT (2026-09-12)
+
+Read this before anyone concludes again that "the board can't do projects."
+
+- **`public.tasks.priority_rank int` is the ordering system and it is fully wired** — grooming
+  writes a dense normalised 1..N (`groom.ts:206-232`); the board sort, the scorer, auto-work's slice
+  ordering and the stand-up all read it. 139 of 412 live journey tasks carry one. Ordering is NOT
+  missing.
+- **`public.tasks.blocked_by uuid[]` exists on the canonical table, correctly typed, and is dead.**
+  0 of 412 rows populate it; ZERO grep hits in `huddle-extension-app/src`; it is not in the mirror
+  DDL (`tasks.server.ts:39`), not in the sync upsert, never read. This is the cheapest available
+  route to "do this after that" — reviving it is not a new system.
+- **A parent pointer genuinely does not exist** (no `parent_task_id`, and no `epic`/`subtask`
+  anything). Grooming's ranking is FLAT — it cannot express "these five belong together and keep
+  their relative order."
+- **Why ChatGPT holds a chunked plan and Huddle drops it:** ChatGPT never represents the plan — the
+  transcript IS the state, re-read whole on every turn. Huddle's turns are independent and answered
+  by different agents, so state must live in COLUMNS; anything without a column ceases to exist
+  between turns. The trade is real in both directions (ChatGPT's plan dies with the thread and no
+  agent owns it, nothing schedules or reminds it).
+- Full table + the three mutually-exclusive schema options: `docs/feasibility-epics-tasks-subtasks.md`.
+
+**The mistake to not repeat:** this was first reported as "all absent" from a grep for the NAMES
+`parent_task|subtask|epic|depends_on|sequence|project_id`. Two of three capabilities were sitting
+there under different names. Sweep by CAPABILITY (who writes it, who reads it), never by name.
+
+## The approach gate: what actually clears `escalated`, and a fail-open that LIES (2026-09-12)
+
+Independently verified (`.claude/VERIFY-escalated-dead-end-1.md`, 5 claims, 3 CONFIRMED 2 REFUTED).
+Read this before anyone says again that an escalated task has no way out.
+
+**TWO ways out already exist. Both are blunt; neither is per-task.**
+1. **Settings has a per-agent kill switch.** `AgentWorkflowPanel.tsx`, mounted at
+   `SettingsSheet.tsx:157` under "Confirm-intent & review gate". Off = the gate is bypassed for
+   EVERY task that agent owns. Both consumers miss the escalated state entirely:
+   `approach-gate.server.ts:51-52` returns `approved:true` BEFORE the escalated check at :65, and
+   `autowork.server.ts:686-688` promotes to DOING in a branch that never reaches the :697 test.
+   Nothing caches the config — next pass, no deploy.
+2. **ANY reassignment clears it.** `resetEngagementOnReassignment` is called from
+   `tasks.server.ts:296` inside `upsertJourneyTask` — the GENERIC mirror writer, not a grooming
+   path. journey's `execute-tool` writes `assigned_agent` from `update_task` (`index.ts:906-908`)
+   and `batch_update_tasks` (`:971`). It also wipes `confirmed_dod` and the clarify state, which is
+   why reassigning the Trinnex row needed a restore afterwards.
+
+**LIVE DEFECT, still open on main: `approach-gate.server.ts:121-127` fails open into STORED STATE.**
+On a grader throw it calls `approveApproach`, so a task is permanently marked approved that no
+grader ever read. One transient 429 — recurring in this repo — approves it forever, indistinguishably.
+The REVIEW gate's equivalent returns `proceed:true` and **writes nothing**; that is the correct
+shape. **Fail open in the RETURN, never in the STORED STATE.** The override work hardened the
+errored RE-GRADE path to stay escalated and deliberately left this fresh path alone.
+
+**`approveApproach` (`tasks.server.ts:1023-1036`) is an UNGUARDED upsert** — no `WHERE` on current
+status, so it moves any status to `approved`. Not a bypass today, but any new caller silently voids
+an escalation. New callers must be status-guarded `UPDATE`s.
+
+**Escalated is invisible in every deterministic surface** — no query selects it, no UI rendered it,
+`review-digest` and `standup` never read `approach_status`. The only notification was a PROMPT
+DIRECTIVE (`autowork.server.ts:159`) asking the model to mention it — a prose-only step, exactly the
+failure these gates were hardened against.
+
+**The "meaty" produce-vs-quick ask has TWO causes, and only one is fixed.** Trigger is seven
+conjuncts (1:1 only, difficulty >= 3, no pending row, ...). (a) the produce patterns were anchored
+`^(`, so `"Okay knock it out"` classified as `unrelated` — FIXED. (b) the pending row is
+`PRIMARY KEY (user_email, huddle_id)` and EVERY verdict deletes it, so a prior "produce" does NOT
+suppress the next difficulty>=3 ask — **still open**. Only `data.modelEscalate` suppresses, per-request.
+
+### Liveness: a stale transcript mtime is NOT proof a subagent died
+This verifier delivered at ~7 hours and was reported to the owner as dead at hour 6, on the strength
+of its `.output` file not having grown — while `ListAgents` said `running` the whole time. The JSONL
+is appended per assistant MESSAGE; an agent deep in a read/grep chain legitimately writes nothing for
+hours. **Only `ListAgents` plus the agent's own artifact file are valid liveness reads.** Same class
+as the org-wide rule about a verifier declared dead 14 seconds before delivering 9/9.
+
+## A task handed DIRECTLY to an agent lands with NO assignee — the owner is chosen, then discarded (2026-09-12)
+
+Traced end to end across both repos. Do not re-derive; verify the line numbers still match, then act.
+
+```
+owner asks an agent in a 1:1 to do X
+   -> createSuggestedTaskFromTool (huddle.functions.ts ~:2649)
+        ownerId: resolveTaskOwner(args.ownerId ?? args.owner ?? args.assignee)
+        ... an owner IS resolved, and is used ONLY for the local UI card draft
+   -> the CANONICAL journey write, ~20 lines later:
+        invokeJourneyTool({toolName:"quick_create_task", args:{title} | {title,date}})
+        ... no assignee. NOT dropped by a bug -- there is nowhere to put one.
+   -> journey quickCreateTask (journey-voice execute-tool/index.ts, case ~:432)
+        accepts ONLY title / date / auto_schedule, forwards to parseAndCreateTasks
+   -> public.tasks row created with assigned_agent = NULL
+   -> mirror row NULL (pg_net, 1-3s)
+   -> autowork.server.ts:370   if (!row.assigned_agent) continue;
+   -> INERT. No confirm ask, no promotion, no work, no reach-out, until GROOMING assigns it.
+```
+
+**So a task the owner hands to a named agent behaves exactly like an unassigned one.** Observed on
+the Trinnex row, whose `assigned_agent` read genuinely NULL in journey.
+
+**The write path already exists — do NOT add one.** journey's `update_task` writes `assigned_agent`
+(`execute-tool/index.ts` ~:906-908), as does `batch_update_tasks` (`:971`); the board drag already
+uses it via `board.functions.ts`. The fix is a best-effort follow-up `update_task` after create — no
+journey deploy, and its failure mode degrades to exactly today's behaviour.
+
+**WHO to assign is the only real decision, and it is decided:** 1:1 -> the responding agent; GROUP ->
+only when the agent explicitly named an owner. Not the lead: `huddle.functions.ts` ~:2221 makes the
+lead capture items across EVERY lane, so defaulting to it would assign other lanes' work wrongly.
+
+**Full diagnosis + the rejected alternative:** `.claude/actions.md`, `ACT:assign-on-direct-ask`.
+
+## HARDENING — I called my own choices "intended differences" and stopped (2026-10-15, ACT:tree-matches-phone)
+
+The verifier traced every gap between Huddle's tree and the owner's phone. I wrote three of the
+causes up as "intended differences", reported Life 14 vs 18 and Ventures 55 vs 66 as acceptable, and
+moved on. They were rules I had chosen myself (hide parked, keep BLOCKED, show no-topic tasks); the
+owner had never asked for them, and his phone is the spec. Owner: *"why are you pushing past it
+instead of fixing it?"* **"Intended" needs an owner who intended it. When the spec is a reference
+implementation, every divergence is a defect until he says otherwise.**
+
+**Owner preference, standing (2026-10-15):** when a turn ends with choices pending, RESTATE each
+option in a line at the bottom. *"the bottom of the thread is the first place i go, not the last."* A
+bare "A, B or C (I recommend C)" sends him back up the thread to find what A, B and C were.
+
+## HARDENING — a feature with THREE entry points shipped through ONE (2026-10-15, ACT:category-tasks-2)
+
+The category tree was wired into `getPrioritiesWidget` and nowhere else. `tools.ts` built its own
+`PrioritiesWidgetData` with a hardcoded empty tree — and the surface the owner actually reads (a
+scheduled card, posted by an agent) goes through `tools.ts`. He saw "No topics yet." on a feature
+reported as deployed. **My own plan said "extract the composition once and repoint all three sites"
+and I skipped it.** The guard is structural (an allowlist test over `buildPrioritiesBand` callers),
+because this repo's prose rule AND a comment at `huddle.functions.ts:6429` naming this exact hazard
+were both already in place and neither stopped it.
+
+**Two testing lessons from the verifier, both of which produced a false pass:** a LENGTH assertion
+cannot see a REORDER; and a fixture whose name sorts the right way by accident makes a rank
+invisible. When `mutate.sh` says EQUIVALENT, deepen the fixture — never accept it.
+
+## Active work — the priorities tree renders each category's TASKS (2026-10-15, ACT:category-tasks, PR #66, MECHANISM ONLY)
+
+`9252a1b`. The tree drew names + counts and no tasks, so the owner could not pull work out of a
+category and an agent could not answer "what's next in Career?" — the tasks were not in the payload.
+Each category now carries its live tasks, ordered `byPriorityThenDue`, with the existing
+Today/Done/Park buttons reused verbatim (no second write path).
+
+**THE FACT THAT DECIDED THE DESIGN, and the one that cost a wrong claim:** `get_tasks` is capped at
+**`.limit(50)`** (journey-voice `execute-tool/index.ts:707`). I asserted it returned the whole board
+"in one call" from a summary that said `select('*')` with no limit — it does not, and 101 open tasks
+means one call silently returns half, skewed to scheduled rows (`start_time asc nullsFirst:false`,
+no status filter). Read the line, never the recollection of the line.
+
+**`get_task_topics` CANNOT be deployed — only written.** Not on journey's `main`, not in ANY open PR
+(checked all 40), commit `ec508a5` unreachable in the clone. memory.md:3196's "blocked on an owner
+action" overstated it: there is no owner action available. So Huddle's topic/theme SUB-layer is
+still absent, and the UI now SAYS so instead of looking complete — `topics.reason` is left exactly
+as the journey passthrough reported it, because overwriting it to "ok" after the merge would hide the
+gap. The mirror is the tree's BASE and journey's topics nest in via `mergeTopicTree` if that source
+ever answers.
+
+**Three defects found by the cold AC read, not by me:** FAMILY absent in Huddle though the Android
+widget draws it; a tasks-only category row unexpandable; counts passed through rather than derived.
+
+**MERGED `ca0d7d1`, DEPLOYED (run 38764997134 success), NOT OWNER-CONFIRMED** — nobody has seen it
+in a browser. 184 assertions green across 11 suites, `tsc` 0, build ok, **4 mutations FIRED**, and no
+server-module leak into the client bundle.
+
+**HARDENING — I built a row cap that an existing AC forbids BY NAME.** The first draft capped each
+category at 8 tasks behind "+N more". `docs/AC-journey-widgets.md` AC-10: *"no row cap, no '+N more'
+truncation"*, quoting the owner — *"it should include all that comes back from the query no matter
+how long that is"*. It was caught only because a PARALLEL session's ledger entry (PR #65) cited
+AC-10 for an unrelated reason. **The guard this implies is not "re-read the ACs": it is that an AC
+file governing a surface must be read BEFORE writing a renderer for that surface, the same way the
+data model index now gets read before writing a query.** Removed in `ac43446`. And note the limit of
+the fix: the cap lived in the COMPONENT, so no offline test could have caught it — AC-10 states its
+own DOM-level observation method, which is why that AC exists in that form.
+
+## Active work — journey PRIORITIES + SCHEDULE widgets as in-chat widgets (2026-09-13, NOT verified)
+Branch `claude/journey-widgets-in-chat` in BOTH repos. Nothing on `main`, nothing deployed.
+
+**Three lanes, all committed and pushed:**
+- **Lane A (journey-voice `ec508a5`)** — `get_task_topics` registered in `_shared/tool-definitions.ts`
+  (26→27 tools) + handler in `execute-tool/index.ts`. `huddle-proxy` needed NO change (it re-serves
+  `/definitions` verbatim). No new secret — `JOURNEY_PROXY_TOKEN` reused. **NOT deployed** —
+  `deploy-supabase-functions.yml` with `function_name=execute-tool` is the owner's call.
+  Non-obvious: `task_topic_index` IS the topics table (no separate topics table). A category badge is
+  the SUM of its topics' subtree counts, NOT the denormalized `stored_task_count` column (which read
+  15 where the truth was 1). Two topics naming each other as parent produced a CYCLIC object graph
+  that `JSON.stringify` throws on — would have 500'd the whole tool; fixed with `wouldCycle()`.
+- **Lane B (`54639aa`)** — `widgets.server.ts` + `widgets.functions.ts`: `getScheduleWidget`,
+  `getPrioritiesWidget`, `updateWidgetTask` (`start|done|pause|today|untoday`). None ever throws;
+  failures return `ok:false`. **No migration needed** — every column already exists in the mirror DDL.
+  Found by reading, not assuming: `getBoardTasks` did NOT select `start_time`/`end_time`/`is_scheduled`,
+  so TODAY'S SCHEDULE was unreachable — that one read was EXTENDED (additive, optional fields), not
+  duplicated. `updateWidgetTask` gates on the existing `getOwnedTaskForConfirmAsk` before any write.
+- **Lane C (`4c68ff2`, `3ead8e6`, `59afbbb`)** — `JourneyWidgets.tsx`, docked in Iris's 1:1 above the
+  transcript; Rail + HuddleApp view registry + mobile switcher.
+
+**Pre-existing bug this work had to step around:** `Rail.tsx:39/45` marks Memory active when
+`view==='huddle'` and maps it to `'huddle'` — clicking Memory silently renders Huddles. It is
+decorative today. Adding two views to that three-way ternary compounds it, so the registry becomes a
+VIEW MAP keyed by id, which fixes Memory in the same change.
+
+**Status: `npx tsc --noEmit` exit 0 on the branch. NO verifier has run, NO live check, NOT deployed.**
+Prototype canvas (where everything lands, incl. mobile):
+https://claude.ai/code/artifact/da7013d0-2fff-4942-ae91-2a69dbd0cda3
+
+## Hardening — a container restore killed all three lanes mid-flight (2026-09-13)
+All three agents died with the container (15h gap). NO notification fired — silence is the designed
+behaviour. Every lane's work survived ONLY because each brief named a file and each lane committed as
+it went; Lane C's last two commits sat UNPUSHED in the container and were recovered by comparing local
+HEAD to origin on the next turn, exactly as the re-sync rule prescribes. `ListAgents` after the restore
+showed zero agents, which is the only ground truth that they are gone.
+
+## Hardening — the checklist widget renders NOTHING on the Lovable path (found 2026-09-13, NOT fixed)
+Found while wiring the two journey widgets, in the existing feature they were modelled on.
+`lovableTools.build_checklist` (`huddle.functions.ts:5472`) never calls `recordToolUse`, and
+reply-assembly recovers a rendered payload ONLY from a toolUse's `detail`. So on the Lovable backend
+the checklist tool fires, does its work, and the card never reaches the client. The OpenAI path is
+fine — it records, so its payload rides back.
+**The two new widgets do NOT inherit this**: their Lovable dispatch calls `recordToolUse` explicitly.
+The checklist itself is UNFIXED — fixing it means editing that feature's own wiring, which is outside
+what the owner asked for. Reported to the owner; his call whether to widen.
+**The general lesson: on this codebase a tool that renders a card must call `recordToolUse` on BOTH
+dispatch paths, or it is silently inert on one of them.** Symmetry between the two paths is not
+enforced anywhere — nothing fails, nothing logs, the card just never appears.
+
+## Active work — journey widgets: wiring landed, verification loop 2 in flight (2026-09-13)
+Branch `claude/journey-widgets-in-chat` @ `b56907e`. Nothing on `main`, nothing deployed.
+
+**Since the last entry:**
+- **Pause defect FIXED (`966bd2f`).** `ACTION_STATUS.pause` was `UP_NEXT` — the lane
+  `autowork.server.ts` promotes from — while ⏸ emptied the DOING slot in the same write, so a paused
+  task was a promotion candidate at the next 9/13/17 tick and the confirm-intent gate passed it
+  through (a task that had reached DOING was already confirmed). Now `BACKLOG` + the `parking-lot`
+  tag auto-work already filters on. journey's `update_task` REPLACES the tag array, so the UNION is
+  sent — parking must never wipe a task's other labels. Un-ticking ✓ was split onto a new `reopen`
+  action so that gesture does not inherit the park.
+  `scripts/widget-park.test.ts` (`npm run test:widget-park`) 10/10; mutation-proved **FIRED** via
+  `mutate.sh` with `pause: "UP_NEXT"` reinstated.
+- **Widget tools WIRED (`b56907e`).** `show_priorities_widget` / `show_schedule_widget` existed fully
+  written in `tasks/tools.ts` but were registered NOWHERE — the render branches in `HuddleView.tsx`
+  were live but unreachable, so no agent could ever surface them. That was the "like the checklists
+  widget" half of the request, and it was the +160 unexplained lines on the branch. Now registered in
+  `mergedTools`, dispatched on BOTH paths with per-widget `claimAction` keys, `WIDGET_SYSTEM_HINT` on
+  both instruction branches, and the payload recovered from `detail` at all six reply-DTO sites.
+- **Rail Memory entry de-highlighted** (`Rail.tsx` `neverActive` flag) so two items no longer
+  highlight at once. Whether Memory is REMOVED or WIRED is still the owner's open decision.
+
+**Status: `tsc` exit 0; `test:widget-park` 10/10; `test:router` 20/20. NOT deployed, NOT observed in a
+browser — type agreement is not a rendered card.** Loop-2 verification running; `huddle.functions.ts`
+and `Rail.tsx` were moving targets during it and are DEFERRED TO LOOP 3.
+
+## Feature status — journey PRIORITIES + SCHEDULE widgets: LIVE (2026-09-13)
+**Merged to `main` as `125409d` and DEPLOYED.** `deploy-swa.yml` run 34757153463 → `success`, head_sha
+`125409d`. The deploy's DB-pin line read **`Assembled AZURE_PG_URL for eds-postgresql/RAG_AI_Agents`**
+— the canonical server, NOT the `ux-design-pg` discovery drift this repo was bitten by before. Both
+widget bundles are in the build output (`widgets.functions-*.mjs`, `widgets.server-*.mjs`).
+Live: https://icy-flower-0f415200f.7.azurestaticapps.net
+
+**What shipped:** both widgets docked in Iris's 1:1 **stacked at full column width** (never side by
+side — the owner's phone is the primary surface and a two-up never fit 390px), a full-page view each
+on the rail, and `show_priorities_widget` / `show_schedule_widget` registered so any agent can surface
+them on request — the "like the checklists widget" half, which existed as written-but-unregistered
+tools until `b56907e`.
+
+**Still NOT true, and the one thing nobody has done:** no one has seen any of this render in a
+browser. Three verification loops were source-and-execution only — no live DB from the session, no
+deploy until now. Per the repo's own rule, status is **mechanism verified + deployed, NOT
+user-confirmed**; the owner looking at it live is the verdict.
+
+**Blocked on an owner action:** journey's `get_task_topics` is committed (journey-voice `ec508a5`)
+but **NOT deployed**, so the topic tree — roughly 60% of the Priorities screenshot — renders its
+labelled empty state while the task band works fully. Deploying `execute-tool` is what lights it up.
+
+### Why journey and the Android widget HAVE topics and Huddle does not (owner's question, 2026-09-13)
+**OBSERVATION, from the two call sites.** journey's web app reads the table directly —
+`supabase.from('task_topic_index').select('*').eq('user_id', user.id)` (`src/pages/Priorities.tsx:222`)
+— and the Android bridge widget runs the identical read over PostgREST,
+`GET /rest/v1/task_topic_index?select=id,topic_name,position,category_affinity,parent_topic_id,window_affinity&user_id=eq.$userId`
+(`android-bridge-template SupabaseTaskClient.kt:219`). **Both hold the USER's Supabase session**, so
+RLS scopes the read to their own rows. Huddle holds only `JOURNEY_PROXY_TOKEN` and no user session,
+so it can reach nothing but named `execute-tool` tools. **The data was never missing — Huddle's ROUTE
+to it was.** Saying "topics aren't available" without that clause read as "the data isn't there",
+which the owner's screenshot disproved.
+
+**`get_tasks` already returns SOME topic data today, deployed.** `enrichTasksWithTopics` attaches a
+`topic_groups` array to `get_tasks`/`get_today_tasks`. It is **not** a substitute for the tree and
+`get_task_topics` is **not** a duplicate of it: `getTopicGroupsManual` ends in
+`return results.slice(0, 5)` and selects no `id` and no `category_affinity` — it is a top-5 voice
+briefing, not a tree. Worth knowing before writing anything else that wants topics.
+
+### `buildTopicTree`: EVERY PARSED NODE IS EMITTED EXACTLY ONCE — a malformed row costs nesting, never existence
+An independent verifier found `byId` doing two jobs — parent lookup AND the list of nodes to emit —
+so the loop over `byId.values()` **silently deleted** any id collision. Measured, then reproduced:
+two `Admin` topics in different categories → one row, the CAREER topic and its whole category row
+gone. Not contrived: `toTopicNode` falls back to `id = name` when a payload carries no id
+(deliberate — journey's envelope is unpublished), and duplicate names are ordinary in 158 topics.
+Fixed `0f0273c`: the emit loop reads `flat`, `byId` is lookup-only, and `attached` is keyed by NODE
+(an id-keyed set re-creates the same bug one layer down). `hasAncestorCycle` directly above it
+exists to enforce this exact invariant for cycles — that case was fixed and this one was not,
+because both were reasoned about rather than RUN. Guarded, mutation-proved FIRED.
+**Known, not fixed:** `hasAncestorCycle` is O(n²) — a 24k-deep parent chain takes ~47s, 32k throws
+`RangeError`. Caught into `{ok:false}` by `widgets.functions.ts`; live data is 158 PARENTLESS
+topics, so it is unreachable. Left alone on purpose — do not "optimise" it without a real input.
+
+### journey's PRIORITIES VIEW RUNS AN UNMERGED BRANCH — `origin/main` is NOT what the owner sees
+**The live view is `claude/priority-widget-nesting-1jtwa9`** (journey-voice, commits `f0ab561` +
+`532da6b`, Jun 29). Proof it is the live one rather than `main`: `main` renders one row per raw
+config key (six rows, no Family); the branch declares
+`DISPLAY_CATEGORIES = ['LIFE','CAREER','VENTURES','EDUCATION','FAMILY']` — **exactly the five rows in
+the owner's screenshot** — and FAMILY holds no rows in `task_topic_index`, which is why that row
+carries no count. journey's clone has a **truncated history** (`origin/main...<branch>` reports *no
+merge base*), so `git log origin/main` **cannot** be used to argue a thing was never shipped there.
+
+What the branch establishes, and what Huddle must port:
+- **Four levels: `category > group > sub-group > task`** (f0ab561's own subject line). Category sits
+  ABOVE `parent_topic_id` nesting; the two COMPOSE. This is the "sub-tasks and epics" hierarchy work
+  the owner flagged — journey is building toward populated `parent_topic_id`, so *"some topics nest,
+  others do not"* is the state to survive, not an edge case.
+- **Six raw keys merge into five display rows**: `PERSONAL → LIFE` (label **"Life & Personal"**),
+  `PROF_EDUCATION → EDUCATION` (label **"Education"**), plus **FAMILY** as a fifth. Known categories
+  render in `DISPLAY_CATEGORIES` order; unknown keys pass through and append alphabetically
+  (`532da6b`, "hybrid dynamic category detection" — they are NOT dropped).
+- A topic's category is a **majority vote over its tasks' categories**, falling back to
+  `category_affinity`, then `window_affinity[0]`; children inherit the parent's. Huddle is handed
+  topics without their tasks, so it uses the fallbacks only — an honest subset, not the vote.
+
+**Separately — TASK hierarchy (epic → task → subtask) is a DIFFERENT thing and is ABSENT.** See
+`docs/feasibility-epics-tasks-subtasks.md` (2026-09-12): ordering EXISTS (`tasks.priority_rank`),
+inter-task pointers EXIST-BUT-DEAD (`tasks.blocked_by`, 0 of 412 rows, never written/mirrored/read),
+parent pointer ABSENT (no `parent_task_id` column). Different table, different code path from the
+topic tree. Do not conflate the two when either comes up.
+
+### `parent_topic_id` IS NULL ON EVERY ROW *TODAY* — a dated measurement, not the shape
+    select count(*), count(parent_topic_id), count(distinct category_affinity)
+      from public.task_topic_index;          -- journey wwxgajrtmslzklnyplah, 2026-09-13
+    -> 158 topics, 0 with a parent, 5 categories
+
+journey groups by `category_affinity` FIRST (`Priorities.tsx:284`, `categoryKeys.map`) and only then
+nests by parent — which currently never fires. Category keys come from user config
+(`user_scheduling_prefs.config.categoryMappings`): LIFE, CAREER, PERSONAL, VENTURES, EDUCATION,
+PROF_EDUCATION. The numbers on a category row are OPEN TASK COUNTS — the owner's screenshot reads
+Ventures 40 and open non-test `category = VENTURES` tasks measured exactly 40.
+
+Huddle's `buildTopicTree` nested on `parent_topic_id` alone, so the live payload would have rendered
+**158 flat rows**, never the five collapsible category rows. Fixed in `bc515d2` by `groupByCategory`
+(a no-op when real nesting exists, so journey populating parents later still wins), guarded by
+`scripts/widget-topic-tree.test.ts` — 12 assertions, mutation-proved **FIRED**. This is the first
+coverage `buildTopicTree` has ever had; every earlier fixture invented a `parent_topic_id` the real
+table has never contained, which is exactly why 67 green assertions never saw it.
+
+## The Memory rail entry — intent and current state (answered 2026-09-13, post-deploy as asked)
+**OBSERVATION.** Added 2026-08-16 in `9a77207`, a commit titled *"fix(routing): deterministic
+multi-lane detection turns off solo…"* — it arrived as a side-car in an unrelated routing fix, not as
+its own feature. The SAME diff that adds the entry also adds `(it.id === "memory" && view === "huddle")`,
+so it has pointed at Huddles since the instant it existed. There is no `MemoryView` component in the
+tree and the view registry has never carried a `memory` key.
+**CAVEAT — do not over-read that.** `origin/main` has **3 parentless roots**; history is truncated, so
+git cannot prove a Memory view never existed, only that none survives in reachable history.
+**INTERPRETATION (inference, not proven):** placeholder chrome staged ahead of a view nobody built.
+No commit message states an intent.
+**WHERE MEMORY ACTUALLY LIVES TODAY:** `MemoryDbPanel`, mounted in Settings (global: Diagnose /
+Bootstrap / Round-trip / Provision + schema status) and in the per-agent settings drawer. It is an
+**operator/diagnostic surface** — there is NO way to browse or search the stored `rag_chunks` /
+`rag_triples` content from the UI at all. That absence is the real gap the rail entry gestures at.
+**Current state after this work:** de-highlighted via a `neverActive` flag so it no longer lights up
+alongside Huddles — the minimal fix, deliberately not a removal. Whether it is removed or backed by a
+real "browse my memory" view is the owner's open decision.
+
+## Feature status — journey widgets: LIVE and VISUALLY VERIFIED at phone width (2026-09-13)
+`main` @ `8ede4e0`; the widget+colour work deployed as `ea3c898` (deploy run 34757153463 / 34763…,
+DB pin `eds-postgresql/RAG_AI_Agents` confirmed in the log both times).
+
+**This is the first claim in this feature backed by a RENDERED SCREEN, not a passing suite.**
+`verify-uat.yml` + `widget-ui-checks.mjs`, 390×844, run **34763566801** against production, running
+as the owner (`entra-auth.ts` maps the UAT bypass to `von.ellis@enterpriseds.io`, and the shots show
+his real tasks): **5 of 6 PASS** — one switcher (was 2), nav at **796px of 844** (was 60px), band
+**hue 92 cream** with no pink, no console errors, no failed requests. The 6th was a false negative in
+the check, disproved by its own screenshot.
+
+**BOTH colour bugs were one class.** `--surface` is `oklch(1 0 0)` — white with an EXPLICIT hue of 0
+— and a polar space interpolates toward it:
+  `--warning 9%  + --surface` → hue 55 → **4.95**  (band shipped PINK)
+  `--success 72% + --surface` → hue 155 → **111.6** (▶ button shipped YELLOW-GREEN)
+Both are now literals (`--band-cream`, `--success-soft`) at the intended hue, per theme. The other
+four `color-mix` calls mix with `transparent`, where premultiplied alpha cannot move a hue — safe.
+`scripts/no-achromatic-color-mix.test.ts` fails the build on the construct repo-wide.
+
+**THE LESSON, and it is about the checks, not the app.** Three separate times a check reported a
+defect that did not exist: a colour verdict rendered from a loading screen; the PREVIOUS run's
+results read as this run's; a selector matching nothing reported as "0% of viewport". Every one was
+the same shape — **a measurement that did not happen, presented as a measurement that failed.** Each
+is now gated to report NOT MEASURED / UNPROVEN instead, and `uat-shots` commits stamp their run id so
+provenance is checkable. A check that cannot distinguish "I found nothing" from "there is nothing" is
+worse than no check, because the alarming reading is the one that gets acted on.
+
+## Active work — 2026-09-13: three-digest delivery (daily brief / meetings / stand-up)
+
+Owner wants THREE morning digests, and stated the architecture: **both apps must work standalone;
+when integrated, journey is the source and the switch** (the owner's case). So journey owns the
+send; Huddle owns the stand-up content and must retain the whole capability for a journey-less user.
+
+ACs: `journey-voice/.claude/AC-digest-delivery.md` (45 ACs, written by an independent `ac-writer`
+subagent). Tier 1 items: AC-SU-2..5 (ranking), AC-CH-3/4 (delivery is a stored claim), AC-REND-1.
+
+### Huddle lane — stand-up ranking divergence: FIXED, mutation-proven, NOT confirmed live
+Commits `0c06813`, `53e345b`, `f2179c6` on `claude/huddle-workflows-setup-cucecs`. Detail in
+`.claude/IMPL-standup-ranking.md`.
+
+`standup.server.ts` now calls **`rankTasks`** instead of sorting raw `priority_rank`. EXTENDED, not
+duplicated — `rankTasks` is unmodified and every other caller is untouched. New pure seam
+`selectStandupPriorities(tasks, blockedIds, limit)`.
+
+Guard `scripts/standup-ranking.test.ts` (`npm run test:standup-ranking`) 10/10, driving BOTH
+production entry points over ONE fixture. Mutation proof via `scripts/mutate.sh`: **4 × FIRED**,
+0 INERT, 0 NOT-APPLIED.
+
+## Hardening — 2026-09-13
+
+**A board row cannot be scored, and that is why the stand-up diverged.** `BoardTaskRow`
+(`tasks.server.ts:1361`) has no `pushed_count`, `created_at`, `is_scheduled` or `start_time`, so it
+is NOT a `ScorableTask`. The stand-up's raw `priority_rank` sort was not merely a different ordering
+— it was the only ordering that shape permits. Any fix that kept `getBoardTasks` on the priorities
+path would have had to widen the row or re-derive a score, i.e. duplicate ranking. **When two
+surfaces disagree on an order, check whether one of them is even capable of the shared function's
+input before assuming the caller was lazy.**
+
+**The parking-lot leak was closed in `rankTasks` and stayed open in the stand-up for months.** The
+filter (`scoring.ts:132`) carries an in-source comment naming the incident — *"grooming ranked a
+parked 'Prepare investor pitch' #3 Urgent"* (ACT-13/ACT-17) — yet the daily digest bypassed it, so
+the owner kept seeing parked work in the one place they read every morning. **A fix applied at the
+shared function does not reach a caller that never called it.** Grep every consumer when closing a
+leak, not just the one that reported it.
+
+**A mutation harness that prints the wrong marker reports UNDETERMINED, not INERT — and that is the
+correct behaviour.** Run 1 failed because the runner emitted a bare `❌` while `mutate.sh:121` greps
+a literal `FAIL <name>`. It was reported rather than silently re-run, then fixed (`53e345b`). A
+harness that cannot see a failure must never claim the guard is worthless.
+
+## Stand-up — 2026-09-13 continuation (merge blocker + off-chat delivery)
+
+Branch `claude/huddle-workflows-setup-cucecs`, pushed, PR #61. **Not merged, not deployed, not
+live-confirmed.** 25/25 tests (13 ranking + 12 deliver-mode), 4/4 mutations FIRED.
+
+### Facts worth not re-deriving
+- **AC-SU-6, the merge blocker a verifier caught.** The ranking seam landed on a branch 222 commits
+  behind `main`, where `rankTasks` had ALREADY grown a third parameter (`excludeIds`) and
+  `dispatchPrioritize` already passed `taskIdsInReminderWindow(email)`. `selectStandupPriorities`
+  called it with two arguments and **nothing failed to compile, because the parameter is optional**.
+  Merging would have silently reopened the leak: a task inside its reminder window is dropped by
+  `prioritize` and still greets the user in the digest. The stand-up is the FOURTH reminder-window
+  filter site — `tools.ts:406` says "all three must exclude"; that comment is now out of date by one.
+  **An optional parameter added upstream is invisible to `tsc` at every stale call site.** When a
+  long-lived branch merges, diff the SIGNATURES it calls, not just the files it touched.
+- **The stand-up now has a CONTENT mode.** `runScheduledStandup(caller, {deliver:false})` assembles
+  and returns `result.digest` (produced / blocked / inReview / priorities / brief) without posting
+  to Terry's DM. It also skips `setLastStandupAt` — that watermark is the trap: a content pull that
+  advanced it would make the real stand-up an hour later report "nothing to report" about work it
+  had never told anyone. journey pulls this over the existing `JOURNEY_PROXY_TOKEN`; no new secret.
+- **Position IS the rank on the wire.** journey records `rank: i+1` from the array order and never
+  re-sorts, because `rankTasks` already ordered it. A second sort on the journey side could disagree
+  with what the user sees in Huddle.
+
+## Hardening — 2026-09-13 (stand-up lane)
+
+**A behavioural guard alone cannot catch a missing wire-up behind an OPTIONAL parameter.** The
+`excludeIds` forward needed TWO guards: a behavioural one (stub `turns.server` at the module
+boundary so `dispatchPrioritize` resolves the set through its real path) AND a source guard on the
+call site. Only the second catches "someone forgot to pass it", because the optional parameter makes
+that omission compile cleanly. Both mutation-proved FIRED.
+
+**Assert on side effects the STUBS recorded, not on what the test computes.** `standup-deliver-mode`
+counts `enqueueTurn` / `setLastStandupAt` calls; that is what makes "a content pull posts nothing"
+a real assertion rather than a restatement of the code.
+
+## Artifact formats: the STORE is binary-capable; the AGENT-FACING TOOL is not (2026-09-13)
+
+Do not re-derive this, and do not tell the user rich formats are an OpenAI limitation — they are not.
+
+- `createArtifact` (`artifacts/artifacts.server.ts:123-150`) takes **`input.bytes` (Buffer) + an
+  arbitrary `input.mime`** and uploads via `putArtifactBlob`. `artifacts.items` stores `mime` /
+  `size_bytes` / `blob_path` verbatim. **Everything downstream of the agent can already hold a
+  .docx / .pptx / .png.**
+- `CREATE_ARTIFACT_TOOL` (`artifacts/artifact-tool.ts:24`) exposes only `content: string`, described
+  as "The FULL document in markdown", `mime` defaulting to `text/markdown`. **That single schema is
+  the whole limitation the user sees.** The voice twin (`voice/realtime-tools.server.ts:296-299`) has
+  the same shape — fix both or the surfaces diverge.
+- `mergedTools` (`huddle.functions.ts:3497`) is **100% custom `type:"function"` tools**. No OpenAI
+  built-in execution tool is ever offered. `snapshotResponsesTools`
+  (`openai-assistants.server.ts:32`) keeps only `file_search` + `function` and its own doc comment
+  says *"Drops `code_interpreter`"*. `openai-responses.server.ts:90` types `tools` as
+  *"(function/file_search). Not code_interpreter."*
+- Measured sweep of all `src/`: `image_generation` **0**, `dall-e` / `gpt-image` /
+  `images/generations` **0**. `code_interpreter` 7 hits, **every one either the snapshot declaring it
+  or the code stripping it**.
+
+**So an agent replying "I can only do .md" is reporting its toolset accurately.** Same OpenAI
+account, same Responses API, same models as ChatGPT — we hand it strictly less. ChatGPT's `.docx`
+comes from `code_interpreter` (python sandbox → container file); its images from `image_generation`.
+
+**Mermaid and D3 are a DIFFERENT bug and it is easy to misdiagnose.** They are *text*, so the
+generator was never the blocker — `TEXT_PREVIEW_MIME` (`artifacts.server.ts:183`) renders them as raw
+source. That one is viewer-side only. Do not "fix" it in the model layer.
+
+Tracked as `ACT:artifact-rich-formats`; PR #62. Built-in tools bill per session — gate them the way
+`emailTools` / `webSearchTools` / `nexusTools` are already conditionally spread into `mergedTools`,
+not unconditionally per turn.
+## Artifact preview renders markup — in a sandboxed frame, never in the app document (2026-09-13)
+
+- **`lib/artifacts/preview.ts` owns the choice of renderer**, and it is PURE — `detectPreviewKind`
+  (mime + extension + content) → `markdown | mermaid | html | svg | image | pdf | text | none`,
+  `sandboxFor(kind)`, `buildSrcDoc(kind, content)`. `ArtifactsView.tsx` stays thin and just consumes
+  them, so the logic is testable without a browser (`npm run test:artifact-preview`).
+- **The sandbox string is the whole security boundary.** `allow-scripts` WITHOUT `allow-same-origin`
+  = opaque origin; the two together would disable the sandbox entirely. SVG gets `sandbox=""`. Three
+  mutation proofs FIRED on exactly these lines, including one that widens the sandbox — if a future
+  edit reintroduces `allow-same-origin` or `dangerouslySetInnerHTML` on a CODE line of either file,
+  the suite fails. (The guards strip COMMENT lines first, because both files discuss those keywords.)
+- **A markdown artifact containing a ```mermaid fence renders the diagram** — the fence is extracted,
+  the surrounding prose rides along HTML-escaped. Plain markdown is untouched: still the `<pre>`.
+- **There is NO Content-Security-Policy anywhere in this repo** — no `staticwebapp.config.json`, no
+  `http-equiv` in `src/`, and the built `.output/public/_headers` carries only cache-control. So the
+  pinned CDN `<script>` tags inside the srcdoc are not blocked by app config. This matters because a
+  `srcdoc` frame INHERITS the embedding document's CSP: the day a CSP is added, mermaid/d3 need
+  `script-src https://cdn.jsdelivr.net` or the diagrams silently stop drawing.
+- **`TEXT_PREVIEW_MIME` (artifacts.server.ts:183) is the upstream gate and it is narrower than the
+  viewer.** `text/html` and `text/vnd.mermaid` pass it; **`image/svg+xml` does not**, so an SVG
+  artifact reaches the client with `text: null` and can only degrade to the `<img>` path. The viewer
+  cannot render what the server never sends.
+
+## Feature status — artifact rich formats: deployed through verifier loop 3; NOT owner-confirmed (2026-09-21)
+
+Deployed at `main` `500bbf9` (`deploy-swa.yml` run 35644105251, success, matched on `head_sha`).
+Three verification loops in; **the owner has not confirmed any of it live.** Say "mechanism-verified,
+not user-confirmed" until he has produced a Word doc, a deck and a mermaid diagram himself — **by
+voice as well as typed**, because voice was the silently-broken path twice running.
+
+**Four facts about this subsystem that were expensive to learn and are easy to re-break:**
+
+1. **`createArtifactFromAgent` is the agent choke point; `createArtifact` is the LAST GATE.** They are
+   not the same thing and the difference is a security boundary. `createArtifact` has **five** callers
+   — the agent tool, the durable-turn worker, the artifacts panel, `artifacts.functions`, and
+   **USER-UPLOADED chat attachments** (`attachments.functions.ts`), whose filename is exactly as
+   untrusted as model output. Sanitising only in `createArtifactFromAgent` left four of them open.
+   Both `safeArtifactFolder(input.folder)` and `safeArtifactName(input.name)` now run in
+   `createArtifact` itself; both are idempotent, so the upstream call (which needs the safe name to
+   resolve an extension) still works.
+
+2. **The OneDrive mirror path is built from TWO model-controlled values**, and `encodeURIComponent`
+   **does not encode `.`** — so a `..` segment in EITHER `{lane}` or `{name}` walks out of
+   `Huddle Artifacts/` on the owner's real drive. Loop 2 fixed `name`; loop 3 found `folder`. There is
+   now defence in depth on purpose: sanitised at `createArtifact` (what is STORED) **and** inside
+   `onedrive.server` (what is SENT, which also covers rows written before either fix).
+
+3. **The mirror is deliberately path-keyed with replace semantics** — that is what makes re-mirroring
+   idempotent instead of piling up duplicates. It also means the path must be unique PER ARTIFACT, and
+   the traversal fix broke that: `reports/q3.docx` and `drafts/q3.docx` both sanitise to `q3.docx`, so
+   one silently overwrote the other. `mirrorFileName(id, name)` suffixes the stem with the id's short
+   form. **Do not "tidy" that suffix away** — it is the only thing preventing data loss here.
+   *The general lesson: a sanitiser that COLLAPSES an input space can destroy data through the very
+   mechanism that made it safe. Ask what it makes IDENTICAL, not only what it makes safe.*
+
+4. **A tool has FOUR dispatch sites and THREE schemas, and they drift independently.** Sites:
+   OpenAI Responses + Lovable (both in `huddle.functions.ts`), the durable-turn worker
+   (`runWorkerTurn`), and voice (`realtime-tools.server.ts`). Schemas: `CREATE_ARTIFACT_TOOL`
+   (shared), the Lovable zod object, and voice's own raw schema. **The voice schema is the trap** —
+   `additionalProperties: false` means an omitted field is UNREACHABLE, not merely undocumented, so
+   relaxing the voice EXECUTOR while its schema still said `required: ["name","content"]` would have
+   changed nothing. This bit twice: `format` missing from that schema in loop 2, `document` in loop 3.
+   **Whenever you relax an executor, read the schema that feeds it.**
+
+## Hardening — 2026-09-21 (artifact-formats loop 3)
+
+- **Two lanes fixed the same two findings independently, and `git merge` reported NO conflict while
+  producing two `export function safeArtifactFolder` in one module.** Only `tsc` caught it. **After
+  any merge touching a file both sides edited, grep for duplicate top-level declarations — the absence
+  of a conflict marker is not evidence of a correct merge.** Resolution kept the union and recorded
+  both lanes' reasoning in the surviving comments, because they are different lessons (why the guard
+  was wrong vs. why it survived a verification loop).
+- **A container reclaim rewound this tree 129 commits mid-turn** (`/root/.claude/CLAUDE.md` vanished,
+  working directory reset, date jumped). Everything pushed survived on origin; the only loss was one
+  uncommitted ledger section. The direction check is what made recovery safe —
+  `git rev-list --left-right --count origin/main...HEAD` read `129  0`, so `ahead` was 0 and
+  `reset --hard origin/main` was correct rather than destructive. **Measure before you recover.**
+- **An assertion keyed on a bare string fires on prose about itself.** A guard asserting "no site
+  returns the old error" matched a code COMMENT that quoted the old error to explain why it went.
+  Key source-text guards to the returned expression (`error: "…"`), not the bare phrase.
+
+## The schedule brief (2026-10-05) — read before touching scheduled jobs or the calendar readers
+
+**Adding a recurring job is DATA, not plumbing.** `scheduler.server.ts` `JOB_ROWS[]` is a table;
+`JobTypeKey` + `SCHEDULING_DEFAULTS` is a table. One row in each plus one `fireJob` branch, and the
+every-minute scheduler picks it up. **No new cron exists or is needed** — and note that NO workflow
+in this repo carries a `schedule: cron` trigger, so a job that is not in `JOB_ROWS` does not run.
+
+**`SchedulingPanel.tsx` enforces exhaustiveness over `JobTypeKey`.** A new job type will not compile
+until it has a Settings label — which is the config-centric rule enforced by the type system rather
+than by anyone remembering it. Treat that error as the feature working.
+
+**`CalendarEvent` now carries Graph's `id`** (added here). Anything keying per-event state — a
+reminder, a dedup, a seen-marker — must use it. Subject+start is NOT a key: it changes when a
+meeting is moved or renamed, which mints a duplicate rather than updating one.
+
+**`chat.reminders` has NO dedup of any kind.** `createReminder` is a plain INSERT with a
+time-derived id; there is no `external_event_id`, no `ON CONFLICT`, and the claim query is simply
+`due_at <= now()` with no lookahead window. So anything that SEEDS reminders on a cadence must
+supply its own idempotent id, or it creates a fresh alarm on every run. (An earlier note in this
+session claimed the opposite — a dedup keyed on `external_event_id` and a hardcoded `+5` scan
+window. Neither is in this codebase; that belonged to journey's reminder system and was repeated
+here as fact three times before being checked.)
+
+**Two facts about the brief's own rules, so they are not "simplified" away:**
+- An empty day sends NOTHING. A nightly "you have nothing tomorrow" push is how an alert gets muted.
+- An empty day WITH a read failure is a DIFFERENT fact: `ok:false` plus the reason. "You have
+  nothing" and "we could not look" must never collapse into the same silence.
+
+## Priority check (6am/8pm freshness gate) — 2026-10-15
+- **"Start these" = ONE core, `focusOn` (lib/tasks/focus.server.ts, #94).** The Priorities tab input (`focusWidgetItems`) and the `focus_on` tool (both text backends + voice) call it. Matching is conservative on purpose: a wrong match STARTS the wrong task; a miss only creates. Writes go through journey tools only (quick_create_task / set_priority_rank / update_task). Extend it, don't add a second "start/create" path.
+- **Message buttons that switch tabs = `Message.navLink {view,label}` (#91).** Put `navLink` in a turn payload and the runner attaches it to the TARGET agent's reply; `ensureNavLinkDelivered` guarantees it (fallback reply if the model is silent). The priority check uses it ("Open Priorities") instead of `show_priorities_widget`. Reuse it for any "go look at tab X" ping rather than embedding a widget.
+- **Web Push (the composer bell) is LIVE since 2026-10-19.** VAPID keys are repo secrets written by `vapid-keys.yml` (never rotate without force=true — it breaks every subscribed browser). A CCR session CANNOT write secrets (proxy 403 on /actions/secrets): use a workflow with GHUB_KEY + `gh secret set`. Phone pushes still go through journey `send_push`; desktop now gets browser pushes too (duplicates accepted by the owner).
+- **The priority check ALWAYS sends (2026-10-16, #88).** An empty band (0 starred/ranked open tasks) used to return skipped:"empty" and send nothing; owner ruled there is no case where it may stay silent. Empty now = "no priorities set" + widget. A 0 count is usually REAL (starred tasks get completed), not data loss -- check journey `public.tasks` is_priority/priority_rank on open rows before suspecting a sync bug.
+- Job `priorityCheck` (default [6, 20] ET), route `/api/public/run-priority-check`, runner
+  `lib/tasks/priority-check.server.ts`, manual trigger `run-priority-check.yml` (dryRun default true).
+- Coupled timing: 6am precedes groom (8, Mon) + autowork (9); 8pm precedes journey
+  `nightly-schedule-builder` (cron `0 5 * * *` UTC = 1am ET). Move together.
+- Scheduler targets the mirror's `user_email` = `dev@enterpriseds.io`.
+- Count in the message = the widget's own `buildPrioritiesBand` → never disagrees with the card.
+- Settings JOB_TYPE_KEYS must list EVERY JobTypeKey (scheduleBrief was missing after #63).
+- Settings → Scheduling → Priority check has **Send now** (`runPriorityCheckNowFn`). It is the ONLY
+  in-app run-now for any scheduled job; the others are triggered via their `run-*.yml` workflows.
+- The scheduling save validator (`scheduling-config.functions.ts` JOB_TYPE_KEYS) must list every key too.
+
+## Scheduled jobs are ONE ROW PER USER (2026-10-15)
+- Ids are `<job>-u-<user_id>` (`scheduledJobId` in scheduler.server.ts); email ids are only for an
+  unlinked address. Each tick disables (`enabled=false`) any other row of that job for the same user.
+- Before this, two emails of one user = two rows = every job fired twice (von.ellis@ + dev@ pairs).
+- Live since 2026-10-15 16:09Z (#68, `c1c9e32`): 7 enabled `<job>-u-<user_id>` rows; the old email rows
+  are disabled, not deleted — re-enable one with `UPDATE tasks.scheduled_jobs SET enabled=true WHERE id=…`.
+
+## Active work — INSTANT email alerts + sticky sender-named push + Calibri drafts (2026-10-27, ACT:instant-email-alerts, NOT owner-confirmed)
+- **Why:** the 2026-10-27 Trinnex email WAS alerted (push FCM-accepted 3m23s after arrival) — the owner just didn't get it
+  "immediately", and the push read "Iris Chase replied". Lesson: a "done" turn + journey "1 success" is the delivery ground
+  truth; check journey `function_logs` for `[send-push-notification]` before concluding a push never went out.
+- **B (instant):** Graph subscription on `users/{mailbox}/mailFolders('inbox')/messages` (changeType created), stored in
+  `chat.graph_mail_subscriptions` (owner_email PK). `ensureMailSubscription` runs inside every non-dry inbound-email run
+  (create / renew <24h left or >12h old / recreate on host change or 404). Route `/api/public/graph-mail-notify` echoes
+  `validationToken`, trusts only clientState = sha256("huddle-graph-mail:"+JOURNEY_PROXY_TOKEN), honours the inboundEmail
+  cadence hours, kicks `/run-inbound-email` (2.5s wait) AND pulls the scheduled job's next_run_at to now (backstop).
+  Idempotent: one announcement per email by turn id, so poll + notification never double-alert.
+- **Sticky push:** payload.emailReplyRef → `inboundEmailPush()` → title + `data.sticky:"true"` → journey fcmData allow-list
+  forwards `sticky` → bridge `setAutoCancel(!sticky)` (+ carried through AlarmRepeater). Only effective after a Huddle APK
+  rebuild (android-bridge-template configs/8596e6c2…/bridge.config.json `_buildTriggeredAt` bump).
+- **Drafts:** `createReply` with a `comment` = one unstyled plain-text run (the bug). Now createReply `{}` then PATCH HTML
+  from `lib/email/draft-html.ts` (Calibri 11pt). Same formatter for the plain-draft fallback.
+
+## Active work — inbound email watch: Iris tells the owner about new email + offers a reply draft (2026-10-15, ACT:inbound-email-watch, PRs #82/#85/#87/#90 LIVE — deploy 38836561690; Save-to-Drafts NOT yet owner-confirmed)
+- **Root cause of "Iris never told me Amy (Trinnex) emailed":** nothing read incoming mail — Huddle had send/draft/calendar only; journey's 127 edge fns have no mail reader; `mail-and-appointments` is on-request only. Graph app already holds Mail.Read/Mail.ReadWrite; app-only Inbox + Drafts read of von.ellis@ = HTTP 200 (graph-permission-check.yml §4, run 38799786649).
+- **Built (PR #82):** job type `inbound-email` on the EXISTING scheduler (hourly 7–22 ET, Settings "New email alerts"), `lib/email/inbound-email.ts` (pure screen, default `needs-reply`) + `.server.ts` (reads owner Outlook via resolveCalendarMailbox, one durable Iris DM turn + push per kept email, max 5/run), route `/api/public/run-inbound-email`, `run-inbound-email.yml`. `create_email_draft` gained `reply_to` on all 3 surfaces via `createDraftForTool` → threaded reply in the OWNER's Drafts (Graph createReply). Never sends.
+- **Gotcha (verifier loop 1 caught it):** the scheduler stamps every fire with a per-hour `runId`; folding it into the turn id (the priority-check shape) re-announces the same email every hour. The id is the message alone. Mutation-proved.
+- **Repo is PUBLIC → Actions logs public.** Run results carry sender DOMAINS + verdicts only; never print subjects/bodies.
+- **Open:** verifier loop on fixed head, merge, live dry run (trinnex.io must be kept), real run, owner confirms Iris's message + draft in Outlook. Follow-ups: Settings toggle for mode A/B/C (today: route/workflow `mode` only); plain-draft fallback lands in dev@ when the original isn't found.
+
+## STANDING RULE (owner, 2026-10-15): any action an agent OFFERS the owner is a BUTTON with its context baked in — never "reply yes"
+> *"similar to the wip confirmation widget this should have a yes or no button rather than depending on text so that if i scroll up and click yes two hours later, the context to execute is baked in and it is less likely to fail from my natural language."*
+- Pattern to copy: `confirmAsk` (HuddleView.tsx `ConfirmAskRow` ~612; field on HuddleMessage seed.ts:43; agent calls a tool → tool detail → `confirmAsk` set on the reply at huddle.functions.ts ~6484; buttons call `*FromButtonFn` in confirm-ask.functions.ts with ONLY an id; the server re-reads everything else from its own row and checks ownership; a second tap returns alreadyDone).
+- Applies first to new-email alerts (Save to Drafts / Dismiss), and to every future "want me to…?" offer.
+- Known gap in the pattern: `resolved` is client-only (store.ts:376); server row state is the truth. Read it, don't trust the card.
+
+## Inbound email watch — what is TRUE now (2026-10-15 late)
+- Live: every 5 min 7–22 ET; `chat.email_replies` ledger (owed→drafted→replied|dismissed); Iris's alert carries a card (Save to Drafts / Edit first / No reply needed, "N owed · M settled today").
+- **Every reply path must attach a widget, not just the normal one.** Amy's alert lost its card because Iris timed out after the tool call and `ensureNotSilentOnRealWork` / `hardReply` built a bare reply. Wire any reply-borne widget through one helper used by all three paths (`emailCardFor`).
+- **Durable turn `text` is `.max(4000)`** (huddle.functions.ts input schema) — an over-long directive fails the WHOLE turn as `status=error`. Cap any directive that embeds outside content.

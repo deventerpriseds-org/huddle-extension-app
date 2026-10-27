@@ -1,0 +1,268 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    a { color: oklch(0.55 0.22 295); } a:hover { color: oklch(0.45 0.22 295); }
+    .lbl { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: oklch(0.52 0.02 225); }
+  </style>
+</helmet>
+
+<div style="display: flex; width: 1440px; height: 900px; background: oklch(0.985 0.005 210); color: oklch(0.22 0.03 220); font-size: 13px;">
+
+  <!-- RAIL — w-14 (56px), bg-primary, size-10 rounded-lg items, 18px icons @1.8 -->
+  <nav style="display: flex; flex-direction: column; align-items: center; justify-content: space-between; width: 56px; flex-shrink: 0; background: oklch(0.34 0.055 200); color: oklch(0.985 0.005 210); padding: 16px 0;">
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+      <div style="display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; margin-bottom: 12px; border-radius: 10px; background: oklch(0.985 0.005 210 / 0.1); font-weight: 700;">H</div>
+
+      <!-- existing: Huddles (active) -->
+      <div style="display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; background: oklch(0.985 0.005 210 / 0.15);">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </div>
+      <!-- Board -->
+      <div style="display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; color: oklch(0.985 0.005 210 / 0.6);">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+      </div>
+      <!-- Artifacts -->
+      <div style="display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; color: oklch(0.985 0.005 210 / 0.6);">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2z"/></svg>
+      </div>
+      <!-- Memory -->
+      <div style="display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; color: oklch(0.985 0.005 210 / 0.6);">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+      </div>
+
+      <!-- divider then the TWO NEW rail entries -->
+      <div style="width: 24px; height: 1px; margin: 6px 0; background: oklch(0.985 0.005 210 / 0.18);"></div>
+
+      <!-- NEW: Priorities -->
+      <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; color: oklch(0.985 0.005 210 / 0.6); outline: 1.5px dashed oklch(0.55 0.22 295); outline-offset: 1px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="14" y2="12"/><line x1="4" y1="18" x2="9" y2="18"/></svg>
+      </div>
+      <!-- NEW: Schedule -->
+      <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; color: oklch(0.985 0.005 210 / 0.6); outline: 1.5px dashed oklch(0.55 0.22 295); outline-offset: 1px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>
+      </div>
+    </div>
+
+    <div style="display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 10px; color: oklch(0.985 0.005 210 / 0.6);">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </div>
+  </nav>
+
+  <!-- HUDDLE LIST -->
+  <aside style="display: flex; flex-direction: column; width: 232px; flex-shrink: 0; border-right: 1px solid oklch(0.90 0.008 220 / 0.9); background: oklch(0.975 0.006 220);">
+    <div style="padding: 14px 14px 10px;"><div class="lbl">Direct</div></div>
+    <div style="display: flex; flex-direction: column; gap: 2px; padding: 0 8px;">
+      <div style="display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 8px; background: oklch(1 0 0); box-shadow: 0 0 0 1px oklch(0.90 0.008 220 / 0.9);">
+        <div style="display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 999px; background: oklch(0.95 0.04 295); color: oklch(0.45 0.22 295); font-size: 11px; font-weight: 600;">IC</div>
+        <div style="font-weight: 600;">Iris Chase</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 8px; color: oklch(0.52 0.02 225);">
+        <div style="display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 999px; background: oklch(0.965 0.006 220); font-size: 11px; font-weight: 600;">FR</div>
+        <div>Finn Reid</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 8px; color: oklch(0.52 0.02 225);">
+        <div style="display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 999px; background: oklch(0.965 0.006 220); font-size: 11px; font-weight: 600;">TL</div>
+        <div>Terry Locke</div>
+      </div>
+    </div>
+    <div style="padding: 18px 14px 10px;"><div class="lbl">Rooms</div></div>
+    <div style="display: flex; flex-direction: column; gap: 2px; padding: 0 8px; color: oklch(0.52 0.02 225);">
+      <div style="padding: 8px 10px;"># all-members</div>
+      <div style="padding: 8px 10px;"># daily</div>
+    </div>
+  </aside>
+
+  <!-- CHAT COLUMN -->
+  <main style="display: flex; flex-direction: column; flex-grow: 1; min-width: 0; background: oklch(0.985 0.005 210);">
+    <header style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid oklch(0.90 0.008 220 / 0.9); background: oklch(1 0 0); padding: 10px 16px;">
+      <div style="display: flex; align-items: center; gap: 9px;">
+        <div style="display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 999px; background: oklch(0.95 0.04 295); color: oklch(0.45 0.22 295); font-size: 11px; font-weight: 600;">IC</div>
+        <div>
+          <div style="font-weight: 600;">Iris Chase</div>
+          <div style="font-size: 11px; color: oklch(0.52 0.02 225);">Life strategy · 1:1</div>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: oklch(0.52 0.02 225);">
+        <div style="border: 1px solid oklch(0.90 0.008 220 / 0.9); border-radius: 999px; padding: 3px 9px;">Huddle</div>
+        <div style="padding: 3px 9px;">Board</div>
+        <div style="padding: 3px 9px;">Files</div>
+      </div>
+    </header>
+
+    <div style="display: flex; flex-direction: column; gap: 12px; flex-grow: 1; overflow: hidden; padding: 16px;">
+
+      <!-- DOCKED STRIP — the two widgets pinned above the transcript -->
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <div class="lbl" style="color: oklch(0.45 0.22 295);">Docked in this huddle</div>
+        <div style="flex-grow: 1; height: 1px; background: oklch(0.55 0.22 295 / 0.25);"></div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
+
+        <!-- PRIORITIES widget, docked -->
+        <section style="display: flex; flex-direction: column; border: 1px solid oklch(0.90 0.008 220 / 0.9); border-radius: 10px; background: oklch(1 0 0); overflow: hidden;">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 8px;">
+            <div style="font-size: 14px; font-weight: 700;">Priorities</div>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="oklch(0.52 0.02 225)" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px; margin: 0 12px 10px; border-radius: 999px; background: oklch(0.965 0.006 220); padding: 7px 12px;">
+            <div style="flex-grow: 1; font-size: 12px; color: oklch(0.52 0.02 225);">Add a priority…</div>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="oklch(0.52 0.02 225)" stroke-width="1.8" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="oklch(0.55 0.22 295)" stroke="none"><path d="M3 20l18-8L3 4v6l10 2-10 2z"/></svg>
+          </div>
+          <!-- cream task band -->
+          <div style="background: oklch(0.975 0.032 92); border-top: 1px solid oklch(0.90 0.008 220 / 0.9); border-bottom: 1px solid oklch(0.90 0.008 220 / 0.9);">
+            <div style="display: flex; align-items: center; gap: 8px; padding: 7px 12px;">
+              <div style="flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Pay Black Card</div>
+              <div style="border-radius: 4px; background: oklch(0.92 0.04 240); color: oklch(0.36 0.09 240); font-size: 10px; font-weight: 600; padding: 2px 6px;">Life</div>
+              <div style="display: flex; align-items: center; gap: 3px; border-radius: 6px; background: oklch(0.62 0.14 155); color: oklch(0.985 0.005 210); font-size: 11px; font-weight: 600; padding: 5px 9px;">✓ Today</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-top: 1px solid oklch(0.90 0.008 220 / 0.55);">
+              <div style="flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Residency participation</div>
+              <div style="border-radius: 4px; background: oklch(0.94 0.06 78); color: oklch(0.42 0.11 62); font-size: 10px; font-weight: 600; padding: 2px 6px;">Education</div>
+              <div style="display: flex; align-items: center; gap: 3px; border-radius: 6px; background: oklch(0.965 0.006 220); color: oklch(0.52 0.02 225); font-size: 11px; font-weight: 600; padding: 5px 9px;">▲ Today</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-top: 1px solid oklch(0.90 0.008 220 / 0.55);">
+              <div style="flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Introductions</div>
+              <div style="border-radius: 4px; background: oklch(0.94 0.06 78); color: oklch(0.42 0.11 62); font-size: 10px; font-weight: 600; padding: 2px 6px;">Education</div>
+              <div style="display: flex; align-items: center; gap: 3px; border-radius: 6px; background: oklch(0.62 0.14 155); color: oklch(0.985 0.005 210); font-size: 11px; font-weight: 600; padding: 5px 9px;">✓ Today</div>
+            </div>
+          </div>
+          <!-- topic tree -->
+          <div style="padding: 8px 12px 12px;">
+            <div style="display: flex; align-items: center; gap: 7px; padding: 4px 0;">
+              <div style="width: 3px; height: 15px; border-radius: 2px; background: oklch(0.62 0.14 155);"></div>
+              <div style="color: oklch(0.52 0.02 225); font-size: 10px;">▼</div>
+              <div style="flex-grow: 1; font-weight: 600;">Career</div>
+              <div style="color: oklch(0.52 0.02 225);">25</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 7px; padding: 3px 0 3px 32px;">
+              <div style="color: oklch(0.52 0.02 225); font-size: 10px;">►</div>
+              <div style="flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Career Development</div>
+              <div style="color: oklch(0.52 0.02 225);">15</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 7px; padding: 3px 0 3px 32px;">
+              <div style="color: oklch(0.52 0.02 225); font-size: 10px;">►</div>
+              <div style="flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Software Development Lifecycle</div>
+              <div style="color: oklch(0.52 0.02 225);">4</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 7px; padding: 4px 0;">
+              <div style="width: 3px; height: 15px; border-radius: 2px; background: oklch(0.55 0.22 295);"></div>
+              <div style="color: oklch(0.52 0.02 225); font-size: 10px;">►</div>
+              <div style="flex-grow: 1; font-weight: 600;">Ventures</div>
+              <div style="color: oklch(0.52 0.02 225);">40</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 7px; padding: 4px 0;">
+              <div style="width: 3px; height: 15px; border-radius: 2px; background: oklch(0.72 0.16 55);"></div>
+              <div style="color: oklch(0.52 0.02 225); font-size: 10px;">►</div>
+              <div style="flex-grow: 1; font-weight: 600;">Education</div>
+              <div style="color: oklch(0.52 0.02 225);">20</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 7px; padding: 4px 0;">
+              <div style="width: 3px; height: 15px; border-radius: 2px; background: oklch(0.55 0.12 240);"></div>
+              <div style="color: oklch(0.52 0.02 225); font-size: 10px;">►</div>
+              <div style="flex-grow: 1; font-weight: 600;">Life</div>
+              <div style="color: oklch(0.52 0.02 225);">35</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 7px; padding: 4px 0;">
+              <div style="width: 3px; height: 15px; border-radius: 2px; background: oklch(0.62 0.01 240);"></div>
+              <div style="color: oklch(0.52 0.02 225); font-size: 10px;">►</div>
+              <div style="flex-grow: 1; font-weight: 600;">Family</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SCHEDULE widget, docked -->
+        <section style="display: flex; flex-direction: column; border: 1px solid oklch(0.90 0.008 220 / 0.9); border-radius: 10px; background: oklch(1 0 0); overflow: hidden;">
+          <div style="display: flex; align-items: center; gap: 8px; margin: 12px 12px 10px; border-radius: 999px; background: oklch(0.965 0.006 220); padding: 7px 12px;">
+            <div style="flex-grow: 1; font-size: 12px; color: oklch(0.52 0.02 225);">What's next…</div>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="oklch(0.52 0.02 225)" stroke-width="1.8" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="oklch(0.55 0.22 295)" stroke="none"><path d="M3 20l18-8L3 4v6l10 2-10 2z"/></svg>
+          </div>
+
+          <div style="padding: 0 12px 4px;"><div class="lbl">Today's schedule</div></div>
+          <div style="display: flex; flex-direction: column;">
+            <div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid oklch(0.90 0.008 220 / 0.55);">
+              <div style="width: 58px; flex-shrink: 0; color: oklch(0.52 0.02 225); font-size: 12px;">10:00AM</div>
+              <div style="flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Introductions</div>
+              <div style="display: flex; align-items: center; justify-content: center; width: 34px; height: 30px; border-radius: 6px; background: oklch(0.62 0.14 155 / 0.9);"><svg width="13" height="13" viewBox="0 0 24 24" fill="oklch(1 0 0)"><path d="M7 4l13 8-13 8z"/></svg></div>
+              <div style="display: flex; align-items: center; justify-content: center; width: 34px; height: 30px; border-radius: 6px; background: oklch(0.56 0.14 155);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="oklch(1 0 0)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid oklch(0.90 0.008 220 / 0.55);">
+              <div style="width: 58px; flex-shrink: 0; color: oklch(0.52 0.02 225); font-size: 12px;">11:30AM</div>
+              <div style="flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Find a low-interest credit card to transfer…</div>
+              <div style="display: flex; align-items: center; justify-content: center; width: 34px; height: 30px; border-radius: 6px; background: oklch(0.62 0.14 155 / 0.9);"><svg width="13" height="13" viewBox="0 0 24 24" fill="oklch(1 0 0)"><path d="M7 4l13 8-13 8z"/></svg></div>
+              <div style="display: flex; align-items: center; justify-content: center; width: 34px; height: 30px; border-radius: 6px; background: oklch(0.56 0.14 155);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="oklch(1 0 0)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+            </div>
+          </div>
+
+          <div style="padding: 12px 12px 4px;"><div class="lbl">Currently doing</div></div>
+          <div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid oklch(0.90 0.008 220 / 0.55);">
+            <div style="flex-grow: 1; font-weight: 700;">Nothing in progress</div>
+            <div style="display: flex; align-items: center; justify-content: center; width: 34px; height: 30px; border-radius: 6px; background: oklch(0.56 0.14 155);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="oklch(1 0 0)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <div style="display: flex; align-items: center; justify-content: center; width: 34px; height: 30px; border-radius: 6px; background: oklch(0.72 0.16 55);"><svg width="13" height="13" viewBox="0 0 24 24" fill="oklch(1 0 0)"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg></div>
+          </div>
+
+          <div style="padding: 12px 12px 4px;"><div class="lbl">Up next</div></div>
+          <div style="background: oklch(0.975 0.032 92); border-top: 1px solid oklch(0.90 0.008 220 / 0.9); border-bottom: 1px solid oklch(0.90 0.008 220 / 0.9);">
+            <div style="display: flex; align-items: center; gap: 6px; padding: 7px 12px 4px; color: oklch(0.42 0.11 62); font-weight: 700; font-size: 12px;">★ This Week</div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 5px 12px;">
+              <div style="color: oklch(0.72 0.16 55);">★</div>
+              <div style="flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Plan business architecture from holding co…</div>
+              <div style="border-radius: 6px; background: oklch(0.965 0.006 220); color: oklch(0.52 0.02 225); font-size: 11px; font-weight: 600; padding: 5px 9px;">▲ Today</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 5px 12px 8px;">
+              <div style="color: oklch(0.72 0.16 55);">★</div>
+              <div style="flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Create Nexus Career-Playbook Template</div>
+              <div style="border-radius: 6px; background: oklch(0.965 0.006 220); color: oklch(0.52 0.02 225); font-size: 11px; font-weight: 600; padding: 5px 9px;">▲ Today</div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- transcript below the dock -->
+      <div style="display: flex; flex-direction: column; gap: 10px; padding-top: 4px;">
+        <div style="display: flex; gap: 9px;">
+          <div style="display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex-shrink: 0; border-radius: 999px; background: oklch(0.95 0.04 295); color: oklch(0.45 0.22 295); font-size: 11px; font-weight: 600;">IC</div>
+          <div style="max-width: 560px; border: 1px solid oklch(0.90 0.008 220 / 0.9); border-radius: 10px; background: oklch(1 0 0); padding: 9px 12px; line-height: 1.5;">Your week's shaped up — two Education items land today, and the Black Card payment is the one with a hard date.</div>
+        </div>
+        <div style="display: flex; justify-content: flex-end;">
+          <div style="max-width: 420px; border-radius: 10px; background: oklch(0.34 0.055 200); color: oklch(0.985 0.005 210); padding: 9px 12px; line-height: 1.5;">Push the residency one to tomorrow.</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid oklch(0.90 0.008 220 / 0.9); background: oklch(1 0 0); padding: 12px 16px;">
+      <div style="display: flex; align-items: center; gap: 10px; border: 1px solid oklch(0.90 0.008 220 / 0.9); border-radius: 10px; padding: 9px 12px; color: oklch(0.52 0.02 225);">
+        <div style="flex-grow: 1;">Message Iris…</div>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="oklch(0.55 0.22 295)" stroke="none"><path d="M3 20l18-8L3 4v6l10 2-10 2z"/></svg>
+      </div>
+    </div>
+  </main>
+
+  <!-- CONTEXT PANEL -->
+  <aside style="display: flex; flex-direction: column; width: 272px; flex-shrink: 0; border-left: 1px solid oklch(0.90 0.008 220 / 0.9); background: oklch(0.975 0.006 220); padding: 14px;">
+    <div class="lbl" style="margin-bottom: 10px;">Activity</div>
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <div style="border: 1px solid oklch(0.90 0.008 220 / 0.9); border-radius: 8px; background: oklch(1 0 0); padding: 9px 10px;">
+        <div style="font-size: 11px; color: oklch(0.52 0.02 225);">Terry Locke</div>
+        <div style="margin-top: 2px;">Groomed 4 items into Up next</div>
+      </div>
+      <div style="border: 1px solid oklch(0.90 0.008 220 / 0.9); border-radius: 8px; background: oklch(1 0 0); padding: 9px 10px;">
+        <div style="font-size: 11px; color: oklch(0.52 0.02 225);">Finn Reid</div>
+        <div style="margin-top: 2px;">Flagged the Klarna balance</div>
+      </div>
+    </div>
+  </aside>
+</div>
+</x-dc>
+</body>
+</html>

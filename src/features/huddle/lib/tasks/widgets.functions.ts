@@ -1,0 +1,404 @@
+// WHAT:       The three server functions behind the two in-chat journey widgets: one read for the
+//             SCHEDULE widget, one read for the PRIORITIES widget, one write for every widget
+//             button (▶ start, ✓ done, ⏸ pause, ▲/✓ Today).
+// WHY:        The widgets mirror journey's Android home widgets inside Huddle chat. Every
+//             dependency already exists — the Azure mirror `tasks.journey_tasks` for the task
+//             data, the journey proxy for the topic tree, journey's `update_task` /
+//             `move_task_to_day` / `unschedule_task` for the writes — so this file composes them
+//             and adds NO store, NO second query layer and NO second writer.
+// SUPERSEDES: nothing
+// SUPERSEDED-BY: nothing -- current
+// EVIDENCE:   docs/LANE-B-widget-data.md records the DDL, tool schemas and proxy envelope exactly
+//             as they were read, plus the tsc result.
+//
+// THE TWO ARCHITECTURAL RULES THIS FILE OBEYS (CLAUDE.md, "Prioritization & task-sync"):
+//  1. THE MIRROR IS A SINGLE-WRITER READ-MODEL. Only the sync webhook writes
+//     `tasks.journey_tasks`. So every read here goes to the mirror and every WRITE goes to
+//     JOURNEY (`public.tasks`, the canonical source of truth) via invokeJourneyTool, letting the
+//     pg_net trigger update the mirror. The ~1-3s propagation lag is EXPECTED, not a bug.
+//  2. EMAIL-SCOPE EVERY QUERY. Reads go through resolveTaskEmail → getBoardTasks (which widens to
+//     the caller's whole alias set); the write path re-checks ownership per task id before
+//     touching anything.
+
+import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
+import type {
+  PrioritiesWidgetData,
+  ScheduleWidgetData,
+  TopicTreeResult,
+  WidgetActionResult,
+  WidgetTaskAction,
+} from "./widgets.server";
+
+// pg / journey-fetch deps are imported dynamically inside the handlers so server-only code never
+// bundles into the client (the same discipline board.functions.ts uses).
+
+const Caller = z
+  .object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() })
+  .optional();
+
+/** The browser's IANA zone, when the client knows it. `resolveTimeZone` prefers the stored profile
+ *  zone and falls back to this, then UTC — so a server/cron caller may omit it. */
+const TimeZoneInput = z.string().max(64).optional();
+
+async function resolveCallerEmail(caller: z.infer<typeof Caller>): Promise<string | null> {
+  const { resolveTaskEmail } = await import("../journey/identity");
+  return (await resolveTaskEmail(caller)) ?? caller?.entra_email ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Widget 1 — SCHEDULE
+// ---------------------------------------------------------------------------
+
+/**
+ * Data for the SCHEDULE widget: TODAY'S SCHEDULE + CURRENTLY DOING + UP NEXT (This Week).
+ *
+ * Composes the EXISTING email-scoped mirror read (`getBoardTasks`) rather than issuing its own
+ * SQL, then slices it in the user's timezone (`buildScheduleSections`). An unsigned-in or failed
+ * call returns `ok:false` with EMPTY sections — it never throws, so the widget always renders.
+ *
+ * `currentlyDoing: []` is a NORMAL result, not an error: the spec renders "Nothing in progress".
+ */
+export const getScheduleWidget = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, timeZone: TimeZoneInput }).parse(raw),
+  )
+  .handler(async ({ data }): Promise<ScheduleWidgetData> => {
+    const empty = (ok: boolean, timeZone: string, error?: string): ScheduleWidgetData => {
+      const todayKey = new Date().toISOString().slice(0, 10);
+      return {
+        ok,
+        error,
+        timeZone,
+        todayKey,
+        weekStartKey: todayKey,
+        weekEndKey: todayKey,
+        todaySchedule: [],
+        currentlyDoing: [],
+        upNext: [],
+      };
+    };
+    if (!data.caller?.entra_email) return empty(false, data.timeZone ?? "UTC", "Sign-in required.");
+    try {
+      const email = await resolveCallerEmail(data.caller);
+      const { resolveTimeZone } = await import("../journey/identity");
+      const { safeTimeZone, buildScheduleSections } = await import("./widgets.server");
+      const timeZone = safeTimeZone(await resolveTimeZone(data.caller, data.timeZone));
+      if (!email) return empty(false, timeZone, "Could not resolve your account.");
+      const { getBoardTasks } = await import("./tasks.server");
+      const rows = await getBoardTasks(email);
+      const sections = buildScheduleSections(rows, timeZone, Date.now());
+      return { ok: true, timeZone, ...sections };
+    } catch (err) {
+      return empty(false, data.timeZone ?? "UTC", err instanceof Error ? err.message : String(err));
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// Widget 2 — PRIORITIES
+// ---------------------------------------------------------------------------
+
+/**
+ * Data for the PRIORITIES widget: the task band (from the mirror) + journey's topic tree.
+ *
+ * The two halves are INDEPENDENT by design. A topic-tree failure leaves `ok:true` and a populated
+ * band with `topics.ok:false` — half this widget must work before journey deploys anything. Only a
+ * MIRROR failure sets the top-level `ok:false`.
+ */
+export const getPrioritiesWidget = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({ caller: Caller, timeZone: TimeZoneInput, includeTopics: z.boolean().optional() })
+      .parse(raw),
+  )
+  .handler(async ({ data }): Promise<PrioritiesWidgetData> => {
+    const noTopics: TopicTreeResult = { ok: false, roots: [], reason: "ok" };
+    const empty = (timeZone: string, error?: string): PrioritiesWidgetData => ({
+      ok: false,
+      error,
+      timeZone,
+      todayKey: new Date().toISOString().slice(0, 10),
+      band: [],
+      topics: noTopics,
+    });
+    if (!data.caller?.entra_email) return empty(data.timeZone ?? "UTC", "Sign-in required.");
+    const wantTopics = data.includeTopics !== false;
+    try {
+      const email = await resolveCallerEmail(data.caller);
+      const { resolveTimeZone } = await import("../journey/identity");
+      const { safeTimeZone, composePrioritiesWidget } = await import("./widgets.server");
+      const timeZone = safeTimeZone(await resolveTimeZone(data.caller, data.timeZone));
+      if (!email) return empty(timeZone, "Could not resolve your account.");
+      // ONE composition for every surface, journey's topic tree included. This used to fetch the
+      // topics separately and merge them in AFTER composing, which put topic nodes in the tree with
+      // NO tasks under them (the links were never read); the composer now attaches each task to its
+      // topic itself. `topics.ok`/`reason` still describe the journey read, untouched.
+      return await composePrioritiesWidget(email, timeZone, {
+        caller: data.caller,
+        includeTopics: wantTopics,
+      });
+    } catch (err) {
+      return empty(data.timeZone ?? "UTC", err instanceof Error ? err.message : String(err));
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// Widget actions — one write path, journey-canonical
+// ---------------------------------------------------------------------------
+
+/**
+ * Every widget button, in one server function.
+ *
+ *   ▶ start   → update_task status=DOING
+ *   ✓ done    → update_task status=DONE
+ *   ⏸ pause   → update_task status=BACKLOG *plus* the `parking-lot` tag (a PARK, not a hand-back —
+ *               UP_NEXT is the lane auto-work promotes from, so pause used to resume within hours;
+ *               see ACTION_STATUS's "PAUSE IS A PARK" note and commit 966bd2f)
+ *   ↺ reopen  → update_task status=BACKLOG, tags untouched (un-ticking ✓ is NOT parking)
+ *   ▲ Today   → move_task_to_day {date: today in the user's tz}   (journey picks the time)
+ *   ✓ Today   → unschedule_task                                    (toggling today OFF)
+ *
+ * NO SECOND WRITER. Like board.functions.ts's `updateBoardTask` and confirm-ask.functions.ts's
+ * button actions, this writes JOURNEY through `invokeJourneyTool` and lets the sync trigger update
+ * the mirror. The status values come from `update_task`'s own enum and the two scheduling tools
+ * from journey's own catalog — all read this session, not recalled (see the doc).
+ *
+ * OWNERSHIP IS CHECKED FIRST, and it is checked the way the repo already does it:
+ * `getOwnedTaskForConfirmAsk(taskId, email)` returns null for a task that does not exist OR is not
+ * the caller's — indistinguishably, so a guessed/forged id cannot be used to probe or mutate.
+ * `board.functions.ts` does NOT do this; the confirm-ask path added it precisely because nothing
+ * below this layer has per-row access control. A widget button is the same kind of exposure.
+ */
+export const updateWidgetTask = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({
+        caller: Caller,
+        taskId: z.string().min(1),
+        action: z.enum(["start", "done", "pause", "reopen", "today", "untoday"]),
+        timeZone: TimeZoneInput,
+      })
+      .parse(raw),
+  )
+  .handler(async ({ data }): Promise<WidgetActionResult> => {
+    const action = data.action as WidgetTaskAction;
+    const fail = (error: string): WidgetActionResult => ({
+      ok: false,
+      error,
+      action,
+      taskId: data.taskId,
+      applied: false,
+    });
+    if (!data.caller?.entra_email) return fail("Sign-in required.");
+    try {
+      const email = await resolveCallerEmail(data.caller);
+      if (!email) return fail("Could not resolve your account.");
+
+      // Ownership gate. Same error for "doesn't exist" and "not yours" — see the helper's own note.
+      const { getOwnedTaskForConfirmAsk } = await import("./tasks.server");
+      const owned = await getOwnedTaskForConfirmAsk(data.taskId, email);
+      if (!owned) return fail("Task not found.");
+
+      const { ACTION_STATUS, safeTimeZone, localDateKey, withParkingLotTag } =
+        await import("./widgets.server");
+      const { invokeJourneyTool } = await import("../journey/proxy.functions");
+
+      let toolName: string;
+      let args: Record<string, unknown>;
+      let status: string | undefined;
+      if (action === "today") {
+        const { resolveTimeZone } = await import("../journey/identity");
+        const timeZone = safeTimeZone(await resolveTimeZone(data.caller, data.timeZone));
+        const dateKey = localDateKey(Date.now(), timeZone);
+        if (!dateKey) return fail("Could not resolve today's date.");
+        // move_task_to_day takes YYYY-MM-DD and lets journey's scheduler choose the slot — which is
+        // what the widget's "Today" affordance means (put it on today), not "start it at 10:00".
+        toolName = "move_task_to_day";
+        args = { task_id: data.taskId, date: dateKey };
+      } else if (action === "untoday") {
+        toolName = "unschedule_task";
+        args = { task_id: data.taskId };
+      } else if (action === "pause") {
+        // ⏸ PARKS the task: BACKLOG *plus* the `parking-lot` tag that `autowork.server.ts` filters
+        // on. Status alone is not enough — see ACTION_STATUS's "PAUSE IS A PARK" note for why
+        // UP_NEXT un-paused it within hours.
+        // journey's `update_task` REPLACES the tag array ("Replaces existing tags." —
+        // journey-voice `_shared/tool-definitions.ts`), so send the UNION. Sending just the one tag
+        // would silently wipe every other label the task carries (blocked, reminder, quick-win…).
+        status = ACTION_STATUS[action];
+        toolName = "update_task";
+        // ONE union, shared with confirm-ask's Park button — `withParkingLotTag` (widgets.server.ts).
+        args = { task_id: data.taskId, status, tags: withParkingLotTag(owned.tags) };
+      } else {
+        // start / done / reopen — status only, tags untouched. `reopen` deliberately does NOT add or
+        // remove the parking-lot tag: un-ticking ✓ means "not actually done", never "park it".
+        status = ACTION_STATUS[action];
+        toolName = "update_task";
+        args = { task_id: data.taskId, status };
+      }
+
+      const r = await invokeJourneyTool({
+        toolName,
+        args,
+        caller: data.caller,
+        context: { source: "huddle" },
+      });
+      return {
+        ok: r.ok,
+        error: r.ok ? undefined : (r.error ?? "journey rejected the change"),
+        action,
+        taskId: data.taskId,
+        status,
+        applied: r.ok,
+      };
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err));
+    }
+  });
+
+/**
+ * The Priorities tab's input: "what do you want to work on". Starts what exists, creates and starts
+ * what doesn't, and stays on the tab — like journey's Focus view. One implementation, shared with the
+ * `focus_on` agent tool: `focus.server.ts`.
+ */
+export const focusWidgetItems = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, text: z.string().min(1).max(2000) }).parse(raw),
+  )
+  .handler(async ({ data }) => {
+    const { focusOn } = await import("./focus.server");
+    return focusOn(data.caller ?? {}, { text: data.text });
+  });
+
+/**
+ * Persist the user's explicit "This Week" ordering — the drag/move-up/move-down write.
+ *
+ * WHY THIS IS NOT A `WidgetTaskAction`. Every member of that union acts on ONE task id and writes
+ * to JOURNEY (`update_task` / `move_task_to_day`). A reorder acts on the whole list and writes to
+ * HUDDLE's own store, because journey has nowhere to put it that grooming would not overwrite —
+ * see `tasks.week_order`'s DDL comment. Forcing it into `updateWidgetTask` would mean one function
+ * with two unrelated contracts and two different destinations.
+ *
+ * The list is SPARSE and REPLACED WHOLESALE: a reorder is inherently a whole-list operation, so one
+ * atomic write beats N rank updates with gap management, and there is no partial state to recover.
+ *
+ * OWNERSHIP IS CHECKED PER ID, not once for the caller. Without that, a caller could persist an
+ * ordering containing another user's task ids — harmless to read (they never appear in that user's
+ * band) but it would store foreign ids under this user's row. Unowned ids are DROPPED rather than
+ * failing the whole call, so one stale id in a drag payload cannot block a legitimate reorder.
+ */
+export const reorderWidgetBand = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({
+        caller: Caller,
+        // Cap matches nothing in particular except sanity: a band this long is already a defect,
+        // and an unbounded array here is an unbounded write.
+        taskIds: z.array(z.string().min(1)).max(500),
+      })
+      .parse(raw),
+  )
+  .handler(async ({ data }): Promise<{ ok: boolean; error?: string; taskIds: string[] }> => {
+    if (!data.caller?.entra_email) return { ok: false, error: "Sign-in required.", taskIds: [] };
+    try {
+      const email = await resolveCallerEmail(data.caller);
+      if (!email) return { ok: false, error: "Could not resolve your account.", taskIds: [] };
+
+      const { getOwnedTaskForConfirmAsk, setWeekOrder } = await import("./tasks.server");
+
+      // De-dupe first: a drag payload that repeats an id would otherwise cost two ownership reads
+      // and store a contradictory order.
+      const seen = new Set<string>();
+      const unique = data.taskIds.filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
+
+      const owned: string[] = [];
+      for (const id of unique) {
+        if (await getOwnedTaskForConfirmAsk(id, email)) owned.push(id);
+      }
+
+      await setWeekOrder(email, owned);
+      return { ok: true, taskIds: owned };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err), taskIds: [] };
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// PUSH into This Week — the ⋮ menu's star actions (push.server.ts holds the logic and the rationale)
+// ---------------------------------------------------------------------------
+
+type PushFnResult = {
+  ok: boolean;
+  error?: string;
+  applied: boolean;
+  task?: { id: string; title: string } | null;
+  message?: string;
+};
+
+async function withPushCaller(
+  caller: z.infer<typeof Caller>,
+  run: (email: string) => Promise<PushFnResult>,
+): Promise<PushFnResult> {
+  if (!caller?.entra_email) return { ok: false, applied: false, error: "Sign-in required." };
+  try {
+    const email = await resolveCallerEmail(caller);
+    if (!email) return { ok: false, applied: false, error: "Could not resolve your account." };
+    return await run(email);
+  } catch (err) {
+    return { ok: false, applied: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** ⋮ → "Push to This Week" on a task. */
+export const pushWidgetTask = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, taskId: z.string().min(1).max(200) }).parse(raw),
+  )
+  .handler(async ({ data }) =>
+    withPushCaller(data.caller, async (email) => {
+      const { pushTask } = await import("./push.server");
+      return pushTask(email, data.caller ?? {}, data.taskId);
+    }),
+  );
+
+/** ⋮ → "Remove from This Week". */
+export const unstarWidgetTask = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, taskId: z.string().min(1).max(200) }).parse(raw),
+  )
+  .handler(async ({ data }) =>
+    withPushCaller(data.caller, async (email) => {
+      const { unstarTask } = await import("./push.server");
+      return unstarTask(email, data.caller ?? {}, data.taskId);
+    }),
+  );
+
+/** ⋮ → "Push <category or topic>". `nodeId` is the tree node's own id. */
+export const pushWidgetNode = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({
+        caller: Caller,
+        nodeId: z.string().min(1).max(200),
+        nodeName: z.string().max(200).optional(),
+      })
+      .parse(raw),
+  )
+  .handler(async ({ data }) =>
+    withPushCaller(data.caller, async (email) => {
+      const { pushNode } = await import("./push.server");
+      return pushNode(email, data.caller ?? {}, data.nodeId, data.nodeName ?? null);
+    }),
+  );
+
+/** ⋮ → "Stop pushing". */
+export const unpushWidgetNode = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, nodeId: z.string().min(1).max(200) }).parse(raw),
+  )
+  .handler(async ({ data }) =>
+    withPushCaller(data.caller, async (email) => {
+      const { unpushNode } = await import("./push.server");
+      return unpushNode(email, data.caller ?? {}, data.nodeId);
+    }),
+  );

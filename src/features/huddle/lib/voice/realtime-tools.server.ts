@@ -45,7 +45,7 @@ import {
   toResponsesTool,
   invokeJourneyTool,
 } from "../journey/proxy.functions";
-import { PRIORITIZE_TOOL } from "../tasks/tools";
+import { FOCUS_TOOL, PRIORITIZE_TOOL } from "../tasks/tools";
 import { SCHEDULE_REMINDER_TOOL } from "../tasks/reminders";
 import { GROOM_BACKLOG_TOOL } from "../tasks/groom";
 import { TAVILY_WEB_SEARCH_TOOL, tavilySearch, type TavilySearchArgs } from "../tavily-search.functions";
@@ -170,7 +170,8 @@ export async function buildRealtimeToolset(
   } = {},
 ): Promise<{ tools: unknown[]; journeyNames: Set<string> }> {
   const agent = AGENT_BY_ID[agentId];
-  const raw: unknown[] = [PRIORITIZE_TOOL, SCHEDULE_REMINDER_TOOL, GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL, ...nexusReadTools()];
+  // FOCUS_TOOL: "start these" by voice — the same core as the Priorities tab input (focus.server.ts).
+  const raw: unknown[] = [PRIORITIZE_TOOL, FOCUS_TOOL, SCHEDULE_REMINDER_TOOL, GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL, ...nexusReadTools()];
 
   if (opts.webSearch !== false) raw.push(TAVILY_WEB_SEARCH_TOOL);
   if (agentOwnsCapability(agent, "backlog-grooming")) raw.push(GROOM_BACKLOG_TOOL);
@@ -286,19 +287,44 @@ export async function buildRealtimeToolset(
     type: "function",
     name: "create_artifact",
     description:
-      "Save a document (markdown/plain text) as a reviewable artifact the user can open, review, and " +
-      "approve — a memo, plan, budget, brief, notes, or any file you produce for them. Call this WHENEVER " +
-      "you produce a document; do not merely say you'll generate a file. Returns the saved artifact.",
+      "Save a document as a reviewable artifact the user can open, review, and approve — a memo, plan, " +
+      "budget, brief, deck, diagram, or any file you produce for them. Call this WHENEVER you produce a " +
+      "document; do not merely say you'll generate a file. " +
+      "YOU ARE NOT LIMITED TO MARKDOWN: set `format` to 'docx' for a real Word document, 'pptx' for a " +
+      "PowerPoint deck, 'mermaid' for a diagram, 'html' for an interactive/D3 visualisation. If the user " +
+      "SAYS Word, deck, slides or diagram, produce THAT. Returns the saved artifact.",
     parameters: {
       type: "object",
+      // `additionalProperties: false` means an omitted field is UNREACHABLE, not merely undocumented —
+      // the model cannot emit it at all. `format` was missing here while the shared dispatch happily
+      // accepted it, so spoken "make me a deck" silently returned markdown: the exact bug the owner
+      // reported, still live on this path. Keep this list in step with CREATE_ARTIFACT_TOOL.
       additionalProperties: false,
       properties: {
-        name: { type: "string", description: "File name, e.g. 'alabama-trip-budget.md'." },
-        content: { type: "string", description: "The FULL document content (markdown/plain text)." },
+        name: { type: "string", description: "File name; the extension is corrected to match `format`." },
+        content: { type: "string", description: "The FULL document. Markdown for md/docx/pptx; native source for html/mermaid/svg." },
+        format: {
+          type: "string",
+          enum: ["md", "docx", "pptx", "html", "mermaid", "svg"],
+          description:
+            "What to produce. Default 'md'. 'docx' = Word, 'pptx' = PowerPoint deck (write markdown; a " +
+            "top-level heading starts each slide), 'mermaid' = diagram source, 'html' = interactive page, " +
+            "'svg' = vector image.",
+        },
+        document: {
+          type: "object",
+          description:
+            "OPTIONAL, and only for 'docx'/'pptx' when LAYOUT MATTERS more than prose — supply the " +
+            "structure instead of `content`. Prefer `content` markdown unless you need the control.",
+        },
         folder: { type: "string", description: "Optional folder/category, e.g. Finance, Research, Ventures. Default Research." },
-        mime: { type: "string", description: "Optional MIME type. Default text/markdown." },
+        mime: { type: "string", description: "Rarely needed — `format` sets this." },
       },
-      required: ["name", "content"],
+      // `content` is NOT required: a structured `document` stands alone. Relaxing the executor without
+      // this line would have changed nothing — `additionalProperties:false` plus a required `content`
+      // makes a document-only call unemittable, so the guard below would never have seen one. Same
+      // class of miss as `format` being absent here: the call site was checked, the schema was not.
+      required: ["name"],
     },
   });
 
@@ -379,6 +405,7 @@ export async function buildRealtimeToolset(
               to: { type: "string", description: "Optional recipient address(es), comma-separated." },
               from: { type: "string", description: `Optional mailbox to draft in. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.` },
               cc: { type: "string", description: "Optional CC address(es), comma-separated." },
+              reply_to: { type: "string", description: "If this is a REPLY to an email the owner received, the sender's email address. The draft is then saved in the OWNER's own Outlook Drafts as a threaded reply to that sender's latest email (from is ignored)." },
             },
             required: ["subject", "body"],
           },
@@ -484,8 +511,8 @@ export async function executeRealtimeTool(
       return done(JSON.stringify(await executeNexusTool(name, args, ctx.timeZone || "UTC")));
     }
     if (name === "get_external_calendar_events") {
-      const { resolveTaskEmail } = await import("../journey/identity");
-      const mailbox = (await resolveTaskEmail(ctx.caller)) ?? ctx.caller?.entra_email;
+      const { resolveCalendarMailbox } = await import("../journey/identity");
+      const mailbox = (await resolveCalendarMailbox(ctx.caller)) ?? ctx.caller?.entra_email;
       const tz = ctx.timeZone || "UTC";
       const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz });
       const startRaw = typeof args.start === "string" && args.start.trim() ? args.start.trim() : todayStr;
@@ -495,6 +522,10 @@ export async function executeRealtimeTool(
       const { getGraphCalendarEvents } = await import("../email/graph-email.server");
       const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
       return done(JSON.stringify(r));
+    }
+    if (name === "focus_on") {
+      const { dispatchFocusOn } = await import("../tasks/tools");
+      return done(await dispatchFocusOn(ctx.caller, args));
     }
     if (name === "schedule_and_priorities" || name === "get_calendar_events") {
       const { dispatchPrioritize } = await import("../tasks/tools");
@@ -555,14 +586,18 @@ export async function executeRealtimeTool(
       return done(JSON.stringify(r));
     }
     if (name === "create_email_draft") {
-      const { createGraphDraft } = await import("../email/graph-email.server");
-      const r = await createGraphDraft({
-        to: String(args.to ?? ""),
-        subject: String(args.subject ?? ""),
-        body: String(args.body ?? ""),
-        from: args.from ? String(args.from) : undefined,
-        cc: args.cc ? String(args.cc) : undefined,
-      });
+      const { createDraftForTool } = await import("../email/graph-email.server");
+      const r = await createDraftForTool(
+        {
+          to: String(args.to ?? ""),
+          subject: String(args.subject ?? ""),
+          body: String(args.body ?? ""),
+          from: args.from ? String(args.from) : undefined,
+          cc: args.cc ? String(args.cc) : undefined,
+          replyTo: args.reply_to ? String(args.reply_to) : undefined,
+        },
+        ctx.caller,
+      );
       return done(JSON.stringify(r));
     }
     if (name === "list_artifacts") {
@@ -574,21 +609,27 @@ export async function executeRealtimeTool(
     if (name === "create_artifact") {
       const artName = String(args.name ?? "").trim();
       const content = String(args.content ?? "");
-      if (!artName || !content) return done(JSON.stringify({ ok: false, error: "name and content are required" }));
+      // A structured `document` stands alone — requiring `content` too rejected every structured call.
+      // Voice is the path that most needs this: "make me a deck" spoken out loud is exactly the call
+      // that arrives as a document with no markdown body. This guard was missed when the chat paths
+      // were relaxed, so voice silently stayed markdown-only. Found by verifier loop 3.
+      if (!artName || (!content && !args.document))
+        return done(JSON.stringify({ ok: false, error: "name plus content or document are required" }));
       const { resolveTaskEmail } = await import("../journey/identity");
       const email = (await resolveTaskEmail(ctx.caller ?? {})) ?? ctx.caller?.entra_email;
       if (!email) return done(JSON.stringify({ ok: false, error: "sign-in required" }));
-      const { createArtifact } = await import("../artifacts/artifacts.server");
+      const { createArtifactFromAgent } = await import("../artifacts/artifacts.server");
       // Voice artifacts aren't task-scoped (taskId=null) — they save straight to the Artifacts panel;
       // the task-scoped review-flip in the text path is intentionally skipped here.
-      const { id, deepLink } = await createArtifact({
+      // Formats go through the SAME renderer as the text path: "make me a deck" spoken out loud has
+      // to produce the same .pptx it would typed, or voice quietly becomes a second-class caller.
+      const { id, deepLink } = await createArtifactFromAgent({
         userEmail: email,
         agentId: ctx.agentId,
         taskId: null,
         folder: String(args.folder ?? "Research"),
         name: artName,
-        mime: String(args.mime ?? "text/markdown"),
-        bytes: Buffer.from(content, "utf8"),
+        args: { format: args.format, content, document: args.document, mime: args.mime },
       });
       return done(JSON.stringify({ ok: true, id, deepLink }));
     }

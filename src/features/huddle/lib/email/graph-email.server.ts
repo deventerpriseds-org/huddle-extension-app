@@ -6,7 +6,66 @@
 // permitted to (Mail.Send application permission). Default sender is
 // dev@enterpriseds.io; HUDDLE_EMAIL_FROM overrides the allow-list (first = default).
 
+import { insertReplyIntoBody, replyTextToHtml } from "./draft-html";
+
 const GRAPH = "https://graph.microsoft.com/v1.0";
+
+/**
+ * Create a threaded reply draft on `messageId` and write `bodyText` into it as formatted HTML.
+ * createReply is called EMPTY (no `comment`): a comment is inserted as one unstyled plain-text run,
+ * which is what made drafts arrive as a single block in a random font (2026-10-27). The draft Graph
+ * returns already holds the quoted original as HTML, so the reply is inserted above it and PATCHed.
+ */
+async function createFormattedReplyDraft(
+  base: string,
+  token: string,
+  messageId: string,
+  bodyText: string,
+): Promise<{ ok: true; id?: string; webLink?: string } | { ok: false; error: string }> {
+  const auth = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const created = await fetch(`${base}/messages/${encodeURIComponent(messageId)}/createReply`, {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({}),
+  });
+  if (created.status !== 201) {
+    return {
+      ok: false,
+      error: `Graph createReply failed (${created.status}): ${(await created.text()).slice(0, 200)}`,
+    };
+  }
+  const draft = (await created.json()) as {
+    id?: string;
+    webLink?: string;
+    body?: { contentType?: string; content?: string };
+  };
+  if (!draft.id) return { ok: false, error: "Graph createReply returned no draft id" };
+  // The quoted original comes back as HTML normally, or as text for a plain-text mailbox; keep it
+  // either way (as formatted paragraphs when it was text) so the thread below the reply survives.
+  const isHtml = String(draft.body?.contentType ?? "").toLowerCase() === "html";
+  const quoted = isHtml
+    ? draft.body?.content
+    : draft.body?.content
+      ? replyTextToHtml(draft.body.content)
+      : "";
+  const patched = await fetch(`${base}/messages/${encodeURIComponent(draft.id)}`, {
+    method: "PATCH",
+    headers: auth,
+    body: JSON.stringify({
+      body: {
+        contentType: "HTML",
+        content: insertReplyIntoBody(quoted, replyTextToHtml(bodyText)),
+      },
+    }),
+  });
+  if (!patched.ok) {
+    return {
+      ok: false,
+      error: `Graph draft body update failed (${patched.status}): ${(await patched.text()).slice(0, 200)}`,
+    };
+  }
+  return { ok: true, id: draft.id, webLink: draft.webLink };
+}
 
 function firstEnv(names: string[]): string | undefined {
   for (const n of names) {
@@ -59,7 +118,9 @@ export async function getAppToken(): Promise<string> {
     }),
   });
   if (!res.ok) {
-    throw new Error(`Graph token request failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+    throw new Error(
+      `Graph token request failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
   }
   const json = (await res.json()) as { access_token?: string };
   if (!json.access_token) throw new Error("Graph token response had no access_token");
@@ -141,7 +202,10 @@ export async function createGraphDraft(input: SendEmailInput): Promise<DraftEmai
   const requested = (input.from ?? "").trim();
   const from = requested || options[0];
   if (!options.some((o) => o.toLowerCase() === from.toLowerCase())) {
-    return { ok: false, error: `"${from}" is not an allowed mailbox. Available: ${options.join(", ")}.` };
+    return {
+      ok: false,
+      error: `"${from}" is not an allowed mailbox. Available: ${options.join(", ")}.`,
+    };
   }
   const subject = String(input.subject ?? "").trim();
   if (!subject) return { ok: false, error: "A subject is required." };
@@ -177,7 +241,269 @@ export async function createGraphDraft(input: SendEmailInput): Promise<DraftEmai
   }
 }
 
+/**
+ * Read the newest Inbox messages received at or after `sinceIso`, app-only (Mail.Read), for the
+ * inbound email watch (inbound-email.server.ts). Bodies come back as plain text. Proven against the
+ * owner's mailbox by graph-permission-check.yml section 4 (run 38799786649, HTTP 200).
+ */
+export async function listInboxMessagesSince(
+  mailbox: string,
+  sinceIso: string,
+  top = 25,
+): Promise<
+  { ok: true; messages: import("./inbound-email").InboundMessage[] } | { ok: false; error: string }
+> {
+  try {
+    const token = await getAppToken();
+    // Built by hand like calendarView's: URLSearchParams would write "%24filter" and "+" for spaces.
+    const qs =
+      `$filter=${encodeURIComponent(`receivedDateTime ge ${sinceIso}`)}` +
+      `&$orderby=${encodeURIComponent("receivedDateTime desc")}` +
+      `&$top=${top}` +
+      `&$select=${encodeURIComponent(
+        "id,subject,receivedDateTime,bodyPreview,body,from,inferenceClassification,internetMessageHeaders,conversationId",
+      )}`;
+    const res = await fetch(
+      `${GRAPH}/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages?${qs}`,
+      { headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="text"' } },
+    );
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: `Graph inbox read failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+      };
+    }
+    type Raw = {
+      id: string;
+      subject?: string;
+      receivedDateTime?: string;
+      bodyPreview?: string;
+      body?: { content?: string };
+      from?: { emailAddress?: { address?: string; name?: string } };
+      inferenceClassification?: string;
+      internetMessageHeaders?: { name?: string; value?: string }[];
+      conversationId?: string;
+    };
+    const j = (await res.json()) as { value?: Raw[] };
+    const messages = (j.value ?? []).map((r) => {
+      const headers = r.internetMessageHeaders ?? [];
+      const val = (n: string) =>
+        headers.find((h) => (h.name ?? "").toLowerCase() === n)?.value ?? null;
+      return {
+        id: r.id,
+        subject: r.subject ?? null,
+        receivedDateTime: r.receivedDateTime ?? null,
+        bodyPreview: r.bodyPreview ?? null,
+        bodyText: r.body?.content ?? null,
+        fromAddress: r.from?.emailAddress?.address ?? null,
+        fromName: r.from?.emailAddress?.name ?? null,
+        conversationId: r.conversationId ?? null,
+        inferenceClassification: r.inferenceClassification ?? null,
+        headerNames: headers.map((h) => (h.name ?? "").toLowerCase()).filter(Boolean),
+        precedence: val("precedence"),
+        autoSubmitted: val("auto-submitted"),
+      };
+    });
+    return { ok: true, messages };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Save a REPLY draft in the OWNER's own mailbox, threaded onto the newest Inbox message from
+ * `replyTo` (Graph createReply keeps the conversation, recipients and quoted original). The mailbox is
+ * resolved by the caller from the owner's identity — never chosen by the model — so this is not
+ * subject to the HUDDLE_EMAIL_FROM allow-list (that list governs which mailbox Huddle SENDS from).
+ * Drafting only: nothing is sent. Falls back to { ok:false } when no message from that sender is found,
+ * and the tool caller then drafts a fresh message instead.
+ */
+export async function createReplyDraftInMailbox(input: {
+  mailbox: string;
+  replyTo: string;
+  body: string;
+  subjectHint?: string;
+}): Promise<DraftEmailResult> {
+  const mailbox = input.mailbox.trim();
+  const sender = input.replyTo.trim().toLowerCase();
+  if (!mailbox || !sender) return { ok: false, error: "mailbox and reply_to are required" };
+  try {
+    const token = await getAppToken();
+    const auth = { Authorization: `Bearer ${token}` };
+    const base = `${GRAPH}/users/${encodeURIComponent(mailbox)}`;
+    const qs =
+      `$filter=${encodeURIComponent(`from/emailAddress/address eq '${sender.replace(/'/g, "''")}'`)}` +
+      `&$top=10&$select=${encodeURIComponent("id,subject,receivedDateTime")}`;
+    const find = await fetch(`${base}/mailFolders/inbox/messages?${qs}`, { headers: auth });
+    if (!find.ok) {
+      return {
+        ok: false,
+        from: mailbox,
+        error: `Graph find-original failed (${find.status}): ${(await find.text()).slice(0, 200)}`,
+      };
+    }
+    const hits = (
+      (
+        (await find.json()) as {
+          value?: { id: string; subject?: string; receivedDateTime?: string }[];
+        }
+      ).value ?? []
+    ).sort((a, b) =>
+      String(b.receivedDateTime ?? "").localeCompare(String(a.receivedDateTime ?? "")),
+    );
+    // Prefer the message whose subject the model named; else the newest from that sender.
+    const hint = String(input.subjectHint ?? "")
+      .replace(/^\s*(re|fw|fwd)\s*:\s*/i, "")
+      .trim()
+      .toLowerCase();
+    const original =
+      (hint &&
+        hits.find((h) =>
+          String(h.subject ?? "")
+            .toLowerCase()
+            .includes(hint),
+        )) ||
+      hits[0];
+    if (!original)
+      return { ok: false, from: mailbox, error: `No Inbox message from ${sender} to reply to.` };
+
+    const r = await createFormattedReplyDraft(base, token, original.id, input.body ?? "");
+    if (!r.ok) return { ok: false, from: mailbox, error: r.error };
+    return { ok: true, from: mailbox, id: r.id, webLink: r.webLink };
+  } catch (err) {
+    return { ok: false, from: mailbox, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * A threaded reply draft on ONE known message, by its stored Graph id — what the email card's
+ * "Save to Drafts" button calls. No search: the email-replies row already holds the exact message, so
+ * a tap hours later replies to the right email even if the sender has written again since.
+ */
+export async function createReplyDraftForMessage(input: {
+  mailbox: string;
+  graphMessageId: string;
+  body: string;
+}): Promise<DraftEmailResult> {
+  const mailbox = input.mailbox.trim();
+  try {
+    const token = await getAppToken();
+    const r = await createFormattedReplyDraft(
+      `${GRAPH}/users/${encodeURIComponent(mailbox)}`,
+      token,
+      input.graphMessageId,
+      input.body ?? "",
+    );
+    if (!r.ok) return { ok: false, from: mailbox, error: r.error };
+    return { ok: true, from: mailbox, id: r.id, webLink: r.webLink };
+  } catch (err) {
+    return { ok: false, from: mailbox, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Has the owner SENT a message in this conversation after `afterIso`? Reads Sent Items filtered by
+ * conversationId (filter only — adding $orderby to a conversationId filter is the shape Graph rejects
+ * as InefficientFilter). true / false, or null when Graph could not answer (never settles on null).
+ */
+export async function hasSentReplyInConversation(
+  mailbox: string,
+  conversationId: string,
+  afterIso: string | null,
+): Promise<boolean | null> {
+  try {
+    const token = await getAppToken();
+    const qs =
+      `$filter=${encodeURIComponent(`conversationId eq '${conversationId.replace(/'/g, "''")}'`)}` +
+      `&$top=10&$select=${encodeURIComponent("sentDateTime")}`;
+    const res = await fetch(
+      `${GRAPH}/users/${encodeURIComponent(mailbox)}/mailFolders/sentitems/messages?${qs}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return null;
+    const j = (await res.json()) as { value?: { sentDateTime?: string }[] };
+    const after = afterIso ? Date.parse(afterIso) : 0;
+    return (j.value ?? []).some((m) => m.sentDateTime && Date.parse(m.sentDateTime) > after);
+  } catch {
+    return null;
+  }
+}
+
+/** A plain (unthreaded) draft in a mailbox resolved from the owner's identity — the reply fallback. */
+async function createPlainDraftInMailbox(
+  mailbox: string,
+  input: SendEmailInput,
+): Promise<DraftEmailResult> {
+  const subject = String(input.subject ?? "").trim();
+  if (!subject) return { ok: false, from: mailbox, error: "A subject is required." };
+  try {
+    const token = await getAppToken();
+    const res = await fetch(`${GRAPH}/users/${encodeURIComponent(mailbox)}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subject,
+        body: { contentType: "HTML", content: replyTextToHtml(input.body ?? "") },
+        toRecipients: toRecipients(input.to),
+        ccRecipients: toRecipients(input.cc),
+      }),
+    });
+    if (res.status === 201) {
+      const j = (await res.json()) as { id?: string; webLink?: string };
+      return { ok: true, from: mailbox, id: j.id, webLink: j.webLink };
+    }
+    return {
+      ok: false,
+      from: mailbox,
+      error: `Graph create-draft failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    };
+  } catch (err) {
+    return { ok: false, from: mailbox, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * The ONE entry point every create_email_draft dispatch site calls (chat, Lovable, voice), so a reply
+ * draft behaves the same on every surface. With `replyTo`, the draft is a threaded reply in the
+ * OWNER's mailbox (resolved from `caller` exactly as the calendar read does); without it, or when no
+ * original is found, it is the existing createGraphDraft.
+ */
+export async function createDraftForTool(
+  input: SendEmailInput & { replyTo?: string },
+  caller: { entra_object_id?: string; entra_email?: string } | undefined,
+): Promise<DraftEmailResult & { reply?: boolean; replyFallback?: string }> {
+  const replyTo = String(input.replyTo ?? "").trim();
+  if (replyTo) {
+    let mailbox: string | undefined;
+    try {
+      const { resolveCalendarMailbox } = await import("../journey/identity");
+      mailbox = await resolveCalendarMailbox(caller);
+    } catch {
+      mailbox = caller?.entra_email;
+    }
+    if (mailbox) {
+      const r = await createReplyDraftInMailbox({
+        mailbox,
+        replyTo,
+        body: String(input.body ?? ""),
+        subjectHint: String(input.subject ?? ""),
+      });
+      if (r.ok) return { ...r, reply: true };
+      // No original to thread onto: still a draft in the OWNER's mailbox (as the tool promises),
+      // never the default sending mailbox, and say why.
+      const plain = await createPlainDraftInMailbox(mailbox, { ...input, to: input.to || replyTo });
+      return { ...plain, reply: false, replyFallback: r.error };
+    }
+  }
+  return createGraphDraft(input);
+}
+
 export interface CalendarEvent {
+  /** Graph's stable event id. Added 2026-10-05 for the schedule brief's T-60 reminders: a
+   *  reminder seeded per event needs an IDEMPOTENT key, and deriving one from subject+start
+   *  would mint a second alarm the moment a meeting is moved or renamed. Additive -- every
+   *  existing caller ignores it. */
+  id: string;
   subject: string;
   start: string | null;
   end: string | null;
@@ -217,7 +543,7 @@ export async function getGraphCalendarEvents(input: {
     const qs =
       `startDateTime=${encodeURIComponent(input.startISO)}` +
       `&endDateTime=${encodeURIComponent(input.endISO)}` +
-      `&$select=${encodeURIComponent("subject,start,end,location,isAllDay,organizer")}` +
+      `&$select=${encodeURIComponent("id,subject,start,end,location,isAllDay,organizer")}` +
       `&$orderby=${encodeURIComponent("start/dateTime")}` +
       `&$top=${top}`;
     const res = await fetch(`${GRAPH}/users/${encodeURIComponent(mailbox)}/calendarView?${qs}`, {
@@ -239,6 +565,7 @@ export async function getGraphCalendarEvents(input: {
     }
     const j = (await res.json()) as {
       value?: Array<{
+        id?: string;
         subject?: string;
         start?: { dateTime?: string };
         end?: { dateTime?: string };
@@ -248,6 +575,7 @@ export async function getGraphCalendarEvents(input: {
       }>;
     };
     const events: CalendarEvent[] = (j.value ?? []).map((e) => ({
+      id: e.id ?? "",
       subject: e.subject?.trim() || "(no subject)",
       start: e.start?.dateTime ?? null,
       end: e.end?.dateTime ?? null,
@@ -298,7 +626,11 @@ async function resolveRecipientScope(input: SendEmailInput): Promise<{
       "[resolveRecipientScope] recipient-scope resolution failed; failing CLOSED (draft):",
       err instanceof Error ? err.message : err,
     );
-    return { decision: "draft", blocked: [], reason: "Saved to drafts instead of sending: the recipient check could not be completed." };
+    return {
+      decision: "draft",
+      blocked: [],
+      reason: "Saved to drafts instead of sending: the recipient check could not be completed.",
+    };
   }
 }
 
@@ -311,42 +643,42 @@ export async function sendGraphEmail(input: SendEmailInput): Promise<SendEmailRe
   const scope = await resolveRecipientScope(input);
   const selfOnly = scope.decision === "send";
   if (!selfOnly) {
-  // EMAIL SEND GATE - BACKSTOP (2026-09-07). The PRIMARY gate is at tool assembly: when sending is
-  // disabled, `send_email` is never offered to the model on either surface (huddle.functions.ts for
-  // text, voice/realtime-tools.server.ts for the Realtime session). This is belt and braces for the
-  // case the primary gate is bypassed - a stale minted toolset still held by a live voice session, a
-  // cached tool definition, or a future call site that forgets the gate. It is the LAST thing between
-  // an agent and real mail leaving the tenant, so it fails CLOSED in every direction: no callerEmail,
-  // a config-read error, or an explicit false all refuse. The error names the exact setting to flip.
-  {
-    // Even LOADING the config module is inside the try: a module-resolution failure must fail CLOSED
-    // (drafts only) and never throw out of a tool call. `false` is the only safe value here.
-    const allowed = await (async () => {
-      try {
-        const { isEmailSendEnabled } = await import("../identity/agent-workflow-config.server");
-        return await isEmailSendEnabled(input.callerEmail, input.callerAgentId);
-      } catch (err) {
-        console.error(
-          "[sendGraphEmail] email-send-gate resolution failed; failing CLOSED (drafts only):",
-          err instanceof Error ? err.message : err,
-        );
-        return false;
+    // EMAIL SEND GATE - BACKSTOP (2026-09-07). The PRIMARY gate is at tool assembly: when sending is
+    // disabled, `send_email` is never offered to the model on either surface (huddle.functions.ts for
+    // text, voice/realtime-tools.server.ts for the Realtime session). This is belt and braces for the
+    // case the primary gate is bypassed - a stale minted toolset still held by a live voice session, a
+    // cached tool definition, or a future call site that forgets the gate. It is the LAST thing between
+    // an agent and real mail leaving the tenant, so it fails CLOSED in every direction: no callerEmail,
+    // a config-read error, or an explicit false all refuse. The error names the exact setting to flip.
+    {
+      // Even LOADING the config module is inside the try: a module-resolution failure must fail CLOSED
+      // (drafts only) and never throw out of a tool call. `false` is the only safe value here.
+      const allowed = await (async () => {
+        try {
+          const { isEmailSendEnabled } = await import("../identity/agent-workflow-config.server");
+          return await isEmailSendEnabled(input.callerEmail, input.callerAgentId);
+        } catch (err) {
+          console.error(
+            "[sendGraphEmail] email-send-gate resolution failed; failing CLOSED (drafts only):",
+            err instanceof Error ? err.message : err,
+          );
+          return false;
+        }
+      })();
+      if (!allowed) {
+        return {
+          ok: false,
+          // Structural marker so sendOrDraftEmail can tell "the GATE refused" from "Graph failed".
+          // Sniffing the message text for that distinction would break the moment the wording changed.
+          gateRefused: true,
+          error:
+            "Sending email is currently disabled - agents may only prepare drafts. Use create_email_draft " +
+            "instead; the draft lands in the mailbox's Drafts folder ready to review and send by hand. " +
+            "(To re-enable sending, set identity.agent_workflow_config.email_send_enabled = true for this " +
+            "user; it takes effect on the next turn, no redeploy needed.)",
+        };
       }
-    })();
-    if (!allowed) {
-      return {
-        ok: false,
-        // Structural marker so sendOrDraftEmail can tell "the GATE refused" from "Graph failed".
-        // Sniffing the message text for that distinction would break the moment the wording changed.
-        gateRefused: true,
-        error:
-          "Sending email is currently disabled - agents may only prepare drafts. Use create_email_draft " +
-          "instead; the draft lands in the mailbox's Drafts folder ready to review and send by hand. " +
-          "(To re-enable sending, set identity.agent_workflow_config.email_send_enabled = true for this " +
-          "user; it takes effect on the next turn, no redeploy needed.)",
-      };
     }
-  }
   }
   const options = emailFromOptions();
   const requested = (input.from ?? "").trim();
@@ -441,7 +773,8 @@ export async function sendOrDraftEmail(input: SendEmailInput): Promise<SendEmail
   const why =
     scope.decision === "no-recipients"
       ? "Saved to drafts instead of sending: no recipient was given."
-      : scope.reason || "Saved to drafts instead of sending: a recipient is not one of your own addresses.";
+      : scope.reason ||
+        "Saved to drafts instead of sending: a recipient is not one of your own addresses.";
   if (!draft.ok) {
     return {
       ok: false,

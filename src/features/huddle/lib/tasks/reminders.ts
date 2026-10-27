@@ -32,6 +32,10 @@ export const SCHEDULE_REMINDER_TOOL = {
         type: "string",
         description: "Local clock time as HH:MM (24-hour) to fire today, or tomorrow if already past. Use for 'at 3pm' → '15:00', 'wake me at 6am' → '06:00'.",
       },
+      task_id: {
+        type: "string",
+        description: "ONLY when this reminder/alarm is about a task ALREADY on the user's board: that task's id (from schedule_and_priorities results, or a task id you were given). It makes the phone alarm show Done/Doing that update that task. Omit it for ordinary reminders like 'check the mail in 15 minutes' — never create a task just to get an id.",
+      },
     },
     required: ["text"],
   },
@@ -117,10 +121,26 @@ export async function dispatchScheduleReminder(
     email = caller?.entra_email ?? null;
   }
 
+  // Optional link to an EXISTING board task (never created here — a reminder is not a task). Only
+  // kept when the id is one of the caller's open mirror tasks, so a model can't attach an alarm to a
+  // task it invented or to someone else's. A linked alarm carries the id to the phone, where its
+  // Done/Doing buttons update that journey task.
+  let taskId: string | null = null;
+  const requestedTaskId = typeof args.task_id === "string" ? args.task_id.trim() : "";
+  if (requestedTaskId && email) {
+    try {
+      const { getTasksForUser } = await import("./tasks.server");
+      const open = await getTasksForUser(email);
+      if (open.some((t) => t.id === requestedTaskId)) taskId = requestedTaskId;
+    } catch {
+      /* unverifiable → leave unlinked; the reminder itself still gets set */
+    }
+  }
+
   try {
     const { createReminder } = await import("./turns.server");
     const id = `rem-${nowMs.toString(36)}-${Math.round((dueMs % 1_000_000))}`;
-    await createReminder({ id, userEmail: email, huddleId, agentId, text, kind, dueAtMs: dueMs });
+    await createReminder({ id, userEmail: email, huddleId, agentId, text, kind, dueAtMs: dueMs, taskId });
     const minutes = Math.round((dueMs - nowMs) / 60_000);
     const whenIso = new Date(dueMs).toISOString();
     const label = kind === "alarm" ? "Alarm" : "Reminder";
@@ -130,6 +150,8 @@ export async function dispatchScheduleReminder(
       kind,
       due_at: whenIso,
       in_minutes: minutes,
+      task_linked: taskId != null,
+      ...(requestedTaskId && taskId == null ? { task_link_note: "task_id was not one of the user's open tasks, so this reminder is not linked to a task" } : {}),
       message: `${label} set — I'll ${kind === "alarm" ? "ring you" : "ping you here"}${minutes >= 1 ? ` in about ${minutes} minute${minutes === 1 ? "" : "s"}` : " shortly"}.`,
     });
   } catch (err) {
@@ -149,6 +171,16 @@ export async function fireDueReminders(max = 25): Promise<number> {
   const { invokeJourneyTool } = await import("../journey/proxy.functions");
   await Promise.all(
     due.map(async (r) => {
+      // A reminder linked to a board task that is already DONE has nothing left to say: no alarm, no
+      // "did you get it done?" close-out. Cancel it instead of firing.
+      if (r.task_id) {
+        const { getTaskStatus } = await import("./tasks.server");
+        if ((await getTaskStatus(r.task_id)) === "DONE") {
+          const { cancelReminder } = await import("./turns.server");
+          await cancelReminder(r.id);
+          return;
+        }
+      }
       const name = r.agent_id ? AGENT_BY_ID[r.agent_id as AgentId]?.name ?? "Huddle" : "Huddle";
       const isAlarm = r.kind === "alarm";
       const title = isAlarm ? "⏰ Alarm" : `Reminder from ${name}`;
@@ -179,6 +211,10 @@ export async function fireDueReminders(max = 25): Promise<number> {
                 // (the bridge keys on `tag`; a shared tag would collapse them to one). See executeClaimedTurn.
                 notificationId: `rem-${r.id}`,
                 tag: `rem-${r.id}`,
+                // Linked to a journey task → journey mints a signed action token and the phone alarm
+                // shows Done/Doing that update THAT task (no login needed on the phone). Unlinked
+                // reminders stay Confirm/Snooze/Dismiss.
+                ...(r.task_id ? { taskId: r.task_id } : {}),
               },
             },
             caller: { entra_email: r.user_email },
@@ -219,7 +255,7 @@ export async function fireDueReminders(max = 25): Promise<number> {
             `Send ONE short, warm line asking whether they got it done — nothing else, no plan, no ` +
             `offer to do it for them, no restating the task's history.\n` +
             `If they say it's DONE, call update_task to mark it done and confirm briefly. If they want ` +
-            `more time, ask for the new day/time and call schedule_reminder for it. If they no longer ` +
+            `more time, ask for the new day/time and call schedule_reminder for it with task_id "${r.task_id}" so the new alarm stays linked to this task. If they no longer ` +
             `want it, offer to archive it. Do NOT create a new task and do NOT propose a deliverable.`;
           const fresh = await enqueueTurn(`taskremind-closeout-${r.id}`, huddleId, r.user_email, {
             text: directive,

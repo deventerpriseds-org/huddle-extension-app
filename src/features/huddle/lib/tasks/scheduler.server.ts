@@ -9,11 +9,17 @@
 import {
   claimDueScheduledJobs,
   getUsersWithOpenBacklog,
+  retireDuplicateScheduledJobs,
   setScheduledJobNextRun,
   upsertScheduledJob,
   type ScheduledJob,
 } from "./tasks.server";
-import { resolveJobCadence, DEFAULT_TZ, type JobCadence, type JobTypeKey } from "../identity/scheduling-config.server";
+import {
+  resolveJobCadence,
+  DEFAULT_TZ,
+  type JobCadence,
+  type JobTypeKey,
+} from "../identity/scheduling-config.server";
 
 // Cadences (which hours, which days) are a user-editable Setting (Settings → Account → Scheduling),
 // not a hardcoded constant — see scheduling-config.server.ts. SCHEDULING_DEFAULTS there is what a
@@ -31,7 +37,10 @@ function tzOffsetMs(tz: string, date: Date): number {
     minute: "2-digit",
     second: "2-digit",
   });
-  const p = Object.fromEntries(dtf.formatToParts(date).map((x) => [x.type, x.value])) as Record<string, string>;
+  const p = Object.fromEntries(dtf.formatToParts(date).map((x) => [x.type, x.value])) as Record<
+    string,
+    string
+  >;
   const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second);
   return asUTC - date.getTime();
 }
@@ -48,8 +57,44 @@ function localWallToUtc(tz: string, year: number, month1: number, day: number, h
  * restricted to specific local weekdays (`daysOfWeek`, Date.getDay() convention: 0=Sun..6=Sat;
  * omitted/empty = every day). Scans a full 8-day window so a single-day-of-week cadence (e.g.
  * "Monday only") always finds its next occurrence, not just a 3-day lookahead built for daily use. */
-export function computeNextRun(hours: number[], tz: string, from: Date, daysOfWeek?: number[]): Date {
-  const slots = [...new Set(hours.filter((h) => Number.isInteger(h) && h >= 0 && h <= 23))].sort((a, b) => a - b);
+export function computeNextRun(
+  hours: number[],
+  tz: string,
+  from: Date,
+  daysOfWeek?: number[],
+  everyMinutes?: number,
+): Date {
+  // Sub-hourly: `from + N min` if that instant is still inside an active hour on an allowed day;
+  // otherwise the start of the next active hour (the hourly scan below).
+  if (everyMinutes && everyMinutes > 0 && everyMinutes < 60) {
+    const cand = new Date(from.getTime() + everyMinutes * 60_000);
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        hour: "2-digit",
+        hour12: false,
+        weekday: "short",
+      })
+        .formatToParts(cand)
+        .map((x) => [x.type, x.value]),
+    ) as Record<string, string>;
+    const h = +parts.hour % 24;
+    const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts.weekday);
+    const dayOk = !daysOfWeek?.length || daysOfWeek.includes(dow);
+    if (dayOk && hours.includes(h)) return cand;
+  }
+  return computeHourlyNextRun(hours, tz, from, daysOfWeek);
+}
+
+function computeHourlyNextRun(
+  hours: number[],
+  tz: string,
+  from: Date,
+  daysOfWeek?: number[],
+): Date {
+  const slots = [...new Set(hours.filter((h) => Number.isInteger(h) && h >= 0 && h <= 23))].sort(
+    (a, b) => a - b,
+  );
   if (!slots.length) return new Date(from.getTime() + 3_600_000);
   const dayFilter = daysOfWeek && daysOfWeek.length ? new Set(daysOfWeek) : null;
   // Anchor on the local calendar day of `from`, scan today + next 7 days (a full week, so a
@@ -66,7 +111,9 @@ export function computeNextRun(hours: number[], tz: string, from: Date, daysOfWe
   let d = +lp.day;
   for (let dayOffset = 0; dayOffset < 8; dayOffset++) {
     const localNoon = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
-    const localDow = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(localNoon);
+    const localDow = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(
+      localNoon,
+    );
     const dowIndex = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(localDow);
     if (!dayFilter || dayFilter.has(dowIndex)) {
       for (const h of slots) {
@@ -92,6 +139,9 @@ const JOB_ROWS: { key: JobTypeKey; idPrefix: string; jobType: string }[] = [
   { key: "standup", idPrefix: "standup", jobType: "standup-digest" },
   { key: "reviewDigest", idPrefix: "review-digest", jobType: "review-digest" },
   { key: "reviewRecheck", idPrefix: "review-recheck", jobType: "review-recheck" },
+  { key: "scheduleBrief", idPrefix: "schedule-brief", jobType: "schedule-brief" },
+  { key: "priorityCheck", idPrefix: "priority-check", jobType: "priority-check" },
+  { key: "inboundEmail", idPrefix: "inbound-email", jobType: "inbound-email" },
 ];
 
 /** Reverse lookup: the `job_type` string stored on a row -> the JobTypeKey scheduling-config knows it
@@ -99,27 +149,64 @@ const JOB_ROWS: { key: JobTypeKey; idPrefix: string; jobType: string }[] = [
  * happens to be stored on the row (see runDueScheduledJobs — that stored value only gets refreshed by
  * ensureGroomJobs, which is gated on the user currently having an open backlog; a user with an empty
  * backlog at every post-config-change tick would otherwise keep firing on a stale cadence forever). */
-const JOB_TYPE_KEY: Record<string, JobTypeKey> = Object.fromEntries(JOB_ROWS.map((r) => [r.jobType, r.key]));
+const JOB_TYPE_KEY: Record<string, JobTypeKey> = Object.fromEntries(
+  JOB_ROWS.map((r) => [r.jobType, r.key]),
+);
+
+/** The scheduled-job id for one job type and one OWNER. Keyed on the user, never an email: one
+ *  person with two sign-in emails is one owner and must get ONE row per job type. Falls back to the
+ *  email only when no user id resolves (an unlinked address), which can only ever be one row. */
+export function scheduledJobId(idPrefix: string, email: string, userId: string | null): string {
+  return userId ? `${idPrefix}-u-${userId}` : `${idPrefix}-${email}`;
+}
+
+/** Collapse backlog emails to one entry per OWNER, keeping the first email seen for each user. */
+export function oneEmailPerUser(
+  entries: { email: string; userId: string | null }[],
+): { email: string; userId: string | null }[] {
+  const seen = new Set<string>();
+  const out: { email: string; userId: string | null }[] = [];
+  for (const e of entries) {
+    const owner = e.userId ? `u:${e.userId}` : `e:${e.email}`;
+    if (seen.has(owner)) continue;
+    seen.add(owner);
+    out.push(e);
+  }
+  return out;
+}
 
 /**
- * Ensure every user with an open backlog has a row for every job type in JOB_ROWS (idempotent; only
- * new rows get a next_run seeded — an existing row's next_run_at is left alone so a pending fire
- * isn't disturbed, but `cadence` DOES refresh every tick, so a live Settings change to hours/days
- * takes effect on that job's next fire without needing to delete/recreate anything).
+ * Ensure every user with an open backlog has ONE row for every job type in JOB_ROWS (idempotent;
+ * only new rows get a next_run seeded — an existing row's next_run_at is left alone so a pending
+ * fire isn't disturbed, but `cadence` DOES refresh every tick, so a live Settings change to
+ * hours/days takes effect on that job's next fire without needing to delete/recreate anything).
+ * Any older row for the same user + job type (the pre-2026-10-15 per-EMAIL ids) is switched off.
  */
 async function ensureGroomJobs(now: Date): Promise<void> {
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
   const emails = await getUsersWithOpenBacklog();
-  for (const email of emails) {
+  const resolved = await Promise.all(
+    emails.map(async (email) => ({ email, userId: (await resolveScopeByEmail(email)).userId })),
+  );
+  for (const { email, userId } of oneEmailPerUser(resolved)) {
     for (const row of JOB_ROWS) {
       const cadence: JobCadence = await resolveJobCadence(email, row.key);
+      const id = scheduledJobId(row.idPrefix, email, userId);
       await upsertScheduledJob({
-        id: `${row.idPrefix}-${email}`,
+        id,
         jobType: row.jobType,
         targetEmail: email,
         cadence,
-        nextRunAt: computeNextRun(cadence.hours, cadence.tz, now, cadence.daysOfWeek).toISOString(),
+        nextRunAt: computeNextRun(
+          cadence.hours,
+          cadence.tz,
+          now,
+          cadence.daysOfWeek,
+          cadence.everyMinutes,
+        ).toISOString(),
         meta: {},
       });
+      if (userId) await retireDuplicateScheduledJobs(row.jobType, userId, id);
     }
   }
 }
@@ -165,6 +252,21 @@ async function fireJob(job: ScheduledJob, slotId: string): Promise<void> {
   } else if (job.job_type === "review-recheck") {
     // No force: a cadence fire is a no-op when no IN_REVIEW task's 48h ping is due yet.
     await post("/api/public/run-review-recheck");
+  } else if (job.job_type === "schedule-brief") {
+    // No force, same as every row above: an edition with nothing on it does not send.
+    // WHICH EDITION is not in this body and is deliberately not stored on the job row — the route
+    // derives it from the local hour (before noon = today's, after = tomorrow's). Storing it would
+    // mean a user who edits `scheduleBrief.hours` gets whichever edition was frozen in at write
+    // time, which is the stale-cadence trap the JOB_TYPE_KEY comment above already describes.
+    await post("/api/public/run-schedule-brief");
+  } else if (job.job_type === "priority-check") {
+    // No force: an empty priority band sends nothing. The edition (morning/evening) is derived from
+    // the local hour in the route, for the same stale-cadence reason as schedule-brief above.
+    await post("/api/public/run-priority-check");
+  } else if (job.job_type === "inbound-email") {
+    // No force: a run with no new email from a person sends nothing, and each message is announced
+    // once ever (its turn id), so overlapping fires and the 12h lookback never double-notify.
+    await post("/api/public/run-inbound-email");
   }
   // Future: else if (job.job_type === "ceremony") { ... POST run-ceremony ... }
 }
@@ -216,7 +318,11 @@ export async function runDueScheduledJobs(): Promise<number> {
     const daysOfWeek = cadence?.daysOfWeek;
     // Advance to the real next slot (claim held it ~90s; overwrite with the true next fire time).
     try {
-      await setScheduledJobNextRun(job.id, computeNextRun(hours, tz, now, daysOfWeek).toISOString(), cadence);
+      await setScheduledJobNextRun(
+        job.id,
+        computeNextRun(hours, tz, now, daysOfWeek, cadence?.everyMinutes).toISOString(),
+        cadence,
+      );
     } catch {
       /* if this fails the 90s hold retries the job later — idempotent slot id prevents a double run */
     }

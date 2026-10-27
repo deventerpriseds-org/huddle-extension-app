@@ -1,4 +1,16 @@
 import { AGENTS, type AgentId } from "./agents";
+// Type-only: `widgets.server.ts` holds the widget payload contract (Lane B) and is deliberately
+// dependency-free, so this import is erased at compile time and pulls no server code into the client.
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
+import type { EmailReplyAsk } from "../lib/email/email-reply-ask";
+
+/** A button under an agent message that switches the app to one of its tabs (owner, 2026-10-16:
+ *  "she can do so with a button that deep links to the priority tab in the app instead of embedded
+ *  priority widget"). Only views the app actually has; the renderer ignores anything else. */
+export interface NavLink {
+  view: "priorities" | "schedule" | "board" | "artifacts";
+  label: string;
+}
 
 export type MessageAuthor =
   | { kind: "user" }
@@ -38,6 +50,16 @@ export interface HuddleMessage {
   // is set client-side once a button action succeeds, swapping the live buttons for a resolved badge.
   // Absent on messages from before this feature shipped, or on any non-confirm-ask message → no row.
   confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string; resolved?: boolean };
+  // Present when THIS message reports an approach gate that ESCALATED — the agent tried to propose an
+  // approach, the reviewer wouldn't pass it, and the task is now stuck waiting on the user. Renders the
+  // "Approve anyway" row. Before this existed, escalation reached NO component at all, so the owner's
+  // only signal that a task was permanently stuck was an agent mentioning it in prose. `resolved` is set
+  // client-side once the override succeeds. Absent on every other message → no row.
+  overrideAsk?: { taskId: string; taskTitle: string; note?: string; resolved?: boolean };
+  // A new-email alert's reply card (Save to Drafts / Dismiss). Carries display text only; the buttons
+  // send just `emailId` and the server re-reads chat.email_replies. Owner, 2026-10-15: a tap hours later
+  // must still work without re-reading the chat.
+  emailReply?: EmailReplyAsk;
   // An in-chat CHECKLIST an agent produced (the `build_checklist` tool). Rendered as a stable list of
   // tick-boxes with a per-row status pill. This is a SNAPSHOT of server truth at the moment the reply
   // was written — deliberately NOT the live state. Live per-row state lives in the store's
@@ -46,6 +68,23 @@ export interface HuddleMessage {
   // renderer overlays `checklistState[taskId]` on top of these rows, so a stale snapshot is harmless.
   // Absent on every message that isn't a checklist → no widget.
   checklist?: ChecklistPayload;
+  // The in-chat PRIORITIES widget (journey's Android "Priorities" home widget, brought inside
+  // Huddle) and the SCHEDULE widget beside it. Same SNAPSHOT discipline as `checklist` above and for
+  // the same reason: live per-row state lives in the store's `checklistState` keyed by taskId, so a
+  // re-delivered turn cannot revert a Today toggle or a ✓ the user just made.
+  //
+  // THE TYPES ARE LANE B'S, imported rather than redeclared. An earlier draft of this file defined a
+  // parallel `PrioritiesPayload`/`SchedulePayload` pair with its own field names (taskId, today,
+  // pre-formatted `time`) because Lane B's contract had not landed yet. Keeping both would have left
+  // two shapes for one payload and a same-named `WidgetTaskRow` in two modules — so the assumed pair
+  // was deleted in favour of the real one. `widgets.server.ts` is deliberately dependency-free (pure
+  // types + pure functions, no pg, no fetch), and this is a type-only import, so nothing server-side
+  // reaches the client bundle.
+  // Absent on every message that isn't the relevant widget → no widget.
+  priorities?: PrioritiesWidgetData;
+  schedule?: ScheduleWidgetData;
+  // A tab-switch button under this message (see NavLink). Absent on every other message → no button.
+  navLink?: NavLink;
 }
 
 export interface ChecklistRow {
@@ -143,7 +182,14 @@ export function breadcrumbToolsFor(
   // ENTIRE widget payload (needed by the reply-assembly to rebuild the checklist without a second
   // read), and the breadcrumb renders `detail` into the chip's title tooltip -- so leaving it in
   // dumps the raw JSON on hover. The widget is already visible on screen; a chip adds nothing.
-  const HIDDEN_FROM_BREADCRUMBS = new Set(["tool_catalog", "build_checklist"]);
+  // `show_priorities_widget` / `show_schedule_widget` are the SAME shape (payload-in-detail, widget
+  // already on screen) and so belong in this set too -- any future widget tool does as well.
+  const HIDDEN_FROM_BREADCRUMBS = new Set([
+    "tool_catalog",
+    "build_checklist",
+    "show_priorities_widget",
+    "show_schedule_widget",
+  ]);
   return toolUses.filter((t) => t.agentId === agentId && !HIDDEN_FROM_BREADCRUMBS.has(t.tool));
 }
 

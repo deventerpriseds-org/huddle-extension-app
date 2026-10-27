@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import {
   getMySchedulingConfigFn,
+  runPriorityCheckNowFn,
   setMySchedulingConfigFn,
 } from "../lib/identity/scheduling-config.functions";
 import type { JobCadence, JobTypeKey } from "../lib/identity/scheduling-config.server";
@@ -29,6 +30,27 @@ const JOB_LABELS: Record<JobTypeKey, { label: string; hint: string }> = {
     label: "Standup digest",
     hint: "Summarizes the prior day's autonomous work and blockers.",
   },
+  scheduleBrief: {
+    label: "Schedule brief",
+    hint:
+      "Iris sends your meetings and classes. Which EDITION each hour sends is derived from the hour " +
+      "itself — before noon covers today, after noon covers tomorrow — so the shipped 8 and 20 give " +
+      "you a morning and an evening brief. Nothing is sent on a day with nothing on it.",
+  },
+  priorityCheck: {
+    label: "Priority check",
+    hint:
+      "Iris asks whether your priorities are still right and shows the priorities widget, timed " +
+      "before the jobs that use them — the shipped 6 is before the 8am grooming, the 20 is before " +
+      "the 1am nightly scheduler. Nothing is sent when you have no priorities.",
+  },
+  inboundEmail: {
+    label: "New email alerts",
+    hint:
+      "Iris checks your Outlook inbox every few minutes during these hours and tells you about new email from a real person " +
+      "that asks you something, with a suggested reply she can save to your Drafts when you say so. " +
+      "Each email is only ever mentioned once; newsletters and no-reply senders are skipped.",
+  },
   reviewDigest: {
     label: "Review digest",
     hint: "Iris's nudge on what's waiting in Ready for review.",
@@ -40,7 +62,18 @@ const JOB_LABELS: Record<JobTypeKey, { label: string; hint: string }> = {
 };
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const JOB_TYPE_KEYS: JobTypeKey[] = ["groom", "autowork", "standup", "reviewDigest", "reviewRecheck"];
+// Every JobTypeKey, so a new job is editable the day it ships. `scheduleBrief` was missing here when
+// it shipped (#63), which left its 8/20 cadence un-editable despite the label existing above.
+const JOB_TYPE_KEYS: JobTypeKey[] = [
+  "groom",
+  "autowork",
+  "standup",
+  "scheduleBrief",
+  "priorityCheck",
+  "inboundEmail",
+  "reviewDigest",
+  "reviewRecheck",
+];
 
 function parseHours(text: string): number[] {
   return [...new Set(text.split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isInteger(n) && n >= 0 && n <= 23))].sort(
@@ -59,6 +92,24 @@ export function SchedulingPanel() {
   const [hoursText, setHoursText] = useState<Record<JobTypeKey, string>>({} as Record<JobTypeKey, string>);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState<JobTypeKey | null>(null);
+  const [sending, setSending] = useState(false);
+
+  // "Send now" — runs the priority check immediately through the same runner the scheduler uses.
+  const sendPriorityCheckNow = useCallback(async () => {
+    if (!caller || sending) return;
+    setSending(true);
+    try {
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const r = await runPriorityCheckNowFn({ data: { caller, timeZone } });
+      if (r.delivered) toast.success(`Sent — Iris is asking about ${r.count ?? 0} priorities in her 1:1.`);
+      else if (r.skipped === "empty") toast.info("Nothing sent — you have no open priorities.");
+      else toast.error(`Couldn't send the priority check${r.error ? `: ${r.error}` : "."}`);
+    } catch {
+      toast.error("Couldn't send the priority check.");
+    } finally {
+      setSending(false);
+    }
+  }, [caller, sending]);
 
   useEffect(() => {
     if (!caller) return;
@@ -209,7 +260,44 @@ export function SchedulingPanel() {
                   className="h-7 max-w-[160px] text-xs"
                   placeholder="e.g. 8 or 9,13,17"
                 />
-                <span className="text-[11px] text-muted-foreground">local hour(s), 0-23</span>
+                <span className="text-[11px] text-muted-foreground">
+                  {cadence.everyMinutes ? "active hours, 0-23" : "local hour(s), 0-23"}
+                </span>
+                {cadence.everyMinutes !== undefined && (
+                  <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                    every
+                    <Input
+                      type="number"
+                      min={1}
+                      max={59}
+                      defaultValue={cadence.everyMinutes}
+                      onBlur={(e) => {
+                        const n = parseInt(e.target.value, 10);
+                        if (!Number.isInteger(n) || n < 1 || n > 59) {
+                          toast.error("Minutes must be 1-59.");
+                          return;
+                        }
+                        if (n !== cadence.everyMinutes) void persist(key, { ...cadence, everyMinutes: n });
+                      }}
+                      disabled={!ready || saving === key}
+                      className="h-7 w-14 text-xs"
+                      data-testid={`every-minutes-${key}`}
+                    />
+                    min
+                  </span>
+                )}
+                {key === "priorityCheck" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="ml-auto h-7 text-xs"
+                    disabled={!ready || sending}
+                    onClick={() => void sendPriorityCheckNow()}
+                    data-testid="priority-check-send-now"
+                  >
+                    {sending ? "Sending…" : "Send now"}
+                  </Button>
+                )}
               </div>
             </div>
           );

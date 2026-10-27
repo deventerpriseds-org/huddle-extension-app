@@ -1,0 +1,227 @@
+// WHAT:       The INBOUND EMAIL WATCH runner: reads the owner's recent Outlook Inbox, keeps the
+//             messages screenMessage() lets through, and has Iris tell him about each one in her 1:1
+//             with a suggested reply — one durable turn per message, with a phone push.
+// WHY:        Iris never mentioned Amy Corriveau's (Trinnex) 2026-10-15 email because nothing read
+//             incoming mail. See inbound-email.ts for the full WHY.
+// SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+// EVIDENCE:   .claude/actions.md ACT:inbound-email-watch; graph-permission-check.yml run 38799786649.
+//
+// EXTENDS THE PRIORITY CHECK'S DELIVERY PATH (priority-check.server.ts), which extends the schedule
+// brief's and the standup's: a durable turn in Iris's DM with notify:"push" + internal:true, so the
+// existing away-notification (journey send_push -> Android bridge) fires with no new sender. Fired by
+// the existing every-minute scheduler as job type "inbound-email" — no new cron, no new secret.
+
+import {
+  INBOUND_EMAIL_LOOKBACK_HOURS_DEFAULT,
+  INBOUND_EMAIL_MODE_DEFAULT,
+  inboundEmailDirective,
+  inboundEmailTurnId,
+  screenMessage,
+  type InboundEmailMode,
+  type ScreenVerdict,
+} from "./inbound-email";
+
+/** Iris owns it, like the priority check and the schedule brief. */
+export const INBOUND_EMAIL_OWNER = "iris-chase";
+
+/** At most this many announcements per run, so a burst of mail is a few messages, not a flood. */
+const MAX_PER_RUN = 5;
+
+export interface InboundEmailRunResult {
+  ok: boolean;
+  /** True when the owner's Outlook mailbox resolved. The ADDRESS is never returned (public logs). */
+  mailboxResolved?: boolean;
+  mode?: InboundEmailMode;
+  since?: string;
+  scanned?: number;
+  /** Per message: what the screen decided. Sender DOMAIN only — no subject, name, address or body —
+   *  because this result is printed by run-inbound-email.yml and the repo's Actions logs are PUBLIC. */
+  decisions?: {
+    received: string | null;
+    fromDomain: string | null;
+    verdict: ScreenVerdict;
+    turnId?: string;
+    delivered?: boolean;
+  }[];
+  delivered?: number;
+  /** The instant-alert subscription upkeep this run did. Action + status code only (public logs). */
+  subscription?: { action: "create" | "renew" | "keep" | "skipped"; ok: boolean; status?: number };
+  error?: string;
+}
+
+/** Run once for one user. NEVER THROWS — like every scheduled job, a throw would lose the tick. */
+export async function runInboundEmailWatch(
+  caller: { entra_email: string },
+  opts: {
+    timeZone?: string;
+    mode?: InboundEmailMode;
+    lookbackHours?: number;
+    dryRun?: boolean;
+    runId?: string;
+    nowMs?: number;
+    /** MANUAL ONLY (run-inbound-email.yml): re-announce emails still OWED, with a fresh turn id, so
+     *  an alert sent before a change (e.g. before the reply buttons existed) can be re-sent once.
+     *  Never set by the scheduler — that path stays one-announcement-per-email. Needs runId. */
+    resendOwed?: boolean;
+  } = {},
+): Promise<InboundEmailRunResult> {
+  try {
+    const { DEFAULT_TZ } = await import("../identity/scheduling-config.server");
+    const tz = opts.timeZone?.trim() || DEFAULT_TZ;
+    const mode = opts.mode ?? INBOUND_EMAIL_MODE_DEFAULT;
+    const nowMs = opts.nowMs ?? Date.now();
+    const hours =
+      opts.lookbackHours && opts.lookbackHours > 0
+        ? Math.min(opts.lookbackHours, 72)
+        : INBOUND_EMAIL_LOOKBACK_HOURS_DEFAULT;
+    const since = new Date(nowMs - hours * 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+
+    // The owner's Outlook mailbox — resolved EXACTLY as the schedule brief and the calendar tool do
+    // (journey's connected Microsoft account), never the data-scope login (dev@).
+    const { resolveCalendarMailbox } = await import("../journey/identity");
+    const mailbox = (await resolveCalendarMailbox(caller)) ?? caller.entra_email;
+    // The ledger's owner key — the same resolution the board and every button use.
+    const { resolveTaskEmail } = await import("../journey/identity");
+    const ownerEmail = (await resolveTaskEmail(caller)) ?? caller.entra_email;
+    const ledger = await import("./email-replies.server");
+    // Settle anything he already answered from Outlook BEFORE counting / announcing.
+    if (!opts.dryRun) await ledger.reconcileRepliedFromSentItems(ownerEmail);
+    // Keep the instant-alert subscription alive (created/renewed here, so no new cron). Never throws,
+    // and never blocks this run: the 5-minute check is the backstop for whatever it misses.
+    let subscription: InboundEmailRunResult["subscription"];
+    if (!opts.dryRun) {
+      const { ensureMailSubscription } = await import("./mail-subscription.server");
+      subscription = await ensureMailSubscription({
+        ownerEmail,
+        callerEmail: caller.entra_email,
+        mailbox,
+        nowMs,
+      });
+    }
+
+    const { listInboxMessagesSince } = await import("./graph-email.server");
+    const read = await listInboxMessagesSince(mailbox, since);
+    if (!read.ok) {
+      // The raw Graph text can echo the mailbox; log it server-side, return only the status code.
+      console.error("[inbound-email] inbox read failed", read.error);
+      const status = /\((\d{3})\)/.exec(read.error)?.[1];
+      return {
+        ok: false,
+        mailboxResolved: true,
+        mode,
+        since,
+        error: `inbox read failed${status ? ` (${status})` : ""}`,
+      };
+    }
+
+    // Oldest first, so the owner hears about them in the order they arrived.
+    const msgs = [...read.messages].sort((a, b) =>
+      String(a.receivedDateTime ?? "").localeCompare(String(b.receivedDateTime ?? "")),
+    );
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      weekday: "short",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    const decisions: NonNullable<InboundEmailRunResult["decisions"]> = [];
+    let delivered = 0;
+
+    for (const m of msgs) {
+      const verdict = screenMessage(m, mode, mailbox);
+      const row: (typeof decisions)[number] = {
+        received: m.receivedDateTime ?? null,
+        fromDomain:
+          String(m.fromAddress ?? "")
+            .split("@")[1]
+            ?.toLowerCase() || null,
+        verdict,
+      };
+      decisions.push(row);
+      if (!verdict.keep) continue;
+
+      const received = m.receivedDateTime ? fmt.format(new Date(m.receivedDateTime)) : "just now";
+      // No opts.runId here, ever (see inboundEmailTurnId) — except the manual resend below.
+      let turnId = inboundEmailTurnId(m.id);
+      const emailId = turnId.slice("inbound-email-".length);
+      row.turnId = turnId;
+      if (opts.dryRun || delivered >= MAX_PER_RUN) continue;
+
+      // Owed from the moment it is flagged. Idempotent: a settled row is never re-opened.
+      await ledger.recordOwedEmail({
+        id: emailId,
+        ownerEmail,
+        mailbox,
+        graphMessageId: m.id,
+        conversationId: m.conversationId ?? null,
+        fromAddress: m.fromAddress ?? null,
+        fromName: m.fromName ?? null,
+        subject: m.subject ?? null,
+        receivedAt: m.receivedDateTime ?? null,
+      });
+      const ledgerRow = await ledger.getOwnedEmailReply(emailId, ownerEmail);
+      if (opts.resendOwed && opts.runId) {
+        if (!ledgerRow || !ledger.OWED_STATUSES.includes(ledgerRow.status)) continue;
+        turnId = `${turnId}-${opts.runId}`;
+        row.turnId = turnId;
+      } else if (ledgerRow && !ledger.OWED_STATUSES.includes(ledgerRow.status)) {
+        continue; // already settled (answered from Outlook / dismissed) — nothing to announce
+      }
+      const counts = await ledger.getEmailReplyCounts(ownerEmail, tz);
+      const directive = inboundEmailDirective(m, received, {
+        emailId,
+        owed: counts.owed,
+        settledToday: counts.settledToday,
+      });
+
+      const owner = INBOUND_EMAIL_OWNER;
+      const payload = {
+        text: directive,
+        huddleId: `dm-${owner}`,
+        scope: "one-to-one",
+        members: [owner],
+        targetAgentId: owner,
+        history: [],
+        router: {
+          backend: "openai",
+          model: "gpt-4o-mini",
+          soloOnCoverage: true,
+          interjections: false,
+        },
+        // journey disabled: an email alert has no business writing the board.
+        agents: { [owner]: { backend: "openai", journey: { enabled: false } } },
+        timeZone: tz,
+        caller,
+        notify: "push",
+        internal: true,
+        emailReplyRef: {
+          emailId,
+          fromName: String(m.fromName ?? "").slice(0, 300),
+          fromAddress: String(m.fromAddress ?? "").slice(0, 320),
+          subject: String(m.subject ?? "").slice(0, 500),
+        },
+      };
+      const { enqueueTurn } = await import("../tasks/turns.server");
+      const fresh = await enqueueTurn(turnId, `dm-${owner}`, caller.entra_email, payload);
+      row.delivered = !!fresh;
+      if (fresh) {
+        delivered++;
+        const { runTurnById } = await import("../huddle.functions");
+        await runTurnById(turnId);
+      }
+    }
+    return {
+      ok: true,
+      mailboxResolved: true,
+      mode,
+      since,
+      scanned: msgs.length,
+      decisions,
+      delivered,
+      subscription,
+    };
+  } catch (err) {
+    console.error("[inbound-email] run failed", err instanceof Error ? err.message : err);
+    return { ok: false, error: "inbound email run failed" };
+  }
+}

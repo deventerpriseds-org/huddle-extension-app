@@ -4,6 +4,10 @@
 // Liam (life), Tess (product), Sam (venture) all use the same tool with a different category.
 // Modeled on rag/tools.ts (schema + dispatch + system hint).
 import { formatInTz } from "../time";
+// Type-only: the widget payload contract (Lane B). `widgets.server.ts` is dependency-free, and this
+// import is erased, so requiring it here costs nothing at runtime but makes the two widget
+// dispatchers below type-checked against the same shape the client renders.
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "./widgets.server";
 
 export const PRIORITIZE_TOOL = {
   type: "function",
@@ -194,6 +198,160 @@ export async function dispatchBuildChecklist(
   }
 }
 
+/* ══ The two journey home widgets, as agent-invokable in-chat widgets ════════════════════════════
+ * Modelled on CHECKLIST_TOOL directly above: a tool whose result carries a structured payload the
+ * client renders, plus a system hint that makes the MODEL'S TOOL CHOICE the intent gate rather than a
+ * keyword regex over the user's message. Spec: docs/widgets/spec-*.jpg; UI: components/JourneyWidgets.tsx.
+ *
+ * WHY SEPARATE FROM schedule_and_priorities, which reads the same mirror: that tool answers in PROSE.
+ * These render an interactive card. "What's on my plate" wants the former; "show me my priorities
+ * widget" wants the latter. Two tools let the model's own tool choice decide; one tool with a flag
+ * would need a keyword regex over the user's message, which is what we do not do here.
+ *
+ * THE PAYLOADS ARE LANE B'S, COMPOSED BY LANE B'S OWN FUNCTIONS. These dispatchers call
+ * `buildScheduleSections` / `buildPrioritiesBand` from `widgets.server.ts` over the same
+ * `getBoardTasks` read its server fns use, so a widget an agent surfaces and a widget the user opens
+ * from the side menu are byte-for-byte the same shape. A second composition here would be a second
+ * definition of "today" and "up next" — exactly the divergence the mirror-is-one-read-model rule
+ * exists to prevent. Nothing in this file re-derives a section.
+ *
+ * NO ROW CAP in either dispatcher, deliberately — same rule as the checklist above. The widget
+ * scrolls; it never truncates and never offers a "+N more" escape hatch.
+ *
+ * These two names are also in `breadcrumbToolsFor`'s HIDDEN_FROM_BREADCRUMBS set (data/seed.ts): the
+ * tool `detail` carries the whole payload, and the breadcrumb chip renders `detail` into its tooltip,
+ * so leaving them in dumps raw JSON on hover for a widget already visible on screen. */
+
+export const PRIORITIES_WIDGET_TOOL = {
+  type: "function",
+  name: "show_priorities_widget",
+  description:
+    "Render the user's PRIORITIES WIDGET in the chat: an interactive card listing their priority tasks, each with its category chip and a toggle for whether it sits on today, plus journey's topic breakdown with counts. ONLY call this when the user asks for the WIDGET or for an interactive/tappable view — e.g. 'show me my priorities widget', 'pull up priorities', 'show my priorities so I can move things to today'. An ordinary question about priorities ('what are my top priorities', 'what should I focus on') wants a NORMAL PROSE ANSWER from schedule_and_priorities instead. If you are unsure which the user wants, answer in prose and offer the widget.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      title: {
+        type: "string",
+        description:
+          "Optional heading for the card. Defaults to 'Priorities'. Keep it under ~30 characters; the chat column is narrow.",
+      },
+    },
+    required: [],
+  },
+  strict: false,
+} as const;
+
+export const SCHEDULE_WIDGET_TOOL = {
+  type: "function",
+  name: "show_schedule_widget",
+  description:
+    "Render the user's SCHEDULE WIDGET in the chat: an interactive card with today's timed schedule (each row startable and completable), what they are currently doing, and what is up next this week. ONLY call this when the user asks for the WIDGET or an interactive view of their day — e.g. 'show me my schedule widget', 'pull up my schedule', 'show my day so I can start things'. An ordinary 'what's on my schedule today' wants a PROSE answer from schedule_and_priorities with view 'scheduled'. If you are unsure, answer in prose and offer the widget.",
+  parameters: { type: "object", additionalProperties: false, properties: {}, required: [] },
+  strict: false,
+} as const;
+
+export const WIDGET_SYSTEM_HINT =
+  "Two of the user's journey home widgets are available IN CHAT as interactive cards: `show_priorities_widget` (their priority tasks with category chips and a Today toggle, plus journey's topic breakdown) and `show_schedule_widget` (today's timed schedule with start/done controls, what they're currently doing, and what's up next this week). Call one ONLY when the user asks for the WIDGET itself or for a tappable/interactive view (\"show me my priorities widget\", \"pull up my schedule so I can start something\"). A plain question about their day, priorities or backlog is NOT a widget request — answer that in prose from `schedule_and_priorities`. When you do render a widget, keep your own message to ONE short line: the widget IS the answer, so do not also list its rows in text.";
+
+/**
+ * Execute `show_priorities_widget`.
+ *
+ * Ownership works exactly as it does for the checklist: the rows come from the caller's OWN
+ * email-scoped mirror read, so a task belonging to someone else simply is not there to render.
+ *
+ * The topic tree IS fetched here now, BOUNDED. This used to skip it, on the sound reasoning that a
+ * tool call inside an agent's turn is the worst place to spend journey latency. But this is the card
+ * the owner actually reads (a scheduled 6am/8pm check is posted through this path), and he needs
+ * the Category -> Topic -> Task layer on it. So the call happens with a ceiling
+ * (TOPIC_FETCH_TIMEOUT_MS): a slow or missing journey degrades the card to the category-only tree,
+ * never to an error and never to a stalled reply.
+ */
+export async function dispatchPrioritiesWidget(
+  userEmail: string | undefined,
+  args: Record<string, unknown>,
+  timeZone?: string,
+): Promise<string> {
+  if (!userEmail) {
+    return JSON.stringify({
+      error: "no_caller_identity",
+      message: "The priorities widget needs the signed-in user's email; none was provided this turn.",
+    });
+  }
+  const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : "Priorities";
+  try {
+    const { safeTimeZone, composePrioritiesWidget } = await import("./widgets.server");
+    const tz = safeTimeZone(timeZone);
+    // THE ONE composition — same band, same ordering and the SAME CATEGORY TREE the docked widget
+    // and the Settings view render. This used to build its own payload with a hardcoded
+    // `topics: {ok:false, roots:[], reason:"ok"}`, so an agent-surfaced card showed "No topics yet."
+    // while the identical data rendered a full tree on the other surfaces. Measured on the owner's
+    // own 6am/8pm check card, 2026-10-15.
+    //
+    // ANNOTATED, not inferred: the result of this function is a JSON *string*, so tsc cannot check
+    // the payload once stringified. Naming the type here is what makes a contract drift a compile
+    // error instead of a widget that renders blank.
+    const priorities: PrioritiesWidgetData = await composePrioritiesWidget(userEmail, tz, {
+      caller: { entra_email: userEmail },
+    });
+    const band = priorities.band;
+    console.info(`[priorities-widget] rendered title=${JSON.stringify(title)} band=${band.length} tz=${tz}`);
+    return JSON.stringify({
+      rendered: true,
+      title,
+      // `priorities` is the key the reply-assembly looks for (mirrors `checklist`).
+      priorities,
+      message: `Priorities widget rendered with ${band.length} item(s). Do not repeat the items in your reply.`,
+    });
+  } catch (err) {
+    console.info(`[priorities-widget] SKIPPED reason=exception`);
+    return JSON.stringify({
+      error: "priorities_widget_failed",
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** Execute `show_schedule_widget`. Same composition path as `getScheduleWidget` — one definition of
+ *  each section, in Lane B's `buildScheduleSections`. */
+export async function dispatchScheduleWidget(
+  userEmail: string | undefined,
+  _args: Record<string, unknown>,
+  timeZone?: string,
+): Promise<string> {
+  if (!userEmail) {
+    return JSON.stringify({
+      error: "no_caller_identity",
+      message: "The schedule widget needs the signed-in user's email; none was provided this turn.",
+    });
+  }
+  try {
+    const { getBoardTasks } = await import("./tasks.server");
+    const { safeTimeZone, buildScheduleSections } = await import("./widgets.server");
+    const tz = safeTimeZone(timeZone);
+    const rows = await getBoardTasks(userEmail);
+    const sections = buildScheduleSections(rows, tz, Date.now());
+    // Annotated for the same reason as the priorities payload above — see that comment.
+    const schedule: ScheduleWidgetData = { ok: true, timeZone: tz, ...sections };
+    console.info(
+      `[schedule-widget] rendered today=${sections.todaySchedule.length} doing=${sections.currentlyDoing.length} upNext=${sections.upNext.length} tz=${tz}`,
+    );
+    return JSON.stringify({
+      rendered: true,
+      // `schedule` is the key the reply-assembly looks for.
+      schedule,
+      message: `Schedule widget rendered (${sections.todaySchedule.length} today, ${sections.currentlyDoing.length} in progress, ${sections.upNext.length} up next). Do not repeat the items in your reply.`,
+    });
+  } catch (err) {
+    console.info(`[schedule-widget] SKIPPED reason=exception`);
+    return JSON.stringify({
+      error: "schedule_widget_failed",
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+
 export const PRIORITIZE_SYSTEM_HINT =
   "For ANY question about the user's schedule, calendar, agenda, day, tasks, backlog, priorities, meetings, appointments, free/busy, or what to do next — including 'what's on my schedule/calendar/day today', 'what's on my plate', 'what's in my backlog', 'what's up next', 'what's overdue', 'what are my <area> priorities' — call the `schedule_and_priorities` tool and answer from its ranked results. It is the user's nightly-planned schedule + tasks, the source of truth. Use view 'scheduled' for 'what's on my schedule/calendar/day today'; otherwise pick the matching `view` (backlog / up_next / overdue / priorities) and the relevant `category`. Only an EXPLICIT 'external calendar' / 'Outlook calendar' request should use get_external_calendar_events instead. The start/due times it returns are ALREADY in the user's local timezone (each carries its zone abbreviation, e.g. '10:00 AM EDT') — state them exactly as given; do NOT convert or shift them. Never invent an ordering, and never tell the user their tasks/schedule aren't in your files or ask them to upload anything. If it returns an error, say you couldn't reach their schedule and offer to retry.";
 
@@ -280,4 +438,65 @@ export async function dispatchPrioritize(
       message: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// focus_on — "start these" (owner 2026-10-16). The agent-facing door to the SAME core the Priorities
+// tab's input uses (focus.server.ts): existing tasks are started, missing ones created then started.
+// ---------------------------------------------------------------------------
+
+export const FOCUS_TOOL = {
+  type: "function",
+  name: "focus_on",
+  description:
+    "START the things the user says they want to work on — now. Pass each item; for each one the app finds the user's existing open task and starts it (moves it to Doing and puts it at the top of This Week), and if no such task exists it CREATES the task first and then starts it. Call this whenever the user lists what they want to work on / focus on / get done (including a reply to a priority check like 'the deck, interview prep, gym'), or says 'start X'. Pass the user's own wording as `title`; pass `task_id` only when a schedule_and_priorities result in this same turn gave you that task's id. Do NOT also call create_huddle_task for these — this tool already creates what is missing. Report what it says it started and created, nothing more.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      items: {
+        type: "array",
+        description: "What to start, in the order the user gave them (most important first).",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            title: { type: "string", description: "The item in the user's own words." },
+            task_id: { type: "string", description: "Only when a tool result this turn gave you the exact task id." },
+          },
+          required: ["title"],
+        },
+      },
+    },
+    required: ["items"],
+  },
+  strict: false,
+} as const;
+
+export const FOCUS_SYSTEM_HINT =
+  "When the user tells you what they want to work on or focus on — a list, or 'start X' — including when they answer a priority check — call `focus_on` with those items. It starts the ones that already exist and creates-then-starts the ones that don't, in one step; do not create them separately first and do not ask for confirmation. Then say in one or two lines what it started and what it newly created.";
+
+/** Execute `focus_on`. Returns JSON the model reads verbatim. */
+export async function dispatchFocusOn(
+  caller: { entra_object_id?: string; entra_email?: string } | undefined,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const raw = Array.isArray(args.items) ? (args.items as unknown[]) : [];
+  const items = raw
+    .map((i) => (typeof i === "string" ? { title: i } : (i as { title?: unknown; task_id?: unknown })))
+    .map((i) => ({
+      title: typeof i?.title === "string" ? i.title : "",
+      task_id: typeof i?.task_id === "string" ? i.task_id : null,
+    }))
+    .filter((i) => i.title.trim() || i.task_id);
+  const text = typeof args.text === "string" ? args.text : undefined;
+  const { focusOn } = await import("./focus.server");
+  const out = await focusOn(caller ?? {}, items.length ? { items } : { text });
+  return JSON.stringify({
+    ok: out.ok,
+    summary: out.summary,
+    started: out.results.filter((r) => r.started).map((r) => ({ title: r.title, created: r.created })),
+    failed: out.results.filter((r) => !r.started).map((r) => ({ title: r.title, error: r.error ?? "not started" })),
+    ...(out.error ? { error: out.error } : {}),
+  });
 }

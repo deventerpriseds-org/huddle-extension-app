@@ -3,7 +3,11 @@ import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { isUserTurn } from "./turn-identity";
-import type { ChecklistPayload, HuddleMessage, SuggestedTaskDraft, TaskLane } from "../data/seed";
+import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, TaskLane } from "../data/seed";
+// The two in-chat widget payloads ride back on a reply exactly as `checklist` does, so they are
+// declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
+// and the reply DTOs are shared with the client bundle.
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "./tasks/widgets.server";
 import {
   parseMentions,
   routeMessage,
@@ -69,6 +73,15 @@ import {
   type TavilySearchArgs,
 } from "./tavily-search.functions";
 import { CREATE_ARTIFACT_TOOL, LIST_ARTIFACTS_TOOL } from "./artifacts/artifact-tool";
+// Static import for the same reason artifact-tool.ts is one: openai-builtin-tools.ts is deliberately
+// dependency-free constants, so it costs the client bundle nothing.
+import {
+  BUILTIN_RESPONSES_TOOLS,
+  BUILTIN_TOOLS_SYSTEM_HINT,
+  BUILTIN_TOOL_TYPES,
+  basenameOf,
+  mimeForFilename,
+} from "./openai-builtin-tools";
 import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "./calendar/tools";
 import {
   DELEGATE_TO_SPECIALIST_TOOL,
@@ -81,10 +94,22 @@ import {
   CONFIRM_TASK_INTENT_TOOL,
   PROPOSE_TASK_INTENT_TOOL,
   PROPOSE_APPROACH_TOOL,
+  REQUEST_APPROACH_OVERRIDE_TOOL,
+  OVERRIDE_APPROACH_GATE_TOOL,
   ASK_CLARIFYING_QUESTION_TOOL,
   RESOLVE_CLARIFYING_QUESTION_TOOL,
 } from "./tasks/task-agent-tools";
+import {
+  PROPOSE_EMAIL_REPLY_TOOL,
+  emailReplyAskFromDetail,
+  type EmailReplyAsk,
+} from "./email/email-reply-ask";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
+import {
+  assignCreatedJourneyTasks,
+  pickCreatedTaskAssignee,
+  resolveExplicitOwner,
+} from "./tasks/assign-on-create";
 
 // Feature flag: gates the intent-classification guard on capability/lane hand-off.
 // Set to false for an instant rollback to the previous (trigger-word-only) behaviour.
@@ -196,6 +221,25 @@ const Input = z.object({
   // and lane-deferral machinery must NOT run on it: doing so mis-reads the directive as "a user ask in
   // the wrong lane" and spawns follow-ups that re-trigger follow-ups (the notification-barrage loop).
   internal: z.boolean().optional(),
+  // A new-email alert turn (inbound-email.server.ts): the email this turn is ABOUT, so the reply card
+  // (Save to Drafts / Dismiss) is attached to the target agent's reply even if the model skips
+  // propose_email_reply. Display-only; every button re-reads chat.email_replies by emailId.
+  emailReplyRef: z
+    .object({
+      emailId: z.string().max(64),
+      fromName: z.string().max(300),
+      fromAddress: z.string().max(320),
+      subject: z.string().max(500),
+    })
+    .optional(),
+  // A tab-switch button attached to the TARGET agent's reply (the priority check: "Open Priorities").
+  // Attached from the payload, like emailReplyRef, so it is there whatever the model does.
+  navLink: z
+    .object({
+      view: z.enum(["priorities", "schedule", "board", "artifacts"]),
+      label: z.string().min(1).max(60),
+    })
+    .optional(),
   // A live-ceremony BARGE-IN answered synchronously (the client's runBargeSequence, not the durable
   // ceremony queue). When set on a group turn, the responder the router picks gets the existing
   // bargeDirective() layered onto its scene — "the user just cut into a live stand-up, address them
@@ -537,7 +581,12 @@ type TurnResumeState = {
     fallbackNotes?: string[];
     artifacts?: { id: string; name: string }[];
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+    overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
     checklist?: ChecklistPayload;
+    priorities?: PrioritiesWidgetData;
+    navLink?: NavLink;
+    schedule?: ScheduleWidgetData;
   }[];
   journeyTaskUpdates: import("./journey/types").JourneyTask[];
   suggestedTasks: SuggestedTaskDraft[];
@@ -816,7 +865,12 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // message. Derived the same way as artifacts — from this agent's own propose_task_intent
     // toolUse this turn — NOT injected from another turn/agent.
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+    overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
     checklist?: ChecklistPayload;
+    priorities?: PrioritiesWidgetData;
+    navLink?: NavLink;
+    schedule?: ScheduleWidgetData;
   };
 
   // Journey-voice mirror: any task rows that journey returns from a tool call
@@ -1519,8 +1573,84 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         getPendingDeepConfirm,
         setPendingDeepConfirm,
         clearPendingDeepConfirm,
+        recordDeepConfirmVerdict,
+        getRecentDeepVerdict,
         classifyConfirmReply,
+        produceVsQuickAsk,
       } = await import("./tasks/deep-confirm.server");
+      const { hasGreenLit } = await import("./tasks/green-light");
+
+      // THE PRODUCE PATH, once. Reached from TWO places now — an explicit "produce" reply to a pending
+      // ask, and a fresh deep ask the user has ALREADY green-lit in this thread — and they must do the
+      // identical thing (board task + async kick + the same ack), so this is a closure rather than a
+      // second copy of fifty lines that would drift the first time one of them was touched.
+      const runProduce = async (agentId: AgentId, askText: string, note: string) => {
+        const title = produceTitleFrom(askText);
+        // Create the produce task on the board (dual-write to journey). Non-fatal.
+        let created = false;
+        try {
+          if (data.caller?.entra_email) {
+            const { invokeJourneyTool } = await import("./journey/proxy.functions");
+            const r = await invokeJourneyTool({
+              toolName: "quick_create_task",
+              args: { title },
+              caller: data.caller ?? {},
+              context: { source: "huddle", huddleId: data.huddleId, agentId },
+            });
+            created = !!r.ok;
+            if (r.ok && r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+            // ASSIGN IT TO THE AGENT THAT IS TAKING IT ON. Without this the row lands with
+            // assigned_agent = NULL and `runScheduledAutoWork` — kicked on the very next line —
+            // skips it entirely (autowork.server.ts:544), so "I've kicked it to the team to work up
+            // async" was an overclaim: nothing could pick it up until the next groom. This path is
+            // 1:1 by construction (the gate is inside `data.scope === "one-to-one"`), so the
+            // responding agent is the assignee by the same rule used for create_huddle_task.
+            // Best-effort: a failure leaves it exactly as it was before this line existed.
+            if (r.ok) {
+              const a = await assignCreatedJourneyTasks({
+                taskIds: (r.tasks ?? []).map((t) => t.id),
+                agentId,
+                caller: (data.caller ?? {}) as Record<string, unknown>,
+                huddleId: data.huddleId,
+              });
+              if (!a.assigned) {
+                console.warn(`[huddle-model] produce task created but NOT assigned: ${a.error ?? "no id"}`);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn(
+            `[huddle-model] produce-confirm task create failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+        // Kick the async WIP pipeline (fire-and-forget; the gated 9/13/17 cadence also picks it up).
+        try {
+          const { runScheduledAutoWork } = await import("./tasks/autowork.server");
+          void runScheduledAutoWork(data.caller, { force: true }).catch(() => {});
+        } catch {
+          /* best-effort */
+        }
+        return finalize({
+          decision: {
+            ...routed.decision,
+            reason: `${routed.decision.reason} [${note}]`.slice(0, 220),
+          },
+          replies: [
+            {
+              agentId,
+              text: created
+                ? `Done — I've put “${title}” on the board as a produce task and kicked it to the team to work up async. You'll get the draft to review. Want me to steer it any particular way?`
+                : `I'll take “${title}” on as a produce task and work it up async — you'll get the draft to review. (Heads up: I couldn't confirm the board write just now, so give it a quick check.)`,
+            },
+          ] as Reply[],
+          fallbacks,
+          prompts,
+          journeyTaskUpdates,
+          suggestedTasks,
+          toolUses,
+          reasoning: reasoningSummaries,
+        });
+      };
 
       const pending = await getPendingDeepConfirm(email, data.huddleId);
       if (pending) {
@@ -1536,57 +1666,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             routed.winners = [pending.agentId as AgentId];
             routed.interjectors = [];
           }
-          await clearPendingDeepConfirm(email, data.huddleId);
+          // REMEMBER the answer instead of deleting it. This used to clear the row outright, so the
+          // next deep ask in this same 1:1 re-asked a question the user had just answered.
+          await recordDeepConfirmVerdict(email, data.huddleId, pending.agentId, pending.askText, "quick");
         } else if (verdict === "produce") {
-          await clearPendingDeepConfirm(email, data.huddleId);
+          await recordDeepConfirmVerdict(email, data.huddleId, pending.agentId, pending.askText, "produce");
           const agentId = (pending.agentId as AgentId) ?? routed.winners[0] ?? data.members[0];
-          const title = produceTitleFrom(pending.askText);
-          // Create the produce task on the board (dual-write to journey). Non-fatal.
-          let created = false;
-          try {
-            if (data.caller?.entra_email) {
-              const { invokeJourneyTool } = await import("./journey/proxy.functions");
-              const r = await invokeJourneyTool({
-                toolName: "quick_create_task",
-                args: { title },
-                caller: data.caller ?? {},
-                context: { source: "huddle", huddleId: data.huddleId, agentId },
-              });
-              created = !!r.ok;
-              if (r.ok && r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
-            }
-          } catch (e) {
-            console.warn(
-              `[huddle-model] produce-confirm task create failed: ${e instanceof Error ? e.message : String(e)}`,
-            );
-          }
-          // Kick the async WIP pipeline (fire-and-forget; the gated 9/13/17 cadence also picks it up).
-          try {
-            const { runScheduledAutoWork } = await import("./tasks/autowork.server");
-            void runScheduledAutoWork(data.caller, { force: true }).catch(() => {});
-          } catch {
-            /* best-effort */
-          }
-          return finalize({
-            decision: {
-              ...routed.decision,
-              reason: `${routed.decision.reason} [deep-confirm: produce]`.slice(0, 220),
-            },
-            replies: [
-              {
-                agentId,
-                text: created
-                  ? `Done — I've put “${title}” on the board as a produce task and kicked it to the team to work up async. You'll get the draft to review. Want me to steer it any particular way?`
-                  : `I'll take “${title}” on as a produce task and work it up async — you'll get the draft to review. (Heads up: I couldn't confirm the board write just now, so give it a quick check.)`,
-              },
-            ] as Reply[],
-            fallbacks,
-            prompts,
-            journeyTaskUpdates,
-            suggestedTasks,
-            toolUses,
-            reasoning: reasoningSummaries,
-          });
+          return runProduce(agentId, pending.askText, "deep-confirm: produce");
         } else if (verdict === "cancel") {
           await clearPendingDeepConfirm(email, data.huddleId);
           return finalize({
@@ -1611,27 +1697,68 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // Fresh deep ask (no manual override): HOLD and ask produce-vs-quick instead of spending o3 inline.
       if (!deepManual && routed.winners.length > 0 && (routed.difficulty ?? 2) >= 3) {
         const primary = routed.winners[0];
-        await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
-        return finalize({
-          decision: {
-            ...routed.decision,
-            reason: `${routed.decision.reason} [deep-confirm: produce-vs-quick]`.slice(0, 220),
-          },
-          replies: [
-            {
-              agentId: primary,
-              text:
-                "That's a meaty one. Want me to **produce** it — take it on as a task, do the deep work async, and hand you a draft to review — " +
-                'or would a **quick take right here** do for now? Reply "produce", "quick", or "cancel".',
+        // ...UNLESS THE USER HAS ALREADY SAID GO. Measured: the ask fired at 01:32, the owner replied
+        // "Go for it" at 02:06 and "Okay knock it out" at 02:50 — three go-aheads — and it was still
+        // asking. Half of that was the classifier (fixed in classifyConfirmReply); this is the other
+        // half: once someone has told you to get on with it, asking them to choose a shape reads as
+        // not listening. A go-ahead in the thread means PRODUCE, which is the answer the gate was
+        // fishing for anyway. The current message counts too — "go for it, and do the pricing one"
+        // is a go-ahead AND a fresh deep ask in one line.
+        const recentUserLines = [
+          ...(data.history as HuddleMessage[]).filter((m) => m.author.kind === "user").map((m) => m.text),
+          data.text,
+        ];
+        if (hasGreenLit(recentUserLines)) {
+          // Remember it, so the NEXT deep ask a minute later is not asked either. `hasGreenLit` only
+          // looks back four user lines, so it decays out from under a conversation that is still
+          // plainly in the same flow.
+          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "produce");
+          return runProduce(primary, data.text, "deep-confirm: already green-lit");
+        }
+        // ...OR THE USER ALREADY ANSWERED THIS QUESTION. Every verdict used to DELETE the pending
+        // row, so the gate had no memory past the single reply: answer "produce", and the next
+        // difficulty>=3 message in the same 1:1 asked again from scratch a minute later. Note that
+        // the green-light check above does NOT cover this — measured this session,
+        // isGreenLight("produce") is FALSE, so replying with the exact word the gate asked for
+        // suppressed nothing. A recent verdict now applies the shape the user already chose instead
+        // of re-asking. "cancel" is never remembered (it deletes the row), so parking one ask can
+        // never silence a later genuine one. Window + expiry: tasks/verdict-memory.ts.
+        const remembered = await getRecentDeepVerdict(email, data.huddleId);
+        if (remembered === "produce") {
+          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "produce");
+          return runProduce(primary, data.text, "deep-confirm: remembered produce");
+        }
+        if (remembered === "quick") {
+          // Same landing as the explicit "quick" reply: answer INLINE on the chat-friendly tier,
+          // never the deep o3 rung. data.text is already the real ask here (unlike the reply path,
+          // which has to restore it from the stored pending), so only the tier and the recorded
+          // difficulty change.
+          deepManual = "terra-med";
+          routed.difficulty = 2;
+          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "quick");
+        } else {
+          // Nothing remembered — ask, exactly as before.
+          await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
+          return finalize({
+            decision: {
+              ...routed.decision,
+              reason: `${routed.decision.reason} [deep-confirm: produce-vs-quick]`.slice(0, 220),
             },
-          ] as Reply[],
-          fallbacks,
-          prompts,
-          journeyTaskUpdates,
-          suggestedTasks,
-          toolUses,
-          reasoning: reasoningSummaries,
-        });
+            replies: [
+              {
+                agentId: primary,
+                // Per-agent phrasing, not one literal every agent recites — see produceVsQuickAsk.
+                text: produceVsQuickAsk(primary),
+              },
+            ] as Reply[],
+            fallbacks,
+            prompts,
+            journeyTaskUpdates,
+            suggestedTasks,
+            toolUses,
+            reasoning: reasoningSummaries,
+          });
+        }
       }
     } catch (err) {
       console.warn(
@@ -1728,6 +1855,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // createSuggestedTaskFromTool below, which claims a title here before writing.
   const createdTaskTitles = new Set<string>(resume?.createdTaskTitles ?? []);
 
+  // Tasks whose approach gate ESCALATED during this turn, by the agent that hit it. Drives the
+  // in-thread "Approve anyway" row (the same reply-chip channel as confirmAsk), because escalation had
+  // NO user-visible surface at all before this: `grep -rn escalated src/**/*.tsx` returned zero, so a
+  // task could sit permanently stuck while the owner's only clue was an agent mentioning it in prose.
+  // Not persisted across a resume: a chip is a per-reply decoration, and the board chip is the durable
+  // half of the same discovery.
+  const escalatedApproachByAgent = new Map<string, { taskId: string; taskTitle: string; note: string }>();
+
   // Cross-turn / cross-run dedup for create_huddle_task. `createdTaskTitles` only guards WITHIN a
   // turn; the board clutter came from the SAME task being (re)created across many turns/test runs.
   // Load the user's already-open task titles ONCE per turn from the mirror and skip creating a
@@ -1807,6 +1942,106 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     } catch {
       /* follow-up delivery is best-effort — never fail the user's turn on it */
     }
+  }
+
+  /**
+   * The owner is AWAY and an agent has asked them to unstick an escalated task. Deliver the ask the
+   * same way every other reply reaches them — a REAL durable turn in the requesting agent's own DM, so
+   * the runner produces the reply and fires the EXISTING away-notification (send_push -> Android
+   * bridge). No new sender; that is a standing rule in this repo's CLAUDE.md, and this follows
+   * deliverOwnerFollowup above line for line for exactly that reason.
+   *
+   * Only called when `data.internal` (an agent-initiated turn — autowork, a groom pass): in a live
+   * conversation the confirm row on the agent's reply is already in front of the owner, and a push on
+   * top of it is noise.
+   *
+   * Idempotent TWICE OVER, deliberately, because a duplicate nudge about a stuck task is the kind of
+   * thing that trains an owner to ignore the channel: `recordApproachOverrideRequest`'s guarded UPDATE
+   * means this is reached once per escalation episode, and the turn id below makes a retry of THAT
+   * call a no-op as well (enqueueTurn conflicts). The id carries the task so two stuck tasks never
+   * collapse into one notice.
+   */
+  async function deliverOverrideRequestNotice(
+    agentId: AgentId,
+    taskId: string,
+    taskTitle: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      const agent = AGENT_BY_ID[agentId];
+      if (!agent) return;
+      const cleanReason = (reason ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
+      const cleanTitle = (taskTitle ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
+      const agentHuddle = `dm-${agentId}`;
+      // Canonical journey email (see deliverOwnerFollowup) so the finished turn is matchable by the
+      // client's cross-huddle back-fill — the raw login can resolve to a different address.
+      let email: string | null = null;
+      try {
+        const { resolveTaskEmail } = await import("./journey/identity");
+        email = (await resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
+      } catch {
+        email = data.caller?.entra_email ?? null;
+      }
+      // The directive is careful about ONE thing above all: the agent must not tell the user the task
+      // is unblocked. It is not, and it cannot be until they tap.
+      const directive =
+        `You are ${agent.name}. The approach review on "${cleanTitle}" escalated, so nobody is working ` +
+        `it until the user approves it themselves. You have already asked for their approval` +
+        (cleanReason ? ` — your reason was: "${cleanReason}"` : "") +
+        `. Send ONE short message telling them this task is waiting on their call and why you think it ` +
+        `should go ahead, and that there is an "Approve anyway" button on it. Do NOT say it is ` +
+        `unblocked, approved or in progress — it is none of those until they tap. Do not do the work.`;
+      const notifyPayload = {
+        text: directive,
+        huddleId: agentHuddle,
+        scope: "one-to-one",
+        members: [agentId],
+        targetAgentId: agentId,
+        history: [],
+        router: data.router,
+        agents: data.agents,
+        timeZone: data.timeZone,
+        caller: data.caller,
+        internal: true, // never let a notice spawn another notice
+      };
+      const { enqueueTurn } = await import("./tasks/turns.server");
+      const fresh = await enqueueTurn(`ovrreq-${taskId}`, agentHuddle, email, notifyPayload);
+      if (fresh) void kickNextChunk(`ovrreq-${taskId}`);
+    } catch {
+      /* best-effort — the confirm row and the board chip are the durable surfaces */
+    }
+  }
+
+  /**
+   * THE RELAY (step 4 of the owner's four): an agent says the user has just authorised an override, and
+   * this hands the TURN PAIR to the server to fetch and to the approach gate's grader to judge.
+   *
+   * Shared by both dispatch paths deliberately — a safety gate with two implementations is a safety
+   * gate that leaks through whichever one nobody re-read (memory.md 2026-08-05). The model's arguments
+   * reach `overrideApproachFromTurnPair` as REFERENCES and nothing else; there is no text parameter on
+   * this path at all.
+   *
+   * `turnId` is this closure's own durable turn id — the turn being executed, i.e. the message the
+   * agent is replying to RIGHT NOW. That is the owner's authorising turn in the ordinary case, and the
+   * server supplying it is stronger than a model naming it: `isUserTurn` still has to accept it, so an
+   * agent-initiated turn (autowork, a groom pass, the override NOTICE itself) is refused even here.
+   */
+  async function relayApproachOverride(
+    taskId: string,
+    ownerTurnId: string | null,
+    agentTurnId: string | null,
+  ): Promise<{ ok: boolean; applied: boolean; title?: string; error?: string }> {
+    const email =
+      (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ?? data.caller?.entra_email;
+    if (!email) return { ok: false, applied: false, error: "sign-in required" };
+    const { overrideApproachFromTurnPair } = await import("./tasks/confirm-ask.functions");
+    const r = await overrideApproachFromTurnPair({
+      taskId,
+      email,
+      ownerTurnId: ownerTurnId || turnId || null,
+      agentTurnId: agentTurnId || null,
+    });
+    return { ok: !!r.ok, applied: !!r.applied, title: r.title, error: r.error };
   }
 
   // Chat-driven UNBLOCK routing: the user cleared a blocker while talking to a NON-owner (e.g. Terry,
@@ -2528,20 +2763,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       return "Backlog";
     }
 
+    // The owner the agent NAMED, or null. One implementation, shared with the journey assignment
+    // below (tasks/assign-on-create.ts), so the card's owner and the canonical assignee can never
+    // disagree — before this they were two different questions answered in two different places.
+    function resolveNamedTaskOwner(value: unknown): AgentId | null {
+      return resolveExplicitOwner(value, AGENTS) as AgentId | null;
+    }
+
+    // ...and the same answer with the long-standing fallback applied, for the UI card, which must
+    // always show SOMEONE. The fallback is exactly why this cannot be the input to an assignment:
+    // it returns the responding agent whether or not one was ever named.
     function resolveTaskOwner(value: unknown): AgentId {
-      const raw = String(value ?? "")
-        .trim()
-        .toLowerCase();
-      if (!raw) return winner.id;
-      if (AGENT_BY_ID[raw as AgentId]) return raw as AgentId;
-      const matched = AGENTS.find(
-        (a) =>
-          a.name.toLowerCase() === raw ||
-          a.handle.toLowerCase() === raw ||
-          a.name.toLowerCase().includes(raw) ||
-          raw.includes(a.handle.toLowerCase()),
-      );
-      return matched?.id ?? winner.id;
+      return resolveNamedTaskOwner(value) ?? winner.id;
     }
 
     async function createSuggestedTaskFromTool(args: Record<string, unknown>) {
@@ -2609,10 +2842,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         return { ok: true, deduped: true, task: { title: title.slice(0, 160) } };
       }
       createdTaskTitles.add(titleKey);
+      // Did the agent actually NAME an owner? Kept separate from the card's ownerId because that
+      // one falls back to the responder, and the group rule below turns on the difference.
+      const namedOwner = resolveNamedTaskOwner(args.ownerId ?? args.owner ?? args.assignee);
       const task: SuggestedTaskDraft = {
         id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
         title: title.slice(0, 160),
-        ownerId: resolveTaskOwner(args.ownerId ?? args.owner ?? args.assignee),
+        ownerId: namedOwner ?? winner.id,
         lane: resolveTaskLane(args.lane ?? args.status),
         progress: typeof args.progress === "number" ? args.progress : undefined,
         blockReason: typeof args.blockReason === "string" ? args.blockReason : undefined,
@@ -2645,6 +2881,31 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           if (r.ok) {
             if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
             else suggestedTasks.push(task); // journey didn't echo a row — keep a Huddle card
+            // ASSIGN IT. `quick_create_task` has no assignee parameter (journey
+            // execute-tool/index.ts:2658-2670 forwards only text/target_date/auto_schedule), so the
+            // row lands with assigned_agent = NULL and the whole auto-work engine skips it
+            // (autowork.server.ts:544 drops it from the WIP buckets, :370 from the confirm
+            // reach-outs) until grooming assigns it. A follow-up update_task — the same write the
+            // board drag already uses — closes that, with no journey deploy.
+            // 1:1 → the responding agent; group → only an explicitly named owner (the LEAD captures
+            // every lane's items in a group, :2221, so defaulting to it would assign other lanes'
+            // work to the wrong agent). BEST-EFFORT: a failure leaves the task unassigned, which is
+            // exactly the old behaviour, and the outcome is reported verbatim so the agent cannot
+            // claim an assignment that did not happen.
+            const assignee = pickCreatedTaskAssignee({
+              scope: data.scope,
+              huddleId: data.huddleId,
+              responderId: winner.id,
+              explicitOwner: namedOwner,
+            });
+            const assignment = assignee
+              ? await assignCreatedJourneyTasks({
+                  taskIds: (r.tasks ?? []).map((t) => t.id),
+                  agentId: assignee,
+                  caller: (data.caller ?? {}) as Record<string, unknown>,
+                  huddleId: data.huddleId,
+                })
+              : null;
             // journey's `output` IS execute-tool's `result` object verbatim (huddle-proxy forwards
             // exec.result, not the sibling exec.message string) — parse it so the model can report
             // honestly instead of a flat "added it" that overclaims what actually happened (same-day
@@ -2653,14 +2914,47 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             // due_date}], tasks:[{due_date,start_time,is_scheduled,...}]} — see parseAndCreateTasks.
             // Shared with the voice executor — see tasks/create-task-core.ts.
             const { outcome, note: outcomeNote } = summarizeQuickCreateOutcome(r.output);
+            const assignNote = assignment
+              ? assignment.assigned
+                ? ` · assigned to ${AGENT_BY_ID[assignment.agentId as AgentId]?.name ?? assignment.agentId}`
+                : ` · NOT assigned (${assignment.error ?? "assignment failed"})`
+              : "";
             recordToolUse(
               winner.id,
               "create_huddle_task",
-              `“${task.title}” → Huddle board + journey${outcomeNote ? ` — ${outcomeNote}` : ""}`,
+              `“${task.title}” → Huddle board + journey${outcomeNote ? ` — ${outcomeNote}` : ""}${assignNote}`,
               true,
             );
-            return { ok: true, task, boards: ["huddle", "journey"], outcome, note: outcomeNote };
+            return {
+              ok: true,
+              task,
+              boards: ["huddle", "journey"],
+              outcome,
+              // The assignment is a SEPARATE fact from the create and is reported as one. `assigned`
+              // is true only when a journey row really changed owner; when it is false the task
+              // still exists, unassigned, and the note says so in words the model must not soften.
+              assigned: assignment?.assigned ?? false,
+              assignedTo: assignment?.assigned ? assignment.agentId : null,
+              note: [outcomeNote, assignment?.note].filter(Boolean).join(" ") || undefined,
+            };
           }
+          // LOG THE REAL REASON SERVER-SIDE. `recordFallback`'s `reason` carries journey's actual
+          // error (status code + body prefix) but ONLY `ev.inline` is persisted -- `fallbackNotes:
+          // [ev.inline]` -- so the detail is built and then dropped at turn end. Measured
+          // 2026-10-06: a task-create failure the owner reported took an hour to root-cause because
+          // the turn record held only "journey task create failed" while the status code and body
+          // that would have named it in one read had already been discarded. The user-facing text
+          // is deliberately unchanged -- a raw upstream error does not belong in a chat reply --
+          // but it now reaches the app log, where the next diagnosis can start.
+          console.error(
+            "[create_huddle_task] journey refused the write:",
+            JSON.stringify({
+              title: task.title,
+              huddleId: data.huddleId,
+              agentId: winner.id,
+              journeyError: r.error ?? "unknown",
+            }),
+          );
           const ev = recordFallback(
             "tool",
             `${winner.name}: could NOT save “${task.title}” to your board — journey create failed — ${r.error ?? "unknown"}`,
@@ -2988,7 +3282,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const effectiveInstructions = overrideInstructions || snapshotInstructions;
         fromSnapshot = !overrideInstructions && !!snapshotInstructions;
         const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
-        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT } = await import("./tasks/tools");
+        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT } = await import(
+          "./tasks/tools"
+        );
         // Grooming is now gated on the data-driven capability (agents.ts), with the legacy
         // id/special check kept as a non-destructive fallback so nothing regresses.
         const ownsGrooming =
@@ -3011,6 +3307,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           groomHint = "\n\n" + groom.GROOM_SYSTEM_HINT + groomHandoffHint;
         }
         const { REMINDER_SYSTEM_HINT } = await import("./tasks/reminders");
+        // May this agent use OpenAI's built-in code_interpreter + image_generation — i.e. produce a
+        // real .docx/.pptx/.xlsx/.csv/.png instead of only markdown? Resolved HERE, above the
+        // instruction assembly, because the hint that tells the model the capability exists has to go
+        // into the prompt and the tools have to go into mergedTools, and offering one without the
+        // other is the ACT-huddle-40 failure (narrating a file it never produced). One read, both uses.
+        // Same per-user config + per-agent override surface as the email send gate below; unlike that
+        // one it fails OPEN — see canOfferBuiltInTools for why a cost gate and a safety gate differ.
+        const { canOfferBuiltInTools } = await import("./identity/agent-workflow-config.server");
+        const builtInToolsAllowed = await canOfferBuiltInTools(
+          await resolveCallerEmail(),
+          winner.id,
+        );
         // Cache-friendly ordering (see the "prompt-payload efficiency" backlog item): put ALL
         // STABLE content first — persona/snapshot + roster + tool hints + house-style — so OpenAI
         // automatic prompt caching keys on a large prefix that's byte-identical across this agent's
@@ -3038,6 +3346,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           PRIORITIZE_SYSTEM_HINT +
           "\n\n" +
           CHECKLIST_SYSTEM_HINT +
+          // Same slot as CHECKLIST_SYSTEM_HINT directly above and for the same reason: the widget
+          // tools are offered in `mergedTools` below, so the model needs the hint that says WHEN to
+          // prefer an interactive card over a prose answer. Additive -- nothing above is altered.
+          "\n\n" +
+          WIDGET_SYSTEM_HINT +
+          "\n\n" +
+          FOCUS_SYSTEM_HINT +
+          // Same slot and same rule as the hints above: the built-in tools are offered in
+          // `mergedTools` below ONLY when builtInToolsAllowed, so the hint that says the capability
+          // exists is added under exactly the same condition. Purely ADDITIVE — it takes nothing away
+          // from any agent's prompt, and it is one shared block for every agent and lane rather than a
+          // per-persona list of file types.
+          (builtInToolsAllowed ? "\n\n" + BUILTIN_TOOLS_SYSTEM_HINT : "") +
           groomHint +
           "\n\n" +
           REMINDER_SYSTEM_HINT;
@@ -3059,11 +3380,24 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             .map((t) => (t as { name?: string })?.name)
             .filter((name): name is string => !!name),
         );
-        // Warn if snapshot had tools we can't wire (e.g. code_interpreter).
+        // Warn if the snapshot had tools we can't wire.
+        //
+        // `code_interpreter` used to be the headline example here and no longer belongs in the list
+        // when we are offering our own: the runtime now supplies a properly-configured
+        // code_interpreter (with the `container` the snapshot's bare copy lacks) in mergedTools below,
+        // so reporting it as "dropped, unsupported" would tell the user a capability was lost in the
+        // same turn the model actually has it. Filtered by TYPE against what we offer, so adding a
+        // built-in to openai-builtin-tools.ts keeps this honest with no edit here.
         if (snapshot && snapshot.tools.length > snapshotTools.length) {
+          const offeredBuiltIns = builtInToolsAllowed ? BUILTIN_TOOL_TYPES : [];
           const dropped = snapshot.tools
             .map((t) => t?.type)
-            .filter((t) => t !== "file_search" && t !== "function") as string[];
+            .filter(
+              (t) =>
+                t !== "file_search" &&
+                t !== "function" &&
+                !offeredBuiltIns.includes(t as string),
+            ) as string[];
           if (dropped.length > 0) {
             const ev = recordFallback(
               "tool",
@@ -3228,6 +3562,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   description: `Optional mailbox to draft in. Defaults to ${fromOpts[0]}. Allowed: ${fromOpts.join(", ")}.`,
                 },
                 cc: { type: "string", description: "Optional CC address(es), comma-separated." },
+                reply_to: { type: "string", description: "If this is a REPLY to an email the owner received, the sender's email address. The draft is then saved in the OWNER's own Outlook Drafts as a threaded reply to that sender's latest email (from is ignored)." },
               },
               required: ["subject", "body"],
             },
@@ -3237,7 +3572,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           emailTools.push(GET_EXTERNAL_CALENDAR_EVENTS_TOOL);
         }
 
-        const { PRIORITIZE_TOOL, CHECKLIST_TOOL } = await import("./tasks/tools");
+        const { PRIORITIZE_TOOL, CHECKLIST_TOOL, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL, FOCUS_TOOL } =
+          await import("./tasks/tools");
         // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
         const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
         const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
@@ -3259,12 +3595,23 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           FLAG_BLOCKER_TOOL,
           CONFIRM_TASK_INTENT_TOOL,
           PROPOSE_TASK_INTENT_TOOL,
+          // New-email alerts: store the suggested reply so the card's Save-to-Drafts button acts on it.
+          PROPOSE_EMAIL_REPLY_TOOL,
           PROPOSE_APPROACH_TOOL,
+          REQUEST_APPROACH_OVERRIDE_TOOL,
+          OVERRIDE_APPROACH_GATE_TOOL,
           ASK_CLARIFYING_QUESTION_TOOL,
           RESOLVE_CLARIFYING_QUESTION_TOOL,
           SCHEDULE_REMINDER_TOOL,
           PRIORITIZE_TOOL,
           CHECKLIST_TOOL,
+          // The two in-chat journey widgets. Ungated, exactly like CHECKLIST_TOOL above: whichever
+          // agent is answering is the one the user asked, so gating these to a single agent would
+          // make the widget reachable only by talking to that agent.
+          PRIORITIES_WIDGET_TOOL,
+          SCHEDULE_WIDGET_TOOL,
+          // "start these": starts existing tasks, creates-then-starts missing ones (focus.server.ts).
+          FOCUS_TOOL,
           GET_CALENDAR_EVENTS_TOOL, // calendar-framed alias → combined schedule (always available)
           ...groomTools,
           ...emailTools,
@@ -3320,8 +3667,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             const name = String(a.name ?? "").trim();
             const content = String(a.content ?? "");
             const taskIdRaw = a.task_id ? String(a.task_id) : "";
-            if (!name || !content)
-              return JSON.stringify({ ok: false, error: "name and content are required" });
+            // `content` is no longer unconditionally required: a structured `document` (a deck with
+            // real slide layout) can stand alone. Requiring both rejected every structured call.
+            if (!name || (!content && !a.document))
+              return JSON.stringify({ ok: false, error: "name plus content or document are required" });
             // Include the task's current revision_count in the dedup key so a revise-and-resave
             // (same task+name, after the review gate below sends it back) isn't blocked as "already
             // saved this turn" — only a TRUE repeat at the same revision is deduped.
@@ -3349,15 +3698,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
-              const { createArtifact } = await import("./artifacts/artifacts.server");
-              const { id, deepLink } = await createArtifact({
+              // ONE renderer for every dispatch path — see createArtifactFromAgent. `format` decides
+              // whether this becomes markdown, a real .docx/.pptx, a mermaid diagram or a D3 page.
+              const { createArtifactFromAgent } = await import("./artifacts/artifacts.server");
+              const { id, deepLink } = await createArtifactFromAgent({
                 userEmail: email,
                 agentId: winner.id,
                 taskId: taskIdRaw || null,
                 folder: String(a.folder ?? "Research"),
                 name,
-                mime: String(a.mime ?? "text/markdown"),
-                bytes: Buffer.from(content, "utf8"),
+                args: { format: a.format, content, document: a.document, mime: a.mime },
               });
               let reviewSuffix = "";
               let review:
@@ -3487,6 +3837,48 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               return JSON.stringify({ ok: false, error: msg });
             }
           }
+          if (c.name === "propose_email_reply") {
+            const a = c.arguments as Record<string, unknown>;
+            const givenId = String(a.email_id ?? "").trim();
+            const fromAddr = String(a.from_address ?? "").trim();
+            const body = String(a.reply_body ?? "").trim();
+            if ((!givenId && !fromAddr) || !body)
+              return JSON.stringify({ ok: false, error: "reply_body and email_id (or from_address) are required" });
+            try {
+              const owner =
+                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                data.caller?.entra_email;
+              if (!owner) return JSON.stringify({ ok: false, error: "sign-in required" });
+              const { getOwnedEmailReply, findOwedEmailReplyByFrom, setProposedReply } = await import(
+                "./email/email-replies.server"
+              );
+              const row = givenId
+                ? await getOwnedEmailReply(givenId, owner)
+                : await findOwedEmailReplyByFrom(owner, fromAddr);
+              if (!row) return JSON.stringify({ ok: false, error: "No owed email matches that." });
+              const emailId = row.id;
+              await setProposedReply(emailId, owner, body);
+              // Structured detail -> the reply card on THIS message (the confirmAsk derivation).
+              recordToolUse(
+                winner.id,
+                "propose_email_reply",
+                `Suggested a reply to ${row.from_name || row.from_address || "an email"}`,
+                true,
+                JSON.stringify({
+                  emailId,
+                  fromName: row.from_name ?? "",
+                  fromAddress: row.from_address ?? "",
+                  subject: row.subject ?? "",
+                  replyBody: body,
+                }),
+              );
+              return JSON.stringify({ ok: true, email_id: emailId });
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "propose_email_reply", "propose failed", false, msg);
+              return JSON.stringify({ ok: false, error: msg });
+            }
+          }
           if (c.name === "propose_task_intent") {
             const a = c.arguments as Record<string, unknown>;
             const taskId = String(a.task_id ?? "").trim();
@@ -3590,6 +3982,115 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               return JSON.stringify({ ok: false, error: msg });
             }
           }
+          if (c.name === "request_approach_override") {
+            const a = c.arguments as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const reason = String(a.reason ?? "").trim();
+            if (!taskId) return JSON.stringify({ ok: false, error: "task_id is required" });
+            try {
+              const email =
+                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                data.caller?.entra_email;
+              if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+              const { requestApproachOverride } = await import("./tasks/confirm-ask.functions");
+              // NOTHING ON THIS SIDE OF THE CALL CAN GRANT AN OVERRIDE, and that is structural rather
+              // than a matter of care here: `requestApproachOverride` does not call
+              // `overrideApproachGate` at all. It used to — via a `source:{via:"quote"}` arm carrying
+              // model-supplied text that the server tried to read as the owner's consent — and three
+              // independent adversarial passes broke that reading with ordinary English. The only
+              // grant is the owner's tap on the row attached below.
+              const r = await requestApproachOverride({
+                taskId,
+                email,
+                requestedByAgent: winner.id,
+                reason,
+              });
+              // EXTEND the existing confirm-row channel rather than building a second one: the same
+              // map `propose_approach` writes when a gate escalates, read at the reply-assembly site
+              // into `replies[].overrideAsk` -> OverrideAskRow's "Approve anyway". The board card chip
+              // (driven by approach_status='escalated') is the durable half and needs no change.
+              if (r.ok && r.awaitingUserTap) {
+                const title = r.title ?? (await (await import("./tasks/tasks.server")).getTaskTitle(taskId));
+                escalatedApproachByAgent.set(winner.id, { taskId, taskTitle: title, note: reason });
+                // Away-notification ONLY on the first ask of this escalation episode, and only when the
+                // owner is not already in this conversation — the row above is the surface when they
+                // are. Rides the existing durable-turn path (send_push), never a new sender.
+                if (r.fresh && data.internal) void deliverOverrideRequestNotice(winner.id, taskId, title, reason);
+              }
+              recordToolUse(
+                winner.id,
+                "request_approach_override",
+                r.ok
+                  ? r.alreadyDone
+                    ? "already unblocked"
+                    : r.alreadyRequested
+                      ? "already waiting on the user's approval"
+                      : "asked the user to approve it"
+                  : `request refused — ${r.error ?? ""}`.slice(0, 160),
+                r.ok,
+                r.ok ? undefined : r.error,
+              );
+              return JSON.stringify(
+                r.ok
+                  ? {
+                      ok: true,
+                      task_id: taskId,
+                      applied: false,
+                      approach_status: r.alreadyDone ? "approved" : "escalated",
+                      awaiting_user_tap: !!r.awaitingUserTap,
+                      already_requested: !!r.alreadyRequested,
+                      note: r.alreadyDone
+                        ? "Already approved — nothing to wait for."
+                        : "NOT approved. The user has been shown an Approve anyway button; the task stays escalated until they tap it.",
+                    }
+                  : { ok: false, applied: false, error: r.error },
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "request_approach_override", "request failed", false, msg);
+              return JSON.stringify({ ok: false, applied: false, error: msg });
+            }
+          }
+          if (c.name === "override_approach_gate") {
+            const a = c.arguments as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const ownerTurnArg = String(a.owner_turn_id ?? "").trim() || null;
+            const agentTurnArg = String(a.agent_turn_id ?? "").trim() || null;
+            if (!taskId) return JSON.stringify({ ok: false, applied: false, error: "task_id is required" });
+            try {
+              const r = await relayApproachOverride(taskId, ownerTurnArg, agentTurnArg);
+              recordToolUse(
+                winner.id,
+                "override_approach_gate",
+                r.applied
+                  ? "the user's authorisation checked out — approach approved"
+                  : `not approved — ${r.error ?? "the exchange did not authorise it"}`.slice(0, 160),
+                r.applied,
+                r.applied ? undefined : r.error,
+              );
+              return JSON.stringify(
+                r.applied
+                  ? {
+                      ok: true,
+                      task_id: taskId,
+                      applied: true,
+                      approach_status: "approved",
+                      note: "Approved on the user's own authorisation. You may proceed.",
+                    }
+                  : {
+                      ok: false,
+                      applied: false,
+                      approach_status: "escalated",
+                      error: r.error,
+                      note: "STILL BLOCKED. Do not proceed and do not tell the user it is unblocked — say what is missing, or ask them to use the Approve anyway button.",
+                    },
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "override_approach_gate", "override check failed", false, msg);
+              return JSON.stringify({ ok: false, applied: false, error: msg });
+            }
+          }
           if (c.name === "propose_approach") {
             const a = c.arguments as Record<string, unknown>;
             const taskId = String(a.task_id ?? "").trim();
@@ -3612,6 +4113,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 approach,
                 claim: claimAction,
               });
+              // An escalation is the ONE gate outcome the user has to act on, so it is the one that
+              // gets a chip. Recorded here rather than derived from the tool-use detail (the way
+              // confirmAsk is) because that detail is human prose shown in the tool chip's tooltip —
+              // turning it into JSON to carry a payload would degrade a surface the owner reads.
+              if (gate.escalated) {
+                escalatedApproachByAgent.set(winner.id, { taskId, taskTitle: title, note: gate.note });
+              }
               recordToolUse(
                 winner.id,
                 "propose_approach",
@@ -3774,6 +4282,64 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             recordToolUse(winner.id, "build_checklist", ok ? "checklist rendered" : "checklist -- failed", ok, detail);
             return out;
           }
+          // show_priorities_widget / show_schedule_widget -- the two in-chat journey widgets. Each
+          // mirrors build_checklist directly above, point for point: its OWN ledger key (so a
+          // priorities widget and a schedule widget can both render in one turn, but neither twice),
+          // the caller's resolved email, and the FULL dispatcher JSON carried back in `detail`, which
+          // is the only channel the reply-assembly has to recover the payload.
+          if (c.name === "focus_on") {
+            // Mutating: one per turn, so two group responders cannot start the same list twice.
+            if (!claimAction("focus_on")) {
+              recordToolUse(winner.id, c.name, "focus_on -- already done this turn", true);
+              return JSON.stringify({ error: "already_done", message: "Those were already started this turn; refer to that result." });
+            }
+            const { dispatchFocusOn } = await import("./tasks/tools");
+            const out = await dispatchFocusOn(data.caller, c.arguments);
+            let ok = false,
+              summary = "focus_on";
+            try {
+              const p = JSON.parse(out) as { ok?: boolean; summary?: string };
+              ok = p.ok === true;
+              summary = p.summary ?? summary;
+            } catch {
+              /* keep defaults */
+            }
+            recordToolUse(winner.id, c.name, summary.slice(0, 200), ok, ok ? undefined : summary);
+            return out;
+          }
+          if (c.name === "show_priorities_widget" || c.name === "show_schedule_widget") {
+            const isPriorities = c.name === "show_priorities_widget";
+            const label = isPriorities ? "priorities widget" : "schedule widget";
+            if (!claimAction(c.name)) {
+              const dupe = JSON.stringify({
+                error: "already_rendered",
+                message: `A ${label} was already rendered this turn; refer to it instead of rendering another.`,
+              });
+              recordToolUse(winner.id, c.name, `${label} -- already rendered`, true);
+              return dupe;
+            }
+            const { dispatchPrioritiesWidget, dispatchScheduleWidget } = await import("./tasks/tools");
+            const ident = await (
+              await import("./journey/identity")
+            ).resolveJourneyIdentity(data.caller, data.timeZone);
+            const email = ident.email ?? data.caller?.entra_email;
+            const tz = ident.timeZone || data.timeZone || "UTC";
+            const args = (c.arguments ?? {}) as Record<string, unknown>;
+            const out = isPriorities
+              ? await dispatchPrioritiesWidget(email, args, tz)
+              : await dispatchScheduleWidget(email, args, tz);
+            let ok = true;
+            let detail = "";
+            try {
+              const parsed = JSON.parse(out) as { error?: string };
+              ok = !parsed.error;
+              detail = ok ? out : (parsed.error ?? "");
+            } catch {
+              ok = false;
+            }
+            recordToolUse(winner.id, c.name, ok ? `${label} rendered` : `${label} -- failed`, ok, detail);
+            return out;
+          }
           const nexusMod = await import("./nexus/nexus.server");
           if (nexusMod.NEXUS_TOOL_NAMES.has(c.name)) {
             const out = await nexusMod.executeNexusTool(
@@ -3918,14 +4484,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               });
             }
             try {
-              const { createGraphDraft } = await import("./email/graph-email.server");
-              const r = await createGraphDraft({
-                to: String(a.to ?? ""),
-                subject: String(a.subject ?? ""),
-                body: String(a.body ?? ""),
-                from: a.from ? String(a.from) : undefined,
-                cc: a.cc ? String(a.cc) : undefined,
-              });
+              const { createDraftForTool } = await import("./email/graph-email.server");
+              const r = await createDraftForTool(
+                {
+                  to: String(a.to ?? ""),
+                  subject: String(a.subject ?? ""),
+                  body: String(a.body ?? ""),
+                  from: a.from ? String(a.from) : undefined,
+                  cc: a.cc ? String(a.cc) : undefined,
+                  replyTo: a.reply_to ? String(a.reply_to) : undefined,
+                },
+                data.caller,
+              );
               recordToolUse(
                 winner.id,
                 "create_email_draft",
@@ -3964,7 +4534,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               const startISO = startRaw.length > 10 ? startRaw : `${startDay}T00:00:00`;
               const endISO = endRaw.length > 10 ? endRaw : `${endDay}T23:59:59`;
               const mailbox =
-                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
                 data.caller?.entra_email;
               const { getGraphCalendarEvents } = await import("./email/graph-email.server");
               const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
@@ -4285,11 +4855,80 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             }
           : undefined;
 
+        // A file a BUILT-IN tool produced — an image from image_generation, or a file the model wrote
+        // inside the code-interpreter container. It reaches us as an output item, never as a
+        // function_call, so it cannot ride combinedOnToolCall; this is its dispatch.
+        //
+        // It funnels into the SAME createArtifact() the create_artifact tool uses — the store already
+        // takes `bytes: Buffer | Uint8Array` and an arbitrary `mime`, so there is nothing to build and
+        // no second storage path (the map in docs/qc-evidence/ACT-artifact-rich-formats-consumer-map.md
+        // is explicit that every route must funnel here).
+        //
+        // It records a `create_artifact` toolUse with the deepLink in `detail` for one concrete
+        // reason, not for tidiness: the chat bubble's "Open <name>" chip is DERIVED from exactly that
+        // shape (`t.tool === "create_artifact" && t.detail.startsWith("/artifacts/")`, and the name is
+        // parsed out of `saved "<name>"`). Recording it any other way would save the file and show the
+        // user nothing to click.
+        const onBuiltInFile = async (file: {
+          kind: "image" | "container";
+          filename: string;
+          base64?: string;
+          containerId?: string;
+          fileId?: string;
+        }) => {
+          try {
+            const email =
+              (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+              data.caller?.entra_email;
+            if (!email) return;
+            let bytes: Uint8Array;
+            if (file.kind === "image") {
+              if (!file.base64) return;
+              bytes = Buffer.from(file.base64, "base64");
+            } else {
+              if (!file.containerId || !file.fileId) return;
+              const { fetchContainerFileBytes } = await import("./openai-responses.server");
+              bytes = await fetchContainerFileBytes(file.containerId, file.fileId, signal);
+            }
+            if (bytes.length === 0) return;
+            const name = basenameOf(file.filename);
+            const { createArtifact } = await import("./artifacts/artifacts.server");
+            const { id, deepLink } = await createArtifact({
+              userEmail: email,
+              agentId: winner.id,
+              taskId: null,
+              folder: "Research",
+              name,
+              mime: mimeForFilename(name),
+              bytes,
+            });
+            void id;
+            recordToolUse(winner.id, "create_artifact", `saved "${name}"`, true, deepLink);
+          } catch (err) {
+            // A produced file we could not store is reported as a FAILED tool use, never swallowed:
+            // the model narrating a document that does not exist is the exact failure this whole lane
+            // is fixing, so the failure has to be visible rather than silent.
+            recordToolUse(
+              winner.id,
+              "create_artifact",
+              "built-in tool file could not be saved",
+              false,
+              err instanceof Error ? err.message : String(err),
+            );
+          }
+        };
+
         const personaArgs = {
           model: usedModel,
           instructions,
           fastMode: routerCfg.fastMode,
           tools: mergedTools.length > 0 ? mergedTools : undefined,
+          // Built-in tools travel SEPARATELY from `tools` (they are executed by OpenAI, never by
+          // combinedOnToolCall) so the transport's 400 fallback can drop exactly these and keep the
+          // function tools rather than costing the user the whole reply on a model that can't run them.
+          ...(builtInToolsAllowed
+            ? { builtInTools: BUILTIN_RESPONSES_TOOLS as unknown[], onBuiltInFile }
+            : {}),
           onToolCall: (c: { name: string; arguments: Record<string, unknown> }) =>
             runToolSafely(c.name, () => combinedOnToolCall(c)),
           toolChoice,
@@ -4416,9 +5055,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // create_artifact — save the agent's own finished work as a reviewable artifact (mirrors OpenAI path).
         lovableTools.create_artifact = tool({
           description: CREATE_ARTIFACT_TOOL.description,
+          // `format`/`document` MUST be here even though this schema is hand-written. It borrows
+          // CREATE_ARTIFACT_TOOL.description above — the text that says "YOU ARE NOT LIMITED TO
+          // MARKDOWN: set `format` to 'docx'" — so a schema without the field promised a capability
+          // and then STRIPPED it: zod drops unknown keys silently, so the model emitted `format`
+          // and `.parse()` returned an object without it. Proven by the verifier, not assumed.
+          // If you add a field to CREATE_ARTIFACT_TOOL, add it here too or this path quietly lies.
           inputSchema: z.object({
             name: z.string(),
-            content: z.string(),
+            content: z.string().optional(),
+            format: z.string().optional(),
+            document: z.unknown().optional(),
             folder: z.string().optional(),
             task_id: z.string().optional(),
             mime: z.string().optional(),
@@ -4428,8 +5075,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             const name = String(a.name ?? "").trim();
             const content = String(a.content ?? "");
             const taskIdRaw = a.task_id ? String(a.task_id) : "";
-            if (!name || !content)
-              return JSON.stringify({ ok: false, error: "name and content are required" });
+            // `content` is no longer unconditionally required: a structured `document` (a deck with
+            // real slide layout) can stand alone. Requiring both rejected every structured call.
+            if (!name || (!content && !a.document))
+              return JSON.stringify({ ok: false, error: "name plus content or document are required" });
             let revisionCountForClaim = 0;
             if (taskIdRaw) {
               try {
@@ -4454,15 +5103,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
                 data.caller?.entra_email;
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
-              const { createArtifact } = await import("./artifacts/artifacts.server");
-              const { id, deepLink } = await createArtifact({
+              // ONE renderer for every dispatch path — see createArtifactFromAgent. `format` decides
+              // whether this becomes markdown, a real .docx/.pptx, a mermaid diagram or a D3 page.
+              const { createArtifactFromAgent } = await import("./artifacts/artifacts.server");
+              const { id, deepLink } = await createArtifactFromAgent({
                 userEmail: email,
                 agentId: winner.id,
                 taskId: taskIdRaw || null,
                 folder: String(a.folder ?? "Research"),
                 name,
-                mime: String(a.mime ?? "text/markdown"),
-                bytes: Buffer.from(content, "utf8"),
+                args: { format: a.format, content, document: a.document, mime: a.mime },
               });
               let reviewSuffix = "";
               let review:
@@ -4710,6 +5360,120 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           },
         });
 
+        // request_approach_override — the agent ASKS the owner to unstick an escalated approach
+        // (mirrors the OpenAI path). It cannot apply the override; only the owner's tap can.
+        lovableTools.request_approach_override = tool({
+          description: REQUEST_APPROACH_OVERRIDE_TOOL.description,
+          inputSchema: z.object({ task_id: z.string(), reason: z.string() }),
+          execute: async (args) => {
+            const a = args as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const reason = String(a.reason ?? "").trim();
+            if (!taskId) return JSON.stringify({ ok: false, error: "task_id is required" });
+            try {
+              const email =
+                (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                data.caller?.entra_email;
+              if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
+              const { requestApproachOverride } = await import("./tasks/confirm-ask.functions");
+              const r = await requestApproachOverride({
+                taskId,
+                email,
+                requestedByAgent: winner.id,
+                reason,
+              });
+              if (r.ok && r.awaitingUserTap) {
+                const title = r.title ?? (await (await import("./tasks/tasks.server")).getTaskTitle(taskId));
+                escalatedApproachByAgent.set(winner.id, { taskId, taskTitle: title, note: reason });
+                if (r.fresh && data.internal) void deliverOverrideRequestNotice(winner.id, taskId, title, reason);
+              }
+              recordToolUse(
+                winner.id,
+                "request_approach_override",
+                r.ok
+                  ? r.alreadyDone
+                    ? "already unblocked"
+                    : r.alreadyRequested
+                      ? "already waiting on the user's approval"
+                      : "asked the user to approve it"
+                  : `request refused — ${r.error ?? ""}`.slice(0, 160),
+                r.ok,
+                r.ok ? undefined : r.error,
+              );
+              return JSON.stringify(
+                r.ok
+                  ? {
+                      ok: true,
+                      task_id: taskId,
+                      applied: false,
+                      approach_status: r.alreadyDone ? "approved" : "escalated",
+                      awaiting_user_tap: !!r.awaitingUserTap,
+                      already_requested: !!r.alreadyRequested,
+                      note: r.alreadyDone
+                        ? "Already approved — nothing to wait for."
+                        : "NOT approved. The user has been shown an Approve anyway button; the task stays escalated until they tap it.",
+                    }
+                  : { ok: false, applied: false, error: r.error },
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "request_approach_override", "request failed", false, msg);
+              return JSON.stringify({ ok: false, applied: false, error: msg });
+            }
+          },
+        });
+
+        // override_approach_gate — the agent RELAYS an authorisation the user just gave, by turn
+        // reference (mirrors the OpenAI path). Nothing it passes is text; the server fetches the pair.
+        lovableTools.override_approach_gate = tool({
+          description: OVERRIDE_APPROACH_GATE_TOOL.description,
+          inputSchema: z.object({
+            task_id: z.string(),
+            owner_turn_id: z.string().optional(),
+            agent_turn_id: z.string().optional(),
+          }),
+          execute: async (args) => {
+            const a = args as Record<string, unknown>;
+            const taskId = String(a.task_id ?? "").trim();
+            const ownerTurnArg = String(a.owner_turn_id ?? "").trim() || null;
+            const agentTurnArg = String(a.agent_turn_id ?? "").trim() || null;
+            if (!taskId) return JSON.stringify({ ok: false, applied: false, error: "task_id is required" });
+            try {
+              const r = await relayApproachOverride(taskId, ownerTurnArg, agentTurnArg);
+              recordToolUse(
+                winner.id,
+                "override_approach_gate",
+                r.applied
+                  ? "the user's authorisation checked out — approach approved"
+                  : `not approved — ${r.error ?? "the exchange did not authorise it"}`.slice(0, 160),
+                r.applied,
+                r.applied ? undefined : r.error,
+              );
+              return JSON.stringify(
+                r.applied
+                  ? {
+                      ok: true,
+                      task_id: taskId,
+                      applied: true,
+                      approach_status: "approved",
+                      note: "Approved on the user's own authorisation. You may proceed.",
+                    }
+                  : {
+                      ok: false,
+                      applied: false,
+                      approach_status: "escalated",
+                      error: r.error,
+                      note: "STILL BLOCKED. Do not proceed and do not tell the user it is unblocked — say what is missing, or ask them to use the Approve anyway button.",
+                    },
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, "override_approach_gate", "override check failed", false, msg);
+              return JSON.stringify({ ok: false, applied: false, error: msg });
+            }
+          },
+        });
+
         // propose_approach — pre-work approach gate (mirrors the OpenAI path).
         lovableTools.propose_approach = tool({
           description: PROPOSE_APPROACH_TOOL.description,
@@ -4736,6 +5500,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 approach,
                 claim: claimAction,
               });
+              // An escalation is the ONE gate outcome the user has to act on, so it is the one that
+              // gets a chip. Recorded here rather than derived from the tool-use detail (the way
+              // confirmAsk is) because that detail is human prose shown in the tool chip's tooltip —
+              // turning it into JSON to carry a payload would degrade a surface the owner reads.
+              if (gate.escalated) {
+                escalatedApproachByAgent.set(winner.id, { taskId, taskTitle: title, note: gate.note });
+              }
               recordToolUse(
                 winner.id,
                 "propose_approach",
@@ -4854,8 +5625,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             description: RTOOL.description,
             inputSchema: z.object({
               text: z.string(),
+              // Was missing here, so the Lovable path silently dropped kind and always set an alarm.
+              kind: z.enum(["reminder", "alarm"]).optional(),
               delay_minutes: z.number().optional(),
               at_time: z.string().optional(),
+              task_id: z.string().optional(),
             }),
             execute: async (args) => {
               const a = args as Record<string, unknown>;
@@ -4934,6 +5708,35 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           });
         }
 
+        // focus_on — mirrors the OpenAI path (FOCUS_SYSTEM_HINT is appended to both backends).
+        {
+          const { dispatchFocusOn } = await import("./tasks/tools");
+          lovableTools.focus_on = tool({
+            description:
+              "START what the user says they want to work on: existing tasks are started (Doing, top of This Week); missing ones are created first, then started. Use for a list of things to work on or 'start X', including a reply to a priority check.",
+            inputSchema: z.object({
+              items: z.array(z.object({ title: z.string(), task_id: z.string().optional() })),
+            }),
+            execute: async (args) => {
+              if (!claimAction("focus_on")) {
+                return JSON.stringify({ error: "already_done", message: "Those were already started this turn." });
+              }
+              const out = await dispatchFocusOn(data.caller, args as Record<string, unknown>);
+              let ok = false;
+              let summary = "focus_on";
+              try {
+                const p = JSON.parse(out) as { ok?: boolean; summary?: string };
+                ok = p.ok === true;
+                summary = p.summary ?? summary;
+              } catch {
+                /* keep defaults */
+              }
+              recordToolUse(winner.id, "focus_on", summary.slice(0, 200), ok, ok ? undefined : summary);
+              return out;
+            },
+          });
+        }
+
         // build_checklist — the in-chat checklist widget. MUST exist here as well as in the OpenAI
         // tools array: CHECKLIST_SYSTEM_HINT is appended to BOTH backends' instructions, so omitting
         // it here told this backend to call a tool it was never offered.
@@ -4963,6 +5766,75 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 args as Record<string, unknown>,
               );
             },
+          });
+        }
+
+        // show_priorities_widget / show_schedule_widget — the in-chat journey widgets, present here
+        // for exactly the reason the checklist block above gives: WIDGET_SYSTEM_HINT is appended to
+        // BOTH backends' instructions, so omitting them here would tell this backend to call tools it
+        // was never offered. Same ledger keys as the OpenAI path, so a turn that somehow crossed
+        // backends still renders each widget at most once.
+        //
+        // These DO call recordToolUse, which the checklist block above does not. That is not a
+        // deviation from the pattern for its own sake: the reply-assembly recovers a widget payload
+        // ONLY from a toolUse's `detail`, so without this call the tool would fire on this backend
+        // and render nothing — the precise failure this wiring exists to fix. (The checklist has the
+        // same gap on this path; fixing it is a change to the checklist's own wiring, which this lane
+        // is not allowed to make. Recorded in docs/LANE-D-widget-tool-wiring.md.)
+        {
+          // The descriptions are reused from the tool definitions rather than retyped, so the two
+          // backends can never drift into describing the same tool differently.
+          const {
+            dispatchPrioritiesWidget,
+            dispatchScheduleWidget,
+            PRIORITIES_WIDGET_TOOL,
+            SCHEDULE_WIDGET_TOOL,
+          } = await import("./tasks/tools");
+          const runWidget = async (
+            name: "show_priorities_widget" | "show_schedule_widget",
+            args: Record<string, unknown>,
+          ) => {
+            const isPriorities = name === "show_priorities_widget";
+            const label = isPriorities ? "priorities widget" : "schedule widget";
+            if (!claimAction(name)) {
+              recordToolUse(winner.id, name, `${label} -- already rendered`, true);
+              return JSON.stringify({
+                error: "already_rendered",
+                message: `A ${label} was already rendered this turn; refer to it instead of rendering another.`,
+              });
+            }
+            const ident = await (
+              await import("./journey/identity")
+            ).resolveJourneyIdentity(data.caller, data.timeZone);
+            const email = ident.email ?? data.caller?.entra_email;
+            const tz = ident.timeZone || data.timeZone || "UTC";
+            const out = isPriorities
+              ? await dispatchPrioritiesWidget(email, args, tz)
+              : await dispatchScheduleWidget(email, args, tz);
+            let ok = true;
+            let detail = "";
+            try {
+              const parsed = JSON.parse(out) as { error?: string };
+              ok = !parsed.error;
+              detail = ok ? out : (parsed.error ?? "");
+            } catch {
+              ok = false;
+            }
+            recordToolUse(winner.id, name, ok ? `${label} rendered` : `${label} -- failed`, ok, detail);
+            return out;
+          };
+          lovableTools.show_priorities_widget = tool({
+            description: PRIORITIES_WIDGET_TOOL.description,
+            // `title` is optional on the OpenAI schema; this backend's schema mirrors that with an
+            // `.optional()` rather than the checklist's required-string, so an agent calling it with
+            // no arguments is valid here too.
+            inputSchema: z.object({ title: z.string().optional() }),
+            execute: async (args) => runWidget("show_priorities_widget", (args ?? {}) as Record<string, unknown>),
+          });
+          lovableTools.show_schedule_widget = tool({
+            description: SCHEDULE_WIDGET_TOOL.description,
+            inputSchema: z.object({}),
+            execute: async () => runWidget("show_schedule_widget", {}),
           });
         }
 
@@ -5078,6 +5950,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 to: z.string().optional(),
                 from: z.string().optional(),
                 cc: z.string().optional(),
+                reply_to: z.string().optional().describe("If this is a REPLY to an email the owner received, the sender's email address. The draft is then saved in the OWNER's own Outlook Drafts as a threaded reply to that sender's latest email (from is ignored)."),
               }),
               execute: async (args) => {
                 const a = args as Record<string, unknown>;
@@ -5094,14 +5967,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                     message: "That draft was already created this turn.",
                   });
                 }
-                const { createGraphDraft } = await import("./email/graph-email.server");
-                const r = await createGraphDraft({
-                  to: String(a.to ?? ""),
-                  subject: String(a.subject ?? ""),
-                  body: String(a.body ?? ""),
-                  from: a.from ? String(a.from) : undefined,
-                  cc: a.cc ? String(a.cc) : undefined,
-                });
+                const { createDraftForTool } = await import("./email/graph-email.server");
+                const r = await createDraftForTool(
+                  {
+                    to: String(a.to ?? ""),
+                    subject: String(a.subject ?? ""),
+                    body: String(a.body ?? ""),
+                    from: a.from ? String(a.from) : undefined,
+                    cc: a.cc ? String(a.cc) : undefined,
+                    replyTo: a.reply_to ? String(a.reply_to) : undefined,
+                  },
+                  data.caller,
+                );
                 recordToolUse(
                   winner.id,
                   "create_email_draft",
@@ -5131,7 +6008,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 const startISO = startRaw.length > 10 ? startRaw : `${startDay}T00:00:00`;
                 const endISO = endRaw.length > 10 ? endRaw : `${endDay}T23:59:59`;
                 const mailbox =
-                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
                   data.caller?.entra_email;
                 const { getGraphCalendarEvents } = await import("./email/graph-email.server");
                 const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
@@ -5351,7 +6228,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         }
 
         {
-          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT } = await import("./tasks/tools");
+          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT } = await import(
+            "./tasks/tools"
+          );
           usedInstructions =
             appSystem +
             ragInstructions +
@@ -5360,6 +6239,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             PRIORITIZE_SYSTEM_HINT +
             "\n\n" +
             CHECKLIST_SYSTEM_HINT +
+            // Matches the OpenAI branch: both backends are offered the widget tools, so both are told
+            // when to prefer one over a prose answer.
+            "\n\n" +
+            WIDGET_SYSTEM_HINT +
+            "\n\n" +
+            FOCUS_SYSTEM_HINT +
             groundingBlock(!!agentBackend.webSearch);
         }
 
@@ -5516,6 +6401,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   // ran together this wave; a mid-reply @mention of a same-wave agent must NOT
   // re-enqueue it (it already ran once), mirroring the sequential queue.includes
   // guard for agents still pending in the queue.
+  // The email-reply card for `agentId`'s reply: from its own propose_email_reply (carries the body), else
+  // — on a new-email alert turn — from the payload's emailReplyRef. Used by EVERY path that pushes a
+  // reply (normal, hardReply, the zero-reply safety net): 2026-10-15 Amy's alert lost its buttons because
+  // Iris timed out after the tool call and the safety-net reply was built without the card.
+  const emailCardFor = (agentId: AgentId, uses: readonly AgentTurnResult["toolUses"][number][]): EmailReplyAsk | undefined => {
+    const use = [...uses].reverse().find((t) => t.agentId === agentId && t.tool === "propose_email_reply" && t.ok);
+    const fromTool = use ? emailReplyAskFromDetail(use.detail) : undefined;
+    if (fromTool) return fromTool;
+    if (data.emailReplyRef && agentId === data.targetAgentId) return { ...data.emailReplyRef, replyBody: "" };
+    return undefined;
+  };
   const mergeAgentResult = (nextId: AgentId, r: AgentTurnResult, waveIds: readonly AgentId[]) => {
     const winner = AGENT_BY_ID[nextId]!;
     // Append-only buffers merge deterministically (queue order via call order).
@@ -5542,7 +6438,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     }
     if (outcome.kind === "hardReply") {
       // Config/model-failure fallbacks: always emitted, no echo/PASS, no mentions.
-      replies.push(outcome.reply);
+      const card = emailCardFor(nextId, r.toolUses);
+      replies.push(card ? { ...outcome.reply, emailReply: card } : outcome.reply);
       spoken.add(nextId);
       return;
     }
@@ -5674,13 +6571,66 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         console.warn("[checklist] build_checklist detail was not valid JSON; no widget rendered");
       }
     }
+    // The two in-chat widgets, recovered exactly as the checklist above is: the dispatcher put its
+    // whole JSON result in the toolUse's `detail`, so the payload comes back with no second read.
+    //
+    // Unlike the checklist, these are NOT re-mapped field by field. The payload is Lane B's own
+    // `PrioritiesWidgetData`/`ScheduleWidgetData`, composed by `buildPrioritiesBand` /
+    // `buildScheduleSections` and consumed verbatim by the same `PrioritiesWidget`/`ScheduleWidget`
+    // components the docked copies use — so a re-map here would be a SECOND definition of that
+    // contract, and any field Lane B adds would be silently dropped by this function rather than
+    // reaching the card. What is checked is only what makes the payload renderable at all: it parsed,
+    // `ok` is true, and the section the card is built from is an array. An empty array is a VALID
+    // result (the widgets render their own labelled empty states), so emptiness is NOT a rejection —
+    // that is the one place this differs from the checklist, which suppresses a zero-row card.
+    let replyPriorities: PrioritiesWidgetData | undefined;
+    let replySchedule: ScheduleWidgetData | undefined;
+    const widgetDetail = (name: string): unknown => {
+      const use = r.toolUses.find((t) => t.tool === name && t.ok && typeof t.detail === "string");
+      if (!use) return undefined;
+      try {
+        return JSON.parse(use.detail as string) as unknown;
+      } catch {
+        console.warn(`[widget] ${name} detail was not valid JSON; no widget rendered`);
+        return undefined;
+      }
+    };
+    {
+      const parsed = widgetDetail("show_priorities_widget") as { priorities?: unknown } | undefined;
+      const p = parsed?.priorities as PrioritiesWidgetData | undefined;
+      if (parsed) {
+        if (p && p.ok === true && Array.isArray(p.band)) replyPriorities = p;
+        else console.warn("[widget] show_priorities_widget returned an unexpected shape; no widget rendered");
+      }
+    }
+    {
+      const parsed = widgetDetail("show_schedule_widget") as { schedule?: unknown } | undefined;
+      const s = parsed?.schedule as ScheduleWidgetData | undefined;
+      if (parsed) {
+        if (s && s.ok === true && Array.isArray(s.todaySchedule)) replySchedule = s;
+        else console.warn("[widget] show_schedule_widget returned an unexpected shape; no widget rendered");
+      }
+    }
+    // An approach this agent proposed THIS turn was escalated — attach the "Approve anyway" row to its
+    // own reply, the same scoping rule confirmAsk uses: the ask belongs to the agent whose turn raised
+    // it, so it is keyed by that agent rather than broadcast to whoever happens to speak next.
+    const replyOverrideAsk = escalatedApproachByAgent.get(nextId);
+    // The email-reply card: from this agent's own propose_email_reply call (carries the body), else —
+    // on a new-email alert turn — from the payload's emailReplyRef, so the buttons are there even when
+    // the model skipped the tool (Save then explains there is no suggestion yet; Dismiss still works).
+    const replyEmailReply = emailCardFor(nextId, r.toolUses);
     replies.push({
       agentId: nextId,
       text: safeText,
       fallbackNotes: outcome.perAgentFallbacks.length > 0 ? outcome.perAgentFallbacks : undefined,
       artifacts: replyArtifacts.length ? replyArtifacts : undefined,
       confirmAsk: replyConfirmAsk,
+      overrideAsk: replyOverrideAsk,
+      emailReply: replyEmailReply,
       checklist: replyChecklist,
+      priorities: replyPriorities,
+      schedule: replySchedule,
+      navLink: data.navLink && nextId === data.targetAgentId ? data.navLink : undefined,
     });
     spoken.add(nextId);
 
@@ -5882,11 +6832,35 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     if (replies.length > 0) return;
     const didWork = toolUses.find((t) => t.ok && t.tool !== "tool_catalog");
     if (!didWork) return;
+    const card = emailCardFor(didWork.agentId, toolUses);
     replies.push({
       agentId: didWork.agentId,
-      text:
-        `${didWork.summary} — I ran out of time to reply in full, but that went through. ` +
-        `Let me know if you want more detail.`,
+      text: card
+        ? `New email from ${card.fromName || card.fromAddress}${card.subject ? ` — "${card.subject}"` : ""}. ` +
+          `I ran out of time to write it all up, but my suggested reply is on the card below.`
+        : `${didWork.summary} — I ran out of time to reply in full, but that went through. ` +
+          `Let me know if you want more detail.`,
+      ...(card ? { emailReply: card } : {}),
+    });
+  };
+
+  // A turn whose payload carries a navLink (the scheduled priority check) MUST end with that button in
+  // front of the owner. Owner, 2026-10-16: "There is no scenario or excuse for priority message not being
+  // produced". The target agent's reply gets the button wherever it was built (normal, hardReply); if the
+  // model produced nothing at all (timeout, empty completion), a short deterministic reply carries it.
+  const ensureNavLinkDelivered = () => {
+    const link = data.navLink;
+    const target = data.targetAgentId;
+    if (!link || !target) return;
+    const i = replies.findIndex((r) => r.agentId === target);
+    if (i >= 0) {
+      if (!replies[i].navLink) replies[i] = { ...replies[i], navLink: link };
+      return;
+    }
+    replies.push({
+      agentId: target,
+      text: `Hello Sir, I couldn't finish writing this one up just now — the "${link.label}" button below takes you straight there.`,
+      navLink: link,
     });
   };
 
@@ -6129,6 +7103,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       return { ...finalResult(), partial: true };
     }
     ensureNotSilentOnRealWork();
+    ensureNavLinkDelivered();
     try {
       await turnStore.saveTurnChunk(turnId, replies, null, true, finalResult());
     } catch (e) {
@@ -6139,6 +7114,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   }
 
   ensureNotSilentOnRealWork();
+  ensureNavLinkDelivered();
   persistResearchedMemory();
   return finalResult();
 }
@@ -6361,20 +7337,33 @@ async function runWorkerTurn(record: {
         const a = c.arguments;
         const name = String(a.name ?? "").trim();
         const content = String(a.content ?? "");
-        if (!name || !content)
-          return JSON.stringify({ ok: false, error: "name and content are required" });
+        // Accept a structured `document` with no `content` — CREATE_ARTIFACT_TOOL's `required` is
+        // ["name"] and its `document` description says "Supply the structure instead of `content`",
+        // so the old `!content` guard made the schema lie to the worker: a worker that followed its
+        // own tool description into a slide layout was rejected outright. Matches the OpenAI and
+        // Lovable guards; found by the independent verifier (VERIFY-artifact-formats-3.md, R1).
+        //
+        // Two lanes fixed this line independently and the merge kept both reasons, because they are
+        // different lessons: the paragraph above is WHY the guard was wrong (the schema promised
+        // something the executor refused); the reason it SURVIVED loop 2 is that the two chat paths
+        // were relaxed and this one and the voice one were not — the sites that had been edited got
+        // checked, the sites that carried the same rule did not.
+        //
+        // The error text is part of the fix, not cosmetics: "name and content are required" was
+        // still telling a caller to send `content` when `document` alone is now valid.
+        if (!name || (!content && !a.document))
+          return JSON.stringify({ ok: false, error: "name plus content or document are required" });
         if (artifactId) return JSON.stringify({ ok: true, deduped: true, id: artifactId });
         if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
         try {
-          const { createArtifact } = await import("./artifacts/artifacts.server");
-          const { id, deepLink } = await createArtifact({
+          const { createArtifactFromAgent } = await import("./artifacts/artifacts.server");
+          const { id, deepLink } = await createArtifactFromAgent({
             userEmail: email,
             agentId: w.personaId ?? null, // attribute to the accountable persona
             taskId: a.task_id ? String(a.task_id) : null,
             folder: String(a.folder ?? worker.role),
             name,
-            mime: String(a.mime ?? "text/markdown"),
-            bytes: Buffer.from(content, "utf8"),
+            args: { format: a.format, content, document: a.document, mime: a.mime },
           });
           artifactId = id;
           artifactName = name;
@@ -6599,7 +7588,19 @@ async function executeClaimedTurn(record: {
     const lead = result.replies?.[0];
     if (lead && wantsPush) {
       const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
-      const title = `${name} replied`;
+      // An email alert names the sender and stays until dismissed; every other turn is unchanged.
+      // Guarded like the presence check above: a throw here must never fail an already-saved reply.
+      let emailPush: ReturnType<typeof import("./email/inbound-email").inboundEmailPush> = null;
+      try {
+        const { inboundEmailPush } = await import("./email/inbound-email");
+        emailPush = inboundEmailPush(
+          (record.payload as { emailReplyRef?: { fromName?: string; fromAddress?: string } })
+            ?.emailReplyRef,
+        );
+      } catch {
+        emailPush = null;
+      }
+      const title = emailPush?.title ?? `${name} replied`;
       const body = String(lead.text).replace(/\s+/g, " ").slice(0, 140);
       // Primary away-delivery: piggyback journey's push (web-push + FCM/Android bridge), the SAME
       // reliable path reminders/alarms use to reach the phone. No separate Huddle VAPID keys needed;
@@ -6633,6 +7634,9 @@ async function executeClaimedTurn(record: {
                 // one at a time. `notificationId` tags web-push the same way.
                 notificationId: record.id,
                 tag: record.id,
+                // journey forwards it to the Android bridge, which then keeps the notification
+                // when tapped (setAutoCancel(false)) — only Dismiss or a swipe clears it.
+                ...(emailPush?.sticky ? { sticky: "true" } : {}),
               },
             },
             caller: { entra_email: record.user_email },
@@ -6792,7 +7796,12 @@ type TurnUpdateDTO = {
     text: string;
     artifacts?: { id: string; name: string }[];
     confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+    overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
     checklist?: ChecklistPayload;
+    priorities?: PrioritiesWidgetData;
+    navLink?: NavLink;
+    schedule?: ScheduleWidgetData;
   }[];
   result: HuddleTurnResult | null;
 };
@@ -6831,7 +7840,12 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
           text: string;
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+          overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
           checklist?: ChecklistPayload;
+          priorities?: PrioritiesWidgetData;
+          navLink?: NavLink;
+          schedule?: ScheduleWidgetData;
         }[],
         result: (t.result ?? null) as HuddleTurnResult | null,
       }));
@@ -6896,7 +7910,12 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         text: string;
         artifacts?: { id: string; name: string }[];
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+        overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
         checklist?: ChecklistPayload;
+        priorities?: PrioritiesWidgetData;
+        navLink?: NavLink;
+        schedule?: ScheduleWidgetData;
       }[];
       // Tool-use breadcrumbs for away/cross-device turns — the client filters per agent + drops tool_catalog.
       toolUses?: import("../data/seed").ToolUseEvent[];
@@ -6932,7 +7951,12 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         text: string;
         artifacts?: { id: string; name: string }[];
         confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+        overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+    emailReply?: EmailReplyAsk;
         checklist?: ChecklistPayload;
+        priorities?: PrioritiesWidgetData;
+        navLink?: NavLink;
+        schedule?: ScheduleWidgetData;
       }[],
       toolUses: ((t.result as { toolUses?: unknown } | null)?.toolUses ?? undefined) as
         | import("../data/seed").ToolUseEvent[]

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Send,
   Sparkles,
@@ -12,7 +12,6 @@ import {
   Plus,
   Users,
   Bell,
-  BellRing,
   FileText,
   Paperclip,
   X,
@@ -23,11 +22,29 @@ import {
   Pause,
   CircleStop,
   ListChecks,
+  AlertTriangle,
+  Mail,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AGENT_BY_ID, AGENTS, type AgentId } from "../data/agents";
-import { breadcrumbToolsFor, type ChecklistPayload, type Huddle, type HuddleMessage, type ToolUseEvent } from "../data/seed";
+import {
+  breadcrumbToolsFor,
+  type ChecklistPayload,
+  type Huddle,
+  type HuddleMessage,
+  type NavLink,
+  type ToolUseEvent,
+} from "../data/seed";
+// The widget payload contract is Lane B's (lib/tasks/widgets.server.ts). Type-only import — that
+// module is deliberately dependency-free, so nothing server-side reaches the client bundle.
+import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
+import type { EmailReplyAsk } from "../lib/email/email-reply-ask";
+import {
+  dismissEmailReplyFn,
+  getEmailReplyCountsFn,
+  saveEmailReplyDraftFn,
+} from "../lib/email/email-replies.functions";
 import {
   enqueueHuddleTurn,
   getTurnUpdates,
@@ -36,10 +53,22 @@ import {
 } from "../lib/huddle.functions";
 import { uploadChatAttachmentFn } from "../lib/artifacts/attachments.functions";
 import { userTurnTs } from "../lib/turn-identity";
+import {
+  anchoredScrollTop,
+  createFollowState,
+  olderStart,
+  shouldRevealOlder,
+  windowStart,
+  type ScrollMetrics,
+} from "../lib/transcript-scroll";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
-import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind } from "../store";
+import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind, type View } from "../store";
+import {
+  PrioritiesWidget,
+  ScheduleWidget,
+} from "./JourneyWidgets";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useDictation } from "../hooks/useDictation";
 import { usePush } from "../hooks/usePush";
@@ -47,11 +76,13 @@ import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useAuth } from "@/hooks/useAuth";
 import {
   confirmTaskFromButtonFn,
+  overrideApproachFromButtonFn,
   backlogTaskFromButtonFn,
   parkTaskFromButtonFn,
 } from "../lib/tasks/confirm-ask.functions";
 
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
+import { ViewSwitcher } from "./ViewSwitcher";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -70,29 +101,21 @@ export function HuddleView() {
     () => allMessages.filter((m) => m.huddleId === activeId),
     [allMessages, activeId],
   );
-  const view = useHuddleStore((s) => s.view);
-  const setView = useHuddleStore((s) => s.setView);
-
   if (!huddle) return null;
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <HuddleHeader huddle={huddle} view={view} setView={setView} />
-      <Transcript messages={messages} huddle={huddle} />
+      <HuddleHeader huddle={huddle} />
+      <Transcript key={huddle.id} messages={messages} huddle={huddle} />
       <Composer huddle={huddle} />
     </section>
   );
 }
 
-function HuddleHeader({
-  huddle,
-  view,
-  setView,
-}: {
-  huddle: Huddle;
-  view: "huddle" | "board" | "artifacts";
-  setView: (v: "huddle" | "board" | "artifacts") => void;
-}) {
+// `view`/`setView` used to be threaded down here as props for the inline switcher. ViewSwitcher
+// reads them from the store itself, the same way Rail does, so the plumbing is gone rather than
+// left dangling.
+function HuddleHeader({ huddle }: { huddle: Huddle }) {
   const startMeeting = useHuddleStore((s) => s.startMeeting);
   const patchMeeting = useHuddleStore((s) => s.patchMeeting);
   const { user } = useAuth();
@@ -168,23 +191,11 @@ function HuddleHeader({
       </div>
 
       <div className="ml-auto flex items-center gap-2">
-        <div className="inline-flex rounded-lg border border-hairline bg-surface p-0.5">
-          {(["huddle", "board", "artifacts"] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setView(v)}
-              className={cn(
-                "rounded-md px-3 py-1 text-xs font-medium capitalize transition",
-                view === v
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {v === "huddle" ? "Huddle" : v === "board" ? "Board" : "Files"}
-            </button>
-          ))}
-        </div>
+        {/* The incumbent switcher, extended from three entries to five and lifted into ViewSwitcher
+            so the header and the phone's bottom bar cannot drift apart. Hidden below `md`, which is
+            exactly where the bottom bar takes over (HuddleApp) — the two are complementary, so
+            precisely one is on screen at any width. They used to BOTH render at 390px, stacked. */}
+        <ViewSwitcher variant="inline" className="app-hidden md:inline-flex" />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -276,31 +287,73 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
     setHydrated(true);
   }, []);
 
-  // Opening a huddle (mount or switch) lands you at the NEWEST message, like SMS — not at the top
-  // of history. Without this, back-filled/autonomous replies sit below the fold and read as
-  // "missing" until you scroll. Double rAF so it pins after the messages actually paint.
-  useEffect(() => {
+  // Opening a huddle lands you at the NEWEST message, like SMS, and stays there as messages arrive
+  // unless YOU scrolled up. The follow decision comes from your last scroll (lib/transcript-scroll.ts),
+  // not from measuring after an update: a push-tap deep link opens the thread before the workspace
+  // history loads, and measuring after that bulk load read "thousands of px from the bottom" as "the
+  // reader scrolled up" — so it landed at the top of history. (Transcript is keyed by huddle id, so a
+  // switch remounts and re-opens at the bottom.)
+  const [follow] = useState(createFollowState);
+  // Only the newest window renders; older pages are revealed on scroll-up. null = follow the newest.
+  const [pinnedStart, setPinnedStart] = useState<number | null>(null);
+  const start = windowStart(messages.length, pinnedStart);
+  const shown = useMemo(() => messages.slice(start), [messages, start]);
+  const anchorRef = useRef<ScrollMetrics | null>(null);
+  const lastId = messages[messages.length - 1]?.id;
+
+  const revealOlder = useCallback(() => {
     const el = scrollRef.current;
-    if (!el) return;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        el.scrollTop = el.scrollHeight;
+    if (!el || anchorRef.current || start <= 0) return;
+    anchorRef.current = {
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    };
+    setPinnedStart(olderStart(start));
+  }, [start]);
+
+  // Pin to the newest message when the list changes or a turn starts. Layout effect so the first paint
+  // is already at the bottom; a second pin after paint catches rows that grow late (markdown, widgets).
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !follow.shouldPin(isPending)) return;
+    el.scrollTop = el.scrollHeight;
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        if (follow.following) el.scrollTop = el.scrollHeight;
       });
     });
-  }, [huddle.id]);
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, [follow, messages.length, lastId, isPending]);
 
-  // Reveal the latest message (and the typing indicator) when the transcript
-  // grows or a turn starts. Instant + rAF (no smooth-scroll jank), and only when
-  // the user is already near the bottom so it never yanks them out of history.
-  useEffect(() => {
+  // After older rows are prepended, keep the same message under the reader. If the window still does
+  // not fill the view there is no scrollbar to ask for more, so reveal the next page now.
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
-    if (!nearBottom && !isPending) return;
-    requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight;
-    });
-  }, [messages.length, isPending]);
+    const before = anchorRef.current;
+    if (before) {
+      anchorRef.current = null;
+      el.scrollTop = anchoredScrollTop(before, el.scrollHeight);
+    }
+    if (start > 0 && el.scrollHeight <= el.clientHeight) revealOlder();
+  }, [start, revealOlder]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const m = {
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    };
+    follow.onScroll(m);
+    if (shouldRevealOlder(m, start)) revealOlder();
+  };
 
   const dayLabel = useMemo(() => {
     if (!hydrated) return "Today · morning standup";
@@ -311,15 +364,24 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
   }, [messages, hydrated]);
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
+    <div
+      ref={scrollRef}
+      onScroll={onScroll}
+      data-testid="transcript"
+      className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6"
+    >
       <div className="mx-auto flex max-w-3xl flex-col gap-4">
-        <div className="flex justify-center">
-          <span className="rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground">
-            {dayLabel}
-          </span>
-        </div>
+        {/* Older history loads on its own as you scroll up, so there is no button for it. The day label
+            marks the true start of the thread, so it shows only once the oldest message is rendered. */}
+        {start === 0 && (
+          <div className="flex justify-center">
+            <span className="rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground">
+              {dayLabel}
+            </span>
+          </div>
+        )}
 
-        {messages.map((m) => (
+        {shown.map((m) => (
           <MessageRow key={m.id} m={m} huddle={huddle} />
         ))}
 
@@ -704,6 +766,246 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
   );
 }
 
+/**
+ * The "Approve anyway" row — the owner's way out of an escalated approach gate, in the thread where
+ * they were told about it.
+ *
+ * This row is the whole answer to the owner's actual complaint ("I cannot unstick a task"). The server
+ * fn behind it existed nowhere the owner could reach before: escalation reached ZERO components, so a
+ * task could be permanently stuck with the only signal being an agent saying so in prose. Modelled on
+ * ConfirmAskRow above, deliberately — same button styling, same resolved badge, same model-free path.
+ *
+ * NO QUOTE IS ASKED FOR HERE. A click is already a user act: it carries an authenticated session no
+ * model can forge. The transcript-quote check exists for the TOOL, where the caller is a model.
+ */
+/**
+ * A button under an agent message that switches the app to one of its tabs. Owner, 2026-10-16: "she
+ * can do so with a button that deep links to the priority tab in the app instead of embedded priority
+ * widget". Pure navigation — no server call, nothing to resolve, so it works however old the message.
+ */
+const NAV_VIEWS: readonly NavLink["view"][] = ["priorities", "schedule", "board", "artifacts"];
+function NavLinkButton({ link }: { link: NavLink }) {
+  const setView = useHuddleStore((s) => s.setView);
+  if (!NAV_VIEWS.includes(link.view)) return null;
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setView(link.view)}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-hairline bg-surface px-3 py-1.5 text-xs font-medium hover:bg-muted"
+      >
+        {link.label}
+      </button>
+    </div>
+  );
+}
+
+function OverrideAskRow({ m }: { m: HuddleMessage }) {
+  const { user } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const ask = m.overrideAsk;
+  if (!ask) return null;
+  if (ask.resolved) {
+    return (
+      <div className={cn(CONFIRM_ASK_BTN, "mt-2 text-muted-foreground")}>
+        <Check size={12} /> Approved — they'll pick it back up
+      </div>
+    );
+  }
+  const caller = user
+    ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+    : undefined;
+  async function approveAnyway() {
+    setBusy(true);
+    try {
+      const res = await overrideApproachFromButtonFn({ data: { caller, taskId: ask!.taskId } });
+      if (res.ok) {
+        useHuddleStore.getState().resolveOverrideAsk(m.id);
+        if (!res.alreadyDone) toast.success("Approved — the team can run with it");
+      } else {
+        // Never a silent failure: telling the owner "unstuck" about a task that is still stuck is the
+        // one outcome worse than the error itself.
+        toast.error(res.error ?? "Couldn't approve that.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2">
+      <div className="flex items-start gap-1.5 text-xs text-foreground">
+        <AlertTriangle size={12} className="mt-0.5 shrink-0 text-destructive" />
+        <span className="min-w-0">
+          <span className="font-semibold">Stuck on your call.</span>{" "}
+          {ask.taskTitle ? <span className="italic">“{ask.taskTitle}”</span> : "This task"} didn't get
+          past the approach review, so nobody is working it until you say so.
+        </span>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={approveAnyway}
+          className={cn(CONFIRM_ASK_BTN, "font-semibold")}
+        >
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} style={{ color: "var(--ai)" }} />}
+          Approve anyway
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            useHuddleStore
+              .getState()
+              .setDraftPrefill(`Here's what you were missing on "${ask.taskTitle}": `)
+          }
+          className={CONFIRM_ASK_BTN}
+        >
+          Give them what's missing
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The new-email reply card: Save to Drafts / Edit first / Dismiss, plus the owed-vs-settled tally.
+ *
+ * Owner, 2026-10-15: "this should have a yes or no button rather than depending on text so that if i
+ * scroll up and click yes two hours later, the context to execute is baked in". So the buttons send
+ * ONLY `emailId`; the server re-reads which message, which mailbox and which reply from
+ * chat.email_replies (ownership-checked). Modelled on ConfirmAskRow / OverrideAskRow. Nothing is sent —
+ * Save makes a threaded reply DRAFT in the owner's Outlook; the email stays owed until he sends it.
+ */
+function EmailReplyRow({ m }: { m: HuddleMessage }) {
+  const { user } = useAuth();
+  const [busy, setBusy] = useState<null | "save" | "dismiss">(null);
+  const [tally, setTally] = useState<{ owed: number; settledToday: number } | null>(null);
+  const ask = m.emailReply;
+  const caller = user
+    ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+    : undefined;
+  const resolved = ask?.resolved;
+  useEffect(() => {
+    if (!caller) return;
+    let alive = true;
+    getEmailReplyCountsFn({
+      data: { caller, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+    })
+      .then((r) => alive && r.ok && setTally({ owed: r.owed, settledToday: r.settledToday }))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // Re-read after an action so the tally reflects it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.username, resolved]);
+  if (!ask) return null;
+  const who = ask.fromName || ask.fromAddress || "this email";
+  async function save() {
+    setBusy("save");
+    try {
+      const res = await saveEmailReplyDraftFn({ data: { caller, emailId: ask!.emailId } });
+      if (res.ok) {
+        useHuddleStore.getState().resolveEmailReply(m.id, "drafted");
+        if (!res.alreadyDone) toast.success("Draft saved in your Outlook Drafts — send it from there");
+      } else {
+        toast.error(res.error ?? "Couldn't save the draft.");
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function dismiss() {
+    setBusy("dismiss");
+    try {
+      const res = await dismissEmailReplyFn({ data: { caller, emailId: ask!.emailId } });
+      if (res.ok) useHuddleStore.getState().resolveEmailReply(m.id, "dismissed");
+      else toast.error(res.error ?? "Couldn't dismiss that.");
+    } finally {
+      setBusy(null);
+    }
+  }
+  const tallyLine = tally ? (
+    <span className="text-[11px] text-muted-foreground" data-testid="email-reply-tally">
+      {tally.owed} owed · {tally.settledToday} settled today
+    </span>
+  ) : null;
+  if (resolved) {
+    return (
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <div className={cn(CONFIRM_ASK_BTN, "text-muted-foreground")}>
+          <Check size={12} />
+          {resolved === "drafted" ? "Draft saved in Outlook — still owed until you send it" : "Dismissed — no reply needed"}
+        </div>
+        {tallyLine}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-2 rounded-lg border p-2" data-testid="email-reply-card">
+      <div className="flex items-start gap-1.5 text-xs text-foreground">
+        <Mail size={12} className="mt-0.5 shrink-0" style={{ color: "var(--ai)" }} />
+        <span className="min-w-0">
+          Reply to <span className="font-semibold">{who}</span>
+          {ask.subject ? <span className="text-muted-foreground"> — “{ask.subject}”</span> : null}
+        </span>
+      </div>
+      {/* The exact text Save puts in Drafts — visible on the card itself, so the tap never depends on
+          Iris's prose having arrived (2026-10-15: her reply timed out and only the card survived). */}
+      {ask.replyBody ? (
+        <blockquote
+          className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap border-l-2 pl-2 text-xs text-muted-foreground"
+          data-testid="email-reply-body"
+        >
+          {ask.replyBody}
+        </blockquote>
+      ) : (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          No suggested reply yet — tap Edit first to tell Iris what to say.
+        </p>
+      )}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          disabled={!!busy}
+          onClick={save}
+          className={cn(CONFIRM_ASK_BTN, "font-semibold")}
+          data-testid="email-reply-save"
+        >
+          {busy === "save" ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} style={{ color: "var(--ai)" }} />}
+          Save to Drafts
+        </button>
+        <button
+          type="button"
+          disabled={!!busy}
+          onClick={() =>
+            useHuddleStore
+              .getState()
+              .setDraftPrefill(
+                `For the reply to ${who}${ask.fromAddress ? ` <${ask.fromAddress}>` : ""}${ask.subject ? ` ("${ask.subject}")` : ""}, change it to: `,
+              )
+          }
+          className={CONFIRM_ASK_BTN}
+        >
+          Edit first
+        </button>
+        <button
+          type="button"
+          disabled={!!busy}
+          onClick={dismiss}
+          className={CONFIRM_ASK_BTN}
+          data-testid="email-reply-dismiss"
+        >
+          {busy === "dismiss" ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />}
+          No reply needed
+        </button>
+        {tallyLine}
+      </div>
+    </div>
+  );
+}
+
 function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
   if (m.author.kind === "user") {
     return (
@@ -827,7 +1129,22 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
           </div>
         )}
         {m.checklist && <ChecklistCard m={m} />}
+        {/* In-chat widget cards, rendered from the message's own SNAPSHOT payload (the docked copy
+            above reads live instead). Same placement and same conditional shape as the checklist. */}
+        {m.priorities && (
+          <div className="mt-2">
+            <PrioritiesWidget data={m.priorities} />
+          </div>
+        )}
+        {m.schedule && (
+          <div className="mt-2">
+            <ScheduleWidget data={m.schedule} />
+          </div>
+        )}
         {m.confirmAsk && <ConfirmAskRow m={m} />}
+        {m.overrideAsk && <OverrideAskRow m={m} />}
+        {m.emailReply && <EmailReplyRow m={m} />}
+        {m.navLink && <NavLinkButton link={m.navLink} />}
       </div>
     </div>
   );
@@ -990,6 +1307,22 @@ function Composer({ huddle }: { huddle: Huddle }) {
     };
   }, [pushCaller?.entra_email]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [notifyStripHidden, setNotifyStripHidden] = useState(() => {
+    try {
+      return localStorage.getItem("huddle.notifyStripHidden") === "1";
+    } catch {
+      return false;
+    }
+  });
+  function hideNotifyStrip() {
+    setNotifyStripHidden(true);
+    try {
+      localStorage.setItem("huddle.notifyStripHidden", "1");
+    } catch {
+      /* per-browser convenience only */
+    }
+  }
+
   async function toggleNotifications() {
     const ok = await push.enablePush();
     toast[ok ? "success" : "message"](
@@ -1013,7 +1346,15 @@ function Composer({ huddle }: { huddle: Huddle }) {
           text: string;
           artifacts?: { id: string; name: string }[];
           confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string };
+          overrideAsk?: { taskId: string; taskTitle: string; note?: string };
+          emailReply?: EmailReplyAsk;
           checklist?: ChecklistPayload;
+          // MUST be declared here AND at HuddleApp's copy of this DTO. This shape is re-declared
+          // inline at both mapping sites and an undeclared field is dropped SILENTLY — no error, no
+          // crash — so a widget would decay into plain text after a reload with nothing to blame.
+          priorities?: PrioritiesWidgetData;
+          navLink?: NavLink;
+          schedule?: ScheduleWidgetData;
         }[]
       | undefined,
     result: TurnResult,
@@ -1077,7 +1418,12 @@ function Composer({ huddle }: { huddle: Huddle }) {
         artifacts: reply.artifacts,
         toolUses: crumbs,
         confirmAsk: reply.confirmAsk,
+        overrideAsk: reply.overrideAsk,
+        emailReply: reply.emailReply,
         checklist: reply.checklist,
+        priorities: reply.priorities,
+        navLink: reply.navLink,
+        schedule: reply.schedule,
       });
     });
 
@@ -1487,6 +1833,33 @@ function Composer({ huddle }: { huddle: Huddle }) {
         {/* Full-width composer card (SMS/Teams/Slack-style): meta row, auto-growing textarea,
             then a docked action row so the input keeps the full width and the actions never
             crowd it. */}
+        {/* Reply notifications (owner 2026-10-20: a one-time strip instead of the composer bell). Shown only
+            where Web Push works (desktop browsers; the Android app gets FCM and never sees it) and only
+            while the browser has not been asked yet — it disappears once allowed, or if he blocks it. */}
+        {push.supported && push.permission === "default" && !notifyStripHidden && (
+          <div className="mb-2 flex items-center gap-2 rounded-xl border border-hairline bg-muted/60 px-3 py-2 text-xs">
+            <Bell size={14} className="shrink-0 text-muted-foreground" />
+            <span className="flex-1">Get reply notifications on this computer</span>
+            <button
+              type="button"
+              onClick={toggleNotifications}
+              disabled={push.busy}
+              className="inline-flex items-center gap-1 rounded-full bg-primary px-3 py-1 font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-50"
+            >
+              {push.busy && <Loader2 size={12} className="animate-spin" />}
+              Turn on
+            </button>
+            <button
+              type="button"
+              onClick={hideNotifyStrip}
+              className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Not now"
+              title="Not now"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
         <div className="rounded-2xl border border-border bg-background px-3 pt-2 pb-1.5 transition focus-within:border-ring focus-within:ring-2 focus-within:ring-ring">
           <div className="mb-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <span className="rounded bg-muted px-1.5 py-0.5 font-medium">
@@ -1570,27 +1943,6 @@ function Composer({ huddle }: { huddle: Huddle }) {
             >
               <Paperclip size={16} />
             </button>
-            {push.supported && push.permission !== "granted" && (
-              <button
-                type="button"
-                onClick={toggleNotifications}
-                disabled={push.busy}
-                className="inline-flex size-9 items-center justify-center rounded-full border border-hairline bg-surface text-muted-foreground transition hover:bg-muted disabled:opacity-50"
-                aria-label="Enable notifications for replies while you're away"
-                title="Notify me when a reply lands while I'm away"
-              >
-                {push.busy ? <Loader2 size={16} className="animate-spin" /> : <Bell size={16} />}
-              </button>
-            )}
-            {push.supported && push.permission === "granted" && (
-              <span
-                className="inline-flex size-9 items-center justify-center rounded-full border border-hairline bg-surface text-primary"
-                aria-label="Notifications on"
-                title="Notifications on — we'll ping you when a reply lands while you're away"
-              >
-                <BellRing size={16} />
-              </span>
-            )}
             <button
               type="button"
               onClick={startVoice}

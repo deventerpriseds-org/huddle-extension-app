@@ -59,6 +59,23 @@ ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS email_send_a
 -- sign-in primary) => auto, anything else => on-request. An address in NEITHER is a third party. The
 -- map is an OVERRIDE layer, so the common case needs no row in it at all.
 ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS email_self_tiers JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- OpenAI BUILT-IN tools (code_interpreter + image_generation) — what lets an agent produce a real
+-- .docx/.pptx/.xlsx/.csv/.png instead of only markdown. Same default+per-agent-override shape as the
+-- email columns above, and a SEPARATE column for the same reason: reusing an existing boolean would
+-- give one value two meanings.
+--
+-- DEFAULT true, and that is deliberate — read this before "hardening" it to false. The email gate
+-- above defaults CLOSED because it is a SAFETY gate: the thing it prevents (mail leaving the tenant)
+-- is irreversible. This one is a COST gate. What it prevents is a few cents of container/image spend;
+-- what a closed default causes is the exact bug it was built to fix — the agent telling the owner it
+-- can only produce markdown. A cost gate that defaults off ships a fix nobody can see. Turning it off
+-- for everyone, or for one agent, is one UPDATE:
+--   UPDATE identity.agent_workflow_config SET builtin_tools_enabled = false, updated_at = now()
+--    WHERE lower(email) = lower('<the owner email>');
+-- Nothing caches it (getAgentWorkflowConfig queries per call), so it takes effect on the next turn.
+ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS builtin_tools_enabled BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS builtin_tools_agent_overrides JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE INDEX IF NOT EXISTS agent_workflow_config_userid_idx ON identity.agent_workflow_config(user_id);
 `;
 
@@ -98,6 +115,12 @@ export interface AgentWorkflowConfig {
   email_send_agent_overrides: Record<string, boolean>;
   /** D4b per-address self-send policy: address -> 'auto' | 'on-request' | 'excluded'. */
   email_self_tiers: Record<string, string>;
+  /** Agents may use OpenAI's built-in code_interpreter + image_generation — i.e. may produce real
+   *  .docx/.pptx/.xlsx/.png files rather than only markdown. Defaults to TRUE (cost gate, not a
+   *  safety gate — see the column comment in BOOTSTRAP_SQL). */
+  builtin_tools_enabled: boolean;
+  /** Per-agent override of builtin_tools_enabled, same shape as email_send_agent_overrides. */
+  builtin_tools_agent_overrides: Record<string, boolean>;
 }
 
 // Gate is ON by default (2026-08-05): the confirm-intent/DoD gate is a SAFETY gate, so a user (or an
@@ -116,6 +139,10 @@ const DEFAULT_CONFIG: AgentWorkflowConfig = {
   email_send_enabled: false,
   email_send_agent_overrides: {},
   email_self_tiers: {},
+  // ON by default: a user with no config row must be able to produce real documents, because the
+  // alternative is the agent telling them it can only write markdown. Cost gate, not a safety gate.
+  builtin_tools_enabled: true,
+  builtin_tools_agent_overrides: {},
 };
 
 /** Read the config for an email. Returns the default (all discretionary) when nothing is set.
@@ -133,16 +160,20 @@ export async function getAgentWorkflowConfig(email: string): Promise<AgentWorkfl
     email_send_enabled: boolean;
     email_send_agent_overrides: Record<string, boolean>;
     email_self_tiers: Record<string, string>;
+    builtin_tools_enabled: boolean;
+    builtin_tools_agent_overrides: Record<string, boolean>;
   }>(
     userId
       ? `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides,
-                 email_send_enabled, email_send_agent_overrides, email_self_tiers
+                 email_send_enabled, email_send_agent_overrides, email_self_tiers,
+                 builtin_tools_enabled, builtin_tools_agent_overrides
            FROM identity.agent_workflow_config
           WHERE user_id = $1 OR (user_id IS NULL AND lower(email) = ANY($2))
           ORDER BY (user_id IS NOT NULL) DESC, updated_at DESC
           LIMIT 1`
       : `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides,
-                 email_send_enabled, email_send_agent_overrides, email_self_tiers
+                 email_send_enabled, email_send_agent_overrides, email_self_tiers,
+                 builtin_tools_enabled, builtin_tools_agent_overrides
            FROM identity.agent_workflow_config WHERE lower(email) = lower($1) LIMIT 1`,
     userId ? [userId, emails] : [email],
   );
@@ -155,6 +186,11 @@ export async function getAgentWorkflowConfig(email: string): Promise<AgentWorkfl
     email_send_enabled: r.rows[0].email_send_enabled === true,
     email_send_agent_overrides: r.rows[0].email_send_agent_overrides ?? {},
     email_self_tiers: r.rows[0].email_self_tiers ?? {},
+    // `!== false` (not `=== true`) so a row that predates the column — where the driver hands back
+    // null/undefined rather than the column default — keeps the ON default instead of silently
+    // disabling real-document output for the one user who has a config row.
+    builtin_tools_enabled: r.rows[0].builtin_tools_enabled !== false,
+    builtin_tools_agent_overrides: r.rows[0].builtin_tools_agent_overrides ?? {},
   };
 }
 
@@ -176,20 +212,26 @@ export async function setAgentWorkflowConfig(
     email_send_agent_overrides:
       patch.email_send_agent_overrides ?? current.email_send_agent_overrides,
     email_self_tiers: patch.email_self_tiers ?? current.email_self_tiers,
+    builtin_tools_enabled: patch.builtin_tools_enabled ?? current.builtin_tools_enabled,
+    builtin_tools_agent_overrides:
+      patch.builtin_tools_agent_overrides ?? current.builtin_tools_agent_overrides,
   };
   // Dual-write: user_id (primary going forward) + email (retained for display/fallback). Upsert stays on
   // the email PK (the canonical email is stable per user); user_id is set/refreshed when resolvable.
   await getPool().query(
     `INSERT INTO identity.agent_workflow_config
        (email, default_required, agent_overrides, default_caps, agent_cap_overrides, user_id,
-        email_send_enabled, email_send_agent_overrides, email_self_tiers, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+        email_send_enabled, email_send_agent_overrides, email_self_tiers,
+        builtin_tools_enabled, builtin_tools_agent_overrides, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
      ON CONFLICT (email) DO UPDATE SET
        default_required=EXCLUDED.default_required, agent_overrides=EXCLUDED.agent_overrides,
        default_caps=EXCLUDED.default_caps, agent_cap_overrides=EXCLUDED.agent_cap_overrides,
        email_send_enabled=EXCLUDED.email_send_enabled,
        email_send_agent_overrides=EXCLUDED.email_send_agent_overrides,
        email_self_tiers=EXCLUDED.email_self_tiers,
+       builtin_tools_enabled=EXCLUDED.builtin_tools_enabled,
+       builtin_tools_agent_overrides=EXCLUDED.builtin_tools_agent_overrides,
        user_id=COALESCE(EXCLUDED.user_id, identity.agent_workflow_config.user_id), updated_at=now()`,
     [
       email,
@@ -201,6 +243,8 @@ export async function setAgentWorkflowConfig(
       next.email_send_enabled,
       JSON.stringify(next.email_send_agent_overrides),
       JSON.stringify(next.email_self_tiers),
+      next.builtin_tools_enabled,
+      JSON.stringify(next.builtin_tools_agent_overrides),
     ],
   );
   return next;
@@ -382,6 +426,36 @@ export async function canOfferSendEmailTool(
       err instanceof Error ? err.message : err,
     );
     return false;
+  }
+}
+
+/**
+ * May this agent be offered OpenAI's BUILT-IN tools (code_interpreter + image_generation) — i.e. may
+ * it produce a real .docx / .pptx / .xlsx / .csv / .png rather than only markdown?
+ *
+ * Shaped like `canOfferSendEmailTool` and read at the same point in the turn, but it FAILS OPEN, and
+ * the difference is deliberate rather than an oversight. Those email resolvers fail CLOSED because the
+ * thing they gate is irreversible: mail that leaves the tenant cannot be recalled, so an unreadable
+ * config must mean "don't". This gate protects a few cents of container/image spend. If a transient
+ * pool throw silently downgraded every agent to markdown-only, the owner would see the ORIGINAL bug
+ * ("it says it can only make .md files") with no error anywhere to explain it — a far worse outcome
+ * than the spend. So: default ON, per-agent override wins, and a read failure resolves to the default.
+ */
+export async function canOfferBuiltInTools(
+  email: string | null | undefined,
+  agentId?: string,
+): Promise<boolean> {
+  if (!email || !email.trim()) return DEFAULT_CONFIG.builtin_tools_enabled;
+  try {
+    const cfg = await getAgentWorkflowConfig(email);
+    const override = agentId ? cfg.builtin_tools_agent_overrides[agentId] : undefined;
+    return typeof override === "boolean" ? override : cfg.builtin_tools_enabled;
+  } catch (err) {
+    console.error(
+      `[canOfferBuiltInTools] config read failed for ${email}/${agentId ?? "-"}; using the default (${DEFAULT_CONFIG.builtin_tools_enabled}):`,
+      err instanceof Error ? err.message : err,
+    );
+    return DEFAULT_CONFIG.builtin_tools_enabled;
   }
 }
 

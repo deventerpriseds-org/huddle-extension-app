@@ -61,8 +61,11 @@ function researchDirective(task: { id: string; title: string; category: string |
     `${agentRole(task.assigned_agent)} you are. Research it properly: use your web-search tool to gather ` +
     `current, credible information — plan your searches, prioritize authoritative and leading sources in ` +
     `this area, and think it through. Then:\n` +
-    `1) You MUST call create_artifact to SAVE your full findings as a document — detailed markdown with ` +
-    `your analysis, the sources you used, and a clear recommendation or concrete next steps. Set task_id ` +
+    `1) You MUST call create_artifact to SAVE your full findings as a document — detailed, with ` +
+    `your analysis, the sources you used, and a clear recommendation or concrete next steps. Choose the ` +
+    `\`format\` that actually fits what you produced rather than defaulting blindly: 'md' for plain prose ` +
+    `(still the right default), 'docx' when the user will send or print it, 'pptx' for a deck, and ` +
+    `'mermaid'/'html'/'svg' when the finding is a diagram or a visual. Set task_id ` +
     `to "${task.id}" and folder to "${folder}". The app turns that saved document into a clickable link on ` +
     `your message automatically — do NOT write your own link to it, do NOT paste an external website URL as ` +
     `if it were your document, and do NOT claim you "compiled a document" unless this create_artifact call ` +

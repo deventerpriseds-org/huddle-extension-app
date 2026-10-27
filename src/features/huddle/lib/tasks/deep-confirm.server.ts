@@ -7,6 +7,8 @@
 // chat-friendly tier. The original ask is stored here. One pending row per (user, huddle); best-effort
 // (any DB error → null, so the turn simply proceeds normally). No new secret; reuses AZURE_PG_URL.
 import { Pool } from "pg";
+import { isGreenLight } from "./green-light";
+import { verdictToApply, type RememberedVerdict } from "./verdict-memory";
 
 let _pool: Pool | null = null;
 function getPool(): Pool {
@@ -30,7 +32,19 @@ CREATE TABLE IF NOT EXISTS chat.deep_confirm (
 -- fallback + display. Resolved in-store from the passed email via resolveScopeByEmail, so both of a
 -- user's emails converge to one pending row regardless of which email a caller presents.
 ALTER TABLE chat.deep_confirm ADD COLUMN IF NOT EXISTS user_id TEXT;
-CREATE INDEX IF NOT EXISTS deep_confirm_userid_idx ON chat.deep_confirm(user_id);`;
+CREATE INDEX IF NOT EXISTS deep_confirm_userid_idx ON chat.deep_confirm(user_id);
+-- Verdict memory (2026-09-12). EXTENDS this row rather than adding a second table: the question
+-- "what did you last tell me about this huddle" is the same question this row already answers, one
+-- step later. Before these columns every verdict DELETEd the row, so the gate re-asked a question
+-- the owner had just answered.
+--   resolved_at     — set when a verdict lands. A row with it set is NO LONGER a pending ask (the
+--                     reader filters on IS NULL), it is only a memory. Cleared again by a new ask.
+--   last_verdict    — 'produce' | 'quick'. NEVER 'cancel': cancel DELETEs the row, so a park can
+--                     never suppress a later genuine ask.
+--   last_verdict_at — when, so the window in verdict-memory.ts can expire it.
+ALTER TABLE chat.deep_confirm ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE chat.deep_confirm ADD COLUMN IF NOT EXISTS last_verdict TEXT;
+ALTER TABLE chat.deep_confirm ADD COLUMN IF NOT EXISTS last_verdict_at TIMESTAMPTZ;`;
 let booted: Promise<void> | null = null;
 async function ensure() {
   if (booted) return booted;
@@ -47,8 +61,11 @@ export async function setPendingDeepConfirm(email: string | null, huddleId: stri
     const { resolveScopeByEmail } = await import("../identity/identity.server");
     const { userId } = await resolveScopeByEmail(email);
     await getPool().query(
+      // resolved_at=NULL: a NEW ask is by definition unanswered, so a row that was only a verdict
+      // memory becomes a live pending again. last_verdict is left alone — the gate only reaches
+      // here when no recent verdict suppressed the ask, so there is nothing to contradict.
       `INSERT INTO chat.deep_confirm (user_email, huddle_id, agent_id, ask_text, user_id) VALUES ($1,$2,$3,$4,$5)
-       ON CONFLICT (user_email, huddle_id) DO UPDATE SET agent_id=$3, ask_text=$4, user_id=COALESCE(EXCLUDED.user_id, chat.deep_confirm.user_id), created_at=now()`,
+       ON CONFLICT (user_email, huddle_id) DO UPDATE SET agent_id=$3, ask_text=$4, user_id=COALESCE(EXCLUDED.user_id, chat.deep_confirm.user_id), created_at=now(), resolved_at=NULL`,
       [email, huddleId, agentId, askText, userId],
     );
   } catch { /* best-effort */ }
@@ -60,10 +77,13 @@ export async function getPendingDeepConfirm(email: string | null, huddleId: stri
     const { resolveScopeByEmail } = await import("../identity/identity.server");
     const { userId, emails } = await resolveScopeByEmail(email);
     const r = await getPool().query<{ ask_text: string; agent_id: string | null; created_at: Date }>(
+      // `resolved_at IS NULL` is what keeps a VERDICT MEMORY from masquerading as an outstanding
+      // ask. Without it a resolved row would come back as `pending` and the user's next message
+      // would be classified as a reply to a question nobody had just asked.
       userId
         ? `SELECT ask_text, agent_id, created_at FROM chat.deep_confirm
-           WHERE (user_id=$1 OR (user_id IS NULL AND lower(user_email)=ANY($2))) AND huddle_id=$3 LIMIT 1`
-        : `SELECT ask_text, agent_id, created_at FROM chat.deep_confirm WHERE user_email=$1 AND huddle_id=$2 LIMIT 1`,
+           WHERE (user_id=$1 OR (user_id IS NULL AND lower(user_email)=ANY($2))) AND huddle_id=$3 AND resolved_at IS NULL LIMIT 1`
+        : `SELECT ask_text, agent_id, created_at FROM chat.deep_confirm WHERE user_email=$1 AND huddle_id=$2 AND resolved_at IS NULL LIMIT 1`,
       userId ? [userId, emails, huddleId] : [email, huddleId],
     );
     const row = r.rows[0];
@@ -89,6 +109,86 @@ export async function clearPendingDeepConfirm(email: string | null, huddleId: st
 }
 
 /**
+ * Remember that the user answered the gate, and with WHAT — instead of deleting the row and
+ * forgetting it happened.
+ *
+ * `resolved_at` retires the pending ask (so `getPendingDeepConfirm` stops returning it) while
+ * `last_verdict`/`last_verdict_at` keep the answer for `getRecentDeepVerdict` to reuse. Called for
+ * "produce" and "quick" only; "cancel" still goes through `clearPendingDeepConfirm`, which DELETEs
+ * the row, so a park can never suppress a later genuine ask.
+ *
+ * UPDATE-then-INSERT rather than a plain upsert: the read path resolves a user by `user_id` OR any
+ * of their emails, so the row may have been written under the user's OTHER address and a bare
+ * `ON CONFLICT (user_email, huddle_id)` would create a second row instead of updating that one.
+ * The INSERT is only the no-row case — the green-lit produce path records a verdict without there
+ * ever having been a pending ask. Best-effort throughout: a failure just means the gate behaves
+ * exactly as it did before this existed.
+ */
+export async function recordDeepConfirmVerdict(
+  email: string | null,
+  huddleId: string,
+  agentId: string | null,
+  askText: string,
+  verdict: RememberedVerdict,
+): Promise<void> {
+  if (!email) return;
+  try {
+    await ensure();
+    const { resolveScopeByEmail } = await import("../identity/identity.server");
+    const { userId, emails } = await resolveScopeByEmail(email);
+    const upd = await getPool().query(
+      userId
+        ? `UPDATE chat.deep_confirm SET resolved_at=now(), last_verdict=$4, last_verdict_at=now(), agent_id=COALESCE($5, agent_id)
+           WHERE (user_id=$1 OR (user_id IS NULL AND lower(user_email)=ANY($2))) AND huddle_id=$3`
+        : `UPDATE chat.deep_confirm SET resolved_at=now(), last_verdict=$3, last_verdict_at=now(), agent_id=COALESCE($4, agent_id)
+           WHERE user_email=$1 AND huddle_id=$2`,
+      userId ? [userId, emails, huddleId, verdict, agentId] : [email, huddleId, verdict, agentId],
+    );
+    if (upd.rowCount) return;
+    await getPool().query(
+      `INSERT INTO chat.deep_confirm (user_email, huddle_id, agent_id, ask_text, user_id, resolved_at, last_verdict, last_verdict_at)
+       VALUES ($1,$2,$3,$4,$5,now(),$6,now())
+       ON CONFLICT (user_email, huddle_id) DO UPDATE SET resolved_at=now(), last_verdict=$6, last_verdict_at=now()`,
+      [email, huddleId, agentId, askText || "(green-lit)", userId, verdict],
+    );
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * The user's last verdict for this huddle, if it is recent enough to answer for them.
+ *
+ * Returns null when there is no verdict, when it is stale, or on ANY error — every one of which
+ * means "ask normally", i.e. the behaviour before this existed. The window lives in
+ * `verdict-memory.ts` so it is provable offline without a database.
+ */
+export async function getRecentDeepVerdict(
+  email: string | null,
+  huddleId: string,
+  nowMs: number = Date.now(),
+): Promise<RememberedVerdict | null> {
+  if (!email) return null;
+  try {
+    await ensure();
+    const { resolveScopeByEmail } = await import("../identity/identity.server");
+    const { userId, emails } = await resolveScopeByEmail(email);
+    const r = await getPool().query<{ last_verdict: string | null; last_verdict_at: Date | null }>(
+      userId
+        ? `SELECT last_verdict, last_verdict_at FROM chat.deep_confirm
+           WHERE (user_id=$1 OR (user_id IS NULL AND lower(user_email)=ANY($2))) AND huddle_id=$3 LIMIT 1`
+        : `SELECT last_verdict, last_verdict_at FROM chat.deep_confirm WHERE user_email=$1 AND huddle_id=$2 LIMIT 1`,
+      userId ? [userId, emails, huddleId] : [email, huddleId],
+    );
+    const row = r.rows[0];
+    if (!row?.last_verdict_at) return null;
+    return verdictToApply(row.last_verdict, new Date(row.last_verdict_at).getTime(), nowMs);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Classify a short user reply to a pending deep-1:1 produce-vs-quick confirm. Deterministic (no LLM).
  * - "produce"  → yes, make it a real produce task the team works async → artifact
  * - "quick"    → no, just give me a quick take here (resume inline on a chat-friendly tier)
@@ -108,5 +208,56 @@ export function classifyConfirmReply(text: string): "produce" | "quick" | "cance
     return "produce";
   if (/\b(produce|make it a task|as a task|work on it|async|artifact|full (write|work) ?up|deep dive|do the (research|work))/.test(t))
     return "produce";
+  // A GREEN LIGHT ANYWHERE IN THE LINE, not just at the start. The two patterns above are anchored
+  // with `^`, and that is exactly how the measured defect happened: the ask fired at 01:32, the owner
+  // replied "Go for it" (caught by `^go\b`) and then "Okay knock it out" — which starts with "okay",
+  // matches neither pattern, and was classified "unrelated", so the gate kept asking a question the
+  // owner had answered three times. Verified before the fix: classifyConfirmReply("Okay knock it out")
+  // returned "unrelated". Owner: "need to make sure it works and doesn't ignore a green light."
+  if (isGreenLight(text)) return "produce";
   return "unrelated";
+}
+
+/**
+ * The produce-vs-quick ask itself.
+ *
+ * Two things the owner named, and one honest limitation:
+ *  - THE WORDING. "the wording is bad and it needs a cleanup that will help." The old copy opened
+ *    "That's a meaty one." and read like a form: it named the mechanism ("take it on as a task, do the
+ *    deep work async") instead of the outcome the user cares about, and ended in a quoted command
+ *    list. This says what the user gets either way, in the order they'd choose in.
+ *  - EVERY AGENT RECITED IT IDENTICALLY, because it is a hardcoded literal returned before any
+ *    persona/snapshot call. Fully voicing it through the persona would mean a model call, which is the
+ *    exact cost this gate exists to avoid — so instead each agent gets a STABLE variant chosen by its
+ *    id: Cole always phrases it one way, Elle another, and no agent's phrasing wanders between turns.
+ *    That removes the chorus effect for the price of nothing. It is NOT full persona voicing, and if
+ *    that is wanted it needs a cheap model tier here, not a bigger literal.
+ *
+ * Every variant keeps the produce / quick / cancel contract `classifyConfirmReply` parses, and keeps
+ * those three words bold and literal so the reply is easy to give.
+ */
+const PRODUCE_VS_QUICK_VARIANTS: (() => string)[] = [
+  () =>
+    "That's a real piece of work, not a chat answer. I can **produce** it — put it on the board, dig in " +
+    "properly, and come back with a draft you can mark up. Or a **quick** take right now, off what I " +
+    "already know. Which would you rather? (**cancel** if you'd sooner park it.)",
+  () =>
+    "Happy to run at this properly. Two ways: **produce** — I take it away, do the work, hand you " +
+    "something written to react to. Or **quick** — my read right here, right now, off the top. Say " +
+    "which, or **cancel** and I'll drop it.",
+  () =>
+    "This one deserves more than a paragraph. Want me to **produce** it (I'll work it up and bring you " +
+    "a draft to pick apart) or give you a **quick** answer here and now? **cancel** if it can wait.",
+  () =>
+    "I can go two ways on this. **produce**: on the board, worked properly, a draft back to you. " +
+    "**quick**: an answer in this thread in a few seconds, no digging. Your call — or **cancel** it.",
+];
+
+export function produceVsQuickAsk(agentId: string | null | undefined): string {
+  // Stable per agent (a sum over the id), so an agent's phrasing never wanders between turns — a
+  // teammate who says it differently every time reads as MORE robotic, not less.
+  const id = agentId ?? "";
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h + id.charCodeAt(i)) % 9973;
+  return PRODUCE_VS_QUICK_VARIANTS[h % PRODUCE_VS_QUICK_VARIANTS.length]();
 }
