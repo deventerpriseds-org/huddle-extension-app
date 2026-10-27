@@ -4717,3 +4717,25 @@ Owner: *"keep re-asking, but in a loop moving to the next item in the lane... ~3
 - [x] Verifier loop 1 (`.claude/VERIFY-confirm-ask-rotation-1.md`): gate CONFIRMED; REFUTED a hidden 3/day per-agent cap + a clock-skew double-send. Both fixed in 03ab8f2, new guards mutation-proved FIRED.
 - [ ] Verifier loop 2 (running) → push (target is an owner decision) → merge to main → deploy → owner live confirm.
 Branch: `claude_autowork-lane-rotation` (designated branch's history no longer connects to main — push target is an owner decision).
+## ACT:instant-email-alerts + ACT:draft-formatting — instant, clearly-labelled, sticky email alerts; Calibri drafts (owner 2026-10-27)
+Owner: *"i recieved an email and Iris did not immediately send me an alert message with a draft reply"* → after the
+diagnosis: *"A and B now... The push should stick until I dismiss. Also when I click save draft, the draft it creates is
+all one block with no new line spacing and the font is random instead of being calibri size 11 font"*.
+
+**Diagnosis (ground truth, read-only):** Trinnex email 17:39:48Z → watch 17:43:03Z → Iris alert (645 ch) + draft (367 ch)
+17:43:10Z → journey send-push "FCM sent… 1 success" 17:43:11Z to the Huddle app token. Mechanism worked; the gap was the
+5-minute poll (3m23s) and a push titled "Iris Chase replied". Runs: run-inbound-email dry 40555456420, azure-pg 40555462650 / 40555642569.
+
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| A | Email-alert push titled "New email from <sender> — draft reply ready" (other pushes unchanged) | built | mail-subscription.test P1–P6; P5 FIRED |
+| S | Sticky: huddle sets data.sticky → journey fcmData forwards it → bridge setAutoCancel(false), kept on repeat | built (3 repos) | journey sticky.test FIRED; bridge StickyNotificationSourceTest (CI); **needs Huddle APK rebuild + install** |
+| B | Graph change notifications: `/api/public/graph-mail-notify` + `chat.graph_mail_subscriptions`; 5-min check creates/renews; poll stays as backstop; alert hours still apply | built | mail-subscription.test S1–S14, R1–R4; S3 FIRED |
+| D | Save to Drafts: createReply empty → PATCH HTML (Calibri 11pt, one `<p>` per line, blank lines kept) above the quoted original | built | draft-html.test D1–D11; D1, D4, D10 FIRED |
+
+**Shipped 2026-10-27:** huddle #105 (ebf801b, deploy-swa success), journey #69 (d7a9db2, edge deploy success),
+bridge #10 + #11 → Huddle APK v1.0.10 built (84f9813). Live: run 40575373656 → `subscription: {action:create, ok:true}`
+(Graph accepted our validation echo) and a real 20:04Z Trinnex email alerted with push title "New email from Elizabeth J.
+Plumley — draft reply ready", data.sticky "true", FCM 1 success (journey function_logs 20:08:53Z).
+**NOT yet confirmed by the owner** — needs: install v1.0.10; the next real email arriving within seconds; the push staying
+after a tap; one Save to Drafts tap (spacing + Calibri 11 in Outlook).

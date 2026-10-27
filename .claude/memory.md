@@ -3744,6 +3744,22 @@ here as fact three times before being checked.)
 - Live since 2026-10-15 16:09Z (#68, `c1c9e32`): 7 enabled `<job>-u-<user_id>` rows; the old email rows
   are disabled, not deleted — re-enable one with `UPDATE tasks.scheduled_jobs SET enabled=true WHERE id=…`.
 
+## Active work — INSTANT email alerts + sticky sender-named push + Calibri drafts (2026-10-27, ACT:instant-email-alerts, NOT owner-confirmed)
+- **Why:** the 2026-10-27 Trinnex email WAS alerted (push FCM-accepted 3m23s after arrival) — the owner just didn't get it
+  "immediately", and the push read "Iris Chase replied". Lesson: a "done" turn + journey "1 success" is the delivery ground
+  truth; check journey `function_logs` for `[send-push-notification]` before concluding a push never went out.
+- **B (instant):** Graph subscription on `users/{mailbox}/mailFolders('inbox')/messages` (changeType created), stored in
+  `chat.graph_mail_subscriptions` (owner_email PK). `ensureMailSubscription` runs inside every non-dry inbound-email run
+  (create / renew <24h left or >12h old / recreate on host change or 404). Route `/api/public/graph-mail-notify` echoes
+  `validationToken`, trusts only clientState = sha256("huddle-graph-mail:"+JOURNEY_PROXY_TOKEN), honours the inboundEmail
+  cadence hours, kicks `/run-inbound-email` (2.5s wait) AND pulls the scheduled job's next_run_at to now (backstop).
+  Idempotent: one announcement per email by turn id, so poll + notification never double-alert.
+- **Sticky push:** payload.emailReplyRef → `inboundEmailPush()` → title + `data.sticky:"true"` → journey fcmData allow-list
+  forwards `sticky` → bridge `setAutoCancel(!sticky)` (+ carried through AlarmRepeater). Only effective after a Huddle APK
+  rebuild (android-bridge-template configs/8596e6c2…/bridge.config.json `_buildTriggeredAt` bump).
+- **Drafts:** `createReply` with a `comment` = one unstyled plain-text run (the bug). Now createReply `{}` then PATCH HTML
+  from `lib/email/draft-html.ts` (Calibri 11pt). Same formatter for the plain-draft fallback.
+
 ## Active work — inbound email watch: Iris tells the owner about new email + offers a reply draft (2026-10-15, ACT:inbound-email-watch, PRs #82/#85/#87/#90 LIVE — deploy 38836561690; Save-to-Drafts NOT yet owner-confirmed)
 - **Root cause of "Iris never told me Amy (Trinnex) emailed":** nothing read incoming mail — Huddle had send/draft/calendar only; journey's 127 edge fns have no mail reader; `mail-and-appointments` is on-request only. Graph app already holds Mail.Read/Mail.ReadWrite; app-only Inbox + Drafts read of von.ellis@ = HTTP 200 (graph-permission-check.yml §4, run 38799786649).
 - **Built (PR #82):** job type `inbound-email` on the EXISTING scheduler (hourly 7–22 ET, Settings "New email alerts"), `lib/email/inbound-email.ts` (pure screen, default `needs-reply`) + `.server.ts` (reads owner Outlook via resolveCalendarMailbox, one durable Iris DM turn + push per kept email, max 5/run), route `/api/public/run-inbound-email`, `run-inbound-email.yml`. `create_email_draft` gained `reply_to` on all 3 surfaces via `createDraftForTool` → threaded reply in the OWNER's Drafts (Graph createReply). Never sends.
