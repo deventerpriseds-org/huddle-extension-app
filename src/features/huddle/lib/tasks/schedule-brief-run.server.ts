@@ -234,6 +234,38 @@ export function briefDeliveryPlan(
   };
 }
 
+/** A `runId` that marks a DELIBERATE manual re-run (run-schedule-brief.yml sends `manual-<utc ts>`).
+ *  Only this shape may make a fresh brief turn; see scheduleBriefTurnId. */
+const MANUAL_RERUN_ID = /^manual-[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * THE idempotency key for one brief turn: (owner, slot, local date it covers). Every producer of a
+ * brief -- Huddle's own scheduler and journey's window trigger -- goes through runScheduleBrief, and
+ * runScheduleBrief derives its turn id ONLY here, so two producers asking for the same brief land on
+ * the same `chat.pending_turns` id and `enqueueTurn`'s `ON CONFLICT (id) DO NOTHING` makes the
+ * second one a no-op: one turn, one push, whichever fires first.
+ *
+ * `runId` is IGNORED unless it is a manual re-run id. The scheduler's `fireJob` sends every job a
+ * generic per-slot runId (`<job id>-<YYYYMMDDHH>`) as a retry guard for jobs with no natural key.
+ * The brief HAS a natural key, and appending that runId is exactly what split Huddle's 8am brief
+ * (`schedule-brief-morning-<date>-schedule-brief-u-<uuid>-<date>08`) from journey's
+ * (`schedule-brief-morning-<date>`) -- two 8am messages every weekday 2026-10-16..27
+ * (docs/qc-evidence/FIX-iris-morning-dedupe.md).
+ *
+ * `owner` is the resolved user id when there is one (one person, many sign-in emails = one owner,
+ * the same rule as scheduler.server.ts `scheduledJobId`), else the lower-cased login email.
+ */
+export function scheduleBriefTurnId(k: {
+  slot: string;
+  forDate: string;
+  owner: { userId: string | null; email: string };
+  runId?: string;
+}): string {
+  const owner = k.owner.userId ? `u-${k.owner.userId}` : `e-${k.owner.email.trim().toLowerCase()}`;
+  const rerun = k.runId && MANUAL_RERUN_ID.test(k.runId) ? `-${k.runId}` : "";
+  return `schedule-brief-${k.slot}-${k.forDate}-${owner}${rerun}`;
+}
+
 /**
  * Run one edition for one user and deliver it.
  *
@@ -298,15 +330,25 @@ export async function runScheduleBrief(
     return { ...base, delivered: false, kind: plan.kind, directive: plan.directive, brief };
   const directive = plan.directive;
 
-  // The run id is keyed on the EDITION AND THE DATE IT COVERS, not on a timestamp: if the scheduler
-  // fires twice in one slot (a retry, an overlapping tick), `enqueueTurn` sees the same id and
-  // returns not-fresh, so the owner gets ONE push rather than two. `runId` only disambiguates a
-  // deliberate manual re-run.
+  // The run id is keyed on the OWNER, the EDITION AND THE DATE IT COVERS, not on a timestamp or on
+  // which producer asked: a scheduler retry, an overlapping tick, AND journey's 8am window call all
+  // land on the same id, `enqueueTurn` returns not-fresh, and the owner gets ONE push.
   // A window gets its own key per day, so 11am/5pm/7pm each send once. journey's 8am MORNING window is
   // sent WITHOUT a window (as the morning edition), so it shares this key with Huddle's own 8am brief
-  // and the owner gets ONE 8am message whichever fires first.
+  // and the owner gets ONE 8am message whichever fires first. See scheduleBriefTurnId for why the
+  // scheduler's runId is NOT part of the key.
   const slot = opts.window ? `window-${opts.window.name}` : brief.edition;
-  const turnId = `schedule-brief-${slot}-${brief.forDate}${opts.runId ? `-${opts.runId}` : ""}`;
+  let owner: { userId: string | null; email: string } = { userId: null, email: caller.entra_email };
+  try {
+    const { resolveScopeByEmail } = await import("../identity/identity.server");
+    owner = {
+      userId: (await resolveScopeByEmail(caller.entra_email)).userId,
+      email: caller.entra_email,
+    };
+  } catch {
+    /* identity lookup is best-effort — the email still keys one owner */
+  }
+  const turnId = scheduleBriefTurnId({ slot, forDate: brief.forDate, owner, runId: opts.runId });
 
   const payload = {
     text: directive,
