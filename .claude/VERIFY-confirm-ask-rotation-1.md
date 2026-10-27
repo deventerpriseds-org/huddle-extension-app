@@ -23,7 +23,7 @@ Started 2026-10-27 20:42Z. Budget 45 min.
 | `bun scripts/confirm-spacing.test.ts` | ALL PASS, rc 0 |
 | `bun scripts/voice-toolset-hidden.test.ts` | 36 passed, 0 failed |
 | `bun scripts/confirm-reask-db.test.ts` (local PG16) | ALL PASS (34 lines), rc 0 |
-| `npx tsc --noEmit -p .` | pending |
+| `npx tsc --noEmit -p .` | rc 0, no errors |
 
 ## Verdicts
 (filled per claim below)
