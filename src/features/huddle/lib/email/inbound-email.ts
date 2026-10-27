@@ -217,3 +217,18 @@ export function inboundEmailDirective(
   const body = fullBody.length > room ? `${fullBody.slice(0, room)}\n[…email truncated]` : fullBody;
   return build(body);
 }
+
+/** The phone push for an email alert. Owner, 2026-10-27: the generic "Iris Chase replied" read like any
+ *  chat reply, so the alert that mattered was skimmed past. The title names the sender and says a
+ *  reply is waiting; `sticky` keeps it in the shade until he dismisses it (a tap opens the chat but
+ *  does not clear it). Returns null for every other turn, which keeps the existing push untouched. */
+export function inboundEmailPush(
+  ref: { fromName?: string | null; fromAddress?: string | null } | null | undefined,
+): { title: string; sticky: true } | null {
+  if (!ref) return null;
+  const raw = String(ref.fromName ?? "").trim() || String(ref.fromAddress ?? "").trim();
+  // Outlook's "Last, First" display name reads backwards in a headline.
+  const m = /^([^,]+),\s*([^,]+)$/.exec(raw);
+  const who = (m ? `${m[2].trim()} ${m[1].trim()}` : raw).slice(0, 60) || "someone";
+  return { title: `New email from ${who} — draft reply ready`, sticky: true };
+}
