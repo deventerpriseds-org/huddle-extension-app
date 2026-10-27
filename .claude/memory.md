@@ -117,7 +117,7 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
-## Chat transcript scroll: opens at the newest, follows only if YOU did not scroll up (2026-10-27, IMPLEMENTED, NOT owner-confirmed)
+## Chat transcript scroll: opens at the newest, follows only if YOU did not scroll up (2026-10-27, DEPLOYED 4332c41, NOT owner-confirmed)
 A push deep link (`?huddle=dm-<agent>`) switches threads BEFORE the workspace history downloads, so any
 "scroll to bottom on thread switch" fires on an empty thread. The old follow rule re-measured near-bottom
 after each update, which a bulk history load always fails (view at 0, list grew 27k px) — so it landed at

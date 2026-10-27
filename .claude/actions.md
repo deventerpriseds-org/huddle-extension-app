@@ -29,8 +29,8 @@ Previous: 2026-08-26 (ACT-64 confirm-ask/assist scope revised, no code yet; ACT-
 thread history instead of the bottom … it seems it should quick load the most recent and only load the
 oldest when scrolling up far enough according to best practices"*
 
-**Status: IMPLEMENTED on `claude/busy-hawking-3wokvh`, mechanism verified headless (A/B), NOT yet
-confirmed on the owner's phone.**
+**Status: DEPLOYED `4332c41` (PR #109, deploy run 40586460645 success), mechanism verified headless
+(A/B), NOT yet confirmed on the owner's phone.**
 
 **Cause (read from code, then reproduced):** the deep link switches to the 1:1 before the workspace
 history downloads. `Transcript` scrolled to the bottom only on a thread SWITCH (empty thread then), and
