@@ -396,3 +396,18 @@ a blocked task makes a duplicate. Recommended: **include BLOCKED in the dedup se
 8. **Performance and error categories:** covered (AC-19, AC-41..AC-46, AC-52; AC-13, AC-23, AC-50, AC-53, AC-64).
 9. **Tier:** this change decides a gate (what reaches DOING) and binds user replies to confirmations, so it is **Tier 1**:
    independent verifier after, and mutation-prove AC-1, AC-13, AC-22/23 and AC-27 with `scripts/mutate.sh`.
+
+---
+
+## SCOPE CHANGED BY THE OWNER (2026-10-27, after this pass)
+Owner: *"why are we limiting to the top n per agent instead of the entire lane given it is already capped instead of double
+capping? ... we already had logic for the interval to ask me and how many times a day ... why would re asks pause if an agent
+has 2 or more items instead of asking the first, then asking the second so on and so forth in a loop?"*
+1. **OQ-1 → rotate the WHOLE UP_NEXT lane** (no top-3 limit). AC-11 holds; rotation order AC-24/25 applies to every item.
+2. **No new day cap and no new interval setting.** Re-asks ride the EXISTING throttle: `armConfirmAsksSpaced` /
+   `nextSpacedFanSlotIso` (45–90 min `resolveConfirmGap` chain anchored on `getLatestPendingConfirmAskAt`), inside
+   `resolveConfirmFanWindows` (9–18, 20–22), plus `CONFIRM_FIRE_MAX_PER_USER_PER_TICK`. **Dropped: AC-43, AC-45, AC-46,
+   AC-47, AC-48, AC-49, and OQ-5.** AC-41/42/44 stay as assertions against the existing chain. The only new value is a
+   per-item floor of 24h (owner's own 2026-08-26 choice), as `CONFIRM_REASK_MIN_HOURS_DEFAULT` + `resolveConfirmReaskMinHours`
+   in the same pattern as `CONFIRM_GAP_DEFAULT` / `resolveConfirmGap`.
+3. **OQ-3 → no pause for review-frozen agents.** Asking keeps looping; only promotion to DOING respects REVIEW_CAP.
