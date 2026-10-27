@@ -50,6 +50,63 @@ scheduler sends one on every fire. The design (one shared key) was right; the ke
 Why weekends got one: on Sat/Sun journey fires its `weekends` window (sent WITH a window), whose key is
 `schedule-brief-window-weekends-<date>` by design, so there is no second MORNING turn to duplicate.
 
-## 3. Fix
+## 3. Fix (commit `7acbf14`)
 
-_(filled in as it lands)_
+One place, Huddle's runner: `scheduleBriefTurnId({slot, forDate, owner, runId})` in
+`schedule-brief-run.server.ts` is now the only code that builds a brief turn id.
+
+- **Key = (owner, slot, local date it covers):** `schedule-brief-<slot>-<forDate>-u-<userId>`
+  (`-e-<lower-cased email>` only if no user resolves). Owner is resolved with `resolveScopeByEmail`,
+  the same rule as `scheduledJobId`: one person with two sign-in emails is one owner.
+- **`runId` is ignored unless it is a manual re-run** (`/^manual-…$/`, what `run-schedule-brief.yml`
+  sends). The scheduler's generic `<job id>-<YYYYMMDDHH>` runId no longer enters the key. Its job
+  (stop a retry in the same slot double-firing) is already done by the natural key.
+- **Both triggers stay.** Neither producer is suppressed; whichever reaches `enqueueTurn` first wins,
+  the other gets `ON CONFLICT (id) DO NOTHING` → `fresh=false` → no `runTurnById` → no push.
+- **No journey change needed.** journey already sends the morning call with no window and no runId,
+  so `iris-window.ts:11` ("shares the turn key of Huddle's own 8am brief") becomes true as written.
+
+Checked before scoping the key by user (OBSERVED, `azure-pg-query.yml` run 40575099755): both
+producers post `caller.entra_email = dev@enterpriseds.io`, every brief row carries
+`user_id = a89e3652-3ba0-407e-90c3-7b5c0c7b4cad`, and `identity.profile_emails` links both
+`dev@enterpriseds.io` and `von.ellis@enterpriseds.io` to that id. So a user-scoped key converges.
+
+## 4. Tests (`bun scripts/schedule-brief-dedupe.test.ts`, 21/21)
+
+- **J (pure key):** scheduler body and journey body give the same morning key (J1); a manual re-run,
+  evening, a window, another day and another owner each give a different key (J2–J6); email fallback (J7).
+- **K (the real `runScheduleBrief`, outside world mocked):** replays 10-26 — Huddle at 12:00:02Z
+  delivers, journey at 12:00:08Z is a no-op, one row, one run (K1–K4); journey-first order (K5);
+  the `von.ellis@` alias is the same owner (K6); evening, a window and a manual re-run still send (K7–K10).
+  The durable-turn mock has `enqueueTurn`'s `ON CONFLICT (id) DO NOTHING` semantics; `runTurnById`
+  is what fires the push, so its call count is the push count.
+- Existing suites unchanged and green: `schedule-brief.test.ts` 65/65, `priority-check.test.ts` 35/35,
+  `scheduler-one-user.test.ts` 7/7. `tsc --noEmit` clean. ESLint: no new findings (the 6 prettier
+  findings in `schedule-brief-run.server.ts` are pre-existing on `main`).
+
+## 5. Mutation proofs (`mutate.sh`, anchors in files)
+
+| # | defect reinstated | named test | outcome |
+|---|---|---|---|
+| M1 | any `runId` appended to the key (the pre-fix behaviour) | J1 scheduler and journey derive the SAME morning key | **FIRED** |
+| M1b | same | K2 journey's window fire 6 s later is a no-op | **FIRED** |
+| M2 | owner dropped from the key | J6 another owner is a different key | **FIRED** |
+| M3 | runner bypasses the helper with the pre-fix inline id | K2 journey's window fire 6 s later is a no-op | **FIRED** |
+| M3b | same | K4 exactly ONE turn ran (one push) | **FIRED** |
+
+All restored to HEAD, tree clean. (A first pass passed the pattern as `FAIL <name>`; the script adds
+`FAIL ` itself, so those three runs reported "nothing proven" and were re-run, not counted.)
+
+## 6. What will no longer be in place
+
+- The second weekday 8am Iris message (journey's copy, or Huddle's when journey fires first).
+- Turn ids in the old shapes. New rows read `schedule-brief-<slot>-<date>-u-<userId>`; old rows are
+  untouched. Nothing in `src/` parses these ids (grep).
+- A non-`manual-` `runId` no longer forces a fresh brief. Only `run-schedule-brief.yml`'s
+  `manual-<ts>` does.
+- Two different users can no longer collide on one key (before, the key had no owner at all, so a
+  second user's brief for the same slot and date would have been silently dropped).
+
+**Deploy:** merging to `main` auto-deploys (`deploy-swa.yml` `push: main`; `src/` is not in
+`paths-ignore`). Status until the owner confirms one 8am message live: implemented, mechanism
+verified locally, NOT yet confirmed live.
