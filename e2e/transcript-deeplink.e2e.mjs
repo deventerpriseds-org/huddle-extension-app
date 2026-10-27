@@ -21,7 +21,7 @@ const SEL = '[data-testid="transcript"], section > div.overflow-y-auto';
 
 let failed = 0;
 const report = (ok, label, detail) => {
-  console.log(`${ok ? "✅" : "❌"} ${label} — ${detail}`);
+  console.log(`${ok ? "✅ PASS" : "❌ FAIL"} ${label} — ${detail}`);
   if (!ok) failed++;
 };
 
