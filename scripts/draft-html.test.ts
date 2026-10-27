@@ -61,7 +61,7 @@ check(
 );
 
 const graph = readFileSync("src/features/huddle/lib/email/graph-email.server.ts", "utf8");
-check("D10 createReply is never given a plain `comment`", !/comment:\s*input\.body/.test(graph));
+check("D10 createReply is never given a plain `comment`", !/\bcomment\s*:/.test(graph));
 check(
   "D11 the draft body is PATCHed as HTML from replyTextToHtml",
   /contentType: "HTML",\s*content: insertReplyIntoBody\(quoted, replyTextToHtml\(bodyText\)\)/.test(
