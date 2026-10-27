@@ -7589,11 +7589,17 @@ async function executeClaimedTurn(record: {
     if (lead && wantsPush) {
       const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
       // An email alert names the sender and stays until dismissed; every other turn is unchanged.
-      const { inboundEmailPush } = await import("./email/inbound-email");
-      const emailPush = inboundEmailPush(
-        (record.payload as { emailReplyRef?: { fromName?: string; fromAddress?: string } })
-          ?.emailReplyRef,
-      );
+      // Guarded like the presence check above: a throw here must never fail an already-saved reply.
+      let emailPush: ReturnType<typeof import("./email/inbound-email").inboundEmailPush> = null;
+      try {
+        const { inboundEmailPush } = await import("./email/inbound-email");
+        emailPush = inboundEmailPush(
+          (record.payload as { emailReplyRef?: { fromName?: string; fromAddress?: string } })
+            ?.emailReplyRef,
+        );
+      } catch {
+        emailPush = null;
+      }
       const title = emailPush?.title ?? `${name} replied`;
       const body = String(lead.text).replace(/\s+/g, " ").slice(0, 140);
       // Primary away-delivery: piggyback journey's push (web-push + FCM/Android bridge), the SAME

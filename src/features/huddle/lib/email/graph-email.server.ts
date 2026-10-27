@@ -40,8 +40,14 @@ async function createFormattedReplyDraft(
     body?: { contentType?: string; content?: string };
   };
   if (!draft.id) return { ok: false, error: "Graph createReply returned no draft id" };
-  const quoted =
-    String(draft.body?.contentType ?? "").toLowerCase() === "html" ? draft.body?.content : "";
+  // The quoted original comes back as HTML normally, or as text for a plain-text mailbox; keep it
+  // either way (as formatted paragraphs when it was text) so the thread below the reply survives.
+  const isHtml = String(draft.body?.contentType ?? "").toLowerCase() === "html";
+  const quoted = isHtml
+    ? draft.body?.content
+    : draft.body?.content
+      ? replyTextToHtml(draft.body.content)
+      : "";
   const patched = await fetch(`${base}/messages/${encodeURIComponent(draft.id)}`, {
     method: "PATCH",
     headers: auth,
