@@ -213,6 +213,28 @@ ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS clarify_status 
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS clarify_count INT NOT NULL DEFAULT 0;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS open_question TEXT;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS open_question_asked_at TIMESTAMPTZ;
+-- Confirm-ask RE-ASK loop (.claude/AC-confirm-ask-rotation.md, section B). confirm_ask_at is the SCHEDULED
+-- instant and updated_at is any write, so neither can say when an ask actually went out:
+--   confirm_last_sent_at: stamped ONLY when a confirm-ask turn was really enqueued (a refused enqueue rolls it
+--     back). It drives the per-item 24h re-ask floor, the least-recently-asked rotation order, and which asked
+--     item a plain "yes" in the DM confirms (getPendingConfirmForAgent) -- by SENT order, never by updated_at.
+--   confirm_ask_count: asks sent for this assignee (1 = the first ask). The CAS key that stops two ticks from
+--     sending the same attempt twice, and what makes a turn a FIRST ask vs a RE-ask.
+-- An 'asked' row is RE-ARMED for another ask by moving confirm_ask_at past confirm_last_sent_at: "armed but
+-- unsent" = awaiting with an instant, OR asked with confirm_ask_at > confirm_last_sent_at (ARMED_UNSENT_SQL).
+-- approach_redrive_count / _last_at: a confirmed task whose approach never got proposed is nudged (internal
+-- turn, propose_approach) at most WorkflowCaps.approach times, then escalated -- no new cap constant.
+-- resetEngagementOnReassignment clears all four: a new assignee's first ask is a FIRST ask.
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS confirm_last_sent_at TIMESTAMPTZ;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS confirm_ask_count INT NOT NULL DEFAULT 0;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_redrive_count INT NOT NULL DEFAULT 0;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_redrive_last_at TIMESTAMPTZ;
+-- One-time backfill for asks sent before these columns existed (35 live 'asked' rows, oldest 2026-08-10): the
+-- best record of when they went out is the instant they were armed for. Idempotent -- after the first run no
+-- row matches (last_sent is set), so later bootstraps touch nothing. updated_at deliberately NOT bumped.
+UPDATE tasks.task_engagement_state
+   SET confirm_last_sent_at = COALESCE(confirm_ask_at, updated_at), confirm_ask_count = GREATEST(confirm_ask_count, 1)
+ WHERE confirm_status = 'asked' AND confirm_last_sent_at IS NULL;
 
 -- GENERAL recurring-job scheduler, resident in Azure Huddle PG (NOT supabase). One heartbeat — the
 -- existing every-minute run-turn tick — dispatches every due job here, so any recurring/scheduled job
@@ -888,13 +910,31 @@ export interface TaskEngagementState {
   approach_override_request_reason: string | null;
   /** The row's own last-write time — the fallback floor when approach_escalated_at is NULL. */
   updated_at: string | null;
+  /** When a confirm-ask for this task was last really SENT (see the DDL note). NULL = never sent. */
+  confirm_last_sent_at: string | null;
+  /** Confirm-asks sent for the current assignee; 0 = never asked, 1 = first ask, 2+ = re-asks. */
+  confirm_ask_count: number;
+  /** Approach re-drives sent (confirmed but approach never proposed); bounded by WorkflowCaps.approach. */
+  approach_redrive_count: number;
+  approach_redrive_last_at: string | null;
 }
 
 const ENGAGEMENT_COLS =
   "task_id,user_email,confirm_status,proposed_dod,confirmed_dod,confirm_ask_at,confirmed_at,last_review_ping_at,next_review_ping_at,revision_count,entered_review_at," +
   "approach_status,proposed_approach,approach_revision_count,clarify_status,clarify_count,open_question,open_question_asked_at," +
   "approach_override_by,approach_override_at,approach_override_via,approach_override_quote,approach_override_turn_id," +
-  "approach_escalated_at,approach_override_requested_at,approach_override_requested_by,approach_override_request_reason,updated_at";
+  "approach_escalated_at,approach_override_requested_at,approach_override_requested_by,approach_override_request_reason,updated_at," +
+  "confirm_last_sent_at,confirm_ask_count,approach_redrive_count,approach_redrive_last_at";
+
+/**
+ * "Armed but not yet sent", as SQL over a task_engagement_state alias. A FIRST ask is armed while 'awaiting'
+ * with an instant; a RE-ask is an 'asked' row whose confirm_ask_at was moved past its last send
+ * (armConfirmReAskAt). Every reader that means "a pending ask" uses this one predicate, so the spacing anchor,
+ * the straggler re-fan and the due query cannot disagree about what is pending.
+ */
+const ARMED_UNSENT_SQL = (a: string) =>
+  `(${a}.confirm_ask_at IS NOT NULL AND (${a}.confirm_status = 'awaiting' OR ` +
+  `(${a}.confirm_status = 'asked' AND ${a}.confirm_ask_at > COALESCE(${a}.confirm_last_sent_at, '-infinity'::timestamptz))))`;
 
 /** Batch-read engagement state for a set of task ids (a missing entry means "never asked yet"). */
 export async function getTaskEngagementStates(taskIds: string[]): Promise<Map<string, TaskEngagementState>> {
@@ -913,11 +953,12 @@ export async function getTaskEngagementState(taskId: string): Promise<TaskEngage
 }
 
 /**
- * The latest FUTURE, still-pending (`awaiting`) confirm-ask instant already scheduled for a user, or
- * null if none. Used to ANCHOR the spacing of newly-armed asks: a new ask is placed a randomized gap
- * AFTER this floor so a later pass never lands a reach-out next to one already on the calendar. Only
- * 'awaiting' rows constrain placement — an already-'asked' (sent) row must not block future scheduling.
- * Never throws for the caller to depend on (returns null on any error path via the caller's try/catch).
+ * The latest FUTURE, still-pending (armed-but-unsent — first asks AND re-armed re-asks, ARMED_UNSENT_SQL)
+ * confirm-ask instant already scheduled for a user, or null if none. Used to ANCHOR the spacing of
+ * newly-armed asks: a new ask is placed a randomized gap AFTER this floor so a later pass never lands a
+ * reach-out next to one already on the calendar. A SENT ask must not block future scheduling — an 'asked' row
+ * only counts while it is re-armed and not yet re-sent. Never throws for the caller to depend on (returns null
+ * on any error path via the caller's try/catch).
  */
 export async function getLatestPendingConfirmAskAt(userEmail: string): Promise<Date | null> {
   await ensureBootstrapped();
@@ -925,11 +966,31 @@ export async function getLatestPendingConfirmAskAt(userEmail: string): Promise<D
   const { userId, emails } = await resolveScopeByEmail(userEmail);
   const { rows } = await getPool().query<{ latest: string | null }>(
     userId
-      ? `SELECT max(confirm_ask_at) AS latest FROM tasks.task_engagement_state
-          WHERE (user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2)))
-            AND confirm_status = 'awaiting' AND confirm_ask_at > now()`
-      : `SELECT max(confirm_ask_at) AS latest FROM tasks.task_engagement_state
-          WHERE lower(user_email) = lower($1) AND confirm_status = 'awaiting' AND confirm_ask_at > now()`,
+      ? `SELECT max(es.confirm_ask_at) AS latest FROM tasks.task_engagement_state es
+          WHERE (es.user_id = $1 OR (es.user_id IS NULL AND lower(es.user_email) = ANY($2)))
+            AND ${ARMED_UNSENT_SQL("es")} AND es.confirm_ask_at > now()`
+      : `SELECT max(es.confirm_ask_at) AS latest FROM tasks.task_engagement_state es
+          WHERE lower(es.user_email) = lower($1) AND ${ARMED_UNSENT_SQL("es")} AND es.confirm_ask_at > now()`,
+    userId ? [userId, emails] : [userEmail],
+  );
+  const latest = rows[0]?.latest;
+  return latest ? new Date(latest) : null;
+}
+
+/**
+ * When the user's most recent confirm-ask (first ask or re-ask, any agent) was actually SENT, or null. The
+ * fire-time half of the spacing chain: fireDueConfirmAsks never sends a second ask until the gap's minimum has
+ * passed since this instant, however the asks were armed (AC-41).
+ */
+export async function getLastConfirmSentAt(userEmail: string): Promise<Date | null> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
+  const { rows } = await getPool().query<{ latest: string | null }>(
+    userId
+      ? `SELECT max(confirm_last_sent_at) AS latest FROM tasks.task_engagement_state
+          WHERE user_id = $1 OR (user_id IS NULL AND lower(user_email) = ANY($2))`
+      : `SELECT max(confirm_last_sent_at) AS latest FROM tasks.task_engagement_state WHERE lower(user_email) = lower($1)`,
     userId ? [userId, emails] : [userEmail],
   );
   const latest = rows[0]?.latest;
@@ -964,30 +1025,115 @@ export async function ensureConfirmAskAt(taskId: string, userEmail: string, askA
  * when a window closed). It relocates that ask to a random instant inside the next open window so the
  * batch spreads across the window instead of dumping at its opening edge. Only ever called for rows
  * still in 'awaiting' (never touches an already-'asked'/'confirmed' row) so it can't resurrect a sent
- * ask. No-op if the row doesn't exist or has already advanced past 'awaiting'.
+ * ask. Covers a re-armed RE-ask the same way (an 'asked' row armed past its last send — ARMED_UNSENT_SQL):
+ * it is still unsent, so moving it is a re-fan, not a resurrection. No-op once the row has been sent/confirmed.
  */
 export async function reArmConfirmAskAt(taskId: string, userEmail: string, askAtIso: string): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(
-    `UPDATE tasks.task_engagement_state
+    `UPDATE tasks.task_engagement_state es
        SET confirm_ask_at = $3, updated_at = now()
-     WHERE task_id = $1 AND lower(user_email) = lower($2) AND confirm_status = 'awaiting'`,
+     WHERE es.task_id = $1 AND lower(es.user_email) = lower($2) AND ${ARMED_UNSENT_SQL("es")}`,
     [taskId, userEmail.toLowerCase(), askAtIso],
   );
 }
 
 /**
- * Transition awaiting -> asked (the confirm-intent DM was just enqueued). Returns whether THIS call
- * made the transition, so a caller can tell "I just enqueued it" from "someone else already did."
+ * RE-ARM an unanswered ('asked') confirm-ask for another round, at an instant the spacing chain chose
+ * (armConfirmAsksSpaced). The re-ask counterpart of ensureConfirmAskAt, and set-once per round the same way:
+ * it only applies while the row is NOT already armed for a re-ask (confirm_ask_at <= last send), and only to
+ * an instant AFTER the last send — so a second pass can't push an armed re-ask out forever, and a re-ask can't
+ * be armed into the past. Returns whether THIS call armed it.
  */
-export async function markConfirmAsked(taskId: string): Promise<boolean> {
+export async function armConfirmReAskAt(taskId: string, userEmail: string, askAtIso: string): Promise<boolean> {
   await ensureBootstrapped();
   const { rowCount } = await getPool().query(
-    `UPDATE tasks.task_engagement_state SET confirm_status='asked', updated_at=now()
-      WHERE task_id = $1 AND confirm_status = 'awaiting'`,
-    [taskId],
+    `UPDATE tasks.task_engagement_state
+       SET confirm_ask_at = $3::timestamptz, updated_at = now()
+     WHERE task_id = $1 AND lower(user_email) = lower($2)
+       AND confirm_status = 'asked'
+       AND confirm_last_sent_at IS NOT NULL
+       AND (confirm_ask_at IS NULL OR confirm_ask_at <= confirm_last_sent_at)
+       AND $3::timestamptz > confirm_last_sent_at`,
+    [taskId, userEmail.toLowerCase(), askAtIso],
   );
   return (rowCount ?? 0) > 0;
+}
+
+/**
+ * CLAIM the right to send one confirm-ask (first ask or re-ask) — a compare-and-set on confirm_ask_count, so
+ * two concurrent ticks cannot both send attempt N, whatever turn id each would mint. On success the row is
+ * 'asked', the count advanced, and confirm_last_sent_at stamped. The caller MUST then enqueue the turn and, if
+ * the enqueue is refused or throws, call releaseConfirmAskSend — an ask that was not enqueued must never read
+ * as sent (AC-23). Returns the claimed count + stamp, or null when someone else got there first / the row is
+ * no longer armed-but-unsent (sent, confirmed, reassigned). The stamp is truncated to milliseconds so the
+ * JS Date the driver hands back compares EQUAL to the stored value in releaseConfirmAskSend's guard.
+ */
+export async function claimConfirmAskSend(
+  taskId: string,
+  expectedCount: number,
+): Promise<{ count: number; sentAt: string } | null> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ confirm_ask_count: number; confirm_last_sent_at: Date | string }>(
+    `UPDATE tasks.task_engagement_state es
+        SET confirm_status = 'asked', confirm_ask_count = es.confirm_ask_count + 1,
+            confirm_last_sent_at = date_trunc('milliseconds', now()), updated_at = now()
+      WHERE es.task_id = $1 AND es.confirm_ask_count = $2 AND ${ARMED_UNSENT_SQL("es")}
+      RETURNING es.confirm_ask_count, es.confirm_last_sent_at`,
+    [taskId, expectedCount],
+  );
+  if (!rows.length) return null;
+  const s = rows[0].confirm_last_sent_at;
+  return { count: rows[0].confirm_ask_count, sentAt: s instanceof Date ? s.toISOString() : String(s) };
+}
+
+/**
+ * Undo a claimConfirmAskSend whose enqueue was refused or threw: restore the previous status, count and last-
+ * sent stamp, leaving confirm_ask_at (already due) untouched — so the ask is still armed, still due, and is
+ * retried on the next tick with a fresh turn id. Guarded on the exact claim (count + stamp) AND on the row still
+ * being 'asked', so it can never undo a later claim or roll back a confirmation the user made in between.
+ */
+export async function releaseConfirmAskSend(
+  taskId: string,
+  claim: { count: number; sentAt: string },
+  prev: { status: "awaiting" | "asked"; lastSentAt: string | null },
+): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE tasks.task_engagement_state
+        SET confirm_status = $4, confirm_ask_count = $2 - 1, confirm_last_sent_at = $5::timestamptz
+      WHERE task_id = $1 AND confirm_ask_count = $2 AND confirm_last_sent_at = $3::timestamptz
+        AND confirm_status = 'asked'`,
+    [taskId, claim.count, claim.sentAt, prev.status, prev.lastSentAt],
+  );
+}
+
+/**
+ * CLAIM one approach re-drive for a confirmed task whose approach is still 'pending' (AC-34) — compare-and-set
+ * on approach_redrive_count, same shape as claimConfirmAskSend. Returns the claimed count, or null.
+ */
+export async function claimApproachRedrive(taskId: string, expectedCount: number): Promise<number | null> {
+  await ensureBootstrapped();
+  const { rows } = await getPool().query<{ approach_redrive_count: number }>(
+    `UPDATE tasks.task_engagement_state
+        SET approach_redrive_count = approach_redrive_count + 1, approach_redrive_last_at = now(), updated_at = now()
+      WHERE task_id = $1 AND approach_redrive_count = $2
+        AND confirm_status = 'confirmed' AND approach_status = 'pending'
+      RETURNING approach_redrive_count`,
+    [taskId, expectedCount],
+  );
+  return rows.length ? rows[0].approach_redrive_count : null;
+}
+
+/** Undo a claimApproachRedrive whose enqueue was refused or threw (so a not-sent nudge never counts). */
+export async function releaseApproachRedrive(taskId: string, claimedCount: number, prevLastAt: string | null): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE tasks.task_engagement_state
+        SET approach_redrive_count = $2 - 1, approach_redrive_last_at = $3::timestamptz
+      WHERE task_id = $1 AND approach_redrive_count = $2`,
+    [taskId, claimedCount, prevLastAt],
+  );
 }
 
 export interface DueConfirmAsk {
@@ -997,40 +1143,63 @@ export interface DueConfirmAsk {
   title: string;
   category: string | null;
   tags: string[] | null;
+  /** 'awaiting' = a FIRST ask is due; 'asked' = a re-armed RE-ask is due. */
+  confirm_status: "awaiting" | "asked";
+  confirm_ask_count: number;
+  confirm_last_sent_at: string | null;
 }
 
 /**
- * Armed-but-unsent confirm-intent asks whose jittered `confirm_ask_at` has elapsed — i.e. due to FIRE
- * NOW. Read every heartbeat by the scheduler so each ask goes out at its own jittered instant (random
- * fan-out across the working day) instead of batching to the 3x/day auto-work pass. Only 'awaiting' rows
- * with a due `confirm_ask_at` on a still-open, agent-assigned task; ordered oldest-due first.
+ * Armed-but-unsent confirm-intent asks (first asks AND re-armed re-asks, ARMED_UNSENT_SQL) whose
+ * `confirm_ask_at` has elapsed — i.e. due to FIRE NOW. Read every heartbeat by the scheduler so each ask goes
+ * out at its own spaced instant instead of batching to the 3x/day auto-work pass. Only tasks still IN the lane
+ * (AC-40): UP_NEXT or DOING, agent-assigned, not flagged in task_blockers, not parking-lot, not paused on an
+ * open clarifying question, not escalated. (A reminder-window task is filtered by the caller —
+ * chat.reminders lives in the turn store.) `tags` is NOT NULL by DDL, so the parking-lot test can't silently
+ * NULL-out a row; the COALESCE keeps that true even if the DDL ever changes (AC-39). Oldest-due first.
  */
 export async function getDueConfirmAsks(nowIso: string, limit = 100): Promise<DueConfirmAsk[]> {
   await ensureBootstrapped();
   const { rows } = await getPool().query<DueConfirmAsk>(
-    `SELECT es.task_id, es.user_email, jt.assigned_agent, jt.title, jt.category, jt.tags
+    `SELECT es.task_id, es.user_email, jt.assigned_agent, jt.title, jt.category, jt.tags,
+            es.confirm_status, es.confirm_ask_count, es.confirm_last_sent_at
        FROM tasks.task_engagement_state es
        JOIN tasks.journey_tasks jt
          ON jt.id = es.task_id AND lower(jt.user_email) = lower(es.user_email)
-      WHERE es.confirm_status = 'awaiting'
-        AND es.confirm_ask_at IS NOT NULL
+      WHERE ${ARMED_UNSENT_SQL("es")}
         AND es.confirm_ask_at <= $1::timestamptz
+        AND es.clarify_status <> 'open'
+        AND es.approach_status <> 'escalated'
         AND jt.assigned_agent IS NOT NULL
-        AND upper(coalesce(jt.status, '')) <> 'DONE'
-        AND NOT ('parking-lot' = ANY(jt.tags))
+        AND jt.completed_at IS NULL
+        AND upper(coalesce(jt.status, '')) IN ('UP_NEXT', 'DOING')
+        AND NOT ('parking-lot' = ANY(coalesce(jt.tags, '{}'::text[])))
+        AND NOT EXISTS (SELECT 1 FROM tasks.task_blockers b WHERE b.task_id = jt.id)
       ORDER BY es.confirm_ask_at ASC
       LIMIT $2`,
     [nowIso, limit],
   );
-  return rows;
+  return rows.map((r) => ({
+    ...r,
+    confirm_last_sent_at:
+      (r.confirm_last_sent_at as unknown) instanceof Date
+        ? (r.confirm_last_sent_at as unknown as Date).toISOString()
+        : r.confirm_last_sent_at,
+  }));
 }
 
 /**
  * The task (if any) whose confirm-intent ask is OUTSTANDING for a given agent+user — i.e. the agent
  * already sent the reach-out (`confirm_status='asked'`) and is waiting on the user's reply. Used by the
  * turn engine to recognize that a user's DM message IS the response to a pending confirmation, so it can
- * record `confirm_task_intent` deterministically instead of hoping the model calls the tool. Most-recent
- * asked task wins (a DM has one active confirmation at a time in practice).
+ * record `confirm_task_intent` deterministically instead of hoping the model calls the tool.
+ *
+ * WHICH asked task, when an agent has several (the lane rotation makes that normal): the one whose ask was
+ * most recently SENT — that is the message sitting at the bottom of the DM the user is answering. It used to
+ * be the newest `updated_at`, which any unrelated write bumps (proposeTaskDod, a re-arm, a reassignment), so a
+ * plain "yes" could confirm a task the user was not looking at — a gate leak, because confirmed + approved is
+ * exactly what moves a task to DOING (AC-27). NULLS LAST keeps a never-stamped legacy row from outranking a
+ * real send; `updated_at` only breaks a tie between rows with no send record at all.
  */
 export async function getPendingConfirmForAgent(
   userEmail: string,
@@ -1052,7 +1221,7 @@ export async function getPendingConfirmForAgent(
             AND es.confirm_status = 'asked'
             AND upper(coalesce(jt.status, '')) <> 'DONE'
             AND NOT EXISTS (SELECT 1 FROM tasks.task_blockers b WHERE b.task_id = jt.id)
-          ORDER BY es.updated_at DESC
+          ORDER BY es.confirm_last_sent_at DESC NULLS LAST, es.updated_at DESC
           LIMIT 1`
       : `SELECT es.task_id, jt.title, es.proposed_dod
            FROM tasks.task_engagement_state es
@@ -1063,7 +1232,7 @@ export async function getPendingConfirmForAgent(
             AND es.confirm_status = 'asked'
             AND upper(coalesce(jt.status, '')) <> 'DONE'
             AND NOT EXISTS (SELECT 1 FROM tasks.task_blockers b WHERE b.task_id = jt.id)
-          ORDER BY es.updated_at DESC
+          ORDER BY es.confirm_last_sent_at DESC NULLS LAST, es.updated_at DESC
           LIMIT 1`,
     userId ? [userId, emails, agentId] : [userEmail, agentId],
   );
@@ -1485,7 +1654,9 @@ export async function getOwnedTaskForConfirmAsk(
  * would otherwise inherit 'confirmed'/'approved' status it never itself proposed to the user, and sail
  * straight to DOING/IN_REVIEW without asking — the same failure mode as the 2026-08-05 incident, just
  * via reassignment instead of a stale-mirror race). Resets to a clean slate so the new assignee goes
- * through the full ask + approach process. A no-op if the task has no engagement row yet.
+ * through the full ask + approach process. A no-op if the task has no engagement row yet. The re-ask history
+ * (last-sent, ask count) and approach re-drive count are reset too: the new assignee's first ask is a FIRST
+ * ask, and the old assignee's rotation position never carries over (AC-38).
  */
 export async function resetEngagementOnReassignment(taskId: string): Promise<void> {
   await ensureBootstrapped();
@@ -1498,6 +1669,8 @@ export async function resetEngagementOnReassignment(taskId: string): Promise<voi
             approach_override_requested_at=NULL, approach_override_requested_by=NULL,
             approach_override_request_reason=NULL,
             clarify_status='none', clarify_count=0, open_question=NULL, open_question_asked_at=NULL,
+            confirm_last_sent_at=NULL, confirm_ask_count=0,
+            approach_redrive_count=0, approach_redrive_last_at=NULL,
             updated_at=now()
       WHERE task_id = $1`,
     [taskId],
