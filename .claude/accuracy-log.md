@@ -454,3 +454,24 @@ is **loop 4**.
 | Source that would have settled it | `TZ=America/New_York date` — one command, before the first query |
 | Root cause | Took the harness's "today" (a UTC date) as the owner's local day; journey's own rule is "never toISOString for today, use the user's tz" |
 | Guard implied | Any "today/tonight/this morning" question: resolve the date in the owner's tz (`user_scheduling_prefs.timezone`) first and state it ("Friday 16 Oct, ET") in the first line |
+
+
+## 2026-10-20 — "Several confirm-asks are expected today given the backlog size"
+
+| field | value |
+|---|---|
+| Claim | Many confirm-asks should fire today because the backlog is large |
+| Ground truth | Asks are armed only from UP_NEXT/DOING, never BACKLOG; 9/13/17 passes arm only `upNextAfterTopUp[0]` per agent; each ask fires once ever (`markConfirmAsked` awaiting→asked). Expected count today was ~0, which the live pass confirmed (0/0/0/0) |
+| Source that would have settled it | A full read of `autowork.server.ts` (`runScheduledAutoWork` gate loop, ~585-721) and `tasks.server.ts` `getDueConfirmAsks` |
+| Root cause | Inferred volume from backlog size without reading which lane arming draws from — answered from a proxy |
+| Guard implied | `scripts/autowork-lane-starvation.test.ts` pins the real arming/starvation behaviour; any "how many X should happen" answer must cite the selecting code path first |
+
+## 2026-10-20 — Typed SQL column shapes without reading the DDL (twice)
+
+| field | value |
+|---|---|
+| Claim | `task_engagement_state.confirm_asked_at`; `pending_turns.chunks` is jsonb |
+| Ground truth | Column is `confirm_ask_at`; `chunks` is `INT NOT NULL DEFAULT 0` (`turns.server.ts:57`) |
+| Source that would have settled it | The `CREATE TABLE` in `tasks.server.ts` / `turns.server.ts` |
+| Root cause | Literal typed from memory into a slow workflow-dispatched query; `ON_ERROR_STOP` aborted the whole batch each time, costing a dispatch round-trip |
+| Guard implied | Before any `azure-pg-query.yml` dispatch, grep the DDL for every column named in the SQL |
