@@ -4712,7 +4712,8 @@ Owner: *"keep re-asking, but in a loop moving to the next item in the lane... ~3
 - [x] Starvation reproduced offline — `scripts/autowork-lane-starvation.test.ts` (case A: asked-top + ready-second → 0 DOING).
 - [x] Independent ACs — `.claude/AC-confirm-ask-rotation.md` (67 ACs, 8 OQs; recommended defaults adopted, owner may override).
 - [x] Live sizing (azure-pg-query run 40574733189): 35 unanswered asks / 10 agents, oldest 2026-08-10; tess 12 in UP_NEXT; 2 confirmed+approach-pending; tess has 1 DOING item still `asked`.
-- [ ] Build A-C (rotation, re-ask loop 24h / 4-per-day seeded settings, "yes"-binding by last-sent, approach re-drive) — subagent in worktree, log `.claude/IMPL-confirm-ask-rotation.md`.
-- [ ] Build D (create dedup across raw journey creates / voice / produce) — subagent in worktree, log `.claude/IMPL-create-dedup.md`.
-- [ ] Independent verifier + mutation proofs (AC-1, 13, 22/23, 27, 55, 64) → merge to main → deploy → owner live confirm.
+- [x] Owner re-scope 2026-10-27: whole lane (no top-N), NO new day cap/interval setting (reuse the 45–90 min spacing chain + windows), NO review-frozen pause; only a 24h per-item floor (owner's 08-26 choice).
+- [x] Build A-C — `.claude/IMPL-confirm-ask-rotation.md`; Build D — `.claude/IMPL-create-dedup.md`; merged on `claude_autowork-lane-rotation`.
+- [x] Verifier loop 1 (`.claude/VERIFY-confirm-ask-rotation-1.md`): gate CONFIRMED; REFUTED a hidden 3/day per-agent cap + a clock-skew double-send. Both fixed in 03ab8f2, new guards mutation-proved FIRED.
+- [ ] Verifier loop 2 (running) → push (target is an owner decision) → merge to main → deploy → owner live confirm.
 Branch: `claude_autowork-lane-rotation` (designated branch's history no longer connects to main — push target is an owner decision).

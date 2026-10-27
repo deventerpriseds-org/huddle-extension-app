@@ -123,6 +123,8 @@ index into a requirement list**.
 - Owner policy 2026-10-27: keep re-asking, rotate through the lane, NO auto-shelving (supersedes 2026-08-26 "move stuck to backlog").
 - Hidden hazard: plain "yes" in a 1:1 binds to the newest-`updated_at` asked task (`getPendingConfirmForAgent`) — with rotation there are several asked rows, so binding must be by last-SENT or it leaks the gate. Ship together.
 - `journey_tasks.tags` is NOT NULL DEFAULT '{}' — the NULL-tags parking-lot trap does not occur.
+- Owner re-scope: whole lane, re-asks ride the EXISTING 45–90 min spacing chain (armConfirmAsksSpaced) + windows, no new day cap, no review pause; 24h per-item floor only. The heartbeat re-arms right after each send (armOnly pass) — re-arming only at 9/13/17 was a hidden 3/day/agent cap.
+- Memory architecture: owner chose (a) SOFT preference (2026-10-27) and "thought it was already this way" — it largely IS: runAgentTurn's laneBoost re-ranks shared memory by the agent's domains/themes (topic text, not agent name). Gaps: voice has no lane boost/Executive Profile; the owner's ChatGPT knowledge isn't ingested yet.
 - ACs: `.claude/AC-confirm-ask-rotation.md`. Tracker: ACT:confirm-ask-rotation.
 
 ## Iris schedule brief = meetings + classes + TASKS, per day AND per journey window (2026-10-15, DEPLOYED, NOT owner-confirmed)
