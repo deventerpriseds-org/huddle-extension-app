@@ -4698,3 +4698,11 @@ Owner: *"Option b as I use desktop a lot. Just be sure you are updating the basi
 
 **NOT yet confirmed by the owner** — needs one desktop test: open the web app, tap the bell (or just reload if it already shows as on), allow notifications, then get a reply while the tab is closed.
 
+
+## ACT:reply-notify-strip — composer bell → one-time "Get reply notifications on this computer — Turn on" strip (owner 2026-10-20)
+Owner: *"I prefer 'Get reply notifications on this computer — Turn on' strip"*.
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | Strip above the composer; only where Web Push works (desktop browsers — the Android app has no PushManager and uses FCM) and only while permission is "default"; gone once allowed/blocked; "Not now" remembered per browser | built | `scripts/notify-strip.test.ts` 4/4; N1 + N4 mutation FIRED |
+| 2 | Composer bell + BellRing indicator removed | built | N3 |
+| 3 | Owner sees the strip on desktop, taps Turn on, gets a reply notification with the tab closed | **NOT confirmed live** | — |
