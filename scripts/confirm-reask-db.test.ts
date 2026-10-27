@@ -168,6 +168,23 @@ try {
   await T.proposeTaskDod("bind-A", E, "Test- a DoD written AFTER B was asked"); // bumps A's updated_at
   const pc = await T.getPendingConfirmForAgent(E, "cole-blake");
   check("AC-27 a plain yes binds to B (asked last), not A (written last)", pc?.taskId === "bind-B", JSON.stringify(pc));
+  // Same property on the OTHER SQL branch: a user linked to an identity profile (user_id set) — the live owner's
+  // shape. The unlinked email above takes the email-only branch.
+  const E2 = "linked@test.local";
+  const OID = "00000000-0000-4000-8000-0000000000aa";
+  await db.query(`INSERT INTO identity.profiles (entra_object_id, username) VALUES ($1, $2)`, [OID, E2]);
+  await db.query(`INSERT INTO identity.profile_emails (entra_object_id, email, source) VALUES ($1, $2, 'entra')`, [OID, E2]);
+  for (const [id, sent] of [["link-A", "2026-10-20T10:00:00Z"], ["link-B", "2026-10-21T10:00:00Z"]]) {
+    await db.query(`INSERT INTO tasks.journey_tasks (id,user_email,title,status,assigned_agent) VALUES ($1,$2,$3,'UP_NEXT','sam-trent')`, [id, E2, `Test-${id}`]);
+    await db.query(
+      `INSERT INTO tasks.task_engagement_state (task_id,user_email,user_id,confirm_status,confirm_ask_at,confirm_last_sent_at,confirm_ask_count)
+       VALUES ($1,$2,$3,'asked',$4,$4,1)`,
+      [id, E2, OID, sent],
+    );
+  }
+  await T.proposeTaskDod("link-A", E2, "Test- a DoD written AFTER link-B was asked");
+  const pc2 = await T.getPendingConfirmForAgent(E2, "sam-trent");
+  check("AC-27 (linked user / user_id branch) a plain yes binds to the last-SENT ask", pc2?.taskId === "link-B", JSON.stringify(pc2));
   // The text and voice call sites pass that row's id straight through — no re-selection in between.
   const hf = readFileSync(`${import.meta.dir}/../src/features/huddle/lib/huddle.functions.ts`, "utf8");
   const rt = readFileSync(`${import.meta.dir}/../src/features/huddle/lib/voice/realtime-tools.server.ts`, "utf8");
