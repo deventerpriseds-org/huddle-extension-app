@@ -69,3 +69,57 @@ Started 2026-10-27 20:42Z. Budget 45 min.
 | New columns via ADD COLUMN IF NOT EXISTS | CONFIRMED | tasks.server.ts DDL; D AC-21 x4 on a pre-change table shape. |
 | Backfill idempotent on every bootstrap | CONFIRMED | Only `claimConfirmAskSend` ever sets 'asked' and it always stamps last_sent (grep), so after the first run the `WHERE confirm_status='asked' AND confirm_last_sent_at IS NULL` matches nothing; probe re-ran the exact statement: rowCount 0. updated_at not bumped. |
 | resetEngagementOnReassignment resets the new columns (AC-38) | CONFIRMED | tasks.server.ts:1672-1673; D AC-38 pass. |
+
+### Full per-AC coverage, sections A-C (H = lane-starvation suite, S = re-ask simulator, D = real-PG16 suite; all run by the verifier)
+| AC | Verdict | Evidence |
+|---|---|---|
+| 1, 2, 3, 4, 5, 6, 10, 11, 12, 16, 19 | CONFIRMED | H named cases pass; AC-1 mutation R1 FIRED |
+| 7, 8, 9 | CONFIRMED | H pass; N1 (AC-7) and N3 (AC-9) FIRED |
+| 13 | CONFIRMED | see priority 1 |
+| 14 | CONFIRMED | H pass; N2 FIRED |
+| 15 | CONFIRMED | H AC-15 (pass side) + S "AC-40 reminder window" (fire side) |
+| 17 | CONFIRMED (by source) | runScheduledAutoWork only ever pushes `status:"UP_NEXT"` (:789) or `status:"DOING"` (:909), never tags. Note: `assertNoShelving()` is called in 14 of 25 H cases, not "every case" as IMPL claims; the source proof covers the gap. |
+| 18 | CONFIRMED | grep: autowork.server.ts:48-50 = 3 / 1 / 2 |
+| 20 | CONFIRMED | H AC-20 + S B1 |
+| 21, 22, 23 | CONFIRMED | see priority 2 (D CAS/backfill, S ids, D+S release). **Caveat: the never-double-send property is REFUTED under app-ahead-of-DB clock skew (LOW), see priority 2.** |
+| 24, 25, 26 | CONFIRMED | S B1/B2 (B,A,C,B; C,A,B first round; >=45 min) |
+| 27, 28 | CONFIRMED | see priority 1 |
+| 29, 30 | CONFIRMED | S payload checks; directive source :149-158 |
+| 31, 32, 33 | CONFIRMED | S B3/B5; D due-query clarify filter |
+| 34, 35, 36 | CONFIRMED | H AC-34/34b/35/8; D re-drive CAS. Observation (LOW): escalation (:946) is checked before the 24h floor (:951), so the item escalates at the very next pass after the 3rd re-drive -- the last nudge gets ~4h, not 24h, to be answered. |
+| 37 | CONFIRMED | S B5 (and IMPL deviation 6 is pre-existing top-up behaviour) |
+| 38 | CONFIRMED | D + S |
+| 39 | CONFIRMED | D: `journey_tasks.tags` is_nullable = NO; SQL also coalesces (tasks.server.ts:1176) |
+| 40 | CONFIRMED | D (BACKLOG / blocker / parking excluded) + S reminder window |
+| 41, 42, 44 | CONFIRMED | S C1: 72 pushes / 7 days, min gap >= 45 min, 100% in windows, <=1 in first hour |
+| 43, 45, 46, 47, 48, 49 | DROPPED by owner 2026-10-27 | not verified |
+| 50 | CONFIRMED as re-scoped | `resolveConfirmReaskMinHours` returns the constant; the pass still guards it (autowork.server.ts:821-827, non-finite/<=0 -> default) |
+| 51 | CONFIRMED | S C3 + grep |
+| 52 | CONFIRMED | S C2 (1 query, < 200 ms on mocks) |
+| 53 | CONFIRMED (partly by source) | S C2; scheduler.server.ts:286-293 wraps the call in its own try before `claimDueScheduledJobs` |
+| 54 | CONFIRMED | `bun scripts/confirm-spacing.test.ts` ALL PASS |
+
+## Verdicts — section D (dedup, AC-55..67)
+Journey-side check (GAPS item 7) re-read by the verifier: journey-voice execute-tool `quick_create_task` reads `args.title`
+(:2839), `parse_and_create_tasks` reads `args.text` (:1362), `create_task` redirects to parseAndCreateTasks (:338-342). No title
+dedup there -- matches IMPL. Huddle's catalog names are journey's raw `t.name` (journey/proxy.functions.ts:100), so the
+`RAW_JOURNEY_CREATE_TOOLS` names match what the dispatchers see.
+
+| AC | Verdict | Evidence |
+|---|---|---|
+| 55 (D4 OpenAI) | CONFIRMED | helper behaviour (D-suite) + wiring huddle.functions.ts:4715-4721 (after `maybeDeferStatusChange`, before `invokeJourneyTool`, screened args sent). Verifier mutation D1 (`if (false && load.titles.has(key))`) FIRED on "AC-55: raw quick_create_task of an open title is SKIPPED ...". |
+| 56 (D5 Lovable) | CONFIRMED (wiring + shared helper) | huddle.functions.ts:6260-6266 |
+| 57 (D6 voice) | CONFIRMED | behaviour test through real `executeRealtimeTool`; realtime-tools.server.ts:833-856 |
+| 58 (D7 produce) | CONFIRMED (wiring + helper) | huddle.functions.ts:1595-1619; ack branch "already on your board" |
+| 59 (batch) | CONFIRMED | behaviour; partial batch rewrites only `text` (split on `\n`/`;` only, create-task-core.ts:309-313), so no comma-splitting of a natural-language blob |
+| 60 (mixed paths same turn) | CONFIRMED | shared `createdTaskTitles` ledger now keyed by `normTitle` on both create_huddle_task (:2904) and the raw guard |
+| 61 (per user) | CONFIRMED | behaviour test; set = whole board via `getTasksForUser` |
+| 62 (no false positive) | CONFIRMED | behaviour; normalizer has no fuzzy matching (scoring.ts:45-56) |
+| 63 (DONE never blocks) | CONFIRMED | SQL `status <> 'DONE'` + `completed_at IS NULL` (tasks.server.ts:603-605) |
+| 64 (fail-open, loud) | CONFIRMED for core + voice + produce; **UNPROVEN for the text-dispatch reporter** | M5 (implementer) was INERT: `reportDedupUnavailable` (huddle.functions.ts:2790) is pinned only by source strings. The behaviour exists in source; no test fails if it is silenced. |
+| 65 (one normalizer) | CONFIRMED | grep: exactly one `export function normalizeTaskTitle` (scoring.ts:45); create-task-core re-exports it |
+| 66 (D1-D3 regress) | CONFIRMED | voice-toolset-hidden 36/0 |
+| 67 (non-creates untouched) | CONFIRMED | `screenRawJourneyCreate` returns `pass` before any read for non-create names (create-task-core.ts:180) |
+Residual (LOW, pre-existing pattern, not a regression): a title is claimed in the per-turn ledger BEFORE journey answers, so if
+journey's create fails, a retry of the same title in the same turn is reported back as "deduped" although nothing was created.
+create_huddle_task already behaved this way.
