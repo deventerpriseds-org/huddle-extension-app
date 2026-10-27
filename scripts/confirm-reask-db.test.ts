@@ -13,6 +13,8 @@
 // SAFETY:        refuses to run unless the admin URL points at 127.0.0.1/localhost, and every run uses a FRESH
 //                database it creates (and drops) itself — it can never touch the live Azure PG.
 import { Pool } from "pg";
+import { mock } from "bun:test";
+import { readFileSync } from "node:fs";
 
 const ADMIN = process.env.LOCAL_PG_ADMIN_URL ?? "";
 const host = (() => {
@@ -166,6 +168,28 @@ try {
   await T.proposeTaskDod("bind-A", E, "Test- a DoD written AFTER B was asked"); // bumps A's updated_at
   const pc = await T.getPendingConfirmForAgent(E, "cole-blake");
   check("AC-27 a plain yes binds to B (asked last), not A (written last)", pc?.taskId === "bind-B", JSON.stringify(pc));
+  // The text and voice call sites pass that row's id straight through — no re-selection in between.
+  const hf = readFileSync(`${import.meta.dir}/../src/features/huddle/lib/huddle.functions.ts`, "utf8");
+  const rt = readFileSync(`${import.meta.dir}/../src/features/huddle/lib/voice/realtime-tools.server.ts`, "utf8");
+  check(
+    "AC-27 the deterministic 'yes' path confirms exactly getPendingConfirmForAgent's task (text + voice)",
+    /const pc = await getPendingConfirmForAgent\(em, dmAgent\);[\s\S]{0,400}await confirmTaskIntent\(pc\.taskId, em, dod\);/.test(hf) &&
+      /const pending = await getPendingConfirmForAgent\(email, ctx\.agentId\);[\s\S]{0,900}taskId: pending\.taskId,/.test(rt),
+  );
+
+  // ---- AC-28: the Confirm BUTTON carries its own task id — it confirms A even though B was asked last -------
+  mock.module(require.resolve("../src/features/huddle/lib/journey/proxy.functions.ts"), () => ({
+    invokeJourneyTool: async () => ({ ok: true, output: "{}" }),
+  }));
+  await T.proposeTaskDod("bind-B", E, "Test- B's proposed DoD");
+  const { confirmTaskFromProposal } = await import("../src/features/huddle/lib/tasks/confirm-ask.functions.ts");
+  const btn = await confirmTaskFromProposal({ caller: { entra_email: E }, taskId: "bind-A", email: E });
+  const ab = await T.getTaskEngagementStates(["bind-A", "bind-B"]);
+  check(
+    "AC-28 tapping Confirm on A confirms A only, although B was asked last",
+    btn.ok === true && ab.get("bind-A")!.confirm_status === "confirmed" && ab.get("bind-B")!.confirm_status === "asked",
+    JSON.stringify({ btn, a: ab.get("bind-A")!.confirm_status, b: ab.get("bind-B")!.confirm_status }),
+  );
 
   // ---- AC-38: reassignment clears the re-ask history ---------------------------------------------------------
   await db.query(`UPDATE tasks.task_engagement_state SET approach_redrive_count=2, approach_redrive_last_at=now() WHERE task_id='due-upnext'`);
