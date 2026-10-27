@@ -117,6 +117,14 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Confirm-ask LANE STARVATION + no re-ask (2026-10-27, IMPLEMENTING — NOT deployed, NOT owner-confirmed)
+- Root cause (code read + offline test `scripts/autowork-lane-starvation.test.ts`): autowork considers only `upNextAfterTopUp[0]` per agent for DOING and arms only that item's ask; `markConfirmAsked` is set-once and nothing re-asks. One unanswered top ask freezes the whole lane forever.
+- Groom is WEEKLY (Mon 8am, owner's 2026-07-31 choice) and never writes status; autowork 9/13/17 daily — a daily groom would NOT unstick a lane.
+- Owner policy 2026-10-27: keep re-asking, rotate through the lane, NO auto-shelving (supersedes 2026-08-26 "move stuck to backlog").
+- Hidden hazard: plain "yes" in a 1:1 binds to the newest-`updated_at` asked task (`getPendingConfirmForAgent`) — with rotation there are several asked rows, so binding must be by last-SENT or it leaks the gate. Ship together.
+- `journey_tasks.tags` is NOT NULL DEFAULT '{}' — the NULL-tags parking-lot trap does not occur.
+- ACs: `.claude/AC-confirm-ask-rotation.md`. Tracker: ACT:confirm-ask-rotation.
+
 ## Iris schedule brief = meetings + classes + TASKS, per day AND per journey window (2026-10-15, DEPLOYED, NOT owner-confirmed)
 - **Calendar mailbox is NOT the data-scope email.** Owner's Outlook meetings live in the journey-connected
   account (Von.Ellis@, `calendar_connections.provider_account_email`); dev@'s calendar is empty. Every Graph

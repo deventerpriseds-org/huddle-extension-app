@@ -4706,3 +4706,13 @@ Owner: *"I prefer 'Get reply notifications on this computer — Turn on' strip"*
 | 1 | Strip above the composer; only where Web Push works (desktop browsers — the Android app has no PushManager and uses FCM) and only while permission is "default"; gone once allowed/blocked; "Not now" remembered per browser | built | `scripts/notify-strip.test.ts` 4/4; N1 + N4 mutation FIRED |
 | 2 | Composer bell + BellRing indicator removed | built | N3 |
 | 3 | Owner sees the strip on desktop, taps Turn on, gets a reply notification with the tab closed | **NOT confirmed live** | — |
+
+## ACT:confirm-ask-rotation — stop one unanswered ask freezing an agent's lane; keep re-asking in a loop (owner 2026-10-27)
+Owner: *"keep re-asking, but in a loop moving to the next item in the lane... ~3 at a time but it gets stuck on the first."* Also asked "why don't we have any deduplication in place?" (2026-10-20).
+- [x] Starvation reproduced offline — `scripts/autowork-lane-starvation.test.ts` (case A: asked-top + ready-second → 0 DOING).
+- [x] Independent ACs — `.claude/AC-confirm-ask-rotation.md` (67 ACs, 8 OQs; recommended defaults adopted, owner may override).
+- [x] Live sizing (azure-pg-query run 40574733189): 35 unanswered asks / 10 agents, oldest 2026-08-10; tess 12 in UP_NEXT; 2 confirmed+approach-pending; tess has 1 DOING item still `asked`.
+- [ ] Build A-C (rotation, re-ask loop 24h / 4-per-day seeded settings, "yes"-binding by last-sent, approach re-drive) — subagent in worktree, log `.claude/IMPL-confirm-ask-rotation.md`.
+- [ ] Build D (create dedup across raw journey creates / voice / produce) — subagent in worktree, log `.claude/IMPL-create-dedup.md`.
+- [ ] Independent verifier + mutation proofs (AC-1, 13, 22/23, 27, 55, 64) → merge to main → deploy → owner live confirm.
+Branch: `claude_autowork-lane-rotation` (designated branch's history no longer connects to main — push target is an owner decision).
