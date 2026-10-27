@@ -475,3 +475,13 @@ is **loop 4**.
 | Source that would have settled it | The `CREATE TABLE` in `tasks.server.ts` / `turns.server.ts` |
 | Root cause | Literal typed from memory into a slow workflow-dispatched query; `ON_ERROR_STOP` aborted the whole batch each time, costing a dispatch round-trip |
 | Guard implied | Before any `azure-pg-query.yml` dispatch, grep the DDL for every column named in the SQL |
+
+## 2026-10-27 — Proposed a NEW re-ask day cap + interval setting when the throttle already existed
+
+| field | value |
+|---|---|
+| Claim | Re-asks need a new per-day cap (4/day) and a new interval setting, plus a top-3 limit and a review-frozen pause |
+| Ground truth | The confirm-ask throttle already exists: `armConfirmAsksSpaced` chains every ask 45–90 min after the user's latest pending one, inside fan windows 9–18/20–22, with a per-tick fire cap. The lane is already capped. Re-asks just need to ride that chain |
+| Source that would have settled it | `autowork.server.ts` `armConfirmAsksSpaced` / `nextSpacedFanSlotIso` and `scheduling-config.server.ts` `CONFIRM_GAP_DEFAULT` — both read in the same pass, but not reconciled against the new proposals |
+| Root cause | Relayed an AC subagent's "new knob" defaults without running the Extend-don't-duplicate check on them; the owner caught it |
+| Guard implied | Before presenting any new cap/interval/setting, name the existing mechanism that already throttles that thing and say why it is insufficient — or drop the new knob |
