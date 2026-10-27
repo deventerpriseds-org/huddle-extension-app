@@ -40,7 +40,9 @@ message in the thread at once.
 
 **Fix:** `lib/transcript-scroll.ts` — follow state decided by the reader's own scrolls, not by a
 post-update measurement; newest 40 rendered, older pages of 40 revealed on scroll-up with the reader's
-place anchored; "Show earlier messages (n)" button as the keyboard/no-scrollbar path. `Transcript` keyed
+place anchored (a window too short to scroll reveals the next page on its own). The "Show earlier
+messages (n)" button shipped in #109 was REMOVED 2026-10-27 at the owner's request ("unnecessary");
+the day label now shows only once the oldest message is rendered. `Transcript` keyed
 by huddle id so a switch re-opens at the bottom.
 
 **Evidence:** `bun scripts/transcript-scroll.test.ts` 20/20. `e2e/transcript-deeplink.e2e.mjs`

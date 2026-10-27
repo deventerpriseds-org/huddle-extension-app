@@ -371,17 +371,9 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
       className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6"
     >
       <div className="mx-auto flex max-w-3xl flex-col gap-4">
-        {start > 0 ? (
-          <div className="flex justify-center">
-            <button
-              type="button"
-              onClick={revealOlder}
-              className="rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground hover:text-foreground"
-            >
-              Show earlier messages ({start})
-            </button>
-          </div>
-        ) : (
+        {/* Older history loads on its own as you scroll up, so there is no button for it. The day label
+            marks the true start of the thread, so it shows only once the oldest message is rendered. */}
+        {start === 0 && (
           <div className="flex justify-center">
             <span className="rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground">
               {dayLabel}
