@@ -560,7 +560,14 @@ export async function getScheduledTasksBetween(
 }
 
 /** Open tasks for a user (by email), optionally filtered to one category, for the scorer. */
-export async function getTasksForUser(userEmail: string, category?: string): Promise<ScorableTask[]> {
+export async function getTasksForUser(
+  userEmail: string,
+  category?: string,
+  // `includeBlocked` is for the create-dedup title set ONLY (owner OQ-8, 2026-10-27): re-creating a
+  // BLOCKED task still makes a duplicate card, so dedup compares against it. Every scorer caller
+  // omits it, so the ranked set is unchanged.
+  opts?: { includeBlocked?: boolean },
+): Promise<ScorableTask[]> {
   await ensureBootstrapped();
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { emails } = await resolveScopeByEmail(userEmail);
@@ -571,7 +578,9 @@ export async function getTasksForUser(userEmail: string, category?: string): Pro
     params.push(category.toUpperCase());
     sql += ` AND upper(category) = $2`;
   }
-  sql += ` AND completed_at IS NULL AND (status IS NULL OR status NOT IN ('DONE','BLOCKED')) LIMIT 500`;
+  sql += opts?.includeBlocked
+    ? ` AND completed_at IS NULL AND (status IS NULL OR status <> 'DONE') LIMIT 500`
+    : ` AND completed_at IS NULL AND (status IS NULL OR status NOT IN ('DONE','BLOCKED')) LIMIT 500`;
   const { rows } = await getPool().query<ScorableTask>(sql, params);
   return rows;
 }
