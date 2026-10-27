@@ -45,7 +45,8 @@
     "test:schedule-brief": "bun scripts/schedule-brief.test.ts",
     "test:schedule-brief-dedupe": "bun scripts/schedule-brief-dedupe.test.ts",
     "test:draft-html": "bun scripts/draft-html.test.ts",
-    "test:mail-subscription": "bun scripts/mail-subscription.test.ts"
+    "test:mail-subscription": "bun scripts/mail-subscription.test.ts",
+    "test:transcript-scroll": "bun scripts/transcript-scroll.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
