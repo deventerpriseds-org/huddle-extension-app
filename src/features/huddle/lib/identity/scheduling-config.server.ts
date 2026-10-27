@@ -179,6 +179,25 @@ export async function resolveConfirmGap(_email: string): Promise<ConfirmGap> {
   return CONFIRM_GAP_DEFAULT;
 }
 
+/**
+ * Per-ITEM floor between two asks about the SAME task: an unanswered confirm-ask is re-armed no sooner than
+ * this many hours after it was last SENT. The spacing gap above throttles the user's phone across ALL asks; this
+ * only stops a single-item lane from being re-asked every gap. 24h is the owner's own choice ("re-ask every 24
+ * hours", 2026-08-26, .claude/AC-confirm-ask-fixes.md "SCOPE CHANGED" item 2), reaffirmed 2026-10-27 as the
+ * one new knob (.claude/IMPL-confirm-ask-rotation.md, SCOPE CHANGE). Sourced HERE, never as a literal in the
+ * autowork scheduler.
+ */
+export const CONFIRM_REASK_MIN_HOURS_DEFAULT = 24;
+
+/**
+ * Resolve the EFFECTIVE per-item re-ask floor (hours) for a user. Today returns the shipped default; kept async +
+ * email-scoped so a per-user override can be layered in later (mirroring resolveConfirmGap) without touching any
+ * call site. Never throws.
+ */
+export async function resolveConfirmReaskMinHours(_email: string): Promise<number> {
+  return CONFIRM_REASK_MIN_HOURS_DEFAULT;
+}
+
 const EMPTY_CONFIG: SchedulingConfig = { overrides: {} };
 
 /** Read the raw stored overrides for an email (empty object when nothing is set). */
