@@ -1,5 +1,5 @@
 # Action Tracker — huddle-extension-app
-Last updated: 2026-09-21
+Last updated: 2026-10-27
 
 ## ACT:pr-triage-2026-09-21 — 4 open PRs, read-evidence triage
 
@@ -22,6 +22,34 @@ as-is (better fits the now-built memory-intake path) nor closed. Touches live ag
 Previous: 2026-09-12 (ACT:escalated-dead-end -- approach gate's `escalated` is terminal with NO user override, diagnosed from Cole Blake's live transcript, fork awaiting owner choice; ACT:meaty-literal -- the produce-vs-quick prompt is one hardcoded string bypassing every persona)
 Previous: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
 Previous: 2026-08-26 (ACT-64 confirm-ask/assist scope revised, no code yet; ACT-63 notification bugs DEPLOYED 6dccf41, Bug 2 user-confirmed live; ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
+
+## ACT:deeplink-opens-at-top — a 1:1 heads-up opened the thread at the TOP of history (2026-10-27)
+
+**Asked (owner):** *"when i click a heads up message from a 1:1 it deeplinks but goes to the top of the
+thread history instead of the bottom … it seems it should quick load the most recent and only load the
+oldest when scrolling up far enough according to best practices"*
+
+**Status: IMPLEMENTED on `claude/busy-hawking-3wokvh`, mechanism verified headless (A/B), NOT yet
+confirmed on the owner's phone.**
+
+**Cause (read from code, then reproduced):** the deep link switches to the 1:1 before the workspace
+history downloads. `Transcript` scrolled to the bottom only on a thread SWITCH (empty thread then), and
+its "follow new messages" rule measured near-bottom AFTER the bulk history render grew the list, so an
+untouched view at scrollTop 0 read as "reader scrolled up" and stayed at the top. It also rendered every
+message in the thread at once.
+
+**Fix:** `lib/transcript-scroll.ts` — follow state decided by the reader's own scrolls, not by a
+post-update measurement; newest 40 rendered, older pages of 40 revealed on scroll-up with the reader's
+place anchored; "Show earlier messages (n)" button as the keyboard/no-scrollbar path. `Transcript` keyed
+by huddle id so a switch re-opens at the bottom.
+
+**Evidence:** `bun scripts/transcript-scroll.test.ts` 20/20. `e2e/transcript-deeplink.e2e.mjs`
+(deep-linked 1:1 open + empty, 300 messages delivered late via `hydrateFromRemote`): NEW lands 0px from
+bottom, renders newest window only, scroll-up reveals #220 at scrollTop 3750, new message doesn't yank a
+reader; PRE-FIX ends **27,592px above the bottom** (the reported bug), renders all 300, scroll-up stuck at 0.
+
+**Not done (deliberately):** server-side paging of history. All messages live in one workspace blob, so
+paging the DOWNLOAD needs a storage change; only worth it if the download itself becomes slow.
 
 ## LIVE STATUS BOARD (surface this every check-in)
 
