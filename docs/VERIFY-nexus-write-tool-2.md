@@ -77,3 +77,69 @@ the PR replaces that decision with a deterministic one for these asks):
 form numbers, tickers, DBA (business filing), MBA (loan), instructor (yoga) are STRONG context, which skips the
 veto list entirely; each produces a deterministic out-of-lane 1:1 hand-off + follow-up DM where origin/main kept
 the ask. The LLM-router path is not measurable offline.
+
+## C3 — honesty (text + voice, single + group)
+
+Probe: `bun mut-verify-114-2/probe-honesty.ts` (pure `nexusWriteGuardedReply` exactly as huddle.functions.ts:6595
+calls it, and `createNexusWriteSpeechGate` in the event orders useVoiceCallRealtimeSpeak.ts:406-545 can produce).
+Item "Research Proposal" failed with http_500 unless stated.
+
+Loop-1 inputs N1–N16: covered by the fixer's L2-D3a/k (green in C7); spot-checked here (control "I've added the
+Research Proposal to Nexus." -> only the code-built line). **The loop-1 laundering mechanism is gone.**
+
+But the "structural" rule is still a VOCABULARY rule: a sentence is dropped only if it matches `WRITE_TALK` (a word
+list) or names the item; everything else is kept AFTER the truthful line. New inputs:
+
+| # | Reply (own writer, item failed) | Output | Verdict |
+|---|---|---|---|
+| H1 | "It's in." | `Not saved to Nexus: “Research Proposal” — http 500.` + `It's in.` | **false claim kept** |
+| H2 | "It is on your list for Oct 30." — **AC-F2-35 names "is on your list" verbatim** | line + claim kept | **false claim kept** |
+| H3 | "Penciled it in for the 30th." | line + claim kept | **kept** |
+| H4 | "Handled. You're good for the 30th." | line + claim kept | **kept** |
+| H5 | "Booked it for Oct 30." | line + claim kept | **kept** |
+| H6 | "Sorted! It will show up in your coursework view." | line + claim kept | **kept** |
+| H7 | "Your RP is good to go for Oct 30." | line + claim kept | **kept** |
+| H8 | "Listo, ya quedó guardado para el 30." (Spanish) | line + claim kept | **kept** |
+| H9 | "Ａｄｄｅｄ it for Oct 30." (full-width; WRITE_TALK runs on the raw text, not NFKC) | line + claim kept | **kept** |
+| H10 | "I've add​ed it" (zero-width space) | line only | ok |
+| H11 | "Got it on there, you're all good." | line + claim kept | **kept** |
+| H12 | TEAMMATE (no own write), writer failed: "It's in, Elle got it." | **UNCHANGED, no line** | **false claim, no truth shown** |
+| H13 | TEAMMATE: "Elle handled that one for you." | **UNCHANGED** | **false claim, no truth shown** |
+| H14 | clean 1-item write, reply "I've added all 5 assignments from your MGT-782 syllabus." | UNCHANGED | **over-claim passes** (all persisted -> pass-through) |
+| H15 | NO write call this turn, reply "I've added your Research Proposal to Nexus." | UNCHANGED | **hallucinated save passes** (no results -> pass-through) |
+| ctl | "Also, remember to hydrate." | line + kept | ok |
+
+**Voice (new, blocking):**
+
+| # | Event order | Observed | Verdict |
+|---|---|---|---|
+| V-a | write call STARTED (`noteToolCall`), result not in, then a `text.done` arrives | `holding=true`, so the hook takes the held branch and calls `speak(full)` with `full = gate.finalize(raw)` = **the raw text** ("Done, I've added the Research Proposal for Oct 30.") because `nexusWriteGuardedReply` with no results yet is a pass-through. The write then fails: `holding=true` -- too late; it was spoken, captioned and persisted (hook :426-436). | **false save SPOKEN** |
+| V-b | text item before the call in the same response | `holding=false` -> streams | fixer's documented residual |
+| V-c | failed write, reply "It is on your list for Oct 30." | line + claim kept (= H2 on voice) | **kept** |
+
+When does V-a happen? Any `text.done` while a write is in flight: (1) the model calls the write AND a read tool in
+one response ("add my proposal and tell me what's due this week") -- the read returns first and the hook sends
+`response.create` (:534) while the write is still pending, so the model answers before it knows the write's result;
+(2) the user talks during the write (a new auto-response); (3) a message item after the function_call in the same
+response. The "hold from call start" (L2-V2) delays the false sentence until `text.done` and then speaks it whole.
+L2-V1..V13 never call `finalize` while `pending > 0`.
+
+**1:1 text stream (D4):** source re-read (huddle.functions.ts:4394 arms the hold before the claim/execute;
+:4923-4935 `onDelta` wrapped; the final reply is computed after every tool call of the agent has returned, so the
+V-a race does not exist on the text path). Residual: text published BEFORE the write call is shown until the final
+reply replaces it (transient; the final reply is guarded). Non-blocking.
+
+**Parallel teammates (fixer residual) -- MEASURED from source, mostly NOT real:** group waves run
+`Promise.all(wave.map(runBounded))` (huddle.functions.ts:7174) and only THEN `mergeAgentResult` (where the guard
+runs, :6595) for each, so every in-wave write is in `turnNexusWriteUses` before any teammate's reply is guarded.
+The residual is real in two narrower cases: (a) the writer hit the `runBounded` deadline with its write still in
+flight; (b) **a later CHUNK**: `turnNexusWriteUses` is a per-execution array (:2136) that is NOT in
+`buildResumeState` (:6889-6908) and not re-seeded on resume, so a teammate replying in a later chunk of a durable
+group turn is guarded against nothing (H12/H13-style claims then reach the user). Not blocking alone (the teammate
+sees the writer's code-built "Not saved" line in its prior). Text emitted BEFORE the write call: transient on text,
+spoken on voice (V-b) -- non-blocking residual as the fixer states.
+
+**C3: REFUTED.** Blocking: V-a (a false save is spoken on voice whenever a reply completes while the write is in
+flight) and H2 (the exact phrase AC-F2-35 forbids survives after a failed write). Non-blocking but real:
+H1/H3–H9/H11 (contradictory replies -- truthful line first, then a claim), H12/H13 (teammate claim with no truth
+shown), H14/H15 (no failed result to check against -- outside F2-35's letter, inside C3's "ever").
