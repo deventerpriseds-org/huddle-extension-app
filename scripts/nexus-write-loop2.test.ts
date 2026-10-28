@@ -338,26 +338,30 @@ const main = async () => {
     t("L2-V3 a reset during the write is deferred: still holding", g.holding, true);
     g.noteToolOutput(N, failed);
     const spoken = g.finalize("I didn't just add the Research Proposal, I also set it to high priority.");
-    // loop 3 D10: the code-built line became the ONE code-built message (status + closing line).
-    t("L2-V4 the voice speaks the code-built message (verifier N1 on voice)", spoken, nexusWriteFailureMessage(nexusWriteResultsFrom([{ tool: N, ok: false, detail: failed }])));
+    // loop 3 D10/D9: the code-built line became the ONE code-built message, and finalize now returns
+    // { full (captioned+persisted), speak (voiced), mode } instead of one string.
+    t("L2-V4 the voice speaks AND persists only the code-built message (verifier N1 on voice)", `${spoken.speak === nexusWriteFailureMessage(nexusWriteResultsFrom([{ tool: N, ok: false, detail: failed }]))}/${spoken.full === spoken.speak}/${spoken.mode}`, "true/true/whole");
     t("L2-V5 the deferred reset lands once that reply is delivered", g.holding, false);
     g = createNexusWriteSpeechGate();
     g.noteToolCall(N);
     g.noteToolOutput(N, failed);
     g.reset(); // user utterance arrives AFTER the result but BEFORE the reply's text.done
     t("L2-V6 a reset after the result but before the reply is still deferred", g.holding, true);
-    t("L2-V7 ...and the reply is still code-built", g.finalize("Your Research Proposal is all squared away."), nexusWriteFailureMessage(nexusWriteResultsFrom([{ tool: N, ok: false, detail: failed }])));
+    t("L2-V7 ...and the reply is still code-built", g.finalize("Your Research Proposal is all squared away.").speak, nexusWriteFailureMessage(nexusWriteResultsFrom([{ tool: N, ok: false, detail: failed }])));
     g = createNexusWriteSpeechGate();
     g.noteToolCall(N);
     g.noteToolOutput(N, clean);
     t("L2-V8 a clean write releases the hold once its result is in (happy path streams)", g.holding, false);
-    // loop 3 (b): was "passes untouched" -- a clean write now also carries the code-built saved list.
-    t("L2-V9 a clean write's reply + the code-built saved list", g.finalize("I've added the Research Proposal."), "I've added the Research Proposal.\n\nSaved in Nexus:\n• “Research Proposal”");
+    // loop 3 (b)/D9: was "passes untouched" -- a clean write's reply streams as usual and the code-built saved
+    // list is APPENDED (persisted text = reply + list; voiced after the streamed tail = the list).
+    const v9 = g.finalize("I've added the Research Proposal.");
+    t("L2-V9 a clean write's reply + the code-built saved list", `${v9.mode}|${v9.full}|${v9.speak}`, "append|I've added the Research Proposal.\n\nSaved in Nexus:\n• “Research Proposal”|Saved in Nexus:\n• “Research Proposal”");
     g.reset();
     t("L2-V10 after delivery a reset clears at once", `${g.holding}/${g.uses.length}`, "false/0");
     const hook = readFileSync("src/features/huddle/hooks/useVoiceCallRealtimeSpeak.ts", "utf8");
     t("L2-V11 the hook arms the gate when a tool call starts", /case "response\.function_call_arguments\.done":[\s\S]{0,700}nexusGateRef\.current\.noteToolCall\(name\);[\s\S]{0,200}runRealtimeTool\(/.test(hook), true);
-    t("L2-V12 the hook speaks/persists gate.finalize(raw)", /const full = gate\.finalize\(raw\);/.test(hook), true);
+    // loop 3 D9: was `const full = gate.finalize(raw);` -- finalize returns { full, speak, mode } now.
+    t("L2-V12 the hook speaks/persists gate.finalize(raw)", /const out = gate\.finalize\(raw\);\s*\n\s*if \(out\.mode === "whole"\) \{[\s\S]{0,200}void speak\(out\.speak, agentIdRef\.current, gen\);[\s\S]{0,600}persist\("agent", agentIdRef\.current, out\.full\);/.test(hook), true);
     t("L2-V13 the hook still streams only while the gate is not holding", /if \(!nexusGateRef\.current\.holding\) pumpSpeech\(/.test(hook), true);
   }
 };

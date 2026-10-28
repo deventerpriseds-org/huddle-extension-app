@@ -85,7 +85,9 @@ console.log("=== Voice speech gate (W18) ===");
   t("FX-V6 the hook does not stream-synth while the gate holds", /if \(!nexusGateRef\.current\.holding\) pumpSpeech\(/.test(hook), true);
   // loop2 D3: the hook now speaks gate.finalize(raw) (= nexusWriteGuardedReply, the code-built reply) for
   // EVERY reply, held or not; was `held ? enforceNexusWriteHonesty(raw, gate.uses) : raw`.
-  t("FX-V7 the hook speaks the CHECKED text (gate.finalize)", /const full = gate\.finalize\(raw\);/.test(hook), true);
+  // loop 3 D9 (docs/FIX-nexus-write-loop3.md): finalize returns { full, speak, mode }; the hook voices out.speak
+  // and persists out.full (was `const full = gate.finalize(raw);`).
+  t("FX-V7 the hook speaks the CHECKED text (gate.finalize)", /const out = gate\.finalize\(raw\);\s*\n\s*if \(out\.mode === "whole"\) \{[\s\S]{0,200}void speak\(out\.speak, agentIdRef\.current, gen\);[\s\S]{0,600}persist\("agent", agentIdRef\.current, out\.full\);/.test(hook), true);
   t("FX-V8 the hook arms the gate from each tool output", /nexusGateRef\.current\.noteToolOutput\(name, r\.ok \? output/.test(hook), true);
 }
 

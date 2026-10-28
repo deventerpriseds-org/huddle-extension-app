@@ -236,3 +236,44 @@ Mechanism (`presentNexusWriteTurn`, nexus-write-shared.ts) -- decided by the RES
   presenter over ALL of the turn's writes (teammates' included).
 The behavioural F2-35 / RT-H1..H5 / FX-H* / FX-G1..G3 assertions on `enforceNexusWriteHonesty` are unchanged and
 green (that function is now test-only).
+
+## D9 (V-a, V-c) — voice spoke a false save when a reply completed while the write was in flight
+
+**Status: fixed** (owner-specified design, item 2). V-b (text BEFORE the call in the same response) stays a
+residual, see below.
+
+Mechanism (`createNexusWriteSpeechGate`, nexus-write-shared.ts + useVoiceCallRealtimeSpeak.ts):
+- While ANY write call is pending (`noteToolCall` at `response.function_call_arguments.done`), `finalize` (every
+  `text.done`) speaks, captions and persists NOTHING: the text is BUFFERED. Deltas are not stream-synthed
+  (`holding`), and a held reply's streamed tail is discarded.
+- Once every write result is in, the gate DELIVERS ONCE: any item not persisted -> ONLY the code-built failure
+  message (`nexusWriteFailureMessage`, the same text the text path shows); every item persisted -> the
+  buffered model text + this text, then the code-built `Saved in Nexus:` list. After a failed delivery the rest
+  of the exchange says nothing.
+- `finalize` returns `{ full, speak, mode }`: the hook captions/persists `full`; "whole" voices `speak` on its own,
+  "append" (a clean write with nothing buffered: the hold is released when the result arrives, so the happy path
+  keeps streaming latency) appends the list to the streamed tail. `finalize` can no longer pass text through
+  while a write is unresolved (loop 2's V-a hole: it returned the raw text when no results were in yet).
+- `flush()` at `response.done` delivers results that are in but undelivered (the follow-up reply was cut short
+  by a barge or carried no text) -- always for a failure, for a success when text is buffered.
+- `reset()` at the next user utterance stays DEFERRED until the delivery.
+
+Tests: a simulator that drives the gate exactly as the hook does (deltas / text.done / response.done / tool
+call / tool output / user utterance), pinned to the hook's source by L3-V20..V23.
+
+| Order (verifier) | loop 2 | loop 3 | Test |
+|---|---|---|---|
+| V-a: write in flight, `text.done` "Done, I've added the Research Proposal for Oct 30." | spoken + captioned + persisted raw | nothing until the result; then ONLY the message; later model text silent | L3-V1..V3 |
+| read tool returns first, model answers ("…I've also added your proposal.") | spoken raw | buffered; failed -> ONLY the message; clean -> buffered + reply + list, once | L3-V4..V6 |
+| user talks mid-write (new auto-response) | reset deferred, reply spoken raw | buffered; ONLY the message; deferred reset lands; next exchange streams normally | L3-V7..V10 |
+| text item after the function_call in the same response, then response.done | spoken raw at text.done | buffered; not released while pending; follow-up cut short -> response.done delivers ONLY the message; late text silent | L3-V11..V13 |
+| V-c: failed write + "It is on your list for Oct 30." | line + claim kept | ONLY the message | L3-V14 |
+| clean write, nothing buffered | streamed | streamed, then the list appended; persisted = reply + list | L3-V15..V17 |
+| two writes, one fails | — | nothing until both are in; ONLY the message listing both | L3-V18, V19 |
+
+**Changed assertions:** `scripts/nexus-write-loop2.test.ts` L2-V4/L2-V7/L2-V9 now read `finalize(...)`'s
+`{ full, speak, mode }` (V4: speak = full = the message, mode whole; V7: speak = the message; V9: mode append,
+full = reply + list, speak = list) -- the gate's return type changed, the protected behaviour did not weaken.
+L2-V12 and `scripts/nexus-write-fix.test.ts` FX-V7 source regex `const full = gate.finalize(raw);` -> the new
+call site (`const out = gate.finalize(raw);` + `void speak(out.speak …)` + `persist(… out.full)`). Unchanged and
+green: L2-V1..V3, V5, V6, V8, V10, V11, V13; FX-V1..V6, FX-V8; RT-H6 (still finds `gate.finalize(raw)`).

@@ -37,6 +37,7 @@ import {
   nexusWriteInFlightOutcome,
   NEXUS_WRITE_WITHHELD_REPLY,
   NEXUS_WRITE_STATUS_CLOSING,
+  createNexusWriteSpeechGate,
 } from "../src/features/huddle/lib/nexus/nexus-write-shared";
 
 let pass = 0;
@@ -442,6 +443,164 @@ const main = async () => {
     const runtimeCallers = ["src/features/huddle/lib/huddle.functions.ts", "src/features/huddle/hooks/useVoiceCallRealtimeSpeak.ts", "src/features/huddle/lib/voice/realtime-tools.server.ts", "src/features/huddle/lib/nexus/nexus-write.server.ts"]
       .filter((f) => /enforceNexusWriteHonesty\(/.test(readFileSync(f, "utf8")));
     t("L3-H0c enforceNexusWriteHonesty (a word-list parser) has NO runtime caller", runtimeCallers.join(",") || "none", "none");
+  }
+
+  console.log("=== D9: voice -- NOTHING is spoken/captioned/persisted while a write is pending; then ONE delivery ===");
+  {
+    // A simulator that drives the gate EXACTLY as useVoiceCallRealtimeSpeak.ts does (source-pinned by L3-V20..22):
+    //   delta      -> pump to speech only while !gate.holding (else it stays in the sentence buffer)
+    //   text.done  -> out = gate.finalize(raw); "whole" speaks out.speak alone; otherwise out.speak is appended to
+    //                 the stream tail, which is flushed if !gate.holding (else discarded); out.full is persisted
+    //   response.done -> gate.flush() delivers results that are in but undelivered
+    //   function_call_arguments.done -> noteToolCall; tool result -> noteToolOutput; user utterance -> reset
+    const sim = () => {
+      const gate = createNexusWriteSpeechGate();
+      const spoken: string[] = [];
+      const persisted: string[] = [];
+      let tail = "";
+      return {
+        spoken,
+        persisted,
+        gate,
+        call: (name: string) => gate.noteToolCall(name),
+        output: (name: string, out: string) => gate.noteToolOutput(name, out),
+        user: () => gate.reset(),
+        delta: (d: string) => {
+          tail += d;
+          if (!gate.holding) {
+            spoken.push(tail.trim());
+            tail = "";
+          }
+        },
+        textDone: (raw: string) => {
+          const out = gate.finalize(raw);
+          if (out.mode === "whole") {
+            tail = "";
+            if (out.speak) spoken.push(out.speak);
+          } else {
+            if (out.speak) tail += `\n\n${out.speak}`;
+            if (!gate.holding) {
+              if (tail.trim()) spoken.push(tail.trim());
+            }
+            tail = "";
+          }
+          if (out.full) persisted.push(out.full);
+        },
+        responseDone: () => {
+          const f = gate.flush();
+          if (f) {
+            tail = "";
+            if (f.speak) spoken.push(f.speak);
+            if (f.full) persisted.push(f.full);
+          }
+        },
+      };
+    };
+    const FAILED_OUT = JSON.stringify({ ok: true, persisted: false, results: [{ index: 0, title: "Research Proposal", action: "failed", persisted: false, error: "http_500" }] });
+    const CLEAN_OUT = JSON.stringify({ ok: true, persisted: true, results: [{ index: 0, title: "Research Proposal", action: "inserted", persisted: true, due_local: "Fri, Oct 30, 2026, 11:59 PM EDT", course: { id: "c782", code: "MGT-782", name: null } }] });
+    const VMSG = nexusWriteFailureMessage(nexusWriteResultsFrom([{ tool: N, ok: false, detail: FAILED_OUT }]));
+    const LIST = "Saved in Nexus:\n• “Research Proposal” — due Fri, Oct 30, 2026, 11:59 PM EDT — MGT-782";
+    const R = "get_nexus_assignments";
+    const only = (xs: string[], want: string) => xs.length === 1 && xs[0] === want;
+
+    // V-a (the verifier's blocking order): a text.done arrives while the write is in flight.
+    let s = sim();
+    s.call(N);
+    s.delta("Done, I've added the Research Proposal for Oct 30.");
+    s.textDone("Done, I've added the Research Proposal for Oct 30.");
+    t("L3-V1 V-a: a reply completing while the write is in flight is NOT spoken, captioned or persisted", `${s.spoken.length}/${s.persisted.length}`, "0/0");
+    s.output(N, FAILED_OUT);
+    s.textDone("I've added it.");
+    t("L3-V2 V-a: once the write fails, ONLY the code-built message is spoken and persisted", `${only(s.spoken, VMSG)}/${only(s.persisted, VMSG)}`, "true/true");
+    s.textDone("It's definitely in Nexus now.");
+    t("L3-V3 ...and nothing else the model says in that exchange is spoken", `${s.spoken.length}/${s.persisted.length}`, "1/1");
+
+    // Order 1: the model calls the write AND a read; the READ returns first and the model answers.
+    s = sim();
+    s.call(N);
+    s.call(R);
+    s.output(R, JSON.stringify({ ok: true, count: 2 }));
+    s.delta("You have two things due this week. ");
+    s.delta("I've also added your proposal.");
+    s.textDone("You have two things due this week. I've also added your proposal.");
+    t("L3-V4 read-returns-first: the answer is buffered while the write is pending", `${s.spoken.length}/${s.persisted.length}`, "0/0");
+    s.output(N, FAILED_OUT);
+    s.textDone("Your proposal is saved too.");
+    t("L3-V5 read-returns-first + failed write: ONLY the code-built message", `${only(s.spoken, VMSG)}/${only(s.persisted, VMSG)}`, "true/true");
+    s = sim();
+    s.call(N);
+    s.call(R);
+    s.output(R, JSON.stringify({ ok: true, count: 2 }));
+    s.textDone("You have two things due this week.");
+    s.output(N, CLEAN_OUT);
+    s.delta("And your proposal is saved.");
+    s.textDone("And your proposal is saved.");
+    const BOTH = `You have two things due this week. And your proposal is saved.\n\n${LIST}`;
+    t("L3-V6 read-returns-first + clean write: buffered text + this text, THEN the code-built list, spoken once", `${only(s.spoken, BOTH)}/${only(s.persisted, BOTH)}`, "true/true");
+
+    // Order 2: the user talks while the write is in flight (a new auto-response).
+    s = sim();
+    s.call(N);
+    s.user();
+    s.delta("Sure, and your proposal is in.");
+    s.textDone("Sure, and your proposal is in.");
+    t("L3-V7 user-talks-mid-write: the reply to the interjection is buffered", `${s.spoken.length}/${s.persisted.length}/${s.gate.holding}`, "0/0/true");
+    s.output(N, FAILED_OUT);
+    s.textDone("Added!");
+    t("L3-V8 ...then ONLY the code-built message", `${only(s.spoken, VMSG)}/${only(s.persisted, VMSG)}`, "true/true");
+    t("L3-V9 ...and the deferred reset lands after the delivery (next exchange is clean)", `${s.gate.holding}/${s.gate.uses.length}`, "false/0");
+    s.delta("Your budget is fine.");
+    s.textDone("Your budget is fine.");
+    t("L3-V10 the next exchange (no write) streams as usual", s.spoken[1], "Your budget is fine.");
+
+    // Order 3: a text item AFTER the function call in the same response, then response.done.
+    s = sim();
+    s.call(N);
+    s.delta("Done, saved it!");
+    s.textDone("Done, saved it!");
+    s.responseDone();
+    t("L3-V11 text-after-call: buffered, and response.done does not release it while pending", `${s.spoken.length}/${s.persisted.length}`, "0/0");
+    s.output(N, FAILED_OUT);
+    s.responseDone(); // the follow-up response was cut short (barge) -- no text.done
+    t("L3-V12 results in but the follow-up was cut short: response.done delivers ONLY the message", `${only(s.spoken, VMSG)}/${only(s.persisted, VMSG)}`, "true/true");
+    s.textDone("It's saved.");
+    t("L3-V13 ...and a late model sentence is still not spoken", `${s.spoken.length}/${s.persisted.length}`, "1/1");
+
+    // V-c: the AC-F2-35 phrase after a failure.
+    s = sim();
+    s.call(N);
+    s.output(N, FAILED_OUT);
+    s.textDone("It is on your list for Oct 30.");
+    t("L3-V14 V-c: \"It is on your list for Oct 30.\" after a failure -> ONLY the message", `${only(s.spoken, VMSG)}/${only(s.persisted, VMSG)}`, "true/true");
+
+    // Happy path keeps streaming latency: a clean write with nothing buffered releases the hold at its result.
+    s = sim();
+    s.call(N);
+    s.output(N, CLEAN_OUT);
+    t("L3-V15 clean write, nothing buffered: not holding once the result is in", s.gate.holding, false);
+    s.delta("I've added your Research Proposal.");
+    s.textDone("I've added your Research Proposal.");
+    t("L3-V16 the reply streams, then the code-built list follows it", JSON.stringify(s.spoken), JSON.stringify(["I've added your Research Proposal.", LIST]));
+    t("L3-V17 ...and the persisted text is the reply + the list", only(s.persisted, `I've added your Research Proposal.\n\n${LIST}`), true);
+
+    // Two writes in one exchange, one fails: nothing until BOTH are in, then the message lists both.
+    s = sim();
+    s.call(N);
+    s.call(N);
+    s.output(N, CLEAN_OUT);
+    s.textDone("The first one is in.");
+    t("L3-V18 two writes: still nothing while the second is pending", `${s.spoken.length}/${s.persisted.length}`, "0/0");
+    s.output(N, FAILED_OUT);
+    s.textDone("Both are in!");
+    const TWO = nexusWriteFailureMessage(nexusWriteResultsFrom([{ tool: N, ok: false, detail: CLEAN_OUT }, { tool: N, ok: false, detail: FAILED_OUT }]));
+    t("L3-V19 ...then ONLY the message, listing the saved one AND the failed one", `${only(s.spoken, TWO)}/${TWO.includes("• Saved: “Research Proposal”") && TWO.includes("• Not saved: “Research Proposal”")}`, "true/true");
+
+    const hook = readFileSync("src/features/huddle/hooks/useVoiceCallRealtimeSpeak.ts", "utf8");
+    t("L3-V20 hook text.done: finalize -> 'whole' speaks out.speak alone, else appends it to the tail and flushes only while not holding",
+      /const out = gate\.finalize\(raw\);\s*\n\s*if \(out\.mode === "whole"\) \{\s*\n\s*sentenceBufRef\.current = "";\s*\n\s*if \(agentIdRef\.current && out\.speak\) void speak\(out\.speak, agentIdRef\.current, gen\);\s*\n\s*\} else if \(agentIdRef\.current\) \{\s*\n\s*if \(out\.speak\) sentenceBufRef\.current \+= `\\n\\n\$\{out\.speak\}`;\s*\n\s*if \(!gate\.holding\) pumpSpeech\(agentIdRef\.current, gen, true\);\s*\n\s*else sentenceBufRef\.current = "";/.test(hook), true);
+    t("L3-V21 hook persists/captions out.full only", /if \(out\.full && agentIdRef\.current\) \{[\s\S]{0,250}persist\("agent", agentIdRef\.current, out\.full\);/.test(hook), true);
+    t("L3-V22 hook response.done flushes undelivered results", /case "response\.done": \{[\s\S]{0,400}const flushed = nexusGateRef\.current\.flush\(\);[\s\S]{0,500}persist\("agent", agentIdRef\.current, flushed\.full\);/.test(hook), true);
+    t("L3-V23 hook deltas are pumped only while the gate is not holding", /if \(!nexusGateRef\.current\.holding\) pumpSpeech\(agentIdRef\.current, gen, false\);/.test(hook), true);
   }
 };
 

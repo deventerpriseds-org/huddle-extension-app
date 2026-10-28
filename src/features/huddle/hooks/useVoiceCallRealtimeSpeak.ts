@@ -6,9 +6,10 @@ import { useHuddleStore } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
 import { getRealtimeSession, runRealtimeTool, warmupRealtime, REALTIME_MODEL } from "../lib/voice/realtime.functions";
-// Nexus write honesty on VOICE (W18, docs/FIX-nexus-write-redteam.md): the same code guard the text
-// path runs (loop 2: the gate's finalize = nexusWriteGuardedReply, the code-built reply). Pure module
-// (no server imports), so it is safe in the browser bundle.
+// Nexus write honesty on VOICE (W18, docs/FIX-nexus-write-redteam.md): the same code-built text the text
+// path shows (loop 3: the gate buffers everything while a write is pending, then speaks ONLY the code-built
+// failure message, or the model's text + the code-built saved list). Pure module (no server imports), so it
+// is safe in the browser bundle.
 import { createNexusWriteSpeechGate } from "../lib/nexus/nexus-write-shared";
 import { SUMMON_BUZZ_URL, SUMMON_OPEN_DELAY_MS, SUMMON_GREETING_MAX_WAIT_MS, pickSummonGreeting } from "../lib/voice/summon";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
@@ -417,26 +418,43 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
             case "response.output_text.done":
             case "response.text.done": {
               // Flush the trailing partial sentence, then persist the full reply once for the transcript.
+              // Loop 3 D9 (docs/FIX-nexus-write-loop3.md): the gate decides. While ANY Nexus write is pending it
+              // BUFFERS this text (nothing spoken, captioned or persisted); once every result is in it delivers
+              // ONCE -- a failure is ONLY the code-built message, a success is the buffered text + this text +
+              // the code-built saved list. "whole" = voice out.speak on its own (nothing was streamed);
+              // "append" = the reply streamed as usual and out.speak (the saved list) follows its tail.
               const gate = nexusGateRef.current;
-              const held = gate.holding;
-              if (agentIdRef.current && !held) pumpSpeech(agentIdRef.current, gen, true);
               const raw = (((msg.text as string) ?? "").trim()) || fullBufRef.current.trim();
-              // Loop 2 D3: the reply is the CODE-BUILT text when a write in this exchange did not persist
-              // (nexusWriteGuardedReply, same as the text path); finalize also lets a deferred reset land.
-              const full = gate.finalize(raw);
-              if (held) {
+              const out = gate.finalize(raw);
+              if (out.mode === "whole") {
                 sentenceBufRef.current = "";
-                if (agentIdRef.current && full) void speak(full, agentIdRef.current, gen);
+                if (agentIdRef.current && out.speak) void speak(out.speak, agentIdRef.current, gen);
+              } else if (agentIdRef.current) {
+                if (out.speak) sentenceBufRef.current += `\n\n${out.speak}`;
+                if (!gate.holding) pumpSpeech(agentIdRef.current, gen, true);
+                else sentenceBufRef.current = "";
               }
               fullBufRef.current = "";
-              if (full && agentIdRef.current) {
-                lastAgentTextRef.current = full;
-                setCaptions((c) => [...c.slice(-40), { role: "agent", text: full }]);
-                persist("agent", agentIdRef.current, full);
+              if (out.full && agentIdRef.current) {
+                lastAgentTextRef.current = out.full;
+                setCaptions((c) => [...c.slice(-40), { role: "agent", text: out.full }]);
+                persist("agent", agentIdRef.current, out.full);
               }
               break;
             }
             case "response.done": {
+              // Loop 3 D9: Nexus write results that are in but were never delivered (the follow-up reply was cut
+              // short or carried no text) are delivered now -- a failure always, a success when text is buffered.
+              const flushed = nexusGateRef.current.flush();
+              if (flushed && agentIdRef.current) {
+                sentenceBufRef.current = "";
+                if (flushed.speak) void speak(flushed.speak, agentIdRef.current, gen);
+                if (flushed.full) {
+                  lastAgentTextRef.current = flushed.full;
+                  setCaptions((c) => [...c.slice(-40), { role: "agent", text: flushed.full }]);
+                  persist("agent", agentIdRef.current, flushed.full);
+                }
+              }
               // AGENDA RETURN (journey-style) fires HERE, not on output_text.done: a single response can
               // contain a text item AND a function_call item, so text.done can arrive while the response
               // is still active — sending response.create then errors ("active response"). response.done

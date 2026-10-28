@@ -336,58 +336,102 @@ export function createNexusWriteStreamHold() {
 }
 
 /**
- * VOICE (W18 + loop-2 D3/D4). On the Realtime voice surface the model speaks its OWN words as they stream,
- * so the client holds them here:
- *   - `noteToolCall(name)` when a write tool call STARTS: speech is held from that moment (not only once a
- *     failed result arrives);
- *   - `noteToolOutput(name, output)` when its result arrives;
- *   - `holding` = a write is in flight, or any item this exchange did not persist;
- *   - `finalize(raw)` on text.done = the text to speak, caption and persist: `nexusWriteGuardedReply` (the
- *     SAME code-built text the text path shows);
- *   - `reset()` at the next user utterance -- DEFERRED while a write's final reply has not been delivered
- *     yet, so the user talking over the wait can no longer release the hold early (D4). It completes on
- *     the next `finalize` after the results are in.
- * A clean write never holds once its result is in, so the happy path keeps its streaming latency.
+ * VOICE (W18; loop 2 D3/D4; loop 3 D9 -- docs/FIX-nexus-write-loop3.md). On the Realtime voice surface the
+ * model speaks its OWN words as they stream, so the client holds them here. Loop 2 held speech from the
+ * call's start but RELEASED the raw reply at `text.done` while the write was still pending (finalize was a
+ * pass-through with no results yet): "Done, I've added it" was spoken whenever a read tool returned first,
+ * the user talked mid-write, or text followed the call. Loop 3, owner-specified:
+ *   - while ANY write call is pending, `finalize` speaks / captions / persists NOTHING: every text.done is
+ *     BUFFERED;
+ *   - once every write result is in, the next `finalize` (or `flush` at response.done) DELIVERS once:
+ *       any item not persisted -> ONLY the code-built failure message (the same text the text path shows);
+ *       every item persisted   -> the buffered model text + this text, then the code-built saved list;
+ *   - after a failed delivery, the rest of the exchange says nothing (no model sentence survives);
+ *   - `reset()` at the next user utterance is DEFERRED until the delivery, so talking over the wait can
+ *     never release anything early.
+ * `finalize` returns { full, speak, mode }: `full` is what is captioned + persisted; `speak` is what to voice;
+ * mode "whole" = voice `speak` on its own (nothing of this reply was streamed), "append" = the reply streamed
+ * normally and `speak` (the saved list) is appended to the stream's tail, "none" = nothing to add.
+ * A clean write with no buffered text releases the hold when its result arrives, so the happy path keeps
+ * its streaming latency and the list is appended at text.done.
  */
+export type NexusSpeech = { full: string; speak: string; mode: "whole" | "append" | "none" };
+
 export function createNexusWriteSpeechGate() {
   let uses: ToolUseLike[] = [];
   let pending = 0;
-  let awaitingFinal = false;
+  let buffer: string[] = [];
+  let delivered = false;
   let resetRequested = false;
+  const results = () => nexusWriteResultsFrom(uses);
+  const failed = () => nexusWriteAnyUnpersisted(results());
   const clear = () => {
     uses = [];
     pending = 0;
-    awaitingFinal = false;
+    buffer = [];
+    delivered = false;
     resetRequested = false;
+  };
+  const holdingNow = () => pending > 0 || (uses.length > 0 && (failed() || (!delivered && buffer.length > 0)));
+  const deliver = (raw: string, wasHolding: boolean): NexusSpeech => {
+    delivered = true;
+    const rs = results();
+    if (nexusWriteAnyUnpersisted(rs)) {
+      buffer = [];
+      const msg = nexusWriteFailureMessage(rs);
+      return { full: msg, speak: msg, mode: "whole" };
+    }
+    const list = nexusWriteSavedList(rs);
+    const body = [...buffer, raw].map((x) => x.trim()).filter(Boolean).join(" ");
+    buffer = [];
+    const full = body ? `${body}\n\n${list}` : list;
+    return wasHolding ? { full, speak: full, mode: "whole" } : { full, speak: list, mode: "append" };
+  };
+  const settle = <T,>(out: T): T => {
+    if (pending === 0 && delivered && resetRequested) clear();
+    return out;
   };
   return {
     noteToolCall(name: string) {
       if (name !== NEXUS_WRITE_TOOL_NAME) return;
       pending += 1;
-      awaitingFinal = true;
+      delivered = false;
     },
     noteToolOutput(name: string, output: string) {
       if (name !== NEXUS_WRITE_TOOL_NAME || typeof output !== "string") return;
       pending = Math.max(0, pending - 1);
-      awaitingFinal = true;
+      delivered = false;
       uses.push({ tool: name, ok: false, detail: output });
     },
+    /** Do not stream-synth deltas while true. */
     get holding(): boolean {
-      return pending > 0 || nexusWriteResultsFrom(uses).some((r) => r.persisted !== true);
+      return holdingNow();
     },
     get uses(): ToolUseLike[] {
       return uses;
     },
-    finalize(raw: string): string {
-      const out = nexusWriteGuardedReply(raw, uses);
-      if (pending === 0 && awaitingFinal) {
-        awaitingFinal = false; // the reply to the write's results has now been delivered
-        if (resetRequested) clear();
+    /** On every text.done. */
+    finalize(raw: string): NexusSpeech {
+      const text = String(raw ?? "");
+      const wasHolding = holdingNow();
+      if (pending === 0 && uses.length === 0) return { full: text, speak: "", mode: "none" }; // no write: streamed as usual
+      if (pending > 0) {
+        if (text.trim()) buffer.push(text.trim());
+        return { full: "", speak: "", mode: "none" }; // a write is in flight: say NOTHING yet
       }
-      return out;
+      if (!delivered) return settle(deliver(text, wasHolding));
+      if (failed()) return settle({ full: "", speak: "", mode: "none" }); // the failure message was the exchange's only words
+      return settle(wasHolding ? { full: text, speak: text, mode: "whole" } : { full: text, speak: "", mode: "none" });
+    },
+    /** On response.done: deliver results that are in but were never delivered (the follow-up reply was cut
+     *  short or carried no text) -- always for a failure, for a success only when model text is buffered. */
+    flush(): NexusSpeech | null {
+      if (pending > 0 || uses.length === 0 || delivered) return null;
+      if (!failed() && buffer.length === 0) return null;
+      return settle(deliver("", true));
     },
     reset() {
-      if (awaitingFinal || pending > 0) resetRequested = true;
+      if (pending > 0 || (uses.length > 0 && !delivered)) resetRequested = true;
       else clear();
     },
   };
