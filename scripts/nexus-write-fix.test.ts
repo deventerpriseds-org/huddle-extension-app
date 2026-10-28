@@ -88,7 +88,9 @@ console.log("=== Voice speech gate (W18) ===");
   // loop 3 D9 (docs/FIX-nexus-write-loop3.md): finalize returns { full, speak, mode }; the hook voices out.speak
   // and persists out.full (was `const full = gate.finalize(raw);`).
   t("FX-V7 the hook speaks the CHECKED text (gate.finalize)", /const out = gate\.finalize\(raw\);\s*\n\s*if \(out\.mode === "whole"\) \{[\s\S]{0,200}void speak\(out\.speak, agentIdRef\.current, gen\);[\s\S]{0,600}persist\("agent", agentIdRef\.current, out\.full\);/.test(hook), true);
-  t("FX-V8 the hook arms the gate from each tool output", /nexusGateRef\.current\.noteToolOutput\(name, r\.ok \? output/.test(hook), true);
+  // voice-gate fix V3 (docs/FIX-nexus-write-voice-gate.md): the output settles the gate captured at the call
+  // (`writeGate`), not `nexusGateRef.current` (which a hang-up replaces). Same arming, new call site.
+  t("FX-V8 the hook arms the gate from each tool output", /const writeGate = nexusGateRef\.current;[\s\S]{0,1200}writeGate\.noteToolOutput\(name, r\.ok \? output/.test(hook), true);
 }
 
 console.log("=== Own-reply honesty (W8/W10) ===");

@@ -104,6 +104,10 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   // From the moment a Nexus write call starts, and while any of its items did NOT persist, the reply is
   // buffered (not streamed to synth) and the gate's finalize() -- the code-built reply -- is what is
   // spoken. Reset per utterance, deferred until the write's final reply is delivered (loop 2 D4).
+  // ONE GATE PER CALL (V3/V4, docs/FIX-nexus-write-voice-gate.md): cleanup() and connect() each install a
+  // fresh gate, so a write left pending by a hang-up, or a failure delivered in the last call, can never
+  // gate a new call. A write's result settles the gate it was noted on (captured at the call), even after
+  // the call ended -- that gate is no longer current, so settling it touches nothing live.
   const nexusGateRef = useRef(createNexusWriteSpeechGate());
   const audioQueueRef = useRef<string[]>([]);
   const audioPlayingRef = useRef(false);
@@ -282,6 +286,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
     genRef.current += 1;
     connectingRef.current = false;
     summonedRef.current = null; // allow the summon greeting to replay next open
+    nexusGateRef.current = createNexusWriteSpeechGate(); // V3/V4: nothing this call left can gate the next
     clearAudio();
     try { dcRef.current?.close(); } catch { /* noop */ }
     dcRef.current = null;
@@ -347,6 +352,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
       callSeqRef.current = 0;
       genRef.current += 1;
       const gen = genRef.current;
+      nexusGateRef.current = createNexusWriteSpeechGate(); // V3/V4: a new call starts with a fresh gate
       setError(null);
       setCaptions([]);
       setMicMuted(false);
@@ -500,6 +506,17 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
               if (agendaRef.current) resumePendingRef.current = true;
               break;
             }
+            case "input_audio_buffer.committed": {
+              // V5 (docs/FIX-nexus-write-voice-gate.md): the user's audio became a conversation item, and the
+              // server's reply to it is created only AFTER this event -- whereas transcription.completed is async
+              // and can land after that reply's text.done (which swallowed the reply after a failed write). Reset
+              // here, keyed by the item id, so the late transcription for the same item is a no-op. The reset is
+              // still deferred while a write is pending/undelivered (loop 2 D4), so talking over a write releases
+              // nothing early.
+              if (micMutedRef.current) break;
+              nexusGateRef.current.reset(typeof msg.item_id === "string" ? msg.item_id : undefined);
+              break;
+            }
             case "conversation.item.input_audio_transcription.completed": {
               const t = ((msg.transcript as string) ?? "").trim();
               if (!t || !agentIdRef.current) break;
@@ -509,8 +526,9 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
                 jaccard(t, lastAgentTextRef.current) >= 0.5;
               if (echo || micMutedRef.current) break;
               // A new exchange: earlier write results stop gating speech -- but only once the write's final
-              // reply has been delivered (the gate defers this reset until then; loop 2 D4).
-              nexusGateRef.current.reset();
+              // reply has been delivered (the gate defers this reset until then; loop 2 D4). Keyed by the user
+              // item: usually a no-op, because input_audio_buffer.committed already reset for this item (V5).
+              nexusGateRef.current.reset(typeof msg.item_id === "string" ? msg.item_id : undefined);
               setCaptions((c) => [...c.slice(-40), { role: "user", text: t }]);
               persist("user", agentIdRef.current, t);
               // Track a multi-part ask so we can return to unanswered parts after a barge. Do NOT
@@ -530,6 +548,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
               if (!aId) break;
               // Loop 2 D4: a Nexus write call STARTING holds speech now, not only once a failed result is in.
               nexusGateRef.current.noteToolCall(name);
+              const writeGate = nexusGateRef.current; // V3: the result settles THIS gate, even after a hang-up
               pendingToolsRef.current += 1;
               void runRealtimeTool({
                 data: {
@@ -543,16 +562,17 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
                 },
               })
                 .then((r) => {
-                  if (genRef.current !== gen || dc.readyState !== "open") return;
                   const output = r.ok ? r.output : JSON.stringify({ error: r.error });
-                  if (r.ok) console.log(`[realtime-speak] tool ${name} ${r.ms}ms`);
                   // Before the model can voice a reply about it: a write that did not persist arms the gate.
-                  nexusGateRef.current.noteToolOutput(name, r.ok ? output : JSON.stringify({ ok: false, error: r.error }));
+                  // V3: settled BEFORE the hang-up check -- returning first left `pending` stuck forever.
+                  writeGate.noteToolOutput(name, r.ok ? output : JSON.stringify({ ok: false, error: r.error }));
+                  if (genRef.current !== gen || dc.readyState !== "open") return;
+                  if (r.ok) console.log(`[realtime-speak] tool ${name} ${r.ms}ms`);
                   dc.send(JSON.stringify({ type: "conversation.item.create", item: { type: "function_call_output", call_id: callId, output } }));
                   dc.send(JSON.stringify({ type: "response.create" }));
                 })
                 .catch((err) => {
-                  nexusGateRef.current.noteToolOutput(name, JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+                  writeGate.noteToolOutput(name, JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
                   if (dc.readyState !== "open") return;
                   dc.send(JSON.stringify({ type: "conversation.item.create", item: { type: "function_call_output", call_id: callId, output: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) } }));
                   dc.send(JSON.stringify({ type: "response.create" }));
@@ -609,6 +629,10 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
       if (!trimmed || !dc || dc.readyState !== "open") return;
       unlockAudio(); // send is a user gesture — unlock audio autoplay so the reply can be spoken
       if (agentIdRef.current && AGENT_BY_ID[agentIdRef.current]) persist("user", agentIdRef.current, trimmed);
+      // V2 (docs/FIX-nexus-write-voice-gate.md): a typed turn is a new user turn exactly like a spoken one --
+      // same deferred reset (held until a pending write's reply is delivered), sent BEFORE the response.create
+      // so the reply to this text is never read as part of the previous write's exchange.
+      nexusGateRef.current.reset();
       dc.send(JSON.stringify({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: trimmed }] } }));
       dc.send(JSON.stringify({ type: "response.create" }));
     },

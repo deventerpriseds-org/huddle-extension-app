@@ -75,9 +75,13 @@ export function nexusWriteResultsFrom(toolUses: ToolUseLike[]): ItemResult[] {
   for (const u of toolUses) {
     if (u.tool !== NEXUS_WRITE_TOOL_NAME || typeof u.detail !== "string") continue;
     try {
-      const parsed = JSON.parse(u.detail) as { results?: ItemResult[]; ok?: boolean; error?: string };
+      const parsed = JSON.parse(u.detail) as { results?: ItemResult[]; ok?: boolean; error?: unknown; persisted?: unknown };
       if (Array.isArray(parsed.results)) results.push(...parsed.results);
-      else if (parsed.ok === false) results.push({ index: 0, action: "failed", persisted: false, error: String(parsed.error ?? "failed"), request_level: true });
+      // V1 (docs/FIX-nexus-write-voice-gate.md): a write output with NO per-item results is a request-level
+      // failure when it says ok:false OR carries an error (a thrown executor's `{error,tool}` has no `ok`).
+      // `persisted:"unknown"` (a throw after the POST may have landed) is kept, never upgraded to false.
+      else if (parsed && typeof parsed === "object" && (parsed.ok === false || (parsed.error != null && parsed.error !== "" && parsed.error !== false)))
+        results.push({ index: 0, action: "failed", persisted: parsed.persisted === "unknown" ? "unknown" : false, error: String(parsed.error ?? "failed"), request_level: true });
     } catch {
       /* not ours */
     }
@@ -363,6 +367,7 @@ export function createNexusWriteSpeechGate() {
   let buffer: string[] = [];
   let delivered = false;
   let resetRequested = false;
+  const seenTurns: string[] = []; // user turns already reset (survives clear(): a late duplicate stays a no-op)
   const results = () => nexusWriteResultsFrom(uses);
   const failed = () => nexusWriteAnyUnpersisted(results());
   const clear = () => {
@@ -430,7 +435,19 @@ export function createNexusWriteSpeechGate() {
       if (!failed() && buffer.length === 0) return null;
       return settle(deliver("", true));
     },
-    reset() {
+    /**
+     * A NEW USER TURN (spoken or typed). Deferred while a write is pending or its result is undelivered.
+     * `turnKey` (the Realtime user item id) makes it once per user turn: the hook resets at
+     * `input_audio_buffer.committed` -- which precedes the reply to that audio -- AND at the async
+     * `transcription.completed`, which can land AFTER that reply (V5). The second signal for the same
+     * item is a no-op, so a late transcription can never reset a LATER exchange's write.
+     */
+    reset(turnKey?: string) {
+      if (turnKey) {
+        if (seenTurns.includes(turnKey)) return;
+        seenTurns.push(turnKey);
+        if (seenTurns.length > 64) seenTurns.shift();
+      }
       if (pending > 0 || (uses.length > 0 && !delivered)) resetRequested = true;
       else clear();
     },
