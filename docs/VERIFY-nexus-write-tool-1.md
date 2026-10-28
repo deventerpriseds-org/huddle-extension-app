@@ -264,3 +264,58 @@ Probes: probe-exec.ts, probe-ac.ts, probe-read.ts, probe-routing.ts, probe-hones
 **C1: REFUTED** — offline-testable ACs are mostly MET, but F2-35 and F2-45 are NOT MET on observed
 inputs, F2-10/F2-14's "one shared function with F1" is NOT MET by construction (cross-repo copy), and
 F2-14's dedup has hole D1.
+
+## C8 — mutations re-run with mutate.sh (anchors/replacements in mut-verify-114/m1..m7.*)
+
+| # | FIX row | File | Mutation | Test cmd / must-fail | mutate.sh verbatim |
+|---|---|---|---|---|---|
+| m1 | W10 (M01) | nexus-write-shared.ts | `if (namedOwn.some(unsaved)) ownFalse = true;` → `if (false) …` | nexus-write-redteam / RT-H3 | `FIRED: 'RT-H3' failed with the defect reinstated. The guard is real.` |
+| m2 | W1 (M05) | nexus-write.server.ts | same-LOCAL-DAY check → `return rm !== null;` | nexus-write-redteam / RT-D1 | `FIRED: 'RT-D1' failed with the defect reinstated. The guard is real.` |
+| m3 | W4 (M15) | nexus-write.server.ts | head-decides-session line removed | nexus-write-redteam / RT-K1 | `FIRED: 'RT-K1' failed with the defect reinstated. The guard is real.` |
+| m4 | W9 (M19) | nexus-write.server.ts | `est:` alias removed (falls to fixed-offset IANA "EST") | nexus-write-redteam / RT-T1 | `FIRED: 'RT-T1' failed with the defect reinstated. The guard is real.` |
+| m5 | W19 (M29) | capabilities.ts | `return signal && capabilityContextPresent(…)` → `return signal;` | router-redteam / RT-R1 | `FIRED: 'RT-R1' failed with the defect reinstated. The guard is real.` |
+| m6 | W18 (M26) | useVoiceCallRealtimeSpeak.ts | holding check removed before `pumpSpeech` | nexus-write-fix / FX-V6 | `FIRED: 'FX-V6' failed with the defect reinstated. The guard is real.` |
+| m7 | W3 (M08) | nexus-write.server.ts | `withWriteLock` bypassed | nexus-write-redteam / RT-D3 | `FIRED: 'RT-D3' failed with the defect reinstated. The guard is real.` |
+
+Every run also printed `restored: … matches HEAD` and `tree clean: '<name>' passes again on the
+restored tree`; `git status --short` = 0 lines afterwards. 7 FIRED, 0 INERT, 0 NOT-APPLIED.
+**C8: CONFIRMED** — the guards are real for the inputs they test. (D1–D4 show inputs they do not test.)
+
+## C9 — new adversarial inputs (verifier's own; none appear in REDTEAM/FIX docs)
+
+48 new inputs run (probe-exec 25 titles + 6 dates + 2 dedup, probe-honesty 13, probe-routing 11 new,
+probe-lane2 2). Wrong results, each reproducible with the named probe:
+
+| Defect | Input(s) | Wrong result | Repro |
+|---|---|---|---|
+| D1 dedup | "Research Proposal" `due_date:"2026-10-30T20:00:00Z"`, course MGT-782, stored row due 2026-10-31T03:59:59Z | inserted a 2nd row (1 POST) | probe-exec.ts |
+| D2 meeting | "Residency 4, present your research proposal" / "Residency 4 present your research proposal" / "Residency 4. Present your research proposal" / "Residency 4 / present your research proposal" | accepted as assignments | probe-exec.ts |
+| D2b vocab | "Spring Recess", "Tuition payment due", "Course evaluations due", "Annual research symposium", "Networking dinner", "Field trip to Ford plant", "Pre-read: Porter Five Forces (HBR 1979)" | accepted | probe-exec.ts |
+| D2c over-reject | "Chapter 4 problem set", "Holiday Inn case study", "Spring break reflection paper", "Read and respond: chapter 4" | refused (recoverable) | probe-exec.ts |
+| D3 honesty laundered | N1 "I didn't just add the Research Proposal…", N2 "Not a problem I've saved…", N3 "Never fear I added…", N4 "Not only did I add…", N9 denial about the SAVED item + "the proposal is added" | false save claim returned UNCHANGED (text and voice) | probe-honesty.ts |
+| D3b honesty decorated | N5 "squared away", N6 "I've changed … deadline", N7 "Moved …", N8 "✓", N10 "on the books", N11 "is set … scheduled" | false claim kept, truth appended | probe-honesty.ts |
+| D4 1:1 streaming | any failed write in a 1:1 text turn with streaming on (default) | raw reply persisted to the durable row before the guard | source: huddle.functions.ts:4909-4928 vs :6588 |
+| D5 routing | "should I apply to NEXUS before my trip to Toronto", "what's the investment thesis for buying more NVDA", "my semester tuition payment is due Dec 1, can I afford it", "review the course of action for the merger proposal due Friday", "is there a case study on intermittent fasting results", "I'm teaching a training class at work, slides due Friday"; 1:1 Finn "write up an investment thesis for NVDA", 1:1 Troy "apply to NEXUS for me before my Toronto trip" | captured by Elle/Iris; 1:1 hand-off out of the agent's own lane | probe-routing.ts, probe-lane2.ts |
+
+(D-numbers in this table supersede the D3 label used in the C4 section above: routing over-match is D5.)
+
+**C9: REFUTED** — 30+ wrong results across dedup, classification, honesty and routing.
+
+## Verdict
+
+| Claim | Verdict |
+|---|---|
+| C1 F2 ACs | REFUTED (F2-35, F2-45 NOT MET; F2-10/14 shared-with-F1 NOT MET by construction; rest MET or NOT TESTABLE OFFLINE) |
+| C2 owner rules | REFUTED (D1 duplicate row; D2 "Residency 4, present your research proposal" accepted) |
+| C3 honesty | REFUTED (D3 laundering on text+voice, D4 1:1 stream) |
+| C4 routing | REFUTED (D5: travel/finance/work asks captured, 1:1 hand-offs out of own lane) |
+| C5 identity/url/headers | CONFIRMED |
+| C6 read-only | CONFIRMED |
+| C7 suites + tsc | CONFIRMED (exact counts match) |
+| C8 mutations | CONFIRMED (7/7 FIRED) |
+| C9 new adversarial | REFUTED (see table) |
+
+**Overall: REFUTED.** Blocking: D1 (a real duplicate row from a schema-allowed input), D2 (the owner's
+named meeting example passes with a comma), D3 (a false save claim passes the runtime guard unchanged,
+on both text and voice). D4 and D5 are the same defect classes the fix pass reported closed (W18-style
+hold missing on 1:1 text streaming; W19/W20 over-match on unlisted inputs).
