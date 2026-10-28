@@ -32,8 +32,11 @@ import { pickOutlookMailbox } from "../src/features/huddle/lib/journey/calendar-
 import {
   briefDeliveryPlan,
   briefLines,
+  scheduleBriefPush,
+  SCHEDULE_NAV_LINK,
   upcomingLines,
 } from "../src/features/huddle/lib/tasks/schedule-brief-run.server";
+import { readFileSync } from "node:fs";
 
 let pass = 0,
   fail = 0;
@@ -306,15 +309,16 @@ console.log("H. IRIS'S VOICE + LATER THIS WEEK (owner 2026-10-15: 'hello Sir, ju
   });
   const plan = briefDeliveryPlan(withWeek, TZ);
   t("H1 opens with Hello Sir and 'just a reminder that today you have'", /Open with "Hello Sir," then say "just a reminder that today you have/.test(plan.directive), true);
-  t("H2 asks for natural spoken sentences, not bullets", /NO bullet points/.test(plan.directive), true);
+  // Owner 2026-10-28 reversed "NO bullet points": eleven tasks in one sentence read "smashed together".
+  t("H2 asks for separate short lines, one item per line, plain text", /SEPARATE SHORT LINES/.test(plan.directive) && /OWN line starting "• "/.test(plan.directive) && /no \*\* or #/.test(plan.directive) && !/NO bullet points/.test(plan.directive), true);
   t("H3 the week is listed, day after a morning edition labelled Tomorrow", /LATER THIS WEEK:\nTomorrow \(Friday, Oct 16\):\n  10:00AM–10:30AM — Client sync \(meeting\)\nMonday, Oct 19:/.test(plan.directive.replace(/\u202f/g, "")), true);
-  t("H4 and Iris is asked to continue 'and later in the week you have'", /and later in the week you have/.test(plan.directive), true);
+  t("H4 and the week goes under 'Later this week:', one item per line", /write "Later this week:" and then each LATER THIS WEEK item on its OWN line/.test(plan.directive), true);
   const noWeek = briefDeliveryPlan(mk({ upcoming: [] }), TZ);
   t("H5 an empty week is not mentioned", /do not mention the rest of the week/.test(noWeek.directive), true);
   const eve = upcomingLines(mk({ edition: "evening", forDate: "2026-10-16", upcoming: [wk({ startIso: "2026-10-17T14:00:00Z", day: "2026-10-17" })] }), TZ);
   t("H6 on an EVENING edition the next day is a weekday, not 'Tomorrow'", eve[0], "Saturday, Oct 17:");
   const emptyToday = briefDeliveryPlan(mk({ items: [], upcoming: withWeek.upcoming }), TZ);
-  t("H7 nothing today but a busy week still mentions the week", /but later in the week you have/.test(emptyToday.directive), true);
+  t("H7 nothing today but a busy week still mentions the week", /write "Later this week:" and each LATER THIS WEEK item on its OWN/.test(emptyToday.directive), true);
   t("H8 addDays crosses a month boundary", addDays("2026-10-30", 3), "2026-11-02");
 }
 
@@ -324,7 +328,7 @@ console.log("I. TASKS + WINDOWS (owner 2026-10-15: 'i have tasks everyday ... a 
   const withTasks = mk({ tasks: [tk("Find a low-interest credit card", "2026-10-15T13:00:00Z"), tk("Debug autowork", "2026-10-15T14:30:00Z")] });
   const p1 = briefDeliveryPlan(withTasks, TZ);
   t("I1 tasks are listed under TASKS", /TASKS:\n9:00\s?AM — Find a low-interest credit card \(task\)\n10:30\s?AM — Debug autowork \(task\)/.test(p1.directive.replace(/\u202f/g, " ")), true);
-  t("I1b and Iris is asked to name them after the meetings", /and on your task list/.test(p1.directive), true);
+  t("I1b and Iris lists them under 'On your task list:', one per line, after the meetings", /write "On your task list:" and then each TASK on its OWN line/.test(p1.directive), true);
   const tasksOnly = briefDeliveryPlan(mk({ items: [], tasks: withTasks.tasks }), TZ);
   t("I2 a day with tasks but no meetings is a real brief, not 'nothing scheduled'", tasksOnly.kind, "items");
   const empty = briefDeliveryPlan(mk({ items: [], tasks: [] }), TZ);
@@ -340,6 +344,26 @@ console.log("I. TASKS + WINDOWS (owner 2026-10-15: 'i have tasks everyday ... a 
   t("I6b already started -> out", inWindow("2026-10-15T14:00:00Z", win, TZ, now), false);
   t("I6c after the window ends (5 PM) -> out", inWindow("2026-10-15T21:00:00Z", win, TZ, now), false);
   t("I6d undated -> out", inWindow(null, win, TZ, now), false);
+}
+
+console.log("J. ASK TO ADJUST + OPEN SCHEDULE BUTTON + PUSH TITLE (owner 2026-10-28: 'asked in the early morning to check out the schedule for any adjustments ... with deep link ... to each tab'; 'it didn't stick i missed it')");
+{
+  const morning = briefDeliveryPlan(mk({}), TZ);
+  t("J1 the morning brief ends by asking whether he wants to adjust anything today", /asking whether he wants to adjust anything today/.test(morning.directive), true);
+  t("J1b and points at the Open Schedule button", /"Open Schedule" button below takes him to the Schedule tab/.test(morning.directive), true);
+  const evening = briefDeliveryPlan(mk({ edition: "evening", forDate: "2026-10-16" }), TZ);
+  t("J2 the evening brief asks about tomorrow", /adjust anything for tomorrow/.test(evening.directive), true);
+  const empty = briefDeliveryPlan(mk({ items: [], tasks: [] }), TZ);
+  t("J3 an empty day still asks", /adjust anything today/.test(empty.directive), true);
+  const win = briefDeliveryPlan(mk({ window: { name: "after_work", start: 17, end: 22 }, tasks: [{ id: "a", title: "A", startIso: "2026-10-15T22:00:00Z" }] }), TZ);
+  t("J4 a window heads-up carries no question", /adjust anything/.test(win.directive), false);
+  t("J5 the button opens the Schedule tab", JSON.stringify(SCHEDULE_NAV_LINK), JSON.stringify({ view: "schedule", label: "Open Schedule" }));
+  t("J6 push title: morning", scheduleBriefPush("morning").title, "Iris: today's schedule");
+  t("J6b push title: evening", scheduleBriefPush("evening").title, "Iris: tomorrow's schedule");
+  t("J6c push title: window", scheduleBriefPush("morning", { name: "after_work", start: 17, end: 22 }).title, "Iris: rest of your after work window");
+  t("J6d a brief is a heads-up, not sticky", scheduleBriefPush("evening").sticky, false);
+  const src = readFileSync("src/features/huddle/lib/tasks/schedule-brief-run.server.ts", "utf8");
+  t("J7 the payload carries the button and the push style", /navLink: SCHEDULE_NAV_LINK,\s*pushStyle: scheduleBriefPush\(brief\.edition, opts\.window\),/.test(src), true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
