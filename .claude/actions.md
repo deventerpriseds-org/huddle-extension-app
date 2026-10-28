@@ -30,6 +30,8 @@ thread history instead of the bottom … it seems it should quick load the most 
 oldest when scrolling up far enough according to best practices"*
 
 **Status: DEPLOYED `4332c41` (PR #109, deploy run 40586460645 success), mechanism verified headless
+**OWNER-CONFIRMED LIVE 2026-10-28:** "yes the scroll lands on the newest items". Part B step 4 decision: KEEP
+the ~185 blob-only messages (owner). Part B steps 1-3: awaiting approval.
 (A/B), NOT yet confirmed on the owner's phone.**
 
 **Cause (read from code, then reproduced):** the deep link switches to the 1:1 before the workspace
