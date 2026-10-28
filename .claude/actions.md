@@ -4787,7 +4787,9 @@ Owner: *"keep re-asking, but in a loop moving to the next item in the lane... ~3
 - [x] Owner re-scope 2026-10-27: whole lane (no top-N), NO new day cap/interval setting (reuse the 45–90 min spacing chain + windows), NO review-frozen pause; only a 24h per-item floor (owner's 08-26 choice).
 - [x] Build A-C — `.claude/IMPL-confirm-ask-rotation.md`; Build D — `.claude/IMPL-create-dedup.md`; merged on `claude_autowork-lane-rotation`.
 - [x] Verifier loop 1 (`.claude/VERIFY-confirm-ask-rotation-1.md`): gate CONFIRMED; REFUTED a hidden 3/day per-agent cap + a clock-skew double-send. Both fixed in 03ab8f2, new guards mutation-proved FIRED.
-- [ ] Verifier loop 2 (running) → push (target is an owner decision) → merge to main → deploy → owner live confirm.
+- [x] Owner chose push target (a): new branch `claude_autowork-lane-rotation`, PR #108 (2026-10-27).
+- [x] Verifier loop 2 CONFIRMED R1 (no hidden cap); loop 3 (`docs/qc-evidence/VERIFY-confirm-ask-rotation-3.md`) CONFIRMED R2 clock skew, R3 escalate-after-floor, and the main-merge journeyOn gate; its two unguarded fixes now have tests (AC-35b, ask-shape dedup gate), both mutation-proved FIRED.
+- [ ] Merge #108 → deploy → owner sees re-asks rotate through each agent's lane on the phone (NOT yet confirmed live).
 Branch: `claude_autowork-lane-rotation` (designated branch's history no longer connects to main — push target is an owner decision).
 ## ACT:instant-email-alerts + ACT:draft-formatting — instant, clearly-labelled, sticky email alerts; Calibri drafts (owner 2026-10-27)
 Owner: *"i recieved an email and Iris did not immediately send me an alert message with a draft reply"* → after the
