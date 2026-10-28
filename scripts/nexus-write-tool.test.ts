@@ -165,6 +165,10 @@ t("F2-31 (4a) voice NATIVE set holds the name (never journey-proxied)", /\.\.\.N
 t("F2-31 (4b) voice dispatch routes the name to the write executor", /name === NEXUS_WRITE_TOOL_NAME\)[\s\S]{0,200}executeNexusWriteTool/.test(voiceSrc), true);
 t("F2-31 read executor's name set does NOT contain the write tool", NEXUS_TOOL_NAMES.has(NEXUS_WRITE_TOOL_NAME), false);
 // F2-32: ungated -- the text list is built unconditionally (no capability/agent check on the line).
+// F2-42: the 1:1 owner follow-up must take the deterministic prime decision BEFORE the LLM resolver,
+// or resolveOwnerLLM can still pass Elle's "update the due date on my research paper" to Eli.
+t("F2-42 1:1 follow-up consults primeLaneDecision before the LLM resolver",
+  /const prime = capOwnerId \? null : primeLaneDecision\(data\.text, nextId\);[\s\S]{0,400}\} else if \(prime === "keep"\) \{[\s\S]{0,200}\} else if \(prime\) \{\s*deliverIfOwner\(prime\);[\s\S]{0,2000}resolveOwnerLLM/.test(textSrc), true);
 t("F2-32 text pool is ungated (no agent/capability condition)", /const nexusWriteToolList = nexusWriteTools\(\) as/.test(textSrc), true);
 t("F2-32 voice toolset is ungated (same unconditional raw list as the reads)", /\.\.\.nexusReadTools\(\), \.\.\.nexusWriteTools\(\)\]/.test(voiceSrc), true);
 
