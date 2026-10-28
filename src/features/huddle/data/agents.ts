@@ -59,6 +59,25 @@ export interface AgentCapability {
    * see `sharedCapabilityMatches` in lib/capabilities.ts.
    */
   triggerPairs?: Array<[string[], string[]]>;
+  /**
+   * SHARED capabilities only: the ask must ALSO carry this context, or no trigger counts. A trigger
+   * word says WHAT kind of job ("assignment", "deliverable", "paper ... due"); the context says WHOSE
+   * job -- without it "change my seat assignment on the flight" and "the client deliverable is due"
+   * were captured (W19/W20, docs/FIX-nexus-write-redteam.md). STRONG context always counts; WEAK
+   * context counts only when no VETO word (another lane's unmistakable vocabulary) is present.
+   * Words are whole-word, case-insensitive; patterns are [source, flags] RegExp pairs.
+   */
+  requiresContext?: {
+    strong?: string[];
+    strongPatterns?: Array<[string, string]>;
+    weak?: string[];
+    weakPatterns?: Array<[string, string]>;
+    /** [nouns, cues]: weak context when any noun AND any cue appear as whole words. */
+    weakPairs?: Array<[string[], string[]]>;
+    vetoes?: string[];
+    /** Phrases removed before matching ("of course" is not a course). */
+    ignore?: string[];
+  };
 }
 
 /**
@@ -71,9 +90,13 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
   id: "nexus-assignments",
   label: "adding & updating the owner's coursework assignments in Nexus (dated, graded deliverables)",
   exclusive: false,
+  // WHAT kind of job: an assignment-shaped word. Deliberately broad -- `requiresContext` below is what
+  // keeps it to HIS coursework.
   triggers: [
     "assignment", "syllabus", "syllabi", "deliverable", "nexus", "coursework", "course work",
     "research paper", "research proposal", "term paper", "final paper",
+    "paper", "essay", "thesis", "dissertation", "case analysis", "case study", "case brief", "proposal",
+    "midterm", "exam", "homework", "quiz", "due", "deadline",
   ],
   triggerPairs: [
     [
@@ -81,6 +104,33 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
       ["due", "deadline", "deadlines", "graded", "grade", "submit", "submission"],
     ],
   ],
+  // WHOSE job: the owner's coursework. Owner rule (2026-10-28 fix pass): course code, EMBA/DBA/class/
+  // professor/syllabus words, or an explicit Nexus-assignment phrase. A seat assignment, a client or
+  // quarterly-report deliverable, tax papers or "the nexus of AI" carry none of it.
+  requiresContext: {
+    strong: [
+      "syllabus", "syllabi", "emba", "mba", "dba", "doctoral", "professor", "prof", "instructor",
+      "coursework", "course work", "research paper", "research proposal", "term paper", "final paper",
+      "case analysis", "case study", "case brief", "literature review", "thesis", "dissertation",
+    ],
+    // "add this to Nexus", "my assignments in Nexus", "Nexus assignments" -- not "NEXUS card", "the nexus of".
+    strongPatterns: [["\\b(?:to|in|into|on|from) nexus\\b|\\bnexus assignments?\\b", "i"]],
+    weak: ["class", "classes", "course", "courses", "semester", "school", "grad school"],
+    weakPatterns: [
+      // a course code: MGT-782, MGT 782, MGT782, mgt-782
+      ["\\b[A-Z]{2,5}[- ]?\\d{3,4}[A-Z]?\\b|\\b[a-zA-Z]{2,5}-\\d{3,4}\\b|\\b[a-z]{2,5} ?\\d{3}\\b", ""],
+      // "my assignments", "my school assignments" (plural: "my seat assignment" is not coursework)
+      ["\\bmy (?:[a-z]+ )?assignments\\b", "i"],
+    ],
+    // a graded-work cue with a paper/essay: "the due date on my strategy paper"
+    weakPairs: [[["paper", "essay"], ["due date", "deadline", "graded", "grade", "submit", "submission"]]],
+    vetoes: [
+      "flight", "seat", "trip", "hotel", "airline", "client", "customer", "boss", "quarterly", "invoice",
+      "tax", "taxes", "toilet", "towel", "towels", "card", "kid", "kids", "son", "daughter", "child",
+      "grocery", "groceries", "golf",
+    ],
+    ignore: ["of course"],
+  },
 };
 
 export interface Agent {
@@ -201,7 +251,11 @@ export const AGENTS: Agent[] = [
     initials: "ER",
     colorVar: "--agent-violet",
     domains: ["coursework", "essays", "deadlines", "applications"],
-    themes: ["EMBA", "essay", "draft", "professor", "submit", "education", "school", "course", "program", "degree", "studies", "assignments", "syllabus", "deliverables", "due date"],
+    // The builder's extra themes ("assignments", "syllabus", "deliverables", "due date") are NOT kept:
+    // topic scoring has no coursework context, so they sent "my tax papers are due" and "toilet paper
+    // is due for restock" to Elle (W19). Coursework asks reach her through the context-gated PRIME
+    // capability below instead. Back to the origin/main 4809e2e themes.
+    themes: ["EMBA", "essay", "draft", "professor", "submit", "education", "school", "course", "program", "degree", "studies"],
     tone: "coach",
     voiceId: "hGQkZQUA5RiOXIw7P9iO",
     // PRIME (not exclusive) for Nexus assignment writes -- see NEXUS_ASSIGNMENTS_CAPABILITY above.

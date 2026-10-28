@@ -278,16 +278,33 @@ const wordStart = (phrase: string) => new RegExp(`(^|[^a-z0-9])${escapeRe(phrase
 const wholeWord = (w: string) =>
   new RegExp(`(^|[^a-z0-9])${escapeRe(w.toLowerCase())}(?:'?s)?(?![a-z0-9])`, "i");
 
+/** Does `text` carry the capability's required CONTEXT (agents.ts `requiresContext`)? No spec = yes. */
+export function capabilityContextPresent(cap: AgentCapability, text: string): boolean {
+  const ctx = cap.requiresContext;
+  if (!ctx) return true;
+  let raw = String(text ?? "");
+  for (const p of ctx.ignore ?? []) raw = raw.replace(new RegExp(escapeRe(p), "gi"), " ");
+  const t = raw.toLowerCase();
+  const anyWord = (ws?: string[]) => (ws ?? []).some((w) => wholeWord(w).test(t));
+  const anyPattern = (ps?: Array<[string, string]>) => (ps ?? []).some(([src, flags]) => new RegExp(src, flags).test(raw));
+  if (anyWord(ctx.strong) || anyPattern(ctx.strongPatterns)) return true;
+  if (anyWord(ctx.vetoes)) return false;
+  if (anyWord(ctx.weak) || anyPattern(ctx.weakPatterns)) return true;
+  return (ctx.weakPairs ?? []).some(([nouns, cues]) => anyWord(nouns) && anyWord(cues));
+}
+
 /** Does `text` ask for this SHARED capability? Exclusive capabilities never match here. */
 export function sharedCapabilityMatches(cap: AgentCapability, text: string): boolean {
   if (cap.exclusive) return false;
   const t = (text ?? "").toLowerCase();
   if (!t.trim()) return false;
-  if ((cap.triggers ?? []).some((p) => wordStart(p).test(t))) return true;
+  let signal = (cap.triggers ?? []).some((p) => wordStart(p).test(t));
   for (const [nouns, cues] of cap.triggerPairs ?? []) {
-    if (nouns.some((n) => wholeWord(n).test(t)) && cues.some((c) => wholeWord(c).test(t))) return true;
+    if (signal) break;
+    if (nouns.some((n) => wholeWord(n).test(t)) && cues.some((c) => wholeWord(c).test(t))) signal = true;
   }
-  return false;
+  // A trigger says what KIND of job; the context says it is THIS capability's job (W19/W20).
+  return signal && capabilityContextPresent(cap, text);
 }
 
 /** The agents PRIME for this ask (holders of a matching shared capability), in roster order,
