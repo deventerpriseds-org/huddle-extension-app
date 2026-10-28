@@ -1,0 +1,2 @@
+      if (false) {
+        if (text.trim()) buffer.push(text.trim());

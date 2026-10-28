@@ -277,3 +277,134 @@ full = reply + list, speak = list) -- the gate's return type changed, the protec
 L2-V12 and `scripts/nexus-write-fix.test.ts` FX-V7 source regex `const full = gate.finalize(raw);` -> the new
 call site (`const out = gate.finalize(raw);` + `void speak(out.speak …)` + `persist(… out.full)`). Unchanged and
 green: L2-V1..V3, V5, V6, V8, V10, V11, V13; FX-V1..V6, FX-V8; RT-H6 (still finds `gate.finalize(raw)`).
+
+## Mutations (mutate.sh; anchors/replacements are FILES in `mut-loop3/`, generated and checked to occur exactly once by `mut-loop3/make-anchors.py`; runner `bash mut-loop3/run-mutations.sh`; test cmd `bun scripts/nexus-write-loop3.test.ts`)
+
+| # | Guard | File | Mutation | Must fail | mutate.sh verbatim |
+|---|---|---|---|---|---|
+| k1 | strip default-ignorable/format chars | nexus-write.server.ts | strip removed | L3-D7a | `FIRED: 'L3-D7a' failed with the defect reinstated. The guard is real.` |
+| k2 | NFKC | nexus-write.server.ts | `.normalize("NFKC")` removed | L3-D7a | `FIRED: 'L3-D7a' failed with the defect reinstated. The guard is real.` |
+| k3 | every non-letter/digit -> space | nexus-write.server.ts | only ASCII spaces collapsed | L3-D7a | `FIRED: 'L3-D7a' failed with the defect reinstated. The guard is real.` |
+| k4 | letter↔digit split | nexus-write.server.ts | split removed | L3-D7a | `FIRED: 'L3-D7a' failed with the defect reinstated. The guard is real.` |
+| k5 | meeting-word + roman split | nexus-write.server.ts | token returned unsplit | L3-D7a | `FIRED: 'L3-D7a' failed with the defect reinstated. The guard is real.` |
+| k6 | classifier reads the canonical form | nexus-write.server.ts | raw lower-cased title | L3-D7a | `FIRED: 'L3-D7a' failed with the defect reinstated. The guard is real.` |
+| k7 | extended deny vocabulary | nexus-write.server.ts | intensive/weekend/consortium/conference/cohort removed | L3-D7a | `FIRED: 'L3-D7a' failed with the defect reinstated. The guard is real.` |
+| u1 | unchanged stored title not re-judged | nexus-write.server.ts | skip removed | L3-K6a | `FIRED: 'L3-K6a' failed with the defect reinstated. The guard is real.` |
+| z1 | dedup in courseZoneOf(course) | nexus-write.server.ts | `dayZone = due.zone` | L3-D8b | `FIRED: 'L3-D8b' failed with the defect reinstated. The guard is real.` |
+| z2 | written-day match key | nexus-write.server.ts | key removed | L3-D8c | `FIRED: 'L3-D8c' failed with the defect reinstated. The guard is real.` |
+| z3 | ISO instant ignores the model zone | nexus-write.server.ts | ISO returns the argument's zone | L3-D8m | `FIRED: 'L3-D8m' failed with the defect reinstated. The guard is real.` |
+| z4 | claim key on the written/ET day | nexus-write.server.ts | instant's ET day only | L3-D8k | `FIRED: 'L3-D8k' failed with the defect reinstated. The guard is real.` |
+| z5 | the course record's own zone is used | nexus-write.server.ts | always the default | L3-D8i | `FIRED: 'L3-D8i' failed with the defect reinstated. The guard is real.` |
+| r1 | vetoes BEFORE strong | capabilities.ts | order swapped | L3-D6o | `FIRED: 'L3-D6o' failed with the defect reinstated. The guard is real.` |
+| r2 | course list is strong context (data source) | capabilities.ts | `anySource` removed | L3-D6f | `FIRED: 'L3-D6f' failed with the defect reinstated. The guard is real.` |
+| r3 | no generic course-code regex | agents.ts | `[A-Z]{2,4}[- ]?\d{3}` re-added | L3-D6a | `FIRED: 'L3-D6a' failed with the defect reinstated. The guard is real.` |
+| r4 | mba/dba/instructor/professor not strong | agents.ts | re-added to strong | L3-D6q | `FIRED: 'L3-D6q' failed with the defect reinstated. The guard is real.` |
+| r5 | stale course list unused | course-context.ts | TTL check removed | L3-D6l | `FIRED: 'L3-D6l' failed with the defect reinstated. The guard is real.` |
+| r6 | course list primed before routing | huddle.functions.ts | prime call removed | L3-D6u | `FIRED: 'L3-D6u' failed with the defect reinstated. The guard is real.` |
+| r7 | one-word course names are not context | course-context.ts | `>= 1` word | L3-D6k | `FIRED: 'L3-D6k' failed with the defect reinstated. The guard is real.` |
+| h1 | failed write -> code-built message | nexus-write-shared.ts | failure branch disabled | L3-H1 | `FIRED: 'L3-H1' failed with the defect reinstated. The guard is real.` |
+| h2 | every other reply held back | nexus-write-shared.ts | other replies keep model text | L3-H12 | `FIRED: 'L3-H12' failed with the defect reinstated. The guard is real.` |
+| h3 | saved list appended on success | nexus-write-shared.ts | list not appended | L3-H14 | `FIRED: 'L3-H14' failed with the defect reinstated. The guard is real.` |
+| h4 | write recorded in flight | huddle.functions.ts | push removed | L3-D11f | `FIRED: 'L3-D11f' failed with the defect reinstated. The guard is real.` |
+| h5 | write results in buildResumeState | huddle.functions.ts | field removed | L3-D11c | `FIRED: 'L3-D11c' failed with the defect reinstated. The guard is real.` |
+| h6 | re-seeded on resume | huddle.functions.ts | starts empty | L3-D11d | `FIRED: 'L3-D11d' failed with the defect reinstated. The guard is real.` |
+| h7 | final result is presented | huddle.functions.ts | raw `replies` | L3-D10w (final result) | `FIRED: 'L3-D10w every exit is presented: the final result' failed with the defect reinstated. The guard is real.` |
+| h8 | in-flight = unknown | nexus-write-shared.ts | in-flight reported saved | L3-H17 | `FIRED: 'L3-H17' failed with the defect reinstated. The guard is real.` |
+| v1 | voice buffers while pending | nexus-write-shared.ts | buffering disabled | L3-V1 | `FIRED: 'L3-V1' failed with the defect reinstated. The guard is real.` |
+| v2 | failure delivers ONLY the message | nexus-write-shared.ts | raw text prepended | L3-V2 | `FIRED: 'L3-V2' failed with the defect reinstated. The guard is real.` |
+| v3 | silence after a failed delivery | nexus-write-shared.ts | suppression removed | L3-V3 | `FIRED: 'L3-V3' failed with the defect reinstated. The guard is real.` |
+| v4 | flush at response.done | nexus-write-shared.ts | flush returns null | L3-V12 | `FIRED: 'L3-V12' failed with the defect reinstated. The guard is real.` |
+| v5 | reset deferred until delivery | nexus-write-shared.ts | reset always clears | L3-V7 | `FIRED: 'L3-V7' failed with the defect reinstated. The guard is real.` |
+| v6 | hook calls flush | useVoiceCallRealtimeSpeak.ts | flush call removed | L3-V22 | `FIRED: 'L3-V22' failed with the defect reinstated. The guard is real.` |
+| v7 | hook "whole" branch | useVoiceCallRealtimeSpeak.ts | branch disabled | L3-V20 | `FIRED: 'L3-V20' failed with the defect reinstated. The guard is real.` |
+
+First run: r2 against L3-D6e returned `UNDETERMINED: the suite FAILED (rc=1) but no recognised failure marker named
+'L3-D6e'` -- with the course-list source removed, the GROUP leader of the MGT-782-only asks is still Elle/Iris
+through origin/main's pre-existing theme scoring, so L3-D6e does not move; the 1:1 keep decision does.
+Re-targeted at L3-D6f (row above, FIRED). **35 run, 35 FIRED, 0 INERT, 0 NOT-APPLIED.** Every run printed
+`restored: … matches HEAD` and `tree clean: … passes again on the restored tree`.
+
+h4-h7, r6, v6, v7 are SOURCE assertions (the call sites live in an 8k-line server function and a React hook that
+cannot run offline); the behaviour behind each is proved by the pure tests h1-h3/h8, r1-r5, v1-v5 fire on.
+
+### The verifier's loop-2 mutation set re-run on loop-3 code (`bash mut-verify-114-2/run-mutations.sh`)
+
+| # | Verdict (verbatim) | Note |
+|---|---|---|
+| m1 RT-H3 | `FIRED: 'RT-H3' failed with the defect reinstated. The guard is real.` | `enforceNexusWriteHonesty`, now test-only |
+| m2 RT-D1 | `NOT-APPLIED: the anchor does not appear in src/features/huddle/lib/nexus/nexus-write.server.ts. NOTHING WAS TESTED.` | the same-day line became `days.has(…)` (D8 written-day key). Re-anchored as **m2b** (`mut-loop3/m2b.*`, test `bun scripts/nexus-write-redteam.test.ts`): `FIRED: 'RT-D1' failed with the defect reinstated. The guard is real.` |
+| m5 RT-R1 | `FIRED: 'RT-R1' failed with the defect reinstated. The guard is real.` | |
+| m6 FX-V6 | `FIRED: 'FX-V6' failed with the defect reinstated. The guard is real.` | |
+| m7 RT-D3 | `FIRED: 'RT-D3' failed with the defect reinstated. The guard is real.` | |
+| n1 L2-D2a | `FIRED: 'L2-D2a' failed with the defect reinstated. The guard is real.` | |
+| n2 L2-D1h | `FIRED: 'L2-D1h' failed with the defect reinstated. The guard is real.` | |
+| n3 L2-D3a N14 | `NOT-APPLIED: the anchor does not appear in src/features/huddle/lib/nexus/nexus-write-shared.ts. NOTHING WAS TESTED.` | expected: the WRITE_TALK sentence filter it mutates is DELETED by D10; the replacement guards are h1/h2 (FIRED) |
+| n4 L2-D4a | `FIRED: 'L2-D4a' failed with the defect reinstated. The guard is real.` | |
+| n5 L2-D5b | `NOT-APPLIED: the anchor does not appear in src/features/huddle/data/agents.ts. NOTHING WAS TESTED.` | the strong list changed (D6). Re-anchored as **n5b** (`mut-loop3/n5b.*`, test `bun scripts/nexus-write-loop2.test.ts`): `FIRED: 'L2-D5b' failed with the defect reinstated. The guard is real.` |
+
+## Residuals (not fixed, and why)
+
+- **H15 -- a hallucinated save with NO write call this turn** ("I've added your Research Proposal to Nexus." and
+  nothing was called) is shown unchanged. Catching it would need reading the model's prose for save claims --
+  exactly the word-list mechanism the owner ruled out. The structural backstop: EVERY real write now carries a
+  code-built `Saved in Nexus:` list or `Nexus write status:` message, so a save claim WITHOUT one was not a write.
+  (A UI badge for code-built blocks would make that signal unmissable -- not built; out of scope.)
+- **V-b / text before the call** -- text the model emits BEFORE the function call in the same response is streamed
+  (voice) or shown transiently (1:1 text, replaced by the final presented reply) before the call exists. Holding
+  all voice text until `response.done` would cost every voice reply its streaming latency. Unchanged since loop 1.
+- **Over-strip, by the owner's rule:** in a failed-write turn every other agent's reply is held back, including an
+  unrelated answer; code-built attachments (artifact chips, widgets) stay. A duplicate counts as "did not persist"
+  (nothing new was written), so it also takes the failure-message path.
+- **D7 accepted cost:** deny-anywhere still refuses some real deliverables (the verifier's over-rejection list, plus
+  e.g. "Cohort analysis paper", "Weekend reflection paper"), refused WITH a reason, nothing written.
+- **D6 accepted cost:** a veto beats even a real course code ("book the flight for my MGT-782 paper deadline" is not
+  routed as coursework). A cold start routes its first turn on weak signals if Nexus does not answer within ~1.5 s
+  (the read completes in the background). The cache is per server process (single-owner deployment:
+  NEXUS_OWNER_ID is server config). Client-side code (if any routes locally) has no course list -> weak only.
+- **D8:** Nexus has no per-course time-zone column today, so every course is America/New_York; the per-turn claim
+  key (computed before the course is resolved) uses the written date or the ET day.
+- **Presentation index shift:** when a clean writer has NO reply of its own, its list is appended as a new reply at
+  the end; a reply from a later chunk can shift it one slot (the client upserts by index; it self-corrects on the
+  next poll).
+- **An update whose stored row cannot be read** is labelled by its id (no title/course in the list line).
+- Unchanged from earlier loops: F2-10/F2-14 "shared with F1" (cross-repo, by construction), W3 across server
+  instances, MST/MT and "Eastern Standard Time" refused as ambiguous (recoverable), LLM-router path not measurable
+  offline.
+
+## Results
+
+`bash scripts/run-nexus-fix-suites.sh` on the final commit:
+
+| Suite | Result |
+|---|---|
+| scripts/nexus-write-redteam.test.ts | 39 passed, 0 failed (unchanged) |
+| scripts/router-redteam.test.ts | 12 passed, 0 failed (course-list fixture injected; assertions unchanged) |
+| scripts/nexus-write-tool.test.ts | 115 passed, 0 failed (F2-35 source check changed; fixture injected) |
+| scripts/router-winners.test.ts | 39 passed, 0 failed (fixture injected; assertions unchanged) |
+| scripts/nexus-read-tools.test.ts | 190 passed, 0 failed |
+| scripts/cross-app-turn-gate.test.ts | 92 passed, 0 failed (G7/G8 green: no public route or `Input` schema change) |
+| scripts/voice-toolset-hidden.test.ts | 36 passed, 0 failed |
+| scripts/nexus-write-fix.test.ts | 51 passed, 0 failed (FX-G6, FX-V7 changed; fixture injected) |
+| scripts/nexus-write-loop2.test.ts | 185 passed, 0 failed (L2-D1g, L2-D3a/b/c/e/f/g/h/i/j, L2-V4/V7/V9/V12 changed; fixture injected) |
+| scripts/nexus-write-loop3.test.ts (new) | 315 passed, 0 failed |
+| `npx tsc --noEmit -p .` | clean (exit 0) |
+| scripts/barge-route.test.ts (not in the runner; a routing consumer) | 10 passed, 0 failed (same as origin/main) |
+
+Mutations: 35 new -> 35 FIRED. Verifier's m1-m7/n1-n5 re-run: 7 FIRED, 3 NOT-APPLIED (targets replaced by
+design), 2 of those re-anchored (m2b, n5b) -> FIRED.
+
+## Blast radius
+
+| File | Change | Feeds verifier claims |
+|---|---|---|
+| src/features/huddle/lib/nexus/nexus-write.server.ts | `canonicalTitle` + canonical kind rules + extended deny vocab (D7); stored-row read on UPDATE, unchanged title not re-judged, stored title/course on update results (item 6); `courseZoneOf`, `writtenDay`, course-zone dedup + labels, claim key, ISO ignores the model zone (D8); the course list refreshes the routing cache. The single outbound write call (`nexusWriteFetch`, one `fetch(`) is untouched; the new reads go through `nexusGet` (server owner set last). | C1 (F2-11/12/13/14/20), C2, C5 (unchanged: the verifier's probe C5 block re-run -- one owner, whitelisted body), C9 |
+| src/features/huddle/lib/nexus/nexus-write-shared.ts | `presentNexusWriteTurn`, `nexusWriteFailureMessage`, `nexusWriteSavedList`, `nexusWriteStatusLine`, fixed closing / held-back lines, `nexusWriteInFlightOutcome`, single-reply `nexusWriteGuardedReply`; WRITE_TALK filter deleted; `enforceNexusWriteHonesty` test-only; speech gate rewritten (buffer / deliver once / flush / deferred reset) | C1 (F2-35), C3, C9 |
+| src/features/huddle/lib/huddle.functions.ts | course list primed before routing; per-agent guard removed from the reply assembly; `presentedReplies()` at every exit (1:1 stream, chunk stream/saves, final result, prior, memory); write recorded in flight then replaced; `nexusWriteUses` in the resume state + re-seeded outcomes. `Input` schema unchanged. | C1 (F2-31/35), C3, C4 |
+| src/features/huddle/hooks/useVoiceCallRealtimeSpeak.ts | speaks `out.speak` / persists `out.full`; whole vs append; `flush()` at response.done | C1 (F2-35), C3 |
+| src/features/huddle/lib/capabilities.ts | vetoes first; `strongSources` via `CONTEXT_SOURCES` | C1 (F2-41..45), C4 |
+| src/features/huddle/data/agents.ts | capability DATA: strong = syllabus/syllabi + `nexus-courses` + Nexus-as-app; generic code regex deleted; degree/teacher words weak; vetoes + `$TICKER` | C1 (F2-41..45), C4 |
+| src/features/huddle/lib/nexus/course-context.ts (new), course-context.server.ts (new) | the owner's course list cache (pure) + bounded primer through `nexusGet("courses")` | C4; C6 (read-only: a GET through the read module, no new method/body/header) |
+| scripts/*.test.ts, scripts/run-nexus-fix-suites.sh, mut-loop3/ | new suite, fixture injection, documented assertion changes, mutation set + routing probe | C7, C8 |
+
+Not touched: `nexus.server.ts` (C6), `routing.ts`, `lib/voice/*` (the voice tool executor), the public routes and the
+`Input` schema (cross-app gate G7/G8).

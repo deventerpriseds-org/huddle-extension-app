@@ -1,0 +1,2 @@
+  s = s.replace(/[^\p{L}\p{N}]+/gu, " ");
+  s = s.replace(/(\p{L})

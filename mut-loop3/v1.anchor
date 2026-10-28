@@ -1,0 +1,2 @@
+      if (pending > 0) {
+        if (text.trim()) buffer.push(text.trim());

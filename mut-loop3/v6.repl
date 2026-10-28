@@ -1,0 +1,1 @@
+              const flushed = null as ReturnType<typeof nexusGateRef.current.flush>;

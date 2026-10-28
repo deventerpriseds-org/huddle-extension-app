@@ -1,0 +1,1 @@
+      if (false) return settle({ full: "", speak: "", mode: "none" }); // the failure message

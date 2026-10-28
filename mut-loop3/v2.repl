@@ -1,0 +1,1 @@
+      return { full: `${raw}\n\n${msg}`, speak: `${raw} ${msg}`, mode: "whole" };

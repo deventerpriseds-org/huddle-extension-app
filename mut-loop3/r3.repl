@@ -1,0 +1,3 @@
+    strongPatterns: [
+      ["\\b[A-Z]{2,4}[- ]?\\d{3}[A-Z]?\\b", ""],
+      // "Nexus" as the APP

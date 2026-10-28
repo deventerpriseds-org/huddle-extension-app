@@ -1,0 +1,1 @@
+    return { index, title, assignment_id: id, action: "failed", persisted: "unknown", error };
