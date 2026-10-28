@@ -71,6 +71,13 @@ only alarms and history never filled in (before: alarms, then history ~7s later)
   `saveWorkspace` validates `stateJson.max(2_000_000)`, so every save is rejected. Newest saved message: 2026-10-15.
   Why the load did not apply on that open is still UNKNOWN; awaiting the owner's normal-open check.
 
+**Owner chose C (2026-10-28).** Part A shipped: #117 (`39f464d`, deploy 40744286484 success) -- save cap 8M,
+back-fill resumes from the newest saved message and pages past 100, load retries with an on-screen notice, save
+failures shown. NOT yet confirmed on the owner's phone (awaiting his reopen + a DB check that `updated_at` moves
+off 2026-10-18). Part B planned in `docs/plan-message-history-storage.md`, awaiting approval. Retracted claim: "the
+APK restart caused the loss" -- owner installed APKs after 10-18 without loss, so restarts were being recovered by
+something not yet identified.
+
 **Not done (deliberately):** server-side paging of history. All messages live in one workspace blob, so
 paging the DOWNLOAD needs a storage change; only worth it if the download itself becomes slow.
 
