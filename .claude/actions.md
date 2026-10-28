@@ -28,7 +28,11 @@ Owner asked (screenshot of journey's Iris chat): "there should be a copy option 
 have timestamps but no date." Change in `HuddleView.tsx`: `ClientTime` now renders `Oct 27, 8:15 AM` (year only when
 not the current year) via `formatMessageTimestamp`; user messages gained a timestamp row (they had none); new
 `CopyMessageButton` (Copy→Check 2s, mirrors journey `TranscriptScroll.tsx`) on every user + agent message with text.
-Status: implemented, tsc clean, no new lint errors; NOT yet owner-confirmed live.
+Status: 🚀 DEPLOYED, NOT yet owner-confirmed live. Evidence: PR deventerpriseds-org/huddle-extension-app#120
+(https://github.com/deventerpriseds-org/huddle-extension-app/pull/120) squash-merged as `bee838b`; deploy-swa run
+40748141478 conclusion=success (https://github.com/deventerpriseds-org/huddle-extension-app/actions/runs/40748141478).
+Checks: `tsc --noEmit` 0 errors; eslint shows the same 19 pre-existing prettier errors as before (none new).
+Owner check: hard-refresh, open any chat → timestamps read `Oct 27, 8:15 AM`; copy icon on each message copies text.
 
 ## ACT:deeplink-opens-at-top — a 1:1 heads-up opened the thread at the TOP of history (2026-10-27)
 
