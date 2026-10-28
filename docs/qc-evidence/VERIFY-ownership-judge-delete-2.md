@@ -67,3 +67,54 @@ huddle.functions.ts at 508970d:
 | plural `create_huddle_tasks` / voice create | leave the row unassigned (grooming decides later) | unchanged from loop 1 |
 
 Out-of-scope note: journey `updateTask(supabase, args)` (execute-tool :349) takes NO `userId`, unlike `deleteTask(supabase, userId, args)` (:356). Delete is therefore scoped MORE tightly than the pre-existing update path. Delete does not make the client-asserted-caller issue worse than `updateBoardTask` already does. If anything, update is the weaker of the two.
+(Confirmed: execute-tool `updateTask` filters only `.eq('id', args.task_id)` at :998-999, with no user_id.)
+
+## AC5 — delete reachable only from the board's confirm dialog: CONFIRMED (Huddle side)
+
+- Gate: proxy.functions.ts:114 `UI_ONLY_JOURNEY_TOOLS = new Set(["delete_task"])`. At :120 `invokeJourneyTool` returns `{ok:false, error:"delete_task is a user-only action"}` unless `opts.allowUiOnly`.
+- The only caller passing `allowUiOnly` in src: board.functions.ts:105 (`deleteBoardTask`, after the `Sign-in required` check at :95).
+- Voice executor realtime-tools.server.ts:824 calls `invokeJourneyTool({toolName: name, …})` with no opts, so it is gated. `invokeJourneyToolDebug` (proxy.functions.ts:229-233) has no opts, so it is gated.
+- Other routes to journey's /tool: `journeyFetch` is module-private (proxy.functions.ts:35, not exported). Its only `/tool` caller is `invokeJourneyTool` (:127). A grep of src for `supabase.co`, `SUPABASE_SERVICE`, `.from("tasks")` and `/functions/v1/execute-tool` finds nothing. So there is NO Huddle path to journey /tool that skips the chokepoint.
+- **Behavioural probe** (a scratch bun script importing the real `invokeJourneyTool`, with the journey env unset so any call that passes the gate throws "not configured"; deleted after the run):
+  ```
+  "delete_task"  {}                    -> refused: false delete_task is a user-only action
+  "delete_task"  {"allowUiOnly":false} -> refused: false delete_task is a user-only action
+  "delete_task"  {"allowUiOnly":true}  -> THREW (reached journeyFetch)
+  "get_tasks"    {}                    -> THREW (reached journeyFetch)   (over-match negative: not blocked)
+  "DELETE_TASK"  {}                    -> THREW (reached journeyFetch)
+  " delete_task" {}                    -> THREW (reached journeyFetch)
+  ```
+  The case and whitespace variants pass Huddle's gate. They are harmless: huddle-proxy forwards `toolName` unchanged (index.ts:154, :206), and execute-tool matches `switch (toolName)` / `case 'delete_task'` exactly (:331, :355), with `default` returning `Unknown tool` (:471-474). No normalisation exists on that path. This rests on the journey-voice checkout at branch claude/intelligent-hawking-qj88qu. If deployed journey ever starts normalising tool names, the gate should match the normalised form.
+- UI (BoardView.tsx, unchanged since e56147d): `onDelete={applyDelete}` at :560 and :634; `onDelete(task.id)` only inside the confirm action at :768; the hover button (:749) and the mobile menu item (:831) only `setConfirmDelete(true)`; `applyDelete` (:330) restores `prev` on failure (:340, :346). Loop 1's whole-snapshot-restore caveat still applies.
+- journey scoping: `deleteTask(supabase, userId, args)` (execute-tool :356, :947-952, `.delete()` scoped to user). The mirror DELETE path is unchanged and not exercised live.
+
+## AC6 — produce offer suppressed after a hand-off: CONFIRMED (unchanged code, shifted lines)
+
+`ensureProduceOfferDelivered` huddle.functions.ts:6943-6952. It returns immediately when there is no offer; otherwise it races `followupResolution.catch(()=>{})` against 3000ms, then `if (followupDelivered.size > 0) return`. `followupResolution` is the IIFE at :6765 with `.catch(() => {})`. The capability path adds to `followupDelivered` synchronously (:6752-6753). Loop 1's edges remain. One edge now matters less: a >3s judge still lets the offer go out, but `runProduce` now runs the same judge, so accepting that offer assigns the task to the lane owner, not the offering agent (AC1).
+
+## AC4 — judge framing and strict schema: CONFIRMED (routing.ts unchanged since e56147d)
+
+routing.ts :543 `framing?: "dm" | "assigned"`, :549 `const assigned = opts.framing === "assigned"`, :563/:566 the two DEFAULT STRONGLY texts, :582-584 `additionalProperties:false`, `owner` enum = roster ids, `required:["owner"]`.
+
+## AC7 — harness env: CONFIRMED by reading (unchanged since e56147d)
+
+durable-harness.mjs :33 `journey: { enabled: false }`, :72 `SCOPE = HUDDLE_SCOPE || "group"`, :73 `TARGET = HUDDLE_TARGET`. Not run (live scripts forbidden).
+
+## AC8 — focus_on refuses when the agent's journey is disabled (cf2305e): CONFIRMED for both TEXT backends; the VOICE path is NOT gated
+
+- OpenAI path huddle.functions.ts:4355 and Lovable path :5790: `if (!agentBackend.journey?.enabled)` returns `{error:"journey_disabled"}` BEFORE `claimAction("focus_on")` and before any dispatch. `agentBackend = agentsCfg[nextId] ?? {backend:"lovable"}` (:2194). With no config, `journey` is undefined, so the call refuses (fails closed). tsc exit 0 confirms it is in scope at both sites. Test: ask-shape.test.ts gained one check (regex) and passes.
+- **Finding (outside the literal "both backends" claim, same incident class):** voice realtime-tools.server.ts:174 always includes `FOCUS_TOOL` (not gated by `opts.journey`, which gates only the journey catalog at :424). The executor at :526-528 calls `dispatchFocusOn(ctx.caller, args)` with no journey check. So a voice session minted with `journey:false` can still create and start real tasks through focus_on. The 2026-10-28 incident was a text-harness turn, which IS closed.
+
+## Verdict (loop 2, at 508970d)
+
+| AC | result |
+|---|---|
+| suites | tsc exit 0; all 7 suites pass |
+| 1 | PARTLY CONFIRMED: runProduce is now judged (closed). Still bypassing: an agent-invoked journey `update_task` with `assigned_agent` (pre-existing, model-driven, no judge, no guard) |
+| 2 | CONFIRMED: 5s race; falls back to the responder |
+| 3 | CONFIRMED: no path writes a batch pick over an assigned (roster-owned) task; worst case ~63.5s in-chat (unmeasured), still over 45s |
+| 4 | CONFIRMED (unchanged) |
+| 5 | CONFIRMED: the chokepoint gate is behaviourally proven; voice and debug are blocked; there is no bypass to /tool. Journey-side exact-match dependency noted. The client-asserted caller is pre-existing; delete is scoped more tightly than update |
+| 6 | CONFIRMED (unchanged) |
+| 7 | CONFIRMED by reading |
+| 8 | CONFIRMED for text OpenAI + Lovable; voice focus_on ignores the journey toggle (finding) |
