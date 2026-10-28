@@ -127,6 +127,17 @@ index into a requirement list**.
 - Memory architecture: owner chose (a) SOFT preference (2026-10-27) and "thought it was already this way" — it largely IS: runAgentTurn's laneBoost re-ranks shared memory by the agent's domains/themes (topic text, not agent name). Gaps: voice has no lane boost/Executive Profile; the owner's ChatGPT knowledge isn't ingested yet.
 - ACs: `.claude/AC-confirm-ask-rotation.md`. Tracker: ACT:confirm-ask-rotation.
 
+## Chat transcript scroll: opens at the newest, follows only if YOU did not scroll up (2026-10-27, DEPLOYED 4332c41, NOT owner-confirmed)
+A push deep link (`?huddle=dm-<agent>`) switches threads BEFORE the workspace history downloads, so any
+"scroll to bottom on thread switch" fires on an empty thread. The old follow rule re-measured near-bottom
+after each update, which a bulk history load always fails (view at 0, list grew 27k px) — so it landed at
+the top. Rules now live in `lib/transcript-scroll.ts` (follow state from the reader's scrolls; newest 40
+rendered; older pages on scroll-up, anchored). **Testing trap, measured:** a harness that lets the dev
+bypass seed the workspace is NOT on the deep-linked thread (the `hydrateFromRemote(null)` seed path ignores
+`deepLinkTarget`), and Chromium scroll anchoring drags a view that starts scrolled-down to the bottom on its
+own — both made the pre-fix code PASS. `e2e/transcript-deeplink.e2e.mjs` asserts the precondition
+(1:1 active, empty, scrollTop 0) and refuses to run without it.
+
 ## Iris schedule brief = meetings + classes + TASKS, per day AND per journey window (2026-10-15, DEPLOYED, NOT owner-confirmed)
 - **Calendar mailbox is NOT the data-scope email.** Owner's Outlook meetings live in the journey-connected
   account (Von.Ellis@, `calendar_connections.provider_account_email`); dev@'s calendar is empty. Every Graph

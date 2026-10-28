@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Send,
   Sparkles,
@@ -53,6 +53,14 @@ import {
 } from "../lib/huddle.functions";
 import { uploadChatAttachmentFn } from "../lib/artifacts/attachments.functions";
 import { userTurnTs } from "../lib/turn-identity";
+import {
+  anchoredScrollTop,
+  createFollowState,
+  olderStart,
+  shouldRevealOlder,
+  windowStart,
+  type ScrollMetrics,
+} from "../lib/transcript-scroll";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
@@ -98,7 +106,7 @@ export function HuddleView() {
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <HuddleHeader huddle={huddle} />
-      <Transcript messages={messages} huddle={huddle} />
+      <Transcript key={huddle.id} messages={messages} huddle={huddle} />
       <Composer huddle={huddle} />
     </section>
   );
@@ -279,31 +287,73 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
     setHydrated(true);
   }, []);
 
-  // Opening a huddle (mount or switch) lands you at the NEWEST message, like SMS — not at the top
-  // of history. Without this, back-filled/autonomous replies sit below the fold and read as
-  // "missing" until you scroll. Double rAF so it pins after the messages actually paint.
-  useEffect(() => {
+  // Opening a huddle lands you at the NEWEST message, like SMS, and stays there as messages arrive
+  // unless YOU scrolled up. The follow decision comes from your last scroll (lib/transcript-scroll.ts),
+  // not from measuring after an update: a push-tap deep link opens the thread before the workspace
+  // history loads, and measuring after that bulk load read "thousands of px from the bottom" as "the
+  // reader scrolled up" — so it landed at the top of history. (Transcript is keyed by huddle id, so a
+  // switch remounts and re-opens at the bottom.)
+  const [follow] = useState(createFollowState);
+  // Only the newest window renders; older pages are revealed on scroll-up. null = follow the newest.
+  const [pinnedStart, setPinnedStart] = useState<number | null>(null);
+  const start = windowStart(messages.length, pinnedStart);
+  const shown = useMemo(() => messages.slice(start), [messages, start]);
+  const anchorRef = useRef<ScrollMetrics | null>(null);
+  const lastId = messages[messages.length - 1]?.id;
+
+  const revealOlder = useCallback(() => {
     const el = scrollRef.current;
-    if (!el) return;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        el.scrollTop = el.scrollHeight;
+    if (!el || anchorRef.current || start <= 0) return;
+    anchorRef.current = {
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    };
+    setPinnedStart(olderStart(start));
+  }, [start]);
+
+  // Pin to the newest message when the list changes or a turn starts. Layout effect so the first paint
+  // is already at the bottom; a second pin after paint catches rows that grow late (markdown, widgets).
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !follow.shouldPin(isPending)) return;
+    el.scrollTop = el.scrollHeight;
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        if (follow.following) el.scrollTop = el.scrollHeight;
       });
     });
-  }, [huddle.id]);
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, [follow, messages.length, lastId, isPending]);
 
-  // Reveal the latest message (and the typing indicator) when the transcript
-  // grows or a turn starts. Instant + rAF (no smooth-scroll jank), and only when
-  // the user is already near the bottom so it never yanks them out of history.
-  useEffect(() => {
+  // After older rows are prepended, keep the same message under the reader. If the window still does
+  // not fill the view there is no scrollbar to ask for more, so reveal the next page now.
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
-    if (!nearBottom && !isPending) return;
-    requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight;
-    });
-  }, [messages.length, isPending]);
+    const before = anchorRef.current;
+    if (before) {
+      anchorRef.current = null;
+      el.scrollTop = anchoredScrollTop(before, el.scrollHeight);
+    }
+    if (start > 0 && el.scrollHeight <= el.clientHeight) revealOlder();
+  }, [start, revealOlder]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const m = {
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    };
+    follow.onScroll(m);
+    if (shouldRevealOlder(m, start)) revealOlder();
+  };
 
   const dayLabel = useMemo(() => {
     if (!hydrated) return "Today · morning standup";
@@ -314,15 +364,24 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
   }, [messages, hydrated]);
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
+    <div
+      ref={scrollRef}
+      onScroll={onScroll}
+      data-testid="transcript"
+      className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6"
+    >
       <div className="mx-auto flex max-w-3xl flex-col gap-4">
-        <div className="flex justify-center">
-          <span className="rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground">
-            {dayLabel}
-          </span>
-        </div>
+        {/* Older history loads on its own as you scroll up, so there is no button for it. The day label
+            marks the true start of the thread, so it shows only once the oldest message is rendered. */}
+        {start === 0 && (
+          <div className="flex justify-center">
+            <span className="rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground">
+              {dayLabel}
+            </span>
+          </div>
+        )}
 
-        {messages.map((m) => (
+        {shown.map((m) => (
           <MessageRow key={m.id} m={m} huddle={huddle} />
         ))}
 
