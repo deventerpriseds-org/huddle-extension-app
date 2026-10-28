@@ -16,3 +16,25 @@ Clone: scratchpad/verify-clone detached at origin/main 6ea7dfe.
 - RE-CHECKED 2026-10-28 16:50Z on origin/main 4809e2e (branch claude_verify-deeplink-transcript): pre-fix lines 285-293 `[huddle.id]` pin,
   298-306 nearBottom<200 follow effect on `[messages.length,isPending]`; HuddleApp.tsx:318-332 deep-link setActive when huddle exists;
   seed.ts has no `huddleId: "dm-`; store.ts:630-663 deepLinkTarget. Still CONFIRMED.
+
+## C3 — tests (re-run in this clone, 16:55Z) — CONFIRMED
+- `bun scripts/transcript-scroll.test.ts` -> "20 passed, 0 failed".
+- e2e on fix (origin/main 4809e2e, vite dev :4174, /opt/pw-browsers/chromium): 7/7 PASS, distance from bottom=0px, #0 not rendered,
+  scroll-up reveals #220 with scrollTop=3750, new msg while scrolled up 3750->3750.
+- e2e on pre-fix (`git show 4332c41^:HuddleView.tsx`): precondition PASS then FAIL "distance from bottom=27592px" (exact match to claim),
+  FAIL #0 rendered, FAIL scrollTop=0. 3 failed. File restored via `git checkout --`, tree clean.
+- Precondition model: store.ts persists no messages locally (only booleans in localStorage, lines 36-49), so a cold page load really
+  starts with the DM empty; hydrateFromRemote (store.ts:602-650) replaces messages in one setState and honors deepLinkTarget. The e2e
+  forces the precondition with setState instead of the real `?huddle=` effect (it says why: dev bypass seeds without deep-link
+  handling) and ASSERTS it, so it is a faithful model of a cold load. NOT modeled: a warm WebView (app already open) receiving the tap;
+  real Android WebView vs desktop Chromium. Mechanism only.
+
+## C2 — fix design (code-read HuddleView.tsx Transcript + lib/transcript-scroll.ts) — CONFIRMED with caveats (see below)
+- (a) createFollowState: following set only by onScroll / open / isPending; pin effect asks shouldPin(), no post-update measurement.
+- (b) windowStart slices newest 40; onScroll -> shouldRevealOlder (scrollTop<150) -> revealOlder captures metrics in anchorRef,
+  setPinnedStart(start-40); layout effect sets scrollTop = before.scrollTop + delta (absolute assignment, so Chrome scroll anchoring
+  cannot double-count).
+- (d) shouldPin(isPending) forces following=true. (e) `<Transcript key={huddle.id}` at HuddleView.tsx:109.
+- Render loop: anchor effect deps [start, revealOlder]; auto-reveal only while start>0 && no scrollbar -> bounded by start reaching 0.
+  Repeated reveal blocked by `anchorRef.current` guard. `follow` is a stable useState-initialised object (no stale closure).
+- SSR: React 19.2.7 installed (no useLayoutEffect server warning in 19).
