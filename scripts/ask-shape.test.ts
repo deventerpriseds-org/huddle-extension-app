@@ -69,6 +69,7 @@ const turnSrc = readFileSync(new URL("../src/features/huddle/lib/huddle.function
 check("an act ask is pinned to the budget tier (never o3/Sol)", /route === "act-now"\)\s*\{\s*deepManual = "budget";/.test(turnSrc), true);
 check("an offer is only accepted inside its TTL", /Date\.now\(\) - pending\.createdAt <= OFFER_TTL_MS && isOfferAccepted\(/.test(turnSrc), true);
 check("produce honours the journey toggle (no board write / auto-work from a harness)", /const journeyOn = data\.agents\?\.\[agentId\]\?\.journey\?\.enabled !== false;[\s\S]{0,200}?if \(journeyOn && data\.caller\?\.entra_email\)[\s\S]{0,4000}?if \(journeyOn\) \{\s*try \{\s*const \{ runScheduledAutoWork \}/.test(turnSrc), true);
+check("a near-miss reply does not clear the offer", /if \(!mentionsProduceOffer\(data\.text\)\) await clearPendingDeepConfirm\(/.test(turnSrc), true);
 check("a failed gate still pins the tier", /proceeding without gate\.`,\s*\);[\s\S]{0,600}?deepManual = routeDeepAsk\(askShape\) === "act-now" \? "budget" : "terra-med";/.test(turnSrc), true);
 check("no fresh ask is diverted to runProduce", /deep-ask: green-lit/.test(turnSrc), false);
 
