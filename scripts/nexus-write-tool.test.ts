@@ -255,7 +255,9 @@ console.log("=== AC-F2-11 — meetings/sessions and admin dates are refused ==="
   t("F2-11 the result tells the agent it belongs on the schedule", /SCHEDULE/.test(String(r0(r).note)), true);
   t("F2-11 participation is a meeting, not a deliverable", classifyNonDeliverable("Residency participation"), "meeting/session");
   t("F2-11 office hours / zoom session refused", classifyNonDeliverable("Zoom live session with the professor"), "meeting/session");
-  t("F2-11 a deliverable noun wins ('Seminar paper' is a paper)", classifyNonDeliverable("Seminar paper"), "null");
+  // loop2 D2 (docs/FIX-nexus-write-loop2.md): a meeting word ANYWHERE now wins over a deliverable noun (owner
+  // rule), so "Seminar paper" is refused with its reason -- the accepted cost of deny-anywhere. Was: null.
+  t("F2-11 a meeting word anywhere wins ('Seminar paper' is refused, loop2 D2)", classifyNonDeliverable("Seminar paper"), "meeting/session");
   t("F2-11 admin date refused", classifyNonDeliverable("Drop deadline"), "administrative");
   t("F2-11 a plain deliverable passes", classifyNonDeliverable("Research Proposal"), "null");
 }
@@ -286,8 +288,8 @@ console.log("=== AC-F2-14 / AC-F1-11..14 — dedup, and it must NOT over-match =
   t("F2-14 a grade weight is not part of the title", weighted ? String(weighted.row.id) : "none", "w");
   resetAssignments();
   r = await run([
-    { course: "MGT-782", title: "Test-Same Batch Twice", due_date: "2026-11-15" },
-    { course: "MGT-782", title: "Test-Same Batch Twice", due_date: "2026-11-15" },
+    { course: "MGT-782", title: "Test-Same Batch Twice Paper", due_date: "2026-11-15" },
+    { course: "MGT-782", title: "Test-Same Batch Twice Paper", due_date: "2026-11-15" },
   ]);
   t("F2-14 an identical second item in ONE batch is a duplicate of the first", `${String(r.results[0].action)}/${String(r.results[1].action)}`, "inserted/duplicate");
 }
@@ -334,7 +336,7 @@ console.log("=== AC-F2-20/22 — update is minimal; inserted rows have the F1 sh
   t("F2-20 PATCH also names the tool (pre-image actor)", w?.headers["x-agent-tool"], NEXUS_WRITE_TOOL_NAME);
   t("F2-20 update reported persisted:true", `${r0(r).action}/${r0(r).persisted}`, "updated/true");
   mode = "patch404";
-  r = await run([{ assignment_id: "someone-elses", title: "Test-x" }]);
+  r = await run([{ assignment_id: "someone-elses", title: "Test-x paper" }]);
   mode = "normal";
   t("F2-20 a foreign/absent id -> not_found, persisted:false", `${r0(r).error}/${r0(r).persisted}`, "not_found/false");
   resetAssignments();
@@ -350,9 +352,9 @@ console.log("=== AC-F2-23 — batch semantics ===");
 {
   resetAssignments();
   const r = await run([
-    { course: "MGT-782", title: "Test-Batch One", due_date: "2026-11-22" },
-    { course: "MGT-782", title: "Test-Batch Two", due_date: "Week 5" },
-    { course: "MGT-782", title: "Test-Batch Three", due_date: "2026-11-24" },
+    { course: "MGT-782", title: "Test-Batch One Paper", due_date: "2026-11-22" },
+    { course: "MGT-782", title: "Test-Batch Two Paper", due_date: "Week 5" },
+    { course: "MGT-782", title: "Test-Batch Three Paper", due_date: "2026-11-24" },
   ]);
   t("F2-23 per-item persisted flags", r.results.map((x) => String(x.persisted)).join(","), "true,false,true");
   t("F2-23 item 2 rejected, the others inserted", r.results.map((x) => String(x.action)).join(","), "inserted,rejected,inserted");
@@ -372,7 +374,7 @@ console.log("=== AC-F2-34 — `persisted` is truthful on every outcome ===");
   for (const [m, want] of shapes) {
     resetAssignments();
     mode = m;
-    const r = await run([{ course: "MGT-782", title: `Test-Persist ${m}`, due_date: "2026-11-26" }]);
+    const r = await run([{ course: "MGT-782", title: `Test-Persist ${m} Paper`, due_date: "2026-11-26" }]);
     mode = "normal";
     t(`F2-34 ${m} -> persisted/error`, `${String(r0(r).persisted)}/${String(r0(r).error ?? "-")}`, want);
   }

@@ -139,8 +139,14 @@ console.log("=== Time zones / DST (W9, W13) ===");
 
 console.log("=== Kind filter non-regressions (W4/W5/W12) ===");
 {
-  for (const s of ["Paper due at Residency 4", "Residency 4 reflection paper", "Seminar paper", "Final presentation", "Reading response 3", "Reading quiz", "Thanksgiving reflection essay", "Case Study 2"]) {
+  for (const s of ["Final presentation", "Reading response 3", "Reading quiz", "Case Study 2"]) {
     t(`FX-K1 "${s}" is still a deliverable`, classifyNonDeliverable(s), "null");
+  }
+  // loop2 D2 (docs/FIX-nexus-write-loop2.md): deny-ANYWHERE replaced "the head decides". These four were
+  // asserted to be deliverables here; under the owner's rule a meeting/holiday word anywhere wins, so they
+  // are now REFUSED with a reason (the accepted cost). Assertion changed, not silently dropped.
+  for (const [s, why] of [["Paper due at Residency 4", "meeting/session"], ["Residency 4 reflection paper", "meeting/session"], ["Seminar paper", "meeting/session"], ["Thanksgiving reflection essay", "administrative"]]) {
+    t(`FX-K1 "${s}" is refused under deny-anywhere (loop2 D2)`, classifyNonDeliverable(s), why);
   }
   t("FX-K2 'Read chapters 3-5' is a reading", classifyNonDeliverable("Read chapters 3-5"), "reading");
 }

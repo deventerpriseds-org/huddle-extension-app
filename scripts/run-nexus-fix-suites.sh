@@ -6,7 +6,7 @@
 # EVIDENCE:   docs/FIX-nexus-write-redteam.md (Results).
 cd "$(dirname "$0")/.." || exit 1
 rc=0
-for f in nexus-write-redteam router-redteam nexus-write-tool router-winners nexus-read-tools cross-app-turn-gate voice-toolset-hidden nexus-write-fix; do
+for f in nexus-write-redteam router-redteam nexus-write-tool router-winners nexus-read-tools cross-app-turn-gate voice-toolset-hidden nexus-write-fix nexus-write-loop2; do
   [ -f "scripts/$f.test.ts" ] || continue
   out="$(bun "scripts/$f.test.ts" 2>&1)"; code=$?
   [ $code -ne 0 ] && rc=1

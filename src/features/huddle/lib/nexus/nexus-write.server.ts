@@ -213,6 +213,12 @@ function validYmd(y: number, mo: number, d: number): boolean {
 const isoZ = (ms: number) => new Date(ms).toISOString().replace(/\.000Z$/, "Z");
 
 export type DueResolution =
+  /**
+   * `zone` is ALWAYS the COURSE zone (the `time_zone` argument, else DEFAULT_COURSE_TZ) -- never the
+   * zone an ISO string happened to be written in. "Same local day" (dedup, claim key, labels) is a
+   * fact about the course calendar, so `2026-10-30T20:00:00Z` and `…T16:00:00-04:00` are the same day
+   * (D1, docs/FIX-nexus-write-loop2.md).
+   */
   | { ok: true; iso: string; ms: number; timeAssumed: boolean; zone: string; timeShifted?: boolean }
   | { ok: false; reason: "undated" | "ambiguous-date"; detail: string };
 
@@ -245,7 +251,8 @@ export function resolveDueInstant(
     if (!validYmd(+m[1], +m[2], +m[3]) || +m[4] > 23 || +m[5] > 59) return { ok: false, reason: "ambiguous-date", detail: `"${raw}" is not a real date` };
     const ms = Date.parse(raw);
     if (!Number.isFinite(ms)) return { ok: false, reason: "ambiguous-date", detail: `"${raw}" is not a real date` };
-    return { ok: true, iso: isoZ(ms), ms, timeAssumed: false, zone: m[7].toUpperCase() === "Z" ? "UTC" : m[7] };
+    // The offset says WHEN; the course zone (not "UTC"/"-04:00") says which DAY that is (D1).
+    return { ok: true, iso: isoZ(ms), ms, timeAssumed: false, zone };
   }
 
   let y: number, mo: number, d: number, h: number, mi: number, s: number;
@@ -279,57 +286,50 @@ export function resolveDueInstant(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-// WHAT IS NOT AN ASSIGNMENT (AC-F2-11, OQ-11, AC-F1-20..23). An assignment is a GRADED DELIVERABLE
-// WITH A DATE. Never one: a meeting / session / residency / class / call / appointment / office
-// hours / review session, a holiday or break, an administrative date, or a reading. The refusal
-// REASON goes back to the agent so the owner can rephrase to override.
-//
-// W4 (docs/FIX-nexus-write-redteam.md): "a deliverable noun wins" was too blunt -- "Residency 4:
-// present your research proposal" (the shape of the row the owner deleted by hand) carries the noun
-// "proposal" but IS a residency. So the HEAD of the title decides: the part before the first ":" /
-// spaced dash / "(" names the thing itself. A head that ENDS in a session word ("Midterm exam review
-// session", "Presentation at Residency 4", "Class 5") or names a session followed by what it is ABOUT
-// ("Kickoff meeting for final project") is a session, whatever deliverable nouns follow. A head that
-// names a deliverable still wins ("Residency 4 reflection paper", "Seminar paper", "Paper due at
-// Residency 4").
+// WHAT IS AN ASSIGNMENT (AC-F2-11, OQ-11, AC-F1-20..23) -- ALLOW-LIST + DENY-ANYWHERE.
+// docs/FIX-nexus-write-loop2.md, D2. Two rounds of "the HEAD of the title decides" patching leaked on
+// punctuation ("Residency 4, present your research proposal" was accepted because only ":" / dash / "("
+// split the head). The rule is now structural and has no notion of a head at all:
+//   1. DENY ANYWHERE. A meeting / session / class / event / holiday / break / admin word ANYWHERE in the
+//      title refuses it, whatever deliverable noun is also present (owner rule: "Residency 4, present
+//      your research proposal" is refused in every punctuation variant). The meeting word WINS.
+//   2. ALLOW-LIST. Otherwise the title must contain a graded-deliverable noun (paper, proposal, exam,
+//      case brief, problem set, …). A title with none ("Chapter 2", "Pre-read: Porter Five Forces",
+//      "Spring Recess") is refused -- as `reading` when it is shaped like a reading, else
+//      `not-a-deliverable`.
+// Accepted cost, by design: odd titles such as "Holiday Inn case study", "Seminar paper" or "Paper due
+// at Residency 4" are REFUSED. The refusal reason goes back to the agent so it can tell the owner; there
+// is deliberately no bypass argument. A title written in a non-Latin script is not judged by these
+// English lists (nothing in it can match either), so it is accepted on its date and course alone.
+// A leading "Test-" (the org's test-artifact prefix) is not read as the deliverable noun "test".
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-const DELIVERABLE_NOUN =
-  /\b(papers?|proposals?|essays?|reports?|assignments?|submissions?|projects?|briefs?|memos?|deliverables?|drafts?|thesis|dissertation|case (?:study|analysis|write-?up)|reflections?|exams?|quiz(?:zes)?|midterms?|homework|problem sets?|portfolios?|bibliograph(?:y|ies)|literature review|write-?ups?|posts?|responses?|presentations?|critiques?)\b/i;
-const MEETING_WORD_SRC =
-  "residenc(?:y|ies)|seminars?|sessions?|zoom|webex|class meetings?|meetings?|orientation|office hours?|check-?points?|check-?ins?|lectures?|webinars?|workshops?|kick-?offs?|attendance|participation|live class(?:es)?|synchronous|immersion|colloqui(?:um|a)|class(?:es)?|appointments?|advising|guest speakers?|speaker series|study groups?|(?:live|coaching|conference|zoom|teams|video|phone|group|cohort|advising|team|weekly) calls?";
-const MEETING_WORD = new RegExp(`\\b(?:${MEETING_WORD_SRC})\\b`, "i");
-/** The head ENDS in a session word (a trailing number/ordinal ignored): "Class 5", "Week 3 class". */
-const HEAD_ENDS_IN_MEETING = new RegExp(`\\b(?:${MEETING_WORD_SRC})(?:\\s*#?\\d+[a-z]?)?\\s*$`, "i");
-/** A session word followed by what it is ABOUT: "meeting for the final project", "session on the case". */
-const MEETING_ABOUT = new RegExp(
-  `\\b(?:${MEETING_WORD_SRC})(?:\\s*#?\\d+)?\\s+(?:for|about|on|re|regarding|covering|to discuss|with)\\b`,
-  "i",
-);
-/** A deliverable that is DUE at a session: "Paper due at Residency 4" is the paper, not the residency. */
-const DUE_PHRASE = new RegExp(`${DELIVERABLE_NOUN.source}[^:]*\\b(?:due|submit(?:ted)?|turn(?:ed)? in|upload(?:ed)?)\\b`, "i");
-const ADMIN_DATE =
-  /\b(drop deadline|add\s*\/\s*drop|add-drop|withdraw(?:al)?(?: deadline)?|last day to (?:withdraw|drop|add|register)|last day of class(?:es)?|first day of class(?:es)?|holidays?|no class(?:es)?|(?:spring|fall|autumn|winter|summer|thanksgiving|holiday|reading|study|mid-?semester|mid-?term|semester|term|quarter) break|reading (?:week|days?)|study (?:week|days?)|registration (?:opens|closes|deadline)|census date|commencement|graduation)\b|^\s*(?:final\s+|mid-?term\s+)?grades?\s+(?:due|posted|released|available|submitted)\b/i;
-/** Holidays: refused unless a deliverable noun names the thing ("Thanksgiving reflection essay"). */
-const HOLIDAY =
-  /\b(thanksgiving|labou?r day|memorial day|independence day|juneteenth|veterans day|columbus day|indigenous peoples'? day|presidents'? day|martin luther king|mlk day|christmas|new year'?s(?: day| eve)?|easter|good friday|rosh hashanah|yom kippur|passover|diwali|lunar new year)\b/i;
-/** A reading is not a graded deliverable (W12): "Reading: chapter 4", "Read chapters 3-5", "Chapter 4 readings". */
-const READING = /^\s*(?:(?:required|assigned|optional|pre)[\s-]*)?readings?\b|^\s*read\b|\breadings?\s*$|^\s*chapters?\s+\d/i;
-/** ...unless the reading is itself graded work: "Reading response 3", "Reading quiz". */
-const GRADED_READING = /\b(quiz(?:zes)?|responses?|reflections?|summar(?:y|ies)|essays?|papers?|memos?|posts?|critiques?|journals?|briefs?|exams?|assignments?)\b/i;
+/** Graded-deliverable nouns (word-start; plurals tolerated). One of these must appear (rule 2). */
+const DELIVERABLE_ALLOW =
+  /\b(?:papers?|essays?|proposals?|reports?|cases?|case (?:study|studies|brief|briefs|analysis|analyses|write-?ups?)|analys[ie]s|memos?|memorand(?:um|a)|reflections?|posts?|quiz(?:zes)?|exams?|midterms?|finals?|tests?|projects?|presentations?|problem sets?|assignments?|deliverables?|briefs?|(?:literature|peer|book|article|critical|systematic|policy|case) reviews?|responses?|journals?|portfolios?|capstones?|dissertations?|thesis|theses|drafts?|homework|submissions?|write-?ups?|critiques?|bibliograph(?:y|ies)|summar(?:y|ies)|worksheets?|exercises?|business plans?|pitch(?:es)?|slide decks?)\b/i;
+/** MEETING / SESSION family (rule 1) -> reason "meeting/session". */
+const DENY_MEETING =
+  /\b(?:residenc(?:y|ies)|seminars?|sessions?|meetings?|class(?:es)?|lectures?|calls?|office hours?|appointments?|colloqui(?:um|a)|webinars?|workshops?|zoom|webex|teams meeting|check-?points?|check-?ins?|kick-?offs?|attendance|participation|synchronous|immersion|advising|guest speakers?|speaker series|study groups?|orientation)\b/i;
+/** EVENT family (rule 1) -> reason "event". */
+const DENY_EVENT =
+  /\b(?:symposi(?:um|a)|networking|dinners?|lunch(?:eon)?|trips?|field trip|visits?|retreats?|offsites?|off-site|gala|banquet|mixer|happy hour|ceremon(?:y|ies)|celebrations?)\b/i;
+/** ADMIN / HOLIDAY / BREAK family (rule 1) -> reason "administrative". "Break-even" is not a break. */
+const DENY_ADMIN =
+  /\b(?:holidays?|break(?![-\s]?even)s?|recess|vacation|payments?|tuition|evaluations?|registration|enrollment|enrolment|withdraw(?:al)?|drop deadline|add\s*\/\s*drop|add-drop|census date|commencement|graduation|reading (?:week|days?)|study (?:week|days?)|no class(?:es)?|last day|first day|grades?\s+(?:due|posted|released|available|submitted)|thanksgiving|labou?r day|memorial day|independence day|juneteenth|veterans day|columbus day|indigenous peoples'? day|presidents'? day|martin luther king|mlk day|christmas|new year'?s(?: day| eve)?|easter|good friday|rosh hashanah|yom kippur|passover|diwali|lunar new year)\b/i;
+/** A reading (refusal reason only): "Reading: chapter 4", "Read chapters 3-5", "Pre-read: …", "Chapter 4 readings". */
+const READING_SHAPE = /^\s*(?:(?:required|assigned|optional|pre)[\s-]*)?read(?:ings?)?\b|\breadings?\s*$|^\s*chapters?\s+\d/i;
 
-export type NonDeliverable = "meeting/session" | "administrative" | "reading";
+export type NonDeliverable = "meeting/session" | "event" | "administrative" | "reading" | "not-a-deliverable";
 
 export function classifyNonDeliverable(title: string): NonDeliverable | null {
-  const t = String(title ?? "").trim();
-  if (ADMIN_DATE.test(t)) return "administrative";
-  const head = t.split(/\s*(?::|\s[–—-]{1,2}\s|—|\()/)[0].trim() || t;
-  if (DUE_PHRASE.test(head)) return null;
-  if (HEAD_ENDS_IN_MEETING.test(head) || MEETING_ABOUT.test(head)) return "meeting/session";
-  const hasNoun = DELIVERABLE_NOUN.test(t);
-  if (!hasNoun && MEETING_WORD.test(t)) return "meeting/session";
-  if (!hasNoun && HOLIDAY.test(t)) return "administrative";
-  if (READING.test(t) && !GRADED_READING.test(t)) return "reading";
-  return null;
+  const t = String(title ?? "").trim().replace(/^test-\s*/i, "");
+  // Rule 1: deny ANYWHERE. Admin first (so "Reading week" is a break, not a reading), then meetings, events.
+  if (DENY_ADMIN.test(t)) return "administrative";
+  if (DENY_MEETING.test(t)) return "meeting/session";
+  if (DENY_EVENT.test(t)) return "event";
+  // Rule 2: allow-list. A title with no Latin letters cannot be judged by an English list.
+  if (!/[a-z]/i.test(t)) return null;
+  if (DELIVERABLE_ALLOW.test(t)) return null;
+  return READING_SHAPE.test(t) ? "reading" : "not-a-deliverable";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -366,9 +366,16 @@ const headWord = (ws: string[]) => (ws.filter((w) => !isNum(w)).pop() ?? "").rep
 const numbersOf = (ws: string[]) => ws.filter(isNum).sort().join(",");
 const SAME_INSTANT_MS = 60_000;
 
-/** The calendar day of an instant in `zone` (YYYY-MM-DD). */
+/** The zone a course-calendar DAY is computed in: a real region (IANA "Area/City"), else the default.
+ *  "UTC" and bare offsets are how a date was WRITTEN, not where the course is (D1). */
+export function courseDayZone(zone: string | undefined): string {
+  const z = String(zone ?? "").trim();
+  return /^[A-Za-z]+\/[A-Za-z_+-]+(?:\/[A-Za-z_+-]+)?$/.test(z) && isValidZone(z) ? z : DEFAULT_COURSE_TZ;
+}
+
+/** The calendar day of an instant in the course zone (YYYY-MM-DD). */
 function localDay(ms: number, zone: string): string {
-  return new Date(ms).toLocaleDateString("en-CA", { timeZone: isValidZone(zone) ? zone : DEFAULT_COURSE_TZ });
+  return new Date(ms).toLocaleDateString("en-CA", { timeZone: courseDayZone(zone) });
 }
 
 /** Postgres/JSON due values → ms. Handles "2026-10-31T03:59:59.000Z" and "2026-10-31 03:59:59+00". */
@@ -387,13 +394,19 @@ export type DuplicateMatch = {
   storedUndated?: boolean;
 };
 
+/**
+ * @param cand.zone  the COURSE zone (D1). Both the candidate's instant and every stored row's instant
+ *                   are turned into a calendar day in THIS zone; a value that is not an IANA zone (an
+ *                   offset like "-04:00", or "UTC" from how a string was written) is ignored in favour
+ *                   of DEFAULT_COURSE_TZ, so the day can never depend on how the date was spelled.
+ */
 export function findDuplicate(
   cand: { title: string; dueMs: number | null; zone?: string },
   existing: Row[],
 ): DuplicateMatch | null {
   const ct = dedupTitle(cand.title);
   if (!ct) return null;
-  const zone = cand.zone ?? DEFAULT_COURSE_TZ;
+  const zone = courseDayZone(cand.zone);
   const sameTitle = existing.filter((r) => dedupTitle(String(r.title ?? "")) === ct);
   if (sameTitle.length) {
     if (cand.dueMs === null) return { row: sameTitle[0], by: "title" };
@@ -710,10 +723,14 @@ async function runNexusWrite(rawItems: unknown[], ref: string): Promise<Row> {
           reason: non,
           note:
             non === "meeting/session"
-              ? "Not an assignment: a meeting/session/residency belongs on the class SCHEDULE, not the assignments list. Nothing was written. If it really is a graded deliverable, ask the owner to name the deliverable itself (e.g. 'Residency 4 reflection paper')."
-              : non === "reading"
-                ? "Not an assignment: a reading is not a graded deliverable. Nothing was written. If there is graded work on it (a response, quiz or summary), ask the owner to name that."
-                : "Not an assignment: a holiday, break or administrative calendar date, not a graded deliverable. Nothing was written.",
+              ? "Not an assignment: the title names a meeting/session/residency/class, which belongs on the class SCHEDULE, not the assignments list. Nothing was written. Tell the owner it was refused for that reason."
+              : non === "event"
+                ? "Not an assignment: the title names an event (a trip, dinner, symposium, networking…), not a graded deliverable. Nothing was written. Tell the owner it was refused for that reason."
+                : non === "reading"
+                  ? "Not an assignment: a reading is not a graded deliverable. Nothing was written. If there is graded work on it (a response, quiz or summary), ask the owner to name that."
+                  : non === "not-a-deliverable"
+                    ? "Not an assignment: the title names no graded deliverable (paper, proposal, essay, exam, case brief, project, problem set…). Nothing was written. Tell the owner it was refused for that reason."
+                    : "Not an assignment: a holiday, break, payment or administrative calendar date, not a graded deliverable. Nothing was written. Tell the owner it was refused for that reason.",
         });
         continue;
       }
