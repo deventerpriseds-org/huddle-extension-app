@@ -9,7 +9,7 @@ EVIDENCE:   this file; commands below run against detached HEAD 7ad609f in an is
 -->
 
 Commit: 7ad609f on claude/intelligent-hawking-qj88qu, diffed against 7ad609f~1 (d618114).
-Worktree: detached HEAD, no branch created/pushed, no DB or deployed service touched.
+Worktree: detached HEAD, no local branch created. Per the coordinator amendment, this file alone is pushed to refs/heads/claude_verify-deep-ask-hybrid-1 (the only ref pushed). No DB or deployed service touched.
 
 ## Diff stat
 7 files: package.json, scripts/ask-shape.test.ts (new), scripts/verdict-memory.test.ts,
