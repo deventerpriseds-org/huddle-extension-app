@@ -59,3 +59,26 @@ The INERT one is NOT behaviourally equivalent: with journey off, the turn would 
 no dedup READ" half of claim M holds in today's source but has NO test protecting it. Severity: low (read-only, and
 only reachable by a future edit). Suggested row: extend the ask-shape regex (or the AC-58 test) to require
 `const dedup = journeyOn && data.caller?.entra_email`.
+
+## R3 approach re-drive: floor before escalation -- CONFIRMED in behaviour; NOT guarded by the shipped suite
+Source, autowork.server.ts:952-972: candidates require confirm_status='confirmed' AND approach_status='pending' (so an
+'escalated' item is never a candidate); then `since = redrive_last_at ?? confirmed_at`; `if (since && now-since <
+reaskMinMs) continue;` (:968) BEFORE `if (n >= caps.approach) escalateApproach` (:969-971).
+Probe = copy of autowork-lane-starvation.test.ts + 5 cases (`scripts/verify3-r3-probe.test.ts`, untracked), caps.approach=3,
+floor 24h. On 883bd7e: **30 pass, 0 fail**:
+| case | expected | observed |
+|---|---|---|
+| V3R3a 3/3 spent, last nudge 1h ago | no escalation, no nudge | PASS |
+| V3R3b 3/3 spent, last nudge 25h ago | escalated exactly once, no nudge | PASS |
+| V3R3c 2/3, last nudge 25h ago | nudged (id autowork-approach-pend-3-*), not escalated | PASS |
+| V3R3d 3/3, no nudge stamp, confirmed 1h ago | not escalated (floor from confirmed_at) | PASS |
+| V3R3e approach_status='escalated', stale stamp | neither nudged nor re-escalated | PASS |
+Mutations (mutate.sh, reinstating the pre-fix order: cap check before floor):
+| test cmd | outcome |
+|---|---|
+| shipped suites: lane-starvation + confirm-reask-rotation | **INERT** (both still pass) |
+| verify3 probe | **FIRED** on V3R3a |
+So R3 is fixed, but **no shipped test protects it**: AC-35's only escalation case uses redrive_last_at=null and
+confirmed_at 2 days ago (lane test :359-367), which is past the floor under either order. A future edit can silently
+reinstate early escalation. Severity: low-medium (escalation pages the owner a day early). Suggested row: add V3R3a
+to autowork-lane-starvation.test.ts.
