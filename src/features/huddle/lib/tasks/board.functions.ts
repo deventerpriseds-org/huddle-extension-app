@@ -95,12 +95,15 @@ export const deleteBoardTask = createServerFn({ method: "POST" })
     if (!data.caller?.entra_email) return { ok: false, error: "Sign-in required." };
     try {
       const { invokeJourneyTool } = await import("../journey/proxy.functions");
-      const r = await invokeJourneyTool({
-        toolName: "delete_task",
-        args: { task_id: data.taskId },
-        caller: data.caller,
-        context: { source: "huddle" },
-      });
+      const r = await invokeJourneyTool(
+        {
+          toolName: "delete_task",
+          args: { task_id: data.taskId },
+          caller: data.caller,
+          context: { source: "huddle" },
+        },
+        { allowUiOnly: true },
+      );
       return { ok: r.ok, error: r.error ?? "" };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };

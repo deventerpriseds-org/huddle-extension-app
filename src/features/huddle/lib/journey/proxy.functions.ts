@@ -104,9 +104,26 @@ export function toResponsesTool(t: JourneyToolDefinition): JourneyResponsesTool 
   };
 }
 
+/**
+ * journey tools only a deliberate USER action may run — never a model, voice executor or the debug
+ * fn. ONE chokepoint: every Huddle path reaches journey through invokeJourneyTool, so gating here
+ * covers the text agents, the voice executor (which forwards ANY non-native tool name,
+ * voice/realtime-tools.server.ts) and invokeJourneyToolDebug alike
+ * (VERIFY-ownership-judge-delete-1.md AC5). The board's Delete passes `allowUiOnly`.
+ */
+export const UI_ONLY_JOURNEY_TOOLS = new Set(["delete_task"]);
+
 export async function invokeJourneyTool(
   req: JourneyToolInvocationRequest,
+  opts: { allowUiOnly?: boolean } = {},
 ): Promise<JourneyToolInvocationResponse> {
+  if (UI_ONLY_JOURNEY_TOOLS.has(req.toolName) && !opts.allowUiOnly) {
+    return {
+      ok: false,
+      output: JSON.stringify({ error: "not_allowed", message: `${req.toolName} is a user-only action.` }),
+      error: `${req.toolName} is a user-only action`,
+    };
+  }
   const res = await journeyFetch("/tool", {
     method: "POST",
     body: JSON.stringify(req),

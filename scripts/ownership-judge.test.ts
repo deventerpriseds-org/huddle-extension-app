@@ -35,7 +35,15 @@ check(
   true,
 );
 check("grooming keeps the incumbent when the judge fails", /a\.assigned_agent = judged \?\? incumbent;/.test(groom), true);
+check(
+  "every assignment starts at its incumbent BEFORE the judge (budget skip / load failure keep the current owner)",
+  /for \(const a of assignments\) \{\s*const t = byId\.get\(a\.id\);\s*if \(t\) a\.assigned_agent = incumbentOwner\(t\.assigned_agent, a\.assigned_agent\);\s*\}\s*try \{/.test(groom),
+  true,
+);
 check("a 1:1-created task asks the judge on its own title", /resolveOwnerLLM\(title, winner\.id,/.test(turn), true);
+check("…and that call is time-boxed on the reply path", /laneOwner = await Promise\.race\(\[\s*resolveOwnerLLM\(title, winner\.id,[\s\S]{0,200}?setTimeout\(\(\) => r\(null\), 5_000\)/.test(turn), true);
+check("a produce task is assigned through the same judge", /resolveOwnerLLM\(askText, agentId,[\s\S]{0,800}?agentId: owner \?\? agentId,/.test(turn), true);
+check("the delete action is user-only at the journey chokepoint", /UI_ONLY_JOURNEY_TOOLS\.has\(req\.toolName\) && !opts\.allowUiOnly/.test(read("../src/features/huddle/lib/journey/proxy.functions.ts")), true);
 check("the 1:1 hand-off asks the same judge", /resolveOwnerLLM\(data\.text, nextId,/.test(turn), true);
 check("the judge has the assigned-task framing", /const assigned = opts\.framing === "assigned";/.test(routing), true);
 

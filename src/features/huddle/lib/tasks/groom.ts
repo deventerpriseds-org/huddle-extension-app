@@ -304,18 +304,26 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     // every Monday groom. The batch model's pick is now only the default for an UNASSIGNED task, and on
     // any judge failure the incumbent stays — so a failure can never reshuffle owners.
     const _tJ0 = Date.now();
+    // Every assignment STARTS at its incumbent, so any path the judge does not complete for — the
+    // budget skip, a per-call timeout, or the judge failing to load at all — keeps the current owner
+    // rather than the batch model's pick (VERIFY-ownership-judge-delete-1.md AC3: the skip and outer
+    // catch used to write the batch pick, which could reshuffle an assigned task).
+    const byId = new Map(slice.map((t) => [t.id, t]));
+    for (const a of assignments) {
+      const t = byId.get(a.id);
+      if (t) a.assigned_agent = incumbentOwner(t.assigned_agent, a.assigned_agent);
+    }
     try {
       const { resolveOwnerLLM } = await import("../routing");
       const { DEFAULT_ROUTER_MODEL } = await import("../model-catalog");
-      const byId = new Map(slice.map((t) => [t.id, t]));
       // Bounded: grooming also runs inside a chat turn (the hosting ceiling is ~45s), so the judge gets a
-      // fixed budget. A task the budget doesn't reach keeps the batch pick — exactly the old behaviour.
-      const JUDGE_BUDGET_MS = 12_000;
-      await mapLimit(assignments, 10, async (a) => {
+      // fixed budget; a task the budget doesn't reach keeps its incumbent.
+      const JUDGE_BUDGET_MS = 8_000;
+      await mapLimit(assignments, 16, async (a) => {
         if (Date.now() - _tJ0 > JUDGE_BUDGET_MS) return;
         const t = byId.get(a.id);
         if (!t) return;
-        const incumbent = incumbentOwner(t.assigned_agent, a.assigned_agent);
+        const incumbent = a.assigned_agent;
         const judged = await withTimeout(
           resolveOwnerLLM(
             t.title,
@@ -323,13 +331,13 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
             { backend: "openai", model: DEFAULT_ROUTER_MODEL.openai },
             { framing: "assigned" },
           ),
-          6_000,
+          5_000,
           "owner-judge",
         ).catch(() => null);
         a.assigned_agent = judged ?? incumbent;
       });
     } catch {
-      /* judge unavailable — every assignment keeps the batch pick, exactly as before */
+      /* judge unavailable — every assignment keeps its incumbent (set above) */
     }
     const _judgeMs = Date.now() - _tJ0;
 

@@ -1632,9 +1632,23 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             // responding agent is the assignee by the same rule used for create_huddle_task.
             // Best-effort: a failure leaves it exactly as it was before this line existed.
             if (r.ok) {
+              // The SAME ownership judge as every other assignment (VERIFY-ownership-judge-delete-1.md
+              // AC1): the produce task goes to whoever's lane the ask is in, defaulting to the agent
+              // who offered it. Bounded; any failure keeps that agent.
+              const owner =
+                routerCfg.backend === "openai" && openaiKey
+                  ? await Promise.race([
+                      resolveOwnerLLM(askText, agentId, {
+                        backend: "openai",
+                        model: routerCfg.model,
+                        fastMode: routerCfg.fastMode,
+                      }).catch(() => null),
+                      new Promise<null>((r) => setTimeout(() => r(null), 5_000)),
+                    ])
+                  : null;
               const a = await assignCreatedJourneyTasks({
                 taskIds: (r.tasks ?? []).map((t) => t.id),
-                agentId,
+                agentId: owner ?? agentId,
                 caller: (data.caller ?? {}) as Record<string, unknown>,
                 huddleId: data.huddleId,
               });
@@ -2879,15 +2893,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       if (!namedOwner && isOneToOne(data.scope, data.huddleId)) {
         laneOwner = capabilityOwnerFor(title)?.agent.id ?? null;
         if (!laneOwner && routerCfg.backend === "openai" && openaiKey) {
-          try {
-            laneOwner = await resolveOwnerLLM(title, winner.id, {
+          // Bounded: this sits on the reply path, so a slow judge falls back to the responder after 5s
+          // (VERIFY-ownership-judge-delete-1.md AC2 — it was awaited with no timeout).
+          laneOwner = await Promise.race([
+            resolveOwnerLLM(title, winner.id, {
               backend: "openai",
               model: routerCfg.model,
               fastMode: routerCfg.fastMode,
-            });
-          } catch {
-            laneOwner = null;
-          }
+            }).catch(() => null),
+            new Promise<null>((r) => setTimeout(() => r(null), 5_000)),
+          ]);
         }
       }
       const task: SuggestedTaskDraft = {

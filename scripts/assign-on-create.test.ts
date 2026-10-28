@@ -112,7 +112,7 @@ console.log("\nSTRUCTURAL — the 1:1 create site resolves the lane owner from t
 {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/features/huddle/lib/huddle.functions.ts", import.meta.url), "utf8");
-  check("capability owner, then the semantic resolver, on the task title", /laneOwner = capabilityOwnerFor\(title\)\?\.agent\.id \?\? null;[\s\S]{0,200}?resolveOwnerLLM\(title, winner\.id/.test(src), true);
+  check("capability owner, then the semantic resolver, on the task title", /laneOwner = capabilityOwnerFor\(title\)\?\.agent\.id \?\? null;[\s\S]{0,600}?resolveOwnerLLM\(title, winner\.id/.test(src), true);
   check("the lane owner reaches the assignee picker", /explicitOwner: namedOwner,\s*laneOwner,\s*\}\)/.test(src), true);
   check("the board card shows the same owner", /ownerId: namedOwner \?\? laneOwner \?\? winner\.id,/.test(src), true);
 }
