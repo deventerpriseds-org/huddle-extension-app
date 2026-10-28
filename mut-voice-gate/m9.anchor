@@ -1,0 +1,1 @@
+name === NEXUS_WRITE_TOOL_NAME ? { ok: false, persisted: "unknown", error, tool: name } : { ok: false, error, tool: name }
