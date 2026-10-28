@@ -66,7 +66,9 @@ export const loadWorkspace = createServerFn({ method: "POST" })
 export const saveWorkspace = createServerFn({ method: "POST" })
   .inputValidator((d) =>
     AuthInput.extend({
-      stateJson: z.string().min(2).max(2_000_000),
+      // Was 2_000_000. The owner's workspace reached ~2.0M chars on 2026-10-18 and every save after that
+      // was rejected here — silently, for 10 days. Headroom until messages move out of this blob.
+      stateJson: z.string().min(2).max(8_000_000),
       version: z.number().int().min(1).max(9999).optional(),
     }).parse(d),
   )

@@ -58,9 +58,9 @@ import {
   anchoredScrollTop,
   createFollowState,
   olderStart,
+  pinnedStartOnScroll,
   shouldRevealOlder,
   windowStart,
-  type ScrollMetrics,
 } from "../lib/transcript-scroll";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
@@ -299,19 +299,21 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
   const [pinnedStart, setPinnedStart] = useState<number | null>(null);
   const start = windowStart(messages.length, pinnedStart);
   const shown = useMemo(() => messages.slice(start), [messages, start]);
-  const anchorRef = useRef<ScrollMetrics | null>(null);
+  // The first rendered message and its viewport top, taken just before older rows are prepended.
+  const anchorRef = useRef<{ id: string; top: number } | null>(null);
+  const rowTop = (id: string) =>
+    scrollRef.current?.querySelector(`[data-msg-id="${CSS.escape(id)}"]`)?.getBoundingClientRect()
+      .top;
   const lastId = messages[messages.length - 1]?.id;
 
   const revealOlder = useCallback(() => {
     const el = scrollRef.current;
     if (!el || anchorRef.current || start <= 0) return;
-    anchorRef.current = {
-      scrollTop: el.scrollTop,
-      scrollHeight: el.scrollHeight,
-      clientHeight: el.clientHeight,
-    };
+    const id = messages[start]?.id;
+    const top = id === undefined ? undefined : rowTop(id);
+    if (id !== undefined && top !== undefined) anchorRef.current = { id, top };
     setPinnedStart(olderStart(start));
-  }, [start]);
+  }, [start, messages]);
 
   // Pin to the newest message when the list changes or a turn starts. Layout effect so the first paint
   // is already at the bottom; a second pin after paint catches rows that grow late (markdown, widgets).
@@ -339,7 +341,8 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
     const before = anchorRef.current;
     if (before) {
       anchorRef.current = null;
-      el.scrollTop = anchoredScrollTop(before, el.scrollHeight);
+      const after = rowTop(before.id);
+      if (after !== undefined) el.scrollTop = anchoredScrollTop(el.scrollTop, before.top, after);
     }
     if (start > 0 && el.scrollHeight <= el.clientHeight) revealOlder();
   }, [start, revealOlder]);
@@ -353,6 +356,8 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
       clientHeight: el.clientHeight,
     };
     follow.onScroll(m);
+    const pinned = pinnedStartOnScroll(follow.following, pinnedStart, start);
+    if (pinned !== pinnedStart) setPinnedStart(pinned);
     if (shouldRevealOlder(m, start)) revealOlder();
   };
 
@@ -383,7 +388,9 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
         )}
 
         {shown.map((m) => (
-          <MessageRow key={m.id} m={m} huddle={huddle} />
+          <div key={m.id} data-msg-id={m.id}>
+            <MessageRow m={m} huddle={huddle} />
+          </div>
         ))}
 
         {messages.length === 0 && !isPending && (

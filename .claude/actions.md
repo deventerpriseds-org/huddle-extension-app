@@ -37,6 +37,8 @@ thread history instead of the bottom … it seems it should quick load the most 
 oldest when scrolling up far enough according to best practices"*
 
 **Status: DEPLOYED `4332c41` (PR #109, deploy run 40586460645 success), mechanism verified headless
+**OWNER-CONFIRMED LIVE 2026-10-28:** "yes the scroll lands on the newest items". Part B step 4 decision: KEEP
+the ~185 blob-only messages (owner). Part B steps 1-3: awaiting approval.
 (A/B), NOT yet confirmed on the owner's phone.**
 
 **Cause (read from code, then reproduced):** the deep link switches to the 1:1 before the workspace
@@ -60,6 +62,31 @@ reader; PRE-FIX ends **27,592px above the bottom** (the reported bug), renders a
 **Owner live test (2026-10-27):** owner asked for a clickable test notification. `test-push.yml` /
 `/api/public/test-push` gained an optional `huddle_id` input that adds the SAME `deepLink: /?huddle=<id>`
 a real 1:1 reply push carries, so a tap exercises the deep-link landing with no agent turn.
+
+**Test push sent (2026-10-28 16:37 UTC):** run 40727708245 -> HTTP 200, journey "Push sent on messages", deep link
+`dm-iris-chase`. Awaiting the owner's tap result. **Independent verification:** verifier loop 1 (work slug
+`deeplink-transcript`) covers #109/#111/#112; artifact `.claude/evidence/VERIFY-deeplink-transcript-1.md` on branch
+`claude_verify-deeplink-transcript`. C1 (root cause) already CONFIRMED by the verifier from source before a restart.
+
+**Owner live test 2026-10-28 ~18:00 UTC — FAILED from his view:** after tapping the test push, the Iris 1:1 showed
+only alarms and history never filled in (before: alarms, then history ~7s later). Findings, from the DB and a replay:
+- The newest Iris messages in the saved workspace are real conversation (Oct 9-15), not alarms, so an
+  alarms-only screen means the workspace history was NOT applied on that open (the alarms come from the
+  thread's own reminder poll, which runs before hydration).
+- Phone-sized headless replay of current main (alarms first, then a 3,230-message / 654-Iris history via
+  hydrateFromRemote): history renders, 40 rows, 0px from bottom, no page errors. So rendering is not what failed.
+- Load path untouched since 2026-10-17 (git log on useWorkspaceSync/store/HuddleApp/workspace.functions/entra-auth).
+- **SAVE IS BROKEN SINCE ~2026-10-18 (pre-existing, measured):** `identity.workspace_state` is 2,080,919 chars;
+  `saveWorkspace` validates `stateJson.max(2_000_000)`, so every save is rejected. Newest saved message: 2026-10-15.
+  Why the load did not apply on that open is still UNKNOWN; awaiting the owner's normal-open check.
+
+**Owner chose C (2026-10-28).** Part A shipped: #117 (`39f464d`, deploy 40744286484 success) -- save cap 8M,
+back-fill resumes from the newest saved message and pages past 100, load retries with an on-screen notice, save
+failures shown. **OWNER-CONFIRMED on his phone 2026-10-28 ("I now see the messages again")** and DB-verified: workspace
+`updated_at` 2026-10-28 18:24:36 UTC (was 10-18), 3,415 messages (was 3,230), Iris 806 (was 654), newest saved
+message 18:17 UTC today. Blob is now 2,228,410 chars -- over the OLD cap, so the raise is what let it save. Part B planned in `docs/plan-message-history-storage.md`, awaiting approval. Retracted claim: "the
+APK restart caused the loss" -- owner installed APKs after 10-18 without loss, so restarts were being recovered by
+something not yet identified.
 
 **Not done (deliberately):** server-side paging of history. All messages live in one workspace blob, so
 paging the DOWNLOAD needs a storage change; only worth it if the download itself becomes slow.
