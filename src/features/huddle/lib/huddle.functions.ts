@@ -9,10 +9,17 @@ import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, Task
 // and the reply DTOs are shared with the client bundle.
 import type { PrioritiesWidgetData, ScheduleWidgetData } from "./tasks/widgets.server";
 import {
+  OFFER_TTL_MS,
+  appendProduceOffer,
+  isOfferAccepted,
+  routeDeepAsk,
+  type AskShape,
+} from "./tasks/ask-shape";
+import {
   parseMentions,
   routeMessage,
   routeMessageLLM,
-  scoreDifficultyLLM,
+  scoreAskLLM,
   laneOwnerFor,
   resolveOwnerLLM,
   type RouterInvocation,
@@ -1223,15 +1230,20 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // cheap dedicated LLM call — this is what powers the difficulty-driven model tier + the Sol confirm
   // gate in 1:1. LLM-primary (dynamic, no keyword list), heuristic fallback only when there's no key.
   // Guarded: any failure leaves difficulty unset (treated as 2 = standard downstream).
+  // The same call also labels the ASK SHAPE (act vs deliverable) for the deep-1:1 hybrid below.
+  let askShape: AskShape | null = null;
   if (!resume && routed.difficulty == null && !data.internal && !data.ceremonyBarge) {
     try {
       if (routerCfg.backend === "openai" && openaiKey) {
-        const d = await scoreDifficultyLLM(data.text, {
+        const scored = await scoreAskLLM(data.text, {
           backend: "openai",
           model: routerCfg.model,
           fastMode: routerCfg.fastMode,
         });
-        if (d != null) routed.difficulty = d;
+        if (scored) {
+          routed.difficulty = scored.difficulty;
+          askShape = scored.shape;
+        }
       }
     } catch {
       /* leave unset — downstream treats undefined as 2 */
@@ -1579,19 +1591,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // exists and the user is in it. The owner reported exactly this misfire (2026-09-14). Without the
   // hold, the persona site's needsConfirm branch still keeps such a turn off the Sol rung.
   let deepManual: string | undefined = data.modelEscalate?.trim() || undefined;
+  // Set when a deliverable is answered now: the produce offer is appended to that agent's reply at the
+  // end of the turn (ensureProduceOfferDelivered), and only then recorded as a pending offer.
+  let produceOffer: { agentId: AgentId; askText: string; email: string | null } | null = null;
   if (!resume && !data.internal && !data.ceremonyBarge && !data.appContext && data.scope === "one-to-one") {
     try {
       const email = await resolveCallerEmail();
-      const {
-        getPendingDeepConfirm,
-        setPendingDeepConfirm,
-        clearPendingDeepConfirm,
-        recordDeepConfirmVerdict,
-        getRecentDeepVerdict,
-        classifyConfirmReply,
-        produceVsQuickAsk,
-      } = await import("./tasks/deep-confirm.server");
-      const { hasGreenLit } = await import("./tasks/green-light");
+      const { getPendingDeepConfirm, clearPendingDeepConfirm, recordDeepConfirmVerdict, classifyConfirmReply } =
+        await import("./tasks/deep-confirm.server");
 
       // THE PRODUCE PATH, once. Reached from TWO places now — an explicit "produce" reply to a pending
       // ask, and a fresh deep ask the user has ALREADY green-lit in this thread — and they must do the
@@ -1599,10 +1606,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // second copy of fifty lines that would drift the first time one of them was touched.
       const runProduce = async (agentId: AgentId, askText: string, note: string) => {
         const title = produceTitleFrom(askText);
-        // Create the produce task on the board (dual-write to journey). Non-fatal.
+        // Create the produce task on the board (dual-write to journey). Non-fatal. OPT-IN, like every
+        // other board write (`agentBackend.journey?.enabled`): only when the agent's journey is
+        // explicitly on — so a harness turn with journey off or absent never lands on the real board
+        // or kicks a forced auto-work pass (VERIFY-deep-ask-hybrid-2.md AC9; -3.md caveat).
+        const journeyOn = data.agents?.[agentId]?.journey?.enabled === true;
         let created = false;
         try {
-          if (data.caller?.entra_email) {
+          if (journeyOn && data.caller?.entra_email) {
             const { invokeJourneyTool } = await import("./journey/proxy.functions");
             const r = await invokeJourneyTool({
               toolName: "quick_create_task",
@@ -1637,11 +1648,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           );
         }
         // Kick the async WIP pipeline (fire-and-forget; the gated 9/13/17 cadence also picks it up).
-        try {
-          const { runScheduledAutoWork } = await import("./tasks/autowork.server");
-          void runScheduledAutoWork(data.caller, { force: true }).catch(() => {});
-        } catch {
-          /* best-effort */
+        if (journeyOn) {
+          try {
+            const { runScheduledAutoWork } = await import("./tasks/autowork.server");
+            void runScheduledAutoWork(data.caller, { force: true }).catch(() => {});
+          } catch {
+            /* best-effort */
+          }
         }
         return finalize({
           decision: {
@@ -1666,7 +1679,21 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       };
 
       const pending = await getPendingDeepConfirm(email, data.huddleId);
-      if (pending) {
+      if (pending && pending.kind === "offer") {
+        // HYBRID: the agent already ANSWERED and offered the full version. Only an explicit produce
+        // phrase accepts (a bare "yes" may be answering a question inside the answer itself); anything
+        // else retires the offer and the message routes normally — including as a fresh deep ask.
+        if (Date.now() - pending.createdAt <= OFFER_TTL_MS && isOfferAccepted(data.text)) {
+          await recordDeepConfirmVerdict(email, data.huddleId, pending.agentId, pending.askText, "produce");
+          const agentId = (pending.agentId as AgentId) ?? routed.winners[0] ?? data.members[0];
+          return runProduce(agentId, pending.askText, "produce-offer: accepted");
+        }
+        // Anything that is not an acceptance retires the offer — including a refusal that mentions it
+        // ("no, produce nothing"). Keeping it alive let a LATER "make it a task" produce the ask the
+        // user had just declined (VERIFY-deep-ask-hybrid-3.md, near-miss REFUTED).
+        await clearPendingDeepConfirm(email, data.huddleId);
+      } else if (pending) {
+        // A legacy held ask (written before the hybrid shipped) — answered exactly as before.
         const verdict = classifyConfirmReply(data.text);
         if (verdict === "quick") {
           // Resume the original ask inline on a chat-friendly tier — deliberately NOT the deep o3 rung.
@@ -1707,76 +1734,39 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         // verdict "unrelated" → leave the pending (2h expiry) and fall through to normal routing.
       }
 
-      // Fresh deep ask (no manual override): HOLD and ask produce-vs-quick instead of spending o3 inline.
+      // Fresh deep ask (no manual override): the HYBRID (tasks/ask-shape.ts). Never hold the turn.
+      // It used to hold EVERY difficulty>=3 1:1 message behind a canned "produce or quick?" before the
+      // agent ran — and a long "plan my day" (gym at 3pm, papers, errands, app work) scored 3 on length
+      // and came back as one vague async task instead of a plan. Owner, 2026-10-28: "why didnt she just
+      // do it?" Now: an ACT ask runs normally, pinned to the budget tier (Terra-high — never o3/Sol,
+      // which difficulty 3 would otherwise pick); a DELIVERABLE is answered now on the chat tier and
+      // ends with a one-line offer to produce the full version.
       if (!deepManual && routed.winners.length > 0 && (routed.difficulty ?? 2) >= 3) {
         const primary = routed.winners[0];
-        // ...UNLESS THE USER HAS ALREADY SAID GO. Measured: the ask fired at 01:32, the owner replied
-        // "Go for it" at 02:06 and "Okay knock it out" at 02:50 — three go-aheads — and it was still
-        // asking. Half of that was the classifier (fixed in classifyConfirmReply); this is the other
-        // half: once someone has told you to get on with it, asking them to choose a shape reads as
-        // not listening. A go-ahead in the thread means PRODUCE, which is the answer the gate was
-        // fishing for anyway. The current message counts too — "go for it, and do the pricing one"
-        // is a go-ahead AND a fresh deep ask in one line.
-        const recentUserLines = [
-          ...(data.history as HuddleMessage[]).filter((m) => m.author.kind === "user").map((m) => m.text),
-          data.text,
-        ];
-        if (hasGreenLit(recentUserLines)) {
-          // Remember it, so the NEXT deep ask a minute later is not asked either. `hasGreenLit` only
-          // looks back four user lines, so it decays out from under a conversation that is still
-          // plainly in the same flow.
-          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "produce");
-          return runProduce(primary, data.text, "deep-confirm: already green-lit");
-        }
-        // ...OR THE USER ALREADY ANSWERED THIS QUESTION. Every verdict used to DELETE the pending
-        // row, so the gate had no memory past the single reply: answer "produce", and the next
-        // difficulty>=3 message in the same 1:1 asked again from scratch a minute later. Note that
-        // the green-light check above does NOT cover this — measured this session,
-        // isGreenLight("produce") is FALSE, so replying with the exact word the gate asked for
-        // suppressed nothing. A recent verdict now applies the shape the user already chose instead
-        // of re-asking. "cancel" is never remembered (it deletes the row), so parking one ask can
-        // never silence a later genuine one. Window + expiry: tasks/verdict-memory.ts.
-        const remembered = await getRecentDeepVerdict(email, data.huddleId);
-        if (remembered === "produce") {
-          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "produce");
-          return runProduce(primary, data.text, "deep-confirm: remembered produce");
-        }
-        if (remembered === "quick") {
-          // Same landing as the explicit "quick" reply: answer INLINE on the chat-friendly tier,
-          // never the deep o3 rung. data.text is already the real ask here (unlike the reply path,
-          // which has to restore it from the stored pending), so only the tier and the recorded
-          // difficulty change.
+        const route = routeDeepAsk(askShape);
+        if (route === "act-now") {
+          deepManual = "budget";
+        } else {
           deepManual = "terra-med";
           routed.difficulty = 2;
-          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "quick");
-        } else {
-          // Nothing remembered — ask, exactly as before.
-          await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
-          return finalize({
-            decision: {
-              ...routed.decision,
-              reason: `${routed.decision.reason} [deep-confirm: produce-vs-quick]`.slice(0, 220),
-            },
-            replies: [
-              {
-                agentId: primary,
-                // Per-agent phrasing, not one literal every agent recites — see produceVsQuickAsk.
-                text: produceVsQuickAsk(primary),
-              },
-            ] as Reply[],
-            fallbacks,
-            prompts,
-            journeyTaskUpdates,
-            suggestedTasks,
-            toolUses,
-            reasoning: reasoningSummaries,
-          });
+          produceOffer = { agentId: primary, askText: data.text, email };
         }
+        routed.decision = {
+          ...routed.decision,
+          reason: `${routed.decision.reason} [deep-ask: ${route}]`.slice(0, 220),
+        };
       }
     } catch (err) {
       console.warn(
         `[huddle-model] deep-confirm gate error: ${err instanceof Error ? err.message : String(err)}; proceeding without gate.`,
       );
+      // The tier pin needs no database, so a failed email/identity lookup above must not leave a
+      // difficulty>=3 ask unpinned on o3/Sol (VERIFY-deep-ask-hybrid-2.md, out-of-scope finding 3).
+      // No offer here: without the email there is nowhere to record it.
+      if (!deepManual && (routed.difficulty ?? 2) >= 3) {
+        deepManual = routeDeepAsk(askShape) === "act-now" ? "budget" : "terra-med";
+        if (deepManual === "terra-med") routed.difficulty = 2;
+      }
     }
   }
 
@@ -4746,7 +4736,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // routine→Luna-low, standard→Luna-high, deep→Sol-high. Escalating THINKING on the cheap model
         // (luna-high ≈ terra-med at ~1/9 cost, measured) beats jumping the model, so most turns run Luna
         // with more effort and only genuinely deep asks reach Sol. Sol auto-spend is gated upstream (a
-        // fresh 1:1 deep ask is confirm-gated), so if we still see needsConfirm here (a group deep ask,
+        // fresh 1:1 deep ask is pinned to budget/terra-med by the deep-ask hybrid), so if we still see needsConfirm here (a group deep ask,
         // or an un-gated path) we do NOT silently spend Sol — we drop to the Terra-high budget. A manual
         // override (deepManual) always wins and clears the gate. Guarded: any failure keeps the static
         // agent-backend model so a bad resolve never breaks the turn.
@@ -4774,7 +4764,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             // reasoning-summary channel to the UI.
             if (chosenModel === "o3" || chosenModel.includes("sol") || deepManual) {
               reasoningSummaries.push(
-                `${winner.name}: reasoning tier ${chosenModel.replace("gpt-5.6-", "")}/${chosenEffort}${deepManual ? " (you chose this)" : ""}`,
+                `${winner.name}: reasoning tier ${chosenModel.replace("gpt-5.6-", "")}/${chosenEffort}${data.modelEscalate?.trim() ? " (you chose this)" : ""}`,
               );
             }
           }
@@ -6894,6 +6884,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     });
   };
 
+  // A deliverable answered now (the deep-1:1 hybrid) ends with the produce offer. Recorded as a pending
+  // offer ONLY when the line actually landed on a reply, so an offer the user never saw can never be
+  // "accepted" by their next message.
+  const ensureProduceOfferDelivered = async () => {
+    if (!produceOffer) return;
+    const offer = produceOffer;
+    produceOffer = null;
+    const out = appendProduceOffer(replies, offer.agentId);
+    if (!out.appended) return;
+    replies.splice(0, replies.length, ...out.replies);
+    const { setPendingDeepConfirm } = await import("./tasks/deep-confirm.server");
+    await setPendingDeepConfirm(offer.email, data.huddleId, offer.agentId, offer.askText, "offer");
+  };
+
   // "researched" mode, GROUP/ceremony only (1:1 is carried by the conversation object): after the turn,
   // persist (A1) a distilled record of each agent's reply as a shared episodic chunk attributed to that
   // agent — so what an agent SAID survives beyond the ~14-message window and is retrievable cross-huddle —
@@ -7134,6 +7138,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     }
     ensureNotSilentOnRealWork();
     ensureNavLinkDelivered();
+    await ensureProduceOfferDelivered();
     try {
       await turnStore.saveTurnChunk(turnId, replies, null, true, finalResult());
     } catch (e) {
@@ -7145,6 +7150,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 
   ensureNotSilentOnRealWork();
   ensureNavLinkDelivered();
+  await ensureProduceOfferDelivered();
   persistResearchedMemory();
   return finalResult();
 }

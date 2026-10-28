@@ -44,7 +44,11 @@ CREATE INDEX IF NOT EXISTS deep_confirm_userid_idx ON chat.deep_confirm(user_id)
 --   last_verdict_at — when, so the window in verdict-memory.ts can expire it.
 ALTER TABLE chat.deep_confirm ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
 ALTER TABLE chat.deep_confirm ADD COLUMN IF NOT EXISTS last_verdict TEXT;
-ALTER TABLE chat.deep_confirm ADD COLUMN IF NOT EXISTS last_verdict_at TIMESTAMPTZ;`;
+ALTER TABLE chat.deep_confirm ADD COLUMN IF NOT EXISTS last_verdict_at TIMESTAMPTZ;
+-- Hybrid (2026-10-28). 'ask' = the legacy held produce-vs-quick question; 'offer' = the agent already
+-- ANSWERED and offered to produce the full version (tasks/ask-shape.ts). An offer only counts for the
+-- very next message, and only an explicit produce phrase accepts it.
+ALTER TABLE chat.deep_confirm ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'ask';`;
 let booted: Promise<void> | null = null;
 async function ensure() {
   if (booted) return booted;
@@ -52,9 +56,15 @@ async function ensure() {
   try { await booted; } catch (e) { booted = null; throw e; }
 }
 
-export interface PendingDeep { askText: string; agentId: string | null; createdAt: number }
+export interface PendingDeep { askText: string; agentId: string | null; createdAt: number; kind: "ask" | "offer" }
 
-export async function setPendingDeepConfirm(email: string | null, huddleId: string, agentId: string | null, askText: string): Promise<void> {
+export async function setPendingDeepConfirm(
+  email: string | null,
+  huddleId: string,
+  agentId: string | null,
+  askText: string,
+  kind: "ask" | "offer" = "ask",
+): Promise<void> {
   if (!email) return;
   try {
     await ensure();
@@ -64,9 +74,9 @@ export async function setPendingDeepConfirm(email: string | null, huddleId: stri
       // resolved_at=NULL: a NEW ask is by definition unanswered, so a row that was only a verdict
       // memory becomes a live pending again. last_verdict is left alone — the gate only reaches
       // here when no recent verdict suppressed the ask, so there is nothing to contradict.
-      `INSERT INTO chat.deep_confirm (user_email, huddle_id, agent_id, ask_text, user_id) VALUES ($1,$2,$3,$4,$5)
-       ON CONFLICT (user_email, huddle_id) DO UPDATE SET agent_id=$3, ask_text=$4, user_id=COALESCE(EXCLUDED.user_id, chat.deep_confirm.user_id), created_at=now(), resolved_at=NULL`,
-      [email, huddleId, agentId, askText, userId],
+      `INSERT INTO chat.deep_confirm (user_email, huddle_id, agent_id, ask_text, user_id, kind) VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (user_email, huddle_id) DO UPDATE SET agent_id=$3, ask_text=$4, user_id=COALESCE(EXCLUDED.user_id, chat.deep_confirm.user_id), created_at=now(), resolved_at=NULL, kind=$6`,
+      [email, huddleId, agentId, askText, userId, kind],
     );
   } catch { /* best-effort */ }
 }
@@ -76,21 +86,26 @@ export async function getPendingDeepConfirm(email: string | null, huddleId: stri
     await ensure();
     const { resolveScopeByEmail } = await import("../identity/identity.server");
     const { userId, emails } = await resolveScopeByEmail(email);
-    const r = await getPool().query<{ ask_text: string; agent_id: string | null; created_at: Date }>(
+    const r = await getPool().query<{ ask_text: string; agent_id: string | null; created_at: Date; kind: string | null }>(
       // `resolved_at IS NULL` is what keeps a VERDICT MEMORY from masquerading as an outstanding
       // ask. Without it a resolved row would come back as `pending` and the user's next message
       // would be classified as a reply to a question nobody had just asked.
       userId
-        ? `SELECT ask_text, agent_id, created_at FROM chat.deep_confirm
+        ? `SELECT ask_text, agent_id, created_at, kind FROM chat.deep_confirm
            WHERE (user_id=$1 OR (user_id IS NULL AND lower(user_email)=ANY($2))) AND huddle_id=$3 AND resolved_at IS NULL LIMIT 1`
-        : `SELECT ask_text, agent_id, created_at FROM chat.deep_confirm WHERE user_email=$1 AND huddle_id=$2 AND resolved_at IS NULL LIMIT 1`,
+        : `SELECT ask_text, agent_id, created_at, kind FROM chat.deep_confirm WHERE user_email=$1 AND huddle_id=$2 AND resolved_at IS NULL LIMIT 1`,
       userId ? [userId, emails, huddleId] : [email, huddleId],
     );
     const row = r.rows[0];
     if (!row) return null;
     // Expire stale pendings (>2h) so an abandoned confirm never hijacks a later message.
     if (Date.now() - new Date(row.created_at).getTime() > 2 * 3600_000) { await clearPendingDeepConfirm(email, huddleId); return null; }
-    return { askText: row.ask_text, agentId: row.agent_id, createdAt: new Date(row.created_at).getTime() };
+    return {
+      askText: row.ask_text,
+      agentId: row.agent_id,
+      createdAt: new Date(row.created_at).getTime(),
+      kind: row.kind === "offer" ? "offer" : "ask",
+    };
   } catch { return null; }
 }
 export async function clearPendingDeepConfirm(email: string | null, huddleId: string): Promise<void> {
