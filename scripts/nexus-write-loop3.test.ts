@@ -20,6 +20,15 @@ import {
   resolveDueInstant,
 } from "../src/features/huddle/lib/nexus/nexus-write.server";
 import { readFileSync } from "node:fs";
+import { routeMessage, laneOwnerFor, primeLaneDecision } from "../src/features/huddle/lib/routing";
+import { sharedCapabilityHolders } from "../src/features/huddle/lib/capabilities";
+import { AGENTS, type AgentId } from "../src/features/huddle/data/agents";
+import {
+  setNexusCourseContext,
+  nexusCourseMentioned,
+  NEXUS_COURSE_CONTEXT_TTL_MS,
+} from "../src/features/huddle/lib/nexus/course-context";
+import { primeNexusCourseContext } from "../src/features/huddle/lib/nexus/course-context.server";
 
 let pass = 0;
 let fail = 0;
@@ -207,6 +216,110 @@ const main = async () => {
     t("L3-D8o a garbage time_zone is still refused (validated, never silently dropped)", bad.ok ? "ok" : bad.reason, "ambiguous-date");
     const src = readFileSync("src/features/huddle/lib/nexus/nexus-write.server.ts", "utf8");
     t("L3-D8p runNexusWrite dedups in courseZoneOf(course), never due.zone", /const dayZone = courseZoneOf\(course\);\s*\n\s*const dup = findDuplicate\(\{ title, dueMs: due\.ms, zone: dayZone, writtenDay: due\.writtenDay \}, existing\);/.test(src) && !/zone: due\.zone/.test(src), true);
+  }
+
+  console.log("=== D6: coursework context is DATA FROM NEXUS (the owner's real courses); vetoes first ===");
+  {
+    const ALL_IDS = AGENTS.map((a) => a.id) as AgentId[];
+    const PRIME = new Set(["elle-rowan", "iris-chase"]);
+    const OWNER_COURSES = [{ code: "MGT-782", name: "MGT-782-W1 (202711)" }, { code: "MGT-702", name: "Strategic Management" }];
+    setNexusCourseContext(OWNER_COURSES);
+    const lead = (text: string) =>
+      routeMessage({ text, scope: "group", members: ALL_IDS, history: [] } as Parameters<typeof routeMessage>[0]).winners[0];
+    // [ask, addressed agent in the 1:1, group leader on origin/main, laneOwnerFor(ask, addressed) on origin/main].
+    // Baselines MEASURED with `bun mut-loop3/probe-routing.ts <git archive origin/main bee838b> d6`, not typed
+    // from memory. The verifier's D6 table (all 16 rows of probe-intent + probe-routing's attacks) + 4 extras.
+    const D6: Array<[string, AgentId, string, string]> = [
+      ["my UA 902 check-in deadline is tonight, can you handle it", "troy-lennox", "elle-rowan", "null"],
+      ["check me in for UA 902 before the deadline tonight", "troy-lennox", "elle-rowan", "null"],
+      ["my DS-160 visa form is due Friday", "troy-lennox", "iris-chase", "null"],
+      ["fill out my DS-160 visa form, it's due Friday", "troy-lennox", "iris-chase", "null"],
+      ["my DBA filing deadline for the LLC is Friday", "sam-trent", "elle-rowan", "null"],
+      ["file my DBA for the LLC before the deadline", "sam-trent", "elle-rowan", "null"],
+      ["pay the IRS 941 payment due Friday", "finn-reid", "iris-chase", "null"],
+      ["the IRS 941 payment is due Friday", "finn-reid", "iris-chase", "null"],
+      ["my MBA loan payment is due Monday, can I afford it", "finn-reid", "finn-reid", "null"],
+      ["set up autopay for my MBA loan payment due Monday", "finn-reid", "finn-reid", "null"],
+      ["pay my yoga instructor, the payment is due Monday", "finn-reid", "iris-chase", "null"],
+      ["my yoga instructor says the class pass payment is due Monday", "flex-grimes", "iris-chase", "null"],
+      ["sign my mortgage papers before the due date", "finn-reid", "iris-chase", "null"],
+      ["when is the due date on my mortgage papers", "finn-reid", "iris-chase", "null"],
+      ["my new job assignment in Germany starts Monday, what's my assignment exactly", "sam-trent", "sam-trent", "null"],
+      ["roll my NVDA 200 calls before the deadline Friday", "finn-reid", "elle-rowan", "null"],
+      ["what's the deadline to submit my visa papers", "troy-lennox", "elle-rowan", "elle-rowan"],
+      ["my NVDA 200 call options deadline to roll is Friday", "finn-reid", "elle-rowan", "null"],
+      ["can you log my 5k run to Nexus fitness tracker by the deadline", "flex-grimes", "elle-rowan", "null"],
+      ["my prof at the gym wants the meal plan paper by Friday", "flex-grimes", "charleston-lewis", "null"],
+      ["book a flight to Toronto for the EMBA residency", "troy-lennox", "troy-lennox", "null"],
+      ["buy $NVDA before the earnings deadline", "finn-reid", "elle-rowan", "null"],
+      ["my passport renewal paperwork is due next week", "troy-lennox", "iris-chase", "null"],
+      ["submit the payroll report before the deadline", "finn-reid", "elle-rowan", "elle-rowan"],
+    ];
+    for (const [text, self, group, lane] of D6) {
+      t(`L3-D6a "${text}" matches NO coursework prime capability`, sharedCapabilityHolders(text).length, 0);
+      t(`L3-D6b group "${text}" -> origin/main baseline`, lead(text), group);
+      const handoffs = ALL_IDS.map((id) => primeLaneDecision(text, id)).filter((x) => x !== null);
+      t(`L3-D6c 1:1 with ANY agent: "${text}" makes no prime hand-off`, handoffs.length, 0);
+      t(`L3-D6d 1:1 ${self}: "${text}" -> origin/main lane`, laneOwnerFor(text, self)?.id ?? "null", lane);
+    }
+    // Every coursework ask (loop-2 tests + the verifier's 13 + MGT-702/name spellings) still goes to Elle/Iris.
+    const COURSEWORK = [
+      "add my assignments", "add my MGT-782 assignments from the syllabus", "put the research paper due Dec 9 on my assignments",
+      "update the due date on my research paper", "change my research proposal deadline to Nov 2", "log my DBA deliverables",
+      "add this syllabus's deadlines to Nexus", "I have a new paper due next month for MGT-782, add it", "add my school assignments",
+      "fix the due date on my strategy paper", "my professor pushed the case analysis to Friday",
+      "my mgt 782 paper is due friday", "the strategy essay for my doctoral program is due Dec 1",
+      "add the case study due Nov 3 to Nexus", "what's due in Nexus this week", "show my Nexus assignments", "mgt-782 paper deadline moved",
+      "my instructor extended the essay deadline", "my doctoral dissertation draft is due Dec 1",
+      "the MGT-702 final paper is due Dec 4", "my Strategic Management essay deadline is Friday",
+    ];
+    for (const text of COURSEWORK) {
+      t(`L3-D6e group "${text}" is led by Elle/Iris`, PRIME.has(String(lead(text))), true);
+      t(`L3-D6f 1:1 Elle/Iris keep "${text}"`, `${primeLaneDecision(text, "elle-rowan")}/${primeLaneDecision(text, "iris-chase")}`, "keep/keep");
+      t(`L3-D6g 1:1 Finn hands "${text}" to Elle/Iris`, PRIME.has(String(laneOwnerFor(text, "finn-reid" as AgentId)?.id)), true);
+    }
+    // The course is DATA, not a shape: the same ask without the owner's course list (or with a course he
+    // does not have) carries no strong context.
+    const ASK = "I have a new paper due next month for MGT-782, add it";
+    t("L3-D6h with the owner's course list, MGT-782 is strong context", nexusCourseMentioned(ASK), true);
+    t("L3-D6i a course code he does NOT have (MGT-999) is not context", sharedCapabilityHolders("I have a new paper due next month for MGT-999, add it").length, 0);
+    t("L3-D6j a full course NAME counts (\"Strategic Management\")", nexusCourseMentioned("my strategic management essay is due"), true);
+    setNexusCourseContext([{ code: "STR", name: "Strategy" }]);
+    t("L3-D6k a one-word course name is not used as context (\"Strategy\")", nexusCourseMentioned("what's our strategy for the merger paper due friday"), false);
+    setNexusCourseContext(OWNER_COURSES, Date.now() - NEXUS_COURSE_CONTEXT_TTL_MS - 1);
+    t("L3-D6l a STALE course list is not used (weak signals only)", `${nexusCourseMentioned(ASK)}/${sharedCapabilityHolders(ASK).length}`, "false/0");
+    setNexusCourseContext(null);
+    t("L3-D6m no course list (Nexus unavailable): the code alone is no context", sharedCapabilityHolders(ASK).length, 0);
+    t("L3-D6n ...but explicit words still are (\"syllabus\")", sharedCapabilityHolders("add my MGT-782 assignments from the syllabus").length > 0, true);
+    setNexusCourseContext(OWNER_COURSES);
+    // VETOES are evaluated BEFORE strong context and win (owner's rule) -- even over a real course code.
+    t("L3-D6o a veto beats a real course code (owner's order)", sharedCapabilityHolders("book the flight for my MGT-782 paper deadline").length, 0);
+    // "Nexus" counts only as the APP.
+    for (const text of ["renew my NEXUS card before the deadline", "my NEXUS program application deadline is Friday", "should I apply to NEXUS before the deadline", "is my NEXUS interview due"]) {
+      t(`L3-D6p "${text}" is not Nexus-the-app`, sharedCapabilityHolders(text).length, 0);
+    }
+    // The data on the capability: no generic course-code regex, no degree/teacher word as STRONG.
+    const cap = AGENTS.flatMap((a) => a.capabilities ?? []).find((c) => c.id === "nexus-assignments");
+    const strong = (cap?.requiresContext?.strong ?? []).join(",");
+    t("L3-D6q strong words are only syllabus/syllabi (mba/dba/instructor/professor are weak)", strong, "syllabus,syllabi");
+    t("L3-D6r strong context names the Nexus course list as a DATA source", (cap?.requiresContext?.strongSources ?? []).join(","), "nexus-courses");
+    t("L3-D6s no generic course-code shape survives in the strong patterns", (cap?.requiresContext?.strongPatterns ?? []).some(([src]) => /\\d\{3\}|\[A-Z\]\{2/.test(src)), false);
+    const capSrc = readFileSync("src/features/huddle/lib/capabilities.ts", "utf8");
+    t("L3-D6t vetoes are checked BEFORE strong context", /if \(anyWord\(ctx\.vetoes\) \|\| anyPattern\(ctx\.vetoPatterns\)\) return false;\s*\n\s*if \(anyWord\(ctx\.strong\)/.test(capSrc), true);
+    const fnSrc = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
+    t("L3-D6u the turn primes the course list BEFORE routing", /await primeNexusCourseContext\(\);[\s\S]{0,300}\/\/ ---- Route ----/.test(fnSrc), true);
+    // The server primer: the existing read path, owner-filtered; unavailable -> weak only.
+    setNexusCourseContext(null);
+    const primed = await primeNexusCourseContext({ waitMs: 2000 });
+    t("L3-D6v primeNexusCourseContext reads Nexus courses and fills the cache", `${primed}/${nexusCourseMentioned("the MGT-702 paper is due")}`, "loaded/true");
+    t("L3-D6w ...through nexusGet(\"courses\") (the read path), owner-scoped", calls.some((c) => c.method === "GET" && c.url.pathname.endsWith("/api/d1/courses") && c.url.searchParams.get("owner") === OWNER), true);
+    setNexusCourseContext(null);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("{}", { status: 503 })) as unknown as typeof fetch;
+    const down = await primeNexusCourseContext({ waitMs: 2000 });
+    globalThis.fetch = realFetch;
+    t("L3-D6x Nexus down -> 'unavailable', routing on weak signals only", `${down}/${sharedCapabilityHolders(ASK).length}`, "unavailable/0");
+    setNexusCourseContext(OWNER_COURSES);
   }
 };
 

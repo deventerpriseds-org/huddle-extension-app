@@ -1124,6 +1124,17 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     return lovableModel;
   }
 
+  // D6 (loop 3, docs/FIX-nexus-write-loop3.md): the coursework capability's strong context is the owner's
+  // REAL Nexus course list (codes/names), read through the existing read path and cached with a short TTL.
+  // Bounded (course-context.server.ts): a cold read is awaited ~1.5s at most, else this turn routes on the
+  // weak signals only. Also read by the 1:1 prime hand-off below (resumed chunks included).
+  try {
+    const { primeNexusCourseContext } = await import("./nexus/course-context.server");
+    await primeNexusCourseContext();
+  } catch {
+    /* weak signals only */
+  }
+
   // ---- Route ----
   // On a resumed chunk we do NOT re-route (it would waste an LLM call and could pick a different
   // responder set): the queue + decision come straight from the persisted progress. `routed` is a

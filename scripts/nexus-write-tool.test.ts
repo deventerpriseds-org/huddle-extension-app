@@ -32,6 +32,11 @@ import {
 } from "../src/features/huddle/lib/nexus/nexus-write.server";
 import { nexusReadTools, NEXUS_TOOL_NAMES, executeNexusTool } from "../src/features/huddle/lib/nexus/nexus.server";
 import { readFileSync } from "node:fs";
+import { setNexusCourseContext } from "../src/features/huddle/lib/nexus/course-context";
+// loop 3 D6 (docs/FIX-nexus-write-loop3.md): coursework routing's strong context is the owner's REAL Nexus
+// course list (data, fetched at runtime); offline it is injected here. The executor also refreshes it
+// from its own fake course list whenever a write runs.
+setNexusCourseContext([{ code: "MGT-782", name: "MGT-782-W1 (202711)" }, { code: "MGT-702", name: "Strategic Management" }]);
 
 let pass = 0;
 let fail = 0;

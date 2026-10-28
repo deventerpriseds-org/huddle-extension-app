@@ -5,6 +5,7 @@
 // capability to any agent (or a new agent that owns one) works across the whole
 // roster with zero per-case code. See AgentCapability in agents.ts.
 import { AGENTS, type Agent, type AgentCapability, type AgentId } from "../data/agents";
+import { nexusCourseMentioned } from "./nexus/course-context";
 
 // ─── Turn intent classification ────────────────────────────────────────────────
 // Lightweight, trait-driven intent classifier. Determines the SEMANTIC INTENT of
@@ -278,7 +279,23 @@ const wordStart = (phrase: string) => new RegExp(`(^|[^a-z0-9])${escapeRe(phrase
 const wholeWord = (w: string) =>
   new RegExp(`(^|[^a-z0-9])${escapeRe(w.toLowerCase())}(?:'?s)?(?![a-z0-9])`, "i");
 
-/** Does `text` carry the capability's required CONTEXT (agents.ts `requiresContext`)? No spec = yes. */
+/**
+ * Named DATA sources a capability's `requiresContext.strongSources` may cite (agents.ts). Each answers "does
+ * this text name something real for the owner?" from data held elsewhere -- never a shape regex.
+ *   "nexus-courses" -- one of the owner's REAL Nexus course codes or names (lib/nexus/course-context.ts,
+ *                      filled from Nexus on the server; empty/stale -> false, i.e. weak signals only).
+ */
+const CONTEXT_SOURCES: Record<string, (text: string) => boolean> = {
+  "nexus-courses": nexusCourseMentioned,
+};
+
+/**
+ * Does `text` carry the capability's required CONTEXT (agents.ts `requiresContext`)? No spec = yes.
+ * ORDER (loop 3 D6, docs/FIX-nexus-write-loop3.md): VETOES FIRST and they WIN -- another lane's unmistakable
+ * vocabulary ("flight", "visa", "loan", "LLC", "calls", "yoga" …) beats even strong context; loop 2 checked
+ * strong first, so a flight number read as a course code skipped every veto. Then STRONG (data sources such
+ * as the owner's real course list, plus explicit words/patterns), then WEAK.
+ */
 export function capabilityContextPresent(cap: AgentCapability, text: string): boolean {
   const ctx = cap.requiresContext;
   if (!ctx) return true;
@@ -287,8 +304,9 @@ export function capabilityContextPresent(cap: AgentCapability, text: string): bo
   const t = raw.toLowerCase();
   const anyWord = (ws?: string[]) => (ws ?? []).some((w) => wholeWord(w).test(t));
   const anyPattern = (ps?: Array<[string, string]>) => (ps ?? []).some(([src, flags]) => new RegExp(src, flags).test(raw));
-  if (anyWord(ctx.strong) || anyPattern(ctx.strongPatterns)) return true;
-  if (anyWord(ctx.vetoes)) return false;
+  const anySource = (names?: string[]) => (names ?? []).some((n) => CONTEXT_SOURCES[n]?.(raw) === true);
+  if (anyWord(ctx.vetoes) || anyPattern(ctx.vetoPatterns)) return false;
+  if (anyWord(ctx.strong) || anyPattern(ctx.strongPatterns) || anySource(ctx.strongSources)) return true;
   if (anyWord(ctx.weak) || anyPattern(ctx.weakPatterns)) return true;
   return (ctx.weakPairs ?? []).some(([nouns, cues]) => anyWord(nouns) && anyWord(cues));
 }

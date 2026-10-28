@@ -110,3 +110,65 @@ correct in loop 2.
 "the time_zone argument IS the course zone", which the owner's D8 rule replaces; it now asserts
 `America/New_York` (the argument is not used for an offset-bearing date). Not a weakening: the dedup
 outcomes it protected (L2-D1a..k) all stay green unchanged.
+
+## D6 — coursework routing captured travel / finance / business asks (flight numbers, forms, tickers, MBA/DBA/instructor)
+
+**Status: fixed** (owner-specified design: coursework context is DATA FROM NEXUS, not a regex; vetoes first).
+
+Mechanism:
+- **Strong context = the owner's REAL courses.** New `lib/nexus/course-context.ts` (pure, client-safe) holds the
+  owner's course codes and names; `nexusCourseMentioned(text)` matches a real code in any spacing ("MGT-782",
+  "mgt 782", "MGT782") or a full course NAME of 2+ words / 8+ chars (a one-word name like "Strategy" is never
+  context). Filled on the server by `lib/nexus/course-context.server.ts` `primeNexusCourseContext()` through the
+  EXISTING read path (`nexusGet("courses")`, the same call `get_nexus_courses` makes, owner-filtered), cached for
+  `NEXUS_COURSE_CONTEXT_TTL_MS` = 5 min, a cold read awaited ~1.5 s at most (then it finishes in the background),
+  60 s back-off after a failure. The write tool refreshes the same cache whenever it reads the course list.
+  Stale/empty cache = no strong course context (weak signals only). Injectable in tests
+  (`setNexusCourseContext`). `runHuddleTurn` primes it before routing (resumed chunks too: the 1:1 prime
+  hand-off reads it).
+- **The capability names it as data:** agents.ts `requiresContext.strongSources: ["nexus-courses"]`, resolved in
+  capabilities.ts `CONTEXT_SOURCES` -- no agent id, no course code in code.
+- **Other strong context:** only `syllabus`/`syllabi`, and "Nexus" as the APP ("Nexus assignment(s)", "in/on/
+  from/into (my) Nexus", a write verb "… to Nexus"), never followed by card/program/membership/application/
+  interview/pass/lane/fitness/tracker.
+- **Deleted:** the generic course-code regexes (`[A-Z]{2,4}[- ]?\d{3}`, `[a-zA-Z]{2,4}-\d{3}`). **Demoted to
+  weak:** mba, dba, emba, doctoral, professor, prof, instructor, coursework.
+- **Vetoes FIRST, and they win** (`capabilityContextPresent`): flight(s), airline(s), check-in/check in/checkin,
+  boarding, visa(s), passport, seat, trip, hotel, loan(s), mortgage, IRS, tax(es), LLC, filing, job, payroll,
+  invoice(s), client(s), customer, boss, quarterly, calls, puts, options, stock(s), shares, ticker, strike, yoga,
+  gym, fitness, workout, + the loop-1/2 household words; `vetoPatterns`: a `$TICKER` cashtag.
+
+Baselines are MEASURED, not typed: `bun mut-loop3/probe-routing.ts <tree> d6|cw` run on this branch and on a
+`git archive origin/main` export (bee838b, same node_modules). Every D6 ask: PR == origin/main for the group
+leader AND for `laneOwnerFor` from the addressed agent; `primeLaneDecision` null from every agent.
+
+| Verifier D6 input (1:1 with) | loop 2 | loop 3 (= origin/main) | Tests |
+|---|---|---|---|
+| "my UA 902 check-in deadline is tonight…" / "check me in for UA 902…" (Troy) | -> elle, follow-up DM | no prime; lane null; group elle (main's theme scoring) | L3-D6a..d |
+| "my DS-160 visa form is due Friday" / "fill out my DS-160…" (Troy) | -> iris | no prime; lane null | L3-D6a..d |
+| "my DBA filing deadline for the LLC…" / "file my DBA for the LLC…" (Sam) | -> elle | no prime; lane null | L3-D6a..d |
+| "pay the IRS 941 payment…" / "the IRS 941 payment is due Friday" (Finn) | -> iris | no prime; lane null | L3-D6a..d |
+| "my MBA loan payment is due Monday, can I afford it" (Finn) | -> iris; group finn->iris | no prime; group **finn** | L3-D6a..d |
+| "set up autopay for my MBA loan payment…" (Finn) | -> iris | group finn | L3-D6a..d |
+| "pay my yoga instructor…" (Finn) / "my yoga instructor says…" (Flex) | -> iris | no prime | L3-D6a..d |
+| "sign my mortgage papers…" / "when is the due date on my mortgage papers" (Finn) | -> iris | no prime | L3-D6a..d |
+| "my new job assignment in Germany…" (Sam) | -> iris; group sam->iris | no prime; group **sam** | L3-D6a..d |
+| "roll my NVDA 200 calls before the deadline Friday" (Finn) | -> elle | no prime | L3-D6a..d |
+| (probe) visa papers, NVDA call options, "log my 5k run to Nexus fitness tracker", gym prof, flight for the EMBA residency | mixed | = main | L3-D6a..d |
+| (extra) "$NVDA", passport paperwork, payroll report | — | = main | L3-D6a..d |
+
+Coursework (loop-2 L2-D5e..g list + the verifier's 13 + MGT-702 / course-name spellings, 21 asks): group led
+by Elle/Iris, both keep it in a 1:1 (`primeLaneDecision` = keep), Finn hands it to Elle/Iris (L3-D6e..g).
+Data, not shape: without the course list, or for a course he does not have (MGT-999), the code is no
+context; a stale list is not used; explicit "syllabus" still is (L3-D6h..n). A veto beats a real course
+code (owner's order; L3-D6o -- accepted cost: "book the flight for my MGT-782 paper deadline" is not routed
+as coursework). "NEXUS card / program / apply to NEXUS / interview" are not the app (L3-D6p). Data checks
+(L3-D6q..s), veto-before-strong order (L3-D6t), priming before routing (L3-D6u), the primer through the read
+path and owner-scoped, and Nexus-down -> weak only (L3-D6v..x).
+
+**Test setup changed (no assertion changed):** `router-winners`, `router-redteam`, `nexus-write-tool`,
+`nexus-write-fix`, `nexus-write-loop2` now inject the owner's course list (MGT-782, MGT-702) with
+`setNexusCourseContext` after their imports -- the brief's "tests inject the owner's course list". Without
+it, router-winners F2-42 failed 2 asserts ("I have a new paper due next month for MGT-782, add it" is
+coursework only because MGT-782 is HIS course, which is now data). Every assertion in those files is
+unchanged.

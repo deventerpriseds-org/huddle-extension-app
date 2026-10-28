@@ -70,11 +70,18 @@ export interface AgentCapability {
   requiresContext?: {
     strong?: string[];
     strongPatterns?: Array<[string, string]>;
+    /**
+     * Named DATA sources that count as strong context (lib/capabilities.ts CONTEXT_SOURCES), e.g.
+     * "nexus-courses" = the text names one of the owner's REAL Nexus courses. Data, not a shape regex.
+     */
+    strongSources?: string[];
     weak?: string[];
     weakPatterns?: Array<[string, string]>;
     /** [nouns, cues]: weak context when any noun AND any cue appear as whole words. */
     weakPairs?: Array<[string[], string[]]>;
+    /** Evaluated FIRST: any veto word/pattern means "not this capability's job", even over strong context. */
     vetoes?: string[];
+    vetoPatterns?: Array<[string, string]>;
     /** Phrases removed before matching ("of course" is not a course). */
     ignore?: string[];
   };
@@ -104,21 +111,28 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
       ["due", "deadline", "deadlines", "graded", "grade", "submit", "submission"],
     ],
   ],
-  // WHOSE job: the owner's coursework -- SPECIFIC signals only (loop 2, D5, owner-approved; see
-  // docs/FIX-nexus-write-loop2.md). Generic words are NOT context any more: "course" (course of action),
-  // "class" (a training class), "semester"/"tuition" (a payment), "thesis" (an investment thesis),
-  // "case study" (a fasting study), "NEXUS" alone (the trusted-traveller card / "apply to NEXUS").
+  // WHOSE job: the owner's coursework. Loop 3 (D6, docs/FIX-nexus-write-loop3.md, owner-specified):
+  //   VETOES are evaluated FIRST and win (another lane's unmistakable vocabulary).
+  //   STRONG = DATA FROM NEXUS -- one of the owner's REAL course codes or names (`strongSources:
+  //     ["nexus-courses"]`, filled from get_nexus_courses' read path) -- or the explicit words "syllabus"/
+  //     "syllabi", or "Nexus" used as the APP ("due in Nexus", "Nexus assignments", "add … to Nexus"),
+  //     never "NEXUS card"/"NEXUS program"/"apply to NEXUS". The loop-2 GENERIC course-code regex is
+  //     deleted (it read UA 902, DS-160, IRS 941 and NVDA 200 as courses), and mba/dba/instructor/
+  //     professor are no longer strong (an MBA loan, a DBA filing, a yoga instructor).
+  //   WEAK (veto-able) = degree/teacher words, "my assignment(s)", deliverable + deadline cue.
+  // Generic words are NOT context at all: "course", "class", "semester", "tuition", "thesis", "case study".
   requiresContext: {
-    strong: ["syllabus", "syllabi", "emba", "mba", "dba", "doctoral", "professor", "prof", "instructor", "coursework", "course work"],
+    strong: ["syllabus", "syllabi"],
+    strongSources: ["nexus-courses"],
     strongPatterns: [
-      // a course code as written on a syllabus: MGT-782, MGT 782, MGT782 (capitals), or mgt-782 (hyphenated)
-      ["\\b[A-Z]{2,4}[- ]?\\d{3}[A-Z]?\\b", ""],
-      ["\\b[a-zA-Z]{2,4}-\\d{3}\\b", ""],
-      // an explicit Nexus-ASSIGNMENT phrase: "Nexus assignments", "due in Nexus", "add/put/log … to Nexus"
-      // -- never "NEXUS" alone ("apply to NEXUS before my trip", "renew my NEXUS card").
-      ["\\bnexus assignments?\\b|\\bdue (?:in|on) nexus\\b|\\b(?:add|put|log|save|enter|record|sync)\\b[^.?!]{0,60}?\\b(?:to|into|in) nexus\\b", "i"],
+      // "Nexus" as the APP: "Nexus assignments", "in/on/from/into (my) Nexus", or a write verb "… to Nexus"
+      // -- never followed by card/program/membership/application/interview/pass/lane/fitness/tracker.
+      [
+        "\\bnexus assignments?\\b|\\b(?:in|on|from|into) (?:my )?nexus\\b(?!\\s+(?:card|cards|program|programme|membership|application|interview|pass|lane|fitness|tracker))|\\b(?:add|put|log|save|enter|record|sync|upload|import)\\b[^.?!]{0,60}?\\bto (?:my )?nexus\\b(?!\\s+(?:card|cards|program|programme|membership|application|interview|pass|lane|fitness|tracker))",
+        "i",
+      ],
     ],
-    weak: [],
+    weak: ["coursework", "course work", "emba", "mba", "dba", "doctoral", "professor", "prof", "instructor"],
     weakPatterns: [
       // "my assignment", "my assignments", "my school assignments" (a veto word keeps "my seat assignments")
       ["\\bmy assignment\\b|\\bmy (?:[a-z]+ )?assignments\\b", "i"],
@@ -130,10 +144,21 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
       ["due date", "deadline", "deadlines", "graded", "grade", "submit", "submission"],
     ]],
     vetoes: [
-      "flight", "seat", "trip", "hotel", "airline", "client", "customer", "boss", "quarterly", "invoice",
-      "tax", "taxes", "toilet", "towel", "towels", "card", "kid", "kids", "son", "daughter", "child",
-      "grocery", "groceries", "golf",
+      // travel
+      "flight", "flights", "airline", "airlines", "check-in", "check in", "checkin", "boarding", "visa", "visas",
+      "passport", "seat", "trip", "hotel",
+      // money / tax / business filings / work
+      "loan", "loans", "mortgage", "irs", "tax", "taxes", "llc", "filing", "job", "payroll", "invoice", "invoices",
+      "client", "clients", "customer", "boss", "quarterly",
+      // markets
+      "calls", "puts", "options", "stock", "stocks", "shares", "ticker", "strike",
+      // fitness
+      "yoga", "gym", "fitness", "workout",
+      // household (loop 1/2)
+      "toilet", "towel", "towels", "card", "kid", "kids", "son", "daughter", "child", "grocery", "groceries", "golf",
     ],
+    // a ticker written as a cashtag ("$NVDA")
+    vetoPatterns: [["\\$[A-Za-z]{1,5}\\b", ""]],
     ignore: ["of course"],
   },
 };

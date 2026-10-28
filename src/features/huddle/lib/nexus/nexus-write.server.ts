@@ -26,6 +26,7 @@
 
 import { nexusBase, nexusOwner, nexusGet, TIMEOUT_MS } from "./nexus.server";
 import { NEXUS_WRITE_TOOL_NAME, nexusWriteOutcomeStatement, type ItemResult } from "./nexus-write-shared";
+import { setNexusCourseContext } from "./course-context";
 
 export { NEXUS_WRITE_TOOL_NAME, enforceNexusWriteHonesty, nexusWriteOutcomeStatement } from "./nexus-write-shared";
 export type { ItemResult } from "./nexus-write-shared";
@@ -745,6 +746,8 @@ async function runNexusWrite(rawItems: unknown[], ref: string): Promise<Row> {
     const owner = nexusOwner();
     // Only HIS courses: never a shared sample/demo row (they carry another owner id).
     courses = cr.rows.filter((c) => !c.user_id || String(c.user_id) === owner);
+    // The same list is the routing course context (D6): refresh it for free while we have it.
+    setNexusCourseContext(courses as Array<{ code?: unknown; name?: unknown }>);
     return { ok: true, rows: courses };
   };
   if (needsCourses) {
