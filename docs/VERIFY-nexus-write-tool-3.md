@@ -192,9 +192,11 @@ addressed agent is told to defer AND a deterministic follow-up DM goes to Elle/I
 
 Bold = the group leader itself moved from the lane owner to Elle/Iris (deterministic router; the LLM router is not
 measurable offline). Every row's 1:1 changed from "the addressed agent answers (LLM resolver may follow up)" to a
-deterministic hand-off + follow-up DM. Controls that ARE coursework and stay coursework: "the MGT 782 paper on
-real options is due Friday" (Elle keeps -- but the PR's veto word "options" would block it if Elle were not
-already prime), "add the MGT-701 research proposal due Dec 1 to Nexus" (Troy -> Iris, correct).
+deterministic hand-off + follow-up DM. Controls: "add the MGT-701 research proposal due Dec 1 to Nexus" (Troy ->
+Iris, correct). Over-veto (the fixer's "veto beats a real course code" residual, measured): "the MGT 782 paper on
+real options is due Friday" -> `primeLaneDecision` null even from Elle (veto word "options"), and "my EMBA694
+operations case for the client is due Dec 4" -> null ("client"); both fall back to origin/main's routing (group
+still Iris/Elle) -- NON-BLOCKING, low-moderate (paper topics naming options/clients/stocks are common in a DBA).
 
 This is the same failure shape as loop 2's D6, moved: the course list fixed WHICH tokens count as a course, but
 the capability still treats "names a course + says due/paper/exam" as "add it to Nexus", and the only guard is a
@@ -227,3 +229,132 @@ is :128 `fetch(url.toString(), { signal })`. The NEW `course-context.server.ts` 
 (source: its sole import from ./nexus.server is `nexusGet, nexusOwner, nexusReadConfigured`; probe-primer: one GET,
 init keys `["signal"]`); `course-context.ts` is pure (no imports). `bun mut-verify-114/probe-read.ts`: 12 read
 tools = 12 NEXUS_TOOL_NAMES; 16 fetches, 0 with any init key other than `signal`.
+
+## C8 — mutations (mutate.sh; anchors/replacements are FILES in `mut-verify-114-3/`, written from exact source text
+by `mut-verify-114-3/make-anchors.py`, each checked to occur once; runner `bash mut-verify-114-3/run-mutations.sh`;
+test cmd `bun scripts/nexus-write-loop3.test.ts`)
+
+Verifier-chosen mutations of 7 of the 35 loop-3 guards (own anchors, not the fixer's mut-loop3 files):
+
+| # | Guard | File | Mutation | Must fail | mutate.sh verbatim |
+|---|---|---|---|---|---|
+| p1 | other replies held back on a failed write | nexus-write-shared.ts | teammates keep `r.text` | L3-H12 | `FIRED: 'L3-H12' failed with the defect reinstated. The guard is real.` |
+| p2 | voice buffers while a write is pending | nexus-write-shared.ts | pending branch returns the raw text `whole` | L3-V1 | `FIRED: 'L3-V1' failed with the defect reinstated. The guard is real.` |
+| p3 | letter→digit split in `canonicalTitle` | nexus-write.server.ts | only digit→letter split kept | L3-D7a | `FIRED: 'L3-D7a' failed with the defect reinstated. The guard is real.` |
+| p4 | dedup day = course zone | nexus-write.server.ts | `zone: "Asia/Tokyo"` passed to findDuplicate | L3-D8 | `FIRED: 'L3-D8' failed with the defect reinstated. The guard is real.` |
+| p5 | write uses re-seeded on resume | huddle.functions.ts | `turnNexusWriteUses = []` | L3-D11d | `FIRED: 'L3-D11d' failed with the defect reinstated. The guard is real.` |
+| p6 | hook flushes at response.done | useVoiceCallRealtimeSpeak.ts | `flushed = null` | L3-V22 | `FIRED: 'L3-V22' failed with the defect reinstated. The guard is real.` |
+| p7 | vetoes evaluated (first) | capabilities.ts | veto line deleted | L3-D6 | `FIRED: 'L3-D6' failed with the defect reinstated. The guard is real.` |
+
+Loop-1/2 set re-run (`bash mut-verify-114-2/run-mutations.sh m1 m2 m5 m6 m7 n1 n2 n4`): m1 RT-H3, m5 RT-R1, m6 FX-V6,
+m7 RT-D3, n1 L2-D2a, n2 L2-D1h, n4 L2-D4a -> each `FIRED: '<id>' failed with the defect reinstated. The guard is
+real.`; m2 -> `NOT-APPLIED: the anchor does not appear in src/features/huddle/lib/nexus/nexus-write.server.ts.
+NOTHING WAS TESTED.` (its line was replaced by the D8 written-day key; the fixer's re-anchored m2b covers it). Every
+applied run printed `restored: … matches HEAD` and `tree clean: … passes again on the restored tree`; `git status
+--short` empty afterwards. **14 FIRED, 0 INERT, 1 NOT-APPLIED (expected). p5/p6 are SOURCE assertions (the
+fixer says so too): they prove the call site exists, not its runtime behaviour.**
+
+**Changed assertions -- judged:**
+- L2-D1g (`zone` for an ISO instant LA -> New_York): legitimate -- encodes the owner's D8 replacement rule.
+- L2-D3a/b/h (exact expected = the full code-built message), L2-D3c and L2-V9 (exact text + list), L2-V4 (speak ===
+  full === message, mode whole): **stronger** than loop 2.
+- L2-D3e/f/g/i went from exact equality to `.includes(<bullet>)`: individually WEAKER (an implementation that kept
+  the model text next to the bullet would pass them), but the same failure-replaces-all behaviour is pinned by
+  exact-equality rows L2-D3a (16 inputs), L3-H1, L3-H16 (duplicate), L3-H17 (in flight). Not a coverage loss.
+- L2-V7, L2-V12, FX-V7, FX-G6, F2-35 source regexes: renames to the new call sites; FX-V7/L2-V12 now also require
+  `void speak(out.speak …)` and `persist(… out.full)` -- same or stronger.
+- Fixture injection (`setNexusCourseContext([MGT-782, MGT-702 "Strategic Management"])`) added to router-winners,
+  router-redteam, nexus-write-tool/-fix/-loop2: legitimate (the course list is now data). Note the fixture's
+  2-word name "Strategic Management" makes a NAME match possible in tests; the real Nexus names
+  (`MGT-701-W1-Becoming an Applied Researcher (202712)`) almost never appear whole in an ask, so in production the
+  code matcher carries all of it.
+
+**C8: CONFIRMED** (the loop-3 guards are real for the inputs they test). None of them covers D12 or the voice
+lifecycle (V2/V3/V4): those are inputs, not guards.
+
+## C1 — Feature 2 ACs (re-derived on ebd805b; AC text from nexus-hub docs/cross-app-agent/AC-syllabus-deliverables-write-tool.md)
+
+Probes re-run: loop-1 `probe-ac.ts`, `probe-exec.ts`, `probe-read.ts`; loop-2 `probe-exec.ts`; this loop's
+`probe-exec.ts`, `probe-voice.ts`, `probe-routing*.ts`, `probe-primer.ts`, `probe-f211.ts`.
+
+| AC | Verdict | Evidence (this loop) |
+|---|---|---|
+| F2-01/02/03, F2-06, F2-20/21, F2-38, F2-40, F2-50 (live part) | NOT TESTABLE OFFLINE | Nexus-side / LLM / live; unchanged Huddle side. |
+| F2-04/05/07 | MET (Huddle side) | C5: one server owner on every request, literal path, whitelisted body, new stored-row read included. |
+| F2-08 | MET (Huddle side) | PATCH 404 -> not_found, persisted false (probe-exec item 6 "update unknown id"). |
+| F2-09 | PARTIAL | headers sent; preimage Nexus-side. |
+| F2-10 | behaviour MET; "one predicate shared with F1" NOT MET by construction (cross-repo, unchanged) | null/""/TBD undated; ET/EST/E.S.T. resolve. |
+| F2-11 | MET | fixture "Residency 4 – present ideas and insights from the readings" (en dash and hyphen) -> meeting/session; all 15 loop-2 spellings refused; residual vocabulary edges in C2 (homoglyph/typo/UK "residential"). |
+| F2-12 | MET | `due_date:null` update -> rejected/undated, 0 writes. |
+| F2-13 | MET | 10-30 -> 03:59Z; 12-09 -> 12-10T04:59Z; 03-07 -> 03-08T04:59Z; `-07:00`/`+0530` honoured. |
+| F2-14 | MET (incl. loop-2 D8 inputs); "same function as F1" NOT MET by construction | "Research Paper Proposal" -> duplicate aafbf80f; Tokyo/London -> duplicate. |
+| F2-15 | MET | timeout-after-commit -> unknown; retry -> duplicate; rows = 1. |
+| F2-16..19 | MET | MGT-782 / mgt 782 / MGT782 / mgt-782 / "MGT-782-W1 (202711)" -> c782; MGT-999 not found; TST-701 ambiguous. |
+| F2-22/23 | MET | type/status forced; [dated, undated, dated] -> inserted/rejected/inserted; 26 -> batch_too_large. |
+| F2-30/31/32/33 | MET | 1+12 / 0/0 / 0/0 / 0 write+12 read; voice-toolset-hidden 36/0; cross-app-turn-gate 92/0. |
+| F2-34/36 | MET | 200/400/500/throw/no-id/timeout mapped; telemetry ok flags correct. |
+| F2-35 | MET (offline part) | a non-persisted write replaces every reply with the code-built message (L3-H1, probe T2); voice speaks nothing while pending, then only the message. Outside its letter: H15/T1 (no write call), V1 (latent throw shape). |
+| F2-37 | MET | C6. |
+| F2-41/42/43 | MET | 21/21 coursework asks: group Elle/Iris, Elle/Iris keep in 1:1; Finn -> Iris for "add my MGT-782 research paper due Dec 9". |
+| **F2-45** | **NOT MET** | "Fitness, finance and travel asks still route to Flex, Finn and Troy as before": "budget for the MGT-701 residency costs, the deposit is due Monday" group **finn -> iris**; in a 1:1 Finn hands it (and "the EMBA694 textbook payment is due Friday, can I afford it") to Elle/Iris with a follow-up DM; Troy hands residency lodging/Airbnb/car asks to Elle/Iris; Cam (email), Charleston (dinner), Eli (calendar/reminder), Flex (runs) likewise (C4 D12). Board asks still -> Iris (ok). |
+| F2-46 | MET vs baseline for its fixtures | unchanged. |
+
+**C1: REFUTED** (F2-45 NOT MET on D12 inputs; F2-10/F2-14 "shared with F1" NOT MET by construction, unchanged
+since loop 1 and outside this repo).
+
+## C9 — new adversarial inputs aimed at the loop-3 designs (verifier's own; none in FIX-loop3 / L3 tests)
+
+| Design attacked | Inputs | Wrong results |
+|---|---|---|
+| canonicaliser | 15 meeting spellings + 11 deliverables + F2-11 fixture | 8 meetings accepted (homoglyph x2, "ResidencyFour", typo, "Residential week", "Mtg", "Town hall", "Res. 4", spaced letters, "Virtual huddle"); 7 deliverables refused incl. "Research proposal (Session 3 deliverable)" |
+| stored-title update (item 6) | 5 | none |
+| course-zone dedup / written day | 7 | 2 far-zone plain dates treated as next-ET-day duplicates (consistent with the stated rule) |
+| executor throw surface | 14 malformed args / garbage Nexus rows | none threw; `items` as an object -> no_items |
+| replace-all-replies / saved list | T1 teammate claim on a clean write, T2 duplicate | T1 shown unchanged (H15 class) |
+| voice buffer orders + lifecycle | V1 throw shape, V2 typed entry, V3 hang-up mid-write, V4 new call after failure, V5 late transcription, V6 over-claim, V7 second write fails | V1 latent false header; V2/V3/V4/V5 silence (V3 permanent until reload) |
+| course-list routing | 17 course-code other-lane asks + 7 weak-only + 8 cache cases + primer bound/back-off/owner filter | **13 deterministic lane steals (D12)**; full-width code not matched (harmless) |
+| resume state | p5 mutation + source read | none |
+
+**C9: REFUTED** (D12).
+
+## Defects, ranked by realistic likelihood with a real model
+
+| # | Defect | Class | Likelihood (real LLM / real owner) | Repro |
+|---|---|---|---|---|
+| **D12** | Asks for OTHER lanes that name one of the owner's real courses (or "my professor/instructor") plus a deadline word are captured as coursework: deterministic 1:1 hand-off + follow-up DM to Elle/Iris; group leader moves from Finn/Cam/Charleston/Ezra to Iris/Elle in the deterministic router | **BLOCKING** (lane stolen) | **moderate-high** -- ordinary phrasing ("email my professor that my MGT-782 paper will be late", "budget for the MGT-701 residency, deposit due Monday", "dinner after my MGT-782 exam"); needs no LLM at all (deterministic path) | `bun mut-verify-114-3/probe-routing.ts <tree>`, `probe-routing-weak.ts <tree>` |
+| H15/T1 | a save claim with no write call (own or teammate) is shown unchanged | BLOCKING by the brief's definition (false claim shown); owner-accepted design residual (no word list) | low-moderate (hallucinated tool use) | `bun mut-verify-114-3/probe-voice.ts` (T1) |
+| V3 | hang-up during a pending write leaves the voice gate `pending>0` forever; every later call on that MeetingBar is mute until page reload | NON-BLOCKING (no false claim) but severe availability | low (needs hang-up in the write window), permanent when hit | `probe-voice.ts` V3; hook :107, :281, :545 |
+| V2 | typed entry never resets the gate: after one failed write the rest of a typed voice session is silent and unpersisted | NON-BLOCKING | low-moderate (UAT/typed path) | `probe-voice.ts` V2; hook :606-614 |
+| V4/V5 | first reply of a new call / of a new utterance after a failure is swallowed | NON-BLOCKING | moderate for V4 (new call greeting after a failed write), V5 ordering is inference | `probe-voice.ts` V4/V5 |
+| D7-gap | homoglyph / typo / "Residential week" / "Mtg" / "Res. 4" meeting titles accepted | BLOCKING by definition (wrong row) with the owner's saved-list backstop | low (needs that spelling in the syllabus and the extractor keeping it) | `bun mut-verify-114-3/probe-exec.ts` |
+| D7-over | "Research proposal (Session 3 deliverable)", "Peer review of Class 2 proposals", "Conference paper submission" refused | NON-BLOCKING (refused with reason) | moderate (session-organised syllabi) | same |
+| V1 | an executor THROW on the voice path yields `{error,tool}` -> gate treats it as success: raw text streamed + empty "Saved in Nexus:" header | latent; BLOCKING if reached | very low (no input found that throws) | `probe-voice.ts` V1 |
+| D8-far | a plain date with a far-from-ET `time_zone` is a "duplicate" of the next ET day's row | NON-BLOCKING (refusal naming the stored date) | low | `probe-exec.ts` D8 |
+| H14/V6 | clean write, reply over-claims ("all five") | NON-BLOCKING-ish (list shows the truth) | low | `probe-voice.ts` V6 |
+| over-veto | course paper topics with "options"/"client"/"stocks" not routed as coursework | NON-BLOCKING (baseline routing) | low-moderate | `probe-routing.ts` |
+
+Fixer's stated residuals, measured: H15 (real, above); V-b (real, low; "Done" before a call is unlikely);
+"Cohort analysis paper" refused (real, NON-BLOCKING); veto beats a real course code (real, NON-BLOCKING, baseline
+routing); cold-start weak-only routing (real -- and the weak path steals lanes too, see D12 weak rows, so a cold
+cache is not a safe fallback).
+
+## Verdict
+
+| Claim | Verdict |
+|---|---|
+| C1 F2 ACs | REFUTED (F2-45 NOT MET via D12; F2-10/14 shared-with-F1 NOT MET by construction) |
+| C2 owner rules | CONFIRMED (D7/D8 fixed as specified; vocabulary edges are the accepted word-list class) |
+| C3 honesty | CONFIRMED as scoped (structural replace-all on text; voice buffer); residuals H15 (by design), V1 (latent); voice lifecycle defects V2/V3/V4 are silence, not false claims |
+| C4 routing | REFUTED (D12: course-code / professor + deadline word captures email, dining, finance, travel, calendar, fitness asks) |
+| C5 identity/url/headers | CONFIRMED |
+| C6 read-only | CONFIRMED |
+| C7 suites + tsc | CONFIRMED (exact counts) |
+| C8 mutations | CONFIRMED (14 FIRED, 0 INERT, 1 expected NOT-APPLIED) |
+| C9 new adversarial | REFUTED (D12) |
+
+**Overall: REFUTED.** Every loop-2 defect (D6–D11) is fixed as reported and its guard is real. The write path
+itself (what is written, where, as whom, and what the owner is told about it) holds on every input tried. The one
+BLOCKING defect with realistic likelihood is **D12**: the routing redesign still decides "coursework" from
+course-name/teacher words plus a deadline word, guarded only by a veto WORD LIST, so ordinary asks to Cam, Finn,
+Troy, Charleston, Eli and Flex that mention a course or a professor are deterministically handed to Elle/Iris with
+a follow-up DM. Highest-impact NON-BLOCKING: V3 (voice permanently mute after a hang-up mid-write).
