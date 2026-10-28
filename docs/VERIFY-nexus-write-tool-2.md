@@ -247,3 +247,91 @@ dedup/persist/not-found, not classification). **None is a weakening.** Radius ch
 also runs on UPDATEs that pass a title (nexus-write.server.ts:717-719), so an update of the kept Canvas row
 "Residency participation" (OQ-2) that carries its title is refused -- inside the radius, untested, low impact
 (an update by `assignment_id` alone still works).
+
+## C1 — Feature 2 ACs (+ RESOLUTIONS: W1 auth, owner = Huddle's server-held NEXUS_OWNER_ID)
+
+Re-derived on 6b11bae: loop-1 `probe-ac.ts`, `probe-exec.ts`, `probe-read.ts`, `probe-routing.ts` re-run, plus the
+loop-2 probes in mut-verify-114-2/. AC text read from /home/user/nexus-hub/docs/cross-app-agent/AC-syllabus-deliverables-write-tool.md.
+
+| AC | Verdict | Evidence (this loop) |
+|---|---|---|
+| F2-01/02/03 | NOT TESTABLE OFFLINE | Nexus-side token checks (W1). Huddle side: token from server env; F2-30 no-token -> 0 write tools. |
+| F2-04 | MET (Huddle side) | C5: every model identity key dropped; one server `owner=`. |
+| F2-05 | MET as re-read by OQ-10 | owner = `NEXUS_OWNER_ID` on every POST/PATCH/GET (C5). |
+| F2-06 | NOT TESTABLE OFFLINE | Nexus route matrix. |
+| F2-07 | MET (Huddle side) | literal path, POST/PATCH only, whitelisted body keys (C5). |
+| F2-08 | NOT TESTABLE OFFLINE | Nexus 404; Huddle maps 404 -> not_found, persisted:false (C5 PATCH). |
+| F2-09 | PARTIAL | `X-Agent-Tool`/`X-Agent-Ref` sent (C5); preimage `source` is Nexus-side. |
+| F2-10 | NOT MET (as written, unchanged) | behaviour MET (null/""/TBD undated; Week 5/Oct 30/10/30 ambiguous); "one predicate imported by F1 and this endpoint" impossible cross-repo (Huddle-local copy). |
+| F2-11 | MET for the AC's fixture; **owner rule NOT MET** | "Residency 4 – present ideas and insights from the readings" -> meeting/session, 0 POSTs. But D7: "Residency4, …", "Residency_4: …", "Office-hours: …", "Oﬃce hours: …", full-width "Ｒｅｓｉｄｅｎｃｙ 4: …" accepted. |
+| F2-12 | MET | update `due_date:null` -> rejected/undated, 0 writes. |
+| F2-13 | MET | 10-30 -> 03:59Z; 12-09 -> 12-10T04:59Z; 03-07 -> 03-08T04:59Z; `-07:00` honoured; EST in July uses DST. |
+| F2-14 | MET for the stated fixtures; **D8 hole** | "Research Proposal (20%)"/"Research Paper Proposal" -> duplicate aafbf80f…; loop-1 D1 fixed; but a non-ET `time_zone` argument (Asia/Tokyo, Europe/London) inserts a same-ET-day duplicate. Same-function-as-F1 NOT MET by construction. |
+| F2-15 | MET | timeout-after-commit -> unknown; identical retry -> duplicate; rows = 1. |
+| F2-16..19 | MET | MGT-782 / mgt 782 / MGT782 / mgt-782 / "MGT-782-W1 (202711)" -> c782; MGT-999 not found; TST-701 ambiguous; "Strategic Management" -> csm; "Strategy" not found. |
+| F2-20/21 | NOT TESTABLE OFFLINE | preimage + undo are Nexus-side. |
+| F2-22 | MET | POST body type/status forced, program_id from course (C5). |
+| F2-23 | MET | [dated, undated, dated] -> inserted/rejected/inserted; 26 -> batch_too_large, 0 writes. |
+| F2-30 | MET | full 1+12; no URL 0/0; no owner 0/0; no token 0 write/12 read. |
+| F2-31/32 | MET (source + suites) | voice-toolset-hidden 36/0, cross-app-turn-gate 92/0. |
+| F2-33 | MET | schema unchanged in loop 2 (suite nexus-write-tool 115/0). |
+| F2-34 | MET | 200 inserted; 400/500 http_N; throw network_error; no id; timeout unknown. |
+| **F2-35** | **NOT MET** (offline part) / live part NOT TESTABLE | H2: "It is on your list for Oct 30." -- a phrase the AC names -- survives after a failed write; V-a: on voice a false "I've added …" is spoken when a reply completes while the write is in flight; H1/H3–H9/H11 keep other claims after the truthful line. |
+| F2-36 | MET | "Nexus write: 1 inserted, 0 updated" ok:true; FAILED summaries ok:false. |
+| F2-37 | MET | C6. |
+| F2-38 | NOT TESTABLE OFFLINE | prompt-level. |
+| F2-39 | N/A offline | no live writes made. |
+| F2-40 | NOT TESTABLE OFFLINE | LLM router. |
+| F2-41 | MET | 13/13 coursework phrasings -> Elle/Iris on `routeMessage`. |
+| F2-42 | MET | Elle and Iris keep all 13 in a 1:1. |
+| F2-43 | MET | 1:1 Finn "add my MGT-782 research paper due Dec 9" -> iris-chase. |
+| F2-44 | MET | 0 added lines with `elle-rowan`/`iris-chase` in routing.ts, huddle.functions.ts, capabilities.ts, nexus.server.ts, nexus-write*.ts (agents.ts data only). |
+| **F2-45** | **NOT MET** | board asks -> Iris; run/dining/flight -> Flex/Finn/Troy (ok); but "my MBA loan payment is due Monday, can I afford it" moves finn -> **iris** in group, and 1:1 Finn/Troy/Sam/Flex hand finance/travel/business asks to Elle/Iris (D6). |
+| F2-46 | MET vs baseline | "tidy up my calendar adjustments" -> eli; "fix the typo in the email draft" -> cam-post on both trees. |
+| F2-50 | NOT TESTABLE OFFLINE | TIMEOUT_MS 15 s imported; surfaces as unknown (F2-34). |
+
+**C1: REFUTED** -- F2-35 and F2-45 NOT MET on new inputs; F2-11/F2-14 MET only for their literal fixtures (D7, D8);
+F2-10/F2-14 "shared with F1" NOT MET by construction (unchanged since loop 1, out of this repo's reach).
+
+## C9 — new adversarial inputs (verifier's own; none appear in REDTEAM / FIX / FIX-loop2 / VERIFY-1)
+
+78 new inputs: routing 17 (+6 coursework/controls), honesty 15 + 3 voice orderings, classifier 15 deny + 9 allow,
+dedup/zone 16, injection 3. Wrong results, each reproducible:
+
+| Defect | Input(s) | Wrong result | Repro |
+|---|---|---|---|
+| **D6 routing** | 1:1 Troy "my UA 902 check-in deadline is tonight, can you handle it" / "check me in for UA 902 before the deadline tonight"; Troy "my DS-160 visa form is due Friday" / "fill out my DS-160 …"; Sam "my DBA filing deadline for the LLC is Friday" / "file my DBA …"; Finn "pay the IRS 941 payment due Friday", "my MBA loan payment is due Monday, can I afford it", "set up autopay for my MBA loan payment due Monday", "pay my yoga instructor, the payment is due Monday", "sign my mortgage papers before the due date", "roll my NVDA 200 calls before the deadline Friday"; Flex "my yoga instructor says the class pass payment is due Monday"; Sam "my new job assignment in Germany starts Monday…" | `primeLaneDecision` -> elle/iris, intent `perform` -> deterministic follow-up DM; group "MBA loan" finn->iris, "job assignment" sam->iris | `bun mut-verify-114-2/probe-intent.ts <tree>`, `probe-routing.ts <tree>` |
+| **D7 classifier** | "Residency4, present your research proposal", "Residency_4: …", "ResidencyIV: …", "Ｒｅｓｉｄｅｎｃｙ 4: …", "Office-hours: bring your proposal draft", "Oﬃce hours: …", "Office hours: …", "Office  hours: …", "Re­sidency 4: …", "Residence weekend: …", "Weekend intensive: …", "Doctoral consortium: …", "Academic conference: present your paper", "Cohort gathering: bring your case analysis" | accepted (`null`) | `bun mut-verify-114-2/probe-exec.ts` |
+| D7-over | "Program evaluation report", "Case analysis: Stripe payments", "Literature review: tuition pricing models", "Holiday retail sales analysis", "Final paper: … trip to bankruptcy", "Business plan: corporate retreat startup", "Class participation reflection paper", "Team project: Ford plant visit report" | refused (recoverable; accepted-cost class) | same |
+| **D8 dedup zone** | "Research Proposal" `2026-10-30T12:00:00Z` + `time_zone: Asia/Tokyo`; `2026-10-30` + `time_zone: Europe/London` | inserted a 2nd row (1 POST each) | same |
+| **D9 honesty, voice** | write in flight + `text.done` "Done, I've added the Research Proposal for Oct 30." | spoken raw (finalize is a pass-through with no results) | `bun mut-verify-114-2/probe-honesty.ts` (V-a) |
+| **D10 honesty, vocab** | own failed write + "It is on your list for Oct 30." (AC-F2-35 phrase), "It's in.", "Penciled it in…", "Handled…", "Booked it…", "Sorted! …", "Your RP is good to go…", Spanish, full-width "Ａｄｄｅｄ…", "Got it on there…" | false claim kept after the truthful line | same (H1–H11) |
+| D10b | teammate "It's in, Elle got it." / "Elle handled that one for you." after the writer's failure | UNCHANGED, no truthful line | same (H12/H13) |
+| D10c | clean 1-item write + "I've added all 5 assignments…"; no write call + "I've added your Research Proposal to Nexus." | UNCHANGED | same (H14/H15) |
+| D11 chunk | teammate in a later chunk of a durable group turn | `turnNexusWriteUses` not in resume state -> unguarded | source: huddle.functions.ts:2136, :6889-6908 |
+| obs | "Eastern Standard Time" (Windows/Graph name) | refused ambiguous-date (recoverable) | probe-exec |
+
+**C9: REFUTED.**
+
+## Verdict
+
+| Claim | Verdict |
+|---|---|
+| C1 F2 ACs | REFUTED (F2-35, F2-45 NOT MET; F2-11/F2-14 fixture-only; F2-10/14 shared-with-F1 NOT MET by construction) |
+| C2 owner rules | REFUTED (D7 canonicalisation of the owner's own meeting example; D8 input-zone dedup) |
+| C3 honesty | REFUTED (D9 voice speaks a false save while the write is in flight; D10 vocabulary leaks incl. the AC's own phrase) |
+| C4 routing | REFUTED (D6: flight/visa/tax-form numbers, tickers, DBA/MBA/instructor are STRONG and skip vetoes) |
+| C5 identity/url/headers | CONFIRMED |
+| C6 read-only | CONFIRMED |
+| C7 suites + tsc | CONFIRMED (counts match exactly) |
+| C8 mutations | CONFIRMED (10/10 FIRED: m1 m2 m5 m6 m7 + loop-2 n1–n5) |
+| C9 new adversarial | REFUTED |
+
+**Overall: REFUTED.** Loop-1's D1–D5 inputs are fixed and their guards are real. Blocking now:
+**D7** (the brief's own canonicalisation spellings of "Residency"/"Office hours" are accepted -- the deny
+regexes run on the raw, un-normalised title with ASCII word boundaries), **D9** (voice: the call-start hold
+releases the RAW reply at `text.done` while the write is pending), **D10/H2** (AC-F2-35's named phrase survives),
+**D6** (deterministic out-of-lane 1:1 hand-offs for travel/finance/business asks; F2-45). D8 is blocking per the
+rule as stated but needs a non-ET `time_zone`. The pattern across D6/D7/D10 is the same one loop 1 named:
+the "structural" redesigns are still word lists (WRITE_TALK, DENY_*, strong words/patterns), so each leaks on
+the next spelling the list does not hold.
