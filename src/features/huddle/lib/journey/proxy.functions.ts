@@ -90,7 +90,30 @@ export const HIDDEN_FROM_HUDDLE = new Set(["web_search", "send_email"]);
  * (the raw one stays for diagnostics like `listJourneyTools`, which should show the real catalog).
  */
 export async function fetchJourneyToolDefinitionsForHuddle(): Promise<JourneyToolDefinition[]> {
-  return (await fetchJourneyToolDefinitions()).filter((d) => !HIDDEN_FROM_HUDDLE.has(d.name));
+  return (await fetchJourneyToolDefinitions()).filter(
+    (d) => !HIDDEN_FROM_HUDDLE.has(d.name) && !NEVER_MODEL_INVOKED.has(d.name),
+  );
+}
+
+/**
+ * Journey tools a MODEL may never invoke through Huddle, even if journey's catalog someday lists them.
+ * `register_push_token` adds a device to a user's pushes (alarms + their action tokens); huddle-proxy calls
+ * execute-tool with the service-role key, which execute-tool accepts for it, so a model-driven call would
+ * register any device for whichever user the caller names (journey VERIFY-phone-registration-a-3). The
+ * Huddle app registers its own device through `registerBridgeFcmToken` (verified Entra ID token), not a model.
+ */
+export const NEVER_MODEL_INVOKED = new Set(["register_push_token"]);
+
+/**
+ * True only for a journey tool Huddle actually OFFERS its agents: the same `fetchJourneyToolDefinitionsForHuddle`
+ * list the text turn (`ensureJourneyTools` -> `journeyNames`) and the voice toolset (`buildRealtimeToolset`)
+ * hand to the model. Executors that receive a tool NAME from a client (the voice data channel) must check it
+ * here before forwarding, the way the text path checks `journeyNames.has(c.name)`. Catalog unavailable ->
+ * throws (callers fail closed).
+ */
+export async function isOfferedJourneyTool(name: string): Promise<boolean> {
+  if (NEVER_MODEL_INVOKED.has(name)) return false;
+  return (await fetchJourneyToolDefinitionsForHuddle()).some((d) => d.name === name);
 }
 
 /** Convert a journey ToolDefinition into an OpenAI Responses `type:"function"` tool. */

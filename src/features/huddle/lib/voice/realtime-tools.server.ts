@@ -44,6 +44,8 @@ import {
   fetchJourneyToolDefinitionsForHuddle,
   toResponsesTool,
   invokeJourneyTool,
+  isOfferedJourneyTool,
+  NEVER_MODEL_INVOKED,
 } from "../journey/proxy.functions";
 import { FOCUS_TOOL, PRIORITIZE_TOOL } from "../tasks/tools";
 import { SCHEDULE_REMINDER_TOOL } from "../tasks/reminders";
@@ -817,9 +819,18 @@ export async function executeRealtimeTool(
       );
     }
 
-    // Anything not native → route to the journey catalog directly (no per-call catalog fetch → lower
-    // latency). An unknown/unsupported name comes back as a journey error, surfaced to the model.
+    // Anything not native → route to the journey catalog, but ONLY a journey tool the model is actually
+    // offered. The name arrives from the browser (runRealtimeTool), so without this check ANY journey
+    // tool -- including ones never offered, like `register_push_token` -- could be forwarded through
+    // huddle-proxy's service-role call (journey VERIFY-phone-registration-a-3). Same source of truth as
+    // the text path's `journeyNames.has(c.name)`: fetchJourneyToolDefinitionsForHuddle (60s cached).
     if (!NATIVE.has(name)) {
+      if (NEVER_MODEL_INVOKED.has(name)) {
+        return done(JSON.stringify({ error: `Tool not available on the voice path: ${name}` }));
+      }
+      if (!(await isOfferedJourneyTool(name))) {
+        return done(JSON.stringify({ error: `Tool not offered on the voice path: ${name}` }));
+      }
       via = "journey";
       const r = await invokeJourneyTool({
         toolName: name,

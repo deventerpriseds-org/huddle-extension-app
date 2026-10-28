@@ -4738,3 +4738,4 @@ Both now resolve the caller from a verified Entra ID token (`verifyEntraIdToken`
 | 2 | HuddleView sends `idToken` (`getToken()`) for the Huddle app's FCM registration | on branch | — |
 | 3 | Other Huddle server fns that take `caller` from the body (sendHuddleMessage etc.) | **open, not in this fix** | — |
 | 4 | Huddle app FCM registration: `done` only after an ok send; a null ID token is logged and retried (`lib/push/bridge-fcm-register.ts`) | on branch | `scripts/bridge-fcm-register.test.ts` 12/12; `tsc --noEmit` 0; `test:router` 20/20 |
+| 5 | Voice executor forwards ONLY offered journey tools; `register_push_token` refused by name (`isOfferedJourneyTool` / `NEVER_MODEL_INVOKED` in journey/proxy.functions.ts) | on branch | `scripts/voice-offered-tools.test.ts` 5/5; voice-tools 36/36; tsc 0; router 20/20 |

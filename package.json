@@ -46,7 +46,8 @@
     "test:draft-html": "bun scripts/draft-html.test.ts",
     "test:mail-subscription": "bun scripts/mail-subscription.test.ts",
     "test:journey-verified-caller": "bun scripts/journey-verified-caller.test.ts",
-    "test:bridge-fcm-register": "bun scripts/bridge-fcm-register.test.ts"
+    "test:bridge-fcm-register": "bun scripts/bridge-fcm-register.test.ts",
+    "test:voice-offered-tools": "bun scripts/voice-offered-tools.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
