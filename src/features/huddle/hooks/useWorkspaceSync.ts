@@ -3,12 +3,10 @@
 // - On store change: debounce 800ms → save remote.
 // - On sign-out: reset store to seed defaults.
 import { useEffect, useRef } from "react";
+import { toast } from "sonner";
 import { getToken, isAuthBypassActive } from "@/lib/entra-auth";
 import { useAuth } from "@/hooks/useAuth";
-import {
-  loadWorkspace,
-  saveWorkspace,
-} from "@/features/huddle/lib/identity/workspace.functions";
+import { loadWorkspace, saveWorkspace } from "@/features/huddle/lib/identity/workspace.functions";
 import {
   clearLegacyLocalWorkspace,
   getPersistablePayload,
@@ -19,6 +17,12 @@ import {
 } from "@/features/huddle/store";
 
 const DEBOUNCE_MS = 800;
+// A failed load used to give up silently until the next mount, leaving a thread that showed only what
+// the per-thread pollers fetched (e.g. alarms) and never the history — measured on the owner's phone
+// right after an APK reinstall, 2026-10-28. Retry for about a minute, and SAY so on screen.
+const LOAD_RETRY_MS = 3_000;
+const LOAD_MAX_ATTEMPTS = 20;
+const LOAD_TOAST_ID = "workspace-load";
 
 export function useWorkspaceSync() {
   const { isAuthenticated, user } = useAuth();
@@ -38,7 +42,23 @@ export function useWorkspaceSync() {
     }
     if (hydratedRef.current === oid) return;
 
-    (async () => {
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const failed = (attempt: number, why: string) => {
+      if (cancelled) return;
+      if (attempt + 1 < LOAD_MAX_ATTEMPTS) {
+        if (attempt === 1) toast.loading("Loading your message history…", { id: LOAD_TOAST_ID });
+        retryTimer = setTimeout(() => void load(attempt + 1), LOAD_RETRY_MS);
+      } else {
+        toast.error(
+          `Couldn't load your message history (${why}). Close and reopen Huddle to retry.`,
+          {
+            id: LOAD_TOAST_ID,
+            duration: Infinity,
+          },
+        );
+      }
+    };
+    const load = async (attempt: number) => {
       try {
         const idToken = await getToken();
         if (cancelled) return;
@@ -55,6 +75,8 @@ export function useWorkspaceSync() {
           if (isAuthBypassActive()) {
             hydrateFromRemote(null);
             hydratedRef.current = oid;
+          } else {
+            failed(attempt, "not signed in yet");
           }
           return;
         }
@@ -86,13 +108,17 @@ export function useWorkspaceSync() {
           }
         }
         hydratedRef.current = oid;
+        if (attempt > 0) toast.dismiss(LOAD_TOAST_ID);
       } catch (e) {
         console.error("[workspace-sync] load failed", e);
+        failed(attempt, "server error");
       }
-    })();
+    };
+    void load(0);
 
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [isAuthenticated, user?.homeAccountId, user?.localAccountId]);
 
@@ -127,6 +153,14 @@ export function useWorkspaceSync() {
           });
         } catch (e) {
           console.error("[workspace-sync] save failed", e);
+          // Saves failed SILENTLY for 10 days once the workspace crossed the size cap (2026-10-18 to
+          // 10-28): new messages lived only in memory and an app restart lost them. Never silent again.
+          toast.error(
+            "Couldn't save your latest messages. They're safe on the server and will reload.",
+            {
+              id: "workspace-save",
+            },
+          );
         } finally {
           savingRef.current = false;
         }

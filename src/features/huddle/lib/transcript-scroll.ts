@@ -55,9 +55,34 @@ export function shouldRevealOlder(m: ScrollMetrics, start: number, px = LOAD_OLD
   return m.scrollTop < px || m.scrollHeight <= m.clientHeight;
 }
 
-/** scrollTop that keeps the same message under the reader after rows were prepended above it. */
-export function anchoredScrollTop(before: ScrollMetrics, scrollHeightAfter: number): number {
-  return before.scrollTop + (scrollHeightAfter - before.scrollHeight);
+/**
+ * scrollTop that keeps the same message under the reader after rows were prepended above it. Anchored
+ * to that message's own position (its viewport top before and after), NOT to the change in total
+ * height: a new message landing at the bottom in the same render grows scrollHeight too, and a
+ * height-delta anchor would push the reader down by that row (verifier loop 1, finding 2). If the
+ * browser's own CSS scroll anchoring already held the row in place, the delta is 0 and this is a no-op.
+ */
+export function anchoredScrollTop(
+  scrollTopNow: number,
+  rowTopBefore: number,
+  rowTopAfter: number,
+): number {
+  return scrollTopNow + (rowTopAfter - rowTopBefore);
+}
+
+/**
+ * The window start to keep once the reader scrolls up. While following, the window slides forward
+ * as messages arrive (dropping its oldest row); once the reader is reading history, a sliding window
+ * would remove the row above them and only browser CSS scroll anchoring (absent in WebKit) would hold
+ * their place. So pin the start the moment they stop following (verifier loop 1, finding 3).
+ */
+export function pinnedStartOnScroll(
+  following: boolean,
+  pinnedStart: number | null,
+  start: number,
+): number | null {
+  if (following || pinnedStart !== null) return pinnedStart;
+  return start;
 }
 
 /**

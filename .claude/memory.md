@@ -117,12 +117,16 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+<<<<<<< HEAD
 ## Chat messages: dated timestamps + per-message copy (2026-10-28, NOT owner-confirmed)
 `ClientTime` (HuddleView.tsx) → `formatMessageTimestamp`: always month+day+time, year only for past years. User
 bubbles have a timestamp + copy row beneath; agent header has timestamp + copy. `CopyMessageButton` returns null
 for empty text. Reference pattern: journey `src/components/CommsConsole/TranscriptScroll.tsx`.
 
 ## Chat transcript scroll: opens at the newest, follows only if YOU did not scroll up (2026-10-27, DEPLOYED 4332c41, NOT owner-confirmed)
+=======
+## Chat transcript scroll: opens at the newest, follows only if YOU did not scroll up (2026-10-27, DEPLOYED, OWNER-CONFIRMED on his phone 2026-10-28)
+>>>>>>> origin/main
 A push deep link (`?huddle=dm-<agent>`) switches threads BEFORE the workspace history downloads, so any
 "scroll to bottom on thread switch" fires on an empty thread. The old follow rule re-measured near-bottom
 after each update, which a bulk history load always fails (view at 0, list grew 27k px) — so it landed at
@@ -132,6 +136,15 @@ bypass seed the workspace is NOT on the deep-linked thread (the `hydrateFromRemo
 `deepLinkTarget`), and Chromium scroll anchoring drags a view that starts scrolled-down to the bottom on its
 own — both made the pre-fix code PASS. `e2e/transcript-deeplink.e2e.mjs` asserts the precondition
 (1:1 active, empty, scrollTop 0) and refuses to run without it.
+
+### Testing a deep link on the owner's phone (2026-10-28)
+`test-push.yml` (workflow_dispatch) takes an optional `huddle_id` (e.g. `dm-iris-chase`); the push then carries the
+same `data.deepLink=/?huddle=<id>` a real 1:1 reply does, so a tap exercises deep-link landing with NO agent turn and
+no board write. Chain (read from source): test-push.ts -> journey execute-tool sendPushNow (spreads args.data) ->
+send-push-notification (app:"huddle" -> only `fcm:app:huddle:%` tokens; fcmData.deepLink) -> Android bridge
+MainActivity deepLink extra -> HuddleApp `params.get("huddle")`. Pushes expire after 120s (TTL), so a missed one must
+be re-sent, not waited for. First send: run 40727708245, HTTP 200 "Push sent on messages" (proves journey accepted it,
+NOT that the phone displayed it). Owner email for journey: von.ellis@enterpriseds.io.
 
 ## Iris schedule brief = meetings + classes + TASKS, per day AND per journey window (2026-10-15, DEPLOYED, NOT owner-confirmed)
 - **Calendar mailbox is NOT the data-scope email.** Owner's Outlook meetings live in the journey-connected

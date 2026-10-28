@@ -56,6 +56,9 @@ export const Route = createFileRoute("/api/public/test-push")({
             ? payload.channels.map((c) => String(c))
             : [...DEFAULT_CHANNELS];
         const stamp = payload.runId || String(request.headers.get("x-request-id") || "testpush");
+        if (payload.huddleId !== undefined && typeof payload.huddleId !== "string") {
+          return json({ ok: false, error: "invalid_huddle_id" }, 400);
+        }
         const huddleId = (payload.huddleId ?? "").trim();
         if (huddleId && !/^[a-z0-9-]{1,64}$/.test(huddleId)) {
           return json({ ok: false, error: "invalid_huddle_id" }, 400);
