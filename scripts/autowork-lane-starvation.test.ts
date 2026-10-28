@@ -366,6 +366,16 @@ t("AC-35 re-drive cap reached (WorkflowCaps.approach) -> no further re-drive; it
   expect(src).toContain("n >= caps.approach");
 });
 
+t("AC-35b cap spent but the last nudge was inside the 24h floor -> NOT escalated yet (floor before cap)", async () => {
+  // VERIFY-confirm-ask-rotation-3 (R3): AC-35 starts past the floor, so it passed with the cap checked first too —
+  // which escalated to the owner up to a day early. This case pins the order.
+  board = [task("pend")];
+  engagement.set("pend", { ...PENDING_APPROACH(), approach_redrive_count: 3, approach_redrive_last_at: ago(3600_000) });
+  await run();
+  expect(escalated).toEqual([]);
+  expect(enqueued.some((e) => e.id.startsWith("autowork-approach-"))).toBe(false);
+});
+
 t("AC-34b a re-drive is not repeated inside the per-item floor", async () => {
   board = [task("pend")];
   engagement.set("pend", { ...PENDING_APPROACH(), approach_redrive_count: 1, approach_redrive_last_at: ago(3600_000) });
