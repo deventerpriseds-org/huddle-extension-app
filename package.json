@@ -47,7 +47,8 @@
     "test:draft-html": "bun scripts/draft-html.test.ts",
     "test:mail-subscription": "bun scripts/mail-subscription.test.ts",
     "test:transcript-scroll": "bun scripts/transcript-scroll.test.ts",
-    "test:test-push": "bun scripts/test-push-validation.test.ts"
+    "test:test-push": "bun scripts/test-push-validation.test.ts",
+    "test:turn-catchup": "bun scripts/turn-catchup.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
