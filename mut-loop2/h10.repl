@@ -1,0 +1,1 @@
+    const safeText = ((x: string, ..._r: unknown[]) => x)(

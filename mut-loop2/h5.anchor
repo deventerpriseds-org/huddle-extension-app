@@ -1,0 +1,2 @@
+      if (awaitingFinal || pending > 0) resetRequested = true;
+      else clear();

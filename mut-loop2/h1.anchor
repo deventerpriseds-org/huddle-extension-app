@@ -1,0 +1,1 @@
+    (WRITE_TALK.test(s.text) || all.some((r) => mentionsItem(words, r)) ? removed : kept).push(s);

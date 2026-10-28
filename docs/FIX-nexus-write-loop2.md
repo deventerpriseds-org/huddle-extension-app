@@ -154,3 +154,177 @@ Mutations (`src/features/huddle/data/agents.ts`, test cmd `bun scripts/nexus-wri
 | d5c | NEXUS alone is not context | bare `to/in/on/from nexus` re-added | `FIRED: 'L2-D5b "should I apply to NEXUS before my trip to Toronto"' failed with the defect reinstated. The guard is real.` |
 | d5d | "due in Nexus" / "add … to Nexus" are load-bearing for coursework | patterns removed | `FIRED: 'L2-D5e group "what's due in Nexus this week"' failed with the defect reinstated. The guard is real.` |
 | d5e | a course code must look like one | lowercase `word ?\d{3}` re-added | `FIRED: 'L2-D5i "the deadline to pay 300 for my gym is Friday"' failed with the defect reinstated. The guard is real.` |
+
+## D3 — honesty: false save claims laundered or decorated (text + voice, 1:1 + group)
+
+**Status: fixed** (owner-approved design: stop parsing the model's prose for claims as the primary
+defence). W8/W10/W11's clause-level claim/denial parsing (`enforceNexusWriteHonesty`) is kept,
+unchanged, as a secondary function for its existing tests; the RUNTIME no longer calls it.
+
+Mechanism (`nexusWriteGuardedReply`, nexus-write-shared.ts): when ANY write this turn -- this agent's or a
+teammate's, text or voice -- has an item whose `persisted !== true` (failed, rejected, unknown, or a
+duplicate: nothing new was written), the reply is:
+1. **one code-built line per item** from the results (`nexusWriteItemLines`): "Saved to Nexus: “T” (due …)."
+   / "Updated in Nexus: …" / "Already in Nexus, nothing new added: …" / "Not saved to Nexus: “T” — <plain
+   reason>." / "Unknown: “T” — … check Nexus before treating it as saved.";
+2. followed by the model's text with **every sentence removed** that names a written item (all its title
+   words, or its head noun) or contains write-talk (add/save/update/move/schedule/Nexus/log/record/create/
+   change/put/set/done/took care/squared away/on the books/✓ …). Nothing else is judged.
+When every item persisted, the model's text passes untouched. A teammate whose reply says nothing about
+the write is untouched; one whose reply did (even "Elle took care of it") loses those sentences and gets
+the writer's lines -- which closes the loop-1 documented residual N14.
+
+| Verifier input | Before | After | Test |
+|---|---|---|---|
+| N1 "I didn't just add the Research Proposal, I also set it to high priority." | UNCHANGED | the line only | L2-D3a N1, L2-V4 (voice) |
+| N2 "Not a problem I've saved the Research Proposal for Oct 30." | UNCHANGED | the line only | L2-D3a N2 |
+| N3 "Never fear I added the Research Proposal to Nexus." | UNCHANGED | the line only | L2-D3a N3 |
+| N4 "Not only did I add the Research Proposal, …" | UNCHANGED | the line only | L2-D3a N4 |
+| N5 "… is all squared away for Oct 30." | kept + appended | the line only | L2-D3a N5, L2-V7 (voice) |
+| N6 "I've changed the Research Proposal deadline to Nov 2." (update failed) | kept + appended | the line only | L2-D3a N6 |
+| N7 "Moved the Research Proposal to Nov 2 for you." | kept + appended | the line only | L2-D3a N7 |
+| N8 "Research Proposal ✓" | kept + appended | the line only | L2-D3a N8 |
+| N9 "Case Brief 2 could not be saved. The proposal is added though." | UNCHANGED | "Not saved … Research Proposal …" + "Saved to Nexus: “Case Brief 2”." | L2-D3a N9 |
+| N10 "… is on the books for Oct 30." | kept + appended | the line only | L2-D3a N10 |
+| N11 "… is set — due …, scheduled in Nexus." | kept + appended | the line only | L2-D3a N11 |
+| N12/N13 controls | replaced / unchanged | the line only (an honest denial is also code-built) | L2-D3a N12, N13 |
+| N14 teammate "Elle took care of it." | unchanged (residual) | the line only | L2-D3a N14 |
+| N15 teammate "Elle has added your Research Proposal." | replaced | the line only | L2-D3a N15 |
+| (new) N16 title named, no write word: "The Research Proposal is good to go for Oct 30." | — | the line only | L2-D3a N16 |
+
+Plus: unrelated sentences survive after the lines (L2-D3b), all-persisted passes (L2-D3c), no write
+passes (L2-D3d), duplicate/timeout/refusal/tool-error lines (L2-D3e..i), and the text path's reply
+assembly is wired to it with teammates' writes (L2-D3j). L2-D3k: none of the verifier's 13 own-writer
+replies survives verbatim.
+
+**Changed assertions:** `scripts/nexus-write-tool.test.ts` F2-35 source check now looks for
+`const safeText = nexusWriteGuardedReply(` (was `enforceNexusWriteHonesty(`);
+`scripts/nexus-write-redteam.test.ts` RT-H6 now also accepts a voice file that creates the speech gate
+AND speaks `gate.finalize(raw)` (it previously required the name `enforceNexusWriteHonesty` there).
+The behavioural F2-35 / RT-H1..H5 assertions on `enforceNexusWriteHonesty` are unchanged and green.
+
+## D4 — the 1:1 text stream showed the raw reply forming; the voice hold could be released early
+
+**Status: fixed.**
+
+- **Text (1:1 streaming).** `createNexusWriteStreamHold()` is turn-scoped in `runHuddleTurn` (beside
+  `turnNexusWriteUses`). The write dispatch calls `nexusStreamHold.noteToolCall(c.name)` FIRST, before
+  the claim/execute, and the 1:1 `onDelta` is `nexusStreamHold.wrap(...)`: once a write call has
+  started, no further partial reply is published to the durable row for the rest of the turn; only the
+  final guarded reply (D3) is persisted by the normal reply assembly. A turn with no write streams
+  exactly as before.
+- **Voice.** `createNexusWriteSpeechGate` now (a) holds speech from the moment the write call STARTS
+  (`noteToolCall`, called from the hook's `response.function_call_arguments.done` before
+  `runRealtimeTool`), not only once a failed result arrives; (b) `finalize(raw)` returns
+  `nexusWriteGuardedReply(raw, uses)` -- the SAME code-built text as the text path -- and the hook
+  speaks, captions and persists exactly that; (c) `reset()` at the next user utterance is DEFERRED while
+  the write's reply has not been delivered and lands on the next `finalize`, so a barge-in during the
+  write can no longer release the hold early.
+
+| Behaviour | Test |
+|---|---|
+| deltas after a write call starts are never published; a read call does not hold | L2-D4a, L2-D4b |
+| onDelta wrapped / dispatch arms the hold before executing / hold is turn-scoped | L2-D4c, L2-D4d, L2-D4e (source) |
+| voice holds at call start; reset during the write deferred; code-built line spoken; reset lands after delivery | L2-V1..V7 |
+| clean write: hold released when result is in; reply untouched; reset clears | L2-V8..V10 |
+| hook arms at call start / speaks `gate.finalize(raw)` / streams only while not holding | L2-V11..V13 |
+
+**Changed assertions:** `scripts/nexus-write-fix.test.ts` FX-V4 asserted "reset releases the hold"
+unconditionally; it now asserts the reset is deferred until the reply is delivered (FX-V4) and releases
+after `finalize` (new FX-V4b). FX-V7's source regex now matches `const full = gate.finalize(raw);`
+(was `held ? enforceNexusWriteHonesty(raw, gate.uses) : raw`).
+
+Mutations (test cmd `bun scripts/nexus-write-loop2.test.ts`):
+
+| # | File | Guard | Mutation | mutate.sh verbatim |
+|---|---|---|---|---|
+| h1 | nexus-write-shared.ts | write-talk sentences dropped | only title mentions dropped | `FIRED: 'L2-D3a N14 teammate unnamed' failed with the defect reinstated. The guard is real.` |
+| h2 | nexus-write-shared.ts | title-mention sentences dropped | only write-talk dropped | `FIRED: 'L2-D3a N16 title named with no write-talk word' failed with the defect reinstated. The guard is real.` |
+| h3 | nexus-write-shared.ts | the reply IS code-built | `return t` | `FIRED: 'L2-D3a N1 negated-intensifier claim' failed with the defect reinstated. The guard is real.` |
+| h4 | nexus-write-shared.ts | stream hold blocks deltas | `if (!held)` removed | `FIRED: 'L2-D4a deltas after a write call starts' failed with the defect reinstated. The guard is real.` |
+| h5 | nexus-write-shared.ts | voice reset deferred | reset always clears | `FIRED: 'L2-V3 a reset during the write is deferred' failed with the defect reinstated. The guard is real.` |
+| h6 | nexus-write-shared.ts | voice holds at call start | `pending += 1` removed | `FIRED: 'L2-V2 holding from the moment the write call STARTS' failed with the defect reinstated. The guard is real.` |
+| h7 | nexus-write-shared.ts | voice speaks the code-built text | `finalize` returns raw | `FIRED: 'L2-V4 the voice speaks the code-built line' failed with the defect reinstated. The guard is real.` |
+| h8 | huddle.functions.ts | dispatch arms the hold | `noteToolCall` removed | `FIRED: 'L2-D4d the write dispatch arms the hold' failed with the defect reinstated. The guard is real.` |
+| h9 | huddle.functions.ts | onDelta wrapped | wrap removed | `FIRED: 'L2-D4c the 1:1 onDelta is wrapped' failed with the defect reinstated. The guard is real.` |
+| h10 | huddle.functions.ts | reply assembly runs the guard | identity function | `FIRED: 'L2-D3j the text path's reply assembly' failed with the defect reinstated. The guard is real.` |
+| h11 | useVoiceCallRealtimeSpeak.ts | hook arms at call start | `noteToolCall` removed | `FIRED: 'L2-V11 the hook arms the gate' failed with the defect reinstated. The guard is real.` |
+| h12 | useVoiceCallRealtimeSpeak.ts | hook speaks finalize | `const full = raw` | `FIRED: 'L2-V12 the hook speaks/persists' failed with the defect reinstated. The guard is real.` |
+
+h8-h12 are proved by SOURCE assertions (the call sites live in a 7k-line server function and a React
+hook that cannot run offline); the behaviour behind them is proved by the pure tests h3-h7 fire on.
+Every run printed `restored: … matches HEAD` and `tree clean: … passes again on the restored tree`.
+
+## The verifier's own mutations m1-m7, re-run on the loop-2 code
+
+| # | Verdict (mutate.sh verbatim) | Note |
+|---|---|---|
+| m1 RT-H3 | `FIRED: 'RT-H3' failed with the defect reinstated. The guard is real.` | `enforceNexusWriteHonesty` kept as secondary |
+| m2 RT-D1 | `FIRED: 'RT-D1' failed with the defect reinstated. The guard is real.` | |
+| m3 RT-K1 | `NOT-APPLIED: the anchor does not appear in src/features/huddle/lib/nexus/nexus-write.server.ts. NOTHING WAS TESTED.` | expected: the "head decides" line it mutates was REMOVED by D2; the replacement guard is d2a (FIRED) |
+| m4 RT-T1 | `FIRED: 'RT-T1' failed with the defect reinstated. The guard is real.` | |
+| m5 RT-R1 | `FIRED: 'RT-R1' failed with the defect reinstated. The guard is real.` | |
+| m6 FX-V6 | `FIRED: 'FX-V6' failed with the defect reinstated. The guard is real.` | |
+| m7 RT-D3 | `FIRED: 'RT-D3' failed with the defect reinstated. The guard is real.` | |
+
+## C1 ACs the verifier marked NOT MET
+
+- **F2-35** (runtime honesty): now MET on every verifier input offline (D3/D4 above). Live part still
+  NOT TESTABLE OFFLINE.
+- **F2-45** (non-coursework asks keep their agent): MET on every verifier input (D5).
+- **F2-10 / F2-14 "one shared function with F1"**: NOT fixed -- cannot hold by construction (F1 lives in
+  nexus-hub; Huddle has a spelled-identical copy). Out of scope for this repo; unchanged.
+
+## Residuals (not fixed, and why)
+
+- **Over-strip in a failed-write turn.** While any write this turn did not persist, ANY agent's sentence
+  containing a write-talk word is dropped -- including an unrelated "I've updated your budget" from a
+  teammate. That is the owner's rule as written ("any agent"); the cost is lost prose in a turn that
+  already failed, never a false claim.
+- **Text streamed/spoken BEFORE the write call** in the same model response ("Adding it now!") was
+  already published; the hold starts at the call. Same as the loop-1 W18 residual.
+- **A teammate reply assembled before the writer's write completed** (parallel wave) is not checked
+  against that write: `turnNexusWriteUses` is filled as writes finish. Pre-existing (W17 scope).
+- **D2 accepted costs:** "Holiday Inn case study", "Seminar paper", "Paper due at Residency 4",
+  "Post-residency reflection paper", "Conference call notes memo" and any title with a deny word are
+  refused with a reason; there is deliberately no bypass.
+- **D5:** a capitalised word + 3 digits ("NVDA 100") still reads as a course code IF the ask also has an
+  assignment-shaped trigger; "add … to Nexus" is accepted as context (owner's "due in Nexus" spirit).
+  The LLM-router path is still not measurable offline.
+- **W3 across server instances**, **MST/MT refused**: unchanged from loop 1.
+- **Branch hygiene:** origin/main (d618114, #115) was merged into the branch so cross-app-turn-gate G7
+  (which compares public route files with origin/main) is green; #115's files do not overlap this work.
+
+## Results
+
+`bash scripts/run-nexus-fix-suites.sh` on the final commit (after merging origin/main d618114):
+
+| Suite | Result |
+|---|---|
+| scripts/nexus-write-redteam.test.ts | 39 passed, 0 failed (RT-H6 regex widened, documented) |
+| scripts/router-redteam.test.ts | 12 passed, 0 failed (unchanged) |
+| scripts/nexus-write-tool.test.ts | 115 passed, 0 failed (F2-11, F2-35 changed; 6 fixture titles gained "Paper") |
+| scripts/router-winners.test.ts | 39 passed, 0 failed |
+| scripts/nexus-read-tools.test.ts | 190 passed, 0 failed |
+| scripts/cross-app-turn-gate.test.ts | 92 passed, 0 failed (G7 needed the origin/main merge) |
+| scripts/voice-toolset-hidden.test.ts | 36 passed, 0 failed |
+| scripts/nexus-write-fix.test.ts | 51 passed, 0 failed (was 50: FX-V4b added; FX-K1 x4, FX-V4, FX-V7 changed) |
+| scripts/nexus-write-loop2.test.ts (new) | 185 passed, 0 failed |
+| `npx tsc --noEmit -p .` | clean (exit 0) |
+
+Mutations this pass: 24 new (d1a-b, d2a-e, d5a-e, h1-h12) -> 24 FIRED, 0 INERT, 0 NOT-APPLIED. Verifier's
+m1-m7 re-run: 6 FIRED, 1 NOT-APPLIED (m3: its target line was deliberately removed by D2).
+
+## Blast radius
+
+| File | Change | Feeds verifier claims |
+|---|---|---|
+| src/features/huddle/lib/nexus/nexus-write.server.ts | D1 course-zone day (`resolveDueInstant` zone, `courseDayZone`, `findDuplicate`, claim key); D2 `classifyNonDeliverable` allow-list + deny-anywhere, new reasons `event`/`not-a-deliverable`, refusal notes | C1 (F2-10/11/13/14), C2, C9 |
+| src/features/huddle/lib/nexus/nexus-write-shared.ts | D3 `nexusWriteGuardedReply`, `nexusWriteItemLines`; D4 `createNexusWriteStreamHold`; voice gate `noteToolCall`/`finalize`/deferred `reset` | C1 (F2-35), C3, C9 |
+| src/features/huddle/lib/huddle.functions.ts | reply assembly calls `nexusWriteGuardedReply`; turn-scoped stream hold armed in the write dispatch; 1:1 `onDelta` wrapped | C1 (F2-31/35), C3 |
+| src/features/huddle/hooks/useVoiceCallRealtimeSpeak.ts | gate armed at call start; speaks `gate.finalize(raw)` | C1 (F2-35), C3 |
+| src/features/huddle/data/agents.ts | D5 `requiresContext` data only (no agent ids in code) | C1 (F2-41..45), C4, C9 |
+| scripts/*.test.ts, scripts/run-nexus-fix-suites.sh | new suite + documented assertion changes | C7, C8 |
+
+Not touched: the outbound call site `nexusWriteFetch`, owner/URL/header handling (C5), the read module
+`nexus.server.ts` (C6), `capabilities.ts` (the context gate's code is unchanged; only its data moved).

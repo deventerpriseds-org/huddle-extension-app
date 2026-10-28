@@ -4414,7 +4414,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             const out = await pending;
             const { summary, ok } = nexusWriteMod.nexusWriteSummary(out);
             // The FULL result rides in `detail`: the reply-assembly reads it back to enforce that the
-            // agent does not claim a save that did not happen (enforceNexusWriteHonesty).
+            // agent does not claim a save that did not happen (nexusWriteGuardedReply, loop 2).
             recordToolUse(winner.id, c.name, summary, ok, JSON.stringify(out));
             turnNexusWriteUses.push({ agentId: winner.id, tool: c.name, ok, detail: JSON.stringify(out) });
             return JSON.stringify(out);

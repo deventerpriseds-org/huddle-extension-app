@@ -1,0 +1,2 @@
+      if (name !== NEXUS_WRITE_TOOL_NAME) return;
+      pending += 1;
