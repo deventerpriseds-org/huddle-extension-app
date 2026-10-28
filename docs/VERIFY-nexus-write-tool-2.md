@@ -143,3 +143,51 @@ spoken on voice (V-b) -- non-blocking residual as the fixer states.
 flight) and H2 (the exact phrase AC-F2-35 forbids survives after a failed write). Non-blocking but real:
 H1/H3–H9/H11 (contradictory replies -- truthful line first, then a claim), H12/H13 (teammate claim with no truth
 shown), H14/H15 (no failed result to check against -- outside F2-35's letter, inside C3's "ever").
+
+## C2 — owner rules
+
+Probes: loop-1's `bun mut-verify-114/probe-exec.ts` re-run on 6b11bae (re-derivation), plus the new
+`bun mut-verify-114-2/probe-exec.ts` (fake fetch; executor + `classifyNonDeliverable`).
+
+**Re-derived (all ok):** ET/EST/E.S.T./US/Eastern 10-30 23:59 -> 03:59Z; 12-09 -> 12-10T04:59Z; DST eve/day; gap
+02:30 -> `timeShifted`; overlap 01:30 -> first; `-07:00` and `+0530` honoured; null/""/TBD -> undated; Week 5 /
+Oct 30 / 10/30 / 2026-02-30 -> ambiguous-date; MST refused as ambiguous. Loop-1 D1 (Z instant, same ET day) ->
+**duplicate, 0 POSTs (fixed)**; `-04:00` same instant -> duplicate; next day -> inserted; recurring Discussion
+Post 11-09/11-16 inserted, 11-02 duplicate. Loop-1 D2: all four punctuation variants + "Present your research
+proposal at Residency 4" -> meeting/session **(fixed)**; Thanksgiving / Spring Recess / Tuition payment / symposium
+/ networking dinner / field trip / Pre-read -> refused. New, ok: EST in July -> 2026-07-16T03:59:59Z (DST honoured);
+EDT in December -> 04:59:59Z; plain date with time_zone LA / PST / UTC -> duplicate; full-width title, hyphen +
+trailing period, "(20% of final grade)", "- 20%" -> duplicate; the same new item twice in ONE batch, and plain vs Z
+on the same course day in one batch -> 1 POST + duplicate; claim keys equal for plain vs Z.
+
+**NEW defects:**
+
+| # | Input | Observed | Rule broken |
+|---|---|---|---|
+| D7a | "Residency4, present your research proposal" | `null` (accepted) | meeting refused in any spelling |
+| D7b | "Residency_4: present your research proposal" | `null` | same |
+| D7c | "ResidencyIV: present your research proposal" | `null` | same |
+| D7d | "Ｒｅｓｉｄｅｎｃｙ 4: present your research proposal" (full-width) | `null` | same |
+| D7e | "Office-hours: bring your proposal draft" | `null` | same |
+| D7f | "Oﬃce hours: bring your proposal draft" (U+FB03 ligature) | `null` | same |
+| D7g | "Office hours: …" (NBSP, common in PDF-extracted syllabi) / "Office  hours: …" (two spaces) | `null` / `null` | same |
+| D7h | "Re­sidency 4: …" (soft hyphen) | `null` | same |
+| D7i | "Residence weekend: …", "Weekend intensive: …", "Doctoral consortium: …", "Academic conference: present your paper", "Cohort gathering: bring your case analysis" | all `null` | meeting/event vocabulary gaps |
+| D8 | "Research Proposal" `2026-10-30T12:00:00Z` with `time_zone: "Asia/Tokyo"`; plain `2026-10-30` with `time_zone: "Europe/London"` (stored row 2026-10-31T03:59:59Z = Oct 30 ET) | **inserted, 1 POST each** -- a second Research Proposal on the same ET course day | dedup day "in the COURSE zone regardless of input zone": the day zone is the model-supplied `time_zone` argument (nexus-write.server.ts resolveDueInstant `zone` -> findDuplicate `courseDayZone(cand.zone)`), not the course's zone |
+
+Mechanism D7: `classifyNonDeliverable` (nexus-write.server.ts:323-332) runs the deny regexes on the RAW title --
+no NFKC, no separator folding -- with `\b…\b` word boundaries and literal single spaces. `Residency4`/`Residency_4`/
+`ResidencyIV` have no boundary after the `y`; `office hours?` needs exactly one ASCII space; full-width letters and
+ligatures never match an ASCII pattern. The allow-list then finds "proposal"/"draft"/"paper"/"analysis" and accepts.
+(`dedupTitle` and the honesty `wordsOf` both NFKC-normalise; the classifier does not.)
+
+Over-rejections (recoverable: refused with a reason, nothing written; the fixer lists this class as accepted cost):
+"Program evaluation report" -> administrative, "Case analysis: Stripe payments" -> administrative, "Literature review:
+tuition pricing models" -> administrative, "Holiday retail sales analysis" -> administrative, "Final paper: lessons
+from the Delta Air Lines trip to bankruptcy" -> event, "Business plan: corporate retreat startup" -> event, "Class
+participation reflection paper" -> meeting/session, "Team project: Ford plant visit report" -> event.
+"Eastern Standard Time" (the Windows/Graph zone name) -> refused as ambiguous-date (recoverable).
+
+**C2: REFUTED.** Blocking: D7a–D7g (the brief's own canonicalisation spellings of the owner's named meeting example
+are accepted as assignments). D8 blocking per the rule as stated (a real duplicate row), low frequency (needs a
+non-ET `time_zone` argument).
