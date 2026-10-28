@@ -112,7 +112,7 @@ export const NEVER_MODEL_INVOKED = new Set(["register_push_token"]);
  * throws (callers fail closed).
  */
 export async function isOfferedJourneyTool(name: string): Promise<boolean> {
-  if (NEVER_MODEL_INVOKED.has(name)) return false;
+  // NEVER_MODEL_INVOKED is already dropped by fetchJourneyToolDefinitionsForHuddle, so it can never match.
   return (await fetchJourneyToolDefinitionsForHuddle()).some((d) => d.name === name);
 }
 
