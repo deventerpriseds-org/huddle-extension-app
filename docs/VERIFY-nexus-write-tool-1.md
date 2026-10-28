@@ -197,3 +197,70 @@ brief-named non-coursework asks match their origin/main baseline in group and 1:
 This is the W19/W20 class the fix pass reported closed; it is closed for its 9 listed inputs only.
 
 **C4: REFUTED** (D3). The LLM-router path is not measurable offline (documented residual).
+
+Calibration (probe-intent.ts / probe-lane2.ts): the 1:1 hand-off directive and follow-up DM are
+intent-gated (`classifyTurnIntent === "perform"`). "should I apply to NEXUS before my trip…",
+"my semester tuition payment is due…", "review the course of action…", "I'm teaching a training class…"
+classify `perform` → the directive + follow-up DM fire. The NVDA and fasting questions classify `query`
+(no directive). But the perform phrasing "write up an investment thesis for NVDA" in a 1:1 with Finn →
+`laneOwnerFor` = iris-chase (score 0); origin/main = null. Same for "apply to NEXUS for me before my
+Toronto trip" with Troy.
+
+## C6 — read tools stay read-only (VERIFIED)
+
+`git diff origin/main...HEAD -- nexus.server.ts`: 4 hunks add `export` to `nexusOwner`, `nexusBase`,
+`TIMEOUT_MS`, `nexusGet`, plus a comment block. `nexusFetch`'s body is untouched; its only `fetch(` is
+`fetch(url.toString(), { signal: controller.signal })` (nexus.server.ts:128). The only other `fetch(` in
+lib/nexus is nexus-write.server.ts:490. `bun mut-verify-114/probe-read.ts`: `nexusReadTools()` = 12 tools,
+`NEXUS_TOOL_NAMES` = 12; executing all 12 against a fake fetch made 16 calls, **0** with any init key
+other than `signal` (no method/body/headers; the UAT and JOURNEY tokens were set in env and never sent).
+**C6: CONFIRMED.**
+
+## C1 — Feature 2 ACs (+ RESOLUTIONS: W1 auth, owner = Huddle's server-held NEXUS_OWNER_ID)
+
+Probes: probe-exec.ts, probe-ac.ts, probe-read.ts, probe-routing.ts, probe-honesty.ts (all in mut-verify-114/).
+
+| AC | Verdict | Evidence |
+|---|---|---|
+| F2-01/02/03 | NOT TESTABLE OFFLINE | Nexus-side token checks; under W1 Huddle calls the existing UAT path. Huddle side: token is server env, never empty on the wire (`nexusWriteConfigured` requires it; F2-30 row). |
+| F2-04 | MET (Huddle side) | C5: model `owner`/`user_id`/`userId`/`email`/nested owner dropped; single `owner=` from env. Nexus-side refusal not testable offline. |
+| F2-05 | MET as re-read by OQ-10 | owner = `NEXUS_OWNER_ID` set last (`searchParams.set`) on every POST/PATCH/GET (probe-exec). |
+| F2-06 | NOT TESTABLE OFFLINE | Nexus route matrix. |
+| F2-07 | MET (Huddle side) | no DELETE in nexus-write.server.ts; path literal `/api/d1/assignments`; body = whitelisted keys only (C5 body). |
+| F2-08 | NOT TESTABLE OFFLINE | Nexus 404 for a foreign id; Huddle maps 404 → `not_found`, persisted:false (probe-exec PATCH). |
+| F2-09 | PARTIAL / NOT TESTABLE OFFLINE | Huddle sends `X-Agent-Tool: write_nexus_assignments` and `X-Agent-Ref` (observed). The preimage `source` value is Nexus-side. |
+| F2-10 | NOT MET (as written) | Behaviour MET (null/""/TBD → undated; Week 5/Oct 30 → ambiguous-date). "ONE predicate imported by both F1 and this endpoint; grep finds it once" cannot hold: the predicate is a Huddle-local copy (nexus-write.server.ts:226); F1 lives in nexus-hub. |
+| F2-11 | MET | "Residency 4 – present ideas and insights from the readings" → meeting/session, 0 POSTs. (D2 shows nearby spellings that are not refused.) |
+| F2-12 | MET | update `due_date:null` → rejected/undated, 0 writes. |
+| F2-13 | MET | 10-30 23:59 → 03:59Z; 12-09 → 12-10T04:59Z; 03-07 → 03-08T04:59Z; `-07:00` honoured. |
+| F2-14 | MET for the stated fixtures; same-function-as-F1 NOT MET | "Research Proposal (20%)" and "Research Paper Proposal" 10-30 23:59 ET → duplicate, id aafbf80f…; but D1 (Z instant) inserts a duplicate. |
+| F2-15 | MET | timeout after commit → `unknown/timeout`; identical retry → duplicate of n1; rows = 1. |
+| F2-16 | MET | MGT-782, mgt 782, MGT782, mgt-782, "MGT-782-W1 (202711)" → c782 (5/5). |
+| F2-17 | MET | MGT-999 → course_not_found (+ courses list in result). |
+| F2-18 | MET | TST-701 vs "TST 701" → course_ambiguous, no write. |
+| F2-19 | MET | "Strategic Management" (code NULL) → csm; "Strategy" → course_not_found. |
+| F2-20/21 | NOT TESTABLE OFFLINE | Nexus preimage + undo. Huddle sends X-Agent-Tool so the insert is logged (by Nexus contract). |
+| F2-22 | MET | POST body `type:assignment,status:active,program_id` from course, no points unless integer. |
+| F2-23 | MET | batch [dated, undated, dated] → inserted / rejected-undated / inserted; 26 items → batch_too_large, 0 writes. |
+| F2-30 | MET | full → 1 write tool, 12 read; no URL → 0/0; no owner → 0/0; no token → 0 write, 12 read. Voice list uses the same `nexusWriteTools()` (realtime-tools.server.ts:178). |
+| F2-31 | MET (source + suites) | text pool huddle.functions.ts:3627-3667; voice list realtime-tools:178; text dispatch :4389; voice dispatch :518-526; voice-toolset-hidden 36/36. |
+| F2-32 | MET (source) | `mergedTools` and the voice `raw` list are not agent-gated for this tool. |
+| F2-33 | MET | schema properties: assignment_id, course, title, due_date, due_time, time_zone, description, points, priority; `additionalProperties:false`; wire probe C5. |
+| F2-34 | MET | 200 → inserted/true; 400/500 → failed/false/http_N; throw → network_error; 200 without id → no_row_id_in_response; timeout → persisted "unknown". |
+| F2-35 | NOT MET (offline part) / live part NOT TESTABLE | runtime enforcement exists, but C3 N1–N4/N9 pass a false save claim through unchanged; D4 streams the raw 1:1 text. |
+| F2-36 | MET | "Nexus write: 1 inserted, 0 updated" ok:true; "Nexus write FAILED: … not saved: http_500" ok:false; unknown → ok:false. |
+| F2-37 | MET | C6. |
+| F2-38 | NOT TESTABLE OFFLINE | prompt-level only (tool description); no runtime guard. |
+| F2-39 | N/A offline | no live writes made. |
+| F2-40 | NOT TESTABLE OFFLINE | LLM router. |
+| F2-41 | MET | 10/10 phrasings → Elle/Iris on `routeMessage` (probe-routing). |
+| F2-42 | MET | `laneOwnerFor(text, elle/iris)` = null for 10/10 (was eli for the due-date phrasing). |
+| F2-43 | MET | 1:1 Finn "add my MGT-782 research paper due Dec 9" → iris-chase. |
+| F2-44 | MET | 0 added lines containing `elle-rowan`/`iris-chase` in routing.ts, huddle.functions.ts, nexus.server.ts, capabilities.ts. |
+| F2-45 | NOT MET in general | board asks → Iris; run/dining/flight → Flex/Finn/Troy; but D3: a finance ask (tuition payment) and a travel ask (apply to NEXUS before trip) move to Iris. ("assign the grocery run to Iris" → charleston-lewis on BOTH trees: pre-existing, unchanged.) |
+| F2-46 | MET vs baseline | "tidy up my calendar adjustments" → eli. "fix the typo in the email draft" → cam-post on origin/main AND PR (the AC's expected eli was never the baseline). |
+| F2-50 | NOT TESTABLE OFFLINE | timeout bound = read `TIMEOUT_MS` 15 s (imported) → surfaces as persisted "unknown" (F2-34). |
+
+**C1: REFUTED** — offline-testable ACs are mostly MET, but F2-35 and F2-45 are NOT MET on observed
+inputs, F2-10/F2-14's "one shared function with F1" is NOT MET by construction (cross-repo copy), and
+F2-14's dedup has hole D1.
