@@ -25,7 +25,7 @@
 // model that passes `owner`/`user_id`/`email` anyway has it dropped before anything leaves Huddle.
 
 import { nexusBase, nexusOwner, nexusGet, TIMEOUT_MS } from "./nexus.server";
-import { NEXUS_WRITE_TOOL_NAME, type ItemResult } from "./nexus-write-shared";
+import { NEXUS_WRITE_TOOL_NAME, nexusWriteOutcomeStatement, type ItemResult } from "./nexus-write-shared";
 
 export { NEXUS_WRITE_TOOL_NAME, enforceNexusWriteHonesty, nexusWriteOutcomeStatement } from "./nexus-write-shared";
 export type { ItemResult } from "./nexus-write-shared";
@@ -154,16 +154,54 @@ function zoneOffsetMs(tz: string, utcMs: number): number {
   return asUtc - base;
 }
 
-/** Wall-clock time in `tz` → the UTC instant (ms). Two-pass, so it is right on both sides of a DST switch. */
+/**
+ * Wall-clock time in `tz` → the UTC instant (ms), right on both sides of a DST switch.
+ *   - an OVERLAP (fall back: the wall time happens twice) -> the FIRST occurrence;
+ *   - a GAP (spring forward: the wall time never happens) -> moved FORWARD by the gap, i.e. 02:30
+ *     on a spring-forward night is 03:30 daylight time (Temporal's "compatible"). A deadline is
+ *     never moved earlier (W13: this used to return 01:30 standard time, an hour early).
+ */
 export function zonedLocalToUtcMs(
   y: number, mo: number, d: number, h: number, mi: number, s: number, tz: string,
 ): number {
   const guess = Date.UTC(y, mo - 1, d, h, mi, s);
-  const off1 = zoneOffsetMs(tz, guess);
-  let t = guess - off1;
-  const off2 = zoneOffsetMs(tz, t);
-  if (off2 !== off1) t = guess - off2;
-  return t;
+  const t1 = guess - zoneOffsetMs(tz, guess);
+  const t2 = guess - zoneOffsetMs(tz, t1);
+  const cands = [...new Set([t1, t2])];
+  const exact = cands.filter((t) => t + zoneOffsetMs(tz, t) === guess);
+  return exact.length ? Math.min(...exact) : Math.max(...cands);
+}
+
+/** True when the wall-clock time does not exist in `tz` (a spring-forward gap). */
+function isNonexistentLocal(y: number, mo: number, d: number, h: number, mi: number, s: number, tz: string): boolean {
+  const guess = Date.UTC(y, mo - 1, d, h, mi, s);
+  const t = zonedLocalToUtcMs(y, mo, d, h, mi, s, tz);
+  return t + zoneOffsetMs(tz, t) !== guess;
+}
+
+/**
+ * US time-zone ABBREVIATIONS a syllabus writes ("11:59 pm EST") -> the region they mean (W9). `EST`
+ * and `MST` ARE valid IANA names -- fixed UTC-5 / UTC-7 -- which is exactly why "EST" on an October
+ * deadline used to be stored an hour late: syllabi write EST for Eastern time all year. `MST`/`MT`
+ * are refused instead (Arizona keeps MST all year, Denver does not; the tool cannot know which), so
+ * the agent asks.
+ */
+const ZONE_ALIASES: Record<string, string | null> = {
+  est: "America/New_York", edt: "America/New_York", et: "America/New_York", eastern: "America/New_York",
+  cst: "America/Chicago", cdt: "America/Chicago", ct: "America/Chicago", central: "America/Chicago",
+  pst: "America/Los_Angeles", pdt: "America/Los_Angeles", pt: "America/Los_Angeles", pacific: "America/Los_Angeles",
+  mdt: "America/Denver", mountain: "America/Denver",
+  mst: null, mt: null,
+};
+export function resolveZone(raw: string): { ok: true; zone: string } | { ok: false; detail: string } {
+  const key = raw.trim().toLowerCase().replace(/\./g, "").replace(/\s+time$/, "");
+  if (Object.prototype.hasOwnProperty.call(ZONE_ALIASES, key)) {
+    const z = ZONE_ALIASES[key];
+    return z
+      ? { ok: true, zone: z }
+      : { ok: false, detail: `time zone "${raw}" is ambiguous (Arizona keeps MST all year, Denver does not) -- ask which: America/Phoenix or America/Denver` };
+  }
+  return isValidZone(raw.trim()) ? { ok: true, zone: raw.trim() } : { ok: false, detail: `unknown time zone "${raw}"` };
 }
 
 function validYmd(y: number, mo: number, d: number): boolean {
@@ -175,7 +213,7 @@ function validYmd(y: number, mo: number, d: number): boolean {
 const isoZ = (ms: number) => new Date(ms).toISOString().replace(/\.000Z$/, "Z");
 
 export type DueResolution =
-  | { ok: true; iso: string; ms: number; timeAssumed: boolean; zone: string }
+  | { ok: true; iso: string; ms: number; timeAssumed: boolean; zone: string; timeShifted?: boolean }
   | { ok: false; reason: "undated" | "ambiguous-date"; detail: string };
 
 /**
@@ -196,8 +234,9 @@ export function resolveDueInstant(
   }
   let zone = DEFAULT_COURSE_TZ;
   if (typeof timeZone === "string" && timeZone.trim()) {
-    if (!isValidZone(timeZone.trim())) return { ok: false, reason: "ambiguous-date", detail: `unknown time zone "${timeZone}"` };
-    zone = timeZone.trim();
+    const z = resolveZone(timeZone);
+    if (!z.ok) return { ok: false, reason: "ambiguous-date", detail: z.detail };
+    zone = z.zone;
   }
 
   // Full ISO instant with an explicit offset: honour the offset, ignore time_zone.
@@ -235,40 +274,102 @@ export function resolveDueInstant(
     return { ok: false, reason: "ambiguous-date", detail: `"${raw}" is not a real date/time` };
   }
   const ms = zonedLocalToUtcMs(y, mo, d, h, mi, s, zone);
-  return { ok: true, iso: isoZ(ms), ms, timeAssumed, zone };
+  const timeShifted = isNonexistentLocal(y, mo, d, h, mi, s, zone) || undefined;
+  return { ok: true, iso: isoZ(ms), ms, timeAssumed, zone, timeShifted };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-// WHAT IS NOT AN ASSIGNMENT (AC-F2-11, OQ-11). A meeting word with no deliverable noun is a session;
-// a deliverable noun wins ("Seminar paper" is a paper). Administrative calendar dates are never
-// deliverables. The refusal REASON goes back to the agent so the owner can rephrase to override.
+// WHAT IS NOT AN ASSIGNMENT (AC-F2-11, OQ-11, AC-F1-20..23). An assignment is a GRADED DELIVERABLE
+// WITH A DATE. Never one: a meeting / session / residency / class / call / appointment / office
+// hours / review session, a holiday or break, an administrative date, or a reading. The refusal
+// REASON goes back to the agent so the owner can rephrase to override.
+//
+// W4 (docs/FIX-nexus-write-redteam.md): "a deliverable noun wins" was too blunt -- "Residency 4:
+// present your research proposal" (the shape of the row the owner deleted by hand) carries the noun
+// "proposal" but IS a residency. So the HEAD of the title decides: the part before the first ":" /
+// spaced dash / "(" names the thing itself. A head that ENDS in a session word ("Midterm exam review
+// session", "Presentation at Residency 4", "Class 5") or names a session followed by what it is ABOUT
+// ("Kickoff meeting for final project") is a session, whatever deliverable nouns follow. A head that
+// names a deliverable still wins ("Residency 4 reflection paper", "Seminar paper", "Paper due at
+// Residency 4").
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 const DELIVERABLE_NOUN =
-  /\b(papers?|proposals?|essays?|reports?|assignments?|submissions?|projects?|briefs?|memos?|deliverables?|drafts?|thesis|dissertation|case (?:study|analysis|write-?up)|reflections?|exams?|quiz(?:zes)?|midterms?|homework|problem sets?|portfolios?|bibliograph(?:y|ies)|literature review|write-?ups?|posts?|responses?)\b/i;
-const MEETING_WORD =
-  /\b(residenc(?:y|ies)|seminars?|sessions?|zoom|class meetings?|meetings?|orientation|office hours?|check-?points?|lectures?|webinars?|workshops?|kick-?off|attendance|participation|live class(?:es)?|synchronous|immersion)\b/i;
+  /\b(papers?|proposals?|essays?|reports?|assignments?|submissions?|projects?|briefs?|memos?|deliverables?|drafts?|thesis|dissertation|case (?:study|analysis|write-?up)|reflections?|exams?|quiz(?:zes)?|midterms?|homework|problem sets?|portfolios?|bibliograph(?:y|ies)|literature review|write-?ups?|posts?|responses?|presentations?|critiques?)\b/i;
+const MEETING_WORD_SRC =
+  "residenc(?:y|ies)|seminars?|sessions?|zoom|webex|class meetings?|meetings?|orientation|office hours?|check-?points?|check-?ins?|lectures?|webinars?|workshops?|kick-?offs?|attendance|participation|live class(?:es)?|synchronous|immersion|colloqui(?:um|a)|class(?:es)?|appointments?|advising|guest speakers?|speaker series|study groups?|(?:live|coaching|conference|zoom|teams|video|phone|group|cohort|advising|team|weekly) calls?";
+const MEETING_WORD = new RegExp(`\\b(?:${MEETING_WORD_SRC})\\b`, "i");
+/** The head ENDS in a session word (a trailing number/ordinal ignored): "Class 5", "Week 3 class". */
+const HEAD_ENDS_IN_MEETING = new RegExp(`\\b(?:${MEETING_WORD_SRC})(?:\\s*#?\\d+[a-z]?)?\\s*$`, "i");
+/** A session word followed by what it is ABOUT: "meeting for the final project", "session on the case". */
+const MEETING_ABOUT = new RegExp(
+  `\\b(?:${MEETING_WORD_SRC})(?:\\s*#?\\d+)?\\s+(?:for|about|on|re|regarding|covering|to discuss|with)\\b`,
+  "i",
+);
+/** A deliverable that is DUE at a session: "Paper due at Residency 4" is the paper, not the residency. */
+const DUE_PHRASE = new RegExp(`${DELIVERABLE_NOUN.source}[^:]*\\b(?:due|submit(?:ted)?|turn(?:ed)? in|upload(?:ed)?)\\b`, "i");
 const ADMIN_DATE =
-  /\b(drop deadline|add\s*\/\s*drop|add-drop|withdraw(?:al)? deadline|last day of class(?:es)?|first day of class(?:es)?|holidays?|no class(?:es)?|spring break|fall break|winter break|registration (?:opens|closes|deadline))\b/i;
+  /\b(drop deadline|add\s*\/\s*drop|add-drop|withdraw(?:al)?(?: deadline)?|last day to (?:withdraw|drop|add|register)|last day of class(?:es)?|first day of class(?:es)?|holidays?|no class(?:es)?|(?:spring|fall|autumn|winter|summer|thanksgiving|holiday|reading|study|mid-?semester|mid-?term|semester|term|quarter) break|reading (?:week|days?)|study (?:week|days?)|registration (?:opens|closes|deadline)|census date|commencement|graduation)\b|^\s*(?:final\s+|mid-?term\s+)?grades?\s+(?:due|posted|released|available|submitted)\b/i;
+/** Holidays: refused unless a deliverable noun names the thing ("Thanksgiving reflection essay"). */
+const HOLIDAY =
+  /\b(thanksgiving|labou?r day|memorial day|independence day|juneteenth|veterans day|columbus day|indigenous peoples'? day|presidents'? day|martin luther king|mlk day|christmas|new year'?s(?: day| eve)?|easter|good friday|rosh hashanah|yom kippur|passover|diwali|lunar new year)\b/i;
+/** A reading is not a graded deliverable (W12): "Reading: chapter 4", "Read chapters 3-5", "Chapter 4 readings". */
+const READING = /^\s*(?:(?:required|assigned|optional|pre)[\s-]*)?readings?\b|^\s*read\b|\breadings?\s*$|^\s*chapters?\s+\d/i;
+/** ...unless the reading is itself graded work: "Reading response 3", "Reading quiz". */
+const GRADED_READING = /\b(quiz(?:zes)?|responses?|reflections?|summar(?:y|ies)|essays?|papers?|memos?|posts?|critiques?|journals?|briefs?|exams?|assignments?)\b/i;
 
-export function classifyNonDeliverable(title: string): "meeting/session" | "administrative" | null {
-  if (ADMIN_DATE.test(title)) return "administrative";
-  if (MEETING_WORD.test(title) && !DELIVERABLE_NOUN.test(title)) return "meeting/session";
+export type NonDeliverable = "meeting/session" | "administrative" | "reading";
+
+export function classifyNonDeliverable(title: string): NonDeliverable | null {
+  const t = String(title ?? "").trim();
+  if (ADMIN_DATE.test(t)) return "administrative";
+  const head = t.split(/\s*(?::|\s[–—-]{1,2}\s|—|\()/)[0].trim() || t;
+  if (DUE_PHRASE.test(head)) return null;
+  if (HEAD_ENDS_IN_MEETING.test(head) || MEETING_ABOUT.test(head)) return "meeting/session";
+  const hasNoun = DELIVERABLE_NOUN.test(t);
+  if (!hasNoun && MEETING_WORD.test(t)) return "meeting/session";
+  if (!hasNoun && HOLIDAY.test(t)) return "administrative";
+  if (READING.test(t) && !GRADED_READING.test(t)) return "reading";
   return null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // DEDUP (AC-F2-14/15, AC-F1-11..14). Scoped to ONE course by the caller. Two rules, nothing looser:
-//   1. the same normalised title (after a grade-weight like "(20%)" is dropped) is the same row;
+//   1. the same normalised title (after a grade-weight like "(20%)" is dropped) due the same LOCAL
+//      DAY is the same row -- and so is a same-titled stored row with NO due date (reported as such,
+//      so the agent can offer to add the date: W7). The same title on a DIFFERENT day is a DIFFERENT
+//      assignment: weekly "Discussion Post"s are separate deliverables (W1);
 //   2. the same due INSTANT (within a minute -- 23:59:00 vs 23:59:59) AND one title's words a subset
-//      of the other's ("Research Paper Proposal" vs "Research Proposal").
+//      of the other's AND the same HEAD noun AND the same numbers, with at least two words in the
+//      shorter title: "Research Paper Proposal" is the stored "Research Proposal" (both proposals),
+//      but "Research Paper Peer Review" is not "Research Paper", "Case Study 2" is not "Case Study",
+//      and a bare "Paper" matches nothing by subset (W2: every time-less date defaults to 23:59:59,
+//      so ANY two items due the same day share an instant -- the instant alone proves little).
 // Never a bare substring/containment rule: "Research Paper" (Dec 9) must NOT swallow "Research Paper
 // Proposal" (Oct 30) -- different instants, so rule 2 does not fire, and the titles differ (AC-F1-12).
+// Titles are compared Unicode-aware here (W14: a non-Latin title used to normalise to "" and never
+// dedup); `normTitle` above stays byte-identical to Nexus's own.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 const WEIGHT_RE = /\(\s*\d+(?:\.\d+)?\s*(?:%|percent|pct)[^)]*\)|\b\d+(?:\.\d+)?\s*(?:%|percent\b|pct\b)(?:\s+of\s+(?:the\s+)?(?:final\s+|course\s+|overall\s+)?grade)?/gi;
 const STOP = new Set(["the", "a", "an", "of", "and", "for", "on", "to", "in", "my"]);
-export const dedupTitle = (s: string | null | undefined) => normTitle(String(s || "").replace(WEIGHT_RE, " "));
-const words = (s: string) => new Set(dedupTitle(s).split(" ").filter((w) => w && !STOP.has(w)));
+export const dedupTitle = (s: string | null | undefined) =>
+  String(s || "")
+    .replace(WEIGHT_RE, " ")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+const wordList = (s: string) => dedupTitle(s).split(" ").filter((w) => w && !STOP.has(w));
+const words = (s: string) => new Set(wordList(s));
+const isNum = (w: string) => /^\p{N}+[a-z]?$/u.test(w) || /^(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)$/.test(w);
+/** The head noun: the last non-number word, singularised ("Research Papers" -> "paper"). */
+const headWord = (ws: string[]) => (ws.filter((w) => !isNum(w)).pop() ?? "").replace(/(?<!s)s$/, "");
+const numbersOf = (ws: string[]) => ws.filter(isNum).sort().join(",");
 const SAME_INSTANT_MS = 60_000;
+
+/** The calendar day of an instant in `zone` (YYYY-MM-DD). */
+function localDay(ms: number, zone: string): string {
+  return new Date(ms).toLocaleDateString("en-CA", { timeZone: isValidZone(zone) ? zone : DEFAULT_COURSE_TZ });
+}
 
 /** Postgres/JSON due values → ms. Handles "2026-10-31T03:59:59.000Z" and "2026-10-31 03:59:59+00". */
 export function parseStoredInstant(v: unknown): number | null {
@@ -279,25 +380,54 @@ export function parseStoredInstant(v: unknown): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+export type DuplicateMatch = {
+  row: Row;
+  by: "title" | "title+due";
+  /** The stored row has NO due date: the owner's date is new information (W7). */
+  storedUndated?: boolean;
+};
+
 export function findDuplicate(
-  cand: { title: string; dueMs: number | null },
+  cand: { title: string; dueMs: number | null; zone?: string },
   existing: Row[],
-): { row: Row; by: "title" | "title+due" } | null {
+): DuplicateMatch | null {
   const ct = dedupTitle(cand.title);
   if (!ct) return null;
-  const exact = existing.find((r) => dedupTitle(String(r.title ?? "")) === ct);
-  if (exact) return { row: exact, by: "title" };
+  const zone = cand.zone ?? DEFAULT_COURSE_TZ;
+  const sameTitle = existing.filter((r) => dedupTitle(String(r.title ?? "")) === ct);
+  if (sameTitle.length) {
+    if (cand.dueMs === null) return { row: sameTitle[0], by: "title" };
+    const day = localDay(cand.dueMs, zone);
+    const sameDay = sameTitle.find((r) => {
+      const rm = parseStoredInstant(r.due_date);
+      return rm !== null && localDay(rm, zone) === day;
+    });
+    if (sameDay) return { row: sameDay, by: "title" };
+    const undated = sameTitle.find((r) => parseStoredInstant(r.due_date) === null);
+    if (undated) return { row: undated, by: "title", storedUndated: true };
+    // Same title, every stored one on another day: a recurring deliverable, NOT a duplicate (W1).
+  }
   if (cand.dueMs === null) return null;
-  const cw = words(cand.title);
+  const cl = wordList(cand.title);
+  const cw = new Set(cl);
   for (const r of existing) {
     const rm = parseStoredInstant(r.due_date);
     if (rm === null || Math.abs(rm - cand.dueMs) > SAME_INSTANT_MS) continue;
-    const rw = words(String(r.title ?? ""));
-    if (!cw.size || !rw.size) continue;
+    const rl = wordList(String(r.title ?? ""));
+    const rw = new Set(rl);
+    if (Math.min(cw.size, rw.size) < 2) continue;
     const sub = [...cw].every((w) => rw.has(w)) || [...rw].every((w) => cw.has(w));
-    if (sub) return { row: r, by: "title+due" };
+    if (!sub) continue;
+    if (headWord(cl) !== headWord(rl) || numbersOf(cl) !== numbersOf(rl)) continue;
+    return { row: r, by: "title+due" };
   }
   return null;
+}
+
+/** Same-titled stored rows on OTHER days, for the note on a recurring insert (so a MOVE is not missed). */
+function sameTitleElsewhere(title: string, existing: Row[]): Row[] {
+  const ct = dedupTitle(title);
+  return ct ? existing.filter((r) => dedupTitle(String(r.title ?? "")) === ct) : [];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -313,6 +443,9 @@ export function resolveCourse(ref: unknown, courses: Row[]): CourseResolution {
   const r = typeof ref === "string" ? ref.trim() : "";
   if (!r) return { ok: false, error: "course_required" };
   const c = normCode(r);
+  // A reference with nothing comparable in it ("!!!", "--") names no course -- and must not match a
+  // course whose own code also normalises to "" (W15).
+  if (!c && !normTitle(r)) return { ok: false, error: "course_required" };
   const byCode = courses.filter((x) => typeof x.code === "string" && x.code && normCode(x.code) === c);
   if (byCode.length === 1) return { ok: true, course: byCode[0] };
   if (byCode.length > 1) return { ok: false, error: "course_ambiguous", candidates: byCode };
@@ -457,7 +590,76 @@ export async function executeNexusWriteTool(
       note: `Nothing was written. Send at most ${NEXUS_WRITE_MAX_BATCH} items per call.`,
     };
   }
+  // W3: the dedup is read-then-POST, so two calls in flight at once (two prime agents in one parallel
+  // wave) could both read "no row" and both insert. Every write call in this server process runs one
+  // at a time, so the second reads AFTER the first has written and reports `duplicate`.
+  return withWriteLock(() => runNexusWrite(rawItems, ref));
+}
 
+/**
+ * The process-wide write lock (W3). A promise chain, not a mutex library: each call waits for the
+ * previous one to settle (success OR failure) before reading. Scope: ONE server instance -- two
+ * Azure instances handling two requests at the same instant are not serialised by this (Nexus has
+ * no unique constraint on assignments); see docs/FIX-nexus-write-redteam.md, W3 residual.
+ */
+let writeChain: Promise<unknown> = Promise.resolve();
+export function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(fn, fn);
+  writeChain = run.catch(() => undefined);
+  return run;
+}
+
+/**
+ * The per-turn CLAIM KEY for a write call (W3): the normalised (course, title, due date) of every ADD
+ * item and the (id, title, due date) of every UPDATE, sorted -- so two agents whose calls differ only
+ * in an optional field (priority, description) or in item order claim the SAME key, and the second
+ * one is handed the first one's outcome instead of writing again. Hashed so a 25-item batch cannot be
+ * cut short by the ledger's 240-character key limit and collide with a different batch.
+ */
+export function nexusWriteClaimKey(args: Record<string, unknown>): string {
+  const raw: unknown[] = Array.isArray(args.items) ? (args.items as unknown[]) : [args];
+  const keys = raw
+    .map((x) => {
+      const it = (x && typeof x === "object" ? x : {}) as Row;
+      const due = resolveDueInstant(it.due_date, it.due_time, it.time_zone);
+      const when = due.ok ? localDay(due.ms, due.zone) : str(it.due_date).toLowerCase();
+      const id = str(it.assignment_id);
+      return id
+        ? `upd|${id}|${dedupTitle(str(it.title))}|${due.ok ? due.iso : when}`
+        : `add|${normCode(str(it.course)) || dedupTitle(str(it.course))}|${dedupTitle(str(it.title))}|${when}`;
+    })
+    .sort()
+    .join("\n");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < keys.length; i++) {
+    h ^= keys.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `${raw.length}:${h.toString(16)}:${keys.length}`;
+}
+
+/**
+ * What a suppressed duplicate call reports when the first call's outcome is not in hand (it was made
+ * in an EARLIER chunk of a resumed turn). Every item is `unknown`, so the honesty guard forbids any
+ * success claim and the agent is told to check -- never a fabricated "ok".
+ */
+export function nexusWriteUnknownOutcome(args: Record<string, unknown>): Row {
+  const raw: unknown[] = Array.isArray(args.items) ? (args.items as unknown[]) : [args];
+  const results: ItemResult[] = raw.map((x, index) => {
+    const it = (x && typeof x === "object" ? x : {}) as Row;
+    return {
+      index,
+      title: str(it.title) || undefined,
+      action: "failed",
+      persisted: "unknown",
+      error: "outcome_not_in_this_chunk",
+      note: "This exact write was already made earlier in this turn; its outcome is not available here. Check with get_nexus_assignments before saying anything about it.",
+    };
+  });
+  return { ok: true, persisted: "unknown", inserted: 0, updated: 0, duplicate: 0, rejected: 0, failed: results.length, results };
+}
+
+async function runNexusWrite(rawItems: unknown[], ref: string): Promise<Row> {
   // The owner's courses, read once -- only when some item ADDS (an update names its row by id).
   const needsCourses = rawItems.some((it) => !str((it as Row | null)?.assignment_id));
   let courses: Row[] = [];
@@ -490,8 +692,15 @@ export async function executeNexusWriteTool(
     const title = str(it.title);
     const description = typeof it.description === "string" ? it.description : undefined;
     const points = typeof it.points === "number" && Number.isInteger(it.points) && it.points >= 0 ? it.points : undefined;
+    // W16: a points value that cannot be stored (12.5, -3, "20%") is REFUSED -- never rounded, since a
+    // weight is not points -- and the result SAYS so, so the agent cannot report it as saved.
+    const pointsRefused =
+      it.points !== undefined && it.points !== null && points === undefined
+        ? `points ${JSON.stringify(it.points)} was NOT saved: points must be a whole number of real points. A percentage or weight belongs in description.`
+        : undefined;
     const priority = PRIORITIES.has(str(it.priority).toLowerCase()) ? str(it.priority).toLowerCase() : undefined;
     const base: ItemResult = { index: i, title: title || undefined, action: "rejected", persisted: false };
+    if (pointsRefused) base.points_note = pointsRefused;
 
     if (title) {
       const non = classifyNonDeliverable(title);
@@ -502,7 +711,9 @@ export async function executeNexusWriteTool(
           note:
             non === "meeting/session"
               ? "Not an assignment: a meeting/session/residency belongs on the class SCHEDULE, not the assignments list. Nothing was written. If it really is a graded deliverable, ask the owner to name the deliverable itself (e.g. 'Residency 4 reflection paper')."
-              : "Not an assignment: an administrative calendar date, not a graded deliverable. Nothing was written.",
+              : non === "reading"
+                ? "Not an assignment: a reading is not a graded deliverable. Nothing was written. If there is graded work on it (a response, quiz or summary), ask the owner to name that."
+                : "Not an assignment: a holiday, break or administrative calendar date, not a graded deliverable. Nothing was written.",
         });
         continue;
       }
@@ -530,7 +741,7 @@ export async function executeNexusWriteTool(
       }
       const out = await nexusWriteFetch("PATCH", { id: assignmentId }, patch, ref);
       const r = outcomeToResult({ ...base, assignment_id: assignmentId }, out, "updated");
-      if (due && due.ok) Object.assign(r, { due_date: due.iso, due_local: localLabel(due.ms, due.zone), time_assumed: due.timeAssumed || undefined });
+      if (due && due.ok) Object.assign(r, { due_date: due.iso, due_local: localLabel(due.ms, due.zone), time_assumed: due.timeAssumed || undefined, time_shifted: due.timeShifted });
       results.push(r);
       continue;
     }
@@ -568,7 +779,7 @@ export async function executeNexusWriteTool(
       results.push({ ...base, action: "failed", persisted: false, error: "existing_unreadable", course: courseBrief(course), note: "Nothing was written: the course's existing assignments could not be read to rule out a duplicate." });
       continue;
     }
-    const dup = findDuplicate({ title, dueMs: due.ms }, existing);
+    const dup = findDuplicate({ title, dueMs: due.ms, zone: due.zone }, existing);
     if (dup) {
       const storedMs = parseStoredInstant(dup.row.due_date);
       const differs = storedMs !== null && Math.abs(storedMs - due.ms) > SAME_INSTANT_MS;
@@ -578,12 +789,16 @@ export async function executeNexusWriteTool(
         persisted: false,
         assignment_id: String(dup.row.id),
         course: courseBrief(course),
-        note: differs
-          ? `Already in Nexus as "${String(dup.row.title)}" but with a DIFFERENT due date (stored ${String(dup.row.due_date)}). Nothing was added. If the owner wants the new date, call again with assignment_id and due_date to update it.`
-          : `Already in Nexus as "${String(dup.row.title)}". Nothing new was added.`,
+        stored_undated: dup.storedUndated || undefined,
+        note: dup.storedUndated
+          ? `Already in Nexus as "${String(dup.row.title)}", but that stored row has NO due date, so the date given (${localLabel(due.ms, due.zone)}) was NOT saved. Nothing new was added. Tell the owner and offer to add the date: call again with assignment_id and due_date to update it.`
+          : differs
+            ? `Already in Nexus as "${String(dup.row.title)}" but with a DIFFERENT due time (stored ${String(dup.row.due_date)}). Nothing was added. If the owner wants the new time, call again with assignment_id and due_date to update it.`
+            : `Already in Nexus as "${String(dup.row.title)}". Nothing new was added.`,
       });
       continue;
     }
+    const elsewhere = sameTitleElsewhere(title, existing);
     const body: Row = {
       course_id: courseId,
       title,
@@ -597,10 +812,20 @@ export async function executeNexusWriteTool(
     if (priority !== undefined) body.priority = priority;
     const out = await nexusWriteFetch("POST", {}, body, ref);
     const r = outcomeToResult(
-      { ...base, course: courseBrief(course), due_date: due.iso, due_local: localLabel(due.ms, due.zone), time_assumed: due.timeAssumed || undefined },
+      {
+        ...base,
+        course: courseBrief(course),
+        due_date: due.iso,
+        due_local: localLabel(due.ms, due.zone),
+        time_assumed: due.timeAssumed || undefined,
+        time_shifted: due.timeShifted,
+      },
       out,
       "inserted",
     );
+    if (r.persisted === true && elsewhere.length) {
+      r.note = `Added as a SEPARATE assignment: "${title}" also exists due ${elsewhere.map((x) => String(x.due_date)).join(", ")} (a recurring deliverable). If the owner meant to MOVE that one, say so: the extra row would need removing in Nexus.`;
+    }
     results.push(r);
     // Same-batch dedup: a second identical item in this call is a duplicate of the row just written.
     if (r.persisted === true && r.assignment_id) existing.push({ id: r.assignment_id, title, due_date: due.iso, course_id: courseId });
@@ -619,8 +844,11 @@ export async function executeNexusWriteTool(
     rejected: count("rejected"),
     failed: count("failed"),
     results,
+    // The truthful one-paragraph summary, built from the per-item results: the voice surface (whose
+    // model speaks its own words) and any agent can say exactly this.
+    outcome: nexusWriteOutcomeStatement(results),
     note:
-      "Report each item exactly as its result says. persisted:true = saved to Nexus. action 'duplicate' = it was already there, nothing new added. 'rejected' or 'failed' = NOT saved -- say so plainly and give the reason. persisted:'unknown' = timed out and may have landed -- verify with get_nexus_assignments first. Never say an item was added, saved or updated unless its own persisted is true.",
+      "Report each item exactly as its result says (`outcome` is a truthful summary you may say as-is). persisted:true = saved to Nexus. action 'duplicate' = it was already there, nothing new added. 'rejected' or 'failed' = NOT saved -- say so plainly and give the reason. persisted:'unknown' = timed out and may have landed -- verify with get_nexus_assignments first. Never say an item was added, saved or updated unless its own persisted is true.",
   };
 }
 
