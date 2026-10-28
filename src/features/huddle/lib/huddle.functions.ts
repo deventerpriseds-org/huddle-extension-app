@@ -8,11 +8,12 @@ import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, Task
 // declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
 // and the reply DTOs are shared with the client bundle.
 import type { PrioritiesWidgetData, ScheduleWidgetData } from "./tasks/widgets.server";
+import { appendProduceOffer, isOfferAccepted, routeDeepAsk, type AskShape } from "./tasks/ask-shape";
 import {
   parseMentions,
   routeMessage,
   routeMessageLLM,
-  scoreDifficultyLLM,
+  scoreAskLLM,
   laneOwnerFor,
   resolveOwnerLLM,
   type RouterInvocation,
@@ -1223,15 +1224,20 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // cheap dedicated LLM call — this is what powers the difficulty-driven model tier + the Sol confirm
   // gate in 1:1. LLM-primary (dynamic, no keyword list), heuristic fallback only when there's no key.
   // Guarded: any failure leaves difficulty unset (treated as 2 = standard downstream).
+  // The same call also labels the ASK SHAPE (act vs deliverable) for the deep-1:1 hybrid below.
+  let askShape: AskShape | null = null;
   if (!resume && routed.difficulty == null && !data.internal && !data.ceremonyBarge) {
     try {
       if (routerCfg.backend === "openai" && openaiKey) {
-        const d = await scoreDifficultyLLM(data.text, {
+        const scored = await scoreAskLLM(data.text, {
           backend: "openai",
           model: routerCfg.model,
           fastMode: routerCfg.fastMode,
         });
-        if (d != null) routed.difficulty = d;
+        if (scored) {
+          routed.difficulty = scored.difficulty;
+          askShape = scored.shape;
+        }
       }
     } catch {
       /* leave unset — downstream treats undefined as 2 */
@@ -1579,19 +1585,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // exists and the user is in it. The owner reported exactly this misfire (2026-09-14). Without the
   // hold, the persona site's needsConfirm branch still keeps such a turn off the Sol rung.
   let deepManual: string | undefined = data.modelEscalate?.trim() || undefined;
+  // Set when a deliverable is answered now: the produce offer is appended to that agent's reply at the
+  // end of the turn (ensureProduceOfferDelivered), and only then recorded as a pending offer.
+  let produceOffer: { agentId: AgentId; askText: string; email: string | null } | null = null;
   if (!resume && !data.internal && !data.ceremonyBarge && !data.appContext && data.scope === "one-to-one") {
     try {
       const email = await resolveCallerEmail();
-      const {
-        getPendingDeepConfirm,
-        setPendingDeepConfirm,
-        clearPendingDeepConfirm,
-        recordDeepConfirmVerdict,
-        getRecentDeepVerdict,
-        classifyConfirmReply,
-        produceVsQuickAsk,
-      } = await import("./tasks/deep-confirm.server");
-      const { hasGreenLit } = await import("./tasks/green-light");
+      const { getPendingDeepConfirm, clearPendingDeepConfirm, recordDeepConfirmVerdict, classifyConfirmReply } =
+        await import("./tasks/deep-confirm.server");
 
       // THE PRODUCE PATH, once. Reached from TWO places now — an explicit "produce" reply to a pending
       // ask, and a fresh deep ask the user has ALREADY green-lit in this thread — and they must do the
@@ -1666,7 +1667,18 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       };
 
       const pending = await getPendingDeepConfirm(email, data.huddleId);
-      if (pending) {
+      if (pending && pending.kind === "offer") {
+        // HYBRID: the agent already ANSWERED and offered the full version. Only an explicit produce
+        // phrase accepts (a bare "yes" may be answering a question inside the answer itself); anything
+        // else retires the offer and the message routes normally — including as a fresh deep ask.
+        if (isOfferAccepted(data.text)) {
+          await recordDeepConfirmVerdict(email, data.huddleId, pending.agentId, pending.askText, "produce");
+          const agentId = (pending.agentId as AgentId) ?? routed.winners[0] ?? data.members[0];
+          return runProduce(agentId, pending.askText, "produce-offer: accepted");
+        }
+        await clearPendingDeepConfirm(email, data.huddleId);
+      } else if (pending) {
+        // A legacy held ask (written before the hybrid shipped) — answered exactly as before.
         const verdict = classifyConfirmReply(data.text);
         if (verdict === "quick") {
           // Resume the original ask inline on a chat-friendly tier — deliberately NOT the deep o3 rung.
@@ -1707,71 +1719,29 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         // verdict "unrelated" → leave the pending (2h expiry) and fall through to normal routing.
       }
 
-      // Fresh deep ask (no manual override): HOLD and ask produce-vs-quick instead of spending o3 inline.
+      // Fresh deep ask (no manual override): the HYBRID (tasks/ask-shape.ts). Never hold the turn.
+      // It used to hold EVERY difficulty>=3 1:1 message behind a canned "produce or quick?" before the
+      // agent ran — and a long "plan my day" (gym at 3pm, papers, errands, app work) scored 3 on length
+      // and came back as one vague async task instead of a plan. Owner, 2026-10-28: "why didnt she just
+      // do it?" Now: an ACT ask runs normally (tools, and the persona site keeps it on the budget tier,
+      // never Sol); a DELIVERABLE is answered now on the chat tier and ends with a one-line offer to
+      // produce the full version; a go-ahead in the CURRENT message still means produce.
       if (!deepManual && routed.winners.length > 0 && (routed.difficulty ?? 2) >= 3) {
         const primary = routed.winners[0];
-        // ...UNLESS THE USER HAS ALREADY SAID GO. Measured: the ask fired at 01:32, the owner replied
-        // "Go for it" at 02:06 and "Okay knock it out" at 02:50 — three go-aheads — and it was still
-        // asking. Half of that was the classifier (fixed in classifyConfirmReply); this is the other
-        // half: once someone has told you to get on with it, asking them to choose a shape reads as
-        // not listening. A go-ahead in the thread means PRODUCE, which is the answer the gate was
-        // fishing for anyway. The current message counts too — "go for it, and do the pricing one"
-        // is a go-ahead AND a fresh deep ask in one line.
-        const recentUserLines = [
-          ...(data.history as HuddleMessage[]).filter((m) => m.author.kind === "user").map((m) => m.text),
-          data.text,
-        ];
-        if (hasGreenLit(recentUserLines)) {
-          // Remember it, so the NEXT deep ask a minute later is not asked either. `hasGreenLit` only
-          // looks back four user lines, so it decays out from under a conversation that is still
-          // plainly in the same flow.
+        const route = routeDeepAsk(askShape, data.text);
+        if (route === "produce") {
           await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "produce");
-          return runProduce(primary, data.text, "deep-confirm: already green-lit");
+          return runProduce(primary, data.text, "deep-ask: green-lit in the ask");
         }
-        // ...OR THE USER ALREADY ANSWERED THIS QUESTION. Every verdict used to DELETE the pending
-        // row, so the gate had no memory past the single reply: answer "produce", and the next
-        // difficulty>=3 message in the same 1:1 asked again from scratch a minute later. Note that
-        // the green-light check above does NOT cover this — measured this session,
-        // isGreenLight("produce") is FALSE, so replying with the exact word the gate asked for
-        // suppressed nothing. A recent verdict now applies the shape the user already chose instead
-        // of re-asking. "cancel" is never remembered (it deletes the row), so parking one ask can
-        // never silence a later genuine one. Window + expiry: tasks/verdict-memory.ts.
-        const remembered = await getRecentDeepVerdict(email, data.huddleId);
-        if (remembered === "produce") {
-          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "produce");
-          return runProduce(primary, data.text, "deep-confirm: remembered produce");
-        }
-        if (remembered === "quick") {
-          // Same landing as the explicit "quick" reply: answer INLINE on the chat-friendly tier,
-          // never the deep o3 rung. data.text is already the real ask here (unlike the reply path,
-          // which has to restore it from the stored pending), so only the tier and the recorded
-          // difficulty change.
+        if (route === "answer-with-offer") {
           deepManual = "terra-med";
           routed.difficulty = 2;
-          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "quick");
-        } else {
-          // Nothing remembered — ask, exactly as before.
-          await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
-          return finalize({
-            decision: {
-              ...routed.decision,
-              reason: `${routed.decision.reason} [deep-confirm: produce-vs-quick]`.slice(0, 220),
-            },
-            replies: [
-              {
-                agentId: primary,
-                // Per-agent phrasing, not one literal every agent recites — see produceVsQuickAsk.
-                text: produceVsQuickAsk(primary),
-              },
-            ] as Reply[],
-            fallbacks,
-            prompts,
-            journeyTaskUpdates,
-            suggestedTasks,
-            toolUses,
-            reasoning: reasoningSummaries,
-          });
+          produceOffer = { agentId: primary, askText: data.text, email };
         }
+        routed.decision = {
+          ...routed.decision,
+          reason: `${routed.decision.reason} [deep-ask: ${route}]`.slice(0, 220),
+        };
       }
     } catch (err) {
       console.warn(
@@ -6894,6 +6864,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     });
   };
 
+  // A deliverable answered now (the deep-1:1 hybrid) ends with the produce offer. Recorded as a pending
+  // offer ONLY when the line actually landed on a reply, so an offer the user never saw can never be
+  // "accepted" by their next message.
+  const ensureProduceOfferDelivered = async () => {
+    if (!produceOffer) return;
+    const offer = produceOffer;
+    produceOffer = null;
+    const out = appendProduceOffer(replies, offer.agentId);
+    if (!out.appended) return;
+    replies.splice(0, replies.length, ...out.replies);
+    const { setPendingDeepConfirm } = await import("./tasks/deep-confirm.server");
+    await setPendingDeepConfirm(offer.email, data.huddleId, offer.agentId, offer.askText, "offer");
+  };
+
   // "researched" mode, GROUP/ceremony only (1:1 is carried by the conversation object): after the turn,
   // persist (A1) a distilled record of each agent's reply as a shared episodic chunk attributed to that
   // agent — so what an agent SAID survives beyond the ~14-message window and is retrievable cross-huddle —
@@ -7134,6 +7118,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     }
     ensureNotSilentOnRealWork();
     ensureNavLinkDelivered();
+    await ensureProduceOfferDelivered();
     try {
       await turnStore.saveTurnChunk(turnId, replies, null, true, finalResult());
     } catch (e) {
@@ -7145,6 +7130,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 
   ensureNotSilentOnRealWork();
   ensureNavLinkDelivered();
+  await ensureProduceOfferDelivered();
   persistResearchedMemory();
   return finalResult();
 }
