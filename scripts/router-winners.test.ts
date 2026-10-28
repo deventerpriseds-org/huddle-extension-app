@@ -5,7 +5,8 @@
 // This is the cheap layer that proves the mention/handoff/multi-lane routing WITHOUT running full
 // multi-agent turns (which would fire N agent-reply LLM calls per test and burn quota).
 
-import { assembleWinners, countLaneLabels, detectLaneOwners } from "../src/features/huddle/lib/routing";
+import { assembleWinners, countLaneLabels, detectLaneOwners, routeMessage, laneOwnerFor, primeLaneDecision } from "../src/features/huddle/lib/routing";
+import { sharedCapabilityHolders } from "../src/features/huddle/lib/capabilities";
 import { AGENTS } from "../src/features/huddle/data/agents";
 
 const A = {
@@ -169,6 +170,71 @@ Errands - cancel or take my wife's suv for repair 8am Tuesday morning`;
 check("single-topic → no forced lane owners",
   detectLaneOwners("what workouts do I usually go for?", AGENTS).length === 0,
   `got [${detectLaneOwners("what workouts do I usually go for?", AGENTS).join(", ")}]`);
+
+// ── PRIME RESPONDERS for Nexus assignment asks (AC-F2-41/42/43/45/46, RG-8) ─────────────────────────
+// Owner, 2026-10-28: "elle and iris should be prime to use it immediately if i request it." Proved on
+// the DETERMINISTIC path -- the one that runs when the LLM router 429s -- and on the 1:1 lane logic.
+// Baseline before the change (origin/main 4809e2e): "update the due date on my research paper" ->
+// eli-vaughn 0.32, "log my DBA deliverables" -> ezra-miles 0.26, "fix the due date on my strategy
+// paper" -> liam-kingsley 0.11; laneOwnerFor(..,'elle-rowan') and (..,'iris-chase') -> eli/ezra.
+console.log("\n=== PRIME RESPONDERS (Nexus assignments) ===");
+{
+  const ALL_IDS = AGENTS.map((a) => a.id);
+  const PRIME = new Set(["elle-rowan", "iris-chase"]);
+  const PHRASES = [
+    "add my assignments",
+    "add my MGT-782 assignments from the syllabus",
+    "put the research paper due Dec 9 on my assignments",
+    "update the due date on my research paper",
+    "change my research proposal deadline to Nov 2",
+    "log my DBA deliverables",
+    "add this syllabus's deadlines to Nexus",
+    "I have a new paper due next month for MGT-782, add it",
+    "add my school assignments",
+    "fix the due date on my strategy paper",
+  ];
+  const winner = (text: string) =>
+    routeMessage({ text, scope: "group", members: ALL_IDS, history: [] } as Parameters<typeof routeMessage>[0]).winners[0];
+  const groupHits = PHRASES.filter((p) => PRIME.has(winner(p)));
+  check("F2-41 group fallback: Elle/Iris lead 10/10", groupHits.length === 10,
+    `${groupHits.length}/10; misses: ${PHRASES.filter((p) => !PRIME.has(winner(p))).map((p) => `"${p}"->${winner(p)}`).join("; ") || "none"}`);
+  for (const self of ["elle-rowan", "iris-chase"] as const) {
+    const handed = PHRASES.map((p) => [p, laneOwnerFor(p, self)?.id] as const).filter(([, o]) => o);
+    check(`F2-42 1:1 with ${self} keeps all 10 (no lane hand-off)`, handed.length === 0,
+      handed.map(([p, o]) => `"${p}"->${o}`).join("; ") || "none handed off");
+    const notKeep = PHRASES.filter((p) => primeLaneDecision(p, self) !== "keep");
+    check(`F2-42 1:1 with ${self}: owner follow-up decision is 'keep' for all 10`, notKeep.length === 0,
+      notKeep.join("; ") || "all keep");
+  }
+  for (const self of ["finn-reid", "eli-vaughn", "faith-hartley"] as const) {
+    const bad = PHRASES.map((p) => [p, laneOwnerFor(p, self)?.id] as const).filter(([, o]) => o && !PRIME.has(o));
+    check(`F2-43 1:1 with ${self}: any hand-off goes to Elle/Iris, never a third lane`, bad.length === 0,
+      bad.map(([p, o]) => `"${p}"->${o}`).join("; ") || "ok");
+  }
+  // Regression: lanes that must NOT move. Expected values are the origin/main baseline, measured.
+  const KEEP: Array<[string, string]> = [
+    ["add a task to my board to call the bank", "iris-chase"],
+    ["what's on my board", "iris-chase"],
+    ["plan my workout for tomorrow", "flex-grimes"],
+    ["tighten my budget", "finn-reid"],
+    ["book my flight to Denver", "troy-lennox"],
+    ["tidy up my calendar adjustments", "eli-vaughn"],
+    ["change the due date on my grocery task", "charleston-lewis"],
+    // PRE-EXISTING on origin/main and NOT changed here: these two do not route where AC-F2-45/46
+    // say ("assign the grocery run to Iris" -> charleston, "fix the typo in the email draft" ->
+    // cam-post). Pinned to the baseline so this change provably did not move them.
+    ["assign the grocery run to Iris", "charleston-lewis"],
+    ["fix the typo in the email draft", "cam-post"],
+  ];
+  for (const [text, want] of KEEP) {
+    const got = winner(text);
+    check(`F2-45/46 unchanged lane: "${text}"`, got === want, `-> ${got} (baseline ${want})`);
+  }
+  check("F2-45 'buy paper towels' is not a coursework ask", sharedCapabilityHolders("buy paper towels").length === 0,
+    `holders [${sharedCapabilityHolders("buy paper towels").map((h) => h.agent.id).join(", ")}]`);
+  check("F2-45 'assign the grocery run' is not captured by 'assignment'",
+    sharedCapabilityHolders("assign the grocery run to Iris").length === 0, "word-start match only");
+}
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);
 process.exit(fail === 0 ? 0 : 1);
