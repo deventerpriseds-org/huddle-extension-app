@@ -2128,6 +2128,12 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     turnActionLedger.add(k);
     return true;
   };
+  // Nexus writes (W3/W17, docs/FIX-nexus-write-redteam.md): the FIRST call's outcome, by claim key, so a
+  // teammate whose identical write is suppressed is handed THAT real outcome (and its reply is checked
+  // against it) instead of an unconditional "already done". Every write this turn is also collected so
+  // a teammate that never called the tool cannot claim the writer's failed item was saved.
+  const nexusWriteOutcomes = new Map<string, Promise<Record<string, unknown>>>();
+  const turnNexusWriteUses: Array<{ agentId: AgentId; tool: string; ok: boolean; detail?: string }> = [];
 
   // Lightweight handoff contract for the ad-hoc mention-chain: when an agent @mentions a teammate
   // (the "mention IS the handoff"), we re-queue that teammate — but today they receive no structured
@@ -4384,22 +4390,28 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             // Mutating: an IDENTICAL write is claimed once per turn, so two group responders running in
             // one parallel wave cannot both POST the same deliverable (the dedup read would race).
             const writeArgs = (c.arguments ?? {}) as Record<string, unknown>;
-            if (!claimAction(`${c.name}:${JSON.stringify(writeArgs)}`)) {
-              recordToolUse(winner.id, c.name, "Nexus write -- already done this turn", true);
-              return JSON.stringify({
-                ok: false,
-                persisted: false,
-                error: "already_done_this_turn",
-                note: "A teammate already sent this exact write this turn; refer to that result instead of repeating it.",
+            const runWrite = () =>
+              nexusWriteMod.executeNexusWriteTool(writeArgs, {
+                ref: `huddle:${data.huddleId}:turn:${turnId ?? "sync"}:agent:${winner.id}`,
               });
+            // Claimed on the NORMALISED (course, title, due) of its items, never the raw JSON (W3).
+            const claimKey = `${c.name}:${nexusWriteMod.nexusWriteClaimKey(writeArgs)}`;
+            if (!claimAction(claimKey)) {
+              // Suppressed: carry the FIRST call's real outcome (unknown if it was an earlier chunk).
+              const firstOut = (await nexusWriteOutcomes.get(claimKey)) ?? nexusWriteMod.nexusWriteUnknownOutcome(writeArgs);
+              const firstDetail = JSON.stringify(firstOut);
+              const firstOk = nexusWriteMod.nexusWriteSummary(firstOut).ok;
+              recordToolUse(winner.id, c.name, "Nexus write -- already done this turn", firstOk, firstDetail);
+              return JSON.stringify({ ...firstOut, already_done_this_turn: true, note: "A teammate already sent this write this turn. These are THAT call's real results: report them exactly, and do not call again." });
             }
-            const out = await nexusWriteMod.executeNexusWriteTool(writeArgs, {
-              ref: `huddle:${data.huddleId}:turn:${turnId ?? "sync"}:agent:${winner.id}`,
-            });
+            const pending = runWrite();
+            nexusWriteOutcomes.set(claimKey, pending.catch(() => nexusWriteMod.nexusWriteUnknownOutcome(writeArgs)));
+            const out = await pending;
             const { summary, ok } = nexusWriteMod.nexusWriteSummary(out);
             // The FULL result rides in `detail`: the reply-assembly reads it back to enforce that the
             // agent does not claim a save that did not happen (enforceNexusWriteHonesty).
             recordToolUse(winner.id, c.name, summary, ok, JSON.stringify(out));
+            turnNexusWriteUses.push({ agentId: winner.id, tool: c.name, ok, detail: JSON.stringify(out) });
             return JSON.stringify(out);
           }
           const nexusMod = await import("./nexus/nexus.server");
@@ -6571,10 +6583,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // Also backstop file_search's own narration tendency (house-style bans it in prose; the model still
     // does it — see stripFileMentionNarration above).
     // Nexus write honesty (code, not prompt): a reply may not claim an assignment was saved when this
-    // agent's write_nexus_assignments result says it was not. Pass-through when no write failed.
+    // agent's write_nexus_assignments result says it was not. Pass-through when no write failed. A
+    // TEAMMATE's writes this turn are checked too, but only against claims that name their items.
     const safeText = enforceNexusWriteHonesty(
       stripFileMentionNarration(stripAgentReplyLinks(finalText)),
       r.toolUses,
+      turnNexusWriteUses.filter((u) => u.agentId !== nextId),
     );
     // A confirm-intent ask this reply IS, if the agent called propose_task_intent this same turn — mirrors
     // replyArtifacts's derivation exactly (detail carries the structured payload as JSON rather than a

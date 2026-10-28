@@ -135,6 +135,32 @@ function names(words: Set<string>, r: ItemResult): boolean {
 }
 
 /**
+ * VOICE (W18). On the Realtime voice surface the model speaks its OWN words, sentence by sentence as
+ * they stream, so there is no reply-assembly step to hook. This gate gives the voice client one: feed
+ * it every tool output; while the exchange holds a write whose item did NOT persist, `holding` is true
+ * and the client must buffer the reply instead of speaking it, then speak
+ * `enforceNexusWriteHonesty(fullText, gate.uses)` -- the same guard the text path runs. A clean write
+ * never holds, so the happy path keeps its streaming latency. `reset()` at the next user utterance.
+ */
+export function createNexusWriteSpeechGate() {
+  let uses: ToolUseLike[] = [];
+  return {
+    noteToolOutput(name: string, output: string) {
+      if (name === NEXUS_WRITE_TOOL_NAME && typeof output === "string") uses.push({ tool: name, ok: false, detail: output });
+    },
+    get holding(): boolean {
+      return uses.some((u) => nexusWriteHasUnsaved(u.detail ?? ""));
+    },
+    get uses(): ToolUseLike[] {
+      return uses;
+    },
+    reset() {
+      uses = [];
+    },
+  };
+}
+
+/**
  * @param toolUses  THIS agent's own tool uses: every check applies.
  * @param teammateUses  write_nexus_assignments uses made by OTHER agents this turn: only a claim that
  *                      NAMES one of their not-saved items is checked (a teammate's "Done" is about

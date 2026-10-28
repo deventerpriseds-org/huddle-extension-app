@@ -6,6 +6,9 @@ import { useHuddleStore } from "../store";
 import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
 import { getRealtimeSession, runRealtimeTool, warmupRealtime, REALTIME_MODEL } from "../lib/voice/realtime.functions";
+// Nexus write honesty on VOICE (W18, docs/FIX-nexus-write-redteam.md): the same code guard the text
+// path runs. Pure module (no server imports), so it is safe in the browser bundle.
+import { createNexusWriteSpeechGate, enforceNexusWriteHonesty } from "../lib/nexus/nexus-write-shared";
 import { SUMMON_BUZZ_URL, SUMMON_OPEN_DELAY_MS, SUMMON_GREETING_MAX_WAIT_MS, pickSummonGreeting } from "../lib/voice/summon";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import type { VoiceCallController, VoiceStatus, VoiceCaption } from "./useVoiceCall";
@@ -96,6 +99,9 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   // fullBufRef = the entire reply text so far (for the transcript/caption, persisted once on done).
   const sentenceBufRef = useRef("");
   const fullBufRef = useRef("");
+  // While this exchange holds a Nexus write whose item did NOT persist, the reply is buffered (not
+  // streamed to synth) and spoken only after enforceNexusWriteHonesty has checked it. Reset per utterance.
+  const nexusGateRef = useRef(createNexusWriteSpeechGate());
   const audioQueueRef = useRef<string[]>([]);
   const audioPlayingRef = useRef(false);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -401,15 +407,24 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
               if (delta && agentIdRef.current) {
                 sentenceBufRef.current += delta;
                 fullBufRef.current += delta;
-                pumpSpeech(agentIdRef.current, gen, false);
+                // Held while a failed/unconfirmed Nexus write is in this exchange (checked on done).
+                if (!nexusGateRef.current.holding) pumpSpeech(agentIdRef.current, gen, false);
               }
               break;
             }
             case "response.output_text.done":
             case "response.text.done": {
               // Flush the trailing partial sentence, then persist the full reply once for the transcript.
-              if (agentIdRef.current) pumpSpeech(agentIdRef.current, gen, true);
-              const full = (((msg.text as string) ?? "").trim()) || fullBufRef.current.trim();
+              const gate = nexusGateRef.current;
+              const held = gate.holding;
+              if (agentIdRef.current && !held) pumpSpeech(agentIdRef.current, gen, true);
+              const raw = (((msg.text as string) ?? "").trim()) || fullBufRef.current.trim();
+              // A held reply is checked against the per-item write results, then spoken as checked.
+              const full = held ? enforceNexusWriteHonesty(raw, gate.uses) : raw;
+              if (held) {
+                sentenceBufRef.current = "";
+                if (agentIdRef.current && full) void speak(full, agentIdRef.current, gen);
+              }
               fullBufRef.current = "";
               if (full && agentIdRef.current) {
                 lastAgentTextRef.current = full;
@@ -472,6 +487,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
                 (modeRef.current === "speaking" || sinceAgent < 1200) &&
                 jaccard(t, lastAgentTextRef.current) >= 0.5;
               if (echo || micMutedRef.current) break;
+              nexusGateRef.current.reset(); // a new exchange: earlier write results no longer gate speech
               setCaptions((c) => [...c.slice(-40), { role: "user", text: t }]);
               persist("user", agentIdRef.current, t);
               // Track a multi-part ask so we can return to unanswered parts after a barge. Do NOT
@@ -505,10 +521,13 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
                   if (genRef.current !== gen || dc.readyState !== "open") return;
                   const output = r.ok ? r.output : JSON.stringify({ error: r.error });
                   if (r.ok) console.log(`[realtime-speak] tool ${name} ${r.ms}ms`);
+                  // Before the model can voice a reply about it: a write that did not persist arms the gate.
+                  nexusGateRef.current.noteToolOutput(name, r.ok ? output : JSON.stringify({ ok: false, error: r.error }));
                   dc.send(JSON.stringify({ type: "conversation.item.create", item: { type: "function_call_output", call_id: callId, output } }));
                   dc.send(JSON.stringify({ type: "response.create" }));
                 })
                 .catch((err) => {
+                  nexusGateRef.current.noteToolOutput(name, JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
                   if (dc.readyState !== "open") return;
                   dc.send(JSON.stringify({ type: "conversation.item.create", item: { type: "function_call_output", call_id: callId, output: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) } }));
                   dc.send(JSON.stringify({ type: "response.create" }));
@@ -545,7 +564,7 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
       }
       return ok();
     },
-    [supported, status, callerFor, persist, failWith, cleanup, clearAudio, setModeBoth, pumpSpeech],
+    [supported, status, callerFor, persist, failWith, cleanup, clearAudio, setModeBoth, pumpSpeech, speak],
   );
 
   const toggleMic = useCallback(() => {
