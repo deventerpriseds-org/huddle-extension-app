@@ -4808,3 +4808,10 @@ Ask: "Is Iris going through her standup routine in a 1:1? why didnt she just do 
 (7ad609f). Status: implemented, offline tests + 4 mutations FIRED; independent verifier running; then merge → auto-deploy
 → live 1:1 check. NOT owner-confirmed. Sub-item: delete stray "Plan daily activities" task — awaiting owner yes/no.
 
+
+## ACT:iris-sticky-priority-and-clean-layout — priority check missed; thread "smashed together" (2026-10-28)
+Owner: *"I haven't been asked in the early morning to check out the schedule for any adjustments. and evening to confirm the priorities ... with deep link"*, then *"it did ask but because it didn't stick i missed it. also the formatting in the thread is all smashed together not clean"*.
+- **Found:** 8pm priority check sent nightly 10-16..10-27 (chat.pending_turns, all `done`); push log 2026-10-28T00:00:07Z FCM-accepted, titled "Iris Chase replied", 1s before the 8pm brief with the SAME title; not sticky. Brief directive demanded "ONE ... NO bullet points" → 11 tasks in one sentence.
+- **Shipped:** PR #122 squash `8302cb6`, deploy-swa run 40750842127 success. `lib/push/turn-push.ts` (`turnPushStyle`; email alerts unchanged) + `payload.pushStyle`; priority check "Iris: confirm tomorrow's/today's priorities" sticky; briefs "Iris: today's/tomorrow's schedule" (not sticky) + Open Schedule button + 8am/8pm "adjust anything?" line; one item per line, plain text.
+- **Evidence:** turn-push 9, priority-check 43, schedule-brief 76, dedupe 21, mail-subscription 24, inbound-email 69; tsc 0; build 0; mutate.sh FIRED T4/T7/P-STICK3/J4/J6b/P6. Live: run-priority-check run 40751464060 → turn `priority-check-evening-2026-10-28-manual-20261028190743` reply one priority per line + Open Priorities; push title "Iris: confirm tomorrow's priorities", FCM 1 success.
+- **Status:** live; mechanism verified. NOT owner-confirmed (stays in shade on phone; layout in thread). First scheduled briefs with the new layout: 8pm ET tonight.
