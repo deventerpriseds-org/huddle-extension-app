@@ -4768,3 +4768,10 @@ bridge #10 + #11 → Huddle APK v1.0.10 built (84f9813). Live: run 40575373656 �
 Plumley — draft reply ready", data.sticky "true", FCM 1 success (journey function_logs 20:08:53Z).
 **NOT yet confirmed by the owner** — needs: install v1.0.10; the next real email arriving within seconds; the push staying
 after a tap; one Save to Drafts tap (spacing + Calibri 11 in Outlook).
+
+### ACT:deep-ask-hybrid (2026-10-28) — OPEN
+Ask: "Is Iris going through her standup routine in a 1:1? why didnt she just do it?" → diagnosed the deep-confirm hold
+(not standup); owner chose the hybrid ("go with the recomended hybrid"). PR deventerpriseds-org/huddle-extension-app#116
+(7ad609f). Status: implemented, offline tests + 4 mutations FIRED; independent verifier running; then merge → auto-deploy
+→ live 1:1 check. NOT owner-confirmed. Sub-item: delete stray "Plan daily activities" task — awaiting owner yes/no.
+
