@@ -1,7 +1,7 @@
 import { generateText, NoObjectGeneratedError, Output } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type Agent, type AgentId } from "../data/agents";
-import { ownershipMarker } from "./capabilities";
+import { ownershipMarker, primeMarker, sharedCapabilityHolders } from "./capabilities";
 import { resolveAddressedAgent } from "./addressedAgent";
 import type { HuddleMessage, RoutingDecision } from "../data/seed";
 
@@ -212,6 +212,33 @@ export function routeMessage(input: RouteInput): RouteResult {
   }
   ranked.sort((a, b) => b.s - a.s);
 
+  // 1b. PRIME RESPONDERS (shared capability, agents.ts data). When the ask matches a capability some
+  // present agents are PRIME for, one of THEM leads -- keyword scoring alone sent "update the due date
+  // on my research paper" to the edits lane. The sticky holder keeps the floor if it is itself prime;
+  // otherwise the best-scoring holder (roster order on a tie). No agent id is named here.
+  const prime = sharedCapabilityHolders(text, members);
+  if (prime.length > 0) {
+    const primeIds = new Set(prime.map((p) => p.agent.id));
+    const lastAgent = [...history].reverse().slice(0, 6).find((m) => m.author.kind === "agent");
+    const sticky =
+      lastAgent && lastAgent.author.kind === "agent" && primeIds.has(lastAgent.author.agentId)
+        ? lastAgent.author.agentId
+        : null;
+    const lead = sticky ?? ranked.find((r) => primeIds.has(r.id))?.id ?? prime[0].agent.id;
+    const others = ranked.filter((r) => r.id !== lead);
+    return {
+      winners: [lead],
+      decision: {
+        signal: sticky ? "reply" : "topic",
+        scores,
+        winnerId: lead,
+        runnerUpId: others[0]?.id ?? null,
+        interjected: !sticky,
+        reason: `Prime responder: ${prime[0].cap.label}.`,
+      },
+    };
+  }
+
   // 2. reply/thread stickiness — last agent turn keeps floor unless topic strongly points elsewhere
   const last = [...history].reverse().slice(0, 6);
   const lastAgentTurn = last.find((m) => m.author.kind === "agent");
@@ -284,7 +311,32 @@ export function routeMessage(input: RouteInput): RouteResult {
  * so the agent can defer + bring them in. Returns null when the addressed agent is the (or a close)
  * owner, so in-lane asks never hand off. Driven entirely by agents.ts domains/themes — no hardcoding.
  */
+/**
+ * The SHARED-capability half of 1:1 ownership (agents.ts `capabilities` with exclusive:false).
+ *   "keep"   -- the addressed agent is PRIME for this ask: it never hands it off (not to a keyword
+ *               lane owner, not to an LLM-chosen one).
+ *   AgentId  -- the addressed agent is not prime, but someone is: hand to the best-scoring holder.
+ *   null     -- the ask matches no shared capability; ordinary lane logic applies.
+ * Used by laneOwnerFor (the 1:1 directive) and by the 1:1 owner follow-up in huddle.functions.ts,
+ * so the directive and the follow-up DM can never disagree about who owns it.
+ */
+export function primeLaneDecision(text: string, selfId: AgentId): "keep" | AgentId | null {
+  const holders = sharedCapabilityHolders(text);
+  if (!holders.length) return null;
+  if (holders.some((h) => h.agent.id === selfId)) return "keep";
+  const best = holders
+    .map((h, i) => ({ id: h.agent.id, s: scoreAgentAgainst(text, h.agent), i }))
+    .sort((x, y) => y.s - x.s || x.i - y.i)[0];
+  return best.id;
+}
+
 export function laneOwnerFor(text: string, selfId: AgentId): { id: AgentId; score: number } | null {
+  const prime = primeLaneDecision(text, selfId);
+  if (prime === "keep") return null;
+  if (prime) {
+    const a = AGENT_BY_ID[prime];
+    return { id: prime, score: Number((a ? scoreAgentAgainst(text, a) : 0).toFixed(2)) };
+  }
   const ranked = AGENTS.map((a) => ({ id: a.id, s: scoreAgentAgainst(text, a) })).sort((x, y) => y.s - x.s);
   const top = ranked[0];
   if (!top) return null;
@@ -589,7 +641,7 @@ export async function routeMessageLLM(
       (a) =>
         `- ${a.id} (${a.name}, ${a.role}): ${a.domains.join(", ")}${
           journeySet.has(a.id) ? " [has live calendar/tasks/contacts tools]" : ""
-        }${ownershipMarker(a)}`,
+        }${ownershipMarker(a)}${primeMarker(a)}`,
     )
     .join("\n");
 
@@ -608,10 +660,12 @@ export async function routeMessageLLM(
 ADDRESSED BY NAME: if the user addresses an agent by name (e.g. "Cole, how long…", "Finn — …"), that agent IS the primary. Do NOT hand the lead to a different agent because the topic superficially fits another lane.
 DELEGATION (overrides ADDRESSED BY NAME): if the user tells the addressed agent to have / ask / get / assign ANOTHER named agent to do something ("Finn, have Iris create the task", "Sam, ask Cole to estimate it"), the DELEGATE — the agent who should actually perform the action (Iris / Cole) — is the primary, because they must be the one to do it (create the task, run the tool). Add the addressed agent as supporting only if they also contribute.
 CAPABILITY OWNERSHIP: some jobs are exclusive to one agent, shown as [owns: …] on their roster line (e.g. [owns: backlog grooming, triage & sprint/board assignment]). A request for an exclusively-owned job belongs to its owner. If the user did NOT address a specific agent, route the owner as primary. If they DID address a different agent (e.g. "Tess, groom the backlog"), keep that agent as primary — they will hand off to the owner themselves; do not silently swap them out.
+PRIME RESPONDERS: some agents are marked [prime for: …] on their roster line. Anyone may do that kind of job, but when the user's request is that kind of job and they did NOT address a specific agent, make one of the [prime for: …] agents the primary — never a different lane just because a word like "update" or "fix" fits it.
 TIME IS NOT ALWAYS THE CALENDAR: how long a piece of WORK will take (a build estimate, a task's effort) belongs to the lane that owns that work — NOT the schedule/itinerary agent. The schedule agent is ONLY for the user's OWN calendar (their meetings, appointments, personal deadlines). Do not pull in the calendar agent just because a duration or the word "time" appears.
 MULTI-LANE LIST / BRAIN-DUMP: when the user's latest message ENUMERATES several distinct task areas at once — a list with lane labels ("Career - …", "Finance - …", "Errands - …") or clearly separate domains each carrying their own item(s) — do NOT funnel it all to one agent. Pick the owner of the most prominent lane as primary, and return the owner of EACH other enumerated lane in BOTH supporting AND explicitlyRequested (the user asked for that lane by listing it). Map each lane to its owner via the roster domains. Each owner captures only its own lane's items. This applies ONLY to an actual multi-area enumeration — a single-topic message that merely touches an adjacent domain still gets ONE primary.`;
 
   const strictSystem = `You are the router for a multi-agent huddle. Pick exactly ONE primary agent for the user's latest message. Return supporting = [] UNLESS the message explicitly asks for a second, non-overlapping specialty (e.g. "and also budget it" or "then draft the email"). Adjacency is not enough — a workout question does NOT need a life-strategist just because habits are related. When in doubt, return supporting = []. Never invent agent ids — only choose from the roster.
+PRIME RESPONDERS: when the request is the kind of job an agent is marked [prime for: …] for, and the user did not address a specific agent, one of those agents is the primary.
 ADDRESSED BY NAME: if the user addresses an agent by name ("Cole, how long…"), that agent IS the primary — never hand the lead to another agent because the topic superficially fits their lane. DELEGATION (overrides that): if the user tells the addressed agent to have/ask/get ANOTHER named agent do something ("Finn, have Iris create the task"), the DELEGATE who must perform the action (Iris) is the primary. TIME IS NOT ALWAYS THE CALENDAR: how long WORK takes (a build/effort estimate) belongs to the lane that owns the work, not the schedule agent; the schedule agent is only for the user's OWN calendar.
 
 Example — user: "what workouts do i usually go for?" → primary: flex-grimes, supporting: [], reason: single-lane fitness question.

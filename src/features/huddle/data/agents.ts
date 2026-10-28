@@ -52,7 +52,36 @@ export interface AgentCapability {
    * not the scrum master). A substring match on any trigger routes the ask to this capability's owner.
    */
   triggers?: string[];
+  /**
+   * CO-OCCURRENCE triggers, for asks no single phrase identifies without over-matching: each pair is
+   * [nouns, cues] and fires when ANY noun AND ANY cue both appear as words ("strategy PAPER ... DUE
+   * date" fires; "buy paper towels" does not). Read only for NON-exclusive (shared) capabilities --
+   * see `sharedCapabilityMatches` in lib/capabilities.ts.
+   */
+  triggerPairs?: Array<[string[], string[]]>;
 }
+
+/**
+ * A SHARED (non-exclusive) capability several agents are PRIME for. Unlike an exclusive one, every
+ * agent may still perform it (its tool stays in the common pool); "prime" only decides who LEADS
+ * when the ask matches -- the deterministic router picks a holder, and a holder is never handed off
+ * from in a 1:1. Defined ONCE here and attached to each prime agent, so the triggers cannot drift.
+ */
+const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
+  id: "nexus-assignments",
+  label: "adding & updating the owner's coursework assignments in Nexus (dated, graded deliverables)",
+  exclusive: false,
+  triggers: [
+    "assignment", "syllabus", "syllabi", "deliverable", "nexus", "coursework", "course work",
+    "research paper", "research proposal", "term paper", "final paper",
+  ],
+  triggerPairs: [
+    [
+      ["paper", "papers", "essay", "essays", "thesis", "dissertation", "case brief", "midterm"],
+      ["due", "deadline", "deadlines", "graded", "grade", "submit", "submission"],
+    ],
+  ],
+};
 
 export interface Agent {
   id: AgentId;
@@ -118,6 +147,9 @@ export const AGENTS: Agent[] = [
     tone: "warm",
     voiceId: "0fbdXLXuDBZXm2IHek4L",
     special: "coordinator",
+    // PRIME (not exclusive) for Nexus assignment writes -- owner, 2026-10-28: "the nexus tool should
+    // be among a pool of tools but elle and iris should be prime to use it immediately if i request it."
+    capabilities: [NEXUS_ASSIGNMENTS_CAPABILITY],
     avatarUrl: "/agents/iris-chase.jpg",
     systemPrompt: p(
       "Iris Chase, the team lead who owns the day plan, calendar and shared task board",
@@ -169,9 +201,11 @@ export const AGENTS: Agent[] = [
     initials: "ER",
     colorVar: "--agent-violet",
     domains: ["coursework", "essays", "deadlines", "applications"],
-    themes: ["EMBA", "essay", "draft", "professor", "submit", "education", "school", "course", "program", "degree", "studies"],
+    themes: ["EMBA", "essay", "draft", "professor", "submit", "education", "school", "course", "program", "degree", "studies", "assignments", "syllabus", "deliverables", "due date"],
     tone: "coach",
     voiceId: "hGQkZQUA5RiOXIw7P9iO",
+    // PRIME (not exclusive) for Nexus assignment writes -- see NEXUS_ASSIGNMENTS_CAPABILITY above.
+    capabilities: [NEXUS_ASSIGNMENTS_CAPABILITY],
     avatarUrl: "/agents/elle-rowan.jpg",
     systemPrompt: p(
       "Elle Rowan, the EMBA planner",

@@ -14,6 +14,7 @@ import {
   routeMessageLLM,
   scoreDifficultyLLM,
   laneOwnerFor,
+  primeLaneDecision,
   resolveOwnerLLM,
   type RouterInvocation,
   type RouteResult,
@@ -6747,8 +6748,16 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           void deliverOwnerFollowup(ownerId, winner.name, data.text);
         }
       };
+      // SHARED capability (agents.ts, exclusive:false): deterministic too, and decided BEFORE the LLM
+      // resolver so the 1:1 directive (laneOwnerFor) and this follow-up can never disagree. "keep" =
+      // the addressed agent is prime for this ask -> no follow-up to anyone.
+      const prime = capOwnerId ? null : primeLaneDecision(data.text, nextId);
       if (capOwnerId) {
         deliverIfOwner(capOwnerId);
+      } else if (prime === "keep") {
+        // in its own lane: nothing to pass along
+      } else if (prime) {
+        deliverIfOwner(prime);
       } else {
         // No exclusive owner → resolve the LANE owner. The LLM router doesn't run in a 1:1, so classify
         // SEMANTICALLY (a cheap dedicated LLM call, mirroring scoreDifficultyLLM) — replacing the keyword

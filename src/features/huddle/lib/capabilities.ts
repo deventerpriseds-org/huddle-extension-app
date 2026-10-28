@@ -263,3 +263,48 @@ export function ownershipDirectory(members: readonly AgentId[]): string {
   if (!owned.length) return "";
   return owned.map((o) => `- ${o.cap.label} → @${o.agent.handle}`).join("\n");
 }
+
+// ─── SHARED (non-exclusive) capabilities: who is PRIME for an ask ──────────────────────────────────
+// An exclusive capability says "only X may do this". A SHARED one says "anyone may, but X and Y lead".
+// Everything here is generic over agents.ts data -- no agent id appears in this file. Consumers:
+// routing.ts (`routeMessage` picks a holder as the deterministic winner; `primeLaneDecision` keeps a
+// 1:1 with a holder and hands a non-holder's to one), the 1:1 owner follow-up in huddle.functions.ts,
+// and the roster/router prompt markers.
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Word-START match, so "assignment" matches "assignments" but not "reassignment". */
+const wordStart = (phrase: string) => new RegExp(`(^|[^a-z0-9])${escapeRe(phrase.toLowerCase())}`, "i");
+/** Whole-word match (plural/possessive tolerated), for the co-occurrence pairs. */
+const wholeWord = (w: string) =>
+  new RegExp(`(^|[^a-z0-9])${escapeRe(w.toLowerCase())}(?:'?s)?(?![a-z0-9])`, "i");
+
+/** Does `text` ask for this SHARED capability? Exclusive capabilities never match here. */
+export function sharedCapabilityMatches(cap: AgentCapability, text: string): boolean {
+  if (cap.exclusive) return false;
+  const t = (text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  if ((cap.triggers ?? []).some((p) => wordStart(p).test(t))) return true;
+  for (const [nouns, cues] of cap.triggerPairs ?? []) {
+    if (nouns.some((n) => wholeWord(n).test(t)) && cues.some((c) => wholeWord(c).test(t))) return true;
+  }
+  return false;
+}
+
+/** The agents PRIME for this ask (holders of a matching shared capability), in roster order,
+ *  optionally restricted to `members`. Empty when the ask matches no shared capability. */
+export function sharedCapabilityHolders(text: string, members?: readonly AgentId[]): OwnedCapability[] {
+  const inScope = members ? new Set(members) : null;
+  const out: OwnedCapability[] = [];
+  for (const agent of AGENTS) {
+    if (inScope && !inScope.has(agent.id)) continue;
+    const cap = (agent.capabilities ?? []).find((c) => sharedCapabilityMatches(c, text));
+    if (cap) out.push({ agent, cap });
+  }
+  return out;
+}
+
+/** Roster marker for shared capabilities, e.g. " [prime for: adding & updating … in Nexus …]". */
+export function primeMarker(agent: Agent): string {
+  const shared = (agent.capabilities ?? []).filter((c) => !c.exclusive);
+  return shared.length ? ` [prime for: ${shared.map((c) => c.label).join("; ")}]` : "";
+}
