@@ -191,3 +191,59 @@ participation reflection paper" -> meeting/session, "Team project: Ford plant vi
 **C2: REFUTED.** Blocking: D7a–D7g (the brief's own canonicalisation spellings of the owner's named meeting example
 are accepted as assignments). D8 blocking per the rule as stated (a real duplicate row), low frequency (needs a
 non-ET `time_zone` argument).
+
+## C5 — the model cannot steer owner / URL / table / auth headers (CONFIRMED)
+
+Loop-1 probe re-run on 6b11bae (`bun mut-verify-114/probe-exec.ts`, C5 block): POST url
+`https://nexus.test/api/d1/assignments?owner=owner-uuid-1111` (one owner param); headers
+`{content-type, x-uat-token: srv-token, x-agent-tool: write_nexus_assignments, x-agent-ref: probe}`; body
+`{course_id: c782, title, type: assignment, status: active, due_date, program_id: p-dba}` -- every model-supplied
+owner/user_id/email/url/headers/table/program_id/id/canvas_meta dropped; injected
+`assignment_id: "aafbf80f&owner=evil&id=6616bef3"` encoded into ONE `id`, owner stays single; every GET carries the
+server owner; 26 items -> batch_too_large, 0 writes. Fresh loop-2 injections (`bun mut-verify-114-2/probe-exec.ts`):
+`time_zone: "America/New_York&owner=evil"` -> rejected ambiguous-date, 0 POSTs, owners `[["owner-uuid-1111"]]`;
+`course: "MGT-782&owner=evil"` -> course_not_found, 0 POSTs; JSON-ish title/description (`…", "user_id": "evil`) ->
+body keys `course_id,title,type,status,due_date,program_id,description`, no owner/user_id key. The single
+outbound `fetch(` of the write module is nexus-write.server.ts:503; untouched by loop 2 (fixer's blast radius;
+`git diff e881be0 6b11bae --stat -- src/` lists 8 files, none of them the call site).
+
+## C6 — read tools stay read-only (CONFIRMED)
+
+`git diff origin/main...HEAD -- nexus.server.ts`: 4 changed lines, each only adds `export` (`nexusOwner`,
+`nexusBase`, `TIMEOUT_MS`, `nexusGet`) plus comments. Only `fetch(` in it: `fetch(url.toString(), { signal:
+controller.signal })` (:128). `bun mut-verify-114/probe-read.ts`: 12 read tools = 12 NEXUS_TOOL_NAMES; 16 calls,
+0 with any init key other than `signal`. (The probe's "write tool among reads: true" is the read tool
+`get_nexus_writer_transcript` matching /write/ -- not the write tool.)
+
+## C8 — mutations (mutate.sh; anchors + replacements are files in mut-verify-114-2/; runner
+`bash mut-verify-114-2/run-mutations.sh`; anchors n1–n5 written from exact source lines by
+`mut-verify-114-2/make-anchors.py`, each occurring once)
+
+| # | Guard | File | Mutation | Test / must-fail | mutate.sh verbatim |
+|---|---|---|---|---|---|
+| m1 | loop-1 W10 | nexus-write-shared.ts | `if (namedOwn.some(unsaved)) ownFalse = true;` -> `if (false)` | redteam / RT-H3 | `FIRED: 'RT-H3' failed with the defect reinstated. The guard is real.` |
+| m2 | loop-1 W1 | nexus-write.server.ts | same-local-day check -> `return rm !== null;` | redteam / RT-D1 | `FIRED: 'RT-D1' failed with the defect reinstated. The guard is real.` |
+| m5 | loop-1 W19 | capabilities.ts | context gate removed | router-redteam / RT-R1 | `FIRED: 'RT-R1' failed with the defect reinstated. The guard is real.` |
+| m6 | loop-1 W18 | useVoiceCallRealtimeSpeak.ts | holding check removed | nexus-write-fix / FX-V6 | `FIRED: 'FX-V6' failed with the defect reinstated. The guard is real.` |
+| m7 | loop-1 W3 | nexus-write.server.ts | `withWriteLock` bypassed | redteam / RT-D3 | `FIRED: 'RT-D3' failed with the defect reinstated. The guard is real.` |
+| n1 | **loop-2 D2** deny-anywhere meeting | nexus-write.server.ts | `if (DENY_MEETING.test(t))` -> `if (false)` | loop2 / L2-D2a | `FIRED: 'L2-D2a' failed with the defect reinstated. The guard is real.` |
+| n2 | **loop-2 D1** `courseDayZone` region-only | nexus-write.server.ts | accept any valid zone | loop2 / L2-D1h | `FIRED: 'L2-D1h' failed with the defect reinstated. The guard is real.` |
+| n3 | **loop-2 D3** write-talk sentences dropped | nexus-write-shared.ts | `WRITE_TALK.test(s.text) ||` removed | loop2 / L2-D3a N14 | `FIRED: 'L2-D3a N14' failed with the defect reinstated. The guard is real.` |
+| n4 | **loop-2 D4** stream hold | nexus-write-shared.ts | `if (!held) fn(...a);` -> `fn(...a);` | loop2 / L2-D4a | `FIRED: 'L2-D4a' failed with the defect reinstated. The guard is real.` |
+| n5 | **loop-2 D5** no generic strong words | agents.ts | `"semester", "thesis"` added to `strong` | loop2 / L2-D5b | `FIRED: 'L2-D5b' failed with the defect reinstated. The guard is real.` |
+
+Every run printed `restored: … matches HEAD` and `tree clean: … passes again on the restored tree`; `git status
+--short` = 0 lines afterwards. **10 FIRED, 0 INERT, 0 NOT-APPLIED. C8: CONFIRMED** -- the guards are real for the
+inputs they test. (No test covers V-a, D6, D7, D8: they are inputs, not guards.)
+
+**Changed existing assertions -- judged:** FX-K1 (4 titles now refused), F2-11 "Seminar paper" -> meeting/session:
+legitimate updates to a REPLACED, owner-approved rule (deny-anywhere); the fixer lists them as accepted cost.
+F2-35 source regex (`nexusWriteGuardedReply(`), RT-H6 (accepts `createNexusWriteSpeechGate()` + `gate.finalize(raw)`),
+FX-V7 (`const full = gate.finalize(raw);`): legitimate renames to the new call sites, same strength (source greps
+before and after). FX-V4/V4b (reset deferred until finalize): legitimate for the new design -- but note it is the
+deferral that makes V-a's "speak raw at text.done while pending" path reachable without a test. Fixture titles
+gaining "Paper" (Test-Same Batch Twice, Test-x, Test-Batch One/Two/Three, Test-Persist): legitimate (they test
+dedup/persist/not-found, not classification). **None is a weakening.** Radius challenge: the loop-2 classifier
+also runs on UPDATEs that pass a title (nexus-write.server.ts:717-719), so an update of the kept Canvas row
+"Residency participation" (OQ-2) that carries its title is refused -- inside the radius, untested, low impact
+(an update by `assignment_id` alone still works).
