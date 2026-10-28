@@ -1,0 +1,1 @@
+  return /^[A-Za-z]+\/[A-Za-z_+-]+(?:\/[A-Za-z_+-]+)?$/.test(z) && isValidZone(z) ? z : DEFAULT_COURSE_TZ;

@@ -1,0 +1,1 @@
+  return isValidZone(z) ? z : DEFAULT_COURSE_TZ;
