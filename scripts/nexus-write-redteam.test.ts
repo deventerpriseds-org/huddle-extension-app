@@ -104,7 +104,13 @@ console.log("=== Honesty guard (AC-F2-35) ===");
     }
   };
   walk("src");
-  const voiceGuarded = files.filter((f) => /voice|realtime|Voice|Realtime/.test(f) && /enforceNexusWriteHonesty|nexusWriteOutcomeStatement/.test(readFileSync(f, "utf8")));
+  // loop2 D3 (docs/FIX-nexus-write-loop2.md): the voice hook now calls the gate's finalize (the structural
+  // nexusWriteGuardedReply) instead of naming enforceNexusWriteHonesty; the check accepts that call site.
+  const voiceGuarded = files.filter((f) => {
+    if (!/voice|realtime|Voice|Realtime/.test(f)) return false;
+    const src = readFileSync(f, "utf8");
+    return /enforceNexusWriteHonesty|nexusWriteOutcomeStatement/.test(src) || (/createNexusWriteSpeechGate\(\)/.test(src) && /gate\.finalize\(raw\)/.test(src));
+  });
   t("RT-H6 the voice path enforces Nexus write honesty in code (W18)", voiceGuarded.length > 0, true);
 }
 

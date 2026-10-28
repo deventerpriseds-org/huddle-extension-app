@@ -27,7 +27,7 @@ import {
 } from "./fallbacks";
 import { buildRoster } from "./roster";
 // Pure (no server imports) -- the Nexus write tool's reply-honesty guard, run in reply assembly.
-import { enforceNexusWriteHonesty } from "./nexus/nexus-write-shared";
+import { nexusWriteGuardedReply, createNexusWriteStreamHold } from "./nexus/nexus-write-shared";
 import {
   resolveByDifficulty,
   resolveModel,
@@ -2134,6 +2134,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // a teammate that never called the tool cannot claim the writer's failed item was saved.
   const nexusWriteOutcomes = new Map<string, Promise<Record<string, unknown>>>();
   const turnNexusWriteUses: Array<{ agentId: AgentId; tool: string; ok: boolean; detail?: string }> = [];
+  // D4 (docs/FIX-nexus-write-loop2.md): once a Nexus write call STARTS this turn, the 1:1 text stream
+  // stops publishing partial replies; only the final, guarded reply (nexusWriteGuardedReply) is shown.
+  const nexusStreamHold = createNexusWriteStreamHold();
 
   // Lightweight handoff contract for the ad-hoc mention-chain: when an agent @mentions a teammate
   // (the "mention IS the handoff"), we re-queue that teammate — but today they receive no structured
@@ -4387,6 +4390,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
           const nexusWriteMod = await import("./nexus/nexus-write.server");
           if (c.name === nexusWriteMod.NEXUS_WRITE_TOOL_NAME) {
+            // D4: from here on this turn publishes no partial 1:1 reply (the stream hold), before anything else.
+            nexusStreamHold.noteToolCall(c.name);
             // Mutating: an IDENTICAL write is claimed once per turn, so two group responders running in
             // one parallel wave cannot both POST the same deliverable (the dedup read would race).
             const writeArgs = (c.arguments ?? {}) as Record<string, unknown>;
@@ -4914,8 +4919,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           data.scope === "one-to-one" &&
           (data.streamReplies?.oneOnOne ?? true);
         let lastStreamWrite = 0;
+        // Wrapped in the Nexus stream hold (D4): after a write call starts, no partial is published.
         const onDelta = streamOneOnOne
-          ? (full: string) => {
+          ? nexusStreamHold.wrap((full: string) => {
               const nowMs = Date.now();
               if (nowMs - lastStreamWrite < 900) return; // throttle to ~1s writes
               lastStreamWrite = nowMs;
@@ -4926,7 +4932,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   buildResumeState(),
                 )
                 .catch(() => {});
-            }
+            })
           : undefined;
 
         // A file a BUILT-IN tool produced — an image from image_generation, or a file the model wrote
@@ -6582,10 +6588,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // any self-authored markdown link from the text so the user never sees a fake "open the document" link.
     // Also backstop file_search's own narration tendency (house-style bans it in prose; the model still
     // does it — see stripFileMentionNarration above).
-    // Nexus write honesty (code, not prompt): a reply may not claim an assignment was saved when this
-    // agent's write_nexus_assignments result says it was not. Pass-through when no write failed. A
-    // TEAMMATE's writes this turn are checked too, but only against claims that name their items.
-    const safeText = enforceNexusWriteHonesty(
+    // Nexus write honesty (code, not prompt; loop 2 D3, docs/FIX-nexus-write-loop2.md): when ANY write
+    // this turn (this agent's or a teammate's) has an item that did not persist, the part of the reply
+    // about the write is CODE-BUILT from the per-item results, and every sentence of the model's text
+    // that mentions a written item or write-talk is dropped. Pass-through when every item persisted.
+    const safeText = nexusWriteGuardedReply(
       stripFileMentionNarration(stripAgentReplyLinks(finalText)),
       r.toolUses,
       turnNexusWriteUses.filter((u) => u.agentId !== nextId),

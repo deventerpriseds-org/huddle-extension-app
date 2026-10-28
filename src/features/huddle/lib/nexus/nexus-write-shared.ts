@@ -134,28 +134,181 @@ function names(words: Set<string>, r: ItemResult): boolean {
   return tw.length > 0 && tw.every((w) => words.has(w));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// THE PRIMARY HONESTY RULE (loop 2, D3/D4 -- docs/FIX-nexus-write-loop2.md). STRUCTURAL, not parsing:
+// the model's prose is no longer searched for claims to judge (two rounds of that leaked: "I didn't
+// just add …", "squared away", "✓"). Instead, when ANY write this turn (any agent, text or voice) has
+// an item that did not persist -- failed, rejected, unknown, or a duplicate (nothing new was written)
+// -- the part of the reply ABOUT THE WRITE is built by code from the per-item results:
+//     one line per item (saved / updated / already there / NOT saved + reason / unknown -- check Nexus),
+//     followed by the model's text with EVERY sentence removed that mentions a written item's title or
+//     any write-talk word (add/save/update/move/schedule/Nexus/done/✓ …).
+// Whatever the model said about the write, the user sees only what the results say. When every item
+// persisted, the model's text passes untouched. `enforceNexusWriteHonesty` below is kept (secondary,
+// unchanged behaviour) for its existing callers/tests; the runtime uses this.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Any sentence containing one of these is about the write, so it is dropped while a write did not persist. */
+const WRITE_TALK =
+  /\b(?:add(?:s|ed|ing)?|sav(?:e|es|ed|ing)|updat(?:e|es|ed|ing)|mov(?:e|es|ed|ing)|schedul(?:e|es|ed|ing)|reschedul(?:e|es|ed|ing)|nexus|logg?(?:ed|ing|s)?|record(?:s|ed|ing)?|creat(?:e|es|ed|ing)|chang(?:e|es|ed|ing)|enter(?:s|ed|ing)?|stor(?:e|es|ed|ing)|fil(?:e|es|ed|ing)|upload(?:s|ed|ing)?|insert(?:s|ed|ing)?|put(?:s|ting)?|set|done|squared away|t(?:ake|akes|ook|aken|aking) care|on the books|locked in|in place|went through|gone through|landed|captured|tracked|assignments?)\b|[✅✔☑✓]/i;
+
+/** Does this sentence name the item: every content word of its title, or its head noun? */
+function mentionsItem(words: Set<string>, r: ItemResult): boolean {
+  const tw = wordsOf(r.title ?? "").filter((w) => !TITLE_STOP.has(w));
+  if (!tw.length) return false;
+  if (tw.every((w) => words.has(w))) return true;
+  const head = [...tw].reverse().find((w) => !/^\p{N}+$/u.test(w) && w.length >= 3);
+  return !!head && words.has(head);
+}
+
+const plainReason = (r: ItemResult): string => {
+  const why = String(r.reason ?? r.error ?? "failed");
+  const map: Record<string, string> = {
+    "meeting/session": "it is a meeting/session/class, not a graded deliverable",
+    event: "it is an event, not a graded deliverable",
+    administrative: "it is a holiday, break, payment or admin date, not a graded deliverable",
+    reading: "it is a reading, not a graded deliverable",
+    "not-a-deliverable": "the title names no graded deliverable",
+    undated: "it has no due date",
+    "ambiguous-date": "the date has no year or is not a real date",
+    course_not_found: "no course matches that code",
+    course_ambiguous: "that course code matches more than one course",
+    course_required: "no course was given",
+    title_required: "no title was given",
+    not_found: "that assignment was not found",
+  };
+  return map[why] ?? why.replace(/_/g, " ");
+};
+
+/** One line per item, built ONLY from the results. Duplicate items (same index+title+action) collapse. */
+export function nexusWriteItemLines(results: ItemResult[]): string {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const r of results) {
+    const key = `${r.index}|${r.title ?? r.assignment_id ?? ""}|${r.action}|${String(r.persisted)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const name = `“${r.title ?? r.assignment_id ?? `item ${r.index + 1}`}”`;
+    const when = r.due_local ? ` (due ${r.due_local})` : "";
+    let line: string;
+    if (r.persisted === true) line = r.action === "updated" ? `Updated in Nexus: ${name}${when}.` : `Saved to Nexus: ${name}${when}.`;
+    else if (r.persisted === "unknown") line = `Unknown: ${name} — the request did not confirm, so check Nexus before treating it as saved.`;
+    else if (r.action === "duplicate")
+      line = r.stored_undated
+        ? `Already in Nexus, nothing new added: ${name} — the stored one has no due date, so the date was NOT saved.`
+        : `Already in Nexus, nothing new added: ${name}.`;
+    else line = `Not saved to Nexus: ${name} — ${plainReason(r)}.`;
+    if (r.points_note) line += " Points were not saved (they must be a whole number).";
+    lines.push(line);
+  }
+  return lines.join("\n");
+}
+
 /**
- * VOICE (W18). On the Realtime voice surface the model speaks its OWN words, sentence by sentence as
- * they stream, so there is no reply-assembly step to hook. This gate gives the voice client one: feed
- * it every tool output; while the exchange holds a write whose item did NOT persist, `holding` is true
- * and the client must buffer the reply instead of speaking it, then speak
- * `enforceNexusWriteHonesty(fullText, gate.uses)` -- the same guard the text path runs. A clean write
- * never holds, so the happy path keeps its streaming latency. `reset()` at the next user utterance.
+ * THE runtime reply for any agent this turn (text path: huddle.functions.ts reply assembly; voice path:
+ * the speech gate's `finalize`).
+ * @param toolUses      THIS agent's own tool uses (its writes, or a suppressed duplicate's copy of the first).
+ * @param teammateUses  write_nexus_assignments uses made by OTHER agents this turn.
+ */
+export function nexusWriteGuardedReply(text: string, toolUses: ToolUseLike[], teammateUses: ToolUseLike[] = []): string {
+  const own = nexusWriteResultsFrom(toolUses);
+  const mates = nexusWriteResultsFrom(teammateUses);
+  const all = [...own, ...mates];
+  const t = text ?? "";
+  if (!all.length || all.every((r) => r.persisted === true)) return t; // nothing written, or everything saved
+  const sentences = parseReply(t);
+  const removed: Sentence[] = [];
+  const kept: Sentence[] = [];
+  for (const s of sentences) {
+    const words = new Set(wordsOf(s.text));
+    (WRITE_TALK.test(s.text) || all.some((r) => mentionsItem(words, r)) ? removed : kept).push(s);
+  }
+  // Which items the code-built lines state: the agent's own writes, plus any teammate item its
+  // removed sentences talked about (a teammate's "Elle added it" gets the truth next to where it was).
+  const mateNamed = mates.filter((r) => removed.some((s) => mentionsItem(new Set(wordsOf(s.text)), r)));
+  const stated = own.length ? [...own, ...mateNamed] : removed.length ? (mateNamed.length ? mateNamed : mates) : [];
+  if (!stated.length) return t; // a teammate that said nothing about the write: untouched
+  const rest = kept.map((s) => s.text).join(" ").trim();
+  const lines = nexusWriteItemLines(stated);
+  return rest ? `${lines}\n\n${rest}` : lines;
+}
+
+/**
+ * STREAM HOLD for the 1:1 TEXT path (D4). `onDelta` publishes the growing reply to the durable row the
+ * client polls; once a write tool call STARTS in this turn, nothing more is published for the rest of the
+ * turn, so a forming "I've added it" can never be shown -- only the final, guarded reply is.
+ */
+export function createNexusWriteStreamHold() {
+  let held = false;
+  return {
+    noteToolCall(name: string) {
+      if (name === NEXUS_WRITE_TOOL_NAME) held = true;
+    },
+    get held(): boolean {
+      return held;
+    },
+    wrap<A extends unknown[]>(fn: (...a: A) => void): (...a: A) => void {
+      return (...a: A) => {
+        if (!held) fn(...a);
+      };
+    },
+  };
+}
+
+/**
+ * VOICE (W18 + loop-2 D3/D4). On the Realtime voice surface the model speaks its OWN words as they stream,
+ * so the client holds them here:
+ *   - `noteToolCall(name)` when a write tool call STARTS: speech is held from that moment (not only once a
+ *     failed result arrives);
+ *   - `noteToolOutput(name, output)` when its result arrives;
+ *   - `holding` = a write is in flight, or any item this exchange did not persist;
+ *   - `finalize(raw)` on text.done = the text to speak, caption and persist: `nexusWriteGuardedReply` (the
+ *     SAME code-built text the text path shows);
+ *   - `reset()` at the next user utterance -- DEFERRED while a write's final reply has not been delivered
+ *     yet, so the user talking over the wait can no longer release the hold early (D4). It completes on
+ *     the next `finalize` after the results are in.
+ * A clean write never holds once its result is in, so the happy path keeps its streaming latency.
  */
 export function createNexusWriteSpeechGate() {
   let uses: ToolUseLike[] = [];
+  let pending = 0;
+  let awaitingFinal = false;
+  let resetRequested = false;
+  const clear = () => {
+    uses = [];
+    pending = 0;
+    awaitingFinal = false;
+    resetRequested = false;
+  };
   return {
+    noteToolCall(name: string) {
+      if (name !== NEXUS_WRITE_TOOL_NAME) return;
+      pending += 1;
+      awaitingFinal = true;
+    },
     noteToolOutput(name: string, output: string) {
-      if (name === NEXUS_WRITE_TOOL_NAME && typeof output === "string") uses.push({ tool: name, ok: false, detail: output });
+      if (name !== NEXUS_WRITE_TOOL_NAME || typeof output !== "string") return;
+      pending = Math.max(0, pending - 1);
+      awaitingFinal = true;
+      uses.push({ tool: name, ok: false, detail: output });
     },
     get holding(): boolean {
-      return uses.some((u) => nexusWriteHasUnsaved(u.detail ?? ""));
+      return pending > 0 || nexusWriteResultsFrom(uses).some((r) => r.persisted !== true);
     },
     get uses(): ToolUseLike[] {
       return uses;
     },
+    finalize(raw: string): string {
+      const out = nexusWriteGuardedReply(raw, uses);
+      if (pending === 0 && awaitingFinal) {
+        awaitingFinal = false; // the reply to the write's results has now been delivered
+        if (resetRequested) clear();
+      }
+      return out;
+    },
     reset() {
-      uses = [];
+      if (awaitingFinal || pending > 0) resetRequested = true;
+      else clear();
     },
   };
 }
