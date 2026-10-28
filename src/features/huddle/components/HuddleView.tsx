@@ -1219,36 +1219,27 @@ function Composer({ huddle }: { huddle: Huddle }) {
       }
     ).AndroidBridge;
     if (typeof bridge?.getFcmToken !== "function" || !pushCaller?.entra_email) return;
-    let done = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const attempt = async (n: number) => {
-      if (done) return;
-      let token = "";
-      try {
-        token = bridge.getFcmToken?.() ?? "";
-      } catch {
-        token = "";
-      }
-      if (token) {
-        done = true;
-        try {
-          // The server registers the device for the caller proven by this Entra ID token only.
-          const { getToken } = await import("@/lib/entra-auth");
-          const idToken = await getToken();
-          if (!idToken) return;
+    // Done only after the server accepts it; a null ID token (MSAL not ready) is logged and retried, not
+    // silently dropped for the whole page session. The server registers for the caller in the ID token only.
+    let stop: () => void = () => {};
+    let unmounted = false;
+    void import("../lib/push/bridge-fcm-register").then(({ startBridgeFcmRegistration }) => {
+      if (unmounted) return;
+      stop = startBridgeFcmRegistration({
+        getFcmToken: () => bridge.getFcmToken?.() ?? "",
+        getIdToken: async () => (await import("@/lib/entra-auth")).getToken(),
+        send: async (idToken, token) => {
           const { registerBridgeFcmToken } = await import("../lib/huddle.functions");
-          await registerBridgeFcmToken({ data: { idToken, token } });
-        } catch {
-          /* non-fatal */
-        }
-        return;
-      }
-      if (n < 5) timer = setTimeout(() => void attempt(n + 1), 1500);
-    };
-    void attempt(0);
+          return registerBridgeFcmToken({ data: { idToken, token } });
+        },
+        schedule: (fn, ms) => setTimeout(fn, ms),
+        cancel: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+        log: (m) => console.info(m),
+      });
+    });
     return () => {
-      done = true;
-      if (timer) clearTimeout(timer);
+      unmounted = true;
+      stop();
     };
   }, [pushCaller?.entra_email]); // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -4737,3 +4737,4 @@ Both now resolve the caller from a verified Entra ID token (`verifyEntraIdToken`
 | 1 | `verified-caller.server.ts` + both server fns ignore the body caller, refuse without a verified idToken | on branch `claude_fcm-register-with-session`, not merged | `scripts/journey-verified-caller.test.ts` 12/12 |
 | 2 | HuddleView sends `idToken` (`getToken()`) for the Huddle app's FCM registration | on branch | — |
 | 3 | Other Huddle server fns that take `caller` from the body (sendHuddleMessage etc.) | **open, not in this fix** | — |
+| 4 | Huddle app FCM registration: `done` only after an ok send; a null ID token is logged and retried (`lib/push/bridge-fcm-register.ts`) | on branch | `scripts/bridge-fcm-register.test.ts` 12/12; `tsc --noEmit` 0; `test:router` 20/20 |
