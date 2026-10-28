@@ -7624,19 +7624,17 @@ async function executeClaimedTurn(record: {
     const lead = result.replies?.[0];
     if (lead && wantsPush) {
       const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
-      // An email alert names the sender and stays until dismissed; every other turn is unchanged.
+      // An email alert names the sender and stays until dismissed; a scheduled job (priority check,
+      // schedule brief) may name itself via payload.pushStyle; every other turn is unchanged.
       // Guarded like the presence check above: a throw here must never fail an already-saved reply.
-      let emailPush: ReturnType<typeof import("./email/inbound-email").inboundEmailPush> = null;
+      let stylePush: ReturnType<typeof import("./push/turn-push").turnPushStyle> = null;
       try {
-        const { inboundEmailPush } = await import("./email/inbound-email");
-        emailPush = inboundEmailPush(
-          (record.payload as { emailReplyRef?: { fromName?: string; fromAddress?: string } })
-            ?.emailReplyRef,
-        );
+        const { turnPushStyle } = await import("./push/turn-push");
+        stylePush = turnPushStyle(record.payload);
       } catch {
-        emailPush = null;
+        stylePush = null;
       }
-      const title = emailPush?.title ?? `${name} replied`;
+      const title = stylePush?.title ?? `${name} replied`;
       const body = String(lead.text).replace(/\s+/g, " ").slice(0, 140);
       // Primary away-delivery: piggyback journey's push (web-push + FCM/Android bridge), the SAME
       // reliable path reminders/alarms use to reach the phone. No separate Huddle VAPID keys needed;
@@ -7672,7 +7670,7 @@ async function executeClaimedTurn(record: {
                 tag: record.id,
                 // journey forwards it to the Android bridge, which then keeps the notification
                 // when tapped (setAutoCancel(false)) — only Dismiss or a swipe clears it.
-                ...(emailPush?.sticky ? { sticky: "true" } : {}),
+                ...(stylePush?.sticky ? { sticky: "true" } : {}),
               },
             },
             caller: { entra_email: record.user_email },

@@ -28,6 +28,23 @@ import {
  *  schedule + priorities widgets, so "what's on today" is already her thread. */
 const BRIEF_OWNER: AgentId = "iris-chase";
 
+/** The button under every brief. Owner, 2026-10-28: the morning check should ask about adjustments
+ *  "with deep link ... to each tab" -- the Priorities check already had its button; this is Schedule's.
+ *  Attached by the turn runner from the payload (ensureNavLinkDelivered), whatever the model writes. */
+export const SCHEDULE_NAV_LINK = { view: "schedule" as const, label: "Open Schedule" };
+
+/** The phone push title, so the 8pm brief no longer reads "Iris Chase replied" exactly like the 8pm
+ *  priority check sent one second earlier (push log 2026-10-28T00:00:07Z/08Z). Not sticky: the brief
+ *  is a heads-up; the priority check is the one that needs an answer and stays. */
+export function scheduleBriefPush(edition: BriefEdition, window?: BriefWindow): { title: string; sticky: false } {
+  const title = window
+    ? `Iris: rest of your ${window.name.replace(/_/g, " ")} window`
+    : edition === "evening"
+      ? "Iris: tomorrow's schedule"
+      : "Iris: today's schedule";
+  return { title, sticky: false };
+}
+
 export interface ScheduleBriefResult {
   ok: boolean;
   edition?: BriefEdition;
@@ -155,20 +172,35 @@ export function briefDeliveryPlan(
     (brief.upcomingErrors?.length ? `\n(lookahead partly unread: ${brief.upcomingErrors.join("; ")})` : "");
   const when = w ? `for the rest of the ${winName}` : brief.edition === "evening" ? "tomorrow" : "today";
   const tasksAsk = taskLines.length
-    ? `After the meetings and classes, continue with "and on your task list …", naming each TASK with its ` +
-      `time, earliest first. `
+    ? `After a blank line, write "On your task list:" and then each TASK on its OWN line as ` +
+      `"• <time> — <title>", earliest first. `
     : brief.tasks !== undefined
       ? `There are no tasks scheduled ${when}; say so in a few words. `
       : "";
+  // Owner, 2026-10-28: "the formatting in the thread is all smashed together not clean". This used to
+  // demand ONE message of natural sentences with NO bullet points, so eleven tasks became one run-on
+  // sentence. The chat shows the text as-is (whitespace-pre-wrap, no markdown), so line breaks ARE the
+  // layout. The spoken "Hello Sir, just a reminder that ..." opening (owner, 2026-10-15) is kept.
   const spoken =
-    `Write it as ONE warm message in your own voice, phrased the way a personal assistant would say it ` +
-    `out loud — natural sentences, NO bullet points, NO headings. `;
+    `Write it in your own warm voice, laid out as SEPARATE SHORT LINES, never one long sentence: put ` +
+    `each meeting, class, task and later-in-the-week item on its OWN line starting "• ", with a blank ` +
+    `line between sections. Use plain text only (real line breaks, "• " for items, no ** or # or other ` +
+    `markdown). `;
   const weekAsk = week.length
-    ? `Then continue with "and later in the week you have …", naming each LATER THIS WEEK item by its day ` +
-      `(say "tomorrow" where it is labelled Tomorrow, otherwise the weekday) and its time. `
+    ? `After a blank line, write "Later this week:" and then each LATER THIS WEEK item on its OWN line ` +
+      `as "• <day>, <time> — <item>" (say "Tomorrow" where it is labelled Tomorrow, otherwise the ` +
+      `weekday). `
     : w
       ? ``
       : `There is nothing later in the week, so do not mention the rest of the week. `;
+  // Owner, 2026-10-28: he wants the morning (and the evening look at tomorrow) to ASK whether anything
+  // needs adjusting, with the button to the Schedule tab (attached from the payload's navLink). A window
+  // message is a mid-day heads-up, so it carries the button but no question.
+  const adjustAsk = w
+    ? ``
+    : `End with a blank line and ONE short line asking whether he wants to adjust anything ` +
+      `${brief.edition === "evening" ? "for tomorrow" : "today"}, saying the "${SCHEDULE_NAV_LINK.label}" ` +
+      `button below takes him to the Schedule tab. `;
   const reportOnly =
     `This is a REPORT-ONLY turn — everything above is already known, so do NOT call any tool, do not ` +
     `invent anything that is not listed, and do not paste raw JSON. Keep it skimmable.`;
@@ -211,9 +243,11 @@ export function briefDeliveryPlan(
         `Open with "Hello Sir," and say there is nothing on the calendar ${when}` +
         (brief.tasks !== undefined ? ` and no tasks scheduled` : ``) + `. ` +
         (week.length
-          ? `Then add "but later in the week you have …", naming each LATER THIS WEEK item by its day ` +
-            `(say "tomorrow" where it is labelled Tomorrow, otherwise the weekday) and its time. `
+          ? `Then, after a blank line, write "Later this week:" and each LATER THIS WEEK item on its OWN ` +
+            `line as "• <day>, <time> — <item>" (say "Tomorrow" where it is labelled Tomorrow, otherwise ` +
+            `the weekday). `
           : `Keep it to one or two sentences. `) +
+        adjustAsk +
         reportOnly,
     };
   }
@@ -224,11 +258,13 @@ export function briefDeliveryPlan(
     directive:
       `${day} — here is what is on:\n${lines.length ? lines.join("\n") : "(no meetings or classes)"}${taskBlock}\n${weekBlock}\n\n` +
       spoken +
-      `Open with "Hello Sir," then say "just a reminder that ${when} you have …", naming exactly the ` +
-      `meetings and classes listed, earliest first, each with its time (if there are none, say there are no ` +
-      `meetings). Mention a location only when one is given. ` +
+      `Open with "Hello Sir," then say "just a reminder that ${when} you have …", then the ` +
+      `meetings and classes listed, earliest first, each on its OWN line as "• <time> — <name>" (if there ` +
+      `are none, finish the opening line with "no meetings or classes."). Mention a location only when one ` +
+      `is given. ` +
       tasksAsk +
       weekAsk +
+      adjustAsk +
       `${brief.errors.length ? `Say plainly that one source could not be read (${brief.errors.join("; ")}), so this may be incomplete. ` : ""}` +
       reportOnly,
   };
@@ -363,6 +399,8 @@ export async function runScheduleBrief(
     caller,
     notify: "push", // this IS the alert — the whole point is that it reaches the phone
     internal: true, // system-originated digest — never pass along / defer
+    navLink: SCHEDULE_NAV_LINK,
+    pushStyle: scheduleBriefPush(brief.edition, opts.window),
   };
 
   try {

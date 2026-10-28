@@ -12,6 +12,7 @@
 
 import {
   priorityCheckDirective,
+  priorityCheckPush,
   priorityCheckTurnId,
   summarizeBand,
 } from "../src/features/huddle/lib/tasks/priority-check.server";
@@ -140,6 +141,25 @@ check("P20 Send now calls the scheduler's own runner with a fresh runId",
   const app = readFileSync("src/features/huddle/components/HuddleApp.tsx", "utf8");
   check("P-NAV9 both delivery paths map navLink onto the message",
     /navLink: reply\.navLink,/.test(app) && /navLink: reply\.navLink,/.test(hv));
+}
+
+// P-STICK / P-LAYOUT — owner 2026-10-28: "it did ask but because it didn't stick i missed it. also the
+// formatting in the thread is all smashed together not clean". The 8pm check went out as "Iris Chase
+// replied" one second before the 8pm brief with the same title, and cleared when tapped.
+{
+  check("P-STICK1 evening push is named for what it asks", priorityCheckPush("evening").title === "Iris: confirm tomorrow's priorities");
+  check("P-STICK2 morning push is named for today", priorityCheckPush("morning").title === "Iris: confirm today's priorities");
+  check("P-STICK3 the priority check push stays in the shade", priorityCheckPush("evening").sticky === true);
+  const src = readFileSync("src/features/huddle/lib/tasks/priority-check.server.ts", "utf8");
+  check("P-STICK4 the payload carries the push style for its own edition", /pushStyle: priorityCheckPush\(edition\),/.test(src));
+  const named = summarizeBand(
+    [row({ title: "Alpha" }), row({ title: "Bravo" }), row({ title: "Charlie" }), row({ title: "Delta" })],
+    "evening", today, dueKey);
+  const d = priorityCheckDirective(named);
+  check("P-LAYOUT1 asks for separate short lines, one priority per line", /SEPARATE SHORT LINES/.test(d) && /ONE PER LINE, each line starting "• "/.test(d), d);
+  check("P-LAYOUT2 plain text only (the chat does not render markdown)", /no \*\* or #/.test(d), d);
+  check("P-LAYOUT3 the question stays on its own line after a blank line", /a blank line, then ONE short line asking whether these are still right/.test(d), d);
+  check("P-LAYOUT4 no longer asks for two or three run-together lines", !/TWO or THREE short spoken lines/.test(d), d);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

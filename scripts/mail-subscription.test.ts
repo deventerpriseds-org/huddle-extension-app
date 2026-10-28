@@ -103,12 +103,13 @@ check("P4 any other turn keeps the old push", inboundEmailPush(undefined) === nu
 
 const fns = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
 check(
-  "P5 push delivery uses the email title",
-  /const title = emailPush\?\.title \?\? `\$\{name\} replied`;/.test(fns),
+  "P5 push delivery uses the email title (via turnPushStyle, which defers to inboundEmailPush)",
+  /stylePush = turnPushStyle\(record\.payload\);/.test(fns) &&
+    /const title = stylePush\?\.title \?\? `\$\{name\} replied`;/.test(fns),
 );
 check(
   "P6 push delivery forwards sticky",
-  /\.\.\.\(emailPush\?\.sticky \? \{ sticky: "true" \} : \{\}\)/.test(fns),
+  /\.\.\.\(stylePush\?\.sticky \? \{ sticky: "true" \} : \{\}\)/.test(fns),
 );
 
 const route = readFileSync("src/routes/api/public/graph-mail-notify.ts", "utf8");
