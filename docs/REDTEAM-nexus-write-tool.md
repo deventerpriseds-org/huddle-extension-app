@@ -215,4 +215,16 @@ Baseline = origin/main 4809e2e, measured by checking it out in this worktree and
 
 ## 3. Results
 
-21 WRONG findings (W1-W21; W1-W8, W10, W17-W21 rated HIGH), each pinned by a failing test.
+21 WRONG findings (W1-W21), each pinned by at least one failing test. Measured on 507e13b:
+`bun scripts/nexus-write-redteam.test.ts` -> 0 passed, 39 failed; `bun scripts/router-redteam.test.ts`
+-> 0 passed, 12 failed. The builder's own suites are untouched and still green (115/115, 39/39).
+
+| Severity | Findings |
+|---|---|
+| HIGH (12) | W1 recurring titles collapse, W2 same-day subset over-match, W3 concurrent double insert, W4 session-with-noun filed, W5 meeting vocabulary gaps, W8 stray denial word launders a false save, W10 mixed-batch laundering, W17 group teammate unguarded, W18 voice unguarded, W19 other lanes stolen (group), W20 1:1 hand-off out of own lane + DM, W21 AC-F2-42 symptom for "case analysis" |
+| MEDIUM (4) | W6 holiday/admin gaps, W7 undated row swallows the new date, W9 `EST` one hour late, W11 unknown claim phrasing appended-to not replaced |
+| LOW (5) | W12 readings, W13 DST-gap moved earlier, W14 non-Latin dedup, W15 empty-normalised course ref, W16 float points dropped silently |
+
+Not attacked live (offline brief): AC-F2-40's LLM-router path -- the LLM router prompt now carries
+`[prime for: …]` on Elle/Iris, so W19's over-match may also appear there; measure with the
+`test-agent-serverfn` harness before claiming either way.
