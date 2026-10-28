@@ -845,6 +845,10 @@ export async function executeRealtimeTool(
     }
     return done(JSON.stringify({ error: `Tool not available on the voice path: ${name}` }));
   } catch (err) {
-    return done(JSON.stringify({ error: err instanceof Error ? err.message : String(err), tool: name }));
+    // V1 (docs/FIX-nexus-write-voice-gate.md): a THROW is a failure, said explicitly -- `ok:false`, and for the
+    // Nexus write `persisted:"unknown"` (the throw may have come after the POST landed). Without `ok:false` the
+    // voice gate read `{error,tool}` as a clean write and appended an empty "Saved in Nexus:" list.
+    const error = err instanceof Error ? err.message : String(err);
+    return done(JSON.stringify(name === NEXUS_WRITE_TOOL_NAME ? { ok: false, persisted: "unknown", error, tool: name } : { ok: false, error, tool: name }));
   }
 }
