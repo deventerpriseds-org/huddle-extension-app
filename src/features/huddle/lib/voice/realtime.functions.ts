@@ -74,7 +74,7 @@ export const getRealtimeSession = createServerFn({ method: "POST" })
 
       if (data.agentId) {
         const [instructions, toolset] = await Promise.all([
-          assembleRealtimeInstructions(data.agentId, { memoryQuery: data.memoryQuery }),
+          assembleRealtimeInstructions(data.agentId, { memoryQuery: data.memoryQuery, caller: data.caller }),
           buildRealtimeToolset(data.agentId, {
           webSearch: data.webSearch,
           journey: data.journey,
@@ -158,7 +158,7 @@ export const warmupRealtime = createServerFn({ method: "POST" })
     if (!data.agentId) return { ok: false };
     try {
       await Promise.all([
-        assembleRealtimeInstructions(data.agentId, { memoryQuery: data.memoryQuery }),
+        assembleRealtimeInstructions(data.agentId, { memoryQuery: data.memoryQuery, caller: data.caller }),
         buildRealtimeToolset(data.agentId, {
           webSearch: data.webSearch,
           journey: data.journey,
