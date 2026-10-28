@@ -25,6 +25,8 @@ import {
   type PromptDebug,
 } from "./fallbacks";
 import { buildRoster } from "./roster";
+// Pure (no server imports) -- the Nexus write tool's reply-honesty guard, run in reply assembly.
+import { enforceNexusWriteHonesty } from "./nexus/nexus-write-shared";
 import {
   resolveByDifficulty,
   resolveModel,
@@ -3612,6 +3614,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // than one that exists and fails.
         const { nexusReadTools } = await import("./nexus/nexus.server");
         const nexusTools = nexusReadTools() as { type: "function"; name: string }[];
+        // Nexus WRITE (add/update dated assignments). Same pool for EVERY agent -- Elle and Iris are
+        // made prime by routing data (agents.ts), not by gating the tool. Empty unless the base URL,
+        // the owner id AND the UAT token are all configured (nexus-write.server.ts).
+        const { nexusWriteTools } = await import("./nexus/nexus-write.server");
+        const nexusWriteToolList = nexusWriteTools() as { type: "function"; name: string }[];
         const mergedTools = [
           createHuddleTaskTool,
           createHuddleTasksTool,
@@ -3650,6 +3657,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           ...journeyTools,
           ...webSearchTools,
           ...nexusTools,
+          ...nexusWriteToolList,
         ];
         toolTypes = mergedTools
           .map((t) => {
@@ -4369,6 +4377,29 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             }
             recordToolUse(winner.id, c.name, ok ? `${label} rendered` : `${label} -- failed`, ok, detail);
             return out;
+          }
+          const nexusWriteMod = await import("./nexus/nexus-write.server");
+          if (c.name === nexusWriteMod.NEXUS_WRITE_TOOL_NAME) {
+            // Mutating: an IDENTICAL write is claimed once per turn, so two group responders running in
+            // one parallel wave cannot both POST the same deliverable (the dedup read would race).
+            const writeArgs = (c.arguments ?? {}) as Record<string, unknown>;
+            if (!claimAction(`${c.name}:${JSON.stringify(writeArgs)}`)) {
+              recordToolUse(winner.id, c.name, "Nexus write -- already done this turn", true);
+              return JSON.stringify({
+                ok: false,
+                persisted: false,
+                error: "already_done_this_turn",
+                note: "A teammate already sent this exact write this turn; refer to that result instead of repeating it.",
+              });
+            }
+            const out = await nexusWriteMod.executeNexusWriteTool(writeArgs, {
+              ref: `huddle:${data.huddleId}:turn:${turnId ?? "sync"}:agent:${winner.id}`,
+            });
+            const { summary, ok } = nexusWriteMod.nexusWriteSummary(out);
+            // The FULL result rides in `detail`: the reply-assembly reads it back to enforce that the
+            // agent does not claim a save that did not happen (enforceNexusWriteHonesty).
+            recordToolUse(winner.id, c.name, summary, ok, JSON.stringify(out));
+            return JSON.stringify(out);
           }
           const nexusMod = await import("./nexus/nexus.server");
           if (nexusMod.NEXUS_TOOL_NAMES.has(c.name)) {
@@ -6538,7 +6569,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // any self-authored markdown link from the text so the user never sees a fake "open the document" link.
     // Also backstop file_search's own narration tendency (house-style bans it in prose; the model still
     // does it — see stripFileMentionNarration above).
-    const safeText = stripFileMentionNarration(stripAgentReplyLinks(finalText));
+    // Nexus write honesty (code, not prompt): a reply may not claim an assignment was saved when this
+    // agent's write_nexus_assignments result says it was not. Pass-through when no write failed.
+    const safeText = enforceNexusWriteHonesty(
+      stripFileMentionNarration(stripAgentReplyLinks(finalText)),
+      r.toolUses,
+    );
     // A confirm-intent ask this reply IS, if the agent called propose_task_intent this same turn — mirrors
     // replyArtifacts's derivation exactly (detail carries the structured payload as JSON rather than a
     // path, since there's no natural id/path shape here). Deliberately NOT the attachArtifacts/
