@@ -100,7 +100,11 @@ console.log("=== Teammate honesty (W17) ===");
   t("FX-G4 the first write's outcome is stored by claim key", /nexusWriteOutcomes\.set\(claimKey, pending/.test(fn), true);
   t("FX-G5 the suppressed call returns the first call's results", /return JSON\.stringify\(\{ \.\.\.firstOut, already_done_this_turn: true/.test(fn), true);
   t("FX-G6 reply assembly passes teammates' writes to the guard", /turnNexusWriteUses\.filter\(\(u\) => u\.agentId !== nextId\)/.test(fn), true);
-  t("FX-G7 the claim is keyed on the normalised items, not raw JSON", /claimAction\(claimKey\)/.test(fn) && !/claimAction\(`\$\{c\.name\}:\$\{JSON\.stringify\(writeArgs\)\}`\)/.test(fn), true);
+  t(
+    "FX-G7 the claim is keyed on the normalised items, not raw JSON",
+    /const claimKey = `\$\{c\.name\}:\$\{nexusWriteMod\.nexusWriteClaimKey\(writeArgs\)\}`;\s*\n\s*if \(!claimAction\(claimKey\)\)/.test(fn),
+    true,
+  );
   const unk = nexusWriteUnknownOutcome({ items: [{ title: "A" }, { title: "B" }] }) as { results: Row[] };
   t("FX-G8 an outcome from an earlier chunk is 'unknown', never ok", unk.results.map((r) => r.persisted).join(","), "unknown,unknown");
 }
