@@ -48,15 +48,35 @@ export function routeDeepAsk(shape: AskShape | null): DeepAskRoute {
  * still NOT acceptance: the answer the offer rode on may itself end in a question.
  */
 const OFFER_ACCEPT =
-  /^(?:(?:yes|yeah|yep|ok(?:ay)?|sure)[,!.]?\s+)?(?:please\s+)?(?:produce(?:\s+(?:it|that|the full version))?|(?:(?:give me|send me|i want|i'?d like)\s+)?the full version|full version|make it a task|put it on the board|work it up)(?:\s*,?\s*please)?[\s.!]*$/;
+  /^(?:(?:yes|yeah|yep|ok(?:ay)?|sure|go ahead(?: and)?|let'?s|please)[,!.]?\s*(?:[-–—]\s*)?)*(?:produce(?:\s+(?:it|that|the full version))?(?:\s+now)?|(?:(?:give me|send me|i want|i'?d like|go with|do)\s+)?the full version|full version|make it a task|put it on the board|work it up)(?:\s*,?\s*(?:please|pls|thanks))?[\s.!]*$/;
+
+/** Markdown emphasis (the offer line itself bolds **produce**) and emoji never change the meaning. */
+function normaliseReply(text: string): string {
+  return (text || "")
+    .replace(/[‘’‛ʼ]/g, "'")
+    .replace(/[*_`]/g, "")
+    .replace(/\p{Extended_Pictographic}|\uFE0F/gu, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 /** Offers expire fast: they answer the reply that carried them, not something said an hour later. */
 export const OFFER_TTL_MS = 30 * 60_000;
 
 export function isOfferAccepted(text: string): boolean {
-  const n = (text || "").replace(/[‘’‛ʼ]/g, "'").toLowerCase().replace(/\s+/g, " ").trim();
+  const n = normaliseReply(text);
   if (!n || n.length > 60 || isNegatedOrAsked(n)) return false;
   return OFFER_ACCEPT.test(n);
+}
+
+/**
+ * Does the reply talk ABOUT the offer without accepting it ("produce it tomorrow?")? Then the offer is
+ * kept for its TTL, so a plain "produce" straight after still works instead of finding nothing pending
+ * (VERIFY-deep-ask-hybrid-2.md AC4: a near-miss used to clear the offer).
+ */
+export function mentionsProduceOffer(text: string): boolean {
+  return /\bproduce\b|\bfull version\b/.test(normaliseReply(text));
 }
 
 export const PRODUCE_OFFER_LINE =

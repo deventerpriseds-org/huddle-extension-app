@@ -8,7 +8,14 @@ import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, Task
 // declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
 // and the reply DTOs are shared with the client bundle.
 import type { PrioritiesWidgetData, ScheduleWidgetData } from "./tasks/widgets.server";
-import { OFFER_TTL_MS, appendProduceOffer, isOfferAccepted, routeDeepAsk, type AskShape } from "./tasks/ask-shape";
+import {
+  OFFER_TTL_MS,
+  appendProduceOffer,
+  isOfferAccepted,
+  mentionsProduceOffer,
+  routeDeepAsk,
+  type AskShape,
+} from "./tasks/ask-shape";
 import {
   parseMentions,
   routeMessage,
@@ -1600,10 +1607,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // second copy of fifty lines that would drift the first time one of them was touched.
       const runProduce = async (agentId: AgentId, askText: string, note: string) => {
         const title = produceTitleFrom(askText);
-        // Create the produce task on the board (dual-write to journey). Non-fatal.
+        // Create the produce task on the board (dual-write to journey). Non-fatal. Honour the agent's
+        // journey toggle like every other board write: a turn sent with journey:{enabled:false} (every
+        // test harness) must never land on the real board or kick a forced auto-work pass.
+        // (VERIFY-deep-ask-hybrid-2.md AC9: this path checked only the caller email.)
+        const journeyOn = data.agents?.[agentId]?.journey?.enabled !== false;
         let created = false;
         try {
-          if (data.caller?.entra_email) {
+          if (journeyOn && data.caller?.entra_email) {
             const { invokeJourneyTool } = await import("./journey/proxy.functions");
             const r = await invokeJourneyTool({
               toolName: "quick_create_task",
@@ -1638,11 +1649,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           );
         }
         // Kick the async WIP pipeline (fire-and-forget; the gated 9/13/17 cadence also picks it up).
-        try {
-          const { runScheduledAutoWork } = await import("./tasks/autowork.server");
-          void runScheduledAutoWork(data.caller, { force: true }).catch(() => {});
-        } catch {
-          /* best-effort */
+        if (journeyOn) {
+          try {
+            const { runScheduledAutoWork } = await import("./tasks/autowork.server");
+            void runScheduledAutoWork(data.caller, { force: true }).catch(() => {});
+          } catch {
+            /* best-effort */
+          }
         }
         return finalize({
           decision: {
@@ -1676,7 +1689,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           const agentId = (pending.agentId as AgentId) ?? routed.winners[0] ?? data.members[0];
           return runProduce(agentId, pending.askText, "produce-offer: accepted");
         }
-        await clearPendingDeepConfirm(email, data.huddleId);
+        // A reply that only NEARLY accepts ("produce it tomorrow?") keeps the offer for its TTL so a
+        // plain "produce" right after still works; anything unrelated retires it.
+        if (!mentionsProduceOffer(data.text)) await clearPendingDeepConfirm(email, data.huddleId);
       } else if (pending) {
         // A legacy held ask (written before the hybrid shipped) — answered exactly as before.
         const verdict = classifyConfirmReply(data.text);
@@ -1745,6 +1760,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       console.warn(
         `[huddle-model] deep-confirm gate error: ${err instanceof Error ? err.message : String(err)}; proceeding without gate.`,
       );
+      // The tier pin needs no database, so a failed email/identity lookup above must not leave a
+      // difficulty>=3 ask unpinned on o3/Sol (VERIFY-deep-ask-hybrid-2.md, out-of-scope finding 3).
+      // No offer here: without the email there is nowhere to record it.
+      if (!deepManual && (routed.difficulty ?? 2) >= 3) {
+        deepManual = routeDeepAsk(askShape) === "act-now" ? "budget" : "terra-med";
+        if (deepManual === "terra-med") routed.difficulty = 2;
+      }
     }
   }
 
@@ -4714,7 +4736,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // routine→Luna-low, standard→Luna-high, deep→Sol-high. Escalating THINKING on the cheap model
         // (luna-high ≈ terra-med at ~1/9 cost, measured) beats jumping the model, so most turns run Luna
         // with more effort and only genuinely deep asks reach Sol. Sol auto-spend is gated upstream (a
-        // fresh 1:1 deep ask is confirm-gated), so if we still see needsConfirm here (a group deep ask,
+        // fresh 1:1 deep ask is pinned to budget/terra-med by the deep-ask hybrid), so if we still see needsConfirm here (a group deep ask,
         // or an un-gated path) we do NOT silently spend Sol — we drop to the Terra-high budget. A manual
         // override (deepManual) always wins and clears the gate. Guarded: any failure keeps the static
         // agent-backend model so a bad resolve never breaks the turn.

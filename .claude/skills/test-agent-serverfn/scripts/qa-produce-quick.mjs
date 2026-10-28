@@ -1,7 +1,9 @@
 // Live smoke for the deep-1:1 HYBRID (tasks/ask-shape.ts) — run in GHA via agent-serverfn-uat.yml
 // (the sandbox cannot reach the SWA). SUPERSEDES this file's earlier produce-vs-quick HOLD cases
-// (2026-10-28): a fresh deep ask is no longer held. All turns use journey:{enabled:false} + Test-
-// prefixed text so NOTHING is written to the real board. Observables from the deployed response:
+// (2026-10-28): a fresh deep ask is no longer held. Every turn uses journey:{enabled:false}, and the
+// produce path honours that toggle (huddle.functions.ts runProduce `journeyOn`), so the Case 2
+// acceptance writes NO board task and kicks NO auto-work. Asks are Test- prefixed; the bare "produce"
+// in Case 2 cannot be (it must be the whole reply to count). Observables from the deployed response:
 //   • Case 1 (deliverable deep ask, Finn) → answered NOW: reason has "[deep-ask: answer-with-offer]"
 //     (when it scores >=3), a real answer, and the reply ends with the "Reply **produce**" offer.
 //   • Case 2 ("produce" in the SAME dm) → reason has "[produce-offer: accepted]".
@@ -80,15 +82,17 @@ const OFFER_RE = /Reply \*\*produce\*\*/;
   const t1 = firstText(c1);
   console.log(`http=${c1.http} reason="${c1.reason}"\nreply: ${t1.slice(0, 300)}`);
   check("not held behind the old question", notHeld(c1), c1.reason);
-  check("routed as answer-with-offer", /deep-ask: answer-with-offer/.test(c1.reason || ""), c1.reason);
+  // The tag only appears when the ask scored >=3; the offer must appear exactly when the tag does.
+  check("offer present iff routed as answer-with-offer", /deep-ask: answer-with-offer/.test(c1.reason || "") === OFFER_RE.test(t1), c1.reason);
   check("a real answer came back", t1.replace(OFFER_RE, "").length > 300, `${t1.length} chars`);
-  check("reply ends with the produce offer", OFFER_RE.test(t1.slice(-200)));
+  check("ask scored deep and ends with the produce offer (precondition for Case 2)", OFFER_RE.test(t1.slice(-200)), c1.reason);
   check("no o3/Sol tier breadcrumb", !c1.reasoning.some((x) => /o3|sol\//i.test(String(x))), JSON.stringify(c1.reasoning));
 
   console.log("\n=== Case 2: 'produce' in the same dm (expect the offer accepted) ===");
   const c2 = await send({ agentId: "finn-reid", text: "produce" });
   console.log(`http=${c2.http} reason="${c2.reason}"\nreply: ${firstText(c2).slice(0, 200)}`);
   check("offer accepted", /produce-offer: accepted/.test(c2.reason || ""), c2.reason);
+  check("no board write (journey disabled)", /couldn't confirm the board write/i.test(firstText(c2)), firstText(c2).slice(0, 120));
 
   console.log("\n=== Case 3: act ask — plan my day (expect it DONE, no hold, no offer) ===");
   const c3 = await send({ agentId: "iris-chase", text: ACT_ASK });
@@ -101,7 +105,7 @@ const OFFER_RE = /Reply \*\*produce\*\*/;
 
   console.log("\n=== Case 4: a decline that mentions 'produce' must NOT accept the offer ===");
   await send({ agentId: "tess-sutton", text: DEEP_ASK });
-  const c4 = await send({ agentId: "tess-sutton", text: "no, produce nothing — I just wanted the summary" });
+  const c4 = await send({ agentId: "tess-sutton", text: "Test- no, produce nothing — I just wanted the summary" });
   console.log(`http=${c4.http} reason="${c4.reason}"`);
   check("decline not taken as acceptance", !/produce-offer: accepted/.test(c4.reason || ""), c4.reason);
 
