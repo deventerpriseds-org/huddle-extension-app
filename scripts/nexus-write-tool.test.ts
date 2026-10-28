@@ -278,6 +278,8 @@ console.log("=== AC-F2-14 / AC-F1-11..14 — dedup, and it must NOT over-match =
     { id: "x", title: "Research Paper Proposal", due_date: "2026-12-10T04:59:59Z" },
   ]);
   t("F1-12 subset match needs the SAME instant", direct ? "dup" : "none", "none");
+  const weighted = findDuplicate({ title: "Research Proposal (20%)", dueMs: null }, [{ id: "w", title: "Research Proposal", due_date: null }]);
+  t("F2-14 a grade weight is not part of the title", weighted ? String(weighted.row.id) : "none", "w");
   resetAssignments();
   r = await run([
     { course: "MGT-782", title: "Test-Same Batch Twice", due_date: "2026-11-15" },
