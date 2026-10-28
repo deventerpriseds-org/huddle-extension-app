@@ -34,3 +34,28 @@ behind-10s ask 20:51:07.772130 -> stamp = trunc(DB now) 20:51:27.776000.
   last_sent) and due; the 24h floor shifts < 1ms. Reachability: low -- every stamp written by claim is now
   ms-truncated, and the backfill copies confirm_ask_at, which is written from JS ISO strings (ms). Severity: none
   in practice; no change requested.
+
+## Re-check group: gate mutation (AC-27) -- CONFIRMED
+`mutate.sh src/features/huddle/lib/tasks/tasks.server.ts` replacing the user_id-branch
+`ORDER BY es.confirm_last_sent_at DESC NULLS LAST, es.updated_at DESC` with `ORDER BY es.updated_at DESC`
+(getPendingConfirmForAgent), test = local-PG confirm-reask-db.test.ts ->
+**FIRED**: 'AC-27 (linked user / user_id branch) a plain yes binds to the last-SENT ask' failed; restored; clean.
+(A first run with the marker 'FAIL AC-27' returned UNDETERMINED -- marker-format mismatch, not a result; re-run with the exact check name.)
+
+## M: merge 2258f7c, runProduce journeyOn gate -- CONFIRMED in source, with one UNGUARDED half
+Source read, huddle.functions.ts:1617-1685 on 883bd7e:
+- :1617 `journeyOn = data.agents?.[agentId]?.journey?.enabled === true` (opt-in; absent = off).
+- :1625 dedup READ (screenRawJourneyCreate -> loadOpenTaskTitles) runs only when `journeyOn && caller.entra_email`, else a literal `{action:"pass"}`.
+- :1643 the quick_create_task CREATE is `else if (journeyOn && caller.entra_email)`; :1678 auto-work kick `if (journeyOn)`.
+- So journey off: no dedup read, no create, no kick. Journey on: screen first, then create only on pass (AC-58; raw-create-dedup.test.ts:396 asserts screen-before-invoke and the skip branch, 30/30 pass).
+Mutations (mutate.sh, huddle.functions.ts):
+| mutation | test | outcome |
+|---|---|---|
+| :1643 drop `journeyOn &&` from the CREATE gate | npm run -s test:ask-shape | **FIRED** (`produce honours the journey toggle`) |
+| :1625 drop `journeyOn &&` from the dedup READ gate | test:ask-shape AND raw-create-dedup.test.ts | **INERT** -- nothing fails |
+The INERT one is NOT behaviourally equivalent: with journey off, the turn would read the real user's open board titles
+(the harness caller resolves to the live user), and if the title matched it would set alreadyOnBoard and reply
+"... is already on your board ... I've kicked it to the team" while :1678 kicks nothing. So the "journey off performs
+no dedup READ" half of claim M holds in today's source but has NO test protecting it. Severity: low (read-only, and
+only reachable by a future edit). Suggested row: extend the ask-shape regex (or the AC-58 test) to require
+`const dedup = journeyOn && data.caller?.entra_email`.
