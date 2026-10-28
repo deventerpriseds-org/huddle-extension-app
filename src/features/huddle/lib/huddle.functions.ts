@@ -52,12 +52,16 @@ import {
 // journey date normalization and the honest outcome note. Shared with the VOICE executor
 // (voice/realtime-tools.server.ts) so the two surfaces cannot drift; see create-task-core.ts.
 import {
+  annotateRawCreateOutput,
+  describeRawCreateSkip,
   loadOpenTaskTitles,
   normalizeJourneyDate,
   normalizeTaskTitle,
   screenCapabilityMetaTask,
+  screenRawJourneyCreate,
   splitTaskEntries,
   summarizeQuickCreateOutcome,
+  type OpenTitleLoad,
 } from "./tasks/create-task-core";
 import {
   detectCeremony,
@@ -1613,8 +1617,31 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         // or kicks a forced auto-work pass (VERIFY-deep-ask-hybrid-2.md AC9; -3.md caveat).
         const journeyOn = data.agents?.[agentId]?.journey?.enabled === true;
         let created = false;
+        // D7 / AC-58: the produce path called journey's quick_create_task with no dedup, so re-asking
+        // the same deep question filed the same produce task again. Same interception as every other
+        // raw create. A fresh ledger (not createdTaskTitles): runProduce runs BEFORE that per-turn
+        // ledger is declared below and ends the turn, so there is nothing in this turn to share with.
+        let alreadyOnBoard = false;
         try {
-          if (journeyOn && data.caller?.entra_email) {
+          const dedup = journeyOn && data.caller?.entra_email
+            ? await screenRawJourneyCreate(
+                "quick_create_task",
+                { title },
+                { ledger: new Set<string>(), loadTitles: () => loadOpenTaskTitles(data.caller) },
+              )
+            : ({ action: "pass" } as const);
+          if (dedup.action !== "pass" && dedup.dedupUnavailable) {
+            recordFallback(
+              "tool",
+              `duplicate-task check unavailable (${dedup.dedupUnavailable}) — produce task “${title}” created without it`,
+              "dedup unavailable",
+              agentId,
+            );
+          }
+          if (dedup.action === "skip") {
+            alreadyOnBoard = true;
+            recordToolUse(agentId, "quick_create_task", describeRawCreateSkip(dedup.skipped), true);
+          } else if (journeyOn && data.caller?.entra_email) {
             const { invokeJourneyTool } = await import("./journey/proxy.functions");
             const r = await invokeJourneyTool({
               toolName: "quick_create_task",
@@ -1679,7 +1706,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           replies: [
             {
               agentId,
-              text: created
+              text: alreadyOnBoard
+                ? `“${title}” is already on your board, so I didn't add a second copy — I've kicked it to the team to work up async. You'll get the draft to review. Want me to steer it any particular way?`
+                : created
                 ? `Done — I've put “${title}” on the board as a produce task and kicked it to the team to work up async. You'll get the draft to review. Want me to steer it any particular way?`
                 : `I'll take “${title}” on as a produce task and work it up async — you'll get the draft to review. (Heads up: I couldn't confirm the board write just now, so give it a quick check.)`,
             },
@@ -1887,13 +1916,16 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // duplicate of one that already exists. Best-effort: a failed read never blocks task creation.
   // normTitle / the mirror read now live in tasks/create-task-core.ts so the VOICE executor dedups
   // by the exact same rule — a title typed and the same title spoken must collide, not diverge.
+  // The same per-turn cache now also serves the RAW journey create interception
+  // (screenRawJourneyCreate, AC-55..AC-60), and carries `unavailable` so a failed read is reported
+  // as "dedup unavailable" by whichever agent hits it (AC-64) instead of passing as "no duplicates".
   const normTitle = normalizeTaskTitle;
-  let existingOpenTitles: Set<string> | null = null;
-  async function loadExistingOpenTitles(): Promise<Set<string>> {
+  let existingOpenTitles: OpenTitleLoad | null = null;
+  async function loadExistingOpenTitles(): Promise<OpenTitleLoad> {
     if (existingOpenTitles) return existingOpenTitles;
-    const set = await loadOpenTaskTitles(data.caller);
-    existingOpenTitles = set;
-    return set;
+    const load = await loadOpenTaskTitles(data.caller);
+    existingOpenTitles = load;
+    return load;
   }
 
   // 1:1 owner follow-up delivery (AC-4): when a non-owner defers in a DM ("Terry's better suited,
@@ -2790,6 +2822,54 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       };
     }
 
+    // AC-64 (owner OQ-6): when the open-title read failed, creates PROCEED but the gap is made
+    // VISIBLE — one "dedup unavailable" fallback per agent per turn, on whichever create path hit it
+    // first. Before this, a failed read was a silent empty set, indistinguishable from "no duplicates".
+    let dedupUnavailableReported = false;
+    function reportDedupUnavailable(reason: string | null, tool: string) {
+      if (!reason || dedupUnavailableReported) return;
+      dedupUnavailableReported = true;
+      const ev = recordFallback(
+        "tool",
+        `${winner.name}: duplicate-task check unavailable (${reason}) — ${tool} created without it`,
+        "dedup unavailable",
+        winner.id,
+      );
+      perAgentFallbacks.push(ev.inline);
+    }
+    /** The open-title set for create_huddle_task(s), reporting a failed read as it goes. */
+    async function openTitlesForCreate(tool: string): Promise<Set<string>> {
+      const load = await loadExistingOpenTitles();
+      reportDedupUnavailable(load.unavailable, tool);
+      return load.titles;
+    }
+
+    // RAW journey create interception (AC-55..AC-61, AC-67), shared by the OpenAI and Lovable journey
+    // dispatch exactly like maybeDeferStatusChange above. journey's catalog quick_create_task /
+    // parse_and_create_tasks / create_task bypassed every Huddle dedup (F14 D4/D5) and journey does not
+    // dedup either. Consults the SAME per-turn `createdTaskTitles` ledger as create_huddle_task, so a
+    // mixed sequence in one turn creates once (AC-60). Returns either the output to hand straight back
+    // to the model (skip) or the args to dispatch (unchanged, or a batch minus its duplicates).
+    async function guardRawJourneyCreate(
+      toolName: string,
+      rawArgs: unknown,
+    ): Promise<
+      | { skipOutput: string }
+      | { args: unknown; decision: Awaited<ReturnType<typeof screenRawJourneyCreate>> }
+    > {
+      const decision = await screenRawJourneyCreate(toolName, rawArgs, {
+        ledger: createdTaskTitles,
+        loadTitles: loadExistingOpenTitles,
+      });
+      if (decision.action === "pass") return { args: rawArgs, decision };
+      reportDedupUnavailable(decision.dedupUnavailable, toolName);
+      if (decision.action === "skip") {
+        recordToolUse(winner.id, toolName, describeRawCreateSkip(decision.skipped), true, undefined, rawArgs);
+        return { skipOutput: JSON.stringify(decision.result) };
+      }
+      return { args: decision.args, decision };
+    }
+
     function resolveTaskLane(value: unknown): TaskLane {
       const lane = String(value ?? "")
         .trim()
@@ -2858,7 +2938,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       }
       // Cross-agent / re-run dedup: if this exact title was already created earlier in this turn,
       // don't create a second card. The first caller claims the title here.
-      const titleKey = title.trim().toLowerCase();
+      // Keyed by THE normalizer (not a local lowercase) so the raw-create interception, which shares
+      // this ledger, collides with it whatever whitespace/punctuation either side used (AC-60).
+      const titleKey = normTitle(title);
       if (createdTaskTitles.has(titleKey)) {
         recordToolUse(
           winner.id,
@@ -2869,8 +2951,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         return { ok: true, deduped: true, task: { title: title.slice(0, 160) } };
       }
       // Cross-turn dedup: skip if an open task with this title already exists on the board.
-      const existing = await loadExistingOpenTitles();
-      if (existing.has(normTitle(title))) {
+      const existing = await openTitlesForCreate("create_huddle_task");
+      if (existing.has(titleKey)) {
         createdTaskTitles.add(titleKey);
         recordToolUse(
           winner.id,
@@ -3106,7 +3188,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       }
 
       // Per-entry guards (mirror the single path): exclusive-capability meta-task guard + dedup.
-      const existing = await loadExistingOpenTitles();
+      const existing = await openTitlesForCreate("create_huddle_tasks");
       const survivors: string[] = [];
       const skipped: Array<{ title: string; reason: string }> = [];
       const deferred: Array<{ title: string; handedTo?: string; reason: string }> = [];
@@ -3116,8 +3198,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           deferred.push({ title: entry, handedTo: titleOwner.handedTo, reason: titleOwner.reason });
           continue;
         }
-        const key = entry.trim().toLowerCase();
-        if (createdTaskTitles.has(key) || existing.has(normTitle(entry))) {
+        const key = normTitle(entry);
+        if (createdTaskTitles.has(key) || existing.has(key)) {
           createdTaskTitles.add(key);
           skipped.push({ title: entry, reason: "an open task with this title already exists" });
           continue;
@@ -4698,10 +4780,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 );
                 return JSON.stringify(defer);
               }
+              // Raw journey create dedup (D4, AC-55). Non-creates pass straight through (AC-67).
+              const dedup = await guardRawJourneyCreate(c.name, c.arguments);
+              if ("skipOutput" in dedup) return dedup.skipOutput;
               const { invokeJourneyTool } = await import("./journey/proxy.functions");
               const r = await invokeJourneyTool({
                 toolName: c.name,
-                args: c.arguments,
+                args: dedup.args as typeof c.arguments,
                 caller: data.caller ?? {},
                 context: {
                   source: "huddle",
@@ -4727,7 +4812,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 );
                 perAgentFallbacks.push(ev.inline);
               }
-              return r.output;
+              return annotateRawCreateOutput(r.output, dedup.decision);
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               recordToolUse(winner.id, c.name, `journey-voice · crashed`, false, msg);
@@ -6245,10 +6330,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                       );
                       return JSON.stringify(defer);
                     }
+                    // Raw journey create dedup (D5, AC-56). Non-creates pass straight through.
+                    const dedup = await guardRawJourneyCreate(def.name, args);
+                    if ("skipOutput" in dedup) return dedup.skipOutput;
                     const { invokeJourneyTool } = await import("./journey/proxy.functions");
                     const r = await invokeJourneyTool({
                       toolName: def.name,
-                      args: (args ?? {}) as Record<string, unknown>,
+                      args: (dedup.args ?? {}) as Record<string, unknown>,
                       caller: data.caller ?? {},
                       context: {
                         source: "huddle",
@@ -6273,7 +6361,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                       );
                       perAgentFallbacks.push(ev.inline);
                     }
-                    return r.output;
+                    return annotateRawCreateOutput(r.output, dedup.decision);
                   } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
                     recordToolUse(winner.id, def.name, `journey-voice · crashed`, false, msg);

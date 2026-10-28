@@ -61,10 +61,12 @@ import { LIST_ARTIFACTS_TOOL } from "../artifacts/artifact-tool";
 // journey date normalization and the honest outcome note. NOT a voice-local copy: huddle.functions.ts's
 // two task-create closures call these same functions, so the surfaces cannot drift.
 import {
+  annotateRawCreateOutput,
   loadOpenTaskTitles,
   normalizeJourneyDate,
   normalizeTaskTitle,
   screenCapabilityMetaTask,
+  screenRawJourneyCreate,
   splitTaskEntries,
   summarizeQuickCreateOutcome,
 } from "../tasks/create-task-core";
@@ -662,7 +664,12 @@ export async function executeRealtimeTool(
         );
       }
 
-      const seen = await loadOpenTaskTitles(ctx.caller);
+      const load = await loadOpenTaskTitles(ctx.caller);
+      const seen = load.titles;
+      // AC-64: a failed open-title read proceeds but is SAID, on every result below.
+      const dedupNote = load.unavailable
+        ? { dedup_note: "dedup unavailable — the duplicate check could not run, so this was created without it" }
+        : {};
       const survivors: string[] = [];
       const deferred: Array<{ title: string; handedTo?: string; reason: string }> = [];
       const skipped: Array<{ title: string; reason: string }> = [];
@@ -727,6 +734,7 @@ export async function executeRealtimeTool(
             deferred,
             skipped,
             boards: ["huddle", "journey"],
+            ...dedupNote,
           }),
         );
       }
@@ -771,6 +779,7 @@ export async function executeRealtimeTool(
           skipped,
           boards: ["huddle", "journey"],
           note: `State the exact number created (${created}); do not say "all of them" unless it matches what they asked for.`,
+          ...dedupNote,
         }),
       );
     }
@@ -821,13 +830,30 @@ export async function executeRealtimeTool(
     // latency). An unknown/unsupported name comes back as a journey error, surfaced to the model.
     if (!NATIVE.has(name)) {
       via = "journey";
+      // Raw journey create dedup (D6, AC-57) — the SAME interception the text dispatchers use
+      // (tasks/create-task-core.ts). journey's catalog quick_create_task / parse_and_create_tasks /
+      // create_task are offered on voice too and journey does not dedup. A per-call ledger: voice has no
+      // turn-scoped one, and it still dedups repeats inside one batch. Non-creates pass untouched.
+      const dedup = await screenRawJourneyCreate(name, args, {
+        ledger: new Set<string>(),
+        loadTitles: () => loadOpenTaskTitles(ctx.caller),
+      });
+      if (dedup.action === "skip") {
+        return done(
+          JSON.stringify(
+            dedup.dedupUnavailable
+              ? { ...dedup.result, dedup_note: "dedup unavailable" }
+              : dedup.result,
+          ),
+        );
+      }
       const r = await invokeJourneyTool({
         toolName: name,
-        args,
+        args: dedup.action === "forward" ? dedup.args : args,
         caller: ctx.caller ?? {},
         context: { source: "huddle", huddleId: ctx.huddleId, agentId: ctx.agentId },
       });
-      return done(r.output);
+      return done(annotateRawCreateOutput(r.output, dedup));
     }
     return done(JSON.stringify({ error: `Tool not available on the voice path: ${name}` }));
   } catch (err) {
