@@ -20,6 +20,7 @@ import {
   TRANSCRIPT_PAGE,
   TRANSCRIPT_WINDOW,
   anchoredScrollTop,
+  pinnedStartOnScroll,
   createFollowState,
   isNearBottom,
   olderStart,
@@ -156,13 +157,49 @@ console.log("D. revealing older history");
     shouldRevealOlder(box(3, 0), 10),
     "scrollHeight<=clientHeight",
   );
-  const before = box(40, 50);
-  const after = box(80, 0).scrollHeight;
-  const top = anchoredScrollTop(before, after);
+  // The anchor row sat 20px below the viewport top; 40 rows were prepended above it, so it moved down
+  // by 40*ROW. Keeping it at 20px means scrolling down by exactly that much.
+  const prepended = 40 * ROW;
+  const top = anchoredScrollTop(50, 20, 20 + prepended);
   check(
     "D5 prepending keeps the same message under the reader",
-    top === 50 + 40 * ROW,
-    `scrollTop ${before.scrollTop} → ${top} after ${after - before.scrollHeight}px prepended`,
+    top === 50 + prepended,
+    `scrollTop 50 → ${top} after ${prepended}px prepended`,
+  );
+  // Same render ALSO appends a new message at the bottom. The anchor row's own position is unchanged by
+  // that, so the result must be too. The old height-delta formula added the new row's height here.
+  const topWithNewRow = anchoredScrollTop(50, 20, 20 + prepended);
+  const oldFormula = 50 + (prepended + ROW);
+  check(
+    "D6 a new message arriving in the same render does not shift the reader",
+    topWithNewRow === 50 + prepended && topWithNewRow !== oldFormula,
+    `scrollTop ${topWithNewRow} (height-delta anchoring would give ${oldFormula})`,
+  );
+  check(
+    "D7 browser already held the row: no extra scroll",
+    anchoredScrollTop(3650, 20, 20) === 3650,
+    "delta 0",
+  );
+}
+
+console.log("E. scrolling up freezes the window");
+{
+  check(
+    "E1 following keeps the sliding window",
+    pinnedStartOnScroll(true, null, 260) === null,
+    "null",
+  );
+  check(
+    "E2 scrolling up pins the current start",
+    pinnedStartOnScroll(false, null, 260) === 260,
+    "260",
+  );
+  check("E3 an existing pin is kept", pinnedStartOnScroll(false, 220, 260) === 220, "220");
+  check("E4 a short thread pins at 0 too", pinnedStartOnScroll(false, null, 0) === 0, "0");
+  check(
+    "E5 once pinned, a new message does not drop the top row",
+    windowStart(301, pinnedStartOnScroll(false, null, windowStart(300, null))) === 260,
+    `start stays ${windowStart(301, 260)}`,
   );
 }
 

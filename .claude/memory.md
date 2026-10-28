@@ -128,6 +128,15 @@ bypass seed the workspace is NOT on the deep-linked thread (the `hydrateFromRemo
 own — both made the pre-fix code PASS. `e2e/transcript-deeplink.e2e.mjs` asserts the precondition
 (1:1 active, empty, scrollTop 0) and refuses to run without it.
 
+### Testing a deep link on the owner's phone (2026-10-28)
+`test-push.yml` (workflow_dispatch) takes an optional `huddle_id` (e.g. `dm-iris-chase`); the push then carries the
+same `data.deepLink=/?huddle=<id>` a real 1:1 reply does, so a tap exercises deep-link landing with NO agent turn and
+no board write. Chain (read from source): test-push.ts -> journey execute-tool sendPushNow (spreads args.data) ->
+send-push-notification (app:"huddle" -> only `fcm:app:huddle:%` tokens; fcmData.deepLink) -> Android bridge
+MainActivity deepLink extra -> HuddleApp `params.get("huddle")`. Pushes expire after 120s (TTL), so a missed one must
+be re-sent, not waited for. First send: run 40727708245, HTTP 200 "Push sent on messages" (proves journey accepted it,
+NOT that the phone displayed it). Owner email for journey: von.ellis@enterpriseds.io.
+
 ## Iris schedule brief = meetings + classes + TASKS, per day AND per journey window (2026-10-15, DEPLOYED, NOT owner-confirmed)
 - **Calendar mailbox is NOT the data-scope email.** Owner's Outlook meetings live in the journey-connected
   account (Von.Ellis@, `calendar_connections.provider_account_email`); dev@'s calendar is empty. Every Graph

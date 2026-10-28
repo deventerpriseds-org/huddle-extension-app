@@ -164,6 +164,73 @@ report(
   `scrollTop ${topBefore} → ${m.top}`,
 );
 
+// WebKit (Safari/iOS) has no CSS scroll anchoring; Chromium's anchoring masks a window that slides
+// under a reader who scrolled up. Turn it off and re-check: scrolled up a little inside the NEWEST
+// window, a new message must not move the message under the reader (verifier loop 1, finding 3).
+{
+  const p2 = await browser.newPage({ viewport: { width: 420, height: 860 } });
+  await p2.goto(`http://127.0.0.1:${PORT}/?huddle=${HUDDLE}`, { waitUntil: "networkidle" });
+  await p2.waitForSelector(SEL, { timeout: 30000 });
+  await p2.addStyleTag({ content: "* { overflow-anchor: none !important; }" });
+  await p2.evaluate(
+    async ({ huddle, total }) => {
+      const store = await import("/src/features/huddle/store.ts");
+      const t0 = Date.now() - total * 60_000;
+      const messages = Array.from({ length: total }, (_, i) => ({
+        id: `e2e-${i}`,
+        huddleId: huddle,
+        author: { kind: "agent", agentId: "sam-trent" },
+        text: `Test-message ${i} — ` + "lorem ipsum dolor sit amet ".repeat(1 + (i % 4)),
+        ts: t0 + i * 60_000,
+      }));
+      store.hydrateFromRemote({ activeHuddleId: huddle, messages, showDemoData: false });
+    },
+    { huddle: HUDDLE, total: TOTAL },
+  );
+  await p2.waitForTimeout(800);
+  // Scroll up ~one screen: still inside the newest window, well clear of the reveal threshold.
+  await p2.$eval(SEL, (el) => {
+    el.scrollTop = el.scrollHeight - el.clientHeight - 900;
+  });
+  await p2.waitForTimeout(300);
+  const rowAtTop = () =>
+    p2.$eval(SEL, (el) => {
+      const top = el.getBoundingClientRect().top;
+      const rows = [...el.querySelectorAll("[data-msg-id]")];
+      const r = rows.find((n) => n.getBoundingClientRect().bottom > top + 1);
+      return r
+        ? { id: r.getAttribute("data-msg-id"), y: Math.round(r.getBoundingClientRect().top - top) }
+        : null;
+    });
+  const before = await rowAtTop();
+  await p2.evaluate(
+    async ({ huddle, total }) => {
+      const { useHuddleStore } = await import("/src/features/huddle/store.ts");
+      useHuddleStore.setState((s) => ({
+        messages: [
+          ...s.messages,
+          {
+            id: "e2e-new2",
+            huddleId: huddle,
+            author: { kind: "agent", agentId: "sam-trent" },
+            text: `Test-message ${total} new`,
+            ts: Date.now(),
+          },
+        ],
+      }));
+    },
+    { huddle: HUDDLE, total: TOTAL },
+  );
+  await p2.waitForTimeout(500);
+  const after = await rowAtTop();
+  report(
+    !!before && !!after && before.id === after.id && Math.abs(before.y - after.y) < 3,
+    "without browser scroll anchoring, a new message does not move the reader",
+    `row at top ${JSON.stringify(before)} → ${JSON.stringify(after)}`,
+  );
+  await p2.close();
+}
+
 await browser.close();
 console.log(failed ? `\n${failed} check(s) failed` : "\nall checks passed");
 process.exit(failed ? 1 : 0);
