@@ -2543,70 +2543,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
         }
         if (memoryQueryVec) {
-          // How many CANDIDATES the DB returns, and how many survive into the prompt. Split on purpose:
-          // fetching wide is cheap (one ANN query) while injecting wide is not -- every extra chunk rides
-          // in EVERY agent's prompt on EVERY turn, which is the cost/tail-latency item at the top of this
-          // repo's own optimization backlog. So: widen the funnel, keep the outlet modest.
-          const MEMORY_CANDIDATE_K = 20;
-          const MEMORY_INJECT_N = 8;
-          const { azurePgStore } = await import("./rag/azure-pg.server");
-          const hits = await azurePgStore.searchChunks({
-            query: data.text,
-            queryVec: memoryQueryVec,
-            agentId: winner.id,
-            mode: ragCfg.sharing ?? "shared",
-            // 20, not 6. THIS was the binding constraint, not the `.slice()` below: the SQL LIMIT is
-            // this k, so the database returned at most SIX rows and the relevance floor, the lane
-            // re-rank and any dedup could only ever reorder those six. A chunk the ANN ranked 7th was
-            // unreachable no matter how relevant. Raising the slice alone would have been an inert fix.
-            // 20 is the current server-side clamp ceiling (azure-pg.server.ts) -- deliberately AT it
-            // rather than above, so nothing is silently truncated.
-            k: MEMORY_CANDIDATE_K,
-          });
+          // ONE retrieval step for every surface (rag/memory-context.server.ts): wide candidate fetch,
+          // relevance floor, this agent's topics ranked first, near-duplicate collapse. The voice call
+          // uses the same function, so typed and spoken 1:1s recall the same memory.
+          const { retrieveAgentMemory } = await import("./rag/memory-context.server");
           // Exclude the current message and anything already in this huddle's recent transcript,
           // so we surface only context the model wouldn't otherwise have (older / other-huddle).
-          const alreadyVisible = new Set(
-            [data.text, ...data.history.slice(-14).map((m) => m.text)].map((t) => t.trim()),
-          );
-          // Relevance floor calibrated for text-embedding-3-large, whose cosine scores run LOWER
-          // than older models: a strong topical match (e.g. "what is my dog's name?" vs a stored
-          // "my dog's name is Waffles") measures ~0.42, and unrelated text sits below ~0.25. The old
-          // 0.72 floor silently dropped every real hit. 0.3 keeps genuine matches, rejects noise.
-          const MEMORY_MIN_SCORE = 0.3;
-          // Role/domain-aware re-rank: within the relevance floor, gently prefer memory that matches
-          // THIS agent's lane — its domains/themes appear in the chunk, or it co-authored the chunk —
-          // so each agent surfaces the memory most relevant to what it actually owns, instead of the
-          // same generic top-K for everyone. Pure reorder over already-relevant hits (no SQL change).
-          const laneTerms = [...winner.domains, ...winner.themes]
-            .map((t) => t.toLowerCase())
-            .filter((t) => t.length >= 3);
-          const laneBoost = (h: { text?: string; authorAgentIds?: string[] }) => {
-            const t = (h.text || "").toLowerCase();
-            const termHit = laneTerms.some((kw) => t.includes(kw)) ? 0.12 : 0;
-            const authorHit = h.authorAgentIds?.includes(winner.id) ? 0.06 : 0;
-            return termHit + authorHit;
-          };
-          // Near-duplicate collapse. `alreadyVisible` only matches WHOLE strings, so it cannot catch
-          // two chunks that differ by a task title inside otherwise identical boilerplate. Without this,
-          // a family of near-identical rows can occupy every injected slot with the same sentence --
-          // which is exactly the shape of the 60 auto-work directives already in the store. Legacy rows
-          // stay in the store (deleting user history is destructive and not ours to decide); they are
-          // collapsed at READ time instead, so this also repairs the 713 rows already written.
-          const seenPrefix = new Set<string>();
-          const fresh = (hits ?? [])
-            .filter((h) => (h.score ?? 0) >= MEMORY_MIN_SCORE && !alreadyVisible.has(h.text.trim()))
-            .sort((a, b) => (b.score ?? 0) + laneBoost(b) - ((a.score ?? 0) + laneBoost(a)))
-            .filter((h) => {
-              const key = h.text.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 80);
-              if (seenPrefix.has(key)) return false;
-              seenPrefix.add(key);
-              return true;
-            })
-            .slice(0, MEMORY_INJECT_N);
-          console.info(
-            `[memory] agent=${winner.id} candidates=${(hits ?? []).length} afterFloor+dedup=${fresh.length} ` +
-              `injected=${Math.min(fresh.length, MEMORY_INJECT_N)} topScore=${(hits?.[0]?.score ?? 0).toFixed(3)}`,
-          );
+          const fresh = await retrieveAgentMemory({
+            query: data.text,
+            queryVec: memoryQueryVec,
+            agent: winner,
+            mode: ragCfg.sharing ?? "shared",
+            alreadyVisible: [data.text, ...data.history.slice(-14).map((m) => m.text)],
+          });
           if (fresh.length) {
             memoryBlock =
               "\n\nRelevant memory from earlier conversations (use only if it helps answer; do not repeat it verbatim or announce that you looked it up):\n" +
