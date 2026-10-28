@@ -214,12 +214,15 @@ const isoZ = (ms: number) => new Date(ms).toISOString().replace(/\.000Z$/, "Z");
 
 export type DueResolution =
   /**
-   * `zone` is ALWAYS the COURSE zone (the `time_zone` argument, else DEFAULT_COURSE_TZ) -- never the
-   * zone an ISO string happened to be written in. "Same local day" (dedup, claim key, labels) is a
-   * fact about the course calendar, so `2026-10-30T20:00:00Z` and `…T16:00:00-04:00` are the same day
-   * (D1, docs/FIX-nexus-write-loop2.md).
+   * `zone` is ONLY the zone a plain wall-clock date was INTERPRETED in (the `time_zone` argument, else
+   * DEFAULT_COURSE_TZ); for an ISO string with an offset/Z it is DEFAULT_COURSE_TZ (the argument is
+   * not used at all -- the offset says when). It is NEVER the dedup/label zone: "same local day" is a
+   * fact about the COURSE calendar, computed by the caller in `courseZoneOf(course)` (loop 3 D8,
+   * docs/FIX-nexus-write-loop3.md; replaces loop 2's "the time_zone argument decides the day").
+   * `writtenDay` is the calendar date exactly as a plain date was WRITTEN ("2026-10-30"), so a
+   * syllabus date interpreted in another zone still matches the stored row of that written day.
    */
-  | { ok: true; iso: string; ms: number; timeAssumed: boolean; zone: string; timeShifted?: boolean }
+  | { ok: true; iso: string; ms: number; timeAssumed: boolean; zone: string; timeShifted?: boolean; writtenDay?: string }
   | { ok: false; reason: "undated" | "ambiguous-date"; detail: string };
 
 /**
@@ -238,6 +241,8 @@ export function resolveDueInstant(
   if (!raw || /^(tbd|tba|n\/?a|none|unknown|pending|undated|-+)$/i.test(raw)) {
     return { ok: false, reason: "undated", detail: raw ? `"${raw}" is not a date` : "empty due date" };
   }
+  // The model's time_zone is VALIDATED for every input (garbage is refused, never silently dropped) but
+  // USED only to interpret a plain wall-clock date below (loop 3 D8).
   let zone = DEFAULT_COURSE_TZ;
   if (typeof timeZone === "string" && timeZone.trim()) {
     const z = resolveZone(timeZone);
@@ -245,14 +250,14 @@ export function resolveDueInstant(
     zone = z.zone;
   }
 
-  // Full ISO instant with an explicit offset: honour the offset, ignore time_zone.
+  // Full ISO instant with an explicit offset: honour the offset; the time_zone argument plays no part.
   let m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})$/i.exec(raw);
   if (m) {
     if (!validYmd(+m[1], +m[2], +m[3]) || +m[4] > 23 || +m[5] > 59) return { ok: false, reason: "ambiguous-date", detail: `"${raw}" is not a real date` };
     const ms = Date.parse(raw);
     if (!Number.isFinite(ms)) return { ok: false, reason: "ambiguous-date", detail: `"${raw}" is not a real date` };
-    // The offset says WHEN; the course zone (not "UTC"/"-04:00") says which DAY that is (D1).
-    return { ok: true, iso: isoZ(ms), ms, timeAssumed: false, zone };
+    // The offset says WHEN; which course DAY that is, is the caller's job in the course zone (D1/D8).
+    return { ok: true, iso: isoZ(ms), ms, timeAssumed: false, zone: DEFAULT_COURSE_TZ };
   }
 
   let y: number, mo: number, d: number, h: number, mi: number, s: number;
@@ -282,52 +287,92 @@ export function resolveDueInstant(
   }
   const ms = zonedLocalToUtcMs(y, mo, d, h, mi, s, zone);
   const timeShifted = isNonexistentLocal(y, mo, d, h, mi, s, zone) || undefined;
-  return { ok: true, iso: isoZ(ms), ms, timeAssumed, zone, timeShifted };
+  const writtenDay = `${String(y).padStart(4, "0")}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  return { ok: true, iso: isoZ(ms), ms, timeAssumed, zone, timeShifted, writtenDay };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-// WHAT IS AN ASSIGNMENT (AC-F2-11, OQ-11, AC-F1-20..23) -- ALLOW-LIST + DENY-ANYWHERE.
-// docs/FIX-nexus-write-loop2.md, D2. Two rounds of "the HEAD of the title decides" patching leaked on
-// punctuation ("Residency 4, present your research proposal" was accepted because only ":" / dash / "("
-// split the head). The rule is now structural and has no notion of a head at all:
+// WHAT IS AN ASSIGNMENT (AC-F2-11, OQ-11, AC-F1-20..23) -- ALLOW-LIST + DENY-ANYWHERE, ON A CANONICAL FORM.
+// Loop 2 (docs/FIX-nexus-write-loop2.md, D2) made the rule structural (no "head of the title"):
 //   1. DENY ANYWHERE. A meeting / session / class / event / holiday / break / admin word ANYWHERE in the
-//      title refuses it, whatever deliverable noun is also present (owner rule: "Residency 4, present
-//      your research proposal" is refused in every punctuation variant). The meeting word WINS.
-//   2. ALLOW-LIST. Otherwise the title must contain a graded-deliverable noun (paper, proposal, exam,
-//      case brief, problem set, …). A title with none ("Chapter 2", "Pre-read: Porter Five Forces",
-//      "Spring Recess") is refused -- as `reading` when it is shaped like a reading, else
-//      `not-a-deliverable`.
-// Accepted cost, by design: odd titles such as "Holiday Inn case study", "Seminar paper" or "Paper due
-// at Residency 4" are REFUSED. The refusal reason goes back to the agent so it can tell the owner; there
-// is deliberately no bypass argument. A title written in a non-Latin script is not judged by these
-// English lists (nothing in it can match either), so it is accepted on its date and course alone.
-// A leading "Test-" (the org's test-artifact prefix) is not read as the deliverable noun "test".
+//      title refuses it, whatever deliverable noun is also present. The meeting word WINS.
+//   2. ALLOW-LIST. Otherwise the title must contain a graded-deliverable noun (paper, proposal, exam, …).
+// Loop 3 (docs/FIX-nexus-write-loop3.md, D7): loop 2 ran those rules on the RAW title, so "Residency4",
+// "Residency_4", "ResidencyIV", "Ｒｅｓｉｄｅｎｃｙ 4", "Oﬃce hours", "Office hours" (NBSP), "Office  hours"
+// and "Re­sidency" (soft hyphen) were all ACCEPTED. Both rules now run on `canonicalTitle(title)` ONLY:
+// NFKC; Unicode default-ignorable / format characters removed (soft hyphen, ZWSP/ZWJ/ZWNJ, U+2060 …);
+// every Unicode space (NBSP …) and every non-letter/digit (- _ / . , : …) is ONE ASCII space; lower case;
+// a letter↔digit boundary is split ("residency4" -> "residency 4") and a roman numeral glued to a known
+// meeting word is split ("residencyiv" -> "residency iv"). The vocabularies below are written against
+// that canonical form. The code-built "Saved in Nexus" list (nexus-write-shared.ts) is the owner-visible
+// backstop for any remaining vocabulary gap: every accepted title is shown to him, verbatim.
+// Accepted cost, by design: odd titles such as "Holiday Inn case study", "Seminar paper" or "Cohort
+// analysis paper" are REFUSED with a reason; there is deliberately no bypass argument. A title written in
+// a non-Latin script is not judged by these English lists. A leading "Test-" (the org's test-artifact
+// prefix) is not read as the deliverable noun "test". An UPDATE that passes the row's EXISTING stored
+// title unchanged is not re-judged (see runNexusWrite): the filter applies to new/changed titles only.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-/** Graded-deliverable nouns (word-start; plurals tolerated). One of these must appear (rule 2). */
+
+/** Meeting-family words a numeral is glued to in the wild ("Residency4", "ResidencyIV", "Session2"). */
+const GLUED_NUMERAL_STEMS = [
+  "residency", "residence", "session", "seminar", "meeting", "class", "lecture", "workshop", "webinar",
+  "colloquium", "intensive", "weekend", "immersion", "orientation", "conference", "consortium", "summit",
+  "retreat", "gathering", "cohort", "convocation", "symposium", "week", "module",
+];
+const ROMAN = /^(?:i{1,3}|iv|vi{0,3}|ix|xi{0,3}|xiv|xv|xvi{1,3}|xix|xx)$/;
+
+/**
+ * THE canonical form every kind rule reads (D7). Pure; exported for the tests.
+ *   NFKC -> drop default-ignorable/format chars -> lower case -> any non-letter/digit (incl. every Unicode
+ *   space) to " " -> split letter|digit boundaries -> split <meeting word><roman numeral> -> collapse spaces.
+ */
+export function canonicalTitle(raw: string | null | undefined): string {
+  let s = String(raw ?? "").normalize("NFKC");
+  s = s.replace(/[\p{Default_Ignorable_Code_Point}\p{Cf}]/gu, "");
+  s = s.toLowerCase();
+  s = s.replace(/[^\p{L}\p{N}]+/gu, " ");
+  s = s.replace(/(\p{L})(?=\p{N})/gu, "$1 ").replace(/(\p{N})(?=\p{L})/gu, "$1 ");
+  s = s
+    .split(" ")
+    .map((tok) => {
+      for (const stem of GLUED_NUMERAL_STEMS) {
+        if (tok.length > stem.length && tok.startsWith(stem) && ROMAN.test(tok.slice(stem.length))) {
+          return `${stem} ${tok.slice(stem.length)}`;
+        }
+      }
+      return tok;
+    })
+    .join(" ");
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/** Graded-deliverable nouns (canonical form; plurals tolerated). One of these must appear (rule 2). */
 const DELIVERABLE_ALLOW =
-  /\b(?:papers?|essays?|proposals?|reports?|cases?|case (?:study|studies|brief|briefs|analysis|analyses|write-?ups?)|analys[ie]s|memos?|memorand(?:um|a)|reflections?|posts?|quiz(?:zes)?|exams?|midterms?|finals?|tests?|projects?|presentations?|problem sets?|assignments?|deliverables?|briefs?|(?:literature|peer|book|article|critical|systematic|policy|case) reviews?|responses?|journals?|portfolios?|capstones?|dissertations?|thesis|theses|drafts?|homework|submissions?|write-?ups?|critiques?|bibliograph(?:y|ies)|summar(?:y|ies)|worksheets?|exercises?|business plans?|pitch(?:es)?|slide decks?)\b/i;
-/** MEETING / SESSION family (rule 1) -> reason "meeting/session". */
+  /\b(?:papers?|essays?|proposals?|reports?|cases?|case (?:study|studies|brief|briefs|analysis|analyses|write ?ups?)|analys[ie]s|memos?|memorand(?:um|a)|reflections?|posts?|quiz(?:zes)?|exams?|midterms?|finals?|tests?|projects?|presentations?|problem sets?|assignments?|deliverables?|briefs?|(?:literature|peer|book|article|critical|systematic|policy|case) reviews?|responses?|journals?|portfolios?|capstones?|dissertations?|thesis|theses|drafts?|homework|submissions?|write ?ups?|critiques?|bibliograph(?:y|ies)|summar(?:y|ies)|worksheets?|exercises?|business plans?|pitch(?:es)?|slide decks?)\b/;
+/** MEETING / SESSION family (rule 1, canonical form) -> reason "meeting/session". */
 const DENY_MEETING =
-  /\b(?:residenc(?:y|ies)|seminars?|sessions?|meetings?|class(?:es)?|lectures?|calls?|office hours?|appointments?|colloqui(?:um|a)|webinars?|workshops?|zoom|webex|teams meeting|check-?points?|check-?ins?|kick-?offs?|attendance|participation|synchronous|immersion|advising|guest speakers?|speaker series|study groups?|orientation)\b/i;
-/** EVENT family (rule 1) -> reason "event". */
+  /\b(?:residenc(?:y|ies|e|es)|seminars?|sessions?|meetings?|class(?:es)?|lectures?|calls?|office hours?|appointments?|colloqui(?:um|a)|webinars?|workshops?|zoom|webex|teams meeting|check ?points?|check ?ins?|kick ?offs?|attendance|participation|synchronous|immersions?|advising|guest speakers?|speaker series|study groups?|orientations?|intensives?|weekends?|consorti(?:um|a)|conferences?|cohorts?)\b/;
+/** EVENT family (rule 1, canonical form) -> reason "event". */
 const DENY_EVENT =
-  /\b(?:symposi(?:um|a)|networking|dinners?|lunch(?:eon)?|trips?|field trip|visits?|retreats?|offsites?|off-site|gala|banquet|mixer|happy hour|ceremon(?:y|ies)|celebrations?)\b/i;
-/** ADMIN / HOLIDAY / BREAK family (rule 1) -> reason "administrative". "Break-even" is not a break. */
+  /\b(?:symposi(?:um|a)|networking|dinners?|lunch(?:eon)?s?|trips?|field trips?|visits?|retreats?|offsites?|off site|gala|banquets?|mixers?|happy hours?|ceremon(?:y|ies)|celebrations?|gatherings?|summits?|convocations?)\b/;
+/** ADMIN / HOLIDAY / BREAK family (rule 1, canonical form) -> "administrative". "Break-even" is not a break. */
 const DENY_ADMIN =
-  /\b(?:holidays?|break(?![-\s]?even)s?|recess|vacation|payments?|tuition|evaluations?|registration|enrollment|enrolment|withdraw(?:al)?|drop deadline|add\s*\/\s*drop|add-drop|census date|commencement|graduation|reading (?:week|days?)|study (?:week|days?)|no class(?:es)?|last day|first day|grades?\s+(?:due|posted|released|available|submitted)|thanksgiving|labou?r day|memorial day|independence day|juneteenth|veterans day|columbus day|indigenous peoples'? day|presidents'? day|martin luther king|mlk day|christmas|new year'?s(?: day| eve)?|easter|good friday|rosh hashanah|yom kippur|passover|diwali|lunar new year)\b/i;
-/** A reading (refusal reason only): "Reading: chapter 4", "Read chapters 3-5", "Pre-read: …", "Chapter 4 readings". */
-const READING_SHAPE = /^\s*(?:(?:required|assigned|optional|pre)[\s-]*)?read(?:ings?)?\b|\breadings?\s*$|^\s*chapters?\s+\d/i;
+  /\b(?:holidays?|break(?! ?even)s?|recess|vacations?|payments?|tuition|evaluations?|registration|enrollment|enrolment|withdraw(?:al)?|drop deadline|add drop|census date|commencement|graduation|reading (?:week|days?)|study (?:week|days?)|no class(?:es)?|last day|first day|grades? (?:due|posted|released|available|submitted)|thanksgiving|labou?r day|memorial day|independence day|juneteenth|veterans? day|columbus day|indigenous peoples? day|presidents? day|martin luther king|mlk day|christmas|new year ?s(?: day| eve)?|easter|good friday|rosh hashanah|yom kippur|passover|diwali|lunar new year)\b/;
+/** A reading (refusal reason only), canonical form: "reading chapter 4", "pre read …", "chapter 4 readings". */
+const READING_SHAPE = /^(?:(?:required|assigned|optional|pre) )?read(?:ings?)?\b|\breadings?$|^chapters? \d/;
 
 export type NonDeliverable = "meeting/session" | "event" | "administrative" | "reading" | "not-a-deliverable";
 
 export function classifyNonDeliverable(title: string): NonDeliverable | null {
-  const t = String(title ?? "").trim().replace(/^test-\s*/i, "");
+  let t = canonicalTitle(title);
+  // The org's "Test-" artifact prefix (any dash) is not the deliverable noun "test".
+  if (/^\s*test\s*[-‐‑‒–—_]/i.test(String(title ?? "").normalize("NFKC"))) t = t.replace(/^test\b ?/, "");
   // Rule 1: deny ANYWHERE. Admin first (so "Reading week" is a break, not a reading), then meetings, events.
   if (DENY_ADMIN.test(t)) return "administrative";
   if (DENY_MEETING.test(t)) return "meeting/session";
   if (DENY_EVENT.test(t)) return "event";
   // Rule 2: allow-list. A title with no Latin letters cannot be judged by an English list.
-  if (!/[a-z]/i.test(t)) return null;
+  if (!/[a-z]/.test(t)) return null;
   if (DELIVERABLE_ALLOW.test(t)) return null;
   return READING_SHAPE.test(t) ? "reading" : "not-a-deliverable";
 }
@@ -373,6 +418,17 @@ export function courseDayZone(zone: string | undefined): string {
   return /^[A-Za-z]+\/[A-Za-z_+-]+(?:\/[A-Za-z_+-]+)?$/.test(z) && isValidZone(z) ? z : DEFAULT_COURSE_TZ;
 }
 
+/**
+ * THE course's zone (loop 3 D8): the course record's own time zone when Nexus carries one (`time_zone` /
+ * `timezone` / `tz`, a real "Area/City" region), else DEFAULT_COURSE_TZ. content.courses has no such
+ * column today (nexus-hub sql/nexus_hub/002_app_tables.sql), so this is America/New_York for every
+ * course until Nexus adds one -- and NEVER the model's `time_zone` argument.
+ */
+export function courseZoneOf(course: Row | null | undefined): string {
+  const raw = course ? (course.time_zone ?? course.timezone ?? course.tz) : undefined;
+  return typeof raw === "string" ? courseDayZone(raw) : DEFAULT_COURSE_TZ;
+}
+
 /** The calendar day of an instant in the course zone (YYYY-MM-DD). */
 function localDay(ms: number, zone: string): string {
   return new Date(ms).toLocaleDateString("en-CA", { timeZone: courseDayZone(zone) });
@@ -395,13 +451,16 @@ export type DuplicateMatch = {
 };
 
 /**
- * @param cand.zone  the COURSE zone (D1). Both the candidate's instant and every stored row's instant
- *                   are turned into a calendar day in THIS zone; a value that is not an IANA zone (an
- *                   offset like "-04:00", or "UTC" from how a string was written) is ignored in favour
- *                   of DEFAULT_COURSE_TZ, so the day can never depend on how the date was spelled.
+ * @param cand.zone  the COURSE zone (`courseZoneOf(course)`, D1/D8) -- never the model's time_zone
+ *                   argument. Both the candidate's instant and every stored row's instant are turned into
+ *                   a calendar day in THIS zone; a value that is not an IANA region (an offset like
+ *                   "-04:00", or "UTC") is ignored in favour of DEFAULT_COURSE_TZ.
+ * @param cand.writtenDay  the date exactly as a PLAIN date was written ("2026-10-30"), if it was one: a
+ *                   stored row whose course-zone day is that written date is the same deliverable too,
+ *                   so "Oct 30, 11:59 pm PT" (Oct 31 02:59 ET) is still the stored Oct 30 row.
  */
 export function findDuplicate(
-  cand: { title: string; dueMs: number | null; zone?: string },
+  cand: { title: string; dueMs: number | null; zone?: string; writtenDay?: string },
   existing: Row[],
 ): DuplicateMatch | null {
   const ct = dedupTitle(cand.title);
@@ -410,10 +469,10 @@ export function findDuplicate(
   const sameTitle = existing.filter((r) => dedupTitle(String(r.title ?? "")) === ct);
   if (sameTitle.length) {
     if (cand.dueMs === null) return { row: sameTitle[0], by: "title" };
-    const day = localDay(cand.dueMs, zone);
+    const days = new Set([localDay(cand.dueMs, zone), ...(cand.writtenDay ? [cand.writtenDay] : [])]);
     const sameDay = sameTitle.find((r) => {
       const rm = parseStoredInstant(r.due_date);
-      return rm !== null && localDay(rm, zone) === day;
+      return rm !== null && days.has(localDay(rm, zone));
     });
     if (sameDay) return { row: sameDay, by: "title" };
     const undated = sameTitle.find((r) => parseStoredInstant(r.due_date) === null);
@@ -635,7 +694,9 @@ export function nexusWriteClaimKey(args: Record<string, unknown>): string {
     .map((x) => {
       const it = (x && typeof x === "object" ? x : {}) as Row;
       const due = resolveDueInstant(it.due_date, it.due_time, it.time_zone);
-      const when = due.ok ? localDay(due.ms, due.zone) : str(it.due_date).toLowerCase();
+      // The course is not resolved yet here, so the day is the WRITTEN date of a plain date, else the
+      // instant's day in DEFAULT_COURSE_TZ -- never the model's time_zone (D8).
+      const when = due.ok ? (due.writtenDay ?? localDay(due.ms, DEFAULT_COURSE_TZ)) : str(it.due_date).toLowerCase();
       const id = str(it.assignment_id);
       return id
         ? `upd|${id}|${dedupTitle(str(it.title))}|${due.ok ? due.iso : when}`
@@ -673,17 +734,24 @@ export function nexusWriteUnknownOutcome(args: Record<string, unknown>): Row {
 }
 
 async function runNexusWrite(rawItems: unknown[], ref: string): Promise<Row> {
-  // The owner's courses, read once -- only when some item ADDS (an update names its row by id).
+  // The owner's courses, read once -- up front when some item ADDS (an add cannot proceed without it);
+  // lazily for an UPDATE, only to label its course in the code-built saved list (best effort).
   const needsCourses = rawItems.some((it) => !str((it as Row | null)?.assignment_id));
-  let courses: Row[] = [];
-  if (needsCourses) {
+  let courses: Row[] | null = null;
+  const loadCourses = async (): Promise<{ ok: true; rows: Row[] } | { ok: false; error: string }> => {
+    if (courses) return { ok: true, rows: courses };
     const cr = await nexusGet("courses");
-    if (!cr.ok) {
-      return { ok: false, persisted: false, error: `courses_unreadable:${cr.error}`, note: "Nothing was written: the owner's course list could not be read." };
-    }
+    if (!cr.ok) return cr;
     const owner = nexusOwner();
     // Only HIS courses: never a shared sample/demo row (they carry another owner id).
     courses = cr.rows.filter((c) => !c.user_id || String(c.user_id) === owner);
+    return { ok: true, rows: courses };
+  };
+  if (needsCourses) {
+    const cr = await loadCourses();
+    if (!cr.ok) {
+      return { ok: false, persisted: false, error: `courses_unreadable:${cr.error}`, note: "Nothing was written: the owner's course list could not be read." };
+    }
   }
   const existingByCourse = new Map<string, Row[]>();
   const existingFor = async (courseId: string): Promise<Row[] | null> => {
@@ -695,6 +763,17 @@ async function runNexusWrite(rawItems: unknown[], ref: string): Promise<Row> {
     existingByCourse.set(courseId, rows);
     return rows;
   };
+  // The STORED row an UPDATE names (loop 3): its existing title (so an unchanged title is not re-judged
+  // by the kind filter, verifier's OQ-2 note) and its course (zone + label for the saved list). `id` is
+  // in d1's COMMON filterable set; the row is still matched by id here in case a filter is ignored.
+  const storedRows = new Map<string, Row | null>();
+  const storedRow = async (id: string): Promise<Row | null> => {
+    if (storedRows.has(id)) return storedRows.get(id)!;
+    const r = await nexusGet("assignments", [["id", id]]);
+    const row = r.ok ? (r.rows.find((x) => String(x.id ?? "") === id) ?? null) : null;
+    storedRows.set(id, row);
+    return row;
+  };
 
   const results: ItemResult[] = [];
   for (let i = 0; i < rawItems.length; i++) {
@@ -702,7 +781,7 @@ async function runNexusWrite(rawItems: unknown[], ref: string): Promise<Row> {
     // WHITELIST READ: these are the only keys that can ever influence a write. owner / user_id /
     // email / program_id / canvas_meta / id are never read, so they can never reach Nexus.
     const assignmentId = str(it.assignment_id);
-    const title = str(it.title);
+    let title = str(it.title);
     const description = typeof it.description === "string" ? it.description : undefined;
     const points = typeof it.points === "number" && Number.isInteger(it.points) && it.points >= 0 ? it.points : undefined;
     // W16: a points value that cannot be stored (12.5, -3, "20%") is REFUSED -- never rounded, since a
@@ -714,6 +793,15 @@ async function runNexusWrite(rawItems: unknown[], ref: string): Promise<Row> {
     const priority = PRIORITIES.has(str(it.priority).toLowerCase()) ? str(it.priority).toLowerCase() : undefined;
     const base: ItemResult = { index: i, title: title || undefined, action: "rejected", persisted: false };
     if (pointsRefused) base.points_note = pointsRefused;
+
+    // An UPDATE's stored row (title + course), read once per id.
+    const stored = assignmentId ? await storedRow(assignmentId) : null;
+    if (assignmentId && title && stored && dedupTitle(String(stored.title ?? "")) === dedupTitle(title)) {
+      // The row's EXISTING title passed back unchanged: nothing about the title changes, so it is
+      // neither re-judged by the kind filter nor PATCHed (loop 3, item 6).
+      title = "";
+    }
+    if (assignmentId && !base.title && stored && typeof stored.title === "string") base.title = stored.title;
 
     if (title) {
       const non = classifyNonDeliverable(title);
@@ -743,6 +831,13 @@ async function runNexusWrite(rawItems: unknown[], ref: string): Promise<Row> {
       if (description !== undefined) patch.description = description;
       if (points !== undefined) patch.points = points;
       if (priority !== undefined) patch.priority = priority;
+      // The stored row's course, when it can be read: its zone labels the date, its code labels the list.
+      let course: Row | null = null;
+      if (stored && typeof stored.course_id === "string" && stored.course_id) {
+        const cr = await loadCourses();
+        if (cr.ok) course = cr.rows.find((c) => String(c.id) === stored.course_id) ?? null;
+      }
+      const dayZone = courseZoneOf(course);
       let due: DueResolution | null = null;
       if ("due_date" in it) {
         due = resolveDueInstant(it.due_date, it.due_time, it.time_zone);
@@ -757,12 +852,11 @@ async function runNexusWrite(rawItems: unknown[], ref: string): Promise<Row> {
         continue;
       }
       const out = await nexusWriteFetch("PATCH", { id: assignmentId }, patch, ref);
-      const r = outcomeToResult({ ...base, assignment_id: assignmentId }, out, "updated");
-      if (due && due.ok) Object.assign(r, { due_date: due.iso, due_local: localLabel(due.ms, due.zone), time_assumed: due.timeAssumed || undefined, time_shifted: due.timeShifted });
+      const r = outcomeToResult({ ...base, assignment_id: assignmentId, ...(course ? { course: courseBrief(course) } : {}) }, out, "updated");
+      if (due && due.ok) Object.assign(r, { due_date: due.iso, due_local: localLabel(due.ms, dayZone), time_assumed: due.timeAssumed || undefined, time_shifted: due.timeShifted });
       results.push(r);
       continue;
     }
-
     // ── ADD ──
     if (!title) {
       results.push({ ...base, reason: "title_required" });
@@ -773,14 +867,14 @@ async function runNexusWrite(rawItems: unknown[], ref: string): Promise<Row> {
       results.push({ ...base, reason: due.reason, detail: due.detail, note: "Not added: only DATED deliverables (with a year) go into Nexus. Ask the owner for the date." });
       continue;
     }
-    const cres = resolveCourse(it.course, courses);
+    const cres = resolveCourse(it.course, courses ?? []);
     if (!cres.ok) {
       results.push({
         ...base,
         reason: cres.error,
         error: cres.error,
         candidates: cres.candidates?.map(courseBrief),
-        courses: cres.error === "course_not_found" ? courses.slice(0, 40).map(courseBrief) : undefined,
+        courses: cres.error === "course_not_found" ? (courses ?? []).slice(0, 40).map(courseBrief) : undefined,
         note:
           cres.error === "course_ambiguous"
             ? "Nothing was written: that course reference matches more than one course. Ask the owner which one."
@@ -796,7 +890,9 @@ async function runNexusWrite(rawItems: unknown[], ref: string): Promise<Row> {
       results.push({ ...base, action: "failed", persisted: false, error: "existing_unreadable", course: courseBrief(course), note: "Nothing was written: the course's existing assignments could not be read to rule out a duplicate." });
       continue;
     }
-    const dup = findDuplicate({ title, dueMs: due.ms, zone: due.zone }, existing);
+    // D8: the dedup day (and every label) is in the COURSE's zone, never the model's time_zone argument.
+    const dayZone = courseZoneOf(course);
+    const dup = findDuplicate({ title, dueMs: due.ms, zone: dayZone, writtenDay: due.writtenDay }, existing);
     if (dup) {
       const storedMs = parseStoredInstant(dup.row.due_date);
       const differs = storedMs !== null && Math.abs(storedMs - due.ms) > SAME_INSTANT_MS;
@@ -807,8 +903,9 @@ async function runNexusWrite(rawItems: unknown[], ref: string): Promise<Row> {
         assignment_id: String(dup.row.id),
         course: courseBrief(course),
         stored_undated: dup.storedUndated || undefined,
+        due_local: storedMs !== null ? localLabel(storedMs, dayZone) : undefined,
         note: dup.storedUndated
-          ? `Already in Nexus as "${String(dup.row.title)}", but that stored row has NO due date, so the date given (${localLabel(due.ms, due.zone)}) was NOT saved. Nothing new was added. Tell the owner and offer to add the date: call again with assignment_id and due_date to update it.`
+          ? `Already in Nexus as "${String(dup.row.title)}", but that stored row has NO due date, so the date given (${localLabel(due.ms, dayZone)}) was NOT saved. Nothing new was added. Tell the owner and offer to add the date: call again with assignment_id and due_date to update it.`
           : differs
             ? `Already in Nexus as "${String(dup.row.title)}" but with a DIFFERENT due time (stored ${String(dup.row.due_date)}). Nothing was added. If the owner wants the new time, call again with assignment_id and due_date to update it.`
             : `Already in Nexus as "${String(dup.row.title)}". Nothing new was added.`,
@@ -833,7 +930,7 @@ async function runNexusWrite(rawItems: unknown[], ref: string): Promise<Row> {
         ...base,
         course: courseBrief(course),
         due_date: due.iso,
-        due_local: localLabel(due.ms, due.zone),
+        due_local: localLabel(due.ms, dayZone),
         time_assumed: due.timeAssumed || undefined,
         time_shifted: due.timeShifted,
       },

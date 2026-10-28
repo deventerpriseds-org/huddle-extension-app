@@ -92,7 +92,10 @@ const main = async () => {
     const z = resolveDueInstant("2026-10-30T20:00:00Z");
     t("L2-D1f resolveDueInstant reports the COURSE zone for a Z instant (not 'UTC')", z.ok && z.zone, "America/New_York");
     const pz = resolveDueInstant("2026-10-30T20:00:00Z", undefined, "PT");
-    t("L2-D1g an explicit course zone is kept for an ISO instant", pz.ok && pz.zone, "America/Los_Angeles");
+    // loop 3 D8 (docs/FIX-nexus-write-loop3.md): was "America/Los_Angeles" -- the model's time_zone argument
+    // used to become the day zone. The owner's rule now: it may only interpret a date with NO offset, so for
+    // an ISO instant it plays no part and the reported zone is the default course zone.
+    t("L2-D1g the model's time_zone is NOT used for an ISO instant (loop 3 D8)", pz.ok && pz.zone, "America/New_York");
     const direct = findDuplicate({ title: "Research Proposal", dueMs: Date.parse("2026-10-30T20:00:00Z"), zone: "UTC" }, [
       { id: "s", title: "Research Proposal", due_date: "2026-10-31T03:59:59Z" },
     ]);

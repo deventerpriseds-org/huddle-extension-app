@@ -1,0 +1,1 @@
+    (all.some((r) => mentionsItem(words, r)) ? removed : kept).push(s);
