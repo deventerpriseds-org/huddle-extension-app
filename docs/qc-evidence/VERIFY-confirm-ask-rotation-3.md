@@ -82,3 +82,23 @@ So R3 is fixed, but **no shipped test protects it**: AC-35's only escalation cas
 confirmed_at 2 days ago (lane test :359-367), which is past the floor under either order. A future edit can silently
 reinstate early escalation. Severity: low-medium (escalation pages the owner a day early). Suggested row: add V3R3a
 to autowork-lane-starvation.test.ts.
+
+## Radius challenge
+- Writers of confirm_last_sent_at (grep of src/ on 883bd7e): backfill tasks.server.ts:236, claim :1082, release :1107,
+  reassignment reset :1675. There is no other sender. Single sender confirmed again: fireDueConfirmAsks, called from scheduler.server.ts:289.
+- The backfill at :236 copies `COALESCE(confirm_ask_at, updated_at)`. `updated_at` is a DB now() with microseconds, so the
+  sub-ms rollback rounding noted under R2 IS reachable, but only for a legacy 'asked' row whose confirm_ask_at was NULL.
+  The effect is still benign: the row stays armed and the 24h floor moves less than 1ms.
+- App clock ahead: the claim stamp can land up to the skew in the DB's future. Consumers checked: the gap check at
+  autowork.server.ts:534 gives a non-negative difference (the stamp is at most ask_at+1ms, which is at most app now);
+  armConfirmReAskAt requires a new instant after the stamp; ordering asks for AC-27 binding is unaffected because sends
+  are at least 45 min apart. No defect found.
+
+## Verdict (HEAD 883bd7e)
+| item | verdict |
+|---|---|
+| Re-check: full suite | CONFIRMED (all rc=0) |
+| Re-check: AC-27 gate mutation | CONFIRMED (FIRED) |
+| R2 clock-skew double-send | CONFIRMED fixed; 75/77 probe checks pass, and the 2 failures are a sub-ms rounding on rollback (cosmetic) |
+| R3 floor-before-escalation | CONFIRMED in behaviour (5/5 probe); a regression would not be caught, because the shipped suite stays INERT under the pre-fix order |
+| M runProduce journeyOn gate | CONFIRMED in source. The create gate is guarded (FIRED). The dedup-read gate is unguarded (INERT) |
