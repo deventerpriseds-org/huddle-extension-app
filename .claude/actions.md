@@ -50,6 +50,10 @@ by huddle id so a switch re-opens at the bottom.
 bottom, renders newest window only, scroll-up reveals #220 at scrollTop 3750, new message doesn't yank a
 reader; PRE-FIX ends **27,592px above the bottom** (the reported bug), renders all 300, scroll-up stuck at 0.
 
+**Owner live test (2026-10-27):** owner asked for a clickable test notification. `test-push.yml` /
+`/api/public/test-push` gained an optional `huddle_id` input that adds the SAME `deepLink: /?huddle=<id>`
+a real 1:1 reply push carries, so a tap exercises the deep-link landing with no agent turn.
+
 **Not done (deliberately):** server-side paging of history. All messages live in one workspace blob, so
 paging the DOWNLOAD needs a storage change; only worth it if the download itself becomes slow.
 
