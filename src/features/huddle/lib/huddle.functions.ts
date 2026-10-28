@@ -4334,6 +4334,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // the caller's resolved email, and the FULL dispatcher JSON carried back in `detail`, which
           // is the only channel the reply-assembly has to recover the payload.
           if (c.name === "focus_on") {
+            // Board writes are OPT-IN per agent, like every other journey write
+            // (`agentBackend.journey?.enabled`). focus_on used to skip that check, so a harness turn with
+            // journey off CREATED 7 real tasks and started 8 on the owner's live board (2026-10-28).
+            if (!agentBackend.journey?.enabled) {
+              recordToolUse(winner.id, c.name, "focus_on -- journey disabled for this agent", false, "journey disabled");
+              return JSON.stringify({ error: "journey_disabled", message: "The task board isn't connected for this agent, so nothing was started or created." });
+            }
             // Mutating: one per turn, so two group responders cannot start the same list twice.
             if (!claimAction("focus_on")) {
               recordToolUse(winner.id, c.name, "focus_on -- already done this turn", true);
@@ -5764,6 +5771,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               items: z.array(z.object({ title: z.string(), task_id: z.string().optional() })),
             }),
             execute: async (args) => {
+              // Opt-in board write — same guard as the OpenAI path above.
+              if (!agentBackend.journey?.enabled) {
+                recordToolUse(winner.id, "focus_on", "focus_on -- journey disabled for this agent", false, "journey disabled");
+                return JSON.stringify({ error: "journey_disabled", message: "The task board isn't connected for this agent, so nothing was started or created." });
+              }
               if (!claimAction("focus_on")) {
                 return JSON.stringify({ error: "already_done", message: "Those were already started this turn." });
               }
