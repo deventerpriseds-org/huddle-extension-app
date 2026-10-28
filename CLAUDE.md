@@ -320,7 +320,7 @@ voices — irrelevant, because we don't use Realtime's audio for the voice.
 - **Score floor is model-specific.** `searchChunks` returns cosine similarity; `text-embedding-3-large`
   scores real topical matches ~0.4–0.5 (measured: "what is my dog's name?" vs a stored "my dog's name
   is Waffles" = 0.42), NOT the ~0.75+ older models give. The auto-retrieval floor is **0.3**
-  (`MEMORY_MIN_SCORE` in `runHuddleTurn`); a higher floor silently drops every real hit.
+  (`MEMORY_MIN_SCORE` in `lib/rag/memory-context.server.ts` — the ONE retrieval step both text chat and the 1:1 voice call use); a higher floor silently drops every real hit.
 - **Inject `memoryBlock` on BOTH instruction branches.** The OpenAI Responses path builds
   `baseInstructions` from the assistant snapshot when one exists (all real agents have one) and only
   falls back to `appSystem` when none does. `memoryBlock` must be concatenated into the snapshot branch
