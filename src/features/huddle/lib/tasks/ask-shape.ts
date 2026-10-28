@@ -14,7 +14,7 @@
 // SUPERSEDED-BY: nothing -- current
 // EVIDENCE:   chat.pending_turns u-1793205271396 / u-1793205494452 (dm-iris-chase, 2026-10-28);
 //             `npm run test:ask-shape`.
-import { isGreenLight, isNegatedOrAsked } from "./green-light";
+import { isNegatedOrAsked } from "./green-light";
 
 /** "act" = get something DONE now (plan/schedule/organise, create/update tasks, reminders). "deliverable" = a written work product. */
 export type AskShape = "act" | "deliverable";
@@ -23,34 +23,40 @@ export function asAskShape(v: unknown): AskShape | null {
   return v === "act" || v === "deliverable" ? v : null;
 }
 
-export type DeepAskRoute = "act-now" | "produce" | "answer-with-offer";
+export type DeepAskRoute = "act-now" | "answer-with-offer";
 
 /**
- * What a fresh difficulty>=3 1:1 ask becomes. Never a hold: every route either acts or answers.
- * - act-now           → run the agent normally, tools and all. No question, no offer.
- * - produce           → the CURRENT message itself says go ("go for it — research X"): board task + async.
+ * What a fresh difficulty>=3 1:1 ask becomes. Never a hold, and never a produce-instead-of-answer:
+ * - act-now           → run the agent normally on the budget tier, tools and all. No question, no offer.
  * - answer-with-offer → answer now on the chat tier, then offer to produce the full version.
  * An unknown shape (scorer unavailable) answers with an offer — the safe default, since it still answers.
- * Only the current line counts as a go-ahead: earlier go-aheads were answers to the old question,
- * which no longer exists, and an offer accepted next turn is handled by `isOfferAccepted`.
+ * There is deliberately NO "go-ahead in the ask → produce" route: verification loop 1 showed 6/6 real
+ * deliverable asks that merely CONTAIN "get started" / "proceed" / "carry on" / "take it on" were
+ * diverted to a bare board-task acknowledgement — the exact non-answer this replaces. Producing is
+ * now only ever an answer to the offer (`isOfferAccepted`).
  */
-export function routeDeepAsk(shape: AskShape | null, currentText: string): DeepAskRoute {
-  if (shape === "act") return "act-now";
-  if (isGreenLight(currentText)) return "produce";
-  return "answer-with-offer";
+export function routeDeepAsk(shape: AskShape | null): DeepAskRoute {
+  return shape === "act" ? "act-now" : "answer-with-offer";
 }
 
 /**
- * Does this reply accept the produce offer? Deliberately strict: the answer the offer came with may
- * itself end in a question ("want me to add these to your calendar?"), so a bare "yes" or "go ahead"
- * must NOT be read as "produce the full version". Only an explicit produce-shaped phrase counts.
+ * Does this reply accept the produce offer? The WHOLE reply must be the acceptance — a short,
+ * anchored phrase ("produce", "yes, produce it", "the full version please"). Verification loop 1
+ * refuted the earlier substring match 8/9: "no, produce nothing — I just wanted the summary", "nah.
+ * maybe produce later", "make it a task for Thursday to call the dentist" and "which farms produce
+ * the most eggs" all read as acceptance and threw the new message away. A bare "yes"/"go ahead" is
+ * still NOT acceptance: the answer the offer rode on may itself end in a question.
  */
+const OFFER_ACCEPT =
+  /^(?:(?:yes|yeah|yep|ok(?:ay)?|sure)[,!.]?\s+)?(?:please\s+)?(?:produce(?:\s+(?:it|that|the full version))?|(?:(?:give me|send me|i want|i'?d like)\s+)?the full version|full version|make it a task|put it on the board|work it up)(?:\s*,?\s*please)?[\s.!]*$/;
+
+/** Offers expire fast: they answer the reply that carried them, not something said an hour later. */
+export const OFFER_TTL_MS = 30 * 60_000;
+
 export function isOfferAccepted(text: string): boolean {
   const n = (text || "").replace(/[‘’‛ʼ]/g, "'").toLowerCase().replace(/\s+/g, " ").trim();
-  if (!n || isNegatedOrAsked(n)) return false;
-  return /\bproduce\b|\bfull version\b|\bfull write ?-?up\b|\b(?:make|turn) it (?:into )?a task\b|\bput it on the board\b|\bwork it up\b/.test(
-    n,
-  );
+  if (!n || n.length > 60 || isNegatedOrAsked(n)) return false;
+  return OFFER_ACCEPT.test(n);
 }
 
 export const PRODUCE_OFFER_LINE =

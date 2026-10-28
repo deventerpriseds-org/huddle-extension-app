@@ -7,11 +7,13 @@
 // SUPERSEDES: nothing
 // SUPERSEDED-BY: nothing -- current
 // EVIDENCE:   run with `npm run test:ask-shape`.
+import { readFileSync } from "node:fs";
 import {
   PRODUCE_OFFER_LINE,
   appendProduceOffer,
   asAskShape,
   isOfferAccepted,
+  OFFER_TTL_MS,
   routeDeepAsk,
 } from "../src/features/huddle/lib/tasks/ask-shape";
 
@@ -26,20 +28,24 @@ const PLAN_MY_DAY =
   "I need to plan my activities for the day. begin working on my papers for dba mgmt 702 and 782, go to the gym at 3pm, pickup supplements from the vitamin shop";
 
 console.log("AN ACT ASK IS DONE NOW — never produced, never offered (the 2026-10-28 defect)");
-check("act → act-now", routeDeepAsk("act", PLAN_MY_DAY), "act-now");
-check("act wins even with a go-ahead in it", routeDeepAsk("act", "plan my day, go for it"), "act-now");
+check("act → act-now", routeDeepAsk("act"), "act-now");
 
-console.log("\nA DELIVERABLE IS ANSWERED NOW, WITH AN OFFER");
-check("deliverable → answer-with-offer", routeDeepAsk("deliverable", "compare Aha vs Jira for a small team"), "answer-with-offer");
-check("unknown shape (scorer down) still answers", routeDeepAsk(null, "compare Aha vs Jira"), "answer-with-offer");
-check("go-ahead IN the ask → produce", routeDeepAsk("deliverable", "go for it — research Aha vs Jira pricing"), "produce");
-check("a negated go-ahead does not produce", routeDeepAsk("deliverable", "don't go ahead yet, just compare Aha vs Jira"), "answer-with-offer");
+console.log("\nA DELIVERABLE IS ANSWERED NOW, WITH AN OFFER — never diverted to produce");
+check("deliverable → answer-with-offer", routeDeepAsk("deliverable"), "answer-with-offer");
+check("unknown shape (scorer down) still answers", routeDeepAsk(null), "answer-with-offer");
 
-console.log("\nONLY AN EXPLICIT PRODUCE PHRASE ACCEPTS THE OFFER");
-for (const t of ["produce", "Produce it", "yes, produce", "give me the full version", "make it a task", "put it on the board", "work it up"])
+console.log("\nONLY A WHOLE-REPLY PRODUCE PHRASE ACCEPTS THE OFFER");
+for (const t of ["produce", "Produce it", "yes, produce", "yes produce it please", "the full version", "give me the full version", "full version please", "make it a task", "put it on the board", "work it up!"])
   check(`accepts: ${JSON.stringify(t)}`, isOfferAccepted(t), true);
-for (const t of ["yes", "go ahead", "sure", "thanks", "add those to my calendar", "don't produce it", "should you produce it?", "productivity tips?", ""])
+// The verification-loop-1 refutations (VERIFY-deep-ask-hybrid-1.md AC4), kept verbatim.
+for (const t of [
+  "yes", "go ahead", "sure", "thanks", "add those to my calendar", "don't produce it", "should you produce it?",
+  "no, produce nothing — I just wanted the summary", "nah. maybe produce later", "produce later",
+  "Can you make it a task for Thursday to call the dentist", "Which local farms produce the most organic eggs near me",
+  "put it on the board for next week and also remind me about the gym", "",
+])
   check(`does not accept: ${JSON.stringify(t)}`, isOfferAccepted(t), false);
+check("offers expire within an hour", OFFER_TTL_MS > 0 && OFFER_TTL_MS <= 3_600_000, true);
 
 console.log("\nTHE OFFER LANDS ON THE AGENT'S LAST REPLY, ONCE");
 const r = [
@@ -54,6 +60,12 @@ check("input not mutated", r[0].text, "Here's my read.");
 check("idempotent", appendProduceOffer(a.replies, "iris-chase").replies[0].text.split(PRODUCE_OFFER_LINE).length - 1, 1);
 check("no reply from that agent → not appended", appendProduceOffer(r, "terry-locke").appended, false);
 check("blank reply → not appended", appendProduceOffer([{ agentId: "iris-chase", text: "  " }], "iris-chase").appended, false);
+
+console.log("\nSTRUCTURAL — the turn wires these the way the tests above assume");
+const turnSrc = readFileSync(new URL("../src/features/huddle/lib/huddle.functions.ts", import.meta.url), "utf8");
+check("an act ask is pinned to the budget tier (never o3/Sol)", /route === "act-now"\)\s*\{\s*deepManual = "budget";/.test(turnSrc), true);
+check("an offer is only accepted inside its TTL", /Date\.now\(\) - pending\.createdAt <= OFFER_TTL_MS && isOfferAccepted\(/.test(turnSrc), true);
+check("no fresh ask is diverted to runProduce", /deep-ask: green-lit/.test(turnSrc), false);
 
 console.log("\nSHAPE PARSING");
 check("act", asAskShape("act"), "act");

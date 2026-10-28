@@ -8,7 +8,7 @@ import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, Task
 // declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
 // and the reply DTOs are shared with the client bundle.
 import type { PrioritiesWidgetData, ScheduleWidgetData } from "./tasks/widgets.server";
-import { appendProduceOffer, isOfferAccepted, routeDeepAsk, type AskShape } from "./tasks/ask-shape";
+import { OFFER_TTL_MS, appendProduceOffer, isOfferAccepted, routeDeepAsk, type AskShape } from "./tasks/ask-shape";
 import {
   parseMentions,
   routeMessage,
@@ -1671,7 +1671,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         // HYBRID: the agent already ANSWERED and offered the full version. Only an explicit produce
         // phrase accepts (a bare "yes" may be answering a question inside the answer itself); anything
         // else retires the offer and the message routes normally — including as a fresh deep ask.
-        if (isOfferAccepted(data.text)) {
+        if (Date.now() - pending.createdAt <= OFFER_TTL_MS && isOfferAccepted(data.text)) {
           await recordDeepConfirmVerdict(email, data.huddleId, pending.agentId, pending.askText, "produce");
           const agentId = (pending.agentId as AgentId) ?? routed.winners[0] ?? data.members[0];
           return runProduce(agentId, pending.askText, "produce-offer: accepted");
@@ -1723,17 +1723,15 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // It used to hold EVERY difficulty>=3 1:1 message behind a canned "produce or quick?" before the
       // agent ran — and a long "plan my day" (gym at 3pm, papers, errands, app work) scored 3 on length
       // and came back as one vague async task instead of a plan. Owner, 2026-10-28: "why didnt she just
-      // do it?" Now: an ACT ask runs normally (tools, and the persona site keeps it on the budget tier,
-      // never Sol); a DELIVERABLE is answered now on the chat tier and ends with a one-line offer to
-      // produce the full version; a go-ahead in the CURRENT message still means produce.
+      // do it?" Now: an ACT ask runs normally, pinned to the budget tier (Terra-high — never o3/Sol,
+      // which difficulty 3 would otherwise pick); a DELIVERABLE is answered now on the chat tier and
+      // ends with a one-line offer to produce the full version.
       if (!deepManual && routed.winners.length > 0 && (routed.difficulty ?? 2) >= 3) {
         const primary = routed.winners[0];
-        const route = routeDeepAsk(askShape, data.text);
-        if (route === "produce") {
-          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "produce");
-          return runProduce(primary, data.text, "deep-ask: green-lit in the ask");
-        }
-        if (route === "answer-with-offer") {
+        const route = routeDeepAsk(askShape);
+        if (route === "act-now") {
+          deepManual = "budget";
+        } else {
           deepManual = "terra-med";
           routed.difficulty = 2;
           produceOffer = { agentId: primary, askText: data.text, email };
@@ -4744,7 +4742,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             // reasoning-summary channel to the UI.
             if (chosenModel === "o3" || chosenModel.includes("sol") || deepManual) {
               reasoningSummaries.push(
-                `${winner.name}: reasoning tier ${chosenModel.replace("gpt-5.6-", "")}/${chosenEffort}${deepManual ? " (you chose this)" : ""}`,
+                `${winner.name}: reasoning tier ${chosenModel.replace("gpt-5.6-", "")}/${chosenEffort}${data.modelEscalate?.trim() ? " (you chose this)" : ""}`,
               );
             }
           }

@@ -1,13 +1,14 @@
-// Live smoke for the deep-1:1 PRODUCE-vs-QUICK confirm gate (run in GHA via agent-serverfn-uat.yml —
-// the sandbox cannot reach the SWA). All turns use journey:{enabled:false} + Test- prefixed text so
-// NOTHING is written to the real board (even the produce reply's quick_create_task is a no-op with
-// journey disabled). Observables from the deployed response:
-//   • Case 1 (fresh deep 1:1 ask) → reply asks produce-vs-quick; decision.reason has
-//     "[deep-confirm: produce-vs-quick]". NOT a normal answer, NOT an o3 spend.
-//   • Case 2 (reply "quick" in the SAME dm) → the gate resumes the original ask INLINE on a
-//     chat-friendly tier; reply is a real answer (not the HOLD); reasoning has no o3/Sol tier.
-//   • Case 3 (fresh deep ask in a different dm, reply "cancel") → gate drops with a hold-off ack.
-// Cross-turn pending state is keyed (user+huddle), so each case that resumes reuses its case-1 huddle.
+// Live smoke for the deep-1:1 HYBRID (tasks/ask-shape.ts) — run in GHA via agent-serverfn-uat.yml
+// (the sandbox cannot reach the SWA). SUPERSEDES this file's earlier produce-vs-quick HOLD cases
+// (2026-10-28): a fresh deep ask is no longer held. All turns use journey:{enabled:false} + Test-
+// prefixed text so NOTHING is written to the real board. Observables from the deployed response:
+//   • Case 1 (deliverable deep ask, Finn) → answered NOW: reason has "[deep-ask: answer-with-offer]"
+//     (when it scores >=3), a real answer, and the reply ends with the "Reply **produce**" offer.
+//   • Case 2 ("produce" in the SAME dm) → reason has "[produce-offer: accepted]".
+//   • Case 3 (act ask, Iris: plan my day) → NOT held, NO offer, a real plan back; when it scored >=3 the
+//     reason has "[deep-ask: act-now]".
+//   • Case 4 (deliverable ask in Tess's dm, then a DECLINE that mentions produce) → not accepted.
+// Cross-turn pending state is keyed (user+huddle), so each resuming case reuses its huddle.
 import { toJSONAsync } from "seroval";
 import { defaultSerovalPlugins } from "@tanstack/router-core";
 
@@ -65,39 +66,44 @@ function firstText(r) { return (r.replies?.[0]?.text ?? "").trim(); }
 
 const DEEP_ASK =
   "Test- research the competitive landscape for AI executive-assistant apps and build a positioning and go-to-market strategy with risks, pricing tiers, and a 90-day rollout plan";
+const ACT_ASK =
+  "Test- I need to plan my activities for the day: work on my DBA papers for 702 and 782, draft a reflection speech for Sunday, go to the gym at 3pm, pick up supplements from the vitamin shop, and work on my sidecar, prompto and diagram builder apps. Lay out the day for me.";
+const OFFER_RE = /Reply \*\*produce\*\*/;
 
 (async () => {
   let pass = 0, total = 0;
   const check = (name, cond, detail) => { total++; if (cond) pass++; console.log(`${cond ? "✓" : "✗"} ${name}${detail ? ` — ${detail}` : ""}`); };
+  const notHeld = (c) => !/deep-confirm: produce-vs-quick/i.test(c.reason || "");
 
-  // ---- Case 1: fresh deep 1:1 ask → HOLD produce-vs-quick ----
-  console.log("\n=== Case 1: fresh deep 1:1 ask (expect produce-vs-quick HOLD) ===");
+  console.log("\n=== Case 1: deliverable deep ask (expect an answer NOW + produce offer) ===");
   const c1 = await send({ agentId: "finn-reid", text: DEEP_ASK });
-  console.log(`http=${c1.http} reason="${c1.reason}"`);
   const t1 = firstText(c1);
-  console.log(`reply: ${t1.slice(0, 240)}`);
-  check("gate held (reason tagged)", /deep-confirm: produce-vs-quick/i.test(c1.reason || ""), c1.reason);
-  check("reply offers produce", /produce/i.test(t1));
-  check("reply offers quick", /quick/i.test(t1));
+  console.log(`http=${c1.http} reason="${c1.reason}"\nreply: ${t1.slice(0, 300)}`);
+  check("not held behind the old question", notHeld(c1), c1.reason);
+  check("routed as answer-with-offer", /deep-ask: answer-with-offer/.test(c1.reason || ""), c1.reason);
+  check("a real answer came back", t1.replace(OFFER_RE, "").length > 300, `${t1.length} chars`);
+  check("reply ends with the produce offer", OFFER_RE.test(t1.slice(-200)));
+  check("no o3/Sol tier breadcrumb", !c1.reasoning.some((x) => /o3|sol\//i.test(String(x))), JSON.stringify(c1.reasoning));
 
-  // ---- Case 2: reply "quick" in the SAME dm → resume inline (real answer) ----
-  console.log("\n=== Case 2: reply 'quick' (expect inline answer, no HOLD, no o3) ===");
-  const c2 = await send({ agentId: "finn-reid", text: "quick" });
-  console.log(`http=${c2.http} reason="${c2.reason}"`);
-  const t2 = firstText(c2);
-  console.log(`reply: ${t2.slice(0, 240)}`);
-  check("resumed (not a repeat HOLD)", !/deep-confirm: produce-vs-quick/i.test(c2.reason || "") && !(/produce/i.test(t2) && /quick take right here/i.test(t2)));
-  check("got a real answer", t2.length > 40);
-  check("no o3/Sol tier breadcrumb", !c2.reasoning.some((x) => /o3|sol\//i.test(String(x))), JSON.stringify(c2.reasoning));
+  console.log("\n=== Case 2: 'produce' in the same dm (expect the offer accepted) ===");
+  const c2 = await send({ agentId: "finn-reid", text: "produce" });
+  console.log(`http=${c2.http} reason="${c2.reason}"\nreply: ${firstText(c2).slice(0, 200)}`);
+  check("offer accepted", /produce-offer: accepted/.test(c2.reason || ""), c2.reason);
 
-  // ---- Case 3: fresh deep ask in a DIFFERENT dm → reply 'cancel' ----
-  console.log("\n=== Case 3: fresh deep ask (Tess) then 'cancel' (expect hold-off ack) ===");
-  const c3a = await send({ agentId: "tess-vaughn", text: DEEP_ASK });
-  check("case3 held", /deep-confirm: produce-vs-quick/i.test(c3a.reason || ""), c3a.reason);
-  const c3b = await send({ agentId: "tess-vaughn", text: "cancel" });
-  const t3 = firstText(c3b);
-  console.log(`cancel reply: ${t3.slice(0, 160)}`);
-  check("cancel acked (hold off)", /hold off|hold on|pick it back up|no problem/i.test(t3));
+  console.log("\n=== Case 3: act ask — plan my day (expect it DONE, no hold, no offer) ===");
+  const c3 = await send({ agentId: "iris-chase", text: ACT_ASK });
+  const t3 = firstText(c3);
+  console.log(`http=${c3.http} reason="${c3.reason}"\nreply: ${t3.slice(0, 400)}`);
+  check("not held", notHeld(c3), c3.reason);
+  check("no produce offer on an act ask", !OFFER_RE.test(t3));
+  check("not routed as a deliverable", !/deep-ask: answer-with-offer/.test(c3.reason || ""), c3.reason);
+  check("a real plan came back (mentions the 3pm gym)", t3.length > 150 && /3(:00)?\s*(pm|p\.m\.)|15:00/i.test(t3), `${t3.length} chars`);
+
+  console.log("\n=== Case 4: a decline that mentions 'produce' must NOT accept the offer ===");
+  await send({ agentId: "tess-sutton", text: DEEP_ASK });
+  const c4 = await send({ agentId: "tess-sutton", text: "no, produce nothing — I just wanted the summary" });
+  console.log(`http=${c4.http} reason="${c4.reason}"`);
+  check("decline not taken as acceptance", !/produce-offer: accepted/.test(c4.reason || ""), c4.reason);
 
   console.log(`\n${pass}/${total} checks passed`);
   process.exit(pass === total ? 0 : 1);
