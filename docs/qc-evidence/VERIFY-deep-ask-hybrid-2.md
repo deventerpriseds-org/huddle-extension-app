@@ -95,3 +95,65 @@ No DB or deployed service touched. Started 18:19 UTC.
 - Consequence of a miss (code-read, :1674-1679): a near-miss acceptance is NOT safe-retried. It CLEARS the
   pending offer and routes the reply as a normal message, so a follow-up "produce" finds no pending offer.
   No wrong produce task is ever created (fails safe); the cost is the user losing the offer. "yes please" missing is by design.
+
+## AC5 -- legacy 'ask' rows still use classifyConfirmReply unchanged: CONFIRMED (re-check)
+- `git diff --quiet 7ad609f 74883ca -- deep-confirm.server.ts routing.ts green-light.ts` -> unchanged.
+- Legacy branch huddle.functions.ts:1680-1720 (`else if (pending)`) calls classifyConfirmReply; observed (bun):
+  produce->produce, quick->quick, cancel->cancel, "go for it"->produce, "Okay knock it out"->produce,
+  "just a quick take"->quick, "nevermind"->cancel, "what's the weather"->unrelated (identical to loop 1).
+
+## AC6 -- `kind` column migration + SQL consistency: CONFIRMED (re-check)
+- deep-confirm.server.ts:51 `ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'ask'`; written only at :77-79
+  (INSERT cols + ON CONFLICT `kind=$6`), read only at :94/:96 and mapped at :107 (non-"offer" -> "ask").
+  The file is byte-identical to the one loop 1 reviewed.
+
+## AC8 -- scoreAskLLM sole caller path + strict-valid schema: CONFIRMED (re-check)
+- grep: scoreAskLLM called at huddle.functions.ts:1232 (1:1 / !resume / !internal / !ceremonyBarge, openai+key) and
+  wrapped by scoreDifficultyLLM (routing.ts:465-469), which has no src caller.
+- Schema (routing.ts ~:505-511): type object, additionalProperties:false, difficulty integer enum [1..4],
+  shape string enum ["act","deliverable"], required ["difficulty","shape"]. tsc exit 0.
+
+## "(you chose this)" breadcrumb keys on data.modelEscalate: CONFIRMED
+- huddle.functions.ts:4745 `${data.modelEscalate?.trim() ? " (you chose this)" : ""}`. The gate's own
+  deepManual ("budget"/"terra-med") still makes the breadcrumb line appear (:4743 `|| deepManual`) but without
+  the suffix, so an act ask shows "reasoning tier terra/high".
+
+## AC9 -- qa-produce-quick.mjs rewritten for the hybrid: REFUTED (on the safety claim; the tag assertions are correct)
+- Tags match code: "deep-ask: answer-with-offer" (:83, :99) == `[deep-ask: ${route}]` at :1741;
+  "produce-offer: accepted" (:91, :106) == runProduce note at :1677; OFFER_RE `/Reply \*\*produce\*\*/` (:71)
+  matches PRODUCE_OFFER_LINE "Want the full version? Reply **produce** and I'll put it on the board, ..." (observed).
+- journey:{enabled:false}: set for every agent in every send() (:44). Test- prefix: DEEP_ASK and ACT_ASK yes;
+  Case 2 sends bare "produce" (:89) and Case 4 sends "no, produce nothing — I just wanted the summary" (:104),
+  NOT Test- prefixed and carrying no run marker (they are user messages that may be auto-written to memory).
+- THE DEFECT: header :3-4 claims "NOTHING is written to the real board". Case 2 ACCEPTS the offer, which runs
+  runProduce (:1677). runProduce (:1601-1645) gates the board write ONLY on `data.caller?.entra_email` (:1606) and
+  never consults `agents[*].journey.enabled` (that toggle is read at :901-902, :2865, :3077, :3412, :6152, not here).
+  So Case 2 calls journey `quick_create_task` for the live caller (von.ellis@enterpriseds.io), assigns the task to
+  finn-reid (:1623-1628), and fires `runScheduledAutoWork(data.caller, { force: true })` (:1640-1641) on the user's
+  REAL board. The task title is produceTitleFrom(DEEP_ASK) -> begins "Test- research the competitive landscape ..."
+  (no lead-in strip applies, no sentence break), so it is cleanable; the forced auto-work pass is not a test artifact.
+  (Code-read, high confidence; NOT executed, because running it would write to the live board.)
+- The OLD harness (24e578a) never sent "produce" (only "quick"/"cancel"), and its header's claim that "the produce
+  reply's quick_create_task is a no-op with journey disabled" was already false. The rewrite is the first version
+  that actually reaches the write.
+- Minor: Case 1 asserts "[deep-ask: answer-with-offer]" unconditionally (:83) while its own header (:6) says
+  "when it scores >=3"; a deliverable scored 2 fails this check with no defect. Case 4's decline check passes
+  trivially if Tess's turn scored <3 (no offer row exists).
+
+## Loop-1 gaps the implementer calls safe -- my read
+- Partial (chunked) turn drops the offer and writes no row: AGREE SAFE. Row is written only after `appended`
+  (:6873), so no unseen offer can be accepted. Cost is only the lost offer.
+- Offer outliving internal/ceremony/appContext turns: AGREE BOUNDED. Worst case within 30 minutes, an anchored
+  whole-reply "produce" after an intervening appContext turn produces the earlier ask, which is the most plausible
+  meaning of that literal reply. TTL compares DB `created_at` (DB now()) with app `Date.now()`; skew negligible.
+
+## Radius challenge (claims outside the stated radius that I tested)
+1. runProduce ignores journey.enabled (above) -- inside AC9 via the harness, and also means every harness that
+   sends an acceptance reply writes the live board.
+2. Near-miss acceptance clears the offer (AC4 section) -- user-facing loss, not a wrong action.
+3. Budget pin can fail open if resolveCallerEmail throws (AC1 side finding 2) -- code-read only.
+4. Luna-capped agents are raised to Terra-high on act asks (AC1 side finding 1).
+
+## Verdict
+CONFIRMED: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8, breadcrumb | REFUTED: AC9 (harness board-write claim) |
+UNPROVEN live: AC1/AC2/AC4/AC7 on the deployed build (no live turn driven, per brief).
