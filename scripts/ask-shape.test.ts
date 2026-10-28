@@ -13,7 +13,6 @@ import {
   appendProduceOffer,
   asAskShape,
   isOfferAccepted,
-  mentionsProduceOffer,
   OFFER_TTL_MS,
   routeDeepAsk,
 } from "../src/features/huddle/lib/tasks/ask-shape";
@@ -46,8 +45,6 @@ for (const t of [
   "put it on the board for next week and also remind me about the gym", "no, produce", "produce it later", "make it a task to buy milk", "put it on the board under finance", "work it up for finn", "never mind, produce", "stop, produce", "yes — don't produce", "full version? no", "ok produce nothing", "yes please", "",
 ])
   check(`does not accept: ${JSON.stringify(t)}`, isOfferAccepted(t), false);
-check("a near-miss keeps the offer", mentionsProduceOffer("produce it tomorrow?"), true);
-check("an unrelated reply retires it", mentionsProduceOffer("what about my gym time"), false);
 check("offers expire within an hour", OFFER_TTL_MS > 0 && OFFER_TTL_MS <= 3_600_000, true);
 
 console.log("\nTHE OFFER LANDS ON THE AGENT'S LAST REPLY, ONCE");
@@ -68,8 +65,8 @@ console.log("\nSTRUCTURAL — the turn wires these the way the tests above assum
 const turnSrc = readFileSync(new URL("../src/features/huddle/lib/huddle.functions.ts", import.meta.url), "utf8");
 check("an act ask is pinned to the budget tier (never o3/Sol)", /route === "act-now"\)\s*\{\s*deepManual = "budget";/.test(turnSrc), true);
 check("an offer is only accepted inside its TTL", /Date\.now\(\) - pending\.createdAt <= OFFER_TTL_MS && isOfferAccepted\(/.test(turnSrc), true);
-check("produce honours the journey toggle (no board write / auto-work from a harness)", /const journeyOn = data\.agents\?\.\[agentId\]\?\.journey\?\.enabled !== false;[\s\S]{0,200}?if \(journeyOn && data\.caller\?\.entra_email\)[\s\S]{0,4000}?if \(journeyOn\) \{\s*try \{\s*const \{ runScheduledAutoWork \}/.test(turnSrc), true);
-check("a near-miss reply does not clear the offer", /if \(!mentionsProduceOffer\(data\.text\)\) await clearPendingDeepConfirm\(/.test(turnSrc), true);
+check("produce honours the journey toggle (no board write / auto-work from a harness)", /const journeyOn = data\.agents\?\.\[agentId\]\?\.journey\?\.enabled === true;[\s\S]{0,200}?if \(journeyOn && data\.caller\?\.entra_email\)[\s\S]{0,4000}?if \(journeyOn\) \{\s*try \{\s*const \{ runScheduledAutoWork \}/.test(turnSrc), true);
+check("any non-acceptance retires the offer", /return runProduce\(agentId, pending\.askText, "produce-offer: accepted"\);\s*\}[\s\S]{0,400}?\n\s*await clearPendingDeepConfirm\(email, data\.huddleId\);\s*\} else if \(pending\)/.test(turnSrc), true);
 check("a failed gate still pins the tier", /proceeding without gate\.`,\s*\);[\s\S]{0,600}?deepManual = routeDeepAsk\(askShape\) === "act-now" \? "budget" : "terra-med";/.test(turnSrc), true);
 check("no fresh ask is diverted to runProduce", /deep-ask: green-lit/.test(turnSrc), false);
 

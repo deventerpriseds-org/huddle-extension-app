@@ -12,7 +12,6 @@ import {
   OFFER_TTL_MS,
   appendProduceOffer,
   isOfferAccepted,
-  mentionsProduceOffer,
   routeDeepAsk,
   type AskShape,
 } from "./tasks/ask-shape";
@@ -1607,11 +1606,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // second copy of fifty lines that would drift the first time one of them was touched.
       const runProduce = async (agentId: AgentId, askText: string, note: string) => {
         const title = produceTitleFrom(askText);
-        // Create the produce task on the board (dual-write to journey). Non-fatal. Honour the agent's
-        // journey toggle like every other board write: a turn sent with journey:{enabled:false} (every
-        // test harness) must never land on the real board or kick a forced auto-work pass.
-        // (VERIFY-deep-ask-hybrid-2.md AC9: this path checked only the caller email.)
-        const journeyOn = data.agents?.[agentId]?.journey?.enabled !== false;
+        // Create the produce task on the board (dual-write to journey). Non-fatal. OPT-IN, like every
+        // other board write (`agentBackend.journey?.enabled`): only when the agent's journey is
+        // explicitly on — so a harness turn with journey off or absent never lands on the real board
+        // or kicks a forced auto-work pass (VERIFY-deep-ask-hybrid-2.md AC9; -3.md caveat).
+        const journeyOn = data.agents?.[agentId]?.journey?.enabled === true;
         let created = false;
         try {
           if (journeyOn && data.caller?.entra_email) {
@@ -1689,9 +1688,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           const agentId = (pending.agentId as AgentId) ?? routed.winners[0] ?? data.members[0];
           return runProduce(agentId, pending.askText, "produce-offer: accepted");
         }
-        // A reply that only NEARLY accepts ("produce it tomorrow?") keeps the offer for its TTL so a
-        // plain "produce" right after still works; anything unrelated retires it.
-        if (!mentionsProduceOffer(data.text)) await clearPendingDeepConfirm(email, data.huddleId);
+        // Anything that is not an acceptance retires the offer — including a refusal that mentions it
+        // ("no, produce nothing"). Keeping it alive let a LATER "make it a task" produce the ask the
+        // user had just declined (VERIFY-deep-ask-hybrid-3.md, near-miss REFUTED).
+        await clearPendingDeepConfirm(email, data.huddleId);
       } else if (pending) {
         // A legacy held ask (written before the hybrid shipped) — answered exactly as before.
         const verdict = classifyConfirmReply(data.text);

@@ -70,15 +70,6 @@ export function isOfferAccepted(text: string): boolean {
   return OFFER_ACCEPT.test(n);
 }
 
-/**
- * Does the reply talk ABOUT the offer without accepting it ("produce it tomorrow?")? Then the offer is
- * kept for its TTL, so a plain "produce" straight after still works instead of finding nothing pending
- * (VERIFY-deep-ask-hybrid-2.md AC4: a near-miss used to clear the offer).
- */
-export function mentionsProduceOffer(text: string): boolean {
-  return /\bproduce\b|\bfull version\b/.test(normaliseReply(text));
-}
-
 export const PRODUCE_OFFER_LINE =
   "Want the full version? Reply **produce** and I'll put it on the board, work it up properly, and bring you back a draft.";
 
