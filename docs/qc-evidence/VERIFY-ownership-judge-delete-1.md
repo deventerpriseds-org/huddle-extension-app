@@ -63,3 +63,61 @@ Every other place that writes `assigned_agent` to journey:
   - Typical added time: 15 tasks / 10 concurrent = 2 waves (about 2-4s); 25 tasks = 3 waves; 80 tasks = 8 waves (about 8-16s, so the 12s budget will often cut the tail and those tasks keep the batch pick).
   - So yes, an in-chat grooming can now exceed 45s more often; it could before too. UNPROVEN by measurement.
 - `resolveOwnerLLM` is called with no temperature setting, across up to 80 tasks a week. Owner flip-flop between passes resets confirm state (groom.ts prompt "ASSIGNMENT STABILITY"). The "DEFAULT STRONGLY to keeping" wording mitigates this, but it is not measured. UNPROVEN.
+
+## AC4 — prompt coherence, "dm" framing unchanged in meaning, strict output still valid: CONFIRMED (the dm prompt is not byte-identical)
+
+- System, dm branch: the new string = the old string byte for byte (the dm text ends "...agent's. " and is then joined with the shared "Judge by intent..." tail; old routing.ts at 8302cb6 L555-559).
+- Prompt, dm branch: two wording changes that apply to BOTH framings. "KEEP it with the agent they addressed (the default)" became "KEEP it with ${addressed.name} (the default)", and "when the request plainly belongs" became "when it plainly belongs". The meaning is the same; the bytes are not.
+- "assigned" framing: system and prompt read coherently ("currently owned by X ... DEFAULT STRONGLY to keeping it").
+- Strict: the schema is `{type:object, additionalProperties:false, properties:{owner:{type:string, enum:[roster ids]}}, required:["owner"]}`, sent with `strict: true` (openai-responses.server.ts:37). All properties are required and additionalProperties is false, so the schema is valid under strict mode. Unchanged by the PR.
+
+## AC5 — delete: UI and journey scoping CONFIRMED; the cross-user guarantee and agent non-exposure are REFUTED as stated
+
+- Both renders: `onDelete={applyDelete}` appears 2 times (BoardView.tsx:560 desktop grid, :634 mobile list). CONFIRMED.
+- Only the confirm action deletes. `onDelete(task.id)` appears once, inside `AlertDialogAction` (BoardView). The hover button (desktop, `!onMove`) and the menu item (mobile) only call `setConfirmDelete(true)`. CONFIRMED.
+- Optimistic remove and restore on failure (`applyDelete`): CONFIRMED, with two minor defects.
+  1. It restores the WHOLE pre-delete list snapshot. Delete A, then delete B before A's response arrives; if A fails, `setTasks(prevA)` brings back B too, even though B was deleted in journey (and any move made in between is reverted on screen) until the next refetch.
+  2. `prev` is captured inside the state updater. It relies on React running the updater before the network call returns, which holds in practice.
+- Server fn: `if (!data.caller?.entra_email) return {ok:false,"Sign-in required."}` then `invokeJourneyTool({toolName:"delete_task", args:{task_id}})` (board.functions.ts:86-107). CONFIRMED as written.
+- journey `deleteTask` (squash 9c81e5f, read via the GitHub API): `.delete().eq('id', task_id).eq('user_id', userId)`; zero rows returns "Task not found". Scoped to `userId`. CONFIRMED.
+- How huddle-proxy resolves userId (journey `supabase/functions/huddle-proxy/index.ts` @ main):
+  1. The bearer must equal `JOURNEY_PROXY_TOKEN`.
+  2. `userId` comes from `caller.entra_email` in the REQUEST BODY: alias table first, then `profiles.email`.
+  3. In Huddle, `caller` is a client-supplied field of the server-fn input (`Caller` zod object, board.functions.ts:10). No server middleware verifies it: src/start.ts registers only `errorMiddleware`.
+  So "a user can't delete another user's task" holds only relative to a TRUSTED caller email. A client that puts someone else's email in `caller` plus a task uuid would delete that user's row. This is the same pre-existing trust model as `updateBoardTask`, but delete is the first irreversible action on it. **REFUTED in the strong sense; pre-existing design.**
+- Mirror removal on DELETE: journey migration `20260711120000_huddle_task_sync.sql` fires `AFTER INSERT OR UPDATE OR DELETE ON public.tasks`, and Huddle `src/routes/api/public/tasks-sync.ts:54-55` calls `deleteJourneyTask(id)` (`DELETE FROM tasks.journey_tasks WHERE id=$1`, tasks.server.ts:410). CONFIRMED from source; not exercised live.
+- Agent exposure:
+  - Text path: journey tools are dispatched only when `journeyNames.has(c.name)` (huddle.functions.ts:4667 and 6223 via the catalog). The catalog comes from execute-tool `/definitions`; a GitHub code search for `delete_task` in journey-voice finds it only in the `case 'delete_task'` switch, not in a definition. So it is not offered to text agents. CONFIRMED.
+  - **Voice path: REFUTED.** `executeRealtimeTool` forwards ANY non-native name straight to `invokeJourneyTool({toolName: name})` with no catalog check (voice/realtime-tools.server.ts:819-825). Its server-fn entry `runRealtimeTool` takes `name` from the client body (realtime.functions.ts:186-201). The model is never offered `delete_task`, but the path does pass an arbitrary journey toolName, and `delete_task` is now a live name there.
+  - `invokeJourneyToolDebug` (journey/proxy.functions.ts:213) is also a public server fn that takes an arbitrary `toolName` and `caller`.
+  - Neither path is new in this PR, but both now reach a destructive tool.
+
+## AC6 — hand-off offer suppression: CONFIRMED, with one edge
+
+- `followupResolution` is assigned the 1:1 lane-owner IIFE, `(async () => {...resolveOwnerLLM(data.text, nextId)...; deliverIfOwner(ownerId)})().catch(() => {})` (huddle.functions.ts:6738-6753). CONFIRMED.
+- `ensureProduceOfferDelivered` (6916-6925): returns immediately when `!produceOffer`. Otherwise it races `followupResolution.catch(()=>{})` against a 3000ms timer, then `if (followupDelivered.size > 0) return;`. CONFIRMED.
+- Capability path: `deliverIfOwner(capOwnerId)` adds to `followupDelivered` SYNCHRONOUSLY (before the void delivery), and `followupResolution` stays null, so the size check suppresses the offer. CONFIRMED.
+- No unhandled rejection: the IIFE carries `.catch(() => {})`, the race uses `.catch(() => {})` again, `resolveOwnerLLM` never throws, and `deliverOwnerFollowup` is internally try/catch'd. CONFIRMED.
+- Which turns wait: only turns where `produceOffer` was set (huddle.functions.ts:1753) AND a 1:1 lane-owner resolution is in flight. Every other turn returns at `if (!produceOffer) return;` with no wait. CONFIRMED. The 3s timer is not cleared after the race; that is harmless.
+- Edge 1: `followupDelivered.add` happens before the asynchronous `deliverOwnerFollowup` succeeds. If the follow-up enqueue later fails silently, the offer is still suppressed, and the user gets neither the offer nor the owner's DM.
+- Edge 2: if the judge takes longer than 3s, the offer goes out (documented), which reopens the runProduce gap in AC1.
+- Edge 3: when several agents reply in one turn, each reassigns `followupResolution`, so only the last one is awaited. Earlier ones still populate `followupDelivered` if they finish first.
+
+## AC7 — harness env overrides: CONFIRMED
+
+- durable-harness.mjs: `HID = HUDDLE_ID || "all-members"`, `SCOPE = HUDDLE_SCOPE || "group"`, `TARGET = HUDDLE_TARGET`. The payload uses `scope: SCOPE` and spreads `targetAgentId` only when it is set. The server schema accepts `scope: z.enum(["one-to-one","group"])` and `targetAgentId: z.enum(AgentIds)` (huddle.functions.ts:195-198).
+- qa-iris-plan-durable.mjs sets HUDDLE_ID=dm-iris-chase, SCOPE=one-to-one, TARGET=iris-chase, MEMBERS=iris-chase, and a `Test-` prefixed text BEFORE `await import("./durable-harness.mjs")`. Dynamic import, so the env is set before the harness reads it at module evaluation.
+- journey: every agent is built with `journey: { enabled: false }` (durable-harness.mjs:33).
+- Not run live (the brief forbids live scripts).
+
+## Verdict
+
+| AC | result |
+|---|---|
+| 1 | PARTLY CONFIRMED — the three named paths use the judge; `runProduce` (huddle.functions.ts:1635) assigns without it; the plural/voice creates leave rows unassigned |
+| 2 | CONFIRMED (order, card = assignee, group unchanged); finding: judge awaited with NO timeout on the reply path |
+| 3 | CONFIRMED (incumbent, framing, per-call fallback); REFUTED "a failure can never reshuffle": budget-skip and outer-catch use the batch pick for assigned tasks; judge phase can last about 18s; in-chat worst case about 68.5s (was 50.5s); interactive cap is 25, not 40 |
+| 4 | CONFIRMED (dm meaning unchanged, two wording edits; strict valid) |
+| 5 | UI, journey user_id scoping and mirror CONFIRMED; cross-user safety REFUTED in the strong sense (client-asserted caller); agent non-exposure REFUTED for the voice executor path (arbitrary toolName passthrough) |
+| 6 | CONFIRMED; edges: suppression counts an un-confirmed delivery; more than 3s reopens the offer |
+| 7 | CONFIRMED by reading; not run |
