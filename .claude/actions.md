@@ -23,6 +23,13 @@ Previous: 2026-09-12 (ACT:escalated-dead-end -- approach gate's `escalated` is t
 Previous: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
 Previous: 2026-08-26 (ACT-64 confirm-ask/assist scope revised, no code yet; ACT-63 notification bugs DEPLOYED 6dccf41, Bug 2 user-confirmed live; ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
 
+## ACT:message-copy-and-date — per-message copy button + dated timestamps in chat (2026-10-28)
+Owner asked (screenshot of journey's Iris chat): "there should be a copy option for each message. also the messages
+have timestamps but no date." Change in `HuddleView.tsx`: `ClientTime` now renders `Oct 27, 8:15 AM` (year only when
+not the current year) via `formatMessageTimestamp`; user messages gained a timestamp row (they had none); new
+`CopyMessageButton` (Copy→Check 2s, mirrors journey `TranscriptScroll.tsx`) on every user + agent message with text.
+Status: implemented, tsc clean, no new lint errors; NOT yet owner-confirmed live.
+
 ## ACT:deeplink-opens-at-top — a 1:1 heads-up opened the thread at the TOP of history (2026-10-27)
 
 **Asked (owner):** *"when i click a heads up message from a 1:1 it deeplinks but goes to the top of the

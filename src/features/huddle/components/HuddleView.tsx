@@ -24,6 +24,7 @@ import {
   ListChecks,
   AlertTriangle,
   Mail,
+  Copy,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -1040,6 +1041,10 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
           <div className="rounded-2xl rounded-br-sm bg-primary px-4 py-2 text-sm text-primary-foreground shadow-soft">
             {m.text}
           </div>
+          <div className="flex items-center gap-1.5 px-1">
+            <ClientTime ts={m.ts} />
+            <CopyMessageButton text={m.text} />
+          </div>
         </div>
         <UserAvatar size="sm" />
       </div>
@@ -1072,6 +1077,7 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
             </span>
           )}
           <ClientTime ts={m.ts} />
+          <CopyMessageButton text={m.text} />
         </div>
         <div
           className={cn(
@@ -2006,11 +2012,51 @@ function Composer({ huddle }: { huddle: Huddle }) {
 function ClientTime({ ts }: { ts: number }) {
   const [label, setLabel] = useState<string>("");
   useEffect(() => {
-    setLabel(new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    setLabel(formatMessageTimestamp(ts));
   }, [ts]);
   return (
     <span className="text-[11px] text-muted-foreground" suppressHydrationWarning>
       {label}
     </span>
+  );
+}
+
+/** "Oct 27, 8:15 AM" — always carries the date (journey's chat format); the year only when it isn't this one. */
+function formatMessageTimestamp(ts: number, now: Date = new Date()): string {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}),
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** Per-message copy control, mirroring journey's chat (Copy → Check for 2s). */
+function CopyMessageButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  if (!text?.trim()) return null;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Couldn't copy message");
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={copied ? "Copied" : "Copy message"}
+      aria-label={copied ? "Copied" : "Copy message"}
+      className="inline-flex size-5 items-center justify-center rounded text-muted-foreground/70 transition hover:bg-muted hover:text-foreground"
+      data-testid="copy-message"
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+    </button>
   );
 }
