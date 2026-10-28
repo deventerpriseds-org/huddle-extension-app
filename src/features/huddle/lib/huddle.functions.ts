@@ -1888,6 +1888,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // (dm-<owner>) AND we push the user, so they actually hear back. Fire-and-forget, once per owner
   // per turn, best-effort. Only in a 1:1 (group turns bring the owner in via the normal re-queue).
   const followupDelivered = new Set<AgentId>();
+  // The in-flight lane-owner resolution for a 1:1 hand-off (fire-and-forget below). The produce offer
+  // awaits it briefly: an agent that just handed the ask to a teammate must not also offer to produce it
+  // (measured live 2026-10-28: Finn passed a GTM ask to Tess, then the offer was still appended).
+  let followupResolution: Promise<void> | null = null;
   async function deliverOwnerFollowup(
     ownerId: AgentId,
     fromName: string,
@@ -6731,7 +6735,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // laneOwnerFor that mis-routed a finance spreadsheet to the product lane on "build a spreadsheet".
         // Fire-and-forget (same as the existing deliverOwnerFollowup pattern here) so it never delays the
         // user's reply; falls back to the keyword laneOwnerFor on no-key/failure so it's never worse.
-        void (async () => {
+        followupResolution = (async () => {
           // The semantic resolver is AUTHORITATIVE when it succeeds: it returns a real owner id — which
           // may be the ADDRESSED agent, meaning "keep it here" — and returns null ONLY on failure/no-key.
           // So fall back to the keyword laneOwnerFor ONLY on that null; never override a real decision
@@ -6746,7 +6750,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               : null;
           const ownerId = resolved ?? (laneOwnerFor(data.text, nextId)?.id ?? null);
           deliverIfOwner(ownerId);
-        })();
+        })().catch(() => {});
       }
     }
   };
@@ -6913,6 +6917,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     if (!produceOffer) return;
     const offer = produceOffer;
     produceOffer = null;
+    // Handed off → no offer. Wait at most 3s for an in-flight hand-off decision; if it is slower, the
+    // offer goes out as before (the worst case is the old behaviour, never a lost reply).
+    if (followupResolution) {
+      await Promise.race([followupResolution.catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
+    }
+    if (followupDelivered.size > 0) return;
     const out = appendProduceOffer(replies, offer.agentId);
     if (!out.appended) return;
     replies.splice(0, replies.length, ...out.replies);
