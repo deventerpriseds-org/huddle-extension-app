@@ -23,6 +23,7 @@ import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
 import { useAppViewportHeight } from "../hooks/useAppViewportHeight";
 import { useAuth } from "@/hooks/useAuth";
 import { getAllTurnUpdates } from "../lib/huddle.functions";
+import { catchUpCursor } from "../lib/turn-catchup";
 import { userTurnTs } from "../lib/turn-identity";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 
@@ -151,7 +152,29 @@ export function HuddleApp() {
       }
     };
 
+    // The cursor above only knows what THIS device last fetched. If the saved workspace is older than
+    // that (saves were rejected for 10 days, 2026-10-18..28, and an app restart then dropped every
+    // message held only in memory), the gap between the newest SAVED message and the cursor was never
+    // fetched again. So on the first poll after hydrate, start no later than the newest message the
+    // hydrated workspace actually holds. Ids dedupe (a-<turnId>-<i>, <turnId>), so overlap is harmless.
+    let rewound = false;
+    const rewindToNewestSaved = () => {
+      if (rewound) return;
+      rewound = true;
+      cursor = catchUpCursor(cursor, useHuddleStore.getState().messages);
+    };
+    // The server returns at most 100 turns per call (turns.server.ts getUserTurnsSince), oldest first.
+    // A catch-up after a long gap is more than that, so keep paging until a short page comes back.
+    const TURN_PAGE = 100;
+    const MAX_PAGES = 20;
     const doPoll = async (opts: { left?: boolean } = {}) => {
+      rewindToNewestSaved();
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const n = await pollOnce(opts);
+        if (n < TURN_PAGE || stopped) break;
+      }
+    };
+    const pollOnce = async (opts: { left?: boolean } = {}): Promise<number> => {
       // Absent when not watching — the server reads that as "away", which is the safe direction.
       const watchingHuddleId = opts.left || !isWatching() ? undefined : (activeIdRef.current ?? undefined);
       const { turns } = await getAllTurnUpdates({
@@ -243,6 +266,7 @@ export function HuddleApp() {
       } catch {
         /* ignore */
       }
+      return turns.length;
     };
     const safePoll = () => {
       // Only add AFTER hydrate — a pre-hydrate add would be discarded by hydration while the cursor
