@@ -485,3 +485,13 @@ is **loop 4**.
 | Source that would have settled it | `autowork.server.ts` `armConfirmAsksSpaced` / `nextSpacedFanSlotIso` and `scheduling-config.server.ts` `CONFIRM_GAP_DEFAULT` — both read in the same pass, but not reconciled against the new proposals |
 | Root cause | Relayed an AC subagent's "new knob" defaults without running the Extend-don't-duplicate check on them; the owner caught it |
 | Guard implied | Before presenting any new cap/interval/setting, name the existing mechanism that already throttles that thing and say why it is insufficient — or drop the new knob |
+
+## 2026-10-28 — Two verifier loops froze for 30+ min: my brief told them to `git push --force`
+
+| field | value |
+|---|---|
+| Claim | Verifier loops 2 and 3 "hung" on a git command |
+| Ground truth | No git process existed; the Bash call never started. Each loop's per-claim push in my brief used `--force`, which a subagent cannot run without a permission prompt nobody sees — the call sits waiting forever. Loop 1's brief allowed but did not require `--force` and it pushed fine |
+| Source that would have settled it | The subagent transcript's last line (an unanswered `tool_use` with `--force`) + `ps` showing no git process |
+| Root cause | Brief prescribed an action that needs approval; the harness gives a background subagent no way to surface the prompt |
+| Guard implied | Verifier briefs: per-loop refs are always NEW, so push WITHOUT `--force`; on a stale subagent, read its last tool_use before assuming a slow command |
