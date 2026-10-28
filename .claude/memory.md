@@ -117,6 +117,16 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Confirm-ask LANE STARVATION + no re-ask (2026-10-27, IMPLEMENTING — NOT deployed, NOT owner-confirmed)
+- Root cause (code read + offline test `scripts/autowork-lane-starvation.test.ts`): autowork considers only `upNextAfterTopUp[0]` per agent for DOING and arms only that item's ask; `markConfirmAsked` is set-once and nothing re-asks. One unanswered top ask freezes the whole lane forever.
+- Groom is WEEKLY (Mon 8am, owner's 2026-07-31 choice) and never writes status; autowork 9/13/17 daily — a daily groom would NOT unstick a lane.
+- Owner policy 2026-10-27: keep re-asking, rotate through the lane, NO auto-shelving (supersedes 2026-08-26 "move stuck to backlog").
+- Hidden hazard: plain "yes" in a 1:1 binds to the newest-`updated_at` asked task (`getPendingConfirmForAgent`) — with rotation there are several asked rows, so binding must be by last-SENT or it leaks the gate. Ship together.
+- `journey_tasks.tags` is NOT NULL DEFAULT '{}' — the NULL-tags parking-lot trap does not occur.
+- Owner re-scope: whole lane, re-asks ride the EXISTING 45–90 min spacing chain (armConfirmAsksSpaced) + windows, no new day cap, no review pause; 24h per-item floor only. The heartbeat re-arms right after each send (armOnly pass) — re-arming only at 9/13/17 was a hidden 3/day/agent cap.
+- Memory architecture: owner chose (a) SOFT preference (2026-10-27) and "thought it was already this way" — it largely IS: runAgentTurn's laneBoost re-ranks shared memory by the agent's domains/themes (topic text, not agent name). Gaps: voice has no lane boost/Executive Profile; the owner's ChatGPT knowledge isn't ingested yet.
+- ACs: `.claude/AC-confirm-ask-rotation.md`. Tracker: ACT:confirm-ask-rotation.
+
 ## Deep 1:1 asks: HYBRID — act now, or answer + offer to produce; never hold (2026-10-28, PR #116, NOT deployed yet, NOT owner-confirmed)
 **Trigger:** owner asked Iris (dm-iris-chase) to plan the day — gym 3pm, vitamin shop, DBA 702/782 papers, eulogy,
 app work. Scorer rated it difficulty 3 (length), the old gate HELD it behind the canned "produce or quick?" literal

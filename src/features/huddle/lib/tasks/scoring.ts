@@ -32,8 +32,27 @@ const PRIORITY_KEYWORDS = {
   comms: ["email", "follow up", "follow-up", "respond", "reply", "call", "meeting", "text", "message", "contact", "coach"],
 };
 
+// THE ONE task-title normalizer (AC-65). Every dedup site — the scorer's own title collapse below,
+// create_huddle_task(s) on text and voice, and the raw-journey-create interception in
+// create-task-core.ts — imports THIS function (create-task-core re-exports it), so a typed title and
+// the same title spoken cannot dedup differently, and two copies cannot drift. It lives here rather
+// than in create-task-core because this module is a dependency-free leaf.
+// Rule (owner OQ-7, 2026-10-27): trim, strip SURROUNDING quotes and TRAILING punctuation, lowercase,
+// collapse whitespace. Deliberately NO fuzzy matching: "buy studio camera bag" must stay a different
+// task from "buy studio camera" (AC-62).
+const TITLE_QUOTE = `"'\`“”‘’«»`;
+const TRAILING_TITLE_PUNCT = /[.,;:!?…]+$/;
 export function normalizeTaskTitle(title: string): string {
-  return title.trim().toLowerCase().replace(/\s+/g, " ");
+  let t = String(title ?? "").trim();
+  for (;;) {
+    const before = t;
+    t = t.replace(TRAILING_TITLE_PUNCT, "").trim();
+    if (t.length >= 2 && TITLE_QUOTE.includes(t[0]) && TITLE_QUOTE.includes(t[t.length - 1])) {
+      t = t.slice(1, -1).trim();
+    }
+    if (t === before) break;
+  }
+  return t.toLowerCase().replace(/\s+/g, " ");
 }
 
 export function hasSchedulingPriorityKeyword(title: string): boolean {
