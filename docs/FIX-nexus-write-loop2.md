@@ -144,3 +144,13 @@ near-misses stay green unchanged. Observation outside D5 (pre-existing, not chan
 of action workshop…, deck due Friday" in a 1:1 with Ezra hands to Elle on origin/main too -- Elle's
 THEME "course" (topic scoring, unchanged since 4809e2e), not the prime rule; pinned as the baseline in
 L2-D5d.
+
+Mutations (`src/features/huddle/data/agents.ts`, test cmd `bun scripts/nexus-write-loop2.test.ts`):
+
+| # | Guard | Mutation | mutate.sh verbatim |
+|---|---|---|---|
+| d5a | no generic weak words | `weak` back to class/course/semester/school | `FIRED: 'L2-D5b "my semester tuition payment is due Dec 1, can I afford it"' failed with the defect reinstated. The guard is real.` |
+| d5b | thesis/case study not strong | added back to `strong` | `FIRED: 'L2-D5b "what's the investment thesis for buying more NVDA"' failed with the defect reinstated. The guard is real.` |
+| d5c | NEXUS alone is not context | bare `to/in/on/from nexus` re-added | `FIRED: 'L2-D5b "should I apply to NEXUS before my trip to Toronto"' failed with the defect reinstated. The guard is real.` |
+| d5d | "due in Nexus" / "add … to Nexus" are load-bearing for coursework | patterns removed | `FIRED: 'L2-D5e group "what's due in Nexus this week"' failed with the defect reinstated. The guard is real.` |
+| d5e | a course code must look like one | lowercase `word ?\d{3}` re-added | `FIRED: 'L2-D5i "the deadline to pay 300 for my gym is Friday"' failed with the defect reinstated. The guard is real.` |
