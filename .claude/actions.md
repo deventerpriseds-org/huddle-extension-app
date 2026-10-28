@@ -73,8 +73,9 @@ only alarms and history never filled in (before: alarms, then history ~7s later)
 
 **Owner chose C (2026-10-28).** Part A shipped: #117 (`39f464d`, deploy 40744286484 success) -- save cap 8M,
 back-fill resumes from the newest saved message and pages past 100, load retries with an on-screen notice, save
-failures shown. NOT yet confirmed on the owner's phone (awaiting his reopen + a DB check that `updated_at` moves
-off 2026-10-18). Part B planned in `docs/plan-message-history-storage.md`, awaiting approval. Retracted claim: "the
+failures shown. **OWNER-CONFIRMED on his phone 2026-10-28 ("I now see the messages again")** and DB-verified: workspace
+`updated_at` 2026-10-28 18:24:36 UTC (was 10-18), 3,415 messages (was 3,230), Iris 806 (was 654), newest saved
+message 18:17 UTC today. Blob is now 2,228,410 chars -- over the OLD cap, so the raise is what let it save. Part B planned in `docs/plan-message-history-storage.md`, awaiting approval. Retracted claim: "the
 APK restart caused the loss" -- owner installed APKs after 10-18 without loss, so restarts were being recovered by
 something not yet identified.
 
