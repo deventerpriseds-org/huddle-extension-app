@@ -117,6 +117,11 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Chat messages: dated timestamps + per-message copy (2026-10-28, NOT owner-confirmed)
+`ClientTime` (HuddleView.tsx) → `formatMessageTimestamp`: always month+day+time, year only for past years. User
+bubbles have a timestamp + copy row beneath; agent header has timestamp + copy. `CopyMessageButton` returns null
+for empty text. Reference pattern: journey `src/components/CommsConsole/TranscriptScroll.tsx`.
+
 ## Chat transcript scroll: opens at the newest, follows only if YOU did not scroll up (2026-10-27, DEPLOYED 4332c41, NOT owner-confirmed)
 A push deep link (`?huddle=dm-<agent>`) switches threads BEFORE the workspace history downloads, so any
 "scroll to bottom on thread switch" fires on an empty thread. The old follow rule re-measured near-bottom
