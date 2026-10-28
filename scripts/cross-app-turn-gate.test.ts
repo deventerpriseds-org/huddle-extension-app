@@ -18,6 +18,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
+  CONTEXT_MAX_BYTES,
   CROSS_APP_TURN_ID_PREFIX,
   MAX_BODY_BYTES,
   SUBJECT_ENV,
@@ -1053,6 +1054,50 @@ check(
         successes.every((l) => /projectTurnResult\(/.test(l) || /tasks: \[\]/.test(l))
       );
     })(),
+  );
+}
+
+// ---- PAGE CONTEXT (option B, 2026-10-28) -----------------------------------------------------------
+// The calling app's page context rides as ONE string field. These guard the three ways it can fail:
+// silently dropped (route or schema), refused for the wrong reason (identity walk), or holding the turn
+// on the produce-vs-quick question it exists to remove.
+console.log("\nP: cross-app page context");
+{
+  const base = { text: "what does my draft still need?" };
+  const pass1 = buildTurnInput({ ...base, pageContext: "ASSIGNMENT: Research Proposal" }, subjectFixture);
+  check(
+    "P1 a string context is carried through as appContext, byte-for-byte",
+    pass1.ok && pass1.value.appContext === "ASSIGNMENT: Research Proposal",
+  );
+  const absent = buildTurnInput(base, subjectFixture);
+  check("P2 no context -> no appContext key (a plain turn is unchanged)", absent.ok && !("appContext" in absent.value));
+  const bad = buildTurnInput({ ...base, pageContext: { draft: "x" } }, subjectFixture);
+  check("P3 a non-string context -> 400 bad_context", !bad.ok && bad.status === 400 && bad.error === "bad_context");
+  // 6,001 four-byte characters = 24,004 bytes but only 12,002 UTF-16 units: a CHAR count would pass it.
+  const wide = "\u{1F4CB}".repeat(6001);
+  const tooBig = buildTurnInput({ ...base, pageContext: wide }, subjectFixture);
+  check(
+    "P4 the cap is in BYTES, not chars -> 24,004 bytes of emoji is refused as context_too_long",
+    !tooBig.ok && tooBig.status === 400 && tooBig.error === "context_too_long",
+  );
+  const atCap = buildTurnInput({ ...base, pageContext: "a".repeat(CONTEXT_MAX_BYTES) }, subjectFixture);
+  check("P5 exactly CONTEXT_MAX_BYTES is accepted (the cap is inclusive)", atCap.ok);
+  check(
+    "P6 a context STRING mentioning an email is not an asserted identity (only object keys are)",
+    findCallerAssertedIdentity({ ...base, pageContext: "email: someone@example.test owner: me" }) === null,
+  );
+  const turnCode = stripComments(turnSrc);
+  check(
+    "P7 runHuddleTurn's Input declares appContext (the durable path re-parses and zod strips the rest)",
+    /appContext:\s*z\.string\(\)/.test(turnCode),
+  );
+  check(
+    "P8 the produce-vs-quick gate is skipped when page context is present",
+    /!data\.ceremonyBarge && !data\.appContext && data\.scope === "one-to-one"/.test(turnCode),
+  );
+  check(
+    "P9 the page context reaches the model through memoryBlock (both instruction branches read it)",
+    /if \(data\.appContext\) \{\s*memoryBlock \+=/.test(turnCode),
   );
 }
 

@@ -325,7 +325,18 @@ export type CrossAppTurnBody = {
    *  identity-shaped field and is not refused by findCallerAssertedIdentity. When present it makes
    *  the durable turn id exact (see crossAppTurnId). */
   idempotencyKey?: unknown;
+  /** Optional PAGE CONTEXT from the calling app: what the user is looking at and working on (for
+   *  Nexus: the active assignment, its requirements, outline, current draft, reference files and
+   *  retrieved excerpts). A single STRING on purpose -- findCallerAssertedIdentity walks object KEYS,
+   *  and a string has none, so a draft that happens to mention an email address cannot get the turn
+   *  refused. Bounded by CONTEXT_MAX_BYTES and REFUSED (never truncated) when over it. Never written
+   *  to shared memory: only `text` is. */
+  pageContext?: unknown;
 };
+
+/** Cap on `pageContext`, in UTF-8 BYTES because the body cap (MAX_BODY_BYTES) is bytes. Leaves the rest
+ *  of the 64KB body for `text` (4000) and `history`; the sender drops oldest history first to fit. */
+export const CONTEXT_MAX_BYTES = 24_000;
 
 export type TurnInput = {
   text: string;
@@ -338,6 +349,9 @@ export type TurnInput = {
   agents: Record<string, CrossAppAgentBackend>;
   caller: { entra_email: string };
   timeZone?: string;
+  /** The calling app's page context (see CrossAppTurnBody.pageContext). Present => this is a working
+   *  session on a specific item, which runHuddleTurn treats as such (no produce-vs-quick hold). */
+  appContext?: string;
 };
 
 /** `Input.text` is `z.string().min(1).max(4000)` (huddle.functions.ts). Mirrored here so an
@@ -391,6 +405,13 @@ export function buildTurnInput(
     caller: { entra_email: subject.entra_email },
   };
   if (typeof body.timeZone === "string" && body.timeZone) input.timeZone = body.timeZone;
+  if (body.pageContext !== undefined && body.pageContext !== null) {
+    if (typeof body.pageContext !== "string") return { ok: false, status: 400, error: "bad_context" };
+    if (new TextEncoder().encode(body.pageContext).length > CONTEXT_MAX_BYTES) {
+      return { ok: false, status: 400, error: "context_too_long" };
+    }
+    if (body.pageContext.trim()) input.appContext = body.pageContext;
+  }
   return { ok: true, value: input };
 }
 
