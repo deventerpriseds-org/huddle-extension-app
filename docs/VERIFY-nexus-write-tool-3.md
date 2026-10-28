@@ -145,3 +145,85 @@ nothing while a write is pending and then only the code-built message; success a
 resume state carries the results). Honesty residuals that can still reach the owner as false text: H15/T1
 (no-call claim, by design) and V1 (latent, unreachable from inputs tried). V2/V3/V4 are lifecycle defects of the
 new voice gate (silence, not false claims).
+
+## C4 — routing: strong context = the owner's REAL course list (vs origin/main 3c728d4)
+
+Baseline: `git archive origin/main src scripts` (3c728d4) extracted to the scratchpad with the same node_modules;
+every probe run on both trees. Course list injected as Nexus holds it (nexus-hub docs: `MGT-782-W1 (202711)`,
+`MGT-701-W1-Becoming an Applied Researcher (202712)`, `MGT-702-W1 (202711)`, `EMBA694`).
+
+**Re-derived:** the fixer's own probe (`bun mut-loop3/probe-routing.ts <tree> d6`) on both trees -- all 24 loop-2
+D6 asks: group leader and `laneOwnerFor` IDENTICAL to origin/main, `primeLaneDecision` null on every one
+(`mut-verify-114-3/fixer-d6.*.out`). Coursework mode (21 asks): group led by Elle/Iris, Elle and Iris keep,
+Finn hands to Elle/Iris -- 21/21 (`fixer-cw.pr.out`). **D6 as reported: fixed.**
+
+**Cache / timeout / fallback (`bun mut-verify-114-3/probe-primer.ts`, fake fetch):** cold start with a 2.5 s
+Nexus -> `"unavailable"` after 1504 ms (bounded), routing that turn on weak signals; the read completes in the
+background and the next call is `"fresh"` in 0 ms; another owner's course row (`FIN-999`, user_id other) is NOT
+context; 503 -> unavailable, 0 refetches inside the 60 s back-off; the request is
+`GET /api/d1/courses?owner=<server owner>` with init `{signal}` only. TTL: a match at TTL+1 ms is false. Codes
+are matched as whole tokens (`XMGT-782`, `MGT-782A`, `MGT782paper` -> false); a full-width `ＭＧＴ－７８２` is NOT
+matched (the code matcher runs on the raw text, the name matcher on NFKC) -- falls back to weak signals, harmless.
+
+**NEW lane steals -- a real course code (or a weak teacher word) + any trigger word ("due", "deadline", "paper",
+"exam", "proposal", "essay") makes the ask "coursework" unless one of the listed veto words appears; the veto
+list covers travel/money/markets/fitness/household nouns but not email, calendar, reminders, dining, car rental,
+lodging, budget, deposit, payment, textbook, running** (`bun mut-verify-114-3/probe-routing.ts <tree>`,
+`probe-routing-weak.ts`; outputs `probe-routing*.{pr,main}.out`). All `intent: perform`, so in a 1:1 the
+addressed agent is told to defer AND a deterministic follow-up DM goes to Elle/Iris (huddle.functions.ts
+:6808-6814, BEFORE and INSTEAD OF the LLM owner resolver origin/main uses):
+
+| Ask (1:1 with) | origin/main group / 1:1 | PR group / 1:1 |
+|---|---|---|
+| "email my professor that my MGT-782 paper will be a day late" (Cam) | **cam-post** / no hand-off | **iris** / -> iris + DM |
+| "email my professor that my paper will be a day late" (Cam; weak only, cold cache) | **cam-post** / no hand-off | **iris** / -> iris + DM |
+| "pick a restaurant for dinner after my MGT-782 exam" (Charleston) | **charleston** / no hand-off | **iris** / -> iris + DM |
+| "pick a restaurant for dinner with my professor after the exam" (Charleston; weak) | **charleston** / none | **elle** / -> elle + DM |
+| "budget for the MGT-701 residency costs, the deposit is due Monday" (Finn) | **finn** / none | **iris** / -> iris + DM |
+| "the EMBA694 textbook payment is due Friday, can I afford it" (Finn) | elle / none | elle / -> elle + DM |
+| "rent a car for the MGT-701 residency weekend, it's due back Sunday" (Troy) | **ezra** / none | **iris** / -> iris + DM |
+| "find me lodging near campus for the MGT-782 residency, deadline to book is Friday" (Troy) | elle / none | elle / -> elle + DM |
+| "I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday" (Troy) | elle / lane elle (directive only) | elle / -> elle + DM |
+| "block two hours on my calendar Thursday for the MGT-782 paper" (Eli) | iris / none | iris / -> iris + DM |
+| "block two hours on my calendar Thursday for my research paper deadline" (Eli; weak) | elle / none | elle / -> elle + DM |
+| "remind me tomorrow at 9 that the MGT-782 paper is due" (Eli) | iris / none | iris / -> iris + DM |
+| "plan my runs around the MGT-782 exam week" (Flex) | iris / none | iris / -> iris + DM |
+| "draft an email to my MGT-782 group about the proposal deadline" (Cam) | elle / none | elle / -> elle + DM |
+
+Bold = the group leader itself moved from the lane owner to Elle/Iris (deterministic router; the LLM router is not
+measurable offline). Every row's 1:1 changed from "the addressed agent answers (LLM resolver may follow up)" to a
+deterministic hand-off + follow-up DM. Controls that ARE coursework and stay coursework: "the MGT 782 paper on
+real options is due Friday" (Elle keeps -- but the PR's veto word "options" would block it if Elle were not
+already prime), "add the MGT-701 research proposal due Dec 1 to Nexus" (Troy -> Iris, correct).
+
+This is the same failure shape as loop 2's D6, moved: the course list fixed WHICH tokens count as a course, but
+the capability still treats "names a course + says due/paper/exam" as "add it to Nexus", and the only guard is a
+veto WORD LIST. **D12 (new): BLOCKING** (another agent's lane taken, deterministically, with a DM to Elle/Iris).
+**Realistic likelihood: moderate-high** -- the owner is a DBA student whose other asks (email the professor,
+block study time, a reminder, dinner after an exam, residency travel/budget) naturally name the course and a
+deadline; no adversarial spelling is needed, and the cold-cache/weak path ("my professor", "my instructor")
+produces the same hand-offs with no course code at all.
+
+**C4: REFUTED** (D12; F2-45 NOT MET on these inputs). The loop-2 D6 inputs themselves are fixed.
+
+## C5 — the model cannot steer owner / URL / table / auth headers (CONFIRMED)
+
+Re-run on ebd805b: loop-1 `bun mut-verify-114/probe-exec.ts` C5 block -- POST url
+`https://nexus.test/api/d1/assignments?owner=owner-uuid-1111` (one owner), headers `{content-type, x-uat-token:
+srv-token, x-agent-tool, x-agent-ref}`, body `{course_id,title,type,status,due_date,program_id}`; injected
+`assignment_id "aafbf80f&owner=evil&id=6616bef3"` -> ONE encoded `id`, owner stays single; every GET carries the
+server owner; 26 items -> batch_too_large, 0 writes. Loop-2 `mut-verify-114-2/probe-exec.ts` C5 block: zone /
+course / JSON-ish title injections -> 0 POSTs or whitelisted body, owners `[["owner-uuid-1111"]]`. NEW loop-3 path
+(the UPDATE's stored-row read): `assignment_id "aafbf80f&owner=evil"` + `owner`/`user_id: "evil"` -> GET
+`filters=[["id","aafbf80f&owner=evil"]]` (one JSON value), owner params `[GET:[owner-uuid-1111], PATCH:
+[owner-uuid-1111]]`, not_found. The primer's GET carries the server owner and init `{signal}` only. The write
+module still has exactly one `fetch(` (nexus-write.server.ts:563).
+
+## C6 — read tools stay read-only (CONFIRMED)
+
+`git diff origin/main...HEAD -- nexus.server.ts`: only `export` added to `nexusOwner`, `nexusBase`, `TIMEOUT_MS`,
+`nexusGet` plus comments; no loop-3 change (`git diff 6b11bae HEAD -- nexus.server.ts` empty). Only `fetch(` in it
+is :128 `fetch(url.toString(), { signal })`. The NEW `course-context.server.ts` reads only through `nexusGet("courses")`
+(source: its sole import from ./nexus.server is `nexusGet, nexusOwner, nexusReadConfigured`; probe-primer: one GET,
+init keys `["signal"]`); `course-context.ts` is pure (no imports). `bun mut-verify-114/probe-read.ts`: 12 read
+tools = 12 NEXUS_TOOL_NAMES; 16 fetches, 0 with any init key other than `signal`.

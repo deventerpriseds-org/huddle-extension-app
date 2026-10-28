@@ -1,0 +1,8 @@
+cold + slow Nexus (2.5 s): "unavailable" in 1504 ms
+  MGT-782 mentioned right after: false
+  after the background read finished: true FIN-999 (other owner): false
+warm: "fresh" in 0 ms
+cold + 503: "unavailable" in 0 ms
+again within 60 s: "unavailable" in 0 ms
+  fetches during back-off: 0
+  request shape: {"url":"https://nexus.test/api/d1/courses?owner=owner-uuid-1111","init":["signal"]}
