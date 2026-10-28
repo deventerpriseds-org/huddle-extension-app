@@ -104,26 +104,31 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
       ["due", "deadline", "deadlines", "graded", "grade", "submit", "submission"],
     ],
   ],
-  // WHOSE job: the owner's coursework. Owner rule (2026-10-28 fix pass): course code, EMBA/DBA/class/
-  // professor/syllabus words, or an explicit Nexus-assignment phrase. A seat assignment, a client or
-  // quarterly-report deliverable, tax papers or "the nexus of AI" carry none of it.
+  // WHOSE job: the owner's coursework -- SPECIFIC signals only (loop 2, D5, owner-approved; see
+  // docs/FIX-nexus-write-loop2.md). Generic words are NOT context any more: "course" (course of action),
+  // "class" (a training class), "semester"/"tuition" (a payment), "thesis" (an investment thesis),
+  // "case study" (a fasting study), "NEXUS" alone (the trusted-traveller card / "apply to NEXUS").
   requiresContext: {
-    strong: [
-      "syllabus", "syllabi", "emba", "mba", "dba", "doctoral", "professor", "prof", "instructor",
-      "coursework", "course work", "research paper", "research proposal", "term paper", "final paper",
-      "case analysis", "case study", "case brief", "literature review", "thesis", "dissertation",
+    strong: ["syllabus", "syllabi", "emba", "mba", "dba", "doctoral", "professor", "prof", "instructor", "coursework", "course work"],
+    strongPatterns: [
+      // a course code as written on a syllabus: MGT-782, MGT 782, MGT782 (capitals), or mgt-782 (hyphenated)
+      ["\\b[A-Z]{2,4}[- ]?\\d{3}[A-Z]?\\b", ""],
+      ["\\b[a-zA-Z]{2,4}-\\d{3}\\b", ""],
+      // an explicit Nexus-ASSIGNMENT phrase: "Nexus assignments", "due in Nexus", "add/put/log … to Nexus"
+      // -- never "NEXUS" alone ("apply to NEXUS before my trip", "renew my NEXUS card").
+      ["\\bnexus assignments?\\b|\\bdue (?:in|on) nexus\\b|\\b(?:add|put|log|save|enter|record|sync)\\b[^.?!]{0,60}?\\b(?:to|into|in) nexus\\b", "i"],
     ],
-    // "add this to Nexus", "my assignments in Nexus", "Nexus assignments" -- not "NEXUS card", "the nexus of".
-    strongPatterns: [["\\b(?:to|in|into|on|from) nexus\\b|\\bnexus assignments?\\b", "i"]],
-    weak: ["class", "classes", "course", "courses", "semester", "school", "grad school"],
+    weak: [],
     weakPatterns: [
-      // a course code: MGT-782, MGT 782, MGT782, mgt-782
-      ["\\b[A-Z]{2,5}[- ]?\\d{3,4}[A-Z]?\\b|\\b[a-zA-Z]{2,5}-\\d{3,4}\\b|\\b[a-z]{2,5} ?\\d{3}\\b", ""],
-      // "my assignments", "my school assignments" (plural: "my seat assignment" is not coursework)
-      ["\\bmy (?:[a-z]+ )?assignments\\b", "i"],
+      // "my assignment", "my assignments", "my school assignments" (a veto word keeps "my seat assignments")
+      ["\\bmy assignment\\b|\\bmy (?:[a-z]+ )?assignments\\b", "i"],
     ],
-    // a graded-work cue with a paper/essay: "the due date on my strategy paper"
-    weakPairs: [[["paper", "essay"], ["due date", "deadline", "graded", "grade", "submit", "submission"]]],
+    // a graded deliverable + a deadline/grading cue: "the due date on my strategy paper", "my research
+    // proposal deadline". A bare "due" is not a cue ("the merger proposal due Friday").
+    weakPairs: [[
+      ["paper", "papers", "essay", "essays", "research proposal", "case analysis", "case study", "case brief", "thesis", "dissertation", "midterm"],
+      ["due date", "deadline", "deadlines", "graded", "grade", "submit", "submission"],
+    ]],
     vetoes: [
       "flight", "seat", "trip", "hotel", "airline", "client", "customer", "boss", "quarterly", "invoice",
       "tax", "taxes", "toilet", "towel", "towels", "card", "kid", "kids", "son", "daughter", "child",

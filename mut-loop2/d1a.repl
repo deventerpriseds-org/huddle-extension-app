@@ -1,0 +1,1 @@
+    return { ok: true, iso: isoZ(ms), ms, timeAssumed: false, zone: m[7].toUpperCase() === "Z" ? "UTC" : m[7] };

@@ -1,0 +1,1 @@
+  if (DENY_ADMIN.test(t)) return "administrative";

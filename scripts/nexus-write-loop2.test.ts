@@ -18,6 +18,9 @@ import {
   resolveDueInstant,
   nexusWriteClaimKey,
 } from "../src/features/huddle/lib/nexus/nexus-write.server";
+import { routeMessage, laneOwnerFor, primeLaneDecision } from "../src/features/huddle/lib/routing";
+import { sharedCapabilityHolders } from "../src/features/huddle/lib/capabilities";
+import { AGENTS, type AgentId } from "../src/features/huddle/data/agents";
 
 let pass = 0;
 let fail = 0;
@@ -168,6 +171,63 @@ const main = async () => {
     ]);
     t("L2-D2k executor refuses all three with reasons, 0 POSTs", `${r.results.map((x) => x.reason).join(",")}/${POSTS}`, "meeting/session,event,not-a-deliverable/0");
     t("L2-D2l each refusal carries a note telling the agent to tell the owner", r.results.every((x) => /Nothing was written/.test(String(x.note))), true);
+  }
+
+  console.log("=== D5: coursework routing needs a SPECIFIC signal ===");
+  {
+    const ALL_IDS = AGENTS.map((a) => a.id) as AgentId[];
+    const PRIME = new Set(["elle-rowan", "iris-chase"]);
+    const lead = (text: string) =>
+      routeMessage({ text, scope: "group", members: ALL_IDS, history: [] } as Parameters<typeof routeMessage>[0]).winners[0];
+    // Baselines = routeMessage(...).winners[0] on origin/main d618114 (measured with
+    // mut-verify-114/probe-routing.ts against a `git archive origin/main` export; same as the verifier's table).
+    const D5: Array<[string, string]> = [
+      ["should I apply to NEXUS before my trip to Toronto", "troy-lennox"],
+      ["what's the investment thesis for buying more NVDA", "tess-sutton"],
+      ["my semester tuition payment is due Dec 1, can I afford it", "finn-reid"],
+      ["review the course of action for the merger proposal due Friday", "cole-blake"],
+      ["is there a case study on intermittent fasting results", "cole-blake"],
+      ["I'm teaching a training class at work, slides due Friday", "flex-grimes"],
+    ];
+    for (const [text, base] of D5) {
+      t(`L2-D5a group "${text}" routes to its origin/main baseline`, lead(text), base);
+      t(`L2-D5b "${text}" matches no coursework prime capability`, sharedCapabilityHolders(text).length, 0);
+      const handoffs = ALL_IDS.map((id) => laneOwnerFor(text, id)?.id).filter((x) => x && PRIME.has(x));
+      t(`L2-D5c 1:1 with ANY agent: "${text}" is never handed to Elle/Iris`, handoffs.length, 0);
+    }
+    // [text, self, laneOwnerFor on origin/main d618114]. The last row's "elle-rowan" is PRE-EXISTING theme
+    // routing (Elle's theme "course", unchanged since 4809e2e), not the prime rule: primeLaneDecision is null.
+    for (const [text, self, base] of [
+      ["write up an investment thesis for NVDA", "finn-reid", "null"],
+      ["apply to NEXUS for me before my Toronto trip", "troy-lennox", "null"],
+      ["my tuition payment for the semester is due, set aside the money", "finn-reid", "null"],
+      ["teach the course of action workshop for my team, deck due Friday", "ezra-miles", "elle-rowan"],
+    ] as Array<[string, AgentId, string]>) {
+      t(`L2-D5d 1:1 ${self}: "${text}" -> no prime hand-off, origin/main lane`, `${primeLaneDecision(text, self)}/${laneOwnerFor(text, self)?.id ?? "null"}`, `null/${base}`);
+    }
+    // Every coursework phrasing the verifier listed still goes to Elle/Iris -- group AND 1:1.
+    const COURSEWORK = [
+      "add my assignments", "add my MGT-782 assignments from the syllabus", "put the research paper due Dec 9 on my assignments",
+      "update the due date on my research paper", "change my research proposal deadline to Nov 2", "log my DBA deliverables",
+      "add this syllabus's deadlines to Nexus", "I have a new paper due next month for MGT-782, add it", "add my school assignments",
+      "fix the due date on my strategy paper", "my professor pushed the case analysis to Friday",
+      // specific-signal spellings the owner's rule names
+      "add the case study due Nov 3 to Nexus", "what's due in Nexus this week", "show my Nexus assignments", "mgt-782 paper deadline moved",
+      "my instructor extended the essay deadline", "my doctoral dissertation draft is due Dec 1",
+    ];
+    for (const text of COURSEWORK) {
+      t(`L2-D5e group "${text}" is led by Elle/Iris`, PRIME.has(String(lead(text))), true);
+      t(`L2-D5f 1:1 Elle/Iris keep "${text}"`, `${laneOwnerFor(text, "elle-rowan" as AgentId)?.id ?? "null"}/${laneOwnerFor(text, "iris-chase" as AgentId)?.id ?? "null"}`, "null/null");
+      t(`L2-D5g 1:1 Finn hands "${text}" to Elle/Iris`, PRIME.has(String(laneOwnerFor(text, "finn-reid" as AgentId)?.id)), true);
+    }
+    // A course code must look like one: "pay 300" / "is 300" (a word then three digits) is not MGT-782.
+    for (const text of ["the deadline to pay 300 for my gym is Friday", "my rent is 300 more, deadline is Monday"]) {
+      t(`L2-D5i "${text}" is not a course code`, sharedCapabilityHolders(text).length, 0);
+    }
+    // The context is DATA on the capability (agents.ts), not code: no generic word survives in it.
+    const cap = AGENTS.flatMap((a) => a.capabilities ?? []).find((c) => c.id === "nexus-assignments");
+    const ctxWords = [...(cap?.requiresContext?.strong ?? []), ...(cap?.requiresContext?.weak ?? [])];
+    t("L2-D5h no generic word (course/class/semester/school/thesis/case study/tuition/training/nexus) is context", ctxWords.filter((w) => /^(course|courses|class|classes|semester|school|thesis|case study|tuition|training|nexus)$/i.test(w)).join(",") || "none", "none");
   }
 };
 
