@@ -1,0 +1,26 @@
+{"text":"I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday","self":"troy-lennox","intent":"perform","group":"elle-rowan","prime":"elle-rowan","lane":"elle-rowan"}
+{"text":"find me lodging near campus for the MGT-782 residency, deadline to book is Friday","self":"troy-lennox","intent":"perform","group":"elle-rowan","prime":"elle-rowan","lane":"elle-rowan"}
+{"text":"rent a car for the MGT-701 residency weekend, it's due back Sunday","self":"troy-lennox","intent":"perform","group":"iris-chase","prime":"iris-chase","lane":"iris-chase"}
+{"text":"book a table for my MGT-782 study group after the exam Friday","self":"charleston-lewis","intent":"perform","group":"iris-chase","prime":"iris-chase","lane":"iris-chase"}
+{"text":"pick a restaurant for dinner after my MGT-782 exam","self":"charleston-lewis","intent":"perform","group":"iris-chase","prime":"iris-chase","lane":"iris-chase"}
+{"text":"email my professor that my MGT-782 paper will be a day late","self":"cam-post","intent":"perform","group":"iris-chase","prime":"iris-chase","lane":"iris-chase"}
+{"text":"draft an email to my MGT-782 group about the proposal deadline","self":"cam-post","intent":"perform","group":"elle-rowan","prime":"elle-rowan","lane":"elle-rowan"}
+{"text":"the EMBA694 textbook payment is due Friday, can I afford it","self":"finn-reid","intent":"perform","group":"elle-rowan","prime":"elle-rowan","lane":"elle-rowan"}
+{"text":"budget for the MGT-701 residency costs, the deposit is due Monday","self":"finn-reid","intent":"perform","group":"iris-chase","prime":"iris-chase","lane":"iris-chase"}
+{"text":"plan my runs around the MGT-782 exam week","self":"flex-grimes","intent":"perform","group":"iris-chase","prime":"iris-chase","lane":"iris-chase"}
+{"text":"block two hours on my calendar Thursday for the MGT-782 paper","self":"eli-vaughn","intent":"perform","group":"iris-chase","prime":"iris-chase","lane":"iris-chase"}
+{"text":"schedule focus time before my MGT-782 essay deadline","self":"eli-vaughn","intent":"perform","group":"elle-rowan","prime":"elle-rowan","lane":"elle-rowan"}
+{"text":"remind me tomorrow at 9 that the MGT-782 paper is due","self":"eli-vaughn","intent":"perform","group":"iris-chase","prime":"iris-chase","lane":"iris-chase"}
+{"text":"the MGT 782 paper on real options is due Friday","self":"elle-rowan","intent":"perform","group":"iris-chase","prime":null,"lane":null}
+{"text":"my EMBA694 operations case for the client is due Dec 4","self":"elle-rowan","intent":"perform","group":"elle-rowan","prime":null,"lane":null}
+{"text":"my MGT-782 paper is due Friday","self":"finn-reid","intent":"perform","group":"iris-chase","prime":"iris-chase","lane":"iris-chase"}
+{"text":"add the MGT-701 research proposal due Dec 1 to Nexus","self":"troy-lennox","intent":"perform","group":"iris-chase","prime":"iris-chase","lane":"iris-chase"}
+== cache ==
+  fresh code: true
+  name 3 words: true
+  just past TTL (5 min): false
+  code embedded: XMGT-782: false
+  code + letter suffix: MGT-782A: false
+  code glued to word: MGT782paper: false
+  full-width code: false
+  empty list -> MGT-782: false
