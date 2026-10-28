@@ -78,6 +78,17 @@ console.log("=== Voice speech gate (W18) ===");
   t("FX-V8 the hook arms the gate from each tool output", /nexusGateRef\.current\.noteToolOutput\(name, r\.ok \? output/.test(hook), true);
 }
 
+console.log("=== Own-reply honesty (W8/W10) ===");
+{
+  t("FX-H1 a generic 'All set!' with an unacknowledged failure is replaced", /All set/.test(enforceNexusWriteHonesty("All set!", FAILED)), false);
+  const mixed = use([
+    { index: 0, title: "Research Proposal", action: "inserted", persisted: true },
+    { index: 1, title: "Residency 4", action: "rejected", persisted: false, reason: "meeting/session" },
+  ]);
+  const honest = "Research Proposal is saved. Residency 4 belongs on the schedule, so I didn't add it.";
+  t("FX-H2 a truthful mixed reply is left alone", enforceNexusWriteHonesty(honest, mixed), honest);
+}
+
 console.log("=== Teammate honesty (W17) ===");
 {
   const a = enforceNexusWriteHonesty("Budget looks fine. Elle saved the Final Paper for you.", [], FAILED);
