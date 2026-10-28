@@ -4789,7 +4789,9 @@ Owner: *"keep re-asking, but in a loop moving to the next item in the lane... ~3
 - [x] Verifier loop 1 (`.claude/VERIFY-confirm-ask-rotation-1.md`): gate CONFIRMED; REFUTED a hidden 3/day per-agent cap + a clock-skew double-send. Both fixed in 03ab8f2, new guards mutation-proved FIRED.
 - [x] Owner chose push target (a): new branch `claude_autowork-lane-rotation`, PR #108 (2026-10-27).
 - [x] Verifier loop 2 CONFIRMED R1 (no hidden cap); loop 3 (`docs/qc-evidence/VERIFY-confirm-ask-rotation-3.md`) CONFIRMED R2 clock skew, R3 escalate-after-floor, and the main-merge journeyOn gate; its two unguarded fixes now have tests (AC-35b, ask-shape dedup gate), both mutation-proved FIRED.
-- [ ] Merge #108 → deploy → owner sees re-asks rotate through each agent's lane on the phone (NOT yet confirmed live).
+- [x] Merged #108 (squash 33f625e) → deploy-swa run 40767764507 success (2026-10-28).
+- [x] Live DB after deploy: 4 new columns present; all 29 open 'asked' rows backfilled with last-sent. 5pm ET pass (2026-10-28) armed elle's 2 first asks (8:10pm, 9:19pm) and 7 re-asks, one per agent, oldest-asked first (sam 8/21 → 9:12am, tess → 10:25, cole → 11:54, eli → 12:50, cam → 14:01, iris → 15:29, ezra → 16:41 on 10-29).
+- [ ] Owner confirms on the phone that the re-asks arrive and rotate (NOT yet confirmed live).
 Branch: `claude_autowork-lane-rotation` (designated branch's history no longer connects to main — push target is an owner decision).
 ## ACT:instant-email-alerts + ACT:draft-formatting — instant, clearly-labelled, sticky email alerts; Calibri drafts (owner 2026-10-27)
 Owner: *"i recieved an email and Iris did not immediately send me an alert message with a draft reply"* → after the

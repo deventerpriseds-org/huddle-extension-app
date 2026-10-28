@@ -117,7 +117,7 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
-## Confirm-ask LANE STARVATION + no re-ask (2026-10-27, IMPLEMENTING — NOT deployed, NOT owner-confirmed)
+## Confirm-ask LANE STARVATION + no re-ask (2026-10-27; DEPLOYED 33f625e / #108 on 2026-10-28, live re-asks armed for 10-29 — NOT owner-confirmed)
 - Root cause (code read + offline test `scripts/autowork-lane-starvation.test.ts`): autowork considers only `upNextAfterTopUp[0]` per agent for DOING and arms only that item's ask; `markConfirmAsked` is set-once and nothing re-asks. One unanswered top ask freezes the whole lane forever.
 - Groom is WEEKLY (Mon 8am, owner's 2026-07-31 choice) and never writes status; autowork 9/13/17 daily — a daily groom would NOT unstick a lane.
 - Owner policy 2026-10-27: keep re-asking, rotate through the lane, NO auto-shelving (supersedes 2026-08-26 "move stuck to backlog").
