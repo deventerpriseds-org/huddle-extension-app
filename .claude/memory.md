@@ -131,9 +131,14 @@ never Sol); deliverable/unknown → answered now on `terra-med` + `PRODUCE_OFFER
 any other next message clears it. Legacy `kind='ask'` rows still use `classifyConfirmReply`. Remembered verdicts no
 longer auto-produce fresh asks (no question left to re-ask). Tests: `test:ask-shape`, `test:verdict-memory` (structural
 section superseded). 4 mutations FIRED.
-**Open:** stray task "Plan daily activities" (3304d84c) awaiting owner yes/no to delete.
+**Open:** stray task "Plan daily activities" (3304d84c) — owner said delete; two Supabase-MCP deletes timed out on an unanswered confirm; owner will delete via the new board Delete (follow-up PR) or journey app.
 
-## Chat transcript scroll: opens at the newest, follows only if YOU did not scroll up (2026-10-27, DEPLOYED 4332c41, NOT owner-confirmed)
+## Chat messages: dated timestamps + per-message copy (2026-10-28, DEPLOYED bee838b / #120, NOT owner-confirmed)
+`ClientTime` (HuddleView.tsx) → `formatMessageTimestamp`: always month+day+time, year only for past years. User
+bubbles have a timestamp + copy row beneath; agent header has timestamp + copy. `CopyMessageButton` returns null
+for empty text. Reference pattern: journey `src/components/CommsConsole/TranscriptScroll.tsx`.
+
+## Chat transcript scroll: opens at the newest, follows only if YOU did not scroll up (2026-10-27, DEPLOYED, OWNER-CONFIRMED on his phone 2026-10-28)
 A push deep link (`?huddle=dm-<agent>`) switches threads BEFORE the workspace history downloads, so any
 "scroll to bottom on thread switch" fires on an empty thread. The old follow rule re-measured near-bottom
 after each update, which a bulk history load always fails (view at 0, list grew 27k px) — so it landed at
