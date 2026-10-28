@@ -142,3 +142,58 @@ a failed write is shown forming on screen before being replaced. The voice path 
 armed (W18); the 1:1 text path has no equivalent hold. Confidence: high from the code; not observed live.
 
 **C3: REFUTED** — text and voice share the guard, so N1–N4/N9 fail on both, in 1:1 and group.
+
+## C4 — routing (offline deterministic path, PR head vs origin/main)
+
+Probe: `bun mut-verify-114/probe-routing.ts <tree>` run against this worktree and against a
+`git archive origin/main` export (same node_modules). `group` = `routeMessage(...).winners[0]` with all
+agents present; `1:1 X` = `laneOwnerFor(text, X)` (null = X keeps it; an id = X hands off AND, via
+`primeLaneDecision`, a follow-up DM is enqueued to that id, huddle.functions.ts:6765-6775).
+
+| Ask | group main → PR | 1:1 Elle | 1:1 Iris | 1:1 Finn | 1:1 Troy |
+|---|---|---|---|---|---|
+| add my assignments | iris → iris | null | null | null→iris | null→iris |
+| add my MGT-782 assignments from the syllabus | iris → iris | null | null | →iris | →iris |
+| put the research paper due Dec 9 on my assignments | iris → iris | null | null | →iris | →iris |
+| update the due date on my research paper | **eli → iris** | eli→**null** | eli→**null** | eli→iris | eli→iris |
+| change my research proposal deadline to Nov 2 | elle → elle | null | null | →elle | →elle |
+| log my DBA deliverables | **ezra → iris** | ezra→**null** | ezra→**null** | ezra→iris | ezra→iris |
+| add this syllabus's deadlines to Nexus | elle → elle | null | null | →elle | →elle |
+| I have a new paper due next month for MGT-782, add it | iris → iris | null | null | →iris | →iris |
+| add my school assignments | elle → elle | null | null | →elle | →elle |
+| fix the due date on my strategy paper | **liam → iris** | null | null | →iris | →iris |
+| my professor pushed the case analysis to Friday | elle → elle | null | null | →elle | →elle |
+| change my seat assignment on the flight | troy → troy | troy | troy | troy | null |
+| renew my NEXUS card | iris → iris | null | null | null | null |
+| client deliverable due Friday | ezra → ezra | ezra | null | ezra | ezra |
+| tax papers are due | iris → iris | null | null | null | null |
+| add a task to my board to call the bank | iris → iris | null | null | null | null |
+| what's on my board | iris → iris | null | null | null | null |
+| fix the typo in the email draft | cam → cam | cam | cam | cam | cam |
+| tidy up my calendar adjustments | eli → eli | eli | eli | eli | eli |
+| **should I apply to NEXUS before my trip to Toronto** | **troy → iris** | null | null | **null→iris** | **null→iris** |
+| **what's the investment thesis for buying more NVDA** | **tess → iris** | null | null | **null→iris** | null→iris |
+| **my semester tuition payment is due Dec 1, can I afford it** | **finn → iris** | null | null | **null→iris** | null→iris |
+| **review the course of action for the merger proposal due Friday** | **cole → elle** | null | cole→null | null→elle | null→elle |
+| **is there a case study on intermittent fasting results** | **cole → iris** | cole→null | cole→null | null→iris | null→iris |
+| **I'm teaching a training class at work, slides due Friday** | **flex → iris** | flex→null | flex→null | null→iris | null→iris |
+| the deadline for my spin class membership refund is Friday | elle → elle | null | null | →elle | →elle |
+
+Coursework: 11/11 group asks led by Elle/Iris; Elle and Iris keep all 11 in a 1:1. The four
+brief-named non-coursework asks match their origin/main baseline in group and 1:1.
+
+**D3 (routing over-match, new inputs).** Six non-coursework asks are captured by the prime rule:
+- "should I apply to NEXUS before my trip to Toronto" — `to NEXUS` is a STRONG-context pattern, which
+  beats the `trip` veto (capabilities.ts:283: strong is checked before vetoes). Travel → Iris; a 1:1 with
+  **Troy hands his own travel ask to Iris** and enqueues a follow-up DM.
+- "what's the investment thesis for buying more NVDA" — `thesis` is both a trigger and STRONG context.
+  In a **1:1 with Finn, Finn defers his own finance ask to Iris** (follow-up DM).
+- "my semester tuition payment is due Dec 1, can I afford it" — `due` trigger + weak `semester`, no veto.
+  Finance (baseline Finn) → Iris; 1:1 Finn hands off to Iris.
+- "review the course of action for the merger proposal due Friday" — `course` weak context (`ignore`
+  only removes "of course"). Work → Elle.
+- "is there a case study on intermittent fasting results" — `case study` strong. → Iris.
+- "I'm teaching a training class at work, slides due Friday" — `class` weak + `due`. Work → Iris.
+This is the W19/W20 class the fix pass reported closed; it is closed for its 9 listed inputs only.
+
+**C4: REFUTED** (D3). The LLM-router path is not measurable offline (documented residual).
