@@ -29,10 +29,15 @@ export type ItemResult = {
   candidates?: unknown[];
   courses?: unknown[];
   note?: string;
+  /** A tool-level failure (no per-item results): the whole request, not one item (loop 3). */
+  request_level?: boolean;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-// RUNTIME HONESTY (AC-F2-35). Code, not prompt -- the same precedent as the meta-task guard.
+// SECONDARY, NOT ON ANY RUNTIME PATH since loop 3 (docs/FIX-nexus-write-loop3.md): the runtime rule is
+// `presentNexusWriteTurn` below (code-built from the results, no word lists). The clause parser that follows
+// (`enforceNexusWriteHonesty`, CLAIM_RE/DENIAL_RE) is kept ONLY for its pre-loop-3 tests; L3-H0 asserts no
+// runtime caller. Its original description, for the record:
 //
 // STRUCTURAL, PER ITEM (FIX-nexus-write-redteam.md, W8/W10/W11): the reply is cut into clauses and
 // each clause that CLAIMS a save is checked against the `persisted` value of the item(s) it names.
@@ -72,7 +77,7 @@ export function nexusWriteResultsFrom(toolUses: ToolUseLike[]): ItemResult[] {
     try {
       const parsed = JSON.parse(u.detail) as { results?: ItemResult[]; ok?: boolean; error?: string };
       if (Array.isArray(parsed.results)) results.push(...parsed.results);
-      else if (parsed.ok === false) results.push({ index: 0, action: "failed", persisted: false, error: String(parsed.error ?? "failed") });
+      else if (parsed.ok === false) results.push({ index: 0, action: "failed", persisted: false, error: String(parsed.error ?? "failed"), request_level: true });
     } catch {
       /* not ours */
     }
@@ -135,31 +140,32 @@ function names(words: Set<string>, r: ItemResult): boolean {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-// THE PRIMARY HONESTY RULE (loop 2, D3/D4 -- docs/FIX-nexus-write-loop2.md). STRUCTURAL, not parsing:
-// the model's prose is no longer searched for claims to judge (two rounds of that leaked: "I didn't
-// just add …", "squared away", "✓"). Instead, when ANY write this turn (any agent, text or voice) has
-// an item that did not persist -- failed, rejected, unknown, or a duplicate (nothing new was written)
-// -- the part of the reply ABOUT THE WRITE is built by code from the per-item results:
-//     one line per item (saved / updated / already there / NOT saved + reason / unknown -- check Nexus),
-//     followed by the model's text with EVERY sentence removed that mentions a written item's title or
-//     any write-talk word (add/save/update/move/schedule/Nexus/done/✓ …).
-// Whatever the model said about the write, the user sees only what the results say. When every item
-// persisted, the model's text passes untouched. `enforceNexusWriteHonesty` below is kept (secondary,
-// unchanged behaviour) for its existing callers/tests; the runtime uses this.
+// THE PRIMARY HONESTY RULE (loop 3, D10/D11 -- docs/FIX-nexus-write-loop3.md). NO WORD LISTS, NO PARSING.
+// Loop 2 kept the model's text after a failed write and dropped only the sentences that matched a
+// write-talk vocabulary (WRITE_TALK) or named the item -- and "It's in.", "Penciled it in", "Handled",
+// "Listo, ya quedó guardado", full-width "Ａｄｄｅｄ" and even AC-F2-35's own "is on your list" survived.
+// The rule is now decided by the RESULTS alone, for the whole TURN (every agent, every chunk):
+//   (a) ANY write this turn did not persist (failed / rejected / duplicate -- nothing new written /
+//       unknown): EVERY agent reply of the turn is replaced. ONE code-built message (per-item status +
+//       a fixed closing line) is the writer's reply; every other reply becomes a fixed code-built
+//       "held back" line. No model sentence survives -- nothing is filtered, so nothing can leak.
+//   (b) every write persisted: the writer's reply gets a code-built "Saved in Nexus:" list appended
+//       (title, due date in course-local time, course), so the owner always SEES exactly what was
+//       written -- a model sentence that miscounts ("all 5") sits next to the list that contradicts it.
+//   (c) the turn's write results ride the durable resume state (huddle.functions.ts), so a later chunk
+//       or teammate is covered by (a)/(b) too.
+// A write that is still IN FLIGHT counts as `unknown` (nexusWriteInFlightOutcome), so a reply persisted
+// while it is pending can never claim it. `enforceNexusWriteHonesty` (below) is NOT on any runtime path;
+// it is kept only for its pre-loop-3 tests (scripts/nexus-write-loop3.test.ts L3-H0 asserts no runtime
+// caller exists).
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Any sentence containing one of these is about the write, so it is dropped while a write did not persist. */
-const WRITE_TALK =
-  /\b(?:add(?:s|ed|ing)?|sav(?:e|es|ed|ing)|updat(?:e|es|ed|ing)|mov(?:e|es|ed|ing)|schedul(?:e|es|ed|ing)|reschedul(?:e|es|ed|ing)|nexus|logg?(?:ed|ing|s)?|record(?:s|ed|ing)?|creat(?:e|es|ed|ing)|chang(?:e|es|ed|ing)|enter(?:s|ed|ing)?|stor(?:e|es|ed|ing)|fil(?:e|es|ed|ing)|upload(?:s|ed|ing)?|insert(?:s|ed|ing)?|put(?:s|ting)?|set|done|squared away|t(?:ake|akes|ook|aken|aking) care|on the books|locked in|in place|went through|gone through|landed|captured|tracked|assignments?)\b|[✅✔☑✓]/i;
-
-/** Does this sentence name the item: every content word of its title, or its head noun? */
-function mentionsItem(words: Set<string>, r: ItemResult): boolean {
-  const tw = wordsOf(r.title ?? "").filter((w) => !TITLE_STOP.has(w));
-  if (!tw.length) return false;
-  if (tw.every((w) => words.has(w))) return true;
-  const head = [...tw].reverse().find((w) => !/^\p{N}+$/u.test(w) && w.length >= 3);
-  return !!head && words.has(head);
-}
+/** Every other reply of a failed-write turn: fixed, code-built, claims nothing. */
+export const NEXUS_WRITE_WITHHELD_REPLY =
+  "(Held back: a Nexus write in this turn did not fully save, so this turn shows only the Nexus write status.)";
+/** The fixed closing line of the failed-write message. */
+export const NEXUS_WRITE_STATUS_CLOSING =
+  "Nothing else from this turn is shown. Anything marked not saved is NOT in Nexus; check Nexus before relying on anything marked unknown.";
 
 const plainReason = (r: ItemResult): string => {
   const why = String(r.reason ?? r.error ?? "failed");
@@ -176,63 +182,137 @@ const plainReason = (r: ItemResult): string => {
     course_required: "no course was given",
     title_required: "no title was given",
     not_found: "that assignment was not found",
+    no_fields: "nothing to change was given",
+    network_error: "Nexus could not be reached",
+    no_row_id_in_response: "Nexus did not confirm a saved row",
+    existing_unreadable: "the course's existing assignments could not be read to rule out a duplicate",
+    batch_too_large: "too many items in one request",
+    nexus_write_not_configured: "the Nexus write connection is not configured",
+    not_reversible: "Nexus refused the change",
   };
-  return map[why] ?? why.replace(/_/g, " ");
+  if (map[why]) return map[why];
+  const http = /^http_(\d{3})$/.exec(why);
+  if (http) return `Nexus returned an error (http ${http[1]})`;
+  if (/^courses_unreadable/.test(why)) return "the course list could not be read";
+  return why.replace(/_/g, " ");
 };
 
-/** One line per item, built ONLY from the results. Duplicate items (same index+title+action) collapse. */
-export function nexusWriteItemLines(results: ItemResult[]): string {
+const itemName = (r: ItemResult): string =>
+  r.request_level ? "the whole write request" : `“${r.title ?? r.assignment_id ?? `item ${r.index + 1}`}”`;
+const courseLabel = (r: ItemResult): string => {
+  const c = r.course;
+  const label = c ? (typeof c.code === "string" && c.code ? c.code : typeof c.name === "string" && c.name ? c.name : "") : "";
+  return label ? ` — ${label}` : "";
+};
+const dueLabel = (r: ItemResult): string => (r.due_local ? ` — due ${r.due_local}` : "");
+
+/** One code-built status line per item, from the results alone. */
+export function nexusWriteStatusLine(r: ItemResult): string {
+  let line: string;
+  if (r.persisted === true) line = `${r.action === "updated" ? "Updated" : "Saved"}: ${itemName(r)}${dueLabel(r)}${courseLabel(r)}`;
+  else if (r.persisted === "unknown") line = `Unknown — check Nexus: ${itemName(r)} (the request did not confirm whether it saved)`;
+  else if (r.action === "duplicate")
+    line = `Already in Nexus, nothing new added: ${itemName(r)}${dueLabel(r)}${courseLabel(r)}${r.stored_undated ? " — the stored one has no due date, so the date given was NOT saved" : ""}`;
+  else line = `Not saved: ${itemName(r)} — ${plainReason(r)}`;
+  if (r.points_note) line += " (points were not saved: they must be a whole number)";
+  return line;
+}
+
+/** Same item reported twice (a resumed/suppressed copy) collapses to one line. */
+function uniqueResults(results: ItemResult[]): ItemResult[] {
   const seen = new Set<string>();
-  const lines: string[] = [];
-  for (const r of results) {
-    const key = `${r.index}|${r.title ?? r.assignment_id ?? ""}|${r.action}|${String(r.persisted)}`;
-    if (seen.has(key)) continue;
+  return results.filter((r) => {
+    const key = `${r.index}|${r.title ?? r.assignment_id ?? ""}|${r.action}|${String(r.persisted)}|${r.error ?? r.reason ?? ""}`;
+    if (seen.has(key)) return false;
     seen.add(key);
-    const name = `“${r.title ?? r.assignment_id ?? `item ${r.index + 1}`}”`;
-    const when = r.due_local ? ` (due ${r.due_local})` : "";
-    let line: string;
-    if (r.persisted === true) line = r.action === "updated" ? `Updated in Nexus: ${name}${when}.` : `Saved to Nexus: ${name}${when}.`;
-    else if (r.persisted === "unknown") line = `Unknown: ${name} — the request did not confirm, so check Nexus before treating it as saved.`;
-    else if (r.action === "duplicate")
-      line = r.stored_undated
-        ? `Already in Nexus, nothing new added: ${name} — the stored one has no due date, so the date was NOT saved.`
-        : `Already in Nexus, nothing new added: ${name}.`;
-    else line = `Not saved to Nexus: ${name} — ${plainReason(r)}.`;
-    if (r.points_note) line += " Points were not saved (they must be a whole number).";
-    lines.push(line);
+    return true;
+  });
+}
+
+/** (a) THE message of a turn in which any write did not persist: per-item status + the fixed closing line. */
+export function nexusWriteFailureMessage(results: ItemResult[]): string {
+  const lines = uniqueResults(results).map((r) => `• ${nexusWriteStatusLine(r)}`);
+  return ["Nexus write status:", ...lines, NEXUS_WRITE_STATUS_CLOSING].join("\n");
+}
+
+/** (b) The list appended to the writer's reply when every write persisted. */
+export function nexusWriteSavedList(results: ItemResult[]): string {
+  const lines = uniqueResults(results).map((r) =>
+    r.action === "updated" ? `• Updated: ${itemName(r)}${dueLabel(r)}${courseLabel(r)}` : `• ${itemName(r)}${dueLabel(r)}${courseLabel(r)}`,
+  );
+  return ["Saved in Nexus:", ...lines].join("\n");
+}
+
+/** True when any result did not persist (failed, rejected, duplicate, unknown). */
+export const nexusWriteAnyUnpersisted = (results: ItemResult[]): boolean => results.some((r) => r.persisted !== true);
+
+/** A write this turn, as the runtime records it (huddle.functions.ts turnNexusWriteUses). */
+export type TurnNexusWriteUse = { agentId: string; tool: string; ok: boolean; detail?: string; claimKey?: string };
+
+/**
+ * (a)+(b) for a whole turn: the replies the OWNER sees. Pure; the runtime keeps the raw replies (resume
+ * state) and calls this at every point a reply leaves the server (stream, chunk save, final result, the
+ * prior shown to later agents, memory). Same input -> same output, so re-applying it is safe.
+ */
+export function presentNexusWriteTurn<R extends { agentId: string; text: string }>(
+  replies: R[],
+  uses: TurnNexusWriteUse[],
+): Array<R | { agentId: string; text: string }> {
+  const writes = uses.filter((u) => u.tool === NEXUS_WRITE_TOOL_NAME);
+  const results = nexusWriteResultsFrom(writes);
+  if (!results.length) return replies;
+  if (nexusWriteAnyUnpersisted(results)) {
+    const message = nexusWriteFailureMessage(results);
+    const failedWriters = writes.filter((u) => nexusWriteAnyUnpersisted(nexusWriteResultsFrom([u]))).map((u) => u.agentId);
+    if (!replies.length) return [{ agentId: failedWriters[0] ?? writes[0].agentId, text: message }];
+    let carrier = replies.findIndex((r) => failedWriters.includes(r.agentId));
+    if (carrier < 0) carrier = 0;
+    return replies.map((r, i) => ({ ...r, text: i === carrier ? message : NEXUS_WRITE_WITHHELD_REPLY }));
   }
-  return lines.join("\n");
+  const out: Array<R | { agentId: string; text: string }> = replies.map((r) => ({ ...r }));
+  const writers = [...new Set(writes.map((u) => u.agentId))];
+  for (const w of writers) {
+    const list = nexusWriteSavedList(nexusWriteResultsFrom(writes.filter((u) => u.agentId === w)));
+    let idx = -1;
+    for (let i = out.length - 1; i >= 0; i--) if (out[i].agentId === w) { idx = i; break; }
+    if (idx >= 0) {
+      const text = String(out[idx].text ?? "").trim();
+      out[idx] = { ...out[idx], text: text ? `${text}\n\n${list}` : list };
+    } else out.push({ agentId: w, text: list });
+  }
+  return out;
 }
 
 /**
- * THE runtime reply for any agent this turn (text path: huddle.functions.ts reply assembly; voice path:
- * the speech gate's `finalize`).
- * @param toolUses      THIS agent's own tool uses (its writes, or a suppressed duplicate's copy of the first).
- * @param teammateUses  write_nexus_assignments uses made by OTHER agents this turn.
+ * The single-reply view of the same rule (the voice gate and the pure tests): `toolUses` = this agent's
+ * writes, `teammateUses` = other agents' writes this turn. A failed/unknown write anywhere -> the failure
+ * message; everything persisted -> this agent's text + the list of ITS OWN writes (a teammate's list
+ * belongs on the teammate's reply).
  */
 export function nexusWriteGuardedReply(text: string, toolUses: ToolUseLike[], teammateUses: ToolUseLike[] = []): string {
-  const own = nexusWriteResultsFrom(toolUses);
-  const mates = nexusWriteResultsFrom(teammateUses);
-  const all = [...own, ...mates];
-  const t = text ?? "";
-  if (!all.length || all.every((r) => r.persisted === true)) return t; // nothing written, or everything saved
-  const sentences = parseReply(t);
-  const removed: Sentence[] = [];
-  const kept: Sentence[] = [];
-  for (const s of sentences) {
-    const words = new Set(wordsOf(s.text));
-    (WRITE_TALK.test(s.text) || all.some((r) => mentionsItem(words, r)) ? removed : kept).push(s);
-  }
-  // Which items the code-built lines state: the agent's own writes, plus any teammate item its
-  // removed sentences talked about (a teammate's "Elle added it" gets the truth next to where it was).
-  const mateNamed = mates.filter((r) => removed.some((s) => mentionsItem(new Set(wordsOf(s.text)), r)));
-  const stated = own.length ? [...own, ...mateNamed] : removed.length ? (mateNamed.length ? mateNamed : mates) : [];
-  if (!stated.length) return t; // a teammate that said nothing about the write: untouched
-  const rest = kept.map((s) => s.text).join(" ").trim();
-  const lines = nexusWriteItemLines(stated);
-  return rest ? `${lines}\n\n${rest}` : lines;
+  const uses: TurnNexusWriteUse[] = [
+    ...toolUses.map((u) => ({ ...u, agentId: "self" })),
+    ...teammateUses.map((u) => ({ ...u, agentId: "teammate" })),
+  ];
+  const shown = presentNexusWriteTurn([{ agentId: "self", text: text ?? "" }], uses);
+  return shown.find((r) => r.agentId === "self")?.text ?? shown[0]?.text ?? text ?? "";
 }
 
+/**
+ * The tool result recorded the moment a write call STARTS (D11): every item `unknown`, so a reply persisted
+ * while the write is still in flight -- or a chunk that ends before it returns -- can never claim it. The
+ * real result replaces it when it arrives.
+ */
+export function nexusWriteInFlightOutcome(args: Record<string, unknown>, error = "in_flight"): { [k: string]: unknown; results: ItemResult[] } {
+  const raw: unknown[] = Array.isArray(args.items) ? (args.items as unknown[]) : [args];
+  const results: ItemResult[] = raw.map((x, index) => {
+    const it = (x && typeof x === "object" ? x : {}) as Record<string, unknown>;
+    const title = typeof it.title === "string" && it.title.trim() ? it.title.trim() : undefined;
+    const id = typeof it.assignment_id === "string" && it.assignment_id.trim() ? it.assignment_id.trim() : undefined;
+    return { index, title, assignment_id: id, action: "failed", persisted: "unknown", error };
+  });
+  return { ok: true, persisted: "unknown", inserted: 0, updated: 0, duplicate: 0, rejected: 0, failed: results.length, results };
+}
 /**
  * STREAM HOLD for the 1:1 TEXT path (D4). `onDelta` publishes the growing reply to the durable row the
  * client polls; once a write tool call STARTS in this turn, nothing more is published for the rest of the

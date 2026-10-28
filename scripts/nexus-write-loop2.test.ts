@@ -26,6 +26,8 @@ import {
   nexusWriteGuardedReply,
   createNexusWriteStreamHold,
   createNexusWriteSpeechGate,
+  nexusWriteFailureMessage,
+  nexusWriteResultsFrom,
 } from "../src/features/huddle/lib/nexus/nexus-write-shared";
 import { readFileSync } from "node:fs";
 import { setNexusCourseContext } from "../src/features/huddle/lib/nexus/course-context";
@@ -273,20 +275,35 @@ const main = async () => {
       ["N15 teammate named claim", "Elle has added your Research Proposal.", [], own([FAIL_RP]), LINE_RP],
       ["N16 title named with no write-talk word", "The Research Proposal is good to go for Oct 30.", own([FAIL_RP]), [], LINE_RP],
     ];
-    for (const [label, reply, mine, mates, want] of cases) {
-      t(`L2-D3a ${label}: reply is the code-built line`, nexusWriteGuardedReply(reply, mine, mates), want);
+    // loop 3 D10 (docs/FIX-nexus-write-loop3.md): the expected value of every row below CHANGED. Loop 2 kept the
+    // model's text after a failed write minus the sentences that matched a write-talk word list (the `want`
+    // column above: the code-built line, sometimes followed by surviving prose). The owner's loop-3 rule: when
+    // ANY write this turn did not persist, the reply is REPLACED by ONE code-built message (per-item status +
+    // fixed closing line) -- no model sentence survives, no filtering. So each row now expects exactly that
+    // message, built from the same results. Stronger, not weaker: the old expectation is a substring of nothing.
+    const msgFor = (mine: ReturnType<typeof own>, mates: ReturnType<typeof own>) =>
+      nexusWriteFailureMessage(nexusWriteResultsFrom([...mine, ...mates]));
+    for (const [label, reply, mine, mates] of cases) {
+      t(`L2-D3a ${label}: reply is the code-built message (loop 3)`, nexusWriteGuardedReply(reply, mine, mates), msgFor(mine, mates));
     }
     const mixed = "I couldn't save the Research Proposal. Separately, your MBA reading list is long; start with chapter 2.";
-    t("L2-D3b unrelated sentences are kept AFTER the code-built line", nexusWriteGuardedReply(mixed, own([FAIL_RP])), `${LINE_RP}\n\nSeparately, your MBA reading list is long; start with chapter 2.`);
+    // loop 3: was "unrelated sentences are kept AFTER the code-built line" -- no model sentence survives now.
+    t("L2-D3b no model sentence survives a failed write, unrelated ones included (loop 3)", nexusWriteGuardedReply(mixed, own([FAIL_RP])), msgFor(own([FAIL_RP]), []));
     const saved = "I've added the Research Proposal to Nexus for Oct 30.";
-    t("L2-D3c every item persisted: the model's text passes untouched", nexusWriteGuardedReply(saved, own([{ ...FAIL_RP, action: "inserted", persisted: true }])), saved);
+    const SAVED_RP = { ...FAIL_RP, action: "inserted", persisted: true, error: undefined };
+    // loop 3 (b): was "passes untouched" -- every clean write now also carries the code-built saved list.
+    t("L2-D3c every item persisted: the model's text + the code-built saved list (loop 3)", nexusWriteGuardedReply(saved, own([SAVED_RP])), `${saved}\n\nSaved in Nexus:\n• “Research Proposal”`);
     t("L2-D3d no write this turn: untouched", nexusWriteGuardedReply(saved, []), saved);
-    t("L2-D3e a duplicate is code-built too (nothing new was written)", nexusWriteGuardedReply("I added the Research Proposal.", own([{ ...FAIL_RP, action: "duplicate", error: undefined }])), "Already in Nexus, nothing new added: “Research Proposal”.");
-    t("L2-D3f a timeout is 'Unknown — check Nexus'", nexusWriteGuardedReply("Done!", own([{ ...FAIL_RP, persisted: "unknown", error: "timeout" }])), "Unknown: “Research Proposal” — the request did not confirm, so check Nexus before treating it as saved.");
-    t("L2-D3g a refusal gives its plain reason", nexusWriteGuardedReply("All set.", own([{ index: 0, title: "Residency 4, present your research proposal", action: "rejected", persisted: false, reason: "meeting/session" }])), "Not saved to Nexus: “Residency 4, present your research proposal” — it is a meeting/session/class, not a graded deliverable.");
-    t("L2-D3h a teammate that said nothing about the write is untouched", nexusWriteGuardedReply("Your budget looks fine this month.", [], own([FAIL_RP])), "Your budget looks fine this month.");
-    t("L2-D3i a tool-level error (no per-item results) is code-built", nexusWriteGuardedReply("Saved it!", [{ tool: N, ok: false, detail: JSON.stringify({ ok: false, error: "network" }) }]), "Not saved to Nexus: “item 1” — network.");
-    t("L2-D3j the text path's reply assembly runs the structural guard with teammates' writes", /const safeText = nexusWriteGuardedReply\(\s*stripFileMentionNarration\(stripAgentReplyLinks\(finalText\)\),\s*r\.toolUses,\s*turnNexusWriteUses\.filter\(\(u\) => u\.agentId !== nextId\),/.test(textSrc), true);
+    t("L2-D3e a duplicate is code-built too (nothing new was written)", nexusWriteGuardedReply("I added the Research Proposal.", own([{ ...FAIL_RP, action: "duplicate", error: undefined }])).includes("• Already in Nexus, nothing new added: “Research Proposal”"), true);
+    t("L2-D3f a timeout is 'Unknown — check Nexus'", nexusWriteGuardedReply("Done!", own([{ ...FAIL_RP, persisted: "unknown", error: "timeout" }])).includes("• Unknown — check Nexus: “Research Proposal”"), true);
+    t("L2-D3g a refusal gives its plain reason", nexusWriteGuardedReply("All set.", own([{ index: 0, title: "Residency 4, present your research proposal", action: "rejected", persisted: false, reason: "meeting/session" }])).includes("• Not saved: “Residency 4, present your research proposal” — it is a meeting/session/class, not a graded deliverable"), true);
+    // loop 3 (a): was "a teammate that said nothing about the write is untouched" -- EVERY reply of a turn with a
+    // failed write is replaced now (the owner's rule), so a teammate's reply is the code-built message too.
+    t("L2-D3h a teammate's reply in a failed-write turn is replaced as well (loop 3)", nexusWriteGuardedReply("Your budget looks fine this month.", [], own([FAIL_RP])), msgFor([], own([FAIL_RP])));
+    t("L2-D3i a tool-level error (no per-item results) is code-built", nexusWriteGuardedReply("Saved it!", [{ tool: N, ok: false, detail: JSON.stringify({ ok: false, error: "network_error" }) }]).includes("• Not saved: the whole write request — Nexus could not be reached"), true);
+    // loop 3: was a source check that the per-agent reply assembly calls nexusWriteGuardedReply with teammates'
+    // writes. The runtime now presents EVERY reply against EVERY write of the turn.
+    t("L2-D3j the text path presents every reply against every write of the turn (loop 3)", /const presentedReplies = \(list: Reply\[\] = replies\): Reply\[\] => presentNexusWriteTurn\(list, turnNexusWriteUses\) as Reply\[\];/.test(textSrc), true);
     // The verifier's own probe inputs, end to end: none of them keeps its original text any more.
     t("L2-D3k none of the verifier's 13 own-writer replies survives verbatim", cases.slice(0, 13).filter(([, reply, mine]) => nexusWriteGuardedReply(reply, mine).includes(reply)).length, 0);
   }
@@ -321,19 +338,21 @@ const main = async () => {
     t("L2-V3 a reset during the write is deferred: still holding", g.holding, true);
     g.noteToolOutput(N, failed);
     const spoken = g.finalize("I didn't just add the Research Proposal, I also set it to high priority.");
-    t("L2-V4 the voice speaks the code-built line (verifier N1 on voice)", spoken, "Not saved to Nexus: “Research Proposal” — http 500.");
+    // loop 3 D10: the code-built line became the ONE code-built message (status + closing line).
+    t("L2-V4 the voice speaks the code-built message (verifier N1 on voice)", spoken, nexusWriteFailureMessage(nexusWriteResultsFrom([{ tool: N, ok: false, detail: failed }])));
     t("L2-V5 the deferred reset lands once that reply is delivered", g.holding, false);
     g = createNexusWriteSpeechGate();
     g.noteToolCall(N);
     g.noteToolOutput(N, failed);
     g.reset(); // user utterance arrives AFTER the result but BEFORE the reply's text.done
     t("L2-V6 a reset after the result but before the reply is still deferred", g.holding, true);
-    t("L2-V7 ...and the reply is still code-built", g.finalize("Your Research Proposal is all squared away."), "Not saved to Nexus: “Research Proposal” — http 500.");
+    t("L2-V7 ...and the reply is still code-built", g.finalize("Your Research Proposal is all squared away."), nexusWriteFailureMessage(nexusWriteResultsFrom([{ tool: N, ok: false, detail: failed }])));
     g = createNexusWriteSpeechGate();
     g.noteToolCall(N);
     g.noteToolOutput(N, clean);
     t("L2-V8 a clean write releases the hold once its result is in (happy path streams)", g.holding, false);
-    t("L2-V9 a clean write's reply passes untouched", g.finalize("I've added the Research Proposal."), "I've added the Research Proposal.");
+    // loop 3 (b): was "passes untouched" -- a clean write now also carries the code-built saved list.
+    t("L2-V9 a clean write's reply + the code-built saved list", g.finalize("I've added the Research Proposal."), "I've added the Research Proposal.\n\nSaved in Nexus:\n• “Research Proposal”");
     g.reset();
     t("L2-V10 after delivery a reset clears at once", `${g.holding}/${g.uses.length}`, "false/0");
     const hook = readFileSync("src/features/huddle/hooks/useVoiceCallRealtimeSpeak.ts", "utf8");

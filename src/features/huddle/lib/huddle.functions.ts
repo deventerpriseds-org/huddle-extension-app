@@ -27,7 +27,12 @@ import {
 } from "./fallbacks";
 import { buildRoster } from "./roster";
 // Pure (no server imports) -- the Nexus write tool's reply-honesty guard, run in reply assembly.
-import { nexusWriteGuardedReply, createNexusWriteStreamHold } from "./nexus/nexus-write-shared";
+import {
+  presentNexusWriteTurn,
+  createNexusWriteStreamHold,
+  nexusWriteInFlightOutcome,
+  type TurnNexusWriteUse,
+} from "./nexus/nexus-write-shared";
 import {
   resolveByDifficulty,
   resolveModel,
@@ -604,6 +609,9 @@ type TurnResumeState = {
   reasoning: string[];
   fallbacks: FallbackEvent[];
   prompts: PromptDebug[];
+  /** Every Nexus write this turn, with its result (in-flight = unknown) -- loop 3 D11: a later chunk's
+   *  replies are presented against the writes of EARLIER chunks too (presentNexusWriteTurn). */
+  nexusWriteUses?: TurnNexusWriteUse[];
 };
 
 export interface RunHuddleTurnOpts {
@@ -2144,10 +2152,25 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // against it) instead of an unconditional "already done". Every write this turn is also collected so
   // a teammate that never called the tool cannot claim the writer's failed item was saved.
   const nexusWriteOutcomes = new Map<string, Promise<Record<string, unknown>>>();
-  const turnNexusWriteUses: Array<{ agentId: AgentId; tool: string; ok: boolean; detail?: string }> = [];
+  const turnNexusWriteUses: TurnNexusWriteUse[] = [...(resume?.nexusWriteUses ?? [])];
   // D4 (docs/FIX-nexus-write-loop2.md): once a Nexus write call STARTS this turn, the 1:1 text stream
-  // stops publishing partial replies; only the final, guarded reply (nexusWriteGuardedReply) is shown.
+  // stops publishing partial replies; only the final, presented reply (presentNexusWriteTurn) is shown.
   const nexusStreamHold = createNexusWriteStreamHold();
+  // D11 (loop 3, docs/FIX-nexus-write-loop3.md): a write SETTLED in an earlier chunk hands its real outcome
+  // to an identical call in this chunk (an in-flight one stays `unknown`).
+  for (const u of turnNexusWriteUses) {
+    if (!u.claimKey || typeof u.detail !== "string" || nexusWriteOutcomes.has(u.claimKey)) continue;
+    try {
+      nexusWriteOutcomes.set(u.claimKey, Promise.resolve(JSON.parse(u.detail) as Record<string, unknown>));
+    } catch {
+      /* unreadable -> an identical call reports unknown */
+    }
+  }
+  // D10 (loop 3): the replies the OWNER sees. `replies` stays RAW (the resume state carries it); every point
+  // where a reply leaves the server -- the 1:1 stream, each chunk save, the final result, the prior shown to
+  // later agents, memory -- goes through this, so a turn with a failed/unknown write shows ONLY the
+  // code-built status (every reply, every chunk) and a clean write always shows the code-built saved list.
+  const presentedReplies = (list: Reply[] = replies): Reply[] => presentNexusWriteTurn(list, turnNexusWriteUses) as Reply[];
 
   // Lightweight handoff contract for the ad-hoc mention-chain: when an agent @mentions a teammate
   // (the "mention IS the handoff"), we re-queue that teammate — but today they receive no structured
@@ -4420,14 +4443,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               recordToolUse(winner.id, c.name, "Nexus write -- already done this turn", firstOk, firstDetail);
               return JSON.stringify({ ...firstOut, already_done_this_turn: true, note: "A teammate already sent this write this turn. These are THAT call's real results: report them exactly, and do not call again." });
             }
+            // D11 (loop 3): recorded the moment it STARTS, every item `unknown` -- a reply presented (or a
+            // chunk saved) while it is in flight can never claim it; the real result replaces it below.
+            const writeUse: TurnNexusWriteUse = { agentId: winner.id, tool: c.name, ok: false, detail: JSON.stringify(nexusWriteInFlightOutcome(writeArgs)), claimKey };
+            turnNexusWriteUses.push(writeUse);
             const pending = runWrite();
             nexusWriteOutcomes.set(claimKey, pending.catch(() => nexusWriteMod.nexusWriteUnknownOutcome(writeArgs)));
             const out = await pending;
             const { summary, ok } = nexusWriteMod.nexusWriteSummary(out);
-            // The FULL result rides in `detail`: the reply-assembly reads it back to enforce that the
-            // agent does not claim a save that did not happen (nexusWriteGuardedReply, loop 2).
+            // The FULL result rides in `detail`: presentNexusWriteTurn reads it back to build what the
+            // owner sees (code-built status / saved list, loop 3) -- never the model's own words about it.
             recordToolUse(winner.id, c.name, summary, ok, JSON.stringify(out));
-            turnNexusWriteUses.push({ agentId: winner.id, tool: c.name, ok, detail: JSON.stringify(out) });
+            Object.assign(writeUse, { ok, detail: JSON.stringify(out) });
             return JSON.stringify(out);
           }
           const nexusMod = await import("./nexus/nexus.server");
@@ -4939,7 +4966,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               void turnStore!
                 .updateTurnReplies(
                   turnId!,
-                  [...replies, { agentId: winner.id, text: full }],
+                  presentedReplies([...replies, { agentId: winner.id, text: full }]),
                   buildResumeState(),
                 )
                 .catch(() => {});
@@ -6599,15 +6626,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // any self-authored markdown link from the text so the user never sees a fake "open the document" link.
     // Also backstop file_search's own narration tendency (house-style bans it in prose; the model still
     // does it — see stripFileMentionNarration above).
-    // Nexus write honesty (code, not prompt; loop 2 D3, docs/FIX-nexus-write-loop2.md): when ANY write
-    // this turn (this agent's or a teammate's) has an item that did not persist, the part of the reply
-    // about the write is CODE-BUILT from the per-item results, and every sentence of the model's text
-    // that mentions a written item or write-talk is dropped. Pass-through when every item persisted.
-    const safeText = nexusWriteGuardedReply(
-      stripFileMentionNarration(stripAgentReplyLinks(finalText)),
-      r.toolUses,
-      turnNexusWriteUses.filter((u) => u.agentId !== nextId),
-    );
+    // Nexus write honesty is NOT applied here per agent any more (loop 3 D10, docs/FIX-nexus-write-loop3.md):
+    // it is a property of the whole TURN -- a write that fails AFTER this reply was assembled must still
+    // replace it -- so the raw reply is kept and `presentedReplies()` builds what the owner sees.
+    const safeText = stripFileMentionNarration(stripAgentReplyLinks(finalText));
     // A confirm-intent ask this reply IS, if the agent called propose_task_intent this same turn — mirrors
     // replyArtifacts's derivation exactly (detail carries the structured payload as JSON rather than a
     // path, since there's no natural id/path shape here). Deliberately NOT the attachArtifacts/
@@ -6820,7 +6842,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   // merged so far, in order. Recomputed once per wave and shared by all agents
   // in that wave (they do not see each other's replies).
   const buildPrior = () =>
-    replies.map((rep) => `${AGENT_BY_ID[rep.agentId].name} just said: "${rep.text}"`).join("\n");
+    presentedReplies().map((rep) => `${AGENT_BY_ID[rep.agentId].name} just said: "${rep.text}"`).join("\n");
 
   // Pop the next runnable agent, skipping ones that already spoke or aren't
   // members (mirrors the sequential loop's per-iteration skip checks).
@@ -6916,11 +6938,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     reasoning: reasoningSummaries,
     fallbacks,
     prompts,
+    nexusWriteUses: turnNexusWriteUses.map((u) => ({ ...u })),
   });
 
   const finalResult = () => ({
     decision: routed.decision,
-    replies,
+    replies: presentedReplies(),
     fallbacks,
     prompts,
     journeyTaskUpdates,
@@ -6995,7 +7018,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       return c?.store === "azure" && c.chunks && (c.sharing ?? "shared") === "shared";
     });
     if (!anyShared) return; // respect privacy: only persist when the room shares memory
-    const finalReplies = [...replies];
+    const finalReplies = presentedReplies();
     const finalTools = [...toolUses];
     (async () => {
       try {
@@ -7052,7 +7075,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   const streamChunk = async () => {
     if (!chunked || !turnId || !turnStore) return;
     try {
-      await turnStore.updateTurnReplies(turnId, replies, buildResumeState());
+      await turnStore.updateTurnReplies(turnId, presentedReplies(), buildResumeState());
     } catch (e) {
       console.error("[turn-stream] updateTurnReplies failed", e instanceof Error ? e.message : e);
     }
@@ -7203,7 +7226,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       (remainingEligible.length > 0 || ceremonyCloser != null);
     if (hasMore) {
       try {
-        await turnStore.saveTurnChunk(turnId, replies, buildResumeState(), false);
+        await turnStore.saveTurnChunk(turnId, presentedReplies(), buildResumeState(), false);
       } catch (e) {
         console.error("[turn-chunk] partial save failed", e instanceof Error ? e.message : e);
       }
@@ -7212,7 +7235,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     ensureNotSilentOnRealWork();
     ensureNavLinkDelivered();
     try {
-      await turnStore.saveTurnChunk(turnId, replies, null, true, finalResult());
+      await turnStore.saveTurnChunk(turnId, presentedReplies(), null, true, finalResult());
     } catch (e) {
       console.error("[turn-chunk] done save failed", e instanceof Error ? e.message : e);
     }

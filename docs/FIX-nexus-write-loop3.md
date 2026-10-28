@@ -172,3 +172,67 @@ path and owner-scoped, and Nexus-down -> weak only (L3-D6v..x).
 it, router-winners F2-42 failed 2 asserts ("I have a new paper due next month for MGT-782, add it" is
 coursework only because MGT-782 is HIS course, which is now data). Every assertion in those files is
 unchanged.
+
+## D10 (H1-H15) + D11 — honesty on the TEXT path: no model sentence survives a failed write; a clean write always shows its list
+
+**Status: fixed** for H1-H14, H16-H17 and D11 (owner-specified design, item 1). **H15 (no write call at all):
+not fixed by filtering, by design** -- see Residuals; the code-built list is the backstop.
+
+Mechanism (`presentNexusWriteTurn`, nexus-write-shared.ts) -- decided by the RESULTS alone, for the whole TURN:
+- **(a) any write this turn did not persist** (failed / rejected / duplicate -- nothing new written / unknown /
+  still in flight): EVERY agent reply of the turn is replaced. The writer's reply (else the first reply, else
+  a new reply from the writer) is ONE code-built message: `Nexus write status:` + one bullet per item (saved
+  / updated / already in Nexus / not saved + plain reason / unknown — check Nexus) + the fixed closing line
+  (`NEXUS_WRITE_STATUS_CLOSING`). Every other reply's text becomes the fixed `NEXUS_WRITE_WITHHELD_REPLY`.
+  Nothing is filtered, so no spelling, language or Unicode trick can leak. Code-built attachments on a reply
+  (artifact chips, widgets) are kept; only model TEXT is replaced.
+- **(b) every write persisted:** the writer's reply gets `Saved in Nexus:` + one bullet per item (title, due date
+  in the COURSE's local time from D8, course code) -- built from the executor's results; updates read
+  `• Updated: “title” — due … — course` using the stored row (item 6).
+- **(c) D11:** `turnNexusWriteUses` (now `TurnNexusWriteUse[]` with the claim key) is persisted in
+  `buildResumeState()` (`nexusWriteUses`) and re-seeded on resume; a SETTLED outcome from an earlier chunk is
+  re-handed to an identical later call (`nexusWriteOutcomes` seeded from it). A write is recorded the moment
+  it STARTS as `nexusWriteInFlightOutcome` (every item `unknown`) and replaced in place by its result, so a
+  reply streamed/saved while it is in flight -- or a chunk that ends before it returns, or a writer killed by
+  the `runBounded` deadline -- can only show "Unknown — check Nexus".
+- **Wiring (huddle.functions.ts):** the per-agent `nexusWriteGuardedReply` call in the reply assembly is
+  REMOVED (a write failing AFTER a teammate's reply was assembled must still replace it). `replies` stays raw
+  (it is the resume state); `presentedReplies()` is applied at EVERY point a reply leaves the server: the 1:1
+  stream, the mid-chunk stream, the partial and final chunk saves, the final result, the prior shown to later
+  agents, and researched memory.
+- **No word list on any runtime path:** `WRITE_TALK` / `mentionsItem` deleted. `enforceNexusWriteHonesty`
+  (CLAIM_RE/DENIAL_RE) is kept only for its pre-loop-3 tests, documented as non-runtime, and L3-H0c asserts no
+  runtime file calls it. `nexusWriteGuardedReply` survives as the single-reply view of the same rule (the
+  voice gate uses it; no parsing).
+
+| Verifier input | loop 2 | loop 3 | Test |
+|---|---|---|---|
+| H1 "It's in." / H2 "It is on your list for Oct 30." (AC-F2-35's phrase) / H3-H11 (Penciled, Handled, Booked, Sorted, "good to go", Spanish, full-width "Ａｄｄｅｄ", ZWSP, "Got it on there") | truthful line + claim kept | ONLY the code-built message | L3-H1 (14 inputs incl. ✅ and "Just kidding, it's in") |
+| H12 teammate "It's in, Elle got it." after the writer's failure | unchanged, no truth shown | held back; the writer's slot carries the message | L3-H12 |
+| H13 teammate "Elle handled that one for you." (teammate replied in an EARLIER wave) | unchanged | held back (slot 0); message on the writer's slot | L3-H13 |
+| writer timed out (no reply) / no reply at all | — | first slot carries the message / one code-built reply from the writer | L3-H13b, H13c |
+| H14 clean 1-item write + "I've added all 5 assignments…" | unchanged | text + `Saved in Nexus:` with exactly ONE bullet (title, course-local due, course) | L3-H14, H14b/c |
+| update | — | `• Updated: “Research Proposal” — due Mon, Nov 2, 2026, 11:59 PM EST — MGT-782` | L3-H14d |
+| H15 no write call + "I've added your Research Proposal to Nexus." | unchanged | unchanged, and NO code-built list (residual; see below) | L3-H15 |
+| duplicate (nothing new) | code-built line + kept prose | the message, with the stored date + course | L3-H16 |
+| a write still in flight | not covered | "Unknown — check Nexus" | L3-H17 |
+| D11 teammate in a LATER chunk | unguarded (`turnNexusWriteUses` not in resume) | held back against the earlier chunk's failure (JSON round-trip of the resume state) | L3-D11a |
+| wiring: resume type / buildResumeState / re-seed / settled outcome / in-flight-then-result | — | present | L3-D11b..f |
+| every exit presented; no raw `replies` saved | — | 7 exits | L3-D10w, L3-D10x |
+
+**Changed assertions (each encoded the REPLACED loop-2 design; the owner's loop-3 rule is strictly stronger):**
+- `scripts/nexus-write-loop2.test.ts` L2-D3a (16 rows): expected "the code-built line" (loop 2's line, sometimes
+  followed by surviving prose) -> now exactly `nexusWriteFailureMessage(results)`. L2-D3b ("unrelated sentences
+  are KEPT after the line") -> no model sentence survives. L2-D3c ("all persisted: passes untouched") -> text +
+  the code-built saved list. L2-D3e/f/g/i: exact loop-2 line strings -> the corresponding loop-3 bullet is
+  present. L2-D3h ("a teammate silent about the write is untouched") -> replaced too (rule (a): EVERY reply).
+  L2-D3j (source: per-agent `nexusWriteGuardedReply` with teammates' writes) -> source: `presentedReplies` over
+  every write of the turn. L2-D3d, L2-D3k unchanged.
+- `scripts/nexus-write-loop2.test.ts` L2-V4/L2-V7 (voice speaks "the code-built line") -> the code-built
+  message; L2-V9 ("clean write passes untouched") -> text + saved list. (Revisited again by D9 below.)
+- `scripts/nexus-write-tool.test.ts` F2-35 source check `const safeText = nexusWriteGuardedReply(` -> the
+  turn-level `presentedReplies` definition AND `replies: presentedReplies(),` in the final result.
+- `scripts/nexus-write-fix.test.ts` FX-G6 (`turnNexusWriteUses.filter((u) => u.agentId !== nextId)`) -> the
+  presenter over ALL of the turn's writes (teammates' included).
+The behavioural F2-35 / RT-H1..H5 / FX-H* / FX-G1..G3 assertions on `enforceNexusWriteHonesty` are unchanged and
+green (that function is now test-only).

@@ -110,7 +110,9 @@ console.log("=== Teammate honesty (W17) ===");
   const fn = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
   t("FX-G4 the first write's outcome is stored by claim key", /nexusWriteOutcomes\.set\(claimKey, pending/.test(fn), true);
   t("FX-G5 the suppressed call returns the first call's results", /return JSON\.stringify\(\{ \.\.\.firstOut, already_done_this_turn: true/.test(fn), true);
-  t("FX-G6 reply assembly passes teammates' writes to the guard", /turnNexusWriteUses\.filter\(\(u\) => u\.agentId !== nextId\)/.test(fn), true);
+  // loop 3 D10 (docs/FIX-nexus-write-loop3.md): was "the reply assembly passes teammates' writes" (a per-agent
+  // filter). The runtime now presents EVERY reply against EVERY write of the turn, teammates' included.
+  t("FX-G6 every reply is presented against every write of the turn (teammates' included)", /const presentedReplies = \(list: Reply\[\] = replies\): Reply\[\] => presentNexusWriteTurn\(list, turnNexusWriteUses\) as Reply\[\];/.test(fn), true);
   t(
     "FX-G7 the claim is keyed on the normalised items, not raw JSON",
     /const claimKey = `\$\{c\.name\}:\$\{nexusWriteMod\.nexusWriteClaimKey\(writeArgs\)\}`;\s*\n\s*if \(!claimAction\(claimKey\)\)/.test(fn),

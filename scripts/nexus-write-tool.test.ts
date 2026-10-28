@@ -159,6 +159,7 @@ t("F2-30 configured flag", nexusWriteConfigured(), true);
 
 console.log("=== AC-F2-31/32 — all four registration points, in the pool for every agent ===");
 const textSrc = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
+const PRESENT_RE = /const presentedReplies = \(list: Reply\[\] = replies\): Reply\[\] => presentNexusWriteTurn\(list, turnNexusWriteUses\) as Reply\[\];/;
 const voiceSrc = readFileSync("src/features/huddle/lib/voice/realtime-tools.server.ts", "utf8");
 const writeSrc = readFileSync("src/features/huddle/lib/nexus/nexus-write.server.ts", "utf8");
 const readSrc = readFileSync("src/features/huddle/lib/nexus/nexus.server.ts", "utf8");
@@ -403,7 +404,10 @@ console.log("=== AC-F2-35 — the runtime refuses a success claim on a failed wr
   const already = "That's already on your list.";
   t("F2-35 a duplicate is not a failure", enforceNexusWriteHonesty(already, [{ tool: NEXUS_WRITE_TOOL_NAME, ok: false, detail: JSON.stringify(dup) }]), already);
   // loop2 D3: the runtime guard is now the structural nexusWriteGuardedReply (was enforceNexusWriteHonesty).
-  t("F2-35 the guard is applied in the reply assembly", /const safeText = nexusWriteGuardedReply\(/.test(textSrc), true);
+  // loop 3 D10 (docs/FIX-nexus-write-loop3.md): honesty is a property of the whole TURN, so the runtime guard is
+  // presentNexusWriteTurn over EVERY reply with EVERY write of the turn (was a per-agent nexusWriteGuardedReply in
+  // the reply assembly); the final result carries the presented replies.
+  t("F2-35 the guard is applied to every reply the turn returns", PRESENT_RE.test(textSrc) && /replies: presentedReplies\(\),/.test(textSrc), true);
 }
 
 console.log("=== AC-F2-36 — telemetry says WRITE ===");

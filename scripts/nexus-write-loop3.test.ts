@@ -29,6 +29,15 @@ import {
   NEXUS_COURSE_CONTEXT_TTL_MS,
 } from "../src/features/huddle/lib/nexus/course-context";
 import { primeNexusCourseContext } from "../src/features/huddle/lib/nexus/course-context.server";
+import {
+  NEXUS_WRITE_TOOL_NAME as N,
+  presentNexusWriteTurn,
+  nexusWriteFailureMessage,
+  nexusWriteResultsFrom,
+  nexusWriteInFlightOutcome,
+  NEXUS_WRITE_WITHHELD_REPLY,
+  NEXUS_WRITE_STATUS_CLOSING,
+} from "../src/features/huddle/lib/nexus/nexus-write-shared";
 
 let pass = 0;
 let fail = 0;
@@ -320,6 +329,119 @@ const main = async () => {
     globalThis.fetch = realFetch;
     t("L3-D6x Nexus down -> 'unavailable', routing on weak signals only", `${down}/${sharedCapabilityHolders(ASK).length}`, "unavailable/0");
     setNexusCourseContext(OWNER_COURSES);
+  }
+
+  console.log("=== D10/D11: honesty is code-built from the RESULTS for the whole turn (no word list, no filtering) ===");
+  {
+    const use = (agentId: string, results: unknown[]) => ({ agentId, tool: N, ok: false, detail: JSON.stringify({ ok: true, results }) });
+    const FAIL_RP = { index: 0, title: "Research Proposal", action: "failed", persisted: false, error: "http_500" };
+    const FAILED = [use("elle-rowan", [FAIL_RP])];
+    const MSG = nexusWriteFailureMessage(nexusWriteResultsFrom(FAILED));
+    t("L3-H0a the message is per-item status + the fixed closing line", MSG, `Nexus write status:\n• Not saved: “Research Proposal” — Nexus returned an error (http 500)\n${NEXUS_WRITE_STATUS_CLOSING}`);
+    // H1-H11 (+ the AC-F2-35 phrase) -- every spelling, every language: the reply IS the message, nothing kept.
+    const H: Array<[string, string]> = [
+      ["H1", "It's in."],
+      ["H2 (AC-F2-35's own phrase)", "It is on your list for Oct 30."],
+      ["H3", "Penciled it in for the 30th."],
+      ["H4", "Handled. You're good for the 30th."],
+      ["H5", "Booked it for Oct 30."],
+      ["H6", "Sorted! It will show up in your coursework view."],
+      ["H7", "Your RP is good to go for Oct 30."],
+      ["H8 Spanish", "Listo, ya quedó guardado para el 30."],
+      ["H9 full-width", "Ａｄｄｅｄ it for Oct 30."],
+      ["H10 zero-width space", "I've add​ed it"],
+      ["H11", "Got it on there, you're all good."],
+      ["ctl unrelated", "Also, remember to hydrate."],
+      ["extra emoji only", "✅"],
+      ["extra mixed truth + claim", "I couldn't save it. Just kidding, it's in."],
+    ];
+    for (const [label, reply] of H) {
+      const shown = presentNexusWriteTurn([{ agentId: "elle-rowan", text: reply }], FAILED);
+      t(`L3-H1 ${label}: ${JSON.stringify(reply)} -> ONLY the code-built message`, shown.length === 1 && shown[0].text === MSG, true);
+    }
+    // H12/H13: a teammate's claim after the writer's failure -- every reply of the turn is replaced.
+    let shown = presentNexusWriteTurn(
+      [{ agentId: "elle-rowan", text: "Saving it now." }, { agentId: "finn-reid", text: "It's in, Elle got it." }],
+      FAILED,
+    );
+    t("L3-H12 teammate claim after the writer's failure -> writer slot = message, teammate = held back", `${shown[0].text === MSG}/${shown[1].text === NEXUS_WRITE_WITHHELD_REPLY}`, "true/true");
+    shown = presentNexusWriteTurn(
+      [{ agentId: "finn-reid", text: "Elle handled that one for you." }, { agentId: "elle-rowan", text: "Done!" }],
+      FAILED,
+    );
+    t("L3-H13 teammate replied FIRST (earlier wave): its slot is held back, the writer's slot carries the message", `${shown[0].text === NEXUS_WRITE_WITHHELD_REPLY}/${shown[1].text === MSG}`, "true/true");
+    shown = presentNexusWriteTurn([{ agentId: "finn-reid", text: "Elle took care of it." }], FAILED);
+    t("L3-H13b the writer never replied (timed out): the first slot carries the message", shown[0].text, MSG);
+    shown = presentNexusWriteTurn([], FAILED);
+    t("L3-H13c no reply at all: one code-built reply from the writer", `${shown.length}/${shown[0].agentId}/${shown[0].text === MSG}`, "1/elle-rowan/true");
+    t("L3-H13d the held-back line and closing line are fixed text, not model text", `${NEXUS_WRITE_WITHHELD_REPLY.startsWith("(Held back")}/${NEXUS_WRITE_STATUS_CLOSING.startsWith("Nothing else")}`, "true/true");
+    // A reply's code-built widgets/chips (not model text) stay on it.
+    shown = presentNexusWriteTurn([{ agentId: "finn-reid", text: "x", artifacts: [{ id: "a1", name: "Doc" }] } as { agentId: string; text: string }], FAILED);
+    t("L3-H13e non-text attachments of a replaced reply are kept", JSON.stringify((shown[0] as { artifacts?: unknown }).artifacts), '[{"id":"a1","name":"Doc"}]');
+
+    // (b) every write persisted: the code-built saved list, from a REAL executor result (course-local date + course).
+    resetStore();
+    const ins = await exec([{ course: "MGT-782", title: "Case Brief 9", due_date: "2026-11-20" }]);
+    const CLEAN = [{ agentId: "elle-rowan", tool: N, ok: true, detail: JSON.stringify(ins) }];
+    shown = presentNexusWriteTurn([{ agentId: "elle-rowan", text: "I've added all 5 assignments from your MGT-782 syllabus." }], CLEAN);
+    t("L3-H14 clean 1-item write + 'all 5' claim: the list shows exactly what was written", shown[0].text,
+      "I've added all 5 assignments from your MGT-782 syllabus.\n\nSaved in Nexus:\n• “Case Brief 9” — due Fri, Nov 20, 2026, 11:59 PM EST — MGT-782");
+    shown = presentNexusWriteTurn([{ agentId: "elle-rowan", text: "Done." }, { agentId: "finn-reid", text: "Budget's fine." }], CLEAN);
+    t("L3-H14b the list goes on the WRITER's reply; a teammate's reply is untouched", `${shown[0].text.includes("Saved in Nexus:")}/${shown[1].text}`, "true/Budget's fine.");
+    shown = presentNexusWriteTurn([{ agentId: "finn-reid", text: "Budget's fine." }], CLEAN);
+    t("L3-H14c a clean writer with no reply of its own still gets the list (its own reply)", `${shown.length}/${shown[1]?.agentId}/${shown[1]?.text.startsWith("Saved in Nexus:")}`, "2/elle-rowan/true");
+    resetStore();
+    const upd = await exec([{ assignment_id: "aafbf80f", due_date: "2026-11-02" }]);
+    shown = presentNexusWriteTurn([{ agentId: "iris-chase", text: "Moved it." }], [{ agentId: "iris-chase", tool: N, ok: true, detail: JSON.stringify(upd) }]);
+    t("L3-H14d an update is listed as Updated, with its stored title, course-local date and course", shown[0].text,
+      "Moved it.\n\nSaved in Nexus:\n• Updated: “Research Proposal” — due Mon, Nov 2, 2026, 11:59 PM EST — MGT-782");
+    // H15: no write call this turn -> nothing to build; the ABSENCE of the code-built list is the owner's signal.
+    shown = presentNexusWriteTurn([{ agentId: "elle-rowan", text: "I've added your Research Proposal to Nexus." }], []);
+    t("L3-H15 no write call: the reply is untouched and carries NO code-built list (documented residual)", `${shown[0].text}/${shown[0].text.includes("Saved in Nexus")}`, "I've added your Research Proposal to Nexus./false");
+    // A duplicate wrote nothing new -> failure mode (the literal rule: it did not persist).
+    resetStore();
+    const dup = await exec([{ course: "MGT-782", title: "Research Proposal", due_date: "2026-10-30" }]);
+    shown = presentNexusWriteTurn([{ agentId: "elle-rowan", text: "Added!" }], [{ agentId: "elle-rowan", tool: N, ok: false, detail: JSON.stringify(dup) }]);
+    t("L3-H16 a duplicate (nothing new written) -> the code-built message, with the stored date and course", shown[0].text.split("\n")[1],
+      "• Already in Nexus, nothing new added: “Research Proposal” — due Fri, Oct 30, 2026, 11:59 PM EDT — MGT-782");
+    // In flight: a write that has STARTED but not returned is `unknown` -- nothing presented meanwhile can claim it.
+    const inflight = [{ agentId: "elle-rowan", tool: N, ok: false, detail: JSON.stringify(nexusWriteInFlightOutcome({ items: [{ title: "Research Proposal" }] })) }];
+    shown = presentNexusWriteTurn([{ agentId: "elle-rowan", text: "Done, it's saved!" }], inflight);
+    t("L3-H17 a write still in flight -> 'Unknown — check Nexus', the claim is not shown", shown[0].text.split("\n")[1], "• Unknown — check Nexus: “Research Proposal” (the request did not confirm whether it saved)");
+
+    // D11: the write results ride the resume state, so a LATER chunk's teammate is covered.
+    const chunk1 = { replies: [{ agentId: "elle-rowan", text: "Adding it." }], nexusWriteUses: FAILED };
+    const resumed = JSON.parse(JSON.stringify(chunk1)) as typeof chunk1; // what saveTurnChunk -> resume round-trips
+    const chunk2Replies = [...resumed.replies, { agentId: "finn-reid", text: "It's in, Elle got it." }];
+    shown = presentNexusWriteTurn(chunk2Replies, resumed.nexusWriteUses);
+    t("L3-D11a a teammate in a LATER chunk is held back against an earlier chunk's failed write", `${shown[0].text === MSG}/${shown[1].text === NEXUS_WRITE_WITHHELD_REPLY}`, "true/true");
+
+    // The runtime wiring (huddle.functions.ts: a 8k-line server function -- source-checked, behaviour proved above).
+    const fn = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
+    t("L3-D11b the resume state type carries the turn's write results", /nexusWriteUses\?: TurnNexusWriteUse\[\];/.test(fn), true);
+    t("L3-D11c buildResumeState persists them", /nexusWriteUses: turnNexusWriteUses\.map\(\(u\) => \(\{ \.\.\.u \}\)\),/.test(fn), true);
+    t("L3-D11d a resumed chunk re-seeds them", /const turnNexusWriteUses: TurnNexusWriteUse\[\] = \[\.\.\.\(resume\?\.nexusWriteUses \?\? \[\]\)\];/.test(fn), true);
+    t("L3-D11e an earlier chunk's SETTLED outcome is handed to an identical later call", /nexusWriteOutcomes\.set\(u\.claimKey, Promise\.resolve\(JSON\.parse\(u\.detail\)/.test(fn), true);
+    t("L3-D11f the write is recorded as IN FLIGHT before it runs, then replaced by its result",
+      /turnNexusWriteUses\.push\(writeUse\);\s*\n\s*const pending = runWrite\(\);[\s\S]{0,700}Object\.assign\(writeUse, \{ ok, detail: JSON\.stringify\(out\) \}\);/.test(fn) && /detail: JSON\.stringify\(nexusWriteInFlightOutcome\(writeArgs\)\), claimKey \};/.test(fn), true);
+    for (const [label, re] of [
+      ["the 1:1 stream", /updateTurnReplies\(\s*turnId!,\s*presentedReplies\(\[\.\.\.replies, \{ agentId: winner\.id, text: full \}\]\),/],
+      ["the mid-chunk stream", /updateTurnReplies\(turnId, presentedReplies\(\), buildResumeState\(\)\)/],
+      ["the partial chunk save", /saveTurnChunk\(turnId, presentedReplies\(\), buildResumeState\(\), false\)/],
+      ["the final chunk save", /saveTurnChunk\(turnId, presentedReplies\(\), null, true, finalResult\(\)\)/],
+      ["the final result", /replies: presentedReplies\(\),/],
+      ["the prior shown to later agents", /presentedReplies\(\)\.map\(\(rep\) => `\$\{AGENT_BY_ID\[rep\.agentId\]\.name\} just said/],
+      ["memory", /const finalReplies = presentedReplies\(\);/],
+    ] as Array<[string, RegExp]>) {
+      t(`L3-D10w every exit is presented: ${label}`, re.test(fn), true);
+    }
+    t("L3-D10x no exit leaks the RAW replies (no saveTurnChunk/updateTurnReplies(turnId, replies, …))", /(?:saveTurnChunk|updateTurnReplies)\(turnId, replies,/.test(fn), false);
+    // No word list on any runtime path: the loop-2 sentence filter is gone, the clause parser has no runtime caller.
+    const shared = readFileSync("src/features/huddle/lib/nexus/nexus-write-shared.ts", "utf8");
+    t("L3-H0b the WRITE_TALK sentence filter is deleted", /const WRITE_TALK|function mentionsItem/.test(shared), false);
+    const runtimeCallers = ["src/features/huddle/lib/huddle.functions.ts", "src/features/huddle/hooks/useVoiceCallRealtimeSpeak.ts", "src/features/huddle/lib/voice/realtime-tools.server.ts", "src/features/huddle/lib/nexus/nexus-write.server.ts"]
+      .filter((f) => /enforceNexusWriteHonesty\(/.test(readFileSync(f, "utf8")));
+    t("L3-H0c enforceNexusWriteHonesty (a word-list parser) has NO runtime caller", runtimeCallers.join(",") || "none", "none");
   }
 };
 
