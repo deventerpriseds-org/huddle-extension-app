@@ -117,7 +117,7 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
-## Chat messages: dated timestamps + per-message copy (2026-10-28, NOT owner-confirmed)
+## Chat messages: dated timestamps + per-message copy (2026-10-28, DEPLOYED bee838b / #120, NOT owner-confirmed)
 `ClientTime` (HuddleView.tsx) → `formatMessageTimestamp`: always month+day+time, year only for past years. User
 bubbles have a timestamp + copy row beneath; agent header has timestamp + copy. `CopyMessageButton` returns null
 for empty text. Reference pattern: journey `src/components/CommsConsole/TranscriptScroll.tsx`.
