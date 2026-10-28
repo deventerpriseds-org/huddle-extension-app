@@ -38,3 +38,31 @@ Clone: scratchpad/verify-clone detached at origin/main 6ea7dfe.
 - Render loop: anchor effect deps [start, revealOlder]; auto-reveal only while start>0 && no scrollbar -> bounded by start reaching 0.
   Repeated reveal blocked by `anchorRef.current` guard. `follow` is a stable useState-initialised object (no stale closure).
 - SSR: React 19.2.7 installed (no useLayoutEffect server warning in 19).
+
+### C2 adversarial probes (Playwright, fix build)
+- P1 reader scrolled up 600px INSIDE the newest window (pinnedStart null), new message arrives: windowStart slides +1 so the top row
+  unmounts; Chromium scroll anchoring absorbed it (scrollTop 2015->1953, row under the reader unchanged "Test-message 286").
+  Residual: depends on CSS scroll anchoring (Chromium/Android WebView has it; not verified on WebKit).
+- P2 reveal older twice then shrink thread to 30 msgs (demo-toggle shape): 30 rows rendered, no blank transcript (clamp + auto-reveal self-heals).
+- Code-read caveat (not reproduced): revealOlder anchor captured before a commit that ALSO appends a bottom message adds that row's
+  height to the delta, shifting the reader by one row. Minor.
+
+## C4 — PR #111 (598c4cd) — CONFIRMED
+- Diff: only HuddleView.tsx (button block replaced by `start === 0 &&` day label) + actions.md. `grep -rni "show earlier|earlier messages|
+  loadOlder|showEarlier" src e2e scripts` -> no hits. revealOlder still called from onScroll and the no-scrollbar auto-reveal; e2e on
+  main (includes #111) shows scroll-to-top reveals #220.
+
+## C5 — PR #112 (6ea7dfe) — PARTIAL (Huddle side CONFIRMED; downstream consumers NOT REACHED)
+- test-push.ts: huddleId trimmed, `/^[a-z0-9-]{1,64}$/` (no m flag, so `$` is true end), 400 invalid_huddle_id; data spread
+  `{deepLink:"/?huddle=<id>", huddleId}` only when present. Same shape as real reply push huddle.functions.ts:7658 and reminders.ts:208
+  (those also put `source` inside data: "huddle-message"/"huddle-reminder", so data.source="huddle-test-push" follows the pattern).
+- Workflow body builder executed locally: empty huddle_id -> no huddleId key; "dm-iris-chase" -> included; hostile `x" $(id) \`whoami\``
+  -> valid JSON string, not executed (env var via python json.dumps), then rejected server-side by the regex.
+- Defect (minor): `(payload.huddleId ?? "").trim()` sits OUTSIDE the try; a non-string huddleId (e.g. 123) throws TypeError -> unhandled
+  500 instead of 400. Behind the shared secret, so low impact.
+- NOT REACHED (budget): journey execute-tool sendPushNow spread / source conflict, send-push-notification deepLink + fcm:app routing,
+  android MainActivity.kt, HuddleApp params.get("huddle") (HuddleApp.tsx:321 seen during C1).
+
+## C6 — NOT REACHED (budget). Job log not read.
+## tsc / eslint — NOT REACHED (budget).
+Budget note: started 16:49Z; a permission prompt on a test command timed out and the clock read 17:42Z on return. Stopped here.
