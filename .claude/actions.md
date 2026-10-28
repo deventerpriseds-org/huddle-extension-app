@@ -54,6 +54,11 @@ reader; PRE-FIX ends **27,592px above the bottom** (the reported bug), renders a
 `/api/public/test-push` gained an optional `huddle_id` input that adds the SAME `deepLink: /?huddle=<id>`
 a real 1:1 reply push carries, so a tap exercises the deep-link landing with no agent turn.
 
+**Test push sent (2026-10-28 16:37 UTC):** run 40727708245 -> HTTP 200, journey "Push sent on messages", deep link
+`dm-iris-chase`. Awaiting the owner's tap result. **Independent verification:** verifier loop 1 (work slug
+`deeplink-transcript`) covers #109/#111/#112; artifact `.claude/evidence/VERIFY-deeplink-transcript-1.md` on branch
+`claude_verify-deeplink-transcript`. C1 (root cause) already CONFIRMED by the verifier from source before a restart.
+
 **Not done (deliberately):** server-side paging of history. All messages live in one workspace blob, so
 paging the DOWNLOAD needs a storage change; only worth it if the download itself becomes slow.
 
