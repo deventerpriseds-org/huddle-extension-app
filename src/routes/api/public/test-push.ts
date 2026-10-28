@@ -5,7 +5,10 @@ import type {} from "@tanstack/react-start";
 // send_push — the SAME path agent replies (executeClaimedTurn, channel "messages") and reminders
 // (reminders.ts, channel "task-reminders") use. Fires on one or more channels so we can tell which
 // notification channel actually lands on the Huddle bridge app. Guarded by the shared
-// JOURNEY_PROXY_TOKEN (no new secret, no Entra). Body: { caller:{entra_email}, channels?, title?, body? }.
+// JOURNEY_PROXY_TOKEN (no new secret, no Entra). Body: { caller:{entra_email}, channels?, title?, body?,
+// huddleId? }. With `huddleId` the push carries the SAME deep link a real agent reply does
+// (huddle.functions.ts executeClaimedTurn), so tapping it opens that thread — the way to test the
+// deep-link landing on a real phone without generating an agent turn.
 
 const MAX_BODY_BYTES = 8_000;
 const DEFAULT_CHANNELS = ["messages", "task-reminders"] as const;
@@ -37,6 +40,7 @@ export const Route = createFileRoute("/api/public/test-push")({
           body?: string;
           app?: string;
           runId?: string;
+          huddleId?: string;
         };
         try {
           payload = (await request.json()) as typeof payload;
@@ -52,6 +56,13 @@ export const Route = createFileRoute("/api/public/test-push")({
             ? payload.channels.map((c) => String(c))
             : [...DEFAULT_CHANNELS];
         const stamp = payload.runId || String(request.headers.get("x-request-id") || "testpush");
+        if (payload.huddleId !== undefined && typeof payload.huddleId !== "string") {
+          return json({ ok: false, error: "invalid_huddle_id" }, 400);
+        }
+        const huddleId = (payload.huddleId ?? "").trim();
+        if (huddleId && !/^[a-z0-9-]{1,64}$/.test(huddleId)) {
+          return json({ ok: false, error: "invalid_huddle_id" }, 400);
+        }
 
         try {
           const { invokeJourneyTool } = await import(
@@ -64,7 +75,11 @@ export const Route = createFileRoute("/api/public/test-push")({
           const rawApp = (payload.app ?? "huddle").trim();
           const useApp = rawApp && rawApp.toLowerCase() !== "none" ? rawApp : null;
           for (const channel of channels) {
-            const title = payload.title || `Huddle test push (${channel}${useApp ? "" : "/native"})`;
+            const title =
+              payload.title ||
+              (huddleId
+                ? `Test heads-up: tap to open ${huddleId}`
+                : `Huddle test push (${channel}${useApp ? "" : "/native"})`);
             const body =
               payload.body ||
               `If you see this, the "${channel}" channel${useApp ? ` via app:${useApp}` : " (native, no app filter)"} reaches your device. Tag ${stamp}.`;
@@ -82,6 +97,7 @@ export const Route = createFileRoute("/api/public/test-push")({
                   channel,
                   ...(useApp ? { app: useApp } : {}),
                   data: {
+                    ...(huddleId ? { deepLink: `/?huddle=${huddleId}`, huddleId } : {}),
                     source: "huddle-test-push",
                     notificationId: collapseId,
                     tag: collapseId,

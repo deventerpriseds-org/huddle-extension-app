@@ -18,6 +18,10 @@ on:
         description: 'Source-app tag. "huddle" = app-namespaced token; "none" = journey-native (no filter).'
         required: false
         default: "huddle"
+      huddle_id:
+        description: 'Optional thread to deep-link to, e.g. "dm-iris-chase". Tapping the push opens it, like a real 1:1 reply.'
+        required: false
+        default: ""
 
 jobs:
   test-push:
@@ -30,15 +34,17 @@ jobs:
           EMAIL: ${{ inputs.email }}
           CHANNELS: ${{ inputs.channels }}
           APP: ${{ inputs.app }}
+          HUDDLE_ID: ${{ inputs.huddle_id }}
         run: |
           if [ -z "$SECRET" ]; then echo "JOURNEY_PROXY_TOKEN secret not set"; exit 1; fi
           RUN_ID="testpush-$(date -u +%Y%m%d%H%M%S)"
           CH_JSON=$(python3 -c "import json,os;print(json.dumps([c.strip() for c in os.environ['CHANNELS'].split(',') if c.strip()]))")
-          echo "Sending test push to $EMAIL on channels $CH_JSON app=$APP (runId=$RUN_ID)"
+          BODY=$(RUN_ID="$RUN_ID" CH_JSON="$CH_JSON" python3 -c "import json,os;b={'caller':{'entra_email':os.environ['EMAIL']},'channels':json.loads(os.environ['CH_JSON']),'app':os.environ['APP'],'runId':os.environ['RUN_ID']};h=os.environ.get('HUDDLE_ID','').strip();b.update({'huddleId':h} if h else {});print(json.dumps(b))")
+          echo "Sending test push to $EMAIL on channels $CH_JSON app=$APP huddle=${HUDDLE_ID:-none} (runId=$RUN_ID)"
           HTTP=$(curl -s -o /tmp/testpush.out -w "%{http_code}" -X POST \
             -H "content-type: application/json" \
             -H "x-webhook-secret: $SECRET" \
-            -d "{\"caller\":{\"entra_email\":\"$EMAIL\"},\"channels\":$CH_JSON,\"app\":\"$APP\",\"runId\":\"$RUN_ID\"}" \
+            -d "$BODY" \
             "$BASE/api/public/test-push")
           echo "HTTP $HTTP"
           echo "--- response ---"

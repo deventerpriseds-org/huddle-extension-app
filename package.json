@@ -27,6 +27,7 @@
     "test:green-light": "bun scripts/green-light.test.ts",
     "test:assign-on-create": "bun scripts/assign-on-create.test.ts",
     "test:verdict-memory": "bun scripts/verdict-memory.test.ts",
+    "test:ask-shape": "bun scripts/ask-shape.test.ts",
     "test:widget-park": "bun scripts/widget-park.test.ts",
     "test:widget-live": "bun scripts/widget-live-refresh.test.ts",
     "test:widget-colors": "bun scripts/widget-colors.test.ts",
@@ -46,7 +47,10 @@
     "test:schedule-brief-dedupe": "bun scripts/schedule-brief-dedupe.test.ts",
     "test:draft-html": "bun scripts/draft-html.test.ts",
     "test:mail-subscription": "bun scripts/mail-subscription.test.ts",
-    "test:transcript-scroll": "bun scripts/transcript-scroll.test.ts"
+    "test:transcript-scroll": "bun scripts/transcript-scroll.test.ts",
+    "test:test-push": "bun scripts/test-push-validation.test.ts",
+    "test:turn-catchup": "bun scripts/turn-catchup.test.ts",
+    "test:turn-push": "bun scripts/turn-push.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

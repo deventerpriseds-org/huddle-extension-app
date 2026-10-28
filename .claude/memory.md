@@ -127,7 +127,28 @@ index into a requirement list**.
 - Memory architecture: owner chose (a) SOFT preference (2026-10-27) and "thought it was already this way" — it largely IS: runAgentTurn's laneBoost re-ranks shared memory by the agent's domains/themes (topic text, not agent name). Gaps: voice has no lane boost/Executive Profile; the owner's ChatGPT knowledge isn't ingested yet.
 - ACs: `.claude/AC-confirm-ask-rotation.md`. Tracker: ACT:confirm-ask-rotation.
 
-## Chat transcript scroll: opens at the newest, follows only if YOU did not scroll up (2026-10-27, DEPLOYED 4332c41, NOT owner-confirmed)
+## Deep 1:1 asks: HYBRID — act now, or answer + offer to produce; never hold (2026-10-28, PR #116, NOT deployed yet, NOT owner-confirmed)
+**Trigger:** owner asked Iris (dm-iris-chase) to plan the day — gym 3pm, vitamin shop, DBA 702/782 papers, eulogy,
+app work. Scorer rated it difficulty 3 (length), the old gate HELD it behind the canned "produce or quick?" literal
+(`produceVsQuickAsk`, before any model call), and "produce" made ONE vague task "Plan daily activities" (UP_NEXT,
+iris-chase). Evidence: `chat.pending_turns` u-1793205271396 / u-1793205494452; decision.reason
+`1:1 [deep-confirm: produce-vs-quick]`. Owner: "why didnt she just do it? this isnt what i wanted." Owner picked the hybrid.
+**Now:** `scoreAskLLM` (routing.ts) returns difficulty + shape `act|deliverable` in the SAME call. Gate in
+`runHuddleTurn` routes via `routeDeepAsk` (tasks/ask-shape.ts): act → runs normally (persona site still budget-caps,
+never Sol); deliverable/unknown → answered now on `terra-med` + `PRODUCE_OFFER_LINE` appended by
+`ensureProduceOfferDelivered` at both terminal paths; go-ahead in the CURRENT line → runProduce. Offer stored as
+`chat.deep_confirm.kind='offer'` only after it landed; only explicit produce phrases accept it (`isOfferAccepted`);
+any other next message clears it. Legacy `kind='ask'` rows still use `classifyConfirmReply`. Remembered verdicts no
+longer auto-produce fresh asks (no question left to re-ask). Tests: `test:ask-shape`, `test:verdict-memory` (structural
+section superseded). 4 mutations FIRED.
+**Open:** stray task "Plan daily activities" (3304d84c) — owner said delete; two Supabase-MCP deletes timed out on an unanswered confirm; owner will delete via the new board Delete (follow-up PR) or journey app.
+
+## Chat messages: dated timestamps + per-message copy (2026-10-28, DEPLOYED bee838b / #120, NOT owner-confirmed)
+`ClientTime` (HuddleView.tsx) → `formatMessageTimestamp`: always month+day+time, year only for past years. User
+bubbles have a timestamp + copy row beneath; agent header has timestamp + copy. `CopyMessageButton` returns null
+for empty text. Reference pattern: journey `src/components/CommsConsole/TranscriptScroll.tsx`.
+
+## Chat transcript scroll: opens at the newest, follows only if YOU did not scroll up (2026-10-27, DEPLOYED, OWNER-CONFIRMED on his phone 2026-10-28)
 A push deep link (`?huddle=dm-<agent>`) switches threads BEFORE the workspace history downloads, so any
 "scroll to bottom on thread switch" fires on an empty thread. The old follow rule re-measured near-bottom
 after each update, which a bulk history load always fails (view at 0, list grew 27k px) — so it landed at
@@ -137,6 +158,15 @@ bypass seed the workspace is NOT on the deep-linked thread (the `hydrateFromRemo
 `deepLinkTarget`), and Chromium scroll anchoring drags a view that starts scrolled-down to the bottom on its
 own — both made the pre-fix code PASS. `e2e/transcript-deeplink.e2e.mjs` asserts the precondition
 (1:1 active, empty, scrollTop 0) and refuses to run without it.
+
+### Testing a deep link on the owner's phone (2026-10-28)
+`test-push.yml` (workflow_dispatch) takes an optional `huddle_id` (e.g. `dm-iris-chase`); the push then carries the
+same `data.deepLink=/?huddle=<id>` a real 1:1 reply does, so a tap exercises deep-link landing with NO agent turn and
+no board write. Chain (read from source): test-push.ts -> journey execute-tool sendPushNow (spreads args.data) ->
+send-push-notification (app:"huddle" -> only `fcm:app:huddle:%` tokens; fcmData.deepLink) -> Android bridge
+MainActivity deepLink extra -> HuddleApp `params.get("huddle")`. Pushes expire after 120s (TTL), so a missed one must
+be re-sent, not waited for. First send: run 40727708245, HTTP 200 "Push sent on messages" (proves journey accepted it,
+NOT that the phone displayed it). Owner email for journey: von.ellis@enterpriseds.io.
 
 ## Iris schedule brief = meetings + classes + TASKS, per day AND per journey window (2026-10-15, DEPLOYED, NOT owner-confirmed)
 - **Calendar mailbox is NOT the data-scope email.** Owner's Outlook meetings live in the journey-connected
@@ -1713,6 +1743,7 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+- [2026-10-28] Iris scheduled pushes: `turnPushStyle` (lib/push/turn-push.ts) names the push per job via `payload.pushStyle`; priority check is STICKY ("Iris: confirm ... priorities"), briefs carry Open Schedule + "adjust anything?" and one item per line (owner reversed the 10-15 "NO bullet points"). #122 `8302cb6` live, NOT owner-confirmed.
 **ARTIFACTS ARE NOT MARKDOWN-ONLY — `create_artifact` takes a `format` (2026-09-13).**
 Owner: *"why is it saying we are limited to .md when full document, mermaid, d3 abilities etc were
 early requirements for the artifact library?"* The agent was right about its own contract: four of

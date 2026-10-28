@@ -23,6 +23,17 @@ Previous: 2026-09-12 (ACT:escalated-dead-end -- approach gate's `escalated` is t
 Previous: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
 Previous: 2026-08-26 (ACT-64 confirm-ask/assist scope revised, no code yet; ACT-63 notification bugs DEPLOYED 6dccf41, Bug 2 user-confirmed live; ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
 
+## ACT:message-copy-and-date — per-message copy button + dated timestamps in chat (2026-10-28)
+Owner asked (screenshot of journey's Iris chat): "there should be a copy option for each message. also the messages
+have timestamps but no date." Change in `HuddleView.tsx`: `ClientTime` now renders `Oct 27, 8:15 AM` (year only when
+not the current year) via `formatMessageTimestamp`; user messages gained a timestamp row (they had none); new
+`CopyMessageButton` (Copy→Check 2s, mirrors journey `TranscriptScroll.tsx`) on every user + agent message with text.
+Status: 🚀 DEPLOYED, NOT yet owner-confirmed live. Evidence: PR deventerpriseds-org/huddle-extension-app#120
+(https://github.com/deventerpriseds-org/huddle-extension-app/pull/120) squash-merged as `bee838b`; deploy-swa run
+40748141478 conclusion=success (https://github.com/deventerpriseds-org/huddle-extension-app/actions/runs/40748141478).
+Checks: `tsc --noEmit` 0 errors; eslint shows the same 19 pre-existing prettier errors as before (none new).
+Owner check: hard-refresh, open any chat → timestamps read `Oct 27, 8:15 AM`; copy icon on each message copies text.
+
 ## ACT:deeplink-opens-at-top — a 1:1 heads-up opened the thread at the TOP of history (2026-10-27)
 
 **Asked (owner):** *"when i click a heads up message from a 1:1 it deeplinks but goes to the top of the
@@ -30,6 +41,8 @@ thread history instead of the bottom … it seems it should quick load the most 
 oldest when scrolling up far enough according to best practices"*
 
 **Status: DEPLOYED `4332c41` (PR #109, deploy run 40586460645 success), mechanism verified headless
+**OWNER-CONFIRMED LIVE 2026-10-28:** "yes the scroll lands on the newest items". Part B step 4 decision: KEEP
+the ~185 blob-only messages (owner). Part B steps 1-3: awaiting approval.
 (A/B), NOT yet confirmed on the owner's phone.**
 
 **Cause (read from code, then reproduced):** the deep link switches to the 1:1 before the workspace
@@ -49,6 +62,35 @@ by huddle id so a switch re-opens at the bottom.
 (deep-linked 1:1 open + empty, 300 messages delivered late via `hydrateFromRemote`): NEW lands 0px from
 bottom, renders newest window only, scroll-up reveals #220 at scrollTop 3750, new message doesn't yank a
 reader; PRE-FIX ends **27,592px above the bottom** (the reported bug), renders all 300, scroll-up stuck at 0.
+
+**Owner live test (2026-10-27):** owner asked for a clickable test notification. `test-push.yml` /
+`/api/public/test-push` gained an optional `huddle_id` input that adds the SAME `deepLink: /?huddle=<id>`
+a real 1:1 reply push carries, so a tap exercises the deep-link landing with no agent turn.
+
+**Test push sent (2026-10-28 16:37 UTC):** run 40727708245 -> HTTP 200, journey "Push sent on messages", deep link
+`dm-iris-chase`. Awaiting the owner's tap result. **Independent verification:** verifier loop 1 (work slug
+`deeplink-transcript`) covers #109/#111/#112; artifact `.claude/evidence/VERIFY-deeplink-transcript-1.md` on branch
+`claude_verify-deeplink-transcript`. C1 (root cause) already CONFIRMED by the verifier from source before a restart.
+
+**Owner live test 2026-10-28 ~18:00 UTC — FAILED from his view:** after tapping the test push, the Iris 1:1 showed
+only alarms and history never filled in (before: alarms, then history ~7s later). Findings, from the DB and a replay:
+- The newest Iris messages in the saved workspace are real conversation (Oct 9-15), not alarms, so an
+  alarms-only screen means the workspace history was NOT applied on that open (the alarms come from the
+  thread's own reminder poll, which runs before hydration).
+- Phone-sized headless replay of current main (alarms first, then a 3,230-message / 654-Iris history via
+  hydrateFromRemote): history renders, 40 rows, 0px from bottom, no page errors. So rendering is not what failed.
+- Load path untouched since 2026-10-17 (git log on useWorkspaceSync/store/HuddleApp/workspace.functions/entra-auth).
+- **SAVE IS BROKEN SINCE ~2026-10-18 (pre-existing, measured):** `identity.workspace_state` is 2,080,919 chars;
+  `saveWorkspace` validates `stateJson.max(2_000_000)`, so every save is rejected. Newest saved message: 2026-10-15.
+  Why the load did not apply on that open is still UNKNOWN; awaiting the owner's normal-open check.
+
+**Owner chose C (2026-10-28).** Part A shipped: #117 (`39f464d`, deploy 40744286484 success) -- save cap 8M,
+back-fill resumes from the newest saved message and pages past 100, load retries with an on-screen notice, save
+failures shown. **OWNER-CONFIRMED on his phone 2026-10-28 ("I now see the messages again")** and DB-verified: workspace
+`updated_at` 2026-10-28 18:24:36 UTC (was 10-18), 3,415 messages (was 3,230), Iris 806 (was 654), newest saved
+message 18:17 UTC today. Blob is now 2,228,410 chars -- over the OLD cap, so the raise is what let it save. Part B planned in `docs/plan-message-history-storage.md`, awaiting approval. Retracted claim: "the
+APK restart caused the loss" -- owner installed APKs after 10-18 without loss, so restarts were being recovered by
+something not yet identified.
 
 **Not done (deliberately):** server-side paging of history. All messages live in one workspace blob, so
 paging the DOWNLOAD needs a storage change; only worth it if the download itself becomes slow.
@@ -4769,3 +4811,17 @@ bridge #10 + #11 → Huddle APK v1.0.10 built (84f9813). Live: run 40575373656 �
 Plumley — draft reply ready", data.sticky "true", FCM 1 success (journey function_logs 20:08:53Z).
 **NOT yet confirmed by the owner** — needs: install v1.0.10; the next real email arriving within seconds; the push staying
 after a tap; one Save to Drafts tap (spacing + Calibri 11 in Outlook).
+
+### ACT:deep-ask-hybrid (2026-10-28) — OPEN
+Ask: "Is Iris going through her standup routine in a 1:1? why didnt she just do it?" → diagnosed the deep-confirm hold
+(not standup); owner chose the hybrid ("go with the recomended hybrid"). PR deventerpriseds-org/huddle-extension-app#116
+(7ad609f). Status: implemented, offline tests + 4 mutations FIRED; independent verifier running; then merge → auto-deploy
+→ live 1:1 check. NOT owner-confirmed. Sub-item: delete stray "Plan daily activities" task — awaiting owner yes/no.
+
+
+## ACT:iris-sticky-priority-and-clean-layout — priority check missed; thread "smashed together" (2026-10-28)
+Owner: *"I haven't been asked in the early morning to check out the schedule for any adjustments. and evening to confirm the priorities ... with deep link"*, then *"it did ask but because it didn't stick i missed it. also the formatting in the thread is all smashed together not clean"*.
+- **Found:** 8pm priority check sent nightly 10-16..10-27 (chat.pending_turns, all `done`); push log 2026-10-28T00:00:07Z FCM-accepted, titled "Iris Chase replied", 1s before the 8pm brief with the SAME title; not sticky. Brief directive demanded "ONE ... NO bullet points" → 11 tasks in one sentence.
+- **Shipped:** PR #122 squash `8302cb6`, deploy-swa run 40750842127 success. `lib/push/turn-push.ts` (`turnPushStyle`; email alerts unchanged) + `payload.pushStyle`; priority check "Iris: confirm tomorrow's/today's priorities" sticky; briefs "Iris: today's/tomorrow's schedule" (not sticky) + Open Schedule button + 8am/8pm "adjust anything?" line; one item per line, plain text.
+- **Evidence:** turn-push 9, priority-check 43, schedule-brief 76, dedupe 21, mail-subscription 24, inbound-email 69; tsc 0; build 0; mutate.sh FIRED T4/T7/P-STICK3/J4/J6b/P6. Live: run-priority-check run 40751464060 → turn `priority-check-evening-2026-10-28-manual-20261028190743` reply one priority per line + Open Priorities; push title "Iris: confirm tomorrow's priorities", FCM 1 success.
+- **Status:** live; mechanism verified. NOT owner-confirmed (stays in shade on phone; layout in thread). First scheduled briefs with the new layout: 8pm ET tonight.
