@@ -69,12 +69,18 @@ console.log("=== Voice speech gate (W18) ===");
   t("FX-V3 the held reply is checked by the text-path guard", /Final Paper is saved/.test(enforceNexusWriteHonesty("Final Paper is saved.", g.uses)), false);
   g.noteToolOutput("schedule_reminder", FAILED[0].detail);
   g.reset();
-  t("FX-V4 reset (next utterance) releases the hold", g.holding, false);
+  // loop2 D4 (docs/FIX-nexus-write-loop2.md): was "reset releases the hold" unconditionally. The reset is
+  // now DEFERRED until the write's final reply has been delivered (finalize), then releases.
+  t("FX-V4 reset (next utterance) is deferred until the write's reply is delivered", g.holding, true);
+  g.finalize("Final Paper is saved.");
+  t("FX-V4b ...and releases the hold once that reply is finalized", g.holding, false);
   g.noteToolOutput(N, JSON.stringify({ ok: false, error: "network" }));
   t("FX-V5 a tool-level error holds speech", g.holding, true);
   const hook = readFileSync("src/features/huddle/hooks/useVoiceCallRealtimeSpeak.ts", "utf8");
   t("FX-V6 the hook does not stream-synth while the gate holds", /if \(!nexusGateRef\.current\.holding\) pumpSpeech\(/.test(hook), true);
-  t("FX-V7 the hook speaks the CHECKED text when held", /const full = held \? enforceNexusWriteHonesty\(raw, gate\.uses\) : raw;/.test(hook), true);
+  // loop2 D3: the hook now speaks gate.finalize(raw) (= nexusWriteGuardedReply, the code-built reply) for
+  // EVERY reply, held or not; was `held ? enforceNexusWriteHonesty(raw, gate.uses) : raw`.
+  t("FX-V7 the hook speaks the CHECKED text (gate.finalize)", /const full = gate\.finalize\(raw\);/.test(hook), true);
   t("FX-V8 the hook arms the gate from each tool output", /nexusGateRef\.current\.noteToolOutput\(name, r\.ok \? output/.test(hook), true);
 }
 

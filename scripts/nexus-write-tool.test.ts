@@ -397,7 +397,8 @@ console.log("=== AC-F2-35 — the runtime refuses a success claim on a failed wr
   const dup = { ok: true, persisted: false, results: [{ index: 0, title: "X", action: "duplicate", persisted: false }] };
   const already = "That's already on your list.";
   t("F2-35 a duplicate is not a failure", enforceNexusWriteHonesty(already, [{ tool: NEXUS_WRITE_TOOL_NAME, ok: false, detail: JSON.stringify(dup) }]), already);
-  t("F2-35 the guard is applied in the reply assembly", /const safeText = enforceNexusWriteHonesty\(/.test(textSrc), true);
+  // loop2 D3: the runtime guard is now the structural nexusWriteGuardedReply (was enforceNexusWriteHonesty).
+  t("F2-35 the guard is applied in the reply assembly", /const safeText = nexusWriteGuardedReply\(/.test(textSrc), true);
 }
 
 console.log("=== AC-F2-36 — telemetry says WRITE ===");

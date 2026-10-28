@@ -7,8 +7,9 @@ import { useBackendsStore } from "../lib/agent-backends";
 import { useAuth } from "@/hooks/useAuth";
 import { getRealtimeSession, runRealtimeTool, warmupRealtime, REALTIME_MODEL } from "../lib/voice/realtime.functions";
 // Nexus write honesty on VOICE (W18, docs/FIX-nexus-write-redteam.md): the same code guard the text
-// path runs. Pure module (no server imports), so it is safe in the browser bundle.
-import { createNexusWriteSpeechGate, enforceNexusWriteHonesty } from "../lib/nexus/nexus-write-shared";
+// path runs (loop 2: the gate's finalize = nexusWriteGuardedReply, the code-built reply). Pure module
+// (no server imports), so it is safe in the browser bundle.
+import { createNexusWriteSpeechGate } from "../lib/nexus/nexus-write-shared";
 import { SUMMON_BUZZ_URL, SUMMON_OPEN_DELAY_MS, SUMMON_GREETING_MAX_WAIT_MS, pickSummonGreeting } from "../lib/voice/summon";
 import { synthesizeSpeech } from "../lib/voice/tts.functions";
 import type { VoiceCallController, VoiceStatus, VoiceCaption } from "./useVoiceCall";
@@ -99,8 +100,9 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
   // fullBufRef = the entire reply text so far (for the transcript/caption, persisted once on done).
   const sentenceBufRef = useRef("");
   const fullBufRef = useRef("");
-  // While this exchange holds a Nexus write whose item did NOT persist, the reply is buffered (not
-  // streamed to synth) and spoken only after enforceNexusWriteHonesty has checked it. Reset per utterance.
+  // From the moment a Nexus write call starts, and while any of its items did NOT persist, the reply is
+  // buffered (not streamed to synth) and the gate's finalize() -- the code-built reply -- is what is
+  // spoken. Reset per utterance, deferred until the write's final reply is delivered (loop 2 D4).
   const nexusGateRef = useRef(createNexusWriteSpeechGate());
   const audioQueueRef = useRef<string[]>([]);
   const audioPlayingRef = useRef(false);
@@ -419,8 +421,9 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
               const held = gate.holding;
               if (agentIdRef.current && !held) pumpSpeech(agentIdRef.current, gen, true);
               const raw = (((msg.text as string) ?? "").trim()) || fullBufRef.current.trim();
-              // A held reply is checked against the per-item write results, then spoken as checked.
-              const full = held ? enforceNexusWriteHonesty(raw, gate.uses) : raw;
+              // Loop 2 D3: the reply is the CODE-BUILT text when a write in this exchange did not persist
+              // (nexusWriteGuardedReply, same as the text path); finalize also lets a deferred reset land.
+              const full = gate.finalize(raw);
               if (held) {
                 sentenceBufRef.current = "";
                 if (agentIdRef.current && full) void speak(full, agentIdRef.current, gen);
@@ -487,7 +490,9 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
                 (modeRef.current === "speaking" || sinceAgent < 1200) &&
                 jaccard(t, lastAgentTextRef.current) >= 0.5;
               if (echo || micMutedRef.current) break;
-              nexusGateRef.current.reset(); // a new exchange: earlier write results no longer gate speech
+              // A new exchange: earlier write results stop gating speech -- but only once the write's final
+              // reply has been delivered (the gate defers this reset until then; loop 2 D4).
+              nexusGateRef.current.reset();
               setCaptions((c) => [...c.slice(-40), { role: "user", text: t }]);
               persist("user", agentIdRef.current, t);
               // Track a multi-part ask so we can return to unanswered parts after a barge. Do NOT
@@ -505,6 +510,8 @@ export function useVoiceCallRealtimeSpeak(): VoiceCallRealtimeSpeakController {
               try { args = JSON.parse((msg.arguments as string) || "{}"); } catch { /* noop */ }
               const aId = agentIdRef.current;
               if (!aId) break;
+              // Loop 2 D4: a Nexus write call STARTING holds speech now, not only once a failed result is in.
+              nexusGateRef.current.noteToolCall(name);
               pendingToolsRef.current += 1;
               void runRealtimeTool({
                 data: {
