@@ -4829,3 +4829,13 @@ Owner: *"I haven't been asked in the early morning to check out the schedule for
 - **Shipped:** PR #122 squash `8302cb6`, deploy-swa run 40750842127 success. `lib/push/turn-push.ts` (`turnPushStyle`; email alerts unchanged) + `payload.pushStyle`; priority check "Iris: confirm tomorrow's/today's priorities" sticky; briefs "Iris: today's/tomorrow's schedule" (not sticky) + Open Schedule button + 8am/8pm "adjust anything?" line; one item per line, plain text.
 - **Evidence:** turn-push 9, priority-check 43, schedule-brief 76, dedupe 21, mail-subscription 24, inbound-email 69; tsc 0; build 0; mutate.sh FIRED T4/T7/P-STICK3/J4/J6b/P6. Live: run-priority-check run 40751464060 → turn `priority-check-evening-2026-10-28-manual-20261028190743` reply one priority per line + Open Priorities; push title "Iris: confirm tomorrow's priorities", FCM 1 success.
 - **Status:** live; mechanism verified. NOT owner-confirmed (stays in shade on phone; layout in thread). First scheduled briefs with the new layout: 8pm ET tonight.
+
+## ACT:voice-context-parity — voice 1:1 uses the same memory step + Executive Profile as text (owner 2026-10-28)
+Owner: *"Go on 3 and 4, I don't understand why voice can't trigger the same jobs instead of needing to be configured separately."*
+- [x] One shared retrieval `lib/rag/memory-context.server.ts` used by runAgentTurn AND assembleRealtimeInstructions; voice also gets renderExecutiveContext via the caller. `scripts/memory-context.test.ts` 11/0; 3 mutations FIRED.
+- [x] PR #125 merged (adad7b1), deploy-swa run 40773068187 success.
+- [ ] Owner confirms on a live voice 1:1 that the agent knows their goals (NOT yet confirmed).
+
+## ACT:duplicate-cleanup — remove existing duplicate tasks (owner "go on 3", 2026-10-28)
+- [x] Read journey `public.tasks` (canonical): 4 exact-duplicate groups + near-duplicates via pg_trgm ≥0.55. Presented grouped with a recommended keep per group.
+- [ ] Owner approves rows → DELETE from journey public.tasks only (mirror follows via trigger) → read back 0 remaining.
