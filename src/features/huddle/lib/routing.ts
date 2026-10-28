@@ -536,11 +536,17 @@ export async function resolveOwnerLLM(
   text: string,
   addressedId: AgentId,
   invocation: { backend: "openai" | "lovable"; model: string; fastMode?: boolean },
+  // THE ONE OWNERSHIP JUDGE (owner-chosen, 2026-10-28). Three callers share it so they can never
+  // disagree: the 1:1 hand-off ("dm"), a task created in a 1:1 ("dm", on the task title), and weekly
+  // grooming ("assigned", the task's CURRENT owner as the default). Same rubric for all: keep the
+  // default owner unless the work plainly belongs to another lane.
+  opts: { framing?: "dm" | "assigned" } = {},
 ): Promise<AgentId | null> {
   try {
     if (invocation.backend !== "openai") return null; // failure → caller falls back to laneOwnerFor
     const addressed = AGENTS.find((a) => a.id === addressedId);
     if (!addressed) return null;
+    const assigned = opts.framing === "assigned";
     // Candidate pool = the WHOLE team. Ownership is team-wide: the true owner (e.g. Finn for finance) need
     // NOT be "present" in this 1:1, so restricting to data.members (often just the addressed agent) is wrong
     // — that was the bug that made this a no-op and let the keyword scorer decide.
@@ -552,16 +558,24 @@ export async function resolveOwnerLLM(
     const raw = await callOpenAIRouter<{ owner: string }>({
       model: invocation.model,
       system:
-        "You decide which teammate should OWN a user's request. The user sent it to a specific agent in a " +
-        "1:1, so DEFAULT STRONGLY to keeping it with the agent they addressed — only hand it to a different " +
-        "teammate when the request clearly belongs to that teammate's lane and is outside the addressed " +
-        "agent's. Judge by intent and lane, never by surface words (e.g. a finance analysis that happens to " +
+        (assigned
+          ? "You decide which teammate should OWN a task on the user's board. It already has an owner, so " +
+            "DEFAULT STRONGLY to keeping it with them — only move it when the task clearly belongs to another " +
+            "teammate's lane and is outside the current owner's. "
+          : "You decide which teammate should OWN a user's request. The user sent it to a specific agent in a " +
+            "1:1, so DEFAULT STRONGLY to keeping it with the agent they addressed — only hand it to a different " +
+            "teammate when the request clearly belongs to that teammate's lane and is outside the addressed " +
+            "agent's. ") +
+        "Judge by intent and lane, never by surface words (e.g. a finance analysis that happens to " +
         "want a spreadsheet still belongs to the finance lane, not whoever 'builds' things).",
       prompt:
-        `The user is in a 1:1 with ${addressed.name} (id "${addressed.id}", ${addressed.role}). Team roster:\n${lines}\n\n` +
-        `User's request:\n"""${(text || "").slice(0, 1200)}"""\n\n` +
+        (assigned
+          ? `This task is currently owned by ${addressed.name} (id "${addressed.id}", ${addressed.role}). Team roster:\n${lines}\n\n` +
+            `Task:\n"""${(text || "").slice(0, 1200)}"""\n\n`
+          : `The user is in a 1:1 with ${addressed.name} (id "${addressed.id}", ${addressed.role}). Team roster:\n${lines}\n\n` +
+            `User's request:\n"""${(text || "").slice(0, 1200)}"""\n\n`) +
         `Return {"owner": "<agent id>"}: the id of the teammate who should own this. Use "${addressed.id}" to KEEP ` +
-        `it with the agent they addressed (the default). Only pick a different id when the request plainly belongs ` +
+        `it with ${addressed.name} (the default). Only pick a different id when it plainly belongs ` +
         `to that agent's lane and is outside ${addressed.name}'s. Exactly one id from the roster.`,
       schema: {
         type: "object",

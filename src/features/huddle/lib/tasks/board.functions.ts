@@ -82,3 +82,27 @@ export const updateBoardTask = createServerFn({ method: "POST" })
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   });
+
+// The owner deleting one of their own tasks from a card (behind a confirm). journey is canonical, so
+// the delete goes there (execute-tool `delete_task`, scoped to the caller's user id); the
+// notify_huddle_task_sync trigger then removes the mirror row (~1-3s). Permanent — the card's confirm
+// says so. Agents never call this: it is a UI action, not a model tool.
+export const deleteBoardTask = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, taskId: z.string().min(1) }).parse(raw),
+  )
+  .handler(async ({ data }): Promise<{ ok: boolean; error: string }> => {
+    if (!data.caller?.entra_email) return { ok: false, error: "Sign-in required." };
+    try {
+      const { invokeJourneyTool } = await import("../journey/proxy.functions");
+      const r = await invokeJourneyTool({
+        toolName: "delete_task",
+        args: { task_id: data.taskId },
+        caller: data.caller,
+        context: { source: "huddle" },
+      });
+      return { ok: r.ok, error: r.error ?? "" };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });

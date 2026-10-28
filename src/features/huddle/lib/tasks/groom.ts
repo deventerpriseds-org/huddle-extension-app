@@ -141,6 +141,23 @@ export function laneRanks(sortedIds: readonly string[], max: number = PRIORITY_L
   return m;
 }
 
+/**
+ * Who a task's owner is BEFORE the ownership judge runs: its current assignee when that is a real
+ * agent, else the batch model's pick (an unassigned task). Pure, exported for the test.
+ */
+export function incumbentOwner(current: string | null | undefined, batchPick: string): string {
+  return current && AGENT_IDS.has(current as AgentId) ? current : batchPick;
+}
+
+/** Run `fn` over `items` with at most `limit` in flight (no dependency for one call site). */
+async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let i = 0;
+  const worker = async () => {
+    while (i < items.length) await fn(items[i++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     p,
@@ -279,6 +296,43 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
       return JSON.stringify({ error: "groom_no_assignments", message: "Classification returned nothing — try again." });
     }
 
+    // ONE OWNERSHIP JUDGE (owner-chosen "B", 2026-10-28). The owner is decided by the SAME resolver the
+    // 1:1 hand-off and 1:1 task creation use (routing.ts resolveOwnerLLM), with the task's CURRENT owner
+    // as the default it keeps unless the task plainly belongs to another lane. Before this, the batch
+    // model's "keep the existing assignee if still a reasonable fit" rule protected a wrong owner
+    // forever: two writing tasks Flex (fitness) created on Oct 9 and handed to Elle stayed Flex's across
+    // every Monday groom. The batch model's pick is now only the default for an UNASSIGNED task, and on
+    // any judge failure the incumbent stays — so a failure can never reshuffle owners.
+    const _tJ0 = Date.now();
+    try {
+      const { resolveOwnerLLM } = await import("../routing");
+      const { DEFAULT_ROUTER_MODEL } = await import("../model-catalog");
+      const byId = new Map(slice.map((t) => [t.id, t]));
+      // Bounded: grooming also runs inside a chat turn (the hosting ceiling is ~45s), so the judge gets a
+      // fixed budget. A task the budget doesn't reach keeps the batch pick — exactly the old behaviour.
+      const JUDGE_BUDGET_MS = 12_000;
+      await mapLimit(assignments, 10, async (a) => {
+        if (Date.now() - _tJ0 > JUDGE_BUDGET_MS) return;
+        const t = byId.get(a.id);
+        if (!t) return;
+        const incumbent = incumbentOwner(t.assigned_agent, a.assigned_agent);
+        const judged = await withTimeout(
+          resolveOwnerLLM(
+            t.title,
+            incumbent as AgentId,
+            { backend: "openai", model: DEFAULT_ROUTER_MODEL.openai },
+            { framing: "assigned" },
+          ),
+          6_000,
+          "owner-judge",
+        ).catch(() => null);
+        a.assigned_agent = judged ?? incumbent;
+      });
+    } catch {
+      /* judge unavailable — every assignment keeps the batch pick, exactly as before */
+    }
+    const _judgeMs = Date.now() - _tJ0;
+
     // Normalize ranks to a dense 1..N ordering (1 = do first) for the priority lane.
     //
     // THE LANE IS CAPPED, AND THAT CAP IS THE POINT. Grooming used to rank EVERY task it assigned —
@@ -400,7 +454,7 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
       groomed: written,
       promoted,
       total: assignments.length,
-      _timings: { readMs: _readMs, classifyMs: _classifyMs, writeMs: _writeMs, tasks: slice.length },
+      _timings: { readMs: _readMs, classifyMs: _classifyMs, judgeMs: _judgeMs, writeMs: _writeMs, tasks: slice.length },
       note:
         (written === 0
           ? "Planned the assignments, but the write to the task board didn't confirm — try again in a moment."

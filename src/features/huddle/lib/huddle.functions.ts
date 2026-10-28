@@ -114,6 +114,7 @@ import {
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
 import {
   assignCreatedJourneyTasks,
+  isOneToOne,
   pickCreatedTaskAssignee,
   resolveExplicitOwner,
 } from "./tasks/assign-on-create";
@@ -2865,10 +2866,30 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // Did the agent actually NAME an owner? Kept separate from the card's ownerId because that
       // one falls back to the responder, and the group rule below turns on the difference.
       const namedOwner = resolveNamedTaskOwner(args.ownerId ?? args.owner ?? args.assignee);
+      // 1:1 with no named owner: whose LANE is this task? Resolved from the task title with the SAME
+      // two resolvers the 1:1 owner hand-off uses (capability owner, then the semantic lane owner), so
+      // the task's assignee and the agent it was handed to can no longer disagree (2026-10-28: Flex's
+      // writing tasks went to Elle as a hand-off but stayed assigned to Flex). Never the keyword
+      // laneOwnerFor — it mis-routes; on any failure the responder stays the owner, as before.
+      let laneOwner: AgentId | null = null;
+      if (!namedOwner && isOneToOne(data.scope, data.huddleId)) {
+        laneOwner = capabilityOwnerFor(title)?.agent.id ?? null;
+        if (!laneOwner && routerCfg.backend === "openai" && openaiKey) {
+          try {
+            laneOwner = await resolveOwnerLLM(title, winner.id, {
+              backend: "openai",
+              model: routerCfg.model,
+              fastMode: routerCfg.fastMode,
+            });
+          } catch {
+            laneOwner = null;
+          }
+        }
+      }
       const task: SuggestedTaskDraft = {
         id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
         title: title.slice(0, 160),
-        ownerId: namedOwner ?? winner.id,
+        ownerId: namedOwner ?? laneOwner ?? winner.id,
         lane: resolveTaskLane(args.lane ?? args.status),
         progress: typeof args.progress === "number" ? args.progress : undefined,
         blockReason: typeof args.blockReason === "string" ? args.blockReason : undefined,
@@ -2917,6 +2938,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               huddleId: data.huddleId,
               responderId: winner.id,
               explicitOwner: namedOwner,
+              laneOwner,
             });
             const assignment = assignee
               ? await assignCreatedJourneyTasks({

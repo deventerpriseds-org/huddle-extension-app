@@ -81,6 +81,42 @@ check(
   a1.id,
 );
 
+console.log("\npickCreatedTaskAssignee — 1:1 prefers the task's LANE owner (2026-10-28: Flex kept Elle's writing tasks)");
+check(
+  "1:1, lane owner resolved -> the lane owner, not the responder",
+  pickCreatedTaskAssignee({ scope: "one-to-one", huddleId: `dm-${a0.id}`, responderId: a0.id, explicitOwner: null, laneOwner: a1.id }),
+  a1.id,
+);
+check(
+  "1:1, lane owner is the responder -> the responder",
+  pickCreatedTaskAssignee({ scope: "one-to-one", huddleId: `dm-${a0.id}`, responderId: a0.id, explicitOwner: null, laneOwner: a0.id }),
+  a0.id,
+);
+check(
+  "1:1, lane resolver failed (null) -> falls back to the responder",
+  pickCreatedTaskAssignee({ scope: "one-to-one", huddleId: `dm-${a0.id}`, responderId: a0.id, explicitOwner: null, laneOwner: null }),
+  a0.id,
+);
+check(
+  "1:1, a NAMED owner still beats the lane owner",
+  pickCreatedTaskAssignee({ scope: "one-to-one", huddleId: `dm-${a0.id}`, responderId: a0.id, explicitOwner: a0.id, laneOwner: a1.id }),
+  a0.id,
+);
+check(
+  "group ignores a lane owner (group rule unchanged: only a named owner)",
+  pickCreatedTaskAssignee({ scope: "group", huddleId: "all-members", responderId: a0.id, explicitOwner: null, laneOwner: a1.id }),
+  null,
+);
+
+console.log("\nSTRUCTURAL — the 1:1 create site resolves the lane owner from the TASK and passes it through");
+{
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/features/huddle/lib/huddle.functions.ts", import.meta.url), "utf8");
+  check("capability owner, then the semantic resolver, on the task title", /laneOwner = capabilityOwnerFor\(title\)\?\.agent\.id \?\? null;[\s\S]{0,200}?resolveOwnerLLM\(title, winner\.id/.test(src), true);
+  check("the lane owner reaches the assignee picker", /explicitOwner: namedOwner,\s*laneOwner,\s*\}\)/.test(src), true);
+  check("the board card shows the same owner", /ownerId: namedOwner \?\? laneOwner \?\? winner\.id,/.test(src), true);
+}
+
 console.log("\npickCreatedTaskAssignee — GROUP assigns ONLY an explicitly named owner");
 check(
   "group, nobody named -> null (left for grooming, NOT dumped on the lead)",
