@@ -176,7 +176,7 @@ function rosterForPrompt(): string {
 export async function dispatchGroomBacklog(
   caller: Caller | undefined,
   args: Record<string, unknown>,
-  opts?: { maxLimit?: number },
+  opts?: { maxLimit?: number; judgeBudgetMs?: number },
 ): Promise<string> {
   if (!caller?.entra_email) {
     return JSON.stringify({ error: "no_caller_identity", message: "Grooming needs the signed-in user's email." });
@@ -316,9 +316,11 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     try {
       const { resolveOwnerLLM } = await import("../routing");
       const { DEFAULT_ROUTER_MODEL } = await import("../model-catalog");
-      // Bounded: grooming also runs inside a chat turn (the hosting ceiling is ~45s), so the judge gets a
-      // fixed budget; a task the budget doesn't reach keeps its incumbent.
-      const JUDGE_BUDGET_MS = 8_000;
+      // Bounded. In a chat turn (the hosting ceiling is ~45s, and classify + write + autowork already
+      // take most of it) the judge gets 3s; the scheduled weekly groom, which runs outside a chat turn,
+      // passes a larger budget (grooming.server.ts). A task the budget doesn't reach keeps its incumbent.
+      // VERIFY-ownership-judge-delete-2.md AC3: an in-chat worst case of ~63.5s at the old 8s budget.
+      const JUDGE_BUDGET_MS = opts?.judgeBudgetMs ?? 3_000;
       await mapLimit(assignments, 16, async (a) => {
         if (Date.now() - _tJ0 > JUDGE_BUDGET_MS) return;
         const t = byId.get(a.id);

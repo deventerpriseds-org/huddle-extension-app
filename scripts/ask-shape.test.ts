@@ -69,6 +69,7 @@ check("produce honours the journey toggle (no board write / auto-work from a har
 check("any non-acceptance retires the offer", /return runProduce\(agentId, pending\.askText, "produce-offer: accepted"\);\s*\}[\s\S]{0,400}?\n\s*await clearPendingDeepConfirm\(email, data\.huddleId\);\s*\} else if \(pending\)/.test(turnSrc), true);
 check("no produce offer after a 1:1 hand-off", /if \(followupDelivered\.size > 0\) return;/.test(turnSrc.slice(turnSrc.indexOf("const ensureProduceOfferDelivered"))), true);
 check("focus_on refuses when journey is off (both backends)", (turnSrc.match(/if \(!agentBackend\.journey\?\.enabled\) \{\s*recordToolUse\(winner\.id, (?:c\.name|"focus_on"), "focus_on -- journey disabled/g) ?? []).length, 2);
+check("voice only offers focus_on when journey is on", /\.\.\.\(opts\.journey !== false \? \[FOCUS_TOOL\] : \[\]\)/.test(readFileSync(new URL("../src/features/huddle/lib/voice/realtime-tools.server.ts", import.meta.url), "utf8")), true);
 check("a failed gate still pins the tier", /proceeding without gate\.`,\s*\);[\s\S]{0,600}?deepManual = routeDeepAsk\(askShape\) === "act-now" \? "budget" : "terra-med";/.test(turnSrc), true);
 check("no fresh ask is diverted to runProduce", /deep-ask: green-lit/.test(turnSrc), false);
 

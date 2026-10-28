@@ -45,6 +45,8 @@ check("…and that call is time-boxed on the reply path", /laneOwner = await Pro
 check("a produce task is assigned through the same judge", /resolveOwnerLLM\(askText, agentId,[\s\S]{0,800}?agentId: owner \?\? agentId,/.test(turn), true);
 check("the delete action is user-only at the journey chokepoint", /UI_ONLY_JOURNEY_TOOLS\.has\(req\.toolName\) && !opts\.allowUiOnly/.test(read("../src/features/huddle/lib/journey/proxy.functions.ts")), true);
 check("the 1:1 hand-off asks the same judge", /resolveOwnerLLM\(data\.text, nextId,/.test(turn), true);
+check("in-chat grooming gives the judge a short budget", /const JUDGE_BUDGET_MS = opts\?\.judgeBudgetMs \?\? 3_000;/.test(groom), true);
+check("the scheduled groom passes a longer judge budget", /judgeBudgetMs: 20_000/.test(read("../src/features/huddle/lib/tasks/grooming.server.ts")), true);
 check("the judge has the assigned-task framing", /const assigned = opts\.framing === "assigned";/.test(routing), true);
 
 console.log(failures ? `\n${failures} FAILED` : "\nALL PASS");

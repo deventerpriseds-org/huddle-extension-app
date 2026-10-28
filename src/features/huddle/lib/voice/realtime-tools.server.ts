@@ -173,7 +173,17 @@ export async function buildRealtimeToolset(
 ): Promise<{ tools: unknown[]; journeyNames: Set<string> }> {
   const agent = AGENT_BY_ID[agentId];
   // FOCUS_TOOL: "start these" by voice — the same core as the Priorities tab input (focus.server.ts).
-  const raw: unknown[] = [PRIORITIZE_TOOL, FOCUS_TOOL, SCHEDULE_REMINDER_TOOL, GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL, ...nexusReadTools()];
+  // FOCUS_TOOL creates and starts real board tasks, so it rides the same journey switch as the journey
+  // catalog below: a session minted with journey off is never offered it (VERIFY-ownership-judge-
+  // delete-2.md AC8 — the text paths refuse it since cf2305e; voice still offered it unconditionally).
+  const raw: unknown[] = [
+    PRIORITIZE_TOOL,
+    ...(opts.journey !== false ? [FOCUS_TOOL] : []),
+    SCHEDULE_REMINDER_TOOL,
+    GET_CALENDAR_EVENTS_TOOL,
+    GET_EXTERNAL_CALENDAR_EVENTS_TOOL,
+    ...nexusReadTools(),
+  ];
 
   if (opts.webSearch !== false) raw.push(TAVILY_WEB_SEARCH_TOOL);
   if (agentOwnsCapability(agent, "backlog-grooming")) raw.push(GROOM_BACKLOG_TOOL);
