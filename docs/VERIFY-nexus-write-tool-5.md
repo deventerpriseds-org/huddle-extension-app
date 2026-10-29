@@ -110,3 +110,90 @@ matches the coursework capability (course code + exam/deadline, no veto word) re
 (huddle.functions.ts:6890-6897) `keep` means no follow-up and the semantic `resolveOwnerLLM` judge is never called;
 on main the judge runs (it may DM Troy/Finn/Flex/Cam). The directive (`laneOwnerFor`) is null on both trees, so
 Iris/Elle answer on both; the only difference is a suppressed LLM-judged follow-up DM. Warm cache only.
+
+**F2-45 / travel-finance-fitness rows with the D14 shape** (`probe-l5-f245.ts`, PR vs main):
+
+| Ask (addressed) | PR group / prime | main group / lane |
+|---|---|---|
+| "move my flight home, my exam in Nexus got moved to Monday" (Troy) | **iris / iris** | troy / keep |
+| "change my hotel checkout, the final exam in Nexus is Saturday now" (Troy) | **iris / iris** | troy / keep |
+| "move my run to the evening so I can finish my essay in Nexus" (Flex) | elle / elle | elle / elle (same) |
+| "set a budget for the textbooks for my projects in Nexus" (Finn) | **iris / iris** | finn / keep |
+
+A comma does not end the override's clause (`[^.?!;\n]`), so "move my flight home, my exam in Nexus …" reads as
+"move … exam … in Nexus". The `flight`/`hotel`/`budget` vetoes never run because the override is checked first.
+
+## C8 — mutations (mutate.sh; anchors cut from source and count-checked by `mut-verify-114-5/make-anchors.py`;
+runner `run-mutations.sh`; output `mutations.out`)
+
+| id | Defect reinstated | Suite | Named test | Verdict (verbatim) |
+|---|---|---|---|---|
+| r1 | `capabilityHandsOffInOneToOne` ignores the `oneToOneHandoff` flag (always hands off) | nexus-write-routing | `Finn makes no deterministic hand-off` | FIRED |
+| r2 | override without the assignment-noun group (any object, loop-4 shape) | nexus-write-routing | `R13-ovr-neg` | FIRED |
+| r3 | `primeHint` for every non-assigned `resolveOwnerLLM` caller (task creation gets the hint) | nexus-write-routing | `R-M0-task creation` | FIRED |
+| r4 | merge takes main's side: voice `raw` loses `...nexusWriteTools()` | nexus-write-tool | `voice toolset pushes the write tools` | FIRED |
+| r5 | merge takes the PR's old side: FOCUS_TOOL offered with journey off | ask-shape | `voice only offers focus_on when journey is on` | FIRED |
+| r6 | "account" put back in `NEXUS_PROGRAM_WORDS` | nexus-write-routing | `add my essay to my Nexus account` | FIRED |
+| r7 | `oneToOneHandoff: "explicit-override"` removed from the capability DATA | nexus-write-routing | `R13-ovr-data` | FIRED |
+
+Every run printed `restored: … matches HEAD` and `tree clean: … passes again`. **7 FIRED, 0 INERT, 0 NOT-APPLIED.**
+r1, r2, r3, r4, r5 are the five loop-4 guards named in the brief. r4 and r5 are caught only by source-shape regexes
+(`F2-31 (2)` greps the `raw` list; ask-shape greps the FOCUS line); r1/r2/r3/r6/r7 are caught behaviourally.
+**C8: CONFIRMED.**
+
+### Rewritten assertions — legitimacy
+
+| Test | Before (38e1b17) | After (ec6127a) | Judgement |
+|---|---|---|---|
+| L2-D5g / L3-D6g | 1:1 Finn hands every coursework row to Elle/Iris (`laneOwnerFor`) | Elle/Iris only when `capabilityExplicitOverride`, else `primeLaneDecision === null` | Legitimate: implements the owner's D13 rule. Narrower: the non-override branch asserts no PRIME hand-off but not equality with main's `laneOwnerFor` (R13 rows do check main equality for the D13 rows). |
+| R-CW (R-X rows) | 1:1 Finn hands each to Elle/Iris | same D13 rule | Legitimate (same rule). |
+| F2-43 | `laneOwnerFor` never names a third lane | `primeLaneDecision` never names a third lane | Legitimate but narrower: non-override coursework now takes main's `laneOwnerFor`, which can name a third lane (e.g. Eli for a due-date ask) -- owner-accepted residual in FIX-nexus-write-loop4.md. |
+| R-A4 | prime directory in every 1:1 resolver prompt | only with `{ primeHint: true }` + R-M0 variants | Legitimate, strengthened (r3 FIRED). |
+
+None of the rewrites hides D14: the suite has no row where Nexus is the SOURCE and another lane's object is the
+destination. Its OVR_POS list itself contains "move my hotel case study to Dec 4 in Nexus" (Troy) as an intended
+override, which is a coursework object -- fine -- but the same shape with a non-coursework object
+("move my flight home, my exam in Nexus …") is untested.
+
+## C1 — Feature 2 ACs
+
+F2-41/42/43 MET as the owner re-scoped them (P1/P4/P5/P7 hand off on explicit writes; P8/P2 do not; Elle/Iris keep).
+F2-35 MET (C3 unchanged). **F2-45 NOT MET**: "move my flight home, my exam in Nexus got moved to Monday" and "change my
+hotel checkout, the final exam in Nexus is Saturday now" (Troy) and "set a budget for the textbooks for my projects in
+Nexus" (Finn) lead the GROUP with Iris and hand off deterministically in the 1:1, where main keeps Troy/Finn; Flex's
+"move my workout to tomorrow so I can finish my paper in Nexus" likewise (group Flex -> Iris). F2-10/F2-14 "shared
+with F1" NOT MET by construction (cross-repo, unchanged since loop 1). **C1: REFUTED (F2-45 via D14).**
+
+## Defects (pre-merge classification)
+
+| # | Defect | Class | Likelihood | Repro |
+|---|---|---|---|---|
+| **D14** | Explicit override reads "in Nexus" as the write DESTINATION when Nexus is the source or a side remark, and runs before every veto; a comma does not end the clause. Eli: "add my assignments in Nexus to my calendar", "add the exam dates in Nexus to my calendar", "set reminders for every assignment in Nexus", "reschedule my study session, the exam in Nexus moved to Friday"; Troy: "move my flight home, my exam in Nexus got moved to Monday"; Finn: "set a budget for the textbooks for my projects in Nexus"; Flex: "move my workout to tomorrow so I can finish my paper in Nexus". 1:1 = deterministic "not your lane" directive + follow-up DM to Iris/Elle; 6 rows also move the GROUP leader. main keeps every one. | **BLOCKING** (other lane's ask taken, group and 1:1) | **moderate** for the calendar phrasing (pulling Nexus dates into a calendar is an everyday student ask to the calendar agent); low-moderate for the travel/fitness/finance side-remark shapes. Deterministic -- reproduces every time, warm and cold. | `bun mut-verify-114-5/probe-l5-routing.ts <tree> warm|cold`, `probe-l5-extra.ts`, `probe-l5-f245.ts` (PR vs main export) |
+| D15 | Elle/Iris addressed in a 1:1 with another lane's ask that matches the coursework capability (course code + exam/deadline, no veto) -> `keep`: no follow-up and no LLM owner judge; main runs the judge (may DM Troy/Finn/Cam/Flex). Who answers is the same on both trees. Pre-existing (loop 3), not introduced by the loop-4 fix. | NON-BLOCKING (no wrong row, no false claim, the addressed agent answers on both) | low-moderate (needs Elle/Iris addressed with another lane's ask) | `probe-l5-routing.ts` rows K1-K9 |
+| N16 | "draft a pitch deck for my startup, the MGT-701 deadline is Friday": GROUP Elle (warm) vs main Sam; cold = Sam; 1:1 same | NON-BLOCKING (arguably a course deliverable -- owner's call) | low | `probe-l5-routing.ts` N16 |
+| W4, H15, O13, q6-cov, D7-gap/over, D8-far | unchanged from loop 4 (probes byte-identical) | as loop 4 | as loop 4 | loop-4 probes |
+| focus F22 | `scripts/focus.test.ts` F22 fails 24/1 | **pre-existing on origin/main** (identical failure on a `git archive origin/main` export); not #114 | n/a | `bun scripts/focus.test.ts` on both trees |
+
+Fixed and confirmed this loop: **M0** (merge-tree exit 0; main already an ancestor), **D13** (all 18 vocabulary rows =
+main), **D13-ovr** (O3/O4/O8 = main), **#124 `resolveOwnerLLM`** (prime hint only via `primeHint: true` on the chat
+hand-off; r3 FIRED; grooming/task creation never get it -- R-M0-site checks pass).
+
+## Verdict
+
+| Claim | Verdict |
+|---|---|
+| M0 merge with origin/main | CONFIRMED (merge-tree exit 0; `git merge` no-op) |
+| C1 F2 ACs | REFUTED (F2-45 via D14) |
+| C2 owner rules | CONFIRMED (loop-4 probe byte-identical) |
+| C3 honesty | CONFIRMED as scoped (byte-identical; residual W4 very low, H15 owner-accepted) |
+| C4 routing | REFUTED (D14; D13 and D13-ovr as reported are fixed) |
+| C5 identity/url/headers | CONFIRMED |
+| C6 read-only | CONFIRMED |
+| C7 suites + tsc | CONFIRMED (12 suites incl. routing 1315/0; #124's 4 suites ALL PASS; tsc 0; focus F22 pre-existing on main) |
+| C8 mutations | CONFIRMED (7/7 FIRED, incl. the 5 named loop-4 guards) |
+| C9 new realistic phrasings | REFUTED (D14 on 10 of 17 override-shaped other-lane asks + 3 of 4 F2-45 rows; D15 NON-BLOCKING) |
+
+**Overall: REFUTED -- one BLOCKING defect (D14).** The write path, the voice gate, owner/URL/header pinning, the
+merge with main, the D13 vocabulary fix and the #124 primeHint scoping all hold. What does not: the explicit-override
+pattern (checked before every veto, in group and 1:1) treats "… <assignment noun> … in Nexus" as a write to Nexus even
+when the request is to put Nexus dates on the calendar, move a flight, or set a budget.
