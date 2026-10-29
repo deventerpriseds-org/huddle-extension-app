@@ -1,0 +1,1 @@
+  if (cap.oneToOneHandoff === "explicit-override") return capabilityExplicitOverride(cap, text);

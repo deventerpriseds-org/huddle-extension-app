@@ -1,0 +1,14 @@
+S1	intent=perform	prime=iris-chase	lane=iris-chase	eli-vaughn	put my MGT-782 exam on the calendar
+S2	intent=perform	prime=iris-chase	lane=iris-chase	eli-vaughn	add the MGT-782 final exam to the calendar, it's Dec 12
+S3	intent=perform	prime=-	lane=-	eli-vaughn	put the EMBA694 midterm in my calendar
+S4	intent=perform	prime=iris-chase	lane=iris-chase	eli-vaughn	can you get the MGT-782 exam onto my schedule
+S5	intent=perform	prime=elle-rowan	lane=elle-rowan	cam-post	share the slides with my MGT-782 group before Friday's deadline
+S6	intent=perform	prime=elle-rowan	lane=elle-rowan	cam-post	send the MGT-782 group my draft before the deadline
+S7	intent=perform	prime=elle-rowan	lane=elle-rowan	cam-post	reply to my MGT-782 professor about the exam
+S8	intent=perform	prime=iris-chase	lane=iris-chase	troy-lennox	book a room for the MGT-701 residency, it's due by Friday
+S9	intent=perform	prime=iris-chase	lane=iris-chase	troy-lennox	I need a ride to my MGT-782 exam
+S10	intent=perform	prime=elle-rowan	lane=elle-rowan	finn-reid	order the EMBA694 textbook before the exam
+S11	intent=perform	prime=iris-chase	lane=iris-chase	charleston-lewis	meal prep for my MGT-782 exam week
+S12	intent=query	prime=iris-chase	lane=iris-chase	charleston-lewis	what should I cook the night before my MGT-782 exam
+S13	intent=perform	prime=-	lane=-	flex-grimes	should I skip the gym the week of my MGT-782 exam
+S14	intent=perform	prime=iris-chase	lane=iris-chase	flex-grimes	stretch routine before my MGT-782 exam

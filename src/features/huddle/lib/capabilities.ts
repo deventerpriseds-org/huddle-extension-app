@@ -307,7 +307,8 @@ export function capabilityContextPresent(cap: AgentCapability, text: string): bo
   const anyPattern = (ps?: Array<[string, string]>) => (ps ?? []).some(([src, flags]) => new RegExp(src, flags).test(raw));
   const anySource = (names?: string[]) => (names ?? []).some((n) => CONTEXT_SOURCES[n]?.(raw) === true);
   // An EXPLICIT request naming the capability's own system as the destination beats the vetoes (owner, 2026-10-29).
-  if (anyPattern(ctx.explicitOverride)) return true;
+  // D14: tested per clause, with competing destinations cancelling (`explicitOverrideMatches`).
+  if (explicitOverrideMatches(ctx, raw)) return true;
   if (anyWord(ctx.vetoes) || anyPattern(ctx.vetoPatterns)) return false;
   if (anyWord(ctx.strong) || anyPattern(ctx.strongPatterns) || anySource(ctx.strongSources)) return true;
   if (anyWord(ctx.weak) || anyPattern(ctx.weakPatterns)) return true;
@@ -324,7 +325,28 @@ export function capabilityExplicitOverride(cap: AgentCapability, text: string): 
   if (!ctx?.explicitOverride?.length) return false;
   let raw = String(text ?? "");
   for (const p of ctx.ignore ?? []) raw = raw.replace(new RegExp(escapeRe(p), "gi"), " ");
-  return ctx.explicitOverride.some(([src, flags]) => new RegExp(src, flags).test(raw));
+  return explicitOverrideMatches(ctx, raw);
+}
+
+/**
+ * D14 (docs/FIX-nexus-write-loop4.md, "D14 -- override needs Nexus as the destination"): the explicit override is
+ * evaluated ONE CLAUSE AT A TIME (`explicitOverrideClauseBreak` DATA splits the ask), and a clause counts only when an
+ * `explicitOverride` pattern matches it and NO `explicitOverrideCancels` pattern does (a competing destination such as
+ * "to my calendar", or another lane's object such as a reminder, flight or budget, in that same clause). Generic over
+ * the capability's data; `raw` has already had `ignore` phrases removed.
+ */
+function explicitOverrideMatches(ctx: NonNullable<AgentCapability["requiresContext"]>, raw: string): boolean {
+  const overrides = ctx.explicitOverride ?? [];
+  if (!overrides.length) return false;
+  const brk = ctx.explicitOverrideClauseBreak;
+  const clauses = brk ? raw.split(new RegExp(brk[0], brk[1].includes("g") ? brk[1] : `${brk[1]}g`)) : [raw];
+  const cancels = ctx.explicitOverrideCancels ?? [];
+  return clauses.some((c) => {
+    const clause = c.trim();
+    if (!clause) return false;
+    if (!overrides.some(([src, flags]) => new RegExp(src, flags).test(clause))) return false;
+    return !cancels.some(([src, flags]) => new RegExp(src, flags).test(clause));
+  });
 }
 
 /**

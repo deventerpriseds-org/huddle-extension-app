@@ -1,0 +1,1 @@
+in\\s+(?:my\\s+)?nexus\\b${NEXUS_NOT_THE_APP})

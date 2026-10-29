@@ -1,0 +1,92 @@
+== probe-l5-routing warm (main vs after)
+9c9
+< N9	warm	intent=perform	group=eli-vaughn	lane=-	cam-post	email my professor and then update the due date in Nexus
+---
+> N9	warm	intent=perform	group=elle-rowan	lane=elle-rowan	cam-post	email my professor and then update the due date in Nexus
+16c16
+< N16	warm	intent=perform	group=sam-trent	lane=-	sam-trent	draft a pitch deck for my startup, the MGT-701 deadline is Friday
+---
+> N16	warm	intent=perform	group=elle-rowan	lane=-	sam-trent	draft a pitch deck for my startup, the MGT-701 deadline is Friday
+18,19c18,19
+< P4	warm	intent=perform	group=liam-kingsley	lane=-	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+< P5	warm	intent=perform	group=elle-rowan	lane=-	cam-post	please put the EMBA694 case analysis into my Nexus
+---
+> P4	warm	intent=perform	group=iris-chase	lane=iris-chase	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+> P5	warm	intent=perform	group=elle-rowan	lane=elle-rowan	cam-post	please put the EMBA694 case analysis into my Nexus
+21,23c21,23
+< P7	warm	intent=perform	group=eli-vaughn	lane=eli-vaughn	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+< P8	warm	intent=perform	group=liam-kingsley	lane=-	finn-reid	help me outline my MGT-782 strategy paper due Friday
+< P9	warm	intent=query	group=tess-sutton	lane=-	iris-chase	what's due in Nexus this week
+---
+> P7	warm	intent=perform	group=iris-chase	lane=iris-chase	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+> P8	warm	intent=perform	group=iris-chase	lane=-	finn-reid	help me outline my MGT-782 strategy paper due Friday
+> P9	warm	intent=query	group=iris-chase	lane=-	iris-chase	what's due in Nexus this week
+== probe-l5-routing cold (main vs after)
+9c9
+< N9	cold	intent=perform	group=eli-vaughn	lane=-	cam-post	email my professor and then update the due date in Nexus
+---
+> N9	cold	intent=perform	group=elle-rowan	lane=elle-rowan	cam-post	email my professor and then update the due date in Nexus
+18,19c18,19
+< P4	cold	intent=perform	group=liam-kingsley	lane=-	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+< P5	cold	intent=perform	group=elle-rowan	lane=-	cam-post	please put the EMBA694 case analysis into my Nexus
+---
+> P4	cold	intent=perform	group=iris-chase	lane=iris-chase	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+> P5	cold	intent=perform	group=elle-rowan	lane=elle-rowan	cam-post	please put the EMBA694 case analysis into my Nexus
+21c21
+< P7	cold	intent=perform	group=eli-vaughn	lane=eli-vaughn	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+---
+> P7	cold	intent=perform	group=iris-chase	lane=iris-chase	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+23c23
+< P9	cold	intent=query	group=tess-sutton	lane=-	iris-chase	what's due in Nexus this week
+---
+> P9	cold	intent=query	group=iris-chase	lane=-	iris-chase	what's due in Nexus this week
+== probe-l5-extra warm (main vs after)
+(empty)
+== probe-l5-extra cold (main vs after)
+(empty)
+== probe-l5-f245 warm (main vs after)
+(empty)
+== probe-l5-f245 cold (main vs after)
+(empty)
+== probe-d14-all warm (main vs after)
+9c9
+< N9	warm	group=eli-vaughn	lane=-	cam-post	email my professor and then update the due date in Nexus
+---
+> N9	warm	group=elle-rowan	lane=elle-rowan	cam-post	email my professor and then update the due date in Nexus
+16c16
+< N16	warm	group=sam-trent	lane=-	sam-trent	draft a pitch deck for my startup, the MGT-701 deadline is Friday
+---
+> N16	warm	group=elle-rowan	lane=-	sam-trent	draft a pitch deck for my startup, the MGT-701 deadline is Friday
+18,19c18,19
+< P4	warm	group=liam-kingsley	lane=-	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+< P5	warm	group=elle-rowan	lane=-	cam-post	please put the EMBA694 case analysis into my Nexus
+---
+> P4	warm	group=iris-chase	lane=iris-chase	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+> P5	warm	group=elle-rowan	lane=elle-rowan	cam-post	please put the EMBA694 case analysis into my Nexus
+21,23c21,23
+< P7	warm	group=eli-vaughn	lane=eli-vaughn	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+< P8	warm	group=liam-kingsley	lane=-	finn-reid	help me outline my MGT-782 strategy paper due Friday
+< P9	warm	group=tess-sutton	lane=-	iris-chase	what's due in Nexus this week
+---
+> P7	warm	group=iris-chase	lane=iris-chase	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+> P8	warm	group=iris-chase	lane=-	finn-reid	help me outline my MGT-782 strategy paper due Friday
+> P9	warm	group=iris-chase	lane=-	iris-chase	what's due in Nexus this week
+== probe-d14-all cold (main vs after)
+9c9
+< N9	cold	group=eli-vaughn	lane=-	cam-post	email my professor and then update the due date in Nexus
+---
+> N9	cold	group=elle-rowan	lane=elle-rowan	cam-post	email my professor and then update the due date in Nexus
+18,19c18,19
+< P4	cold	group=liam-kingsley	lane=-	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+< P5	cold	group=elle-rowan	lane=-	cam-post	please put the EMBA694 case analysis into my Nexus
+---
+> P4	cold	group=iris-chase	lane=iris-chase	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+> P5	cold	group=elle-rowan	lane=elle-rowan	cam-post	please put the EMBA694 case analysis into my Nexus
+21c21
+< P7	cold	group=eli-vaughn	lane=eli-vaughn	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+---
+> P7	cold	group=iris-chase	lane=iris-chase	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+23c23
+< P9	cold	group=tess-sutton	lane=-	iris-chase	what's due in Nexus this week
+---
+> P9	cold	group=iris-chase	lane=-	iris-chase	what's due in Nexus this week

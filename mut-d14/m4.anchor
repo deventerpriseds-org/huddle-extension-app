@@ -1,0 +1,1 @@
+\\b(?<!\\bfor\\s+(?:(?:my|the|a|an|our|this|that)\\s+)?(?:[a-z0-9'-]+\\s+){0,2})(?:${NEXUS_ASSIGNMENT_OBJECTS

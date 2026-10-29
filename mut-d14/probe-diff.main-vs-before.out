@@ -1,0 +1,244 @@
+== probe-l5-routing warm (main vs before)
+1,3c1,3
+< N1	warm	intent=perform	group=elle-rowan	lane=-	eli-vaughn	set a reminder to submit my MGT-782 paper in Nexus Friday
+< N2	warm	intent=perform	group=iris-chase	lane=-	eli-vaughn	add the exam dates in Nexus to my calendar
+< N3	warm	intent=perform	group=iris-chase	lane=-	eli-vaughn	put the due dates in Nexus on my calendar
+---
+> N1	warm	intent=perform	group=elle-rowan	lane=elle-rowan	eli-vaughn	set a reminder to submit my MGT-782 paper in Nexus Friday
+> N2	warm	intent=perform	group=iris-chase	lane=iris-chase	eli-vaughn	add the exam dates in Nexus to my calendar
+> N3	warm	intent=perform	group=iris-chase	lane=iris-chase	eli-vaughn	put the due dates in Nexus on my calendar
+5,6c5,6
+< N5	warm	intent=perform	group=flex-grimes	lane=-	flex-grimes	move my workout to tomorrow so I can finish my paper in Nexus
+< N6	warm	intent=perform	group=eli-vaughn	lane=-	eli-vaughn	reschedule my study session, the exam in Nexus moved to Friday
+---
+> N5	warm	intent=perform	group=iris-chase	lane=iris-chase	flex-grimes	move my workout to tomorrow so I can finish my paper in Nexus
+> N6	warm	intent=perform	group=iris-chase	lane=iris-chase	eli-vaughn	reschedule my study session, the exam in Nexus moved to Friday
+8,11c8,11
+< N8	warm	intent=perform	group=iris-chase	lane=-	finn-reid	log the textbook I bought for my MGT-782 project in Nexus
+< N9	warm	intent=perform	group=eli-vaughn	lane=-	cam-post	email my professor and then update the due date in Nexus
+< N10	warm	intent=perform	group=iris-chase	lane=-	eli-vaughn	set up a study block tonight for the exam in Nexus
+< N11	warm	intent=perform	group=iris-chase	lane=-	eli-vaughn	add the MGT-782 exam to my calendar, it's listed in Nexus
+---
+> N8	warm	intent=perform	group=iris-chase	lane=iris-chase	finn-reid	log the textbook I bought for my MGT-782 project in Nexus
+> N9	warm	intent=perform	group=elle-rowan	lane=elle-rowan	cam-post	email my professor and then update the due date in Nexus
+> N10	warm	intent=perform	group=iris-chase	lane=iris-chase	eli-vaughn	set up a study block tonight for the exam in Nexus
+> N11	warm	intent=perform	group=iris-chase	lane=iris-chase	eli-vaughn	add the MGT-782 exam to my calendar, it's listed in Nexus
+16c16
+< N16	warm	intent=perform	group=sam-trent	lane=-	sam-trent	draft a pitch deck for my startup, the MGT-701 deadline is Friday
+---
+> N16	warm	intent=perform	group=elle-rowan	lane=-	sam-trent	draft a pitch deck for my startup, the MGT-701 deadline is Friday
+18,19c18,19
+< P4	warm	intent=perform	group=liam-kingsley	lane=-	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+< P5	warm	intent=perform	group=elle-rowan	lane=-	cam-post	please put the EMBA694 case analysis into my Nexus
+---
+> P4	warm	intent=perform	group=iris-chase	lane=iris-chase	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+> P5	warm	intent=perform	group=elle-rowan	lane=elle-rowan	cam-post	please put the EMBA694 case analysis into my Nexus
+21,23c21,23
+< P7	warm	intent=perform	group=eli-vaughn	lane=eli-vaughn	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+< P8	warm	intent=perform	group=liam-kingsley	lane=-	finn-reid	help me outline my MGT-782 strategy paper due Friday
+< P9	warm	intent=query	group=tess-sutton	lane=-	iris-chase	what's due in Nexus this week
+---
+> P7	warm	intent=perform	group=iris-chase	lane=iris-chase	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+> P8	warm	intent=perform	group=iris-chase	lane=-	finn-reid	help me outline my MGT-782 strategy paper due Friday
+> P9	warm	intent=query	group=iris-chase	lane=-	iris-chase	what's due in Nexus this week
+== probe-l5-routing cold (main vs before)
+1,3c1,3
+< N1	cold	intent=perform	group=elle-rowan	lane=-	eli-vaughn	set a reminder to submit my MGT-782 paper in Nexus Friday
+< N2	cold	intent=perform	group=iris-chase	lane=-	eli-vaughn	add the exam dates in Nexus to my calendar
+< N3	cold	intent=perform	group=iris-chase	lane=-	eli-vaughn	put the due dates in Nexus on my calendar
+---
+> N1	cold	intent=perform	group=elle-rowan	lane=elle-rowan	eli-vaughn	set a reminder to submit my MGT-782 paper in Nexus Friday
+> N2	cold	intent=perform	group=iris-chase	lane=iris-chase	eli-vaughn	add the exam dates in Nexus to my calendar
+> N3	cold	intent=perform	group=iris-chase	lane=iris-chase	eli-vaughn	put the due dates in Nexus on my calendar
+5,6c5,6
+< N5	cold	intent=perform	group=flex-grimes	lane=-	flex-grimes	move my workout to tomorrow so I can finish my paper in Nexus
+< N6	cold	intent=perform	group=eli-vaughn	lane=-	eli-vaughn	reschedule my study session, the exam in Nexus moved to Friday
+---
+> N5	cold	intent=perform	group=iris-chase	lane=iris-chase	flex-grimes	move my workout to tomorrow so I can finish my paper in Nexus
+> N6	cold	intent=perform	group=iris-chase	lane=iris-chase	eli-vaughn	reschedule my study session, the exam in Nexus moved to Friday
+8,11c8,11
+< N8	cold	intent=perform	group=iris-chase	lane=-	finn-reid	log the textbook I bought for my MGT-782 project in Nexus
+< N9	cold	intent=perform	group=eli-vaughn	lane=-	cam-post	email my professor and then update the due date in Nexus
+< N10	cold	intent=perform	group=iris-chase	lane=-	eli-vaughn	set up a study block tonight for the exam in Nexus
+< N11	cold	intent=perform	group=iris-chase	lane=-	eli-vaughn	add the MGT-782 exam to my calendar, it's listed in Nexus
+---
+> N8	cold	intent=perform	group=iris-chase	lane=iris-chase	finn-reid	log the textbook I bought for my MGT-782 project in Nexus
+> N9	cold	intent=perform	group=elle-rowan	lane=elle-rowan	cam-post	email my professor and then update the due date in Nexus
+> N10	cold	intent=perform	group=iris-chase	lane=iris-chase	eli-vaughn	set up a study block tonight for the exam in Nexus
+> N11	cold	intent=perform	group=iris-chase	lane=iris-chase	eli-vaughn	add the MGT-782 exam to my calendar, it's listed in Nexus
+18,19c18,19
+< P4	cold	intent=perform	group=liam-kingsley	lane=-	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+< P5	cold	intent=perform	group=elle-rowan	lane=-	cam-post	please put the EMBA694 case analysis into my Nexus
+---
+> P4	cold	intent=perform	group=iris-chase	lane=iris-chase	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+> P5	cold	intent=perform	group=elle-rowan	lane=elle-rowan	cam-post	please put the EMBA694 case analysis into my Nexus
+21c21
+< P7	cold	intent=perform	group=eli-vaughn	lane=eli-vaughn	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+---
+> P7	cold	intent=perform	group=iris-chase	lane=iris-chase	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+23c23
+< P9	cold	intent=query	group=tess-sutton	lane=-	iris-chase	what's due in Nexus this week
+---
+> P9	cold	intent=query	group=iris-chase	lane=-	iris-chase	what's due in Nexus this week
+== probe-l5-extra warm (main vs before)
+1c1
+< lane=-	eli-vaughn	add my assignments in Nexus to my calendar
+---
+> lane=iris-chase	eli-vaughn	add my assignments in Nexus to my calendar
+5,6c5,6
+< lane=-	eli-vaughn	add all my paper deadlines in Nexus to my Google calendar
+< lane=-	eli-vaughn	set reminders for every assignment in Nexus
+---
+> lane=elle-rowan	eli-vaughn	add all my paper deadlines in Nexus to my Google calendar
+> lane=iris-chase	eli-vaughn	set reminders for every assignment in Nexus
+== probe-l5-extra cold (main vs before)
+1c1
+< lane=-	eli-vaughn	add my assignments in Nexus to my calendar
+---
+> lane=iris-chase	eli-vaughn	add my assignments in Nexus to my calendar
+5,6c5,6
+< lane=-	eli-vaughn	add all my paper deadlines in Nexus to my Google calendar
+< lane=-	eli-vaughn	set reminders for every assignment in Nexus
+---
+> lane=elle-rowan	eli-vaughn	add all my paper deadlines in Nexus to my Google calendar
+> lane=iris-chase	eli-vaughn	set reminders for every assignment in Nexus
+== probe-l5-f245 warm (main vs before)
+1,2c1,2
+< group=troy-lennox	lane=-	troy-lennox	move my flight home, my exam in Nexus got moved to Monday
+< group=troy-lennox	lane=-	troy-lennox	change my hotel checkout, the final exam in Nexus is Saturday now
+---
+> group=iris-chase	lane=iris-chase	troy-lennox	move my flight home, my exam in Nexus got moved to Monday
+> group=iris-chase	lane=iris-chase	troy-lennox	change my hotel checkout, the final exam in Nexus is Saturday now
+4c4
+< group=finn-reid	lane=-	finn-reid	set a budget for the textbooks for my projects in Nexus
+---
+> group=iris-chase	lane=iris-chase	finn-reid	set a budget for the textbooks for my projects in Nexus
+== probe-l5-f245 cold (main vs before)
+1,2c1,2
+< group=troy-lennox	lane=-	troy-lennox	move my flight home, my exam in Nexus got moved to Monday
+< group=troy-lennox	lane=-	troy-lennox	change my hotel checkout, the final exam in Nexus is Saturday now
+---
+> group=iris-chase	lane=iris-chase	troy-lennox	move my flight home, my exam in Nexus got moved to Monday
+> group=iris-chase	lane=iris-chase	troy-lennox	change my hotel checkout, the final exam in Nexus is Saturday now
+4c4
+< group=finn-reid	lane=-	finn-reid	set a budget for the textbooks for my projects in Nexus
+---
+> group=iris-chase	lane=iris-chase	finn-reid	set a budget for the textbooks for my projects in Nexus
+== probe-d14-all warm (main vs before)
+1,3c1,3
+< N1	warm	group=elle-rowan	lane=-	eli-vaughn	set a reminder to submit my MGT-782 paper in Nexus Friday
+< N2	warm	group=iris-chase	lane=-	eli-vaughn	add the exam dates in Nexus to my calendar
+< N3	warm	group=iris-chase	lane=-	eli-vaughn	put the due dates in Nexus on my calendar
+---
+> N1	warm	group=elle-rowan	lane=elle-rowan	eli-vaughn	set a reminder to submit my MGT-782 paper in Nexus Friday
+> N2	warm	group=iris-chase	lane=iris-chase	eli-vaughn	add the exam dates in Nexus to my calendar
+> N3	warm	group=iris-chase	lane=iris-chase	eli-vaughn	put the due dates in Nexus on my calendar
+5,6c5,6
+< N5	warm	group=flex-grimes	lane=-	flex-grimes	move my workout to tomorrow so I can finish my paper in Nexus
+< N6	warm	group=eli-vaughn	lane=-	eli-vaughn	reschedule my study session, the exam in Nexus moved to Friday
+---
+> N5	warm	group=iris-chase	lane=iris-chase	flex-grimes	move my workout to tomorrow so I can finish my paper in Nexus
+> N6	warm	group=iris-chase	lane=iris-chase	eli-vaughn	reschedule my study session, the exam in Nexus moved to Friday
+8,11c8,11
+< N8	warm	group=iris-chase	lane=-	finn-reid	log the textbook I bought for my MGT-782 project in Nexus
+< N9	warm	group=eli-vaughn	lane=-	cam-post	email my professor and then update the due date in Nexus
+< N10	warm	group=iris-chase	lane=-	eli-vaughn	set up a study block tonight for the exam in Nexus
+< N11	warm	group=iris-chase	lane=-	eli-vaughn	add the MGT-782 exam to my calendar, it's listed in Nexus
+---
+> N8	warm	group=iris-chase	lane=iris-chase	finn-reid	log the textbook I bought for my MGT-782 project in Nexus
+> N9	warm	group=elle-rowan	lane=elle-rowan	cam-post	email my professor and then update the due date in Nexus
+> N10	warm	group=iris-chase	lane=iris-chase	eli-vaughn	set up a study block tonight for the exam in Nexus
+> N11	warm	group=iris-chase	lane=iris-chase	eli-vaughn	add the MGT-782 exam to my calendar, it's listed in Nexus
+16c16
+< N16	warm	group=sam-trent	lane=-	sam-trent	draft a pitch deck for my startup, the MGT-701 deadline is Friday
+---
+> N16	warm	group=elle-rowan	lane=-	sam-trent	draft a pitch deck for my startup, the MGT-701 deadline is Friday
+18,19c18,19
+< P4	warm	group=liam-kingsley	lane=-	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+< P5	warm	group=elle-rowan	lane=-	cam-post	please put the EMBA694 case analysis into my Nexus
+---
+> P4	warm	group=iris-chase	lane=iris-chase	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+> P5	warm	group=elle-rowan	lane=elle-rowan	cam-post	please put the EMBA694 case analysis into my Nexus
+21,23c21,23
+< P7	warm	group=eli-vaughn	lane=eli-vaughn	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+< P8	warm	group=liam-kingsley	lane=-	finn-reid	help me outline my MGT-782 strategy paper due Friday
+< P9	warm	group=tess-sutton	lane=-	iris-chase	what's due in Nexus this week
+---
+> P7	warm	group=iris-chase	lane=iris-chase	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+> P8	warm	group=iris-chase	lane=-	finn-reid	help me outline my MGT-782 strategy paper due Friday
+> P9	warm	group=iris-chase	lane=-	iris-chase	what's due in Nexus this week
+34c34
+< E1	warm	group=iris-chase	lane=-	eli-vaughn	add my assignments in Nexus to my calendar
+---
+> E1	warm	group=iris-chase	lane=iris-chase	eli-vaughn	add my assignments in Nexus to my calendar
+38,41c38,41
+< E5	warm	group=elle-rowan	lane=-	eli-vaughn	add all my paper deadlines in Nexus to my Google calendar
+< E6	warm	group=iris-chase	lane=-	eli-vaughn	set reminders for every assignment in Nexus
+< F1	warm	group=troy-lennox	lane=-	troy-lennox	move my flight home, my exam in Nexus got moved to Monday
+< F2	warm	group=troy-lennox	lane=-	troy-lennox	change my hotel checkout, the final exam in Nexus is Saturday now
+---
+> E5	warm	group=elle-rowan	lane=elle-rowan	eli-vaughn	add all my paper deadlines in Nexus to my Google calendar
+> E6	warm	group=iris-chase	lane=iris-chase	eli-vaughn	set reminders for every assignment in Nexus
+> F1	warm	group=iris-chase	lane=iris-chase	troy-lennox	move my flight home, my exam in Nexus got moved to Monday
+> F2	warm	group=iris-chase	lane=iris-chase	troy-lennox	change my hotel checkout, the final exam in Nexus is Saturday now
+43c43
+< F4	warm	group=finn-reid	lane=-	finn-reid	set a budget for the textbooks for my projects in Nexus
+---
+> F4	warm	group=iris-chase	lane=iris-chase	finn-reid	set a budget for the textbooks for my projects in Nexus
+== probe-d14-all cold (main vs before)
+1,3c1,3
+< N1	cold	group=elle-rowan	lane=-	eli-vaughn	set a reminder to submit my MGT-782 paper in Nexus Friday
+< N2	cold	group=iris-chase	lane=-	eli-vaughn	add the exam dates in Nexus to my calendar
+< N3	cold	group=iris-chase	lane=-	eli-vaughn	put the due dates in Nexus on my calendar
+---
+> N1	cold	group=elle-rowan	lane=elle-rowan	eli-vaughn	set a reminder to submit my MGT-782 paper in Nexus Friday
+> N2	cold	group=iris-chase	lane=iris-chase	eli-vaughn	add the exam dates in Nexus to my calendar
+> N3	cold	group=iris-chase	lane=iris-chase	eli-vaughn	put the due dates in Nexus on my calendar
+5,6c5,6
+< N5	cold	group=flex-grimes	lane=-	flex-grimes	move my workout to tomorrow so I can finish my paper in Nexus
+< N6	cold	group=eli-vaughn	lane=-	eli-vaughn	reschedule my study session, the exam in Nexus moved to Friday
+---
+> N5	cold	group=iris-chase	lane=iris-chase	flex-grimes	move my workout to tomorrow so I can finish my paper in Nexus
+> N6	cold	group=iris-chase	lane=iris-chase	eli-vaughn	reschedule my study session, the exam in Nexus moved to Friday
+8,11c8,11
+< N8	cold	group=iris-chase	lane=-	finn-reid	log the textbook I bought for my MGT-782 project in Nexus
+< N9	cold	group=eli-vaughn	lane=-	cam-post	email my professor and then update the due date in Nexus
+< N10	cold	group=iris-chase	lane=-	eli-vaughn	set up a study block tonight for the exam in Nexus
+< N11	cold	group=iris-chase	lane=-	eli-vaughn	add the MGT-782 exam to my calendar, it's listed in Nexus
+---
+> N8	cold	group=iris-chase	lane=iris-chase	finn-reid	log the textbook I bought for my MGT-782 project in Nexus
+> N9	cold	group=elle-rowan	lane=elle-rowan	cam-post	email my professor and then update the due date in Nexus
+> N10	cold	group=iris-chase	lane=iris-chase	eli-vaughn	set up a study block tonight for the exam in Nexus
+> N11	cold	group=iris-chase	lane=iris-chase	eli-vaughn	add the MGT-782 exam to my calendar, it's listed in Nexus
+18,19c18,19
+< P4	cold	group=liam-kingsley	lane=-	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+< P5	cold	group=elle-rowan	lane=-	cam-post	please put the EMBA694 case analysis into my Nexus
+---
+> P4	cold	group=iris-chase	lane=iris-chase	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+> P5	cold	group=elle-rowan	lane=elle-rowan	cam-post	please put the EMBA694 case analysis into my Nexus
+21c21
+< P7	cold	group=eli-vaughn	lane=eli-vaughn	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+---
+> P7	cold	group=iris-chase	lane=iris-chase	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+23c23
+< P9	cold	group=tess-sutton	lane=-	iris-chase	what's due in Nexus this week
+---
+> P9	cold	group=iris-chase	lane=-	iris-chase	what's due in Nexus this week
+34c34
+< E1	cold	group=iris-chase	lane=-	eli-vaughn	add my assignments in Nexus to my calendar
+---
+> E1	cold	group=iris-chase	lane=iris-chase	eli-vaughn	add my assignments in Nexus to my calendar
+38,41c38,41
+< E5	cold	group=elle-rowan	lane=-	eli-vaughn	add all my paper deadlines in Nexus to my Google calendar
+< E6	cold	group=iris-chase	lane=-	eli-vaughn	set reminders for every assignment in Nexus
+< F1	cold	group=troy-lennox	lane=-	troy-lennox	move my flight home, my exam in Nexus got moved to Monday
+< F2	cold	group=troy-lennox	lane=-	troy-lennox	change my hotel checkout, the final exam in Nexus is Saturday now
+---
+> E5	cold	group=elle-rowan	lane=elle-rowan	eli-vaughn	add all my paper deadlines in Nexus to my Google calendar
+> E6	cold	group=iris-chase	lane=iris-chase	eli-vaughn	set reminders for every assignment in Nexus
+> F1	cold	group=iris-chase	lane=iris-chase	troy-lennox	move my flight home, my exam in Nexus got moved to Monday
+> F2	cold	group=iris-chase	lane=iris-chase	troy-lennox	change my hotel checkout, the final exam in Nexus is Saturday now
+43c43
+< F4	cold	group=finn-reid	lane=-	finn-reid	set a budget for the textbooks for my projects in Nexus
+---
+> F4	cold	group=iris-chase	lane=iris-chase	finn-reid	set a budget for the textbooks for my projects in Nexus

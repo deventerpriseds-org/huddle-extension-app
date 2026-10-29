@@ -93,6 +93,18 @@ export interface AgentCapability {
      * lane's veto word ("the email marketing case analysis", "my travel industry essay"). [source, flags] pairs.
      */
     explicitOverride?: Array<[string, string]>;
+    /**
+     * D14 (docs/FIX-nexus-write-loop4.md, "D14 -- override needs Nexus as the destination"): the override is tested
+     * ONE CLAUSE AT A TIME. This [source, flags] pattern SPLITS the ask into clauses (comma, semicolon, dash, "so",
+     * "because", "and then", sentence end); a clause matches only if `explicitOverride` matches it and no
+     * `explicitOverrideCancels` pattern does. Absent = the whole ask is one clause.
+     */
+    explicitOverrideClauseBreak?: [string, string];
+    /**
+     * D14: a COMPETING destination or another lane's object in the SAME clause cancels the override ("add the exam
+     * dates in Nexus to my calendar", "set a budget for … my projects in Nexus"). [source, flags] pairs.
+     */
+    explicitOverrideCancels?: Array<[string, string]>;
     /** Evaluated after `explicitOverride`, before everything else: any veto word/pattern means "not this capability's job", even over strong context. */
     vetoes?: string[];
     vetoPatterns?: Array<[string, string]>;
@@ -154,18 +166,59 @@ const NEXUS_ASSIGNMENT_OBJECTS = [
   "analys[ie]s", "memos?", "reflections?", "posts?", "quiz(?:zes)?", "exams?", "projects?", "presentations?",
   "problem sets?", "deliverables?", "briefs?", "reviews?", "reports?", "due dates?",
 ];
+// D14 (docs/FIX-nexus-write-loop4.md, "D14 -- override needs Nexus as the destination", RESPONDS TO
+// VERIFY-nexus-write-tool-5.md D14): "in Nexus" is the DESTINATION only when it is the LAST prepositional phrase of
+// the clause, optionally followed by a date/time ("… in Nexus to Dec 3", "… in Nexus by Friday", "… in Nexus, due …").
+// "add the exam dates in Nexus to my calendar" names Nexus as the SOURCE ("to my calendar" follows), and
+// "set reminders for every assignment in Nexus" is a reminder, not a write (see the cancels below).
+const NEXUS_DATE =
+  "(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|today|tonight|tomorrow|eod|" +
+  "(?:next|this)\\s+(?:week|weekend|month|(?:mon|tues|wednes|thurs|fri|satur|sun)day)|" +
+  "(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?|" +
+  "\\d{1,2}/\\d{1,2}(?:/\\d{2,4})?|the\\s+\\d{1,2}(?:st|nd|rd|th)?)" +
+  "(?:\\s+at\\s+\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?)?";
+const NEXUS_DATE_TAIL =
+  `(?:\\s+(?:(?:to|for|by|on|until|before)\\s+)?${NEXUS_DATE}|\\s+due\\b[^.?!;\\n]*)?`;
 const NEXUS_EXPLICIT_WRITE =
   "(?:^|[.!?;:\\n]\\s*|\\b(?:and|then)\\s+)" +
   "(?:(?:hey|hi|ok|okay|so)\\s+)?(?:[a-z]+\\s*,\\s*)?" +
   "(?:(?:please|pls|kindly|just|also|now|go ahead and|can you|could you|would you|will you|can u|i need you to|i want you to|i'd like you to|i need to|i want to|let's|lets|help me)\\s+)*" +
-  "(?:add|put|log|save|enter|record|update|change|move|reschedule|set)\\b" +
+  // D14: "set up …", "set a reminder", "set reminders" are not writes TO Nexus.
+  "(?:add|put|log|save|enter|record|update|change|move|reschedule|set\\b(?!\\s+(?:up|a\\s+reminder|reminders?)\\b))\\b" +
   "(?:" +
-  // (a) an assignment object, then the destination "to / in / into (my) Nexus" (the app, never the NEXUS program)
-  `[^.?!;\\n]{0,80}?\\b(?:${NEXUS_ASSIGNMENT_OBJECTS.join("|")})\\b[^.?!;\\n]{0,80}?` +
-  `\\b(?:to|in|into)\\s+(?:my\\s+)?nexus\\b${NEXUS_NOT_THE_APP}` +
+  // (a) an assignment object, then the DESTINATION: "to / into (my) Nexus" anywhere after it, or "in (my) Nexus" as
+  // the clause's LAST phrase (+ an optional date tail) -- the app, never the NEXUS program. The override is tested
+  // per CLAUSE (`explicitOverrideClauseBreak` below), so "$" is the end of the clause.
+  // D14: the assignment noun must be the thing WRITTEN, not the purpose of something else ("log the textbook I bought
+  // FOR my MGT-782 project in Nexus" writes a textbook purchase) -- so a noun introduced by "for (my|the …)" does not count.
+  `[^.?!;\\n]{0,80}?\\b(?<!\\bfor\\s+(?:(?:my|the|a|an|our|this|that)\\s+)?(?:[a-z0-9'-]+\\s+){0,2})(?:${NEXUS_ASSIGNMENT_OBJECTS.join("|")})\\b[^.?!;\\n]{0,80}?` +
+  `\\b(?:(?:to|into)\\s+(?:my\\s+)?nexus\\b${NEXUS_NOT_THE_APP}|in\\s+(?:my\\s+)?nexus\\b${NEXUS_NOT_THE_APP}${NEXUS_DATE_TAIL}\\s*$)` +
   // (b) or the destination itself names the object: "… to my Nexus assignments"
   "|[^.?!;\\n]{0,100}?\\bnexus\\s+assignments?\\b" +
   ")";
+// D14: a clause ends at a comma, semicolon, spaced/long dash, "so", "because", "and then", or a sentence end.
+// "move my flight home, my exam in Nexus got moved to Monday" -> "my exam in Nexus got moved to Monday" has no write
+// verb; "move my workout to tomorrow so I can finish my paper in Nexus" -> "I can finish my paper in Nexus" neither.
+const NEXUS_OVERRIDE_CLAUSE_BREAK: [string, string] = [
+  "[,;\\n]|\\s[-\\u2013\\u2014]+\\s|[\\u2013\\u2014]|\\bso\\b|\\bbecause\\b|\\band\\s+then\\b|[.?!]+(?=\\s|$)",
+  "i",
+];
+// D14: another DESTINATION or another lane's OBJECT in the same clause cancels the override -- unless the word is
+// only the TOPIC of an assignment noun right after it ("the email marketing case analysis", "my hotel management
+// essay", "the flight operations essay", "my hotel case study"): up to two content words, then an assignment noun.
+const NEXUS_OVERRIDE_COMPETITORS = [
+  "calendars?", "reminders?", "study\\s+(?:blocks?|sessions?)", "schedules?", "flights?", "hotels?", "checkouts?",
+  "workouts?", "budgets?", "e-?mails?",
+];
+const NEXUS_TOPIC_WORD =
+  "(?!(?:to|on|onto|into|in|for|from|by|at|with|of|the|my|a|an|and|or|so|before|after|then|that|this)\\b)[a-z0-9'-]+";
+const NEXUS_OVERRIDE_CANCELS: Array<[string, string]> = [
+  [
+    `\\b(?:${NEXUS_OVERRIDE_COMPETITORS.join("|")})\\b` +
+      `(?!\\s+(?:${NEXUS_TOPIC_WORD}\\s+){0,2}(?:${NEXUS_ASSIGNMENT_OBJECTS.join("|")})\\b)`,
+    "i",
+  ],
+];
 const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
   id: "nexus-assignments",
   label: "adding & updating the owner's coursework assignments in Nexus (dated, graded deliverables)",
@@ -222,6 +275,9 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
     // Checked BEFORE the vetoes (owner, 2026-10-29): "add the MGT-782 email marketing case analysis to Nexus",
     // "put my travel industry essay due Nov 3 into Nexus", "update the Airbnb pricing case study due date in Nexus".
     explicitOverride: [[NEXUS_EXPLICIT_WRITE, "i"]],
+    // D14: one clause at a time; a competing destination / other lane's object in that clause cancels it.
+    explicitOverrideClauseBreak: NEXUS_OVERRIDE_CLAUSE_BREAK,
+    explicitOverrideCancels: NEXUS_OVERRIDE_CANCELS,
     weak: ["coursework", "course work", "emba", "mba", "dba", "doctoral", "professor", "prof", "instructor"],
     weakPatterns: [
       // "my assignment", "my assignments", "my school assignments" (a veto word keeps "my seat assignments")

@@ -1,0 +1,28 @@
+===== r1 (src/features/huddle/lib/capabilities.ts) must-fail: Finn makes no deterministic hand-off
+FIRED: 'Finn makes no deterministic hand-off' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/capabilities.ts matches HEAD
+tree clean: 'Finn makes no deterministic hand-off' passes again on the restored tree (build output regenerated)
+===== r2 (src/features/huddle/data/agents.ts) must-fail: R13-ovr-neg
+FIRED: 'R13-ovr-neg' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R13-ovr-neg' passes again on the restored tree (build output regenerated)
+===== r3 (src/features/huddle/lib/routing.ts) must-fail: R-M0-task creation
+FIRED: 'R-M0-task creation' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/routing.ts matches HEAD
+tree clean: 'R-M0-task creation' passes again on the restored tree (build output regenerated)
+===== r4 (src/features/huddle/lib/voice/realtime-tools.server.ts) must-fail: voice toolset pushes the write tools
+FIRED: 'voice toolset pushes the write tools' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/voice/realtime-tools.server.ts matches HEAD
+tree clean: 'voice toolset pushes the write tools' passes again on the restored tree (build output regenerated)
+===== r5 (src/features/huddle/lib/voice/realtime-tools.server.ts) must-fail: voice only offers focus_on when journey is on
+FIRED: 'voice only offers focus_on when journey is on' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/voice/realtime-tools.server.ts matches HEAD
+tree clean: 'voice only offers focus_on when journey is on' passes again on the restored tree (build output regenerated)
+===== r6 (src/features/huddle/data/agents.ts) must-fail: add my essay to my Nexus account
+FIRED: 'add my essay to my Nexus account' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'add my essay to my Nexus account' passes again on the restored tree (build output regenerated)
+===== r7 (src/features/huddle/data/agents.ts) must-fail: R13-ovr-data
+FIRED: 'R13-ovr-data' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R13-ovr-data' passes again on the restored tree (build output regenerated)
