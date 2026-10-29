@@ -67,7 +67,10 @@ async function callFn(fnId, data) {
   return { http: res.status, val: decoded?.result ?? decoded };
 }
 
-const HID = "all-members";
+// HUDDLE_ID / HUDDLE_SCOPE / HUDDLE_TARGET let the same harness drive a 1:1 (e.g. dm-iris-chase).
+const HID = process.env.HUDDLE_ID || "all-members";
+const SCOPE = process.env.HUDDLE_SCOPE || "group";
+const TARGET = process.env.HUDDLE_TARGET || undefined;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Members can be narrowed (HUDDLE_MEMBERS=comma,list) so the responder count stays under MAX_CHUNKS
@@ -87,8 +90,9 @@ const turnId = `dur-${process.env.RUN_TAG || "verify"}-${Buffer.from(String(proc
 const payload = {
   text: TEXT,
   huddleId: HID,
-  scope: "group",
+  scope: SCOPE,
   members: MEMBERS,
+  ...(TARGET ? { targetAgentId: TARGET } : {}),
   history: [],
   router: { backend: "openai", model: "gpt-5.5", fastMode: false, soloOnCoverage: true, interjections: true, maxInterjectors: 2 },
   agents,

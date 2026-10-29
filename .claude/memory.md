@@ -127,7 +127,8 @@ index into a requirement list**.
 - Memory architecture: owner chose (a) SOFT preference (2026-10-27) and "thought it was already this way" — it largely IS: runAgentTurn's laneBoost re-ranks shared memory by the agent's domains/themes (topic text, not agent name). Gaps: voice has no lane boost/Executive Profile; the owner's ChatGPT knowledge isn't ingested yet.
 - ACs: `.claude/AC-confirm-ask-rotation.md`. Tracker: ACT:confirm-ask-rotation.
 
-## Deep 1:1 asks: HYBRID — act now, or answer + offer to produce; never hold (2026-10-28, PR #116, NOT deployed yet, NOT owner-confirmed)
+## Deep 1:1 asks: HYBRID — act now, or answer + offer to produce; never hold (2026-10-28, #116 MERGED + DEPLOYED 96448d3, NOT owner-confirmed)
+**Live (durable path, 2026-10-28 19:22Z):** Iris answered a "plan my day" ask with a real time-blocked plan in 37s. Follow-up PR #124: one ownership judge (creation + grooming), board Delete, no offer after a hand-off, focus_on journey gate. **Incident:** live harness runs wrote to the real board (see accuracy-log 2026-10-28); 7 test tasks parked+tagged `test-artifact` pending delete confirmation.
 **Trigger:** owner asked Iris (dm-iris-chase) to plan the day — gym 3pm, vitamin shop, DBA 702/782 papers, eulogy,
 app work. Scorer rated it difficulty 3 (length), the old gate HELD it behind the canned "produce or quick?" literal
 (`produceVsQuickAsk`, before any model call), and "produce" made ONE vague task "Plan daily activities" (UP_NEXT,

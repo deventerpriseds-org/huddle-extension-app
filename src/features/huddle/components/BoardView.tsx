@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck, X, Plus, PauseCircle, FileText, AlertTriangle, Check } from "lucide-react";
+import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck, X, Plus, PauseCircle, FileText, AlertTriangle, Check, Trash2 } from "lucide-react";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
-import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
+import { deleteBoardTask, getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import {
   getEscalatedApproachTasksFn,
   overrideApproachFromButtonFn,
@@ -24,6 +24,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -315,6 +325,31 @@ export function BoardView() {
     [caller, waitForMirrorSync],
   );
 
+  // Delete = remove the card optimistically, delete in journey (canonical), restore on failure. No
+  // mirror poll: a deleted row simply stops coming back, and the next refetch agrees.
+  const applyDelete = useCallback(
+    async (taskId: string) => {
+      let prev: BoardTaskRow[] = [];
+      setTasks((ts) => {
+        prev = ts;
+        return ts.filter((t) => t.id !== taskId);
+      });
+      try {
+        const r = await deleteBoardTask({ data: { caller, taskId } });
+        if (!r.ok) {
+          setTasks(prev);
+          toast.error(r.error || "Couldn't delete the task.");
+        } else {
+          toast.success("Task deleted");
+        }
+      } catch (e) {
+        setTasks(prev);
+        toast.error(e instanceof Error ? e.message : "Delete failed.");
+      }
+    },
+    [caller],
+  );
+
   function onDrop(colKey: string, laneKey: string) {
     const id = dragId;
     setDragId(null);
@@ -522,6 +557,7 @@ export function BoardView() {
                                     onDragStart={() => setDragId(t.id)}
                                     onDragEnd={() => setDragId(null)}
                                     onStatus={(id, s) => applyMove(id, { status: s })}
+                                    onDelete={applyDelete}
                                   />
                                 ))}
                                 {!items.length && <div className="h-1" />}
@@ -595,6 +631,7 @@ export function BoardView() {
                               fullWidth
                               onMove={applyMove}
                               onStatus={(id, s) => applyMove(id, { status: s })}
+                              onDelete={applyDelete}
                             />
                           ))}
                         </div>
@@ -626,6 +663,7 @@ function BoardCard({
   fullWidth,
   onMove,
   onStatus,
+  onDelete,
 }: {
   task: BoardTaskRow;
   /** The approach gate escalated on this task — nobody is working it until the owner decides. */
@@ -636,7 +674,10 @@ function BoardCard({
   fullWidth?: boolean;
   onMove?: (id: string, patch: { status?: string; assigned_agent?: string; tags?: string[] }) => void;
   onStatus?: (id: string, status: string) => void;
+  /** Permanently delete this task (journey canonical). Always behind the confirm dialog below. */
+  onDelete?: (id: string) => void;
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const agent = task.assigned_agent ? AGENT_BY_ID[task.assigned_agent as AgentId] : undefined;
   const stripe = agent ? `var(${agent.colorVar})` : "var(--hairline)";
   const overdue = task.due_date && task.status !== "DONE" && new Date(task.due_date).getTime() < Date.now();
@@ -691,7 +732,7 @@ function BoardCard({
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       className={cn(
-        "relative overflow-hidden rounded-lg border border-hairline bg-card shadow-soft",
+        "group relative overflow-hidden rounded-lg border border-hairline bg-card shadow-soft",
         draggable && "cursor-grab active:cursor-grabbing",
         fullWidth && "w-full",
         parked && "opacity-60 saturate-50", // paused — de-emphasized vs active work
@@ -700,6 +741,38 @@ function BoardCard({
       <div className="flex">
         <span className="w-1 shrink-0" style={{ background: stripe }} />
         <div className="min-w-0 flex-1 p-2.5">
+          {/* Desktop cards are drag-only (no ⋮ menu), so Delete is a hover button there. Same confirm. */}
+          {!onMove && onDelete && (
+            <button
+              type="button"
+              aria-label="Delete task"
+              onClick={() => setConfirmDelete(true)}
+              className="absolute right-1 top-1 z-10 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
+          {onDelete && (
+            <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete this task?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    “{task.title}” will be permanently removed from your board and from journey. This can't be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    onClick={() => onDelete(task.id)}
+                  >
+                    Delete
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
           {onMove && (
             <div className="absolute right-1 top-1">
               <DropdownMenu>
@@ -752,6 +825,15 @@ function BoardCard({
                   >
                     {parked ? "Remove from parking lot" : "Parking lot (pause automation)"}
                   </DropdownMenuItem>
+                  {onDelete && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setConfirmDelete(true)}>
+                        <Trash2 size={14} className="mr-1.5" />
+                        Delete task…
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>

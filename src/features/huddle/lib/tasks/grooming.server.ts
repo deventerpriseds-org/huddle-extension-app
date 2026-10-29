@@ -144,7 +144,7 @@ export async function runScheduledGrooming(
   const passLimit = Math.min(tasks.length, SCHEDULED_MAX);
   let parsed: GroomJson = {};
   try {
-    parsed = JSON.parse(await dispatchGroomBacklog(caller, { limit: passLimit }, { maxLimit: SCHEDULED_MAX })) as GroomJson;
+    parsed = JSON.parse(await dispatchGroomBacklog(caller, { limit: passLimit }, { maxLimit: SCHEDULED_MAX, judgeBudgetMs: 20_000 })) as GroomJson;
   } catch {
     parsed = {};
   }
