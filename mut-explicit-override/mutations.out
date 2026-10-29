@@ -1,0 +1,76 @@
+### m-order (src/features/huddle/lib/capabilities.ts) must fail: R-X warm "add the MGT-782 email marketing case analysis to Nexus" -> holders are Elle/Iris
+FIRED: 'R-X warm "add the MGT-782 email marketing case analysis to Nexus" -> holders are Elle/Iris' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/capabilities.ts matches HEAD
+tree clean: 'R-X warm "add the MGT-782 email marketing case analysis to Nexus" -> holders are Elle/Iris' passes again on the restored tree (build output regenerated)
+### m-order-1to1-cam (src/features/huddle/lib/capabilities.ts) must fail: R-X warm 1:1 Cam hands "add the MGT-782 email marketing case analysis to Nexus" to Elle/Iris
+FIRED: 'R-X warm 1:1 Cam hands "add the MGT-782 email marketing case analysis to Nexus" to Elle/Iris' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/capabilities.ts matches HEAD
+tree clean: 'R-X warm 1:1 Cam hands "add the MGT-782 email marketing case analysis to Nexus" to Elle/Iris' passes again on the restored tree (build output regenerated)
+### m-order-1to1-keep (src/features/huddle/lib/capabilities.ts) must fail: R-X cold 1:1 Elle/Iris keep "update the Airbnb pricing case study due date in Nexus"
+FIRED: 'R-X cold 1:1 Elle/Iris keep "update the Airbnb pricing case study due date in Nexus"' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/capabilities.ts matches HEAD
+tree clean: 'R-X cold 1:1 Elle/Iris keep "update the Airbnb pricing case study due date in Nexus"' passes again on the restored tree (build output regenerated)
+### m-after-veto (src/features/huddle/lib/capabilities.ts) must fail: R-X warm "update the Airbnb pricing case study due date in Nexus" -> holders are Elle/Iris
+FIRED: 'R-X warm "update the Airbnb pricing case study due date in Nexus" -> holders are Elle/Iris' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/lib/capabilities.ts matches HEAD
+tree clean: 'R-X warm "update the Airbnb pricing case study due date in Nexus" -> holders are Elle/Iris' passes again on the restored tree (build output regenerated)
+### m-data (src/features/huddle/data/agents.ts) must fail: R-X cold "put my travel industry essay due Nov 3 into Nexus" -> holders are Elle/Iris
+FIRED: 'R-X cold "put my travel industry essay due Nov 3 into Nexus" -> holders are Elle/Iris' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-X cold "put my travel industry essay due Nov 3 into Nexus" -> holders are Elle/Iris' passes again on the restored tree (build output regenerated)
+### m-hint (src/features/huddle/data/agents.ts) must fail: R-X-hint
+FIRED: 'R-X-hint' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-X-hint' passes again on the restored tree (build output regenerated)
+### g-card (src/features/huddle/data/agents.ts) must fail: R-XN-card warm "add the renewal date to my NEXUS card" matches NO
+FIRED: 'R-XN-card warm "add the renewal date to my NEXUS card" matches NO' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-XN-card warm "add the renewal date to my NEXUS card" matches NO' passes again on the restored tree (build output regenerated)
+### g-program (src/features/huddle/data/agents.ts) must fail: R-XN-program warm "update the interview date in my NEXUS program" matches NO
+FIRED: 'R-XN-program warm "update the interview date in my NEXUS program" matches NO' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-XN-program warm "update the interview date in my NEXUS program" matches NO' passes again on the restored tree (build output regenerated)
+### g-trusted (src/features/huddle/data/agents.ts) must fail: R-XN-trusted warm "add my kid to NEXUS trusted traveler" matches NO
+FIRED: 'R-XN-trusted warm "add my kid to NEXUS trusted traveler" matches NO' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-XN-trusted warm "add my kid to NEXUS trusted traveler" matches NO' passes again on the restored tree (build output regenerated)
+### g-trusted-in (src/features/huddle/data/agents.ts) must fail: R-XN-trusted cold "update my address in NEXUS trusted traveler before the deadline" matches NO
+FIRED: 'R-XN-trusted cold "update my address in NEXUS trusted traveler before the deadline" matches NO' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-XN-trusted cold "update my address in NEXUS trusted traveler before the deadline" matches NO' passes again on the restored tree (build output regenerated)
+### g-fitness (src/features/huddle/data/agents.ts) must fail: R-XN-fitness warm "can you log my 5k run to Nexus fitness tracker by the deadline" matches NO
+FIRED: 'R-XN-fitness warm "can you log my 5k run to Nexus fitness tracker by the deadline" matches NO' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-XN-fitness warm "can you log my 5k run to Nexus fitness tracker by the deadline" matches NO' passes again on the restored tree (build output regenerated)
+### g-apply (src/features/huddle/data/agents.ts) must fail: R-XN-apply warm "apply to NEXUS for me before my Toronto trip" matches NO
+FIRED: 'R-XN-apply warm "apply to NEXUS for me before my Toronto trip" matches NO' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-XN-apply warm "apply to NEXUS for me before my Toronto trip" matches NO' passes again on the restored tree (build output regenerated)
+### g-clause (src/features/huddle/data/agents.ts) must fail: R-XN-email warm "email my professor that I will add the MGT-782 essay to Nexus tonight" matches NO
+FIRED: 'R-XN-email warm "email my professor that I will add the MGT-782 essay to Nexus tonight" matches NO' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-XN-email warm "email my professor that I will add the MGT-782 essay to Nexus tonight" matches NO' passes again on the restored tree (build output regenerated)
+### g-clause-put (src/features/huddle/data/agents.ts) must fail: R-XN-email cold "email my professor about the essay I put in Nexus" matches NO
+FIRED: 'R-XN-email cold "email my professor about the essay I put in Nexus" matches NO' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-XN-email cold "email my professor about the essay I put in Nexus" matches NO' passes again on the restored tree (build output regenerated)
+### g-verb (src/features/huddle/data/agents.ts) must fail: R-XN-question warm "when is my travel essay due in Nexus" matches NO
+FIRED: 'R-XN-question warm "when is my travel essay due in Nexus" matches NO' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-XN-question warm "when is my travel essay due in Nexus" matches NO' passes again on the restored tree (build output regenerated)
+### g-verb-did (src/features/huddle/data/agents.ts) must fail: R-XN-question cold "did the email marketing paper make it into Nexus" matches NO
+FIRED: 'R-XN-question cold "did the email marketing paper make it into Nexus" matches NO' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-XN-question cold "did the email marketing paper make it into Nexus" matches NO' passes again on the restored tree (build output regenerated)
+### g-naive-down (src/features/huddle/data/agents.ts) must fail: R-XN-down warm "is Nexus down" matches NO
+FIRED: 'R-XN-down warm "is Nexus down" matches NO' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-XN-down warm "is Nexus down" matches NO' passes again on the restored tree (build output regenerated)
+### g-naive-email (src/features/huddle/data/agents.ts) must fail: R-XN-email warm "email my professor about Nexus" matches NO
+FIRED: 'R-XN-email warm "email my professor about Nexus" matches NO' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-XN-email warm "email my professor about Nexus" matches NO' passes again on the restored tree (build output regenerated)
+### g-the (src/features/huddle/data/agents.ts) must fail: R-XN-nexus-of warm "update my travel essay to the nexus of airlines and hotels" matches NO
+FIRED: 'R-XN-nexus-of warm "update my travel essay to the nexus of airlines and hotels" matches NO' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-XN-nexus-of warm "update my travel essay to the nexus of airlines and hotels" matches NO' passes again on the restored tree (build output regenerated)

@@ -264,6 +264,163 @@ reinstated. The guard is real.` The verifier's p7 (`bash mut-verify-114-3/run-mu
   residual. Even an explicit "… to Nexus" does not override a veto: vetoes-first is loop 3's owner-specified order
   (pinned by L3-D6t and mutation r1), unchanged here. Letting an explicit Nexus-as-the-app mention beat the
   vetoes would be a code change to `capabilityContextPresent`, so it is left for the owner to decide.
+  **UPDATE 2026-10-29: the owner decided. An explicit Nexus write now overrides the vetoes; see "Explicit Nexus
+  override (2026-10-29)" below.** The asks above that do NOT name Nexus as the destination ("add my MGT-782 case
+  study on Airbnb's pricing due Friday", "my MGT-782 travel industry essay is due Friday") stay over-vetoed.
 - **Every recorded coursework ask is unaffected:** every loop-1/2/3 coursework assertion is green unchanged, so
   none of them hits a new veto.
 - **(A) is advisory and unmeasured offline:** whether a real model follows the hint is a live question.
+
+## Explicit Nexus override (2026-10-29)
+
+**Owner's decision:** Elle and Iris act immediately when he EXPLICITLY asks to add or update an assignment in
+Nexus, even when the assignment's topic carries another lane's veto word. Before this change, "add the MGT-782
+email marketing case analysis to Nexus" was vetoed by "email" (group Cam), "put my travel industry essay due Nov 3
+into Nexus" by "travel" (group Troy), and "update the Airbnb pricing case study due date in Nexus" by "airbnb"
+(group Eli) -- measured, `mut-explicit-override/probe-override.before.out`.
+
+**Status: implemented and tested offline, NOT yet confirmed live.** Branch fix/nexus-explicit-override from
+origin/claude_nexus-write-tool-fixed, pushed to claude_nexus-write-tool-fixed (PR #114).
+
+### The change (DATA on the capability, one ordering line of code, no agent name)
+
+| Where | What |
+|---|---|
+| `agents.ts` `AgentCapability.requiresContext.explicitOverride` | New optional field: `[source, flags]` patterns checked BEFORE the vetoes. |
+| `agents.ts` `NEXUS_EXPLICIT_WRITE` -> `explicitOverride` | A write verb (add, put, log, save, enter, record, update, change, move, reschedule, set) that OPENS a clause (start of message, after `. ! ? ; :` or a newline, or after "and"/"then"), optionally after a greeting, a vocative ("Elle,") and "please / can you / could you / I need you to / …", followed within 100 characters of the same sentence by `to / in / into (my) Nexus` or `Nexus assignment(s)`. |
+| `agents.ts` `NEXUS_NOT_THE_APP` | ONE list of the words that make "Nexus" the trusted-traveler card/program, now shared by the existing strong "Nexus as the app" pattern AND the override, so they cannot drift. Adds `trusted / traveler / traveller`. |
+| `capabilities.ts` `capabilityContextPresent` | `if (anyPattern(ctx.explicitOverride)) return true;` immediately before the veto line. The veto line is still directly followed by the strong line, so loop 3's L3-D6t source assertion is unchanged and green. |
+| `agents.ts` `routerHint` | Additive sentence for the LLM routers: an explicit request to add/update something TO/IN/INTO Nexus is theirs even when its topic names another lane. |
+
+**A pre-existing leak found and closed on the way:** on the PR head, "update my address in NEXUS trusted traveler
+before the deadline" was read as Nexus-the-app by the strong `in (my) nexus` pattern (holders 2; 15 agents would
+hand it off in a 1:1; Troy's 1:1 handed it to Elle; origin/main: Troy keeps it, `probe-override.before.out`). The
+shared list's new `trusted|traveler|traveller` closes it; the row now matches origin/main.
+
+### Results: positives (warm AND cold cache; `probe-override.pr.out`)
+
+All 15 positives: holders = Elle + Iris; group lead Elle or Iris; a 1:1 with Elle or Iris keeps it (`keep/keep`,
+`laneOwnerFor` null); a 1:1 with Cam AND with the lane agent the topic names hands it to Elle/Iris.
+
+| Ask | Veto word it carries | before (group lead) | after (group lead) | after: 1:1 hand-off |
+|---|---|---|---|---|
+| add the MGT-782 email marketing case analysis to Nexus | email | cam-post | iris-chase | Cam -> Iris |
+| put my travel industry essay due Nov 3 into Nexus | travel | troy-lennox | elle-rowan | Troy -> Elle |
+| update the Airbnb pricing case study due date in Nexus | airbnb | eli-vaughn | iris-chase | Troy -> Iris |
+| can you add my hotel management essay to Nexus | hotel | troy-lennox | elle-rowan | Troy -> Elle |
+| please reschedule the budgeting case study to Dec 2 in Nexus | budgeting | finn-reid | iris-chase | Finn -> Iris |
+| add the flight operations essay to my Nexus assignments | flight | troy-lennox | elle-rowan | Troy -> Elle |
+| set the travel essay due date to Friday in Nexus | travel | troy-lennox | elle-rowan | Troy -> Elle |
+| record my dinner etiquette essay due Nov 10 into Nexus | dinner | elle-rowan | elle-rowan | Charleston -> Elle |
+| change the client presentation paper deadline in Nexus to Monday | client | elle-rowan | elle-rowan | Sam -> Elle |
+| save the email marketing paper to my Nexus | email | cam-post | iris-chase | Cam -> Iris |
+| enter the fitness industry case study into Nexus | fitness | flex-grimes | iris-chase | Flex -> Iris |
+| move my hotel case study to Dec 4 in Nexus | hotel | troy-lennox | iris-chase | Troy -> Iris |
+| log the tax accounting paper due Friday in Nexus | tax | iris-chase | iris-chase | Finn -> Iris |
+| hey Elle, add my airline pricing essay to Nexus | airline | elle-rowan | elle-rowan | Cam -> Elle |
+| I need you to put the restaurant case study into Nexus | restaurant | iris-chase | iris-chase | Charleston -> Iris |
+
+("before" = PR head 3efcfdc, where every row had 0 holders, so those leads came from theme scoring, not the prime
+rule; origin/main's leads are identical.)
+
+### Results: negatives keep their origin/main routing (warm AND cold)
+
+Every row: 0 holders, 0 agents would make a prime 1:1 hand-off / follow-up DM, the addressed agent answers its own
+1:1, and group leader and `laneOwnerFor` are IDENTICAL to origin/main ee8f7b6 (`diff` of the lead/1:1/lane columns
+of `probe-override.main.out` vs `probe-override.pr.out`: no differences).
+
+| Guard | Ask | origin/main = after: group / 1:1 lane |
+|---|---|---|
+| NEXUS card | renew my NEXUS card before the deadline | elle-rowan / null |
+| NEXUS card | update the address on my NEXUS card | eli-vaughn / eli-vaughn |
+| NEXUS card | add my NEXUS card renewal fee to my budget | finn-reid / null |
+| NEXUS card | add the renewal date to my NEXUS card | iris-chase / null |
+| NEXUS program | update the interview date in my NEXUS program | cole-blake / cole-blake |
+| NEXUS program | my NEXUS program application deadline is Friday | elle-rowan / elle-rowan |
+| NEXUS program | move my NEXUS program interview to Friday | cole-blake / cole-blake |
+| apply to NEXUS | apply to NEXUS for me before my Toronto trip | troy-lennox / null |
+| apply to NEXUS | should I apply to NEXUS before the deadline | elle-rowan / null |
+| NEXUS trusted traveler | update my address in NEXUS trusted traveler before the deadline | troy-lennox / null |
+| NEXUS trusted traveler | add my kid to NEXUS trusted traveler | troy-lennox / null |
+| Nexus fitness tracker | can you log my 5k run to Nexus fitness tracker by the deadline | elle-rowan / null |
+| email … about Nexus | email my professor about Nexus | cam-post / null |
+| email … about Nexus | email my professor about the essay I put in Nexus | elle-rowan / elle-rowan |
+| email … about Nexus | email my professor that I will add the MGT-782 essay to Nexus tonight | elle-rowan / elle-rowan |
+| is Nexus down | is Nexus down | iris-chase / null |
+| is Nexus down | is Nexus down again? I can't add the travel essay | troy-lennox / troy-lennox |
+| question, no write verb | when is my travel essay due in Nexus | troy-lennox / null |
+| question, no write verb | did the email marketing paper make it into Nexus | cam-post / null |
+| the nexus of X and Y | update my travel essay to the nexus of airlines and hotels | troy-lennox / null |
+| the nexus of X and Y | add a paragraph on the nexus of travel and pricing to my essay | troy-lennox / null |
+
+(The elle-rowan / iris-chase leads and lanes in this table are PRE-EXISTING theme/domain routing on origin/main,
+not the prime rule: every row has 0 holders.)
+
+### Tests and suites
+
+`scripts/nexus-write-routing.test.ts`, new section "Explicit Nexus override": R-X-data, R-X-order, R-X-hint, R-X
+(15 positives x 6 assertions x warm/cold) and R-XN-* (21 negatives x 5 assertions x warm/cold) = 393 new
+assertions. Every existing D12 / coursework / (A) / loop-2 / loop-3 assertion is unchanged and green.
+
+| Suite (`bash scripts/run-nexus-fix-suites.sh`) | Result |
+|---|---|
+| nexus-write-redteam | 39 passed, 0 failed |
+| router-redteam | 12 passed, 0 failed |
+| nexus-write-tool | 115 passed, 0 failed |
+| router-winners | 39 passed, 0 failed |
+| nexus-read-tools | 190 passed, 0 failed |
+| cross-app-turn-gate | 92 passed, 0 failed |
+| voice-toolset-hidden | 36 passed, 0 failed |
+| nexus-write-fix | 51 passed, 0 failed |
+| nexus-write-loop2 | 185 passed, 0 failed |
+| nexus-write-loop3 | 315 passed, 0 failed |
+| nexus-write-voice-gate | 43 passed, 0 failed |
+| nexus-write-routing | 825 passed, 0 failed (was 432) |
+
+`npx tsc --noEmit -p .`: exit 0. `bun scripts/barge-route.test.ts` (routing consumer, not in the runner): 10 passed,
+0 failed. Offline only: no live Nexus/Huddle/OpenAI, no DB or board writes.
+
+### Mutations (mutate.sh; anchors/replacements are FILES in `mut-explicit-override/`, written from exact source lines and checked to occur once by `make-anchors.py`; runner `bash mut-explicit-override/run-mutations.sh`; test cmd `bun scripts/nexus-write-routing.test.ts`; full output `mut-explicit-override/mutations.out`)
+
+| # | Guard | Mutation | mutate.sh verbatim |
+|---|---|---|---|
+| m-order | override evaluated at all | delete the `explicitOverride` line in `capabilityContextPresent` | `FIRED: 'R-X warm "add the MGT-782 email marketing case analysis to Nexus" -> holders are Elle/Iris' failed with the defect reinstated. The guard is real.` |
+| m-order-1to1-cam | 1:1 Cam hands it off | same | `FIRED: 'R-X warm 1:1 Cam hands "add the MGT-782 email marketing case analysis to Nexus" to Elle/Iris' failed with the defect reinstated. The guard is real.` |
+| m-order-1to1-keep | 1:1 Elle/Iris keep it | same | `FIRED: 'R-X cold 1:1 Elle/Iris keep "update the Airbnb pricing case study due date in Nexus"' failed with the defect reinstated. The guard is real.` |
+| m-after-veto | override BEFORE the veto | swap the override and veto lines | `FIRED: 'R-X warm "update the Airbnb pricing case study due date in Nexus" -> holders are Elle/Iris' failed with the defect reinstated. The guard is real.` |
+| m-data | the override is data | delete `explicitOverride: [[NEXUS_EXPLICIT_WRITE, "i"]],` | `FIRED: 'R-X cold "put my travel industry essay due Nov 3 into Nexus" -> holders are Elle/Iris' failed with the defect reinstated. The guard is real.` |
+| m-hint | router hint sentence | delete it | `FIRED: 'R-X-hint' failed with the defect reinstated. The guard is real.` |
+| g-card | NEXUS card is not the app | drop `card`/`cards` from `NEXUS_NOT_THE_APP` | `FIRED: 'R-XN-card warm "add the renewal date to my NEXUS card" matches NO' failed with the defect reinstated. The guard is real.` |
+| g-program | NEXUS program | drop `program`/`programme` | `FIRED: 'R-XN-program warm "update the interview date in my NEXUS program" matches NO' failed with the defect reinstated. The guard is real.` |
+| g-trusted | NEXUS trusted traveler (override) | drop `trusted`/`traveler`/`traveller` | `FIRED: 'R-XN-trusted warm "add my kid to NEXUS trusted traveler" matches NO' failed with the defect reinstated. The guard is real.` |
+| g-trusted-in | NEXUS trusted traveler (the pre-existing strong-pattern leak) | same | `FIRED: 'R-XN-trusted cold "update my address in NEXUS trusted traveler before the deadline" matches NO' failed with the defect reinstated. The guard is real.` |
+| g-fitness | Nexus fitness tracker | drop `fitness` | `FIRED: 'R-XN-fitness warm "can you log my 5k run to Nexus fitness tracker by the deadline" matches NO' failed with the defect reinstated. The guard is real.` |
+| g-apply | "apply to NEXUS" is not a write | add `apply` to the verb list | `FIRED: 'R-XN-apply warm "apply to NEXUS for me before my Toronto trip" matches NO' failed with the defect reinstated. The guard is real.` |
+| g-clause | email … (the verb must open a clause) | clause start -> any word boundary | `FIRED: 'R-XN-email warm "email my professor that I will add the MGT-782 essay to Nexus tonight" matches NO' failed with the defect reinstated. The guard is real.` |
+| g-clause-put | email … about the essay I put in Nexus | same | `FIRED: 'R-XN-email cold "email my professor about the essay I put in Nexus" matches NO' failed with the defect reinstated. The guard is real.` |
+| g-verb | question with no write verb | make the write verb optional | `FIRED: 'R-XN-question warm "when is my travel essay due in Nexus" matches NO' failed with the defect reinstated. The guard is real.` |
+| g-verb-did | same | same | `FIRED: 'R-XN-question cold "did the email marketing paper make it into Nexus" matches NO' failed with the defect reinstated. The guard is real.` |
+| g-naive-down | is Nexus down (verb + destination required) | override = any `\bnexus\b` mention | `FIRED: 'R-XN-down warm "is Nexus down" matches NO' failed with the defect reinstated. The guard is real.` |
+| g-naive-email | email … about Nexus | same | `FIRED: 'R-XN-email warm "email my professor about Nexus" matches NO' failed with the defect reinstated. The guard is real.` |
+| g-the | the nexus of X and Y | allow `the` before nexus in the destination | `FIRED: 'R-XN-nexus-of warm "update my travel essay to the nexus of airlines and hotels" matches NO' failed with the defect reinstated. The guard is real.` |
+
+19/19 FIRED, 0 INERT, 0 NOT-APPLIED; every run printed `restored: … matches HEAD` and `tree clean`.
+
+### Residuals (measured: `bun mut-explicit-override/probe-residuals.ts`, output `probe-residuals.pr.out`, warm)
+
+- **Only an explicit Nexus DESTINATION overrides.** "add my MGT-782 case study on Airbnb's pricing due Friday" (no
+  "to Nexus") stays vetoed (holders 0; group still Iris by theme scoring), as in the residual above. Deliberate:
+  the owner asked for the explicit case.
+- **A comma is not a clause boundary.** "the essay on email marketing, could you add it to Nexus" does NOT override
+  (holders 0; group still Elle by theme scoring), while the same ask split by a full stop ("… marketing. Could you
+  add it to Nexus") does (holders 2). "I'd love it if the email marketing essay got added to Nexus" (passive, no
+  clause-opening verb) does not override either. These fall back to origin/main routing; nothing is written or lost.
+  Adding `,` as a boundary is a one-token data change if the owner wants it.
+- **A compound ask now goes to Elle/Iris.** "email my professor and add the email marketing essay to Nexus" overrides
+  (the "and add … to Nexus" clause is explicit; holders 2), so in a 1:1 Cam hands the whole message to Elle/Iris and
+  the email half rides with it. Same shape as any multi-lane ask; the group LLM router can still add Cam as support.
+- **"is Nexus down again? I can't add the travel essay"** is guarded structurally (Nexus comes before the verb, and
+  the verb is not clause-opening and has no Nexus destination), not by one mutable token; only the naive "any
+  mention" relaxation (g-naive-down) makes that class fire.
+- **Live behaviour unconfirmed.** The deterministic path is proven offline; the LLM routers only get the additive
+  hint, whose effect on a real model is a live question.
