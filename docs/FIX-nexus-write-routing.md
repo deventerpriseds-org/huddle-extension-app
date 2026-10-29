@@ -30,6 +30,11 @@ any change. `git archive origin/main src scripts` (9afd68e) was extracted to the
 node_modules. The verifier's probes run on that export reproduce its recorded `probe-routing.main.out` and
 `probe-routing-weak.main.out` byte for byte, so this baseline is the verifier's baseline.
 
+Before pushing, origin/main had moved to ee8f7b6 (#126, UAT bypass token checked server-side: deploy-swa.yml,
+package.json script line, src/lib/entra-auth.ts + uat-bypass*, its test and doc; no routing, agents or capability
+file). Merged it too, clean; the suites, tsc and its own `scripts/uat-check-server-side.test.ts` (32 passed, 0
+failed) are green on the merge, so the 9afd68e routing baseline still holds.
+
 ## (B) D12: veto DATA extended (agents.ts only; no code change, no agent name)
 
 **Status: fixed** for every D12 ask the verifier listed, plus 15 extra asks (at least one per veto group).
