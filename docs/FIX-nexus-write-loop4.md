@@ -242,3 +242,105 @@ this fix: `mut-group-veto/probe-edges.{before,after}.out`), for the owner:
 - Coursework whose TOPIC is food ("essay on meal kit startups", "paper on the cooking industry", "the recipe for
   success essay") no longer matches the capability, but the keyword router still leads with Elle/Iris (unchanged
   group). "case study on grocery pricing" was already vetoed by the household group before this change.
+
+## D14 — override needs Nexus as the destination
+
+**RESPONDS TO** `docs/VERIFY-nexus-write-tool-5.md` D14 (BLOCKING): `NEXUS_EXPLICIT_WRITE` read "write verb … assignment
+noun … in Nexus" as a write TO Nexus when Nexus was the SOURCE or a side remark, and it runs before every veto
+("add the exam dates in Nexus to my calendar", "set reminders for every assignment in Nexus", "move my flight home, my
+exam in Nexus got moved to Monday", "move my workout to tomorrow so I can finish my paper in Nexus").
+
+**Fix (data on the capability + one generic evaluator; no agent names):**
+
+| Piece | Where | What |
+|---|---|---|
+| Clause boundary | agents.ts `NEXUS_OVERRIDE_CLAUSE_BREAK` -> `requiresContext.explicitOverrideClauseBreak` | the override is tested ONE CLAUSE at a time; a clause ends at `,` `;` a spaced/long dash, "so", "because", "and then", or a sentence end |
+| Destination | `NEXUS_EXPLICIT_WRITE` branch (a) | "to / into (my) Nexus" anywhere after the assignment noun, or "in (my) Nexus" ONLY as the clause's last phrase, optionally followed by a date/time tail (`NEXUS_DATE_TAIL`: "to Dec 3", "for Friday", "by Nov 3 at 5pm", "due …") and courtesy words ("for me", "please", "now") |
+| Competing destination / object | `NEXUS_OVERRIDE_CANCELS` -> `requiresContext.explicitOverrideCancels` | calendar(s), reminder(s), study block/session, schedule(s), flight(s), hotel(s), checkout(s), workout(s), budget(s), email(s) in the SAME clause cancel it -- unless the word is only an assignment's TOPIC (up to two content words, then an assignment noun: "the email marketing case analysis", "my hotel management essay", "the flight operations essay", "my hotel case study") |
+| Not write verbs | `NEXUS_EXPLICIT_WRITE` verb list | `set` not followed by "up", "a reminder", "reminder(s)" |
+| Purpose phrase | `NEXUS_EXPLICIT_WRITE` branch (a), lookbehind | an assignment noun introduced by "for (my/the …)" is not the thing written: "log the textbook I bought **for my MGT-782 project** in Nexus" (N8) writes a purchase. Added beyond the brief because N8 was otherwise the one remaining non-coursework diff; "update the due date for my MGT-701 proposal in Nexus to Dec 3" still overrides ("due date" is the object) |
+| Evaluator | capabilities.ts `explicitOverrideMatches` | used by BOTH `capabilityContextPresent` (override before vetoes) and `capabilityExplicitOverride` (1:1 hand-off gate): split by the clause break, a clause counts iff an override pattern matches and no cancel pattern does |
+
+**Acceptance -- verifier probes vs a `git archive origin/main` export (4bad00f)**, warm and cold
+(`bash mut-d14/run-probes.sh <tree> <label> mut-d14/out`, `bash mut-d14/diff-probes.sh mut-d14/out main after`;
+`mut-d14/probe-d14-all.ts` reruns every row of the three probes honouring cold, which `probe-l5-extra`/`probe-l5-f245`
+do not). Compared: group leader and the 1:1 `laneOwnerFor` (the PR-only `prime` column stripped). Full diff:
+`mut-d14/probe-diff.main-vs-after.out`; before this fix: `mut-d14/probe-diff.main-vs-before.out`.
+
+| Probe | warm | cold |
+|---|---|---|
+| probe-l5-extra (E1-E6) | **empty** | **empty** |
+| probe-l5-f245 (F1-F4) | **empty** | **empty** |
+| probe-l5-routing / probe-d14-all, every D14 row (N1-N8, N10, N11, E1-E6, F1-F4) and every K / N12-N15 / N17 row | **empty** | **empty** |
+| remaining rows that differ | N9, N16, P4, P5, P7, P8, P9 | N9, P4, P5, P7, P9 |
+
+The remaining rows, precisely:
+- **N9** "email my professor and then update the due date in Nexus" (Cam) -- the mixed ask. "and then" ends the email
+  clause; the second clause "update the due date in Nexus" IS an explicit coursework write, so the override fires:
+  GROUP **Elle** (origin/main Eli), Cam's 1:1 hands off to **Elle** (origin/main: Cam keeps). Same as before this fix;
+  pinned as measured (`D14-N9`). Rule 2's competing word ("email") is in the OTHER clause, so it does not cancel.
+- **N16** (warm only) "draft a pitch deck for my startup, the MGT-701 deadline is Friday" (Sam): group Elle vs main
+  Sam. Pre-existing D13-class coursework GROUP rule (real course code + "deadline", no veto word), identical before
+  this fix; not an override (prime `-`, lane = main). Not D14; not changed.
+- **P4 P5 P7** are the intended explicit overrides (coursework writes into Nexus); **P8 P9** are coursework asks the
+  coursework group rule leads (allowed by the owner's rule; 1:1 lane = main).
+
+**Explicit-override positives** (`mut-d14/probe-units.out`; all still override; the full POS / OVR_POS / NOUNS sets in
+`scripts/nexus-write-routing.test.ts` pass unchanged, warm and cold):
+
+| Positive | override |
+|---|---|
+| add my essay to my Nexus account | true |
+| put my travel industry essay due Nov 3 into Nexus | true |
+| update the Airbnb pricing case study due date in Nexus | true |
+| set the travel essay due date to Friday in Nexus | true |
+| log the tax accounting paper due Friday in Nexus | true |
+| add the MGT-782 email marketing case analysis to Nexus ("email" = topic) | true |
+| can you add my hotel management essay to Nexus ("hotel" = topic) | true |
+| move my hotel case study to Dec 4 in Nexus ("hotel" = topic; "to Dec 4" precedes "in Nexus") | true |
+| add the flight operations essay to my Nexus assignments ("flight" = topic) | true |
+| save the email marketing paper to my Nexus ("email" = topic) | true |
+| please reschedule the budgeting case study to Dec 2 in Nexus | true |
+| change the client presentation paper deadline in Nexus to Monday (date tail) | true |
+| update the due date for my MGT-701 proposal in Nexus to Dec 3 (date tail; object before "for") | true |
+| add my MGT-782 reflection paper to Nexus, due Sunday (clause 1) | true |
+
+No positive conflicted with rules 1/2; none was weakened.
+
+**Tests (`scripts/nexus-write-routing.test.ts`, 1315 -> 1545):** `D14-*` -- the 20 D14 rows (N1-N8, N10, N11, E1-E6,
+F1-F4) x warm/cold x {not an override, group = origin/main, 1:1 lane = origin/main, no prime hand-off from ANY agent,
+the addressed agent answers its 1:1}; expected values GENERATED from the main export by `mut-d14/gen-rows.py`, not
+typed. `D14-N9` pins the mixed ask as measured. Unit rows `D14-clause` / `D14-dest` / `D14-cancel` / `D14-for` /
+`D14-set` and `D14-data` (both new fields are DATA on the capability). One assertion re-shaped, not weakened:
+`R-X-order` greps the override-before-vetoes order and now matches `if (explicitOverrideMatches(ctx, raw)) return true;`
+(the override is no longer a bare `anyPattern` call); the order it asserts is unchanged.
+
+**Suites** (`mut-d14/suites.out`): nexus-write-redteam 39/0, router-redteam 12/0, nexus-write-tool 115/0,
+router-winners 39/0, nexus-read-tools 190/0, cross-app-turn-gate 92/0, voice-toolset-hidden 36/0, nexus-write-fix 51/0,
+nexus-write-loop2 185/0, nexus-write-loop3 315/0, nexus-write-voice-gate 43/0, nexus-write-routing 1545/0; #124
+ownership-judge (15 PASS), assign-on-create (52), ask-shape (69), board-delete (6) ALL PASS; `npx tsc --noEmit -p .`
+exit 0 (`mut-d14/tsc.out` empty).
+
+**Mutations** (`bash mut-d14/run-mutations.sh`, anchors cut from source and count-checked by
+`mut-d14/make-anchors.py`; output `mut-d14/mutations.out`):
+
+| id | Defect reinstated | Named test | Verdict (verbatim) |
+|---|---|---|---|
+| m1 | clause boundary removed (`explicitOverrideClauseBreak` dropped: whole ask = one clause) | `D14-clause "add my reading list, the essay is in Nexus"` | see mutations.out |
+| m2 | destination requirement removed ("in (my) Nexus" anywhere, the loop-4 shape) | `D14-dest "add my essay in Nexus to the shared folder"` | see mutations.out |
+| m3 | competing-destination cancel removed (`explicitOverrideCancels` dropped) | `D14-cancel "add a reminder about my essay to Nexus"` | see mutations.out |
+| m4 | purpose ("for my … project") lookbehind removed | `D14-for "log the textbook I bought for my MGT-782 project in Nexus"` | see mutations.out |
+
+**Collateral, measured on asks outside the suite** (`bun mut-d14/probe-edges.ts <tree>`, PR head ec6127a -> this fix:
+`mut-d14/out/probe-edges.{before,after}.out`). Four asks NO LONGER override (deterministic 1:1 hand-off from a
+non-holder lost; the ordinary 1:1 owner path decides, as on origin/main); the GROUP leader is unchanged in all four:
+- "add my essay in Nexus for Friday's class" ("for Friday's class" is not a pure date tail)
+- "update the paper in Nexus to reflect the new rubric" ("in Nexus" is not the last phrase)
+- "add the notes for my case study to Nexus" (noun introduced by "for"; the object is "notes")
+- "add the exam to my schedule and to Nexus" (competing destination "schedule" in the same clause, per rule 2)
+Still overriding: "… in Nexus please / for me / now", "… in Nexus to the 14th / to next Friday / by Nov 3", "…, it's due
+Friday", "… so Iris can track it", "… because it's due Sunday", "… - due Monday", "add my study session reflection to
+Nexus", "add my workout essay to Nexus" (topic exemptions).
+
+**Not touched:** D15 (Elle/Iris "keep" on another lane's coursework-shaped ask) -- owner-visible decision, separate.
+The `routerHint` prose for the LLM routers is unchanged.

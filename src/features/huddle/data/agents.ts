@@ -177,8 +177,10 @@ const NEXUS_DATE =
   "(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?|" +
   "\\d{1,2}/\\d{1,2}(?:/\\d{2,4})?|the\\s+\\d{1,2}(?:st|nd|rd|th)?)" +
   "(?:\\s+at\\s+\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?)?";
+// … plus courtesy words that name no other destination ("… in Nexus for me", "… in Nexus please").
 const NEXUS_DATE_TAIL =
-  `(?:\\s+(?:(?:to|for|by|on|until|before)\\s+)?${NEXUS_DATE}|\\s+due\\b[^.?!;\\n]*)?`;
+  `(?:\\s+(?:(?:to|for|by|on|until|before)\\s+)?${NEXUS_DATE}|\\s+due\\b[^.?!;\\n]*)?` +
+  "(?:\\s+(?:for\\s+me|please|pls|thanks|thank\\s+you|now|asap|too|as\\s+well))*";
 const NEXUS_EXPLICIT_WRITE =
   "(?:^|[.!?;:\\n]\\s*|\\b(?:and|then)\\s+)" +
   "(?:(?:hey|hi|ok|okay|so)\\s+)?(?:[a-z]+\\s*,\\s*)?" +
