@@ -1,7 +1,13 @@
 import { generateText, NoObjectGeneratedError, Output } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type Agent, type AgentId } from "../data/agents";
-import { ownershipMarker, primeMarker, primeOwnershipDirectory, sharedCapabilityHolders } from "./capabilities";
+import {
+  capabilityHandsOffInOneToOne,
+  ownershipMarker,
+  primeMarker,
+  primeOwnershipDirectory,
+  sharedCapabilityHolders,
+} from "./capabilities";
 import { resolveAddressedAgent } from "./addressedAgent";
 import type { HuddleMessage, RoutingDecision } from "../data/seed";
 
@@ -315,8 +321,11 @@ export function routeMessage(input: RouteInput): RouteResult {
  * The SHARED-capability half of 1:1 ownership (agents.ts `capabilities` with exclusive:false).
  *   "keep"   -- the addressed agent is PRIME for this ask: it never hands it off (not to a keyword
  *               lane owner, not to an LLM-chosen one).
- *   AgentId  -- the addressed agent is not prime, but someone is: hand to the best-scoring holder.
- *   null     -- the ask matches no shared capability; ordinary lane logic applies.
+ *   AgentId  -- the addressed agent is not prime, someone is, AND the capability's data allows a deterministic 1:1
+ *               hand-off for this ask (agents.ts `oneToOneHandoff`; Nexus coursework: only an explicit write to
+ *               Nexus, D13): hand to the best-scoring such holder.
+ *   null     -- the ask matches no shared capability, or a non-holder may not hand it off deterministically
+ *               (D13); ordinary lane logic applies.
  * Used by laneOwnerFor (the 1:1 directive) and by the 1:1 owner follow-up in huddle.functions.ts,
  * so the directive and the follow-up DM can never disagree about who owns it.
  */
@@ -324,7 +333,12 @@ export function primeLaneDecision(text: string, selfId: AgentId): "keep" | Agent
   const holders = sharedCapabilityHolders(text);
   if (!holders.length) return null;
   if (holders.some((h) => h.agent.id === selfId)) return "keep";
-  const best = holders
+  // D13 (docs/FIX-nexus-write-loop4.md): a NON-holder hands off deterministically only when the capability's DATA
+  // allows it for this ask (`oneToOneHandoff`; for Nexus coursework: an explicit write to Nexus). Otherwise null --
+  // the ordinary 1:1 owner path (keyword laneOwnerFor directive + LLM owner judge) decides, as on origin/main.
+  const handing = holders.filter((h) => capabilityHandsOffInOneToOne(h.cap, text));
+  if (!handing.length) return null;
+  const best = handing
     .map((h, i) => ({ id: h.agent.id, s: scoreAgentAgainst(text, h.agent), i }))
     .sort((x, y) => y.s - x.s || x.i - y.i)[0];
   return best.id;

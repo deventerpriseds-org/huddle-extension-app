@@ -99,6 +99,17 @@ export interface AgentCapability {
     /** Phrases removed before matching ("of course" is not a course). */
     ignore?: string[];
   };
+  /**
+   * SHARED capabilities only: when the deterministic 1:1 hand-off may fire from a NON-holder to a holder
+   * (routing.ts `primeLaneDecision` -> the "not your lane" directive + the durable follow-up DM).
+   *   "always" (default)    -- whenever the ask matches the capability (triggers + context).
+   *   "explicit-override"   -- ONLY when the ask also matches `requiresContext.explicitOverride` (an explicit
+   *                            write to the capability's own system). Any other matching ask in a 1:1 with a
+   *                            non-holder falls through to the ordinary 1:1 owner logic (keyword laneOwnerFor
+   *                            directive + LLM owner judge). Holders still KEEP every matching ask; the GROUP
+   *                            leader rule is unaffected. docs/FIX-nexus-write-loop4.md (D13).
+   */
+  oneToOneHandoff?: "always" | "explicit-override";
 }
 
 /**
@@ -117,13 +128,28 @@ const NEXUS_NOT_THE_APP =
 // and "please / can you / I need you to …"), whose object goes TO / IN / INTO (my) Nexus, or onto "Nexus
 // assignment(s)". Clause-initial on purpose: "email my professor that I will add the essay to Nexus" and "is Nexus
 // down? I can't add the essay" are not requests to write. "the nexus of X and Y" never matches (no "the").
+// D13-ovr (docs/FIX-nexus-write-loop4.md, RESPONDS TO VERIFY-nexus-write-tool-4.md): the override needs an ASSIGNMENT
+// OBJECT -- one of these coursework nouns between the write verb and "to/in/into Nexus" (or the destination "Nexus
+// assignments" itself). Without it "add my new passport number to NEXUS", "change my vehicle info in my NEXUS account"
+// and "set a reminder to log into Nexus tonight" overrode Troy's / Eli's lanes. Each entry is a regex fragment matched
+// as a whole word (plural "s"/"es" tolerated by the entry itself).
+const NEXUS_ASSIGNMENT_OBJECTS = [
+  "assignments?", "papers?", "essays?", "proposals?", "case stud(?:y|ies)", "case analys[ie]s", "cases?",
+  "analys[ie]s", "memos?", "reflections?", "posts?", "quiz(?:zes)?", "exams?", "projects?", "presentations?",
+  "problem sets?", "deliverables?", "briefs?", "reviews?", "reports?", "due dates?",
+];
 const NEXUS_EXPLICIT_WRITE =
   "(?:^|[.!?;:\\n]\\s*|\\b(?:and|then)\\s+)" +
   "(?:(?:hey|hi|ok|okay|so)\\s+)?(?:[a-z]+\\s*,\\s*)?" +
   "(?:(?:please|pls|kindly|just|also|now|go ahead and|can you|could you|would you|will you|can u|i need you to|i want you to|i'd like you to|i need to|i want to|let's|lets|help me)\\s+)*" +
   "(?:add|put|log|save|enter|record|update|change|move|reschedule|set)\\b" +
-  "[^.?!;\\n]{0,100}?" +
-  `(?:\\b(?:to|in|into)\\s+(?:my\\s+)?nexus\\b${NEXUS_NOT_THE_APP}|\\bnexus\\s+assignments?\\b)`;
+  "(?:" +
+  // (a) an assignment object, then the destination "to / in / into (my) Nexus" (the app, never the NEXUS program)
+  `[^.?!;\\n]{0,80}?\\b(?:${NEXUS_ASSIGNMENT_OBJECTS.join("|")})\\b[^.?!;\\n]{0,80}?` +
+  `\\b(?:to|in|into)\\s+(?:my\\s+)?nexus\\b${NEXUS_NOT_THE_APP}` +
+  // (b) or the destination itself names the object: "… to my Nexus assignments"
+  "|[^.?!;\\n]{0,100}?\\bnexus\\s+assignments?\\b" +
+  ")";
 const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
   id: "nexus-assignments",
   label: "adding & updating the owner's coursework assignments in Nexus (dated, graded deliverables)",
@@ -250,6 +276,11 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
     ],
     ignore: ["of course"],
   },
+  // D13 (docs/FIX-nexus-write-loop4.md, owner decision): the deterministic coursework rule keeps deciding the GROUP
+  // leader, and Elle/Iris keep every coursework ask addressed to them; but a 1:1 with ANY OTHER agent is handed to
+  // them deterministically ONLY on an explicit write to Nexus (`explicitOverride`). Everything else there takes the
+  // ordinary 1:1 owner path, as on origin/main.
+  oneToOneHandoff: "explicit-override",
 };
 
 export interface Agent {

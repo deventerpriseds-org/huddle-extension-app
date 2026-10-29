@@ -212,8 +212,11 @@ console.log("\n=== PRIME RESPONDERS (Nexus assignments) ===");
       notKeep.join("; ") || "all keep");
   }
   for (const self of ["finn-reid", "eli-vaughn", "faith-hartley"] as const) {
-    const bad = PHRASES.map((p) => [p, laneOwnerFor(p, self)?.id] as const).filter(([, o]) => o && !PRIME.has(o));
-    check(`F2-43 1:1 with ${self}: any hand-off goes to Elle/Iris, never a third lane`, bad.length === 0,
+    // D13 (docs/FIX-nexus-write-loop4.md): the DETERMINISTIC prime hand-off is now limited to explicit Nexus writes;
+    // other coursework asks take origin/main's ordinary 1:1 path (keyword laneOwnerFor + LLM judge), so the check is
+    // on the prime decision itself: it hands to Elle/Iris or to no one, never to a third lane.
+    const bad = PHRASES.map((p) => [p, primeLaneDecision(p, self)] as const).filter(([, o]) => o && o !== "keep" && !PRIME.has(o));
+    check(`F2-43 1:1 with ${self}: any PRIME hand-off goes to Elle/Iris, never a third lane`, bad.length === 0,
       bad.map(([p, o]) => `"${p}"->${o}`).join("; ") || "ok");
   }
   // Regression: lanes that must NOT move. Expected values are the origin/main baseline, measured.

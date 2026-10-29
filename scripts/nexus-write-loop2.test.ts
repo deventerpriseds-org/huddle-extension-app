@@ -19,7 +19,10 @@ import {
   nexusWriteClaimKey,
 } from "../src/features/huddle/lib/nexus/nexus-write.server";
 import { routeMessage, laneOwnerFor, primeLaneDecision } from "../src/features/huddle/lib/routing";
-import { sharedCapabilityHolders } from "../src/features/huddle/lib/capabilities";
+import { capabilityExplicitOverride, sharedCapabilityHolders } from "../src/features/huddle/lib/capabilities";
+// D13 (docs/FIX-nexus-write-loop4.md, owner decision): a NON-holder hands coursework to Elle/Iris deterministically
+// ONLY on an explicit write to Nexus; every other coursework ask takes the ordinary 1:1 owner path (origin/main).
+const ovrOf = (text: string) => sharedCapabilityHolders(text).some((h) => capabilityExplicitOverride(h.cap, text));
 import { AGENTS, type AgentId } from "../src/features/huddle/data/agents";
 import {
   NEXUS_WRITE_TOOL_NAME as N,
@@ -236,7 +239,7 @@ const main = async () => {
     for (const text of COURSEWORK) {
       t(`L2-D5e group "${text}" is led by Elle/Iris`, PRIME.has(String(lead(text))), true);
       t(`L2-D5f 1:1 Elle/Iris keep "${text}"`, `${laneOwnerFor(text, "elle-rowan" as AgentId)?.id ?? "null"}/${laneOwnerFor(text, "iris-chase" as AgentId)?.id ?? "null"}`, "null/null");
-      t(`L2-D5g 1:1 Finn hands "${text}" to Elle/Iris`, PRIME.has(String(laneOwnerFor(text, "finn-reid" as AgentId)?.id)), true);
+      t(`L2-D5g 1:1 Finn: "${text}" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13)`, ovrOf(text) ? PRIME.has(String(primeLaneDecision(text, "finn-reid" as AgentId))) : primeLaneDecision(text, "finn-reid" as AgentId) === null, true);
     }
     // A course code must look like one: "pay 300" / "is 300" (a word then three digits) is not MGT-782.
     for (const text of ["the deadline to pay 300 for my gym is Friday", "my rent is 300 more, deadline is Monday"]) {

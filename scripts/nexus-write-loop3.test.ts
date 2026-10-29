@@ -21,7 +21,10 @@ import {
 } from "../src/features/huddle/lib/nexus/nexus-write.server";
 import { readFileSync } from "node:fs";
 import { routeMessage, laneOwnerFor, primeLaneDecision } from "../src/features/huddle/lib/routing";
-import { sharedCapabilityHolders } from "../src/features/huddle/lib/capabilities";
+import { capabilityExplicitOverride, sharedCapabilityHolders } from "../src/features/huddle/lib/capabilities";
+// D13 (docs/FIX-nexus-write-loop4.md, owner decision): a NON-holder hands coursework to Elle/Iris deterministically
+// ONLY on an explicit write to Nexus; every other coursework ask takes the ordinary 1:1 owner path (origin/main).
+const ovrOf = (text: string) => sharedCapabilityHolders(text).some((h) => capabilityExplicitOverride(h.cap, text));
 import { AGENTS, type AgentId } from "../src/features/huddle/data/agents";
 import {
   setNexusCourseContext,
@@ -286,7 +289,7 @@ const main = async () => {
     for (const text of COURSEWORK) {
       t(`L3-D6e group "${text}" is led by Elle/Iris`, PRIME.has(String(lead(text))), true);
       t(`L3-D6f 1:1 Elle/Iris keep "${text}"`, `${primeLaneDecision(text, "elle-rowan")}/${primeLaneDecision(text, "iris-chase")}`, "keep/keep");
-      t(`L3-D6g 1:1 Finn hands "${text}" to Elle/Iris`, PRIME.has(String(laneOwnerFor(text, "finn-reid" as AgentId)?.id)), true);
+      t(`L3-D6g 1:1 Finn: "${text}" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13)`, ovrOf(text) ? PRIME.has(String(primeLaneDecision(text, "finn-reid" as AgentId))) : primeLaneDecision(text, "finn-reid" as AgentId) === null, true);
     }
     // The course is DATA, not a shape: the same ask without the owner's course list (or with a course he
     // does not have) carries no strong context.

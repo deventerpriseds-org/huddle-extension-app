@@ -314,6 +314,29 @@ export function capabilityContextPresent(cap: AgentCapability, text: string): bo
   return (ctx.weakPairs ?? []).some(([nouns, cues]) => anyWord(nouns) && anyWord(cues));
 }
 
+/**
+ * Does `text` match the capability's EXPLICIT OVERRIDE (agents.ts `requiresContext.explicitOverride`, after `ignore`)?
+ * For the Nexus coursework capability: a write verb + an ASSIGNMENT OBJECT + "to/in/into Nexus" (D13-ovr,
+ * docs/FIX-nexus-write-loop4.md). False when the capability has no override.
+ */
+export function capabilityExplicitOverride(cap: AgentCapability, text: string): boolean {
+  const ctx = cap.requiresContext;
+  if (!ctx?.explicitOverride?.length) return false;
+  let raw = String(text ?? "");
+  for (const p of ctx.ignore ?? []) raw = raw.replace(new RegExp(escapeRe(p), "gi"), " ");
+  return ctx.explicitOverride.some(([src, flags]) => new RegExp(src, flags).test(raw));
+}
+
+/**
+ * May the deterministic 1:1 hand-off fire from a NON-holder to a holder of this matching shared capability?
+ * Data-driven (agents.ts `oneToOneHandoff`): "always" (default) = yes; "explicit-override" = only when the ask
+ * also matches the capability's explicit override (D13, docs/FIX-nexus-write-loop4.md). Holders KEEP regardless.
+ */
+export function capabilityHandsOffInOneToOne(cap: AgentCapability, text: string): boolean {
+  if (cap.oneToOneHandoff === "explicit-override") return capabilityExplicitOverride(cap, text);
+  return true;
+}
+
 /** Does `text` ask for this SHARED capability? Exclusive capabilities never match here. */
 export function sharedCapabilityMatches(cap: AgentCapability, text: string): boolean {
   if (cap.exclusive) return false;
