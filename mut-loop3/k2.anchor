@@ -1,2 +1,0 @@
-  let s = String(raw ?? "").normalize("NFKC");
-  s = s.replace(/[\p{Default

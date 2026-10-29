@@ -1,1 +1,0 @@
-  `[^.?!;\\n]{0,80}?\\b(?:${NEXUS_ASSIGNMENT_OBJECTS.join("|")})\\b[^.?!;\\n]{0,80}?` +

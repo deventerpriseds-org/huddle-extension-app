@@ -1,2 +1,0 @@
-  if (anyWord(ctx.vetoes) || anyPattern(ctx.vetoPatterns)) return false;
-  if (anyPattern(ctx.explicitOverride)) return true;

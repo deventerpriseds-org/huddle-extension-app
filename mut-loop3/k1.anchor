@@ -1,2 +1,0 @@
-  s = s.replace(/[\p{Default_Ignorable_Code_Point}\p{Cf}]/gu, "");
-  s = s.toLowerCase();

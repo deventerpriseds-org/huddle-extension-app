@@ -1,2 +1,0 @@
-                  if (genRef.current !== gen || dc.readyState !== "open") return;
-                  writeGate.noteToolOutput(name, r.ok ? output : JSON.stringify({ ok: false, error: r.error }));

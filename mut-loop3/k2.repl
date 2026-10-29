@@ -1,2 +1,0 @@
-  let s = String(raw ?? "");
-  s = s.replace(/[\p{Default

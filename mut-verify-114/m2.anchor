@@ -1,1 +1,0 @@
-      return rm !== null && localDay(rm, zone) === day;

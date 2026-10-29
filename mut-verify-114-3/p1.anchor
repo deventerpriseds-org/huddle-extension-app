@@ -1,1 +1,0 @@
-return replies.map((r, i) => ({ ...r, text: i === carrier ? message : NEXUS_WRITE_WITHHELD_REPLY }));

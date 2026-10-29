@@ -1,2 +1,0 @@
-      if (!failed() && buffer.length === 0) return null;
-      return settle(deliver("", true));

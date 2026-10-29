@@ -1,7 +1,0 @@
-{"text":"email my professor that my paper will be a day late","self":"cam-post","intent":"perform","group":"cam-post","prime":null,"lane":null}
-{"text":"draft an email to my instructor asking for an extension on the essay deadline","self":"cam-post","intent":"perform","group":"elle-rowan","prime":null,"lane":"elle-rowan"}
-{"text":"block two hours on my calendar Thursday for my research paper deadline","self":"eli-vaughn","intent":"perform","group":"elle-rowan","prime":null,"lane":null}
-{"text":"remind me tomorrow at 9 that my essay deadline is Friday","self":"eli-vaughn","intent":"perform","group":"elle-rowan","prime":null,"lane":"elle-rowan"}
-{"text":"pick a restaurant for dinner with my professor after the exam","self":"charleston-lewis","intent":"perform","group":"charleston-lewis","prime":null,"lane":null}
-{"text":"my professor wants the case study by Friday, can you add it","self":"finn-reid","intent":"perform","group":"elle-rowan","prime":"elle-rowan","lane":"elle-rowan"}
-{"text":"what's my assignment for the DBA residency, can you check","self":"troy-lennox","intent":"query","group":"iris-chase","prime":"iris-chase","lane":"iris-chase"}

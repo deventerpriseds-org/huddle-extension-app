@@ -1,1 +1,0 @@
-    ...(opts.journey !== false ? [FOCUS_TOOL] : []),

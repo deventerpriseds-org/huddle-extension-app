@@ -1,2 +1,0 @@
-              if (micMutedRef.current) break;
-              nexusGateRef.current.reset(typeof msg.item_id === "string" ? msg.item_id : undefined);

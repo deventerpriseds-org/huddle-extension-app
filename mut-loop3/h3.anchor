@@ -1,1 +1,0 @@
-      out[idx] = { ...out[idx], text: text ? `${text}\n\n${list}` : list };

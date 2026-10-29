@@ -1,1 +1,0 @@
-  const system = (invocation.strictPrompt ? strictSystem : baseSystem) + (primeOwners ? `\n${primeOwners}` : "");

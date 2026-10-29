@@ -1,2 +1,0 @@
-        if (text.trim()) buffer.push(text.trim());
-        return { full: "", speak: "", mode: "none" }; // a write is in flight: say NOTHING yet

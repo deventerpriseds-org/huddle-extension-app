@@ -1,1 +1,0 @@
-  if (!cache || !nexusCourseContextFresh(nowMs)) return false;

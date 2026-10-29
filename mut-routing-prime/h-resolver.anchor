@@ -1,1 +1,0 @@
-        (primeOwners ? `${primeOwners}\n\n` : "") +

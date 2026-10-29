@@ -1,1 +1,0 @@
-    const primeHint = opts.primeHint === true && !assigned;

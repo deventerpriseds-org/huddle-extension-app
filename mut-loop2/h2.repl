@@ -1,1 +1,0 @@
-    (WRITE_TALK.test(s.text) ? removed : kept).push(s);

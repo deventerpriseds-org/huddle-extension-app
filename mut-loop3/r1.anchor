@@ -1,2 +1,0 @@
-  if (anyWord(ctx.vetoes) || anyPattern(ctx.vetoPatterns)) return false;
-  if (anyWord(ctx.strong) || anyPattern(ctx.strongPatterns) || anySource(ctx.strongSources)) return true;

@@ -1,1 +1,0 @@
-      return { full: msg, speak: msg, mode: "whole" };

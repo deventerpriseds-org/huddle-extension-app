@@ -1,4 +1,0 @@
-// WHAT: verifier probe -- classifyTurnIntent for the C4 over-match asks (does the 1:1 follow-up DM fire?).
-// WHY: C4 evidence calibration. SUPERSEDES: nothing. SUPERSEDED-BY: nothing -- current. EVIDENCE: docs/VERIFY-nexus-write-tool-1.md
-import { classifyTurnIntent } from "../src/features/huddle/lib/capabilities";
-for (const t of ["should I apply to NEXUS before my trip to Toronto", "what's the investment thesis for buying more NVDA", "my semester tuition payment is due Dec 1, can I afford it", "review the course of action for the merger proposal due Friday", "is there a case study on intermittent fasting results", "I'm teaching a training class at work, slides due Friday", "apply to NEXUS for me before my Toronto trip", "write up an investment thesis for NVDA"]) console.log(JSON.stringify(t), "->", classifyTurnIntent(t));

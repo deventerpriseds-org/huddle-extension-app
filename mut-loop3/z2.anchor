@@ -1,1 +1,0 @@
-const days = new Set([localDay(cand.dueMs, zone), ...(cand.writtenDay ? [cand.writtenDay] : [])]);

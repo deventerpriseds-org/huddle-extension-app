@@ -1,1 +1,0 @@
-      if (pending > 0 || (uses.length > 0 && !delivered)) resetRequested = true;

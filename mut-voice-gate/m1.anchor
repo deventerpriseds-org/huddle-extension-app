@@ -1,1 +1,0 @@
-    nexusGateRef.current = createNexusWriteSpeechGate(); // V3/V4: nothing this call left can gate the next

@@ -1,8 +1,0 @@
-== m2 src/features/huddle/lib/capabilities.ts :: R13-L10 warm 1:1 with ANY agent
-FIRED: 'R13-L10 warm 1:1 with ANY agent' failed with the defect reinstated. The guard is real.
-restored: src/features/huddle/lib/capabilities.ts matches HEAD
-tree clean: 'R13-L10 warm 1:1 with ANY agent' passes again on the restored tree (build output regenerated)
-== m5 src/features/huddle/lib/routing.ts :: R-M0-task creation
-FIRED: 'R-M0-task creation' failed with the defect reinstated. The guard is real.
-restored: src/features/huddle/lib/routing.ts matches HEAD
-tree clean: 'R-M0-task creation' passes again on the restored tree (build output regenerated)

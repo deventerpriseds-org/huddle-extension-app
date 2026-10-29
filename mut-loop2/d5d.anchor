@@ -1,1 +1,0 @@
-\\bnexus assignments?\\b|\\bdue (?:in|on) nexus\\b|\\b(?:add|put|log|save|enter|record|sync)\\b[^.?!]{0,60}?\\b(?:to|into|in) nexus\\b

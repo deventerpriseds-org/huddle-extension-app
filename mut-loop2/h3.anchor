@@ -1,2 +1,0 @@
-  return rest ? `${lines}\n\n${rest}` : lines;
-}

@@ -1,1 +1,0 @@
-      ["\\bwrite (?:a (?:note|letter|message) )?to (?!(?:my )?nexus\\b)|\\btext (?:my|the|him|her|them)\\b", "i"],

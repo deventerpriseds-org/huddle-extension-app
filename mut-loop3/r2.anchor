@@ -1,1 +1,0 @@
- || anySource(ctx.strongSources)) return true;

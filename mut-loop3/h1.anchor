@@ -1,2 +1,0 @@
-  if (nexusWriteAnyUnpersisted(results)) {
-    const message = nexusWriteFailureMessage(results);

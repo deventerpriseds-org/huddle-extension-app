@@ -1,1 +1,0 @@
-  if (DENY_EVENT.test(t)) return "event";

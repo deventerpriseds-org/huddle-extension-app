@@ -1,3 +1,0 @@
-      if (turnKey) {
-        if (seenTurns.includes(turnKey)) return;
-        seenTurns.push(turnKey);

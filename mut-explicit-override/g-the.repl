@@ -1,1 +1,0 @@
-  `(?:\\b(?:to|in|into)\\s+(?:(?:my|the)\\s+)?nexus\\b${NEXUS_NOT_THE_APP}|\\bnexus\\s+assignments?\\b)`;
